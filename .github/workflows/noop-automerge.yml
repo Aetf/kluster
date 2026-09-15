@@ -3,7 +3,8 @@ name: noop-automerge
 # A PR that touches neither the program (`src/`) nor its stack config
 # (`Pulumi.*`) cannot legitimately change what gets deployed — lockfile
 # maintenance, dependency bumps, docs. This workflow merges such a PR
-# unattended.
+# unattended — and one `Pulumi.yaml` change besides, which is the **admission**
+# below.
 #
 # Its own workflow rather than a step in preview.yml, which runs for every PR
 # and only reports: "this may merge without a human" deserves its own trigger,
@@ -33,13 +34,48 @@ name: noop-automerge
 #     would be a ceremony over an empty diff. Such a PR skips the matrix and
 #     merges on the required checks alone.
 #
-# **The proven route asks the path; the unproven one asks who as well. Both are
-# refused outright by a fork or an `expect-changes` label first.** Skipping the
+# **The unproven route asks who as well as the path; the proven one asks the
+# path, and asks who only for the admission above. Both are refused outright
+# by a fork or an `expect-changes` label first.** Skipping the
 # proof also skips the only thing that was holding a documentation change until
 # somebody read it, and dispatch.md §3 says no PR here merges reviewed by
 # nobody but its author — a rule whose subject is `AGENTS.md` and `docs/` more
 # than anything else. So the unproven route is open to renovate's own pull
 # requests and to nothing else.
+#
+# **One `Pulumi.*` path is admitted even so**: `Pulumi.yaml`'s `packages:`
+# block, on renovate's own pull request. That block is not stack
+# configuration — no stack program reads it. It is the recipe `pulumi install`
+# generates the three SDKs under `sdks/` from, and a bump of it reaches a
+# stack only through the regenerated SDK, which `checks` already holds to the
+# block (ci.md §3). So `classify` admits a pull request whose only
+# `src/`-or-`Pulumi.*` path is `Pulumi.yaml`, when the author is renovate and
+# the document with `packages` removed is equal at base and head. What the
+# bump actually changes — `sdks/`, `uv.lock` — is code, so such a pull request
+# stays on the proven route and merges behind the same zero-diff preview as
+# any other bump.
+#
+# **That equality is of parsed documents, not of the diff**, and the step
+# below decides it from three inputs and nothing else: the author, the base
+# SHA and the head SHA. A hunk test would answer for the lines around the
+# block as readily as for the block. So both revisions are read through the
+# API — `classify` has no checkout — parsed, stripped of `packages`, and
+# compared with their keys sorted. A comment does not count, and neither does
+# a reordering of keys; an edit to any other key does. `versions:` is the key
+# that matters: a pin there is what a stack program reads, so a bump that
+# moved one is a change to what gets deployed, and it keeps the human route.
+#
+# **A person's edit to the recipe keeps the human route as well**, even when
+# it is packages-only: an added entry is a new provider, and a pin moved by
+# hand is a design decision. Renovate's bump is the mechanical case, and the
+# only one `sdk-regenerate.yml` finishes on its branch.
+#
+# **Base is the base branch's tip**, which is what the event carries. Where
+# that is not also the merge base — a branch behind a `main` that has since
+# moved `Pulumi.yaml` — the two documents differ and the verdict is "not a
+# candidate". That is the safe direction, and a temporary one: `main` requires
+# an up-to-date branch (ci.md §5), so a branch that can merge at all has been
+# rebased onto that tip, and renovate rebases its own.
 #
 # **An operator opt-in by label is ruled out rather than unbuilt** (kluster-ops
 # #244, #247). A label carries no record of who put it there: the event names
@@ -53,7 +89,9 @@ name: noop-automerge
 # this file to it.** A login a workflow branches on and nothing declares makes
 # the condition silently dead: the comparison is never true, the route is never
 # taken, and nothing anywhere reports that. The same census carries every label
-# a workflow reads, for the same reason.
+# a workflow reads, for the same reason. Both routes test the same login, and
+# it is written once — in `env` below — because two spellings are two things
+# to get wrong, and the same test holds it to that one place.
 #
 # A fork's pull request is refused outright, by name in `classify`. Until the
 # unproven route existed the refusal was implicit — the proof needs Environment
@@ -89,6 +127,11 @@ env:
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   GH_REPO: ${{ github.repository }}
   PR: ${{ github.event.pull_request.number }}
+  # Who opened the pull request, and the one login either route admits. The
+  # literal is written here and nowhere else in this file (see the header);
+  # `conventions.forge.RENOVATE` is the census that holds it.
+  AUTHOR: ${{ github.event.pull_request.user.login }}
+  RENOVATE: renovate[bot]
 
 jobs:
   classify:
@@ -113,6 +156,44 @@ jobs:
               - '!.vscode/**'
               - '!.gitignore'
 
+      # The admission the header describes, decided from the author and the two
+      # revisions and nothing else -- which is what lets the same script be run
+      # against a pair of real commits from a workstation. `yq` is on the
+      # runner image; the JSON it writes carries no comments, and
+      # `sort_keys(..)` makes two documents that differ only in the order of
+      # their keys compare equal.
+      #
+      # Every read is guarded rather than assumed: the author test comes first,
+      # so a pull request that is not renovate's costs no API call and a fork's
+      # head is never fetched; and each revision is read into a variable of its
+      # own, because a `gh api` that failed inside a `[ "$(...)" = "$(...)" ]`
+      # would compare two empty strings and admit the pull request. Under
+      # `set -euo pipefail` an assignment that fails ends the step, the job's
+      # outputs are never written, and the merge job's `if` is false.
+      - name: Is this a renovate bump of the packages block
+        id: recipe
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          recipe() {
+            gh api "repos/$GH_REPO/contents/Pulumi.yaml?ref=$1" \
+              --header 'Accept: application/vnd.github.raw' \
+            | yq --output-format=json --indent=0 'del(.packages) | sort_keys(..)'
+          }
+          if [ "$AUTHOR" != "$RENOVATE" ]; then
+            echo 'admit=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          base=$(recipe "$BASE_SHA")
+          head=$(recipe "$HEAD_SHA")
+          admit=false
+          if [ "$base" = "$head" ]; then
+            admit=true
+          fi
+          echo "admit=$admit" >> "$GITHUB_OUTPUT"
+
       - name: Classify the PR
         id: classify
         env:
@@ -125,20 +206,27 @@ jobs:
           # own, pattern for pattern and under the same `every` quantifier, so
           # a file that stops being inert stops being inert in both at once.
           INERT: ${{ steps.paths.outputs.code == 'false' }}
-          # Who may take the unproven route (see the header).
-          TRUSTED: ${{ github.event.pull_request.user.login == 'renovate[bot]' }}
+          ADMIT: ${{ steps.recipe.outputs.admit }}
         run: |
           set -euo pipefail
+          trusted=false
+          if [ "$AUTHOR" = "$RENOVATE" ]; then
+            trusted=true
+          fi
           if [ "$FORK" = 'true' ] || [ "$OVERRIDE" = 'true' ]; then
             echo 'noop=false' >> "$GITHUB_OUTPUT"
             exit 0
           fi
           files=$(gh pr view "$PR" --json files --jq '.files[].path')
-          if grep -qE '^(src/|Pulumi\.)' <<<"$files"; then
+          # Every path that can reach a stack. `Pulumi.yaml` alone, admitted by
+          # the step above, is the one such list that is still a candidate: any
+          # other member, and a second member beside it, is the human route.
+          reaching=$(grep -E '^(src/|Pulumi\.)' <<<"$files" || true)
+          if [ -n "$reaching" ] && { [ "$reaching" != 'Pulumi.yaml' ] || [ "$ADMIT" != 'true' ]; }; then
             echo 'noop=false' >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if [ "$INERT" = 'true' ] && [ "$TRUSTED" = 'true' ]; then
+          if [ "$INERT" = 'true' ] && [ "$trusted" = 'true' ]; then
             echo 'unproven=true' >> "$GITHUB_OUTPUT"
           fi
           # Last, and the only line that writes it: see the merge job's `if`.
@@ -147,8 +235,10 @@ jobs:
   prove:
     needs: classify
     # The proof is for every candidate that is not on the unproven route: a
-    # fork, an `expect-changes` label and a `src/`-or-`Pulumi.*` touch all
-    # leave `noop` false, which skips this job and the merge with it.
+    # fork, an `expect-changes` label, and a `src/`-or-`Pulumi.*` touch the
+    # admission above does not cover, all leave `noop` false, which skips this
+    # job and the merge with it. An admitted bump is a candidate that is not
+    # inert, so it arrives here rather than skipping past.
     if: needs.classify.outputs.noop == 'true' && needs.classify.outputs.unproven != 'true'
     runs-on: ubuntu-latest
     strategy:

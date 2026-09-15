@@ -645,9 +645,10 @@ def test_every_login_a_workflow_compares_against_is_one_the_census_names() -> No
         if login
     }
 
-    # noop-automerge's unproven route is renovate's and nobody else's (ci.md
-    # §3), so a workflow that stopped naming the login, or a census that
-    # stopped carrying it, is what this holds still.
+    # The login this scan reaches is sdk-regenerate's, which spells it in a
+    # step; noop-automerge keeps its own in `env:`, a form this scan cannot
+    # see and the recipe-step case holds instead. What this holds still is
+    # that a workflow naming the login names one the census carries.
     assert 'renovate[bot]' in read
     assert read <= named, f'compared against by a workflow and named nowhere: {sorted(read - named)}'
 
@@ -910,6 +911,55 @@ def test_renovate_reads_every_entry_of_the_packages_block() -> None:
 
     assert bridges == [entry.bridge for entry in declared.values()]
     assert providers == {(entry.provider, entry.version) for entry in declared.values()}
+
+
+#: The workflow that merges a bump of the block without a human, and the one
+#: `Pulumi.*` admission it carries (framework/ci.md §3).
+NOOP_AUTOMERGE = GITHUB / 'workflows' / 'noop-automerge.yml'
+
+#: How the admission step names the key it removes before comparing the two
+#: revisions of `Pulumi.yaml`: a `yq` expression, in the one step that reads
+#: that file at all.
+BLOCK_REMOVED_BEFORE_COMPARING = re.compile(r'del\(\.(\w+)\)')
+
+
+def test_the_unattended_route_for_a_bump_removes_the_block_and_tests_renovate() -> None:
+    """`classify` admits a bump of the block, and neither half of how it decides is written twice.
+
+    A bump of `packages:` is the one change to a `Pulumi.*` path that merges
+    unattended: the block is the generator's recipe, no stack program reads it,
+    and `checks` holds every `sdks/<name>` to it. What makes that route
+    admissible is exactly two things, and each fails silently on its own. The
+    key removed before the two revisions are compared has to be *this* block --
+    remove `config:` instead and the versions pins stop being compared, which
+    is a stack configuration change merging on a proof that never looked at it.
+    And the login has to be the one the census names, spelled once: a workflow
+    cannot notice that it guessed a login wrong, because the comparison is
+    simply never true, and two spellings are two chances to guess wrong.
+
+    Neither is restated here. The key is read out of the workflow and held
+    against the block `Pulumi.yaml` declares, and the login comes from the
+    census rather than from a literal typed in this file.
+    """
+    workflow = NOOP_AUTOMERGE.read_text()
+    classify = cast('dict[str, object]', yaml.safe_load(workflow)['jobs']['classify'])
+    steps = cast('list[dict[str, str]]', classify['steps'])
+
+    deciding = [step for step in steps if BLOCK_REMOVED_BEFORE_COMPARING.search(step.get('run', ''))]
+    assert len(deciding) == 1, f'{len(deciding)} steps of `classify` strip a key before comparing; the admission is one'
+    assert 'Pulumi.yaml' in deciding[0]['run'], 'the admission compares some document other than Pulumi.yaml'
+    (removed,) = BLOCK_REMOVED_BEFORE_COMPARING.findall(deciding[0]['run'])
+    declared = cast('dict[str, object]', yaml.safe_load(PULUMI_YAML.read_text())[removed])
+
+    assert set(declared) == set(_declared_packages()), (
+        f'the admission compares the two revisions with `{removed}` removed, which is not the block sdks/ is generated from'
+    )
+    # A verdict that consults nothing the step decided is the same dead route
+    # as a login nothing declares: the step runs, and its answer goes nowhere.
+    assert f'steps.{deciding[0]["id"]}.outputs.' in workflow, "nothing reads the admission step's verdict"
+    assert workflow.count(conventions.forge.RENOVATE.login) == 1, (
+        'the login the admission tests the author against is spelled here more or less than once'
+    )
 
 
 def test_nothing_under_packages_is_a_bridged_sdk() -> None:
