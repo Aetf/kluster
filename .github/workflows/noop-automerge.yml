@@ -34,6 +34,16 @@ name: noop-automerge
 #     would be a ceremony over an empty diff. Such a PR skips the matrix and
 #     merges on the required checks alone.
 #
+# **The classification is only as good as the path list, so the list is
+# complete or the verdict is a refusal.** GitHub pages a pull request's changed
+# files, and a reader that takes the first page alone -- `gh pr view --json
+# files` -- answers with at most a hundred paths and nothing to say that there
+# were more, so a pull request carrying a hundred early-sorting paths could
+# hold a `src/` file the test never saw and merge unattended. `classify` pages
+# the list instead and counts what it got against the number the pull request
+# reports; a read that failed, an empty list and a count that falls short each
+# refuse candidacy rather than decide on what arrived.
+#
 # **The unproven route asks who as well as the path; the proven one asks the
 # path, and asks who only for the admission above. Both are refused outright
 # by a fork or an `expect-changes` label first.** Skipping the
@@ -217,7 +227,32 @@ jobs:
             echo 'noop=false' >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          files=$(gh pr view "$PR" --json files --jq '.files[].path')
+          # The complete list, which `gh pr view --json files` is not: it
+          # answers with the API's first page, at most a hundred paths, and
+          # says nothing about the rest, so a pull request carrying a hundred
+          # early-sorting paths hides every path after them from the test
+          # below. `--paginate` walks the pages, and the `--jq` filter runs on
+          # each of them, so the output is one path per line however many pages
+          # there were; `per_page` decides only how many requests that is.
+          #
+          # Each read lands in a variable of its own and the list is counted,
+          # because every way this can go wrong goes wrong the same way: a
+          # short list still greps clean. So a read that failed refuses, an
+          # empty list refuses, and a count that does not match the number the
+          # pull request itself reports refuses -- naming both numbers, a log
+          # being the only reader there is.
+          if ! files=$(gh api --paginate "repos/$GH_REPO/pulls/$PR/files?per_page=100" --jq '.[].filename') \
+            || ! changed=$(gh pr view "$PR" --json changedFiles --jq '.changedFiles'); then
+            echo 'The changed paths could not be read; not a candidate.'
+            echo 'noop=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          seen=$(grep -c . <<<"$files" || true)
+          if [ "$seen" -eq 0 ] || [ "$seen" -ne "$changed" ]; then
+            echo "Read $seen of the $changed changed paths; not a candidate."
+            echo 'noop=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           # Every path that can reach a stack. `Pulumi.yaml` alone, admitted by
           # the step above, is the one such list that is still a candidate: any
           # other member, and a second member beside it, is the human route.

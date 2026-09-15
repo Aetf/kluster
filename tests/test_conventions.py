@@ -962,6 +962,59 @@ def test_the_unattended_route_for_a_bump_removes_the_block_and_tests_renovate() 
     )
 
 
+#: How the candidacy test asks for a list GitHub pages, and the reader that
+#: stops at that list's first page. `gh pr view --json files` answers with at
+#: most a hundred paths and reports nothing about the rest, so a verdict taken
+#: on it is a verdict about whatever sorted early; `gh api --paginate` walks
+#: every page. The capped form is matched in any `--json` list it is asked for
+#: alongside, and `changedFiles` -- how many there were -- is not it.
+PAGED_READ = re.compile(r'gh api\b[^\n]*--paginate\b')
+CAPPED_FILE_READ = re.compile(r'--json\s+(?:\w+,)*files\b')
+
+#: The refusal `classify` writes, spelled as its step writes it.
+REFUSAL_IN_CLASSIFY = 'echo \'noop=false\' >> "$GITHUB_OUTPUT"'
+
+
+def test_the_candidacy_test_reads_every_changed_path_or_refuses() -> None:
+    """A path the verdict never saw is the one that merges a deploy unattended.
+
+    `classify` decides candidacy by grepping a pull request's changed paths for
+    the ones a stack program reads, so the verdict is worth exactly what that
+    list is. Read from the API's first page it covers at most a hundred paths
+    and says nothing about the rest -- a pull request with a hundred
+    early-sorting paths can then carry a `src/` file the grep never sees, and
+    be admitted as a no-op by the job whose whole purpose is the fence.
+
+    Three things keep the list honest, and each is silent on its own: the read
+    pages, what arrived is counted against the number the pull request itself
+    reports, and every way out of the step short of the verdict refuses. The
+    last is what the count is for -- a short list still greps clean, so
+    noticing it only helps if noticing it stands the merge down.
+    """
+    workflow = NOOP_AUTOMERGE.read_text()
+    classify = cast('dict[str, object]', yaml.safe_load(workflow)['jobs']['classify'])
+    steps = cast('list[dict[str, str]]', classify['steps'])
+
+    # The verdict names its own step: `noop=true` is written in one place.
+    (deciding,) = [step for step in steps if 'noop=true' in step.get('run', '')]
+    # What the shell runs, which is what decides anything; a comment is free to
+    # name the capped reader in order to say why it is not used.
+    code = '\n'.join(line for line in deciding['run'].splitlines() if not line.lstrip().startswith('#'))
+
+    assert PAGED_READ.search(code), 'the candidacy test reads the changed paths without paging them'
+    assert not CAPPED_FILE_READ.search(code), (
+        "the candidacy test reads the changed paths through a call that stops at the list's first page"
+    )
+    assert 'changedFiles' in code, 'nothing holds the list the candidacy test read against how long it should be'
+
+    lines = [line.strip() for line in code.splitlines() if line.strip()]
+    leaving = [index for index, line in enumerate(lines) if line.startswith('exit ')]
+    assert leaving, 'no route out of the candidacy test refuses, so a read that fell short cannot'
+    assert all(lines[index - 1] == REFUSAL_IN_CLASSIFY for index in leaving), (
+        'a route out of the candidacy test leaves without refusing'
+    )
+
+
 def test_nothing_under_packages_is_a_bridged_sdk() -> None:
     """`packages/` is what this repository authors; a bridged SDK belongs under `sdks/`.
 
