@@ -94,7 +94,15 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     into a `known_hosts` file of the tool's own beside the client
     bundle, which the client is pointed at exclusively and under strict
     checking. A wrong or unknown key is refused rather than written
-    down. Re-read on every exec rather than trusted from disk, so it is
+    down. **No client configuration participates in that connection**
+    — the exec passes `-F /dev/null`, so neither the operator's
+    `ssh_config` nor the machine's is read. That is a cut rather than a
+    list of directives to distrust, and it has to be: a `ControlMaster`
+    block, which is ordinary on a workstation, would otherwise let one
+    bare login outside the tool leave a multiplexing socket that a later
+    pinned exec attaches to with no host-key check performed at all, and
+    a `KnownHostsCommand` would supply trusted keys beside the pinned
+    file. Re-read on every exec rather than trusted from disk, so it is
     right on a workstation that did not perform the last replace.
     Because it is read at exec time a refusal cannot mean a stale local
     file, and the run says both of its readings before it connects: the
@@ -102,7 +110,8 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     interposed on the path. The operator's own `~/.ssh/known_hosts` is
     neither read nor written, so a bare `ssh core@<address>` outside
     the tool is unpinned by definition and the answer to it is
-    `state-backend ssh`.
+    `state-backend ssh`. What that bare login leaves behind reaches no
+    further than itself, which is the other thing `-F /dev/null` buys.
     Whoever can instead rewrite that metadata to match a rogue box is
     an OCI principal with instance-update on this compartment, which is
     root-equivalent for the box already — the same posture "Secrets

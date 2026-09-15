@@ -389,11 +389,14 @@ def machine(
 def render_ignition(values: Machine) -> str:
     """Butane in, validated Ignition out.
 
-    Takes the machine rather than building one, because two facts about the
-    box have to come from the same render: the Ignition it boots with, and
-    when the server certificate inside that Ignition expires (`expires_at`).
-    A second `machine` call would issue a second certificate, and the box
-    would record an expiry belonging to a certificate it never held.
+    Takes the machine rather than building one, because every fact recorded
+    beside the box has to come from the same render as the Ignition it boots
+    with: when the server certificate inside that Ignition expires
+    (`expires_at`), and the public half of the SSH host key it delivers
+    (`host_public_key`). A second `machine` call would issue a second
+    certificate and mint a second host key, so the box would record an expiry
+    belonging to a certificate it never held and be pinned to a key it was
+    never given.
 
     Rendered through an environment of its own rather than through
     `kluster.lib.templates`: that mechanism resolves a template relative to

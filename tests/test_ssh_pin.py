@@ -14,6 +14,7 @@ at which the server may not be up yet.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess as sp
 from pathlib import Path
@@ -68,14 +69,15 @@ class Host:
         )
 
 
-def _serving(directory: Path, host: Host) -> str:
+def _serving(directory: Path, host: Host, *, admits: Path | None = None) -> str:
     """A `ProxyCommand` running `sshd` under `host`'s identity.
 
-    Authentication is left with nothing to accept: what this case is about
-    happens before it, and a server that cannot let anybody in is the clearest
-    way to see that the client got that far.
+    `admits` names a public key the server accepts, for the one case that
+    needs a session to actually open. Left out, authentication has nothing to
+    accept: what these cases are about happens before it, and a server that
+    can let nobody in is the clearest way to see that a client got that far.
     """
-    configuration = directory / 'sshd_config'
+    configuration = directory / f'sshd_config-{host.private.name}'
     _ = configuration.write_text(
         f'HostKey {host.private}\n'
         'PidFile none\n'
@@ -84,7 +86,7 @@ def _serving(directory: Path, host: Host) -> str:
         'UsePAM no\n'
         'PasswordAuthentication no\n'
         'KbdInteractiveAuthentication no\n'
-        'AuthorizedKeysFile none\n'
+        f'AuthorizedKeysFile {admits or "none"}\n'
         'LogLevel ERROR\n'
     )
     # `-e` puts the server's own errors on stderr beside the client's, so a
@@ -92,25 +94,62 @@ def _serving(directory: Path, host: Host) -> str:
     return f'{SSHD} -i -e -f {configuration}'
 
 
+def _client(argv: list[str], *, cwd: Path, home: Path | None = None) -> sp.CompletedProcess[str]:
+    """One `ssh` run, with the home directory its configuration is read from.
+
+    `home` is what lets a case put a client configuration in front of the
+    connection without touching the one this machine's user has.
+    """
+    environment = dict(os.environ)
+    if home is not None:
+        environment['HOME'] = str(home)
+    return sp.run(argv, capture_output=True, text=True, timeout=30, cwd=cwd, env=environment)
+
+
+def _pinned_argv(known_hosts: Path, proxy: str, command: str = 'true') -> list[str]:
+    return [
+        'ssh',
+        *provision.pin_options(known_hosts),
+        # Scaffolding, not part of the pin: without it a case that is meant to
+        # end in a refusal can sit waiting for a prompt instead.
+        '-o',
+        'BatchMode=yes',
+        '-o',
+        f'ProxyCommand={proxy}',
+        f'core@{ADDRESS}',
+        command,
+    ]
+
+
+def _through_one_directory(
+    argv: list[str], *, cwd: Path, home: Path
+) -> tuple[sp.CompletedProcess[str], sp.CompletedProcess[str]]:
+    """An unpinned probe and then `argv`, both run in `cwd`.
+
+    **One working directory for both, structurally.** A relative
+    `ControlPath` makes "is a multiplexing master reachable" a property of the
+    directory a client runs in rather than of the socket existing, so a pinned
+    client's refusal means "the pin held" only where an unpinned one would
+    have got through. Run from two directories, the pinned client would refuse
+    for want of a master rather than for want of trust and the case would go
+    green having proven nothing -- which is why the caller cannot point the
+    two anywhere different.
+
+    The probe carries no `ProxyCommand` and no pin, so reusing the master is
+    the only way it can succeed: anything else dials the address for real,
+    which is what the connect timeout bounds.
+    """
+    probe = _client(
+        ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', f'core@{ADDRESS}', 'true'],
+        cwd=cwd,
+        home=home,
+    )
+    return probe, _client(argv, cwd=cwd, home=home)
+
+
 def _dial(directory: Path, *, serving: Host, pinned: Host) -> sp.CompletedProcess[str]:
     known_hosts = config.write_known_hosts(directory / 'slot', address=ADDRESS, public_key=pinned.public)
-    return sp.run(
-        [
-            'ssh',
-            *provision.pin_options(known_hosts),
-            # Scaffolding, not part of the pin: without them a case that is
-            # meant to end in a refusal can sit waiting for a prompt instead.
-            '-o',
-            'BatchMode=yes',
-            '-o',
-            f'ProxyCommand={_serving(directory, serving)}',
-            f'core@{ADDRESS}',
-            'true',
-        ],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    return _client(_pinned_argv(known_hosts, _serving(directory, serving)), cwd=directory)
 
 
 @needs_ssh
@@ -146,3 +185,92 @@ def test_a_server_holding_the_pinned_key_gets_past_the_host_key_phase(tmp_path: 
 
     assert REFUSED not in dialed.stderr
     assert PAST_THE_HOST_KEY in dialed.stderr
+
+
+#: How long a master left behind by a failed case can outlive it. Short, so a
+#: case that never reaches its own teardown still cleans up on its own.
+CONTROL_PERSIST = 5
+
+
+@needs_ssh
+@needs_sshd
+def test_a_multiplexing_master_cannot_carry_the_pinned_exec(tmp_path: Path) -> None:
+    """A client configuration is not something the pin may depend on being absent.
+
+    `ControlMaster auto` in a `Host *` block is ordinary on an operator's
+    workstation, and one bare `ssh core@<address>` outside the tool -- the
+    mistake the runbook already anticipates -- leaves a master socket behind
+    for as long as `ControlPersist` says. A pinned exec that read the same
+    configuration would attach to that socket and run **with no host-key
+    verification performed at all**: the pin would be suppressed by a file
+    neither this code nor the operator thought of as part of the connection.
+    Suppressing the two known-hosts files does not reach it; `-F /dev/null`
+    does, and that is the mutation this case exists for.
+    """
+    interposer = Host(tmp_path, 'interposer')
+    appliance = Host(tmp_path, 'appliance')
+    identity = Host(tmp_path, 'identity')
+    # The socket's path goes into a `sockaddr_un`, which stops at 108 bytes --
+    # shorter than a pytest temporary directory plus a name. So the path is
+    # relative, and every client below runs in the directory holding it: that
+    # shared working directory is how the pinned exec would see the master,
+    # and it is what `_through_one_directory` refuses to let drift apart.
+    sockets = tmp_path / 'm'
+    sockets.mkdir()
+    home = tmp_path / 'home'
+    (home / '.ssh').mkdir(parents=True)
+    _ = (home / '.ssh' / 'config').write_text(
+        f'Host *\n  ControlMaster auto\n  ControlPath ./mux-%h\n  ControlPersist {CONTROL_PERSIST}\n'
+    )
+    admitted = tmp_path / 'authorized_keys'
+    _ = admitted.write_text(identity.public + '\n')
+    proxy = _serving(tmp_path, interposer, admits=admitted)
+
+    try:
+        # The operator's bare login: trust-on-first-use, against the wrong
+        # box, leaving the master that the pinned exec must not inherit.
+        # Inside the `try` so that the teardown owns it too -- its own timeout
+        # is the way this line raises, and it raises with a master standing.
+        bare = _client(
+            [
+                'ssh',
+                '-o',
+                'StrictHostKeyChecking=accept-new',
+                '-o',
+                f'UserKnownHostsFile={home / ".ssh" / "known_hosts"}',
+                '-o',
+                'IdentitiesOnly=yes',
+                '-i',
+                str(identity.private),
+                '-o',
+                'BatchMode=yes',
+                '-o',
+                f'ProxyCommand={proxy}',
+                f'{os.environ["USER"]}@{ADDRESS}',
+                'true',
+            ],
+            cwd=sockets,
+            home=home,
+        )
+        assert bare.returncode == 0, f'the bare login never opened a session: {bare.stderr}'
+        assert list(sockets.iterdir()), 'no master socket, so this case would pass without proving anything'
+
+        known_hosts = config.write_known_hosts(tmp_path / 'slot', address=ADDRESS, public_key=appliance.public)
+        reuse, pinned = _through_one_directory(_pinned_argv(known_hosts, proxy), cwd=sockets, home=home)
+
+        # The probe got through to a server it holds no pin for and could not
+        # have dialled, so the master is reusable from where the pinned client
+        # ran -- without which its refusal below would be a refusal for want
+        # of a master, and the case would prove nothing about the pin.
+        assert reuse.returncode == 0, (
+            'no master is reusable from the directory both clients ran in, '
+            f'so the refusal below would prove nothing: {reuse.stderr}'
+        )
+        assert pinned.returncode != 0
+        assert REFUSED in pinned.stderr
+    finally:
+        _ = _client(
+            ['ssh', '-O', 'exit', '-o', 'ControlPath=./mux-%h', f'{os.environ["USER"]}@{ADDRESS}'],
+            cwd=sockets,
+            home=home,
+        )
