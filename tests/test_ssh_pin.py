@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess as sp
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -31,6 +32,45 @@ SSHD = shutil.which('sshd') or shutil.which('sshd', path='/usr/sbin:/usr/libexec
 needs_sshd = pytest.mark.skipif(SSHD is None, reason='no sshd on this machine (openssh-server)')
 needs_ssh = pytest.mark.skipif(shutil.which('ssh') is None, reason='no ssh client on this machine')
 
+
+def _home_reaches_the_client_configuration() -> bool:
+    """Whether this `ssh` takes its user configuration from `$HOME`.
+
+    The multiplexing case below needs a client to read a configuration this
+    test wrote, and to read it **the way an operator's own is read** -- through
+    the default user path, which is the channel `-F /dev/null` closes. Handing
+    the file over with `-F` instead would prove nothing: the mutation that has
+    to redden that case is a pinned client picking up a configuration nobody
+    named on its command line, and a file this test named is not that.
+
+    Measured rather than inferred from a version string, because it is the
+    property the case needs rather than the version that decides: OpenSSH
+    resolves that default path through the password database on some builds
+    (9.6p1 reads `getpwuid()`'s home directory and ignores `$HOME`) and
+    through `$HOME` on others (10.5p1). Where it is the former, the operator
+    configuration the case turns on could only be supplied by writing the real
+    `~/.ssh/config`, which a test may not do.
+    """
+    if shutil.which('ssh') is None:
+        return False
+    with tempfile.TemporaryDirectory() as scratch:
+        configuration = Path(scratch) / '.ssh' / 'config'
+        configuration.parent.mkdir()
+        _ = configuration.write_text('Host *\n  ControlMaster auto\n')
+        # A user configuration anyone but its owner may write is ignored, so a
+        # machine whose umask is 0002 would otherwise answer "no" for a reason
+        # that has nothing to do with the question being asked.
+        configuration.chmod(0o600)
+        probed = sp.run(
+            ['ssh', '-G', f'core@{ADDRESS}'],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=dict(os.environ, HOME=scratch),
+        )
+    return 'controlmaster auto' in probed.stdout.lower()
+
+
 #: What the appliance's reserved address stands in as. Never resolved: the
 #: `ProxyCommand` below is what the client talks to, and this is only ever the
 #: name the `known_hosts` entry is keyed by -- which is the half of the pin
@@ -42,6 +82,13 @@ ADDRESS = '192.0.2.10'
 #: asserting on: they are how an operator will read the same failure.
 REFUSED = 'Host key verification failed'
 PAST_THE_HOST_KEY = 'Permission denied'
+
+
+needs_home_backed_configuration = pytest.mark.skipif(
+    not _home_reaches_the_client_configuration(),
+    reason='this ssh reads its user configuration from the password database rather than $HOME, so the '
+    'operator configuration this case turns on cannot be supplied without writing the real ~/.ssh/config',
+)
 
 
 class Host:
@@ -194,6 +241,7 @@ CONTROL_PERSIST = 5
 
 @needs_ssh
 @needs_sshd
+@needs_home_backed_configuration
 def test_a_multiplexing_master_cannot_carry_the_pinned_exec(tmp_path: Path) -> None:
     """A client configuration is not something the pin may depend on being absent.
 
@@ -219,9 +267,13 @@ def test_a_multiplexing_master_cannot_carry_the_pinned_exec(tmp_path: Path) -> N
     sockets.mkdir()
     home = tmp_path / 'home'
     (home / '.ssh').mkdir(parents=True)
-    _ = (home / '.ssh' / 'config').write_text(
+    configuration = home / '.ssh' / 'config'
+    _ = configuration.write_text(
         f'Host *\n  ControlMaster auto\n  ControlPath ./mux-%h\n  ControlPersist {CONTROL_PERSIST}\n'
     )
+    # `ssh` ignores a user configuration anyone but its owner may write, and a
+    # machine whose umask is 0002 writes one of those by default.
+    configuration.chmod(0o600)
     admitted = tmp_path / 'authorized_keys'
     _ = admitted.write_text(identity.public + '\n')
     proxy = _serving(tmp_path, interposer, admits=admitted)
