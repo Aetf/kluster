@@ -128,9 +128,9 @@ def test_every_member_is_placed_inside_the_overlays_own_subnet() -> None:
 def test_the_gateway_entry_is_infrastructure_at_the_address_every_client_dials() -> None:
     """Two things the gateway's entry must say on the day the ceremony adds it.
 
-    The device's SSH, the controller's API and every managed route's next hop
-    all derive from `conventions.overlay.UDM`, so an entry at any other address
-    would point all three somewhere the member is not. And the gateway is infrastructure: an
+    The device's SSH, the controller's API and the next hop of every route to
+    the home all derive from `conventions.overlay.UDM`, so an entry at any
+    other address would point all three somewhere the member is not. And the gateway is infrastructure: an
     entry carrying the permissive default role would put the box every route
     runs through on the same footing as a phone. The entry is absent until the
     ceremony reads the minted node id and adds it (physical/gateway.md §2.5),
@@ -175,20 +175,72 @@ def test_the_roster_stays_within_what_multicast_reaches() -> None:
 ##
 
 
-def test_the_network_is_adopted_and_carries_every_managed_route(stack: Central) -> None:
-    """The network predates the program, and the routes are net-new.
+def test_the_network_carries_the_census_routes_and_stamps_no_via_of_its_own(stack: Central) -> None:
+    """The route table is the census, target and via, and nothing the census lacks.
 
-    Creating a second network would leave every existing member on the first
-    one; declaring the routes anywhere but through the gateway's member would
-    put a machine that is not a router on the management path.
+    The network is adopted with its routes declared in full, so the list here
+    is what Central holds after the update -- a route added or a `via` stamped
+    by the component would be one the census never decided, and a route the
+    census carries but the component drops would be one the update deletes at
+    Central. `via` is present exactly where the census names a member: the
+    overlay's own route carries none, and a `via` written onto it would make
+    every member's address depend on a next hop.
     """
     network = stack.inputs_of(f'{NAME}-network')
 
-    assert [route['target'] for route in network['routes']] == [str(net) for net in conventions.overlay.MANAGED_ROUTES]
-    assert {route['via'] for route in network['routes']} == {str(conventions.overlay.UDM)}
+    assert network['routes'] == [
+        {'target': str(route.target)} | ({} if route.via is None else {'via': str(route.via)})
+        for route in conventions.overlay.MANAGED_ROUTES
+    ]
     assert network['private'] is True
     assert network['enableBroadcast'] is True
     assert network['multicastLimit'] == overlay_module.MULTICAST_LIMIT
+
+
+def test_a_route_with_no_via_covers_every_address_the_roster_places() -> None:
+    """The controller's condition for handing a member its address, held on the census.
+
+    A member's static assignment is pushed only when some route's target
+    contains it, with that route's netmask; a via-less route is the one
+    ZeroTier installs on the member's own interface for the network's subnet.
+    So a table whose via-less routes cover less than the roster is a table
+    that leaves some member with no address at its next config refresh -- and
+    a table with none leaves every member that way. Held over the roster and
+    the gateway's address, not over the subnet constant: what has to be true
+    is that every placed member is covered, whatever the table's targets are.
+    """
+    own = [route.target for route in conventions.overlay.MANAGED_ROUTES if route.via is None]
+    assert own, 'no via-less route: the controller would push no member an address'
+
+    placed = [entry.address for entry in conventions.overlay.ROSTER] + [conventions.overlay.UDM]
+    for address in placed:
+        assert any(address in target for target in own), address
+
+
+def test_every_via_is_a_member_and_only_the_gateway_forwards_for_the_home() -> None:
+    """A `via` is nothing but a member's address, and the home is routed by the router.
+
+    A route via an address no member holds is a route to nothing. A home subnet
+    via anything but the gateway would put a machine that is not a router on
+    the management path; the gateway forwarding for anything but the home
+    would make it the next hop of a subnet it has no leg on. The one route via
+    another member is the legacy pod subnet, via the machine that still runs
+    that cluster, so that the route leaves with the entry.
+    """
+    home = {network.v4 for network in conventions.SITE_NETWORKS} | {conventions.LAN_POOL.v4}
+    members = {entry.address for entry in conventions.overlay.ROSTER} | {conventions.overlay.UDM}
+    legacy = conventions.overlay.member(conventions.overlay.MEMBER_VPS).address
+
+    for route in conventions.overlay.MANAGED_ROUTES:
+        if route.via is None:
+            continue
+        assert route.via in members, route
+        if route.target in home:
+            assert route.via == conventions.overlay.UDM, route
+        elif route.target == conventions.overlay.LEGACY_POD_SUBNET:
+            assert route.via == legacy, route
+        else:
+            raise AssertionError(f'{route} is via a member for a subnet that is neither the home nor the legacy one')
 
 
 def test_the_census_carries_the_cluster_vlan_and_the_pool_by_name() -> None:
@@ -200,10 +252,12 @@ def test_the_census_carries_the_cluster_vlan_and_the_pool_by_name() -> None:
     route table and the two subnets are one census, so what is assertable here
     is which subnets the table carries and not what either one is numbered.
     """
+    targets = [route.target for route in conventions.overlay.MANAGED_ROUTES]
+
     # The pool is not a subnet anything is attached to: it is carried because
     # the gateway learns host routes into it over BGP.
-    assert conventions.LAN_POOL.v4 in conventions.overlay.MANAGED_ROUTES
-    assert conventions.CLUSTER_VLAN.v4 in conventions.overlay.MANAGED_ROUTES
+    assert conventions.LAN_POOL.v4 in targets
+    assert conventions.CLUSTER_VLAN.v4 in targets
 
 
 def test_the_network_carries_the_rules_it_was_handed_and_composes_none(stack: Central) -> None:
@@ -238,14 +292,14 @@ def test_the_members_declared_are_exactly_the_roster_and_nothing_else_is_consult
     That is what lets the gateway be absent during a first bring-up with no
     relaxation to switch on: there is no configured mapping the roster could
     be short against, so an entry that has not been written yet declares
-    nothing and costs nothing. The routes name the gateway's overlay address
-    as their next hop either way — a route to a router that has not joined yet is the ordinary
-    state of a bring-up.
+    nothing and costs nothing. The routes to the home name the gateway's
+    overlay address as their next hop either way — a route to a router that
+    has not joined yet is the ordinary state of a bring-up.
     """
     declared_members = stack.names(MEMBER)
 
     assert declared_members == {f'{NAME}-member-{entry.name}' for entry in conventions.overlay.ROSTER}
-    assert {route['via'] for route in stack.inputs_of(f'{NAME}-network')['routes']} == {str(conventions.overlay.UDM)}
+    assert str(conventions.overlay.UDM) in {route.get('via') for route in stack.inputs_of(f'{NAME}-network')['routes']}
 
 
 def test_no_member_is_handed_an_address_the_roster_did_not_choose(stack: Central) -> None:

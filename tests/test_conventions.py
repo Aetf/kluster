@@ -325,7 +325,7 @@ def test_every_pushed_server_sits_behind_a_route_the_network_manages() -> None:
     otherwise have used pre-empted by the scoped resolver.
     """
     for server in conventions.overlay.MANAGED_DNS.servers:
-        assert any(server in route for route in conventions.overlay.MANAGED_ROUTES), server
+        assert any(server in route.target for route in conventions.overlay.MANAGED_ROUTES), server
 
 
 # --------------------------------------------------------------------------

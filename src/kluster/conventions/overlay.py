@@ -29,12 +29,12 @@ NETWORK_ID = '83048a0632b6ba9b'
 
 SUBNET = IPv4Network('10.144.0.0/16')
 
-#: Static managed overlay addresses. The UDM is the nexthop of every managed
-#: route; the two CI identities are confined by the tag-based flow rules to
-#: exactly the four targets they need. There is one identity per *stack* that
-#: joins, not one per kind of run: ZeroTier maps a node to one endpoint at a
-#: time, so two jobs sharing an identity would flap it
-#: (physical/gateway.md §2.6).
+#: Static managed overlay addresses. The UDM is the nexthop of every route to
+#: the home (`MANAGED_ROUTES`); the two CI identities are confined by the
+#: tag-based flow rules to exactly the four targets they need. There is one
+#: identity per *stack* that joins, not one per kind of run: ZeroTier maps a
+#: node to one endpoint at a time, so two jobs sharing an identity would flap
+#: it (physical/gateway.md §2.6).
 UDM = IPv4Address('10.144.1.1')
 CI_PHYSICAL = IPv4Address('10.144.2.1')
 CI_DNS = IPv4Address('10.144.2.2')
@@ -57,17 +57,6 @@ class Role(IntEnum):
     INFRA = 1
     CI = 2
 
-
-#: Home subnets the UDM member routes for overlay clients. The cluster VLAN is
-#: here because a run reaches the worker's machine API over the overlay, and the
-#: pool because that is how a person off-site reaches a cluster service.
-MANAGED_ROUTES = (
-    SERVER_LAN.v4,
-    CLUSTER_VLAN.v4,
-    IOT_VLAN.v4,
-    CONTAINER_VLAN.v4,
-    LAN_POOL.v4,  # reached via the UDM's BGP-learned route
-)
 
 #: The two identities that exist only for continuous integration, one per
 #: stack that joins the overlay during a run (physical/gateway.md §2.6).
@@ -113,6 +102,11 @@ MANAGED_DNS = ManagedDns(domain=OVERLAY_DOMAIN, servers=tuple(resolver.address f
 #: the bring-up has happened. Step 2 of the ceremony reads it off the device
 #: and adds the entry as a commit (physical/gateway.md §2.5).
 MEMBER_UDM = 'udm'
+
+#: The legacy deployment, as the roster names it. It is the one member a route
+#: other than the gateway's is via: the legacy cluster's pod subnet stays
+#: routed through it until the machine retires (cluster/migration.md §4).
+MEMBER_VPS = 'Aetf-Arch-VPS'
 
 #: The homelab host, as the roster names it. It is the one member the flow
 #: rules and the libvirt session look up rather than take from a constant: the
@@ -198,7 +192,7 @@ ROSTER: tuple[RosterEntry, ...] = (
         note='the homelab host: a plain member and the recovery side-door, never a router',
     ),
     EnrolledMember(
-        name='Aetf-Arch-VPS',
+        name=MEMBER_VPS,
         node_id='fb6c235c67',
         address=IPv4Address('10.144.160.212'),
         role=Role.INFRA,
@@ -251,3 +245,45 @@ def member(name: str) -> RosterEntry:
         if entry.name == name:
             return entry
     raise ValueError(f'{name} is not on the overlay roster')
+
+
+@final
+@dataclass(frozen=True)
+class ManagedRoute:
+    """One route the network carries: what it reaches, and which member forwards for it.
+
+    A route is `{target, via}` on the network and nothing more: `via` names a
+    member, and that member forwards only because forwarding is configured on
+    the device itself (physical/gateway.md §2.2). `via=None` is the route
+    ZeroTier itself installs on every member's interface, the one for the
+    network's own subnet -- and it is what makes an address an address: the
+    controller pushes a member's static assignment only when some route's
+    target contains it, with that route's netmask, so a network without one
+    hands every member no address at all.
+    """
+
+    target: IPv4Network
+    via: IPv4Address | None
+
+
+#: The legacy cluster's pod subnet, reached through the machine that still
+#: runs it. Retires with that machine's roster entry (cluster/migration.md §4).
+LEGACY_POD_SUBNET = IPv4Network('10.42.0.0/24')
+
+#: The whole route table the network carries, and the only one: the network is
+#: adopted with its routes declared in full, so what is absent here is deleted
+#: at Central. First the overlay's own subnet, with no `via`, which is what
+#: keeps every member addressed; then the home subnets the gateway forwards
+#: for -- the cluster VLAN because a run reaches the worker's machine API over
+#: the overlay, the pool because that is how a person off-site reaches a
+#: cluster service; then the legacy route, via the retiring member's own
+#: address so that the entry and the route leave in one commit.
+MANAGED_ROUTES: tuple[ManagedRoute, ...] = (
+    ManagedRoute(SUBNET, None),
+    ManagedRoute(SERVER_LAN.v4, UDM),
+    ManagedRoute(CLUSTER_VLAN.v4, UDM),
+    ManagedRoute(IOT_VLAN.v4, UDM),
+    ManagedRoute(CONTAINER_VLAN.v4, UDM),
+    ManagedRoute(LAN_POOL.v4, UDM),  # reached via the UDM's BGP-learned route
+    ManagedRoute(LEGACY_POD_SUBNET, member(MEMBER_VPS).address),
+)
