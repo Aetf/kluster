@@ -71,17 +71,21 @@ KEY_ENV = 'PGSSLKEY'
 #:
 #: It is small against `pki.LEAF_VALIDITY`, so a certificate spends a small
 #: fraction of its life inside the margin and the box is replaced for expiry
-#: at most once per certificate. That reason stands
-#: on its own, which matters because the second one rests on something
-#: unbuilt: an expiry probe alerting at 30 days remaining would sit 60 days
-#: after this margin opens, so an installation being deployed at all would
-#: have had the expiry reported to it well before that alert could fire. The
-#: alert would then be the backstop for a box nobody has converged, or whose
-#: reports nobody acted on -- reporting is what a converge does unaided, and
-#: the replacement itself waits for `--force`. The probe is still design-only
-#: (physical/state-backend.md §3), so today the margin is the only thing
-#: watching the certificate.
+#: at most once per certificate. And it is wider than `EXPIRY_ALERT_MARGIN`
+#: below, so an installation being deployed at all has had the expiry
+#: reported to it -- reporting is what a converge does unaided, and the
+#: replacement itself waits for `--force` -- well before the probe's alert
+#: can fire.
 RENEWAL_MARGIN = dt.timedelta(days=90)
+
+#: How much life the server certificate must have left for `state-backend
+#: probe` to stay quiet (physical/state-backend.md §6), and the only home of
+#: that number. Held below `RENEWAL_MARGIN` by a test: the probe is the
+#: backstop for a box nobody has converged, or whose reports nobody acted on,
+#: and a backstop that fires before the margin opens is the first reporter
+#: rather than the last. The gap between the two is the time a reported
+#: expiry has to be acted on before it is alerted as well.
+EXPIRY_ALERT_MARGIN = dt.timedelta(days=30)
 
 
 def drill_recipient(path: Path) -> str | None:
