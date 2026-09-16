@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from kluster.conventions.identity import CLUSTER_NAME, PHYSICAL, STATE_BACKEND
+from kluster.conventions.identity import CLUSTER_NAME, DRILL, PHYSICAL, STATE_BACKEND
 
 
 class CompartmentMissing(LookupError):
@@ -37,24 +37,31 @@ class Compartment:
     still behind a key.
 
     A compartment that has not been created yet therefore has a name and no
-    OCID. That is a state rather than a gap: `credentials derived oci-<consumer>
-    mint` creates it, prints the OCID, and the edit that records it here is one
-    line to commit. Until then `require` refuses by naming that command, which
-    is what keeps a stack from failing on a lookup instead.
+    OCID. That is a state rather than a gap: the row's mint creates it, prints
+    the OCID, and the edit that records it here is one line to commit. Until
+    then `require` refuses by naming that command, which is what keeps a stack
+    from failing on a lookup instead.
     """
 
-    #: The `credentials derived oci-<consumer>` row, and the stack or command
-    #: the compartment belongs to.
+    #: The consumer whose key is confined to the compartment: the stack,
+    #: command or workflow it belongs to, and the name its `credentials
+    #: derived` row and IAM principal carry.
     consumer: str
     #: What the compartment is called in the tenancy.
     name: str
     #: What OCI calls it, once it exists.
     ocid: str | None = None
+    #: The row that mints the key, where it is not `oci-<consumer>`. A stack's
+    #: OCI key is a row of its own; the drill's is one half of a composite row
+    #: that mints its B2 key beside it, so that row is named here rather than
+    #: derived -- a refusal naming `oci-drill mint` would send an operator to a
+    #: command that does not exist.
+    minted_by: str | None = None
 
     @property
     def mint(self) -> str:
         """The command that creates the compartment and mints the key confined to it."""
-        return f'credentials derived oci-{self.consumer} mint'
+        return self.minted_by or f'credentials derived oci-{self.consumer} mint'
 
     def require(self) -> str:
         """The OCID, or a refusal naming the command that produces one."""
@@ -164,6 +171,19 @@ OCI_TENANCY = OciTenancy(
                 consumer=PHYSICAL,
                 name=f'{CLUSTER_NAME}-{PHYSICAL}',
                 ocid='ocid1.compartment.oc1..aaaaaaaajoaiz6cho6dnufutp6nrqyzhp6dswoi4hssa4o4sks276areztna',
+            ),
+            # The rebuild drill's scratch box, its network and its image import
+            # (physical/state-backend.md §7.3) live here and nothing else does:
+            # the compartment boundary is the whole of what the drill's key may
+            # touch, and what the compartment holds is the bound. No OCID until
+            # the first mint prints it. No `Guardrails` either -- `physical`
+            # declares those per compartment (`components/cloud/guardrails.py`)
+            # and declares none here, so until it does the bound on spend is
+            # this boundary and the account's own limits.
+            Compartment(
+                consumer=DRILL,
+                name=f'{CLUSTER_NAME}-{DRILL}',
+                minted_by=f'credentials derived {DRILL}-credentials mint',
             ),
         )
     },

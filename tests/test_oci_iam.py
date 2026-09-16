@@ -1121,6 +1121,60 @@ def test_a_compartment_whose_ocid_disagrees_with_the_mapping_is_refused(
         _ = oci_iam.mint_api_key(seeded, consumer=conventions.STATE_BACKEND, seed_entry=SEED_ENTRY, connect=tenancy)
 
 
+def test_the_drill_compartment_is_recorded_apart_from_every_other() -> None:
+    """The drill's OCI key administers a compartment with nothing else in it.
+
+    That bound is a fact about the tenancy, and what this repository can hold
+    of it is the record: the compartment is named for the drill and for no
+    stack, its name is nobody else's, and nothing a stack declares reads its
+    entry -- so a resource can reach it only through the drill's own key. The
+    OCID is absent until the first mint prints it, which `Compartment.require`
+    refuses by naming the composite row rather than an `oci-drill` mint that
+    does not exist.
+    """
+    compartments = conventions.OCI_TENANCY.compartments
+    drill = compartments[conventions.DRILL]
+
+    assert drill.consumer == conventions.DRILL
+    assert drill.name == f'{conventions.CLUSTER_NAME}-{conventions.DRILL}'
+    assert drill.name not in {other.name for other in compartments.values() if other is not drill}
+    assert drill.ocid is None or drill.ocid not in {other.ocid for other in compartments.values() if other is not drill}
+    assert drill.mint == f'credentials derived {conventions.DRILL}-credentials mint'
+    with pytest.raises(conventions.CompartmentMissing, match=re.escape(drill.mint)):
+        _ = conventions.Compartment(consumer=conventions.DRILL, name=drill.name, minted_by=drill.minted_by).require()
+
+
+def test_the_drill_identity_administers_its_compartment_and_reaches_nothing_outside_it() -> None:
+    identity = oci_iam.Identity.for_consumer(conventions.DRILL, compartment_id='ocid1.compartment.oc1..drill')
+
+    # Exactly one statement, and it is the consumer template's: every verb a
+    # rebuild drill needs -- launch and terminate, a network, an address, an
+    # image import -- is "manage" inside one compartment, and a verb-by-verb
+    # policy would be a list the next `provision` change silently outgrows.
+    # No statement reaches the tenancy: the compartment is the whole grant.
+    assert identity.name == f'{conventions.CLUSTER_NAME}-{conventions.DRILL}'
+    assert identity.statements == (
+        f'Allow group {identity.name} to manage all-resources in compartment id ocid1.compartment.oc1..drill',
+    )
+    assert not [statement for statement in identity.statements if 'in tenancy' in statement]
+
+
+def test_a_drill_mint_creates_the_drill_compartment_and_confines_the_key_to_it(
+    seeded: KdbxStore, tenancy: Tenancy
+) -> None:
+    intended = conventions.OCI_TENANCY.compartments[conventions.DRILL]
+
+    _ = oci_iam.mint_api_key(seeded, consumer=conventions.DRILL, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    # The recorded entry carries no OCID yet, so this is the create-and-announce
+    # path the `physical` compartment once took: the compartment the policy
+    # names is the one this run made, under the drill's own name.
+    assert _compartments(tenancy) == [intended.name]
+    created = next(iter(tenancy.identity.compartments.values()))
+    name = f'{conventions.CLUSTER_NAME}-{conventions.DRILL}'
+    assert _policy(tenancy, name) == [f'Allow group {name} to manage all-resources in compartment id {created.id}']
+
+
 def test_a_compartment_named_on_the_command_line_is_taken_as_given(seeded: KdbxStore, tenancy: Tenancy) -> None:
     drill = 'ocid1.compartment.oc1..drill'
 

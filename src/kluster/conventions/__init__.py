@@ -234,7 +234,7 @@ from kluster.conventions.homelab import (
     HOMELAB_STORAGE_DIR,
     HOMELAB_VCPUS,
 )
-from kluster.conventions.identity import CLUSTER_NAME, LABEL_DOMAIN, PHYSICAL, STATE_BACKEND
+from kluster.conventions.identity import CLUSTER_NAME, DRILL, LABEL_DOMAIN, PHYSICAL, STATE_BACKEND
 from kluster.conventions.outputs import PHYSICAL_OUTPUTS, PhysicalOutputs
 from kluster.conventions.providers import (
     B2_ACCOUNT,
@@ -279,6 +279,7 @@ __all__ = (
     'CLUSTER_VLAN',
     'CONTAINER_VLAN',
     'DEDICATED_VIP_NODE',
+    'DRILL',
     'ETCD_SNAPSHOT_PREFIX',
     'FOLLOWS_DEDICATED_VIP',
     'GATEWAY_INTERNET',

@@ -16,6 +16,15 @@ STATE_BACKEND = 'state-backend'
 #: signs as, and the compartment that principal administers.
 PHYSICAL = 'physical'
 
+#: The unattended rebuild drill (physical/state-backend.md §7.3), which is
+#: one name in four places: the ops repository's Environment its credentials
+#: land in (`forge.DRILL`), the IAM principal it signs as, the compartment
+#: that principal administers, and the B2 key it reads the dumps with. Not a
+#: stack and not a command of this repository -- a workflow in the ops
+#: repository -- which is why its rows carry the name as a prefix on every
+#: secret (credentials.md §3).
+DRILL = 'drill'
+
 #: Prefix for every label/annotation key this program owns. A k8s label key
 #: prefix must be a DNS subdomain; this one is a zone we control, so the keys
 #: can never collide with an upstream chart's.

@@ -36,6 +36,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import final
 
+from kluster.conventions import identity
+
 
 @final
 @dataclass(frozen=True)
@@ -197,8 +199,10 @@ RENOVATE = Author('renovate[bot]')
 #: The ops repository's only Environment, which carries the unattended drills'
 #: credentials. Ungated because its scope is the gate (credentials.md §4).
 #: Any branch, for want of an alternative: a private repository has no
-#: protected branches to name on this plan (framework/github.md §2).
-DRILL = Environment('drill', BranchPolicy.ANY_BRANCH)
+#: protected branches to name on this plan (framework/github.md §2). Named
+#: after the consumer whose credentials it holds (`identity.DRILL`): the
+#: Environment, the IAM principal and the compartment are one name.
+DRILL = Environment(identity.DRILL, BranchPolicy.ANY_BRANCH)
 
 #: The repository this stack is declared in, and the one CI deploys from.
 DEPLOYMENT = Repository(
