@@ -32,6 +32,14 @@ because every dump it opens is also encrypted to an escrowed generation
 (credentials.md §2.2) — so its private half goes to the ops-repo Environment
 through the same GitHub sink every other GitHub secret takes, and its public
 half to a committed file the appliance's recipient list appends.
+
+The drill's other row is one command over two mints: the OCI key that
+administers the drill compartment and the B2 key that reads the dump prefix
+are minted by the same two shapes the `physical` rows use, and every carrier
+lands in that same Environment through the sink. One row, because the census
+keys map rows by the command that produces them; two mints, because the two
+platforms' seeds are two kit entries and a failure on one must leave the
+other's predecessor live.
 """
 
 from __future__ import annotations
@@ -41,6 +49,7 @@ from pathlib import Path
 
 from ... import conventions
 from ..state_backend import config as appliance
+from ..state_backend import settings as appliance_settings
 from . import age, b2, cloudflare, entries, oci_iam, oci_slot, pulumi_config
 from .github_secrets import Forge, Slot
 from .kdbx import KdbxStore
@@ -150,21 +159,51 @@ GATEWAY_ACME_ROW = 'cloudflare-gateway-acme'
 OCI_PHYSICAL_ROW = 'oci-physical'
 OCI_STATE_BACKEND_ROW = f'oci-{conventions.STATE_BACKEND}'
 B2_MANAGEMENT_ROW = 'b2-management'
-DRILL_AGE_IDENTITY_ROW = 'drill-age-identity'
+DRILL_AGE_IDENTITY_ROW = f'{conventions.DRILL}-age-identity'
+DRILL_CREDENTIALS_ROW = f'{conventions.DRILL}-credentials'
 
-#: Where the drill age identity's private half lands: the ops repository's
-#: `drill` Environment, read by the rebuild drill and by nothing else
-#: (ci.md §3). One value, imported by the slot map, so the sink this generator
-#: pushes to and the target the register advertises cannot be two addresses.
-#:
-#: The name carries the Environment as a prefix. Inside a job an Environment
-#: secret shadows a repository secret of the same name, and the ops
-#: repository is to hold both kinds (credentials.md §3), so an ops-repo
-#: Environment secret is named `<ENVIRONMENT>_<what>`; a test holds every
-#: such slot in the map to it.
-DRILL_AGE_IDENTITY_SLOT = Slot(
-    repository=conventions.forge.OPS.full_name, name='DRILL_AGE_IDENTITY', environment=conventions.forge.DRILL.name
-)
+
+def _drill_slot(name: str) -> Slot:
+    """One secret in the ops repository's `drill` Environment, read by the rebuild drill and by nothing else (ci.md §3).
+
+    The name carries the Environment as a prefix. Inside a job an Environment
+    secret shadows a repository secret of the same name, and the ops
+    repository is to hold both kinds (credentials.md §3), so an ops-repo
+    Environment secret is named `<ENVIRONMENT>_<what>`; a test holds every
+    such slot in the map to it.
+    """
+    return Slot(repository=conventions.forge.OPS.full_name, name=name, environment=conventions.forge.DRILL.name)
+
+
+#: Where the drill age identity's private half lands. One value, imported by
+#: the slot map, so the sink the generator pushes to and the target the
+#: register advertises cannot be two addresses; the five below are the same
+#: arrangement for the drill's OCI and B2 keys.
+DRILL_AGE_IDENTITY_SLOT = _drill_slot('DRILL_AGE_IDENTITY')
+
+#: The drill's OCI signing configuration, the three carriers `_push_api_key`
+#: writes for a stack, as Environment secrets: the user OCID the key signs
+#: as, the fingerprint computed from the key at push time so the two cannot
+#: disagree, and the PEM. The tenancy, the region and the compartment are not
+#: among them, for the reason they are not config keys either: all three are
+#: `conventions`, and the workflow that assembles a signing configuration out
+#: of these reads them from the checkout it pins.
+DRILL_OCI_USER_SLOT = _drill_slot('DRILL_OCI_USER_OCID')
+DRILL_OCI_FINGERPRINT_SLOT = _drill_slot('DRILL_OCI_FINGERPRINT')
+DRILL_OCI_PRIVATE_KEY_SLOT = _drill_slot('DRILL_OCI_PRIVATE_KEY')
+DRILL_OCI_SLOTS = (DRILL_OCI_USER_SLOT, DRILL_OCI_FINGERPRINT_SLOT, DRILL_OCI_PRIVATE_KEY_SLOT)
+
+#: The drill's B2 key, both halves: the id names the one key of that name the
+#: account holds, and the pair is one credential.
+DRILL_B2_KEY_ID_SLOT = _drill_slot('DRILL_B2_KEY_ID')
+DRILL_B2_KEY_SLOT = _drill_slot('DRILL_B2_KEY')
+DRILL_B2_SLOTS = (DRILL_B2_KEY_ID_SLOT, DRILL_B2_KEY_SLOT)
+
+#: The two halves of the drill's credentials, as `--only` names them: the
+#: platform each key is minted at.
+DRILL_OCI_HALF = 'oci'
+DRILL_B2_HALF = 'b2'
+DRILL_HALVES = (DRILL_OCI_HALF, DRILL_B2_HALF)
 
 CLOUDFLARE_SEED_ENTRY = entries.SEEDS['cloudflare'].entry
 OCI_SEED_ENTRY = entries.SEEDS['oci'].entry
@@ -398,6 +437,30 @@ def b2_management(kit: KdbxStore, *, stack: pulumi_config.Stack, seed_entry: str
     return delivered.key_id
 
 
+def _push(forge: Forge, slot: Slot, value: str) -> None:
+    """Push one GitHub secret through the sink and prove it landed, as far as the channel can.
+
+    The value is never readable again, so what is checked is what the map's
+    sink checks (`slots.py`): the name is in the listing afterwards and its
+    timestamp moved. The name separates a push that happened from one that
+    was refused, which is the failure guarded against; on a rotation the name
+    was there before, and the timestamp is what says this run's push is the
+    one listed -- two pushes inside one second share one, which is worth a
+    word rather than a failure. A push that does not show there ends the
+    run, and what that leaves behind is the caller's to say.
+    """
+    before = forge.listing(slot).get(slot.name)
+    log.info('pushing %s (gh encrypts it on the way out)', slot)
+    forge.put(slot, value)
+    after = forge.listing(slot).get(slot.name)
+    if after is None:
+        raise pulumi_config.SlotRefused(f'{slot}: pushed, but the secret listing does not show it')
+    if before is not None and after == before:
+        log.warning('%s: the listing still reads %s - a re-push inside one second looks like this', slot, after)
+    else:
+        log.info('%s: updated %s', slot, after)
+
+
 def drill_age_identity(forge: Forge, *, recipient_file: Path, rotate: bool) -> str:
     """Draw the drill age identity: private half to the ops-repo Environment, public half to a file.
 
@@ -451,12 +514,7 @@ def drill_age_identity(forge: Forge, *, recipient_file: Path, rotate: bool) -> s
     # lines and with no trailing newline: a GitHub secret is stored exactly
     # as it is piped in, and the drill writes the value to a file it hands
     # `state-backend restore --identity-file`, which reads it line by line.
-    log.info('pushing the private half to %s (gh encrypts it on the way out)', slot)
-    forge.put(slot, identity.secret)
-    if slot.name not in forge.listing(slot):
-        raise pulumi_config.SlotRefused(
-            f'{slot}: pushed, but the secret listing does not show it; {recipient_file} is untouched'
-        )
+    _push(forge, slot, identity.secret)
     log.info('%s holds the private half; writing the public half to %s', slot, recipient_file)
     _ = recipient_file.write_text(
         '# The drill age identity, public half (docs/credentials.md §3). The private\n'
@@ -468,3 +526,119 @@ def drill_age_identity(forge: Forge, *, recipient_file: Path, rotate: bool) -> s
     log.info('    state-backend provision --force    # dumps under the new recipients, replaces, names the file')
     log.info('    state-backend restore <that file>')
     return identity.public
+
+
+def _push_drill_api_key(forge: Forge, key: oci_iam.ApiKey) -> None:
+    """Write the drill's OCI signing configuration into its three Environment secrets.
+
+    The same three values `_push_api_key` writes into a stack's config, for
+    the same reasons -- the fingerprint computed from the key at push time, the
+    PEM without its trailing newline -- landing as three secrets because a
+    GitHub secret is one string and a workflow assembles the configuration
+    file out of them. Each push is verified through the listing before the
+    next one starts, so a run that stops part way leaves a set the drill
+    cannot sign with rather than one that signs as the wrong user.
+    """
+    _push(forge, DRILL_OCI_USER_SLOT, key.user)
+    _push(forge, DRILL_OCI_FINGERPRINT_SLOT, key.fingerprint)
+    _push(forge, DRILL_OCI_PRIVATE_KEY_SLOT, key.private_key.strip())
+
+
+def _dump_bucket(session: b2.Session) -> str:
+    """The id of the bucket the appliance dumps into, which is what confines the drill's key.
+
+    Looked up rather than converged: `state-backend provision` creates the
+    bucket and pins its retention, and a drill that finds no bucket has
+    nothing to read -- creating one here would mint a reader over an empty
+    prefix and report success.
+    """
+    name = appliance_settings.B2_BUCKET
+    found = session.buckets(name)
+    if not found:
+        raise pulumi_config.SlotRefused(
+            f'the B2 account holds no bucket named {name}, so there is nothing for a drill to read; '
+            '`state-backend provision` creates it'
+        )
+    return found[0].bucket_id
+
+
+def drill_credentials(
+    kit: KdbxStore,
+    forge: Forge,
+    *,
+    only: str | None = None,
+    oci_seed_entry: str = OCI_SEED_ENTRY,
+    b2_seed_entry: str = B2_SEED_ENTRY,
+    connect: oci_iam.Connect = oci_iam.identity_client,
+) -> dict[str, str]:
+    """Mint the rebuild drill's OCI and B2 keys into the ops repository's `drill` Environment.
+
+    Returns the identifiers delivered, by half: the OCI user OCID and the B2
+    key id, which is what an operator matches against a console listing.
+
+    Two mints the `physical` rows already run, aimed at the drill's own
+    boundaries. The OCI half is `oci_iam.mint_api_key` for the `drill`
+    consumer: its user, group and policy under one name, confined to the
+    compartment `conventions` names for it and created there on the first
+    run, which prints the OCID to record. **No `--compartment` override on
+    this row.** That flag exists for rehearsing a bring-up in a tenancy that
+    is not this installation's, where no recorded name applies; the drill
+    compartment is a recorded name in the recorded tenancy, and the mint is
+    held to it (`oci_iam.verify_tenancy`) -- a drill key confined to a
+    compartment named on the command line is a key whose bound no test holds.
+    The B2 half is `b2.mint_drill_read_key` over the bucket the appliance
+    dumps into: list and read on the dump prefix, verified by listing it as
+    the new key.
+
+    Each half goes through `Delivery`: mint, push its carriers, verify each
+    through the listing, and only then retire what it supersedes -- so a push
+    that fails leaves the predecessor live, and the halves are independent of
+    each other's failure. Re-running is the rotation of both; `only` rotates
+    one.
+
+    **Every refusal the run can know before minting fires before anything is
+    minted.** The B2 half's preconditions -- the seed opens, the account is
+    the recorded one, the dump bucket exists -- are resolved ahead of the OCI
+    half whenever the B2 half runs, so a run against an account with no
+    bucket creates nothing on either platform, rather than rotating the OCI
+    key and then refusing with nothing said about it.
+
+    Nothing here writes a file: the carriers exist in this process, on `gh`'s
+    standard input and in the Environment. Assembling a signing configuration
+    and a B2 credential out of them is the workflow's step (state-backend.md
+    §7.3), which reads the tenancy, the region and the compartment from the
+    checkout it pins rather than from a secret.
+    """
+    if only is not None and only not in DRILL_HALVES:
+        raise pulumi_config.SlotRefused(
+            f'{only!r} is no half of the drill credentials; the halves are {", ".join(DRILL_HALVES)}'
+        )
+    halves = DRILL_HALVES if only is None else (only,)
+    delivered: dict[str, str] = {}
+
+    reader_scope: tuple[b2.Session, str] | None = None
+    if DRILL_B2_HALF in halves:
+        log.info('opening the B2 seed from the kit')
+        session = b2.Session.from_entry(kit, b2_seed_entry)
+        b2.verify_account(session.account_id)
+        reader_scope = (session, _dump_bucket(session))
+
+    if DRILL_OCI_HALF in halves:
+        pending_key = oci_iam.mint_api_key(kit, consumer=conventions.DRILL, seed_entry=oci_seed_entry, connect=connect)
+        key, _ = pending_key.deliver(lambda key: _push_drill_api_key(forge, key))
+        log.info('the drill signs as %s (%s) from now on', oci_iam.Identity.name_for(conventions.DRILL), key.user)
+        delivered[DRILL_OCI_HALF] = key.user
+
+    if reader_scope is not None:
+        session, bucket_id = reader_scope
+        pending_read = b2.mint_drill_read_key(session, bucket_id=bucket_id)
+
+        def push_read_key(read_key: b2.AppKey) -> None:
+            _push(forge, DRILL_B2_KEY_ID_SLOT, read_key.key_id)
+            _push(forge, DRILL_B2_KEY_SLOT, read_key.key)
+
+        read_key, _ = pending_read.deliver(push_read_key)
+        log.info('the drill reads the dump prefix as %s (%s) from now on', b2.DRILL_READ_NAME, read_key.key_id)
+        delivered[DRILL_B2_HALF] = read_key.key_id
+
+    return delivered

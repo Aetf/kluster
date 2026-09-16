@@ -253,6 +253,7 @@ class Dispatch:
             (cli.derived, 'oci_state_backend', Path('placeholder')),
             (cli.derived, 'b2_management', 'key-id'),
             (cli.derived, 'drill_age_identity', 'age1recipient'),
+            (cli.derived, 'drill_credentials', {}),
             (cli.devices, 'deliver', ()),
             # Slots are files in the checkout this test is running from, so
             # the writer is stubbed: a dispatch test must not leave a
@@ -460,6 +461,44 @@ def test_the_drill_identity_is_aimed_at_the_committed_recipient_file_as_the_admi
     assert [kwargs['rotate'] for _, kwargs in calls] == [False, True]
     assert {kwargs['recipient_file'] for _, kwargs in calls} == {cli.appliance_config.DRILL_RECIPIENT_FILE}
     assert {args[0].token for args, _ in calls} == {'a-token'}
+
+
+def test_the_drill_credentials_mint_takes_no_compartment(capsys: pytest.CaptureFixture[str]) -> None:
+    """The one OCI mint held to the recorded compartment with no way around it.
+
+    `--compartment` exists for rehearsing a bring-up in a tenancy that is not
+    this installation's; the drill compartment is a recorded name in the
+    recorded tenancy, and a drill key confined to a compartment named on the
+    command line would be a key whose bound no test holds.
+    """
+    with pytest.raises(SystemExit) as refusal:
+        _ = cli.build_parser().parse_args(['derived', 'drill-credentials', 'mint', '--compartment', 'ocid1.x'])
+
+    assert refusal.value.code == 2
+    assert 'unrecognized arguments: --compartment' in capsys.readouterr().err
+
+
+def test_the_drill_credentials_reach_their_mint_with_both_seeds_as_the_admin_token(dispatch: Dispatch) -> None:
+    assert cli.main(['derived', 'drill-credentials', 'mint']) == 0
+    assert cli.main(['derived', 'drill-credentials', 'mint', '--only', 'b2', '--b2-entry', 'seeds/other']) == 0
+
+    # Both halves by default and one on request; each seed from the entry its
+    # own flag names; the push authenticates as the token `derived sync` uses,
+    # read out of the `github` stack rather than from anything in the shell.
+    calls = [(args, kwargs) for name, args, kwargs in dispatch.calls if name == 'derived.drill_credentials']
+    assert [kwargs['only'] for _, kwargs in calls] == [None, 'b2']
+    assert [kwargs['b2_seed_entry'] for _, kwargs in calls] == [cli.derived.B2_SEED_ENTRY, 'seeds/other']
+    assert {kwargs['oci_seed_entry'] for _, kwargs in calls} == {cli.derived.OCI_SEED_ENTRY}
+    assert {args[1].token for args, _ in calls} == {'a-token'}
+    assert {type(args[0]) for args, _ in calls} == {KdbxStore}
+
+
+def test_a_half_the_drill_does_not_have_is_refused_by_the_parser(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as refusal:
+        _ = cli.build_parser().parse_args(['derived', 'drill-credentials', 'mint', '--only', 'cloudflare'])
+
+    assert refusal.value.code == 2
+    assert 'invalid choice' in capsys.readouterr().err
 
 
 def test_the_compartment_reaches_the_row_that_confines_the_key_with_it(dispatch: Dispatch) -> None:

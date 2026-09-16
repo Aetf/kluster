@@ -659,6 +659,34 @@ def test_the_drill_age_identity_is_delivered_by_its_generator_and_waits_on_nothi
     assert row.pending == {}
 
 
+def test_the_drill_credentials_are_five_secrets_in_the_drill_environment_and_wait_on_nothing() -> None:
+    """One row over the drill's two keys, every carrier in the ops repository's `drill` Environment.
+
+    The carriers are the mint's own values, so the addresses the register
+    advertises are the ones the mint pushes to: three for the OCI signing
+    configuration, two for the B2 pair, all Environment secrets of that one
+    Environment and none a repository secret. Nothing pending: the row is
+    built, and a `pending` left on it would send an operator to wait for a
+    channel the mint fills.
+    """
+    row = slots.ROWS[derived.DRILL_CREDENTIALS_ROW]
+
+    assert isinstance(row.source, slots.Minted)
+    assert row.source.command == f'credentials derived {derived.DRILL_CREDENTIALS_ROW} mint'
+    assert not row.source.unbuilt
+    assert row.pending == {}
+    assert row.targets == row.sinks
+    assert {slot.repository for slot in row.sinks} == {OPS_REPOSITORY}
+    assert {slot.environment for slot in row.sinks} == {DRILL_ENVIRONMENT}
+    assert [slot.name for slot in row.sinks] == [
+        'DRILL_OCI_USER_OCID',
+        'DRILL_OCI_FINGERPRINT',
+        'DRILL_OCI_PRIVATE_KEY',
+        'DRILL_B2_KEY_ID',
+        'DRILL_B2_KEY',
+    ]
+
+
 def test_an_ops_repo_environment_secret_is_named_after_its_environment() -> None:
     """Inside a job an Environment secret shadows a repository secret of the same name.
 

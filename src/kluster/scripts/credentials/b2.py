@@ -1,6 +1,6 @@
 """The B2 credential family (docs/credentials.md §2–§3).
 
-Three credentials, three lifetimes:
+Three account-wide credentials, three lifetimes:
 
 -   the **account master key** — an account root (`masters.py`), held outside
     the kit and used only to create the seed if it is ever lost;
@@ -15,7 +15,11 @@ Three credentials, three lifetimes:
 Seed and management carry the same capabilities: what separates them is
 lifetime and reach, not permission. Neither carries file capabilities at
 all — the credential that manages the backup buckets cannot read a byte out
-of them.
+of them. The keys that touch files are confined to one prefix of one bucket
+each, and the two on the dump prefix are disjoint in what they may do: the
+appliance's uploader writes and can neither list nor read, the rebuild
+drill's reader lists and reads and can write nothing (`dumps`,
+`drill_reads`).
 
 **Every answer B2 sends crosses into a typed value at one parser** (`payload`):
 `post` hands back the decoded JSON as an `object`, and the `_…` functions below
@@ -73,6 +77,17 @@ CAPABILITIES: tuple[str, ...] = (
 #: The uploader's whole permission: it cannot list, read, or delete, so a
 #: compromised appliance cannot walk the dump history (storage.md §4).
 DUMP_CAPABILITIES: tuple[str, ...] = ('writeFiles',)
+
+#: The rebuild drill's whole permission over the same prefix: list the dumps
+#: and read one. No write, no delete, no key capability -- an exposed drill
+#: key can read every object under the prefix and change nothing, and the
+#: objects it reads are age-encrypted (state-backend.md §5).
+DRILL_READ_CAPABILITIES: tuple[str, ...] = ('listFiles', 'readFiles')
+
+#: How many names to ask for per `b2_list_file_names` page. B2 caps a page at
+#: a thousand and bills a call per page, so this is a transaction-size choice
+#: rather than a limit on what a listing sees.
+FILE_PAGE_SIZE = 1000
 
 
 @dataclass(frozen=True)
@@ -140,6 +155,17 @@ MANAGEMENT = Role(name='kluster-management', capabilities=CAPABILITIES)
 #: What the uploader is called, on the same terms as the two names above.
 DUMPS_NAME = 'kluster-state-dump'
 
+#: What the drill's reader is called, on the same terms: `kluster-drill` is
+#: the name its OCI principal carries (`oci_iam.Identity.name_for`), and the
+#: suffix says which of the drill's two keys this is.
+DRILL_READ_NAME = f'{conventions.CLUSTER_NAME}-{conventions.DRILL}-read'
+
+#: The prefix both dump-prefix roles are confined to: the one
+#: `conventions` names, with the `/` B2 matches a `namePrefix` on literally.
+#: One value, so the writer and the reader cannot be confined to prefixes
+#: that differ by a separator.
+DUMP_PREFIX = f'{conventions.STATE_DUMP_PREFIX}/'
+
 
 def dumps(bucket_id: str) -> Role:
     """The uploader's role: write-only, and confined to the dump prefix of one bucket.
@@ -155,7 +181,23 @@ def dumps(bucket_id: str) -> Role:
         name=DUMPS_NAME,
         capabilities=DUMP_CAPABILITIES,
         bucket_id=bucket_id,
-        name_prefix=f'{conventions.STATE_DUMP_PREFIX}/',
+        name_prefix=DUMP_PREFIX,
+    )
+
+
+def drill_reads(bucket_id: str) -> Role:
+    """The rebuild drill's role: read-only, and confined to the same prefix the uploader writes.
+
+    A function for the reason `dumps` is one, and a value the caller cannot
+    shape for the same reason: the prefix is the writer's, the capabilities are
+    the two the drill's one act needs -- list the objects, download the newest
+    -- and nothing in this repository can hand the mint a wider one.
+    """
+    return Role(
+        name=DRILL_READ_NAME,
+        capabilities=DRILL_READ_CAPABILITIES,
+        bucket_id=bucket_id,
+        name_prefix=DUMP_PREFIX,
     )
 
 
@@ -202,6 +244,20 @@ class KeyPage:
 
     keys: tuple[ListedKey, ...]
     next_key_id: str | None
+
+
+@dataclass(frozen=True)
+class FilePage:
+    """One page of `b2_list_file_names`, and where the page after it starts.
+
+    Names alone: what a dump is called carries its timestamp
+    (`deploy/state-backend/state-dump.py`), so the newest object and how old
+    it is are both read off the name. `next_file_name` -- absent on the last
+    page -- is the only thing that says a listing is complete.
+    """
+
+    names: tuple[str, ...]
+    next_file_name: str | None
 
 
 @dataclass(frozen=True)
@@ -264,6 +320,15 @@ def _key_page(answer: object) -> KeyPage:
     return KeyPage(
         keys=tuple(_listed_key(entry) for entry in body.objects('keys')),
         next_key_id=body.optional_text('nextApplicationKeyId'),
+    )
+
+
+def _file_page(answer: object) -> FilePage:
+    """`b2_list_file_names`: one page of names, and the cursor for the next."""
+    body = payload.Payload.of(answer, 'b2_list_file_names')
+    return FilePage(
+        names=tuple(entry.text('fileName') for entry in body.objects('files')),
+        next_file_name=body.optional_text('nextFileName'),
     )
 
 
@@ -388,6 +453,27 @@ class Session:
             page = _key_page(self.post('b2_list_keys', body))
             found.extend(page.keys)
             start = page.next_key_id
+            if not start:
+                return tuple(found)
+
+    def file_names(self, bucket_id: str, *, prefix: str) -> tuple[str, ...]:
+        """Every object name under `prefix` in one bucket, following the pages.
+
+        The one file call this package makes, and the drill reader's whole
+        verification: a key confined to a prefix is refused by B2 for a listing
+        outside it, so listing the prefix *as the new key* proves the grant is
+        the one asked for. Paged for the reason `keys` is: a listing that
+        stopped at the first answer would call an old dump the newest.
+        """
+        found: list[str] = []
+        start: str | None = None
+        while True:
+            body: dict[str, Any] = {'bucketId': bucket_id, 'prefix': prefix, 'maxFileCount': FILE_PAGE_SIZE}
+            if start is not None:
+                body['startFileName'] = start
+            page = _file_page(self.post('b2_list_file_names', body))
+            found.extend(page.names)
+            start = page.next_file_name
             if not start:
                 return tuple(found)
 
@@ -706,4 +792,34 @@ def mint_dump_key(session: Session, *, bucket_id: str) -> Delivery[AppKey]:
     role = dumps(bucket_id)
     minted = session.create_key(role)
     log.info('minted %s (%s)', role.name, minted.key_id)
+    return Delivery.of(minted, lambda: retire_others(session, role, keep=minted.key_id))
+
+
+def mint_drill_read_key(session: Session, *, bucket_id: str) -> Delivery[AppKey]:
+    """A read-only key confined to the dump prefix of one bucket, for the rebuild drill.
+
+    The same bucket and the same prefix as `mint_dump_key`, and the disjoint
+    capabilities: the uploader writes what this key lists and reads. What is
+    verified is the grant itself, by the one act the drill performs -- the new
+    key lists the prefix, as itself, before anything is delivered. B2 refuses
+    a prefix-confined key a listing outside its prefix, so the listing that
+    succeeds is the listing the grant allows, and a key minted narrower than
+    its job is refused here rather than on the drill's first run.
+
+    The retirement comes back with the key rather than happening here, so it
+    runs after the caller's push and not before it (`delivery.py`, and the
+    register's §4 for why). The closure retires as `session`, the seed that
+    minted the key: a read-only key carries no `deleteKeys` and could retire
+    nothing, its predecessor least of all.
+
+    The account is held against `conventions` before the key exists, as every
+    mint here does: a session for another account would otherwise put a key
+    that can read every dump into a bucket nothing here reads back from.
+    """
+    verify_account(session.account_id)
+    role = drill_reads(bucket_id)
+    minted = session.create_key(role)
+    reader = Session.authorize(minted.key_id, minted.key)
+    listed = reader.file_names(bucket_id, prefix=DUMP_PREFIX)
+    log.info('minted %s (%s), which lists %d object(s) under %s', role.name, minted.key_id, len(listed), DUMP_PREFIX)
     return Delivery.of(minted, lambda: retire_others(session, role, keep=minted.key_id))
