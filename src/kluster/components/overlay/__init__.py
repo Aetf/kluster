@@ -1,4 +1,4 @@
-"""The ZeroTier network the gateway routes for: membership, routes, flow rules.
+"""The ZeroTier network the gateway routes for: membership, routes, flow rules, managed DNS.
 
 The overlay is how the home site is reached from anywhere that is not the home
 site — by a person on a phone, and by a continuous-integration job that has to
@@ -8,7 +8,7 @@ under it (rfc-002 §6). The gateway is one member, and the two components meet
 only in `conventions`, where the roster says which address the gateway answers
 at.
 
-Three things are declared here, and each answers a different question
+Four things are declared here, and each answers a different question
 (gateway.md §2):
 
 -   **Membership** — who is authorized, at what address, carrying which role
@@ -31,6 +31,13 @@ Three things are declared here, and each answers a different question
     parameter, because what confines a run is a fact about how continuous
     integration reaches this site rather than about the network, and this
     component declares no policy (`flow_rules.py`).
+-   **The managed DNS** — the one domain the network asks its members to
+    resolve at home, and the resolvers that answer for it. It arrives as a
+    parameter, from `conventions.overlay.MANAGED_DNS`, because the `dns` stack
+    answers under the same domain and the two must agree. It is a field of the
+    network like the routes: the controller hands it to every member, and each
+    member applies it only under its own `allowDNS` setting, which is off by
+    default and which nothing here can set (gateway.md §2.7).
 
 **The roster is the whole of admission.** A member is authorized because it has
 an entry, and the entry carries the node id that says which device it is — so
@@ -93,7 +100,10 @@ class Overlay(Component):
     resources, and both arrive from the caller: a component receives the census
     it acts on rather than reading one for itself. They live in `conventions`
     rather than in the stack program because the `dns` stack publishes the
-    `*.zt` host block from the same roster.
+    `*.zt` host block from the same roster. `dns` arrives the same way and for
+    the same reason: the domain it pushes is the one that block is published
+    under, and the servers are the site's resolvers, both decided in
+    `conventions` and read by more than this program.
     """
 
     def __init__(
@@ -104,6 +114,7 @@ class Overlay(Component):
         flow_rules: str,
         roster: Sequence[conventions.overlay.RosterEntry],
         managed_routes: Sequence[IPv4Network],
+        dns: conventions.overlay.ManagedDns,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         # A provider of its own: this token administers the whole ZeroTier
@@ -150,6 +161,12 @@ class Overlay(Component):
                 for route in managed_routes
             ],
             flow_rules=flow_rules,
+            # One element, declared as one object: the provider folds every
+            # element of this list into the network's single DNS setting, so a
+            # second element would overwrite the first rather than add a
+            # domain. Like the routes, this reaches every member; unlike them
+            # it is inert until the member's own `allowDNS` is on.
+            dns=[zerotier.NetworkDnArgs(domain=dns.domain, servers=[str(server) for server in dns.servers])],
             opts=pulumi.ResourceOptions.merge(child, pulumi.ResourceOptions(import_=network_id)),
         )
 

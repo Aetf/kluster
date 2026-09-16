@@ -273,6 +273,7 @@ CENSUS_PARAMETERS = (
     (Guardrails, 'alert_rules'),
     (Overlay, 'roster'),
     (Overlay, 'managed_routes'),
+    (Overlay, 'dns'),
     (TalosCluster, 'control_plane_nodes'),
     (TalosCluster, 'worker_nodes'),
     (TalosCluster, 'bgp_peers'),
@@ -453,6 +454,28 @@ async def test_the_overlay_carries_rules_composed_from_the_roster_and_the_resolv
     for resolver in conventions.gateway.RESOLVERS:
         port = conventions.gateway.ADGUARD_API_PORT
         assert f'accept tseq role {ci} and ipdest {resolver.address}/32 and dport {port};' in rendered
+
+
+@pytest.mark.asyncio
+async def test_the_overlay_pushes_the_block_domain_and_the_resolvers_it_admits_a_run_to(setup: Installation) -> None:
+    """The managed DNS reaches the network from `conventions`, not composed here.
+
+    The domain is the convention's -- the overlay block's name, which
+    `test_conventions` holds it to -- and the servers are the resolver census
+    the flow rules above admit a run to, at the same container-VLAN
+    addresses, because the resolvers have no others. A value composed in the
+    program would be a second spelling of either, free to disagree with the
+    block or the census.
+    """
+    async with declaring():
+        await physical.main()
+
+    assert setup.inputs_of(f'{conventions.CLUSTER_NAME}-network')['dns'] == [
+        {
+            'domain': conventions.overlay.MANAGED_DNS.domain,
+            'servers': [str(resolver.address) for resolver in conventions.gateway.RESOLVERS],
+        }
+    ]
 
 
 @pytest.mark.asyncio

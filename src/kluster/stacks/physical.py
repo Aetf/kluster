@@ -324,6 +324,13 @@ async def main() -> None:
         network_id=conventions.overlay.NETWORK_ID,
         roster=conventions.overlay.ROSTER,
         managed_routes=conventions.overlay.MANAGED_ROUTES,
+        # The search domain and the resolvers the network pushes: the overlay
+        # host block's own name, answered by the same two resolvers the flow
+        # rules below admit a run to, at the same container-VLAN addresses.
+        # Written by the same request as the routes and the rules, with the
+        # token the component already holds; no member applies it until its
+        # own `allowDNS` is on (physical/gateway.md §2.7).
+        dns=conventions.overlay.MANAGED_DNS,
         # Composed here rather than inside the component, because what a run
         # may reach is a fact about how continuous integration gets to this
         # site rather than one about the network (rfc-002 §6).
