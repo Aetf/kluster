@@ -779,7 +779,7 @@ pushes those files itself**:
     there fails verification, in which case this provider grows the
     `UnifiFirewallPolicy` fallback resource (§5.1).
 -   **Images: Pulumi pins and deploys, CI builds.** Image *building* stays
-    in homelab-containers' CI (renovate keeps bases fresh; builds are
+    in the CI of homelab-containers (renovate keeps bases fresh; builds are
     slow, cache-dependent, and don't belong inside `pulumi up` —
     pulumi-docker-build exists and is deliberately not used). Pulumi's
     input is a **digest-pinned registry reference** to a CI-built
