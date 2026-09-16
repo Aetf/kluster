@@ -9,9 +9,11 @@ case that downloads at all is handed its bytes by a stand-in.
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import json
 import re
 import tarfile
+import tomllib
 from io import BytesIO
 from pathlib import Path
 from typing import cast
@@ -19,7 +21,9 @@ from typing import cast
 import pytest
 import requests
 
-from kluster.scripts.update_crds import pins, sources
+from kluster.scripts.update_crds import cli, pins, sources
+
+ROOT = Path(__file__).parent.parent
 
 CRD = """
 apiVersion: apiextensions.k8s.io/v1
@@ -314,7 +318,7 @@ def test_renovate_moves_the_crd2pulumi_version_and_digest_together() -> None:
     manager is held here: a rename, or a line inserted between the two
     constants, fails here rather than in a pull request nobody can merge.
     """
-    config = (Path(__file__).parent.parent / 'renovate.json5').read_text()
+    config = (ROOT / 'renovate.json5').read_text()
     module = Path(pins.__file__).read_text()
 
     # `json.dumps` is the escaping renovate.json5 holds the pattern in.
@@ -362,9 +366,119 @@ def test_the_mise_action_rule_outranks_the_github_actions_group() -> None:
     JSON5 parser here. Each substring is written exactly once, which the test
     states rather than assumes.
     """
-    config = (Path(__file__).parent.parent / 'renovate.json5').read_text()
+    config = (ROOT / 'renovate.json5').read_text()
 
     assert config.count("'github-actions'") == 1
     assert config.count("'jdx/mise-action'") == 1
 
     assert config.index("'jdx/mise-action'") > config.index("'github-actions'")
+
+
+def test_the_kubernetes_provider_rule_outranks_the_python_group() -> None:
+    """The same order rule, for the rule that takes `pulumi-kubernetes` out of the python group.
+
+    The pep621 manager reads the pin, so the rule naming the dependency has to
+    come after the rule matching that manager; reordered, the provider bump
+    rides in the python group again, where a bump waiting on a regeneration
+    holds every other library bump red, and nothing goes red here for it.
+    """
+    config = (ROOT / 'renovate.json5').read_text()
+
+    assert config.count("'pep621'") == 1
+    assert config.count("'pulumi-kubernetes'") == 1
+
+    assert config.index("'pulumi-kubernetes'") > config.index("'pep621'")
+
+
+# -- the generated package and the provider it was generated against ----------
+
+
+#: The `dependencies` line as `crd2pulumi` v1.6.2 writes it, with the version
+#: its release was built against baked in.
+BAKED_PYPROJECT = """[project]
+  name = "pulumi_crds"
+  dependencies = ["parver>=0.2.1", "pulumi>=3.231.0,<4.0.0", "pulumi-kubernetes==4.23.0", "requests>=2.21,<3.0"]
+  version = "4.34.1"
+"""
+
+
+def fake_crd2pulumi(directory: Path, pyproject: str) -> Path:
+    """A generator that writes one file into `--pythonPath`: the `pyproject.toml` the rewrite reads."""
+    script = directory / 'crd2pulumi'
+    _ = script.write_text(
+        '#!/usr/bin/env python3\n'
+        'import pathlib, sys\n'
+        'output = pathlib.Path(sys.argv[sys.argv.index("--pythonPath") + 1])\n'
+        'output.mkdir()\n'
+        f'(output / "pyproject.toml").write_text({pyproject!r})\n'
+    )
+    script.chmod(0o755)
+    return script
+
+
+def test_generate_declares_the_provider_it_generated_against_as_a_floor(tmp_path: Path) -> None:
+    """`--version` leaves the baked dependency line alone, so the script rewrites it.
+
+    A floor at the generated-against version rather than the baked pin: the
+    root `pyproject.toml` is where the one exact pin lives, and the generated
+    package left as `crd2pulumi` wrote it would hold the whole project on the
+    release the tool happened to be built with.
+    """
+    output = tmp_path / 'crds'
+    output.mkdir()
+    _ = (output / 'stale').write_text('the previous bindings')
+    generated_against = importlib.metadata.version('pulumi-kubernetes')
+
+    cli.generate([], output, fake_crd2pulumi(tmp_path, BAKED_PYPROJECT))
+
+    dependencies = tomllib.loads((output / 'pyproject.toml').read_text())['project']['dependencies']
+    assert f'pulumi-kubernetes>={generated_against}' in dependencies
+    assert not [dep for dep in dependencies if dep.startswith('pulumi-kubernetes==')]
+    assert not (output / 'stale').exists()
+    assert not output.with_suffix('.bak').exists()
+
+
+def test_generate_refuses_a_generator_that_wrote_no_dependency_line(tmp_path: Path) -> None:
+    """A release whose template changed fails the run by name, and the previous bindings come back."""
+    output = tmp_path / 'crds'
+    output.mkdir()
+    _ = (output / 'previous').write_text('the previous bindings')
+    without_the_line = BAKED_PYPROJECT.replace('"pulumi-kubernetes==4.23.0", ', '')
+
+    with pytest.raises(RuntimeError, match='carries 0 pulumi-kubernetes requirements'):
+        cli.generate([], output, fake_crd2pulumi(tmp_path, without_the_line))
+
+    assert (output / 'previous').read_text() == 'the previous bindings'
+    assert not (output / 'pyproject.toml').exists()
+
+
+def _pinned_provider(requirements: list[str], *, operator: str) -> str:
+    """The version one `pulumi-kubernetes<operator>` requirement in `requirements` names."""
+    (version,) = [
+        found.group(1)
+        for requirement in requirements
+        if (found := re.fullmatch(rf'pulumi-kubernetes{re.escape(operator)}([\d.]+)', requirement))
+    ]
+    return version
+
+
+def test_the_generated_package_is_held_to_the_pinned_provider() -> None:
+    """`pyproject.toml`'s exact pin, the generated floor and `pulumi-plugin.json` name one version.
+
+    The bindings register every resource at the version they were generated
+    against, so the version the program installs and the version the package
+    carries are one fact written in three places (framework/pulumi.md §4).
+    The pin is edited -- by renovate or by hand -- and the package is
+    generated, so the three agree only when `update_crds` has run since the
+    edit; this is the `uv sync --locked` of that package.
+    """
+    pinned = _pinned_provider(
+        tomllib.loads((ROOT / 'pyproject.toml').read_text())['project']['dependencies'], operator='=='
+    )
+    generated = tomllib.loads((ROOT / 'packages/crds/pyproject.toml').read_text())['project']
+    plugin = json.loads((ROOT / 'packages/crds/pulumi_crds/pulumi-plugin.json').read_text())
+
+    stale = f'packages/crds was generated against a different pulumi-kubernetes than pyproject.toml pins ({pinned}); run `uv run update_crds`'
+    assert _pinned_provider(generated['dependencies'], operator='>=') == pinned, stale
+    assert generated['version'] == pinned, stale
+    assert plugin == {'resource': True, 'name': 'crds', 'version': pinned}, stale
