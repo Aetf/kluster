@@ -16,10 +16,11 @@ Seed and management carry the same capabilities: what separates them is
 lifetime and reach, not permission. Neither carries file capabilities at
 all — the credential that manages the backup buckets cannot read a byte out
 of them. The keys that touch files are confined to one prefix of one bucket
-each, and the two on the dump prefix are disjoint in what they may do: the
+each, and the three on the dump prefix are ordered by what they may do: the
 appliance's uploader writes and can neither list nor read, the rebuild
-drill's reader lists and reads and can write nothing (`dumps`,
-`drill_reads`).
+drill's reader lists and reads and can write nothing, and the freshness
+probe's key lists and nothing more — names, never a byte (`dumps`,
+`drill_reads`, `freshness_dumps`).
 
 **Every answer B2 sends crosses into a typed value at one parser** (`payload`):
 `post` hands back the decoded JSON as an `object`, and the `_…` functions below
@@ -83,6 +84,12 @@ DUMP_CAPABILITIES: tuple[str, ...] = ('writeFiles',)
 #: key can read every object under the prefix and change nothing, and the
 #: objects it reads are age-encrypted (state-backend.md §5).
 DRILL_READ_CAPABILITIES: tuple[str, ...] = ('listFiles', 'readFiles')
+
+#: The freshness probe's whole permission over the same prefix: list the
+#: dumps, so that how old the newest one is can be read off its name. No
+#: read, so an exposed probe key discloses what the dumps are called and not
+#: what they hold; the rest is absent for the reasons the drill's are.
+FRESHNESS_CAPABILITIES: tuple[str, ...] = ('listFiles',)
 
 #: How many names to ask for per `b2_list_file_names` page. B2 caps a page at
 #: a thousand and bills a call per page, so this is a transaction-size choice
@@ -160,10 +167,15 @@ DUMPS_NAME = 'kluster-state-dump'
 #: suffix says which of the drill's two keys this is.
 DRILL_READ_NAME = f'{conventions.CLUSTER_NAME}-{conventions.DRILL}-read'
 
-#: The prefix both dump-prefix roles are confined to: the one
-#: `conventions` names, with the `/` B2 matches a `namePrefix` on literally.
-#: One value, so the writer and the reader cannot be confined to prefixes
-#: that differ by a separator.
+#: What the freshness probe's key is called, on the same terms: the state
+#: dumps are what it lists, and the etcd snapshots' key of the same shape --
+#: over another bucket, once that bucket exists -- will carry the other suffix.
+FRESHNESS_DUMPS_NAME = f'{conventions.CLUSTER_NAME}-freshness-dumps'
+
+#: The prefix every dump-prefix role is confined to: the one `conventions`
+#: names, with the `/` B2 matches a `namePrefix` on literally. One value, so
+#: the writer and its readers cannot be confined to prefixes that differ by a
+#: separator.
 DUMP_PREFIX = f'{conventions.STATE_DUMP_PREFIX}/'
 
 
@@ -196,6 +208,22 @@ def drill_reads(bucket_id: str) -> Role:
     return Role(
         name=DRILL_READ_NAME,
         capabilities=DRILL_READ_CAPABILITIES,
+        bucket_id=bucket_id,
+        name_prefix=DUMP_PREFIX,
+    )
+
+
+def freshness_dumps(bucket_id: str) -> Role:
+    """The freshness probe's role: list-only, and confined to the same prefix the uploader writes.
+
+    A function for the reason `dumps` is one, and the drill's reader narrowed
+    to its first act: the probe asks which object is newest and never opens
+    one, so the grant is the listing alone. Nothing in this repository can
+    hand the mint a wider one.
+    """
+    return Role(
+        name=FRESHNESS_DUMPS_NAME,
+        capabilities=FRESHNESS_CAPABILITIES,
         bucket_id=bucket_id,
         name_prefix=DUMP_PREFIX,
     )
@@ -360,6 +388,20 @@ def _created_bucket(answer: object) -> Bucket:
     return _bucket(payload.Payload.of(answer, 'b2_create_bucket'))
 
 
+def _authorization(key_id: str, key: str) -> object:
+    """`b2_authorize_account` as a key, answered with decoded JSON for a parser to read."""
+    resp = requests.get(AUTHORIZE_URL, auth=(key_id, key), timeout=30)
+    if resp.status_code == 401:
+        # The id is not the secret; naming it is what makes a wrong
+        # username field (an account e-mail, say) diagnosable at a glance.
+        raise CredentialRejected(
+            f"B2 rejected key id {key_id!r} — the entry's username must be the key id "
+            '(for the master key, that is the account id) and its password the key itself'
+        )
+    resp.raise_for_status()
+    return resp.json()
+
+
 @dataclass(frozen=True)
 class Session:
     """An authorized B2 API session.
@@ -375,16 +417,27 @@ class Session:
 
     @classmethod
     def authorize(cls, key_id: str, key: str) -> Session:
-        resp = requests.get(AUTHORIZE_URL, auth=(key_id, key), timeout=30)
-        if resp.status_code == 401:
-            # The id is not the secret; naming it is what makes a wrong
-            # username field (an account e-mail, say) diagnosable at a glance.
+        return cls._authorized(_authorization(key_id, key))
+
+    @classmethod
+    def authorize_confined(cls, key_id: str, key: str) -> tuple[Session, str]:
+        """Authorize as a bucket-confined key: the session, and the id of the bucket it is confined to.
+
+        `b2_authorize_account` names the bucket a confined key is restricted
+        to, which is how a key without `listBuckets` learns the id every file
+        call takes -- the probe's key carries `listFiles` alone and could not
+        ask. A key that answers with no bucket is not the key this was handed
+        for, and is refused before it is used as one.
+        """
+        answer = _authorization(key_id, key)
+        storage = payload.Payload.of(answer, 'b2_authorize_account').nested('apiInfo').nested('storageApi')
+        confined = storage.optional_text('bucketId')
+        if confined is None:
             raise CredentialRejected(
-                f"B2 rejected key id {key_id!r} — the entry's username must be the key id "
-                '(for the master key, that is the account id) and its password the key itself'
+                f'B2 key {key_id!r} is confined to no bucket, so it is not a prefix-scoped key of this '
+                'installation: `credentials derived ls` names the command that mints the intended one'
             )
-        resp.raise_for_status()
-        return cls._authorized(resp.json())
+        return cls._authorized(answer), confined
 
     @classmethod
     def _authorized(cls, answer: object) -> Session:
@@ -459,11 +512,12 @@ class Session:
     def file_names(self, bucket_id: str, *, prefix: str) -> tuple[str, ...]:
         """Every object name under `prefix` in one bucket, following the pages.
 
-        The one file call this package makes, and the drill reader's whole
-        verification: a key confined to a prefix is refused by B2 for a listing
-        outside it, so listing the prefix *as the new key* proves the grant is
-        the one asked for. Paged for the reason `keys` is: a listing that
-        stopped at the first answer would call an old dump the newest.
+        The one file call this package makes: the verification of both keys
+        that list the dump prefix -- a key confined to a prefix is refused by
+        B2 for a listing outside it, so listing the prefix *as the new key*
+        proves the grant is the one asked for -- and the freshness probe's
+        whole act. Paged for the reason `keys` is: a listing that stopped at
+        the first answer would call an old dump the newest.
         """
         found: list[str] = []
         start: str | None = None
@@ -821,5 +875,34 @@ def mint_drill_read_key(session: Session, *, bucket_id: str) -> Delivery[AppKey]
     minted = session.create_key(role)
     reader = Session.authorize(minted.key_id, minted.key)
     listed = reader.file_names(bucket_id, prefix=DUMP_PREFIX)
+    log.info('minted %s (%s), which lists %d object(s) under %s', role.name, minted.key_id, len(listed), DUMP_PREFIX)
+    return Delivery.of(minted, lambda: retire_others(session, role, keep=minted.key_id))
+
+
+def mint_freshness_dumps_key(session: Session, *, bucket_id: str) -> Delivery[AppKey]:
+    """A list-only key confined to the dump prefix of one bucket, for the freshness probe.
+
+    The same bucket and the same prefix as `mint_dump_key` and
+    `mint_drill_read_key`, and the narrowest grant of the three: the probe
+    asks what the newest object is called, and this key can ask that and
+    nothing else. Verified the way the drill's key is, by the one act its
+    holder performs -- the new key lists the prefix, as itself, before
+    anything is delivered.
+
+    The retirement comes back with the key rather than happening here, so it
+    runs after the caller's push and not before it (`delivery.py`, and the
+    register's §4 for why). The closure retires as `session`, the seed that
+    minted the key: a list-only key carries no `deleteKeys` and could retire
+    nothing, its predecessor least of all.
+
+    The account is held against `conventions` before the key exists, as every
+    mint here does: a session for another account would otherwise put a key
+    that names every dump into a bucket nothing here reads back from.
+    """
+    verify_account(session.account_id)
+    role = freshness_dumps(bucket_id)
+    minted = session.create_key(role)
+    lister = Session.authorize(minted.key_id, minted.key)
+    listed = lister.file_names(bucket_id, prefix=DUMP_PREFIX)
     log.info('minted %s (%s), which lists %d object(s) under %s', role.name, minted.key_id, len(listed), DUMP_PREFIX)
     return Delivery.of(minted, lambda: retire_others(session, role, keep=minted.key_id))

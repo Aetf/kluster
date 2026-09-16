@@ -21,13 +21,13 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
 import requests
-from b2_api import ACCOUNT_ID, FakeApi, Key, Refused
+from b2_api import ACCOUNT_ID, FakeApi, Key
 from memory_kit import MemoryKit
 
 from kluster import conventions
@@ -48,68 +48,18 @@ PREFIX = conventions.STATE_DUMP_PREFIX
 RETENTION_DAYS = 30
 
 
-#: The one file call this package makes, and the capability the API reference
-#: says it needs. The shared fake encodes the calls the account-wide rows
-#: make; this one is the drill reader's, and it lives beside that role's tests.
+#: The file listing is part of the shared fake (`b2_api.FakeApi`), where the
+#: rows that list the dump prefix -- the drill's reader and the freshness
+#: probe's key -- are verified against it. The name stays as the alias
+#: `test_drill_credentials` imports it under.
+ReadableFakeApi = FakeApi
+
 LIST_FILE_NAMES = 'b2_list_file_names'
-LIST_FILES = 'listFiles'
-
-
-@dataclass
-class ReadableFakeApi(FakeApi):
-    """The shared fake plus `b2_list_file_names`, the call the drill's reader is verified by.
-
-    What it encodes is what the API reference says of a confined key: a
-    listing needs `listFiles`, and a key confined to a bucket and a prefix is
-    refused a listing of any other bucket, or of a prefix outside its own --
-    which is what makes "verified by listing the prefix as itself" a proof of
-    the grant rather than of the key's existence. The page is the server's
-    choice here as it is for `b2_list_keys`.
-    """
-
-    #: bucket id -> the object names it holds.
-    objects: dict[str, list[str]] = field(default_factory=dict[str, list[str]])
-    #: How many names one page may hold, which the server picks.
-    file_page_limit: int = 1000
-    #: Every listing served, as (the key it was served to, bucket, prefix).
-    listings: list[tuple[str, str, str]] = field(default_factory=list[tuple[str, str, str]])
-
-    def _authorized(self, headers: dict[str, str], api: str) -> Key:
-        if api != LIST_FILE_NAMES:
-            return super()._authorized(headers, api)
-        key_id = self.tokens.get(headers['Authorization'])
-        if key_id is None or key_id not in self.keys:
-            raise Refused(401, 'bad_auth_token', 'the auth token is not valid')
-        key = self.keys[key_id]
-        if LIST_FILES not in key.capabilities:
-            raise Refused(401, 'unauthorized', f'{api} requires the {LIST_FILES} capability')
-        return key
-
-    def _act(self, api: str, caller: Key, body: dict[str, Any]) -> dict[str, Any]:
-        if api != LIST_FILE_NAMES:
-            return super()._act(api, caller, body)
-        bucket_id = str(body['bucketId'])
-        prefix = str(body.get('prefix', ''))
-        if caller.bucket_id is not None and caller.bucket_id != bucket_id:
-            raise Refused(401, 'unauthorized', 'the key is confined to another bucket')
-        if caller.name_prefix is not None and not prefix.startswith(caller.name_prefix):
-            raise Refused(401, 'unauthorized', 'the key is confined to another prefix')
-        self.listings.append((caller.key_id, bucket_id, prefix))
-        names = sorted(name for name in self.objects.get(bucket_id, []) if name.startswith(prefix))
-        start = body.get('startFileName')
-        if start is not None:
-            names = [name for name in names if name >= str(start)]
-        wanted = min(int(body['maxFileCount']), self.file_page_limit)
-        page, rest = names[:wanted], names[wanted:]
-        return {
-            'files': [{'fileName': name, 'action': 'upload'} for name in page],
-            'nextFileName': rest[0] if rest else None,
-        }
 
 
 @pytest.fixture
-def api(monkeypatch: pytest.MonkeyPatch) -> ReadableFakeApi:
-    fake = ReadableFakeApi()
+def api(monkeypatch: pytest.MonkeyPatch) -> FakeApi:
+    fake = FakeApi()
     monkeypatch.setattr(b2.requests, 'get', fake.get)
     monkeypatch.setattr(b2.requests, 'post', fake.post)
     return fake
@@ -772,7 +722,7 @@ def test_the_drill_reader_may_do_nothing_the_uploader_may_and_nothing_administra
     assert not [capability for capability in reader.capabilities if capability.endswith('Keys')]
 
 
-def test_the_drill_key_is_minted_as_the_role_and_not_a_wider_one(api: ReadableFakeApi, kit: KdbxStore) -> None:
+def test_the_drill_key_is_minted_as_the_role_and_not_a_wider_one(api: FakeApi, kit: KdbxStore) -> None:
     _ = _seeded(api, kit)
     session, bucket_id = _bucket(api, kit)
 
@@ -792,7 +742,7 @@ def test_the_drill_key_is_minted_as_the_role_and_not_a_wider_one(api: ReadableFa
     )
 
 
-def test_the_drill_key_is_verified_by_listing_the_prefix_as_itself(api: ReadableFakeApi, kit: KdbxStore) -> None:
+def test_the_drill_key_is_verified_by_listing_the_prefix_as_itself(api: FakeApi, kit: KdbxStore) -> None:
     _ = _seeded(api, kit)
     session, bucket_id = _bucket(api, kit)
     api.objects[bucket_id] = [f'{PREFIX}/20260101T000000Z.dump.age', 'etcd/snapshot']
@@ -809,7 +759,7 @@ def test_the_drill_key_is_verified_by_listing_the_prefix_as_itself(api: Readable
     _ = _delivered(pending)
 
 
-def test_the_drill_key_can_list_and_read_its_prefix_and_nothing_else(api: ReadableFakeApi, kit: KdbxStore) -> None:
+def test_the_drill_key_can_list_and_read_its_prefix_and_nothing_else(api: FakeApi, kit: KdbxStore) -> None:
     _ = _seeded(api, kit)
     session, bucket_id = _bucket(api, kit)
     api.objects[bucket_id] = [f'{PREFIX}/a.dump.age', f'{PREFIX}/b.dump.age', 'etcd/snapshot']
@@ -828,7 +778,7 @@ def test_the_drill_key_can_list_and_read_its_prefix_and_nothing_else(api: Readab
         _ = reader.buckets()
 
 
-def test_a_prefix_larger_than_one_page_is_listed_whole(api: ReadableFakeApi, kit: KdbxStore) -> None:
+def test_a_prefix_larger_than_one_page_is_listed_whole(api: FakeApi, kit: KdbxStore) -> None:
     _ = _seeded(api, kit)
     session, bucket_id = _bucket(api, kit)
     api.objects[bucket_id] = [f'{PREFIX}/{day:02d}.dump.age' for day in range(1, 8)]
@@ -842,7 +792,7 @@ def test_a_prefix_larger_than_one_page_is_listed_whole(api: ReadableFakeApi, kit
     assert listed == tuple(api.objects[bucket_id])
 
 
-def test_minting_the_drill_key_retires_its_predecessor(api: ReadableFakeApi, kit: KdbxStore) -> None:
+def test_minting_the_drill_key_retires_its_predecessor(api: FakeApi, kit: KdbxStore) -> None:
     _ = _seeded(api, kit)
     session, bucket_id = _bucket(api, kit)
     previous = _delivered(b2.mint_drill_read_key(session, bucket_id=bucket_id)).key_id
@@ -856,9 +806,7 @@ def test_minting_the_drill_key_retires_its_predecessor(api: ReadableFakeApi, kit
     assert previous not in api.keys
 
 
-def test_the_drill_key_retires_nothing_until_the_credential_has_been_delivered(
-    api: ReadableFakeApi, kit: KdbxStore
-) -> None:
+def test_the_drill_key_retires_nothing_until_the_credential_has_been_delivered(api: FakeApi, kit: KdbxStore) -> None:
     _ = _seeded(api, kit)
     session, bucket_id = _bucket(api, kit)
     previous = _delivered(b2.mint_drill_read_key(session, bucket_id=bucket_id)).key_id
@@ -879,7 +827,7 @@ def test_the_drill_key_retires_nothing_until_the_credential_has_been_delivered(
 
 
 def test_a_drill_key_is_not_minted_in_another_account(
-    api: ReadableFakeApi, kit: KdbxStore, monkeypatch: pytest.MonkeyPatch
+    api: FakeApi, kit: KdbxStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _ = _seeded(api, kit)
     session, bucket_id = _bucket(api, kit)
@@ -891,6 +839,152 @@ def test_a_drill_key_is_not_minted_in_another_account(
 
     assert _mints(api) == before
     assert not api.named(b2.DRILL_READ_NAME)
+
+
+# -- the freshness probe's key -------------------------------------------------
+
+
+def test_the_freshness_key_keeps_its_name() -> None:
+    # Retirement matches on it (`retire_others`), so a rename would leave the
+    # key the ops repository holds outside every later sweep.
+    assert b2.FRESHNESS_DUMPS_NAME == 'kluster-freshness-dumps'
+
+
+def test_the_freshness_key_is_confined_to_the_prefix_the_uploader_writes() -> None:
+    lister, writer = b2.freshness_dumps('bucket-x'), b2.dumps('bucket-x')
+
+    # The same bucket and the same prefix, separator included, for the reason
+    # the drill's reader is held to them: a key confined to `pulumi-state`
+    # would list that prefix and every sibling that shares its letters.
+    assert lister.bucket_id == writer.bucket_id == 'bucket-x'
+    assert lister.name_prefix == writer.name_prefix == f'{PREFIX}/'
+
+
+def test_the_freshness_key_may_list_and_nothing_more() -> None:
+    lister = b2.freshness_dumps('bucket-x')
+
+    assert lister.capabilities == ('listFiles',)
+    # Narrower than the drill's reader and disjoint from the writer: the probe
+    # asks what the newest object is called, so a key that could read one
+    # would be a second drill reader held where only a listing is needed, and
+    # one that could write would be a second uploader.
+    assert set(lister.capabilities) < set(b2.drill_reads('bucket-x').capabilities)
+    assert not set(lister.capabilities) & set(b2.dumps('bucket-x').capabilities)
+    assert not set(lister.capabilities) & set(b2.CAPABILITIES)
+    assert not [capability for capability in lister.capabilities if capability.startswith(MUTATING)]
+
+
+def test_the_freshness_key_is_minted_as_the_role_and_not_a_wider_one(api: FakeApi, kit: KdbxStore) -> None:
+    _ = _seeded(api, kit)
+    session, bucket_id = _bucket(api, kit)
+
+    key_id = _delivered(b2.mint_freshness_dumps_key(session, bucket_id=bucket_id)).key_id
+
+    minted = api.keys[key_id]
+    assert (minted.name, minted.capabilities, minted.bucket_id, minted.name_prefix) == (
+        b2.FRESHNESS_DUMPS_NAME,
+        b2.FRESHNESS_CAPABILITIES,
+        bucket_id,
+        f'{PREFIX}/',
+    )
+
+
+def test_the_freshness_key_is_verified_by_listing_the_prefix_as_itself(api: FakeApi, kit: KdbxStore) -> None:
+    _ = _seeded(api, kit)
+    session, bucket_id = _bucket(api, kit)
+    api.objects[bucket_id] = [f'{PREFIX}/20260101T000000Z.dump.age', 'etcd/snapshot']
+
+    pending = b2.mint_freshness_dumps_key(session, bucket_id=bucket_id)
+
+    # The one act the probe performs, done as the new key before anything is
+    # delivered, so a key the platform would refuse that act is refused here
+    # rather than on the probe's first scheduled run.
+    (key_id,) = api.named(b2.FRESHNESS_DUMPS_NAME)
+    assert api.listings == [(key_id, bucket_id, f'{PREFIX}/')]
+    assert api.calls.index(LIST_FILE_NAMES) > api.calls.index('b2_create_key')
+    _ = _delivered(pending)
+
+
+def test_a_confined_key_learns_its_bucket_from_the_authorization(api: FakeApi, kit: KdbxStore) -> None:
+    _ = _seeded(api, kit)
+    session, bucket_id = _bucket(api, kit)
+    api.objects[bucket_id] = [f'{PREFIX}/a.dump.age']
+    minted = _delivered(b2.mint_freshness_dumps_key(session, bucket_id=bucket_id))
+
+    lister, confined = b2.Session.authorize_confined(minted.key_id, minted.key)
+
+    # No `listBuckets` on this key, so the bucket id every file call takes has
+    # to come back with the authorization -- and the session it comes with
+    # lists the prefix and can do nothing else the account offers.
+    assert confined == bucket_id
+    assert lister.file_names(bucket_id, prefix=f'{PREFIX}/') == (f'{PREFIX}/a.dump.age',)
+    with pytest.raises(requests.HTTPError):
+        _ = lister.buckets()
+    with pytest.raises(requests.HTTPError):
+        _ = lister.keys()
+
+
+def test_a_key_confined_to_no_bucket_is_refused_as_the_wrong_key(api: FakeApi, kit: KdbxStore) -> None:
+    key_id = _seeded(api, kit)
+
+    # The seed is account-wide; handed over where a prefix-scoped key was
+    # expected, the refusal says so and names where the intended key comes
+    # from, rather than failing later on a bucket id nothing supplied.
+    with pytest.raises(CredentialRejected, match='confined to no bucket'):
+        _ = b2.Session.authorize_confined(key_id, kit.get(SEED_ENTRY))
+
+
+def test_minting_the_freshness_key_retires_its_predecessor(api: FakeApi, kit: KdbxStore) -> None:
+    _ = _seeded(api, kit)
+    session, bucket_id = _bucket(api, kit)
+    previous = _delivered(b2.mint_freshness_dumps_key(session, bucket_id=bucket_id)).key_id
+    drill = _delivered(b2.mint_drill_read_key(session, bucket_id=bucket_id)).key_id
+
+    key_id = _delivered(b2.mint_freshness_dumps_key(session, bucket_id=bucket_id)).key_id
+
+    # Re-running is the rotation: one live key of the name afterwards, and the
+    # drill's reader on the same prefix untouched -- the roles retire by name,
+    # and the names differ.
+    assert api.named(b2.FRESHNESS_DUMPS_NAME) == [key_id]
+    assert previous not in api.keys
+    assert api.named(b2.DRILL_READ_NAME) == [drill]
+
+
+def test_the_freshness_key_retires_nothing_until_the_credential_has_been_delivered(
+    api: FakeApi, kit: KdbxStore
+) -> None:
+    _ = _seeded(api, kit)
+    session, bucket_id = _bucket(api, kit)
+    previous = _delivered(b2.mint_freshness_dumps_key(session, bucket_id=bucket_id)).key_id
+
+    pending = b2.mint_freshness_dumps_key(session, bucket_id=bucket_id)
+
+    # The order every mint in this package has: until the caller's push
+    # returns, the successor exists in this process alone, and a push that
+    # then failed would leave the ops repository naming a key the account has
+    # deleted.
+    standing = api.named(b2.FRESHNESS_DUMPS_NAME)
+    assert previous in standing
+    assert len(standing) == 2
+
+    current = _delivered(pending)
+
+    assert api.named(b2.FRESHNESS_DUMPS_NAME) == [current.key_id]
+
+
+def test_a_freshness_key_is_not_minted_in_another_account(
+    api: FakeApi, kit: KdbxStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _ = _seeded(api, kit)
+    session, bucket_id = _bucket(api, kit)
+    before = _mints(api)
+    _elsewhere(monkeypatch)
+
+    with pytest.raises(CredentialRejected, match=f'{ACCOUNT_ID}.*some-other-account'):
+        _ = b2.mint_freshness_dumps_key(session, bucket_id=bucket_id)
+
+    assert _mints(api) == before
+    assert not api.named(b2.FRESHNESS_DUMPS_NAME)
 
 
 def test_an_account_larger_than_one_page_is_listed_whole(api: FakeApi, kit: KdbxStore) -> None:
@@ -1058,7 +1152,7 @@ class Faulty:
 
 
 #: The names the register mints under, and the invariant below counts.
-MANAGED = (b2.SEED.name, b2.MANAGEMENT.name, b2.DUMPS_NAME, b2.DRILL_READ_NAME)
+MANAGED = (b2.SEED.name, b2.MANAGEMENT.name, b2.DUMPS_NAME, b2.DRILL_READ_NAME, b2.FRESHNESS_DUMPS_NAME)
 
 
 def _kit_never_lies(kit: KdbxStore, api: FakeApi) -> None:
@@ -1132,6 +1226,16 @@ def _drill(api: FakeApi, kit: KdbxStore) -> None:
     _ = _delivered(b2.mint_drill_read_key(session, bucket_id=bucket_id))
 
 
+def _freshness(api: FakeApi, kit: KdbxStore) -> None:
+    """The freshness row: find the bucket, mint the list-only key, deliver it.
+
+    The bucket is converged here for the reason `_drill` converges it.
+    """
+    session = b2.Session.from_entry(kit, SEED_ENTRY)
+    bucket_id = b2.ensure_bucket(session, BUCKET, prefix=PREFIX, retention_days=RETENTION_DAYS)
+    _ = _delivered(b2.mint_freshness_dumps_key(session, bucket_id=bucket_id))
+
+
 Stage = Callable[[FakeApi, KdbxStore], None]
 
 
@@ -1141,7 +1245,7 @@ def _calls_made(operation: Stage, *, prepared: bool, monkeypatch: pytest.MonkeyP
     Measured rather than written down, so the sweep covers exactly the calls
     the stage makes today and widens by itself when the stage grows one.
     """
-    api = ReadableFakeApi()
+    api = FakeApi()
     kit = MemoryKit()
     _record_account(monkeypatch)
     faulty = Faulty(api).attach(monkeypatch)
@@ -1167,6 +1271,7 @@ STAGES: tuple[tuple[str, Stage, bool], ...] = (
     ('management', _manage, True),
     ('provision', _provision, True),
     ('drill', _drill, True),
+    ('freshness', _freshness, True),
 )
 
 #: Both ways a run can stop at call k (see `Faulty`).
@@ -1226,7 +1331,7 @@ def test_a_stage_heals_from_a_failure_at_any_call(
     when: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    api = ReadableFakeApi()
+    api = FakeApi()
     kit = MemoryKit()
     if prepared:
         _ = Faulty(api).attach(monkeypatch)
