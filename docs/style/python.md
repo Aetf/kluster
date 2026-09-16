@@ -41,7 +41,7 @@ lives, in the same voice as the row beside it naming a configuration
 key; it is not telling a caller how to spell the import. How a package
 is imported from is the package's own statement, made in its
 `__init__.py` — which of its surface is re-exported flat, and which
-domains are read qualified — and nothing outside the package overrides
+modules are read qualified — and nothing outside the package overrides
 it. `conventions.providers.CLOUDFLARE_ACCOUNT` in a design table
 therefore says the constant lives in the `providers` module of
 `conventions`; whether a caller writes it qualified or flat is answered

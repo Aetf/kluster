@@ -9,7 +9,7 @@ the *how* for the `physical` stack of [README.md](README.md) §1.
 > **Status**: designed 2026-08-22; provider choices verified against
 > current releases (pulumiverse-talos 0.8.1 wrapping the official
 > siderolabs terraform-provider 0.11). **Declared in full, applied
-> nowhere.** `src/kluster/stacks/physical.py` calls every domain this
+> nowhere.** `src/kluster/stacks/physical.py` calls every area this
 > document describes, and each one is written: the OCI network, image,
 > load balancer and nodes (§1) and the Talos day-1 chain (§2) in the
 > `cloud` and `talos` areas of `src/kluster/components/`, the libvirt
