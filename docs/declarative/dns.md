@@ -347,9 +347,13 @@ is one nobody here asked for, is the issue's question.
 
 ## 3. Split-horizon (AdGuard, both instances, no sync)
 
-LAN/ZT clients must resolve split-horizon apps to their `lan` VIPs,
-never the cloud path (architecture.md §3.4). The AdGuard pair
-(alice/bob) lives on the UDM.
+LAN clients must resolve split-horizon apps to their `lan` VIPs,
+never the cloud path. Which clients the rewrites steer is defined in
+architecture.md §3.4: those whose resolver is alice/bob for the name
+asked — every LAN lease, and an overlay member only under the pushed
+domain, which application names sit outside — so an overlay member is
+steered to a `lan` VIP by nothing. The AdGuard pair (alice/bob) lives
+on the UDM.
 
 -   **Mechanism**: a dynamic-provider resource wrapping the AdGuard
     rewrite API (the legacy golinks work established the technique),
@@ -446,8 +450,9 @@ plane names:
     provider.
 2.  **Service plane — public-zone names, resolved via AdGuard**:
     every LAN-reachable service uses its *public* hostname
-    (`<app>.<zone>`); AdGuard rewrites (§3) steer LAN/ZT clients to the
-    `lan` VIP. **LAN-only services are rewrite-only**: the row yields
+    (`<app>.<zone>`); AdGuard rewrites (§3) steer LAN clients to the
+    `lan` VIP, and no overlay member (architecture.md §3.4).
+    **LAN-only services are rewrite-only**: the row yields
     the AdGuard rewrite (from `dns`, §3) and the `lan-gw` route (from
     `apps`, §5) but *no* Cloudflare record — public resolvers see
     NXDOMAIN, while cert-manager DNS-01 still issues real certificates
