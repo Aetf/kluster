@@ -344,7 +344,13 @@ certificate on every re-provision. The address is recorded as
 from the first provision, the way the compartment is recorded in
 `conventions`, and the one home a reader that holds no bundle — the
 probe of §6 — takes it from. It is public already, on 5432 and 22 and
-in the certificate.
+in the certificate. `provision` holds the box to it: both reads of the
+reservation refuse, naming both addresses, when the reservation
+carries anything else (`provision.hold_address`), so a moved box is a
+decision the repository records rather than drift a converge follows.
+On a site provisioned for the first time the run ends at that refusal
+naming the address OCI chose; recording it and re-running is the
+second half of the first provision.
 
 Public 5432 with TLS + scram + **mandatory client certificates** — the
 client cert is the wall, and **the only wall** (decided 2026-08-24):
