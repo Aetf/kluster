@@ -18,15 +18,20 @@ Four things are declared here, and each answers a different question
     roster arrives as a parameter, and it lives in `conventions.overlay.ROSTER`
     because the `dns` stack publishes the `*.zt` host block from the same table.
     This module is what turns that decision into authorized members.
--   **The managed routes** — which of the home's subnets the overlay carries,
-    all of them through the gateway's own member, which is the one machine that
-    was already routing them. Which subnets those are arrives as a parameter
-    too, from the address plan in `conventions`. A route is `{target, via}` on
-    the network and nothing more: `via` names a member, and that member
-    forwards only because forwarding is configured on the device itself. That
-    is why the gateway's routing configuration is `SiteRouting`'s file on the
-    box and only the route table is here — two systems being told two different
-    things (gateway.md §2.2).
+-   **The managed routes** — the whole route table the network carries, and
+    it arrives as a parameter, from `conventions.overlay.MANAGED_ROUTES`. A
+    route is `{target, via}` on the network and nothing more: `via` names a
+    member, and that member forwards only because forwarding is configured on
+    the device itself. That is why the gateway's routing configuration is
+    `SiteRouting`'s file on the box and only the route table is here — two
+    systems being told two different things (gateway.md §2.2). The table is
+    written as declared, `via` where the census has one and absent where it
+    has none: the home subnets go via the gateway's own member, the one
+    machine that was already routing them, and the overlay's own subnet goes
+    via nothing, because that route is what the controller assigns every
+    member's address under. The network is adopted with its routes declared
+    in full, so a route the census lacks is one the update deletes at
+    Central.
 -   **The flow rules** — what a member may do once admitted. They arrive as a
     parameter, because what confines a run is a fact about how continuous
     integration reaches this site rather than about the network, and this
@@ -66,7 +71,6 @@ over v6 that it cannot reach over v4.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from ipaddress import IPv4Network
 
 import pulumi
 import pulumi_zerotier as zerotier
@@ -113,7 +117,7 @@ class Overlay(Component):
         network_id: str,
         flow_rules: str,
         roster: Sequence[conventions.overlay.RosterEntry],
-        managed_routes: Sequence[IPv4Network],
+        managed_routes: Sequence[conventions.overlay.ManagedRoute],
         dns: conventions.overlay.ManagedDns,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
@@ -152,12 +156,13 @@ class Overlay(Component):
             # single-family and the confinement rules complete.
             assign_ipv4s=[zerotier.NetworkAssignIpv4Args(zerotier=True)],
             assign_ipv6s=[zerotier.NetworkAssignIpv6Args(zerotier=False, rfc4193=False, sixplane=False)],
-            # Every route is next-hopped through the gateway's member, which is
-            # the only member with forwarding configured. The controller hands
-            # the whole table to every member as it joins, so this is what the
-            # whole network learns, not what any one member asked for.
+            # The whole table, as the census states it: `via` where it names
+            # a member, and no `via` at all for the overlay's own subnet. The
+            # controller hands the whole table to every member as it joins,
+            # so this is what the whole network learns, not what any one
+            # member asked for.
             routes=[
-                zerotier.NetworkRouteArgs(target=str(route), via=str(conventions.overlay.UDM))
+                zerotier.NetworkRouteArgs(target=str(route.target), via=None if route.via is None else str(route.via))
                 for route in managed_routes
             ],
             flow_rules=flow_rules,
