@@ -1141,8 +1141,11 @@ def test_no_two_outputs_share_a_name() -> None:
 # --------------------------------------------------------------------------
 # `conventions.backup.max_age` is the one rule for when a scheduled backup is
 # stale, and a retention class's `max_age` is that rule's answer for its
-# cadence, spelled in the alert rules' duration syntax. The rule is a
-# computation, so the value it has to keep producing is held as a literal.
+# `period`, spelled in the alert rules' duration syntax. The rule is a
+# computation, so the values it has to keep producing are held as literals;
+# the classes are a census of the module, so a class is held to the rule from
+# the day it is declared; and the period is held to the cron line beside it,
+# so the rule cannot be fed a cadence the scheduler does not run.
 
 #: The duration syntax a retention class's threshold is written in: a count
 #: and a unit, the units being the ones the alert rules read.
@@ -1162,18 +1165,68 @@ def _duration(text: str) -> dt.timedelta:
     return int(match.group(1)) * UNIT[match.group(2)]
 
 
+#: Every retention class the module declares, found rather than listed.
+RETENTION = [value for value in vars(backup).values() if isinstance(value, backup.RetentionClass)]
+
+#: What a cron line looks like for each cadence a class may state: one time
+#: of day on every day, or one time of day on one day of the week. A class
+#: with a cadence this table lacks fails below by name, and the row it needs
+#: is written here, not guessed.
+CRON_SHAPES = {
+    dt.timedelta(days=1): re.compile(r'^\d+ \d+ \* \* \*$'),
+    dt.timedelta(weeks=1): re.compile(r'^\d+ \d+ \* \* [0-6]$'),
+}
+
+
 def test_stale_is_one_and_a_half_periods() -> None:
     # A run that is merely late is inside it; a run that was missed is half a
     # period overdue by the time it runs out.
     assert backup.max_age(dt.timedelta(days=1)) == dt.timedelta(hours=36)
     assert backup.max_age(dt.timedelta(hours=1)) == dt.timedelta(minutes=90)
+    assert backup.max_age(dt.timedelta(weeks=1)) == dt.timedelta(hours=252)
 
 
-@pytest.mark.parametrize('retention', [conventions.STANDARD, conventions.PRECIOUS], ids=lambda r: r.name)
-def test_a_daily_class_s_threshold_is_the_rule_s_answer_for_one_day(retention: conventions.RetentionClass) -> None:
-    # Both daily classes carry the threshold the rule gives a daily cadence,
-    # so the alert rules and the appliance's dump-age probe agree on stale.
-    assert _duration(retention.max_age) == backup.max_age(dt.timedelta(days=1))
+@pytest.mark.parametrize(
+    ('delta', 'text'),
+    [
+        (dt.timedelta(hours=36), '36h'),
+        (dt.timedelta(hours=252), '252h'),
+        (dt.timedelta(weeks=1), '1w'),
+        (dt.timedelta(minutes=90), '90m'),
+    ],
+)
+def test_a_duration_is_spelled_in_the_largest_unit_that_divides_it(delta: dt.timedelta, text: str) -> None:
+    # The syntax has no fractions, so ten and a half days is hours, not days.
+    assert backup.duration(delta) == text
+    assert _duration(text) == delta
+
+
+def test_a_duration_below_a_second_has_no_spelling() -> None:
+    with pytest.raises(ValueError, match='whole number of seconds'):
+        _ = backup.duration(dt.timedelta(milliseconds=500))
+
+
+def test_the_census_found_the_classes() -> None:
+    assert RETENTION, 'no RetentionClass at module scope: the census walked nothing'
+    assert set(RETENTION) == set(backup.RETENTION_CLASSES)
+
+
+@pytest.mark.parametrize('retention', RETENTION, ids=lambda r: r.name)
+def test_every_class_s_threshold_is_the_rule_s_answer_for_its_period(retention: backup.RetentionClass) -> None:
+    # Every class, not the daily ones: the alert rules and the appliance's
+    # dump-age probe agree on stale only if no row carries a margin of its own.
+    assert _duration(retention.max_age) == backup.max_age(retention.period), retention.name
+
+
+@pytest.mark.parametrize('retention', RETENTION, ids=lambda r: r.name)
+def test_every_class_s_period_is_what_its_cron_line_says(retention: backup.RetentionClass) -> None:
+    # Two spellings of one cadence: the cron line the scheduler reads and the
+    # period the threshold is derived from. Held the way the appliance's
+    # timer is held to its period (`test_probe.py`), so a period cannot be
+    # chosen to make the rule produce a threshold someone had in mind.
+    shape = CRON_SHAPES.get(retention.period)
+    assert shape is not None, f'{retention.name} runs every {retention.period}, a cadence CRON_SHAPES has no row for'
+    assert shape.match(retention.schedule), f'{retention.name}: {retention.schedule!r} is not a {retention.period} line'
 
 
 # --------------------------------------------------------------------------
