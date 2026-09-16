@@ -70,6 +70,24 @@
       groupSlug: 'python',
     },
     {
+      // The kubernetes provider SDK, out of the python group: `packages/crds`
+      // is generated against one provider version and registers its resources
+      // at that version, so `pyproject.toml` pins the SDK exactly and a bump
+      // is finished only by `uv run update_crds` regenerating the package
+      // (framework/pulumi.md §4). Left in the python group, the bump would
+      // hold every other library bump red until someone regenerated.
+      //
+      // Position is load-bearing, the way the `jdx/mise-action` rule's is:
+      // the last matching rule wins a field, so this sits *after* the rule
+      // matching the pep621 manager, which reads the same pin. A test holds
+      // the order.
+      matchDepNames: [
+        'pulumi-kubernetes',
+      ],
+      groupName: 'kubernetes provider',
+      groupSlug: 'kubernetes-provider',
+    },
+    {
       matchManagers: [
         'github-actions',
       ],
