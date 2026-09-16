@@ -25,17 +25,18 @@ shape nor the domain, which reads like a permissions problem.
 > the dump script, and the `state-backend` console script renders,
 > provisions and converges the box, checks its pins, writes the client
 > bundle into its workstation slot (§3), logs in for diagnosis, and
-> takes and restores dumps (§7). The **drill key** of §5 has its
+> takes and restores dumps (§7), and probes the box from outside
+> (§6). The **drill key** of §5 has its
 > generator (`credentials derived drill-age-identity generate`) and
 > joins the recipients from the converge that adopts its committed
-> public half. Still design-only: the key-rotation
-> script of §1, and **everything that was to
-> run outside the box** — the expiry probe of §3, the freshness
-> assertion of §5, the dump-freshness and certificate-expiry probes of
-> §6, and the scheduled drill of §7.3.
-> `kluster-ops` carries no `.github/workflows` directory, so nothing
-> watches the server certificate, nothing notices a dump that stopped
-> being written, and no drill runs. §7.3.1 is the restore rehearsal an
+> public half. The two scheduled probes of §6 — the server
+> certificate's expiry, and the age of the newest dump — are
+> `state-backend probe`, built to be run from the ops repository on a
+> schedule; whether that schedule is in place is the ops repository's
+> own record (its README's census of workflows), and until it is, the
+> probe runs when an operator runs it. Still design-only: the
+> key-rotation script of §1 and the scheduled drill of §7.3, so no
+> drill runs. §7.3.1 is the restore rehearsal an
 > operator runs in their place, and it is written down rather than run:
 > `state-backend restore` has never executed against a live box.
 
@@ -159,11 +160,11 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     validity (`pki.LEAF_VALIDITY`), so a certificate spends a small
     fraction of its life inside the margin and the box is replaced for
     expiry at most once per certificate. It is also wider than the
-    expiry alert §3 describes, which would make that alert the backstop
-    for a box nobody has converged — or whose reports nobody acted on —
-    rather than the trigger for the rotation — but that probe does not exist yet, so today the margin
-    is the only thing watching the certificate at all, and the ratio is
-    the reason that stands on its own. A **threshold**, not a date, is what
+    expiry probe's alert margin (`config.EXPIRY_ALERT_MARGIN`, §6),
+    which makes that alert the backstop for a box nobody has converged
+    — or whose reports nobody acted on — rather than the trigger for
+    the rotation; a test holds the two margins in that order. A
+    **threshold**, not a date, is what
     keeps a time-dependent component from making the converge flap:
     outside the margin a second run is the same no-op as the first, and
     inside it the replacement carries a certificate with its full
@@ -318,16 +319,15 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     at all, nobody has to be watching a date. What the plain run does
     *not* do is act: replacing the box is `--force`, like every other
     replacement (§1), so the certificate is re-issued when an operator
-    says so and not before. **Still design-only, and the repository that
-    would carry it is empty of workflows** (§6): the ops repo's
-    scheduled workflow (ci.md
-    §3) is to assert ≥30 days remaining on the server cert via an
-    `openssl s_client` probe (no credentials needed), failing into the
-    unified alert channel (architecture.md §4.3). The margin opens
-    earlier than that threshold, so once the probe is built it fires
-    only for a box nobody has converged — or whose reports nobody acted
-    on — in the interval between the two. Until it is built, a box
-    nobody converges is a box whose expiry nothing reports. Response: playbook §7.1.
+    says so and not before. The backstop is the expiry probe of §6:
+    `state-backend probe` reads the server certificate off an `openssl
+    s_client` handshake (no credentials needed) and fails once less
+    than `config.EXPIRY_ALERT_MARGIN` remains, and the ops repo's
+    scheduled workflow (ci.md §3) is what runs it, failing into the
+    unified alert channel (architecture.md §4.3). The renewal margin
+    opens earlier than the alert margin, so the probe fires only for a
+    box nobody has converged — or whose reports nobody acted on — in
+    the interval between the two. Response: playbook §7.1.
 
 ## 4. Network exposure
 
@@ -339,7 +339,12 @@ whole design exists to avoid (Pulumi needs the backend before it can
 create anything). The isolation is a bonus, not the point. The **reserved**
 public IP is load-bearing rather than tidy — the server certificate's SAN
 is that literal address, so an ephemeral IP would invalidate the
-certificate on every re-provision.
+certificate on every re-provision. The address is recorded as
+`settings.ADDRESS`, beside the other pins: a site fact that follows
+from the first provision, the way the compartment is recorded in
+`conventions`, and the one home a reader that holds no bundle — the
+probe of §6 — takes it from. It is public already, on 5432 and 22 and
+in the certificate.
 
 Public 5432 with TLS + scram + **mandatory client certificates** — the
 client cert is the wall, and **the only wall** (decided 2026-08-24):
@@ -399,6 +404,15 @@ there is nothing for it to edit.)
     the box's key free of delete/prune capability (the H4
     discipline), and it is what gives retired encryption keys a
     definite end of life (below).
+-   **Stale means one and a half periods.** The rule is
+    `conventions.backup.max_age`, one function for every scheduled
+    backup: a run that is merely late is inside the age, a run that was
+    missed is half a period overdue by the time it runs out. The
+    timer's period is `settings.DUMP_PERIOD` beside its calendar
+    expression, and `settings.DUMP_MAX_AGE` is the rule's answer for
+    it, which is the threshold the dump-age probe of §6 reads. The
+    daily retention classes carry the same answer in the alert rules'
+    syntax, and a test holds them equal.
 -   The box reports one thing about itself, and to one audience: a
     run of `state-dump.service` that fails leaves a notice under
     `/etc/motd.d/`, which Fedora CoreOS prints at an interactive ssh
@@ -410,13 +424,13 @@ there is nothing for it to edit.)
     a question only the outside can ask, and a run that never began —
     a timer that stopped firing, a box that is down — has no failure
     to report.
-    Freshness is therefore to be asserted **from outside** by the ops
-    repo's scheduled workflow (object-age on the prefix, ci.md §3).
-    **That workflow does not exist** (§6), and the box's design is
-    what makes its absence total: a nightly that stopped in August
-    looks exactly like one that ran, until a restore reaches for it.
-    Reading the newest object's timestamp is the assertion, and today
-    the only thing that performs it is an operator running §7.3.1.
+    Freshness is therefore asserted **from outside**, by the dump-age
+    probe of §6 (object-age on the prefix, run on the ops repo's
+    schedule, ci.md §3), and the box's design is what makes that
+    probe load-bearing: a nightly that stopped in August looks exactly
+    like one that ran, until a restore reaches for it. Reading the
+    newest object's stamp is the assertion, and the probe is what
+    performs it; §7.3.1 has an operator perform it by hand.
 -   **The age identity rotates by generations; no key is assumed
     immortal.** A generation is a label with a **stored ciphertext**:
     the identity for `backup/age/<generation>` is random at creation
@@ -514,20 +528,47 @@ shell on it:
 -   Every CI job and local `pulumi` operation is an implicit
     5432 + TLS + auth probe — backend-down is discovered by the first
     thing that needs it, which is the only thing that cares.
--   The ops repo's scheduled workflow (ci.md §3) is to assert pg_dump
-    freshness
-    (object-age on B2) and server-cert expiry (≥30 days), alerting
-    into the unified alert channel (architecture.md §4.3). **Both
-    probes are design-only, and so is the workflow that would carry
-    them: `kluster-ops` has no `.github/workflows` directory at all.**
-    For the certificate the renewal margin
-    of §1 narrows the gap — any converge reports the coming expiry
-    without being asked, though the re-issue itself waits for
-    `--force` — and for the dump nothing does. Each alert maps to a
-    playbook: stale
-    dump → §7.3's restore path doubles as the diagnosis start; cert
-    expiry → §7.1; an unreachable box → §7.3's rebuild is also the
-    diagnosis path (there is no NSG allowlist to refresh — §4).
+-   **`state-backend probe`** is the two scheduled checks, and the ops
+    repo's scheduled workflow (ci.md §3) is what runs it, from a
+    checkout of this repository at a pinned commit, alerting into the
+    unified alert channel (architecture.md §4.3). One command runs
+    both probes (`--only certificate|dumps` runs one), prints every
+    verdict with what it measured, and exits with one bit per failed
+    probe — 2 for the certificate, 4 for the dumps, their sum when
+    both failed — so the workflow's log names which; 1 is a run that
+    could not probe at all (an empty secret, a key the account
+    rejects), which is a different fact from a probe that did and
+    failed. The workflow carries no threshold, no prefix and no
+    address: every number is this repository's.
+    -   **Certificate.** `openssl s_client -connect <ADDRESS>:5432
+        -starttls postgres -showcerts` — the same handshake the
+        provision's readiness wait makes, credential-free because the
+        box sends its certificate before anything authenticates — and
+        the **server leaf** is read off the transcript: the first
+        certificate of the chain. It fails when the leaf is not valid
+        now, when less than `config.EXPIRY_ALERT_MARGIN` remains, or
+        when its SAN does not carry `settings.ADDRESS`, each into
+        playbook §7.1; a box that does not complete the handshake is
+        unreachable, into §7.3 (there is no NSG allowlist to refresh —
+        §4). The leaf and only it: the CA is not what a handshake
+        proves, and the two client certificates are held by their
+        consumers, whose first `pulumi` command is their expiry's
+        report — out of a network probe's reach by design.
+    -   **Dumps.** Authorize as the list-only key (credentials.md §3,
+        `B2 freshness key (state dumps)`, read from the two secrets
+        `B2_FRESHNESS_DUMPS_KEY_ID` and `B2_FRESHNESS_DUMPS_KEY`), list
+        `pulumi-state/`, and take the newest object's stamp: older
+        than `settings.DUMP_MAX_AGE` (§5) is stale, into §7.3, whose
+        restore path doubles as the diagnosis start. **An empty prefix
+        is its own failure** — a box rebuilt and never restored, or a
+        timer that never fired — and so is an object under the prefix
+        that is not named like a dump, since nothing but the
+        appliance's uploader can write there. Names and their stamps
+        are the whole of what the key can see: never a byte of a dump.
+    -   The renewal margin of §1 narrows the certificate's gap — any
+        converge reports the coming expiry without being asked, though
+        the re-issue itself waits for `--force` — and the probe is the
+        backstop behind it; for the dump the probe is the only watcher.
 -   **Deliberately unmonitored, with rationale**: Zincati/update
     failures and disk fill. The DB is ~4 orders of magnitude under
     the disk, and OS staleness is to be bounded by the quarterly
@@ -536,9 +577,10 @@ shell on it:
     operator runs. If either ever bites first, that is the signal to
     add the probe — not before.
 
-So what observes this box today is the first bullet alone: something
-needed the backend, and either reached it or did not. Nothing reports
-on an appliance nobody is using.
+So between scheduled runs of the probe, what observes this box is the
+first bullet alone: something needed the backend, and either reached
+it or did not. The probe is what reports on an appliance nobody is
+using.
 
 ## 7. Playbooks
 
@@ -683,8 +725,8 @@ failure is cheap:
     copy of the same grant by hand. Nothing in this repository fetches an object,
     so listing the prefix and downloading the newest `.dump.age` are
     `b2_list_file_names` and `b2_download_file_by_name` under it. Record
-    the object's name, size and timestamp — that timestamp is the
-    freshness assertion §5 leaves to nobody else. Keep the file outside
+    the object's name, size and timestamp — the same stamp the dump-age
+    probe of §6 reads, checked here by a person. Keep the file outside
     the checkout: it is every stack's state.
 2.  **Render the scratch box.** `state-backend render --address
     127.0.0.1 > <scratch>/scratch.ign` — the command prints the
