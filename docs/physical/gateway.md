@@ -851,7 +851,7 @@ device being renamed in Central.
 
 | Member | role tag | Notes |
 | --- | --- | --- |
-| `udm` | `infra` | The gateway: a static managed address, and the next hop of every managed route. Absent from the roster until §2.5 step 2 records the node id its daemon mints. |
+| `udm` | `infra` | The gateway: a static managed address, and the next hop of every route to the home (§2.2). Absent from the roster until §2.5 step 2 records the node id its daemon mints. |
 | `Aetf-Arch-Homelab` | `infra` | The homelab host: a plain member, never a router (ZT carries no home-LAN routes), and the recovery side-door (§3). The one address the flow rules and the libvirt session look up rather than take from a constant. |
 | `Aetf-Arch-VPS` | `infra` | The legacy deployment. Retires in Wave F together with its `10.42.0.0/24` route. |
 | `haos` | `infra` | Home automation, reachable while the cluster is not. |
@@ -861,12 +861,26 @@ device being renamed in Central.
 
 ### 2.2 Managed routes
 
-All LAN reachability via the UDM member's ZT address, one route per
-subnet: 192.168.70.0/24 (the cluster VLAN), 192.168.80.0/24,
-192.168.90.0/24, 10.0.5.0/24, and the `lan` pool 192.168.71.0/24 —
-the pool is reached through the UDM's own BGP-learned route, one hop.
-The legacy `10.42.0.0/24`-via-VPS route is deleted in Wave F. The
-homelab host advertises nothing.
+The route table is **`conventions.overlay.MANAGED_ROUTES`**, and it is
+everything the network carries: the network is adopted with its routes
+declared in full (§2.5), so a route the census lacks is a route the
+first converge deletes at Central. Each row is `{target, via}`:
+
+| Route | Target | Via |
+| --- | --- | --- |
+| The overlay's own subnet | `10.144.0.0/16` | None. This is the route ZeroTier installs on every member's own interface, and **it is what gives a member its address at all**: the controller pushes a member's static assignment only when some route's target contains it, with that route's prefix length, so a table without it hands every member no address at its next configuration refresh. |
+| The cluster VLAN | `192.168.70.0/24` | `10.144.1.1`, the UDM member — where a run reaches the worker's machine API. |
+| The server LAN | `192.168.80.0/24` | `10.144.1.1` |
+| The IoT VLAN | `192.168.90.0/24` | `10.144.1.1` |
+| The container VLAN | `10.0.5.0/24` | `10.144.1.1` — the resolvers' addresses, which the managed DNS (§2.7) names. |
+| The `lan` pool | `192.168.71.0/24` | `10.144.1.1`, reached through the UDM's own BGP-learned route, one hop — how a person off-site reaches a cluster service. |
+| The legacy pod subnet | `10.42.0.0/24` | The VPS member's own overlay address, so that the route and the roster entry leave in one commit. Deleted in Wave F (cluster/migration.md §4). |
+
+All reachability into the home is via the UDM member's ZT address; the
+homelab host advertises nothing. The suite holds the table's shape
+rather than its rows: some via-less route covers every address the
+roster places, every `via` is a member, and the home subnets go via
+the gateway and nothing else does.
 
 **There is no router object.** ZeroTier's model is an emulated switch:
 a route is `{target, via}` on the *network*, and `via` is nothing but
@@ -1100,6 +1114,67 @@ apply is run in two parts around the cutover window:
     is unset here and optional for that reason: the address it
     carries is formed by the worker off this apply's own router
     advertisement, so the pinhole waits for step 3 (§4.2).
+
+    What each of the two runs does to the overlay network:
+
+    **The window's targeted run adopts it and changes nothing at
+    Central.** The network is declared with `import_`, and the engine
+    performs an import before it asks whether a resource is targeted,
+    so the run whose targets name only the gateway still reads the
+    network into state at Central's current values. The pre-window
+    preview (gateway-cutover.md §3) shows this as one `=` row,
+    `zerotier:index/network:Network kluster-network`, beside the
+    gateway's own resources and nothing else; that row is the one
+    exception to "the gateway's own resources and nothing else". Every
+    roster member stays out of the window; the overlay's provider does
+    not — providers are implicitly targeted, and the adoption's read
+    goes through it, which is why the window's run reaches Central at
+    all (gateway-cutover.md §3).
+    There is no import refusal to get past: the engine reads the live
+    resource into state and then plans an ordinary update from that
+    state to the declaration, so the declaration carries its full
+    inputs and ignores no field.
+
+    **The run with no targets converges it, and is read before it is
+    run.** It plans one `~` update on the network, from Central's
+    values to the declaration, and one `+` create per roster entry —
+    a create, because a member is written onto its node id whether
+    Central already holds one or not, and needs no adoption. The update is applied only after the preview shows,
+    on the network row:
+
+    -   `routes`: the via-less `10.144.0.0/16` route on **both**
+        sides; the legacy `10.42.0.0/24` via the VPS member's address
+        on both sides; the home subnets of §2.2 added via
+        `10.144.1.1`. The diff is printed as a list and pairs rows by
+        position, so what is read is the set of targets and next hops,
+        not the row count.
+    -   `flowRules`: Central's current program on the left, the
+        composed program on the right.
+    -   `dns`: the block added.
+    -   `name`, `description`, `multicastLimit`, `enableBroadcast`,
+        `assignIpv6s` change only if Central's values differ from the
+        declaration, and then to the declared value; `assignmentPools`
+        is absent from the diff.
+    -   **No `+-` or `--` row anywhere on the network, and no warning
+        containing `may not be replaced`.** A replace is what
+        re-issues the network id and makes every member re-join; the
+        engine refuses it while `import_` is declared, so the warning
+        is the stop, not the row. The network is protected besides
+        (`protect=True`): a second refusal of the replace, and the only
+        refusal of a delete — a `destroy` of this stack, or the
+        declaration removed — which outlives the `import_` declaration.
+
+    A `-` on the `10.144.0.0/16` route stops the run: every member
+    would lose its address at its next configuration refresh, and the
+    repair is the route put back at Central by hand from the
+    workstation's own uplink. A via-less route whose target is anything
+    but `10.144.0.0/16` on the left side means the census's subnet
+    constant is wrong, not Central; the ceremony stops and the constant
+    is corrected.
+
+    The routes to the home are written by this run, each `via
+    10.144.1.1`, an address no member answers for until step 3 —
+    which is all a route to an absent router ever is.
 2.  **Read the minted node id off the device** — `zerotier-cli info` in
     that container — and add the gateway's entry to `ZT_ROSTER`, at
     `10.144.1.1` and with that id. It is a commit rather than a
@@ -1138,13 +1213,10 @@ apply is run in two parts around the cutover window:
     The roster now authorizes the member and assigns it
     `10.144.1.1`; the device joins the network it is the router of,
     and the inbound-v6 pinhole (§4.2) is declared for the first time.
-    The managed routes are not added here: they are declared on the
-    network resource, so step 1 already wrote them, each `via`
-    `10.144.1.1`. What this step adds is a member at that address
-    — until now the routes named a nexthop nobody answered for, which is
-    all a route to an absent router ever is. Both halves of this step
-    read a value the previous apply brought into being, which is why
-    they are one step and not two.
+    The routes to the home already name that address as their next
+    hop (step 1); what this step adds is the member that answers for
+    it. Both halves of this step read a value the previous apply
+    brought into being, which is why they are one step and not two.
 4.  **Unset the knob and apply once more.** Every client is back on the
     overlay address, so this run dials over ZT — which is the
     verification rather than a formality: it rewrites the services through
@@ -1197,10 +1269,12 @@ that starts from a gateway which is off the overlay (§3).
 
 Two things that are *not* part of the cycle:
 
--   **Managed routes are net-new additions** — the home-LAN and
-    lan-pool routes via the UDM member appear where none existed;
-    existing members gain reachability and lose nothing. No flip, no
-    transition window.
+-   **The routes to the home are net-new additions** — the home-LAN
+    and lan-pool routes via the UDM member appear where none existed;
+    existing members gain reachability and lose nothing, because the
+    census also carries what Central already holds (§2.2): the
+    overlay's own route and the legacy one. No flip, no transition
+    window.
 -   **CI's per-run ZT join becomes load-bearing only after §2.4
     passes** — until the flow rules and routes are verified,
     `physical` runs stay operator-local.

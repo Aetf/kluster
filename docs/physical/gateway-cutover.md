@@ -157,8 +157,10 @@ not moved.
     than alice and bob.** Both are down for the whole of §4, and the
     run dials by name: the stack program reads the account's
     availability and fault domains off the cloud API before it
-    declares the gateway, targeted or not, and step 5 reaches ZeroTier
-    Central, Backblaze and the Talos image factory as well. What the
+    declares the gateway, targeted or not; step 3's targeted run reads
+    the overlay network off ZeroTier Central for its adoption
+    (gateway.md §2.5 step 1); and step 5 reaches Central again,
+    Backblaze and the Talos image factory as well. What the
     run does *not* need a resolver for is the short list of endpoints
     this program deliberately spells as addresses — the state backend
     (state-backend.md), the libvirt session at the homelab host's
@@ -269,7 +271,15 @@ not moved.
     the persistence layer, the nspawn runtime, the four machines, the
     routing session, the authorized key and the controller-side
     firewall — no cloud instance, no overlay member, no bucket, no
-    worker VM. A preview that matches nothing, or that plans the whole
+    worker VM. One row that is not the gateway's is expected beside
+    them: a single `=` on `zerotier:index/network:Network
+    kluster-network`, the overlay network read into state at Central's
+    current values, because the engine performs an import before it
+    asks whether a resource is targeted (gateway.md §2.5 step 1). That
+    row changes nothing at Central. A preview without it means the
+    adoption rides the run with no targets instead; the update to the
+    network is in that run either way, and is read there before it is
+    applied. A preview that matches nothing, or that plans the whole
     stack, means the targets do not select what they were derived
     from; the window then runs `pulumi up` with no targets at all and
     takes the risk gateway.md §2.5 sets out.
