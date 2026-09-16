@@ -96,8 +96,8 @@ from .pulumi_config import SlotRefused
 
 log = logging.getLogger(__name__)
 
-#: The Environments whose jobs join ZeroTier, one identity domain each
-#: (physical/gateway.md §2.1). `k8s-base` and `apps` join nothing: the
+#: The Environments whose jobs join ZeroTier, grouped by the stack whose
+#: identity they join with (physical/gateway.md §2.1). `k8s-base` and `apps` join nothing: the
 #: LAN-touching work is the AdGuard rewrites, which `dns` applies.
 ZEROTIER_PHYSICAL = ('physical-plan', 'physical')
 ZEROTIER_DNS = ('dns',)
@@ -674,7 +674,7 @@ class Row:
 
     #: The §3 "Credential" cell this row implements, verbatim. More than one
     #: row may name the same cell -- one credential can be several secrets, as
-    #: the ZeroTier identities are one per identity domain.
+    #: the ZeroTier identities are one per joining stack.
     register: str
     source: Source
     targets: tuple[Channel, ...] = ()

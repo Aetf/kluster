@@ -16,7 +16,7 @@ the design (the gateway, a container, an app), it is a component, not a
 function that scatters resources into someone else's.
 
 **Configuration is read at the layer that owns the concept.** A stack
-program reads the keys that parameterize its domain and pushes values
+program reads the keys that parameterize the stack and pushes values
 down as constructor parameters. A component never reads stack
 configuration for a concept that belongs to its parent, and a parent
 never reaches into a child's implementation detail to configure it. The
