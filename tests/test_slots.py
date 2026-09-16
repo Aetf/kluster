@@ -33,6 +33,7 @@ from kluster import conventions
 from kluster.scripts.credentials import derived, devices, escrow, pki, pulumi_config, slots
 from kluster.scripts.credentials.github_secrets import Forge, Slot
 from kluster.scripts.credentials.pulumi_config import SlotRefused
+from kluster.scripts.state_backend import probe
 
 #: The forge census, read here as the map reads it (`conventions.forge`).
 #: Copying the repository names or ci.md §3's Environments into this file
@@ -707,6 +708,40 @@ def test_the_drill_credentials_are_five_secrets_in_the_drill_environment_and_wai
         'DRILL_B2_KEY_ID',
         'DRILL_B2_KEY',
     ]
+
+
+def test_the_freshness_key_is_two_repository_secrets_named_as_the_probe_reads_them() -> None:
+    """The row is built, and its sinks are the probe's own variable names.
+
+    Repository secrets of the ops repository with no Environment -- the job
+    that reads them belongs to none -- under exactly the two names
+    `state_backend.probe` reads the key from, in the order the pair is one
+    credential in. Nothing pending: a `pending` left on a row whose slots the
+    mint fills would send an operator to wait for a channel that is served.
+    """
+    row = slots.ROWS[derived.B2_FRESHNESS_DUMPS_ROW]
+
+    assert isinstance(row.source, slots.Minted)
+    assert row.source.command == f'credentials derived {derived.B2_FRESHNESS_DUMPS_ROW} mint'
+    assert not row.source.unbuilt
+    assert row.pending == {}
+    assert row.targets == row.sinks
+    assert {slot.repository for slot in row.sinks} == {OPS_REPOSITORY}
+    assert {slot.environment for slot in row.sinks} == {None}
+    assert [slot.name for slot in row.sinks] == [probe.KEY_ID_ENV, probe.KEY_ENV]
+    assert not any(slot.name.startswith(f'{DRILL_ENVIRONMENT.upper()}_') for slot in row.sinks)
+
+
+def test_the_etcd_freshness_key_is_a_second_row_that_waits_on_its_bucket() -> None:
+    # A B2 key confines to one bucket, so the etcd snapshots' probe cannot
+    # share the state dumps' key; its row says what it waits on rather than
+    # naming a secret a future workflow would have to guess right.
+    row = slots.ROWS['b2-freshness-etcd']
+
+    assert isinstance(row.source, slots.Minted)
+    assert row.source.unbuilt
+    assert not row.sinks
+    assert set(row.pending) == {'ops-repo secret'}
 
 
 def test_an_ops_repo_environment_secret_is_named_after_its_environment() -> None:

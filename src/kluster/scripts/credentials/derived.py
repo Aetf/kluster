@@ -40,6 +40,13 @@ lands in that same Environment through the sink. One row, because the census
 keys map rows by the command that produces them; two mints, because the two
 platforms' seeds are two kit entries and a failure on one must leave the
 other's predecessor live.
+
+The freshness probe's row is the B2 half of that on its own, narrowed to a
+listing and delivered as a **repository** secret of the ops repository rather
+than into its `drill` Environment: the job that reads it belongs to no
+Environment, and the value's whole power is a listing of names. The names it
+is delivered under are the probe's own (`state_backend.probe`), imported here,
+so the slot the mint fills and the variable the probe reads cannot drift.
 """
 
 from __future__ import annotations
@@ -49,6 +56,7 @@ from pathlib import Path
 
 from ... import conventions
 from ..state_backend import config as appliance
+from ..state_backend import probe
 from ..state_backend import settings as appliance_settings
 from . import age, b2, cloudflare, entries, oci_iam, oci_slot, pulumi_config
 from .github_secrets import Forge, Slot
@@ -161,6 +169,7 @@ OCI_STATE_BACKEND_ROW = f'oci-{conventions.STATE_BACKEND}'
 B2_MANAGEMENT_ROW = 'b2-management'
 DRILL_AGE_IDENTITY_ROW = f'{conventions.DRILL}-age-identity'
 DRILL_CREDENTIALS_ROW = f'{conventions.DRILL}-credentials'
+B2_FRESHNESS_DUMPS_ROW = 'b2-freshness-dumps'
 
 
 def _drill_slot(name: str) -> Slot:
@@ -198,6 +207,14 @@ DRILL_OCI_SLOTS = (DRILL_OCI_USER_SLOT, DRILL_OCI_FINGERPRINT_SLOT, DRILL_OCI_PR
 DRILL_B2_KEY_ID_SLOT = _drill_slot('DRILL_B2_KEY_ID')
 DRILL_B2_KEY_SLOT = _drill_slot('DRILL_B2_KEY')
 DRILL_B2_SLOTS = (DRILL_B2_KEY_ID_SLOT, DRILL_B2_KEY_SLOT)
+
+#: Where the freshness probe's list-only key lands: two repository secrets of
+#: the ops repository, no Environment, under the names the probe reads them
+#: by. The pair is one credential, as the drill's B2 pair is.
+B2_FRESHNESS_DUMPS_SLOTS = (
+    Slot(repository=conventions.forge.OPS.full_name, name=probe.KEY_ID_ENV),
+    Slot(repository=conventions.forge.OPS.full_name, name=probe.KEY_ENV),
+)
 
 #: The two halves of the drill's credentials, as `--only` names them: the
 #: platform each key is minted at.
@@ -642,3 +659,35 @@ def drill_credentials(
         delivered[DRILL_B2_HALF] = read_key.key_id
 
     return delivered
+
+
+def b2_freshness_dumps(kit: KdbxStore, forge: Forge, *, seed_entry: str = B2_SEED_ENTRY) -> str:
+    """Mint the freshness probe's list-only key into the ops repository's secrets. Returns its key id.
+
+    `b2.mint_freshness_dumps_key` over the bucket the appliance dumps into --
+    a listing of the dump prefix and nothing else, verified by listing it as
+    the new key -- pushed as the two repository secrets the probe reads
+    (`B2_FRESHNESS_DUMPS_SLOTS`), each verified through the listing, and only
+    then the predecessor retired: a push that fails leaves the key the
+    workflow holds live. Re-running is the rotation.
+
+    The bucket is looked up rather than converged, for the reason the drill's
+    mint looks it up: a probe over a bucket that does not exist has nothing
+    to measure, and creating one here would mint a key over an empty prefix
+    the probe then reports as never dumped into.
+    """
+    log.info('opening the B2 seed from the kit')
+    session = b2.Session.from_entry(kit, seed_entry)
+    b2.verify_account(session.account_id)
+    bucket_id = _dump_bucket(session)
+    pending = b2.mint_freshness_dumps_key(session, bucket_id=bucket_id)
+
+    def push(key: b2.AppKey) -> None:
+        for slot, value in zip(B2_FRESHNESS_DUMPS_SLOTS, (key.key_id, key.key), strict=True):
+            _push(forge, slot, value)
+
+    delivered, _ = pending.deliver(push)
+    log.info(
+        'the freshness probe lists the dump prefix as %s (%s) from now on', b2.FRESHNESS_DUMPS_NAME, delivered.key_id
+    )
+    return delivered.key_id

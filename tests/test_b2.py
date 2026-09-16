@@ -20,7 +20,7 @@ mid-mint of.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -28,13 +28,17 @@ from typing import Any
 import pytest
 import requests
 from b2_api import ACCOUNT_ID, FakeApi, Key
+from fake_gh import RecordedGh
 from memory_kit import MemoryKit
 
 from kluster import conventions
-from kluster.scripts.credentials import b2, cli, entries, masters, payload
+from kluster.scripts.credentials import b2, cli, derived, entries, masters, payload
+from kluster.scripts.credentials.github_secrets import Forge
 from kluster.scripts.credentials.kdbx import KdbxStore
 from kluster.scripts.credentials.masters import CredentialRejected
+from kluster.scripts.credentials.pulumi_config import SlotRefused
 from kluster.scripts.credentials.delivery import Delivery
+from kluster.scripts.state_backend import settings as appliance_settings
 
 PASSWORD = 'kit-password'
 SEED_ENTRY = entries.SEEDS['b2'].entry
@@ -985,6 +989,97 @@ def test_a_freshness_key_is_not_minted_in_another_account(
 
     assert _mints(api) == before
     assert not api.named(b2.FRESHNESS_DUMPS_NAME)
+
+
+# -- the freshness row: the mint above, delivered through the GitHub sink ------
+
+OPS_REPOSITORY = conventions.forge.OPS.full_name
+
+
+def _freshness_bucket(api: FakeApi, kit: KdbxStore) -> str:
+    """The dump bucket, converged the way `state-backend provision` converges it, by its settings' name."""
+    session = b2.Session.from_entry(kit, SEED_ENTRY)
+    return b2.ensure_bucket(session, appliance_settings.B2_BUCKET, prefix=PREFIX, retention_days=RETENTION_DAYS)
+
+
+def test_the_freshness_row_pushes_both_halves_as_repository_secrets_of_the_ops_repository(
+    api: FakeApi, kit: KdbxStore
+) -> None:
+    _ = _seeded(api, kit)
+    bucket_id = _freshness_bucket(api, kit)
+    gh = RecordedGh()
+
+    key_id = derived.b2_freshness_dumps(kit, Forge(token='admin-token', run=gh))
+
+    # The addresses are the slot map's own: two repository secrets of the ops
+    # repository, no `--env`, holding the key the account now lists under the
+    # role -- and that key is the minted one, confined as the role says.
+    assert list(gh.values) == [
+        (OPS_REPOSITORY, None, 'B2_FRESHNESS_DUMPS_KEY_ID'),
+        (OPS_REPOSITORY, None, 'B2_FRESHNESS_DUMPS_KEY'),
+    ]
+    assert gh.values[(OPS_REPOSITORY, None, 'B2_FRESHNESS_DUMPS_KEY_ID')] == key_id
+    assert gh.values[(OPS_REPOSITORY, None, 'B2_FRESHNESS_DUMPS_KEY')] == api.keys[key_id].secret
+    assert all(['secret', 'set', name, '--repo', OPS_REPOSITORY] in gh.invocations for _, _, name in gh.values)
+    minted = api.keys[key_id]
+    assert (minted.capabilities, minted.bucket_id, minted.name_prefix) == (('listFiles',), bucket_id, f'{PREFIX}/')
+
+
+def test_the_freshness_row_retires_its_predecessor_only_after_both_carriers_landed(
+    api: FakeApi, kit: KdbxStore
+) -> None:
+    _ = _seeded(api, kit)
+    _ = _freshness_bucket(api, kit)
+    gh = RecordedGh()
+    previous = derived.b2_freshness_dumps(kit, Forge(token='admin-token', run=gh))
+    order: list[str] = []
+
+    def timed(args: Sequence[str], *, token: str, stdin: str | None) -> str:
+        if list(args[:2]) == ['secret', 'set']:
+            order.append(f'push {args[2]}')
+        return gh(args, token=token, stdin=stdin)
+
+    def timed_post(url: str, *, json: dict[str, Any], headers: dict[str, str], timeout: int) -> requests.Response:
+        api_name = url.rsplit('/', 1)[-1]
+        if api_name == 'b2_delete_key':
+            order.append('retire')
+        return api.post(url, json=json, headers=headers, timeout=timeout)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(b2.requests, 'post', timed_post)
+        current = derived.b2_freshness_dumps(kit, Forge(token='admin-token', run=timed))
+
+    # The order every mint in this package has, held across the sink: both
+    # pushes, then the deletion of the key the workflow held before.
+    assert order == ['push B2_FRESHNESS_DUMPS_KEY_ID', 'push B2_FRESHNESS_DUMPS_KEY', 'retire']
+    assert api.named(b2.FRESHNESS_DUMPS_NAME) == [current]
+    assert previous not in api.keys
+
+
+def test_the_freshness_row_refuses_before_minting_where_the_dump_bucket_does_not_exist(
+    api: FakeApi, kit: KdbxStore
+) -> None:
+    _ = _seeded(api, kit)
+    before = _mints(api)
+
+    with pytest.raises(SlotRefused, match='no bucket named'):
+        _ = derived.b2_freshness_dumps(kit, Forge(token='admin-token', run=RecordedGh()))
+
+    assert _mints(api) == before
+
+
+def test_the_freshness_row_mints_nothing_in_another_account(
+    api: FakeApi, kit: KdbxStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _ = _seeded(api, kit)
+    _ = _freshness_bucket(api, kit)
+    before = _mints(api)
+    _elsewhere(monkeypatch)
+
+    with pytest.raises(CredentialRejected, match=f'{ACCOUNT_ID}.*some-other-account'):
+        _ = derived.b2_freshness_dumps(kit, Forge(token='admin-token', run=RecordedGh()))
+
+    assert _mints(api) == before
 
 
 def test_an_account_larger_than_one_page_is_listed_whole(api: FakeApi, kit: KdbxStore) -> None:
