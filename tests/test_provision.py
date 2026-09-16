@@ -66,8 +66,11 @@ class _Network:
 
 
 class _Client:
-    def __init__(self, ips: list[Any], *, allocates: str | None = None) -> None:
+    def __init__(self, ips: list[Any], *, allocates: str | None = None, held: bool = True) -> None:
         self.compartment_id: str = 'ocid1.compartment.test'
+        #: The appliance's own compartment unless a case says otherwise, so
+        #: that every case about the hold runs on the compartment it applies to.
+        self.held: bool = held
         self.network: _Network = _Network(ips, allocates=allocates)
 
 
@@ -170,7 +173,8 @@ def test_a_terminated_address_does_not_count() -> None:
 # `settings.ADDRESS` is what the probe dials from another repository, with no
 # OCI credential to look anything up; the converge and `ssh` read the address
 # off the reservation. The two agree only because every read of the
-# reservation refuses an address the constant does not name.
+# reservation refuses an address the constant does not name -- on the
+# appliance's own compartment, the only one the constant describes.
 
 #: Every reader of the reservation. Each is held to the refusal below, so a
 #: caller that reaches the address through either one cannot see a box the
@@ -205,6 +209,26 @@ def test_a_reservation_at_the_recorded_address_is_the_answer(lookup: Callable[[A
 
     address = answer.address if isinstance(answer, provision.ReservedAddress) else answer
     assert address == settings.ADDRESS
+
+
+@pytest.mark.parametrize('lookup', LOOKUPS, ids=lambda f: f.__name__)
+def test_a_run_pointed_at_another_compartment_is_not_held(
+    lookup: Callable[[Any], object], caplog: pytest.LogCaptureFixture
+) -> None:
+    """`--compartment` names another site, whose address the constant does not describe.
+
+    Held, such a run would end at a refusal every time, with a repair --
+    record the found address -- that overwrites the real site's line. So the
+    address is taken as found, and the log says why the hold did not apply.
+    """
+    client = _Client([_ip('state-backend-ip', ELSEWHERE)], held=False)
+
+    with caplog.at_level(logging.INFO):
+        answer = lookup(client)
+
+    address = answer.address if isinstance(answer, provision.ReservedAddress) else answer
+    assert address == ELSEWHERE
+    assert 'not held to settings.ADDRESS: --compartment names another site' in caplog.text
 
 
 def test_a_fresh_reservation_is_held_the_same_way() -> None:
@@ -265,8 +289,25 @@ def test_an_explicit_compartment_wins_over_the_convention(slots: Path) -> None:
     client = provision.OciClients.load('ocid1.compartment.oc1..elsewhere')
 
     # The drill escape: a run against a tenancy that is not this installation's
-    # names its own compartment, because none of the mapping applies there.
+    # names its own compartment, because none of the mapping applies there --
+    # the recorded address included.
     assert client.compartment_id == 'ocid1.compartment.oc1..elsewhere'
+    assert client.held is False
+
+
+def test_the_appliance_s_own_compartment_is_the_held_one(slots: Path) -> None:
+    """Only the compartment `conventions` records is held to `settings.ADDRESS`.
+
+    The mapping's default is held; the same compartment named explicitly is
+    the same site, so it is held too; any other names another site.
+    """
+    _ = _mint()
+    own = conventions.OCI_TENANCY.compartments[conventions.STATE_BACKEND].ocid
+    assert own is not None
+
+    assert provision.OciClients.load().held is True
+    assert provision.OciClients.load(own).held is True
+    assert provision.OciClients.load('ocid1.compartment.oc1..elsewhere').held is False
 
 
 def test_the_superseded_configuration_is_read_once_and_loudly(
@@ -1742,6 +1783,7 @@ def _running(pin: str, *, address: str = PINNED_ADDRESS) -> Any:
                 'compute': _PagedCompute([[instance]]),
                 'network': _Network([_ip(f'{settings.NAME}-ip', address)]),
                 'compartment_id': 'ocid1.compartment.test',
+                'held': True,
             },
         )(),
     )

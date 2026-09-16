@@ -24,7 +24,11 @@ it. The two lookups that read the reservation (`ensure_reserved_ip`,
 `reserved_address`) hold what OCI carries against the constant and refuse
 naming both when they differ, before any caller does anything with the
 address: a box at another address is a decision the repository has to record,
-not drift for a converge to follow.
+not drift for a converge to follow. The hold is a fact about the appliance's
+own compartment: a run pointed at another one (`--compartment`, or a
+configuration file naming one) is another site, whose address the constant
+does not describe, and `OciClients.held` is what says which kind of run this
+is.
 """
 
 from __future__ import annotations
@@ -81,6 +85,13 @@ class OciClients:
 
     compartment_id: str
     config: dict[str, Any]
+    #: Whether `compartment_id` is the appliance's own -- the one
+    #: `conventions.OCI_TENANCY.compartments` records -- and so whether the
+    #: reservation in it is held to `settings.ADDRESS` (`hold_address`). A run
+    #: pointed at any other compartment is another site: the constant
+    #: describes nothing there, and holding it would end every such run at a
+    #: refusal whose only repair overwrites the real site's record.
+    held: bool
 
     @classmethod
     def load(cls, compartment_id: str | None = None) -> OciClients:
@@ -105,7 +116,10 @@ class OciClients:
         `--compartment` overrides both, and a configuration file that names a
         `compartment-id` of its own — the hand-written one above, or one an
         operator points this run at — is honoured ahead of the mapping,
-        because a file naming another tenancy's compartment means it.
+        because a file naming another tenancy's compartment means it. Which
+        of those the answer came from is not remembered; whether it *is* the
+        mapping's compartment is (`held`), because that is what decides
+        whether the site's recorded address applies.
         """
         location = os.environ.get('OCI_CLI_CONFIG_FILE')
         if not location:
@@ -126,17 +140,14 @@ class OciClients:
                     f'oci-state-backend mint`, which mints one into {slot}'
                 )
         config = oci.config.from_file(location)
-        compartment = (
-            compartment_id
-            or config.get('compartment-id')
-            or conventions.OCI_TENANCY.compartments[conventions.STATE_BACKEND].ocid
-        )
+        own = conventions.OCI_TENANCY.compartments[conventions.STATE_BACKEND].ocid
+        compartment = compartment_id or config.get('compartment-id') or own
         if not compartment:
             raise ValueError(
                 f'no compartment: pass --compartment, set compartment-id in {location}, or record the '
                 "appliance's compartment in `conventions.OCI_TENANCY.compartments`"
             )
-        return cls(compartment_id=str(compartment), config=config)
+        return cls(compartment_id=str(compartment), config=config, held=compartment == own)
 
     @property
     def _retry(self) -> Any:
@@ -405,7 +416,7 @@ class ReservedAddress:
     address: str
 
 
-def hold_address(address: str) -> str:
+def hold_address(address: str, *, held: bool) -> str:
     """The address OCI carries for the appliance, held against `settings.ADDRESS`.
 
     Every consumer of the address is downstream of this: the certificate is
@@ -421,7 +432,16 @@ def hold_address(address: str) -> str:
     A refusal names both addresses. Which one is wrong is the operator's call:
     recording the found address in `settings.py` is the answer when the move
     was meant, and repointing the reservation when it was not.
+
+    `held` is `OciClients.held`: the constant records the address in the
+    appliance's own compartment and nothing else, so a run pointed at another
+    compartment is not held to it -- the address is returned as found, and
+    the log says so once. Holding such a run would refuse every one of them
+    with a repair (record the address) that overwrites the real site's line.
     """
+    if not held:
+        log.info('%s is not held to settings.ADDRESS: --compartment names another site', address)
+        return address
     if address != settings.ADDRESS:
         raise RuntimeError(
             f'the reserved address {_name("ip")} carries is {address}, but settings.ADDRESS names '
@@ -435,12 +455,13 @@ def hold_address(address: str) -> str:
 def ensure_reserved_ip(clients: OciClients) -> ReservedAddress:
     """The address the server certificate is issued for.
 
-    Held against `settings.ADDRESS` (`hold_address`) whether it was found or
-    just reserved. A reservation this call makes is one OCI chose, so it is
-    refused on the same terms: on a site that has never been provisioned the
-    run ends here naming the new address, the operator records it, and the
-    next run finds the reservation and continues -- the reservation itself is
-    an `ensure_*` and stands across the refusal.
+    Held against `settings.ADDRESS` (`hold_address`, on the appliance's own
+    compartment) whether it was found or just reserved. A reservation this
+    call makes is one OCI chose, so it is refused on the same terms: on a site
+    that has never been provisioned the run ends here naming the new address,
+    the operator records it, and the next run finds the reservation and
+    continues -- the reservation itself is an `ensure_*` and stands across the
+    refusal.
     """
     network = clients.network
     log.info('looking up the reserved address %s', _name('ip'))
@@ -459,7 +480,7 @@ def ensure_reserved_ip(clients: OciClients) -> ReservedAddress:
             )
         )
         log.info('reserved %s', public_ip.ip_address)
-    return ReservedAddress(id=str(public_ip.id), address=hold_address(str(public_ip.ip_address)))
+    return ReservedAddress(id=str(public_ip.id), address=hold_address(str(public_ip.ip_address), held=clients.held))
 
 
 @dataclass(frozen=True)
@@ -531,7 +552,7 @@ def reserved_address(clients: OciClients) -> str:
     public_ip = _find(existing, _name('ip'))
     if public_ip is None:
         raise RuntimeError(f'no reserved address named {_name("ip")}; has the appliance been provisioned?')
-    return hold_address(str(public_ip.ip_address))
+    return hold_address(str(public_ip.ip_address), held=clients.held)
 
 
 def pin_options(known_hosts: Path) -> list[str]:
