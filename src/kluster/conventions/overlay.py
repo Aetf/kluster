@@ -1,4 +1,4 @@
-"""The overlay: its subnet, its roles, the routes it carries, its roster.
+"""The overlay: its subnet, its roles, the routes it carries, its roster, its managed DNS.
 
 The ZeroTier network every unattended run reaches the home site over
 (physical/gateway.md §2).
@@ -15,6 +15,8 @@ from enum import IntEnum
 from ipaddress import IPv4Address, IPv4Network
 from typing import final
 
+from kluster.conventions.dns import OVERLAY_DOMAIN
+from kluster.conventions.gateway import RESOLVERS
 from kluster.conventions.site import CLUSTER_VLAN, CONTAINER_VLAN, IOT_VLAN, LAN_POOL, SERVER_LAN
 
 #: The network this program adopts, as ZeroTier Central minted it. An identity
@@ -70,6 +72,40 @@ MANAGED_ROUTES = (
 #: The two identities that exist only for continuous integration, one per
 #: stack that joins the overlay during a run (physical/gateway.md §2.6).
 CI_MEMBERS = ('ci-physical', 'ci-dns')
+
+
+@final
+@dataclass(frozen=True)
+class ManagedDns:
+    """What the network pushes to a member that applies it: a domain, and who answers for it.
+
+    ZeroTier's own term for the setting `allowDNS` admits. A member that opts
+    in installs a resolver scoped to `domain` and nothing wider, so the domain
+    is the whole reach of the push: names under it go to `servers` and to
+    nothing else, names outside it are untouched. Opting in is the device's
+    own setting, which the controller neither reads nor sets, so no field
+    here says which members apply it (physical/gateway.md §2.7).
+    """
+
+    #: The search domain, and the scope of the resolver an opted-in member
+    #: installs.
+    domain: str
+    #: The resolvers, in the order the member tries them. Addresses rather
+    #: than names, because they are what the push carries, and every one of
+    #: them has to be reachable from the overlay by a route the network
+    #: already manages.
+    servers: tuple[IPv4Address, ...]
+
+
+#: The one managed-DNS block the network pushes. The domain is the overlay host
+#: block's, so a member that opts in resolves `*.zt` at home and everything
+#: else where it did before. The servers are the site's own resolvers at their
+#: container-VLAN addresses: they are containers on the gateway and not
+#: members, so they have no overlay address, and a member reaches them through
+#: the managed route for that VLAN (`MANAGED_ROUTES`) via the gateway. What a
+#: client keeps of the list is bounded (`components.overlay.DNS_SERVER_LIMIT`),
+#: and the suite holds the list inside it.
+MANAGED_DNS = ManagedDns(domain=OVERLAY_DOMAIN, servers=tuple(resolver.address for resolver in RESOLVERS))
 
 #: The gateway, as the roster names it. It is the one member the roster may be
 #: missing: its node id is minted by the overlay daemon's first run, and that
