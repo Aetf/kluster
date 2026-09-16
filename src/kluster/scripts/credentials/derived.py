@@ -24,6 +24,14 @@ reads it before it can run. The state-backend appliance's OCI key is the one
 row whose consumer is not a stack — `state-backend provision` builds the
 backend the config secrets are stored behind — so it goes into a workstation
 slot instead (`oci_slot.py`).
+
+One row is drawn here rather than minted anywhere: the drill age identity,
+whose consumer is the ops repository's rebuild drill. It is `generate` in the
+command tree because no provider issues it, and it is not an escrow label
+because every dump it opens is also encrypted to an escrowed generation
+(credentials.md §2.2) — so its private half goes to the ops-repo Environment
+through the same GitHub sink every other GitHub secret takes, and its public
+half to a committed file the appliance's recipient list appends.
 """
 
 from __future__ import annotations
@@ -32,7 +40,9 @@ import logging
 from pathlib import Path
 
 from ... import conventions
-from . import b2, cloudflare, entries, oci_iam, oci_slot, pulumi_config
+from ..state_backend import config as appliance
+from . import age, b2, cloudflare, entries, oci_iam, oci_slot, pulumi_config
+from .github_secrets import Forge, Slot
 from .kdbx import KdbxStore
 
 log = logging.getLogger(__name__)
@@ -140,6 +150,21 @@ GATEWAY_ACME_ROW = 'cloudflare-gateway-acme'
 OCI_PHYSICAL_ROW = 'oci-physical'
 OCI_STATE_BACKEND_ROW = f'oci-{conventions.STATE_BACKEND}'
 B2_MANAGEMENT_ROW = 'b2-management'
+DRILL_AGE_IDENTITY_ROW = 'drill-age-identity'
+
+#: Where the drill age identity's private half lands: the ops repository's
+#: `drill` Environment, read by the rebuild drill and by nothing else
+#: (ci.md §3). One value, imported by the slot map, so the sink this generator
+#: pushes to and the target the register advertises cannot be two addresses.
+#:
+#: The name carries the Environment as a prefix. Inside a job an Environment
+#: secret shadows a repository secret of the same name, and the ops
+#: repository is to hold both kinds (credentials.md §3), so an ops-repo
+#: Environment secret is named `<ENVIRONMENT>_<what>`; a test holds every
+#: such slot in the map to it.
+DRILL_AGE_IDENTITY_SLOT = Slot(
+    repository=conventions.forge.OPS.full_name, name='DRILL_AGE_IDENTITY', environment=conventions.forge.DRILL.name
+)
 
 CLOUDFLARE_SEED_ENTRY = entries.SEEDS['cloudflare'].entry
 OCI_SEED_ENTRY = entries.SEEDS['oci'].entry
@@ -371,3 +396,75 @@ def b2_management(kit: KdbxStore, *, stack: pulumi_config.Stack, seed_entry: str
         )
     )
     return delivered.key_id
+
+
+def drill_age_identity(forge: Forge, *, recipient_file: Path, rotate: bool) -> str:
+    """Draw the drill age identity: private half to the ops-repo Environment, public half to a file.
+
+    Returns the recipient written. The identity exists in this process, then
+    on `gh`'s standard input, then in the Environment: no file, no kit row,
+    no escrow ciphertext ever holds the private half, and `age.Identity`
+    keeps it out of every repr. Losing the Environment secret costs a
+    `--rotate` and the converge that follows, never a byte of data, because
+    every dump it opens is also encrypted to an escrowed generation.
+
+    **The recipient on file is what refuses a second generation.** The row is
+    no escrow label, so nothing counts its generations; the committed public
+    half is the one durable trace of a key already in service, and drawing
+    over it would leave the appliance encrypting to a key the Environment
+    no longer holds until the next converge. `rotate` says that is the
+    intent -- and is refused when there is nothing on file to rotate, since
+    an operator who believes a key exists where none does is about to skip
+    the converge that installs it.
+
+    **Push before write, because the file is the durable half.** An
+    Environment secret with no recipient on file costs a re-run; a committed
+    recipient whose private half never landed is a dump encrypted to a key
+    nobody holds -- harmless to the data, and a drill failure found a
+    quarter later. The push is verified through the listing as every GitHub
+    push is (`slots.py`), and a push that does not show there ends the run
+    with the file untouched.
+
+    What follows the write is the operator's: commit the file, then
+    `state-backend provision --force` -- the recipient list is digested, so
+    the plain converge reports the drift and stops -- and `restore` of the
+    dump that run takes. The first object the drill can open is the first
+    dump written after that replace.
+    """
+    on_file = appliance.drill_recipient(recipient_file)
+    if on_file is not None and not rotate:
+        raise pulumi_config.SlotRefused(
+            f'{recipient_file} already names a drill recipient, so a drill key is in service; '
+            '`--rotate` draws its successor, and the sequence it starts is: commit the file, '
+            '`state-backend provision --force`, `state-backend restore` of the dump that run takes, '
+            'then a fresh dump for the drill to open'
+        )
+    if on_file is None and rotate:
+        raise pulumi_config.SlotRefused(
+            f'--rotate, but {recipient_file} names no drill recipient to rotate; the first generation is drawn '
+            'without it'
+        )
+    slot = DRILL_AGE_IDENTITY_SLOT
+    log.info('drawing the drill age identity with %s', age.KEYGEN)
+    identity = age.generate()
+    # The secret line alone, as `age-keygen` prints it minus its comment
+    # lines and with no trailing newline: a GitHub secret is stored exactly
+    # as it is piped in, and the drill writes the value to a file it hands
+    # `state-backend restore --identity-file`, which reads it line by line.
+    log.info('pushing the private half to %s (gh encrypts it on the way out)', slot)
+    forge.put(slot, identity.secret)
+    if slot.name not in forge.listing(slot):
+        raise pulumi_config.SlotRefused(
+            f'{slot}: pushed, but the secret listing does not show it; {recipient_file} is untouched'
+        )
+    log.info('%s holds the private half; writing the public half to %s', slot, recipient_file)
+    _ = recipient_file.write_text(
+        '# The drill age identity, public half (docs/credentials.md §3). The private\n'
+        f'# half is the {slot}; nothing on disk holds it.\n'
+        f'# Written by `credentials derived {DRILL_AGE_IDENTITY_ROW} generate`; replaced by `--rotate`.\n'
+        f'{identity.public}\n'
+    )
+    log.info('commit %s; the appliance encrypts to it from the next converge on:', recipient_file)
+    log.info('    state-backend provision --force    # dumps under the new recipients, replaces, names the file')
+    log.info('    state-backend restore <that file>')
+    return identity.public

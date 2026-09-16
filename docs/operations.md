@@ -102,13 +102,18 @@ default form is a scheduled automation that alerts only on failure,
 and the human appears exactly where an offline secret or physical
 action is irreducible.
 
-**The enabler for the biggest drill**: pg_dumps are to gain a third age
+**The enabler for the biggest drill**: pg_dumps gain a third age
 recipient — an **ops-repo-held drill key** (credentials.md §3),
-living in that repository's `drill` Environment. **The key does not
-exist**: the dumps carry the escrowed generations alone
-(state-backend.md §5), and the Environment holds nothing, so a rebuild
-today is an operator opening the object with the kit. The rest of this
-paragraph is the argument for building it. It adds no new
+living in that repository's `drill` Environment. The key is drawn by
+`credentials derived drill-age-identity generate`, which pushes the
+private half into that Environment and writes the public half to
+`deploy/state-backend/drill-recipient.txt`; the appliance encrypts to
+it from the converge that adopts the committed file (state-backend.md
+§5), and until that converge the dumps carry the escrowed generations
+alone. Nothing yet reads the key: the ops repository carries no
+workflow, so a rebuild today is still an operator opening the object
+with the kit. The rest of this paragraph is the argument for holding
+it there. It adds no new
 *class* of exposure. The kluster CI already reads the live database
 through its client cert, so a dump-decrypting key in a second GitHub
 repository widens the reach of a forge compromise by one repository
@@ -121,10 +126,18 @@ names that Environment, and the sole credential aimed at the ops
 repo (the dispatch App) cannot write a workflow file, holding no
 `workflows` permission. Its accepted residual, writing non-workflow
 files to the default branch, buys no path to this key. The key's own
-scope is the remainder of the argument: it opens the *latest* dump
-alone, while the escrowed offline generations keep their actual
-role and survive the loss of GitHub itself. With it, the
-state-backend rebuild drill runs unattended end to end.
+scope is the remainder of the argument, and it has two halves that are
+not the same sentence. Its *contract* is the newest dump alone — that
+is what the drill relies on, and why it has no generational pair —
+while the escrowed offline generations keep the retention role and
+survive the loss of GitHub itself. Its *exposure* is every dump
+written since it became a recipient and still in retention, at most
+the retention window and none before; the payload underneath is Pulumi
+state whose secrets sit under the state passphrase, which lives in the
+*kluster* Environments and never in the ops repository, so what an
+exposed key reads in the clear is the resource graph and the
+non-secret configuration. With the key held there, the state-backend
+rebuild drill can run unattended end to end once its workflow exists.
 
 **Nothing in the table below runs.** The ops repository carries no
 `.github/workflows` directory, so neither the state-backend rebuild nor

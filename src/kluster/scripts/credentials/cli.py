@@ -32,6 +32,7 @@ import sys
 from pathlib import Path
 
 from ... import conventions
+from ..state_backend import config as appliance_config
 from . import (
     b2,
     derived,
@@ -193,6 +194,12 @@ _ORDER = """when to run what:
     credentials derived <row> generate
          A new generation for that escrowed row alone, adopted by re-running
          what consumes it. Nothing else moves.
+    credentials derived drill-age-identity generate --rotate
+         The drill key: a fresh identity into the ops repo's drill
+         Environment, its recipient over the one on file. Escrowed nowhere,
+         so nothing counts its generations -- the file is what refuses a
+         run without --rotate. Then commit, state-backend provision --force,
+         state-backend restore, and one fresh dump for the drill to open.
     credentials derived <row> record
          The same for an escrowed row nothing here can draw: make another one
          in the console the command prints the steps for, and hand it in. A
@@ -842,6 +849,44 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_bundle_dir(management_mint)
 
+    # The one row drawn here and escrowed nowhere: its private half lands in
+    # the ops repository's Environment through the GitHub sink, its public half
+    # in a committed file the appliance's recipient list appends (`derived.py`).
+    drill_identity = rows.add_parser(
+        derived.DRILL_AGE_IDENTITY_ROW,
+        help='the age key the unattended rebuild drill opens the newest dump with',
+        description=(
+            'The age identity the ops repository holds for the state-backend rebuild drill. Its public half is '
+            'the third recipient every dump is encrypted to, beside the two escrowed generations; its private '
+            'half is an Environment secret in the ops repository and nothing else -- not a kit row and not an '
+            'escrow ciphertext, because every dump it opens also opens with an escrowed generation, so losing '
+            'it costs a fresh key and a converge rather than a byte of data.'
+        ),
+    )
+    drill_identity_verbs = drill_identity.add_subparsers(dest='action', required=True, metavar='<verb>')
+    drill_identity_generate = drill_identity_verbs.add_parser(
+        'generate',
+        help='draw it: the private half into the ops-repo Environment, the public half into the recipient file',
+        description=(
+            "Draw a fresh age identity, push its private half into the ops repository's `drill` Environment as "
+            f'`{derived.DRILL_AGE_IDENTITY_SLOT.name}` -- authenticating as the GitHub admin token, read back out '
+            "of the github stack's config -- and, once the listing shows the push landed, write the public half "
+            f'to `deploy/state-backend/{appliance_config.DRILL_RECIPIENT}`, which is a '
+            'file to commit. The private half exists in this process, on `gh` standard input and in the '
+            'Environment; nothing on disk ever holds it. A recipient already on file refuses a second run: the '
+            'file is the one durable trace of a key in service, and `--rotate` is how its successor is drawn. '
+            'Either way the appliance encrypts to the new recipient only after `state-backend provision '
+            "--force` -- the recipient list is part of the box's bill of materials, so the plain converge "
+            'reports the drift and stops -- followed by `state-backend restore` of the dump that run takes.'
+        ),
+    )
+    _ = drill_identity_generate.add_argument(
+        '--rotate',
+        action='store_true',
+        help='replace the key in service: overwrite the Environment secret and the recipient on file',
+    )
+    _add_bundle_dir(drill_identity_generate)
+
     # The rows whose credential is made in the console that checks it rather
     # than minted from a seed -- an appliance of the installation, or the
     # platform itself where that platform publishes no API for making one. `record`
@@ -1057,25 +1102,32 @@ def _stack(args: argparse.Namespace, store: KdbxStore, name: str, registry: escr
     )
 
 
+def _forge(args: argparse.Namespace, store: KdbxStore, registry: escrow.Registry) -> github_secrets.Forge:
+    """The forge's secret store, as the GitHub admin token.
+
+    The token comes out of the `github` stack's committed configuration, where
+    it lives for the stack that declares the forge (`devices.py`) — one home,
+    read by both. Reading it opens the state backend, which is why every
+    command that pushes a GitHub secret needs the passphrase and the bundle.
+    """
+    return github_secrets.Forge(
+        token=devices.borrow(
+            devices.DEVICES[devices.GITHUB_ADMIN],
+            stack=_stack(args, store, derived.GITHUB_STACK, registry),
+        )
+    )
+
+
 def _sync_context(args: argparse.Namespace, store: KdbxStore, registry: escrow.Registry) -> slots.Context:
     """What `derived sync` may reach for, with everything slow left unopened.
 
-    The token is fetched up front because every push needs it, and it comes out
-    of the `github` stack's committed configuration, where it lives for the
-    stack that declares the forge (`devices.py`) — one home, read by both.
-    Reading it opens the state backend, which is why this is the point the
-    passphrase and the bundle are needed at; the kit's escrow and a second
-    backend connection are passed as openers, so pushing the one typed-in row
-    asks for neither and a row recovered from escrow never reaches for a
-    backend.
+    The token is fetched up front because every push needs it; the kit's
+    escrow and a second backend connection are passed as openers, so pushing
+    the one typed-in row asks for neither and a row recovered from escrow
+    never reaches for a backend.
     """
     return slots.Context(
-        forge=github_secrets.Forge(
-            token=devices.borrow(
-                devices.DEVICES[devices.GITHUB_ADMIN],
-                stack=_stack(args, store, derived.GITHUB_STACK, registry),
-            )
-        ),
+        forge=_forge(args, store, registry),
         open_vault=lambda: escrow.Vault.open(store, registry),
         open_environment=lambda: lifecycle.environment(store, args.bundle_dir, registry),
     )
@@ -1300,6 +1352,17 @@ def main(argv: list[str] | None = None) -> int:
             case ('derived', derived.B2_MANAGEMENT_ROW, 'mint'):
                 _ = derived.b2_management(
                     store, stack=_stack(args, store, derived.PHYSICAL_STACK, registry), seed_entry=args.entry
+                )
+            # The drill age identity: drawn here, pushed through the GitHub
+            # sink as the admin token -- read out of the `github` stack's
+            # config, which is why this opens that stack -- and escrowed
+            # nowhere. The public half is written to the appliance's
+            # definition, for the operator to commit.
+            case ('derived', derived.DRILL_AGE_IDENTITY_ROW, 'generate'):
+                _ = derived.drill_age_identity(
+                    _forge(args, store, registry),
+                    recipient_file=appliance_config.DRILL_RECIPIENT_FILE,
+                    rotate=args.rotate,
                 )
             # The device rows: no mint, so the command is the console steps
             # plus the push. Which stack takes it comes from the row rather
