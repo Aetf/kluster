@@ -73,8 +73,11 @@ HELM_URL = f'https://get.helm.sh/helm-v{HELM_VERSION}-linux-amd64.tar.gz'
 HELM_SHA256 = 'dbb4c8fc8e19d159d1a63dda8db655f9ffa4aac1b9a6b188b34a40957119b286'
 
 #: Pinned rather than `latest`: this binary decides the shape of every
-#: generated module *and* the `pulumi-kubernetes` version `packages/crds`
-#: declares, so an unpinned one would rewrite the bindings without a bump.
+#: generated module, so an unpinned one would rewrite the bindings without a
+#: bump. The `pulumi-kubernetes` version `packages/crds` declares is not its
+#: to decide: the release it was built against is baked into the dependency
+#: line it writes, and `cli` rewrites that line to the version the bindings
+#: were generated against.
 #:
 #: The version is part of the asset's file name, and that is what lets the pin
 #: below travel with a bump: renovate finds the next release's asset by

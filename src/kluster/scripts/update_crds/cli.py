@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import logging
 import logging.config
+import re
 import shutil
 import subprocess as sp
 import sys
@@ -74,12 +75,48 @@ def collect_documents(workdir: Path) -> list[str]:
     return documents
 
 
+#: The `pulumi-kubernetes` requirement `crd2pulumi` writes into the generated
+#: `pyproject.toml`. The version in it is the one its release was built
+#: against, baked into the binary: `--version` moves the package's own version
+#: and `pulumi-plugin.json`, and leaves this line as it was.
+BAKED_DEPENDENCY = re.compile(r'"pulumi-kubernetes==[^"]*"')
+
+
+def declare_sdk_floor(pyproject: Path, version: str) -> None:
+    """Rewrite the generated package's `pulumi-kubernetes` requirement to a floor at `version`.
+
+    The classes register every resource at the version the package was
+    generated against, so the program has to install that version: the root
+    `pyproject.toml` pins it exactly, and a test holds the two to each other.
+    What this leaves in the generated file is a floor rather than the pin,
+    so the one pin lives in one place and the generated package cannot hold
+    the whole project on the release `crd2pulumi` happened to be built with.
+
+    Refused by name when the line is not where the generator writes it: a
+    release that changed its template is a change to what this rewrites, and
+    is answered by reading its output rather than by generating around it.
+    """
+    text = pyproject.read_text()
+    matches = BAKED_DEPENDENCY.findall(text)
+    if len(matches) != 1:
+        raise RuntimeError(
+            f'{pyproject} carries {len(matches)} pulumi-kubernetes requirements where crd2pulumi writes one; '
+            'this release generates a different pyproject.toml than the rewrite expects'
+        )
+    _ = pyproject.write_text(BAKED_DEPENDENCY.sub(f'"pulumi-kubernetes>={version}"', text))
+    log.info(f"Declared the generated package's pulumi-kubernetes floor at {version}")
+
+
 def generate(crd_files: list[Path], output: Path, crd2pulumi: Path) -> None:
     """Replace `output` with bindings for exactly `crd_files`.
 
     The old tree is moved aside rather than merged into: a group that left the
     chart set has to disappear, and a generator that only ever adds would keep
     retired bindings alive forever.
+
+    The tree has one writer, and the rewrite of the dependency line is part of
+    it: what `crd2pulumi` leaves behind is not the package this repository
+    commits until `declare_sdk_floor` has run on it.
     """
     backup = output.with_suffix('.bak')
     log.info(f'Moving the existing bindings aside to {backup}')
@@ -95,6 +132,7 @@ def generate(crd_files: list[Path], output: Path, crd2pulumi: Path) -> None:
             [str(crd2pulumi), '--python', '--pythonPath', str(output), '--version', sdk_version]
             + [str(file) for file in crd_files]
         )
+        declare_sdk_floor(output / 'pyproject.toml', sdk_version)
     except BaseException:
         log.error('Generation failed; restoring the previous bindings')
         shutil.rmtree(output, ignore_errors=True)
