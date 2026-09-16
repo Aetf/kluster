@@ -8,9 +8,14 @@ the CA it chains to, and the address it answers on.
 
 from __future__ import annotations
 
+import base64
+import gzip
+import json
 import shutil
+import urllib.parse
 from dataclasses import fields
 from pathlib import Path
+from typing import Any
 
 import pytest
 from memory_kit import MemoryKit
@@ -19,10 +24,28 @@ from kluster.scripts.credentials import age, escrow, pki
 from kluster.scripts.state_backend import config
 
 needs_age = pytest.mark.skipif(shutil.which(age.BINARY) is None, reason='age is not on PATH (mise x -- ...)')
+needs_butane = pytest.mark.skipif(shutil.which('butane') is None, reason='butane is not on PATH (mise x -- ...)')
 
 ADDRESS = '192.0.2.10'
 OTHER = '192.0.2.11'
 RECIPIENT = 'age1exampleexampleexampleexampleexampleexampleexampleexamplezzzz'
+DRILL_RECIPIENT = 'age1drilldrilldrilldrilldrilldrilldrilldrilldrilldrilldrillzzzz'
+
+#: Where the Butane template puts the recipient list on the box.
+RECIPIENTS_FILE = '/etc/kluster/age-recipients.txt'
+
+
+@pytest.fixture(autouse=True)
+def drill_recipient_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """The drill recipient file, absent unless a case writes it.
+
+    Pointed away from the checkout's own, so that whether the operator has
+    committed one there decides nothing here: the cases below are about what
+    the function does with the file, not about the repository's state.
+    """
+    path = tmp_path / config.DRILL_RECIPIENT
+    monkeypatch.setattr(config, 'DRILL_RECIPIENT_FILE', path)
+    return path
 
 
 @pytest.fixture
@@ -150,3 +173,100 @@ def test_writing_a_bundle_does_not_mint_a_ca(vault: escrow.Vault) -> None:
     # brand-new CA the appliance has never heard of.
     with pytest.raises(escrow.EscrowError, match=escrow.CA):
         _ = config.Roots.recover(vault)
+
+
+@needs_age
+def test_the_drill_recipient_on_file_follows_the_escrowed_generations(
+    vault: escrow.Vault, drill_recipient_file: Path
+) -> None:
+    """The box and an operator's dump encrypt to the drill key once its public half is committed.
+
+    After the generations, because the generations are the recovery path and
+    the drill key is the convenience: a reader of the box's list sees what
+    the escrow holds first. Comments in the file are the generator's, and
+    are not recipients.
+    """
+    _ = config.Roots.ensure(vault, appliance_exists=False)
+    _ = drill_recipient_file.write_text(f'# the drill key, public half\n{DRILL_RECIPIENT}\n')
+
+    recipients = config.age_recipients(vault)
+
+    generations = tuple(age.recipient(vault.recover(label)) for label in escrow.backup_labels())
+    assert recipients == (*generations, DRILL_RECIPIENT)
+
+
+@needs_age
+def test_no_drill_recipient_on_file_is_the_generations_alone(vault: escrow.Vault, drill_recipient_file: Path) -> None:
+    # Absent is a state and not a refusal: every converge before the
+    # generator has run would otherwise refuse.
+    _ = config.Roots.ensure(vault, appliance_exists=False)
+    assert not drill_recipient_file.exists()
+
+    recipients = config.age_recipients(vault)
+
+    assert recipients == tuple(age.recipient(vault.recover(label)) for label in escrow.backup_labels())
+
+
+def test_an_empty_drill_recipient_file_is_refused_like_the_operator_keys(drill_recipient_file: Path) -> None:
+    # A blank where a recipient should be is a dump the drill cannot open,
+    # discovered a quarter later.
+    _ = drill_recipient_file.write_text('# nothing here yet\n')
+
+    with pytest.raises(age.AgeError, match='holds no values'):
+        _ = config.drill_recipient(drill_recipient_file)
+
+
+def test_a_second_drill_recipient_on_file_is_refused_by_naming_the_rotation(drill_recipient_file: Path) -> None:
+    # One slot and no generational pair: a second line is a rotation done by
+    # hand, and the command that does it properly is named instead.
+    _ = drill_recipient_file.write_text(f'{DRILL_RECIPIENT}\nage1another\n')
+
+    with pytest.raises(age.AgeError, match='--rotate'):
+        _ = config.drill_recipient(drill_recipient_file)
+
+
+def test_a_drill_recipient_that_is_not_one_is_refused(drill_recipient_file: Path) -> None:
+    # A secret pasted where the public half belongs would be committed in the
+    # clear and encrypt to nobody.
+    _ = drill_recipient_file.write_text('AGE-SECRET-KEY-1NOTARECIPIENT\n')
+
+    with pytest.raises(age.AgeError, match='not an age recipient'):
+        _ = config.drill_recipient(drill_recipient_file)
+
+
+def _delivered(ignition: str, path: str) -> str:
+    """One file the rendered Ignition writes, as its text.
+
+    Butane encodes an inline file as a `data:` URL and gzips it once it is
+    worth gzipping, so a case reading the JSON straight would be asserting
+    against whichever of the two shapes the value happened to take.
+    """
+    document: Any = json.loads(ignition)
+    for entry in document['storage']['files']:
+        if entry['path'] != path:
+            continue
+        head, _, body = str(entry['contents']['source']).partition(',')
+        raw = base64.b64decode(body) if head.endswith(';base64') else urllib.parse.unquote_to_bytes(body)
+        if entry['contents'].get('compression') == 'gzip':
+            raw = gzip.decompress(raw)
+        return raw.decode()
+    raise AssertionError(f'the rendered Ignition writes no {path}')
+
+
+@needs_butane
+def test_the_ignition_carries_every_recipient_the_roots_name_one_per_line() -> None:
+    """The box's recipient list is the roots' list, the drill key's line included.
+
+    The dump script reads that file a line per recipient, so a third
+    recipient reaches it through the same loop as the first two -- which is
+    what makes the drill key's adoption a converge rather than a template
+    change.
+    """
+    roots = config.Roots(
+        ca=pki.Authority.from_pem(pki.generate_ca_key()), age_recipients=(RECIPIENT, 'age1second', DRILL_RECIPIENT)
+    )
+    built = config.machine(roots, address=ADDRESS, dump_key_id='key-id', dump_key='secret', bucket_id='bucket')
+
+    ignition = config.render_ignition(built)
+
+    assert _delivered(ignition, RECIPIENTS_FILE).split() == [RECIPIENT, 'age1second', DRILL_RECIPIENT]
