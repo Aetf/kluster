@@ -247,6 +247,28 @@ def test_a_fresh_reservation_is_held_the_same_way() -> None:
     assert [ip.ip_address for ip in client.network.ips] == [ELSEWHERE]
 
 
+def test_a_fresh_reservation_s_refusal_offers_the_one_repair_there_is() -> None:
+    """Just reserved, the address has nothing to be repointed to: record it and re-run.
+
+    A found reservation has two repairs, because either side may be the stale
+    one; a reservation this run made has one, and a refusal offering the other
+    sends a first-ever provision looking for a move that never happened.
+    """
+    fresh = _Client([], allocates=ELSEWHERE)
+    found = _Client([_ip('state-backend-ip', ELSEWHERE)])
+
+    with pytest.raises(RuntimeError) as reserved:
+        _ = provision.ensure_reserved_ip(fresh)  # pyright: ignore[reportArgumentType]
+    with pytest.raises(RuntimeError) as carried:
+        _ = provision.ensure_reserved_ip(found)  # pyright: ignore[reportArgumentType]
+
+    assert 'just reserved' in str(reserved.value)
+    assert f'record {ELSEWHERE} as settings.ADDRESS and re-run' in str(reserved.value)
+    assert 'repoint' not in str(reserved.value)
+    assert 'repoint' in str(carried.value)
+    assert 'just reserved' not in str(carried.value)
+
+
 # -- where the appliance's own credential comes from -------------------------
 
 COMPARTMENT = 'ocid1.compartment.oc1..appliance'
