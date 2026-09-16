@@ -33,6 +33,7 @@ from pathlib import Path
 
 from ... import conventions
 from ..state_backend import config as appliance_config
+from ..state_backend import probe
 from . import (
     b2,
     derived,
@@ -205,6 +206,10 @@ _ORDER = """when to run what:
     credentials derived drill-credentials mint [--only oci|b2]
          The drill's OCI and B2 keys, both into that same Environment: a
          re-run is the rotation of both, --only rotates one.
+    credentials derived b2-freshness-dumps mint
+         The list-only B2 key the scheduled dump-age probe lists the dump
+         prefix with, into the ops repo's repository secrets: a re-run is
+         the rotation.
     credentials derived <row> record
          The same for an escrowed row nothing here can draw: make another one
          in the console the command prints the steps for, and hand it in. A
@@ -943,6 +948,39 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_bundle_dir(drill_credentials_mint)
 
+    # The freshness probe's key: the drill's B2 half narrowed to a listing,
+    # delivered as repository secrets of the ops repository through the same
+    # sink, under the names the probe reads (`state_backend.probe`).
+    freshness_key = rows.add_parser(
+        derived.B2_FRESHNESS_DUMPS_ROW,
+        help='the list-only B2 key the scheduled dump-age probe lists the dump prefix with',
+        description=(
+            'The B2 key `state-backend probe` lists the dump prefix with to tell how old the newest dump is. '
+            '`listFiles` alone, confined to the dump prefix of the bucket the appliance dumps into: names, never '
+            'a byte. It lands as two repository secrets of the ops repository -- not in its `drill` Environment, '
+            'because the job that reads it belongs to no Environment -- and rotating it is re-running this.'
+        ),
+    )
+    freshness_verbs = freshness_key.add_subparsers(dest='action', required=True, metavar='<verb>')
+    freshness_mint = freshness_verbs.add_parser(
+        'mint',
+        help="mint it from the seed into the ops repository's secrets",
+        description=(
+            'Sign as the B2 seed to mint a key that lists the dump prefix of the bucket the appliance dumps '
+            'into and can do nothing else, prove it by listing that prefix as itself, and push '
+            f'`{probe.KEY_ID_ENV}` and `{probe.KEY_ENV}` into the ops repository as repository secrets, as '
+            "the GitHub admin token read back out of the github stack's config. The key of that name that was "
+            'live before is retired only once both carriers are in the listing, so a push that fails leaves '
+            'the working key alone. Re-running this is the rotation.'
+        ),
+    )
+    _ = freshness_mint.add_argument(
+        '--entry',
+        default=derived.B2_SEED_ENTRY,
+        help=f'the kit entry the seed is read from (default: {derived.B2_SEED_ENTRY})',
+    )
+    _add_bundle_dir(freshness_mint)
+
     # The rows whose credential is made in the console that checks it rather
     # than minted from a seed -- an appliance of the installation, or the
     # platform itself where that platform publishes no API for making one. `record`
@@ -1432,6 +1470,10 @@ def main(argv: list[str] | None = None) -> int:
                     oci_seed_entry=args.oci_entry,
                     b2_seed_entry=args.b2_entry,
                 )
+            # The freshness probe's key: one seed out of the kit, both
+            # carriers through the same sink as the admin token.
+            case ('derived', derived.B2_FRESHNESS_DUMPS_ROW, 'mint'):
+                _ = derived.b2_freshness_dumps(store, _forge(args, store, registry), seed_entry=args.entry)
             # The device rows: no mint, so the command is the console steps
             # plus the push. Which stack takes it comes from the row rather
             # than from an argument -- the credential authenticates against

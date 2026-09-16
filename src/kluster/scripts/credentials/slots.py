@@ -763,6 +763,14 @@ def _device(member: str, *, onward: tuple[Channel, ...] = (), pending: Mapping[s
 #: secret it reads, which is where the trigger key's row stands.
 _OPS_UNBUILT = 'the ops-repository workflow that would read it is not built, so no secret there names it'
 
+#: Why the etcd snapshots' freshness key has no address: the bucket it would
+#: be confined to is a `physical` resource the stack has not created, and the
+#: scheduled snapshot that fills its prefix is unbuilt with it (ci.md §3).
+_ETCD_PREFIX_UNBUILT = (
+    'the backup bucket is a `physical` resource the stack has not created, and the etcd snapshot workflow '
+    'that would fill its prefix is not built, so no secret there names it'
+)
+
 #: Why an in-cluster row has no address: sealing needs the controller, and the
 #: controller arrives with `k8s-base`.
 _CLUSTER_UNBUILT = 'the sealed-secrets controller and its consumer arrive with `k8s-base`, so no manifest path exists'
@@ -875,6 +883,24 @@ ROWS: dict[str, Row] = {
         register='B2 dump key (micro)',
         source=Minted('state-backend provision'),
         targets=(OnBox("the appliance's Ignition"),),
+    ),
+    derived.B2_FRESHNESS_DUMPS_ROW: Row(
+        register='B2 freshness key (state dumps)',
+        # The slots are the mint's own values, imported, and those are the
+        # probe's variable names: the register, the push and the reader
+        # spell one pair. Repository secrets rather than the `drill`
+        # Environment's, because the probe's job belongs to no Environment.
+        source=Minted(f'credentials derived {derived.B2_FRESHNESS_DUMPS_ROW} mint'),
+        targets=derived.B2_FRESHNESS_DUMPS_SLOTS,
+    ),
+    'b2-freshness-etcd': Row(
+        register='B2 freshness key (etcd)',
+        # The same shape over the etcd snapshots' prefix of the backup
+        # bucket. A B2 key confines to one bucket, so the two probes' keys
+        # are two rows; this one waits on its bucket and on the workflow
+        # that fills the prefix, and lands with them.
+        source=Minted('credentials derived b2-freshness-etcd mint', unbuilt=_ETCD_PREFIX_UNBUILT),
+        pending={'ops-repo secret': _ETCD_PREFIX_UNBUILT},
     ),
     'github-dispatch-key': Row(
         register='GitHub App key (dispatch)',

@@ -254,6 +254,7 @@ class Dispatch:
             (cli.derived, 'b2_management', 'key-id'),
             (cli.derived, 'drill_age_identity', 'age1recipient'),
             (cli.derived, 'drill_credentials', {}),
+            (cli.derived, 'b2_freshness_dumps', 'key-id'),
             (cli.devices, 'deliver', ()),
             # Slots are files in the checkout this test is running from, so
             # the writer is stubbed: a dispatch test must not leave a
@@ -489,6 +490,19 @@ def test_the_drill_credentials_reach_their_mint_with_both_seeds_as_the_admin_tok
     assert [kwargs['only'] for _, kwargs in calls] == [None, 'b2']
     assert [kwargs['b2_seed_entry'] for _, kwargs in calls] == [cli.derived.B2_SEED_ENTRY, 'seeds/other']
     assert {kwargs['oci_seed_entry'] for _, kwargs in calls} == {cli.derived.OCI_SEED_ENTRY}
+    assert {args[1].token for args, _ in calls} == {'a-token'}
+    assert {type(args[0]) for args, _ in calls} == {KdbxStore}
+
+
+def test_the_freshness_key_reaches_its_mint_with_the_seed_as_the_admin_token(dispatch: Dispatch) -> None:
+    assert cli.main(['derived', 'b2-freshness-dumps', 'mint']) == 0
+    assert cli.main(['derived', 'b2-freshness-dumps', 'mint', '--entry', 'seeds/other']) == 0
+
+    # The seed from the entry `--entry` names; the push authenticates as the
+    # token `derived sync` uses, read out of the `github` stack rather than
+    # from anything in the shell.
+    calls = [(args, kwargs) for name, args, kwargs in dispatch.calls if name == 'derived.b2_freshness_dumps']
+    assert [kwargs['seed_entry'] for _, kwargs in calls] == [cli.derived.B2_SEED_ENTRY, 'seeds/other']
     assert {args[1].token for args, _ in calls} == {'a-token'}
     assert {type(args[0]) for args, _ in calls} == {KdbxStore}
 
