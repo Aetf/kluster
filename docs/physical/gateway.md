@@ -4,7 +4,7 @@ The UDM-SE as a system: the home site's router, firewall, ZeroTier
 terminator, and host of the nspawn container services. This document owns *how the
 machine delivers* what the cluster design demands of it; the demands
 themselves live in cluster/ (BGP peering and the `lan` pool —
-architecture.md §3.4; full desired-state absorption — architecture.md §5.2; ZT
+architecture.md §3.4; full desired-state absorption — architecture.md §5.2; overlay
 termination — architecture.md §5.3) and the declaration mechanics in
 declarative/physical.md §4.
 
@@ -274,8 +274,8 @@ declarative/physical.md §4.
 -   **Zone firewall**: UBIOS zone-based firewall, declared through the
     bridged filipowm/unifi provider (architecture.md §5.1). Target
     state: §4.
--   **ZeroTier router**: the home side's ZT terminator (§2) — a
-    net-new role; today ZT and the home LANs are not connected at
+-   **ZeroTier router**: the home side's overlay terminator (§2) — a
+    net-new role; today the overlay and the home LANs are not connected at
     all (no member routes anything).
 -   **Its own TLS issuer**: caddy serves the box's vhosts (the UniFi
     console, both AdGuard UIs) under public-zone names and issues their
@@ -797,9 +797,9 @@ the primary block's is: one rule for both zones.
 
 ## 2. ZeroTier network design
 
-Architecture.md §5.3 decides *where* ZT terminates (the UDM) and *what
-governs it* (ZT Central config in the `physical` stack via the bridged
-`zerotier/zerotier` provider). This section is the network-level
+Architecture.md §5.3 decides *where* the overlay terminates (the UDM)
+and *what governs it* (ZeroTier Central config in the `physical` stack
+via the bridged `zerotier/zerotier` provider). This section is the network-level
 design: roster, addressing, routes, flow rules, managed DNS, and
 cutover.
 
@@ -852,7 +852,7 @@ device being renamed in Central.
 | Member | role tag | Notes |
 | --- | --- | --- |
 | `udm` | `infra` | The gateway: a static managed address, and the next hop of every route to the home (§2.2). Absent from the roster until §2.5 step 2 records the node id its daemon mints. |
-| `Aetf-Arch-Homelab` | `infra` | The homelab host: a plain member, never a router (ZT carries no home-LAN routes), and the recovery side-door (§3). The one address the flow rules and the libvirt session look up rather than take from a constant. |
+| `Aetf-Arch-Homelab` | `infra` | The homelab host: a plain member, never a router (the overlay carries no home-LAN routes), and the recovery side-door (§3). The one address the flow rules and the libvirt session look up rather than take from a constant. |
 | `Aetf-Arch-VPS` | `infra` | The legacy deployment. Retires in Wave F together with its `10.42.0.0/24` route. |
 | `haos` | `infra` | Home automation, reachable while the cluster is not. |
 | `ci-physical` | `ci` | The `physical` identity domain: `plan-physical`, `up-physical`, and the drift matrix's `physical` entry. Identity generated in state (`zerotier_identity`), private key an Environment secret; `zt-physical` keeps it live in one job at a time (§2.6). IPv4-only (§2.3). |
@@ -876,7 +876,7 @@ first converge deletes at Central. Each row is `{target, via}`:
 | The `lan` pool | `192.168.71.0/24` | `10.144.1.1`, reached through the UDM's own BGP-learned route, one hop — how a person off-site reaches a cluster service. |
 | The legacy pod subnet | `10.42.0.0/24` | The VPS member's own overlay address, so that the route and the roster entry leave in one commit. Deleted in Wave F (cluster/migration.md §4). |
 
-All reachability into the home is via the UDM member's ZT address; the
+All reachability into the home is via the UDM member's overlay address; the
 homelab host advertises nothing. The suite holds the table's shape
 rather than its rows: some via-less route covers every address the
 roster places, every `via` is a member, and the home subnets go via
@@ -899,7 +899,7 @@ stating because the intuitive answers are wrong:
 -   **Each member installs them into its own operating system**, gated
     by a client-side setting: `allowManaged`, on by default for
     private ranges, and `allowGlobal` and `allowDefault`, both off. A
-    phone off-site routes the home subnets into its ZT interface
+    phone off-site routes the home subnets into its overlay interface
     because its own client put them there, not because anything
     server-side steered it.
 -   **A member sitting on one of those subnets does not refuse the
@@ -940,8 +940,8 @@ Facts about the rules engine that shape the draft (docs.zerotier.com
     on the other end's tag (the bitwise matchers `tand`/`tor`/`txor`
     combine both ends' values and are wrong for this).
 -   **Routed traffic keeps its pre-forward destination**: a packet for
-    a LAN host rides ZT with ethernet dst = the UDM member but IP dst =
-    the LAN address, so `ipdest` matches LAN CIDRs directly.
+    a LAN host rides the overlay with ethernet dst = the UDM member but
+    IP dst = the LAN address, so `ipdest` matches LAN CIDRs directly.
     (Confirmed by the engine model; still on the §2.4 checklist.)
 -   **#2200 quirks, designed around**: when one end's tags are not yet
     known the evaluator force-matches tag rules (first packets may hit
@@ -1000,7 +1000,7 @@ roster discipline in §2.1 exists: an undeclared member would default to
 doesn't authorize never joins), so the default is unreachable in
 practice.
 
-**Personal traffic and local discovery are untouched.** ZT is also
+**Personal traffic and local discovery are untouched.** The overlay is also
 the personal devices' network segment, so the rules must not break
 LAN-style behavior between them — and they don't: every rule above
 matches only `ci`-tagged endpoints; all other traffic falls through
@@ -1022,20 +1022,20 @@ discovery *does* depend on, declared rather than assumed:
     pair until tags are exchanged, multicast included; mDNS/SSDP
     re-announce periodically, so discovery self-heals.
 
-**Boundary fact**: discovery across the ZT↔LAN boundary does not
+**Boundary fact**: discovery across the overlay↔LAN boundary does not
 work and never did — link-local multicast does not cross a routed
-hop, and the new managed routes carry unicast only. A ZT device
-discovers other ZT members, not LAN devices. If that is ever wanted,
+hop, and the new managed routes carry unicast only. An overlay member
+discovers other overlay members, not LAN devices. If that is ever wanted,
 the shape is an mDNS reflector on the UDM spanning `zt*` and the
 VLANs — deliberately not designed in.
 
-These Central rules are the **only policing layer** for ZT-forwarded
+These Central rules are the **only policing layer** for overlay-forwarded
 traffic — the UBIOS firewall does not classify `zt*` interfaces and
 forwards them on default ACCEPT (architecture.md §5.3).
 
 ### 2.4 Verification (test network, before cutover)
 
-Run against a scratch ZT network with the same rules and a throwaway
+Run against a scratch ZeroTier network with the same rules and a throwaway
 `ci`-tagged member:
 
 1.  CI member reaches exactly its four targets (SSH banner / API
@@ -1048,7 +1048,7 @@ Run against a scratch ZT network with the same rules and a throwaway
 4.  First-packet behavior after a fresh join (the #2200 transient):
     connection succeeds on retry within normal client timeouts.
 5.  Personal members are unaffected: full reachability, ARP/ND intact.
-6.  Local discovery between two personal members over ZT (an mDNS
+6.  Local discovery between two personal members over the overlay (an mDNS
     query/response round trip) works with the rules applied —
     exercises the multicast settings and the final-accept fallthrough
     together.
@@ -1058,14 +1058,14 @@ Run against a scratch ZT network with the same rules and a throwaway
 
 ### 2.5 First bring-up
 
-Steady state is circular: the gateway is reached over ZT, and the ZT
-daemon on the gateway is a container service that same channel
-delivers. The gateway's ZT identity is circular in the same way — a node
+Steady state is circular: the gateway is reached over the overlay, and
+the ZeroTier daemon on the gateway is a container service that same
+channel delivers. The gateway's overlay identity is circular in the same way — a node
 id is minted by the daemon's first run on a device, so it does not exist
 to be authorized until the delivery has happened.
 
 What breaks the cycle is the LAN, which reaches the UDM before and
-independently of ZT, and an optional key of the `physical` stack:
+independently of the overlay, and an optional key of the `physical` stack:
 
 **`gatewayBootstrapHost`** — a LAN address for the gateway, **spelled
 as a literal address and never as a name**: `10.0.5.1`, the device's
@@ -1096,7 +1096,7 @@ The ceremony is four steps; steps 1, 3 and 4 each apply, and step 1's
 apply is run in two parts around the cutover window:
 
 1.  **Set `gatewayBootstrapHost`, then `physical` up.** The push goes
-    over the LAN and delivers the services, the ZT container included.
+    over the LAN and delivers the services, the ZeroTier container included.
     The device is already running the layout the retiring tracker
     built, so this apply is preceded by a cutover window that moves the
     live state under the declared paths — the procedure, its
@@ -1218,7 +1218,7 @@ apply is run in two parts around the cutover window:
     it. Both halves of this step read a value the previous apply
     brought into being, which is why they are one step and not two.
 4.  **Unset the knob and apply once more.** Every client is back on the
-    overlay address, so this run dials over ZT — which is the
+    overlay address, so this run dials over the overlay — which is the
     verification rather than a formality: it rewrites the services through
     the path that is now load-bearing, and it converges only if that
     path carries the whole of it.
@@ -1262,7 +1262,7 @@ the new address, and nothing is deleted at the old one — which, both addresses
 being the same box, would delete what the same apply had just written.
 
 **The ceremony is operator-local by construction.** Its first three
-steps dial the LAN, and CI reaches the site over ZT and has no path to
+steps dial the LAN, and CI reaches the site over the overlay and has no path to
 the LAN at all — so a first bring-up cannot be a CI run whatever the
 schedule says (migration.md Phase 0), and neither can any later recovery
 that starts from a gateway which is off the overlay (§3).
@@ -1275,7 +1275,7 @@ Two things that are *not* part of the cycle:
     census also carries what Central already holds (§2.2): the
     overlay's own route and the legacy one. No flip, no transition
     window.
--   **CI's per-run ZT join becomes load-bearing only after §2.4
+-   **CI's per-run overlay join becomes load-bearing only after §2.4
     passes** — until the flow rules and routes are verified,
     `physical` runs stay operator-local.
 
@@ -1294,7 +1294,7 @@ Facts that shape it (decided 2026-08-24):
     would collapse the per-stack Environment credential partition
     (ci.md §3). Per-job joins are the shape; their recurring cost is the
     latency of each join (below).
--   **One identity live in two places flaps** (ZT maps a node ID to
+-   **One identity live in two places flaps** (ZeroTier maps a node ID to
     one endpoint at a time), so concurrent jobs must never share an
     identity. Hence, one identity per domain — `physical` and `dns`,
     the two stacks whose jobs join — and each domain serialized by a
@@ -1312,9 +1312,9 @@ Facts that shape it (decided 2026-08-24):
 -   **Join latency expectation**: kluster-code's measured 1–2 min
     wait-for-peer is dominated by NAT traversal toward a NATed host
     member (relay first, then a hole-punched direct path). Here the
-    peer is the UDM itself, whose ZT socket (host-networking
+    peer is the UDM itself, whose ZeroTier socket (host-networking
     container) sits on the WAN interface un-NATed — the direct path
-    should form on first contact, and traffic flows (slowly, via ZT
+    should form on first contact, and traffic flows (slowly, via ZeroTier
     relays) even before it does. Verified as §2.4 item 7;
     seconds-class expected, and if it stays minutes it is a per-job
     fixed cost, not a correctness problem.
@@ -1409,7 +1409,7 @@ executable form ships with the implementation.
 **Standing decision: an unreachable gateway fails the whole `physical`
 preview.** Every device-files resource diffs against the device rather than
 against state, so a preview opens a session per resource; with the UDM
-down, its ZT container down, or the overlay itself down, all of them
+down, its ZeroTier container down, or the overlay itself down, all of them
 fail, and the run produces no plan. That is intended — a
 preview that reports "no changes" about a device it never looked at is
 worse than one that says it could not look — and the cost is real: while
@@ -1427,17 +1427,17 @@ reaching it would describe a device the apply cannot touch either,
 while a resolver is a leaf whose absence says nothing about the records
 at the registrar.
 
--   **ZT container down on the UDM** — trigger: physical-stack CI runs
+-   **ZeroTier container down on the UDM** — trigger: physical-stack CI runs
     fail to reach the UDM; personal devices lose LAN reachability. The
-    repair tool (the device-files push) itself rides ZT, hence the side-door:
-    connect to the **homelab host's direct ZT address** (member-to-
-    member traffic needs no managed routes), hop to the LAN, SSH the
+    repair tool (the device-files push) itself rides the overlay, hence
+    the side-door: connect to the **homelab host's direct overlay
+    address** (member-to-member traffic needs no managed routes), hop to the LAN, SSH the
     UDM, restart the machine or rerun the boot chain's two machine
     scripts (§1.1). If the host is also down: physical presence (LAN).
 -   **Firmware update wiped the services** — trigger: post-update, the
     machines are gone from `/var/lib/machines` and their settings from
     `/etc/systemd/nspawn`. The boot chain re-establishes them
-    autonomously (§1.1); verify ZT comes back (it carries the
+    autonomously (§1.1); verify the overlay comes back (it carries the
     management path). Fallback if host-networking nspawn misbehaves
     post-update: the unifios-utilities apt pattern (architecture.md
     §5.3).
@@ -1476,7 +1476,7 @@ complete set and the zone-matrix target state.
     and inherits any WAN-side machinery. Bootstrap verification: no
     NAT/IPS/content-filter interference on the LAN→pool path. Any
     rule naming the pool must use address groups — forever.
--   `zt*` interfaces match no zone; ZT-forwarded traffic rides
+-   `zt*` interfaces match no zone; overlay-forwarded traffic rides
     FORWARD's default ACCEPT — the Central flow rules (§2.3) are its
     only policing layer.
 
@@ -1502,7 +1502,7 @@ machinery:
     re-architecture. What lives on it: Talos apid, the kubelet, the
     BGP session on 179, the worker's GUA. Routine paths deliberately
     do not cross the UDM into it — `talosctl` rides the NLB, home-side
-    management rides ZT, host↔worker NFS rides the on-box `kvmbr1`
+    management rides the overlay, host↔worker NFS rides the on-box `kvmbr1`
     leg, the peer-port forward is WAN-side — so the zone matrix
     governs the exceptional traffic, not the working traffic.
 -   **The service VIP pool — `192.168.71.0/24` + ULA — is never a
@@ -1595,7 +1595,7 @@ on a pair holding both a drop and an allow the position *is* the rule.
 6.  **qbittorrent v4 peer-port forward** — target the worker at
     `192.168.70.10`, and **the only port forward on the device**. No
     management inbound exists: cluster and Talos management ride the
-    NLB, home-side management rides ZT.
+    NLB, home-side management rides the overlay.
 
 Nothing else. A controller rule not on this census is drift.
 

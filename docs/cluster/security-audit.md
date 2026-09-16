@@ -68,8 +68,8 @@ architecture.md §4.1.
 ### H3 — CI credential blast radius + PR-code execution
 
 **Attack.** CI holds the union of all secrets (OCI, Cloudflare, B2
-management, UDM root SSH, ZT, passphrase, kube/talos configs), and a PR
-`preview` job **executes the PR branch's Python with provider
+management, UDM root SSH, overlay identities, passphrase, kube/talos
+configs), and a PR `preview` job **executes the PR branch's Python with provider
 credentials** — a malicious PR or a poisoned dependency in `uv.lock`
 exfiltrates everything at preview time. `noop-automerge` amplifies it
 by merging "zero-diff" dependency bumps unreviewed, after which the
@@ -105,7 +105,7 @@ preview for zero-click renovate cadence; a bump that actually changes
 physical rendering still surfaces as a plan diff and stalls at the
 gate.
 
-**Lives in.** ci.md §2 (ZT confinement), §3 (partitioning + preview
+**Lives in.** ci.md §2 (overlay member confinement), §3 (partitioning + preview
 boundary).
 
 ### H4 — Backups are deletable (no anti-ransomware / anti-fat-finger)
@@ -171,7 +171,7 @@ with one enumerated allow** (the `media-gw` VIP:443) with the cluster
 rather than waiting for a future zone tightening. *Amended
 2026-08-24*: the original "recorded cross-VLAN dependencies all
 originate cluster→IoT" claim was wrong — smart TVs/streamers →
-jellyfin is IoT-originated; the media-gw carve-out serves it without
+jellyfin is IoT-originated; the `media-gw` carve-out serves it without
 reopening the pool (physical/gateway.md §4.2).
 
 **Lives in.** architecture.md §3.4, declared via the unifi provider
@@ -248,7 +248,7 @@ bump into `prove`.
 **Fix.** None at the credential: an admin login is the whole of what the
 appliance offers, and the rewrites are what makes LAN clients resolve
 split-horizon apps to their `lan` VIPs at all. The containment is
-positional — ZT flow rules confine a `ci`-tagged member to the AdGuard
+positional — Central flow rules confine a `ci`-tagged member to the AdGuard
 APIs and three other targets (L5), so the login is usable only from a
 joined member, and previews run for same-repo branches only, never a
 fork's. Accepted residual, and its detection gap is part of what is
@@ -298,7 +298,7 @@ against what was actually issued is dns.md §1.2.
 ### L4 — device-files SSH host-key pinning
 
 The provider does root-level writes to the UDM over ZeroTier; an
-accept-new first contact would let any ZT member MITM into gateway
+accept-new first contact would let any overlay member MITM into gateway
 root. The host key is pinned, as a constant in `conventions` rather
 than a configuration secret: a public key is not one, and a pin a
 preview shows is a pin a reviewer can check. *Lives in* physical.md §4.
@@ -324,8 +324,8 @@ writes the Ignition delivering it. *Lives in* physical/state-backend.md
 ### L5 — Confine CI ZeroTier members by tag
 
 A leaked CI join credential otherwise joins the home network with
-unpoliced forwarding (zt* rides the UDM's default ACCEPT). ZT Central
-tag-based flow rules limit CI members to UDM SSH, the UDM's UniFi
+unpoliced forwarding (`zt*` rides the UDM's default ACCEPT). ZeroTier
+Central tag-based flow rules limit CI members to UDM SSH, the UDM's UniFi
 Network API, the AdGuard APIs, and libvirt SSH. *Lives in* architecture.md §5.3, ci.md §2.
 
 ### L6 — libvirt SSH identity is root-equivalent

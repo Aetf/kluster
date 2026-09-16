@@ -281,7 +281,7 @@ and decides which services a deployment restarts (physical/gateway.md
 is mechanically — the pickle in each resource's state, the credential
 read in `configure`, the two properties `check` injects to make a
 rotation visible, and the traps that come with all three — is
-[framework/pulumi.md](../framework/pulumi.md) §5. ZT Central's network config
+[framework/pulumi.md](../framework/pulumi.md) §5. ZeroTier Central's network config
 (managed routes via the UDM member, member authorizations) is managed
 from the `physical` stack via the bridged `zerotier/zerotier`
 provider (architecture.md §5.3). The gw-config repo retires;

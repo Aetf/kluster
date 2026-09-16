@@ -53,17 +53,17 @@ owns sequencing, data movement, and teardown.
     libvirt SSH identity, NFS exports — physical/homelab-host.md §4). ZeroTier
     Central config is Pulumi-managed (architecture.md §5.3); the
     legacy `10.42.0.0/24`-via-VPS managed route is deleted in Wave F.
-    **ZT's home-LAN routes are net-new** (today ZT and the LANs are
-    not connected at all): the UDM container deploys via an
+    **The overlay's home-LAN routes are net-new** (today the overlay and
+    the LANs are not connected at all): the UDM container deploys via an
     operator-local run over the LAN, routes are added, and only after
-    the flow-rules verification does CI's per-run ZT join become
+    the flow-rules verification does CI's per-run overlay join become
     load-bearing (physical/gateway.md §2.5).
 2.  `physical` up: 3× A1 (A1 capacity confirmed at creation), worker VM
     (60 GB), NLB, UDM FRR and container services, B2. The gateway's share of this is
     **three applies, not one, and operator-local by construction** — CI
     reaches the site over ZeroTier and the gateway is not on ZeroTier
     yet. Set `gatewayBootstrapHost` to a LAN address for the UDM and
-    apply, which lands the container services and with them the ZT container; commit
+    apply, which lands the container services and with them the ZeroTier container; commit
     the gateway's roster entry, carrying the node id that container
     mints, and apply again, which authorizes the member at the address
     the routes already name as their next hop — they ride the overlay
@@ -77,7 +77,7 @@ owns sequencing, data movement, and teardown.
     under the declared paths — procedure, verification and rollback:
     physical/gateway-cutover.md. `dns` up: zones + base records
     imported wholesale (records still pointing at `archvps.hosts`; the
-    import census also drops dead weight — `abacus.hosts`, its ZT
+    import census also drops dead weight — `abacus.hosts`, its overlay
     entry, jupyter/mc records).
 3.  `k8s-base` up; sealing key restored; backup-freshness alerts
     live. (Talos-level checks that need no CNI — etcd fsync, A1
