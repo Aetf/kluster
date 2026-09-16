@@ -666,12 +666,32 @@ def test_the_trigger_app_key_is_a_repository_secret_of_the_ops_repository() -> N
     assert row.pending == {}
 
 
-def test_the_webhook_is_a_repository_secret_and_not_an_environment_one() -> None:
-    # The job that reads it belongs to no stack, so an Environment secret would
-    # be invisible to it (ci.md §3).
-    (slot,) = slots.ROWS['haos-webhook'].sinks
+def test_the_webhook_is_a_repository_secret_of_the_ops_repository_and_has_left_the_deployment_one() -> None:
+    """CI holds no Home Assistant credential; the ops repository's dispatch handler does.
 
-    assert slot == Slot(repository=REPOSITORY, name='HAOS_DEPLOY_WEBHOOK_URL')
+    One sink, a repository secret of the ops repository with no Environment
+    -- the handler belongs to none, so an Environment secret would be
+    invisible to it and the prefix rule does not apply -- under the name the
+    handler reads. The only channel still pending is the in-cluster copy,
+    which waits on the sealed-secrets controller. And no row of the map
+    delivers a webhook into the deployment repository any more: the secret
+    `deploy.yml` still reads there is the legacy channel, which this map
+    leaves alone rather than re-syncing.
+    """
+    row = slots.ROWS['haos-webhook']
+
+    (slot,) = row.sinks
+    assert slot == Slot(repository=OPS_REPOSITORY, name=slots.HA_WEBHOOK_URL)
+    assert slot.environment is None
+    assert slot.name == 'HA_WEBHOOK_URL'
+    assert not slot.name.startswith(f'{DRILL_ENVIRONMENT.upper()}_')
+    assert set(row.pending) == {'SealedSecret'}
+    assert not [
+        slot
+        for row in slots.ROWS.values()
+        for slot in row.sinks
+        if slot.repository == REPOSITORY and 'WEBHOOK' in slot.name.upper()
+    ]
 
 
 def test_the_drill_age_identity_is_delivered_by_its_generator_and_waits_on_nothing() -> None:
@@ -1079,20 +1099,25 @@ def test_a_typed_in_row_is_asked_for_once_and_left_alone_afterwards(caplog: pyte
 
     # A bring-up run walks the whole map; stopping to re-type a value that is
     # already in place would make that run interactive for no reason.
-    assert gh.values[(REPOSITORY, None, 'HAOS_DEPLOY_WEBHOOK_URL')] == 'typed-in'
+    assert gh.values == {(OPS_REPOSITORY, None, 'HA_WEBHOOK_URL'): 'typed-in'}
     assert pushed == []
     assert 'already in every slot' in caplog.text
+    # The listing read before and the verification after both scope the same
+    # way as the write: `--repo` naming the ops repository, and no `--env`.
+    for invocation in gh.invocations:
+        assert invocation[invocation.index('--repo') + 1] == OPS_REPOSITORY, invocation
+        assert '--env' not in invocation, invocation
 
 
 def test_naming_a_typed_in_row_replaces_what_is_there() -> None:
-    gh = RecordedGh(collections={(REPOSITORY, None): {'HAOS_DEPLOY_WEBHOOK_URL': '2026-01-01T00:00:00Z'}})
+    gh = RecordedGh(collections={(OPS_REPOSITORY, None): {'HA_WEBHOOK_URL': '2026-01-01T00:00:00Z'}})
 
     pushed = slots.sync(context(gh, ask=typing_in('a-new-webhook')), only='haos-webhook')
 
     # Rotating it is a new webhook id in Home Assistant and this command, so
     # naming the row has to mean "replace" rather than "leave it".
     assert pushed
-    assert gh.values[(REPOSITORY, None, 'HAOS_DEPLOY_WEBHOOK_URL')] == 'a-new-webhook'
+    assert gh.values == {(OPS_REPOSITORY, None, 'HA_WEBHOOK_URL'): 'a-new-webhook'}
 
 
 def test_a_typed_in_row_that_is_left_empty_is_refused() -> None:

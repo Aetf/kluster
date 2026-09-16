@@ -515,8 +515,12 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     elsewhere, and `credentials derived sync` re-reads and re-pushes
     them: the state passphrase out of the escrow, `ZEROTIER_IDENTITY`
     out of the `physical` stack's state, `ZEROTIER_NETWORK_ID` out of
-    the constant `conventions.overlay.NETWORK_ID`,
-    `HAOS_DEPLOY_WEBHOOK_URL` from whoever types it. Re-running such a
+    the constant `conventions.overlay.NETWORK_ID`, and the Home
+    Assistant webhook URL from whoever types it — `HA_WEBHOOK_URL` in
+    `kluster-ops`, pushed by `credentials derived sync --only
+    haos-webhook`, while `deploy.yml` keeps reading the undeclared
+    `HAOS_DEPLOY_WEBHOOK_URL` until the dispatch handler exists
+    (credentials.md §3). Re-running such a
     push is a refill, never a rotation. The four `PULUMI_BACKEND_*`
     carriers are the exception: the leaf key of a client certificate is
     stored nowhere, so a push *issues* a fresh `ci` bundle under the
