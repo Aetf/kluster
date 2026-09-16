@@ -26,13 +26,20 @@ carries no flag that says so.
 
 **Descriptive over metaphorical.** A name states what the thing is, not
 what it is like. No jargon-for-flavor when a plain compound says it:
-device-services beats estate, initial-state-file beats seed. Rename
+container service beats estate, initial state beats seed. Rename
 cost is paid once; decoding cost is paid by every reader.
 
 **One term per concept, everywhere.** When two similar things coexist
 (the ZeroTier overlay, the LAN networks), every class, method, and
 variable says which one it means; a word that could mean either is
-renamed until it cannot.
+renamed until it cannot. The vocabulary this rule has produced is the
+glossary in the `conventions` package's module docstring
+(`src/kluster/conventions/__init__.py`) — each term, what it names,
+where the tree uses it that way, and the words it refuses — which the
+reviewer reads a diff's names against: a word a `Not:` line refuses, or
+a second word for a concept that has an entry, is a finding, and a diff
+that mints a term adds the entry with its pointer.
+`tests/test_conventions.py` holds the package to it.
 
 **Same shape for same role.** Modules exposing the same kind of entry
 point use the same form and name. A reader should be able to guess a
