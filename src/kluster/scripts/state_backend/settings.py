@@ -91,7 +91,9 @@ REBOOT_WINDOW_MINUTES = 60
 #: (`provision.hold_address`). A box at another address is a decision this
 #: line records, not drift for a converge to follow -- the probe dials this
 #: constant with no OCI credential to look anything up, and would otherwise
-#: report a dead certificate for a box alive elsewhere.
+#: report a dead certificate for a box alive elsewhere. Held on the
+#: appliance's own compartment; a run pointed elsewhere by `--compartment` is
+#: another site and is not.
 ADDRESS = '144.24.7.194'
 
 # --- Backups --------------------------------------------------------------

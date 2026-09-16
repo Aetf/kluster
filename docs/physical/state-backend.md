@@ -348,6 +348,9 @@ in the certificate. `provision` holds the box to it: both reads of the
 reservation refuse, naming both addresses, when the reservation
 carries anything else (`provision.hold_address`), so a moved box is a
 decision the repository records rather than drift a converge follows.
+The hold is on the appliance's own compartment; a run pointed
+elsewhere by `--compartment` is another site and is not held, the way
+credentials.md §3 does not hold such a run to the recorded account.
 On a site provisioned for the first time the run ends at that refusal
 naming the address OCI chose; recording it and re-running is the
 second half of the first provision.
