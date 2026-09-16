@@ -8,9 +8,10 @@ this file is how to operate it.
 
 | Path | What |
 | --- | --- |
-| `butane.yaml.j2` (template) | The machine, whole: the Postgres unit (`podman run` under systemd), PKI, `pg_hba`, age recipients, the dump timer, the reboot window. |
+| `butane.yaml.j2` (template) | The machine, whole: the Postgres unit — a plain systemd unit running `podman run`, auto-updated by label, not a quadlet — PKI, `pg_hba`, the age recipients, the unit that installs the pinned `age`, the dump timer, the reboot window. |
 | `state-dump.py` | What that timer runs — `pg_dump` → `pg_restore --list` → age → B2, standard library only. |
 | `operator-keys.txt` | SSH keys for diagnosis (`state-backend ssh`). The box is never configured by hand, and a key absent here means no access until the next re-provision. |
+| `drill-recipient.txt` | The public half of the drill age identity, one recipient. Written by `credentials derived drill-age-identity generate` — which pushes the private half into the ops repository's `drill` Environment first — and committed; absent until that generator has run, and the appliance then encrypts to the escrowed generations alone. |
 
 The code that renders and applies these is `src/kluster/scripts/state_backend/`,
 exposed as the `state-backend` console script.
@@ -20,8 +21,9 @@ exposed as the `state-backend` console script.
 Runs on the workstation holding the offline kit. The CA and the backup
 encryption identities come out of the escrow registry — the first run generates
 them and commits their ciphertexts, every run after opens the same ones with
-the kit's recovery key (docs/credentials.md §2.2) — and the B2 credentials are
-minted from the seed key:
+the kit's recovery key (docs/credentials.md §2.2) — the drill recipient is read
+from the committed file above, and the B2 credentials are minted from the seed
+key:
 
 ```sh
 mise x uv -- uv run state-backend provision
@@ -39,11 +41,11 @@ client bundle to `.credentials/state-backend/` in the checkout, the workstation
 slot for it (docs/credentials.md §4.4).
 
 **It applies the current commit.** A run compares the box to the repository —
-the Butane file, the operator keys, the pins, the certificate identities, the
-B2 dump key's scope — and one thing to the clock: how much life the box's
-server certificate has left, which is drift once it is inside the renewal
-margin — so a coming expiry is something a run reports rather than something
-anyone has to watch a calendar for. Acting on it is still `--force`, like any
+the Butane file, the operator keys, the age recipients, the pins, the
+certificate identities, the B2 dump key's scope — and one thing to the clock:
+how much life the box's server certificate has left, which is drift once it is
+inside the renewal margin — so a coming expiry is something a run reports
+rather than something anyone has to watch a calendar for. Acting on it is still `--force`, like any
 other replacement. A matching box is left untouched, including its dump key,
 whose secret exists only in the Ignition it booted with. `--replace` forces the rebuild when there is no diff
 to find (rotating the dump key or the server key, or discarding a box that is
@@ -98,6 +100,10 @@ Other commands:
 state-backend render --address <ip>   # the Ignition, without touching the cloud
 state-backend bundle ci --address <ip>  # the CI client certificate and its URL
 state-backend pins                    # verify the pinned digests (CI runs this)
+state-backend dump                    # a dump of the live state, encrypted like the nightly one
+state-backend restore <dump>          # feed a dump into a provisioned box
+state-backend probe                   # the scheduled checks, run by the ops repository
+state-backend ssh                     # a diagnostic login; the box is never configured by hand
 ```
 
 ## Connecting
@@ -161,12 +167,21 @@ to enforce it.
 The daily dump is listed with `pg_restore --list` on the box before it leaves
 it — an archive whose table of contents names no table is a dump of a database
 that has lost its state, which is what a replaced box holds until its restore
-— and age-encrypted to the `backup/age/<generation>` identities —
-random at creation, their only stored copies the ciphertexts under `escrow/`,
-which the kit's recovery key opens — and lands in B2 under a prefix whose
-lifecycle rule enforces retention. Recovery is
-a re-provision followed by `pg_restore` of the newest object — the path the
-quarterly drill is designed to exercise (docs/physical/state-backend.md §7.3).
-Nothing has exercised it yet: no drill has run, and the restore has never run
-against a live box, so until a rehearsal on a scratch instance has been
-through it the path is assumed broken rather than known to work.
+— and age-encrypted to the recipients `config.age_recipients` renders into
+the Butane file, one kind of recipient per reader. The escrowed
+`backup/age/<generation>` identities serve the operator: random at creation,
+their only stored copies the ciphertexts under `escrow/`, which the kit's
+recovery key opens, so `state-backend restore` on the workstation opens a dump
+through the kit. The drill recipient on file in this directory serves the
+quarterly rebuild drill: its private half lives in the ops repository's `drill`
+Environment and nowhere on disk, and the drill's `state-backend restore
+<object> --identity-file <key>` needs no kit. Which generations are recipients,
+how each kind rotates and why the drill key needs no generational pair is
+docs/physical/state-backend.md §5; the register rows for both keys and the
+drill's own OCI and B2 credentials are docs/credentials.md §3. The dump lands in
+B2 under a prefix whose lifecycle rule enforces retention. Recovery is a
+re-provision followed by `state-backend restore` of the newest object — the
+path the drill is designed to exercise (docs/physical/state-backend.md §7.3),
+and the operator form of it, run by hand against a scratch box with the kit, is
+§7.3.1 there. The drill workflow is not built, and no rehearsal has run, so until
+one has the path is assumed broken rather than known to work.
