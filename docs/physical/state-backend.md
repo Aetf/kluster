@@ -597,9 +597,19 @@ age-encrypted to the recipients of §5, into a named local file;
 Either form of file is accepted — an encrypted dump or a bare archive
 — and the identity that opens an encrypted one comes from the escrow
 via the kit, or from `--identity-file` for a workflow that was handed a
-key and has no kit at all (§7.3). Both connect over the `operator`
-client bundle (§3), which is the same connection string `pulumi` uses,
-and both hand `PGSSLROOTCERT`/`PGSSLCERT`/`PGSSLKEY` to the tool they
+key and has no kit at all (§7.3). Each path's `age` binary has a home
+of its own, and no pin beyond the pair a test holds equal: the
+appliance's timer runs `/opt/bin/age`, which `age-install.service`
+fetches once at first boot from `settings.AGE_URL` and verifies against
+`settings.AGE_SHA256`; a workstation's `dump` and `restore` run the
+`age` that `mise.toml` pins, which
+`tests/test_age.py::test_local_age_matches_the_appliance_pin` holds
+equal to `settings.AGE_VERSION`; and the drill workflow's runner, like
+the probe's (§6), installs mise through `jdx/mise-action` inside its
+checkout of this repository at a pinned commit, so its `age` is that
+same `mise.toml` pin as of that commit. Both commands connect over the
+`operator` client bundle (§3), which is the same connection string
+`pulumi` uses, and both hand `PGSSLROOTCERT`/`PGSSLCERT`/`PGSSLKEY` to the tool they
 run — so a `pg_dump` that is really a wrapper around a container has to
 forward those variables and mount the bundle at the paths they name.
 
