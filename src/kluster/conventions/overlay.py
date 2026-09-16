@@ -103,8 +103,8 @@ class ManagedDns:
 #: container-VLAN addresses: they are containers on the gateway and not
 #: members, so they have no overlay address, and a member reaches them through
 #: the managed route for that VLAN (`MANAGED_ROUTES`) via the gateway. What a
-#: client keeps of the list is bounded (`components.overlay.DNS_SERVER_LIMIT`),
-#: and the suite holds the list inside it.
+#: client keeps of the list is bounded by the client's `ZT_MAX_DNS_SERVERS`,
+#: held in `test_conventions`.
 MANAGED_DNS = ManagedDns(domain=OVERLAY_DOMAIN, servers=tuple(resolver.address for resolver in RESOLVERS))
 
 #: The gateway, as the roster names it. It is the one member the roster may be

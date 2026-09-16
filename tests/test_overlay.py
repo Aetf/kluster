@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import inspect
 import re
+from ipaddress import IPv4Address
 from typing import Any
 
 import pulumi
@@ -36,6 +37,15 @@ MEMBER = 'zerotier:index/member:Member'
 #: carries what it is given and composes nothing, and the program's own content
 #: is `test_flow_rules.py`'s subject.
 RULES = '# handed in, not composed\naccept;\n'
+
+#: The managed DNS the fixture hands the component, a sentinel for the same
+#: reason as `RULES`: the case is that the network carries the object it was
+#: given, and what the real one says is `test_conventions`' subject. Two
+#: servers, so that a component keeping only the first is told apart from one
+#: keeping the list.
+DNS = conventions.overlay.ManagedDns(
+    domain='handed.example', servers=(IPv4Address('192.0.2.1'), IPv4Address('192.0.2.2'))
+)
 
 
 class Central(Recorder):
@@ -61,6 +71,7 @@ async def stack() -> Central:
             flow_rules=RULES,
             roster=conventions.overlay.ROSTER,
             managed_routes=conventions.overlay.MANAGED_ROUTES,
+            dns=DNS,
         )
     return monitor
 
@@ -204,6 +215,21 @@ def test_the_network_carries_the_rules_it_was_handed_and_composes_none(stack: Ce
     the resolver census itself would be a second place the policy is decided.
     """
     assert stack.inputs_of(f'{NAME}-network')['flowRules'] == RULES
+
+
+def test_the_network_carries_the_managed_dns_it_was_handed_and_composes_none(stack: Central) -> None:
+    """One block, the caller's, spelled the way the provider takes it.
+
+    The domain and the servers are decided in `conventions` because the `dns`
+    stack answers under the same domain; a component that read the resolver
+    census or the domain for itself would be a second place that decision is
+    made. Exactly one element, because the provider folds the whole list into
+    the network's single DNS setting and a second element would overwrite
+    the first rather than push a second domain.
+    """
+    assert stack.inputs_of(f'{NAME}-network')['dns'] == [
+        {'domain': DNS.domain, 'servers': [str(server) for server in DNS.servers]}
+    ]
 
 
 def test_the_members_declared_are_exactly_the_roster_and_nothing_else_is_consulted(stack: Central) -> None:
