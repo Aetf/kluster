@@ -1,6 +1,6 @@
 """The stacks of one project (docs/declarative/README.md §1).
 
-`physical` exists before the Kubernetes API does; `dns` owns zones, the estate
+`physical` exists before the Kubernetes API does; `dns` owns zones, the base
 records that belong to no app, and the split-horizon rewrites; `k8s-base` owns
 everything cluster-scoped; `apps` owns the applications and their namespaces.
 `github` owns the forge the other four are deployed by, and is the one stack

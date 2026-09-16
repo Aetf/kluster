@@ -75,7 +75,7 @@ owns sequencing, data movement, and teardown.
     running the layout gw-config built, so the first of those applies
     opens with a cutover window that moves the live container state
     under the declared paths — procedure, verification and rollback:
-    physical/gateway-cutover.md. `dns` up: zones + estate records
+    physical/gateway-cutover.md. `dns` up: zones + base records
     imported wholesale (records still pointing at `archvps.hosts`; the
     import census also drops dead weight — `abacus.hosts`, its ZT
     entry, jupyter/mc records).

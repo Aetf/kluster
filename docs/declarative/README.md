@@ -26,7 +26,7 @@ applied by hand.
 | Stack | What it owns | Change cadence |
 | --- | --- | --- |
 | `physical` | everything that must exist before the Kubernetes API does | low, roughly monthly |
-| `dns` | zones, the anchors, and the estate records no app owns | low, and independent of the cluster |
+| `dns` | zones, the anchors, and the base records no app owns | low, and independent of the cluster |
 | `k8s-base` | everything cluster-scoped that speaks the Kubernetes API | medium, mostly chart bumps |
 | `apps` | every application, its namespace, storage, exposure and records | high — the daily driver |
 | `github` | the repositories, their Environments and gates, branch protection | lowest, and the only stack CI does not apply |
@@ -93,7 +93,7 @@ Created as each area reaches detailed design:
     *systems* it declares are designed in
     [../physical/](../physical/) (state-backend appliance, homelab
     host & VM) — this doc stays about how they're declared.
--   **[dns.md](dns.md)** (written) — the `dns` stack: zones + estate
+-   **[dns.md](dns.md)** (written) — the `dns` stack: zones + base
     records + anchors in `dns`, per-app CNAMEs in `apps` (zone sets
     replace the alias-domain copy-paste), split-horizon via direct
     dual-write to both AdGuard instances (adguardhome-sync retires),
