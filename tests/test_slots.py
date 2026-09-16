@@ -614,19 +614,30 @@ def test_no_device_field_is_delivered_into_the_committed_file_in_the_clear() -> 
     assert plain == set()
 
 
-def test_the_dispatch_app_key_is_recovered_from_its_escrow_and_says_what_it_still_waits_on() -> None:
+def test_the_dispatch_app_key_is_a_repository_secret_of_the_deployment_repository() -> None:
+    """Recovered from its escrow, and delivered to the repository whose workflows mint from it.
+
+    The alert producer runs in the deployment repository and belongs to no
+    stack, so the key is a repository secret there and an Environment secret
+    nowhere: a `Slot` naming an Environment would be one the producer's job
+    cannot see. Under the one name the producer and this map share, and with
+    nothing pending -- a `pending` left on a row whose slot the sink fills
+    would send an operator to wait for a channel that is already served.
+    """
     row = slots.ROWS['github-dispatch-key']
 
     # Recovered rather than typed in again, which is the whole point of
     # escrowing a value made in a console: filling a slot later costs a
     # command instead of another visit to the page that generates the key.
     assert row.source == slots.Derived(escrow.DISPATCH_KEY)
-    # And no other slot yet: the workflow that reads it is not built, so the
-    # row says so instead of naming a secret a future workflow would have to
-    # guess right.
-    assert row.targets == (slots.EscrowCopy(escrow.DISPATCH_KEY),)
-    assert not row.sinks
-    assert row.pending
+    assert row.targets == (
+        slots.EscrowCopy(escrow.DISPATCH_KEY),
+        Slot(repository=REPOSITORY, name=slots.DISPATCH_APP_KEY),
+    )
+    (slot,) = row.sinks
+    assert slot.environment is None
+    assert slot.name == 'DISPATCH_APP_PRIVATE_KEY'
+    assert row.pending == {}
 
 
 def test_the_trigger_app_key_is_a_repository_secret_of_the_ops_repository() -> None:
@@ -882,6 +893,31 @@ def test_the_trigger_app_key_is_recovered_once_and_pushed_to_the_ops_repository(
     # way as the write: `--repo` naming the ops repository, and no `--env`.
     for invocation in gh.invocations:
         assert invocation[invocation.index('--repo') + 1] == OPS_REPOSITORY, invocation
+        assert '--env' not in invocation, invocation
+
+
+def test_the_dispatch_app_key_is_recovered_once_and_pushed_to_the_deployment_repository() -> None:
+    """`sync --only github-dispatch-key` is the delivery: recover from escrow, push, verify.
+
+    The trigger key's push one repository over: the escrow is opened for the
+    dispatch label once, and the one write goes to the deployment repository
+    and to no Environment of it, under the name the alert producer reads.
+    What is held is the invocation the sink makes; the forge itself is never
+    reached from here.
+    """
+    gh = RecordedGh()
+    vault = Vault(registry=escrow.Registry(root=Path('nowhere')), identity='not-an-identity')
+
+    pushed = slots.sync(context(gh, open_vault=lambda: vault), only='github-dispatch-key')
+
+    assert vault.recovered == [escrow.DISPATCH_KEY]
+    assert pushed == [str(Slot(repository=REPOSITORY, name='DISPATCH_APP_PRIVATE_KEY'))]
+    assert gh.values == {(REPOSITORY, None, 'DISPATCH_APP_PRIVATE_KEY'): PASSPHRASE}
+    # The listing read before and the verification after both scope the same
+    # way as the write: `--repo` naming the deployment repository, and no
+    # `--env` -- the ops repository is never named by this row.
+    for invocation in gh.invocations:
+        assert invocation[invocation.index('--repo') + 1] == REPOSITORY, invocation
         assert '--env' not in invocation, invocation
 
 

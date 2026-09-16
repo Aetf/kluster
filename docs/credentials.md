@@ -471,7 +471,7 @@ cell would say `pending` to an operator already being served.
 | B2 dump key (micro) | B2 seed key | `writeFiles` alone, dump prefix | on-box (Ignition) | state-backend pg_dump timer |
 | B2 freshness key (state dumps) | B2 seed key (`credentials derived b2-freshness-dumps mint`) | `listFiles` alone, confined to the dump prefix of the appliance's bucket: names, never a byte | ops-repo secret (`B2_FRESHNESS_DUMPS_KEY_ID`, `B2_FRESHNESS_DUMPS_KEY`) | `state-backend probe`, run by the ops repo's scheduled probes workflow (state-backend.md §6) |
 | B2 freshness key (etcd) | B2 seed key | The same shape over the etcd snapshots' prefix of the backup bucket, which a B2 key cannot share with the one above: a key confines to one bucket | ops-repo secret (pending) | the etcd snapshot age probe |
-| GitHub App key (dispatch) | Made on the App's own page (no key API) | Signs a JWT for that App alone, which mints an 8 h installation token carrying contents:write on `kluster-ops` | escrow as `github/dispatch-key` · `kluster` repository secret (pending) | Alert producer step |
+| GitHub App key (dispatch) | Made on the App's own page (no key API) | Signs a JWT for that App alone, which mints an 8 h installation token carrying contents:write on `kluster-ops` | escrow as `github/dispatch-key` · `kluster` repository secret (`DISPATCH_APP_PRIVATE_KEY`) | the alert producer (`alert.yml`), called by every workflow that runs on `main` (ci.md §3) |
 | GitHub App key (trigger) | Made on the App's own page (no key API) | The same, for an 8 h token carrying actions:write on `kluster` | escrow as `github/trigger-key` · ops-repo secret (`TRIGGER_APP_PRIVATE_KEY`) | Weekly drift trigger (the ops repo's `drift-trigger.yml`) |
 | ZT CI member identities (`ci-physical`, `ci-dns`) | generated in-state (`zerotier_identity`) | One per joining stack, `ci`-tagged and flow-rule-confined (gateway.md §2.3) | CI env | CI per-run join |
 | Pulumi state passphrase | generated, escrowed as `pulumi/passphrase` | Decrypts state secrets, and the config secrets of every stack but `github` | escrow · CI env (all stacks) · workstation slot | every `pulumi` run |
@@ -678,15 +678,20 @@ above is the slot. The consumer is a workflow rather than a stack, and
 the key is a repository secret of the repository that workflow runs in,
 pushed by `credentials derived sync` from the escrow copy (§2.2), which
 stays the permanent store: an App key downloads once, and a lost slot
-is a re-push rather than a console visit. The trigger key is delivered
-— `credentials derived sync --only github-trigger-key` recovers it and
-pushes it as `TRIGGER_APP_PRIVATE_KEY`, the name the ops repository's
-`drift-trigger.yml` reads it under. The dispatch key's job is not built,
-so the escrow copy is the whole of that row today and its `kluster`
-repository secret arrives with the job. Rotating one is another key on
+is a re-push rather than a console visit. `credentials derived sync
+--only github-trigger-key` recovers the trigger key and pushes it as
+`TRIGGER_APP_PRIVATE_KEY`, the name the ops repository's
+`drift-trigger.yml` reads it under; `--only github-dispatch-key` pushes
+the dispatch key as `DISPATCH_APP_PRIVATE_KEY`, a repository secret of
+`kluster`, the name the alert producer `alert.yml` reads it under. A
+repository secret rather than an Environment's because that job belongs
+to no stack, and its exposure is the fence's: any same-repo branch can
+read it, previews included, which buys a token that can post alerts and
+write non-workflow files into the private ops repository, and nothing
+else (cluster/architecture.md §4.3). Rotating one is another key on
 that page, recorded here as the label's next generation, `sync --only`
-for a row whose slot is filled, and the superseded key deleted on the
-page in the same visit. The client id the JWT is issued under travels
+for that row, and the superseded key deleted on the page in the same
+visit. The client id the JWT is issued under travels
 with the delivery rather than with the key: it identifies the App
 instead of authenticating as it, and the App's page shows it for as long
 as the App exists.
@@ -1072,9 +1077,8 @@ that puts a value there.
     `credentials derived github-trigger-key record` — the two GitHub App
     private keys, each generated on its own App's settings page and
     escrowed here. No stack authenticates with either, so the ciphertext
-    is a file to commit; stage 10 pushes the trigger key into the
-    repository secret its workflow reads, and the dispatch key's
-    repository secret arrives with the job that reads it (§3).
+    is a file to commit; stage 10 pushes each into the repository secret
+    its workflow reads (§3).
 10. `credentials derived sync` — the GitHub secrets CI reads, for the §3
     rows whose value lives somewhere else (§4). Last, because a row read
     out of a stack needs that stack to have run; a row it cannot fill yet
@@ -1102,8 +1106,9 @@ GitHub secret — and the rest have none.
     controller up) have neither half.
 -   Part of the **CI Environment half** (ci.md §3). The sink exists (§4)
     and fills what a workstation can obtain: the state passphrase and the
-    `ci` client bundle, both into every Environment, and the
-    deploy-failure webhook, which is typed in. What is left waits on
+    `ci` client bundle, both into every Environment, the dispatch App's
+    key as a repository secret, and the deploy-failure webhook, which is
+    typed in. What is left waits on
     something other than the sink — the ZeroTier CI identities, on the
     `physical` stack that generates them.
 -   The **ops-repo channel** has three rows that land through the sink
@@ -1124,12 +1129,6 @@ GitHub secret — and the rest have none.
     `derived check` reports its absence as a problem — and the token on
     file is the value those two consumers will be built around rather
     than one they replace.
--   The **dispatch App key** is in that same shape, one layer out:
-    recorded and escrowed, with the `kluster` repository secret it is
-    destined for waiting on the job that reads it. Its client id waits
-    with it, being part of the delivery rather than of the key (§3). The
-    trigger key's secret is filled; what waits there is the workflow that
-    reads it, in the ops repository.
 -   The **slot-drift probe** (§4). The map it would read is checked in;
     the scheduled workflow that compares it against reality is not.
 
