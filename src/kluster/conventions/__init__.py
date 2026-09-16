@@ -10,12 +10,12 @@ What belongs here: a value the program must agree on with itself. What does
 not: machine facts (OCIDs, generated names, IPs the cloud hands out) — those
 are stack outputs — and per-app values, which live with their app.
 
-One module per domain, and values that are only correct together are one
+One module per subject, and values that are only correct together are one
 structure rather than a flat namespace, so using one without its siblings does
 not parse (rfc-002 §10.1). Most of the surface is re-exported here, so a reader
-says `conventions.X` and does not have to know which domain owns `X`.
+says `conventions.X` and does not have to know which module owns `X`.
 
-**Four domains are read qualified instead**: `conventions.gateway`,
+**Four modules are read qualified instead**: `conventions.gateway`,
 `conventions.overlay`, `conventions.forge` and `conventions.routes`. For the
 first two the module path carries what a prefix otherwise would (rfc-002
 §3.1) — `conventions.overlay.ROSTER`, `conventions.gateway.SERVICES` — and it
@@ -24,6 +24,136 @@ belongs to is never a thing to guess. `forge` and `routes` are qualified from
 the other side: their names are common nouns — `Repository`, `Environment`,
 `Account`; `Route`, `Extra`, `SELF` — that mean one particular thing only
 while the forge or the census stands beside them.
+
+Glossary
+--------
+
+The vocabulary the naming rules produce — one term per concept, descriptive
+over metaphorical (style/README.md under "Naming") — kept here where the style
+reviewer reads a diff against it (rfc-002 §3). Every entry is collected from
+where the tree already uses the term that way, and the pointer beside it is
+that place. A `Not:` line lists the words a diff does not introduce for the
+concept: this package uses none of them, and `test_conventions` holds it to
+that. A word a term is merely distinguished from stays in the prose.
+
+overlay
+    The ZeroTier network every unattended run reaches the home site over
+    (`conventions.overlay`; rfc-002 §3.2). The adjective for what is on it —
+    an overlay address, an overlay member, an overlay route — and never
+    "network" unqualified. The wire label `zt` is a value (`dns.OVERLAY_LABEL`),
+    not a word.
+    Not: zt.
+
+site
+    The home LANs the gateway routes, collectively (`conventions.site`;
+    rfc-002 §3.2): a site network is one of them (`SiteNetwork`,
+    `SITE_NETWORKS`), and the untagged one is the server LAN (`SERVER_LAN`).
+
+LAN
+    On its own, the side an application is reachable from, and the pool that
+    side is steered to (`routes.Exposure`, `cluster.GATEWAY_LAN`,
+    `site.LAN_POOL`); with a site network's name, that network (`SERVER_LAN`).
+    Not one of rfc-002 §3.2's adjectives, which say which network an address
+    is on.
+
+container VLAN
+    The one site network the container services sit on (`site.CONTAINER_VLAN`;
+    rfc-002 §3.2), named as such because a bridged service holds an address
+    there and the host-network one deliberately does not
+    (`gateway.BridgedService`, `gateway.HostNetworkService`).
+
+container service
+    A service the device runs, bridged or in the host's own network namespace
+    (`gateway.SERVICES`, `gateway.ContainerService`). The set as a whole is
+    what the device runs, never a figure of speech for it (rfc-002 §3.1).
+    Not: estate.
+
+gateway
+    The machine at the middle, named for what it does for the site, and the
+    component (`conventions.gateway`; rfc-002 §3.2). The cluster's own
+    gateways — `cluster.GATEWAY_INTERNET`, `GATEWAY_LAN`, `GATEWAY_MEDIA` —
+    are Gateway API objects, and a sentence that could mean either says "the
+    site gateway" (`cluster.QBITTORRENT_PEER_PORT`). Neither is a prefix:
+    rfc-002 §3.1 retired `GW_*`.
+    Not: gw.
+
+device
+    The same machine as what a provider writes to: the thing with a userland,
+    a host key and a firmware update (`gateway.HOST_KEY`, `gateway.DATA_ROOT`;
+    rfc-002 §3.2).
+
+UDM
+    The same machine as the appliance, where the sentence is about hardware
+    or the controller that ships with it (`cluster.UDM_ASN`, `overlay.UDM`;
+    rfc-002 §3.2).
+
+member
+    What has joined the overlay, one roster entry each (`overlay.ROSTER`,
+    `overlay.member`). Its identity keeps ZeroTier's own word, node id
+    (`EnrolledMember.node_id`); a node unqualified is a Talos node
+    (`cloud.ALL_NODES`); the homelab host is the machine the worker runs on,
+    itself a member (`overlay.MEMBER_HOMELAB`, `conventions.homelab`).
+
+resolver
+    One of the two AdGuard instances every lease on the LAN names, the site's
+    name service (`gateway.RESOLVERS`, `gateway.resolver_api_url`;
+    declarative/dns.md §3). A zone's authoritative servers are its name
+    servers, which is a different thing (physical/gateway.md §1).
+
+zone
+    One of the DNS zones the installation holds (`conventions.dns`;
+    declarative/dns.md §2): served (`WEB_ZONES`) or parked (`PARKED_ZONES`),
+    and a record is published in a zone only where something answers for the
+    name there — nothing mirrors (rfc-003 §11).
+    Not: mirrored, alias zone.
+
+installation
+    This deployment as a whole, what every census here is written in the
+    terms of (style/pulumi.md under "Data"; rfc-003 §11). "Estate" survives in
+    one sense only, the operator's personal holdings and their succession
+    (credentials.md), and does not reach this package.
+    Not: estate.
+
+census
+    A table two programs read, which is what places it in this package
+    (style/pulumi.md under "Data"; declarative/README.md §2). A component
+    receives the census it acts on, and the entries it is handed are its roll
+    (style/pulumi.md). Two censuses carry names of their own: the roster and
+    the register.
+
+roster
+    The overlay's census, one entry per member (`overlay.ROSTER`; rfc-002
+    §3.1).
+
+register
+    The credential register, credentials.md: the inventory of every
+    credential, one row each, which the `credentials` command is the
+    executable form of (`scripts/credentials`). This package names it once,
+    where `conventions.forge` says whose rows push into the Environments.
+
+initial state
+    The configuration installed into a state directory that has never held
+    one (`gateway.ADGUARD_API_PORT`; `components.gateway.container.InitialState`;
+    rfc-002 §3.1). "Seed" is not a synonym but a reserved word, the nocloud
+    seed image and the credential seed kit, which this package names in that
+    sense alone (`homelab.HOMELAB_STORAGE_DIR`, `providers.OCI_SEED_USER_EMAIL`).
+
+dedicated VIP node
+    The node holding the dedicated VIP, one capability of a machine
+    (`cloud.DEDICATED_VIP_NODE`; rfc-002 §3.1), apart from the volumes the
+    same machine happens to hold.
+    Not: augmented.
+
+node volume
+    A block volume attached to a node (`cloud.NODE_VOLUMES`,
+    `cloud.NodeVolumeEntry`; rfc-002 §3.1). What it is for belongs to whatever
+    claims it, so an entry is named after its claimant and the type is not.
+
+CI
+    This repository's own GitHub Actions, the deployment pipeline
+    (cluster/architecture.md §4.3; `overlay.Role.CI`, `overlay.CI_MEMBERS`).
+    A workflow in any other repository is named with its repository and is
+    not CI.
 """
 
 from __future__ import annotations

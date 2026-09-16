@@ -24,10 +24,12 @@ disagree with the census, which is what makes them able to catch it.
 
 from __future__ import annotations
 
+import ast
 import base64
 import json
 import re
-from collections.abc import Iterable
+import tokenize
+from collections.abc import Iterable, Iterator
 from ipaddress import IPv6Network
 from pathlib import Path
 from typing import NamedTuple, cast
@@ -1130,3 +1132,219 @@ def test_no_two_outputs_share_a_name() -> None:
     names = conventions.PHYSICAL_OUTPUTS.names()
 
     assert len(names) == len(set(names)), names
+
+
+# --------------------------------------------------------------------------
+# The glossary.
+# --------------------------------------------------------------------------
+# `conventions`' module docstring keeps the vocabulary (style/README.md under
+# "Naming"): a term per concept, and under `Not:` the words a diff does not
+# introduce for it. It is prose, so nothing stops it naming a term the tree
+# never uses or refusing a word the package itself goes on using. The one side
+# it is not the source of is the package's own text -- its identifiers, its
+# docstrings and its comments -- which is what it is held against here.
+
+CONVENTIONS = Path(conventions.__file__).parent
+
+#: Where the glossary starts in the module docstring: the heading and its
+#: underline, on lines of their own.
+GLOSSARY_HEADING = 'Glossary\n--------\n'
+#: An underlined heading, which is how the docstring opens a section.
+SECTION_HEADING = re.compile(r'^\S.*\n-{3,}$', re.MULTILINE)
+#: A code span in prose quotes a value or an identifier -- the wire label
+#: `zt`, a retired `GW_*` -- and is not the prose using the word.
+CODE_SPAN = re.compile(r'`[^`\n]*`')
+#: A word of prose. A hyphenated compound is one word, so `lan-gw` in a
+#: comment is not the prose using `gw`.
+PROSE_WORD = re.compile(r'[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*')
+#: The pieces of one `_`-separated part of an identifier: `ZtMember` is `Zt`
+#: and `Member`, `ADGUARD_API_PORT` is three, `IPv4Address` splits into
+#: fragments that match no word anyone would list.
+CAMEL_PIECE = re.compile(r'[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z0-9]+|[A-Z]+')
+
+
+class GlossaryEntry(NamedTuple):
+    """One entry: the term, and the words the entry refuses for it."""
+
+    term: str
+    refused: tuple[str, ...]
+
+
+class Words(NamedTuple):
+    """One run of words the package uses: an identifier's pieces, or a docstring's or comment's prose."""
+
+    file: str
+    words: tuple[str, ...]
+
+
+def _glossary(doc: str) -> list[GlossaryEntry]:
+    """The entries of the glossary section, in order.
+
+    A headword is an unindented line whose next line is indented; the indented
+    lines below it are the entry. The preamble is unindented too, and is
+    passed over because no indented line follows any line of it.
+
+    The glossary has to be the docstring's last section, because the scan
+    below leaves out everything from its heading on: a section after it would
+    be prose nobody reads for refused words.
+    """
+    _, found, section = doc.partition(GLOSSARY_HEADING)
+    assert found, 'the conventions docstring carries no glossary section'
+    assert not SECTION_HEADING.search(section), 'the glossary is not the last section of the docstring'
+    lines = section.splitlines()
+    entries: list[GlossaryEntry] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        index += 1
+        if not line or line[0].isspace() or index == len(lines) or not lines[index].startswith('    '):
+            continue
+        body: list[str] = []
+        while index < len(lines) and lines[index].startswith('    '):
+            body.append(lines[index].strip())
+            index += 1
+        entries.append(GlossaryEntry(line.strip(), _refused(line.strip(), body)))
+    return entries
+
+
+def _refused(term: str, body: list[str]) -> tuple[str, ...]:
+    """The words an entry's `Not:` lists: from the colon to the line ending in a period.
+
+    Read to the period rather than to the end of the line, because the entries
+    wrap at the docstring's width and a list read one line deep would drop
+    whatever the wrap carried over -- half a phrase, silently, or a trailing
+    comma's empty word, which as a phrase of no words is in every run.
+    """
+    for start, text in enumerate(body):
+        if not text.startswith('Not:'):
+            continue
+        end = next((at for at in range(start, len(body)) if body[at].endswith('.')), len(body) - 1)
+        listed = ' '.join(body[start : end + 1]).removeprefix('Not:').rstrip('.')
+        refused = tuple(word.strip() for word in listed.split(','))
+        assert all(refused), f'{term}: the Not: line lists an empty word: {listed!r}'
+        return refused
+    return ()
+
+
+def _phrase(text: str) -> tuple[str, ...]:
+    """A term or a refused phrase as the words it has to appear as."""
+    return tuple(word.lower() for word in PROSE_WORD.findall(text))
+
+
+def _identifier_words(name: str) -> tuple[str, ...]:
+    return tuple(piece.lower() for part in name.split('_') for piece in CAMEL_PIECE.findall(part))
+
+
+def _prose_words(text: str) -> tuple[str, ...]:
+    """The words of a docstring or a comment, its code spans left out.
+
+    The glossary section itself is left out too: it is the one place that names
+    the words it refuses.
+    """
+    text = text.partition(GLOSSARY_HEADING)[0]
+    return tuple(word.lower() for word in PROSE_WORD.findall(CODE_SPAN.sub(' ', text)))
+
+
+def _vocabulary(package: Path) -> list[Words]:
+    """Every run of words a module of the package uses, tagged with its file.
+
+    Identifiers come from the syntax tree: names, attributes, definitions,
+    parameters, keywords and imports. Prose is every string that stands as a
+    statement of its own -- a module, class, function or attribute docstring --
+    and every block of comments; a string that is a value is a value, not the
+    package speaking. The runs are kept apart so that a phrase has to occur
+    within one identifier or one piece of prose to count -- and a block of
+    comment lines is one piece, because that is how a `#:` attribute doc
+    wraps, and a phrase broken across two of its lines is still the package
+    using it.
+    """
+    runs: list[Words] = []
+    for path in sorted(package.glob('*.py')):
+        file = path.name
+        source = path.read_text()
+        for node in ast.walk(ast.parse(source)):
+            names: list[str] = []
+            match node:
+                case ast.Name(id=name) | ast.Attribute(attr=name) | ast.arg(arg=name):
+                    names.append(name)
+                case ast.FunctionDef(name=name) | ast.AsyncFunctionDef(name=name) | ast.ClassDef(name=name):
+                    names.append(name)
+                case ast.keyword(arg=str(name)) | ast.alias(name=name):
+                    names.append(name)
+                case ast.ImportFrom(module=str(module)):
+                    names.extend(module.split('.'))
+                case ast.Expr(value=ast.Constant(value=str(prose))):
+                    runs.append(Words(file, _prose_words(prose)))
+                case _:
+                    pass
+            runs.extend(Words(file, _identifier_words(name)) for name in names)
+        runs.extend(Words(file, _prose_words(block)) for block in _comment_blocks(source))
+    return runs
+
+
+def _comment_blocks(source: str) -> Iterator[str]:
+    """Each run of comment lines, joined: consecutive lines starting at one column are one block."""
+    block: list[str] = []
+    last: tuple[int, int] | None = None
+    for token in tokenize.generate_tokens(iter(source.splitlines(keepends=True)).__next__):
+        if token.type != tokenize.COMMENT:
+            continue
+        row, column = token.start
+        if block and last != (row - 1, column):
+            yield ' '.join(block)
+            block = []
+        block.append(token.string.lstrip('#'))
+        last = (row, column)
+    if block:
+        yield ' '.join(block)
+
+
+def _uses(run: tuple[str, ...], phrase: tuple[str, ...]) -> bool:
+    """Whether the phrase occurs in the run as consecutive whole words."""
+    return any(run[start : start + len(phrase)] == phrase for start in range(len(run) - len(phrase) + 1))
+
+
+def _files_using(phrase: tuple[str, ...], vocabulary: Iterable[Words]) -> list[str]:
+    return sorted({run.file for run in vocabulary if _uses(run.words, phrase)})
+
+
+def test_the_glossary_names_terms_the_package_uses_and_refuses_words_it_does_not(tmp_path: Path) -> None:
+    """Each term is a word the package uses; each refused word is one it does not.
+
+    The first half keeps a term nobody uses out of the glossary; the second
+    keeps the package that defines the vocabulary from using the words it
+    refuses. Neither is a mirror: the glossary is prose the reviewer reads,
+    and the package's identifiers, docstrings and comments are text the
+    glossary does not generate.
+
+    The scan is exercised on a module written here first, one refused word in
+    each channel it reads and one phrase wrapped across two comment lines, so
+    a channel it stopped reading fails this case rather than leaving the
+    second half silent.
+    """
+    control = tmp_path / 'control.py'
+    control.write_text(
+        '"""A docstring saying refusedone, and `refusedfour` in a code span."""\n'
+        '# a comment saying refusedtwo, and hyphen-refusedfive, then wrapped\n'
+        '# refusedseven on the next line of the same block\n'
+        'REFUSED_THREE = "refusedsix"\n'
+    )
+    reached = _vocabulary(tmp_path)
+    assert _files_using(('refusedone',), reached) == ['control.py']
+    assert _files_using(('refusedtwo',), reached) == ['control.py']
+    assert _files_using(('refused', 'three'), reached) == ['control.py']
+    assert _files_using(('wrapped', 'refusedseven'), reached) == ['control.py']
+    for quoted in ('refusedfour', 'refusedfive', 'refusedsix'):
+        assert _files_using((quoted,), reached) == [], quoted
+
+    entries = _glossary(cast(str, conventions.__doc__))
+    assert entries, 'the glossary section carries no entry'
+    vocabulary = _vocabulary(CONVENTIONS)
+
+    unused = [entry.term for entry in entries if not _files_using(_phrase(entry.term), vocabulary)]
+    assert not unused, f'the glossary names a term the conventions package never uses: {unused}'
+
+    used = {
+        word: files for entry in entries for word in entry.refused if (files := _files_using(_phrase(word), vocabulary))
+    }
+    assert not used, f'the conventions package uses a word its own glossary refuses: {used}'
