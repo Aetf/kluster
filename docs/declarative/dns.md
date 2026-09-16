@@ -268,7 +268,18 @@ is one nobody here asked for, is the issue's question.
     block is code, and it is declared identically before and after
     `physical` is applied. The
     gateway is the one member the roster may not carry yet, and `udm.zt`
-    appears with its entry (physical/gateway.md §2.5).
+    appears with its entry (physical/gateway.md §2.5). The block's name
+    as a client sees it is `conventions.dns.OVERLAY_DOMAIN`, and it has
+    a second reader: the `physical` stack pushes it to the overlay's
+    members as the network's managed-DNS search domain, with alice and
+    bob as the resolvers for it (physical/gateway.md §2.7). A member
+    that opts in resolves `*.zt` at home and nothing else there, and
+    the resolvers answer such a name today by forwarding it upstream,
+    which returns this block's record; a member that does not opt in,
+    and every Linux member, resolves the block through the public
+    records as before. Application names are outside the pushed domain
+    by design, so the push changes nothing about how any of them
+    resolves.
 -   **Apps are CNAMEs to anchors**: `<app>.<zone>` → `kluster.hosts.…`
     declared inside the app component. A node rebuild or VIP re-home
     touches exactly one anchor record, previewed in `dns`.

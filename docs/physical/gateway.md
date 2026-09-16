@@ -800,7 +800,8 @@ the primary block's is: one rule for both zones.
 Architecture.md §5.3 decides *where* ZT terminates (the UDM) and *what
 governs it* (ZT Central config in the `physical` stack via the bridged
 `zerotier/zerotier` provider). This section is the network-level
-design: roster, addressing, routes, flow rules, and cutover.
+design: roster, addressing, routes, flow rules, managed DNS, and
+cutover.
 
 ### 2.1 Member roster & addressing
 
@@ -856,7 +857,7 @@ device being renamed in Central.
 | `haos` | `infra` | Home automation, reachable while the cluster is not. |
 | `ci-physical` | `ci` | The `physical` identity domain: `plan-physical`, `up-physical`, and the drift matrix's `physical` entry. Identity generated in state (`zerotier_identity`), private key an Environment secret; `zt-physical` keeps it live in one job at a time (§2.6). IPv4-only (§2.3). |
 | `ci-dns` | `ci` | The `dns` identity domain: `up-dns`, a pull request's `preview (dns)` and `prove (dns)`, and the drift matrix's `dns` entry — the LAN-touching work is the AdGuard rewrites (declarative/dns.md §3). Same generation and confinement, serialized by `zt-dns` (§2.6). IPv4-only (§2.3). |
-| Personal devices | `personal` | Phones and laptops, each named in the roster. Full access — parity with sitting on the LAN. |
+| Personal devices | `personal` | Phones and laptops, each named in the roster. Full access — parity with sitting on the LAN. Whether a device applies the network's managed DNS (§2.7) is its own `allowDNS` setting, decided on the device: not a roster field, because the controller can neither read nor set it. |
 
 ### 2.2 Managed routes
 
@@ -1243,6 +1244,88 @@ Facts that shape it (decided 2026-08-24):
     relays) even before it does. Verified as §2.4 item 7;
     seconds-class expected, and if it stays minutes it is a per-job
     fixed cost, not a correctness problem.
+
+### 2.7 Managed DNS: the pushed search domain
+
+The network carries one managed-DNS block,
+`conventions.overlay.MANAGED_DNS`: the search domain `zt.<primary>` —
+`conventions.dns.OVERLAY_DOMAIN`, the overlay host block's own name
+(declarative/dns.md §2) — and the two home resolvers, alice and bob,
+at their container-VLAN addresses (`conventions.gateway.RESOLVERS`).
+It is a field of the network beside the routes and the rules, written
+by the same `physical` apply with the token the overlay component
+already holds; Central mints no narrower credential, and none is
+added. The resolvers have no overlay address to push instead: they are
+containers on the gateway, not members, and a member reaches them
+through the managed route for the container VLAN via the gateway
+(§2.2), the reply returning because the gateway is that VLAN's
+default gateway. The flow rules do not stand in the way: they confine
+`ci`-tagged members only (§2.3), and those are Linux runners, on which
+the push is a no-op (below).
+
+**The push reaches every member and is inert on each until that member
+opts in.** The controller hands the block to every joined device the
+way it hands out the routes, and each device applies it only under its
+own `allowDNS` setting — off by default, set on the device, and neither
+readable nor settable from Central. That is why opting in is a device's
+decision and not a roster field (§2.1): a field would be a claim
+nothing enforces.
+
+**What an opted-in member installs is a resolver scoped to the pushed
+domain, not a replacement for the device's resolver.** On macOS the client registers a supplemental
+resolver whose match domain and search domain are both the pushed one;
+on Windows it writes a Name Resolution Policy Table rule for it. Names
+outside the domain never see the pushed servers. So on a device that
+has opted in:
+
+-   Every `*.zt.<primary>` query goes to alice or bob over the overlay,
+    and a bare label completes under the search domain: `ssh haos`
+    resolves `haos.zt.<primary>`. Labels are the roster names as the
+    record helper normalizes them (`pixel-7-pro`, `aetf-arch-homelab`).
+    Today the resolvers answer such a name by forwarding it upstream and
+    returning the public record — the same address, derived from the
+    same roster entry.
+-   Every other name resolves where it resolved before. **Application
+    names stay outside the pushed domain on purpose**: the domain is
+    the block's and not the primary because the primary would put every
+    application name behind the home resolvers for an opted-in device,
+    and a device off-site with home unreachable would then lose the
+    applications the cloud path exists to keep up. Split-horizon for
+    application names is not what this layer does — an off-site overlay
+    client asks its own resolver for an application name and takes the
+    cloud path, as it does with the push absent.
+-   Windows, macOS, Android and iOS apply it. **Linux clients get
+    nothing**: the client does not implement `allowDNS` there, so the
+    homelab host, the VPS and haos keep resolving `*.zt` through the
+    public records, and no service is run to change that.
+-   A client keeps at most four pushed servers and drops the rest
+    silently; two are pushed, and the block is held inside the bound —
+    the client's `ZT_MAX_DNS_SERVERS` — in `test_conventions`.
+
+**The failure mode is scoped to the domain, and it is per device.**
+While both resolvers are unreachable from an opted-in device — the
+gateway down, or the device's overlay link down while home is otherwise
+up — `*.zt.<primary>` is dead on that device for the duration, the
+name of a member it could still reach directly as a peer included: the
+scoped resolver pre-empts the public record that would have answered,
+and does not fall through to the device's default resolver. Recovery is
+the device's own flag — turning `allowDNS` off removes the scoped
+resolver at once — and a device that never opted in was never exposed.
+The domain is what sets the blast radius, which is the other reason it
+is the block's name and not the primary.
+
+**No device opts in before the gateway is a member** (§2.5). Until
+then the pushed servers are addresses no overlay member routes, and an
+opted-in device would carry dead `*.zt` resolution for the length of
+the ceremony.
+
+**The block is not expected to drift.** The network is adopted, so the
+block takes the provider's update path, and a `plan-physical` after an
+up shows no `dns` diff. A `dns` diff on the plan right after an up is
+the symptom of the provider dropping DNS settings on *creation*
+(`zerotier/terraform-provider-zerotier#43`), a path an adopted network
+does not take; seeing it would mean the network was created rather than
+adopted.
 
 ## 3. Failure & recovery (playbook census)
 

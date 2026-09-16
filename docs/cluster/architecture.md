@@ -811,8 +811,9 @@ already lives:
     known interfaces/ipsets; `zt*` interfaces match neither, so
     ZT-forwarded traffic rides the FORWARD chain's default ACCEPT —
     unpoliced, accepted knowingly (ZT membership is the auth boundary).
--   **ZT Central config joins Pulumi**: network managed routes, member
-    authorizations (including the CI ephemeral-member pre-auth), and
+-   **ZT Central config joins Pulumi**: network managed routes, the
+    managed DNS block (gateway.md §2.7), member authorizations
+    (including the CI ephemeral-member pre-auth), and
     **tag-based flow rules confining CI members** to exactly their
     four targets — UDM SSH, the UDM's UniFi Network API on 443 (the
     UniFi OS proxy the bridged unifi provider calls,
@@ -823,8 +824,8 @@ already lives:
     All via the official `zerotier/zerotier` Terraform provider through
     Pulumi's any-Terraform-provider bridge, in the `physical` stack.
     Resource coverage verified (2026-08-24, v1.6.0 docs; repo active
-    2026-07): `zerotier_network` carries managed `route` blocks and
-    `flow_rules` (the Central rules language as a string);
+    2026-07): `zerotier_network` carries managed `route` blocks,
+    `flow_rules` (the Central rules language as a string) and `dns`;
     `zerotier_member` carries `authorized`, static `ip_assignments`,
     `tags`, and `capabilities`; `zerotier_identity` generates member
     keypairs in-state — so the CI members' identities (two, one per
