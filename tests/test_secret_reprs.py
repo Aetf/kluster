@@ -135,6 +135,7 @@ CENSUS: dict[type, Census] = {
     age.Identity: Census('secret public', secret='secret'),
     b2.AppKey: Census('key_id key', secret='key'),
     b2.Bucket: Census('bucket_id lifecycle_rules'),
+    b2.FilePage: Census('names next_file_name'),
     b2.KeyPage: Census('keys next_key_id'),
     b2.LifecycleRule: Census('file_name_prefix days_from_uploading_to_hiding days_from_hiding_to_deleting'),
     b2.ListedKey: Census('key_id name capabilities bucket_id name_prefix'),

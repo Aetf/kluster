@@ -200,6 +200,9 @@ _ORDER = """when to run what:
          so nothing counts its generations -- the file is what refuses a
          run without --rotate. Then commit, state-backend provision --force,
          state-backend restore, and one fresh dump for the drill to open.
+    credentials derived drill-credentials mint [--only oci|b2]
+         The drill's OCI and B2 keys, both into that same Environment: a
+         re-run is the rotation of both, --only rotates one.
     credentials derived <row> record
          The same for an escrowed row nothing here can draw: make another one
          in the console the command prints the steps for, and hand it in. A
@@ -887,6 +890,57 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_bundle_dir(drill_identity_generate)
 
+    # The drill's other row: two mints the rows above already run, aimed at
+    # the drill's own boundaries, every carrier into the same Environment
+    # through the sink. No `--compartment`: the drill compartment is a
+    # recorded name in the recorded tenancy, and the mint is held to it.
+    drill_credentials = rows.add_parser(
+        derived.DRILL_CREDENTIALS_ROW,
+        help="the rebuild drill's OCI key over its own compartment and B2 key over the dump prefix",
+        description=(
+            'The two provider credentials the state-backend rebuild drill runs on, beside the age identity above: '
+            'an OCI user administering the drill compartment and a stranger outside it, and a B2 key that lists '
+            "and reads the dump prefix and can write nothing. Both land in the ops repository's `drill` "
+            'Environment and nowhere else. Rotating either is re-running this; the compartment is the one '
+            '`conventions` names for the drill, created on the first run, and no flag points it elsewhere.'
+        ),
+    )
+    drill_credentials_verbs = drill_credentials.add_subparsers(dest='action', required=True, metavar='<verb>')
+    drill_credentials_mint = drill_credentials_verbs.add_parser(
+        'mint',
+        help='mint both keys from their seeds into the drill Environment',
+        description=(
+            'Sign as the OCI seed to converge the drill compartment, the user, its group and the policy that '
+            "confines that group to the compartment, mint the user's API key and push the signing "
+            f'configuration -- `{derived.DRILL_OCI_USER_SLOT.name}`, `{derived.DRILL_OCI_FINGERPRINT_SLOT.name}`, '
+            f"`{derived.DRILL_OCI_PRIVATE_KEY_SLOT.name}` -- into the ops repository's `drill` Environment as "
+            "the GitHub admin token, read back out of the github stack's config. Then sign as the B2 seed to mint "
+            'a key that lists and reads the dump prefix of the bucket the appliance dumps into, prove it by '
+            f'listing that prefix as itself, and push `{derived.DRILL_B2_KEY_ID_SLOT.name}` and '
+            f"`{derived.DRILL_B2_KEY_SLOT.name}` beside them. Each key's predecessor is retired only once its "
+            'carriers are in the listing, so a push that fails leaves the working key alone; a compartment '
+            'created here for the first time is printed, to be recorded in `conventions` and committed. '
+            'Re-running this is the rotation of both keys.'
+        ),
+    )
+    _ = drill_credentials_mint.add_argument(
+        '--only',
+        choices=derived.DRILL_HALVES,
+        default=None,
+        help='mint one half alone: the OCI key or the B2 key',
+    )
+    _ = drill_credentials_mint.add_argument(
+        '--oci-entry',
+        default=derived.OCI_SEED_ENTRY,
+        help=f'the kit entry the OCI seed is read from (default: {derived.OCI_SEED_ENTRY})',
+    )
+    _ = drill_credentials_mint.add_argument(
+        '--b2-entry',
+        default=derived.B2_SEED_ENTRY,
+        help=f'the kit entry the B2 seed is read from (default: {derived.B2_SEED_ENTRY})',
+    )
+    _add_bundle_dir(drill_credentials_mint)
+
     # The rows whose credential is made in the console that checks it rather
     # than minted from a seed -- an appliance of the installation, or the
     # platform itself where that platform publishes no API for making one. `record`
@@ -1363,6 +1417,18 @@ def main(argv: list[str] | None = None) -> int:
                     _forge(args, store, registry),
                     recipient_file=appliance_config.DRILL_RECIPIENT_FILE,
                     rotate=args.rotate,
+                )
+            # The drill's provider keys: two seeds out of the kit, every
+            # carrier through the same sink as the admin token. The
+            # compartment is not an argument -- the mint is held to the one
+            # `conventions` records for the drill.
+            case ('derived', derived.DRILL_CREDENTIALS_ROW, 'mint'):
+                _ = derived.drill_credentials(
+                    store,
+                    _forge(args, store, registry),
+                    only=args.only,
+                    oci_seed_entry=args.oci_entry,
+                    b2_seed_entry=args.b2_entry,
                 )
             # The device rows: no mint, so the command is the console steps
             # plus the push. Which stack takes it comes from the row rather

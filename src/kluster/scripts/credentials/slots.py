@@ -1049,13 +1049,15 @@ ROWS: dict[str, Row] = {
         # copy waits on a delivery shape that replaces the interim secret above.
         pending={'SealedSecret': _CLUSTER_UNBUILT, 'ops-repo secret': _HAOS_UNBUILT},
     ),
-    'drill-credentials': Row(
+    derived.DRILL_CREDENTIALS_ROW: Row(
         register='Drill-environment credentials',
-        source=Minted(
-            'credentials derived drill-credentials mint',
-            unbuilt='the drill compartment and its keys are not declared',
-        ),
-        pending={'ops-repo Environment': _OPS_UNBUILT},
+        # One row over five secrets, the way each ZeroTier row is one cell
+        # over several: the census keys map rows by the command that produces
+        # them, and one command mints both keys and fills every carrier. The
+        # slots are the mint's own values, imported, so the addresses the
+        # register advertises and the ones the mint pushes to cannot differ.
+        source=Minted(f'credentials derived {derived.DRILL_CREDENTIALS_ROW} mint'),
+        targets=(*derived.DRILL_OCI_SLOTS, *derived.DRILL_B2_SLOTS),
     ),
 }
 

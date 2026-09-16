@@ -21,13 +21,13 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import pytest
 import requests
-from b2_api import ACCOUNT_ID, FakeApi, Key
+from b2_api import ACCOUNT_ID, FakeApi, Key, Refused
 from memory_kit import MemoryKit
 
 from kluster import conventions
@@ -48,9 +48,68 @@ PREFIX = conventions.STATE_DUMP_PREFIX
 RETENTION_DAYS = 30
 
 
+#: The one file call this package makes, and the capability the API reference
+#: says it needs. The shared fake encodes the calls the account-wide rows
+#: make; this one is the drill reader's, and it lives beside that role's tests.
+LIST_FILE_NAMES = 'b2_list_file_names'
+LIST_FILES = 'listFiles'
+
+
+@dataclass
+class ReadableFakeApi(FakeApi):
+    """The shared fake plus `b2_list_file_names`, the call the drill's reader is verified by.
+
+    What it encodes is what the API reference says of a confined key: a
+    listing needs `listFiles`, and a key confined to a bucket and a prefix is
+    refused a listing of any other bucket, or of a prefix outside its own --
+    which is what makes "verified by listing the prefix as itself" a proof of
+    the grant rather than of the key's existence. The page is the server's
+    choice here as it is for `b2_list_keys`.
+    """
+
+    #: bucket id -> the object names it holds.
+    objects: dict[str, list[str]] = field(default_factory=dict[str, list[str]])
+    #: How many names one page may hold, which the server picks.
+    file_page_limit: int = 1000
+    #: Every listing served, as (the key it was served to, bucket, prefix).
+    listings: list[tuple[str, str, str]] = field(default_factory=list[tuple[str, str, str]])
+
+    def _authorized(self, headers: dict[str, str], api: str) -> Key:
+        if api != LIST_FILE_NAMES:
+            return super()._authorized(headers, api)
+        key_id = self.tokens.get(headers['Authorization'])
+        if key_id is None or key_id not in self.keys:
+            raise Refused(401, 'bad_auth_token', 'the auth token is not valid')
+        key = self.keys[key_id]
+        if LIST_FILES not in key.capabilities:
+            raise Refused(401, 'unauthorized', f'{api} requires the {LIST_FILES} capability')
+        return key
+
+    def _act(self, api: str, caller: Key, body: dict[str, Any]) -> dict[str, Any]:
+        if api != LIST_FILE_NAMES:
+            return super()._act(api, caller, body)
+        bucket_id = str(body['bucketId'])
+        prefix = str(body.get('prefix', ''))
+        if caller.bucket_id is not None and caller.bucket_id != bucket_id:
+            raise Refused(401, 'unauthorized', 'the key is confined to another bucket')
+        if caller.name_prefix is not None and not prefix.startswith(caller.name_prefix):
+            raise Refused(401, 'unauthorized', 'the key is confined to another prefix')
+        self.listings.append((caller.key_id, bucket_id, prefix))
+        names = sorted(name for name in self.objects.get(bucket_id, []) if name.startswith(prefix))
+        start = body.get('startFileName')
+        if start is not None:
+            names = [name for name in names if name >= str(start)]
+        wanted = min(int(body['maxFileCount']), self.file_page_limit)
+        page, rest = names[:wanted], names[wanted:]
+        return {
+            'files': [{'fileName': name, 'action': 'upload'} for name in page],
+            'nextFileName': rest[0] if rest else None,
+        }
+
+
 @pytest.fixture
-def api(monkeypatch: pytest.MonkeyPatch) -> FakeApi:
-    fake = FakeApi()
+def api(monkeypatch: pytest.MonkeyPatch) -> ReadableFakeApi:
+    fake = ReadableFakeApi()
     monkeypatch.setattr(b2.requests, 'get', fake.get)
     monkeypatch.setattr(b2.requests, 'post', fake.post)
     return fake
@@ -675,6 +734,165 @@ def test_a_box_that_records_no_key_is_not_current(api: FakeApi, kit: KdbxStore) 
     assert not _current(session, '', bucket_id)
 
 
+# -- the drill's reader -----------------------------------------------------
+
+
+#: The B2 capability families a read-only key must carry nothing from. Named
+#: by what a capability does rather than listed, so a capability B2 adds to a
+#: family is held to it without being named here.
+MUTATING = ('write', 'delete', 'share')
+
+
+def test_the_drill_reader_keeps_its_name() -> None:
+    # Retirement matches on it (`retire_others`), so a rename would leave the
+    # key the Environment holds outside every later sweep.
+    assert b2.DRILL_READ_NAME == 'kluster-drill-read'
+
+
+def test_the_drill_reader_is_confined_to_the_prefix_the_uploader_writes() -> None:
+    reader, writer = b2.drill_reads('bucket-x'), b2.dumps('bucket-x')
+
+    # The same bucket and the same prefix, separator included: a reader
+    # confined to `pulumi-state` where the writer writes `pulumi-state/` would
+    # read that prefix and every sibling that shares its letters.
+    assert reader.bucket_id == writer.bucket_id == 'bucket-x'
+    assert reader.name_prefix == writer.name_prefix == f'{PREFIX}/'
+
+
+def test_the_drill_reader_may_do_nothing_the_uploader_may_and_nothing_administrative() -> None:
+    reader = b2.drill_reads('bucket-x')
+
+    assert reader.capabilities == ('listFiles', 'readFiles')
+    # Disjoint from the writer's and from the administrative set: a key that
+    # could write would be a second uploader, one that could administer would
+    # be a second management key, and neither is what an exposed drill buys.
+    assert not set(reader.capabilities) & set(b2.dumps('bucket-x').capabilities)
+    assert not set(reader.capabilities) & set(b2.CAPABILITIES)
+    assert not [capability for capability in reader.capabilities if capability.startswith(MUTATING)]
+    assert not [capability for capability in reader.capabilities if capability.endswith('Keys')]
+
+
+def test_the_drill_key_is_minted_as_the_role_and_not_a_wider_one(api: ReadableFakeApi, kit: KdbxStore) -> None:
+    _ = _seeded(api, kit)
+    session, bucket_id = _bucket(api, kit)
+
+    key_id = _delivered(b2.mint_drill_read_key(session, bucket_id=bucket_id)).key_id
+
+    # What was asked of B2 is the role, whole: the mint takes a bucket and
+    # nothing else, so no caller can hand it a capability or a prefix.
+    minted = api.keys[key_id]
+    assert (minted.name, minted.capabilities, minted.bucket_id, minted.name_prefix) == (
+        b2.DRILL_READ_NAME,
+        b2.DRILL_READ_CAPABILITIES,
+        bucket_id,
+        f'{PREFIX}/',
+    )
+    assert b2.drill_reads(bucket_id).describes(
+        b2.ListedKey(key_id, minted.name, minted.capabilities, bucket_id, minted.name_prefix)
+    )
+
+
+def test_the_drill_key_is_verified_by_listing_the_prefix_as_itself(api: ReadableFakeApi, kit: KdbxStore) -> None:
+    _ = _seeded(api, kit)
+    session, bucket_id = _bucket(api, kit)
+    api.objects[bucket_id] = [f'{PREFIX}/20260101T000000Z.dump.age', 'etcd/snapshot']
+
+    pending = b2.mint_drill_read_key(session, bucket_id=bucket_id)
+
+    # One listing, served to the new key and not to the seed, of the prefix
+    # the role names -- the one act the drill performs, done before anything
+    # is delivered, so a key the platform would refuse that act is refused
+    # here rather than on the drill's first scheduled run.
+    (key_id,) = api.named(b2.DRILL_READ_NAME)
+    assert api.listings == [(key_id, bucket_id, f'{PREFIX}/')]
+    assert api.calls.index(LIST_FILE_NAMES) > api.calls.index('b2_create_key')
+    _ = _delivered(pending)
+
+
+def test_the_drill_key_can_list_and_read_its_prefix_and_nothing_else(api: ReadableFakeApi, kit: KdbxStore) -> None:
+    _ = _seeded(api, kit)
+    session, bucket_id = _bucket(api, kit)
+    api.objects[bucket_id] = [f'{PREFIX}/a.dump.age', f'{PREFIX}/b.dump.age', 'etcd/snapshot']
+    minted = _delivered(b2.mint_drill_read_key(session, bucket_id=bucket_id))
+
+    reader = b2.Session.authorize(minted.key_id, minted.key)
+
+    assert reader.file_names(bucket_id, prefix=f'{PREFIX}/') == (f'{PREFIX}/a.dump.age', f'{PREFIX}/b.dump.age')
+    # The platform refuses the rest rather than the code declining to ask:
+    # another prefix of the same bucket, and every administrative call.
+    with pytest.raises(requests.HTTPError):
+        _ = reader.file_names(bucket_id, prefix='etcd/')
+    with pytest.raises(requests.HTTPError):
+        _ = reader.keys()
+    with pytest.raises(requests.HTTPError):
+        _ = reader.buckets()
+
+
+def test_a_prefix_larger_than_one_page_is_listed_whole(api: ReadableFakeApi, kit: KdbxStore) -> None:
+    _ = _seeded(api, kit)
+    session, bucket_id = _bucket(api, kit)
+    api.objects[bucket_id] = [f'{PREFIX}/{day:02d}.dump.age' for day in range(1, 8)]
+    api.file_page_limit = 3
+    minted = _delivered(b2.mint_drill_read_key(session, bucket_id=bucket_id))
+
+    # B2 pages `b2_list_file_names` at a size it chooses, so a caller that
+    # read the first page only would call an old dump the newest.
+    listed = b2.Session.authorize(minted.key_id, minted.key).file_names(bucket_id, prefix=f'{PREFIX}/')
+
+    assert listed == tuple(api.objects[bucket_id])
+
+
+def test_minting_the_drill_key_retires_its_predecessor(api: ReadableFakeApi, kit: KdbxStore) -> None:
+    _ = _seeded(api, kit)
+    session, bucket_id = _bucket(api, kit)
+    previous = _delivered(b2.mint_drill_read_key(session, bucket_id=bucket_id)).key_id
+
+    key_id = _delivered(b2.mint_drill_read_key(session, bucket_id=bucket_id)).key_id
+
+    # Re-running is the rotation: one live key of the name afterwards, and the
+    # uploader beside it untouched -- the two roles retire by name, and the
+    # names differ.
+    assert api.named(b2.DRILL_READ_NAME) == [key_id]
+    assert previous not in api.keys
+
+
+def test_the_drill_key_retires_nothing_until_the_credential_has_been_delivered(
+    api: ReadableFakeApi, kit: KdbxStore
+) -> None:
+    _ = _seeded(api, kit)
+    session, bucket_id = _bucket(api, kit)
+    previous = _delivered(b2.mint_drill_read_key(session, bucket_id=bucket_id)).key_id
+
+    pending = b2.mint_drill_read_key(session, bucket_id=bucket_id)
+
+    # The order every mint in this package has: the push is the caller's, and
+    # until it returns the successor exists in this process alone. Retired
+    # here, a push that then failed would leave the Environment naming a key
+    # the account has deleted.
+    standing = api.named(b2.DRILL_READ_NAME)
+    assert previous in standing
+    assert len(standing) == 2
+
+    current = _delivered(pending)
+
+    assert api.named(b2.DRILL_READ_NAME) == [current.key_id]
+
+
+def test_a_drill_key_is_not_minted_in_another_account(
+    api: ReadableFakeApi, kit: KdbxStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _ = _seeded(api, kit)
+    session, bucket_id = _bucket(api, kit)
+    before = _mints(api)
+    _elsewhere(monkeypatch)
+
+    with pytest.raises(CredentialRejected, match=f'{ACCOUNT_ID}.*some-other-account'):
+        _ = b2.mint_drill_read_key(session, bucket_id=bucket_id)
+
+    assert _mints(api) == before
+    assert not api.named(b2.DRILL_READ_NAME)
+
+
 def test_an_account_larger_than_one_page_is_listed_whole(api: FakeApi, kit: KdbxStore) -> None:
     _ = _seeded(api, kit)
     session, bucket_id = _bucket(api, kit)
@@ -840,7 +1058,7 @@ class Faulty:
 
 
 #: The names the register mints under, and the invariant below counts.
-MANAGED = (b2.SEED.name, b2.MANAGEMENT.name, b2.DUMPS_NAME)
+MANAGED = (b2.SEED.name, b2.MANAGEMENT.name, b2.DUMPS_NAME, b2.DRILL_READ_NAME)
 
 
 def _kit_never_lies(kit: KdbxStore, api: FakeApi) -> None:
@@ -902,6 +1120,18 @@ def _provision(api: FakeApi, kit: KdbxStore) -> None:
         _ = _delivered(b2.mint_dump_key(session, bucket_id=bucket_id))
 
 
+def _drill(api: FakeApi, kit: KdbxStore) -> None:
+    """The drill row's B2 half: find the bucket, mint the reader, deliver it.
+
+    The bucket is converged here so the stage has one to confine the key to;
+    the row itself looks it up (`derived.py`), because a drill that finds no
+    bucket has nothing to read.
+    """
+    session = b2.Session.from_entry(kit, SEED_ENTRY)
+    bucket_id = b2.ensure_bucket(session, BUCKET, prefix=PREFIX, retention_days=RETENTION_DAYS)
+    _ = _delivered(b2.mint_drill_read_key(session, bucket_id=bucket_id))
+
+
 Stage = Callable[[FakeApi, KdbxStore], None]
 
 
@@ -911,7 +1141,7 @@ def _calls_made(operation: Stage, *, prepared: bool, monkeypatch: pytest.MonkeyP
     Measured rather than written down, so the sweep covers exactly the calls
     the stage makes today and widens by itself when the stage grows one.
     """
-    api = FakeApi()
+    api = ReadableFakeApi()
     kit = MemoryKit()
     _record_account(monkeypatch)
     faulty = Faulty(api).attach(monkeypatch)
@@ -936,6 +1166,7 @@ STAGES: tuple[tuple[str, Stage, bool], ...] = (
     ('rotate', _rotate, True),
     ('management', _manage, True),
     ('provision', _provision, True),
+    ('drill', _drill, True),
 )
 
 #: Both ways a run can stop at call k (see `Faulty`).
@@ -995,7 +1226,7 @@ def test_a_stage_heals_from_a_failure_at_any_call(
     when: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    api = FakeApi()
+    api = ReadableFakeApi()
     kit = MemoryKit()
     if prepared:
         _ = Faulty(api).attach(monkeypatch)
