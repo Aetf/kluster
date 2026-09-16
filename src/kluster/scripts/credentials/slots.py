@@ -931,17 +931,17 @@ ROWS: dict[str, Row] = {
         ),
     ),
     'zerotier-identity-physical': Row(
-        register='ZT CI member identities (`ci-physical`, `ci-dns`)',
+        register='overlay CI member identities (`ci-physical`, `ci-dns`)',
         source=StateRead(PHYSICAL_STACK, conventions.PHYSICAL_OUTPUTS.ci_identity['ci-physical']),
         targets=_github('ZEROTIER_IDENTITY', ZEROTIER_PHYSICAL),
     ),
     'zerotier-identity-dns': Row(
-        register='ZT CI member identities (`ci-physical`, `ci-dns`)',
+        register='overlay CI member identities (`ci-physical`, `ci-dns`)',
         source=StateRead(PHYSICAL_STACK, conventions.PHYSICAL_OUTPUTS.ci_identity['ci-dns']),
         targets=_github('ZEROTIER_IDENTITY', ZEROTIER_DNS),
     ),
     'zerotier-network': Row(
-        register='ZT CI member identities (`ci-physical`, `ci-dns`)',
+        register='overlay CI member identities (`ci-physical`, `ci-dns`)',
         # Not a credential and not a secret: the workflows pass it beside the
         # identity, and a workflow input that is not a secret has nowhere else
         # to come from.
