@@ -307,9 +307,26 @@ to the homelab VM (the node owning their `lan` VIPs), likewise
     IoT→LAN tightening — is
     [physical/gateway.md](../physical/gateway.md) §4.
 4.  **Split-horizon DNS**: AdGuard (alice/bob) rewrites public hostnames to
-    `lan` VIPs so LAN/ZT clients reach apps (immich!) directly, never via
-    the cloud path — preserving the legacy cluster's hard-earned rule that
-    LAN access to immich must not traverse the VPS.
+    `lan` VIPs, so a client that resolves through them reaches apps
+    (immich!) directly, never via the cloud path — preserving the legacy
+    cluster's hard-earned rule that LAN access to immich must not
+    traverse the VPS. Which clients those are is a question of whose
+    resolver alice/bob is for the name asked, not of where the client
+    sits. On the LAN that is DHCP's doing: every lease names them, for
+    every name. On the overlay it is the device's own opt-in —
+    `allowDNS`, off by default, set on the device and not settable from
+    Central — and what the opt-in installs is a resolver scoped to the
+    pushed search domain, the overlay host block `*.zt.<primary>`, so
+    alice/bob see an opted-in member's `*.zt` queries and nothing else;
+    application names sit outside that domain on purpose, so no overlay
+    member is steered to a `lan` VIP by its opt-in. The overlay half is
+    [declarative/dns.md](../declarative/dns.md) §2; what an opted-in
+    member gets, and what it risks, is
+    [physical/gateway.md](../physical/gateway.md) §2.7. Everyone else
+    resolves publicly and reaches the same service at the address the
+    public record gives: a device on neither network, a member that has
+    not opted in, and an opted-in member off the LAN asking for an
+    application name.
 
 ### 3.5 Egress Design
 
