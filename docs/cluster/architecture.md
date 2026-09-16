@@ -607,7 +607,7 @@ issue tracker, which the public repo needs for real issues. Consequences on reco
     operator), dynamic label values — node names, instances, firing
     values — *do* go into the issue, keeping it self-contained: the
     3 a.m. reader learns which machine without a round-trip to the
-    monitoring stack over ZT. The hard line is only that credentials,
+    monitoring stack over the overlay. The hard line is only that credentials,
     tokens, and secret-bearing URLs never enter alert labels or the
     issue built from them. Summaries remain static strings authored
     with the alert rule.
@@ -792,25 +792,25 @@ pushes those files itself**:
 ### 5.3 ZeroTier terminates on the UDM (decided 2026-08-23)
 
 **The UDM runs the ZeroTier daemon as a standing member and is the home
-side's ZT router.** Today's shape — the homelab host as the only home
-member, and a single ZT managed route (`10.42.0.0/24` via the legacy
-VPS, for the old cluster's pod subnet) — means ZT clients have *no*
+side's overlay router.** Today's shape — the homelab host as the only home
+member, and a single managed route (`10.42.0.0/24` via the legacy
+VPS, for the old cluster's pod subnet) — means overlay members have *no*
 route to the home LANs at all, and every design that adds one through
 the host would put a single non-gateway machine on the management data
-path. Moving the daemon to the UDM puts ZT termination where routing
+path. Moving the daemon to the UDM puts overlay termination where routing
 already lives:
 
--   **Routes become trivial**: ZT Central managed routes for the home
+-   **Routes become trivial**: ZeroTier Central managed routes for the home
     VLAN subnets and the `lan` pool (`10.0.5.0/24`, `192.168.70.0/24`,
     `192.168.80.0/24`, `192.168.90.0/24`, and `192.168.71.0/24` + its
-    ULA /64) all via the UDM's ZT address. The UDM reaches the pool through its own
+    ULA /64) all via the UDM's overlay address. The UDM reaches the pool through its own
     BGP-learned route (§3.4) — one hop, no host in the path. The
     legacy `10.42.0.0/24`-via-VPS route retires with the VPS.
--   **Management-path independence**: CI's per-run ZT join (ci.md §2)
+-   **Management-path independence**: CI's per-run overlay join (ci.md §2)
     and roaming personal devices reach the UDM (SSH, AdGuard APIs) and
     everything behind it even when the homelab host is down — matching
     the CP-in-the-cloud principle that no single home machine gates the
-    management plane. The host keeps its plain ZT membership (direct
+    management plane. The host keeps its plain overlay membership (direct
     address, useful as a fallback path) and never takes a router role
     — today it has none either; the routes via the UDM are net-new.
 -   **Deployment shape**: a fourth of the device's nspawn services
@@ -826,9 +826,9 @@ already lives:
     update is already proven working on this device).
 -   **Firewall fact on record**: the UBIOS zone firewall classifies by
     known interfaces/ipsets; `zt*` interfaces match neither, so
-    ZT-forwarded traffic rides the FORWARD chain's default ACCEPT —
-    unpoliced, accepted knowingly (ZT membership is the auth boundary).
--   **ZT Central config joins Pulumi**: network managed routes, the
+    overlay-forwarded traffic rides the FORWARD chain's default ACCEPT —
+    unpoliced, accepted knowingly (overlay membership is the auth boundary).
+-   **ZeroTier Central config joins Pulumi**: network managed routes, the
     managed DNS block (gateway.md §2.7), member authorizations
     (including the CI ephemeral-member pre-auth), and
     **tag-based flow rules confining CI members** to exactly their
@@ -836,7 +836,7 @@ already lives:
     UniFi OS proxy the bridged unifi provider calls,
     declarative/physical.md §4), the AdGuard APIs, the homelab host's
     libvirt SSH — so a leaked CI join credential does not buy general LAN
-    access (necessary because ZT-forwarded traffic rides the UDM's
+    access (necessary because overlay-forwarded traffic rides the UDM's
     default ACCEPT, above: Central rules are the only policing layer).
     All via the official `zerotier/zerotier` Terraform provider through
     Pulumi's any-Terraform-provider bridge, in the `physical` stack.
@@ -855,10 +855,10 @@ already lives:
     the flow-rules draft, cutover order — is
     [physical/gateway.md](../physical/gateway.md) §2.
 
-Alternative considered — **BGP-advertising the ZT subnet from the
-homelab host** (host stays ZT router, FRR/bird on the host peers with
+Alternative considered — **BGP-advertising the overlay subnet from the
+homelab host** (host stays overlay router, FRR/bird on the host peers with
 the UDM): solves only the return-route half that a single static route
-already covers, keeps the host on the data path for every ZT client,
+already covers, keeps the host on the data path for every overlay member,
 and adds a second BGP peer for a subnet that never changes. Rejected;
 likewise plain status quo (host router + static route) — functionally
 adequate, but it couples the remote-management path to one non-gateway

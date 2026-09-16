@@ -224,7 +224,7 @@ is one nobody here asked for, is the issue's question.
     reserved public IPv4 that OCI 1:1-NATs onto a secondary private
     address, and that mechanism has no IPv6 counterpart. Dropped at
     import: `abacus.hosts` (the machine no longer exists — its
-    dependents, the Abacus ZT entry and the jupyter/mc records, went
+    dependents, the Abacus overlay entry and the jupyter/mc records, went
     with it). `archvps.hosts` is **not** dropped: every app record that
     has not migrated targets it, and it retires with the VPS in Wave F
     (§6). The state-backend micro deliberately gets **no anchor**:

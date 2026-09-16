@@ -51,7 +51,7 @@ the way the waiting rows do: as a reviewed pull request.
 | nspawn rootfs (caddy, AdGuard, ZeroTier) | renovate here — docker datasource, reading whole references off the `versions:image-gateway-…` pins | `physical` stack: the device pulls the pinned manifest itself and unpacks it beside the tree it is running, then the boot chain's machine script restarts what changed | Reviewed; the run-number tag reads as a major bump, so every one waits on dashboard approval |
 | State-backend pins (FCOS stream handled by Zincati; `postgres:NN` in Butane) | Zincati (periodic window) / renovate on `deploy/state-backend/` | auto / manual re-provision | state-backend.md §4 |
 | Pulumi SDK + providers, Python deps, Actions versions | renovate | **noop-automerge workflow** — merges once the preview is proven empty (the zero-diff rule, ci.md); that proof previews stacks that do not exist yet, so nothing takes this path today (paragraph above) | Automerged when diff-free; a bump that produces a real diff falls out of the noop path to human review; major behind dashboard approval |
-| UDM firmware | **vendor-controlled** (auto-update schedule; outage history on record) | — | Not ours to pin; the device's services self-heal via on_boot.d, ZT recovery runbook gateway.md §3 |
+| UDM firmware | **vendor-controlled** (auto-update schedule; outage history on record) | — | Not ours to pin; the device's services self-heal via on_boot.d, overlay recovery runbook gateway.md §3 |
 
 ## 2. Upgrade runbooks (census)
 
@@ -194,7 +194,7 @@ Owning docs keep the content — the index only locates it.
 | Playbook family | Lives in |
 | --- | --- |
 | State backend (cert/CA, PG major, rebuild, age rotation) | physical/state-backend.md §7 |
-| Gateway (ZT container down, firmware-wiped device, UDM replacement) | physical/gateway.md §3 |
+| Gateway (ZeroTier container down, firmware-wiped device, UDM replacement) | physical/gateway.md §3 |
 | Node replacement (CP node, worker VM, block volume and VIP extras) | §3 here |
 | Upgrades (Talos serial, Cilium canary) | §2 here |
 | Backup restores (CNPG, VolSync, etcd) | storage.md §5; the drills are §4 here |

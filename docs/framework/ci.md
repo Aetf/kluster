@@ -79,8 +79,8 @@ same plain-data declaration (dns.md §3). A typical app image bump
 stays entirely public-endpoint, and ZeroTier's availability is not a
 dependency of it. The AdGuard rewrite resources tolerate an
 unreachable UDM by failing only their own resources, not the whole
-up. CI's ZT members are **tag-confined by
-Central flow rules** (managed with the rest of the ZT config,
+up. CI's overlay members are **tag-confined by
+Central flow rules** (managed with the rest of the Central config,
 architecture.md §5.3) to exactly the four targets in the table
 (UDM SSH, UDM UniFi API, AdGuard APIs, homelab libvirt SSH) — a
 leaked join credential does not buy general LAN access. Residual on
@@ -229,7 +229,7 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
 -   **Path-filter skipping is a setup-cost optimization, not a
     correctness mechanism**, and **selection is all-or-nothing**: a
     change that reaches no stack skips the matrix entirely (saving
-    checkout/deps/ZT-join), and every other change runs all three
+    checkout/deps/overlay-join), and every other change runs all three
     layers and lets the internal previews no-op. There is no
     single-layer case to select — the three filters are one YAML anchor
     and its two aliases, so `changes` answers with all three names or
@@ -415,7 +415,7 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     physical split amended 2026-08-24)**: secrets live in **per-stack
     GitHub Environments** — the `dns` jobs see only the Cloudflare
     token, `apps` never holds the UDM key or OCI admin credentials,
-    and the physical credentials (UDM root SSH, OCI, ZT) are
+    and the physical credentials (UDM root SSH, OCI, the overlay identity) are
     **main-only, split across two environments**: ungated
     `physical-plan` for the plan job, reviewer-gated `physical` for
     actual applies — the one approval door kept, guarding *apply*.
