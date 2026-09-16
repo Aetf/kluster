@@ -145,9 +145,11 @@ _ORDER = """when to run what:
        credentials derived github-trigger-key record
          The two GitHub App private keys. Each is generated on its own App
          page -- shown once, and created by no API -- so the command prints
-         the steps and escrows what they produce. Nothing reads either one
-         yet: the workflows that mint an installation token from a key are
-         not built, so the escrow copy is the whole of the delivery for now.
+         the steps and escrows what they produce. The escrow copy is the
+         permanent store; the delivery is the repository secret the key's
+         workflow reads. For the trigger key that is the ops repository's
+         TRIGGER_APP_PRIVATE_KEY, which stage 10 pushes; the dispatch key's
+         job is not built, so its escrow copy is the whole of that row.
    10. credentials derived sync
          The GitHub secrets CI reads, for the rows whose value lives
          somewhere else and is copied into a slot. Run it again whenever one

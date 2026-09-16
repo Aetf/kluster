@@ -470,7 +470,7 @@ cell would say `pending` to an operator already being served.
 | B2 writer keys | B2 seed key (via `physical`) | Prefix-scoped, `list+read+write`, **no `deleteFiles`** — deletes degrade to lifecycle-purged hides (audit H4): VolSync, CNPG barman, etcd snapshots | SealedSecret · ops-repo secret (pending) | restic/barman, ops-repo workflow |
 | B2 dump key (micro) | B2 seed key | `writeFiles` alone, dump prefix | on-box (Ignition) | state-backend pg_dump timer |
 | GitHub App key (dispatch) | Made on the App's own page (no key API) | Signs a JWT for that App alone, which mints an 8 h installation token carrying contents:write on `kluster-ops` | escrow as `github/dispatch-key` · `kluster` repository secret (pending) | Alert producer step |
-| GitHub App key (trigger) | Made on the App's own page (no key API) | The same, for an 8 h token carrying actions:write on `kluster` | escrow as `github/trigger-key` · ops-repo secret (pending) | Weekly drift trigger |
+| GitHub App key (trigger) | Made on the App's own page (no key API) | The same, for an 8 h token carrying actions:write on `kluster` | escrow as `github/trigger-key` · ops-repo secret (`TRIGGER_APP_PRIVATE_KEY`) | Weekly drift trigger (the ops repo's `drift-trigger.yml`) |
 | ZT CI member identities (`ci-physical`, `ci-dns`) | generated in-state (`zerotier_identity`) | One per identity domain, `ci`-tagged and flow-rule-confined (gateway.md §2.3) | CI env | CI per-run join |
 | Pulumi state passphrase | generated, escrowed as `pulumi/passphrase` | Decrypts state secrets, and the config secrets of every stack but `github` | escrow · CI env (all stacks) · workstation slot | every `pulumi` run |
 | `github` stack passphrase | generated, escrowed as `github/passphrase` | Decrypts the `github` stack's config secrets and nothing else | escrow · workstation slot | a `pulumi` run against `github`, and the `credentials` commands that reach that stack's config |
@@ -517,10 +517,11 @@ is the cost of a one-slot design and is bounded by one nightly.
 **An ops-repo Environment secret's name carries its Environment as a
 prefix** (`DRILL_AGE_IDENTITY`, and the five the drill-credentials row
 holds). Inside a job an Environment secret shadows a repository
-secret of the same name, and the ops repository is to hold both kinds
-— the freshness and probe keys are repository secrets — so the prefix
-is what keeps a workflow naming `drill` from silently reading the
-drill's copy where it meant the repository's.
+secret of the same name, and the ops repository holds both kinds —
+the trigger App's key is a repository secret, and the freshness and
+probe keys are to be — so the prefix is what keeps a workflow naming
+`drill` from silently reading the drill's copy where it meant the
+repository's.
 
 **A provider role is one shape.** The name a credential is minted under
 and the whole of what it may do are a single value — `b2.Role`,
@@ -673,13 +674,21 @@ it is an **installation token**, good for eight hours and used inside the
 run that minted it, which is working material of a workflow rather than
 anything this register stores. Where these two differ from the three
 above is the slot. The consumer is a workflow rather than a stack, and
-neither workflow is built, so the escrow copy (§2.2) is the whole of the
-row today and the repository secret each key is destined for arrives with
-the job that reads it. Rotating one is another key on that page,
-recorded here, and the superseded key deleted in the same visit. The
-client id the JWT is issued under travels with the delivery rather than
-with the key: it identifies the App instead of authenticating as it, and
-the App's page shows it for as long as the App exists.
+the key is a repository secret of the repository that workflow runs in,
+pushed by `credentials derived sync` from the escrow copy (§2.2), which
+stays the permanent store: an App key downloads once, and a lost slot
+is a re-push rather than a console visit. The trigger key is delivered
+— `credentials derived sync --only github-trigger-key` recovers it and
+pushes it as `TRIGGER_APP_PRIVATE_KEY`, the name the ops repository's
+`drift-trigger.yml` reads it under. The dispatch key's job is not built,
+so the escrow copy is the whole of that row today and its `kluster`
+repository secret arrives with the job. Rotating one is another key on
+that page, recorded here as the label's next generation, `sync --only`
+for a row whose slot is filled, and the superseded key deleted on the
+page in the same visit. The client id the JWT is issued under travels
+with the delivery rather than with the key: it identifies the App
+instead of authenticating as it, and the App's page shows it for as long
+as the App exists.
 
 ## 4. The scripts
 
@@ -1061,9 +1070,9 @@ that puts a value there.
     `credentials derived github-trigger-key record` — the two GitHub App
     private keys, each generated on its own App's settings page and
     escrowed here. No stack authenticates with either, so the ciphertext
-    is the delivery for now, and it is a file to commit; the workflow that
-    mints an installation token from a key arrives with its own repository
-    secret (§3).
+    is a file to commit; stage 10 pushes the trigger key into the
+    repository secret its workflow reads, and the dispatch key's
+    repository secret arrives with the job that reads it (§3).
 10. `credentials derived sync` — the GitHub secrets CI reads, for the §3
     rows whose value lives somewhere else (§4). Last, because a row read
     out of a stack needs that stack to have run; a row it cannot fill yet
@@ -1095,14 +1104,15 @@ GitHub secret — and the rest have none.
     deploy-failure webhook, which is typed in. What is left waits on
     something other than the sink — the ZeroTier CI identities, on the
     `physical` stack that generates them.
--   The **ops-repo channel** has two rows that land, both in the `drill`
-    Environment through the sink (§4): the drill age identity's private
-    half, which its generator pushes, and the drill's OCI and B2 keys,
-    which their mint pushes as five carriers. Every other row above
-    naming an ops-repo secret lands nowhere, because `kluster-ops`
-    carries the issues this document cites and no workflow and no code —
-    nothing there would read one, and nothing there reads the drill
-    Environment yet either (state-backend.md §7.3).
+-   The **ops-repo channel** has three rows that land through the sink
+    (§4): the drill age identity's private half, which its generator
+    pushes, and the drill's OCI and B2 keys, which their mint pushes as
+    five carriers, both in the `drill` Environment; and the trigger App's
+    key, which stage 10 pushes as a repository secret. Every other row
+    above naming an ops-repo secret lands nowhere, because the workflow
+    that would read it is not built — nothing there names a secret for
+    it, and nothing there reads the drill Environment yet either
+    (state-backend.md §7.3).
 -   **`alertmanager/read`** is generated and escrowed, and what it lacks
     is a consumer: neither the issue-sync poller nor the HTTPRoute that
     matches its header exists, so the ops-repo secret and the config
@@ -1112,10 +1122,12 @@ GitHub secret — and the rest have none.
     `derived check` reports its absence as a problem — and the token on
     file is the value those two consumers will be built around rather
     than one they replace.
--   The **two App keys** are in that same shape, one layer out: recorded
-    and escrowed, with the repository secret each is destined for waiting
-    on the workflow that reads it. Their client ids wait with it, being
-    part of the delivery rather than of the key (§3).
+-   The **dispatch App key** is in that same shape, one layer out:
+    recorded and escrowed, with the `kluster` repository secret it is
+    destined for waiting on the job that reads it. Its client id waits
+    with it, being part of the delivery rather than of the key (§3). The
+    trigger key's secret is filled; what waits there is the workflow that
+    reads it, in the ops repository.
 -   The **slot-drift probe** (§4). The map it would read is checked in;
     the scheduled workflow that compares it against reality is not.
 

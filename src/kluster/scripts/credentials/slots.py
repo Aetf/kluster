@@ -117,6 +117,14 @@ BACKEND_KEY = 'PULUMI_BACKEND_KEY'
 PHYSICAL_STACK = derived.PHYSICAL_STACK
 DNS_STACK = derived.ZONES_STACK
 
+#: The secret the ops repository's weekly drift trigger reads the trigger App's
+#: private key from (ci.md §3). A repository secret of `kluster-ops` rather
+#: than an Environment one: the job belongs to no stack, and the key's whole
+#: power is to start runs on the deployment repository. The name is a contract
+#: with a workflow in another repository, so it is a constant here and is
+#: renamed only together with that workflow.
+TRIGGER_APP_KEY = 'TRIGGER_APP_PRIVATE_KEY'
+
 
 # --------------------------------------------------------------------------
 # The channels: §1 rule 6's closed set, one type each.
@@ -749,19 +757,22 @@ def _device(member: str, *, onward: tuple[Channel, ...] = (), pending: Mapping[s
     )
 
 
-#: Why an ops-repository row has no address: `kluster-ops` carries the issues
-#: this register cites and no workflow, so nothing there names a secret yet
-#: (ci.md §3).
+#: Why an ops-repository row has no address: the ops-repository workflow that
+#: would read it is not built, so nothing has given its secret a name yet
+#: (ci.md §3). A row leaves this set once its workflow is designed down to the
+#: secret it reads, which is where the trigger key's row stands.
 _OPS_UNBUILT = 'the ops-repository workflow that would read it is not built, so no secret there names it'
 
 #: Why an in-cluster row has no address: sealing needs the controller, and the
 #: controller arrives with `k8s-base`.
 _CLUSTER_UNBUILT = 'the sealed-secrets controller and its consumer arrive with `k8s-base`, so no manifest path exists'
 
-#: Why an App key reaches no workflow yet: each is read by a job that mints an
-#: installation token from it for the length of one run, and neither job is
-#: built. The escrow copy is therefore the whole of the row today -- the same
-#: shape the Alertmanager token is in, and for the same reason.
+#: Why the dispatch App's key reaches no workflow yet: it is read by a job that
+#: mints an installation token from it for the length of one run, and that job
+#: is not built. The escrow copy is therefore the whole of the row today -- the
+#: same shape the Alertmanager token is in, and for the same reason. The
+#: trigger key's row is what this one becomes once its job is designed: a
+#: repository secret the sink fills, under the name the workflow reads.
 _APP_KEY_UNDELIVERED = (
     'the workflow that would read it is not built, so no secret there names it; the job that will read it '
     'mints an 8-hour installation token from this key per run and stores nothing'
@@ -874,8 +885,16 @@ ROWS: dict[str, Row] = {
     'github-trigger-key': Row(
         register='GitHub App key (trigger)',
         source=Derived(escrow.TRIGGER_KEY),
-        targets=(EscrowCopy(escrow.TRIGGER_KEY),),
-        pending={'ops-repo secret': _APP_KEY_UNDELIVERED},
+        # The escrow copy is the permanent store -- an App key downloads once,
+        # and a lost slot is a re-push rather than a console visit -- and the
+        # repository secret is the delivery: `derived sync --only
+        # github-trigger-key` recovers the key and pushes it. A repository
+        # secret rather than one of the `drill` Environment's, because the
+        # job that reads it belongs to no stack and names no Environment.
+        targets=(
+            EscrowCopy(escrow.TRIGGER_KEY),
+            Slot(repository=conventions.forge.OPS.full_name, name=TRIGGER_APP_KEY),
+        ),
     ),
     'zerotier-identity-physical': Row(
         register='ZT CI member identities (`ci-physical`, `ci-dns`)',
@@ -1211,6 +1230,7 @@ __all__ = (
     'BACKEND_URL',
     'REGISTER_COLUMNS',
     'ROWS',
+    'TRIGGER_APP_KEY',
     'Context',
     'Decided',
     'Derived',

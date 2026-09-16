@@ -613,23 +613,45 @@ def test_no_device_field_is_delivered_into_the_committed_file_in_the_clear() -> 
     assert plain == set()
 
 
-@pytest.mark.parametrize(
-    ('name', 'label'),
-    [('github-dispatch-key', escrow.DISPATCH_KEY), ('github-trigger-key', escrow.TRIGGER_KEY)],
-)
-def test_an_app_key_is_recovered_from_its_escrow_and_says_what_it_still_waits_on(name: str, label: str) -> None:
-    row = slots.ROWS[name]
+def test_the_dispatch_app_key_is_recovered_from_its_escrow_and_says_what_it_still_waits_on() -> None:
+    row = slots.ROWS['github-dispatch-key']
 
     # Recovered rather than typed in again, which is the whole point of
     # escrowing a value made in a console: filling a slot later costs a
     # command instead of another visit to the page that generates the key.
-    assert row.source == slots.Derived(label)
+    assert row.source == slots.Derived(escrow.DISPATCH_KEY)
     # And no other slot yet: the workflow that reads it is not built, so the
     # row says so instead of naming a secret a future workflow would have to
     # guess right.
-    assert row.targets == (slots.EscrowCopy(label),)
+    assert row.targets == (slots.EscrowCopy(escrow.DISPATCH_KEY),)
     assert not row.sinks
     assert row.pending
+
+
+def test_the_trigger_app_key_is_a_repository_secret_of_the_ops_repository() -> None:
+    """The one App key whose workflow is designed down to the secret it reads.
+
+    Recovered from the same escrow as the dispatch key, and delivered further:
+    the ops repository's weekly drift trigger reads it as a repository secret
+    of that repository, with no Environment -- the job belongs to no stack --
+    under the one name the workflow and this map share. Nothing pending: a
+    `pending` left on a row whose slot the sink fills would send an operator
+    to wait for a channel that is already served.
+    """
+    row = slots.ROWS['github-trigger-key']
+
+    assert row.source == slots.Derived(escrow.TRIGGER_KEY)
+    assert row.targets == (
+        slots.EscrowCopy(escrow.TRIGGER_KEY),
+        Slot(repository=OPS_REPOSITORY, name=slots.TRIGGER_APP_KEY),
+    )
+    (slot,) = row.sinks
+    assert slot.environment is None
+    assert slot.name == 'TRIGGER_APP_PRIVATE_KEY'
+    # Not an Environment secret, so not spelled like one: the prefix is what
+    # separates the drill's secrets from the repository's inside a job.
+    assert not slot.name.startswith(f'{DRILL_ENVIRONMENT.upper()}_')
+    assert row.pending == {}
 
 
 def test_the_webhook_is_a_repository_secret_and_not_an_environment_one() -> None:
@@ -746,11 +768,20 @@ def ca_pem() -> str:
     return pki.generate_ca_key()
 
 
+@dataclass(frozen=True)
 class Vault(escrow.Vault):
-    """An escrow that recovers without a key, standing in for the kit's own."""
+    """An escrow that recovers without a key, standing in for the kit's own.
+
+    Every recovery is remembered -- the list is appended to, never rebound,
+    which is all a frozen record allows -- so a test can hold a push to
+    obtaining its value once.
+    """
+
+    recovered: list[str] = field(default_factory=list[str])
 
     def recover(self, label: str, generation: int | None = None) -> str:
         assert label in escrow.register() or label.startswith(escrow.BACKUP), label
+        self.recovered.append(label)
         # The CA has to be a real key: the row that recovers it issues a
         # certificate under it rather than pushing it anywhere.
         return ca_pem() if label == escrow.CA else PASSPHRASE
@@ -794,6 +825,29 @@ def test_a_derived_row_is_recovered_once_and_pushed_to_every_slot() -> None:
     assert len(pushed) == len(ENVIRONMENTS)
     for environment in ENVIRONMENTS:
         assert gh.values[(REPOSITORY, environment, 'PULUMI_CONFIG_PASSPHRASE')] == PASSPHRASE
+
+
+def test_the_trigger_app_key_is_recovered_once_and_pushed_to_the_ops_repository() -> None:
+    """`sync --only github-trigger-key` is the delivery: recover from escrow, push, verify.
+
+    The push goes to the ops repository and to no Environment of it, under
+    the name the drift trigger reads, and the escrow is opened for that one
+    label once. What is held is the invocation the sink makes; the forge
+    itself is never reached from here.
+    """
+    gh = RecordedGh()
+    vault = Vault(registry=escrow.Registry(root=Path('nowhere')), identity='not-an-identity')
+
+    pushed = slots.sync(context(gh, open_vault=lambda: vault), only='github-trigger-key')
+
+    assert vault.recovered == [escrow.TRIGGER_KEY]
+    assert pushed == [str(Slot(repository=OPS_REPOSITORY, name='TRIGGER_APP_PRIVATE_KEY'))]
+    assert gh.values == {(OPS_REPOSITORY, None, 'TRIGGER_APP_PRIVATE_KEY'): PASSPHRASE}
+    # The listing read before and the verification after both scope the same
+    # way as the write: `--repo` naming the ops repository, and no `--env`.
+    for invocation in gh.invocations:
+        assert invocation[invocation.index('--repo') + 1] == OPS_REPOSITORY, invocation
+        assert '--env' not in invocation, invocation
 
 
 def pushed_bundle(gh: RecordedGh, environment: str = 'dns') -> dict[str, str]:
