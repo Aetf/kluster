@@ -12,7 +12,15 @@ requires-python = ">= 3.12"
 
 dependencies = [
     "pulumi>=3.254.0",
-    "pulumi-kubernetes>=4.23.0",
+    # Exact, unlike every other floor here: `packages/crds` is generated against
+    # one provider version and registers each of its resources at that version,
+    # so the program has to install the same one -- two versions would be two
+    # kubernetes plugins and two default providers. A floor would let
+    # `lockFileMaintenance` move the resolved version in `uv.lock` alone, which
+    # no regeneration follows. A test holds the generated package to this pin;
+    # a bump is finished by `uv run update_crds`, and renovate proposes it apart
+    # from the python group (framework/pulumi.md §4).
+    "pulumi-kubernetes==4.34.1",
     "requests>=2.32.3",
     "jinja2>=3.1.4",
     "pulumi-crds",
