@@ -4,11 +4,11 @@ A smoke test with teeth: it declares the entire stack against mocks, which is
 what catches wiring mistakes — a resource argument the provider would reject,
 or a dependency ordered so that the endpoint is needed before it exists.
 
-The stack is also an inventory, and as of the libvirt domain it is a complete
-one: every domain the design calls for is written, so `main` runs end to end
+The stack is also an inventory, and as of the homelab worker it is a complete
+one: every area the design calls for is written, so `main` runs end to end
 here rather than stopping at a named gap. What replaces that gap as a test is
 the same worry stated positively — each provider of the design has to appear in
-what the run registered, because a domain that quietly declared nothing would
+what the run registered, because an area that quietly declared nothing would
 leave a stack that comes up looking whole.
 """
 
@@ -212,7 +212,8 @@ COMPARTMENT = conventions.Compartment(
 #: configure through one (rfc-002 §8.1).
 STACK_CONFIG = {
     'kluster:budgetAlertRecipients': json.dumps(BUDGET_RECIPIENTS),
-    # The §3 domain: the credential the host is reached with, and nothing else.
+    # The §3 area, the homelab: the credential the host is reached with, and
+    # nothing else.
     # There is no endpoint among them — it is derived — and no storage
     # directory either: the host's own configuration management has to name the
     # same one, which makes it a convention.
@@ -236,24 +237,24 @@ async def setup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Installation
     return await run_with(Installation(), stack='physical')
 
 
-#: The provider of each domain the design has, by the prefix its type tokens
+#: The provider of each area the design has, by the prefix its type tokens
 #: carry: the cloud, the Talos chain, the homelab host, the backup account, the
 #: gateway's controller and the overlay.
-DOMAIN_PROVIDERS = ('oci', 'talos', 'libvirt', 'b2', 'unifi', 'zerotier')
+AREA_PROVIDERS = ('oci', 'talos', 'libvirt', 'b2', 'unifi', 'zerotier')
 
 
 @pytest.mark.asyncio
-async def test_the_stack_declares_every_domain_of_the_design(setup: Installation) -> None:
+async def test_the_stack_declares_every_area_of_the_design(setup: Installation) -> None:
     # The whole program against the mocks, which is where a wiring mistake
     # surfaces — an argument the provider would reject, or a dependency that
     # needs the endpoint before it exists.
     async with declaring():
         await physical.main()
 
-    # And the inventory property: a domain that declared nothing at all would
+    # And the inventory property: an area that declared nothing at all would
     # leave a stack that runs clean and comes up one provider short.
     families = {typ.partition(':')[0] for typ in setup.types}
-    assert set(DOMAIN_PROVIDERS) <= families
+    assert set(AREA_PROVIDERS) <= families
 
 
 #: The census parameters the rule below holds, as the component that receives
@@ -798,7 +799,7 @@ async def test_the_ci_join_credentials_are_exported_under_the_names_the_slot_map
     hand, so a read of an export this program dropped would otherwise surface
     first as a bring-up that cannot fill `ZEROTIER_IDENTITY`. Which member each export carries is part
     of the contract rather than cosmetic: an identity live in two jobs at once
-    flaps, which is why there is one per identity domain (gateway.md §2.6). The
+    flaps, which is why there is one per joining stack (gateway.md §2.6). The
     marking is checked for the same reason it is on the cluster credentials
     below — a join credential printed into a deployment log is a leaked one.
     """

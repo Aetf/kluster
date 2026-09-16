@@ -15,8 +15,8 @@ address, so the balancer is declared before the configuration that names it
 and before the nodes that carry that configuration; the backends pointing
 back at those nodes come last.
 
-**Every domain of the design appears below, and every one of them is
-written.** The stack is the inventory: a domain with no implementation would
+**Every area of the design appears below, and every one of them is
+written.** The stack is the inventory: an area with no implementation would
 still be called here and would refuse by naming itself, so what is missing is
 visible in the program rather than only in a tracker. Nothing is missing
 today, and a run therefore goes all the way through.

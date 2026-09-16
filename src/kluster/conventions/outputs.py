@@ -54,7 +54,7 @@ class PhysicalOutputs:
     """Overlay roster member → the export carrying that member's join credential.
 
     Keyed by the roster name of the continuous-integration member
-    (`overlay.CI_MEMBERS`), one per identity domain: the `credentials derived
+    (`overlay.CI_MEMBERS`), one per joining stack: the `credentials derived
     sync` command pushes each into the `ZEROTIER_IDENTITY` secret of the
     Environments whose jobs join with it (credentials.md §3, gateway.md §2.6).
     The mapping is written out rather than derived from the member's name so
