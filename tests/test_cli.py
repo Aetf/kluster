@@ -129,6 +129,10 @@ def expected(path: list[str]) -> str | None:
             # The row name is the function's identifier with `-` for `_`, which
             # is the whole of the convention tying the tree to `derived.py`.
             return f'derived.{row}'.replace('-', '_')
+        case ['derived', cli.derived.DRILL_AGE_IDENTITY_ROW as row, 'generate']:
+            # The one `generate` that escrows nothing: drawn and delivered by
+            # its own function in `derived.py`, under the mint rows' convention.
+            return f'derived.{row}'.replace('-', '_')
         case ['derived', row, 'record'] if row in devices.DEVICES:
             # One handler for every device row: what differs between them is
             # the table in `devices.py`, not the code that reads it.
@@ -248,6 +252,7 @@ class Dispatch:
             (cli.derived, 'oci_physical', 'ocid1.user.test'),
             (cli.derived, 'oci_state_backend', Path('placeholder')),
             (cli.derived, 'b2_management', 'key-id'),
+            (cli.derived, 'drill_age_identity', 'age1recipient'),
             (cli.devices, 'deliver', ()),
             # Slots are files in the checkout this test is running from, so
             # the writer is stubbed: a dispatch test must not leave a
@@ -442,6 +447,19 @@ def test_the_fixed_rows_are_pushed_into_the_stack_they_are_named_after(dispatch:
 
     pushed = [kwargs['stack'].name for name, _, kwargs in dispatch.calls if name.startswith('derived.')]
     assert pushed == [cli.derived.PHYSICAL_STACK] * 3
+
+
+def test_the_drill_identity_is_aimed_at_the_committed_recipient_file_as_the_admin_token(dispatch: Dispatch) -> None:
+    # The file the generator writes is the one the appliance's recipient list
+    # reads, and the push authenticates as the token `derived sync` uses --
+    # read out of the `github` stack rather than from anything in the shell.
+    assert cli.main(['derived', 'drill-age-identity', 'generate']) == 0
+    assert cli.main(['derived', 'drill-age-identity', 'generate', '--rotate']) == 0
+
+    calls = [(args, kwargs) for name, args, kwargs in dispatch.calls if name == 'derived.drill_age_identity']
+    assert [kwargs['rotate'] for _, kwargs in calls] == [False, True]
+    assert {kwargs['recipient_file'] for _, kwargs in calls} == {cli.appliance_config.DRILL_RECIPIENT_FILE}
+    assert {args[0].token for args, _ in calls} == {'a-token'}
 
 
 def test_the_compartment_reaches_the_row_that_confines_the_key_with_it(dispatch: Dispatch) -> None:

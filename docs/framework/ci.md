@@ -476,9 +476,11 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     drill workflows are to run** — is where the unattended drills'
     credentials (drill-compartment OCI user, dump-read B2 key, drill
     age key) are to live, with **no reviewer gate — the scope is the
-    gate** (credentials.md §4). The Environment exists and holds
-    nothing: none of those credentials has been minted, and the ops
-    repo carries no workflow that would read one (operations.md §4).
+    gate** (credentials.md §4). The Environment exists; the drill age
+    identity lands in it through `credentials derived
+    drill-age-identity generate` (credentials.md §3), the OCI and B2
+    halves are unminted, and the ops repo carries no workflow that
+    would read any of them (operations.md §4).
 -   **What fills these Environments is a workstation, not a stack and
     not a job.** The register's executable form is the `credentials`
     console script (`src/kluster/scripts/credentials/`), whose slot map
@@ -563,8 +565,9 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     local to that repo. Consequences carried consciously: the ops
     repo is to hold real credentials (talosconfig, the B2 etcd
     write key, the drill set — register rows in credentials.md,
-    each marked pending: the repository holds no secret at either
-    level today), which is what forced the dispatch App's fencing
+    pending but for the drill age identity, whose generator fills
+    its Environment secret; nothing there reads any of them yet),
+    which is what forced the dispatch App's fencing
     (architecture.md §4.3), and its Actions-minutes bill is
     accounted there too. This repo keeps only the event-driven
     set: previews, the merge chain, noop-automerge, images.yml —

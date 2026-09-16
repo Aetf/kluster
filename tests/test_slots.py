@@ -30,7 +30,7 @@ from fake_gh import RecordedGh
 from test_cli import commands as cli_commands
 
 from kluster import conventions
-from kluster.scripts.credentials import devices, escrow, pki, pulumi_config, slots
+from kluster.scripts.credentials import derived, devices, escrow, pki, pulumi_config, slots
 from kluster.scripts.credentials.github_secrets import Forge, Slot
 from kluster.scripts.credentials.pulumi_config import SlotRefused
 
@@ -638,6 +638,46 @@ def test_the_webhook_is_a_repository_secret_and_not_an_environment_one() -> None
     (slot,) = slots.ROWS['haos-webhook'].sinks
 
     assert slot == Slot(repository=REPOSITORY, name='HAOS_DEPLOY_WEBHOOK_URL')
+
+
+def test_the_drill_age_identity_is_delivered_by_its_generator_and_waits_on_nothing() -> None:
+    """The row is built, so it names its producer and defers no channel.
+
+    Both halves land: the private one in the ops repository's `drill`
+    Environment, which the generator pushes to through the sink and which is
+    the one address of that Environment the map may name, and the public one
+    on the box. A `pending` left on either would read as work still to do on
+    a slot the generator fills.
+    """
+    row = slots.ROWS[derived.DRILL_AGE_IDENTITY_ROW]
+
+    assert isinstance(row.source, slots.Minted)
+    assert row.source.command == f'credentials derived {derived.DRILL_AGE_IDENTITY_ROW} generate'
+    assert not row.source.unbuilt
+    assert row.sinks == (Slot(repository=OPS_REPOSITORY, name='DRILL_AGE_IDENTITY', environment=DRILL_ENVIRONMENT),)
+    assert any(isinstance(target, slots.OnBox) for target in row.targets)
+    assert row.pending == {}
+
+
+def test_an_ops_repo_environment_secret_is_named_after_its_environment() -> None:
+    """Inside a job an Environment secret shadows a repository secret of the same name.
+
+    The ops repository is to hold both kinds (credentials.md §3), so every
+    Environment secret there carries its Environment as a prefix -- which is
+    what keeps a workflow naming the Environment from reading the drill's copy
+    where it meant the repository's. Held over every such sink in the map, so
+    a row added later is held to it without being named here.
+    """
+    environment_secrets = [
+        (slot, slot.environment)
+        for row in slots.ROWS.values()
+        for slot in row.sinks
+        if slot.repository == OPS_REPOSITORY and slot.environment is not None
+    ]
+    assert environment_secrets, 'nothing to check: no map row names an ops-repo Environment secret'
+
+    for slot, environment in environment_secrets:
+        assert slot.name.startswith(f'{environment.upper()}_'), slot
 
 
 # --------------------------------------------------------------------------

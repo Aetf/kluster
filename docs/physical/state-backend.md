@@ -25,9 +25,11 @@ shape nor the domain, which reads like a permissions problem.
 > the dump script, and the `state-backend` console script renders,
 > provisions and converges the box, checks its pins, writes the client
 > bundle into its workstation slot (§3), logs in for diagnosis, and
-> takes and restores dumps (§7). Still design-only: the key-rotation
-> script of §1; the **drill key** of §5, so today every dump opens with
-> an escrowed generation and nothing else; and **everything that was to
+> takes and restores dumps (§7). The **drill key** of §5 has its
+> generator (`credentials derived drill-age-identity generate`) and
+> joins the recipients from the converge that adopts its committed
+> public half. Still design-only: the key-rotation
+> script of §1, and **everything that was to
 > run outside the box** — the expiry probe of §3, the freshness
 > assertion of §5, the dump-freshness and certificate-expiry probes of
 > §6, and the scheduled drill of §7.3.
@@ -427,12 +429,17 @@ there is nothing for it to edit.)
     last dump under it expires. Rotation is a designed path, not an
     emergency improvisation:
     -   **Every dump is encrypted to the two newest generations, and
-        is to gain the ops-repo-held drill key as a third recipient** —
-        age is natively multi-recipient, and the public keys sit in the
-        Butane file. **The drill key does not exist yet**: the
-        recipients a provision run writes are the generations alone, so
-        every object in the bucket opens with an escrowed identity and
-        nothing else, and a drill needs the kit (§7.3.1). The
+        to the ops-repo-held drill key as a third recipient** — age is
+        natively multi-recipient, and the public keys sit in the Butane
+        file. The recipients a provision run writes are the escrowed
+        generations followed by the drill recipient where
+        `deploy/state-backend/drill-recipient.txt` is on file
+        (`config.age_recipients`); the file is written by
+        `credentials derived drill-age-identity generate`, which pushes
+        the private half into the ops repository's `drill` Environment
+        first, and it is absent until that generator has run. Every
+        object still opens with an escrowed identity, and a drill with
+        no Environment to read needs the kit (§7.3.1). The
         generational pair makes per-object key attribution
         unnecessary (deploys are intentionally manual, so git dates
         prove nothing about which key an object carries): any object
@@ -442,7 +449,7 @@ there is nothing for it to edit.)
         is no previous key and the window is generation 1 alone —
         naming a generation 0 would escrow a key for a generation
         that never existed. The **drill key**
-        (operations.md §4, credentials.md) is what would let the rebuild
+        (operations.md §4, credentials.md §3) is what lets the rebuild
         drill run unattended; it adds no new *class* of exposure —
         the kluster CI's client cert already reads the live
         database, and the ops repo holding the key is fenced at
@@ -450,9 +457,15 @@ there is nothing for it to edit.)
         offline generations keep the survive-loss-of-GitHub role. It needs **no
         generational pair of its own**: its contract is decrypting
         the *latest* object only (retention coverage is the offline
-        keys' job), so its rotation script swaps the Butane
-        recipient, forces a fresh dump, verifies, and destroys the
-        old key — one slot, no N−1 bookkeeping.
+        keys' job), though what it opens is every object written
+        since it became a recipient and still in retention. So its
+        rotation is `credentials derived drill-age-identity generate
+        --rotate`, which overwrites the one Environment secret — with
+        one slot, that *is* deleting the old key — and the recipient
+        on file, then commit → `state-backend provision --force` →
+        `restore` → a fresh dump the drill opens: no N−1 bookkeeping,
+        and between the overwrite and that dump the drill cannot open
+        the newest object, a gap bounded by one nightly.
     -   **Rotate at least yearly** (and on compromise or custody
         change): `credentials derived backup-age-<N+1> generate`, then
         bump the appliance's generation pin, which swaps the Butane
@@ -609,12 +622,13 @@ is the moment nobody can afford to find out later:
     (operations.md §4). One pass exercises B2 download, decryption,
     provision-from-Butane, restore, and cert delivery. The *offline*
     age identity is proven separately by the yearly rotation (§7.4),
-    which inherently decrypts with it. **None of it is built**: the ops
-    repository carries no workflows and holds no drill key, so nothing
-    runs this on a schedule and no pass of it has happened. Until one does, the
-    same ground is covered by hand — §7.3.1, which opens the object
-    with the kit because the `--identity-file` form has no key to be
-    handed.
+    which inherently decrypts with it. **The workflow is not built**:
+    the drill key is generated into the ops repository's `drill`
+    Environment (§5), but that repository carries no workflows, so
+    nothing runs this on a schedule and no pass of it has happened.
+    Until one does, the same ground is covered by hand — §7.3.1, which
+    opens the object with the kit, the `--identity-file` form being the
+    workflow's.
 -   **§7.4 age identity rotation.** Trigger: yearly cadence, key
     compromise, custody change. Outline: `credentials derived
     backup-age-<N+1> generate` → note the rotation date and N−1's
@@ -751,8 +765,9 @@ failure is cheap:
     already gone. The key is the piece that outlives a forgotten step
     worst: it reads every dump the bucket holds.
 
-**What it does not establish**: the `--identity-file` path, there being
-no drill key to hand it; the unattended shape of §7.3, which is a
+**What it does not establish**: the `--identity-file` path with the
+drill key itself, which only the workflow that reads the Environment
+can hand it; the unattended shape of §7.3, which is a
 workflow rather than a sequence; and anything about objects older than
 the one it opened — a generation still covers those by design (§5),
 which is a claim the yearly rotation exercises (§7.4).

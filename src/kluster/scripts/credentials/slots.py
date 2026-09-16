@@ -26,11 +26,12 @@ business of that command:
     is escrowed, the leaf under it is generated at issuance and kept nowhere
     -- so a re-fill there hands CI a certificate it did not have before.
 -   **minted** -- created by the run that delivers it: a provider mint by the
-    row's own `credentials derived <row> mint`, or a secret a program generates
-    for its own resource. The value is disclosed once, to the code that made
-    it, so this map cannot re-push one -- obtaining it again means minting
-    again, which is a rotation. Such a row names its producer instead of
-    pretending it can be filled from here.
+    row's own `credentials derived <row> mint`, a key the row's own `generate`
+    draws and delivers without escrowing (the drill age identity), or a
+    secret a program generates for its own resource. The value is disclosed
+    once, to the code that made it, so this map cannot re-push one --
+    obtaining it again means minting again, which is a rotation. Such a row
+    names its producer instead of pretending it can be filled from here.
 -   **state-read** -- generated inside a Pulumi program, and read back out of
     the stack it belongs to. Not derivable and not re-mintable: the value
     exists because a stack ran. What separates this from *minted* is whether
@@ -944,20 +945,21 @@ ROWS: dict[str, Row] = {
             OnBox('the public half, a Butane recipient'),
         ),
     ),
-    'drill-age-identity': Row(
+    derived.DRILL_AGE_IDENTITY_ROW: Row(
         register='Drill age identity',
-        source=Minted(
-            'state-backend provision',
-            unbuilt='`provision` mints the CA and the escrowed backup generations (`Roots.labels()`) and no drill label',
+        # Minted rather than derived, though no provider is involved: the
+        # private half is disclosed once, to the run that draws it, and lands
+        # in its Environment there -- asking again draws a different key,
+        # which is the rotation. The map cannot re-push it, exactly as it
+        # cannot re-push a provider mint.
+        source=Minted(f'credentials derived {derived.DRILL_AGE_IDENTITY_ROW} generate'),
+        # The public half reaches the box through `config.age_recipients`,
+        # which appends the committed recipient file to the escrowed
+        # generations; the Butane template renders whatever that returns.
+        targets=(
+            derived.DRILL_AGE_IDENTITY_SLOT,
+            OnBox('the public half, the third Butane recipient, read from the committed recipient file'),
         ),
-        # No targets: the public half is to be the third Butane recipient, but
-        # the recipients a provision run writes are the escrowed generations
-        # alone (`config.age_recipients`), so no Butane file carries it.
-        pending={
-            'ops-repo Environment': _OPS_UNBUILT,
-            'on-box': 'the recipients a provision run renders are the escrowed backup generations alone, so no '
-            'Butane file carries a third',
-        },
     ),
     'restic-passwords': Row(
         register='restic repo passwords',
