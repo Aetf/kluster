@@ -344,6 +344,26 @@ it is the only supported way to change anything under that directory.
 The generated package is excluded from the type-annotation standard the
 handwritten code holds to — it is not ours to annotate.
 
+**The Kubernetes provider SDK is pinned exactly, and a bump of the pin
+is finished only by a regeneration.** `pyproject.toml` holds
+`pulumi-kubernetes==<v>` where every other dependency holds a floor,
+because the generated package is one provider version's artifact: the
+bindings are generated against a version and register each resource at
+it, so a program installing any other version asks the engine for two
+`kubernetes` plugins and gets two default providers. Exact rather than a
+floor because a floor lets `lockFileMaintenance` move the resolved
+version in `uv.lock` alone — a change no regeneration follows and that
+a test would then have to read out of the lock. The generated package
+declares the version it was generated against as a floor of its own,
+which `update_crds` writes: `crd2pulumi` bakes the version its release
+was built with into that line, and `--version` moves the package
+version and `pulumi-plugin.json` without touching it. A test holds the
+three — the pin, the generated floor, `pulumi-plugin.json` — equal, so
+a pin moved alone is red naming `update_crds`. Renovate proposes the
+bump apart from the python dependencies group (`renovate.json5`) for
+the same reason: grouped, a bump waiting on a regeneration would hold
+every other library bump red with it.
+
 ## 5. Talking to a System With No Provider
 
 Three systems here are driven by code of this repository's own: the
