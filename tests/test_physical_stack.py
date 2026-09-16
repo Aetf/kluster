@@ -457,6 +457,31 @@ async def test_the_overlay_carries_rules_composed_from_the_roster_and_the_resolv
 
 
 @pytest.mark.asyncio
+async def test_the_overlay_network_is_adopted_by_the_conventions_id_and_is_the_runs_only_adoption(
+    setup: Installation,
+) -> None:
+    """One import in the whole program, and it is the network, by the id `conventions` states.
+
+    The network is the one resource this stack adopts rather than creates: it
+    predates the program, and every member is an upsert on its node id that
+    needs no adoption. An `importId` on anything else would be a resource the
+    first run reads from a provider instead of creating, which is a shape no
+    other declaration here has and one the ceremony (physical/gateway.md
+    §2.5) does not account for. The id is the convention's, not a literal
+    here: the stack hands on what `conventions` says the network is.
+    """
+    async with declaring():
+        await physical.main()
+
+    adopted = [request for request in setup.requested if request.importId]
+
+    assert [request.type for request in adopted] == ['zerotier:index/network:Network']
+    (network,) = adopted
+    assert network.name == f'{conventions.CLUSTER_NAME}-network'
+    assert network.importId == conventions.overlay.NETWORK_ID
+
+
+@pytest.mark.asyncio
 async def test_the_overlay_pushes_the_block_domain_and_the_resolvers_it_admits_a_run_to(setup: Installation) -> None:
     """The managed DNS reaches the network from `conventions`, not composed here.
 
