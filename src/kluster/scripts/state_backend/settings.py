@@ -85,6 +85,13 @@ REBOOT_WINDOW_MINUTES = 60
 #: here the way the compartment is recorded in `conventions.OCI_TENANCY`, so
 #: that a probe run from another repository has an address to check without
 #: holding a bundle. Public already, on 5432 and 22 and in the certificate.
+#:
+#: Recorded rather than looked up, and held: `provision` reads the address the
+#: reservation carries and refuses, naming both, when it is not this one
+#: (`provision.hold_address`). A box at another address is a decision this
+#: line records, not drift for a converge to follow -- the probe dials this
+#: constant with no OCI credential to look anything up, and would otherwise
+#: report a dead certificate for a box alive elsewhere.
 ADDRESS = '144.24.7.194'
 
 # --- Backups --------------------------------------------------------------

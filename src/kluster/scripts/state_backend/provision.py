@@ -16,6 +16,15 @@ Ordering is dictated by the certificate: the server certificate is issued for
 the reserved public IP, so the address must exist before the Ignition that
 carries the certificate, which must exist before the instance that carries the
 Ignition.
+
+The reserved public IP is the only public address the box has -- the VNIC is
+launched with no ephemeral one, and the reservation is pointed at its primary
+private IP -- and `settings.ADDRESS` is that address as the repository records
+it. The two lookups that read the reservation (`ensure_reserved_ip`,
+`reserved_address`) hold what OCI carries against the constant and refuse
+naming both when they differ, before any caller does anything with the
+address: a box at another address is a decision the repository has to record,
+not drift for a converge to follow.
 """
 
 from __future__ import annotations
@@ -396,8 +405,43 @@ class ReservedAddress:
     address: str
 
 
+def hold_address(address: str) -> str:
+    """The address OCI carries for the appliance, held against `settings.ADDRESS`.
+
+    Every consumer of the address is downstream of this: the certificate is
+    issued for it, the client bundles and the host-key pin are keyed by it, the
+    converge waits on it, `ssh` dials it, and the probe -- which runs from
+    another repository with no OCI credential -- dials `settings.ADDRESS`
+    instead. They agree only if the constant is what the box carries, and a
+    difference is refused before the first of them runs rather than followed:
+    a box at another address is a decision the repository has to record, and a
+    converge that adopted whatever it found would leave the probe reporting a
+    dead certificate for a box alive somewhere else.
+
+    A refusal names both addresses. Which one is wrong is the operator's call:
+    recording the found address in `settings.py` is the answer when the move
+    was meant, and repointing the reservation when it was not.
+    """
+    if address != settings.ADDRESS:
+        raise RuntimeError(
+            f'the reserved address {_name("ip")} carries is {address}, but settings.ADDRESS names '
+            f'{settings.ADDRESS}: a box at another address is a decision rather than drift, so nothing here '
+            f'proceeds until the two agree -- record {address} in settings.py if the move is meant, '
+            'or repoint the reservation if it is not'
+        )
+    return address
+
+
 def ensure_reserved_ip(clients: OciClients) -> ReservedAddress:
-    """The address the server certificate is issued for."""
+    """The address the server certificate is issued for.
+
+    Held against `settings.ADDRESS` (`hold_address`) whether it was found or
+    just reserved. A reservation this call makes is one OCI chose, so it is
+    refused on the same terms: on a site that has never been provisioned the
+    run ends here naming the new address, the operator records it, and the
+    next run finds the reservation and continues -- the reservation itself is
+    an `ensure_*` and stands across the refusal.
+    """
     network = clients.network
     log.info('looking up the reserved address %s', _name('ip'))
     existing = _data(
@@ -415,7 +459,7 @@ def ensure_reserved_ip(clients: OciClients) -> ReservedAddress:
             )
         )
         log.info('reserved %s', public_ip.ip_address)
-    return ReservedAddress(id=str(public_ip.id), address=str(public_ip.ip_address))
+    return ReservedAddress(id=str(public_ip.id), address=hold_address(str(public_ip.ip_address)))
 
 
 @dataclass(frozen=True)
@@ -478,6 +522,8 @@ def reserved_address(clients: OciClients) -> str:
     `ensure_reserved_ip` reserves one when none exists, which is right during
     provisioning and wrong for everything else: a diagnosis command must not
     allocate cloud resources as a side effect of being unable to find them.
+    Held against `settings.ADDRESS` the same way (`hold_address`), so `ssh`
+    never pins a host key to an address the repository does not name.
     """
     existing = _data(
         clients.network.list_public_ips(scope='REGION', compartment_id=clients.compartment_id, lifetime='RESERVED')
@@ -485,7 +531,7 @@ def reserved_address(clients: OciClients) -> str:
     public_ip = _find(existing, _name('ip'))
     if public_ip is None:
         raise RuntimeError(f'no reserved address named {_name("ip")}; has the appliance been provisioned?')
-    return str(public_ip.ip_address)
+    return hold_address(str(public_ip.ip_address))
 
 
 def pin_options(known_hosts: Path) -> list[str]:

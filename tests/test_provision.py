@@ -41,26 +41,47 @@ from kluster.scripts.state_backend.state import StateError
 
 
 class _Network:
-    def __init__(self, ips: list[Any]) -> None:
+    """The reserved-address half of OCI's network client.
+
+    `allocates` is the address OCI hands a reservation this fake is asked to
+    make; a fake without one refuses to make any, which is what a lookup that
+    must not allocate is held against.
+    """
+
+    def __init__(self, ips: list[Any], *, allocates: str | None = None) -> None:
         self.ips: list[Any] = ips
+        self.allocates: str | None = allocates
         self.created: int = 0
 
     def list_public_ips(self, **_kwargs: object) -> Any:
         return type('Response', (), {'data': self.ips})()
 
-    def create_public_ip(self, *_args: object, **_kwargs: object) -> Any:  # pragma: no cover
+    def create_public_ip(self, *_args: object, **_kwargs: object) -> Any:
         self.created += 1
-        raise AssertionError('a lookup created a reserved address')
+        if self.allocates is None:  # pragma: no cover
+            raise AssertionError('a lookup created a reserved address')
+        reserved = _ip(f'{settings.NAME}-ip', self.allocates)
+        self.ips.append(reserved)
+        return type('Response', (), {'data': reserved})()
 
 
 class _Client:
-    def __init__(self, ips: list[Any]) -> None:
+    def __init__(self, ips: list[Any], *, allocates: str | None = None) -> None:
         self.compartment_id: str = 'ocid1.compartment.test'
-        self.network: _Network = _Network(ips)
+        self.network: _Network = _Network(ips, allocates=allocates)
 
 
 def _ip(name: str, address: str, state: str = 'ASSIGNED') -> Any:
-    return type('PublicIp', (), {'display_name': name, 'ip_address': address, 'lifecycle_state': state})()
+    return type(
+        'PublicIp',
+        (),
+        {'id': f'ocid1.publicip.{address}', 'display_name': name, 'ip_address': address, 'lifecycle_state': state},
+    )()
+
+
+#: An address that is not the one the repository records, for every case
+#: about a box that is somewhere else.
+ELSEWHERE = '192.0.2.99'
 
 
 class _Answer:
@@ -121,9 +142,9 @@ def test_a_resolved_manifest_answers_its_digest(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_the_address_is_looked_up_not_reserved() -> None:
-    client = _Client([_ip('state-backend-ip', '192.0.2.10')])
+    client = _Client([_ip('state-backend-ip', settings.ADDRESS)])
 
-    assert provision.reserved_address(client) == '192.0.2.10'  # pyright: ignore[reportArgumentType]
+    assert provision.reserved_address(client) == settings.ADDRESS  # pyright: ignore[reportArgumentType]
     assert client.network.created == 0
 
 
@@ -139,10 +160,67 @@ def test_a_missing_address_is_an_error_rather_than_an_allocation() -> None:
 
 
 def test_a_terminated_address_does_not_count() -> None:
-    client = _Client([_ip('state-backend-ip', '192.0.2.10', state='TERMINATED')])
+    client = _Client([_ip('state-backend-ip', settings.ADDRESS, state='TERMINATED')])
 
     with pytest.raises(RuntimeError):
         _ = provision.reserved_address(client)  # pyright: ignore[reportArgumentType]
+
+
+# -- the box is held to the address the repository records ---------------------
+# `settings.ADDRESS` is what the probe dials from another repository, with no
+# OCI credential to look anything up; the converge and `ssh` read the address
+# off the reservation. The two agree only because every read of the
+# reservation refuses an address the constant does not name.
+
+#: Every reader of the reservation. Each is held to the refusal below, so a
+#: caller that reaches the address through either one cannot see a box the
+#: repository does not name.
+LOOKUPS = [provision.reserved_address, provision.ensure_reserved_ip]
+
+
+@pytest.mark.parametrize('lookup', LOOKUPS, ids=lambda f: f.__name__)
+def test_a_reservation_at_another_address_is_refused_naming_both(lookup: Callable[[Any], object]) -> None:
+    """A moved box is a decision, not drift: the run stops and says where the two disagree.
+
+    Both addresses, because which one is wrong is the operator's call --
+    recording the found one when the move was meant, repointing the
+    reservation when it was not -- and a line naming only one sends the
+    reader to the wrong file.
+    """
+    client = _Client([_ip('state-backend-ip', ELSEWHERE)])
+
+    with pytest.raises(RuntimeError) as refused:
+        _ = lookup(client)
+
+    assert ELSEWHERE in str(refused.value)
+    assert settings.ADDRESS in str(refused.value)
+    assert 'settings.ADDRESS' in str(refused.value)
+
+
+@pytest.mark.parametrize('lookup', LOOKUPS, ids=lambda f: f.__name__)
+def test_a_reservation_at_the_recorded_address_is_the_answer(lookup: Callable[[Any], object]) -> None:
+    client = _Client([_ip('state-backend-ip', settings.ADDRESS)])
+
+    answer = lookup(client)
+
+    address = answer.address if isinstance(answer, provision.ReservedAddress) else answer
+    assert address == settings.ADDRESS
+
+
+def test_a_fresh_reservation_is_held_the_same_way() -> None:
+    """A reservation OCI just chose is refused on the same terms as one it found.
+
+    The run cannot pick the address, so on a site provisioned for the first
+    time the refusal is the step that tells the operator what to record; the
+    reservation stands across it, and the next run finds it and continues.
+    """
+    client = _Client([], allocates=ELSEWHERE)
+
+    with pytest.raises(RuntimeError, match=f'{ELSEWHERE}.*{settings.ADDRESS}'):
+        _ = provision.ensure_reserved_ip(client)  # pyright: ignore[reportArgumentType]
+
+    assert client.network.created == 1
+    assert [ip.ip_address for ip in client.network.ips] == [ELSEWHERE]
 
 
 # -- where the appliance's own credential comes from -------------------------
@@ -231,8 +309,13 @@ class _Recorder:
         metadata: dict[str, str] | None = None,
         dump_key_current: bool = True,
         dump_fails: bool = False,
+        address: str = settings.ADDRESS,
     ) -> None:
         self.instance_exists: bool = instance_exists
+        #: What the reservation in the compartment carries. The lookup that
+        #: reads it runs for real over a fake network, so a converge is held
+        #: to the recorded address on the same path an operator's run is.
+        self.address: str = address
         self.metadata: dict[str, str] = {} if metadata is None else metadata
         self.dump_key_current: bool = dump_key_current
         self.dump_fails: bool = dump_fails
@@ -380,14 +463,12 @@ def converge(monkeypatch: pytest.MonkeyPatch) -> Any:
         monkeypatch.setattr(b2, 'ensure_bucket', ensure_bucket)
         monkeypatch.setattr(b2, 'mint_dump_key', mint)
         monkeypatch.setattr(b2, 'dump_key_is_current', _returning(recorder.dump_key_current))
-        monkeypatch.setattr(provision.OciClients, 'load', classmethod(_returning(object())))
+        clients = _Client([_ip(f'{settings.NAME}-ip', recorder.address)])
+        monkeypatch.setattr(provision.OciClients, 'load', classmethod(_returning(clients)))
         monkeypatch.setattr(
             provision, 'ensure_network', _returning(provision.Placement(vcn_id='vcn', subnet_id='subnet'))
         )
         monkeypatch.setattr(provision, 'ensure_security_group', _returning('nsg'))
-        monkeypatch.setattr(
-            provision, 'ensure_reserved_ip', _returning(provision.ReservedAddress(id='ip-id', address='192.0.2.10'))
-        )
         monkeypatch.setattr(provision, 'ensure_image', _returning('image'))
         monkeypatch.setattr(provision, 'find_instance', find)
         monkeypatch.setattr(provision, 'terminate_instance', terminate)
@@ -584,6 +665,29 @@ def test_a_seed_for_another_account_is_refused_before_anything_is_created(
     assert recorder.buckets_converged == 0
     assert (recorder.terminated, recorder.minted, recorder.launched) == (0, 0, 0)
     assert recorder.instance_exists == instance_exists
+
+
+@pytest.mark.parametrize('instance_exists', [False, True], ids=['first run', 'running box'])
+def test_a_converge_over_a_box_elsewhere_stops_before_anything_uses_the_address(
+    converge: Any, instance_exists: bool
+) -> None:
+    """Nothing downstream of the address runs on a box the repository does not name.
+
+    The certificate is issued for the address, the bundle and the pin are
+    keyed by it and the box is dumped and terminated on the strength of it, so
+    the refusal has to come at the read, not at any one consumer: a converge
+    that adopted the found address would rebuild the box, write bundles and a
+    pin against it, and leave the probe dialling the recorded one.
+    """
+    recorder = _Recorder(instance_exists=instance_exists, metadata=_built_from({'butane': 'stale'}), address=ELSEWHERE)
+    converge(recorder)
+
+    with pytest.raises(RuntimeError, match=f'{ELSEWHERE}.*{settings.ADDRESS}'):
+        _ = _run()
+
+    assert (recorder.terminated, recorder.minted, recorder.launched) == (0, 0, 0)
+    assert recorder.pinned == []
+    assert recorder.dumped == []
 
 
 def test_the_converge_hands_the_launch_what_the_box_must_carry(converge: Any) -> None:
@@ -954,7 +1058,7 @@ def test_a_run_that_built_a_box_leaves_its_pin_beside_the_bundle(converge: Any) 
 
     _ = _run(replace=True)
 
-    assert [(address, public_key) for _directory, address, public_key in recorder.pinned] == [('192.0.2.10', PIN)]
+    assert [(address, public_key) for _directory, address, public_key in recorder.pinned] == [(recorder.address, PIN)]
 
 
 def test_a_run_that_built_no_box_writes_no_pin(converge: Any) -> None:
@@ -1502,8 +1606,9 @@ def test_an_expiry_that_is_not_a_date_is_read_as_no_expiry_at_all() -> None:
 
 needs_butane = pytest.mark.skipif(shutil.which('butane') is None, reason='butane is not on PATH (mise x -- ...)')
 
-#: The address every case in this section renders and dials.
-PINNED_ADDRESS = '192.0.2.10'
+#: The address every case in this section renders and dials: the one the
+#: repository records, which is the only one `ssh` agrees to dial.
+PINNED_ADDRESS = settings.ADDRESS
 
 HOST_KEY_FILE = '/etc/ssh/ssh_host_ed25519_key'
 
@@ -1617,7 +1722,7 @@ def test_the_pin_the_launch_records_is_the_key_the_ignition_delivered(monkeypatc
     assert launched.host_public_key == _public_half(private_key)
 
 
-def _running(pin: str) -> Any:
+def _running(pin: str, *, address: str = PINNED_ADDRESS) -> Any:
     """A compartment holding the appliance, at the address every case dials."""
     instance = type(
         'Instance',
@@ -1635,7 +1740,7 @@ def _running(pin: str) -> Any:
             (),
             {
                 'compute': _PagedCompute([[instance]]),
-                'network': _Network([_ip(f'{settings.NAME}-ip', PINNED_ADDRESS)]),
+                'network': _Network([_ip(f'{settings.NAME}-ip', address)]),
                 'compartment_id': 'ocid1.compartment.test',
             },
         )(),
@@ -1677,7 +1782,7 @@ def test_ssh_holds_the_box_to_the_key_its_instance_metadata_records(execed: list
     assert 'StrictHostKeyChecking=yes' in options
     assert 'GlobalKnownHostsFile=/dev/null' in options
     assert 'HostKeyAlgorithms=ssh-ed25519' in options
-    assert argv[-4:] == ['core@192.0.2.10', 'journalctl', '-u', 'postgres']
+    assert argv[-4:] == [f'core@{PINNED_ADDRESS}', 'journalctl', '-u', 'postgres']
 
     named = [option.removeprefix('UserKnownHostsFile=') for option in options if 'UserKnownHostsFile=' in option]
     assert len(named) == 1
@@ -1706,6 +1811,20 @@ def test_the_refusal_is_framed_before_the_connection_is_made(
     assert len(framing) == 1
     assert 'replaced' in framing[0]
     assert PIN in framing[0]
+
+
+def test_ssh_refuses_a_box_elsewhere_before_it_pins_anything(execed: list[list[str]], tmp_path: Path) -> None:
+    """The pin is keyed by the address, so a wrong address is refused before the pin is written.
+
+    Otherwise `ssh` would hold the box to its host key at an address the
+    repository never named, and leave that entry beside the bundle for the
+    next exec to trust.
+    """
+    with pytest.raises(RuntimeError, match=f'{ELSEWHERE}.*{settings.ADDRESS}'):
+        provision.ssh(_running(PIN, address=ELSEWHERE), [])
+
+    assert execed == []
+    assert not (tmp_path / '.credentials' / 'state-backend' / config.KNOWN_HOSTS_FILE).exists()
 
 
 def test_a_box_that_records_no_host_key_is_refused_rather_than_trusted() -> None:
