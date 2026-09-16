@@ -543,7 +543,7 @@ def _write_dump(destination: Path, *, bundle_dir: Path, recipients: Sequence[str
         log.info('encrypting the dump')
         state.encrypt(archive, destination, recipients)
     log.info(
-        '%s holds %.1f MiB, readable by the %d escrowed recipient(s) the appliance encrypts to',
+        '%s holds %.1f MiB, readable by the %d recipient(s) the appliance encrypts to',
         destination,
         destination.stat().st_size / 2**20,
         len(recipients),

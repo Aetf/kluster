@@ -168,6 +168,18 @@ def double(monkeypatch: pytest.MonkeyPatch) -> Callable[..., Double]:
     return install
 
 
+@pytest.fixture(autouse=True)
+def drill_recipient_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """The drill recipient file, absent unless a case writes it.
+
+    Pointed away from the checkout's own, so whether the operator has
+    committed one there decides nothing about what a dump here encrypts to.
+    """
+    path = tmp_path / config.DRILL_RECIPIENT
+    monkeypatch.setattr(config, 'DRILL_RECIPIENT_FILE', path)
+    return path
+
+
 @pytest.fixture
 def kit() -> KdbxStore:
     return MemoryKit()
@@ -590,6 +602,37 @@ def test_the_drill_key_restores_without_a_kit(
 
     assert code == 0
     assert tools.restored == ARCHIVE
+
+
+def test_a_dump_taken_with_the_drill_recipient_on_file_opens_with_the_drill_key_alone(
+    double: Callable[..., Double],
+    kit: KdbxStore,
+    registry: escrow.Registry,
+    bundle: Path,
+    tmp_path: Path,
+    drill_recipient_file: Path,
+) -> None:
+    """The round trip the drill runs: encrypted here to the recipient on file, opened there with no kit.
+
+    The operator's dump reads the same recipient list as the box, so a hand-
+    taken dump is one the drill can open exactly as a nightly one is; and the
+    escrowed generations still open it, because the drill key is a third
+    recipient and never a replacement.
+    """
+    tools = double()
+    drill = age.generate()
+    _ = drill_recipient_file.write_text(f'# the drill key, public half\n{drill.public}\n')
+    dump = tmp_path / 'taken.dump.age'
+    assert _dump(kit, registry, bundle, dump) == 0
+    key = tmp_path / 'drill.key'
+    _ = key.write_text(f'{drill.secret}\n')
+
+    assert _restore(None, registry, bundle, dump, identity=key) == 0
+
+    assert tools.restored == ARCHIVE
+    opened = tmp_path / 'opened.dump'
+    state.decrypt(dump, opened, _identities(kit, registry))
+    assert opened.read_bytes() == ARCHIVE
 
 
 def test_the_wrong_identity_is_a_refusal_rather_than_a_restore(

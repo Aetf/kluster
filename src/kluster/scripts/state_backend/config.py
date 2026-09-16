@@ -39,6 +39,13 @@ DEPLOY_DIR = Path(__file__).resolve().parents[4] / 'deploy' / 'state-backend'
 TEMPLATE = 'butane.yaml.j2'
 DUMP_SCRIPT = 'state-dump.py'
 OPERATOR_KEYS = 'operator-keys.txt'
+#: The public half of the drill age identity (credentials.md §3), one line,
+#: `#` comments allowed. Written by `credentials derived drill-age-identity
+#: generate` and committed; the private half is in the ops repository's
+#: `drill` Environment and nowhere on disk. Absent until that generator has
+#: run: the appliance then encrypts to the escrowed generations alone.
+DRILL_RECIPIENT = 'drill-recipient.txt'
+DRILL_RECIPIENT_FILE = DEPLOY_DIR / DRILL_RECIPIENT
 
 #: The bundle's file names, shared by the writer and the environment that
 #: names them.
@@ -77,6 +84,34 @@ KEY_ENV = 'PGSSLKEY'
 RENEWAL_MARGIN = dt.timedelta(days=90)
 
 
+def drill_recipient(path: Path) -> str | None:
+    """The drill key's public half as `path` holds it, or None while no such file exists.
+
+    Absent is a state rather than a refusal: the file appears when the
+    generator first runs, and every converge before that would otherwise
+    refuse. A file that is there is held to what the generator writes -- one
+    recipient, because the drill key has one slot and no generational pair
+    (physical/state-backend.md §5) -- and an empty one is refused the way
+    `operator-keys.txt` is, since a blank where a recipient should be is a
+    dump the drill cannot open.
+    """
+    if not path.is_file():
+        log.info('no drill recipient on file at %s; dumps encrypt to the escrowed generations alone', path)
+        return None
+    try:
+        found = lib_config.lines(path, 'the drill age recipient')
+    except ValueError as exc:
+        raise age.AgeError(str(exc)) from exc
+    if len(found) != 1:
+        raise age.AgeError(
+            f'{path} holds {len(found)} recipients, and the drill key has one slot: '
+            '`credentials derived drill-age-identity generate --rotate` is what replaces it'
+        )
+    if not found[0].startswith(age.PUBLIC_PREFIX):
+        raise age.AgeError(f'{path} holds {found[0]!r}, which is not an age recipient')
+    return found[0]
+
+
 def age_recipients(vault: escrow.Vault) -> tuple[str, ...]:
     """The public halves of every identity the appliance encrypts dumps to.
 
@@ -84,8 +119,17 @@ def age_recipients(vault: escrow.Vault) -> tuple[str, ...]:
     list is rendered from this, and so is the encryption of a dump an
     operator takes by hand (`state.py`). A dump written to a different set
     than the box's would be a file the drill and the escrow disagree about.
+
+    The escrowed generations first, then the drill recipient where one is on
+    file (`DRILL_RECIPIENT_FILE`). The drill key is not a root the escrow
+    holds -- it opens nothing an escrowed generation does not also open -- so
+    it is read from the committed file rather than recovered, and the field
+    it lands in is digested (`Machine.age_recipients`): committing the file
+    is drift the plain converge names.
     """
-    return tuple(age.recipient(vault.recover(label)) for label in escrow.backup_labels())
+    generations = tuple(age.recipient(vault.recover(label)) for label in escrow.backup_labels())
+    drill = drill_recipient(DRILL_RECIPIENT_FILE)
+    return generations if drill is None else (*generations, drill)
 
 
 def backup_identities(vault: escrow.Vault) -> list[str]:
@@ -104,7 +148,8 @@ class Roots:
 
     Recovered once per run and passed down, so a converge that renders the
     machine twice opens the offline registry once. The age recipients are
-    public halves: the identities themselves stay in the escrow, and the box
+    public halves: the identities themselves stay in the escrow -- or, for
+    the drill key, in the ops repository's `drill` Environment -- and the box
     never holds one.
     """
 
