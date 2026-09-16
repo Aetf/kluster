@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 from dataclasses import dataclass
 
 
@@ -21,7 +22,19 @@ class RetentionClass:
     weekly: int | None = None
     monthly: int | None = None
     max_age: str = ''
-    """Freshness threshold for the central vmalert rule family."""
+    """Freshness threshold for the central vmalert rule family, in its duration syntax."""
+
+
+def max_age(period: dt.timedelta) -> dt.timedelta:
+    """How old the newest object of a scheduled backup may be before the backup is stale.
+
+    One and a half periods: a run that is merely late -- a slow dump, a
+    retried upload -- is still inside it, and a run that was missed is half a
+    period overdue by the time it runs out. The one rule for every cadence, so
+    a freshness probe and a retention class's threshold cannot disagree about
+    what stale means.
+    """
+    return period * 3 / 2
 
 
 #: Daily, a month deep — the default every stateful app gets.

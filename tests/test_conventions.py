@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import ast
 import base64
+import datetime as dt
 import json
 import re
 import tokenize
@@ -38,6 +39,7 @@ import pytest
 import yaml
 
 from kluster import conventions
+from kluster.conventions import backup
 from kluster.components.dns.base import overlay_records
 from kluster.scripts.credentials import pulumi_config
 
@@ -1132,6 +1134,46 @@ def test_no_two_outputs_share_a_name() -> None:
     names = conventions.PHYSICAL_OUTPUTS.names()
 
     assert len(names) == len(set(names)), names
+
+
+# --------------------------------------------------------------------------
+# The backup retention classes.
+# --------------------------------------------------------------------------
+# `conventions.backup.max_age` is the one rule for when a scheduled backup is
+# stale, and a retention class's `max_age` is that rule's answer for its
+# cadence, spelled in the alert rules' duration syntax. The rule is a
+# computation, so the value it has to keep producing is held as a literal.
+
+#: The duration syntax a retention class's threshold is written in: a count
+#: and a unit, the units being the ones the alert rules read.
+DURATION = re.compile(r'^(\d+)([smhdw])$')
+UNIT = {
+    's': dt.timedelta(seconds=1),
+    'm': dt.timedelta(minutes=1),
+    'h': dt.timedelta(hours=1),
+    'd': dt.timedelta(days=1),
+    'w': dt.timedelta(weeks=1),
+}
+
+
+def _duration(text: str) -> dt.timedelta:
+    match = DURATION.match(text)
+    assert match, f'{text!r} is not a duration the alert rules read'
+    return int(match.group(1)) * UNIT[match.group(2)]
+
+
+def test_stale_is_one_and_a_half_periods() -> None:
+    # A run that is merely late is inside it; a run that was missed is half a
+    # period overdue by the time it runs out.
+    assert backup.max_age(dt.timedelta(days=1)) == dt.timedelta(hours=36)
+    assert backup.max_age(dt.timedelta(hours=1)) == dt.timedelta(minutes=90)
+
+
+@pytest.mark.parametrize('retention', [conventions.STANDARD, conventions.PRECIOUS], ids=lambda r: r.name)
+def test_a_daily_class_s_threshold_is_the_rule_s_answer_for_one_day(retention: conventions.RetentionClass) -> None:
+    # Both daily classes carry the threshold the rule gives a daily cadence,
+    # so the alert rules and the appliance's dump-age probe agree on stale.
+    assert _duration(retention.max_age) == backup.max_age(dt.timedelta(days=1))
 
 
 # --------------------------------------------------------------------------
