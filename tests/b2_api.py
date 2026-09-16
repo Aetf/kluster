@@ -13,8 +13,15 @@ test is about:
 -   an authorization token is a token *of a key*, so deleting a key stops the
     token that key issued. This is what makes "which credential runs the
     retirement" a real question instead of a stylistic one;
--   `b2_list_keys` pages, and the page is the server's choice — a caller that
-    reads the first page only sees part of the account.
+-   `b2_list_keys` and `b2_list_file_names` page, and the page is the server's
+    choice — a caller that reads the first page only sees part of the account,
+    or calls an old dump the newest;
+-   a key confined to a bucket and a prefix is refused a listing of any other
+    bucket, or of a prefix outside its own, and `b2_authorize_account` names
+    the bucket such a key is confined to — which is what makes "verified by
+    listing the prefix as itself" a proof of the grant rather than of the
+    key's existence, and what lets a key with no `listBuckets` learn its
+    bucket's id.
 
 The capability table comes from the API reference. The other two are what the
 first live run against the account has to confirm; they are written down here
@@ -52,10 +59,11 @@ REQUIRED: dict[str, str] = {
     'b2_create_key': 'writeKeys',
     'b2_list_keys': 'listKeys',
     'b2_delete_key': 'deleteKeys',
+    'b2_list_file_names': 'listFiles',
 }
 
 #: What the account master key carries: everything, including the file
-#: capabilities no key in the register carries.
+#: capabilities the account-wide rows of the register never carry.
 MASTER_CAPABILITIES: tuple[str, ...] = (
     *b2.CAPABILITIES,
     *b2.DUMP_CAPABILITIES,
@@ -116,6 +124,12 @@ class FakeApi:
     #: How many keys one `b2_list_keys` page may hold. The server picks this,
     #: so a caller cannot assume its own `maxKeyCount` was honoured.
     page_limit: int = 1000
+    #: bucket id -> the object names it holds.
+    objects: dict[str, list[str]] = field(default_factory=dict[str, list[str]])
+    #: How many names one `b2_list_file_names` page may hold, which the server picks.
+    file_page_limit: int = 1000
+    #: Every listing served, as (the key it was served to, bucket, prefix).
+    listings: list[tuple[str, str, str]] = field(default_factory=list[tuple[str, str, str]])
 
     def __post_init__(self) -> None:
         self.keys[ACCOUNT_ID] = Key(
@@ -177,13 +191,16 @@ class FakeApi:
             return self._refusal(Refused(401, 'unauthorized', 'invalid credentials'))
         token = f'token-{key_id}-{next(self.counter)}'
         self.tokens[token] = key_id
+        storage: dict[str, Any] = {'apiUrl': API_URL, 'capabilities': list(key.capabilities)}
+        if key.bucket_id is not None:
+            # A confined key is told what it is confined to, which is the
+            # only way one without `listBuckets` learns its bucket's id.
+            storage['bucketId'] = key.bucket_id
+            storage['bucketName'] = self.buckets[key.bucket_id]['bucketName']
+            storage['namePrefix'] = key.name_prefix
         return self._envelope(
             200,
-            {
-                'accountId': ACCOUNT_ID,
-                'authorizationToken': token,
-                'apiInfo': {'storageApi': {'apiUrl': API_URL, 'capabilities': list(key.capabilities)}},
-            },
+            {'accountId': ACCOUNT_ID, 'authorizationToken': token, 'apiInfo': {'storageApi': storage}},
         )
 
     def _authorized(self, headers: dict[str, str], api: str) -> Key:
@@ -222,6 +239,8 @@ class FakeApi:
                 return self._create_bucket(body)
             case 'b2_update_bucket':
                 return self._update_bucket(body)
+            case 'b2_list_file_names':
+                return self._list_file_names(caller, body)
             case _:  # pragma: no cover - a call the minter is not meant to make
                 raise AssertionError(f'unexpected call {api}')
 
@@ -282,3 +301,22 @@ class FakeApi:
         if 'lifecycleRules' in body:
             bucket['lifecycleRules'] = body['lifecycleRules']
         return bucket
+
+    def _list_file_names(self, caller: Key, body: dict[str, Any]) -> dict[str, Any]:
+        bucket_id = str(body['bucketId'])
+        prefix = str(body.get('prefix', ''))
+        if caller.bucket_id is not None and caller.bucket_id != bucket_id:
+            raise Refused(401, 'unauthorized', 'the key is confined to another bucket')
+        if caller.name_prefix is not None and not prefix.startswith(caller.name_prefix):
+            raise Refused(401, 'unauthorized', 'the key is confined to another prefix')
+        self.listings.append((caller.key_id, bucket_id, prefix))
+        names = sorted(name for name in self.objects.get(bucket_id, []) if name.startswith(prefix))
+        start = body.get('startFileName')
+        if start is not None:
+            names = [name for name in names if name >= str(start)]
+        wanted = min(int(body['maxFileCount']), self.file_page_limit)
+        page, rest = names[:wanted], names[wanted:]
+        return {
+            'files': [{'fileName': name, 'action': 'upload'} for name in page],
+            'nextFileName': rest[0] if rest else None,
+        }
