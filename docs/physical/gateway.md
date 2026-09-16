@@ -855,8 +855,8 @@ device being renamed in Central.
 | `Aetf-Arch-Homelab` | `infra` | The homelab host: a plain member, never a router (the overlay carries no home-LAN routes), and the recovery side-door (§3). The one address the flow rules and the libvirt session look up rather than take from a constant. |
 | `Aetf-Arch-VPS` | `infra` | The legacy deployment. Retires in Wave F together with its `10.42.0.0/24` route. |
 | `haos` | `infra` | Home automation, reachable while the cluster is not. |
-| `ci-physical` | `ci` | The `physical` identity domain: `plan-physical`, `up-physical`, and the drift matrix's `physical` entry. Identity generated in state (`zerotier_identity`), private key an Environment secret; `zt-physical` keeps it live in one job at a time (§2.6). IPv4-only (§2.3). |
-| `ci-dns` | `ci` | The `dns` identity domain: `up-dns`, a pull request's `preview (dns)` and `prove (dns)`, and the drift matrix's `dns` entry — the LAN-touching work is the AdGuard rewrites (declarative/dns.md §3). Same generation and confinement, serialized by `zt-dns` (§2.6). IPv4-only (§2.3). |
+| `ci-physical` | `ci` | The `physical` stack's identity: `plan-physical`, `up-physical`, and the drift matrix's `physical` entry join with it. Identity generated in state (`zerotier_identity`), private key an Environment secret; `zt-physical` keeps it live in one job at a time (§2.6). IPv4-only (§2.3). |
+| `ci-dns` | `ci` | The `dns` stack's identity: `up-dns`, a pull request's `preview (dns)` and `prove (dns)`, and the drift matrix's `dns` entry join with it — the LAN-touching work is the AdGuard rewrites (declarative/dns.md §3). Same generation and confinement, serialized by `zt-dns` (§2.6). IPv4-only (§2.3). |
 | Personal devices | `personal` | Phones and laptops, each named in the roster. Full access — parity with sitting on the LAN. Whether a device applies the network's managed DNS (§2.7) is its own `allowDNS` setting, decided on the device: not a roster field, because the controller can neither read nor set it. |
 
 ### 2.2 Managed routes
@@ -1279,13 +1279,14 @@ Two things that are *not* part of the cycle:
     passes** — until the flow rules and routes are verified,
     `physical` runs stay operator-local.
 
-There are no ordering edges between the three gateway domains: the
+There are no ordering edges between the three places the ceremony
+reaches — ZeroTier Central, the device, and this program's dial to it: the
 graph cannot express "authorize a member, wait for the device to join,
 then dial it", because the middle step happens on the device and not in
 this program. The ceremony is that ordering, performed by the operator
 once.
 
-### 2.6 CI join mechanics: two identities, serialized domains
+### 2.6 CI join mechanics: two identities, serialized per stack
 
 Facts that shape it (decided 2026-08-24):
 
@@ -1296,8 +1297,8 @@ Facts that shape it (decided 2026-08-24):
     latency of each join (below).
 -   **One identity live in two places flaps** (ZeroTier maps a node ID to
     one endpoint at a time), so concurrent jobs must never share an
-    identity. Hence, one identity per domain — `physical` and `dns`,
-    the two stacks whose jobs join — and each domain serialized by a
+    identity. Hence, one identity per stack — `physical` and `dns`,
+    the two stacks whose jobs join — and each stack serialized by a
     **job-level `concurrency` group named after it**, `zt-physical` or
     `zt-dns`. The group has to name the identity rather than the
     workflow because previews, proofs, drift and the merge chain are

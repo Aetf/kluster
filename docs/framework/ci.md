@@ -107,8 +107,8 @@ No workflow-level setting arranges that. The deploy chain's
 drift run joins with the very same Environments' identities, and any
 pull request's preview joins with the `dns` one. The lock therefore has
 to name the identity rather than the workflow: every joining job takes
-a **job-level `concurrency` group named for its identity domain** —
-`zt-dns` or `zt-physical` — and because a concurrency group is
+a **job-level `concurrency` group named for the stack whose identity it
+joins with** — `zt-dns` or `zt-physical` — and because a concurrency group is
 repository-wide, that one name serializes previews, proofs, drift and
 the merge chain against each other. The two physical Environments share
 `zt-physical`: the plan and the apply are separate credential
@@ -120,18 +120,18 @@ sharing a key is the case GitHub does not serialize reliably.
 
 What that buys, and what it costs:
 
--   At most one joining job per domain runs; a second waits.
+-   At most one joining job per stack runs; a second waits.
 -   A **third supersedes the second**: GitHub keeps one pending entry
     per group and cancels the older one. For a preview or a proof this
     is a re-run button rather than a correctness problem — pull
     requests are not cumulative, and `preview` is deliberately not a
     required check (github.md §3).
--   Residual, accepted: a *deploy* job that is waiting on a domain can
-    be superseded the same way, and a cancelled job is neither success
+-   Residual, accepted: a *deploy* job that is waiting on a stack's
+    group can be superseded the same way, and a cancelled job is neither success
     nor failure, so that layer would silently not apply. The window is
     small — drift fires weekly, previews last minutes — and the next
     merge applies the same code again. Making it impossible would mean
-    a second identity per domain, which is credential surface bought to
+    a second identity per stack, which is credential surface bought to
     close a rare and self-healing hole.
 
 Rejected alternatives and the join-latency expectation:
@@ -508,8 +508,8 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     The partition above is therefore also the map's shape —
     the estate `PULUMI_CONFIG_PASSPHRASE` and the state-backend bundle in every
     Environment because every job runs a `pulumi` command,
-    `ZEROTIER_IDENTITY` only in the Environments of the identity
-    domain it belongs to (physical/gateway.md §2.6).
+    `ZEROTIER_IDENTITY` only in the Environments of the stack it
+    belongs to (physical/gateway.md §2.6).
 -   **Two ways a row fills, and which one applies is a property of the
     credential.** *Synced* rows are copies of a value whose truth lives
     elsewhere, and `credentials derived sync` re-reads and re-pushes
