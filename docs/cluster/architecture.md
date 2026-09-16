@@ -699,7 +699,7 @@ The entire stack is deployed via Pulumi using multiple providers:
     (KubeSpan), and management traffic terminates at the NLB. Personal
     devices reach LAN services over ZeroTier (§5.3).
 4.  **Cloudflare (pulumi-cloudflare)**: **all** public DNS records move
-    into Pulumi — zones/estate/anchors in the `dns` stack, per-app
+    into Pulumi — zones/base records/anchors in the `dns` stack, per-app
     records beside their apps (declarative/dns.md). The standalone
     DNSControl repo ([Aetf/dns](https://github.com/Aetf/dns)) is
     absorbed and retired — one declarative world, previewable diffs.

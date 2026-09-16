@@ -338,7 +338,7 @@ locked out real users before (the HA-integration incident).
 ## 5. B2 (bridged provider)
 
 The backup bucket, keys, and lifecycle rules (storage.md §4-5). (DNS —
-zones, estate records, anchors — moved to the `dns` stack,
+zones, base records, anchors — moved to the `dns` stack,
 declarative/dns.md.)
 
 ## 6. Bootstrap order & verification checklist
