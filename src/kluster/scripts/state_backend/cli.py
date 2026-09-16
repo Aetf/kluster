@@ -1,4 +1,4 @@
-"""`state-backend` — provision, inspect, re-provision, dump and restore the appliance.
+"""`state-backend` — provision, inspect, re-provision, dump, restore and probe the appliance.
 
 `provision` is idempotent end to end: it is equally the bring-up command and
 the re-provision command, which is what keeps the rebuild path warm. It is not
@@ -8,12 +8,15 @@ stops, and `--force` is how a replacement is asked for. `dump` and `restore`
 are the other half of that path: every playbook that replaces the box is a
 dump, a provision and a restore (physical/state-backend.md §7), with the dump
 taken by the converge itself, and each of them verifies rather than reports.
+`probe` is the one command written to run somewhere other than a workstation:
+the scheduled checks on the certificate and the dumps (`probe.py`).
 """
 
 from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 import tempfile
 from collections.abc import Sequence
@@ -29,7 +32,7 @@ from kluster.scripts.credentials.masters import CredentialRejected
 from kluster.scripts.credentials.pulumi_config import SlotRefused
 from kluster.scripts.credentials.workstation import WorkstationError
 
-from . import config, provision, settings, state
+from . import config, probe, provision, settings, state
 from .state import StateError
 
 log = logging.getLogger(__name__)
@@ -198,6 +201,35 @@ def build_parser() -> argparse.ArgumentParser:
         '--force',
         action='store_true',
         help='restore even though the target backend already serves stacks',
+    )
+
+    # What the ops repository's scheduled workflow runs (state-backend.md §6):
+    # every probe unless one is named, each verdict printed, the exit status
+    # saying which failed. Needs no offline database: the certificate probe
+    # is a handshake and the dump-age probe reads its key from the
+    # environment, which is where a workflow secret arrives.
+    probing = actions.add_parser(
+        'probe',
+        help='check the server certificate and the age of the newest dump from outside the box',
+        description=(
+            f'The two scheduled probes. `{probe.CERTIFICATE}` reads the server certificate off a TLS handshake '
+            f'with {settings.ADDRESS}:{settings.PORT} and fails when it is not valid, has less than '
+            f'{config.EXPIRY_ALERT_MARGIN.days} days left, or does not name the address; `{probe.DUMPS}` lists '
+            f'the dump prefix as the list-only key in {probe.KEY_ID_ENV} and {probe.KEY_ENV} and fails when the '
+            f'newest dump is older than {probe.hours(settings.DUMP_MAX_AGE)} or there is none. Every verdict is printed, '
+            'with the playbook a failure calls for.'
+        ),
+        epilog=(
+            f'exit status: 0 every probe passed; {probe.FAILED[probe.CERTIFICATE]} the certificate probe failed; '
+            f'{probe.FAILED[probe.DUMPS]} the dump-age probe failed; their sum when both did; '
+            '1 the run could not probe at all — read its last words.'
+        ),
+    )
+    _ = probing.add_argument(
+        '--only',
+        choices=probe.PROBES,
+        default=None,
+        help='run one probe alone',
     )
 
     return parser
@@ -646,9 +678,9 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
     # One dispatch, and the kit is opened by the arms that need it rather than
-    # before them: `pins`, `ssh` and a drill's `restore --identity-file` run on
-    # machines that have no offline database, and asking for one would fail
-    # before the command started.
+    # before them: `pins`, `ssh`, `probe` and a drill's `restore
+    # --identity-file` run on machines that have no offline database, and
+    # asking for one would fail before the command started.
     def kit() -> KdbxStore:
         return KdbxStore.from_env(args.kdbx)
 
@@ -659,6 +691,8 @@ def main(argv: list[str] | None = None) -> int:
         match args.action:
             case 'pins':
                 return 0 if provision.verify_pins() else 1
+            case 'probe':
+                return probe.run(only=args.only, environ=os.environ)
             case 'ssh':
                 provision.ssh(provision.OciClients.load(args.compartment), args.command)
             case 'restore' if args.identity_file is not None:

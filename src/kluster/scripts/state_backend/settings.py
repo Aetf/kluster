@@ -8,7 +8,10 @@ this box has (physical/state-backend.md §1).
 
 from __future__ import annotations
 
+import datetime as dt
+
 from kluster import conventions
+from kluster.conventions import backup
 
 # --- OCI ------------------------------------------------------------------
 
@@ -59,12 +62,30 @@ AGE_SHA256 = 'bdc69c09cbdd6cf8b1f333d372a1f58247b3a33146406333e30c0f26e8f51377'
 #: clamped at the first, there being nothing before it.
 AGE_GENERATION = 1
 
+#: The nightly dump, as a systemd calendar expression and as the period it
+#: amounts to. Two spellings of one cadence: the timer reads the first, the
+#: freshness probe reads the second, and a test holds the calendar form to the
+#: period so they cannot drift apart.
 DUMP_SCHEDULE = '*-*-* 02:30:00'
+DUMP_PERIOD = dt.timedelta(days=1)
+
+#: How old the newest dump may be before the probe calls the backup stale:
+#: `conventions.backup.max_age` over the period above, which is the one rule
+#: every scheduled backup's threshold follows (state-backend.md §5).
+DUMP_MAX_AGE = backup.max_age(DUMP_PERIOD)
 
 #: A scheduled reboot is never mistaken for an incident.
 REBOOT_DAY = 'Tue'
 REBOOT_TIME = '04:00'
 REBOOT_WINDOW_MINUTES = 60
+
+#: The appliance's reserved public IPv4 (state-backend.md §4): the address
+#: every client bundle's connection string names and the server certificate's
+#: SAN carries. A site fact that follows from the first provision, recorded
+#: here the way the compartment is recorded in `conventions.OCI_TENANCY`, so
+#: that a probe run from another repository has an address to check without
+#: holding a bundle. Public already, on 5432 and 22 and in the certificate.
+ADDRESS = '144.24.7.194'
 
 # --- Backups --------------------------------------------------------------
 
