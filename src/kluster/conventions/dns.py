@@ -53,3 +53,15 @@ ANCHOR_TTL = 300
 #: member. The label stays `zt`: it is a published DNS name, and ZeroTier is
 #: the target system's own word.
 OVERLAY_LABEL = 'zt'
+
+#: The overlay host block as a client names it: the label under the primary,
+#: and the primary alone, because that is the one zone the block is published
+#: in. Two programs agree on it, which is why it is spelled here and not in
+#: either: `physical` pushes it to the overlay's members as the search domain
+#: of the network's managed DNS, and `dns` answers under it. It is the block's
+#: name and not the primary because a member that applies the push installs a
+#: resolver scoped to exactly this domain (physical/gateway.md §2.7): every
+#: name under it is answered by the home resolvers or by nothing, and every
+#: name outside it — every application name — keeps resolving wherever the
+#: device resolved it before, home reachable or not.
+OVERLAY_DOMAIN = f'{OVERLAY_LABEL}.{ZONE_PRIMARY}'

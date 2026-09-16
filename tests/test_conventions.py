@@ -36,6 +36,7 @@ import pytest
 import yaml
 
 from kluster import conventions
+from kluster.components.dns.base import overlay_records
 from kluster.scripts.credentials import pulumi_config
 
 # --------------------------------------------------------------------------
@@ -254,6 +255,77 @@ def test_the_block_quota_admits_the_largest_volume_and_a_restore_beside_it() -> 
     # One node's boot volume, the largest volume it may carry, and room to
     # restore such a volume beside the one it replaces.
     assert conventions.NODE_BOOT_VOLUME_GB + 2 * largest <= BLOCK_STORAGE_GB_PER_AD
+
+
+# --------------------------------------------------------------------------
+# The overlay's managed DNS.
+# --------------------------------------------------------------------------
+# `conventions.overlay.MANAGED_DNS` is derived from two other tables -- its
+# domain from the overlay block's name, its servers from the resolver census --
+# and what holds it is its relation to each, never a copy of either. That the
+# `physical` program hands it to the network is held where that program runs
+# (`test_physical_stack`).
+
+#: What a member keeps of the pushed list: `ZT_MAX_DNS_SERVERS` in the
+#: client's `include/ZeroTierOne.h`. A longer list is truncated on the
+#: device with no error anywhere.
+ZT_MAX_DNS_SERVERS = 4
+
+
+def test_the_push_fits_what_a_member_keeps() -> None:
+    """A list pushed past the bound reaches every member truncated, and nothing reports it."""
+    assert len(conventions.overlay.MANAGED_DNS.servers) <= ZT_MAX_DNS_SERVERS
+
+
+def test_the_pushed_domain_is_where_the_block_is_published() -> None:
+    """Every name the block publishes is one label under the domain a member scopes to.
+
+    Held against the `dns` program's own spelling of the block -- its labels,
+    in the one zone it is declared in -- rather than against the join that
+    builds the constant: a member that opts in resolves exactly the names
+    under the pushed domain at home, so the domain has to be the block's
+    suffix and nothing wider or narrower. The primary itself would put every
+    application name behind the home resolvers for an opted-in device off-site
+    (physical/gateway.md §2.7); any other zone would scope the resolver to
+    names nothing publishes.
+    """
+    (zone,) = conventions.PRIMARY_ONLY
+    published = {f'{record.label}.{zone}' for record in overlay_records()}
+    assert published, 'the block is empty'
+
+    for name in published:
+        _, dot, domain = name.partition('.')
+        assert dot and domain == conventions.overlay.MANAGED_DNS.domain, name
+    assert conventions.overlay.MANAGED_DNS.domain == conventions.OVERLAY_DOMAIN
+
+
+def test_the_pushed_servers_are_the_resolver_census_in_its_order_and_nothing_else() -> None:
+    """The resolvers a member is told to use are the site's, all of them, as listed.
+
+    Each direction is a different failure. A resolver the census carries and
+    the push lacks is one no opted-in member ever tries, so that resolver's
+    replaceability -- the reason there are two -- does not reach the overlay;
+    an address pushed that the census does not carry is one nothing on the
+    container VLAN answers at, and a member that tries it first waits on it
+    for every `*.zt` name. The order is the census's own, alice before bob,
+    because a member tries them in the order pushed.
+    """
+    assert conventions.overlay.MANAGED_DNS.servers == tuple(
+        resolver.address for resolver in conventions.gateway.RESOLVERS
+    )
+
+
+def test_every_pushed_server_sits_behind_a_route_the_network_manages() -> None:
+    """A member reaches the resolvers only through a route it was handed.
+
+    The resolvers are containers on the gateway and not members, so an address
+    of theirs the managed routes do not cover -- an overlay address, or a
+    subnet the census stopped routing -- is one an opted-in member sends
+    `*.zt` queries to and never reaches, with the public record it would
+    otherwise have used pre-empted by the scoped resolver.
+    """
+    for server in conventions.overlay.MANAGED_DNS.servers:
+        assert any(server in route for route in conventions.overlay.MANAGED_ROUTES), server
 
 
 # --------------------------------------------------------------------------
