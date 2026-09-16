@@ -416,7 +416,7 @@ class ReservedAddress:
     address: str
 
 
-def hold_address(address: str, *, held: bool) -> str:
+def hold_address(address: str, *, held: bool, fresh: bool = False) -> str:
     """The address OCI carries for the appliance, held against `settings.ADDRESS`.
 
     Every consumer of the address is downstream of this: the certificate is
@@ -431,7 +431,10 @@ def hold_address(address: str, *, held: bool) -> str:
 
     A refusal names both addresses. Which one is wrong is the operator's call:
     recording the found address in `settings.py` is the answer when the move
-    was meant, and repointing the reservation when it was not.
+    was meant, and repointing the reservation when it was not. A reservation
+    the run has just made (`fresh`) has no second repair: OCI chose the
+    address, there is nothing to repoint to, and a site provisioned for the
+    first time has no line to keep -- that refusal names recording alone.
 
     `held` is `OciClients.held`: the constant records the address in the
     appliance's own compartment and nothing else, so a run pointed at another
@@ -442,14 +445,21 @@ def hold_address(address: str, *, held: bool) -> str:
     if not held:
         log.info('%s is not held to settings.ADDRESS: --compartment names another site', address)
         return address
-    if address != settings.ADDRESS:
+    if address == settings.ADDRESS:
+        return address
+    if fresh:
         raise RuntimeError(
-            f'the reserved address {_name("ip")} carries is {address}, but settings.ADDRESS names '
+            f'the reserved address {_name("ip")} was just reserved at {address}, but settings.ADDRESS names '
             f'{settings.ADDRESS}: a box at another address is a decision rather than drift, so nothing here '
-            f'proceeds until the two agree -- record {address} in settings.py if the move is meant, '
-            'or repoint the reservation if it is not'
+            f'proceeds until the two agree -- record {address} as settings.ADDRESS and re-run; the '
+            'reservation stands'
         )
-    return address
+    raise RuntimeError(
+        f'the reserved address {_name("ip")} carries is {address}, but settings.ADDRESS names '
+        f'{settings.ADDRESS}: a box at another address is a decision rather than drift, so nothing here '
+        f'proceeds until the two agree -- record {address} in settings.py if the move is meant, '
+        'or repoint the reservation if it is not'
+    )
 
 
 def ensure_reserved_ip(clients: OciClients) -> ReservedAddress:
@@ -457,11 +467,11 @@ def ensure_reserved_ip(clients: OciClients) -> ReservedAddress:
 
     Held against `settings.ADDRESS` (`hold_address`, on the appliance's own
     compartment) whether it was found or just reserved. A reservation this
-    call makes is one OCI chose, so it is refused on the same terms: on a site
-    that has never been provisioned the run ends here naming the new address,
-    the operator records it, and the next run finds the reservation and
-    continues -- the reservation itself is an `ensure_*` and stands across the
-    refusal.
+    call makes is one OCI chose, so it is refused on the same terms but with
+    one repair rather than two: on a site that has never been provisioned the
+    run ends here naming the new address to record, the operator records it,
+    and the next run finds the reservation and continues -- the reservation
+    itself is an `ensure_*` and stands across the refusal.
     """
     network = clients.network
     log.info('looking up the reserved address %s', _name('ip'))
@@ -469,7 +479,8 @@ def ensure_reserved_ip(clients: OciClients) -> ReservedAddress:
         network.list_public_ips(scope='REGION', compartment_id=clients.compartment_id, lifetime='RESERVED')
     )
     public_ip = _find(existing, _name('ip'))
-    if public_ip is None:
+    fresh = public_ip is None
+    if fresh:
         public_ip = _data(
             network.create_public_ip(
                 oci.core.models.CreatePublicIpDetails(
@@ -480,7 +491,8 @@ def ensure_reserved_ip(clients: OciClients) -> ReservedAddress:
             )
         )
         log.info('reserved %s', public_ip.ip_address)
-    return ReservedAddress(id=str(public_ip.id), address=hold_address(str(public_ip.ip_address), held=clients.held))
+    address = hold_address(str(public_ip.ip_address), held=clients.held, fresh=fresh)
+    return ReservedAddress(id=str(public_ip.id), address=address)
 
 
 @dataclass(frozen=True)
