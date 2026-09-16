@@ -15,8 +15,9 @@
     configuration surface — in [declarative/physical.md](../declarative/physical.md)
     and [physical/gateway.md](../physical/gateway.md). Where this text and a
     design document disagree, the design document is right. **Decisions that
-    moved during construction: the endpoint, §4.3's bridge dependency, and the
-    rendered machine list of §4.2 and §5.**
+    moved during construction: the endpoint, §4.3's bridge dependency, the
+    rendered machine list of §4.2 and §5, and the container set's name of §3.1
+    and §5.**
     The endpoint: §7.4 composes the session from values `configure` put on the
     provider, and §11 routes `gatewayBootstrapHost` there beside the credential;
     what was built keeps the address a declared resource input, because a
@@ -60,7 +61,21 @@
     without the files they name; the only half-states are a directory that is
     not yet a machine and a machine whose tree has not landed, which is
     skipped. The arrangement as built is
-    [physical/gateway.md](../physical/gateway.md) §1.1.
+    [physical/gateway.md](../physical/gateway.md) §1.1. **The container set's
+    name, 2026-09-16:** §3.1 renames `Estate`/`estate.py` to
+    `DeviceServices`/`services.py`, §5.1 gives that component the recovery
+    script, the routing configuration and the containers, and §5.2 has it
+    render §4.2's recovery script from its `Container` children. What is built
+    has no such class: the set is `conventions.gateway.SERVICES`, typed
+    `ContainerService` (`BridgedService | HostNetworkService`), and the
+    component that runs one entry is `components.gateway.Container`, declared
+    by `Gateway` itself from the parameters §5.3 gives `DeviceServices`.
+    Nothing was left for a component between the two to own: the routing
+    configuration is `SiteRouting`'s, and the script that converges the
+    machines is `NspawnRuntime`'s and reads them off the device rather than
+    from a rendered list (the entry above). The vocabulary is "container
+    service", recorded in the
+    `conventions` glossary (`src/kluster/conventions/__init__.py`).
 *   **Created:** 2026-08-28
 *   **Authority:** the style rules (`docs/style/`) are what this document
     obeys; where they are silent, a rule proposed here is marked **new rule**.
