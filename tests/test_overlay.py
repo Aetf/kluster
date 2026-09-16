@@ -30,6 +30,7 @@ NAME = 'kluster'
 NETWORK_ID = '0123456789abcdef'
 API_TOKEN = 'a-central-token'
 
+NETWORK = 'zerotier:index/network:Network'
 MEMBER = 'zerotier:index/member:Member'
 
 #: The rule program the fixture hands the component. It is a sentinel rather
@@ -173,6 +174,25 @@ def test_the_roster_stays_within_what_multicast_reaches() -> None:
 ##
 ## The declaration
 ##
+
+
+def test_the_network_is_adopted_by_the_id_it_was_handed_protected_and_wholly_declared(stack: Central) -> None:
+    """Three options on one registration, and each is a different outage.
+
+    The network predates the program: without `import_` the first run creates
+    a second network nobody is a member of, and the roster's members are
+    upserted onto the wrong one. Without `protect` a replace -- a delete and a
+    create under a new id -- or a `destroy` of the stack takes the overlay
+    down with every member on it. And nothing is ignored, because an adopted
+    resource graduates to declared (style/pulumi.md) and no field of this
+    network belongs to another owner: an `ignore_changes` here would leave a
+    field Central holds that no declaration states.
+    """
+    request = stack.options_of(f'{NAME}-network', NETWORK)
+
+    assert request.importId == NETWORK_ID
+    assert request.protect is True
+    assert list(request.ignoreChanges) == []
 
 
 def test_the_network_carries_the_census_routes_and_stamps_no_via_of_its_own(stack: Central) -> None:

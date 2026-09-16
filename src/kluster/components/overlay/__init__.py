@@ -143,7 +143,16 @@ class Overlay(Component):
 
         # The network predates this program and is addressed by id, so the
         # first deployment adopts it rather than creating a second one that
-        # nobody is a member of.
+        # nobody is a member of. Adopted is declared in full: the engine reads
+        # the network into state at Central's values and plans an ordinary
+        # update from there to this declaration, so every field below is
+        # what Central holds after the first run, and nothing is ignored.
+        #
+        # Protected, because a replace is a delete: a replaced network is a
+        # new id every member has to re-join, and a `destroy` of this stack
+        # must never take the overlay with it. While `import_` is declared
+        # the engine refuses a replace on its own; `protect` is what still
+        # refuses it, and the delete, once that declaration is gone.
         self.network = zerotier.Network(
             f'{name}-network',
             name=conventions.CLUSTER_NAME,
@@ -172,7 +181,7 @@ class Overlay(Component):
             # domain. Like the routes, this reaches every member; unlike them
             # it is inert until the member's own `allowDNS` is on.
             dns=[zerotier.NetworkDnArgs(domain=dns.domain, servers=[str(server) for server in dns.servers])],
-            opts=pulumi.ResourceOptions.merge(child, pulumi.ResourceOptions(import_=network_id)),
+            opts=pulumi.ResourceOptions.merge(child, pulumi.ResourceOptions(import_=network_id, protect=True)),
         )
 
         # Generated identities first: a member cannot be declared before the
