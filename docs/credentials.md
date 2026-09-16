@@ -515,8 +515,8 @@ overwrite and that dump the drill cannot open the newest object, which
 is the cost of a one-slot design and is bounded by one nightly.
 
 **An ops-repo Environment secret's name carries its Environment as a
-prefix** (`DRILL_AGE_IDENTITY`, and every secret the drill row below
-is to hold). Inside a job an Environment secret shadows a repository
+prefix** (`DRILL_AGE_IDENTITY`, and the five the drill-credentials row
+holds). Inside a job an Environment secret shadows a repository
 secret of the same name, and the ops repository is to hold both kinds
 — the freshness and probe keys are repository secrets — so the prefix
 is what keeps a workflow naming `drill` from silently reading the
@@ -720,6 +720,7 @@ name.
 | `credentials derived cloudflare-gateway-acme mint` | After the kit and the state backend exist. Mints the gateway's own ACME token (§3) from the same seed, scoped to the zones its vhosts are served under, and writes it into the `physical` stack's config secret; the stack file is then committed, and the stack writes the token onto the device. Which stack takes it is not a choice — the token is named after the row and minting retires every other token of that name. The account is held against `conventions.CLOUDFLARE_ACCOUNT` before the token is created, as it is for the zones row: the check belongs to the mint, so no row can be the one that forgets it. Re-running it rotates that token. |
 | `credentials derived oci-physical mint` | After the state backend exists. The same mint for the `physical` stack, into that stack's config secrets; the stack file is then committed. It also creates that stack's compartment where the tenancy has none, and prints the `OCID` to record in `conventions` and commit. Before it creates anything, it refuses a seed that belongs to an account other than the one `conventions` records. |
 | `credentials derived b2-management mint` | After the state backend exists. Mints the B2 management key (§3) from the B2 seed into the `physical` stack's config secret. Before it creates anything, it refuses a seed that authorizes as an account other than the one `conventions` records. Re-running it rotates that key and retires the one it replaces. |
+| `credentials derived drill-credentials mint [--only <half>]` | After the state backend exists — its bucket is what confines the B2 key, and the key is proven by listing the dump prefix as itself — and beside the drill age identity, which the same Environment holds. Mints the rebuild drill's two provider keys (§3) and pushes their five carriers into the ops repository's `drill` Environment as the GitHub admin token, each verified through the listing before the key it supersedes is retired. The OCI half creates the `drill` compartment where the tenancy has none and prints the `OCID` to record in `conventions` and commit; it takes no `--compartment`, because the drill compartment is a recorded name in the recorded tenancy and the mint is held to it. Re-running it rotates both keys; `--only oci` or `--only b2` rotates one. |
 | `credentials derived unifi record` | After the state backend exists, and after the controller has minted a key for its dedicated local admin — which the command prints the steps for. Takes the key without echoing it, into the `physical` stack's config; the stack file is then committed. The controller's address is not recorded beside it, being the overlay address `conventions` assigns. Re-running it is how a replaced key is delivered. |
 | `credentials derived adguard record` | The same, for the admin login both AdGuard instances answer to, into the `dns` stack's config — the stack that writes the split-horizon rewrites. |
 | `credentials derived zerotier record` | The same again, for the ZeroTier Central API token, into the `physical` stack's config — which network of that account is this installation's overlay is a constant in `conventions` rather than a value recorded beside the token. Central publishes no token API, so a token created in its web console and re-recorded here is the whole of a rotation; the superseded one is deleted in the same console. |
@@ -1094,12 +1095,14 @@ GitHub secret — and the rest have none.
     deploy-failure webhook, which is typed in. What is left waits on
     something other than the sink — the ZeroTier CI identities, on the
     `physical` stack that generates them.
--   The **ops-repo channel** has one row that lands: the drill age
-    identity's private half, which its generator pushes into the `drill`
-    Environment through the sink (§4). Every other row above naming an
-    ops-repo secret or that Environment lands nowhere, because
-    `kluster-ops` carries the issues this document cites and no workflow
-    and no code — nothing there would read one.
+-   The **ops-repo channel** has two rows that land, both in the `drill`
+    Environment through the sink (§4): the drill age identity's private
+    half, which its generator pushes, and the drill's OCI and B2 keys,
+    which their mint pushes as five carriers. Every other row above
+    naming an ops-repo secret lands nowhere, because `kluster-ops`
+    carries the issues this document cites and no workflow and no code —
+    nothing there would read one, and nothing there reads the drill
+    Environment yet either (state-backend.md §7.3).
 -   **`alertmanager/read`** is generated and escrowed, and what it lacks
     is a consumer: neither the issue-sync poller nor the HTTPRoute that
     matches its header exists, so the ops-repo secret and the config

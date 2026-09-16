@@ -624,7 +624,8 @@ is the moment nobody can afford to find out later:
     age identity is proven separately by the yearly rotation (§7.4),
     which inherently decrypts with it. **The workflow is not built**:
     the drill key is generated into the ops repository's `drill`
-    Environment (§5), but that repository carries no workflows, so
+    Environment (§5) and the drill's OCI and B2 keys are minted beside
+    it (credentials.md §3), but that repository carries no workflows, so
     nothing runs this on a schedule and no pass of it has happened.
     Until one does, the same ground is covered by hand — §7.3.1, which
     opens the object with the kit, the `--identity-file` form being the
@@ -674,10 +675,12 @@ failure is cheap:
     well). What the seed carries is `writeKeys`, which is how every
     prefix-scoped key on this bucket is minted — so the rehearsal mints
     a temporary one with `listFiles` and `readFiles`, confined to the
-    dump bucket and the `pulumi-state/` prefix. That key is the
-    hand-made stand-in for the
-    drill Environment's dump-read credential, which the register expects
-    from this same seed. Nothing in this repository fetches an object,
+    dump bucket and the `pulumi-state/` prefix. That is the drill's own
+    reader in every respect but where it lands: `credentials derived
+    drill-credentials mint` mints that key from this same seed
+    (credentials.md §3) into the ops repository's `drill` Environment,
+    which no workstation can read back, so the rehearsal makes its own
+    copy of the same grant by hand. Nothing in this repository fetches an object,
     so listing the prefix and downloading the newest `.dump.age` are
     `b2_list_file_names` and `b2_download_file_by_name` under it. Record
     the object's name, size and timestamp — that timestamp is the
