@@ -125,6 +125,17 @@ DNS_STACK = derived.ZONES_STACK
 #: renamed only together with that workflow.
 TRIGGER_APP_KEY = 'TRIGGER_APP_PRIVATE_KEY'
 
+#: The secret the alert producer (`alert.yml`, called by every workflow that
+#: runs on `main`; ci.md §3) reads the dispatch App's private key from, and
+#: mints an installation token from for the length of one run. A repository
+#: secret of `kluster` rather than an Environment one: the job belongs to no
+#: stack. Its exposure is the fence's (cluster/architecture.md §4.3): any
+#: same-repo branch can read it, previews included, and what that buys is a
+#: token that can post alerts and write non-workflow files into the private
+#: ops repository, and nothing else. The name is a contract with the
+#: producer, so it is a constant here and is renamed only together with it.
+DISPATCH_APP_KEY = 'DISPATCH_APP_PRIVATE_KEY'
+
 
 # --------------------------------------------------------------------------
 # The channels: §1 rule 6's closed set, one type each.
@@ -775,17 +786,6 @@ _ETCD_PREFIX_UNBUILT = (
 #: controller arrives with `k8s-base`.
 _CLUSTER_UNBUILT = 'the sealed-secrets controller and its consumer arrive with `k8s-base`, so no manifest path exists'
 
-#: Why the dispatch App's key reaches no workflow yet: it is read by a job that
-#: mints an installation token from it for the length of one run, and that job
-#: is not built. The escrow copy is therefore the whole of the row today -- the
-#: same shape the Alertmanager token is in, and for the same reason. The
-#: trigger key's row is what this one becomes once its job is designed: a
-#: repository secret the sink fills, under the name the workflow reads.
-_APP_KEY_UNDELIVERED = (
-    'the workflow that would read it is not built, so no secret there names it; the job that will read it '
-    'mints an 8-hour installation token from this key per run and stores nothing'
-)
-
 #: Why the ops repository holds no copy of the webhook: a deploy failure is an
 #: out-of-cluster alert, and the shape it is designed to travel in has the ops
 #: repository hold the credential rather than CI (cluster/architecture.md §4.3).
@@ -905,8 +905,16 @@ ROWS: dict[str, Row] = {
     'github-dispatch-key': Row(
         register='GitHub App key (dispatch)',
         source=Derived(escrow.DISPATCH_KEY),
-        targets=(EscrowCopy(escrow.DISPATCH_KEY),),
-        pending={'`kluster` repository secret': _APP_KEY_UNDELIVERED},
+        # The same two channels as the trigger key below, one repository over:
+        # the escrow copy is the permanent store, and the repository secret of
+        # `kluster` is the delivery, `derived sync --only github-dispatch-key`.
+        # The slot is filled ahead of its reader by design -- a workflow lands
+        # on a slot that is already there, never on an empty one -- so the
+        # push is the operator's step before the producer's, not after it.
+        targets=(
+            EscrowCopy(escrow.DISPATCH_KEY),
+            Slot(repository=conventions.forge.DEPLOYMENT.full_name, name=DISPATCH_APP_KEY),
+        ),
     ),
     'github-trigger-key': Row(
         register='GitHub App key (trigger)',
@@ -1254,6 +1262,7 @@ __all__ = (
     'BACKEND_CERT',
     'BACKEND_KEY',
     'BACKEND_URL',
+    'DISPATCH_APP_KEY',
     'REGISTER_COLUMNS',
     'ROWS',
     'TRIGGER_APP_KEY',
