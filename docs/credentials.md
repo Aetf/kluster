@@ -490,7 +490,7 @@ cell would say `pending` to an operator already being served.
 | GitHub admin token | Made in the GitHub UI (no token API) | This account's repositories — branch protection, rulesets, Environments and their gates: `repo`, the narrowest scope that covers them | Pulumi config secret (`githubAdminToken`) | `github`, and `credentials derived sync`, which pushes every GitHub secret as it |
 | BGP session password | Drawn by the operator (no console makes it; `credentials derived bgp record` delivers it) | One BGP session, the gateway↔worker peering (cluster-infra.md §2): an MD5 password both ends are configured with | Pulumi config secret (`gatewayBgpPassword`) · device secret (the routing daemon's configuration) · SealedSecret (Cilium's `authSecretRef`; pending) | `physical`, which writes it onto the device; Cilium BGPv2 on the worker |
 | Alertmanager read token | generated, escrowed as `alertmanager/read` | `GET /api/v2/alerts` only, by HTTPRoute method+path+header match | escrow · ops-repo secret (pending) · Pulumi config secret (the HTTPRoute's match, rendered with that route; pending) | Issue-sync poller |
-| HA webhook URL/ID | Home Assistant | One notify endpoint | SealedSecret (pending) · ops-repo secret (pending) · `kluster` repository secret (`HAOS_DEPLOY_WEBHOOK_URL`, the interim deploy-failure channel, ci.md §3) | alertmanager, dispatch handler, the deploy chain's `notify-failure` job |
+| HA webhook URL/ID | Home Assistant | One notify endpoint | SealedSecret (pending) · ops-repo secret (`HA_WEBHOOK_URL`) | alertmanager (pending), the ops repo's dispatch handler. Until `deploy.yml`'s `notify-failure` job becomes a caller of the alert producer it reads the legacy `kluster` repository secret `HAOS_DEPLOY_WEBHOOK_URL`, which this register no longer claims and `sync` does not touch; the operator deletes it from the repository with that job's conversion |
 | Drill-environment credentials | OCI seed key and B2 seed key, one command (`credentials derived drill-credentials mint`) | The OCI key is its own user, group and policy: administrator of the `drill` compartment, which holds the drill's scratch box and nothing else, and a stranger outside it — no `--compartment` on this row, and no quota or budget guardrail on that compartment until `physical` declares one. The B2 key is `listFiles` and `readFiles` on the dump prefix alone, the writer's own prefix and nothing the writer may do | ops-repo Environment (`drill`: `DRILL_OCI_USER_OCID`, `DRILL_OCI_FINGERPRINT`, `DRILL_OCI_PRIVATE_KEY`, `DRILL_B2_KEY_ID`, `DRILL_B2_KEY`) | Quarterly rebuild drill (state-backend.md §7.3) |
 
 Rows whose "From" is a seed rotate by re-running their subcommand.
@@ -1106,19 +1106,21 @@ GitHub secret — and the rest have none.
     controller up) have neither half.
 -   Part of the **CI Environment half** (ci.md §3). The sink exists (§4)
     and fills what a workstation can obtain: the state passphrase and the
-    `ci` client bundle, both into every Environment, the dispatch App's
-    key as a repository secret, and the deploy-failure webhook, which is
-    typed in. What is left waits on
+    `ci` client bundle, both into every Environment, and the dispatch
+    App's key as a repository secret. What is left waits on
     something other than the sink — the ZeroTier CI identities, on the
     `physical` stack that generates them.
--   The **ops-repo channel** has three rows that land through the sink
-    (§4): the drill age identity's private half, which its generator
-    pushes, and the drill's OCI and B2 keys, which their mint pushes as
-    five carriers, both in the `drill` Environment; and the trigger App's
-    key, which stage 10 pushes as a repository secret. Every other row
-    above naming an ops-repo secret lands nowhere, because the workflow
-    that would read it is not built — nothing there names a secret for
-    it, and nothing there reads the drill Environment yet either
+-   The **ops-repo channel** lands through the sink (§4) for every row
+    whose workflow is designed down to the secret it reads: the drill
+    age identity's private half, which its generator pushes, and the
+    drill's OCI and B2 keys, which their mint pushes as five carriers,
+    both in the `drill` Environment; and, as repository secrets, the
+    state dumps' freshness key, which its mint pushes as two carriers,
+    the trigger App's key, which stage 10 pushes, and the Home Assistant
+    webhook, which stage 10 asks for and pushes. Every other row above
+    naming an ops-repo secret lands nowhere, because the workflow that
+    would read it is not built — nothing there names a secret for it,
+    and nothing there reads the drill Environment yet either
     (state-backend.md §7.3).
 -   **`alertmanager/read`** is generated and escrowed, and what it lacks
     is a consumer: neither the issue-sync poller nor the HTTPRoute that

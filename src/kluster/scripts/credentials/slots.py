@@ -136,6 +136,14 @@ TRIGGER_APP_KEY = 'TRIGGER_APP_PRIVATE_KEY'
 #: producer, so it is a constant here and is renamed only together with it.
 DISPATCH_APP_KEY = 'DISPATCH_APP_PRIVATE_KEY'
 
+#: The secret the ops repository's dispatch handler reads the Home Assistant
+#: webhook URL from and posts every alert to (cluster/architecture.md §4.3).
+#: A repository secret of `kluster-ops`, no prefix -- the handler names no
+#: Environment, and the prefix rule is for Environment secrets -- and the
+#: value's whole power is one phone push. A contract with that workflow, so a
+#: constant here, renamed only together with it.
+HA_WEBHOOK_URL = 'HA_WEBHOOK_URL'
+
 
 # --------------------------------------------------------------------------
 # The channels: §1 rule 6's closed set, one type each.
@@ -771,7 +779,8 @@ def _device(member: str, *, onward: tuple[Channel, ...] = (), pending: Mapping[s
 #: Why an ops-repository row has no address: the ops-repository workflow that
 #: would read it is not built, so nothing has given its secret a name yet
 #: (ci.md §3). A row leaves this set once its workflow is designed down to the
-#: secret it reads, which is where the trigger key's row stands.
+#: secret it reads, which is where the trigger key's and the webhook's rows
+#: stand.
 _OPS_UNBUILT = 'the ops-repository workflow that would read it is not built, so no secret there names it'
 
 #: Why the etcd snapshots' freshness key has no address: the bucket it would
@@ -785,15 +794,6 @@ _ETCD_PREFIX_UNBUILT = (
 #: Why an in-cluster row has no address: sealing needs the controller, and the
 #: controller arrives with `k8s-base`.
 _CLUSTER_UNBUILT = 'the sealed-secrets controller and its consumer arrive with `k8s-base`, so no manifest path exists'
-
-#: Why the ops repository holds no copy of the webhook: a deploy failure is an
-#: out-of-cluster alert, and the shape it is designed to travel in has the ops
-#: repository hold the credential rather than CI (cluster/architecture.md §4.3).
-#: The `kluster` repository secret beside it is the interim channel until then.
-_HAOS_UNBUILT = (
-    'the designed shape has CI hold no Home Assistant credential at all -- a `repository_dispatch` to the ops '
-    'repository, which owns the alert (ci.md §3) -- and neither that handler nor the secret it reads is built'
-)
 
 #: Sinks this map used to carry, and where the fact each one delivered lives
 #: now. Retiring a sink moves a fact rather than deleting it, so the name that
@@ -1086,21 +1086,29 @@ ROWS: dict[str, Row] = {
     'haos-webhook': Row(
         register='HA webhook URL/ID',
         source=Manual(
-            'the Home Assistant webhook URL a failed deploy posts to',
-            'Home Assistant → Settings → Automations → the deploy-failure automation\n'
-            '  → its webhook trigger, which shows the full URL. Nothing mints this and\n'
-            '  nothing derives it, so this slot is where it lives: rotating it is a new\n'
-            '  webhook id there and one more run of this command.',
+            "the Home Assistant webhook URL the ops repository's dispatch handler posts to",
+            'Home Assistant → Settings → Automations → the alert-intake automation\n'
+            '  (created by the operator against the contract operations.md §4 gives, before\n'
+            '  this command; the one the ops repository posts every alert to; the\n'
+            "  deploy-failure automation beside it is the legacy tracker's and keeps its\n"
+            '  own id) → its webhook\n'
+            '  trigger, which shows the full URL. Nothing mints this and nothing derives\n'
+            '  it, so this slot is where it lives: rotating it is a new webhook id there\n'
+            '  and one more run of this command.',
         ),
-        # A repository secret rather than an Environment one: the job that reads
-        # it belongs to no stack, and the whole power of the value is to raise a
-        # phone notification (ci.md §3).
-        targets=(Slot(repository=conventions.forge.DEPLOYMENT.full_name, name='HAOS_DEPLOY_WEBHOOK_URL'),),
-        # The two are waiting on different things, which is why they are two
-        # reasons: the in-cluster copy is alertmanager's, direct by design and
-        # permanent (cluster/architecture.md §4.3), while the ops-repository
-        # copy waits on a delivery shape that replaces the interim secret above.
-        pending={'SealedSecret': _CLUSTER_UNBUILT, 'ops-repo secret': _HAOS_UNBUILT},
+        # The ops repository's secret and no copy in `kluster`: CI holds no Home
+        # Assistant credential, because the alert travels as a
+        # `repository_dispatch` to the ops repository, whose handler does the
+        # delivery (cluster/architecture.md §4.3). The `kluster` repository
+        # secret `HAOS_DEPLOY_WEBHOOK_URL` that `deploy.yml`'s `notify-failure`
+        # job still reads is no row of this map: it is the legacy channel, left
+        # in place untouched -- not re-synced from here -- until that job
+        # becomes a caller of the alert producer, and deleted from the
+        # repository then.
+        targets=(Slot(repository=conventions.forge.OPS.full_name, name=HA_WEBHOOK_URL),),
+        # The in-cluster copy is alertmanager's, direct by design and permanent
+        # (cluster/architecture.md §4.3), and it waits on the controller.
+        pending={'SealedSecret': _CLUSTER_UNBUILT},
     ),
     derived.DRILL_CREDENTIALS_ROW: Row(
         register='Drill-environment credentials',
@@ -1263,6 +1271,7 @@ __all__ = (
     'BACKEND_KEY',
     'BACKEND_URL',
     'DISPATCH_APP_KEY',
+    'HA_WEBHOOK_URL',
     'REGISTER_COLUMNS',
     'ROWS',
     'TRIGGER_APP_KEY',
