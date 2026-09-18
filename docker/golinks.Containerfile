@@ -15,7 +15,7 @@ COPY --from=src /src /src
 WORKDIR /src
 RUN npm ci && npm run build
 
-FROM docker.io/library/golang:1.26-alpine AS build
+FROM docker.io/library/golang:1.27-alpine AS build
 COPY --from=ui /src /src
 WORKDIR /src
 RUN CGO_ENABLED=0 go build -o bin/go ./cmd/go
