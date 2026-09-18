@@ -175,12 +175,12 @@ SEEDS: dict[str, Seed] = {
                 '  permissions, so this one cannot be minted and cannot mint its\n'
                 '  successor -- rotation is this same visit again, and the\n'
                 '  superseded token is deleted on the same page.\n'
-                '  A permission added to a token that already exists does not\n'
-                '  extend the value already in hand, so a seed with the wrong\n'
-                '  permissions is replaced rather than edited: make a new token\n'
-                '  with both rows, record it here, delete the old one. An\n'
-                '  account-root token held elsewhere is the seed only if it\n'
-                '  already carries both.'
+                '  Editing a token on that page extends the value already in\n'
+                '  hand, so a seed with a row missing is fixed in place: add the\n'
+                '  row to it there and paste the same value again. A new token\n'
+                '  with both rows, recorded here with the old one deleted, is\n'
+                '  the other way. An account-root token held elsewhere is the\n'
+                '  seed once it carries both.'
             ),
         ),
         Seed(

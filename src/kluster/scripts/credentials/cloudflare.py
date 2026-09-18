@@ -359,7 +359,7 @@ class Session:
         produce a second answer to a question already settled.
 
         The refusal says what the token must carry and where that is fixed,
-        and names no command: which command records the replacement is the
+        and names no command: which command records the paste is the
         caller's to say, and the callers differ -- `seed cloudflare create`
         is its own, while `kit rotate` asks for the paste again at its prompt,
         where that command run meanwhile would write the token into the
@@ -370,11 +370,12 @@ class Session:
             raise CredentialRejected(
                 'this Cloudflare token can mint tokens but can see no zone, so it cannot '
                 'turn a zone name into the id a minted policy names: it is missing '
-                f'{ZONE_VISIBILITY_PERMISSION}, with Zone Resources at all zones. Adding '
-                'that permission to this token in the dashboard does not extend the value '
-                'already in hand -- the seed has to be a fresh token carrying both '
-                f'User → API Tokens → Edit and {ZONE_VISIBILITY_PERMISSION}, made on that page, '
-                'with this one deleted there once the fresh one is recorded'
+                f'{ZONE_VISIBILITY_PERMISSION}, with Zone Resources at all zones. Editing '
+                'this token in the dashboard extends the value in hand, so add that '
+                'permission to it there, beside the User → API Tokens → Edit it already '
+                'carries, and paste the same value again; a fresh token made on that page '
+                f'carrying both User → API Tokens → Edit and {ZONE_VISIBILITY_PERMISSION} '
+                'is the other way'
             )
         return visible
 

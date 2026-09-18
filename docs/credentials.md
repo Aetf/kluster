@@ -208,12 +208,15 @@ Tokens → Edit**, and the superseded token deleted on the same page once
 the new kit is written. The added permission is what lets the seed turn
 a zone name into the id a minted policy names, so the scripts refuse a
 seed whose zone listing is empty at the moment it is pasted in rather
-than at the first mint. A permission added to a token that already
-exists does not extend the value already in hand, so the way to correct
-a seed's permissions is to make a new token and record it, not to edit
-the old one — an operator who already holds a token of that template as
-an "account root" holds the seed only if it carries both permissions
-already. What the seed *does* mint is
+than at the first mint. A token's policies can be edited on that same
+page, and the value already in hand gains what the edit grants: a
+listing that was empty before the edit is the full one after it, under
+the same token value. So a seed refused for the missing permission is
+corrected in place — add **Zone → Zone → Read** to the token in the
+dashboard and paste the same value again — and a new token carrying
+both rows is the other way rather than the only one; an operator who
+already holds a token of that template as an "account root" holds the
+seed once it carries both permissions. What the seed *does* mint is
 §3's tokens, which carry zone permissions and no token permissions —
 the class the platform does allow.
 
