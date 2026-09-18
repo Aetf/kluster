@@ -10,8 +10,9 @@ import contract), so `conventions` is the only home the two share.
 ci.md §3 defines the credential partition in exactly the terms below — which
 branches may deploy into a cell, and whether a reviewer stands in front of it —
 and the switches a workflow branches on are the same kind of fact about what a
-repository *is* here: the labels it reads, and the identities it tests the
-author of a pull request against. What stays in the `github` stack is the
+repository *is* here: the labels it reads, the identities it tests the
+author of a pull request against, the variables it reads, and the Apps whose
+tokens may push to it. What stays in the `github` stack is the
 upstream object's own settings, which are no part of any entry: the required
 check names, the repository descriptions, the merge-strategy flags
 (framework/github.md §3).
@@ -24,6 +25,13 @@ the readers the first paragraph names, so the row belongs in `conventions`, and
 a field of the row travels with it. What holds that field honest is elsewhere:
 a workflow spells the login as a literal, and a test holds that literal to this
 file. Without the entry the two drift with nothing to notice.
+
+**The Apps are here rather than in `conventions.providers`** because they are
+not accounts this program declares into: an App is an actor on the forge, its
+installation is a fact about a repository row, and the one place its client
+id reaches is a variable of that row. `providers` holds the identifiers of the
+clouds the stacks push to; the forge's own identifiers -- the account, the
+Apps -- sit with the forge.
 
 Read qualified — `conventions.forge.DEPLOYMENT` — because the names below are
 common nouns that mean one particular thing only while the forge stands beside
@@ -135,6 +143,58 @@ class Author:
 
 @final
 @dataclass(frozen=True)
+class App:
+    """One GitHub App this installation runs, under the facts that are public.
+
+    An App is console-made and console-installed (framework/github.md §4), and
+    what a workflow needs of it to mint an installation token is two things
+    of opposite kinds: the private key, which authenticates as the App and is
+    a register row escrowed and pushed as a repository secret (credentials.md
+    §3), and the client id, which only names the App -- the JWT's issuer, an
+    identifier GitHub shows on the App's page for as long as the App exists.
+    The client id is on the same side of the fact/credential split as the
+    tenancy OCID and the Cloudflare account id (`conventions.providers`): it
+    opens nothing, so it is recorded here in the clear and declared into the
+    repository variable the workflow reads it from. The key never appears
+    here.
+
+    The repositories an App is installed on are not a field of the App: an
+    installation is console state nothing here declares, and what it decides
+    for a repository -- which App can push to it -- is read off the
+    repository's own row (`Repository.apps`).
+    """
+
+    #: The App's slug, as its settings page and its own login (`<slug>[bot]`)
+    #: spell it.
+    slug: str
+    #: What the App's page shows as *Client ID*, and what a workflow hands to
+    #: the minting action beside the key.
+    client_id: str
+
+
+@final
+@dataclass(frozen=True)
+class Variable:
+    """One repository variable a workflow reads.
+
+    A variable is the public half of a delivery whose other half is a secret:
+    the value is a fact of this installation, so it is spelled here from the
+    census row it belongs to rather than typed into a console. A workflow that
+    reads a variable nothing declares fails the way an undeclared label does
+    -- the expression is empty, and the step that receives it fails on its
+    own terms -- so the set is written down here and a test holds the
+    workflows to it.
+    """
+
+    #: As the workflow spells it under `vars.`.
+    name: str
+    #: Public. A value that would have to be a secret is a register row and a
+    #: repository secret (credentials.md §3), never an entry here.
+    value: str
+
+
+@final
+@dataclass(frozen=True)
 class Repository:
     """One repository as this installation defines it, rather than as GitHub stores it.
 
@@ -161,6 +221,18 @@ class Repository:
     #: comparison that is never true — and on the row rather than in a table of
     #: its own, because these are this repository's workflows and no other's.
     authors: tuple[Author, ...] = ()
+    #: The Apps installed on this repository, which is what decides whose
+    #: installation token can push to it (credentials.md §3). Console state
+    #: recorded rather than declared (framework/github.md §4), and on the row
+    #: because a variable below that hands an App's client id to a mint is a
+    #: mint that fails unless the App is installed here -- a relation between
+    #: two fields of one row, which a test holds.
+    apps: tuple[App, ...] = ()
+    #: The repository variables its workflows read. Declared as resources like
+    #: the labels, and for the same reason: a workflow reading a variable that
+    #: was never set is one that fails at the step that needed it, on the
+    #: first run after a rebuild.
+    variables: tuple[Variable, ...] = ()
 
     @property
     def full_name(self) -> str:
@@ -196,6 +268,18 @@ EXPECT_CHANGES = Label('expect-changes', 'Opts a PR out of the noop-automerge ze
 #: guards is never taken.
 RENOVATE = Author('renovate[bot]')
 
+#: The App whose installation token pushes where `GITHUB_TOKEN` must not: onto
+#: a renovate branch from `sdk-regenerate.yml`, so that the pushed head's runs
+#: start on their own (ci.md §3), and the alert producer once built. Its key is
+#: the `github-dispatch-key` register row; its client id is what the variable
+#: below carries.
+DISPATCH_APP = App(slug='kluster-dispatch', client_id='Iv23liR3WBm3bxvOVqch')
+
+#: How `sdk-regenerate.yml` learns which App its key belongs to: the client id
+#: is handed to `actions/create-github-app-token` beside the key, and this is
+#: the variable it reads it from.
+DISPATCH_APP_CLIENT_ID = Variable('DISPATCH_APP_CLIENT_ID', DISPATCH_APP.client_id)
+
 #: The ops repository's only Environment, which carries the unattended drills'
 #: credentials. Ungated because its scope is the gate (credentials.md §4).
 #: Any branch, for want of an alternative: a private repository has no
@@ -225,6 +309,8 @@ DEPLOYMENT = Repository(
     ),
     labels=(EXPECT_CHANGES,),
     authors=(RENOVATE,),
+    apps=(DISPATCH_APP,),
+    variables=(DISPATCH_APP_CLIENT_ID,),
 )
 
 #: The notification and drill repository. Private on purpose — it holds the
@@ -234,6 +320,10 @@ OPS = Repository(
     name='kluster-ops',
     public=False,
     environments=(DRILL,),
+    # Installed for the alert producer, whose workflow is not built yet
+    # (credentials.md §3); the variable that names the App to it arrives with
+    # that workflow, so the roll of variables is empty until then.
+    apps=(DISPATCH_APP,),
 )
 
 #: Every repository the forge declares, which is every repository of this

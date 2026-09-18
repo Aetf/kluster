@@ -2,7 +2,8 @@
 
 `ManagedRepository` is one repository as a component: the repository itself,
 the vulnerability alerts, the branch protection where the plan offers it, the
-labels the workflows read, and one Environment per census entry. The stack
+labels and the variables the workflows read, and one Environment per census
+entry. The stack
 program is then wiring, and nothing parents a resource by hand.
 
 It is the same shape as `dns.zone.ManagedZone` and named the same way for the
@@ -14,7 +15,7 @@ branches in the body.
 
 **The census decides what exists; the parameters carry what GitHub stores.**
 Which Environments a repository has, which of them a reviewer gates and which
-labels its workflows read are `conventions.forge`, and a label's meaning
+labels and variables its workflows read are `conventions.forge`, and a label's meaning
 travels beside its name there rather than arriving here, because a switch
 whose name is declared and whose meaning is not is one a reader has to
 reconstruct from the workflow that reads it. What arrives as a parameter is
@@ -137,6 +138,21 @@ class ManagedRepository(Component):
                 opts=on_repository,
             )
             for label in entry.labels
+        }
+
+        # A variable a workflow reads is a resource for the same reason a
+        # label is. The value is public and comes from the census row, so
+        # nothing here is a secret: a value that would have to be one is a
+        # register row pushed by `credentials derived sync`, never a variable.
+        self.variables = {
+            variable.name: github.ActionsVariable(
+                f'{name}-{variable.name}',
+                repository=self.repository.name,
+                variable_name=variable.name,
+                value=variable.value,
+                opts=on_repository,
+            )
+            for variable in entry.variables
         }
 
         # `strict` is "the branch must be up to date", without which a green

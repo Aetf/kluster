@@ -84,9 +84,10 @@ jobs:
       # The dispatch App's installation token, for this repository alone: the
       # same installation covers the ops repository, and `repositories:` is
       # what keeps this run's token off it. `client-id` is the App's client
-      # id, the public identifier the register leaves on the App's page and
-      # delivers as a repository variable (credentials.md §3). The action
-      # revokes the token when the job ends.
+      # id, a public identifier the census records in the clear
+      # (`conventions/forge.py`) and the `github` stack declares as this
+      # repository variable (framework/github.md §3). The action revokes
+      # the token when the job ends.
       - uses: actions/create-github-app-token@v3
         id: app-token
         with:

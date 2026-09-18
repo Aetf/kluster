@@ -290,8 +290,10 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     it causes start on their own. So the job mints an installation token
     of the dispatch App per run (`actions/create-github-app-token`, from
     the `DISPATCH_APP_PRIVATE_KEY` repository secret and the App's
-    client id in the `DISPATCH_APP_CLIENT_ID` repository variable,
-    scoped to this repository alone — credentials.md §3) and hands it to
+    client id in the `DISPATCH_APP_CLIENT_ID` repository variable, which
+    the `github` stack declares from `conventions/forge.py`
+    (github.md §3), scoped to this repository alone — credentials.md
+    §3) and hands it to
     the checkout, so the persisted credential and therefore the push are
     the App's; the workflow's own token keeps `contents: read`, which
     makes a push under it a refusal rather than a head that waits. The
