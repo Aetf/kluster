@@ -9,3 +9,6 @@
 config:
   pulumi:disable-default-providers:
     - github
+  kluster-py:githubAdminToken:
+    secure: v1:9rFmlp3YpF+6eHDm:Z/jed6UVRxQoeXpIwQ5AhQfMYHQSEh5c0ulTEy3FVsvuspN4375cRK5Lrt4/uXNoj0eD27A+rOvXICtR0mkaDluzuZ8T2tlIc4vnHCIU3UXMdSgC7Uoxp06e0Wd+QCbGQVoV0yHz2nn3WRyCqg==
+encryptionsalt: v1:mOPkKdjz2Tc=:v1:bHmL+0jM9l7zTfSo:GjLSir4iTty8cpMEm0RUDWPAsQSqNA==
