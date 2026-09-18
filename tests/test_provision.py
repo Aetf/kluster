@@ -40,23 +40,74 @@ from kluster.scripts.state_backend import cli, config, provision, settings
 from kluster.scripts.state_backend.state import StateError
 
 
-class _Network:
-    """The reserved-address half of OCI's network client.
+class _Page:
+    """One page of an OCI list response, in the shape `oci.pagination` reads.
 
-    `allocates` is the address OCI hands a reservation this fake is asked to
-    make; a fake without one refuses to make any, which is what a lookup that
-    must not allocate is held against.
+    The two token attributes are the whole point of the class: a stand-in
+    without them answers a paginated call and an unpaginated one identically,
+    which is how a listing that reads one page passes for one that reads all
+    of them.
     """
 
-    def __init__(self, ips: list[Any], *, allocates: str | None = None) -> None:
-        self.ips: list[Any] = ips
+    def __init__(self, data: list[Any], *, next_page: str | None = None) -> None:
+        self.data: list[Any] = data
+        self.next_page: str | None = next_page
+        self.has_next_page: bool = next_page is not None
+        self.status: int = 200
+        self.headers: dict[str, str] = {}
+        self.request: Any = None
+
+
+class _Service:
+    """One OCI service client over what a compartment holds, served a page at a time.
+
+    `kinds` is each listing's answer, keyed by what the method lists (`vcns`
+    for `list_vcns`, `public_ips` for `list_public_ips`), cut into pages of
+    `page_size` that a reader has to ask for by token. Every call lands in
+    `calls` by name, the writes included: a method the class does not define
+    is recorded and answered with nothing, which is what lets a test hold a
+    read to having written nothing. `create_public_ip` is the one write with
+    a body, because the reserved-address converge runs for real over this
+    fake; `allocates` is the address it hands out, and a fake without one
+    refuses to make any, which is what a lookup that must not allocate is
+    held against.
+    """
+
+    def __init__(
+        self,
+        calls: list[str],
+        kinds: dict[str, list[Any]],
+        *,
+        page_size: int = 100,
+        allocates: str | None = None,
+    ) -> None:
+        self.calls: list[str] = calls
+        self.page_size: int = page_size
         self.allocates: str | None = allocates
+        self.kinds: dict[str, list[Any]] = kinds
         self.created: int = 0
 
-    def list_public_ips(self, **_kwargs: object) -> Any:
-        return type('Response', (), {'data': self.ips})()
+    @property
+    def ips(self) -> list[Any]:
+        return self.kinds.setdefault('public_ips', [])
+
+    def __getattr__(self, method: str) -> Callable[..., Any]:
+        if method.startswith('_'):
+            raise AttributeError(method)
+
+        def call(*_args: object, **kwargs: object) -> Any:
+            self.calls.append(method)
+            if not method.startswith('list_'):
+                return _Page([])
+            items = self.kinds.get(method.removeprefix('list_'), [])
+            start = int(cast('str | None', kwargs.get('page')) or 0)
+            following = start + self.page_size
+            return _Page(items[start:following], next_page=str(following) if following < len(items) else None)
+
+        return call
 
     def create_public_ip(self, *_args: object, **_kwargs: object) -> Any:
+        self.calls.append('create_public_ip')
         self.created += 1
         if self.allocates is None:  # pragma: no cover
             raise AssertionError('a lookup created a reserved address')
@@ -66,12 +117,29 @@ class _Network:
 
 
 class _Client:
-    def __init__(self, ips: list[Any], *, allocates: str | None = None, held: bool = True) -> None:
+    """The clients over one compartment, sharing one call log.
+
+    `ips` is what the reservation listing answers; the other kinds are given
+    by name (`_Service`) and are empty unless a case says otherwise.
+    """
+
+    def __init__(
+        self,
+        ips: list[Any],
+        *,
+        allocates: str | None = None,
+        held: bool = True,
+        page_size: int = 100,
+        kinds: dict[str, list[Any]] | None = None,
+    ) -> None:
         self.compartment_id: str = 'ocid1.compartment.test'
         #: The appliance's own compartment unless a case says otherwise, so
         #: that every case about the hold runs on the compartment it applies to.
         self.held: bool = held
-        self.network: _Network = _Network(ips, allocates=allocates)
+        self.calls: list[str] = []
+        kinds = {**(kinds or {}), 'public_ips': ips}
+        self.network: _Service = _Service(self.calls, kinds, page_size=page_size, allocates=allocates)
+        self.compute: _Service = _Service(self.calls, kinds, page_size=page_size)
 
 
 def _ip(name: str, address: str, state: str = 'ASSIGNED') -> Any:
@@ -176,10 +244,31 @@ def test_a_terminated_address_does_not_count() -> None:
 # reservation refuses an address the constant does not name -- on the
 # appliance's own compartment, the only one the constant describes.
 
+#: A release the stream metadata could name, for every survey that is not
+#: about the image: the image is looked up under the release's name, so the
+#: survey reads the stream before it reads the compartment.
+ARTIFACT = provision.FcosArtifact(
+    release='42.20260901.3.0', url='https://example.invalid/fcos.qcow2.xz', sha256='0' * 64
+)
+
+
+def _surveyed(**fields: Any) -> provision.Survey:
+    """A snapshot that found nothing but `fields`."""
+    blank: dict[str, Any] = dict.fromkeys(
+        ('instance', 'vcn', 'gateway', 'subnet', 'security_group', 'public_ip', 'image')
+    )
+    return provision.Survey(fcos=ARTIFACT, **{**blank, **fields})
+
+
+def _ensure_reserved_ip(client: Any) -> provision.ReservedAddress:
+    """The converge's read of the reservation, as `_provision` wires it: surveyed, then ensured."""
+    return provision.ensure_reserved_ip(client, _surveyed(public_ip=provision.find_reserved_ip(client)))
+
+
 #: Every reader of the reservation. Each is held to the refusal below, so a
 #: caller that reaches the address through either one cannot see a box the
 #: repository does not name.
-LOOKUPS = [provision.reserved_address, provision.ensure_reserved_ip]
+LOOKUPS = [provision.reserved_address, _ensure_reserved_ip]
 
 
 @pytest.mark.parametrize('lookup', LOOKUPS, ids=lambda f: f.__name__)
@@ -241,7 +330,7 @@ def test_a_fresh_reservation_is_held_the_same_way() -> None:
     client = _Client([], allocates=ELSEWHERE)
 
     with pytest.raises(RuntimeError, match=f'{ELSEWHERE}.*{settings.ADDRESS}'):
-        _ = provision.ensure_reserved_ip(client)  # pyright: ignore[reportArgumentType]
+        _ = _ensure_reserved_ip(client)
 
     assert client.network.created == 1
     assert [ip.ip_address for ip in client.network.ips] == [ELSEWHERE]
@@ -258,9 +347,9 @@ def test_a_fresh_reservation_s_refusal_offers_the_one_repair_there_is() -> None:
     found = _Client([_ip('state-backend-ip', ELSEWHERE)])
 
     with pytest.raises(RuntimeError) as reserved:
-        _ = provision.ensure_reserved_ip(fresh)  # pyright: ignore[reportArgumentType]
+        _ = _ensure_reserved_ip(fresh)
     with pytest.raises(RuntimeError) as carried:
-        _ = provision.ensure_reserved_ip(found)  # pyright: ignore[reportArgumentType]
+        _ = _ensure_reserved_ip(found)
 
     assert 'just reserved' in str(reserved.value)
     assert f'record {ELSEWHERE} as settings.ADDRESS and re-run' in str(reserved.value)
@@ -528,6 +617,7 @@ def converge(monkeypatch: pytest.MonkeyPatch) -> Any:
         monkeypatch.setattr(b2, 'dump_key_is_current', _returning(recorder.dump_key_current))
         clients = _Client([_ip(f'{settings.NAME}-ip', recorder.address)])
         monkeypatch.setattr(provision.OciClients, 'load', classmethod(_returning(clients)))
+        monkeypatch.setattr(provision, 'fcos_artifact', _returning(ARTIFACT))
         monkeypatch.setattr(
             provision, 'ensure_network', _returning(provision.Placement(vcn_id='vcn', subnet_id='subnet'))
         )
@@ -1467,24 +1557,6 @@ def test_the_replaced_status_is_published_in_help() -> None:
 # -- finding the box among everything OCI still lists -------------------------
 
 
-class _Page:
-    """One page of an OCI list response, in the shape `oci.pagination` reads.
-
-    The two token attributes are the whole point of the class: a stand-in
-    without them answers a paginated call and an unpaginated one identically,
-    which is how a listing that reads one page passes for one that reads all
-    of them.
-    """
-
-    def __init__(self, data: list[Any], *, next_page: str | None = None) -> None:
-        self.data: list[Any] = data
-        self.next_page: str | None = next_page
-        self.has_next_page: bool = next_page is not None
-        self.status: int = 200
-        self.headers: dict[str, str] = {}
-        self.request: Any = None
-
-
 def _instance(state: str = 'RUNNING') -> Any:
     """A box under the appliance's name, in the state given."""
     return type('Instance', (), {'display_name': f'{settings.NAME}-vm', 'lifecycle_state': state})()
@@ -1525,6 +1597,116 @@ def test_the_running_box_is_found_behind_a_page_of_terminated_ones() -> None:
     assert found is not None and found.lifecycle_state == 'RUNNING'
     # The second page was asked for with the token the first one returned.
     assert compute.asked == [None, '1']
+
+
+# -- the survey: every adopt-by-name read, before the first write --------------
+# One rule for all of them, held per kind so that a kind cannot fall out of it:
+# every page is read, a terminated holder does not count, and two live holders
+# stop the run naming both.
+
+#: Each listing the survey reads: the `Survey` field it answers, and the
+#: suffix the appliance's resource of that kind is named with.
+NAMED = {
+    'instances': ('instance', 'vm'),
+    'vcns': ('vcn', 'vcn'),
+    'internet_gateways': ('gateway', 'igw'),
+    'subnets': ('subnet', 'subnet'),
+    'network_security_groups': ('security_group', 'nsg'),
+    'public_ips': ('public_ip', 'ip'),
+    'images': ('image', f'fcos-{ARTIFACT.release}'),
+}
+
+#: What a listing says of a resource that is gone: an image says `DELETED`
+#: where every other kind says `TERMINATED`.
+GONE = {listing: 'DELETED' if listing == 'images' else 'TERMINATED' for listing in NAMED}
+
+
+def _resource(listing: str, *, name: str | None = None, state: str = 'AVAILABLE', tag: str = 'one') -> Any:
+    """One listed resource of the kind `listing` answers, under the appliance's name unless told otherwise."""
+    _, suffix = NAMED[listing]
+    return type(
+        'Resource',
+        (),
+        {
+            'id': f'ocid1.{listing}.{tag}',
+            'display_name': f'{settings.NAME}-{suffix}' if name is None else name,
+            'lifecycle_state': state,
+            'ip_address': settings.ADDRESS,
+        },
+    )()
+
+
+def _clients(kinds: dict[str, list[Any]], *, page_size: int = 100) -> Any:
+    """`_Client` over `kinds`, as the untyped SDK boundary hands it to the survey."""
+    return cast('Any', _Client(kinds.pop('public_ips', []), page_size=page_size, kinds=kinds))
+
+
+def _compartment(ahead: dict[str, list[Any]] | None = None, *, page_size: int = 100) -> Any:
+    """One live resource of every kind under the appliance's name, each listed behind what `ahead` puts before it."""
+    ahead = ahead or {}
+    return _clients({listing: [*ahead.get(listing, []), _resource(listing)] for listing in NAMED}, page_size=page_size)
+
+
+@pytest.fixture
+def stream(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The FCOS stream metadata, answered without the network."""
+    monkeypatch.setattr(provision, 'fcos_artifact', _returning(ARTIFACT))
+
+
+@pytest.mark.usefixtures('stream')
+def test_the_survey_reads_every_page_of_every_listing() -> None:
+    """A resource on the second page is found, for every kind the survey reads.
+
+    A stranger fills the first page of each listing, so a read of one page
+    answers absent for all of them -- and absent is the answer that creates a
+    duplicate.
+    """
+    strangers = {listing: [_resource(listing, name='someone-elses', tag='stranger')] for listing in NAMED}
+    clients = _compartment(strangers, page_size=1)
+
+    found = provision.survey(clients)
+
+    for listing, (field, _) in NAMED.items():
+        assert getattr(found, field) is not None, f'{listing}: the second page was not read'
+
+
+@pytest.mark.usefixtures('stream')
+@pytest.mark.parametrize('listing', list(NAMED))
+def test_two_live_holders_of_the_name_are_refused_naming_both(listing: str) -> None:
+    """The first of two is not an answer: the run stops and says which two."""
+    clients = _compartment({listing: [_resource(listing, tag='other')]})
+
+    with pytest.raises(RuntimeError) as refused:
+        _ = provision.survey(clients)
+
+    _, suffix = NAMED[listing]
+    assert f'{settings.NAME}-{suffix}' in str(refused.value)
+    assert f'ocid1.{listing}.other' in str(refused.value)
+    assert f'ocid1.{listing}.one' in str(refused.value)
+
+
+@pytest.mark.usefixtures('stream')
+@pytest.mark.parametrize('listing', list(NAMED))
+def test_a_holder_of_the_name_that_is_gone_is_not_adopted(listing: str) -> None:
+    """A listing keeps what was terminated; the survey answers absent for it."""
+    kinds = {other: [_resource(other)] for other in NAMED if other != listing}
+    kinds[listing] = [_resource(listing, state=GONE[listing])]
+    clients = _clients(kinds)
+
+    found = provision.survey(clients)
+
+    field, _ = NAMED[listing]
+    assert getattr(found, field) is None
+
+
+@pytest.mark.usefixtures('stream')
+@pytest.mark.parametrize('clients', [_clients({}), _compartment()], ids=['nothing exists', 'everything exists'])
+def test_the_survey_writes_nothing(clients: Any) -> None:
+    """Every call the survey makes is a listing, whether it finds everything or nothing."""
+    _ = provision.survey(clients)
+
+    assert clients.calls, 'the survey read nothing'
+    assert [call for call in clients.calls if not call.startswith('list_')] == []
 
 
 # -- what the launch actually puts on the box --------------------------------
@@ -1772,6 +1954,7 @@ def test_the_pin_the_launch_records_is_the_key_the_ignition_delivered(monkeypatc
         clients,
         roots,
         dump_key=b2.AppKey(key_id='key-id', key='key-secret'),
+        found=_surveyed(),
         placement=provision.Placement(vcn_id='vcn', subnet_id='subnet'),
         nsg_id='nsg',
         reserved=provision.ReservedAddress(id='ip-id', address=PINNED_ADDRESS),
@@ -1803,7 +1986,7 @@ def _running(pin: str, *, address: str = PINNED_ADDRESS) -> Any:
             (),
             {
                 'compute': _PagedCompute([[instance]]),
-                'network': _Network([_ip(f'{settings.NAME}-ip', address)]),
+                'network': _Service([], {'public_ips': [_ip(f'{settings.NAME}-ip', address)]}),
                 'compartment_id': 'ocid1.compartment.test',
                 'held': True,
             },

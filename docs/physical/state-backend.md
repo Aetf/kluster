@@ -761,8 +761,10 @@ failure is cheap:
     against the rendered file, in the appliance's compartment, subnet
     and availability domain, on the imported FCOS image, with an
     ephemeral public IP. **Give it a display name that is not the
-    appliance's**: a converge adopts whatever box carries that name,
-    and would move the reserved address onto this one.
+    appliance's**: a second live box under that name stops every
+    `provision` run until one of the two is gone, and a scratch box that
+    is the only one under it would be adopted and handed the reserved
+    address.
 4.  **Open the tunnel**: `ssh -L 5432:127.0.0.1:5432 core@<scratch
     address>` with the operator key. The workstation's public key has to
     be in `deploy/state-backend/operator-keys.txt`, which is the file
