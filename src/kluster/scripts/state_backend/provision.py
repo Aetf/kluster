@@ -20,7 +20,7 @@ Ignition.
 The reserved public IP is the only public address the box has -- the VNIC is
 launched with no ephemeral one, and the reservation is pointed at its primary
 private IP -- and `settings.ADDRESS` is that address as the repository records
-it. The two lookups that read the reservation (`ensure_reserved_ip`,
+it. Both consumers of the reservation (`ensure_reserved_ip`,
 `reserved_address`) hold what OCI carries against the constant and refuse
 naming both when they differ, before any caller does anything with the
 address: a box at another address is a decision the repository has to record,
@@ -203,11 +203,42 @@ def _duration(seconds: float) -> str:
     return f'{minutes}m{secs:02d}s' if minutes else f'{secs}s'
 
 
-def _find(items: list[Any], display_name: str) -> Any | None:
-    for item in items:
-        if item.display_name == display_name and item.lifecycle_state not in ('TERMINATED', 'TERMINATING'):
-            return item
-    return None
+#: Lifecycle states a listing still carries that are not a resource anyone can
+#: adopt: what the network and compute resources call `TERMINATED`, an image
+#: calls `DELETED`.
+GONE = ('TERMINATED', 'TERMINATING', 'DELETED')
+
+
+def _lookup(list_call: Callable[..., Any], *args: Any, kind: str, name: str, **kwargs: Any) -> Any | None:
+    """The one live resource of `kind` that carries `name`, or None when none does.
+
+    Every adopt-by-name read goes through here, so the rules of adoption are
+    in one place rather than at each read:
+
+    -   **Every page.** A compartment's listing is not a list of what exists:
+        a terminated resource stays in it, and this box is cattle, so the
+        instance list grows by one on every replacement while the answer
+        stays one box. A read of the first page alone would eventually stop
+        containing the running appliance, and everything that reads this
+        answer reads a miss as "absent": no approval gate in front of a
+        replacement, no dump of the box about to be destroyed, and an escrow
+        that mints a fresh CA and age identity over the live one.
+    -   **Terminated does not count** (`GONE`): the name is free again the
+        moment the old holder starts going away.
+    -   **Two live holders are refused, naming both.** "Absent" and "the
+        first of two" are both answers that create a duplicate, and a
+        converge that adopted one of them by name would be converging a box
+        the other might be serving as. Which one to keep is a decision, so
+        the run stops here rather than making it.
+    """
+    listed = oci.pagination.list_call_get_all_results(list_call, *args, **kwargs).data
+    live = [item for item in listed if item.display_name == name and item.lifecycle_state not in GONE]
+    if len(live) > 1:
+        raise RuntimeError(
+            f'{kind}: {len(live)} live resources carry the name {name} ({", ".join(str(item.id) for item in live)}); '
+            'adopting one by name would leave the other standing, so nothing proceeds until one is gone'
+        )
+    return live[0] if live else None
 
 
 def _await_state(fetch: Callable[[], Any], target: str, *, what: str, timeout: int = 3600) -> Any:
@@ -249,6 +280,77 @@ def _await_state(fetch: Callable[[], Any], target: str, *, what: str, timeout: i
 
 
 @dataclass(frozen=True)
+class Survey:
+    """Every resource the run adopts by name, read before anything is written.
+
+    A field is the live resource under the appliance's name for that kind, or
+    None for a proven absence -- every page read, nothing terminated counted,
+    no second holder (`_lookup`). Each `ensure_*` creates exactly what is None
+    here and adopts the rest, without a listing of its own; the instance is
+    the exception, because the terminate falsifies its answer
+    (`find_instance`). The gateway, subnet and security group live inside the
+    VCN, so when no VCN carries the appliance's name there is nothing of the
+    appliance's to look for, and they are None whenever `vcn` is.
+
+    `fcos` is the release the run would import, read from the stream metadata:
+    the image is named after it, so the read is a precondition of the image
+    lookup rather than of the pipeline that imports one.
+    """
+
+    instance: Any | None
+    vcn: Any | None
+    gateway: Any | None
+    subnet: Any | None
+    security_group: Any | None
+    public_ip: Any | None
+    fcos: FcosArtifact
+    image: Any | None
+
+
+def survey(clients: OciClients) -> Survey:
+    """Read what exists under the appliance's names. Writes nothing."""
+    network = clients.network
+    instance = find_instance(clients)
+    vcn = _lookup(network.list_vcns, clients.compartment_id, kind='VCN', name=_name('vcn'))
+    gateway = subnet = security_group = None
+    if vcn is not None:
+        gateway = _lookup(
+            network.list_internet_gateways,
+            clients.compartment_id,
+            vcn_id=vcn.id,
+            kind='internet gateway',
+            name=_name('igw'),
+        )
+        subnet = _lookup(
+            network.list_subnets, clients.compartment_id, vcn_id=vcn.id, kind='subnet', name=_name('subnet')
+        )
+        security_group = _lookup(
+            network.list_network_security_groups,
+            compartment_id=clients.compartment_id,
+            vcn_id=vcn.id,
+            kind='security group',
+            name=_name('nsg'),
+        )
+    public_ip = find_reserved_ip(clients)
+    fcos = fcos_artifact()
+    image_name = _name(f'fcos-{fcos.release}')
+    log.info('looking for an imported image named %s', image_name)
+    image = _lookup(
+        clients.compute.list_images, clients.compartment_id, display_name=image_name, kind='image', name=image_name
+    )
+    return Survey(
+        instance=instance,
+        vcn=vcn,
+        gateway=gateway,
+        subnet=subnet,
+        security_group=security_group,
+        public_ip=public_ip,
+        fcos=fcos,
+        image=image,
+    )
+
+
+@dataclass(frozen=True)
 class Placement:
     """The VCN and the subnet everything the appliance needs is created in.
 
@@ -261,12 +363,12 @@ class Placement:
     subnet_id: str
 
 
-def ensure_network(clients: OciClients) -> Placement:
+def ensure_network(clients: OciClients, found: Survey) -> Placement:
     """The appliance's VCN, gateway, default route and subnet."""
     network = clients.network
     log.info('converging the VCN, internet gateway, default route and subnet')
 
-    vcn = _find(_data(network.list_vcns(clients.compartment_id)), _name('vcn'))
+    vcn = found.vcn
     if vcn is None:
         vcn = _data(
             network.create_vcn(
@@ -280,7 +382,7 @@ def ensure_network(clients: OciClients) -> Placement:
         )
         log.info('created VCN %s', vcn.id)
 
-    gateway = _find(_data(network.list_internet_gateways(clients.compartment_id, vcn_id=vcn.id)), _name('igw'))
+    gateway = found.gateway
     if gateway is None:
         gateway = _data(
             network.create_internet_gateway(
@@ -310,7 +412,7 @@ def ensure_network(clients: OciClients) -> Placement:
         )
         log.info('default route now points at the gateway')
 
-    subnet = _find(_data(network.list_subnets(clients.compartment_id, vcn_id=vcn.id)), _name('subnet'))
+    subnet = found.subnet
     if subnet is None:
         subnet = _data(
             network.create_subnet(
@@ -329,7 +431,7 @@ def ensure_network(clients: OciClients) -> Placement:
     return Placement(vcn_id=str(vcn.id), subnet_id=str(subnet.id))
 
 
-def ensure_security_group(clients: OciClients, vcn_id: str) -> str:
+def ensure_security_group(clients: OciClients, vcn_id: str, found: Survey) -> str:
     """5432 and 22 from anywhere.
 
     The client certificate is the wall (state-backend.md §4): an allowlist of
@@ -338,9 +440,7 @@ def ensure_security_group(clients: OciClients, vcn_id: str) -> str:
     """
     network = clients.network
     log.info('converging the security group and its rules')
-    group = _find(
-        _data(network.list_network_security_groups(compartment_id=clients.compartment_id, vcn_id=vcn_id)), _name('nsg')
-    )
+    group = found.security_group
     if group is None:
         group = _data(
             network.create_network_security_group(
@@ -462,7 +562,7 @@ def hold_address(address: str, *, held: bool, fresh: bool = False) -> str:
     )
 
 
-def ensure_reserved_ip(clients: OciClients) -> ReservedAddress:
+def ensure_reserved_ip(clients: OciClients, found: Survey) -> ReservedAddress:
     """The address the server certificate is issued for.
 
     Held against `settings.ADDRESS` (`hold_address`, on the appliance's own
@@ -473,16 +573,11 @@ def ensure_reserved_ip(clients: OciClients) -> ReservedAddress:
     and the next run finds the reservation and continues -- the reservation
     itself is an `ensure_*` and stands across the refusal.
     """
-    network = clients.network
-    log.info('looking up the reserved address %s', _name('ip'))
-    existing = _data(
-        network.list_public_ips(scope='REGION', compartment_id=clients.compartment_id, lifetime='RESERVED')
-    )
-    public_ip = _find(existing, _name('ip'))
+    public_ip = found.public_ip
     fresh = public_ip is None
     if fresh:
         public_ip = _data(
-            network.create_public_ip(
+            clients.network.create_public_ip(
                 oci.core.models.CreatePublicIpDetails(
                     compartment_id=clients.compartment_id,
                     lifetime='RESERVED',
@@ -558,13 +653,23 @@ def reserved_address(clients: OciClients) -> str:
     Held against `settings.ADDRESS` the same way (`hold_address`), so `ssh`
     never pins a host key to an address the repository does not name.
     """
-    existing = _data(
-        clients.network.list_public_ips(scope='REGION', compartment_id=clients.compartment_id, lifetime='RESERVED')
-    )
-    public_ip = _find(existing, _name('ip'))
+    public_ip = find_reserved_ip(clients)
     if public_ip is None:
         raise RuntimeError(f'no reserved address named {_name("ip")}; has the appliance been provisioned?')
     return hold_address(str(public_ip.ip_address), held=clients.held)
+
+
+def find_reserved_ip(clients: OciClients) -> Any | None:
+    """The reservation under the appliance's name, if there is one. Creates nothing."""
+    log.info('looking up the reserved address %s', _name('ip'))
+    return _lookup(
+        clients.network.list_public_ips,
+        scope='REGION',
+        compartment_id=clients.compartment_id,
+        lifetime='RESERVED',
+        kind='reserved address',
+        name=_name('ip'),
+    )
 
 
 def pin_options(known_hosts: Path) -> list[str]:
@@ -657,13 +762,12 @@ def ssh(clients: OciClients, command: Sequence[str]) -> NoReturn:
     os.execvp('ssh', argv)
 
 
-def ensure_image(clients: OciClients) -> str:
+def ensure_image(clients: OciClients, found: Survey) -> str:
     """Import the FCOS qcow2 as a custom image, once per release."""
-    artifact = fcos_artifact()
+    artifact = found.fcos
     image_name = _name(f'fcos-{artifact.release}')
 
-    log.info('looking for an imported image named %s', image_name)
-    image = _find(_data(clients.compute.list_images(clients.compartment_id, display_name=image_name)), image_name)
+    image = found.image
     if image is not None:
         # An import in flight is not yet a bootable image; launching against
         # one fails, so converge on the finished state rather than its name.
@@ -764,17 +868,12 @@ def _shape_domain(clients: OciClients, image_id: str) -> str:
 def find_instance(clients: OciClients) -> Any | None:
     """The appliance, if it exists. Creates nothing.
 
-    Paginated, because the compartment's instance list is not a list of the
-    boxes that exist: a terminated instance stays in it, and this box is
-    cattle, so the list grows by one on every replacement while the answer
-    stays one box. A single page would eventually stop containing the running
-    appliance, and everything that reads this answer reads a miss as "no
-    appliance": no approval gate in front of a replacement, no dump of the box
-    about to be destroyed, and an escrow that mints a fresh CA and age
-    identity over the live one.
+    Named apart from the survey, as `find_reserved_ip` is, because it is
+    read outside a converge -- `ssh` asks for the pin alone -- and read again
+    inside one: `ensure_instance` asks after the terminate, when the survey's
+    answer is the box that was destroyed.
     """
-    instances = oci.pagination.list_call_get_all_results(clients.compute.list_instances, clients.compartment_id).data
-    return _find(instances, _name('vm'))
+    return _lookup(clients.compute.list_instances, clients.compartment_id, kind='instance', name=_name('vm'))
 
 
 #: What the box was built from, carried on the box. Instance metadata rather

@@ -303,6 +303,7 @@ def _launch_box(
     roots: config.Roots,
     *,
     dump_key: b2.AppKey,
+    found: provision.Survey,
     placement: provision.Placement,
     nsg_id: str,
     reserved: provision.ReservedAddress,
@@ -331,7 +332,7 @@ def _launch_box(
     ignition = config.render_ignition(built)
     host_public_key = config.host_public_key(built)
     log.info('[6/7] converging the custom image — a release not imported yet takes the better part of an hour')
-    image_id = provision.ensure_image(clients)
+    image_id = provision.ensure_image(clients, found)
     log.info('[7/7] launching the instance')
     instance_id = provision.ensure_instance(
         clients,
@@ -364,7 +365,11 @@ def _provision(
     # speaks on success is indistinguishable from a hang while they run.
     log.info('[1/7] authorizing with OCI, and looking for a box that already exists')
     clients = provision.OciClients.load(compartment)
-    existing = provision.find_instance(clients)
+    # Every adopt-by-name read, before the run's first write: what the stages
+    # below adopt is decided here, and each of them creates only what the
+    # survey answered None for.
+    found = provision.survey(clients)
+    existing = found.instance
 
     # Ahead of everything else because whether a box is running is what
     # decides whether this run may generate roots at all: on a live appliance,
@@ -388,9 +393,9 @@ def _provision(
     )
 
     log.info('[4/7] converging the OCI network: VCN, subnet, gateway, security group, reserved address')
-    placement = provision.ensure_network(clients)
-    nsg_id = provision.ensure_security_group(clients, placement.vcn_id)
-    reserved = provision.ensure_reserved_ip(clients)
+    placement = provision.ensure_network(clients, found)
+    nsg_id = provision.ensure_security_group(clients, placement.vcn_id, found)
+    reserved = provision.ensure_reserved_ip(clients, found)
     log.info('appliance address: %s', reserved.address)
 
     log.info('[5/7] comparing the running box against this commit')
@@ -453,6 +458,7 @@ def _provision(
                     clients,
                     roots,
                     dump_key=dump_key,
+                    found=found,
                     placement=placement,
                     nsg_id=nsg_id,
                     reserved=reserved,
