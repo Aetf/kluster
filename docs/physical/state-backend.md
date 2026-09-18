@@ -217,6 +217,26 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     mid-operation. A reboot is a brief 5432 outage, accepted:
     Postgres shutdown is systemd-ordered, nothing corrupts, and the
     clients retry.
+-   **Everything the template executes names a binary the box has.**
+    Fedora CoreOS is immutable and packageless: the image is the whole
+    of what is installed, and the template's own header says the rest —
+    anything missing from the file does not exist on the machine. So
+    each `Exec*=` head in `butane.yaml.j2`, and the shebang of every
+    file the template writes executable, names either a binary the
+    stable stream's image ships — its composed package set is
+    `manifest-lock.x86_64.json` on the `stable` branch of
+    `coreos/fedora-coreos-config`, and no Python of any kind is in it —
+    or a path another unit in the same template installs, which today
+    is `/opt/bin/age` from `age-install.service`. The dump script is
+    shell for that reason (§5), written against `bash`, `coreutils`,
+    `curl`, `jq`, `gawk`, `sed` and `podman`, all of which the
+    lock carries. A test in `tests/test_state_dump.py` reads the
+    template as text, extracts those targets and holds them to a
+    committed allowlist that cites the lock. It exists because the rest
+    of the suite cannot see this failure: a script runs on a
+    workstation under whatever interpreter its shebang names, and on
+    the box the same shebang fails at exec — `203/EXEC`, "No such file
+    or directory" against a file that is there — on every timer run.
 -   **Every hand operation is a script.** The box is outside Pulumi,
     but not outside version control: `deploy/state-backend/` carries
     the machine's definition, and the `state-backend` console script
@@ -394,7 +414,9 @@ there is nothing for it to edit.)
     plaintext lives in `/var/tmp`
     beside its own ciphertext for the two steps that read it — not in
     `/tmp`, which on this box is backed by memory rather than by the
-    50 GB disk — and is unlinked as soon as the ciphertext exists.
+    50 GB disk — and is unlinked as soon as the ciphertext exists. The
+    script is `deploy/state-backend/state-dump.sh`: shell, because the
+    box has no interpreter to run anything else (§1).
 -   **The same dump on demand: `state-backend dump`.** It differs from
     the timer's in its channel, its destination and its spool — the
     operator's client certificate rather than the box's local socket, a

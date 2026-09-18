@@ -1,6 +1,6 @@
 """Taking the Pulumi state out of the appliance, and putting it back.
 
-The box dumps itself nightly (`deploy/state-backend/state-dump.py`, §5); this
+The box dumps itself nightly (`deploy/state-backend/state-dump.sh`, §5); this
 module is the operator's side of the same artefact — an on-demand dump, and
 the only thing that reads one back. Both halves of every playbook that
 rebuilds the box are built out of it: a Postgres major upgrade is a dump, a

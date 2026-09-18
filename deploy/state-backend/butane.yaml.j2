@@ -247,7 +247,7 @@ systemd:
     # which on a box with 1 GB of memory is what the spool exists to avoid;
     # plain `yes` leaves the host's disk behind them but gives the service a
     # private pair of its own, so the /var/tmp the script names
-    # (state-dump.py) is no longer the /var/tmp it gets. That spool is a
+    # (state-dump.sh) is no longer the /var/tmp it gets. That spool is a
     # choice about this box's disk, and it is made in one file.
     - name: state-dump.service
       contents: |

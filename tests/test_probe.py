@@ -15,19 +15,19 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
-import importlib.util
 import logging
 import os
 import re
 import subprocess as sp
-import types
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import unquote
 
 import pytest
 from b2_api import FakeApi
 from memory_kit import MemoryKit
+from state_dump_box import Box
 
 from kluster import conventions
 from kluster.conventions import backup
@@ -265,48 +265,30 @@ def _dumps(key: b2.AppKey, *, now: dt.datetime = NOW) -> probe.Verdict:
     return probe.dumps(key.key_id, key.key, now=now)
 
 
-def _box_script() -> types.ModuleType:
-    """`deploy/state-backend/state-dump.py`, loaded the way `test_state_dump` loads it: the writer of every object the probe reads."""
-    spec = importlib.util.spec_from_file_location('state_dump', config.DEPLOY_DIR / config.DUMP_SCRIPT)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def test_the_probe_reads_the_name_the_box_uploads_under(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_the_probe_reads_the_name_the_box_uploads_under(tmp_path: Path) -> None:
     """The seam is the box's writer: the objects under the prefix are named by the appliance's own script.
 
-    The script is run through `main` with the dump and the upload stubbed,
-    so the name it hands the upload is the one it would hand B2, from its
-    own format literal and its own clock. A stamp the probe could not read
-    would make every nightly object a stranger, and no case holding the
-    probe to a stamp typed here -- or to the workstation's writer -- would
-    notice.
+    The script is run as the box runs it, over fakes of what it calls
+    (`state_dump_box`), so the name it hands the upload is the one it would
+    hand B2, from its own format literal and its own clock. A stamp the
+    probe could not read would make every nightly object a stranger, and no
+    case holding the probe to a stamp typed here -- or to the workstation's
+    writer -- would notice.
     """
-    box = _box_script()
-    uploaded: list[str] = []
-
-    def dumped(_path: Path) -> None:
-        pass
-
-    def upload(_path: Path, name: str) -> None:
-        uploaded.append(name)
-
-    monkeypatch.setenv('B2_PREFIX', conventions.STATE_DUMP_PREFIX)
-    monkeypatch.setattr(box, 'SPOOL', str(tmp_path))
-    monkeypatch.setattr(box, 'dump', dumped)
-    monkeypatch.setattr(box, 'upload', upload)
+    box = Box(tmp_path)
     before = dt.datetime.now(UTC).replace(microsecond=0)
 
-    assert box.main() == 0
+    ran = box.run(env={'B2_PREFIX': conventions.STATE_DUMP_PREFIX})
 
     after = dt.datetime.now(UTC)
-    (name,) = uploaded
-    taken = probe.dumped_at(name)
+    assert ran.returncode == 0, ran.stderr
+    (put,) = box.of('curl')[2:]
+    sent = put.header('X-Bz-File-Name')
+    assert sent is not None
+    taken = probe.dumped_at(unquote(sent))
     # Read, and read as the moment the box stamped -- the bracket is the
     # call itself, so a stall widens it and decides nothing.
-    assert taken is not None, name
+    assert taken is not None, sent
     assert before <= taken <= after
 
 
