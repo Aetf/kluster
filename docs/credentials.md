@@ -1059,8 +1059,11 @@ that puts a value there.
     from stage 5 for the one reason the row exists: this value goes to no
     Environment, so the stack whose config carries the forge's admin token
     is unreadable by anything CI can start (§1 rule 6). A machine that
-    skips it does not silently fall back to the estate passphrase —
-    every command that would touch that stack refuses by name.
+    skips it does not silently fall back to the estate passphrase:
+    every `credentials` command that would touch that stack refuses by
+    name, and a bare `pulumi` run refuses with `incorrect passphrase`,
+    the committed `encryptionsalt` verifying this passphrase and no
+    other (§4.2 on why that line stays).
 8.  `credentials derived unifi record`,
     `credentials derived adguard record`,
     `credentials derived zerotier record`,
@@ -1348,21 +1351,26 @@ a refusal and never a corruption. The estate passphrase adopts the same
 way, plus a `derived sync` to re-push it to every Environment.
 
 **Never repair that disagreement by deleting `encryptionsalt`.** With no
-salt, `pulumi config set --secret` writes a *new* one from whatever
-passphrase is in the environment and re-keys the stack silently — the
-one operation on this path that does not announce itself, and the way a
-stack encrypted apart quietly rejoins the estate passphrase. Done with
-ciphertext still in the file, it is worse than silent: the values left
-behind were encrypted to the superseded key and the new salt verifies
-the new one, so they decrypt under **neither** passphrase and the file
-looks intact. It is safe
-in exactly one case, which is why the crossing that introduced this row
-used it: a stack file that holds no ciphertext at all has nothing to
-lose. `Pulumi.github.yaml` is that file today — it carries no
-`encryptionsalt` at all, and a comment at its head says why — so the
-first `credentials derived github-admin record` derives the salt from
-the passphrase in hand rather than checking against one that names the
-estate's.
+salt there is nothing to verify against, and `pulumi` mints one from
+whatever passphrase is in the environment and writes it into the file —
+not only `config set --secret` but every command that loads the stack's
+configuration, `preview` among them, and before it looks at whether the
+file holds a secret at all. That is the one operation on this path that
+does not announce itself, and the way a stack encrypted apart quietly
+rejoins the estate passphrase: under `mise.toml` the ambient
+`PULUMI_CONFIG_PASSPHRASE` is always the estate's, so a bare
+`pulumi preview -s github` against a salt-less file keys the stack to
+it, and the stack's own passphrase then meets `incorrect passphrase`
+with nothing wrong but the salt. Done with ciphertext still in the file,
+it is worse than silent: the values left behind were encrypted to the
+superseded key and the new salt verifies the new one, so they decrypt
+under **neither** passphrase and the file looks intact. A salt-less
+stack file is therefore a hazard rather than a state — never committed,
+never run against. The crossing that introduced this row is the one
+time one was, because a file holding no ciphertext has nothing to lose,
+and it closed with `credentials derived github-admin record` deriving
+the salt from the stack's own passphrase; that is the salt
+`Pulumi.github.yaml` carries.
 
 **A value that already exists is imported rather than replaced.**
 `credentials derived <row> import` escrows what a slot or a predecessor

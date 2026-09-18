@@ -1,11 +1,13 @@
-# No `encryptionsalt`. This stack's configuration is encrypted under a
-# passphrase of its own rather than the estate's (docs/credentials.md §1 rule
-# 6), and the salt is a verifier *for a particular passphrase* -- so the one
-# this file used to carry named the wrong key. Removing it is safe here and
-# nowhere else: this file holds no ciphertext, so there is nothing the change
-# of key can strand. `credentials derived github-admin record` writes the
-# first secret and, with no salt to check against, the fresh one it derives
-# from the passphrase in hand (§4.2).
+# This stack's configuration is encrypted under a passphrase of its own rather
+# than the estate's (docs/credentials.md §1 rule 6). The `encryptionsalt` below
+# is a verifier for that passphrase: `mise.toml` exports it as
+# `KLUSTER_GITHUB_PASSPHRASE`, a hand-run `pulumi` passes it in as
+# `PULUMI_CONFIG_PASSPHRASE` (docs/framework/github.md §1), and under any other
+# value `pulumi` refuses with `incorrect passphrase` and writes nothing. The
+# salt is never deleted by hand: a stack file without one is keyed to whatever
+# passphrase the next `pulumi` command finds in its environment (§4.2). The one
+# secret here, the forge's admin token, is written by
+# `credentials derived github-admin record`.
 config:
   pulumi:disable-default-providers:
     - github

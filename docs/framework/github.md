@@ -110,10 +110,12 @@ the invocation passes it in:
 
 Getting it wrong is not silent. `encryptionsalt` is a verifier, so
 `pulumi` answers `error: incorrect passphrase`, exits non-zero and
-writes nothing — for a read and for a write alike. (The one operation
-that would re-key a stack quietly is a `config set --secret` against a
-file with *no* salt, which is why credentials.md §4.2 forbids deleting
-that line.) A `credentials` run on a machine holding no passphrase for
+writes nothing — for a read and for a write alike. (What would re-key a
+stack quietly is any `pulumi` command against a file with *no* salt, a
+`preview` as much as a `config set --secret`: with nothing to verify
+against, `pulumi` mints a salt from the ambient passphrase and writes it
+in, which is why credentials.md §4.2 forbids deleting that line.) A
+`credentials` run on a machine holding no passphrase for
 this stack refuses one step earlier still, naming the stack and the
 command that fills it, rather than letting `pulumi` refuse at the far
 end of whatever was in progress.
