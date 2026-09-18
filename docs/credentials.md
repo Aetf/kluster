@@ -474,7 +474,7 @@ cell would say `pending` to an operator already being served.
 | B2 dump key (micro) | B2 seed key | `writeFiles` alone, dump prefix | on-box (Ignition) | state-backend pg_dump timer |
 | B2 freshness key (state dumps) | B2 seed key (`credentials derived b2-freshness-dumps mint`) | `listFiles` alone, confined to the dump prefix of the appliance's bucket: names, never a byte | ops-repo secret (`B2_FRESHNESS_DUMPS_KEY_ID`, `B2_FRESHNESS_DUMPS_KEY`) | `state-backend probe`, run by the ops repo's scheduled probes workflow (state-backend.md §6) |
 | B2 freshness key (etcd) | B2 seed key | The same shape over the etcd snapshots' prefix of the backup bucket, which a B2 key cannot share with the one above: a key confines to one bucket | ops-repo secret (pending) | the etcd snapshot age probe |
-| GitHub App key (dispatch) | Made on the App's own page (no key API) | Signs a JWT for that App alone, which mints an 8 h installation token carrying contents:write on `kluster-ops` | escrow as `github/dispatch-key` · `kluster` repository secret (`DISPATCH_APP_PRIVATE_KEY`) | the alert producer (`alert.yml`), called by every workflow that runs on `main` (ci.md §3) |
+| GitHub App key (dispatch) | Made on the App's own page (no key API) | Signs a JWT for that App alone, which mints a per-run installation token carrying contents:write on `kluster` and `kluster-ops` — the App is installed on both, and each mint is scoped to the one repository its run pushes to. The residual: the key is a repository secret any same-repository job can read, and its token pushes to unprotected branches of both repositories but to neither `main` (protected, checks required) nor any workflow file (no `workflows` permission) — the same "anyone who can push a branch" boundary this repository already accepts (ci.md §3) | escrow as `github/dispatch-key` · `kluster` repository secret (`DISPATCH_APP_PRIVATE_KEY`) | `sdk-regenerate.yml`, whose push onto a renovate branch is the App's act so that the pushed head's runs start on their own (ci.md §3); the alert producer (`alert.yml`), called by every workflow that runs on `main`, once built |
 | GitHub App key (trigger) | Made on the App's own page (no key API) | The same, for an 8 h token carrying actions:write on `kluster` | escrow as `github/trigger-key` · ops-repo secret (`TRIGGER_APP_PRIVATE_KEY`) | Weekly drift trigger (the ops repo's `drift-trigger.yml`) |
 | overlay CI member identities (`ci-physical`, `ci-dns`) | generated in-state (`zerotier_identity`) | One per joining stack, `ci`-tagged and flow-rule-confined (gateway.md §2.3) | CI env | CI per-run join |
 | Pulumi state passphrase | generated, escrowed as `pulumi/passphrase` | Decrypts state secrets, and the config secrets of every stack but `github` | escrow · CI env (all stacks) · workstation slot | every `pulumi` run |
@@ -686,18 +686,22 @@ is a re-push rather than a console visit. `credentials derived sync
 `TRIGGER_APP_PRIVATE_KEY`, the name the ops repository's
 `drift-trigger.yml` reads it under; `--only github-dispatch-key` pushes
 the dispatch key as `DISPATCH_APP_PRIVATE_KEY`, a repository secret of
-`kluster`, the name the alert producer `alert.yml` reads it under. A
-repository secret rather than an Environment's because that job belongs
-to no stack, and its exposure is the fence's: any same-repo branch can
-read it, previews included, which buys a token that can post alerts and
-write non-workflow files into the private ops repository, and nothing
-else (cluster/architecture.md §4.3). Rotating one is another key on
-that page, recorded here as the label's next generation, `sync --only`
-for that row, and the superseded key deleted on the page in the same
-visit. The client id the JWT is issued under travels
-with the delivery rather than with the key: it identifies the App
-instead of authenticating as it, and the App's page shows it for as long
-as the App exists.
+`kluster`, the name `sdk-regenerate.yml` reads it under today and the
+alert producer `alert.yml` will. A repository secret rather than an
+Environment's because neither job belongs to a stack, and its exposure
+is the fence's: any same-repo branch can read it, previews included,
+which buys a token that can push non-workflow files onto unprotected
+branches of `kluster` and `kluster-ops`, and post alerts to the latter,
+and nothing else (cluster/architecture.md §4.3, ci.md §3). Rotating one
+is another key on that page, recorded here as the label's next
+generation, `sync --only` for that row, and the superseded key deleted
+on the page in the same visit. The client id the JWT is issued under
+travels with the delivery rather than with the key: it identifies the
+App instead of authenticating as it, and the App's page shows it for as
+long as the App exists — for the dispatch App it is the `kluster`
+repository variable `DISPATCH_APP_CLIENT_ID`, set by the operator from
+that page, which `sdk-regenerate.yml` hands to the minting action
+beside the key.
 
 ## 4. The scripts
 
