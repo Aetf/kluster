@@ -164,8 +164,9 @@ PR      preview.yml:        changes ─→ preview (dns | k8s-base | apps)
 
         sdk-regenerate.yml: regenerate ─→ gate ─→ push onto the branch
                               (renovate's branches touching Pulumi.yaml
-                               only; the pushed head's runs wait for an
-                               approval click, see the bridged-SDK bullet)
+                               only; the push is the dispatch App's, so
+                               the pushed head's runs start on their own
+                               — see the bridged-SDK bullet)
 
 merge   deploy.yml:         plan-physical ──zero diff──→ (up-physical skipped)
                                    └───────── diff ────→ up-physical [gate]
@@ -272,64 +273,79 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     and opens a pull request, and a new year reads as a major and waits
     on the dependency dashboard.
 -   **A bridged-SDK bump is finished on its branch by a workflow, and
-    lands one approval click later.** The three SDKs under `sdks/` are
-    generated from the `packages:` block of `Pulumi.yaml`, and a test
-    in `checks` holds each committed SDK to
-    the block, so a renovate bump of a bridge or provider version is a
-    red `checks` until `pulumi install` has regenerated the tree.
-    `sdk-regenerate.yml` does that on renovate's branch: it regenerates
-    `sdks/`, re-locks `uv.lock`, runs AGENTS.md's gate step for step on
-    the regenerated tree, and pushes the result onto the branch — a
-    tree that fails the gate is never pushed, and the run is red on the
-    head renovate pushed. The gate runs *there* because the pushed
-    head's own runs wait for a person: the push is made with
-    `GITHUB_TOKEN`, and the `pull_request` runs such a push causes are
-    created in an approval-required state — `checks`, `changes`,
-    `classify` and the regeneration itself all exist on the new head,
-    and **Approve workflows to run** in the merge box, by anyone with
-    write access, starts them (closing and reopening the pull request
-    does too, and is the heavier gesture). A `push` made with the token
-    still starts nothing, which is the property the unattended merge
-    relies on to start no deploy. From the click on, nobody else is
-    needed: `classify` admits `Pulumi.yaml` when the author is
-    `renovate[bot]` and the document with `packages` removed is equal
-    at base and head — compared **parsed**, not by hunk, so a comment
-    and a reordering of keys do not count while an edit to any other
-    key does, `versions:` above all. A person's edit to the recipe is a
-    new provider, a design change, and keeps the human route.
-    `classify` has no checkout and reads both revisions through the
-    API. The admission rests on `checks` rather than on a second
-    judgment of its own: `checks` already holds each `sdks/<name>` to
-    the block and `uv.lock` to the tree, so "regenerated cleanly" is a
-    required check. The bump then takes the proven route like any other
-    — `checks`, `changes`, `classify`, `prove`, `merge` — because what
-    it actually changes, `sdks/` and `uv.lock`, is code. What `prove`
-    can say about such a bump is nothing in any case: the three SDKs
-    render only in `physical`, which has no pull-request preview, so
-    `prove` cannot see a bump's diff, and it surfaces where every
-    provider-SDK bump does — as a diff in `plan-physical` on `main`
-    (the residual accepted under H3 below).
-    **The click repeats whenever `main` advances while the bump is
-    open.** Renovate's `rebaseWhen: auto` resolves to
-    *behind-base-branch* here, because `main`'s protection requires an
-    up-to-date branch, and `gitIgnoredAuthors` naming the workflow's
+    nobody clicks.** The three SDKs under `sdks/` are generated from the
+    `packages:` block of `Pulumi.yaml`, and a test in `checks` holds
+    each committed SDK to the block, so a renovate bump of a bridge or
+    provider version is a red `checks` until `pulumi install` has
+    regenerated the tree. `sdk-regenerate.yml` does that on renovate's
+    branch: it regenerates `sdks/`, re-locks `uv.lock`, runs AGENTS.md's
+    gate step for step on the regenerated tree, and pushes the result
+    onto the branch — a tree that fails the gate is never pushed, and
+    the run is red on the head renovate pushed. **The push is the
+    dispatch App's act, not `GITHUB_TOKEN`'s.** A `pull_request` run
+    that a `GITHUB_TOKEN` push causes is created in an approval-required
+    state and starts only when someone with write access selects
+    **Approve workflows to run** in the merge box; a push made with a
+    GitHub App's installation token is a different actor, and the runs
+    it causes start on their own. So the job mints an installation token
+    of the dispatch App per run (`actions/create-github-app-token`, from
+    the `DISPATCH_APP_PRIVATE_KEY` repository secret and the App's
+    client id in the `DISPATCH_APP_CLIENT_ID` repository variable,
+    scoped to this repository alone — credentials.md §3) and hands it to
+    the checkout, so the persisted credential and therefore the push are
+    the App's; the workflow's own token keeps `contents: read`, which
+    makes a push under it a refusal rather than a head that waits. The
+    commit's author stays the Actions identity, because who pushed is
+    the credential's business and the author is what `gitIgnoredAuthors`
+    reads (below). A `push` made with `GITHUB_TOKEN` still starts
+    nothing, which is the property the unattended merge relies on to
+    start no deploy. From the push on, nobody is needed: `checks`,
+    `changes` and `classify` start on the regenerated head, and
+    `classify` admits `Pulumi.yaml` when the author is `renovate[bot]`
+    and the document with `packages` removed is equal at base and head —
+    compared **parsed**, not by hunk, so a comment and a reordering of
+    keys do not count while an edit to any other key does, `versions:`
+    above all. A person's edit to the recipe is a new provider, a design
+    change, and keeps the human route. `classify` has no checkout and
+    reads both revisions through the API. The admission rests on
+    `checks` rather than on a second judgment of its own: `checks`
+    already holds each `sdks/<name>` to the block and `uv.lock` to the
+    tree, so "regenerated cleanly" is a required check. The bump then
+    takes the proven route like any other — `checks`, `changes`,
+    `classify`, `prove`, `merge` — because what it actually changes,
+    `sdks/` and `uv.lock`, is code. What `prove` can say about such a
+    bump is nothing in any case: the three SDKs render only in
+    `physical`, which has no pull-request preview, so `prove` cannot see
+    a bump's diff, and it surfaces where every provider-SDK bump does —
+    as a diff in `plan-physical` on `main` (the residual accepted under
+    H3 below).
+    **A rebase heals itself.** Renovate's `rebaseWhen: auto` resolves
+    to *behind-base-branch* here, because `main`'s protection requires
+    an up-to-date branch, and `gitIgnoredAuthors` naming the workflow's
     address keeps the branch renovate's own — so on each advance of
     `main`, renovate rebases the branch from its own commit and the
     regeneration is dropped; the workflow regenerates on the new head,
-    and that head waits for another click. The alternative — a branch renovate
-    would not touch once the workflow committed to it — is a bump that
-    goes stale instead, and stays stale on a newer release too, which
-    is why the loop is the accepted side.
-    **What is left is the click itself** (kluster-ops#366), and
-    with it the loop above: a credential that pushes as something other
-    than `GITHUB_TOKEN` — a GitHub App with `contents: write` on this
-    repository — so that the regeneration's push starts the runs on its
-    own. The trigger App carries `actions: write` alone so that it can
-    start runs and never push code, and adding a pusher is a decision
-    about that partition (credentials.md §3), not a workflow edit. A
-    merge route of the regeneration workflow's own is not part of it
-    and never was: it would be a second copy of `prove`, for a proof it
-    cannot improve on.
+    pushes as the App again, and that head's runs start as the first
+    one's did. The alternative — a branch renovate would not touch once
+    the workflow committed to it — is a bump that goes stale instead,
+    and stays stale on a newer release too, which is why the loop is the
+    accepted side.
+    **What the App's key buys and what it costs.** No third App: the
+    dispatch App's permission set is `contents: write` and nothing else,
+    an installation adds repositories and no permissions, and
+    `repositories:` scopes each run's token to the one repository that
+    run pushes to — this one here, and the ops repository alone once the
+    alert producer mints its own. The trigger App keeps `actions: write` alone, so the
+    partition stands: one App starts runs and never pushes code, the
+    other pushes code and never starts a run by itself. The residual is
+    the key's placement: the dispatch App's key is a repository secret
+    readable by any same-repository job, and its token pushes to
+    unprotected branches of `kluster` and `kluster-ops` but to neither
+    `main` (protected, checks required) nor any workflow file (no
+    `workflows` permission) — the same "anyone who can push a branch"
+    boundary this repository already accepts. A merge route of the
+    regeneration workflow's own is not part of it and never was: it
+    would be a second copy of `prove`, for a proof it cannot improve on.
 -   **Plan-pinning (`preview --save-plan` / `up --plan`) is deliberately
     not adopted** initially: it would guarantee merge applies exactly the
     reviewed plan, but adds plan-artifact plumbing and hard-fails on any
@@ -355,10 +371,11 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     hold no Home Assistant credential at all: one shared producer step
     posts a `repository_dispatch` to the ops repo, which owns tier
     semantics, payload formatting, deduplication and the GitHub-issue
-    leg (cluster/architecture.md §4.3). That producer step, and the
-    dispatch App whose token it would use, are **not built**. When they
-    are, this job becomes the dispatch call and the webhook secret
-    leaves the repository.
+    leg (cluster/architecture.md §4.3). That producer step is **not
+    built**; the dispatch App whose token it would use already pushes
+    for `sdk-regenerate.yml` (above), and its key sits where the step
+    will read it. When the step is, this job becomes the dispatch call
+    and the webhook secret leaves the repository.
 -   **Version control is `jj`, and nothing here notices**: the forge
     sees git objects, so every workflow, check and merge behaves as it
     would under git — with the one accepted loss that rebase-merge does

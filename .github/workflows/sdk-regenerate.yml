@@ -9,26 +9,34 @@ name: sdk-regenerate
 # whole gate on the regenerated tree, and commits the result onto the branch
 # (framework/ci.md §3).
 #
-# **The gate runs here, before the push, because the pushed head's own runs
-# wait for a person.** The push is made with the workflow's token, and a
-# `pull_request` run that a `GITHUB_TOKEN` push causes is created in an
-# approval-required state: `checks`, `changes`, `classify` and this workflow
-# all exist on the regenerated head, and none starts until someone with write
-# access selects **Approve workflows to run** in the merge box. So the one run
-# that sees the regenerated tree before that click is this one, and a tree
-# that fails the gate is not pushed at all: the run goes red on the renovate
-# head, where the pull request shows it. (A `push` made with the token still
-# starts nothing, which is the property the unattended merge relies on to
-# start no deploy.)
+# **The push is the dispatch App's act, so the pushed head's runs start on
+# their own.** A `pull_request` run that a `GITHUB_TOKEN` push causes is
+# created in an approval-required state and starts only when someone with
+# write access selects **Approve workflows to run** in the merge box; a push
+# made with a GitHub App's installation token is a different actor, and the
+# runs it causes start by themselves. So the job mints an installation token
+# of the dispatch App per run -- `actions/create-github-app-token`, from the
+# `DISPATCH_APP_PRIVATE_KEY` repository secret and the App's client id in the
+# `DISPATCH_APP_CLIENT_ID` repository variable (credentials.md §3), scoped to
+# this repository alone -- and hands it to the checkout, whose persisted
+# credential is what the `git push` below authenticates with. The workflow's
+# own token keeps `contents: read`, so a push that somehow reached for it
+# would be refused rather than land a head that waits for a click. Minting
+# comes first, before anything is regenerated: a missing installation, key or
+# client id fails the job there and pushes nothing.
 #
-# **After the click, nothing further is asked of anyone.** A bump that leaves
-# `Pulumi.yaml` changed only in `packages:` is a noop-automerge candidate on
-# renovate's own pull request, so it merges unattended once its runs have
-# started and gone green; `noop-automerge.yml` is where that is decided and
-# ci.md §3 is where the rule is stated. The comment this workflow leaves says
-# as much, which is why the click is the one thing it asks for. What removes
-# the click is a credential that pushes as something other than
-# `GITHUB_TOKEN` -- decided and not built (ci.md §3).
+# **The gate runs here, before the push, all the same.** The pushed head's
+# own `checks` is what the merge requires, but a tree that fails the gate is
+# not worth a commit on renovate's branch: it is not pushed at all, and the
+# run goes red on the renovate head, where the pull request shows it.
+# (A `push` made with `GITHUB_TOKEN` still starts nothing, which is the
+# property the unattended merge relies on to start no deploy.)
+#
+# **Nothing is asked of anyone.** A bump that leaves `Pulumi.yaml` changed
+# only in `packages:` is a noop-automerge candidate on renovate's own pull
+# request, so it merges unattended once the regenerated head's runs have
+# gone green; `noop-automerge.yml` is where that is decided and ci.md §3 is
+# where the rule is stated. The comment this workflow leaves says as much.
 #
 # **Recognised by outcome, not by parsing.** The block is regenerated whenever
 # a renovate branch touches `Pulumi.yaml` at all, and a regeneration that
@@ -37,7 +45,7 @@ name: sdk-regenerate
 # is the tree, so a new entry, a removed one and a moved pin all count.
 #
 # **Only renovate's branches, and only this repository's.** A person's branch
-# is theirs to push to (dispatch.md §2 rule 4), and a fork's is one this token
+# is theirs to push to (dispatch.md §2 rule 4), and a fork's is one the token
 # cannot push to. The login is in the census `conventions/forge.py` carries,
 # and a test holds this file to it.
 
@@ -51,8 +59,11 @@ concurrency:
   group: sdk-regenerate-${{ github.ref }}
   cancel-in-progress: true
 
+# The workflow's own token comments on the pull request and nothing more; the
+# push is the App token's (header). `contents: read` is the least a job can
+# hold, and it is what makes a push under this token a refusal.
 permissions:
-  contents: write
+  contents: read
   pull-requests: write
 
 env:
@@ -70,11 +81,26 @@ jobs:
     # checks.yml's own `timeout 300`, and this bound is for everything else.
     timeout-minutes: 30
     steps:
+      # The dispatch App's installation token, for this repository alone: the
+      # same installation covers the ops repository, and `repositories:` is
+      # what keeps this run's token off it. `client-id` is the App's client
+      # id, the public identifier the register leaves on the App's page and
+      # delivers as a repository variable (credentials.md §3). The action
+      # revokes the token when the job ends.
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          client-id: ${{ vars.DISPATCH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.DISPATCH_APP_PRIVATE_KEY }}
+          repositories: ${{ github.event.repository.name }}
+
       # The branch itself rather than the merge ref, so the commit below is a
-      # fast-forward of what renovate pushed.
+      # fast-forward of what renovate pushed. The App token is the persisted
+      # credential, so the push at the end is the App's act (header).
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.head.ref }}
+          token: ${{ steps.app-token.outputs.token }}
 
       - uses: jdx/mise-action@v3
         with:
@@ -141,11 +167,12 @@ jobs:
 
       # Explicit paths, never `-a`: the regeneration is `sdks/` and the lock,
       # and `pulumi install`'s reorder of `pyproject.toml` is not part of the
-      # bump (it is what a `-a` would commit). The
-      # author is the workflow's own identity, spelled without the numeric
-      # account id GitHub also accepts: `renovate.json5` names this address in
-      # `gitIgnoredAuthors` so that renovate keeps treating the branch as its
-      # own, and a test holds the two spellings equal.
+      # bump (it is what a `-a` would commit). The author is the Actions
+      # identity, spelled without the numeric account id GitHub also accepts,
+      # and it stays that while the push is the App's: `renovate.json5` names
+      # this address in `gitIgnoredAuthors` so that renovate keeps treating
+      # the branch as its own, and a test holds the two spellings equal. Who
+      # pushed is the credential's business, not the commit's.
       - name: Commit and push
         if: steps.tree.outputs.regenerated == 'true'
         env:
@@ -160,7 +187,7 @@ jobs:
           git push origin "HEAD:refs/heads/$BRANCH"
           git rev-parse HEAD > "$RUNNER_TEMP/pushed"
 
-      - name: Say what the head needs
+      - name: Say what happens next
         if: steps.tree.outputs.regenerated == 'true'
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -169,6 +196,6 @@ jobs:
           cat > "$RUNNER_TEMP/comment.md" <<EOF
           Regenerated \`sdks/\` from the \`packages:\` block and pushed $(cat "$RUNNER_TEMP/pushed"); the gate passed on that tree in [this run]($RUN_URL).
 
-          The push was made with the workflow token, so that head's runs wait for approval: select **Approve workflows to run** in the merge box to start them. That click is the only thing this bump still needs from a person: a \`Pulumi.yaml\` changed only in \`packages:\` on a renovate pull request is a noop-automerge candidate, so once the required checks and the zero-diff proof are green it merges on its own (framework/ci.md §3). If either goes red the merge is yours, on a run that says why.
+          The push was made with the dispatch App's token, so that head's runs start on their own. Nothing here needs a person: a \`Pulumi.yaml\` changed only in \`packages:\` on a renovate pull request is a noop-automerge candidate, so once the required checks and the zero-diff proof are green it merges on its own (framework/ci.md §3). If either goes red the merge is yours, on a run that says why.
           EOF
           gh pr comment "$PR" --body-file "$RUNNER_TEMP/comment.md"

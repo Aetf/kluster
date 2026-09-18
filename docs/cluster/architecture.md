@@ -538,17 +538,21 @@ paths, matched to the producers' shapes:
 
 Costs and facts on record:
 
--   **The dispatch App** (this repo's CI → ops repo): a
-    single-purpose GitHub App installed on the ops repo alone,
-    carrying contents:write — the minimum that permits dispatch;
-    GitHub offers no dispatch-only permission, so the same token
-    could push commits there. CI holds no long-lived credential:
-    it mints an **8-hour installation token** per run, and the
-    App's private key is escrowed rather than held in the seed
-    kit (credentials.md §3) —
-    GitHub has no API for creating personal access tokens, which
-    is what makes the App the programmatic shape here rather than
-    a matter of taste. The excess permission is **fenced by what a
+-   **The dispatch App** (this repo's CI → ops repo, and this
+    repo's CI → its own renovate branches): a single-purpose GitHub
+    App installed on both repositories, carrying contents:write —
+    the minimum that permits dispatch; GitHub offers no
+    dispatch-only permission, so the same token could push commits
+    there, and on this repo pushing is the point: `sdk-regenerate.yml`
+    pushes a regeneration onto renovate's branch with the App's
+    token so that the pushed head's runs start without a click
+    (framework/ci.md §3). CI holds no long-lived credential: it
+    mints an **8-hour installation token** per run, scoped to the
+    one repository that run pushes to, and the App's private key
+    is escrowed rather than held in the seed kit (credentials.md
+    §3) — GitHub has no API for creating personal access tokens,
+    which is what makes the App the programmatic shape here rather
+    than a matter of taste. The excess permission is **fenced by what a
     pushed commit can reach, not by who may push**: the ops repo is
     private, and GitHub Free gives a private repository neither
     branch protection nor rulesets (framework/github.md §2), so a
@@ -567,10 +571,15 @@ Costs and facts on record:
     repository's secrets, which are handed to workflow jobs alone.
     The self-contained rule is therefore load-bearing security
     rather than a style preference, and it binds every workflow ever
-    added to the ops repo. Permissions are per-App, not
-    per-installation, which is why the drift-trigger credential is a
-    **second** App (ci.md §3) rather than another permission on this
-    one.
+    added to the ops repo. On this repo the fence is `main`'s own
+    protection, which applies to Apps: a token holder pushes to
+    unprotected branches and to nothing else. Permissions are
+    per-App, not per-installation, which is why the drift-trigger
+    credential is a **second** App (ci.md §3) rather than another
+    permission on this one: the trigger App carries actions:write
+    and never pushes, the dispatch App carries contents:write and
+    never starts a run by itself, and an installation adds
+    repositories to an App without adding permissions.
     Register row in credentials.md.
 -   **The ops repo burns private-repo Actions minutes** (billed
     per-minute, min 1/run): hourly poller ≈ 720 min/mo, the hourly
