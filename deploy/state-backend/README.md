@@ -9,7 +9,7 @@ this file is how to operate it.
 | Path | What |
 | --- | --- |
 | `butane.yaml.j2` (template) | The machine, whole: the Postgres unit — a plain systemd unit running `podman run`, auto-updated by label, not a quadlet — PKI, `pg_hba`, the age recipients, the unit that installs the pinned `age`, the dump timer, the reboot window. |
-| `state-dump.py` | What that timer runs — `pg_dump` → `pg_restore --list` → age → B2, standard library only. |
+| `state-dump.sh` | What that timer runs — `pg_dump` → `pg_restore --list` → age → B2. Shell, because the box has no interpreter: it uses what the Fedora CoreOS image ships plus the `age` the template installs, and a test holds the template to that (docs/physical/state-backend.md §1). |
 | `operator-keys.txt` | SSH keys for diagnosis (`state-backend ssh`). The box is never configured by hand, and a key absent here means no access until the next re-provision. |
 | `drill-recipient.txt` | The public half of the drill age identity, one recipient. Written by `credentials derived drill-age-identity generate` — which pushes the private half into the ops repository's `drill` Environment first — and committed; absent until that generator has run, and the appliance then encrypts to the escrowed generations alone. |
 

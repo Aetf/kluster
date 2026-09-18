@@ -37,7 +37,7 @@ log = logging.getLogger(__name__)
 DEPLOY_DIR = Path(__file__).resolve().parents[4] / 'deploy' / 'state-backend'
 
 TEMPLATE = 'butane.yaml.j2'
-DUMP_SCRIPT = 'state-dump.py'
+DUMP_SCRIPT = 'state-dump.sh'
 OPERATOR_KEYS = 'operator-keys.txt'
 #: The public half of the drill age identity (credentials.md §3), one line,
 #: `#` comments allowed. Written by `credentials derived drill-age-identity

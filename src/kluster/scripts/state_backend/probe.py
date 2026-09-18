@@ -75,7 +75,7 @@ HANDSHAKE_TIMEOUT = 30
 #: printed leaf first, so the first block is the server's own certificate.
 PEM_CERTIFICATE = re.compile(r'-----BEGIN CERTIFICATE-----\n.*?-----END CERTIFICATE-----', re.S)
 
-#: How the appliance names a dump (`deploy/state-backend/state-dump.py`): the
+#: How the appliance names a dump (`deploy/state-backend/state-dump.sh`): the
 #: prefix, a UTC stamp, and the two suffixes. The stamp is the moment the dump
 #: was taken, and it is what the age is read off -- names sort the way they
 #: were written, so the newest object is the last name.
