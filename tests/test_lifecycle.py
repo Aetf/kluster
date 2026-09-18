@@ -415,7 +415,7 @@ def test_the_re_ask_at_the_console_row_names_no_command_but_the_paste(
     refused = next(i for i, message in enumerate(messages) if 'refused, and nothing was stored' in message)
     refusal, hint = messages[refused], messages[refused + 1]
     assert cloudflare.ZONE_VISIBILITY_PERMISSION in refusal
-    assert 'paste the new token at this prompt' in hint
+    assert 'paste the token again at this prompt' in hint
     for line in (refusal, hint):
         assert not re.search(r'seed \S+ create', line), line
         assert '`credentials ' not in line, line
