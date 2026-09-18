@@ -1176,10 +1176,10 @@ apply is run in two parts around the cutover window:
     10.144.1.1`, an address no member answers for until step 3 —
     which is all a route to an absent router ever is.
 2.  **Read the minted node id off the device** — `zerotier-cli info` in
-    that container — and add the gateway's entry to `ZT_ROSTER`, at
-    `10.144.1.1` and with that id. It is a commit rather than a
-    configuration change: a node id is an identity the device minted
-    once and keeps.
+    that container — and add the gateway's entry to
+    `conventions.overlay.ROSTER`, at `10.144.1.1` and with that id. It
+    is a commit rather than a configuration change: a node id is an
+    identity the device minted once and keeps.
 3.  **Read the worker's GUA off the VLAN-7 advertisement** — the
     address it formed by SLAAC once step 1 declared the network and
     booted it — into `workerGua`, and **apply again, knob still
