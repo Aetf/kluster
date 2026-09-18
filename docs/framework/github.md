@@ -159,10 +159,18 @@ command pushes a secret into every Environment the register names
 a stack declares from. It also carries the switches a workflow
 branches on: the labels it reads — today `expect-changes` (ci.md §3) —
 and the identities it tests a pull request's author against — today
-renovate's. Each is held no shorter than what the workflows actually
-read by a test. A label is declared as a resource like everything else
-below; an author is named to nothing, because the only thing that
-reads one is a workflow comparing a login against a string.
+renovate's — and the repository variables it reads, today the dispatch
+App's client id (`DISPATCH_APP_CLIENT_ID`, ci.md §3). Each is held no
+shorter than what the workflows actually read by a test. A label and a
+variable are declared as resources like everything else below; an
+author is named to nothing, because the only thing that reads one is a
+workflow comparing a login against a string. The Apps themselves are
+console-made (§4), and what the table holds of one is its public
+identity — slug and client id, `conventions.forge.App` — and which
+repositories it is installed on, recorded on each repository's row: a
+variable that hands an App's client id to a token mint is a mint that
+fails unless the App is installed there, and a test holds the two
+fields of the row to each other.
 
 **A row carries what defines the entry, not what GitHub stores about
 it.** The credential partition is defined in exactly these terms
@@ -183,8 +191,9 @@ value rather than from a lookup on every run.
 the stack program is wiring rather than a list of resources: the
 component owns one repository plus the resources that must come with
 it and are invisible until they are needed — its vulnerability alerts,
-the branch protection where the plan offers it, one label per census
-entry, and one Environment per census entry. What differs between the
+the branch protection where the plan offers it, one label and one
+variable per census entry, and one Environment per census entry. What
+differs between the
 two repositories is census fields and parameters — visibility, the
 Environments, whether required checks are named — rather than branches
 in the component. It is the same shape, and the same name, as the
@@ -226,6 +235,23 @@ in the component. It is the same shape, and the same name, as the
     Every declared label carries the same color: these are switches a
     workflow reads rather than a taxonomy a reader browses, so a hue
     apiece would be meaning nobody put there.
+-   **Repository variables**: one `ActionsVariable` per census entry,
+    which today is `DISPATCH_APP_CLIENT_ID` on `kluster` — the dispatch
+    App's client id, which `sdk-regenerate.yml` hands to the action
+    that mints the App's token beside the key (ci.md §3) — and nothing
+    on `kluster-ops`. The value is public: a client id names the App
+    and authenticates as nothing, so it is a census fact in the clear
+    (`conventions.forge.DISPATCH_APP`), and the variable is spelled from
+    it rather than typed into the console. A value that would have to
+    be a secret is never a variable; it is a register row
+    `credentials derived sync` pushes (credentials.md §3). The failure a
+    declared variable prevents is the label's: a workflow reading a
+    variable nobody set receives an empty string, and the step that
+    needed it fails on its own terms. The variable did not exist on
+    GitHub before this program declared it, so its create is a plain
+    create; one set by hand first would be refused as a duplicate at
+    the create, and an `import` under the repository's URN would be
+    owed the way §3.1's label import is.
 -   **Branch protection on `main`**: `checks` and `changes` as required
     status checks, plus an up-to-date branch. Those two run on
     every pull request regardless of paths, which is what a required
@@ -365,7 +391,9 @@ apply.
     expiry on both Apps (kluster-ops#11). Reading the state is cheap
     by comparison — an App can list its own installations with a JWT
     signed by the private key already in the kit — so an audit is the
-    open option, not enforcement.
+    open option, not enforcement. What the census records of an App is
+    its public identity and where it is installed (§3); nothing here
+    creates or installs one.
 -   **Environment secret *values*.** Those are the `credentials`
     scripts' job, pushed into slots the register names. This stack
     creates the environment; the register fills it.

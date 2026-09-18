@@ -34,6 +34,7 @@ BRANCH_PROTECTION = 'github:index/branchProtection:BranchProtection'
 ENVIRONMENT = 'github:index/repositoryEnvironment:RepositoryEnvironment'
 VULNERABILITY_ALERTS = 'github:index/repositoryVulnerabilityAlerts:RepositoryVulnerabilityAlerts'
 LABEL = 'github:index/issueLabel:IssueLabel'
+VARIABLE = 'github:index/actionsVariable:ActionsVariable'
 MANAGED_REPOSITORY = 'kluster:components:forge:ManagedRepository'
 PROVIDER = 'pulumi:providers:github'
 
@@ -331,6 +332,7 @@ def _below(entry: conventions.forge.Repository) -> list[tuple[str, str]]:
     """Every resource `ManagedRepository` hangs off one repository, by type and name."""
     below = [(VULNERABILITY_ALERTS, entry.name)]
     below += [(LABEL, f'{entry.name}-{label.name}') for label in entry.labels]
+    below += [(VARIABLE, f'{entry.name}-{variable.name}') for variable in entry.variables]
     below += [(ENVIRONMENT, environment_name(entry, environment)) for environment in entry.environments]
     if entry is conventions.forge.DEPLOYMENT:
         below.append((BRANCH_PROTECTION, PROTECTION))
@@ -364,6 +366,37 @@ def test_each_label_a_workflow_branches_on_is_a_declared_resource(stack: Forge) 
             assert declared['description'] == label.description
             assert declared['color'] == LABEL_COLOR
             assert declared['repository'] == repository.name
+
+
+def test_each_variable_a_workflow_reads_is_a_declared_resource(stack: Forge) -> None:
+    """A variable set by hand in a console is one the next rebuild does not have.
+
+    The workflow that reads it then fails at the step that needed it -- for
+    the dispatch App's client id, the token mint, before anything is
+    regenerated -- so every variable is declared from the census like every
+    label: name and value both, and the value is the census's, which is what
+    keeps the client id spelled once.
+    """
+    variables = stack.by_name(VARIABLE)
+
+    # Written out, for the reason the label case writes its set out: with
+    # both sides derived from the census, a census that lost its variables
+    # would leave `set() == set()` and the loop unentered (ops#184).
+    assert set(variables) == {'kluster-DISPATCH_APP_CLIENT_ID'}
+    assert set(variables) == {
+        f'{repository.name}-{variable.name}'
+        for repository in conventions.forge.REPOSITORIES
+        for variable in repository.variables
+    }
+    for repository in conventions.forge.REPOSITORIES:
+        for variable in repository.variables:
+            declared = variables[f'{repository.name}-{variable.name}']
+            assert declared['variableName'] == variable.name
+            assert declared['value'] == variable.value
+            assert declared['repository'] == repository.name
+            # Public by construction: the value is a census fact, and a
+            # secret marking here would be the tell that one was typed in.
+            assert not isinstance(declared['value'], dict), 'a variable value reached the wire marked secret'
 
 
 def test_only_the_repository_that_merges_unattended_offers_auto_merge(stack: Forge) -> None:

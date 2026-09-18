@@ -632,6 +632,15 @@ AUTHOR_IN_A_CONDITION = re.compile(
     r"\.(?:\w+_)?(?:actor|login)\s*[=!]=\s*'([^']+)'|'([^']+)'\s*[=!]=\s*[\w.]*(?:actor|login)\b"
 )
 
+#: How a workflow reads a repository variable: the `vars` context, in either
+#: of the two spellings GitHub's expression syntax accepts for a property.
+#: Two groups, one per spelling, so a match carries the name in whichever of
+#: them is not empty. Matched wherever it is written -- an input, an `env:`
+#: line, a condition -- because a variable read anywhere and set nowhere is
+#: an empty string at that place, and the step that receives it fails on its
+#: own terms rather than reporting the absence.
+VARIABLE_IN_A_WORKFLOW = re.compile(r"""\bvars\.([A-Za-z_][A-Za-z0-9_]*)|\bvars\[\s*['"]([^'"]+)['"]\s*\]""")
+
 #: The Environment a job deploys into, as a workflow writes it out. The matrix
 #: forms (`environment: ${{ matrix.stack }}`) name a value assembled elsewhere
 #: and are skipped by the shape of this pattern: what it reaches is the
@@ -691,6 +700,65 @@ def test_every_label_a_workflow_branches_on_is_one_the_census_carries() -> None:
     # pass.
     assert 'expect-changes' in read
     assert read <= declared, f'read by a workflow and declared nowhere: {sorted(read - declared)}'
+
+
+def test_every_variable_a_workflow_reads_is_one_the_census_declares_for_this_repository() -> None:
+    """A variable a workflow reads and nothing declares is a step that fails on an empty string.
+
+    `sdk-regenerate.yml` hands `vars.DISPATCH_APP_CLIENT_ID` to the action
+    that mints the dispatch App's token, and an unset variable reaches it as
+    an empty client id: the mint fails, the run is red, and nothing says the
+    variable was the cause. The forge declares every variable from the census
+    (`components/forge`), so what this holds is the other side of that seam:
+    the workflows are text no import reaches, and a variable they read that
+    the census stopped carrying is caught here rather than on the next run.
+
+    Held to **this** repository's row alone, unlike the label case, which
+    pools every repository's labels: a variable is set on one repository, and
+    every file under `.github/workflows/` here is `kluster`'s. One direction
+    only, as the label case is: a declared variable no workflow reads is a
+    value nothing consumes, not a failure.
+    """
+    declared = {variable.name for variable in conventions.forge.DEPLOYMENT.variables}
+    read = {
+        (_name(path), name)
+        for path in _workflows_and_actions()
+        for match in VARIABLE_IN_A_WORKFLOW.findall(path.read_text())
+        for name in match
+        if name
+    }
+
+    # The client id is the one variable the mint needs, and the mint runs
+    # before anything is regenerated (ci.md §3): a scan that stopped reaching
+    # it would be silent about the one read this case exists for.
+    assert ('workflows/sdk-regenerate.yml', 'DISPATCH_APP_CLIENT_ID') in read
+    undeclared = sorted(f'{file} reads vars.{name}' for file, name in read if name not in declared)
+    assert undeclared == [], (
+        f'read by a workflow and declared for {conventions.forge.DEPLOYMENT.name} nowhere: {undeclared}'
+    )
+
+
+def test_an_apps_client_id_is_a_variable_only_where_the_app_is_installed() -> None:
+    """A mint handed a client id on a repository the App is not installed on fails at the mint.
+
+    `actions/create-github-app-token` resolves the App's installation on the
+    repository the run names, so the client id and the installation are two
+    fields of one row that are only correct together: a row that carries the
+    variable and not the App is a run that fails at its first step. The
+    installation itself is console state nothing here declares
+    (framework/github.md §4), so this is the one place the relation is held.
+    """
+    apps = {app.client_id: app for repository in conventions.forge.REPOSITORIES for app in repository.apps}
+
+    # The dispatch App's row is the one this exists for: a census that lost
+    # it would leave both loops below over empty tuples and the case green.
+    assert conventions.forge.DISPATCH_APP in conventions.forge.DEPLOYMENT.apps
+    assert conventions.forge.DISPATCH_APP_CLIENT_ID in conventions.forge.DEPLOYMENT.variables
+    for repository in conventions.forge.REPOSITORIES:
+        for variable in repository.variables:
+            app = apps.get(variable.value)
+            if app is not None:
+                assert app in repository.apps, f'{repository.name} hands {app.slug} to a mint and does not carry it'
 
 
 def test_every_login_a_workflow_compares_against_is_one_the_census_names() -> None:

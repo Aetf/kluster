@@ -696,12 +696,15 @@ and nothing else (cluster/architecture.md §4.3, ci.md §3). Rotating one
 is another key on that page, recorded here as the label's next
 generation, `sync --only` for that row, and the superseded key deleted
 on the page in the same visit. The client id the JWT is issued under
-travels with the delivery rather than with the key: it identifies the
-App instead of authenticating as it, and the App's page shows it for as
-long as the App exists — for the dispatch App it is the `kluster`
-repository variable `DISPATCH_APP_CLIENT_ID`, set by the operator from
-that page, which `sdk-regenerate.yml` hands to the minting action
-beside the key.
+is not a row here at all: it identifies the App instead of
+authenticating as it, and the App's page shows it for as long as the
+App exists, so it is a public fact of the installation recorded in the
+clear in `conventions/forge.py` (`DISPATCH_APP`), the way the tenancy
+OCID and the Cloudflare account id are. The forge declares it as the
+`kluster` repository variable `DISPATCH_APP_CLIENT_ID` from that record
+(framework/github.md §3), landed by `pulumi up -s github` like every
+other resource of that stack, and `sdk-regenerate.yml` hands it to the
+minting action beside the key.
 
 ## 4. The scripts
 
