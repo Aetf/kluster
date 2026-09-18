@@ -302,80 +302,38 @@ async def test_a_run_without_the_token_refuses_by_name_and_names_what_fills_it()
         pulumi.runtime.set_all_config({f'kluster:{program.ADMIN_TOKEN}': TOKEN})
 
 
-def test_each_repository_keeps_the_urn_it_was_declared_at(stack: Forge) -> None:
-    """Introducing the component moved every URN down a level, and an alias is what makes that a rename.
-
-    Without one the preview is "create the parented one, delete the
-    unparented one", and the delete of a `protect`ed repository is refused.
-    One alias per repository is enough for its whole subtree: everything the
-    component declares is parented on the repository rather than on the
-    component, so each of them inherits the repository's alias and lands back
-    on the URN it already has.
-    """
-    for entry in conventions.forge.REPOSITORIES:
-        aliases = list(stack.options_of(entry.name, REPOSITORY).aliases)
-
-        assert len(aliases) == 1, entry.name
-        # Everything else left at its default, which reads as "same name, same
-        # type, this stack, this project" -- so the alias is exactly the URN
-        # this repository had when the stack program declared it itself.
-        assert aliases[0].spec.noParent is True
-        assert (aliases[0].spec.name, aliases[0].spec.type, aliases[0].spec.stack, aliases[0].spec.project) == (
-            '',
-            '',
-            '',
-            '',
-        )
-
-
 def test_nothing_below_a_repository_moved(stack: Forge) -> None:
-    """The subtree's URNs are preserved by parenting, and a renamed child by naming its old name.
+    """Every resource of a repository's subtree sits on the URN state holds it under, and none carries an alias.
 
     Each resource under a repository names the repository as its parent, which
-    is both what it is -- a property of that repository -- and what makes the
-    one alias above cover it. A resource re-parented onto the component would
-    silently need an alias of its own.
-
-    The protection and the Environments carry one alias each besides, naming
-    only the logical name state holds them under: the SDK combines a child's
-    own alias with each alias its parent carries, so that one name is what
-    resolves each of them onto the URN the apply before the rename wrote.
-    Nothing else about the alias is set, because nothing else moved.
+    is both what it is -- a property of that repository -- and what puts it
+    under the component's type chain in its URN. State holds the repository
+    under the component and its children under names carrying the
+    repository's, so an alias here would name a URN nothing is on: one
+    reappearing is a move that has not been applied, and the preview that
+    reads it is a rename, or a create beside a delete.
     """
     for entry in conventions.forge.REPOSITORIES:
         assert stack.options_of(entry.name, REPOSITORY).parent.endswith(f'{MANAGED_REPOSITORY}::{entry.name}')
+        assert list(stack.options_of(entry.name, REPOSITORY).aliases) == [], entry.name
 
         # The repository's own URN, as its children carry it: the component's
         # type, then the repository's, then the repository's name.
         repository = stack.options_of(entry.name, VULNERABILITY_ALERTS).parent
         assert repository.endswith(f'{MANAGED_REPOSITORY}${REPOSITORY}::{entry.name}')
 
-        for typ, name, old_name in _below(entry):
+        for typ, name in _below(entry):
             assert stack.options_of(name, typ).parent == repository, name
-            aliases = list(stack.options_of(name, typ).aliases)
-            if old_name is None:
-                assert aliases == [], name
-                continue
-            assert len(aliases) == 1, name
-            assert aliases[0].spec.name == old_name, name
-            assert (aliases[0].spec.type, aliases[0].spec.stack, aliases[0].spec.project) == ('', '', ''), name
-            assert aliases[0].spec.parentUrn == '' and aliases[0].spec.noParent is False, name
+            assert list(stack.options_of(name, typ).aliases) == [], name
 
 
-def _below(entry: conventions.forge.Repository) -> list[tuple[str, str, str | None]]:
-    """Every resource `ManagedRepository` hangs off one repository: type, name, and the name state still holds.
-
-    The third element is the logical name a child had before it carried the
-    repository's, which is what its alias names; `None` where the name never
-    moved.
-    """
-    below: list[tuple[str, str, str | None]] = [(VULNERABILITY_ALERTS, entry.name, None)]
-    below += [(LABEL, f'{entry.name}-{label.name}', None) for label in entry.labels]
-    below += [
-        (ENVIRONMENT, environment_name(entry, environment), environment.name) for environment in entry.environments
-    ]
+def _below(entry: conventions.forge.Repository) -> list[tuple[str, str]]:
+    """Every resource `ManagedRepository` hangs off one repository, by type and name."""
+    below = [(VULNERABILITY_ALERTS, entry.name)]
+    below += [(LABEL, f'{entry.name}-{label.name}') for label in entry.labels]
+    below += [(ENVIRONMENT, environment_name(entry, environment)) for environment in entry.environments]
     if entry is conventions.forge.DEPLOYMENT:
-        below.append((BRANCH_PROTECTION, PROTECTION, 'main'))
+        below.append((BRANCH_PROTECTION, PROTECTION))
     return below
 
 

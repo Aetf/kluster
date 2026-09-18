@@ -252,8 +252,8 @@ in the component. It is the same shape, and the same name, as the
 
 Three of the resources §3 declares have a create that fails on what is
 already on GitHub, so each is adopted by an `import` run from the
-operator's machine rather than created. Two of them are in state and one
-is owed.
+operator's machine rather than created. Two of them are in state; the
+third's paragraph says how to read whether it is.
 
 **The two repositories are in state**, adopted before the apply §2
 records:
@@ -281,86 +281,74 @@ is `pulumi state unprotect <urn>` then `pulumi state delete <urn>`: both
 touch state only, leaving the Environment on GitHub for the create to
 adopt.
 
-**The `expect-changes` label is the one still owed, and it is owed
-before the next `up`.** `IssueLabel`'s create is a plain create from
-`pulumi-github` 6.15.0 onward — it calls GitHub's create-label endpoint
-outright — so a create against the label, which is on `kluster` already
-and declared here, is a 422. The lock names 6.14.0, whose create still
-adopts, so what arms this is the next `uv lock --upgrade` rather than
-the next apply, and the floor `pyproject.toml` names has no ceiling to
-stand between the two. Importing removes the create instead, which is
-why this is an import rather than a version ceiling: with the label in
-state no apply creates it, and which create the provider would have made
-stops mattering.
+**The `expect-changes` label is the one an import can still owe, and
+it is owed before the first `up` on a provider whose create no longer
+adopts.**
+`IssueLabel`'s create is a plain create from `pulumi-github` 6.15.0
+onward — it calls GitHub's create-label endpoint outright — so a create
+against the label, which is on `kluster` already and declared here, is a
+422. The lock names 6.14.0, whose create still adopts, so what arms this
+is the next `uv lock --upgrade` rather than the next apply, and the
+floor `pyproject.toml` names has no ceiling to stand between the two.
+Importing removes the create instead, which is why this is an import
+rather than a version ceiling: with the label in state no apply creates
+it, and which create the provider would have made stops mattering.
+Whether it is in state already is read from
+`pulumi stack --show-urns -s github` before the command is run rather
+than from this page: a create on 6.14.0 adopts, so an `up` on that
+version that reached the label is what put it in state, and the import
+is owed only while nothing has.
 
 ```sh
 mise x -- pulumi import -s github github:index/issueLabel:IssueLabel kluster-expect-changes kluster:expect-changes \
-    --parent 'repository=urn:pulumi:github::kluster-py::github:index/repository:Repository::kluster' \
+    --parent 'repository=urn:pulumi:github::kluster-py::kluster:components:forge:ManagedRepository$github:index/repository:Repository::kluster' \
     --protect=false
 ```
 
 Its import id is `repository:name`. `--protect=false` because, unlike
 the two repositories, the label carries no `protect` in the program.
 `--parent` is what keeps it out of the trap above, because the program
-declares every label under its repository — and the URN that flag names
-is the one the repository's state entry carries now, unparented, because
-the apply that puts it under the component has not been run. That is the
-other half of *before the next `up`*: after that apply the parent is a
-different URN. The alias below is what carries the repository across
-that move, and the label the program declares inherits that alias from
-its parent, which is what resolves the declaration onto the entry this
-import writes. `pulumi stack --show-urns -s github` prints the URNs
-state holds now.
+declares every label under its repository, and the URN that flag names
+is the repository's as state holds it: under the component, so the type
+chain runs `ManagedRepository$Repository`. `pulumi stack --show-urns -s
+github` prints it, and that print rather than this page is what the
+flag is copied from.
 
 **The import lands under the default provider, and nothing refuses
 it.** `pulumi:disable-default-providers` (§1) is enforced where the
 program is evaluated, and `import` never evaluates the program: it
 computes the default provider's URN itself and reuses the state entry
-that has it — the one §2's apply left behind, which is where the two
-repositories sit — or builds one from the package configuration. So this
+that has it, or builds one from the package configuration. So this
 command succeeds quietly rather than stopping to be told which provider
 to use. `--provider name=urn` is not the correction it looks like
 either: the flag carries a URN and no inputs, so naming this program's
 `kluster-github` would have the engine synthesize a provider with
 neither owner nor token.
 
-**What that provider move costs is the open part**, and the preview is
-where it is read rather than here. The program signs every resource with
-the explicit provider, so at the next `up` each imported entry changes
+**What that provider move costs is read from the preview that follows
+the import**, and nowhere else. The program signs every resource with
+the explicit provider, so at the next `up` the imported entry changes
 which provider it belongs to; whether that is a replacement depends on
-how a provider answers a `DiffConfig` between the default's
+how the provider answers a `DiffConfig` between the default's
 configuration and this program's `owner` and `token`, and a replacement
 of the label is a delete and a create, which is the 422 the import
-exists to remove. The two repositories meet the same move holding
-`protect`, which turns a replacement into a refusal rather than a
-deletion. The recovery the `physical-plan` paragraph gives answers an
-unparented import, which is a different cause.
+exists to remove. What the import buys is one line's absence: a create,
+a delete or a replacement naming the label is the failure it exists to
+prevent, and the preview is stopped on rather than applied.
 
-The check is the preview that follows the import, and it is the whole of
-the evidence there is before the apply. It is not empty and is not meant
-to be: the component and the explicit provider are creates, the default
-provider is a delete, the two repositories match through the alias below
-rather than being created and deleted, and everything else §3 declares
-that no apply has reached is a create. What the import buys is one
-line's absence. A create, a delete or a replacement naming the label is
-the failure it exists to prevent, and a replacement of either repository
-is the other thing to stop on.
-
-**The repositories' URNs moved when the component was introduced**, and
-each repository carries an alias naming the URN it had while the stack
-program declared it directly. Without one the preview would be "create
-the parented one, delete the unparented one", and the delete is refused
-by the `protect` above. One alias per repository carries the move for
-its whole subtree: everything the component declares is parented on the
-repository rather than on the component, so each of those resources
-inherits the alias. The branch protection and the Environments carry a
-second alias of their own, naming the logical name each had before it
-carried the repository's ([style/pulumi.md](../style/pulumi.md)'s
-child-name rule), and the engine crosses the two — the parent's alias
-with the child's old name — into the URN state holds. Both kinds are
-dropped once the apply has moved the entries. State carries the
-unparented URNs today: the apply that moves them under the component is
-the next one.
+**State holds every URN the program declares, and the program carries no
+alias.** Each repository sits under its `ManagedRepository`, and the
+branch protection and the Environments sit under names that carry the
+repository's ([style/pulumi.md](../style/pulumi.md)'s child-name rule),
+so a preview of this program against it names no rename and no
+replacement. An alias is how a move onto that state is made — a
+re-parenting or a rename lands as a same-URN update rather than as a
+create beside a delete, which `protect` refuses on the repositories and
+which, on an Environment, discards its secrets — and it is carried only
+until the apply that moves the entry, as style/pulumi.md says. A rename
+or a replacement in a preview of an unchanged program is the tell that a
+move was applied without one, or that an alias was dropped before its
+apply.
 
 ## 4. What is not declared
 
