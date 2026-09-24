@@ -117,9 +117,9 @@ def connection(bundle_dir: Path) -> Connection:
 
     The URL is the same file `mise.toml` turns into `PULUMI_BACKEND_URL`, so a
     dump talks to the backend the operator's `pulumi` runs talk to, over the
-    same certificate. The variables are derived from where the file was
-    actually found rather than from where it was looked for, so a bundle still
-    in its pre-`.credentials/` location is used with its own certificates.
+    same certificate. The variables are derived from the directory the URL
+    file sits in, which is the bundle directory the caller passed, so the URL
+    and the certificates always come from the one bundle.
     """
     path = lifecycle.backend_url_file(bundle_dir)
     if path is None:

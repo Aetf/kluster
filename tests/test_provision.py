@@ -714,9 +714,8 @@ def test_a_box_that_matches_the_commit_is_left_alone(converge: Any) -> None:
 def test_the_operator_bundle_lands_in_the_workstation_slot(
     converge: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    # It used to land in ~/.config/kluster/state-backend, the one local
-    # artefact outside the convention (credentials.md §1 rule 6). Everything
-    # a checkout needs locally is now in the checkout.
+    # Everything a checkout needs locally is in the checkout (credentials.md
+    # §1 rule 6), the bundle included: nothing lands under the home directory.
     from kluster.scripts.credentials import workstation
     from kluster.scripts.state_backend import config
 

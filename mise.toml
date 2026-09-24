@@ -64,29 +64,29 @@ age = "1.3.1"
 # `config_root` -- the directory holding this file -- rather than by
 # coincidence.
 #
-# The second branch of each is the pre-`.credentials/` location, kept so a
-# workstation that predates the move keeps working without being touched.
-# TODO(kluster-ops#34): delete those branches, and the pre-`.credentials/`
-# entries in .gitignore, once every workstation has been converged.
+# Where a slot exists it outranks the environment, because the slot is the
+# source: inside a checkout that holds one, an exported `PULUMI_BACKEND_URL`
+# does not redirect a `pulumi` run through `mise x`. A scratch probe therefore
+# calls the binary `mise which pulumi` names with its own backend in that one
+# command (framework/testing.md §5.1). That holds in a `jj` workspace too:
+# one holds no slots of its own (`.credentials/` is ignored and never copied),
+# but a workspace nested under a checkout -- `.claude/workspaces/` is -- loads
+# that checkout's `mise.toml` as a parent config, whose slots answer first,
+# and the templates here then read the parent's value as the environment
+# (kluster-ops#387).
 [env]
 PULUMI_CONFIG_PASSPHRASE = """
 {%- set slot = [config_root, '.credentials/pulumi.passphrase'] | join_path -%}
-{%- set moved = [config_root, '.pulumi.secret'] | join_path -%}
 {%- if slot is file -%}
 {{- read_file(path=slot) | trim -}}
-{%- elif moved is file -%}
-{{- read_file(path=moved) | trim -}}
 {%- else -%}
 {{- env.PULUMI_CONFIG_PASSPHRASE | default(value="") -}}
 {%- endif -%}
 """
 PULUMI_BACKEND_URL = """
 {%- set slot = [config_root, '.credentials/state-backend/backend-url'] | join_path -%}
-{%- set moved = [env.HOME, '.config/kluster/state-backend/backend-url'] | join_path -%}
 {%- if slot is file -%}
 {{- read_file(path=slot) | trim -}}
-{%- elif moved is file -%}
-{{- read_file(path=moved) | trim -}}
 {%- else -%}
 {{- env.PULUMI_BACKEND_URL | default(value="") -}}
 {%- endif -%}
@@ -94,34 +94,26 @@ PULUMI_BACKEND_URL = """
 # The bundle the URL above authenticates with. It names no path itself, so the
 # three files travel as the libpq variables — which is the one channel both
 # libpq and the driver behind Pulumi's Postgres backend read, and which
-# nothing has to expand. Each resolves the *same* bundle directory the URL
-# came from, tested on the same file, so a workstation whose bundle sits in
-# the pre-`.credentials/` location gets a matching set rather than a URL from
-# one place and a certificate from another. CI runs `pulumi` through mise too,
-# and materializes the `ci` bundle into `.credentials/state-backend/` of the
-# checkout, so it resolves here exactly as a workstation does.
+# nothing has to expand. Each is tested on the slot's URL file, the same test
+# the URL itself makes, so the four come from one place -- the slot, or else
+# the environment -- rather than a URL from one and a certificate from the
+# other. CI runs `pulumi` through mise too, and materializes the `ci` bundle
+# into `.credentials/state-backend/` of the checkout, so it resolves here
+# exactly as a workstation does.
 PGSSLROOTCERT = """
 {%- set slot = [config_root, '.credentials/state-backend'] | join_path -%}
-{%- set moved = [env.HOME, '.config/kluster/state-backend'] | join_path -%}
 {%- set slot_url = [slot, 'backend-url'] | join_path -%}
-{%- set moved_url = [moved, 'backend-url'] | join_path -%}
 {%- if slot_url is file -%}
 {{- [slot, 'ca.crt'] | join_path -}}
-{%- elif moved_url is file -%}
-{{- [moved, 'ca.crt'] | join_path -}}
 {%- else -%}
 {{- env.PGSSLROOTCERT | default(value="") -}}
 {%- endif -%}
 """
 PGSSLCERT = """
 {%- set slot = [config_root, '.credentials/state-backend'] | join_path -%}
-{%- set moved = [env.HOME, '.config/kluster/state-backend'] | join_path -%}
 {%- set slot_url = [slot, 'backend-url'] | join_path -%}
-{%- set moved_url = [moved, 'backend-url'] | join_path -%}
 {%- if slot_url is file -%}
 {{- [slot, 'client.crt'] | join_path -}}
-{%- elif moved_url is file -%}
-{{- [moved, 'client.crt'] | join_path -}}
 {%- else -%}
 {{- env.PGSSLCERT | default(value="") -}}
 {%- endif -%}
@@ -130,7 +122,7 @@ PGSSLCERT = """
 # because it must never become the ambient `PULUMI_CONFIG_PASSPHRASE`: that one
 # is in every CI Environment, and this stack is the one nothing in CI may read.
 # `credentials derived github-passphrase generate` (or `... recover`) writes the
-# slot. No pre-`.credentials/` branch, because this slot never had another home.
+# slot.
 KLUSTER_GITHUB_PASSPHRASE = """
 {%- set slot = [config_root, '.credentials/github.passphrase'] | join_path -%}
 {%- if slot is file -%}
@@ -141,13 +133,9 @@ KLUSTER_GITHUB_PASSPHRASE = """
 """
 PGSSLKEY = """
 {%- set slot = [config_root, '.credentials/state-backend'] | join_path -%}
-{%- set moved = [env.HOME, '.config/kluster/state-backend'] | join_path -%}
 {%- set slot_url = [slot, 'backend-url'] | join_path -%}
-{%- set moved_url = [moved, 'backend-url'] | join_path -%}
 {%- if slot_url is file -%}
 {{- [slot, 'client.key'] | join_path -}}
-{%- elif moved_url is file -%}
-{{- [moved, 'client.key'] | join_path -}}
 {%- else -%}
 {{- env.PGSSLKEY | default(value="") -}}
 {%- endif -%}

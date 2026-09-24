@@ -31,7 +31,6 @@ __all__ = (
     'DIRECTORY',
     'GITHUB_PASSPHRASE',
     'KIT',
-    'LEGACY_BUNDLE_DIR',
     'PASSPHRASE',
     'ROOTS',
     'WorkstationError',
@@ -66,12 +65,6 @@ ROOTS = 'roots'
 
 #: The state backend's `operator` client bundle: CA, certificate, key, URL.
 BUNDLE = 'state-backend'
-
-#: Where the bundle lived before it became a workstation slot. Read once, with
-#: a warning, so a workstation that predates the move keeps working.
-#: TODO(kluster-ops#34): delete this and its readers once every workstation has
-#: re-run `state-backend bundle operator`.
-LEGACY_BUNDLE_DIR = Path.home() / '.config' / 'kluster' / BUNDLE
 
 
 def kit_path() -> Path:

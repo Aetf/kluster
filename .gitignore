@@ -15,12 +15,9 @@ lib/crds/build
 # (docs/credentials.md §1 rule 6). One directory, one line, one thing on this
 # machine that is secret.
 .credentials/
-# Pre-`.credentials/` locations. `.pulumi.secret` is still read by mise.toml on a
-# workstation that predates the move; `.github.token` is read by nothing since
-# the GitHub admin token became a config secret of the `github` stack
-# (docs/credentials.md §3), and stays here so a stale copy on such a machine
-# cannot be committed by accident.
-# TODO(kluster-ops#34): delete with that fallback.
+# Names workstation secrets had before `.credentials/`. Nothing reads them;
+# they stay ignored so that a copy left at the root is never snapshotted into
+# a change -- `jj` tracks every file it is not told to ignore.
 .pulumi.secret
 .github.token
 # Dumps of the Pulumi state. `state-backend dump` writes one into the working

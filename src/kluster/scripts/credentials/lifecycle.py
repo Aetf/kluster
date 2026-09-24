@@ -32,7 +32,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import b2, cloudflare, entries, escrow, masters, oci_iam, pulumi_config, workstation
+from . import b2, cloudflare, entries, escrow, masters, oci_iam, pulumi_config
 from .kdbx import KdbxError, KdbxStore
 from .masters import CredentialRejected, Prompt
 
@@ -211,28 +211,14 @@ def create_seed(
 
 
 def backend_url_file(bundle_dir: Path) -> Path | None:
-    """The bundle's URL file, or None when this machine has no bundle at all.
+    """The bundle's URL file, or None when `bundle_dir` holds no bundle.
 
-    The bundle is a workstation slot (`workstation.py`). A machine that still
-    has one where it used to live keeps working, once and loudly: the URL
-    written there names the certificates beside it by absolute path, so the
-    older bundle is a complete, working answer.
-
-    TODO(kluster-ops#34): delete the fallback once every workstation has
-    re-run `state-backend bundle operator`.
+    The directory given is the only one looked in: the default is the
+    workstation slot (`workstation.py`), and no location outside the checkout
+    stands in for it.
     """
     current = bundle_dir / URL_FILE
-    if current.is_file():
-        return current
-    legacy = workstation.LEGACY_BUNDLE_DIR / URL_FILE
-    if bundle_dir == workstation.bundle_dir() and legacy.is_file():
-        log.warning(
-            'using the client bundle in %s: it now belongs in %s, which `state-backend bundle operator` writes',
-            workstation.LEGACY_BUNDLE_DIR,
-            bundle_dir,
-        )
-        return legacy
-    return None
+    return current if current.is_file() else None
 
 
 def environment(
