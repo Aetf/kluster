@@ -1455,8 +1455,11 @@ so a lost `.credentials/` costs a few commands and no credential.
 
 `mise.toml` reads this directory — the passphrase, the backend URL and
 the three `PGSSL*` variables naming the bundle beside it — falling back
-to whatever the environment already holds. It reads no provider
-credential at all, because none is here: each is a config secret in the
+to whatever the environment already holds. In a `jj` workspace nested
+under a checkout, that environment is the parent checkout's slots, which
+mise renders first (`kluster-ops#387`); a scratch probe therefore runs
+`pulumi` as [framework/testing.md](framework/testing.md) §5.1 says. It
+reads no provider credential at all, because none is here: each is a config secret in the
 stack that reads it, which the program opens with the passphrase this
 directory carries. **CI
 walks the same path rather than a parallel one.** The four Environment
@@ -1492,16 +1495,14 @@ absolute path into this checkout. A checkout at a different path
 re-runs `credentials derived oci-state-backend mint` on a machine that
 holds the kit.
 
-Some of these slots had other homes before, and every old location is
-still read — the bundle and the appliance's OCI configuration by
-`credentials`, with a warning naming the move; the passphrase file by
-`mise.toml`, silently, because a template has no way to warn. A
-workstation that predates the move therefore keeps working untouched, and
-converges by running the commands above once. The fallbacks are marked in
-the code and in `.gitignore` for deletion (`kluster-ops#34`, and
-`kluster-ops#41` for the OCI one, whose predecessor is a hand-made
-configuration under `~/.config` rather than a minted credential at all).
-A machine that predates the GitHub token's move to the `github` stack's
-configuration is the one case where an old location is **not** read: the
-token file it holds is inert, and deleting it is the last step of that
-crossing.
+Every slot is read where it is now and nowhere else, with one
+exception: the appliance's OCI configuration, whose predecessor is a
+hand-made configuration under `~/.config` rather than a minted credential
+at all. `state-backend` still reads that one when the slot is empty, with
+a warning naming the command that replaces it, and the fallback is marked
+in the code for deletion (`kluster-ops#41`). A copy of any other slot
+at an older location — a client bundle under `~/.config/kluster/`, a
+`.pulumi.secret` or `.github.token` at the checkout's root — is inert,
+and deleting it is the last step of moving that machine onto
+`.credentials/`. Both root-level names stay in `.gitignore` all the same,
+so that no `jj` command ever records a copy left there in a change.

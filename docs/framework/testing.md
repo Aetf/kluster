@@ -427,6 +427,39 @@ one usable key stands: the key the kit holds is the key that authenticates,
 and a surviving second key is proved to be a deletion the tenancy refused
 rather than an orphan the sweep missed.
 
+### 5.1 A scratch probe names its own backend
+
+A drill is meant to reach the live estate; a **scratch probe** is not — a
+throwaway project or `stack init` run to see what the CLI does, against a
+`file://` backend of its own. The one way a probe goes wrong is by landing
+in the live backend, and the route there is `mise x`: `mise.toml` resolves
+`PULUMI_BACKEND_URL` and the passphrase from the checkout's slots **ahead of
+the shell** (the slot is the source), so an exported `file://` URL is
+overridden wherever a slot answers. Two slots can:
+
+-   **The checkout's own**, in the primary checkout, by design.
+-   **A parent checkout's**, in a `jj` workspace nested under it. A workspace
+    has no slots of its own, but mise also loads every `mise.toml` above the
+    directory it runs in, so a workspace under `.claude/workspaces/` receives
+    the primary checkout's backend URL and passphrase all the same
+    (`kluster-ops#387`).
+
+So a probe never runs `pulumi` through a checkout's `mise x`, `-C` included.
+It calls the binary mise resolves, and sets its backend in that same
+command, with every scratch path under the workspace's own `.claude/`:
+
+    PULUMI_BACKEND_URL=file://<scratch>/state PULUMI_HOME=<scratch>/home \
+    PULUMI_CONFIG_PASSPHRASE=<anything> "$(mise which pulumi)" stack ls --all
+
+`PULUMI_HOME` is part of the form because `pulumi` otherwise reads and
+writes the operator's `~/.pulumi`, which records a logged-in backend of
+its own. **Read `pulumi stack ls --all` back before any `stack init`**, in
+the same command form: it names what the backend in hand holds, and a list
+naming this repository's stacks means the probe is pointed at the estate.
+`--all` is what makes that read mean anything — a bare `stack ls` lists the
+current project's stacks only, so a scratch project reads back empty even
+against the live backend.
+
 ## 6. Proving a Test Fails Without the Change
 
 AGENTS.md requires that new behavior ship with a test that fails without
