@@ -547,7 +547,7 @@ Costs and facts on record:
     pushes a regeneration onto renovate's branch with the App's
     token so that the pushed head's runs start without a click
     (framework/ci.md §3). CI holds no long-lived credential: it
-    mints an **8-hour installation token** per run, scoped to the
+    mints a **one-hour installation token** per run, scoped to the
     one repository that run pushes to, and the App's private key
     is escrowed rather than held in the seed kit (credentials.md
     §3) — GitHub has no API for creating personal access tokens,

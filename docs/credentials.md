@@ -475,7 +475,7 @@ cell would say `pending` to an operator already being served.
 | B2 freshness key (state dumps) | B2 seed key (`credentials derived b2-freshness-dumps mint`) | `listFiles` alone, confined to the dump prefix of the appliance's bucket: names, never a byte | ops-repo secret (`B2_FRESHNESS_DUMPS_KEY_ID`, `B2_FRESHNESS_DUMPS_KEY`) | `state-backend probe`, run by the ops repo's scheduled probes workflow (state-backend.md §6) |
 | B2 freshness key (etcd) | B2 seed key | The same shape over the etcd snapshots' prefix of the backup bucket, which a B2 key cannot share with the one above: a key confines to one bucket | ops-repo secret (pending) | the etcd snapshot age probe |
 | GitHub App key (dispatch) | Made on the App's own page (no key API) | Signs a JWT for that App alone, which mints a per-run installation token carrying contents:write on `kluster` and `kluster-ops` — the App is installed on both, and each mint is scoped to the one repository its run pushes to. The residual: the key is a repository secret any same-repository job can read, and its token pushes to unprotected branches of both repositories but to neither `main` (protected, checks required) nor any workflow file (no `workflows` permission) — the same "anyone who can push a branch" boundary this repository already accepts (ci.md §3) | escrow as `github/dispatch-key` · `kluster` repository secret (`DISPATCH_APP_PRIVATE_KEY`) | `sdk-regenerate.yml`, whose push onto a renovate branch is the App's act so that the pushed head's runs start on their own (ci.md §3); the alert producer (`alert.yml`), called by every workflow that runs on `main`, once built |
-| GitHub App key (trigger) | Made on the App's own page (no key API) | The same, for an 8 h token carrying actions:write on `kluster` | escrow as `github/trigger-key` · ops-repo secret (`TRIGGER_APP_PRIVATE_KEY`) | Weekly drift trigger (the ops repo's `drift-trigger.yml`) |
+| GitHub App key (trigger) | Made on the App's own page (no key API) | The same, for a per-run installation token carrying actions:write on `kluster` | escrow as `github/trigger-key` · ops-repo secret (`TRIGGER_APP_PRIVATE_KEY`) | Weekly drift trigger (the ops repo's `drift-trigger.yml`) |
 | overlay CI member identities (`ci-physical`, `ci-dns`) | generated in-state (`zerotier_identity`) | One per joining stack, `ci`-tagged and flow-rule-confined (gateway.md §2.3) | CI env | CI per-run join |
 | Pulumi state passphrase | generated, escrowed as `pulumi/passphrase` | Decrypts state secrets, and the config secrets of every stack but `github` | escrow · CI env (all stacks) · workstation slot | every `pulumi` run |
 | `github` stack passphrase | generated, escrowed as `github/passphrase` | Decrypts the `github` stack's config secrets and nothing else | escrow · workstation slot | a `pulumi` run against `github`, and the `credentials` commands that reach that stack's config |
@@ -674,7 +674,7 @@ single-purpose GitHub App has a private key generated on its own settings
 page — disclosed once, and creatable by no API GitHub publishes — so the
 key is recorded rather than minted, exactly like the three above.
 It is not a seed for the same reason they are not: what a job makes from
-it is an **installation token**, good for eight hours and used inside the
+it is an **installation token**, good for one hour and used inside the
 run that minted it, which is working material of a workflow rather than
 anything this register stores. Where these two differ from the three
 above is the slot. The consumer is a workflow rather than a stack, and
