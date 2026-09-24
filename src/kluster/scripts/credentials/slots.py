@@ -125,15 +125,23 @@ DNS_STACK = derived.ZONES_STACK
 #: renamed only together with that workflow.
 TRIGGER_APP_KEY = 'TRIGGER_APP_PRIVATE_KEY'
 
-#: The secret the alert producer (`alert.yml`, called by every workflow that
-#: runs on `main`; ci.md §3) reads the dispatch App's private key from, and
-#: mints an installation token from for the length of one run. A repository
-#: secret of `kluster` rather than an Environment one: the job belongs to no
-#: stack. Its exposure is the fence's (cluster/architecture.md §4.3): any
-#: same-repo branch can read it, previews included, and what that buys is a
-#: token that can post alerts and write non-workflow files into the private
-#: ops repository, and nothing else. The name is a contract with the
-#: producer, so it is a constant here and is renamed only together with it.
+#: The secret the dispatch App's private key is read from, and an installation
+#: token minted from for the length of one run. Two workflows read it:
+#: `sdk-regenerate.yml` today, which pushes a regeneration onto a renovate
+#: branch of `kluster` as the App so that the pushed head's runs start on their
+#: own, and the alert producer (`alert.yml`, called by every workflow that runs
+#: on `main`; ci.md §3) once built, which posts alerts to `kluster-ops`. The App
+#: is installed on both repositories (`conventions.forge`, `Repository.apps`),
+#: and each mint is scoped to the one its run pushes to. A repository secret of
+#: `kluster` rather than an Environment one: neither job belongs to a stack.
+#: Its exposure is the fence's (cluster/architecture.md §4.3): any same-repo
+#: branch can read it, previews included, and what that buys is a token that
+#: can write non-workflow files onto `kluster`'s unprotected branches and onto
+#: any branch of `kluster-ops` (a private repository has no branch protection
+#: on this plan), and post alerts to the latter, and nothing else: no workflow
+#: file in either, since the App holds no `workflows` permission. The name is a
+#: contract with both workflows, so it is a constant here and is renamed only
+#: together with them.
 DISPATCH_APP_KEY = 'DISPATCH_APP_PRIVATE_KEY'
 
 #: The secret the ops repository's dispatch handler reads the Home Assistant

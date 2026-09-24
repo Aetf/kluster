@@ -43,10 +43,12 @@ import logging
 import os
 import re
 import secrets
+import textwrap
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from kluster import conventions
 from kluster.lib import config
 
 from . import age, entries, pki, workstation
@@ -335,32 +337,76 @@ def backup_labels() -> tuple[str, ...]:
     return tuple(f'{BACKUP}/{number}' for number in window if number >= FIRST)
 
 
-#: How each App's key is created, and where the identifier that goes with it is
-#: read. The client id is not stored anywhere here: it is a public identifier
-#: that the App's own page shows for as long as the App exists, unlike the key,
-#: which is disclosed once.
+#: How each App's key is created, and where the identifier that goes with it
+#: comes from. The client id is never a row here: it is a public identifier
+#: the App's own page shows for as long as the App exists, unlike the key,
+#: which is disclosed once. Where it is recorded differs between the Apps, so
+#: that sentence is each App's own (`_DISPATCH_CLIENT_ID`, `_TRIGGER_CLIENT_ID`).
 _APP_KEY_CONSOLE = """github.com/settings/apps → the "kluster {name}" App → Private keys →
   Generate a private key. The PEM downloads once and is shown never again;
   GitHub publishes no API that creates one, so nothing here can mint it and
   nothing here can mint its successor. Rotation is this same visit: generate
   another, record it, and delete the superseded key on the same page.
-  Creating the App, where there is none: New GitHub App named "kluster
-  {name}", Repository → {permission}, no webhook, installed on {installed}
-  and on nothing else.
-  The JWT issuer that goes with the key is the *client id* on that page, not
-  the numeric app id. It is public and readable there for as long as the App
-  exists, so it is read off the page when the delivery slot is filled rather
-  than stored here."""
+{app}"""
 
 
-def _app_key_console(*, name: str, permission: str, installed: str) -> str:
+def _named(names: Sequence[str]) -> str:
+    """Names as a sentence lists them: `a`, `a and b`, `a, b and c`."""
+    return ' and '.join(names) if len(names) < 3 else f'{", ".join(names[:-1])} and {names[-1]}'
+
+
+def _installed_on(app: conventions.forge.App) -> str:
+    """Every repository the census installs `app` on, as a sentence lists them.
+
+    Read off the repositories' own rows (`Repository.apps`) rather than
+    written here, so the console step that tells the operator where to
+    install the App names what the workflows minting from it need.
+    """
+    return _named([repository.name for repository in conventions.forge.REPOSITORIES if app in repository.apps])
+
+
+def _declared_on(variable: conventions.forge.Variable) -> str:
+    """Every repository the forge declares `variable` on, as a sentence lists them."""
+    return _named(
+        [repository.name for repository in conventions.forge.REPOSITORIES if variable in repository.variables]
+    )
+
+
+#: The dispatch App's client id is a census fact: recorded in the clear and
+#: declared by the forge as the repository variable the workflows minting
+#: from it read (credentials.md §3), so no step here reads it off the page by hand.
+_DISPATCH_CLIENT_ID = (
+    'It is recorded in the clear on `conventions.forge.DISPATCH_APP` (its `client_id`), and the `github` stack declares it as '
+    f'the {_declared_on(conventions.forge.DISPATCH_APP_CLIENT_ID)} repository variable '
+    f'`{conventions.forge.DISPATCH_APP_CLIENT_ID.name}` the workflows minting from it read, so nothing about it is typed into '
+    'a console. A newly created App has a new one: record it there and land it with `pulumi up -s github`.'
+)
+
+#: The trigger App has no row in the census (`conventions.forge`) and no
+#: variable declared for it, so its client id is read off the App's page.
+_TRIGGER_CLIENT_ID = (
+    'It is public and readable there for as long as the App exists, so it is read off the page when the '
+    'delivery slot is filled rather than stored here.'
+)
+
+
+def _app_key_console(*, name: str, permission: str, installed: str, client_id: str) -> str:
     """One App's steps, from the shape both of them share.
 
-    Two Apps differ in a name, a permission and a repository, and in nothing
-    else; writing the text twice would be two places for the part that is the
-    same to drift.
+    Two Apps differ in a name, a permission, their installations and where
+    their client id is recorded, and in nothing else; writing the text twice
+    would be two places for the part that is the same to drift.
     """
-    return _APP_KEY_CONSOLE.format(name=name, permission=permission, installed=installed)
+    app = textwrap.fill(
+        f'Creating the App, where there is none: New GitHub App named "kluster {name}", Repository → '
+        f'{permission}, no webhook, installed on {installed} and on nothing else. The JWT issuer that goes '
+        f'with the key is the *client id* on that page, not the numeric app id. {client_id}',
+        width=78,
+        initial_indent='  ',
+        subsequent_indent='  ',
+        break_on_hyphens=False,
+    )
+    return _APP_KEY_CONSOLE.format(name=name, app=app)
 
 
 def register() -> dict[str, Label]:
@@ -411,9 +457,15 @@ def register() -> dict[str, Label]:
         ),
         Label(
             DISPATCH_KEY,
-            "the dispatch App's private key, which signs for contents:write on the ops repository",
+            f"the dispatch App's private key, which signs for contents:write on "
+            f'{_installed_on(conventions.forge.DISPATCH_APP)}',
             Console(
-                _app_key_console(name='dispatch', permission='Contents: Read and write', installed='kluster-ops'),
+                _app_key_console(
+                    name='dispatch',
+                    permission='Contents: Read and write',
+                    installed=_installed_on(conventions.forge.DISPATCH_APP),
+                    client_id=_DISPATCH_CLIENT_ID,
+                ),
                 kit=KitAttachment('seeds/GitHub App (dispatch)', 'private-key.pem'),
             ),
             shape=PRIVATE_KEY,
@@ -422,7 +474,12 @@ def register() -> dict[str, Label]:
             TRIGGER_KEY,
             "the trigger App's private key, which signs for actions:write on the deployment repository",
             Console(
-                _app_key_console(name='trigger', permission='Actions: Read and write', installed='kluster'),
+                _app_key_console(
+                    name='trigger',
+                    permission='Actions: Read and write',
+                    installed='kluster',
+                    client_id=_TRIGGER_CLIENT_ID,
+                ),
                 kit=KitAttachment('seeds/GitHub App (trigger)', 'private-key.pem'),
             ),
             shape=PRIVATE_KEY,
