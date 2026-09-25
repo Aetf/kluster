@@ -1,9 +1,10 @@
-"""The hand-made credentials (docs/credentials.md §3): made in a console, delivered to a stack.
+"""The hand-made credentials (docs/credentials.md §3): made by a person, delivered to a stack.
 
 Some of §3's rows are neither minted from a seed nor generated and escrowed.
-The credential is made in the console that checks it — the appliance's own, or
-the provider's where the provider publishes no API for making one — and this
-side of the system only delivers it:
+The credential is made by a person — in the console that checks it, the
+appliance's own or the provider's where the provider publishes no API for
+making one, or by drawing it where no console does — and this side of the
+system only delivers it:
 
 -   the **UniFi API key**, which the controller mints for a dedicated local
     admin and shows once;
@@ -182,7 +183,7 @@ class Field:
 
 @dataclass(frozen=True)
 class Device:
-    """One §3 row whose credential is made in the console that checks it."""
+    """One §3 row whose credential is made by hand: in the console that checks it, or drawn by the operator."""
 
     #: The `credentials derived <member> record` row name, which is also the
     #: name this row carries in the slot map.

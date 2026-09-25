@@ -40,7 +40,7 @@ from kluster.scripts.credentials.kdbx import PATH_ENV, KdbxStore
 
 PASSWORD = 'kit-password'
 
-#: The refusal a register row with no implementation produces (`cli.main`).
+#: The refusal a seed row with no implementation produces (`cli.main`).
 REFUSAL = 'not yet implemented'
 
 
@@ -340,8 +340,8 @@ def test_every_leaf_dispatches(argv: list[str], dispatch: Dispatch, caplog: pyte
     code = cli.main(argv)
 
     if target is None:
-        # A register row with no implementation is a subcommand that refuses
-        # by name, which is the documented behaviour, not a crash.
+        # A seed row with no implementation is a subcommand that refuses by
+        # name, which is the documented behaviour, not a crash.
         assert code == 1
         assert REFUSAL in caplog.text
         return
