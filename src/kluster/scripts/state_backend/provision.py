@@ -49,7 +49,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, NoReturn, cast
 
@@ -87,7 +87,10 @@ class OciClients:
     """The OCI clients, bound to one compartment."""
 
     compartment_id: str
-    config: dict[str, Any]
+    #: What `oci.config.from_file` or the slot answered. Out of the repr and out
+    #: of comparison, because the SDK carries a key's `pass_phrase` into it
+    #: whenever the configuration file sets one.
+    config: dict[str, Any] = field(repr=False, compare=False)
     #: Whether `compartment_id` is the appliance's own -- the one
     #: `conventions.OCI_TENANCY.compartments` records -- and so whether the
     #: reservation in it is held to `settings.ADDRESS` (`hold_address`). A run
@@ -309,9 +312,14 @@ class Survey:
     `fcos` is the release the run would import, read from the stream metadata:
     the image is named after it, so the read is a precondition of the image
     lookup rather than of the pipeline that imports one.
+
+    `instance` is out of the repr and out of comparison: the SDK prints an
+    instance with its launch metadata whole, and the `user_data` there is the
+    Ignition the box booted with, which carries its TLS and SSH keys and the
+    dump's B2 key.
     """
 
-    instance: Any | None
+    instance: Any | None = field(repr=False, compare=False)
     vcn: Any | None
     gateway: Any | None
     subnet: Any | None

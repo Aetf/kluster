@@ -161,7 +161,10 @@ class KdbxStore:
     """
 
     path: Path
-    _db: PyKeePass | None = field(default=None, repr=False)
+    #: The unlocked database, which holds the master password as `.password`.
+    #: Out of the repr and out of comparison for that, whatever `PyKeePass`
+    #: itself prints; `path` is what tells two stores apart.
+    _db: PyKeePass | None = field(default=None, repr=False, compare=False)
 
     @classmethod
     def from_env(cls, path: Path | None = None) -> KdbxStore:
