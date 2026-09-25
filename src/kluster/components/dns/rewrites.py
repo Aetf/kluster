@@ -53,7 +53,7 @@ class Rewrite:
         return f'v{self.answer.version}'
 
 
-def rewrites(routes: Iterable[conventions.routes.Route] = ()) -> tuple[Rewrite, ...]:
+def rewrites(routes: Iterable[conventions.routes.Route]) -> tuple[Rewrite, ...]:
     """The split-horizon rewrites the routes imply, one per name per family.
 
     A rewrite is emitted for every zone a LAN-side route is published in --

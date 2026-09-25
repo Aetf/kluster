@@ -48,7 +48,7 @@ class CloudNetwork(Component):
             # OCI assigns the /56 GUA; the nodes' v6 addresses come out of it.
             is_ipv6enabled=True,
             display_name=f'{name}-vcn',
-            dns_label='kluster',
+            dns_label=conventions.CLUSTER_NAME,
             opts=self.child_opts(),
         )
 

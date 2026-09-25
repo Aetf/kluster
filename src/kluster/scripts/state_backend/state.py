@@ -1,13 +1,13 @@
 """Taking the Pulumi state out of the appliance, and putting it back.
 
 The box dumps itself nightly (`deploy/state-backend/state-dump.sh`, §5); this
-module is the operator's side of the same artefact — an on-demand dump, and
+module is the operator's side of the same artifact — an on-demand dump, and
 the only thing that reads one back. Both halves of every playbook that
 rebuilds the box are built out of it: a Postgres major upgrade is a dump, a
 re-provision and a restore (§7.2), and the quarterly drill is the same
 sequence against a scratch box (§7.3).
 
-**The artefact is the same artefact.** A dump written here is `pg_dump -Fc`
+**The artifact is the same artifact.** A dump written here is `pg_dump -Fc`
 under `age`, encrypted to the recipients the escrow names — the ones the
 appliance itself encrypts to, taken from the same function (`config`). A
 restore therefore does not care which of the two produced its input, and an

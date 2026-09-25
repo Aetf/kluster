@@ -1187,7 +1187,7 @@ def _image_digest(image: str) -> str:
 
 
 def verify_pins() -> bool:
-    """Check the pinned artefacts are what settings.py claims they are.
+    """Check the pinned artifacts are what settings.py claims they are.
 
     Renovate can bump a version but cannot compute the tarball's digest or
     ask a registry whether a tag exists, so this runs in CI on every PR: a

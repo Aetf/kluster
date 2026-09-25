@@ -19,7 +19,7 @@ names them, so a workstation and a continuous-integration runner reach the
 host the same way from the same configuration.
 
 **The disk is created from the Talos image, not created empty.** The volume's
-`source` is the decompressed `nocloud` artefact on the machine running the
+`source` is the decompressed `nocloud` artifact on the machine running the
 program (`providers/talos_factory/`), and the provider uploads it into the
 pool over the same connection it defines the domain through. So the first
 boot is a consequence of an apply rather than an operator writing an image
@@ -44,7 +44,7 @@ operation:
     extends its EPHEMERAL partition into the new space (homelab-host.md §1).
     The declaration cannot state a size at all: the provider refuses `size`
     beside `source` and sets the volume's capacity from the image, which is
-    the Talos artefact's own ~1.25 GB. Reaching the worker's working size is
+    the Talos artifact's own ~1.25 GB. Reaching the worker's working size is
     therefore the *first* use of that host-side step rather than a later one,
     and the file and the declaration part company from the moment it runs —
     which is why `size` is ignored here as well. Every field of a libvirt
@@ -53,7 +53,7 @@ operation:
     back.
 
 The image is a creation-time fact for the same reason. Talos upgrades itself
-in place over its machine API — the declared artefact is what the disk was
+in place over its machine API — the declared artifact is what the disk was
 *written* with, not what is on it now — so the declaration stops describing the
 volume the first time the node is upgraded, and a later `versions:talos` bump
 must not propose rewriting a running node's disk. Rebuilding the worker from a

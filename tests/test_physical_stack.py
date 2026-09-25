@@ -40,7 +40,7 @@ from kluster.components.gateway.container import CaddyService
 from kluster.components.gateway.unifi import SiteFirewall
 from kluster.components.overlay import Overlay, flow_rules
 from kluster.components.talos import TalosCluster
-from kluster.components.talos.image import TalosArtefact
+from kluster.components.talos.image import TalosArtifact
 from kluster.lib import workstation
 from kluster.stacks import physical
 
@@ -187,7 +187,7 @@ class Installation(Controller):
             case 'oci:ObjectStorage/getNamespace:getNamespace':
                 return {'namespace': OBJECT_NAMESPACE}
             case 'talos:imageFactory/getUrls:getUrls':
-                # Two artefacts of the same family: the cloud nodes' OCI image
+                # Two artifacts of the same family: the cloud nodes' OCI image
                 # and the worker's `nocloud` disk image, which the factory
                 # serves compressed.
                 platform = str(cast('dict[str, Any]', args.args)['platform'])
@@ -282,10 +282,10 @@ CENSUS_PARAMETERS = (
     (TalosCluster, 'control_plane_nodes'),
     (TalosCluster, 'worker_nodes'),
     (TalosCluster, 'bgp_peers'),
-    # Handed down by the two artefact subclasses rather than by this program:
+    # Handed down by the two artifact subclasses rather than by this program:
     # each states the schematic it is, and the base that renders it takes the
     # roll with no default to fall back on.
-    (TalosArtefact, 'extensions'),
+    (TalosArtifact, 'extensions'),
 )
 
 
@@ -963,6 +963,20 @@ async def test_every_volume_is_attached_to_the_node_the_table_names(setup: Insta
 
     following = setup.inputs_of(f'{conventions.CLUSTER_NAME}-hath-cache-attachment')
     assert following['instanceId'] == INSTANCE_IDS[conventions.DEDICATED_VIP_NODE]
+
+
+@pytest.mark.asyncio
+async def test_the_volumes_and_the_backup_floor_get_the_fleets_values(setup: Installation) -> None:
+    """The tier and the retention floor are this program's to pass, so this program is where they are held."""
+    async with declaring():
+        await physical.main()
+
+    assert conventions.NODE_VOLUMES
+    for volume in conventions.NODE_VOLUMES:
+        inputs = setup.inputs_of(f'{conventions.CLUSTER_NAME}-{volume}-volume', 'oci:Core/volume:Volume')
+        assert inputs['vpusPerGb'] == str(conventions.NODE_VOLUME_VPUS)
+    (rule,) = setup.inputs_of(f'{conventions.CLUSTER_NAME}-backup', 'b2:index/bucket:Bucket')['lifecycleRules']
+    assert rule['daysFromHidingToDeleting'] == conventions.BACKUP_VERSION_RETENTION_DAYS
 
 
 @pytest.mark.asyncio

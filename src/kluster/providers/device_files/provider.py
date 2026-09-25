@@ -282,12 +282,19 @@ MARKER_MODE = '0644'
 #: it displaced waits to be cleared. Both sit beside the tree rather than in a
 #: temporary directory, so the renames that swap them stay within one filesystem
 #: and are therefore atomic.
+#:
+#: The name in every suffix here marks a path as this provider's own scratch
+#: beside its target. It is spelled out rather than read from
+#: `conventions.CLUSTER_NAME`, because a provider imports no `conventions`
+#: (style/pulumi.md, "Layering"), and it is not taken as an input either: it
+#: would then sit in every resource's inputs for a value no caller varies.
 UNPACKING_SUFFIX = '.kluster-unpacking'
 SUPERSEDED_SUFFIX = '.kluster-superseded'
 
 #: Where the pulled image waits between the two device-side commands, as an OCI
-#: layout. Beside the tree for the same reason the other two are: the filesystem
-#: holding the tree is the one with room for the image it came from.
+#: layout. Its name is spelled out for the reason given above, and it sits
+#: beside the tree for the same reason the other two do: the filesystem holding
+#: the tree is the one with room for the image it came from.
 LAYOUT_SUFFIX = '.kluster-oci'
 
 #: What the image is called inside that layout. An OCI layout indexes its

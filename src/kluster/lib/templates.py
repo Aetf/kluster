@@ -56,7 +56,7 @@ def load(package: str, name: str) -> str:
 
     `name` is a path relative to the package, so a component's own templates
     are `templates/<file>`. Nothing is rendered: this is what a caller wants
-    when the file is the artefact.
+    when the file is the artifact.
     """
     return _read(resources.files(package).joinpath(name))
 

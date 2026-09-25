@@ -752,9 +752,8 @@ class Row:
         return {slot: parts[slot.name] for slot in self.sinks}
 
 
-def _github(
-    name: str, environments: tuple[str, ...], repository: str = conventions.forge.DEPLOYMENT.full_name
-) -> tuple[Slot, ...]:
+def _github(name: str, environments: tuple[str, ...]) -> tuple[Slot, ...]:
+    repository = conventions.forge.DEPLOYMENT.full_name
     return tuple(Slot(repository=repository, name=name, environment=environment) for environment in environments)
 
 

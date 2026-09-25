@@ -11,12 +11,16 @@ import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, run_with
 
+from kluster import conventions
 from kluster.components.cloud.storage import NodeVolume
 
 COMPARTMENT_ID = 'ocid1.compartment.oc1..test'
 AVAILABILITY_DOMAIN = 'ZRbp:PHX-AD-1'
 INSTANCE_ID = 'ocid1.instance.oc1.phx.node'
 SIZE_GB = 50
+#: Not the tier the fleet runs: the tier is the caller's to state, so the case
+#: asks for one the component could not have picked up on its own.
+VPUS_PER_GB = 10
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -31,6 +35,7 @@ def node_volume() -> NodeVolume:
         availability_domain=AVAILABILITY_DOMAIN,
         instance_id=INSTANCE_ID,
         size_gb=SIZE_GB,
+        vpus_per_gb=VPUS_PER_GB,
     )
 
 
@@ -44,11 +49,11 @@ async def test_the_volume_and_its_attachment_both_need_an_unprotect() -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_volume_is_sized_as_asked_and_on_the_budgeted_tier() -> None:
+async def test_the_volume_is_sized_and_tiered_as_asked() -> None:
+    assert VPUS_PER_GB != conventions.NODE_VOLUME_VPUS
     volume = node_volume()
     assert await volume.volume.size_in_gbs.future() == str(SIZE_GB)
-    # 0 VPUs/GB is Lower Cost, the tier the storage budget is written against.
-    assert await volume.volume.vpus_per_gb.future() == '0'
+    assert await volume.volume.vpus_per_gb.future() == str(VPUS_PER_GB)
 
 
 @pytest.mark.asyncio

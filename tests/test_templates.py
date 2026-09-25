@@ -55,7 +55,7 @@ def package(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
 
 
 def test_load_hands_back_the_file_with_nothing_substituted(package: str) -> None:
-    """`load` is for the caller whose artefact *is* the file.
+    """`load` is for the caller whose artifact *is* the file.
 
     The verbatim half of the suffix rule leans on this: a stylesheet or a
     dashboard reaches its reader as the bytes on disk, braces included.

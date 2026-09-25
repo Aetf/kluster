@@ -256,6 +256,7 @@ async def main() -> None:
             availability_domain=nodes.instances[entry.attached_node].availability_domain,
             instance_id=nodes.instances[entry.attached_node].id,
             size_gb=entry.size_gb,
+            vpus_per_gb=conventions.NODE_VOLUME_VPUS,
             opts=on_cloud,
         )
 
@@ -279,7 +280,7 @@ async def main() -> None:
 
     # §3: the disk the worker boots, and the VM that boots it.
     #
-    # The image is the worker's own artefact: the fleet's Talos version, a
+    # The image is the worker's own artifact: the fleet's Talos version, a
     # schematic of its own (x86, and the i915 firmware the GPU cutover wants
     # present from day 0), and a file on this machine rather than an entry in a
     # cloud catalogue. No cloud provider on it: nothing it declares reaches the
@@ -310,6 +311,7 @@ async def main() -> None:
         conventions.CLUSTER_NAME,
         region=conventions.B2_ACCOUNT.region,
         bucket_name=conventions.BUCKET_BACKUP,
+        retention_days=conventions.BACKUP_VERSION_RETENTION_DAYS,
         scopes=BACKUP_SCOPES,
     )
 
