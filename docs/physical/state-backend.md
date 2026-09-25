@@ -661,14 +661,15 @@ shell on it:
     repo's scheduled workflow (ci.md §3) is what runs it, from a
     checkout of this repository at a pinned commit, alerting into the
     unified alert channel (architecture.md §4.3). One command runs
-    both probes (`--only certificate|dumps` runs one), prints every
-    verdict with what it measured, and exits with one bit per failed
-    probe — 2 for the certificate, 4 for the dumps, their sum when
-    both failed — so the workflow's log names which; 1 is a run that
-    could not probe at all (an empty secret, a key the account
-    rejects), which is a different fact from a probe that did and
-    failed. The workflow carries no threshold, no prefix and no
-    address: every number is this repository's.
+    both probes (`--only certificate|dumps` runs one), prints each
+    verdict with what it measured as its probe answers, and exits with
+    one bit per failed probe — 4 for the certificate, 8 for the dumps,
+    their sum when both failed — so the workflow's log names which. 1
+    is a run that could not probe at all (an empty secret), which is a
+    different fact from a probe that did and failed; 2 is what the
+    parser and `uv run` answer when the command never ran, which is
+    why no probe's bit is 2. The workflow carries no threshold, no
+    prefix and no address: every number is this repository's.
     -   **Certificate.** `openssl s_client -connect <ADDRESS>:5432
         -starttls postgres -showcerts` — the same handshake the
         provision's readiness wait makes, credential-free because the
@@ -694,6 +695,13 @@ shell on it:
         that is not named like a dump, since nothing but the
         appliance's uploader can write there. Names and their stamps
         are the whole of what the key can see: never a byte of a dump.
+        A key B2 refuses, or one confined to no bucket, is this
+        probe's failure too, into the mint (credentials.md §4), named
+        by its variables and never by its id, which the workflow holds
+        as a secret. So is B2 not answering the listing at all, which
+        points back here rather than at a playbook: the outage is B2's
+        and not the box's, nothing is known about the dumps that run,
+        and the next scheduled run is the retry.
     -   The renewal margin of §1 narrows the certificate's gap — any
         converge reports the coming expiry without being asked, though
         the re-issue itself waits for `--force` — and the probe is the

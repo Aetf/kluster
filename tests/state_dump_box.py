@@ -10,9 +10,12 @@ the argv, because it is the wiring that decides whether the listing reads the
 archive and where the archive is written, and the script closes both files as
 soon as the call returns.
 
-The script's own spool is left alone: it is `/var/tmp` by the script's
-choice, and a case that pointed it elsewhere would be asserting nothing about
-that choice. What a run leaves there is removed by the script's own trap.
+The spool is a seam like the recipients file and `age`: each box spools
+under a directory of its own case's, so what a run leaves there is the case's
+to read -- a failed run that kept its plaintext archive is a finding here
+rather than a file left behind in the machine's `/var/tmp`. The defaults the
+unit relies on are read off the script's text instead
+(`test_state_dump._default`).
 """
 
 from __future__ import annotations
@@ -160,8 +163,12 @@ class Box:
     ) -> None:
         self.bin: Path = root / 'bin'
         self.record: Path = root / 'calls'
+        #: Where the script makes its run's directory. Empty between runs: the
+        #: script's trap removes what a run put there, on every way out.
+        self.spool: Path = root / 'spool'
         self.bin.mkdir()
         self.record.mkdir()
+        self.spool.mkdir()
         for tool, body in FAKES.items():
             fake = self.bin / tool
             _ = fake.write_text(f'#!/usr/bin/bash\nset -uo pipefail\nFAKE_TOOL={tool}\n{body}')
@@ -171,6 +178,7 @@ class Box:
         self.env: dict[str, str] = {
             **ENV,
             'PATH': f'{self.bin}{os.pathsep}{os.environ["PATH"]}',
+            'STATE_DUMP_SPOOL': str(self.spool),
             'STATE_DUMP_RECIPIENTS': str(recipients_file),
             'STATE_DUMP_AGE': str(self.bin / 'age'),
             'FAKE_RECORD': str(self.record),
@@ -211,3 +219,7 @@ class Box:
 
     def of(self, tool: str) -> list[Call]:
         return [call for call in self.calls if call.tool == tool]
+
+    def spooled(self) -> list[str]:
+        """What the runs so far left in the spool, which a finished run leaves empty."""
+        return sorted(str(path.relative_to(self.spool)) for path in self.spool.rglob('*'))

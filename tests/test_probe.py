@@ -25,6 +25,7 @@ from typing import Any, cast
 from urllib.parse import unquote
 
 import pytest
+import requests
 from b2_api import FakeApi
 from memory_kit import MemoryKit
 from state_dump_box import Box
@@ -389,9 +390,86 @@ def test_the_listing_is_served_to_the_list_only_key_over_the_prefix(
     assert api.listings == [(key.key_id, bucket_id, PREFIX)]
 
 
-def test_a_key_the_account_rejects_is_a_refusal_and_not_a_verdict(api: FakeApi) -> None:
-    with pytest.raises(CredentialRejected):
-        _ = probe.dumps('no-such-key', 'nor-secret', now=NOW)
+def test_a_key_b2_refuses_is_the_dump_probe_s_verdict_naming_no_key_id(api: FakeApi) -> None:
+    """A probe that could not run failed, and says so in its own verdict.
+
+    As an exception it would end the run before the other probe's verdict was
+    counted. And the verdict names the two variables rather than the key id
+    B2's refusal carries: in the workflow the id is a secret, and a job
+    output holding one arrives empty.
+    """
+    rejected = 'no-such-key'
+    with pytest.raises(CredentialRejected, match=rejected):
+        _ = b2.Session.authorize_confined(rejected, 'nor-secret')
+
+    verdict = probe.dumps(rejected, 'nor-secret', now=NOW)
+
+    assert not verdict.passed
+    assert verdict.playbook == 'credentials.md §4'
+    assert probe.KEY_ID_ENV in verdict.observed and 'credentials derived b2-freshness-dumps mint' in verdict.observed
+    assert rejected not in str(verdict)
+
+
+class _Listing:
+    """A session whose listing ends the way a case says, for a key the authorization accepted."""
+
+    def __init__(self, failure: Exception) -> None:
+        self.failure: Exception = failure
+
+    def file_names(self, _bucket_id: str, *, prefix: str) -> tuple[str, ...]:
+        raise self.failure
+
+
+def _answered(status: int) -> requests.HTTPError:
+    """What `raise_for_status` raises for a B2 answer of `status`."""
+    response = requests.Response()
+    response.status_code = status
+    return requests.HTTPError(f'{status} from B2', response=response)
+
+
+def _authorizing_to(failure: Exception) -> probe.Authorize:
+    def authorize(_key_id: str, _key: str) -> tuple[b2.Session, str]:
+        return cast('b2.Session', _Listing(failure)), 'bucket-id'
+
+    return authorize
+
+
+def _not_authorizing(failure: Exception) -> probe.Authorize:
+    def authorize(_key_id: str, _key: str) -> tuple[b2.Session, str]:
+        raise failure
+
+    return authorize
+
+
+@pytest.mark.parametrize('status', [401, 403])
+def test_a_key_b2_refuses_at_the_listing_is_the_refused_key_s_verdict(status: int) -> None:
+    # A key that authorizes and is then refused the prefix -- re-scoped, or
+    # retired between the two calls -- is the same repair as one refused at
+    # the door.
+    verdict = probe.dumps('id', 'secret', now=NOW, authorize=_authorizing_to(_answered(status)))
+
+    assert verdict.playbook == 'credentials.md §4'
+
+
+B2_SILENT = {
+    'no connection at the authorization': _not_authorizing(requests.ConnectionError('proxy refused')),
+    'a timeout at the authorization': _not_authorizing(requests.Timeout('read timed out')),
+    'a server error at the listing': _authorizing_to(_answered(503)),
+}
+
+
+@pytest.mark.parametrize('authorize', list(B2_SILENT.values()), ids=list(B2_SILENT))
+def test_b2_not_answering_is_the_dump_probe_s_verdict(authorize: probe.Authorize) -> None:
+    """An outage of B2's is a finding about this run, not about the dumps, and not a traceback.
+
+    It points at §6 rather than at a playbook for the box: nothing is known
+    about the dumps either way, and the next scheduled run is the retry.
+    """
+    verdict = probe.dumps('id', 'secret', now=NOW, authorize=authorize)
+
+    assert not verdict.passed
+    assert verdict.playbook == 'physical/state-backend.md §6'
+    assert 'B2 did not answer' in verdict.observed
 
 
 # -- the credential ------------------------------------------------------------
@@ -469,6 +547,56 @@ def test_every_probe_runs_whatever_the_first_found(
     # would leave unknown on exactly the morning both are wanted.
     assert 'certificate: FAILED' in caplog.text
     assert 'dumps: ok' in caplog.text
+
+
+def test_a_key_b2_refuses_leaves_the_certificate_s_verdict_standing(
+    authority: pki.Authority, api: FakeApi, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The morning both are wanted: a certificate failing, and a key the account no longer has.
+
+    Each is printed and each has its bit, so the status names both probes
+    rather than collapsing into the refusal status that names neither.
+    """
+    environ = {probe.KEY_ID_ENV: 'retired-key', probe.KEY_ENV: 'its-secret'}
+    caplog.set_level(logging.INFO, logger=probe.__name__)
+
+    answered = probe.run(environ=environ, now=NOW, handshake=_serving(authority, issued=_left(29)))
+
+    assert answered == probe.FAILED[probe.CERTIFICATE] + probe.FAILED[probe.DUMPS]
+    assert 'certificate: FAILED' in caplog.text
+    assert 'dumps: FAILED' in caplog.text
+
+
+def test_the_status_names_both_probes_when_b2_does_not_answer(
+    authority: pki.Authority, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A certificate failing on the morning B2 is down: both verdicts, both
+    # bits, rather than the could-not-probe status that names neither.
+    environ = {probe.KEY_ID_ENV: 'id', probe.KEY_ENV: 'secret'}
+    caplog.set_level(logging.INFO, logger=probe.__name__)
+    silent = _not_authorizing(requests.ConnectionError('proxy refused'))
+
+    answered = probe.run(environ=environ, now=NOW, handshake=_serving(authority, issued=_left(29)), authorize=silent)
+
+    assert answered == probe.FAILED[probe.CERTIFICATE] + probe.FAILED[probe.DUMPS]
+    assert 'certificate: FAILED' in caplog.text
+    assert 'dumps: FAILED' in caplog.text
+
+
+def test_a_verdict_is_printed_before_a_later_probe_can_raise(
+    authority: pki.Authority, caplog: pytest.LogCaptureFixture
+) -> None:
+    # What a probe raises that is not a verdict -- a defect rather than a
+    # finding -- still ends the run, and the verdict already reached is on
+    # the page before it does.
+    environ = {probe.KEY_ID_ENV: 'id', probe.KEY_ENV: 'secret'}
+    caplog.set_level(logging.INFO, logger=probe.__name__)
+    broken = _not_authorizing(RuntimeError('a defect in the probe'))
+
+    with pytest.raises(RuntimeError):
+        _ = probe.run(environ=environ, now=NOW, handshake=_serving(authority, issued=_left(29)), authorize=broken)
+
+    assert 'certificate: FAILED' in caplog.text
 
 
 def test_only_runs_the_one_probe_named_and_the_certificate_needs_no_key(
@@ -550,6 +678,19 @@ def test_a_probe_the_command_does_not_have_is_refused_by_the_parser(capsys: pyte
 
     assert refusal.value.code == 2
     assert 'invalid choice' in capsys.readouterr().err
+    # So no probe's bit is 2: a status the parser also answers would file an
+    # interface break as that probe's alert.
+    assert 2 not in probe.FAILED.values()
+
+
+def test_every_probe_has_a_bit_of_its_own_that_no_other_status_shares() -> None:
+    # One bit per probe, so a sum names its members; each above 2, so no bit
+    # is a status the refusal (1) or the layers in front of the command (2)
+    # also answer.
+    assert set(probe.FAILED) == set(probe.PROBES)
+    bits = list(probe.FAILED.values())
+    assert len(set(bits)) == len(bits)
+    assert all(bit > 2 and bit & (bit - 1) == 0 for bit in bits)
 
 
 def test_the_statuses_are_published_in_help() -> None:

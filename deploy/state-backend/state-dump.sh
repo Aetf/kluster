@@ -41,11 +41,12 @@ CONTAINER='pgstate'
 # the other side: `disconnected` backs the service's /var/tmp with a tmpfs
 # too, and plain `yes` hands it a private /var/tmp instead of the host's
 # (butane.yaml.j2).
-SPOOL='/var/tmp'
-
-# Seams for the suite, which runs this file on a workstation where neither
-# path exists. The unit sets neither: it reads the template's recipients file
-# and the age that `age-install.service` pins.
+#
+# Seams for the suite, which runs this file on a workstation where the last
+# two paths do not exist and where the spool is a directory of the case's own.
+# The unit sets none of them: it spools to the host's /var/tmp, and it reads
+# the template's recipients file and the age that `age-install.service` pins.
+SPOOL=${STATE_DUMP_SPOOL:-/var/tmp}
 RECIPIENTS=${STATE_DUMP_RECIPIENTS:-/etc/kluster/age-recipients.txt}
 AGE=${STATE_DUMP_AGE:-/opt/bin/age}
 

@@ -115,15 +115,58 @@ def test_ca_is_a_ca_and_leaves_are_not(authority: pki.Authority) -> None:
     assert not leaf.extensions.get_extension_for_class(x509.BasicConstraints).value.ca
 
 
-def test_openssl_accepts_the_chain(authority: pki.Authority, tmp_path: Path) -> None:
-    ca_file = tmp_path / 'ca.pem'
-    server_file = tmp_path / 'server.pem'
-    _ = ca_file.write_bytes(authority.certificate().cert_pem)
-    _ = server_file.write_bytes(authority.issue_server(ADDRESS).cert_pem)
-    proc = sp.run(
-        ['openssl', 'verify', '-CAfile', str(ca_file), str(server_file)],
+#: Each leaf, and the `openssl verify -purpose` it has to pass: the purpose
+#: a TLS peer holds the certificate to on its side of the handshake.
+PURPOSES = {'server': 'sslserver', 'client': 'sslclient'}
+
+
+def _issue(authority: pki.Authority, leaf: str) -> pki.Credential:
+    return authority.issue_server(ADDRESS) if leaf == 'server' else authority.issue_client('operator')
+
+
+def _verify(ca: bytes, leaf: bytes, directory: Path, *purpose: str) -> sp.CompletedProcess[str]:
+    ca_file = directory / 'ca.pem'
+    leaf_file = directory / 'leaf.pem'
+    _ = ca_file.write_bytes(ca)
+    _ = leaf_file.write_bytes(leaf)
+    return sp.run(
+        ['openssl', 'verify', *purpose, '-CAfile', str(ca_file), str(leaf_file)],
         capture_output=True,
         text=True,
         timeout=30,
     )
+
+
+@pytest.mark.parametrize('leaf', list(PURPOSES))
+def test_openssl_accepts_the_chain_for_the_leaf_s_purpose(authority: pki.Authority, tmp_path: Path, leaf: str) -> None:
+    """A chain that verifies is half of it; the leaf has to be marked for its side of the handshake.
+
+    A server certificate carrying the client purpose chains to the CA just as
+    well, and every `verify-full` client refuses the box that serves it --
+    while the readiness wait's `s_client -brief`, which checks no purpose,
+    still reads the box as up.
+    """
+    ca = authority.certificate().cert_pem
+
+    proc = _verify(ca, _issue(authority, leaf).cert_pem, tmp_path, '-purpose', PURPOSES[leaf])
+
     assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize('leaf', list(PURPOSES))
+def test_openssl_refuses_a_leaf_for_the_other_side_s_purpose(
+    authority: pki.Authority, tmp_path: Path, leaf: str
+) -> None:
+    # The control for the case above: a purpose check that accepted anything
+    # would pass it too. Each leaf chains, and is refused for the purpose it
+    # was not issued for.
+    other = next(purpose for name, purpose in PURPOSES.items() if name != leaf)
+    ca = authority.certificate().cert_pem
+    issued = _issue(authority, leaf).cert_pem
+
+    assert _verify(ca, issued, tmp_path).returncode == 0
+    refused = _verify(ca, issued, tmp_path, '-purpose', other)
+
+    assert refused.returncode != 0
+    # OpenSSL 3 says `unsuitable`, 1.1 said `unsupported`; the error is 26 in both.
+    assert 'certificate purpose' in refused.stdout + refused.stderr

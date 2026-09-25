@@ -46,6 +46,20 @@ def _default(variable: str) -> str:
     return found.group(1)
 
 
+def _left_nothing_behind(box: Box) -> None:
+    """The run spooled under the box's own directory, and took everything it put there with it.
+
+    The first half is what keeps the second from passing on a run that never
+    reached the spool: the archive `pg_dump` wrote is the proof the directory
+    existed. A failed run is the one this matters for -- the archive is the
+    whole state in the clear, and a night that left it behind on the box
+    leaves the next night's beside it.
+    """
+    pg = box.of('podman')[0]
+    assert pg.stdout_path is not None and pg.stdout_path.parent.parent == box.spool, pg.stdout_path
+    assert box.spooled() == []
+
+
 def test_upload_walks_authorize_then_get_url_then_put(tmp_path: Path) -> None:
     box = Box(tmp_path)
 
@@ -103,6 +117,7 @@ def test_a_refused_b2_call_stops_the_run_with_what_b2_said(tmp_path: Path) -> No
     assert ran.returncode != 0
     assert 'bad_auth_token' in ran.stderr
     assert len(box.of('curl')) == 2, 'nothing is uploaded after a refusal'
+    _left_nothing_behind(box)
 
 
 # -- the listing, read the same way on both sides ------------------------------
@@ -212,18 +227,22 @@ def test_the_archive_is_spooled_on_the_disk_rather_than_in_memory(tmp_path: Path
     ENOSPC on a box that has tens of gigabytes free. Both copies live in a
     directory of the run's own under that spool, and the spool is left as it
     was found.
+
+    The run here spools under the case's own directory, so the box's spool
+    is the script's default, read off its text.
     """
     box = Box(tmp_path)
 
     ran = box.run()
 
     assert ran.returncode == 0, ran.stderr
+    assert _default('SPOOL') == '/var/tmp'
     (pg, _), (encrypt,) = box.of('podman'), box.of('age')
     assert pg.stdout_path is not None and encrypt.stdout_path is not None
     assert pg.stdout_path.parent == encrypt.stdout_path.parent
     spool = pg.stdout_path.parent
-    assert spool.parent == Path('/var/tmp') and spool.name.startswith('state-dump.')
-    assert not spool.exists()
+    assert spool.parent == box.spool and spool.name.startswith('state-dump.')
+    _left_nothing_behind(box)
 
 
 def test_the_nightly_object_is_listed_before_it_is_uploaded(tmp_path: Path) -> None:
@@ -241,6 +260,7 @@ def test_the_nightly_object_is_listed_before_it_is_uploaded(tmp_path: Path) -> N
     assert ran.returncode != 0
     assert 'lists no tables' in ran.stderr
     assert box.of('age') == [] and box.of('curl') == []
+    _left_nothing_behind(box)
 
 
 def test_a_listing_that_cannot_be_read_stops_the_run(tmp_path: Path) -> None:
@@ -253,6 +273,7 @@ def test_a_listing_that_cannot_be_read_stops_the_run(tmp_path: Path) -> None:
     assert ran.returncode != 0
     assert 'pg_restore --list failed' in ran.stderr
     assert box.of('age') == [] and box.of('curl') == []
+    _left_nothing_behind(box)
 
 
 def test_the_refusal_carries_what_pg_restore_said(tmp_path: Path) -> None:
@@ -270,6 +291,7 @@ def test_the_refusal_carries_what_pg_restore_said(tmp_path: Path) -> None:
 
     assert ran.returncode != 0
     assert said in ran.stderr
+    _left_nothing_behind(box)
 
 
 def test_the_plaintext_archive_does_not_outlive_the_dump(tmp_path: Path) -> None:
@@ -295,6 +317,7 @@ def test_dump_fails_when_a_step_fails(tmp_path: Path, pg: int, age: int, message
     assert ran.returncode != 0
     assert message in ran.stderr
     assert box.of('curl') == []
+    _left_nothing_behind(box)
 
 
 def test_the_run_names_the_object_under_the_prefix_and_a_stamp(tmp_path: Path) -> None:
@@ -437,6 +460,9 @@ def test_the_dump_unit_spools_to_the_hosts_var_tmp() -> None:
     one.
     """
     assert 'PrivateTmp' not in _unit('state-dump.service')
+    # Nor does the box move the spool through the script's own seam: the
+    # defaults are what it runs on, and every seam is the suite's.
+    assert 'STATE_DUMP_' not in BUTANE
 
 
 # -- what the box can execute at all -------------------------------------------
