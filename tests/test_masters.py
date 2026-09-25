@@ -263,6 +263,20 @@ def test_remember_falls_back_to_the_file_where_there_is_no_secret_store(
     assert masters.load(masters.ROOTS['b2'], _refuse)['key'] == 'master-key'
 
 
+def test_remember_keeps_a_root_in_the_secret_store_alone_where_there_is_one(
+    store: MemoryKeyring, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # One layer, not two: the store is the one a backup cannot copy, so a
+    # plaintext file written beside it would undo the reason for using it.
+    root = masters.ROOTS['b2']
+    monkeypatch.setattr('getpass.getpass', _answers('master-key'))
+
+    _ = masters.remember(root, _answers('account-id'))
+
+    assert masters.stored(root) == {field.name: masters.STORE for field in root.fields}
+    assert [field.file for field in root.fields if workstation.root_path(field.file).exists()] == []
+
+
 def test_forget_removes_the_token_file_as_well_as_the_store_entry(
     store: MemoryKeyring, local: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -50,6 +50,12 @@ BUCKET = 'kluster-state'
 #: up would be driving a bucket the key it mints cannot write into.
 PREFIX = conventions.STATE_DUMP_PREFIX
 RETENTION_DAYS = 30
+#: The lifecycle rule the dump prefix wants, as B2 exchanges it.
+RETENTION: dict[str, Any] = {
+    'fileNamePrefix': f'{PREFIX}/',
+    'daysFromUploadingToHiding': RETENTION_DAYS,
+    'daysFromHidingToDeleting': 1,
+}
 
 LIST_FILE_NAMES = 'b2_list_file_names'
 
@@ -247,17 +253,22 @@ def test_rotation_into_a_kit_already_holding_the_successor_mints_nothing(
     assert kit.get(SEED_ENTRY, attribute='UserName') == previous
 
 
-def test_a_successor_row_missing_a_half_is_written_over(api: FakeApi, kit: KdbxStore, memory_kit: KdbxStore) -> None:
+@pytest.mark.parametrize(('key_id', 'key'), [('', 'a-key'), ('a-key-id', '')], ids=['key id', 'key'])
+def test_a_successor_row_missing_a_half_is_written_over(
+    api: FakeApi, kit: KdbxStore, memory_kit: KdbxStore, key_id: str, key: str
+) -> None:
     _ = _seeded(api, kit)
     # Present is not complete: a row the session cannot authorize from is no
     # key to keep, and treating it as one would refuse a rotation that has
-    # nothing to resume.
-    memory_kit.put(SEED_ENTRY, '', '')
+    # nothing to resume. One half at a time, because each half is checked on
+    # its own: a row blank in both is caught by either check alone.
+    memory_kit.put(SEED_ENTRY, key_id, key)
 
-    key_id = b2.rotate_seed(kit, seed_entry=SEED_ENTRY, into=memory_kit)
+    minted = b2.rotate_seed(kit, seed_entry=SEED_ENTRY, into=memory_kit)
 
-    assert memory_kit.get(SEED_ENTRY, attribute='UserName') == key_id
-    assert api.named(b2.SEED.name) == [key_id]
+    assert memory_kit.get(SEED_ENTRY, attribute='UserName') == minted
+    assert memory_kit.get(SEED_ENTRY) == api.keys[minted].secret
+    assert api.named(b2.SEED.name) == [minted]
 
 
 def test_a_key_stops_working_the_moment_it_is_deleted(api: FakeApi, kit: KdbxStore) -> None:
@@ -343,6 +354,25 @@ def test_a_rotation_in_another_account_deletes_nothing(
     # through somebody else's keys.
     assert api.named(b2.SEED.name) == sorted([key_id, stranger.key_id])
     assert kit.get(SEED_ENTRY, attribute='UserName') == key_id
+
+
+def test_resuming_a_rotation_in_another_account_deletes_nothing(
+    api: FakeApi, kit: KdbxStore, memory_kit: KdbxStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The other way into a rotation: a successor kit already holding its row
+    # is resumed rather than minted into, and the resume's first act is the
+    # same sweep, authorized as the successor's key instead of the seed's.
+    previous = _seeded(api, kit)
+    stored = api.add_key(b2.SEED.name)
+    memory_kit.put(SEED_ENTRY, stored.key_id, stored.secret)
+    stranger = api.add_key(b2.SEED.name)
+    _elsewhere(monkeypatch)
+
+    with pytest.raises(CredentialRejected, match=f'{ACCOUNT_ID}.*some-other-account'):
+        _ = b2.rotate_seed(kit, seed_entry=SEED_ENTRY, into=memory_kit)
+
+    assert api.named(b2.SEED.name) == sorted([previous, stored.key_id, stranger.key_id])
+    assert memory_kit.get(SEED_ENTRY, attribute='UserName') == stored.key_id
 
 
 def test_a_dump_key_is_not_minted_in_another_account(
@@ -509,13 +539,7 @@ def test_the_bucket_is_created_private_with_the_retention_the_prefix_wants(api: 
     assert bucket['bucketType'] == 'allPrivate'
     # Retention is a lifecycle rule so that nothing needs a delete capability
     # to keep the bucket from growing forever.
-    assert bucket['lifecycleRules'] == [
-        {
-            'fileNamePrefix': f'{PREFIX}/',
-            'daysFromUploadingToHiding': RETENTION_DAYS,
-            'daysFromHidingToDeleting': 1,
-        }
-    ]
+    assert bucket['lifecycleRules'] == [RETENTION]
 
 
 def test_converging_the_bucket_twice_creates_one_bucket(api: FakeApi, kit: KdbxStore) -> None:
@@ -529,16 +553,26 @@ def test_converging_the_bucket_twice_creates_one_bucket(api: FakeApi, kit: KdbxS
     assert 'b2_update_bucket' not in api.calls
 
 
-def test_a_retention_someone_changed_is_put_back(api: FakeApi, kit: KdbxStore) -> None:
+@pytest.mark.parametrize(
+    'drifted',
+    [
+        [],
+        [RETENTION | {'daysFromUploadingToHiding': RETENTION_DAYS * 10}],
+        [RETENTION | {'daysFromHidingToDeleting': None}],
+    ],
+    ids=['removed', 'hidden-later', 'never-deleted'],
+)
+def test_a_retention_someone_changed_is_put_back(api: FakeApi, kit: KdbxStore, drifted: list[dict[str, Any]]) -> None:
     _ = _seeded(api, kit)
     session, bucket_id = _bucket(api, kit)
-    api.buckets[bucket_id]['lifecycleRules'] = []
+    api.buckets[bucket_id]['lifecycleRules'] = drifted
 
     _ = b2.ensure_bucket(session, BUCKET, prefix=PREFIX, retention_days=RETENTION_DAYS)
 
     # The rule is the whole reason a compromised appliance cannot walk the
-    # dump history, so drift in it is corrected rather than reported.
-    assert api.buckets[bucket_id]['lifecycleRules'][0]['daysFromUploadingToHiding'] == RETENTION_DAYS
+    # dump history, so drift in it is corrected rather than reported: a rule
+    # that still governs the prefix but keeps files longer is drift too.
+    assert api.buckets[bucket_id]['lifecycleRules'] == [RETENTION]
 
 
 def test_the_uploader_keeps_the_name_the_running_appliance_s_key_carries() -> None:
@@ -1179,14 +1213,7 @@ def test_a_refusal_describes_the_answer_and_never_quotes_it(answer: object, desc
 def test_a_retention_that_already_says_this_is_not_rewritten(api: FakeApi, kit: KdbxStore) -> None:
     _ = _seeded(api, kit)
     session, bucket_id = _bucket(api, kit)
-    api.buckets[bucket_id]['lifecycleRules'] = [
-        {
-            'fileNamePrefix': f'{PREFIX}/',
-            'daysFromUploadingToHiding': RETENTION_DAYS,
-            'daysFromHidingToDeleting': 1,
-            'somethingB2Added': True,
-        }
-    ]
+    api.buckets[bucket_id]['lifecycleRules'] = [RETENTION | {'somethingB2Added': True}]
 
     _ = b2.ensure_bucket(session, BUCKET, prefix=PREFIX, retention_days=RETENTION_DAYS)
 

@@ -147,6 +147,22 @@ def test_writes_survive_a_reopen(tmp_path: Path) -> None:
     assert reopened.get('seeds/Recovery key') == 'AAAA'
 
 
+def test_an_edit_survives_a_reopen(tmp_path: Path) -> None:
+    # The rewrite of an existing row is saved like an addition: `b2.rotate_seed`
+    # rewrites the seed row in place and then retires the old key, so an edit
+    # held only in memory would leave the file naming a key that no longer
+    # exists.
+    path = tmp_path / 'kit.kdbx'
+    store = KdbxStore.create(path, PASSWORD)
+    store.put('seeds/B2 seed key', 'old-id', 'old-secret')
+
+    store.put('seeds/B2 seed key', 'new-id', 'new-secret')
+
+    reopened = _reopened(path)
+    assert reopened.get('seeds/B2 seed key', attribute='UserName') == 'new-id'
+    assert reopened.get('seeds/B2 seed key') == 'new-secret'
+
+
 def test_nested_groups_are_created_on_demand(store: KdbxStore) -> None:
     store.put('seeds/providers/oci/API key', 'ocid1', 'pem')
 
