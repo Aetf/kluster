@@ -1,12 +1,12 @@
 """The cloud nodes and the load balancer in front of them.
 
-Three A1 instances, each a control-plane node *and* an ingress node
-(architecture.md §1.1): etcd quorum lives in one region, and the same three
-machines terminate public traffic. They are spread across availability
-domains before fault domains, so
-losing one takes neither quorum nor ingress with it.
+A1 instances, one per machine configuration the component is handed, each a
+control-plane node *and* an ingress node (architecture.md §1.1): etcd quorum
+lives in one region, and the same machines terminate public traffic. They are
+spread across availability domains before fault domains, so losing one takes
+neither quorum nor ingress with it.
 
-One of the three additionally carries the **dedicated VIP**: a secondary
+One of them additionally carries the **dedicated VIP**: a secondary
 private IP and the reserved public IP that OCI 1:1-NATs onto it. Nothing about
 the node is workload-specific, and a workload that needs the address finds the
 node through scheduling constraints declared beside the workload
@@ -17,7 +17,12 @@ Listeners are not a fixed list. The management listeners are declared here
 because the ports belong to the cluster rather than to any service -- they are
 `conventions.MANAGEMENT_PORTS`, which the node firewall opens and the cluster
 endpoint names from the same structure; a service's listener is declared
-beside the service that needs it.
+beside the service that needs it. Everything declared per management port is
+named after the port's field in that structure (`kubernetes`, say), never
+after its number -- the backend set and the listener in Pulumi and on the
+balancer, the backends in Pulumi and, through the autoname derived from that,
+on the balancer: a name is an identity that state and the balancer key on,
+and the number is a value the structure lets anyone edit.
 
 The load balancer is a component of its own because the dependency runs
 through it: a node's machine configuration names the cluster endpoint, which
@@ -42,6 +47,16 @@ from putils import Component, async_output, resolve
 #: carries no colon and an IPv6 literal no dot — and it keeps deciding it if a
 #: read leaves the address record's own `ip_version` field unset.
 FAMILY_SEPARATOR: Mapping[str, str] = {'IPv4': '.', 'IPv6': ':'}
+
+
+def management_ports() -> list[tuple[str, int]]:
+    """Each management port as its field in `conventions.ManagementPorts` and its number.
+
+    The field is what everything declared per port is named after; the number
+    is only ever an input.
+    """
+    ports = conventions.MANAGEMENT_PORTS
+    return list(zip(ports._fields, ports, strict=True))
 
 
 class NodeLoadBalancer(Component):
@@ -71,30 +86,32 @@ class NodeLoadBalancer(Component):
             opts=self.child_opts(),
         )
 
+        #: Keyed by the port's field in `conventions.ManagementPorts`, which is
+        #: each backend set's OCI name and what its logical name carries.
         self.backend_sets = {
-            port: oci.networkloadbalancer.BackendSet(
-                f'{name}-nlb-{port}',
-                name=f'port{port}',
+            field: oci.networkloadbalancer.BackendSet(
+                f'{name}-nlb-{field}',
+                name=field,
                 network_load_balancer_id=self.load_balancer.id,
                 policy='FIVE_TUPLE',
                 is_preserve_source=True,
                 health_checker=oci.networkloadbalancer.BackendSetHealthCheckerArgs(protocol='TCP', port=port),
                 opts=self.child_opts(),
             )
-            for port in conventions.MANAGEMENT_PORTS
+            for field, port in management_ports()
         }
 
         self.listeners = [
             oci.networkloadbalancer.Listener(
-                f'{name}-nlb-listener-{port}',
-                name=f'port{port}',
+                f'{name}-nlb-listener-{field}',
+                name=field,
                 network_load_balancer_id=self.load_balancer.id,
-                default_backend_set_name=self.backend_sets[port].name,
+                default_backend_set_name=self.backend_sets[field].name,
                 port=port,
                 protocol='TCP',
                 opts=self.child_opts(),
             )
-            for port in conventions.MANAGEMENT_PORTS
+            for field, port in management_ports()
         ]
 
         self.register_outputs({})
@@ -136,7 +153,7 @@ class NodeLoadBalancer(Component):
 
 
 class CloudNodes(Component):
-    """The three A1 nodes, their NLB, and the dedicated VIP one of them holds."""
+    """The A1 nodes, the backends that put them behind the balancer, and the dedicated VIP one of them holds."""
 
     def __init__(
         self,
@@ -224,14 +241,21 @@ class CloudNodes(Component):
 
         self.backends = [
             oci.networkloadbalancer.Backend(
-                f'{name}-nlb-{port}-{node}',
-                backend_set_name=load_balancer.backend_sets[port].name,
+                f'{name}-nlb-{field}-{node}',
+                backend_set_name=load_balancer.backend_sets[field].name,
                 network_load_balancer_id=load_balancer.load_balancer.id,
                 target_id=instance.id,
+                # No `name`: pulumi-oci autonames it from the logical name
+                # (`<logical>-<7 hex>`), so the name on the balancer carries
+                # the field too. A backend's port is not updatable, so a port
+                # edit replaces the backend; an autonamed replacement gets a
+                # fresh name and is created before the old one is deleted,
+                # where a fixed name makes the provider delete first and
+                # leaves the node out of the set until its replacement lands.
                 port=port,
                 opts=self.child_opts(),
             )
-            for port in conventions.MANAGEMENT_PORTS
+            for field, port in management_ports()
             for node, instance in sorted(self.instances.items())
         ]
 
