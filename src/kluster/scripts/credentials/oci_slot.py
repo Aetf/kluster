@@ -9,23 +9,30 @@ slot** (§1 rule 6, §4.4) — a file under the checkout's git-ignored
 `.credentials/`, written by a `credentials` command and read afterwards
 without asking anybody for anything.
 
-The slot is an **OCI SDK configuration file plus the key it names**, rather
-than a shape of this repository's own, because the SDK is the whole of the
-reader: `oci.config.from_file` needs no adapter, and a containerized `oci` CLI
-pointed at the same file behaves identically. It holds the credential and
-nothing else: the compartment the appliance acts in is a boundary this program
-decides rather than a property of the key, so it lives in `conventions` and
-the provisioner reads it there — a copy here could only go stale against it.
+The slot is an **OCI SDK configuration file plus the key beside it**, rather
+than a shape of this repository's own, because the SDK is what signs with it:
+the format is the SDK's, and a containerized `oci` CLI pointed at the same file
+reads it unchanged. It holds the credential and nothing else: the compartment
+the appliance acts in is a boundary this program decides rather than a property
+of the key, so it lives in `conventions` and the provisioner reads it there — a
+copy here could only go stale against it.
 
-The `key_file` entry is an absolute path because the SDK resolves it against
-nothing: it opens the value as given, relative to whatever directory the reader
-was started from rather than to the configuration file beside it. The path is
-therefore a property of where this checkout sits, and a checkout copied
-somewhere else re-runs the mint rather than having its slot edited (§4.4).
+The slot is the two files side by side, and the reader here holds it to that:
+it signs with the key beside the configuration it loaded, whatever the
+configuration's `key_file` entry says (`read`). The entry is written all the
+same, as an absolute path, because the SDK resolves it against nothing — it
+opens the value as given, relative to whatever directory its reader was started
+from rather than to the configuration file beside it — and a reader handed the
+file alone needs a path that opens. That makes the entry a property of the
+checkout that minted the key, and so a default rather than the answer: a
+`.credentials/` copied to a checkout at another path provisions as it is, with
+no edit and no re-mint (§4.4), and only a reader outside this program — the
+`oci` CLI pointed at the copy — still follows the entry back to where the key
+was minted.
 
-There is one such slot, and it is written here and read in
-`state_backend.provision` — including the fallback to the path this one
-superseded, which lives with that reader so the two die together. A second
+There is one such slot, written and read here, for `state_backend.provision`
+— whose fallback to the path this one superseded lives with that caller, so the
+two die together. A second
 workstation-only consumer would earn a parameter back; inventing one now would
 only be a shape nothing has to satisfy.
 """
@@ -50,6 +57,14 @@ PROFILE = 'DEFAULT'
 
 CONFIG = 'config'
 KEY = 'key.pem'
+
+#: What the configuration says about the key, beside `key_file`: everything the
+#: SDK signs with, and all `read` answers with.
+CREDENTIAL = ('user', 'fingerprint', 'tenancy', 'region')
+
+
+class SlotUnusable(RuntimeError):
+    """The appliance's OCI slot is absent or incomplete; the message names the repair."""
 
 
 def directory() -> Path:
@@ -81,13 +96,45 @@ def write(key: ApiKey) -> Path:
     # `BasicInterpolation` would refuse a checkout path containing a `%` --
     # after the key it describes is already live in the tenancy.
     profile = configparser.ConfigParser(interpolation=None)
-    profile[PROFILE] = {
-        'user': key.user,
-        'fingerprint': key.fingerprint,
-        'tenancy': key.tenancy,
-        'region': key.region,
-        'key_file': str(written),
-    }
+    profile[PROFILE] = {**{name: str(getattr(key, name)) for name in CREDENTIAL}, 'key_file': str(written)}
     rendered = io.StringIO()
     profile.write(rendered)
     return workstation.write(config_path(), rendered.getvalue())
+
+
+def read() -> dict[str, str]:
+    """The slot's credential as the SDK's clients take one, signing with the key beside it.
+
+    `oci.config.from_file` is not used, because it refuses a configuration
+    whose `key_file` names no file — which is what the entry becomes the moment
+    the slot is copied to a checkout at another path. The parse is the one it
+    makes, with no interpolation. The answer is `CREDENTIAL` and the PEM in
+    this directory, never the entry's value, and nothing else the file may
+    have gained: a `key_content` added by hand would outrank the PEM in the
+    SDK's signer, and every setting the SDK defaults, the client defaults
+    itself.
+    """
+    location = config_path()
+    parser = configparser.ConfigParser(interpolation=None)
+    try:
+        found = parser.read(location)
+    except configparser.Error as exc:
+        raise SlotUnusable(
+            f'{location} does not parse ({exc}): `credentials derived oci-state-backend mint` rewrites it'
+        ) from exc
+    if not found:
+        raise SlotUnusable(f'{location} cannot be read: `credentials derived oci-state-backend mint` rewrites it')
+    profile = parser[PROFILE]
+    missing = [name for name in CREDENTIAL if not profile.get(name)]
+    if missing:
+        raise SlotUnusable(
+            f'{location} has no {", ".join(missing)} in its [{PROFILE}] profile: '
+            '`credentials derived oci-state-backend mint` rewrites it'
+        )
+    key = key_path()
+    if not key.is_file():
+        raise SlotUnusable(
+            f'{location} has no {KEY} beside it: copy the whole slot directory, or re-run '
+            '`credentials derived oci-state-backend mint`'
+        )
+    return {**{name: profile[name] for name in CREDENTIAL}, 'key_file': str(key)}

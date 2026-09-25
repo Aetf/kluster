@@ -89,9 +89,17 @@ def _why(completed: sp.CompletedProcess[str]) -> str:
     detail = (completed.stderr or completed.stdout).strip()
     last = detail.splitlines()[-1] if detail else f'exit status {completed.returncode}'
     if 'HTTP 404' in detail:
-        return f'{last} - no such repository or Environment; the `github` stack declares them'
-    if 'HTTP 401' in detail or 'HTTP 403' in detail:
-        return f'{last} - the GitHub admin token was refused; it needs `repo` scope on that repository'
+        return (
+            f'{last} - no such repository or Environment (the `github` stack declares them), '
+            'or the GitHub admin token was not given this repository (credentials.md §3)'
+        )
+    if 'HTTP 401' in detail:
+        return (
+            f'{last} - the GitHub admin token was not accepted: '
+            '`credentials derived github-admin record` delivers a new one'
+        )
+    if 'HTTP 403' in detail:
+        return f'{last} - the GitHub admin token was refused; it lacks a permission this call needs (credentials.md §3)'
     return last
 
 

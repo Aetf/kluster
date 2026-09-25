@@ -102,6 +102,11 @@ class OciClients:
         is a file because this command runs unattended halves of a bring-up
         and cannot stop to ask (`credentials.oci_slot`).
 
+        The slot signs with the key beside its configuration, not the one its
+        `key_file` entry names, so a `.credentials/` copied to a checkout at
+        another path works as it is (`oci_slot.read`). A configuration from
+        anywhere else is the SDK's to read, entry and all.
+
         `OCI_CLI_CONFIG_FILE` still wins, because pointing one run at another
         tenancy is a thing an operator does and a slot is not where that
         belongs.
@@ -121,30 +126,36 @@ class OciClients:
         mapping's compartment is (`held`), because that is what decides
         whether the site's recorded address applies.
         """
-        location = os.environ.get('OCI_CLI_CONFIG_FILE')
-        if not location:
-            slot = oci_slot.config_path()
-            if slot.is_file():
-                location = str(slot)
-            elif LEGACY_CONFIG_FILE.is_file():
-                log.warning(
-                    'using the OCI configuration in %s: the appliance has a minted key of its own now, '
-                    'which `credentials derived oci-state-backend mint` writes to %s',
-                    LEGACY_CONFIG_FILE,
-                    slot,
-                )
-                location = str(LEGACY_CONFIG_FILE)
-            else:
-                raise ValueError(
-                    'the appliance has no OCI credential on this machine: run `credentials derived '
-                    f'oci-state-backend mint`, which mints one into {slot}'
-                )
-        config = oci.config.from_file(location)
+        config: dict[str, Any]
+        slot = oci_slot.config_path()
+        if location := os.environ.get('OCI_CLI_CONFIG_FILE'):
+            config = oci.config.from_file(location)
+        elif slot.is_file():
+            location = str(slot)
+            config = oci_slot.read()
+        elif LEGACY_CONFIG_FILE.is_file():
+            log.warning(
+                'using the OCI configuration in %s: the appliance has a minted key of its own now, '
+                'which `credentials derived oci-state-backend mint` writes to %s',
+                LEGACY_CONFIG_FILE,
+                slot,
+            )
+            location = str(LEGACY_CONFIG_FILE)
+            config = oci.config.from_file(location)
+        else:
+            raise oci_slot.SlotUnusable(
+                'the appliance has no OCI credential on this machine: run `credentials derived '
+                f'oci-state-backend mint`, which mints one into {slot}'
+            )
         own = conventions.OCI_TENANCY.compartments[conventions.STATE_BACKEND].ocid
         compartment = compartment_id or config.get('compartment-id') or own
         if not compartment:
-            raise ValueError(
-                f'no compartment: pass --compartment, set compartment-id in {location}, or record the '
+            # The slot carries the credential alone (`oci_slot.read`), so a
+            # `compartment-id` written into it is not read: naming it there
+            # would send the operator to a repair that does nothing.
+            in_file = '' if location == str(slot) else f'set compartment-id in {location}, '
+            raise conventions.CompartmentMissing(
+                f'no compartment: pass --compartment, {in_file}or record the '
                 "appliance's compartment in `conventions.OCI_TENANCY.compartments`"
             )
         return cls(compartment_id=str(compartment), config=config, held=compartment == own)
