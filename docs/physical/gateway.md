@@ -459,9 +459,10 @@ happen. Whether an update that carries `/etc` across puts back the
 stock copy of a file the firmware itself ships — FRR's daemon list, or
 its configuration (§1.3) — is not established. `frr-config.sh` checks
 the daemon list's switch and compares the daemon's copy with the source
-on every run, so it repairs either file whichever way that falls; what
-the answer decides is whether the first boot after an update parses the
-configuration against the new firmware's parser (§1.3).
+on every run, so it repairs either file whichever way that falls, and
+because its stamp names the firmware release, the first boot after an
+update parses the configuration against the new parser either way
+(§1.3).
 
 Three files are the mechanism itself.
 
@@ -608,17 +609,18 @@ Between them sits **`frr-config.sh`**, an executable in `bin/` run by
 **`frr-config.service`**, a `Type=oneshot` unit wanted by
 `multi-user.target` and installed like every other unit here. One run
 converges the toggle, the file and the running daemon, in that order,
-and does nothing where all three already hold.
+and does nothing where all three already hold on the parser its stamp
+names.
 
 **The toggle is a converged fact rather than a hand edit.**
 `/etc/frr/daemons` is the firmware's own file — the list of which
 daemons of the suite the supervisor starts — and it ships with the
 protocol daemon off (`bgpd=no`), which is why a device nobody has
-declared a session on holds none. It is off `/data` like `frr.conf`,
-and a firmware update may put back the stock file (§1.2), so
-`frr-config.sh` switches the line on at every run and then **asserts** it: a file reshaped until the
-substitution matches nothing would otherwise leave the executable
-reporting success over a daemon that never starts the protocol. A
+declared a session on holds none. A firmware update may put that file
+back as it ships, so `frr-config.sh` switches the line on at every run
+and then **asserts** it: a file reshaped until the substitution matches
+nothing would otherwise leave the executable reporting success over a
+daemon that never starts the protocol. A
 switch that had to be flipped is itself a reason to restart, so the
 toggle is checked before the file comparison that would otherwise say
 there is nothing to do.
@@ -665,23 +667,35 @@ failure fails nothing. The installed file and its stamp therefore prove
 *installed*, not *accepted*, and the pre-check is what turns a parser
 that no longer likes one of these lines into a converge-time failure
 instead of a peer that never establishes — on every run that installs
-the file. A boot that finds the stamp still matching (below) installs
-nothing and parses nothing, so after a firmware update that carried
-`/etc` across, the new parser first meets this file on the next push
-that changes it.
+the file, and the first run on a new firmware release, or over a
+replaced parser, is always one (below).
 
 **What says the daemon already holds it is a stamp, not the installed
 file.** The write happens before the restart is attempted, so a run
 that failed at the restart leaves two identical copies behind — and a
 rerun deciding on those alone would exit successfully having told the
 daemon nothing, leaving the session on the old configuration under an
-apply that reported success. The stamp is a checksum written beside
+apply that reported success. The stamp is written beside
 `/etc/frr/frr.conf` after the restart returns, so what is skipped is
-work whose *effect* has landed. It is off `/data` with the file it
-describes. Where an update takes or resets either, the next boot
-parses, installs and restarts from scratch; where it carries both
-across and the switch survives, the boot run finds nothing to do and
-parses nothing.
+work whose *effect* has landed. It is one line: the source's checksum,
+then the parser that checked it — the firmware release from
+`/usr/lib/version`, and the checksum of the `vtysh` binary. The parser
+is there because the stamp is off `/data`, and nothing promises that an
+update takes it away: an update that left the stamp, the daemon's copy
+and the toggle in place would otherwise skip the parse on a parser that
+has never read the file. So a stamp naming another release or another
+binary, or neither, is stale, and the run that finds it parses and
+restarts again. The two halves cover different arrivals. The release
+covers a new firmware, which is how the suite — a package of the
+image — ordinarily changes, command matcher and all. The binary covers
+a suite replaced outside the image under the same release, since the
+command definitions a file is parsed against are compiled into `vtysh`.
+A replacement that changed neither is the one parser change the stamp
+does not see. The suite's own version is not enough: this firmware's
+`vtysh` takes no `--version`, and its `--help` reports the upstream
+version, which a vendor rebuild leaves unchanged. A release the
+executable cannot read, or reads empty, fails the run before anything
+is touched.
 
 **The daemon's copy is installed `frr:frr` 0640**, which is the daemon
 suite's own convention on this device and what an operator writing the

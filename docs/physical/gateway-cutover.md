@@ -91,12 +91,14 @@ not moved.
     healthy day after, and is not a check of anything. What starts the
     daemon at each boot is the `Wants=frr.service` edge in
     `frr-config.service`, which `20-units.sh` enables at every boot; the
-    executable's stamp lives beside the installed file in `/etc`, which
-    a reboot keeps, so the first reboot of the soak finds file and stamp
-    equal and exits having done nothing — with the daemon up regardless,
-    because the edge started it. And **no session comes up until the
-    worker VM exists** to peer with: the declared peer is dialed and
-    nothing answers, which is the expected state rather than a fault.
+    executable's stamp lives beside the installed file in `/etc` and
+    names the firmware release. A reboot on the same release finds file
+    and stamp equal and exits having done nothing, with the daemon up
+    regardless because the edge started it. The first boot on a new
+    release parses and restarts once (gateway.md §1.3). And **no session
+    comes up until the worker VM exists** to peer with: the declared
+    peer is dialed and nothing answers, which is the expected state
+    rather than a fault.
 
     **The edge itself is proven only after a reboot**, which the push
     cannot show and which nothing here schedules — the device takes one
@@ -105,6 +107,9 @@ not moved.
     reboot: `active` then is the edge working, `inactive` then is the
     edge failed. That is the one reading a healthy device cannot give,
     and the only thing about the boot path the push itself cannot show.
+    The edge alone is read on a boot whose `frr-config.sh` did nothing:
+    `journalctl -b -u frr-config.service` shows no `frr-config: checking`
+    line. The first boot after a firmware pass is not such a boot.
 
 ## 3. Before the window opens
 
@@ -765,7 +770,10 @@ object with no file behind it and goes at the next boot, or to
     # frr:frr 640 -- as the stock file already is, so this guards the
     # mode rather than proving the push:
     stat -c '%U:%G %a' /etc/frr/frr.conf
-    ls /etc/frr/frr.conf.kluster-applied
+    # the stamp names the source, the release and the parser binary:
+    test "$(cat /etc/frr/frr.conf.kluster-applied)" = \
+        "$(cksum </data/custom/frr/frr.conf) $(cat /usr/lib/version) $(cksum <"$(command -v vtysh)")" \
+        && echo current                                 # current
     cmp /data/custom/frr/frr.conf /etc/frr/frr.conf     # silent
     vtysh -c 'show daemons'                             # lists bgpd
     # "Active" or "Connect" until the worker peers, "Established" after:
@@ -982,7 +990,7 @@ serving again with all of it in place:
     than one: `systemctl disable --now frr-config.service` takes the
     boot edge away, and `systemctl stop frr` stops the daemon. `bgpd=yes`
     stays in `/etc/frr/daemons` — one line in a file a firmware update
-    restores anyway, and inert with the daemon stopped.
+    may put back as it ships, and inert with the daemon stopped.
 -   `/etc/frr/frr.conf` on the declared content, with its stamp beside
     it. The stock file is not restored, and nothing routes differently
     for it: the peer it declares is the worker VM, which does not exist,
