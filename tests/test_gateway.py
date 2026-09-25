@@ -8,12 +8,11 @@ the boot chain.
 
 from __future__ import annotations
 
-from typing import Any, cast
-
 import pulumi
 import pytest
 import pytest_asyncio
-from mock_monitor import Recorder, declaring, run_with
+from mock_monitor import declaring, run_with
+from unifi_controller import Controller
 
 from kluster import conventions
 from kluster.components.gateway import Gateway, access, container, nspawn, persistence, routing, unifi
@@ -30,16 +29,6 @@ CI_KEY = access.PublicKey(name='kluster-physical', key='ssh-ed25519 AAAAC3NzaC1l
 DIGEST = f'sha256:{"e" * 64}'
 
 
-class Controller(Recorder):
-    """A monitor that answers the firewall's zone lookups; every zone exists."""
-
-    def answer(self, args: pulumi.runtime.MockCallArgs) -> dict[str, Any]:
-        if args.token == 'unifi:index/getFirewallZone:getFirewallZone':
-            name = str(cast('dict[str, Any]', args.args)['name'])
-            return {'id': f'zone-{name}', 'name': name, 'networks': [], 'site': SITE}
-        return {}
-
-
 def pin(service: conventions.gateway.ContainerService) -> container.Rootfs:
     return container.Rootfs(repository=f'registry.invalid/installation/{service.artifact}', tag='7', digest=DIGEST)
 
@@ -47,7 +36,7 @@ def pin(service: conventions.gateway.ContainerService) -> container.Rootfs:
 @pytest_asyncio.fixture(scope='module', autouse=True)
 async def monitor() -> Controller:
     pulumi.runtime.set_all_config({f'kluster:{unifi.API_KEY}': API_KEY})
-    return await run_with(Controller(), stack='physical')
+    return await run_with(Controller(site=SITE), stack='physical')
 
 
 def declare(name: str, host: str) -> Gateway:

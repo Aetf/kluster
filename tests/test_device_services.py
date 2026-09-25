@@ -732,6 +732,33 @@ def test_every_piece_of_a_machine_lands_in_that_machines_directory(monitor: Reco
     )
 
 
+def test_every_file_a_machine_mounts_is_bound_from_where_it_is_delivered(monitor: Recorder) -> None:
+    """The file is written on the device and read inside the machine, and the bind is all that joins the two.
+
+    A settings file without the line still starts the machine: the file sits in
+    the machine's directory and the path its target names is empty inside it.
+    For the proxy that is a server that exits at start for want of its
+    configuration, restarted in a loop, while the push that wrote both reports
+    success. So both halves are read off what was registered — the path the file's
+    resource writes and the settings the machine's resource delivers — rather
+    than off the declaration that produced them.
+    """
+    # A loop is only a claim about what it visits, so the roster is pinned and
+    # one mounted file is named: a `declarations` that reached no machine, or
+    # machines that mount nothing, would otherwise pass by asserting nothing.
+    assert {declaration.service.name for declaration in declarations()} == set(SERVICES)
+    assert 'Caddyfile' in {mounted.name for mounted in declared_for('caddy').mounted_files}
+
+    for declaration in declarations():
+        service = declaration.service.name
+        # Whole lines, so that a commented-out bind or one to a longer target
+        # is not mistaken for the directive.
+        directives = str(monitor.inputs_of(f'{NAME}-{service}-nspawn')['content']).splitlines()
+        for mounted in declaration.mounted_files:
+            delivered = monitor.inputs_of(f'{NAME}-{service}-file-{mounted.name}')['path']
+            assert f'BindReadOnly={delivered}:{mounted.target}' in directives, mounted.name
+
+
 def test_every_file_of_a_machine_converges_that_machine_and_holds_it_to_starting(monitor: Recorder) -> None:
     """The recovery path and the deployment path are the same path.
 

@@ -17,8 +17,10 @@ real ordering rather than an attribute set by hand.
 from __future__ import annotations
 
 import asyncio
+import grp
 import hashlib
 import os
+import pwd
 import subprocess
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
@@ -717,6 +719,26 @@ def test_reading_reports_what_the_device_holds_rather_than_what_state_remembers(
     assert result.id == 'id'
 
 
+def test_reading_a_file_reports_the_mode_and_owner_the_device_has(device: Device) -> None:
+    """A refresh records what the device holds, not what was declared.
+
+    A preview does not depend on it -- the diff asks the device itself -- but
+    state does: handing the declared shape back would record a file somebody
+    loosened or handed to another user as converged, and the refresh that
+    should have shown it would show nothing.
+    """
+    props = file_props()
+    converged(device, props)
+    held = device.files[CONFIG_PATH]
+    held.mode, held.owner, held.group = '0666', 'nobody', 'nogroup'
+
+    result = file_provider().read('id', props)
+
+    assert result.outs is not None
+    assert int(result.outs['mode'], 8) == 0o666
+    assert result.outs['owner'] == 'nobody:nogroup'
+
+
 def test_reading_a_file_someone_deleted_drops_the_identifier(device: Device) -> None:
     """A dropped identifier is how the next up learns to create the file again."""
     result = file_provider().read('id', file_props())
@@ -1182,13 +1204,14 @@ def test_every_script_that_acts_on_a_declared_path_opens_with_its_guards() -> No
 def test_reading_a_directory_reports_the_shape_the_device_has(device: Device) -> None:
     props = directory_props()
     made(device, props)
-    device.files[DIRECTORY_PATH].mode = '0700'
+    held = device.files[DIRECTORY_PATH]
+    held.mode, held.owner, held.group = '0700', 'nobody', 'nogroup'
 
     result = directory_provider().read('id', props)
 
     assert result.outs is not None
-    assert result.outs['mode'] == '0700'
-    assert result.outs['owner'] == 'root:root'
+    assert int(result.outs['mode'], 8) == 0o700
+    assert result.outs['owner'] == 'nobody:nogroup'
 
 
 def test_reading_a_directory_someone_removed_drops_the_identifier(device: Device) -> None:
@@ -1378,6 +1401,29 @@ def test_a_link_pointing_at_nothing_is_something_there_to_both_halves(tmp_path: 
     assert link.is_symlink()
 
 
+def test_the_directory_guard_lets_a_directory_or_nothing_through(tmp_path: Path) -> None:
+    """A tree's scripts make the path when it is not there, so absence passes.
+
+    A guard that refused absence as well would fail the first push of every
+    service, whose tree is not there until the pull puts it there; one that let
+    a file through would have `mv` rename it aside and `rm -rf` delete it.
+    """
+    present = tmp_path / 'roots'
+    present.mkdir()
+
+    assert sh(ssh.directory_test(str(present))) == 0
+    assert sh(ssh.directory_test(str(tmp_path / 'never-made'))) == 0
+
+
+def test_the_directory_guard_refuses_a_file_and_leaves_it_where_it_is(tmp_path: Path) -> None:
+    """The status the provider reads as `WrongKindAtPath`, as a shell produces it."""
+    path = tmp_path / 'roots'
+    _ = path.write_text('put there by whatever held the path before\n')
+
+    assert sh(ssh.directory_test(str(path))) == ssh.ReservedStatus.WRONG_KIND
+    assert path.read_text() == 'put there by whatever held the path before\n'
+
+
 @final
 class Shell:
     """An `ssh.Runner` that runs the transport's own scripts in a real shell.
@@ -1550,6 +1596,55 @@ def test_a_remove_refuses_a_link_rather_than_taking_the_indirection_away(tmp_pat
 
     asyncio.run(shell_transport().remove(str(target)))
     assert not target.exists(), 'the guard refuses a link and nothing else'
+
+
+@pytest.fixture
+def shell_device(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every session the provider opens is the shipped transport on a real shell."""
+
+    @asynccontextmanager
+    async def session(_device: ssh.Device) -> AsyncGenerator[ssh.Transport]:
+        yield shell_transport()
+
+    monkeypatch.setattr(provider, 'open_transport', session)
+
+
+def owner_of(path: Path) -> str:
+    """Who holds a path, as the local account database names the user and group."""
+    held = path.stat()
+    return f'{pwd.getpwuid(held.st_uid).pw_name}:{grp.getgrgid(held.st_gid).gr_name}'
+
+
+#: An owner no host has, so a read that handed the declaration back could not
+#: match the account that actually holds the file.
+UNHELD_OWNER = 'kluster-nobody:kluster-nogroup'
+
+
+@pytest.mark.usefixtures('shell_device')
+def test_a_real_shell_read_of_a_file_reports_the_mode_and_owner_it_holds(tmp_path: Path) -> None:
+    """The owner and the mode are the shell's answer, checked against the filesystem's own."""
+    path = tmp_path / 'frr.conf'
+    _ = path.write_text(CONFIG)
+    path.chmod(0o600)
+
+    result = file_provider().read('id', file_props(path=str(path), mode='0644', owner=UNHELD_OWNER))
+
+    assert result.outs is not None
+    assert int(result.outs['mode'], 8) == 0o600
+    assert result.outs['owner'] == owner_of(path)
+
+
+@pytest.mark.usefixtures('shell_device')
+def test_a_real_shell_read_of_a_directory_reports_the_mode_and_owner_it_holds(tmp_path: Path) -> None:
+    path = tmp_path / 'machines'
+    path.mkdir()
+    path.chmod(0o700)
+
+    result = directory_provider().read('id', directory_props(path=str(path), mode='0755', owner=UNHELD_OWNER))
+
+    assert result.outs is not None
+    assert int(result.outs['mode'], 8) == 0o700
+    assert result.outs['owner'] == owner_of(path)
 
 
 ##
