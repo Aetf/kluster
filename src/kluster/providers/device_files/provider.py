@@ -263,7 +263,7 @@ PRIVATE_KEY_CONFIG = 'gatewayPrivateKey'
 
 #: This module's version, bumped by hand when an operation's behavior changes
 #: (`configured`).
-VERSION = '3'
+VERSION = '4'
 
 #: What `diff` compares, and the whole of it. Its `olds` is the stored *output*
 #: bag while its `news` is the checked *input* bag (rfc-002 §7.5 E7), so a key
@@ -657,6 +657,19 @@ def replacements(olds: Mapping[str, Any], news: Mapping[str, Any], location: str
     return [location] if moved else []
 
 
+def _observed_mode(declared: Any, stat: ssh.FileStat) -> str:
+    """The device's mode, in the spelling the resource declared it when the two agree.
+
+    `stat -c %a` drops the leading zero a declaration carries (`644` for
+    `0644`), and `diff` compares what a refresh recorded against the
+    declaration as strings. Recording the device's spelling of an agreeing mode
+    would make every refreshed resource a change, and the `up` that followed
+    would rewrite each one and run its hook. A mode that disagrees is recorded
+    as the device spells it, which is the change the next diff reports.
+    """
+    return str(declared) if ssh.same_mode(stat.mode, str(declared)) else stat.mode
+
+
 def _observed_owner(declared: Any, stat: ssh.FileStat) -> str | None:
     """The device's ownership, in the shape the resource declared it."""
     if not declared:
@@ -854,7 +867,7 @@ class DeviceFileProvider(DeviceProvider):
             outs = {
                 **props,
                 'content': content.decode(errors='replace'),
-                'mode': stat.mode,
+                'mode': _observed_mode(props['mode'], stat),
                 'owner': _observed_owner(props.get('owner'), stat),
             }
         return dynamic.ReadResult(id_=id_, outs=outs)
@@ -1076,7 +1089,11 @@ class DeviceDirectoryProvider(DeviceProvider):
                 # something else occupies is a directory that is not there: the
                 # next up makes it again, and says so if it cannot.
                 return gone()
-            outs = {**props, 'mode': stat.mode, 'owner': _observed_owner(props.get('owner'), stat)}
+            outs = {
+                **props,
+                'mode': _observed_mode(props['mode'], stat),
+                'owner': _observed_owner(props.get('owner'), stat),
+            }
         return dynamic.ReadResult(id_=id_, outs=outs)
 
     async def _delete(self, props: Mapping[str, Any]) -> None:

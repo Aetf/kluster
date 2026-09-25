@@ -187,13 +187,20 @@ class Transport:
     async def stat(self, path: str) -> ssh.FileStat | None:
         # `if [ ! -e path ]; then exit ABSENT; fi; stat …`: the test resolves a
         # link, so a dangling one reads as nothing there, while `stat` itself
-        # does not and reports a link that resolves as a link.
+        # does not and reports a link that resolves as a link. The mode is
+        # spelled the way `stat -c %a` spells it, with no leading zero (`644`),
+        # whatever spelling it was set with: a declaration's `0644` and the
+        # device's `644` are the pair a provider has to recognize as one mode.
         self.device.log.append(f'stat {path}')
         entry = self.device.files.get(path)
         if entry is None or self._through(entry) is None:
             return None
         return ssh.FileStat(
-            owner=entry.owner, group=entry.group, mode=entry.mode, size=len(entry.data), kind=entry.kind
+            owner=entry.owner,
+            group=entry.group,
+            mode=format(int(entry.mode, 8), 'o'),
+            size=len(entry.data),
+            kind=entry.kind,
         )
 
     @staticmethod
@@ -1645,6 +1652,45 @@ def test_a_real_shell_read_of_a_directory_reports_the_mode_and_owner_it_holds(tm
     assert result.outs is not None
     assert int(result.outs['mode'], 8) == 0o700
     assert result.outs['owner'] == owner_of(path)
+
+
+@pytest.mark.usefixtures('shell_device')
+def test_a_refreshed_file_that_matches_its_declaration_is_no_change(tmp_path: Path) -> None:
+    """`stat -c %a` spells `0644` as `644`, and a refresh must not turn that into a diff.
+
+    A refresh stores what `read` returns, and the next `diff` compares it with
+    the declaration. A spelling difference that reached state would make every
+    refreshed file a change, and the `up` behind it would rewrite each one and
+    run its hook -- for a machine's files, a restart.
+    """
+    path = tmp_path / 'frr.conf'
+    _ = path.write_text(CONFIG)
+    path.chmod(0o644)
+    props = checked(file_provider(), file_props(path=str(path), mode='0644', owner=owner_of(path)))
+    held = asyncio.run(shell_transport().stat(str(path)))
+    assert held is not None
+    assert held.mode == '644', 'the device spells the mode differently from the declaration'
+
+    refreshed = file_provider().read('id', props)
+
+    assert refreshed.outs is not None
+    assert file_provider().diff('id', refreshed.outs, props).changes is False
+
+
+@pytest.mark.usefixtures('shell_device')
+def test_a_refreshed_directory_that_matches_its_declaration_is_no_change(tmp_path: Path) -> None:
+    path = tmp_path / 'machines'
+    path.mkdir()
+    path.chmod(0o755)
+    props = checked(directory_provider(), directory_props(path=str(path), mode='0755', owner=owner_of(path)))
+    held = asyncio.run(shell_transport().stat(str(path)))
+    assert held is not None
+    assert held.mode == '755', 'the device spells the mode differently from the declaration'
+
+    refreshed = directory_provider().read('id', props)
+
+    assert refreshed.outs is not None
+    assert directory_provider().diff('id', refreshed.outs, props).changes is False
 
 
 ##
