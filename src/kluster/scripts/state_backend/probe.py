@@ -263,11 +263,16 @@ def dumps(
 ) -> Verdict:
     """The newest object under the dump prefix is younger than `max_age`.
 
-    An empty prefix is its own failure rather than a stale one: it is a box
-    rebuilt and never restored, or a timer that never fired, and neither is a
-    dump that stopped. An object under the prefix that is not named like a
-    dump fails too, by name: nothing but the appliance's uploader can write
-    there, so a stranger is a fact the operator has to see.
+    An empty prefix is its own failure rather than a stale one: no dump
+    holding state has landed within the retention window. The appliance's
+    uploader refuses an archive holding no stack checkpoint
+    (physical/state-backend.md §5), so a box replaced and not restored, or a
+    site before its first `pulumi stack init`, uploads nothing; so does a
+    timer that never fired. The same refusal is one cause of a stale newest
+    object, beside a timer that stopped. An object under the prefix that is
+    not named like a dump fails too, by name: nothing but the appliance's
+    uploader can write there, so a stranger is a fact the operator has to
+    see.
 
     A probe that could not list fails as one, with a verdict of its own: a
     key B2 refuses -- at the authorization or at the listing -- or one
@@ -281,7 +286,9 @@ def dumps(
     if not names:
         return Verdict(
             DUMPS,
-            f'no object under {b2.DUMP_PREFIX} — a box rebuilt and never restored, or a dump timer that never fired',
+            f'no object under {b2.DUMP_PREFIX} — no dump holding state has landed within the retention window: '
+            'the box refuses to upload one that holds no stack (a box replaced and not restored, or a site '
+            'before its first `pulumi stack init`), or its dump timer never fired',
             REBUILD_PLAYBOOK,
         )
     taken_at: dict[str, dt.datetime] = {}
@@ -305,7 +312,9 @@ def dumps(
         return Verdict(
             DUMPS,
             f'the newest dump, {newest}, was taken {hours(age)} ago, and {hours(max_age)} is the most a '
-            'backup on this timer may be behind — the timer has stopped landing objects',
+            'backup on this timer may be behind — the timer has stopped landing objects: its runs fail, '
+            'the refusal of an archive holding no stack (a box replaced and not restored) among the causes, '
+            'or it no longer runs',
             REBUILD_PLAYBOOK,
         )
     return Verdict(DUMPS, f'the newest dump, {newest}, was taken {hours(age)} ago (allowed: {hours(max_age)})')

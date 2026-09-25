@@ -33,13 +33,14 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from memory_kit import MemoryKit
+from state_dump_box import CHECKPOINT, LISTING, OPENED, SERVING, UNOPENED
 
 from oci_conventions import with_recorded_compartment, with_unrecorded_compartment
 from kluster import conventions
 from kluster.scripts.credentials import b2, escrow, oci_iam, oci_slot, pki, workstation
 from kluster.scripts.credentials.delivery import Delivery
 from kluster.scripts.credentials.masters import CredentialRejected
-from kluster.scripts.state_backend import cli, config, provision, settings
+from kluster.scripts.state_backend import cli, config, provision, settings, state
 from kluster.scripts.state_backend.state import StateError
 
 
@@ -570,6 +571,7 @@ class _Recorder:
         metadata: dict[str, str] | None = None,
         dump_key_current: bool = True,
         dump_fails: bool = False,
+        holds: str | None = None,
         retire_fails: bool = False,
         address: str = settings.ADDRESS,
     ) -> None:
@@ -581,6 +583,11 @@ class _Recorder:
         self.metadata: dict[str, str] = {} if metadata is None else metadata
         self.dump_key_current: bool = dump_key_current
         self.dump_fails: bool = dump_fails
+        #: The running box's state rows, as `pg_restore --data-only` prints
+        #: them from its archive. Set, the dump runs the operator's own check
+        #: (`state.verify_dump`) over them; unset, it passes, as a dump of a
+        #: box serving state does.
+        self.holds: str | None = holds
         #: Whether retiring the dump key's predecessor raises. It runs after
         #: the launch, so a raise there leaves a new box running.
         self.retire_fails: bool = retire_fails
@@ -694,6 +701,8 @@ def converge(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
         def write_dump(destination: Path, *, bundle_dir: Path, recipients: Sequence[str]) -> None:
             if recorder.dump_fails:
                 raise StateError('pg_dump against the box failed: connection refused')
+            if recorder.holds is not None:
+                _ = state.verify_dump(destination)
             recorder.dumped.append(destination)
             recorder.bundles.append(bundle_dir)
             recorder.order.append('dump')
@@ -776,6 +785,15 @@ def converge(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
         monkeypatch.setattr(provision, 'attach_reserved_ip', attach)
         monkeypatch.setattr(provision, 'wait_for_backend', _returning(True))
         monkeypatch.setattr(cli, '_write_dump', write_dump)
+        run_tool = state._run  # pyright: ignore[reportPrivateUsage]
+
+        def read_archive(argv: Sequence[str], **kwargs: Any) -> str:
+            # The box's archive, as `pg_restore` reads it: listed, then its rows.
+            if Path(argv[0]).name == state.PG_RESTORE and recorder.holds is not None:
+                return recorder.holds if '--data-only' in argv else LISTING
+            return run_tool(argv, **kwargs)
+
+        monkeypatch.setattr(state, '_run', read_archive)
         monkeypatch.setattr(config, 'machine', _returning(object()))
         monkeypatch.setattr(config, 'render_ignition', _returning('ignition'))
         monkeypatch.setattr(config, 'host_public_key', _returning(PIN))
@@ -1523,7 +1541,7 @@ def _a_backend(monkeypatch: pytest.MonkeyPatch, stacks: Callable[[object], list[
     monkeypatch.setattr(cli.state, 'endpoint', _returning('box:5432'))
     monkeypatch.setattr(cli.state, 'stacks', stacks)
     monkeypatch.setattr(cli.state, 'encrypted', _returning(False))
-    monkeypatch.setattr(cli.state, 'verify_dump', _returning(['TABLE public stacks']))
+    monkeypatch.setattr(cli.state, 'verify_dump', _returning([CHECKPOINT]))
     monkeypatch.setattr(cli.state, 'pg_restore', _returning(None))
 
 
@@ -1635,16 +1653,25 @@ def test_a_box_that_has_no_interface_listed_at_all_is_refused_the_same_way(conve
         WRITERS['attach_reserved_ip'](clients, instance_id=recorder.instance_id, public_ip_id='ocid1.publicip.box')
 
 
+#: What the box an earlier replacement left empty dumps to, by whether
+#: anything has opened it since -- `restore`'s own question to `pulumi`, a
+#: preview -- which creates the backend's table and its meta row.
+LEFT_EMPTY = {'nothing has opened it': UNOPENED, 'the backend has opened it': OPENED}
+
+
+@pytest.mark.parametrize('holds', list(LEFT_EMPTY.values()), ids=list(LEFT_EMPTY))
 def test_a_no_dump_replacement_of_a_box_left_empty_names_the_dump_the_state_is_in(
-    converge: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    converge: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, holds: str
 ) -> None:
     """The chain a re-run from a later commit sets off, ending where the state is.
 
     The box the stopped run launched no longer matches the commit, so the
-    plain re-run stops; `--force` cannot dump the box; and `--no-dump` is
-    what is left. The state is still in the dump the first run
-    took, which is newer than any nightly object, so that is the file the
-    refusal and the last words name -- not the newest object in B2.
+    plain re-run stops; `--force` cannot dump the box, whose archive holds no
+    stack checkpoint whether or not anything has opened it; and `--no-dump`
+    is what is left. The state is still in the dump the first run took,
+    which is newer than any nightly object, so that is the file the record
+    keeps and the refusal and the last words name -- not the newest object
+    in B2.
     """
     caplog.set_level(logging.WARNING)
     stale = dict(CURRENT) | {'butane': 'zzzz'}
@@ -1659,12 +1686,15 @@ def test_a_no_dump_replacement_of_a_box_left_empty_names_the_dump_the_state_is_i
     # The commit moves on before the re-run.
     monkeypatch.setattr(config, 'digests', _returning(dict(CURRENT) | {'butane': 'yyyy'}))
     assert _run() == 1
-    # A box nothing has opened lists no table, so its dump fails.
-    recorder.dump_fails = True
+    record = workstation.bundle_dir() / cli.RESTORE_OWED
+    recorder.holds = holds
     caplog.clear()
 
-    assert _run(force=True) == 1
+    assert _run(force=True, dump_output=Path('second.dump.age')) == 1
+    assert any('holds no stack checkpoint' in message for message in caplog.messages)
     assert any(str(taken) in message and '--no-dump' in message for message in caplog.messages)
+    assert (recorder.dumped, recorder.terminated) == ([taken], 1)
+    assert record.read_text().strip() == str(taken)
 
     caplog.clear()
     assert _run(force=True, dump=False) == PENDING
@@ -1725,67 +1755,76 @@ def test_a_stale_record_is_not_read_as_an_empty_box(
     assert 'newest object in B2 rather than that dump' in warned
 
 
-def test_a_box_that_dumps_but_cannot_list_its_stacks_is_not_replaced(
-    converge: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize('holds', list(LEFT_EMPTY.values()), ids=list(LEFT_EMPTY))
+def test_a_box_serving_no_stack_with_no_record_is_named_for_what_it_is(
+    converge: Any, caplog: pytest.LogCaptureFixture, holds: str
 ) -> None:
-    """Which dump holds the state is asked of the box, and a box that does not answer is not read as empty.
+    """A dump refused for holding no stack is not a bundle problem, and loses nothing.
+
+    With no record on this checkout, the one reading the words owe is that
+    another checkout replaced the box, and that checkout's record names the
+    dump the state is in. A dump that fails any other way keeps the bundle
+    advice, which is the refusal's likelier cause there.
+    """
+    caplog.set_level(logging.ERROR)
+    stale = dict(CURRENT) | {'butane': 'zzzz'}
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(stale), holds=holds)
+    converge(recorder)
+
+    assert _run(force=True) == 1
+
+    assert (recorder.terminated, recorder.dumped) == (0, [])
+    (said,) = [message for message in caplog.messages if '--no-dump' in message]
+    assert 'serves no stack, so --no-dump loses nothing of it' in said
+    assert cli.RESTORE_OWED in said
+    assert 'bundle operator' not in said
+
+    recorder.holds = None
+    recorder.dump_fails = True
+    caplog.clear()
+    assert _run(force=True) == 1
+    (said,) = [message for message in caplog.messages if '--no-dump' in message]
+    assert 'state-backend bundle operator' in said
+
+
+def test_a_dump_that_holds_a_stack_takes_the_record_over(
+    converge: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, tmp_path: Path
+) -> None:
+    """A dump that passes holds a stack, so it is where the state is, whatever the record said.
 
     The record stands over a box serving state that went back from another
-    checkout; the dump of it passes, and then `pulumi stack ls` fails. Read as
-    empty, the record would keep the old dump and the replacement would go on,
-    naming the fresh dump that holds the state in one line only. So the run
-    stops with nothing destroyed, and the record as it was.
-    """
-    stale = dict(CURRENT) | {'butane': 'zzzz'}
-    recorder = _Recorder(instance_exists=True, metadata=_built_from(stale))
-    converge(recorder)
-    assert _run(force=True) == PENDING
-    record = workstation.bundle_dir() / cli.RESTORE_OWED
-    before = record.read_text()
-    monkeypatch.setattr(config, 'digests', _returning(dict(CURRENT) | {'butane': 'yyyy'}))
-
-    def unanswered(_target: object) -> list[str]:
-        raise StateError('pulumi stack ls: connection reset by peer')
-
-    _a_backend(monkeypatch, unanswered)
-
-    assert _run(force=True, dump_output=tmp_path / 'fresh.dump.age') == 1
-
-    assert recorder.terminated == 1
-    assert record.read_text() == before
-
-
-def test_a_dump_of_a_box_left_empty_does_not_replace_the_record(
-    converge: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    """The first run's dump is where the state is, until a box serves a stack.
-
-    Anything that opens the empty box -- `restore`'s own check, a `pulumi`
-    preview -- creates the backend's table, so its dump lists one and passes
-    while holding no stack. A record that gave way to it would name a dump
-    whose restore brings nothing back, and the first dump nowhere.
+    checkout. Its dump passes the operator's own check, which is proof the
+    box holds a stack, so the record names that dump and the replacement's
+    last words send the restore there -- not to the first run's dump, which
+    is older than what the box served.
     """
     caplog.set_level(logging.WARNING)
     stale = dict(CURRENT) | {'butane': 'zzzz'}
     recorder = _Recorder(instance_exists=True, metadata=_built_from(stale))
     converge(recorder)
-    attach = provision.attach_reserved_ip
-    _refuse('provision', 'attach_reserved_ip')(monkeypatch, recorder)
-    with pytest.raises(RuntimeError, match='refused'):
-        _ = _run(force=True)
-    monkeypatch.setattr(provision, 'attach_reserved_ip', attach)
+    assert _run(force=True) == PENDING
+    (first,) = recorder.dumped
+    verify = state.verify_dump
+    listed: list[list[str]] = []
+
+    def stacks(_target: object) -> list[str]:
+        listed.append([] if len(listed) % 2 == 0 else ['physical'])
+        return listed[-1]
+
+    _a_backend(monkeypatch, stacks)
+    # Another checkout's restore: its own bundle, and this record untouched.
+    assert _restore_into(tmp_path / 'another-checkout', first) == 0
+    monkeypatch.setattr(state, 'verify_dump', verify)
     monkeypatch.setattr(config, 'digests', _returning(dict(CURRENT) | {'butane': 'yyyy'}))
-    _a_backend(monkeypatch, _returning([]))
+    recorder.holds = SERVING
     caplog.clear()
 
-    assert _run(force=True, dump_output=Path('second.dump.age')) == PENDING
+    assert _run(force=True, dump_output=tmp_path / 'second.dump.age') == PENDING
 
-    first, second = recorder.dumped
-    assert any(f'state-backend restore {first}' in message for message in caplog.messages)
-    assert not any(f'state-backend restore {second}' in message for message in caplog.messages)
-    caplog.clear()
-    assert _run() == PENDING
-    assert any(f'state-backend restore {first}' in message for message in caplog.messages)
+    _, second = recorder.dumped
+    assert (workstation.bundle_dir() / cli.RESTORE_OWED).read_text().strip() == str(second)
+    assert any(f'state-backend restore {second}' in message for message in caplog.messages)
+    assert not any(f'state-backend restore {first}' in message for message in caplog.messages)
 
 
 def test_a_lost_launch_names_the_key_its_re_run_leaves_live(

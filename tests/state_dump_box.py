@@ -27,14 +27,65 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from kluster.scripts.state_backend import config
+from kluster.scripts.state_backend import config, settings
 
 SCRIPT = config.DEPLOY_DIR / config.DUMP_SCRIPT
 
-#: A `pg_restore --list` output naming one table, header and all. The header
-#: alone is the shape a dump of a database that lost its state produces.
-HEADER = ';\n; Archive created at 2026-08-26 02:30:00 UTC\n;\n'
-LISTING = HEADER + '215; 1259 16388 TABLE public stacks operator\n3057; 0 16388 TABLE DATA public stacks operator\n'
+#: A `pg_restore --list` output, header and all, of a box the backend has
+#: opened: its one table, the table's rows, and the key's constraint and
+#: index. The header alone is what a box nothing has opened lists.
+HEADER = ';\n; Archive created at 2026-09-25 22:32:48 UTC\n;     dbname: pulumi_state\n;\n'
+LISTING = HEADER + (
+    '217; 1259 16385 TABLE public pulumi_state state_owner\n'
+    '3422; 0 16385 TABLE DATA public pulumi_state state_owner\n'
+    '3276; 2606 16392 CONSTRAINT public pulumi_state pulumi_state_pkey state_owner\n'
+    '3274; 1259 16393 INDEX public pulumi_state_key_prefix_idx state_owner\n'
+)
+
+# -- the state table's rows, as `pg_restore --data-only --table=pulumi_state` prints them
+#
+# The shapes are what the pinned `pulumi` writes into the pinned Postgres
+# image, and `test_state_roles.py` holds both parsers to the real thing. Every
+# key is `<database>/<path>`; a stack's checkpoint is under `.pulumi/stacks/`.
+
+#: What comes before and after the rows, whatever the rows are.
+PREAMBLE = (
+    '--\n-- PostgreSQL database dump\n--\n\n'
+    "SET statement_timeout = 0;\nSET client_encoding = 'UTF8';\n"
+    "SELECT pg_catalog.set_config('search_path', '', false);\n\n"
+)
+COMPLETE = '--\n-- PostgreSQL database dump complete\n--\n\n'
+_COPY = 'COPY public.pulumi_state (key, data, updated_at) FROM stdin;\n'
+
+
+def key(path: str, database: str = settings.DATABASE) -> str:
+    """A state key: the database's name, then the backend's path."""
+    return f'{database}/{path}'
+
+
+def block(*keys: str, head: str = _COPY) -> str:
+    """One COPY block: its header, a row per key, and the line that ends it."""
+    body = ''.join(f'{name}\t{{"data":"e30="}}\t2026-09-25 22:32:48.846613+00\n' for name in keys)
+    return f'{head}{body}\\.\n'
+
+
+def rows(*keys: str) -> str:
+    """The data-only output of an archive whose state table holds these keys."""
+    return f'{PREAMBLE}--\n-- Data for Name: pulumi_state; Type: TABLE DATA\n--\n\n{block(*keys)}\n\n{COMPLETE}'
+
+
+META = key('.pulumi/meta.yaml')
+CHECKPOINT = key('.pulumi/stacks/kluster/dns.json')
+CHECKPOINT_BAK = f'{CHECKPOINT}.bak'
+
+#: A box nothing has opened: no state table, so no block.
+UNOPENED = PREAMBLE + COMPLETE
+#: A box the backend has opened -- `pulumi stack ls` is enough -- and nothing
+#: has written a stack into: the table, and the backend's meta row alone.
+OPENED = rows(META)
+#: A box serving one stack: `pulumi stack init` writes its checkpoint and the
+#: `.bak` beside it.
+SERVING = rows(META, CHECKPOINT_BAK, CHECKPOINT)
 
 ARCHIVE = b'PGDMP-archive-bytes'
 CIPHERTEXT = b'age-encrypted bytes'
@@ -76,6 +127,11 @@ FAKES = {
     + r"""
 case " $* " in
   *" pg_dump "*) printf '%s' "$FAKE_ARCHIVE"; exit "$FAKE_PG_STATUS" ;;
+  *" pg_restore --data-only "*)
+    cat > "$call/stdin"
+    printf '%s' "$FAKE_ROWS"
+    printf '%s' "$FAKE_COMPLAINT" >&2
+    exit "$FAKE_ROWS_STATUS" ;;
   *" pg_restore "*)
     cat > "$call/stdin"
     printf '%s' "$FAKE_LISTING"
@@ -156,6 +212,8 @@ class Box:
         pg: int = 0,
         listing: str = LISTING,
         list_status: int = 0,
+        holds: str = SERVING,
+        rows_status: int = 0,
         complaint: str = '',
         age: int = 0,
         refuses: str = '',
@@ -187,6 +245,8 @@ class Box:
             'FAKE_LISTING': listing,
             'FAKE_COMPLAINT': complaint,
             'FAKE_LIST_STATUS': str(list_status),
+            'FAKE_ROWS': holds,
+            'FAKE_ROWS_STATUS': str(rows_status),
             'FAKE_CIPHERTEXT': CIPHERTEXT.decode(),
             'FAKE_AGE_STATUS': str(age),
             'FAKE_CURL_REFUSES': refuses,

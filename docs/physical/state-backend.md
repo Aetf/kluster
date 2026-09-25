@@ -275,10 +275,10 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     where the box holds state that went back some other way, the words
     say to delete the record first, and that `--no-dump` then loses what
     is not in the nightly object. A replacement's own dump takes the
-    record over only when the box it dumped serves a stack: a box an
-    earlier replacement left empty dumps once anything has opened it,
-    because the backend creates its table on every open, and holds
-    nothing.
+    record over whenever it is taken, because a dump holds a stack by
+    rule (§5): a box an earlier replacement left empty cannot be dumped
+    at all, regardless of whether anything has opened it since, so the
+    record keeps naming the dump the state is in.
 -   **The B2 dump key is one of those components, not a special case.**
     B2 returns an application key's secret once, so the box's copy
     cannot be read back, and every mint is followed by the retirement
@@ -536,24 +536,49 @@ there is nothing for it to edit.)
 ## 5. Backup
 
 -   A plain systemd timer, `state-dump.timer` driving
-    `state-dump.service`, runs `pg_dump -Fc`, **lists the archive
-    with `pg_restore --list` and fails the run when it names no
-    table**, **age-encrypts** the dump — it holds every stack's
-    ciphertext *and* salt — and
+    `state-dump.service`, runs `pg_dump -Fc`, **reads the archive and
+    fails the run when it holds no stack checkpoint**, **age-encrypts**
+    the dump — it holds every stack's ciphertext *and* salt — and
     uploads to B2 under the state-backend prefix with a
     **prefix-scoped key holding `writeFiles` alone** — the system's
     one genuinely write-only key: unlike restic, the uploader keeps
     no index to read (storage.md §4). Pruning is not the box's job:
     RPO ≤ 24 h is fine — state is re-derivable from reality
-    (`pulumi refresh`/import) at worst. What the listing catches is a
-    dump of a database that has no tables — which is exactly what a box
-    produces after a replacement nobody followed with a restore (§1) —
-    and it is why the dump reaches a file before it reaches `age`
-    rather than being piped into it: a stream has no table of contents
-    to read. It is **not** a truncation check: a custom-format archive
-    carries its table of contents at the head, so a file cut down to a
-    few kilobytes still lists what the whole one would have. The
-    plaintext lives in `/var/tmp`
+    (`pulumi refresh`/import) at worst.
+-   **Every object under the dump prefix holds at least one stack
+    checkpoint, and the uploader refuses anything else.** A stack
+    checkpoint is a key in the state table under
+    `<database>/.pulumi/stacks/` that ends in `.json`, or in `.json.gz`
+    or `.json.zst` when the backend compresses.
+    That is the reading `pulumi stack ls` makes, and `stack ls` is what
+    a restore ends on (§7), so the box uploads only an archive whose
+    restore would pass the restore's own verification. Every archive
+    with no checkpoint is refused; today's instances are a box nothing
+    has opened, which has no state table; a box something has opened —
+    `pulumi stack ls` is enough — which has the table and the backend's
+    meta row; a site before its first `pulumi stack init`; and a
+    backend whose stacks were all removed, which keeps only `.bak`
+    rows. A refused run fails and uploads nothing, so the newest object
+    stays the last dump that held state, and the failure leaves the
+    login notice below. The first bring-up is no special case: until
+    the first `pulumi stack init` the nightly refuses, and the probe
+    (§6) reports an empty prefix, which is true — no state exists to
+    back up. The script counts the checkpoints in the archive's state
+    rows, read back with `pg_restore --data-only`, after listing the
+    archive with `pg_restore --list`, which is the check that
+    `pg_restore` can read it at all; it holds a copy of the operator's
+    grammar (`state.checkpoints`), and the suite holds the two to one
+    table of inputs and to what the pinned `pulumi` writes. Reading the
+    archive rather than the database, because the object is what this
+    rule is about, is why the dump reaches a file before it reaches
+    `age` rather than being piped into it: a stream cannot be read
+    twice. The listing is **not** a truncation check: a custom-format
+    archive carries its table of contents at the head, so a file cut
+    down to a few kilobytes still lists what the whole one would have.
+    The rows read is one, for this database: its one data block is the
+    state table's, so a cut anywhere past the table of contents fails
+    `pg_restore --data-only`, and the run with it.
+    The plaintext lives in `/var/tmp`
     beside its own ciphertext for the two steps that read it — not in
     `/tmp`, which on this box is backed by memory rather than by the
     50 GB disk — and is unlinked as soon as the ciphertext exists. The
@@ -567,7 +592,8 @@ there is nothing for it to edit.)
     refuses to overwrite a file already there, which the box has no
     equivalent of. What it does not
     differ in is the archive: the same `pg_dump -Fc`, the same age
-    recipients, and the same listing refused on the same terms. That is
+    recipients, and the same check — an archive holding no stack
+    checkpoint is refused, and no file is written. That is
     what makes a hand-taken dump interchangeable with a nightly one: as
     recoverable, and a restore cannot tell which produced its input.
     The playbooks below take theirs from the converge.
@@ -736,9 +762,17 @@ shell on it:
         `B2_FRESHNESS_DUMPS_KEY_ID` and `B2_FRESHNESS_DUMPS_KEY`), list
         `pulumi-state/`, and take the newest object's stamp: older
         than `settings.DUMP_MAX_AGE` (§5) is stale, into §7.3, whose
-        restore path doubles as the diagnosis start. **An empty prefix
-        is its own failure** — a box rebuilt and never restored, or a
-        timer that never fired — and so is an object under the prefix
+        restore path doubles as the diagnosis start. A box replaced
+        and never restored reads as stale once that age has passed,
+        because its nightly refuses an archive holding no stack (§5);
+        each refused night brings the last object holding state a day
+        closer to the 30-day lifecycle rule, so the stale verdict is
+        the alarm and the 30 days are the deadline. **An empty prefix
+        is its own failure** — no dump holding state has landed within
+        the retention window: the box refuses to upload one holding no
+        stack (§5), as for a box replaced and not restored or a site
+        before its first `pulumi stack init`, or its timer never
+        fired — and so is an object under the prefix
         that is not named like a dump, since nothing but the
         appliance's uploader can write there. Names and their stamps
         are the whole of what the key can see: never a byte of a dump.
@@ -813,9 +847,10 @@ and the recovery is the same for each:
     because the restore is still owed (§1). A new box OCI is still
     provisioning is refused with that said, and a later re-run finds it
     running. From a later commit the re-run reads the new box as
-    drifted and stops. `--force` then either cannot dump the box or
-    dumps one that serves no stack, which leaves the record naming the
-    first run's dump, and `--no-dump` replaces the box without losing
+    drifted and stops. `--force` then cannot dump the box, whose
+    archive holds no stack checkpoint regardless of whether anything
+    has opened it (§5), which leaves the record naming the first run's
+    dump, and `--no-dump` replaces the box without losing
     anything, naming that dump — on this checkout's record; where the
     box holds state that went back some other way, the words say to
     delete the record first.
@@ -834,18 +869,23 @@ and the recovery is the same for each:
 Each **verifies rather than reports**, because the moment either is run
 is the moment nobody can afford to find out later:
 
--   A dump is listed with `pg_restore --list` before it is called one,
-    and a listing naming no table fails the run — the shape that
-    catches an archive of a database with nothing in it, which is
-    what a replaced box holds until its restore. The appliance's own
-    timer runs the same listing before it uploads (§5). The plaintext
+-   A dump is read before it is called one: listed with
+    `pg_restore --list`, and refused when its state rows hold no stack
+    checkpoint — the rule of §5, which catches the archive a replaced
+    box produces until its restore, regardless of whether anything has
+    opened it. A restore reads its archive the same way before the archive
+    touches the database, so a `--force` restore of such an archive
+    cannot empty a backend that serves stacks. The appliance's own
+    timer holds its uploads to the same rule (§5). The plaintext
     exists in a temporary directory for the two steps that read it
     and is never written beside the encrypted file.
 -   A restore asks `pulumi stack ls` twice. Beforehand, so that a
     backend already serving stacks is refused rather than overwritten
-    — `--force` is how a deliberate overwrite says so, and a box too
-    freshly provisioned to answer at all is read as empty rather than
-    as a reason to stop. Afterward as the verification proper: **a
+    — `--force` is how a deliberate overwrite says so. A box
+    provisioned minutes ago answers with no stack, since the question
+    opens the backend, which creates its table on the way; one that
+    does not answer at all is read as serving nothing rather than as a
+    reason to stop. Afterward as the verification proper: **a
     restore is finished when Pulumi can log in to what came back and
     list what it holds**, which is a stronger claim than "the rows
     arrived". The load itself runs in a single transaction, so a
@@ -1048,8 +1088,9 @@ failure is cheap:
     `pg_restore --list` does not detect truncation**: a 145 MB
     custom-format archive cut to 5 000 bytes still lists every table and
     exits 0, since the table of contents sits at the archive's head.
-    What the listing does catch is a dump of a *table-less* database —
-    the shape a box produces after a replacement nobody restored (§5).
+    What the listing does catch is a file that is not an archive, and
+    what the stack count beside it catches is an archive whose restore
+    brings nothing back (§5).
     A drill that only listed the object would have tested nothing about
     restoration. The counts are also what to write down: the next
     rehearsal reads them to see whether the state has quietly shrunk.

@@ -6,10 +6,10 @@ So the round trip is proven by the tool that will do it live, and only the
 database is imagined.
 
 The properties held here are the ones a silent change would cost on the day
-the box is gone: a dump nobody can open is never written, a file that cannot
-list its tables is never called a dump, a restore refuses to land on top of
-live state, and it finishes by asking `pulumi` what the backend serves rather
-than by asserting that it must.
+the box is gone: a dump nobody can open is never written, a file that is not
+an archive or holds no stack checkpoint is never called a dump nor restored,
+a restore refuses to land on top of live state, and it finishes by asking
+`pulumi` what the backend serves rather than by asserting that it must.
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ from typing import Any
 import drill_recipient_redirect
 import pytest
 from memory_kit import MemoryKit
+from state_dump_box import CHECKPOINT, CHECKPOINT_BAK, META, OPENED, SERVING, UNOPENED, rows
 
 from kluster.scripts.credentials import age, escrow
 from kluster.scripts.credentials.kdbx import PATH_ENV, KdbxStore
@@ -37,9 +38,9 @@ needs_age = pytest.mark.skipif(age_binary is None, reason='age is not on PATH (m
 pytestmark = needs_age
 
 #: A stand-in for a custom-format archive: the magic real `pg_restore` looks
-#: for, and a payload that is neither text nor compressible. The tail is there
-#: to give a case something to cut off; nothing reads it, because truncation
-#: is not what a listing detects.
+#: for, and a payload that is neither text nor compressible. The tail is what
+#: says the archive is whole: the listing never reaches it, which is why it is
+#: no truncation check, and the rows read does (`Double._rows`).
 TERMINATOR = b'-the-end-'
 ARCHIVE = state.ARCHIVE_MAGIC + b'\x01\x0e\x00' + os.urandom(4096) + TERMINATOR
 
@@ -75,20 +76,23 @@ class Double:
 
     The listing refuses anything that is not the archive it dumped, which is
     what the real `pg_restore --list` does to a file whose table of contents
-    is cut off — and the stack listing changes only after a restore, because
-    a backend that answers the same before and after would let a restore that
-    did nothing pass its own verification.
+    is cut off; the archive's state rows are `holds`, as `pg_restore
+    --data-only` prints them — and the stack listing changes only after a
+    restore, because a backend that answers the same before and after would
+    let a restore that did nothing pass its own verification.
     """
 
     def __init__(
         self,
         *,
         archive: bytes = ARCHIVE,
+        holds: str = SERVING,
         before: Sequence[str] = (),
         after: Sequence[str] = ('dns', 'physical'),
         answers_before: bool = True,
     ) -> None:
         self.archive: bytes = archive
+        self.holds: str = holds
         self.before: list[str] = list(before)
         self.after: list[str] = list(after)
         self.answers_before: bool = answers_before
@@ -125,13 +129,26 @@ class Double:
         reason it is no truncation check: the table of contents sits at the
         front of the archive, so a file cut short still lists what the whole
         one would have. What it does catch is a file that is not an archive —
-        a decryption that produced something else, or a plain-text dump — and,
-        through the listing itself, an archive naming no table.
+        a decryption that produced something else, or a plain-text dump.
         """
         data = Path(argv[-1]).read_bytes()
         if not data.startswith(state.ARCHIVE_MAGIC):
             return _completed(argv, code=1, stderr='pg_restore: error: did not find magic string in file header')
         return _completed(argv, stdout=LISTING)
+
+    def _rows(self, argv: Sequence[str]) -> sp.CompletedProcess[str]:
+        """`pg_restore --data-only --table=<table> --file=-`: the state rows, as a script on standard output.
+
+        Refusing an archive that is not whole, as the real tool does: the
+        database has one data block, the state table's, so a cut anywhere
+        past the table of contents runs into it. The archive's tail is what
+        says it is whole.
+        """
+        assert f'--table={state.STATE_TABLE}' in argv and '--file=-' in argv, argv
+        assert not any(value.startswith('--dbname=') for value in argv), 'reading rows connects to nothing'
+        if not Path(argv[-1]).read_bytes().endswith(TERMINATOR):
+            return _completed(argv, code=1, stderr='pg_restore: error: could not read from input file: end of file')
+        return _completed(argv, stdout=self.holds)
 
     def _restore(self, argv: Sequence[str]) -> sp.CompletedProcess[str]:
         """The load, refusing to hand an object to a client role.
@@ -175,6 +192,8 @@ class Double:
                 return _completed(argv)
             case state.PG_RESTORE if '--list' in argv:
                 return self._listing(argv)
+            case state.PG_RESTORE if '--data-only' in argv:
+                return self._rows(argv)
             case state.PG_RESTORE:
                 return self._restore(argv)
             case 'pulumi':
@@ -315,45 +334,68 @@ def test_a_dump_that_cannot_list_its_tables_is_not_written(
     assert not output.exists()
 
 
-def test_a_truncated_archive_is_not_what_this_check_catches(
-    double: Callable[..., Double], kit: KdbxStore, registry: escrow.Registry, bundle: Path, tmp_path: Path
+def test_a_truncated_archive_is_refused_by_its_rows_not_its_listing(
+    double: Callable[..., Double], registry: escrow.Registry, kit: KdbxStore, bundle: Path, tmp_path: Path
 ) -> None:
-    """The limitation the design document states, pinned so the double keeps it.
+    """A file cut short is refused, by the read that reaches the cut.
 
-    A custom-format archive carries its table of contents at the head, so
-    `pg_restore --list` reads a file cut short and still answers with
-    everything the whole one would have named — an archive truncated to a few
-    kilobytes lists its tables and exits zero. So the dump succeeds here, and
-    a double that refused instead would be pinning a check this artifact does
-    not have.
-
-    What the listing does catch is the two cases beside this one: a file that
-    is not an archive, and an archive naming no table.
+    The listing reads the table of contents at the head and passes a file
+    cut short; the rows read runs into the cut and fails. This database has
+    one data block, the state table's, so every cut past the table of
+    contents lands in it. A restore reads its archive the same way before it
+    touches the database, so it refuses the same file.
     """
-    _ = double(archive=ARCHIVE[: len(ARCHIVE) // 2])
+    tools = double(archive=ARCHIVE[: len(ARCHIVE) // 2])
     output = tmp_path / 'taken.dump.age'
 
-    assert _dump(kit, registry, bundle, output) == 0
-    assert output.exists()
+    with pytest.raises(state.StateError, match='--data-only.*end of file'):
+        _ = _dump(kit, registry, bundle, output)
+
+    assert not output.exists()
+    cut = tmp_path / 'cut.dump'
+    _ = cut.write_bytes(ARCHIVE[: len(ARCHIVE) // 2])
+    with pytest.raises(state.StateError, match='--data-only.*end of file'):
+        _ = _restore(None, registry, bundle, cut, force=True)
+    assert tools.restored is None
 
 
-def test_an_archive_of_nothing_is_not_a_dump(
-    double: Callable[..., Double], kit: KdbxStore, registry: escrow.Registry, bundle: Path, tmp_path: Path
+#: What a backend serving no stack dumps to, by whether anything has opened it.
+NO_STACK = {
+    'nothing has opened it': UNOPENED,
+    'the backend has opened it': OPENED,
+    'its stacks were removed': rows(META, CHECKPOINT_BAK),
+}
+
+
+@pytest.mark.parametrize('holds', list(NO_STACK.values()), ids=list(NO_STACK))
+def test_a_dump_of_a_backend_serving_no_stack_is_not_written(
+    double: Callable[..., Double], kit: KdbxStore, registry: escrow.Registry, bundle: Path, tmp_path: Path, holds: str
 ) -> None:
-    # The other half of the same check: a file `pg_restore` can read but that
-    # carries no table is a dump of a database that lost its state.
-    tools = double()
-    header = ';\n; Archive created at 2026-08-26 02:30:00 UTC\n;\n'
-    monkeypatched = tools._listing  # pyright: ignore[reportPrivateUsage]
+    """`state-backend dump` of an empty box fails, and leaves no file to trust.
 
-    def empty(argv: Sequence[str]) -> sp.CompletedProcess[str]:
-        answer = monkeypatched(argv)
-        return _completed(argv, stdout=header) if answer.returncode == 0 else answer
+    The other half of the same check: a file `pg_restore` can read but whose
+    state rows hold no stack checkpoint restores nothing -- the archive a box
+    replaced and not yet restored produces, whether or not anything has
+    opened it since.
+    """
+    _ = double(holds=holds)
+    output = tmp_path / 'taken.dump.age'
 
-    tools._listing = empty  # pyright: ignore[reportPrivateUsage]
+    with pytest.raises(state.StateError, match='holds no stack checkpoint'):
+        _ = _dump(kit, registry, bundle, output)
 
-    with pytest.raises(state.StateError, match='lists no tables'):
-        _ = _dump(kit, registry, bundle, tmp_path / 'taken.dump.age')
+    assert not output.exists()
+
+
+def test_the_archive_is_verified_by_its_stack_checkpoints(double: Callable[..., Double], tmp_path: Path) -> None:
+    # What `verify_dump` answers is the keys, read out of the archive it was
+    # handed and nothing else.
+    tools = double(holds=SERVING)
+    archive = tmp_path / 'state.dump'
+    _ = archive.write_bytes(ARCHIVE)
+
+    assert state.verify_dump(archive) == [CHECKPOINT]
+    assert [argv[-1] for argv in tools.calls] == [str(archive), str(archive)]
 
 
 def test_a_dump_never_overwrites_one(
@@ -408,15 +450,15 @@ def test_a_restore_decrypts_verifies_and_lands_the_archive(
     assert _restore(kit, registry, bundle, dump) == 0
 
     assert tools.restored == ARCHIVE
-    # Listed before it is restored, and the backend is asked what it serves
-    # both before and after: the verification is the last word, not the log
-    # line above it.
-    assert tools.programs() == ['pulumi', state.PG_RESTORE, state.PG_RESTORE, 'pulumi']
+    # Listed and read before it is restored, and the backend is asked what
+    # it serves both before and after: the verification is the last word,
+    # not the log line above it.
+    assert tools.programs() == ['pulumi', state.PG_RESTORE, state.PG_RESTORE, state.PG_RESTORE, 'pulumi']
     # A provisioned box carries an empty pulumi_state table once anything
     # has opened the backend -- the restore's own first question to `pulumi`
     # included -- so the landing call must drop before it recreates, inside
     # the one transaction, or every restore onto a fresh appliance aborts.
-    landing = next(argv for argv in tools.calls if Path(argv[0]).name == state.PG_RESTORE and '--list' not in argv)
+    landing = next(argv for argv in tools.calls if any(value.startswith('--dbname=') for value in argv[1:]))
     assert '--single-transaction' in landing
     assert '--clean' in landing
     assert '--if-exists' in landing
@@ -523,14 +565,37 @@ def test_force_restores_over_them(
     assert tools.restored == ARCHIVE
 
 
+@pytest.mark.parametrize('holds', list(NO_STACK.values()), ids=list(NO_STACK))
+def test_force_does_not_restore_an_archive_holding_no_stack(
+    double: Callable[..., Double], registry: escrow.Registry, bundle: Path, tmp_path: Path, holds: str
+) -> None:
+    """The one restore that would wipe live state is refused before the database is touched.
+
+    `--clean` drops the state table inside the restore's transaction, so an
+    archive whose rows hold no stack, loaded over a backend serving stacks,
+    exits 0 and leaves that backend serving none. The restore's closing
+    `stack ls` would fail the command, but only after the state is gone.
+    """
+    tools = double(before=('dns', 'physical'), holds=holds)
+    dump = tmp_path / 'state.dump'
+    _ = dump.write_bytes(ARCHIVE)
+
+    with pytest.raises(state.StateError, match='holds no stack checkpoint'):
+        _ = _restore(None, registry, bundle, dump, force=True)
+
+    assert tools.restored is None
+    assert [program for program, _ in tools.connections()] == ['pulumi']
+
+
 def test_a_backend_that_cannot_answer_yet_is_not_a_reason_to_refuse(
     double: Callable[..., Double], kit: KdbxStore, registry: escrow.Registry, bundle: Path, tmp_path: Path
 ) -> None:
-    """The ordinary case: a box provisioned minutes ago, restored into.
+    """A backend that cannot answer the guard's question is not read as serving state.
 
-    Its database has never had a stack written to it, so the question the
-    guard asks has no answer — which must not be read as "there is state
-    here", or no rebuild could ever finish.
+    A box provisioned minutes ago answers with no stack; one that does not
+    answer at all -- still coming up, or refusing the question -- has told
+    the guard nothing, which must not be read as "there is state here", or
+    no rebuild could ever finish while it lasted.
     """
     tools = double(answers_before=False)
     dump = tmp_path / 'taken.dump.age'
@@ -743,13 +808,6 @@ def test_every_slow_step_announces_itself_before_it_starts(
 
     for program, word in ANNOUNCED.items():
         assert any(word in message for message in said[program]), f'{program} ran without announcing itself'
-
-
-def test_the_listing_is_read_for_tables_rather_than_for_entries() -> None:
-    # Both forms count -- the definition and the rows -- and nothing else
-    # does, so an archive of sequences and functions is not a dump of state.
-    assert state.tables(LISTING) == ['public.stacks']
-    assert state.tables(';\n; Archive created at 2026-08-26 02:30:00 UTC\n;\n') == []
 
 
 def test_the_default_name_is_the_one_the_appliance_uses() -> None:

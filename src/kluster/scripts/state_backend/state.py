@@ -14,12 +14,13 @@ restore therefore does not care which of the two produced its input, and an
 operator's dump is exactly as recoverable as a nightly one.
 
 **Verification is part of the command, not of the playbook.** A dump of a
-database with no tables in it has a plausible size and a plausible name; what
-it does not have is a table of contents naming anything, so every dump is
-listed before it is called one — the appliance's own timer included.
-A restore ends by asking the `pulumi` CLI what the restored backend serves,
-because a database that is full of rows but cannot be logged in to has
-restored nothing anyone needs.
+backend serving no stack has a plausible size and a plausible name; what it
+does not have is a stack checkpoint, so every dump is read for one before it
+is called a dump, and a restore reads its archive the same way before it
+touches the database — the appliance's own timer holds its uploads to the
+same rule (physical/state-backend.md §5). A restore ends by asking the
+`pulumi` CLI what the restored backend serves, because a database that is
+full of rows but cannot be logged in to has restored nothing anyone needs.
 
 **Bytes, which is why this is not `credentials.age`.** That wrapper is text
 in, text out, and a custom-format archive is neither. The invocations here
@@ -33,6 +34,7 @@ import datetime as dt
 import json
 import logging
 import os
+import re
 import subprocess as sp
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -66,14 +68,27 @@ AGE_MAGIC = b'age-encryption.org/'
 ARMOR_MAGIC = age.ARMOR_BEGIN.encode()
 ARCHIVE_MAGIC = b'PGDMP'
 
-#: What a table entry says it is in a `pg_restore --list` line, and the word
-#: that follows it when the entry is the rows rather than the definition.
-TABLE = 'TABLE'
-DATA = 'DATA'
+#: Where the state is: the table Pulumi's Postgres backend keeps it in -- the
+#: backend's default name, since `config.ClientBundle.url` names no `table=`
+#: -- and the directory, under the database's own prefix, that holds one
+#: checkpoint key per stack. The appliance's dump script carries the same
+#: two (`STATE_TABLE`, `STACKS`), and the suite holds them equal.
+STATE_TABLE = 'pulumi_state'
+STACKS = '.pulumi/stacks/'
+
+#: What follows `STACKS` in a checkpoint's key: `<project>/<name>.json`, or
+#: `.json.gz` or `.json.zst` when the backend compresses
+#: (`PULUMI_DIY_BACKEND_GZIP`, `PULUMI_DIY_BACKEND_ZSTD`). The `.bak` beside
+#: each is not one.
+CHECKPOINT = re.compile(r'.+\.json(\.gz|\.zst)?')
 
 
 class StateError(RuntimeError):
     """A dump or a restore did not happen, and says which step refused."""
+
+
+class NoStack(StateError):
+    """The archive reads, and holds no stack checkpoint (`verify_dump`)."""
 
 
 def dump_name(now: dt.datetime | None = None) -> str:
@@ -223,48 +238,79 @@ def pg_dump(target: Connection, destination: Path) -> None:
     log.info('wrote %.1f MiB of archive', destination.stat().st_size / 2**20)
 
 
-def tables(listing: str) -> list[str]:
-    """The tables a `pg_restore --list` output names, as `schema.name`.
+def checkpoints(rows: str, database: str) -> list[str]:
+    """The stack checkpoints in a `pg_restore --data-only` output, as their keys.
 
-    An entry line is `<id>; <catalog oid> <oid> <what> <schema> <name>
-    <owner>`, and `<what>` is one word for a table's definition and two —
-    `TABLE DATA` — for its rows. Comment lines, which is the whole header,
-    start with the semicolon.
+    The state table's rows are one `COPY <schema>.<table> (key, data,
+    updated_at) FROM stdin;` block, a row per line with the key first and a
+    tab after it, ended by a line holding `\\.`; an archive with no such
+    table prints no block. Every key is `<database>/<path>`, and a stack's
+    checkpoint is `<database>/` + `STACKS` + `CHECKPOINT`. That is the reading
+    `pulumi stack ls` makes, and `stack ls` is what a restore ends on: the
+    meta, `.bak`, history and backup rows beside a checkpoint are not stacks.
+
+    Distinct from `stacks`, which asks `pulumi` about a live backend; this
+    reads an archive. The appliance's dump script counts the same keys with
+    the same grammar (`count_stacks`), and the suite holds the two to one
+    table of inputs.
     """
-    found: set[str] = set()
-    for line in listing.splitlines():
-        entry = line.split(';', 1)
-        if line.startswith(';') or len(entry) != 2:
+    prefix = f'{database}/{STACKS}'
+    found: list[str] = []
+    inside = False
+    for line in rows.split('\n'):
+        if inside:
+            if line == '\\.':
+                inside = False
+                continue
+            key = line.split('\t', 1)[0]
+            if key.startswith(prefix) and CHECKPOINT.fullmatch(key[len(prefix) :]):
+                found.append(key)
             continue
-        parts = entry[1].split()
-        if len(parts) < 4 or parts[2] != TABLE:
-            continue
-        start = 4 if parts[3] == DATA else 3
-        if len(parts) >= start + 2:
-            found.add('.'.join(parts[start : start + 2]))
+        words = line.split()
+        if len(words) >= 2 and words[0] == 'COPY' and words[-1] == 'stdin;':
+            inside = words[1].rsplit('.', 1)[-1] == STATE_TABLE
     return sorted(found)
 
 
 def verify_dump(archive: Path) -> list[str]:
-    """The tables the archive carries. A dump that cannot list them is not a dump.
+    """The stack checkpoints the archive carries. An archive that holds none is not a dump.
 
     `pg_restore --list` reads the archive's own table of contents, so a
-    decryption that produced something else, a file that is not an archive at
-    all, or an archive of a database that has lost its tables fails here
-    rather than at the restore that needed it. It is not a truncation check:
-    the table of contents sits at the head of a custom-format archive, so a
-    file cut short still lists what the whole one would have.
+    decryption that produced something else or a file that is not an archive
+    at all fails at the listing rather than at the restore that needed it.
+    It is not a truncation check: the table of contents sits at the head of
+    a custom-format archive, so a file cut short still lists what the whole
+    one would have.
+
+    Then the state table's rows are read for stack checkpoints, and an
+    archive holding none is refused: a dump of a backend serving no stack --
+    a box replaced and not yet restored, whether or not anything has opened
+    it since, or a site before its first `pulumi stack init` -- restores
+    nothing, and restored with `--force` over a backend that serves stacks,
+    it would remove them. The appliance's timer refuses the same archives
+    before it uploads (physical/state-backend.md §5).
     """
     log.info('checking the archive: asking %s to list what it contains', PG_RESTORE)
-    listing = _run(
+    _ = _run(
         [PG_RESTORE, '--list', str(archive)],
         what=f'{PG_RESTORE} --list {archive}',
         timeout=LISTING_TIMEOUT,
     )
-    found = tables(listing)
+    log.info('reading the stack checkpoints out of its %s rows', STATE_TABLE)
+    rows = _run(
+        [PG_RESTORE, '--data-only', f'--table={STATE_TABLE}', '--file=-', str(archive)],
+        what=f'{PG_RESTORE} --data-only {archive}',
+        timeout=LISTING_TIMEOUT,
+    )
+    found = checkpoints(rows, settings.DATABASE)
     if not found:
-        raise StateError(f'{archive} lists no tables, so it is not a dump of the state backend')
-    log.info('the archive carries %d table(s): %s', len(found), ', '.join(found))
+        raise NoStack(
+            f'{archive} holds no stack checkpoint (no key under {settings.DATABASE}/{STACKS} in its '
+            f'{STATE_TABLE} rows), so it is not a dump of any state: every dump holds one '
+            '(physical/state-backend.md §5). A box replaced and not yet restored, or one no '
+            '`pulumi stack init` has run against, dumps to this'
+        )
+    log.info('the archive carries %d stack checkpoint(s)', len(found))
     return found
 
 
@@ -277,9 +323,9 @@ def pg_restore(target: Connection, archive: Path) -> None:
     `pulumi` will happily read.
 
     `--clean --if-exists` is what lets the archive land on a provisioned
-    box at all: the backend creates its empty table the first time
-    anything opens it -- the restore's own first question to `pulumi`
-    included -- so replaying the archive's own CREATE would abort the
+    box at all: the backend creates its table, and writes its meta row, the
+    first time anything opens it -- the restore's own first question to
+    `pulumi` included -- so replaying the archive's own CREATE would abort the
     transaction on every fresh appliance. The drops run inside the same
     transaction, so the all-or-nothing shape survives.
 
