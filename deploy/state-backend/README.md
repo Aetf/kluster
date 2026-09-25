@@ -8,7 +8,7 @@ this file is how to operate it.
 
 | Path | What |
 | --- | --- |
-| `butane.yaml.j2` (template) | The machine, whole: the Postgres unit — a plain systemd unit running `podman run`, auto-updated by label, not a quadlet — PKI, `pg_hba`, the age recipients, the unit that installs the pinned `age`, the dump timer, the reboot window. |
+| `butane.yaml.j2` (template) | The machine, whole: the Postgres unit — a plain systemd unit running `podman run`, auto-updated by label, not a quadlet — PKI, `pg_hba` and the Postgres roles, the age recipients, the unit that installs the pinned `age`, the dump timer, the reboot window. |
 | `state-dump.sh` | What that timer runs — `pg_dump` → `pg_restore --list` → age → B2. Shell, because the box has no interpreter: it uses what the Fedora CoreOS image ships plus the `age` the template installs, and a test holds the template to that (docs/physical/state-backend.md §1). |
 | `operator-keys.txt` | SSH keys for diagnosis (`state-backend ssh`). The box is never configured by hand, and a key absent here means no access until the next re-provision. |
 | `drill-recipient.txt` | The public half of the drill age identity, one recipient. Written by `credentials derived drill-age-identity generate` — which pushes the private half into the ops repository's `drill` Environment first — and committed; absent until that generator has run, and the appliance then encrypts to the escrowed generations alone. |
@@ -149,7 +149,11 @@ the kit's recovery key. A checkout that has the bundle but not the passphrase
 needs that one command and nothing else.
 
 The certificate's Common Name *is* the Postgres role: `operator` locally,
-`ci` in the pipeline.
+`ci` in the pipeline. Neither is a superuser: both act as the role that owns
+the state, which holds what Pulumi's Postgres backend needs and nothing more,
+and the box admits no other role over TCP. The superuser answers only on the
+container's local socket, which is how the box's own initialization and its
+dump timer reach it (docs/physical/state-backend.md §2).
 
 ## Changing it
 

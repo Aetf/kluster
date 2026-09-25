@@ -318,9 +318,44 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     restore. At tens of MB of state, owning `pg_upgrade` machinery
     buys nothing. (The *in-cluster* CNPG databases are the opposite
     case — their major-upgrade policy is workloads.md §4.)
--   Config: TLS on, `scram-sha-256`, `pg_hba` requiring certificate
-    auth (§3); data directory on the boot volume (the DB is four
-    orders of magnitude smaller than the disk).
+-   Config: TLS on, `pg_hba` requiring certificate auth over TCP
+    (§3); data directory on the boot volume (the DB is four orders of
+    magnitude smaller than the disk).
+-   **Roles.** The image's bootstrap superuser, `postgres`, is
+    reachable only on the container's local socket, where `pg_hba`
+    trusts it and asks for no certificate: nothing outside the
+    container reaches that socket, getting there is `podman exec` as
+    root on the box, and its users are the image's own initialization
+    and the dump timer (§5). Over TCP `pg_hba` admits the two client
+    roles, `ci` and `operator`, into `pulumi_state` and nothing else,
+    so a certificate the CA signs for any other name — the superuser's
+    included — is refused. Both client roles are `NOSUPERUSER`
+    members of `state_owner`, a role that cannot log in, and every
+    session either opens acts as it (a per-role `role` setting in
+    `pulumi_state`). What that role holds is exactly what Pulumi's
+    Postgres backend needs: `CONNECT` on `pulumi_state` and `USAGE`
+    and `CREATE` on its `public` schema, which the box's own
+    initialization grants, with every grant `PUBLIC` holds on the
+    database revoked; and ownership of the `pulumi_state` table the
+    backend keeps its objects in, which is the role's because a
+    session acting as it created the table. Ownership, and not rows
+    alone, because the backend
+    (`pkg/backend/diy/postgres` at the pinned CLI) runs `CREATE TABLE
+    IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS` every time it
+    opens, and Postgres checks `CREATE` on the schema and ownership of
+    the table before it looks for either object: a role that can only
+    read and write rows is refused on its first command. Acting as the
+    owner is what makes the table the backend creates at first use,
+    and whatever a restore loads (§7), belong to the owner, whichever
+    client got there first. What neither client role holds is a
+    superuser's reach: no `COPY … TO PROGRAM`, no server files, no
+    other database. What each can do is what the backend does — read, write
+    and drop any stack's state, `github`'s included; credentials.md §3
+    records that as the excess the certificates carry. The roles are
+    created by `/docker-entrypoint-initdb.d`, the image's own
+    initialization, from a script the Butane file delivers, so they
+    exist from a fresh data directory's first start and change only
+    by re-provisioning.
 
 ## 3. PKI: a tiny offline CA
 
@@ -336,15 +371,25 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     first provisions the appliance is what generates and commits it
     (credentials.md §4.1); every run after that reads it and mints
     nothing, because generating over a live CA would invalidate every
-    certificate under it. Exactly three certificates under it:
+    certificate under it. **Every certificate under it is a leaf issued
+    on demand, and issuing is routine**: every `provision` and every
+    `render` issues a server leaf, and every `bundle` and every
+    `credentials derived sync` that reaches the `ci` bundle issues a
+    client leaf. None of them is recorded anywhere, and each is valid until it
+    expires, so the set of valid leaves grows with use and is not
+    something anyone can list. What a leaf is good for is bounded by
+    the box instead: a client leaf authenticates as the one role its
+    CN names, and the box admits only the two client roles (§2).
+    Two kinds of leaf:
 -   **Server cert, 2–3 years, SAN = the micro's reserved public IP.**
     Clients connect by literal IP with `sslmode=verify-full` (libpq
     matches IP SANs), keeping the state-backend hot path free of any
     DNS dependency — the backend stays reachable when Cloudflare or
     the `dns` stack is itself the thing being repaired.
--   **Two client certs — `ci` and `operator`**. The `ci` key is a CI
-    Environment secret; the `operator` key is a **workstation slot**
-    (credentials.md §1 rule 6) — `.credentials/state-backend/` in the
+-   **Client certs, for two roles — `ci` and `operator`**. The `ci`
+    key is a CI Environment secret; the `operator` key is a
+    **workstation slot** (credentials.md §1 rule 6) —
+    `.credentials/state-backend/` in the
     checkout, written by `state-backend provision` and by `state-backend
     bundle operator`, alongside the connection string for the backend it
     authenticates against. libpq refuses a client key anything but its
@@ -366,19 +411,21 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     overrides the variable of the same meaning, so such a URL names the
     bundle it was written beside, and `state-backend bundle operator`
     rewrites it into the portable form.
--   **The three leaf keys are random at issuance and escrowed
-    nowhere.** They are re-issuable from the CA at any time, so a
-    stored copy would be an exposure that buys nothing back: writing a
+-   **Leaf keys are random at issuance and escrowed nowhere.** They
+    are re-issuable from the CA at any time, so a stored copy would be an exposure that buys nothing back: writing a
     client bundle mints a certificate rather than reproducing one, and
     the box authenticates the CA rather than a particular leaf, so a
     workstation re-running `state-backend bundle operator` needs no
     notice given to anything. Issuing twice yields two different keys,
     which is why a caller that needs a certificate and its key takes
     both halves from one issuance.
--   **No CRL/OCSP.** At three certificates, revocation infrastructure
-    is standing rent for nothing: the compromise response is
-    "regenerate the CA, reissue all three, re-provision" — playbook
-    §7.1.
+-   **No CRL/OCSP.** The box's configuration changes only by
+    re-provisioning (§1), so a revocation list could reach it only the
+    way a new CA does — and a new CA revokes every leaf under the old
+    one at once, with no list of leaves to keep. The compromise
+    response is therefore "regenerate the CA, re-provision, reissue
+    the client bundles" — playbook §7.1. Until then a leaked client
+    leaf is its role (§2): the state, not the box.
 -   **An approaching expiry surfaces as drift; rotating is still an
     operator's decision.** Once the box's recorded expiry is inside the
     renewal margin, every `state-backend provision` names it in the
@@ -422,7 +469,7 @@ On a site provisioned for the first time the run ends at that refusal
 naming the address OCI chose; recording it and re-running is the
 second half of the first provision.
 
-Public 5432 with TLS + scram + **mandatory client certificates** — the
+Public 5432 with TLS + **mandatory client certificates** — the
 client cert is the wall, and **the only wall** (decided 2026-08-24):
 the NSG permits 5432 (and SSH, key-auth only) from anywhere. The
 earlier GitHub-Actions-ranges allowlist died on arithmetic —
@@ -431,7 +478,8 @@ quota in the hundreds, so the "coarse pre-filter" cannot be
 expressed, aggregating it until it fits is theater, and a
 home-/32-only rule would simply break CI. What an arbitrary IP
 reaches is Postgres's TLS handshake rejecting certificate-less
-clients; brute force buys nothing against cert auth, and the
+clients; brute force buys nothing against cert auth, a certificate
+gets no further than the role it names (§2), and the
 Postgres-CVE surface is bounded by the auto-updating minor stream
 (§2) plus the re-provision posture — the same appliance logic as
 everything else on this box. (A scheduled workflow auto-editing
@@ -718,9 +766,13 @@ is the moment nobody can afford to find out later:
     arrived". The load itself runs in a single transaction, so a
     failure leaves a box to re-run against instead of a half-populated
     backend that `pulumi` would read as authoritative.
--   Ownership is preserved — no `--no-owner` — because the roles a
-    dump names are certificate subjects that exist on every box (§3),
-    and flattening them would hand CI's tables to the operator.
+-   Ownership is the box's, not the archive's: the load runs with
+    `--no-owner`, so everything it creates belongs to the role the
+    restoring client acts as (§2). An archive names whichever role
+    owned each object where it was dumped, and one from a box whose
+    client roles were superusers names `ci` or `operator` itself,
+    which the restoring role cannot become — replaying that ownership
+    would abort the transaction.
 
 -   **§7.1 Certificate rotation / CA reissue.** Trigger: an expiry
     inside the renewal margin, which the converge finds by itself (§1);
@@ -861,10 +913,10 @@ failure is cheap:
     stops here; that is a guard rather than the check, and reading the
     URL in the bundle first is the check. Its own steps are the next
     assertions: decrypt, list, `pg_restore --single-transaction`, and
-    `pulumi stack ls --all` against what came back. Ownership is
-    preserved rather than flattened, which works because the roles the
-    archive names are created by the same Butane the scratch box booted
-    from.
+    `pulumi stack ls --all` against what came back. Ownership is the
+    scratch box's rather than the archive's (§7): everything lands
+    owned by the role its client roles act as, whichever role the
+    archive names.
 7.  **Count the rows.** Point libpq — `psql`, from the same Postgres
     client package as `pg_restore` — at the same bundle, with
     `PGSSLROOTCERT`, `PGSSLCERT` and `PGSSLKEY` naming `ca.crt`,

@@ -132,6 +132,31 @@ class Double:
             return _completed(argv, code=1, stderr='pg_restore: error: did not find magic string in file header')
         return _completed(argv, stdout=LISTING)
 
+    def _restore(self, argv: Sequence[str]) -> sp.CompletedProcess[str]:
+        """The load, refusing to hand an object to a client role.
+
+        The box's client roles are not superusers, and each session acts as
+        the role that owns the state (physical/state-backend.md §2). Replaying
+        an archive's `ALTER ... OWNER TO` takes being able to become the role
+        it names, and that role cannot become a client role -- so an archive
+        naming one as owner aborts the transaction with nothing loaded, unless
+        the restore is told to leave ownership alone.
+        """
+        owners = {line.split()[-1] for line in LISTING.splitlines() if line and not line.startswith(';')}
+        named = sorted(owners & {settings.CI_ROLE, settings.OPERATOR_ROLE})
+        if named and '--no-owner' not in argv:
+            return _completed(
+                argv,
+                code=1,
+                stderr=(
+                    'pg_restore: error: could not execute query: '
+                    f'ERROR:  must be able to SET ROLE "{named[0]}"\n'
+                    f'Command was: ALTER TABLE public.stacks OWNER TO {named[0]};\n'
+                ),
+            )
+        self.restored = Path(argv[-1]).read_bytes()
+        return _completed(argv)
+
     def _stacks(self, argv: Sequence[str]) -> sp.CompletedProcess[str]:
         if self.restored is None:
             if not self.answers_before:
@@ -150,8 +175,7 @@ class Double:
             case state.PG_RESTORE if '--list' in argv:
                 return self._listing(argv)
             case state.PG_RESTORE:
-                self.restored = Path(argv[-1]).read_bytes()
-                return _completed(argv)
+                return self._restore(argv)
             case 'pulumi':
                 return self._stacks(argv)
             case _:
@@ -389,13 +413,33 @@ def test_a_restore_decrypts_verifies_and_lands_the_archive(
     # both before and after: the verification is the last word, not the log
     # line above it.
     assert tools.programs() == ['pulumi', state.PG_RESTORE, state.PG_RESTORE, 'pulumi']
-    # A provisioned box already carries an empty pulumi_state from first
-    # boot, so the landing call must drop before it recreates — inside the
-    # one transaction — or every restore onto a fresh appliance aborts.
+    # A provisioned box carries an empty pulumi_state table once anything
+    # has opened the backend -- the restore's own first question to `pulumi`
+    # included -- so the landing call must drop before it recreates, inside
+    # the one transaction, or every restore onto a fresh appliance aborts.
     landing = next(argv for argv in tools.calls if Path(argv[0]).name == state.PG_RESTORE and '--list' not in argv)
     assert '--single-transaction' in landing
     assert '--clean' in landing
     assert '--if-exists' in landing
+
+
+def test_a_restore_lands_an_archive_whose_objects_a_client_role_owns(
+    double: Callable[..., Double], kit: KdbxStore, registry: escrow.Registry, bundle: Path, tmp_path: Path
+) -> None:
+    """An archive from a box whose client roles were superusers still restores.
+
+    Such a box's archive names `ci` or `operator` as the owner of its tables
+    (`LISTING` names `ci`), and the operator's restore connects as a role that
+    is no superuser and cannot become either. The objects go to the owner the
+    box's own roles act as, so the archive's ownership is not replayed.
+    """
+    tools = double()
+    dump = tmp_path / 'taken.dump.age'
+    assert _dump(kit, registry, bundle, dump) == 0
+
+    assert _restore(kit, registry, bundle, dump) == 0
+
+    assert tools.restored == ARCHIVE
 
 
 def _printing(printed: str, monkeypatch: pytest.MonkeyPatch) -> state.Connection:

@@ -197,10 +197,9 @@ def pg_dump(target: Connection, destination: Path) -> None:
     """`pg_dump -Fc` over the bundle's connection, into a local file.
 
     The custom format because that is what the appliance's own timer writes
-    and what `pg_restore` can list and reorder; no `--no-owner` and no
-    `--no-privileges`, because the roles a dump names are certificate
-    subjects that exist on every box (`ci`, `operator`) and flattening
-    ownership would hand CI's tables to the operator.
+    and what `pg_restore` can list and reorder. The archive records whichever
+    owner the box gave each object; nothing reads it back, because a restore
+    hands every object to the owner the box itself names (`pg_restore`).
     """
     log.info(
         'running %s -Fc against %s — tens of MB over TLS, expect seconds to minutes',
@@ -278,10 +277,20 @@ def pg_restore(target: Connection, archive: Path) -> None:
     `pulumi` will happily read.
 
     `--clean --if-exists` is what lets the archive land on a provisioned
-    box at all: Ignition's first boot already creates an empty
-    `pulumi_state`, so replaying the archive's own CREATE would abort the
+    box at all: the backend creates its empty table the first time
+    anything opens it -- the restore's own first question to `pulumi`
+    included -- so replaying the archive's own CREATE would abort the
     transaction on every fresh appliance. The drops run inside the same
     transaction, so the all-or-nothing shape survives.
+
+    `--no-owner` because ownership is the box's to decide, not the
+    archive's. The client roles are not superusers, and every session they
+    open acts as the role that owns the state (physical/state-backend.md §2),
+    so what this creates is that role's already; replaying the archive's
+    `ALTER ... OWNER TO` would name whichever role owned each object on the
+    box the dump came from. On an archive from a box whose client roles were
+    superusers that is `ci` or `operator` itself, which the connecting role
+    may not become, and the transaction aborts on it.
     """
     log.info('restoring into %s — this writes the whole archive in one transaction', endpoint(target.url))
     _ = _run(
@@ -290,6 +299,7 @@ def pg_restore(target: Connection, archive: Path) -> None:
             '--single-transaction',
             '--clean',
             '--if-exists',
+            '--no-owner',
             '--no-password',
             f'--dbname={target.url}',
             str(archive),
