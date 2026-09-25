@@ -176,8 +176,9 @@ class AdGuardRewriteProvider(ConfiguredProvider):
 
         Nothing an update can be reached for changes the row: the identity is a
         replacement, and what is left is a stamp and the endpoint this run
-        dialled. The outs replace the stored output bag (rfc-002 §7.5 E9), so
-        what state says about the door this row was written through stays true.
+        dialled. The outs replace the stored output bag (framework/pulumi.md
+        §5.3 E9), so what state says about the door this row was written
+        through stays true.
         """
         return dynamic.UpdateResult(outs=news)
 

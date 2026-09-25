@@ -15,7 +15,8 @@ credential and neither implies the other:
     compares two digests. `Gateway` says
     where the device answers, and the key it must present is the pin in
     `conventions`; the credential that opens the session is the provider's own,
-    read in its `configure` and handled by nothing here (rfc-002 §7.4).
+    read in its `configure` and handled by nothing here (framework/pulumi.md
+    §5.2).
 -   **The UniFi controller**, over its API, for the firewall. Those resources
     live in this stack and not beside the applications whose traffic they
     admit — the one deliberate exception to co-location, because a gateway
@@ -104,7 +105,8 @@ class Gateway(Component):
         repository decides, so it is `conventions.gateway.HOST_KEY` and a
         preview shows it, which is where a reviewer checks what a session will
         be held to (rfc-002 §11). The client credential that answers it is not
-        a parameter here either — it is the provider's own (§7.4).
+        a parameter here either — it is the provider's own (framework/pulumi.md
+        §5.2).
 
         `keys` are the public keys the device's one account accepts, this
         program's own among them. They are the parameter that keeps the SSH

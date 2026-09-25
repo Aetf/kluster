@@ -179,7 +179,7 @@ reportUnusedCallResult = false
 ##
 # The source layout is a set of layers, and a layer that quietly reached
 # upwards would take the layout with it — so the layering is a checked
-# contract rather than a convention (rfc-002 §2.3). Run as
+# contract rather than a convention (style/pulumi.md under "Layering"). Run as
 # `uv run lint-imports`, in CI beside ruff and basedpyright.
 [tool.importlinter]
 root_packages = ["kluster", "putils"]
@@ -218,8 +218,8 @@ type = "forbidden"
 source_modules = ["kluster.providers"]
 forbidden_modules = ["kluster.conventions"]
 
-# Not a rule so much as what `putils` is: the framework of rfc-001, which
-# knows no installation.
+# Not a rule so much as what `putils` is: the Pulumi framework
+# (framework/pulumi.md §1 and §2), which knows no installation.
 [[tool.importlinter.contracts]]
 name = "The framework knows no installation"
 type = "forbidden"

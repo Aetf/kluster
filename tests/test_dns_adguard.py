@@ -2,10 +2,10 @@
 
 **A provider under test is configured first**, because a provider in production
 is: the plugin deserializes it out of a resource's `__provider` property and
-calls `configure` before handing it any operation (rfc-002 §7.5 E2). `provider`
-below does that with a `ConfigureRequest` built the way the plugin builds one --
-the same class, the same project namespace -- so what the tests exercise is the
-real ordering rather than attributes set by hand.
+calls `configure` before handing it any operation (framework/pulumi.md §5.3
+E2). `provider` below does that with a `ConfigureRequest` built the way the
+plugin builds one -- the same class, the same project namespace -- so what the
+tests exercise is the real ordering rather than attributes set by hand.
 
 **The stand-in can refuse** (testing.md §4). An instance told to refuse an
 endpoint answers it with an error status and a body that is not JSON, and
@@ -36,7 +36,7 @@ PASSWORD = 'a-typed-secret'
 
 #: The project the configuration keys below are namespaced by. An unqualified
 #: key is resolved against the running project, which is how the plugin finds
-#: it (rfc-002 §7.5 E2).
+#: it (framework/pulumi.md §5.3 E2).
 PROJECT = 'kluster'
 
 PROPS: dict[str, Any] = {

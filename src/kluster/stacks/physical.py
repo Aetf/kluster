@@ -127,10 +127,10 @@ async def main() -> None:
     # the key belongs to that account instead of writing the OCID beside it
     # (credentials.md §3).
     tenancy_id = conventions.OCI_TENANCY.tenancy_ocid
-    # One pin for the fleet, in the namespace every version pin shares
-    # (rfc-002 §11.1). Three declarations read it — the machine configurations,
-    # the cloud image imported from the factory, and the worker's own disk
-    # image — and they are one version by construction.
+    # One pin for the fleet, in the namespace every pin a stack program reads
+    # shares (framework/pulumi.md §3.2). Three declarations read it — the
+    # machine configurations, the cloud image imported from the factory, and
+    # the worker's own disk image — and they are one version by construction.
     talos_version = versions.talos
 
     # The one provider this program shares, and therefore the one the stack
@@ -412,7 +412,8 @@ def _gateway(config: pulumi.Config) -> Gateway:
     inside the component that owns the connection (rfc-002 §8.1). The device's
     SSH credential is the same rule for a provider with no such line: a dynamic
     provider reads its configuration in `configure`, in its own process, so
-    `gatewayPrivateKey` is read there and by nothing else (§7.4).
+    `gatewayPrivateKey` is read there and by nothing else (framework/pulumi.md
+    §5.2).
 
     What is left is a knob, two secrets a file's content is rendered from, and
     one measurement. Where the device answers and which key it must present are

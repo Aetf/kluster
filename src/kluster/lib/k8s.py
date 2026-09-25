@@ -54,18 +54,22 @@ def helm_chart(
     skip_crds: bool = False,
     opts: pulumi.ResourceOptions | None = None,
 ) -> k8s.helm.v4.Chart:
-    """An upstream chart, pinned by stack configuration rather than by code.
+    """An upstream chart, pinned by project configuration rather than by code.
 
-    The repository and the version come from the `chart:<key>` config entry of
-    the stack doing the installing (`repo:version`), because that is where
-    renovate can see and bump them: `renovate.json5` groups the pins by the
-    stack file they live in, so a chart bump is reviewable as one in-cluster
-    change. A version written in Python would be a pin nobody bumps.
+    The repository and the version come from the `versions:chart-<key>`
+    configuration entry, as `<repository>:<version>` -- committed in
+    `Pulumi.yaml`'s project-level block, which a stack's own file overrides
+    only where it deliberately differs -- and `versions.chart` refuses a
+    missing or malformed one by naming its key. Every pin a stack program reads
+    lives in that one `versions:` namespace with its kind in the key
+    (docs/framework/pulumi.md §3.2), so a chart pin sits beside the others
+    rather than in code.
 
     :param chart: The chart reference — a name within the pinned repository,
         or a full ``oci://`` reference.
-    :param pin: The `chart:` config key holding the pin, when it differs from
-        the chart reference (an OCI reference is not a usable config key).
+    :param pin: The `<key>` after `versions:chart-` holding the pin, when it
+        differs from the chart reference (an OCI reference is not a usable
+        key).
     :param skip_crds: Leave the chart's bundled CRDs uninstalled. Helm never
         upgrades a CRD it installed that way, so a component whose CRDs are
         declared separately sets this and keeps them upgradable.
