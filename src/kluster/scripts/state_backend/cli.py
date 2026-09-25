@@ -11,6 +11,9 @@ that launches a box. `dump` and `restore`
 are the other half of that path: every playbook that replaces the box is a
 dump, a provision and a restore (physical/state-backend.md §7), with the dump
 taken by the converge itself, and each of them verifies rather than reports.
+A replacement records the restore it leaves owed in the workstation slot, and
+`provision` does not exit 0 while that record stands; a restore over the
+slot's bundle is what clears it.
 `probe` is the one command written to run somewhere other than a workstation:
 the scheduled checks on the certificate and the dumps (`probe.py`).
 """
@@ -41,17 +44,35 @@ from .state import StateError
 
 log = logging.getLogger(__name__)
 
-#: What `provision` exits with when it replaced the box and the state is not
-#: back in it. Neither 0 — 5432 answering over an empty database is not the end
+#: What `provision` exits with when a restore a replacement left owed has not
+#: run over this checkout's bundle -- this run's, or an earlier one's
+#: (`RESTORE_OWED`). Neither 0 — 5432 answering over an empty database is not the end
 #: of the operation, and a caller that stops reading at the exit code would
 #: otherwise be told the appliance is ready — nor 1, which says that the run
 #: failed and nothing more: a run can fail before it touches anything, or
 #: after it has already destroyed the box, and which it was is in the run's
-#: last words rather than in its status. This one always means the same thing,
-#: which is what a caller can branch on. A wrapper reads it, so it is
+#: last words rather than in its status. This one means the same thing however
+#: far the run got, which is what a caller can branch on. A wrapper reads it, so it is
 #: published rather than internal: `provision --help` and
 #: deploy/state-backend/README.md both name it.
 RESTORE_PENDING = 3
+
+#: The file in the workstation slot (`workstation.bundle_dir`) that records a
+#: restore a replacement left owed: one line naming the dump that restore
+#: takes, or an empty one for a box destroyed without a dump, whose state is
+#: then the newest object in B2. Written as a run starts destroying the box,
+#: because from then on the state is out of it whichever way the run ends, and
+#: removed by a `restore` over the same slot's bundle, the one thing that puts
+#: the state back. While it stands, a `provision` that would otherwise exit 0
+#: exits `RESTORE_PENDING`, naming that dump again: a re-run after a
+#: replacement that stopped part way launches or finds a box answering over an
+#: empty database, and nothing else the run reads tells that box from one
+#: holding its state.
+#:
+#: It is this checkout's record rather than a fact about the box: a restore
+#: run from another checkout leaves it standing here, and the words that name
+#: it say so.
+RESTORE_OWED = 'restore-owed'
 
 #: What `main` turns into one line and an exit status of 1: every refusal a
 #: module this program imports can raise. A refusal is a decision with the
@@ -103,9 +124,9 @@ def build_parser() -> argparse.ArgumentParser:
         'provision',
         help='create the appliance, or compare the running one to this commit and replace it when asked',
         epilog=(
-            'exit status: 0 the appliance is current and holds its state; '
-            f'{RESTORE_PENDING} the box was replaced and the state is not back in it yet, so run '
-            '`state-backend restore` with the dump this printed; '
+            'exit status: 0 the appliance is current and no restore is owed; '
+            f'{RESTORE_PENDING} a replacement from this checkout left a restore owed that has not run over its '
+            'bundle, so run `state-backend restore` with the dump this printed; '
             '1 the run failed — read its last words for whether it had already replaced the box, '
             'which is where the dump to restore is named.'
         ),
@@ -471,6 +492,9 @@ def _provision(
     b2.verify_account(session.account_id)
     bucket = next(iter(session.buckets(settings.B2_BUCKET)), None)
     reserved = provision.found_reserved_ip(clients, found)
+    # A restore an earlier replacement left owed, read before this run can
+    # write one of its own: every way this run ends reads it from here.
+    owed = _owed()
 
     # Up to here the run has written to neither provider, and a run that leaves
     # the box standing -- because it matches, or because its drift was not
@@ -490,7 +514,7 @@ def _provision(
                 # between a launch and the attach leaves the new box with no
                 # public address, and this is the way back to it.
                 provision.attach_reserved_ip(clients, instance_id=str(existing.id), public_ip_id=reserved.id)
-                return 0 if _hand_over(roots, address=reserved.address, launched=None) else 1
+                return _settled(owed) if _hand_over(roots, address=reserved.address, launched=None) else 1
         for reason in reasons:
             log.warning('%s', reason)
         if not (replace or force):
@@ -507,13 +531,18 @@ def _provision(
     log.info('[5/6] converging what the new box stands on, before anything is destroyed')
     ground = _groundwork(clients, session, found)
 
-    # The dump this run took of the box it destroyed, for the closing
-    # instruction. `None` covers both the run that destroyed nothing and the
-    # `--no-dump` run, which have different last words.
-    taken: Path | None = None
     #: The box this run launched, once it is running.
     launched: LaunchedBox | None = None
     answered = False
+    # Whether the dump key's predecessor was retired, which the launch is
+    # followed by and which can raise with the new box already running.
+    retired = False
+    # Whether a successor was minted: only then can the predecessor be the
+    # one left live, by a retirement that failed or a launch whose wait was lost.
+    minted = False
+    # The key the box being replaced holds: the predecessor that retirement
+    # is for, named by the closing instruction when it stays live.
+    superseded = provision.instance_config(existing).dump_key_id if existing is not None else ''
     # Set the moment the old box starts going away, not when the decision is
     # made: everything after that point owes the operator the closing
     # instruction, including the paths that raise. The `finally` below is what
@@ -523,12 +552,44 @@ def _provision(
     try:
         if existing is not None:
             if dump:
-                taken = _dump_before_replacing(roots, output=dump_output, bundle_dir=bundle_dir)
+                taken = _dump_before_replacing(roots, output=dump_output, bundle_dir=bundle_dir, owed=owed)
                 if taken is None:
                     return 1
-            else:
+                # A box an earlier replacement left empty dumps once anything
+                # has opened it, and holds no stack: the record keeps the
+                # dump the state is in unless this box serves one. A box that
+                # does not answer the question is not read as empty.
+                if owed is None:
+                    owed = str(taken)
+                else:
+                    try:
+                        serving = state.stacks(state.connection(bundle_dir))
+                    except StateError as exc:
+                        log.error(
+                            'the box answered the dump but not `pulumi stack ls` (%s), so whether %s or %s holds the '
+                            'state cannot be told; nothing has been destroyed, and a re-run asks again',
+                            exc,
+                            taken,
+                            owed or 'the newest object in B2',
+                        )
+                        return 1
+                    if serving:
+                        owed = str(taken)
+                    else:
+                        log.warning(
+                            '%s holds no stack, so the restore still owed takes %s',
+                            taken,
+                            owed or 'the newest object in B2',
+                        )
+            elif owed is None:
                 log.warning('--no-dump: replacing without a dump, so everything since the nightly one is lost')
+                owed = ''
+            else:
+                # The record says an earlier replacement left this box empty;
+                # it cannot say whether the state went back some other way.
+                log.warning('--no-dump: replacing without a dump; %s', _both_readings(owed))
             log.warning('replacing %s — 5432 goes away until the new box answers', existing.id)
+            _owe(owed)
             destroyed = True
             provision.terminate_instance(clients, str(existing.id))
         # After the terminate comes what needs the old box gone or the new one
@@ -542,6 +603,7 @@ def _provision(
         # fallible steps left in the stretch with no backend.
         log.info('[6/6] minting the dump key the new box will hold, and launching it')
         pending = b2.mint_dump_key(session, bucket_id=ground.bucket_id)
+        minted = True
 
         # Recorded the moment the launch returns, inside the push: the
         # predecessor's retirement follows it and can raise, and a box that
@@ -556,21 +618,98 @@ def _provision(
         # the successor exists -- the order every mint in that package has
         # (`credentials/delivery.py`).
         _, box = pending.deliver(launch)
+        retired = True
         provision.attach_reserved_ip(clients, instance_id=box.instance_id, public_ip_id=ground.reserved.id)
         answered = _hand_over(roots, address=ground.reserved.address, launched=box)
         if not answered:
             return 1
-        return RESTORE_PENDING if destroyed else 0
+        return RESTORE_PENDING if destroyed else _settled(owed)
     finally:
         # The stretch above is minutes long -- a launch, a first boot -- and
         # every step of it can raise: B2 refusing the mint, OCI refusing the
         # launch. Once the box is going away the state is in one file, so a
         # run that leaves this way says so before the traceback does.
         if destroyed:
-            _restore_pending(taken, launched=launched, answered=answered)
+            _restore_pending(
+                owed or '',
+                launched=launched,
+                answered=answered,
+                live_key=None if retired or not minted else superseded,
+            )
 
 
-def _restore_pending(taken: Path | None, *, launched: LaunchedBox | None, answered: bool) -> None:
+def _owed_path() -> Path:
+    return workstation.bundle_dir() / RESTORE_OWED
+
+
+def _owed() -> str | None:
+    """The restore a replacement left owed (`RESTORE_OWED`), or None when none is.
+
+    The answer is the dump that restore takes, or '' for a box destroyed
+    without one.
+    """
+    try:
+        return _owed_path().read_text().strip()
+    except FileNotFoundError:
+        return None
+
+
+def _owe(dump: str) -> None:
+    """Record the restore this run's replacement leaves owed, before the terminate."""
+    _ = workstation.write(_owed_path(), dump)
+
+
+def _both_readings(owed: str) -> str:
+    """What `--no-dump` costs over a box this checkout records a restore owed for, on each reading.
+
+    The record cannot tell the box an earlier replacement left empty from one
+    whose state went back from another checkout, so the words that send an
+    operator to `--no-dump` carry both, and the file to delete on the second.
+    """
+    return (
+        f'this checkout records a restore a replacement left owed ({_owed_path()}), of '
+        f'{owed or "the newest object in B2"}. If this box is the one that replacement left empty, --no-dump '
+        'replaces it and loses nothing of that, and the restore afterwards takes that dump. If it serves state '
+        'that went back some other way -- a restore from another checkout -- delete that file first: --no-dump '
+        'then loses what is not in the nightly object, and the restore afterwards takes the newest object in B2 '
+        'rather than that dump'
+    )
+
+
+def _name_the_restore(owed: str) -> None:
+    """The command that puts the state back, as the owed record names its dump."""
+    if owed:
+        log.warning('    state-backend restore %s', owed)
+    else:
+        log.warning('the box was destroyed without a dump, so the state is the newest object in B2:')
+        log.warning('    state-backend restore <that object>')
+
+
+def _settled(owed: str | None) -> int:
+    """What a run that answered and destroyed nothing exits with.
+
+    0 when no restore is owed. Otherwise the box it found or launched is the
+    one an earlier replacement left empty -- or, where the record is stale,
+    one whose state came back some other way -- and the run says which dump
+    that restore takes and exits as the replacement did.
+    """
+    if owed is None:
+        return 0
+    log.warning(
+        'the box answers, and this checkout records a restore still owed: a replacement run from here took the '
+        'state out, and no restore over this bundle has put it back since:'
+    )
+    _name_the_restore(owed)
+    log.warning(
+        '%s records that restore as owed, and the restore removes it. If the box already holds its state -- '
+        'restored from another checkout or bundle, or never destroyed because the terminate failed -- delete '
+        'that file instead',
+        _owed_path(),
+    )
+    return RESTORE_PENDING
+
+
+def _restore_pending(owed: str, *, launched: LaunchedBox | None, answered: bool, live_key: str | None) -> None:
     """The last words of a run that destroyed the box: the state is not back yet.
 
     Said from how far the run got, because that decides the operator's next
@@ -581,31 +720,56 @@ def _restore_pending(taken: Path | None, *, launched: LaunchedBox | None, answer
     cannot take the restore yet. A box that answers serves an empty database
     -- it initdb'd a fresh data directory -- and a `pulumi` run against it
     reads a backend serving nothing and acts on that.
+
+    The re-run is named with the commit it runs from, because a box this run
+    launched was built from this one: from another, the re-run reads that box
+    as drifted and stops, and a replacement of it has no state to dump.
+
+    `live_key` is the dump key the destroyed box held, when a successor was
+    minted and the retirement has not run -- '' when that box recorded none
+    -- and None otherwise. Beside a new box that is running, the retirement
+    is what failed. With none seen, the re-run launches one and retires it
+    then -- unless OCI accepted a launch whose wait was lost, and the re-run
+    finds that box and launches nothing, so the words say both.
     """
     if launched is None:
         log.warning(
-            'no new box was seen running: re-run `state-backend provision`, which brings a box up where none '
-            'is and points the address at one that is. If the terminate is what failed, the old box may still be '
-            'standing or still going away; one still standing is found as it was, holding its state, and is owed '
-            'no restore. Otherwise, once a box answers:'
+            'no new box was seen running: re-run `state-backend provision` from this commit, which brings a box '
+            'up where none is and points the address at one that is. If the terminate is what failed, the old box '
+            'may still be standing or still going away; one still standing holds its state and is owed no restore: '
+            "a re-run that finds it matching the commit exits 3 on this checkout's record, and deleting that record "
+            'is the step then; one that finds it drifted stops as before the replacement, and `--force` dumps it '
+            'afresh. Otherwise, once a box answers:'
         )
     elif not answered:
         log.warning(
             'the new box %s has not answered, so it cannot take the restore yet: re-run '
-            '`state-backend provision`, which points the address at it and waits again -- `state-backend ssh` '
-            'reaches it once the address does; once it answers:',
+            '`state-backend provision` from this commit, which points the address at it and waits again -- '
+            '`state-backend ssh` reaches it once the address does; once it answers:',
             launched.instance_id,
         )
     else:
         log.warning('the new box %s serves an empty database until the state goes back into it:', launched.instance_id)
-    if taken is None:
-        log.warning('the box was destroyed without a dump, so the state is the newest object in B2:')
-        log.warning('    state-backend restore <that object>')
-    else:
-        log.warning('    state-backend restore %s', taken)
+    _name_the_restore(owed)
+    if launched is None and live_key is not None:
+        log.warning(
+            'if the re-run finds a box this run launched rather than launching one, the dump key the destroyed box '
+            'held%s stays live: it can write into the dump prefix and nothing else, and the next run that launches '
+            'a box retires it -- `state-backend provision --replace` once the restore is done',
+            f' ({live_key})' if live_key else '',
+        )
+    elif live_key is not None:
+        log.warning(
+            'retiring the dump key the destroyed box held%s failed, so it is still live: it can write into the '
+            'dump prefix and nothing else, and the next run that launches a box retires it with every other '
+            'superseded dump key -- `state-backend provision --replace` once the restore is done',
+            f' ({live_key})' if live_key else '',
+        )
 
 
-def _dump_before_replacing(roots: config.Roots, *, output: Path | None, bundle_dir: Path) -> Path | None:
+def _dump_before_replacing(
+    roots: config.Roots, *, output: Path | None, bundle_dir: Path, owed: str | None
+) -> Path | None:
     """Dump the box about to be destroyed, or answer None having destroyed nothing.
 
     The nightly timer leaves a window of up to a day, and a rebuild throws
@@ -619,6 +783,13 @@ def _dump_before_replacing(roots: config.Roots, *, output: Path | None, bundle_d
     The dump goes over a client bundle that authenticates against the box
     being replaced — by default the workstation slot, which holds exactly
     that: same CA, same address.
+
+    A box an earlier replacement left empty (`owed`) names no table until
+    something opens it; once the backend has created its empty table the
+    dump passes and holds no stack, and the record keeps the earlier dump
+    (`_provision`). Where its dump fails, the refusal says what `--no-dump`
+    costs on both readings of the record, since the record cannot tell an
+    empty box from one whose state went back from another checkout.
     """
     destination = (output if output is not None else Path(state.dump_name())).resolve()
     log.info('dumping the running box before it is replaced, into %s', destination)
@@ -627,10 +798,13 @@ def _dump_before_replacing(roots: config.Roots, *, output: Path | None, bundle_d
     except StateError as exc:
         log.error('the dump of the running box failed: %s', exc)
         log.error('nothing has been destroyed; the box is still serving')
-        log.error(
-            'a missing or stale bundle is `state-backend bundle operator --address <ip>`; '
-            '--no-dump replaces a box that cannot be dumped at all, and loses what is not in the nightly object'
-        )
+        if owed is None:
+            log.error(
+                'a missing or stale bundle is `state-backend bundle operator --address <ip>`; '
+                '--no-dump replaces a box that cannot be dumped at all, and loses what is not in the nightly object'
+            )
+        else:
+            log.error('%s', _both_readings(owed))
         return None
     return destination
 
@@ -678,8 +852,8 @@ def _dump(store: KdbxStore, *, registry: escrow.Registry, bundle_dir: Path, outp
 
     Encrypted to the escrow's recipients rather than left in plain text, and
     listed before it is called a dump: an archive naming no table is a dump of
-    a database that has lost its state — what a replaced box holds until its
-    restore — and the operator taking one is usually about to destroy the box
+    a database that has lost its state — what a replaced box holds until
+    anything opens it and the backend creates its empty table — and the operator taking one is usually about to destroy the box
     it came from (§7.2).
     """
     destination = (output if output is not None else Path(state.dump_name())).resolve()
@@ -729,6 +903,12 @@ def _restore(
     if occupied and not force:
         log.error('%s already serves %d stack(s): %s', state.endpoint(target.url), len(occupied), ', '.join(occupied))
         log.error('restoring over live state is `--force`; a rebuild restores into a box that has none')
+        if (bundle_dir / RESTORE_OWED).exists():
+            log.error(
+                '%s records this restore as owed, and the backend already serves its stacks: the record is stale, '
+                'and deleting it is the step, not --force',
+                bundle_dir / RESTORE_OWED,
+            )
         return 1
     if occupied:
         log.warning(
@@ -761,6 +941,13 @@ def _restore(
         log.error('%s serves no stacks after the restore, so the state did not arrive', state.endpoint(target.url))
         return 1
     log.info('the restored backend serves %d stack(s): %s', len(restored), ', '.join(restored))
+    # The restore a replacement left owed, recorded beside the bundle it
+    # would go over, is this one: the state is back, and `provision` may say 0
+    # again (`RESTORE_OWED`).
+    owed = bundle_dir / RESTORE_OWED
+    if owed.exists():
+        owed.unlink()
+        log.info('the restore a replacement left owed is done; %s is gone', owed)
     return 0
 
 

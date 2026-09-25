@@ -90,16 +90,24 @@ The three statuses are an interface, so a script can branch on them
 
 | Exit | What happened | What to do |
 | --- | --- | --- |
-| `0` | The appliance is current and holds its state — except on a re-run after a replacement that failed part way, which also lands here with the restore that run named still owed. | Nothing, or that restore. |
-| `3` | The box was replaced; the state is not back in it. | Run the `state-backend restore` the run printed. |
+| `0` | The appliance is current, and no replacement run from this checkout left a restore owed. | Nothing. |
+| `3` | The box was replaced — by this run, or by an earlier one whose restore is still owed, which is what a re-run after a replacement that stopped part way meets — and the state is not back in it. | Run the `state-backend restore` the run printed; a restore over the workstation slot's bundle is what brings the next run back to `0`. |
 | `1` | The run failed. | Read the error, then the run's last words: once the run has started terminating the old box they name the dump to restore and say how far the replacement got, and they are silent when it stopped before that, with the old box still serving. |
 
 `1` covers a run that stopped before touching anything **and** one that
 stopped after destroying the box, so it cannot be read as "nothing happened";
-only the run's own output distinguishes them. `3` is the one status that
-always means the same thing — the appliance is up, its database is empty, and
-the dump to feed it has been named — which is why the replacement does not
-reuse `1`. Neither non-zero status says the state is safe.
+only the run's own output distinguishes them. `3` is the one status whose
+meaning does not depend on how far the run got — the appliance is up, the
+restore a replacement left owed has not been run over this checkout's bundle,
+and the dump to feed it has been named — which is why the replacement does not
+reuse `1`. It reads the database as empty on this checkout's record
+(`.credentials/state-backend/restore-owed`) rather than by asking it, so a
+record left standing after the state went back some other way — a restore from
+another checkout or over another bundle, or a terminate that never took the old
+box away — gives `3` over a database that serves its state. The run's words
+say which of the two to act on: run the restore they name, or delete the record
+when the box already holds its state. Neither non-zero status says the state
+is safe.
 
 Other commands:
 

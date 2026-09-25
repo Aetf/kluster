@@ -195,11 +195,7 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     whether B2 still has the dump key — is looked up, and nothing is
     created or converged unless the run is going to launch a box: a
     run that finds no box, which destroys nothing and so has nothing to
-    approve, or a replacement asked for. A re-run after a replacement
-    that stopped part way — one that finds no box and launches one, or
-    finds the new box and points the address at it — exits 0 over an
-    empty database, and the restore the stopped run named is still
-    owed. The report on a
+    approve, or a replacement asked for. The report on a
     drifted box nobody asked to replace writes nothing. The repair is
     on a matching box: when the reserved address does not point at it,
     the run points it back — the box has no other public address, and a
@@ -254,7 +250,35 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     points the address at one that is, before the restore. Since the
     terminate itself may be what failed, it also says the old box may
     still stand: one that does is found as it was, holding its state,
-    and is owed no restore.
+    and is owed no restore. Both re-runs are named as runs from the
+    same commit, because a box this run launched was built from it:
+    from a later one, the re-run reads that box as drifted and stops
+    before pointing the address at it (§7).
+-   **The restore stays owed until it happens, whatever runs between.**
+    A replacement records the restore it leaves owed — the dump's path,
+    or none when it took no dump — in the workstation slot beside the
+    `operator` bundle, as it starts destroying the box, and `state-backend
+    restore` over that bundle removes the record once Pulumi lists what
+    it restored. While the record stands, a run that would exit 0 exits
+    with the replacement's status instead and names that dump again.
+    That is what a re-run after a replacement that stopped part way
+    meets: it launches a box where it finds none, or finds the new one
+    and points the address at it, and either way the box answers over
+    an empty database that nothing else the run reads tells apart from
+    one holding its state. The record is the checkout's rather than the
+    box's: a restore run from another checkout or over another bundle
+    leaves it standing, and so does a terminate that never took the old
+    box away, and the run's words name the file to delete in those
+    cases. A `--no-dump` replacement of a box an earlier one left empty
+    loses nothing, and its words name the dump that earlier run took
+    rather than the newest object in B2 — on this checkout's record;
+    where the box holds state that went back some other way, the words
+    say to delete the record first, and that `--no-dump` then loses what
+    is not in the nightly object. A replacement's own dump takes the
+    record over only when the box it dumped serves a stack: a box an
+    earlier replacement left empty dumps once anything has opened it,
+    because the backend creates its table on every open, and holds
+    nothing.
 -   **The B2 dump key is one of those components, not a special case.**
     B2 returns an application key's secret once, so the box's copy
     cannot be read back, and every mint is followed by the retirement
@@ -266,7 +290,14 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     asks B2 whether the *recorded* key still exists with the scope
     `b2.dumps` states for it: if it does not, the box cannot be handed the
     intended key without being rebuilt, which is the same replace as
-    any other drift. **The dump key's lifetime is the instance's.**
+    any other drift. **The dump key's lifetime is the instance's, give
+    or take a failure past the mint:** a retirement that fails with the
+    new box running, or a launch OCI accepted whose wait was lost, leaves
+    the predecessor live until the next run that launches a box retires
+    it with every other superseded dump key — the re-run that recovers
+    the new box launches nothing, so it is not that run. It can write into the
+    dump prefix and nothing else, and the replacement's last words name
+    it (§7).
     `--replace` remains for the case with no diff to find: rotating the
     dump key, or discarding a box broken in a way metadata cannot show.
 -   **OS updates: Zincati `periodic` strategy** — reboots confined to
@@ -769,6 +800,36 @@ forward those variables and mount the bundle at the paths they name.
 A converge that is about to replace the box takes the first of those two
 moves for itself (§1), so a playbook below names the file that run wrote
 rather than a dump the operator had to remember to take.
+
+**A replacement that stops part way is finished by the commands its
+last words name, from the commit it ran from.** Every playbook below
+that replaces the box can stop between the terminate and the restore,
+and the recovery is the same for each:
+
+-   Re-run `state-backend provision` from that commit. Where the run
+    saw no new box, the re-run launches one; where it did, the re-run
+    points the address at it and waits for it to answer. Either way it
+    exits with the replacement's status and names the dump again,
+    because the restore is still owed (§1). A new box OCI is still
+    provisioning is refused with that said, and a later re-run finds it
+    running. From a later commit the re-run reads the new box as
+    drifted and stops. `--force` then either cannot dump the box or
+    dumps one that serves no stack, which leaves the record naming the
+    first run's dump, and `--no-dump` replaces the box without losing
+    anything, naming that dump — on this checkout's record; where the
+    box holds state that went back some other way, the words say to
+    delete the record first.
+-   Then `state-backend restore <the dump it named>`. The restore
+    removes the record of what was owed, and `provision` exits 0 again.
+    Where the state went back some other way — a restore from another
+    checkout, or a terminate that never took the old box away — the
+    words name the record's file, and deleting it is the step instead.
+-   Where the run minted a successor and did not retire the
+    predecessor — the retirement failed, or the launch was lost — the
+    words name that key too. It stays live until the next run that launches a box,
+    able to write into the dump prefix and nothing else, its secret
+    held nowhere but the destroyed box's Ignition; `state-backend
+    provision --replace` and the restore it names retire it sooner.
 
 Each **verifies rather than reports**, because the moment either is run
 is the moment nobody can afford to find out later:

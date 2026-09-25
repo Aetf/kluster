@@ -1078,11 +1078,25 @@ def ensure_instance(
 
 
 def attach_reserved_ip(clients: OciClients, *, instance_id: str, public_ip_id: str) -> None:
-    """Point the reserved address at the instance's primary private IP."""
+    """Point the reserved address at the instance's primary private IP.
+
+    A box OCI is still provisioning has no attached VNIC to point at yet. A
+    re-run meets one when the run before it lost the wait on a launch OCI had
+    accepted, and it is refused with that said: the next run finds the box
+    running, and waiting for it here would be a second wait beside the one
+    the launch already has.
+    """
     network = clients.network
     log.info('checking that the reserved address points at the instance')
     attachments = _data(clients.compute.list_vnic_attachments(clients.compartment_id, instance_id=instance_id))
-    vnic_id = attachments[0].vnic_id
+    attached = [attachment for attachment in attachments if attachment.lifecycle_state == 'ATTACHED']
+    if not attached:
+        raise RuntimeError(
+            f'{instance_id} has no attached network interface for the reserved address to point at: '
+            'the box is still provisioning. Re-run `state-backend provision` from this commit once OCI '
+            'reports it RUNNING'
+        )
+    vnic_id = attached[0].vnic_id
     private_ips = _data(network.list_private_ips(vnic_id=vnic_id))
     primary = next(ip for ip in private_ips if ip.is_primary)
 
