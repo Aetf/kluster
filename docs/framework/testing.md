@@ -352,15 +352,17 @@ That is, no value reached the provider under that key.
 ## 4. Fakes and the Ratchet
 
 Code that drives an external service is tested against a fake of that service
-(`FakeIdentity` in `tests/test_oci_iam.py` is the worked example). A fake is
+(the tenancy in `tests/oci_tenancy.py` is the worked example). A fake is
 not a stub that returns success; it is the smallest model of the service that
 can still tell a correct caller from an incorrect one.
 
 **A fake carries authorization semantics.** It records which principal made
 each call, so a test can assert *who* did something and not merely that it
-happened. Whether the sweep of superseded API keys runs as the seed user or as
-the account root is the whole of one defect, and it is only visible because
-the fake tenancy remembers the identity behind every connection.
+happened. Whether a rotation's sweep runs as the successor or as the
+predecessor it is retiring is the whole of one defect — a session that
+deletes the key it signs with cannot finish the sweep — and it is only
+visible because the fake tenancy records every call under the user and the
+key that signed it: either principal leaves the same keys behind.
 
 **A fake carries failure semantics.** It refuses what the real service is
 known to refuse: the three-key quota, a user created without a primary email,

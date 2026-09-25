@@ -11,12 +11,12 @@ because until the push returns the freshly minted credential exists in this
 process alone. The recorded `pulumi` refuses a read-back on demand, which is
 one of the ways `stack.fill` fails for real.
 
-The OCI tenancy is the fake `test_oci_iam` drives, imported rather than
-rebuilt: one fake per platform, and the module that owns the API is where it
-lives. What it encodes matters here — the identity domain serves the
-self-service endpoints to anyone who authenticates and the administrative ones
-only to a domain administrator, which the seed is not, so a mint for somebody
-else's user is served by the legacy shim.
+The OCI tenancy is the fake in `oci_tenancy`, imported rather than rebuilt:
+one fake per platform, in a module of its own that every suite minting against
+the platform imports. What it encodes matters here — the identity domain
+serves the self-service endpoints to anyone who authenticates and the
+administrative ones only to a domain administrator, which the seed is not, so
+a mint for somebody else's user is served by the legacy shim.
 """
 
 # The SDK ships no stubs; the same waiver `oci_iam.py` itself carries.
@@ -33,7 +33,7 @@ import pytest
 from cloudflare_api import ACCOUNT_ID, FakeApi, console_seed
 from fake_pulumi import RecordedPulumi
 from memory_kit import MemoryKit
-from test_oci_iam import ROOT_USER, TENANCY, Tenancy
+from oci_tenancy import KEY_LISTINGS, ROOT_USER, TENANCY, Tenancy
 
 from oci_conventions import with_recorded_compartment, with_tenancy_ocid, with_unrecorded_compartment
 from kluster import conventions
@@ -733,7 +733,7 @@ def test_the_seed_mints_for_a_user_that_is_not_its_own(
     assert 'list_my_api_keys' in tenancy.policy.served
     # …and the key that verified and swept is the minted one, signing as the
     # user it was minted for rather than as the seed.
-    assert tenancy.domain_connections[-1][1] == user
+    assert tenancy.made(KEY_LISTINGS)[-1].user == user
 
 
 def test_the_minted_oci_key_never_touches_the_kit(
