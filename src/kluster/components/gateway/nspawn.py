@@ -44,8 +44,8 @@ both manipulate systemd's own configuration:
     changed. It runs at boot with nothing else present, and again as the
     post-apply hook of every file a machine is made of, so the recovery path is
     the path every apply exercises. What it acts on it reads off the disk:
-    which machines exist, what each one's content stamp covers, and what a
-    machine that has never run is seeded with.
+    which machines exist, what each one's content stamp covers, and the initial
+    state a machine that has never run is given.
 
 **The machine set is unordered.** Which machine is actuated when is a push-time
 constraint — the machine carrying the deployment's own session must go last —
@@ -219,8 +219,9 @@ NSPAWN_SUFFIX = '.nspawn'
 #: where inside the state directory is the shape of this one, so no mapping has
 #: to be carried alongside it; and everything under it is out of the content
 #: stamp by construction, which is what a machine that has already made those
-#: files its own requires — the stamp covers the machine's *directory*, and a
-#: seed left in there would be one more file to bounce a running service for.
+#: files its own requires — the stamp covers the machine's *directory*, and an
+#: initial-state file left in there would be one more file to bounce a running
+#: service for.
 INITIAL_STATE = 'initial-state'
 
 #: Those same names as the glob patterns a machine's own file is refused by.
@@ -239,7 +240,7 @@ MARKER_SUFFIX = marker_path('')
 
 #: Where the tree being rolled *out of* waits while the swap happens. A swap
 #: needs a third name, and this one exists only between two renames.
-REJECTED_SUFFIX = '.kluster-rejected'
+REJECTED_SUFFIX = f'.{conventions.CLUSTER_NAME}-rejected'
 
 
 def machine_path(machine: str) -> str:
@@ -268,12 +269,12 @@ def stamp_path(machine: str) -> str:
 
 
 def initial_state_path(machine: str, into: str) -> str:
-    """Where a file the machine is seeded with is delivered, named for where it lands.
+    """Where one of the machine's initial-state files is delivered, named for where it lands.
 
     `into` is the path inside the machine's state directory, and it is also the
     path inside `initial-state/`: the converger copies the one tree onto the
-    other, so the declaration decides where a seed ends up and no mapping
-    travels beside the file to be disagreed with.
+    other, so the declaration decides where an initial-state file ends up and
+    no mapping travels beside the file to be disagreed with.
     """
     return f'{machine_path(machine)}/{INITIAL_STATE}/{into}'
 
@@ -515,7 +516,7 @@ def machines_script() -> str:
     It takes no machines, and the file it renders names none: what exists is
     the set of directories under the custom root that hold a settings file, and
     every per-machine fact the script needs — what the content stamp covers,
-    what a machine that has never run is seeded with — is a shape of that
+    the initial state a machine that has never run is given — is a shape of that
     machine's own directory. A rendered list would be the same statement the
     `Container` declarations already make, delivered as a separate file that
     lands before or after the files it describes, and a device that held the

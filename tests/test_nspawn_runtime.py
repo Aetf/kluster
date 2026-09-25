@@ -497,7 +497,7 @@ def declare(
     settings: str | None = 'machine\n',
     tree: bool = True,
     files: dict[str, str] | None = None,
-    seeds: dict[str, str] | None = None,
+    initial_state: dict[str, str] | None = None,
 ) -> Path:
     """Put a machine on the device, the way a push leaves one.
 
@@ -515,10 +515,10 @@ def declare(
         _ = (directory / f'{nspawn.ROOTFS}{nspawn.MARKER_SUFFIX}').write_text('sha256:one\n', encoding='utf-8')
     for name, content in (files or {}).items():
         _ = (directory / name).write_text(content, encoding='utf-8')
-    for name, content in (seeds or {}).items():
-        seed = directory / nspawn.INITIAL_STATE / name
-        seed.parent.mkdir(parents=True, exist_ok=True)
-        _ = seed.write_text(content, encoding='utf-8')
+    for name, content in (initial_state or {}).items():
+        initial = directory / nspawn.INITIAL_STATE / name
+        initial.parent.mkdir(parents=True, exist_ok=True)
+        _ = initial.write_text(content, encoding='utf-8')
     return directory
 
 
@@ -851,11 +851,11 @@ def test_a_healthy_device_gives_the_boot_log_nothing_to_read(device: _Device) ->
     """Nobody watches this box, so what it prints is what a later reader has.
 
     Every part of a machine's directory that is not a file — the tree, the
-    trees a push parks beside it, the state, the seeds — is walked past rather
-    than read, so a converged device is silent and anything on that stream is a
-    device that needs somebody.
+    trees a push parks beside it, the state, the initial state — is walked past
+    rather than read, so a converged device is silent and anything on that
+    stream is a device that needs somebody.
     """
-    _ = declare(device, 'alice', files={'Caddyfile': 'one\n'}, seeds={'AdGuardHome.yaml': 'listen\n'})
+    _ = declare(device, 'alice', files={'Caddyfile': 'one\n'}, initial_state={'AdGuardHome.yaml': 'listen\n'})
     (device.machines / 'alice' / f'{nspawn.ROOTFS}{SUPERSEDED_SUFFIX}').mkdir()
 
     status, _ = converge(device)
@@ -910,14 +910,14 @@ def test_a_stamp_ignores_a_write_a_push_has_in_flight_or_abandoned(device: _Devi
 
 
 def test_a_machine_that_has_never_run_is_given_what_its_initial_state_holds(device: _Device) -> None:
-    """The seed lands where the declaration put it, and nothing carries a mapping.
+    """The initial state lands where the declaration put it, and nothing carries a mapping.
 
     What the converger copies is the shape of the machine's initial-state
     directory onto its state directory, so a nested path is delivered as one —
     and the state directory exists either way, because it is a bind source and
     nspawn refuses to start a machine whose bind source is missing.
     """
-    directory = declare(device, 'alice', seeds={'AdGuardHome.yaml': 'listen\n', 'nested/other.yaml': 'deep\n'})
+    directory = declare(device, 'alice', initial_state={'AdGuardHome.yaml': 'listen\n', 'nested/other.yaml': 'deep\n'})
     _ = declare(device, 'bob')
 
     status, _ = converge(device)
@@ -925,19 +925,22 @@ def test_a_machine_that_has_never_run_is_given_what_its_initial_state_holds(devi
     assert status == 0
     assert (directory / nspawn.STATE / 'AdGuardHome.yaml').read_text(encoding='utf-8') == 'listen\n'
     assert (directory / nspawn.STATE / 'nested' / 'other.yaml').read_text(encoding='utf-8') == 'deep\n'
-    assert (device.machines / 'bob' / nspawn.STATE).is_dir(), 'a machine with no seed still gets the bind source'
+    assert (device.machines / 'bob' / nspawn.STATE).is_dir(), (
+        'a machine with no initial state still gets the bind source'
+    )
 
 
-def test_a_machine_that_has_run_keeps_its_own_state_and_is_not_bounced_for_the_seed(device: _Device) -> None:
+def test_a_machine_that_has_run_keeps_its_own_state_and_is_not_bounced_for_its_initial_state(device: _Device) -> None:
     """The software behind it rewrites those files the moment it accepts a change.
 
     Emptiness of the state directory is the test rather than the absence of a
     file: a resolver that took a rewrite through its API owns the file it
-    rewrote. And the seed is out of the content stamp by where it sits, so
-    re-declaring one — a listen address that moved, a template that changed —
-    is not a reason to restart an instance that has already made it its own.
+    rewrote. And the initial state is out of the content stamp by where it
+    sits, so re-declaring it — a listen address that moved, a template that
+    changed — is not a reason to restart an instance that has already made it
+    its own.
     """
-    directory = declare(device, 'alice', seeds={'AdGuardHome.yaml': 'listen\n'})
+    directory = declare(device, 'alice', initial_state={'AdGuardHome.yaml': 'listen\n'})
     _ = converge(device)
     _ = (directory / nspawn.STATE / 'AdGuardHome.yaml').write_text('rewritten by the instance\n', encoding='utf-8')
 

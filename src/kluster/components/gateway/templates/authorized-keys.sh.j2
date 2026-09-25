@@ -6,9 +6,11 @@
 # key file, so a key declared during a push is usable when that push returns.
 #
 # Append-only and idempotent: a key already in the file stays where it is, and
-# keys added by hand on the box are never removed. The file is off /data and a
-# firmware update takes it away; the sources below survive, which is what makes
-# this recoverable with nothing else present.
+# keys added by hand on the box are never removed. The file is off /data.
+# The firmware updates observed so far have carried /root across, so a boot
+# after one finds every declared key already present; a major-version jump or
+# a factory reset can take the file away, and the sources below are on /data,
+# which is what makes it recoverable with nothing else present.
 set -eu
 
 keydir={{ key_dir }}

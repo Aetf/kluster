@@ -388,8 +388,8 @@ on the UDM.
     device's `40-machines.sh` copies that directory onto the state
     directory the instance reads only while the state directory is
     empty — before the first start, or after a wipe, and at no other
-    time (physical/gateway.md §1.1). What keeps the seed apart from the
-    live file is where it sits, not a second name.
+    time (physical/gateway.md §1.1). What keeps the initial state apart
+    from the live file is where it sits, not a second name.
 -   **An initial state, because the file is the instance's own.**
     AdGuard Home keeps its whole configuration in one YAML file that a
     running instance rewrites whenever it accepts a change through its

@@ -31,22 +31,22 @@ the controller that is not declared here is drift.
     initiate toward home services — the home-automation API on the IoT VLAN
     among them — and that direction is where the recorded dependencies run.
 4.  **The internal zone into the cluster one, minus the IoT VLAN.** The
-    trusted home VLANs keep reaching the nodes directly, because that is the
-    reachability they had before the nodes moved off the untagged LAN. The
-    IoT VLAN does not: the one recorded IoT-originated dependency is a
-    television reaching the media VIP, which is in the pool and not on the
-    node subnet, so a drop ahead of that allow takes the node ports — apid,
-    kubelet, BGP — away from the LAN's least-trusted population without
-    severing anything known. It is the same shape as rule 1 one zone over:
-    the zone stays open, the untrusted subpopulation is carved out.
+    trusted home VLANs reach the nodes directly — debugging straight at a
+    node, a ping, a host path that hairpins. The IoT VLAN does not: the one
+    recorded IoT-originated dependency is a television reaching the media VIP,
+    which is in the pool and not on the node subnet, so a drop ahead of that
+    allow takes the node ports — apid, kubelet, BGP — away from the LAN's
+    least-trusted population without severing anything known. It is the same
+    shape as rule 1 one zone over: the zone stays open, the untrusted
+    subpopulation is carved out.
 5.  **The inbound IPv6 pinhole** for the bulk-transfer application's peer
-    port, to the worker VM's global address — now landing in the cluster zone
-    rather than the internal one, because that is where the worker moved. The
-    one rule of the census that is conditional: the address is a SLAAC address
-    the worker forms from what the VLAN declared here advertises, so it does
-    not exist until the worker has booted on that VLAN. With no address to
-    name, the rule is not declared and v6 is outbound-only — the same degraded
-    stage a stale rule leaves behind, and an accepted one.
+    port, to the worker VM's global address, in the cluster zone because the
+    worker sits on the cluster VLAN. The one rule of the census that is
+    conditional: the address is a SLAAC address the worker forms from what the
+    VLAN declared here advertises, so it does not exist until the worker has
+    booted on that VLAN. With no address to name, the rule is not declared and
+    v6 is outbound-only — the same degraded stage a stale rule leaves behind,
+    and an accepted one.
 6.  **The IPv4 peer-port forward** — the only port forward on the device.
     Nothing else is published inbound: cluster and node management arrive
     over the cloud load balancer, home-side management over ZeroTier.
@@ -137,8 +137,9 @@ class SiteFirewall(Component):
 
     The pinhole for the worker's global IPv6 address is the one conditional
     policy: it names an address nothing here declares, so it exists only while
-    `worker_gua` does. Every other policy is unconditional, and the whole set
-    is the run of `unifi.FirewallPolicy` declarations below.
+    `worker_gua` does. Every other policy is unconditional. Each policy is a
+    `unifi.FirewallZonePolicy` below, and each zone pair's policies are
+    followed by the one `unifi.FirewallZonePolicyOrder` that ranks them.
 
     Every policy carries the cluster's name in the name the controller shows,
     because the audience for that string is a person looking at the console
@@ -410,10 +411,10 @@ class SiteFirewall(Component):
             opts=child,
         )
 
-        # Everything else on the internal side keeps the reachability it had
-        # while the nodes shared the untagged LAN: the operator's own machines
-        # debugging a node directly, a ping, a host path that hairpins. What
-        # the move changes is that the openness is now declared.
+        # Everything else on the internal side reaches the nodes directly —
+        # the operator's own machines debugging a node, a ping, a host path
+        # that hairpins — and that openness is a declared policy like every
+        # other.
         self.internal_cluster = unifi.FirewallZonePolicy(
             f'{name}-internal-cluster',
             name=f'{conventions.CLUSTER_NAME} internal to cluster nodes',
@@ -445,7 +446,7 @@ class SiteFirewall(Component):
         )
 
         # The pinhole, into the cluster zone: the worker is the destination
-        # and the worker is no longer on the internal side. A literal address
+        # and the cluster VLAN is where it sits. A literal address
         # rather than anything prefix-relative — the zone-policy API matches
         # literal addresses only, and the site's delegated prefix rotates, so
         # this rule is re-declared when it does. A stale rule degrades to

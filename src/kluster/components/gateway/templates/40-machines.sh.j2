@@ -67,8 +67,8 @@ declared() {
 #   - everything that is not a regular file: the tree itself, the trees a push
 #     and a rollback park beside it, the writable state, and the initial state.
 #     That last one is deliberate rather than incidental -- a machine that has
-#     run once owns its state, and a change to what it was seeded with is never
-#     a reason to bounce it.
+#     run once owns its state, and a change to the initial state it was given
+#     is never a reason to bounce it.
 #
 # Every read this script makes goes through this one function, the two files
 # named outright and the stamp itself as much as the ones a glob finds. The
@@ -95,8 +95,8 @@ stamped_content() {
 
 # Place a machine's initial state into a state directory that has never held
 # any. What lands where is the shape of {{ initial_state }}/ itself, so a
-# machine is seeded with whatever the declaration put in there and this script
-# holds no mapping that could disagree with it. The directory is also what
+# machine is given whatever the declaration put in there and this script holds
+# no mapping that could disagree with it. The directory is also what
 # keeps an initial state out of the stamped set above and out of reach of the
 # names the machine mounts.
 #
@@ -104,12 +104,12 @@ stamped_content() {
 # file: a machine that has run once owns everything in there, including the
 # file it rewrote when it accepted a change through its own API.
 install_initial_state() {
-    seed=$MACHINES/$1/{{ initial_state }}
+    initial=$MACHINES/$1/{{ initial_state }}
     target=$MACHINES/$1/{{ state }}
-    [ -d "$seed" ] || return 0
+    [ -d "$initial" ] || return 0
     [ -z "$(ls -A "$target" 2>/dev/null)" ] || return 0
     echo "machines: initial state for $1"
-    cp -R "$seed/." "$target/"
+    cp -R "$initial/." "$target/"
 }
 
 mkdir -p "$LIVE"

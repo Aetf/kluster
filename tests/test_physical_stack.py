@@ -670,7 +670,7 @@ async def test_the_pinhole_admits_the_configured_address_once_it_is_known(setup:
 
     Step three of the bring-up ceremony is writing the key, so what follows it
     has to be the pinhole itself — the configured address, on the port the
-    census holds, into the zone the worker moved to. The port is not configured beside
+    census holds, into the zone the worker sits in. The port is not configured beside
     it: two firewall rules name it and they have to agree, so it sits with the
     public port census in `conventions` (rfc-002 §11).
     """
