@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import inspect
 import re
+from collections.abc import Iterable
+from dataclasses import replace
 from ipaddress import IPv4Address
 from typing import Any
 
@@ -126,21 +128,65 @@ def test_every_member_is_placed_inside_the_overlays_own_subnet() -> None:
         assert entry.address in conventions.overlay.SUBNET, entry.name
 
 
-def test_the_gateway_entry_is_infrastructure_at_the_address_every_client_dials() -> None:
-    """Two things the gateway's entry must say on the day the ceremony adds it.
+def gateway_faults(roster: Iterable[conventions.overlay.RosterEntry]) -> set[str]:
+    """Which ways the gateway entries `roster` holds are wrong: `address`, `role`, or none.
 
+    Two things the gateway's entry must say on the day the ceremony adds it.
     The device's SSH, the controller's API and the next hop of every route to
     the home all derive from `conventions.overlay.UDM`, so an entry at any
-    other address would point all three somewhere the member is not. And the gateway is infrastructure: an
-    entry carrying the permissive default role would put the box every route
-    runs through on the same footing as a phone. The entry is absent until the
-    ceremony reads the minted node id and adds it (physical/gateway.md §2.5),
-    which is why both are stated as conditionals rather than as a lookup.
+    other address would point all three somewhere the member is not. And the
+    gateway is infrastructure: an entry carrying the permissive default role
+    would put the box every route runs through on the same footing as a phone.
+    Empty for a roster with no gateway entry.
     """
-    gateway_entries = [entry for entry in conventions.overlay.ROSTER if entry.name == conventions.overlay.MEMBER_UDM]
+    faults: set[str] = set()
+    for entry in roster:
+        if entry.name != conventions.overlay.MEMBER_UDM:
+            continue
+        if entry.address != conventions.overlay.UDM:
+            faults.add('address')
+        if entry.role != conventions.overlay.Role.INFRA:
+            faults.add('role')
+    return faults
 
-    assert all(entry.address == conventions.overlay.UDM for entry in gateway_entries)
-    assert all(entry.role == conventions.overlay.Role.INFRA for entry in gateway_entries)
+
+def test_the_gateway_entry_is_infrastructure_at_the_address_every_client_dials() -> None:
+    """`gateway_faults` over the roster as it stands.
+
+    The entry is absent until the ceremony reads the minted node id and adds
+    it (physical/gateway.md §2.5), so on a roster without it this holds
+    trivially; the case below is what shows the check refuses a bad entry.
+    """
+    assert gateway_faults(conventions.overlay.ROSTER) == set()
+
+
+def test_the_gateway_check_refuses_an_entry_at_another_address_or_in_another_role() -> None:
+    """The check applied to constructed rosters holding a gateway entry, good or bad.
+
+    Each bad entry is wrong in one way only and is reported for that way, and
+    the good one is reported for nothing, so a check that refused every entry
+    fails here as surely as one that refused none. Every roster also holds a
+    member that is not the gateway and would fail both checks if it were, so
+    a check that forgot which entry it is about fails too.
+    """
+    laptop = conventions.overlay.EnrolledMember(
+        name='a-laptop',
+        node_id='abcdef0123',
+        address=conventions.overlay.UDM + 2,
+        role=conventions.overlay.Role.PERSONAL,
+    )
+    good = conventions.overlay.EnrolledMember(
+        name=conventions.overlay.MEMBER_UDM,
+        node_id='0123456789',
+        address=conventions.overlay.UDM,
+        role=conventions.overlay.Role.INFRA,
+    )
+    elsewhere = replace(good, address=conventions.overlay.UDM + 1)
+    permissive = replace(good, role=conventions.overlay.Role.PERSONAL)
+
+    assert gateway_faults([laptop, good]) == set()
+    assert gateway_faults([laptop, elsewhere]) == {'address'}
+    assert gateway_faults([laptop, permissive]) == {'role'}
 
 
 def test_the_two_continuous_integration_identities_are_generated_and_confined() -> None:

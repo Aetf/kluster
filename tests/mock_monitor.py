@@ -11,6 +11,8 @@ mocks was re-growing:
     than only that it made something;
 -   `run_with`, which points the runtime at a monitor and primes the one thing
     a bridged provider needs before it may register anything;
+-   `run_under_backstop`, which is `run_with` for a run that also refuses an
+    unparented resource the way a real run does;
 -   `declaring`, which waits until the monitor has actually seen the
     declaration -- without it every assertion about the monitor passes
     vacuously;
@@ -44,6 +46,9 @@ import pulumi.runtime.mocks
 import pulumi.runtime.settings
 from pulumi.runtime.proto import resource_pb2
 from pulumi.runtime.stack import wait_for_rpcs
+
+from putils import component as putils_component
+from putils import install_parent_backstop
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Mapping
@@ -482,6 +487,30 @@ async def run_with[MonitorT: pulumi.runtime.Mocks](
     # are closed.
     pulumi.runtime.settings._get_rpc_manager().clear()  # pyright: ignore[reportPrivateUsage]
     _ = await pulumi.runtime.settings.monitor_supports_feature('parameterization')
+    return monitor
+
+
+async def run_under_backstop[MonitorT: pulumi.runtime.Mocks](
+    monitor: MonitorT, *, stack: str, project: str = 'kluster'
+) -> MonitorT:
+    """`run_with`, with the parent backstop on the run's root stack resource.
+
+    Installed before anything is declared, as `kluster.main` installs it on a
+    real run, so a resource a component declares without a parent is refused
+    here rather than first in `pulumi preview` (framework/pulumi.md §1.3).
+
+    The under-construction scope is emptied first, and that is not optional. A
+    component whose ``__init__`` raises never reaches `register_outputs`, so it
+    stays open, and several suites assert that a component refuses a bad
+    argument. That ends a program -- which is the documented behavior -- but
+    not a test process, so a component another suite left open would enclose
+    every top-level resource of this run and have it refused. The isolation is
+    the test process's to arrange, and it is the only thing here that reaches
+    for a module-private name.
+    """
+    putils_component._under_construction.set(())  # pyright: ignore[reportPrivateUsage]
+    _ = await run_with(monitor, stack=stack, project=project)
+    install_parent_backstop()
     return monitor
 
 
