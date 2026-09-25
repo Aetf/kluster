@@ -163,7 +163,7 @@ class Credential:
     """
 
     root: Root
-    values: dict[str, str] = dataclasses.field(repr=False)
+    values: dict[str, str] = dataclasses.field(repr=False, compare=False)
 
     def __getitem__(self, name: str) -> str:
         value = self.values.get(name)

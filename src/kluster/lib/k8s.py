@@ -177,7 +177,7 @@ class SecretTemplate:
     its types prints.
     """
 
-    data: Mapping[str, pulumi.Input[str]] | None = field(default=None, repr=False)
+    data: Mapping[str, pulumi.Input[str]] | None = field(default=None, repr=False, compare=False)
     type: str | None = None
     immutable: bool | None = None
     labels: Mapping[str, str] | None = None

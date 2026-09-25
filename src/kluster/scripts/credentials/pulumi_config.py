@@ -145,14 +145,14 @@ class BackendEnvironment:
 
     #: The estate passphrase. Neither it nor the mapping below prints: both
     #: hold passphrases, and the URL is what a repr is read for.
-    passphrase: str | None = field(default=None, repr=False)
+    passphrase: str | None = field(default=None, repr=False, compare=False)
     url: str | None = None
     #: Stacks whose config is encrypted under a passphrase of their own, by
     #: stack name. A stack absent from here takes the estate's. A mapping and
     #: not a second field, so adding another such stack is a row rather than a
     #: branch — and so `apart` is the whole answer to "which stacks are not on
     #: the estate passphrase", which a test can read.
-    apart: Mapping[str, str] = field(default_factory=dict[str, str], repr=False)
+    apart: Mapping[str, str] = field(default_factory=dict[str, str], repr=False, compare=False)
 
     def variables(self, stack: str) -> dict[str, str]:
         passphrase = self.apart.get(stack)

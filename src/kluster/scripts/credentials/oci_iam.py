@@ -301,7 +301,7 @@ class KeyPair:
     The same asymmetry decides what prints: the public half, and not the other.
     """
 
-    private_pem: str = field(repr=False)
+    private_pem: str = field(repr=False, compare=False)
     public_pem: str
 
 
@@ -1197,7 +1197,7 @@ class SeedRow:
 
     tenancy: str
     user: str
-    private_key: str = field(repr=False)
+    private_key: str = field(repr=False, compare=False)
 
 
 def load_seed(store: KdbxStore, entry: str) -> SeedRow:
@@ -1478,7 +1478,7 @@ class ApiKey:
     #: The PEM, which exists here and in the slot this is delivered to, and
     #: nowhere else -- never in the kit (§1 rule 2). Not in the repr either,
     #: which is the same rule applied to a transcript.
-    private_key: str = field(repr=False)
+    private_key: str = field(repr=False, compare=False)
 
     @property
     def region(self) -> str:

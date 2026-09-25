@@ -6,13 +6,35 @@ then renders, away from putting a live credential into a transcript that
 outlives the run — and a transcript is exactly where a credential cannot be
 retired from, because nobody knows it is there.
 
-The protection is `field(repr=False)`, which is an annotation and therefore
-forgettable. This is the census that makes forgetting it fail: it pins, for
-every record in the modules below, which of its fields carry secrets and which
-do not, and then holds both halves against the classes themselves. A field
-added to any of them fails here until its author has said which half it is in —
-which is the point, because the failure mode being guarded is a field added
-later to a class that was safe when it was written.
+The protection is two annotations on every secret field, and neither covers
+for the other. `field(repr=False)` keeps the value out of the repr, which is
+what a log line's `%r` prints and what a failed assertion's first line prints
+for each side. That is all it does: it keeps the value out of a log line, not
+out of an assertion diff. Pytest explains a failed `==` between two dataclasses
+of one type by drilling into every field that takes part in the comparison —
+`compare=True`, the default — whatever its repr, and prints each one that
+differs as `field: <left> != <right>`. `field(compare=False)` is what keeps a
+secret out of that half.
+
+Both are annotations and therefore forgettable. This is the census that makes
+forgetting either fail: it pins, for every record in the modules below, which
+of its fields carry secrets and which do not, and then holds both halves
+against the classes themselves. A field added to any of them fails here until
+its author has said which half it is in — which is the point, because the
+failure mode being guarded is a field added later to a class that was safe
+when it was written.
+
+**Out of comparison means that two records differing only in a secret are
+equal and hash alike**: a set or a mapping keyed by them keeps one of two
+credentials, and a record whose only unhashable field is a secret mapping
+hashes instead of refusing. So none of them is compared by value, kept in a
+set, used as a mapping key or cached over, and no record is named as an
+exception: every secret field is held to both annotations. A test that
+compares two of them compares their public fields, and a test that has to know
+which secret a record carries reads the field itself, as the SSH provider's
+tests read the key a session opened with. A record declared with `eq=False` —
+`pki.Authority` — is held to the rule all the same: pytest drills into a
+dataclass whose `__eq__` is `object`'s exactly as into a generated one.
 
 **A record is a dataclass, a `NamedTuple` or a `TypedDict`**, which is the set
 of constructs that print their contents: everything else inherits `object`'s
@@ -38,9 +60,10 @@ other. `container` and `k8s` are here for that class of field: a mounted
 file's contents, an initial state's contents, the ACME token, and a produced
 Secret's own data.
 
-**A field that holds a record is classified by what that record prints**, not
-by what it holds: `slots.Context` carries the forge's admin token through a
-`Forge` whose own repr hides it, and the last test here pins that mechanism.
+**A field that holds a record is classified by what that record prints**, in
+its repr and in pytest's explanation of a comparison, not by what it holds:
+`slots.Context` carries the forge's admin token through a `Forge` that hides
+it in both, and the last two tests here pin that mechanism.
 The one exception is a field already out of the repr for another reason —
 `Context`'s two caches — which the census records as secret, since every
 hidden field has to be one it can name.
@@ -191,8 +214,8 @@ CENSUS: dict[type, Census] = {
     pulumi_config.BackendEnvironment: Census('passphrase url apart', secret='passphrase apart'),
     pulumi_config.Stack: Census('name directory environment run'),
     # The two caches hold an opened escrow and the backend environment, each a
-    # record with a secret of its own, and are out of the repr for that
-    # reason as well as for being caches.
+    # record with a secret of its own, and are out of the repr and out of
+    # comparison for that reason as well as for being caches.
     slots.Context: Census(
         'forge open_vault open_environment project runner ask _vault _environment',
         secret='_vault _environment',
@@ -316,21 +339,45 @@ def _hidden(cls: type) -> set[str]:
     return {spec.name for spec in dataclasses.fields(cls) if not spec.repr}  # pyright: ignore[reportArgumentType]
 
 
-def _filled(cls: type, entry: Census) -> object:
+def _uncompared(cls: type) -> set[str]:
+    """The fields a dataclass leaves out of its equality, and so out of pytest's diff of two of it."""
+    return {spec.name for spec in dataclasses.fields(cls) if not spec.compare}  # pyright: ignore[reportArgumentType]
+
+
+def _filled(cls: type, entry: Census, side: str = '') -> object:
     """One instance of `cls` with a marker in every field, built past its constructor.
 
-    Assigned rather than constructed because what is under test is the repr,
-    which reads attributes and nothing else: a constructor would demand
-    certificates, sessions and OCIDs of the right shape from every record in
-    the census, and none of that would make the assertion stronger.
+    Assigned rather than constructed because what is under test is the repr
+    and pytest's explanation of a comparison, which read attributes and
+    nothing else: a constructor would demand certificates, sessions and OCIDs
+    of the right shape from every record in the census, and none of that would
+    make the assertion stronger.
+
+    `side` is appended to every marker, so that two instances built with two
+    sides differ in every field and a comparison of them has something to
+    report in each.
     """
     # `cast` because `object.__new__` is typed against `type[Self]`, and the
     # census holds plain `type`: what comes back is an instance either way.
     instance = cast('object', object.__new__(cls))
     for field_name in entry.names:
         marker = SECRET if field_name in entry.secrets else PUBLIC
-        object.__setattr__(instance, field_name, marker)
+        object.__setattr__(instance, field_name, marker + side)
     return instance
+
+
+def _explained(config: pytest.Config, left: object, right: object) -> str:
+    """What pytest reports for a failed `left == right`, whole.
+
+    The hook a rewritten `assert` calls to explain a failed comparison, called
+    directly. Directly rather than through a failing `assert`, because the
+    rewriting truncates the explanation at default verbosity outside CI: a
+    secret printed below the cut would then pass here and print on CI.
+    """
+    answers = cast(
+        'list[list[str]]', config.hook.pytest_assertrepr_compare(config=config, op='==', left=left, right=right)
+    )
+    return '\n'.join(line for answer in answers for line in answer)
 
 
 @pytest.mark.parametrize('module', MODULES, ids=[module.__name__.rsplit('.', 1)[1] for module in MODULES])
@@ -357,6 +404,21 @@ def test_the_census_names_exactly_the_fields_the_record_has(name: str, cls: type
 def test_every_secret_field_is_declared_out_of_the_repr(name: str, cls: type, entry: Census) -> None:
     """`field(repr=False)`, held against the census rather than against a reading of the file."""
     assert _hidden(cls) == set(entry.secrets), name
+
+
+@RECORDS
+def test_every_secret_field_is_declared_out_of_comparison(name: str, cls: type, entry: Census) -> None:
+    """`field(compare=False)`, for the half of a failed assertion the repr does not reach.
+
+    A subset rather than an equality, unlike the repr: a public field left out
+    of comparison discloses nothing, so the census has no reason to name it.
+    """
+    if _kind(cls) != 'dataclass':
+        # The test below forbids the secret outright.
+        return
+    compared = sorted(set(entry.secrets) - _uncompared(cls))
+
+    assert not compared, f'{name} compares secret fields, which a failed assertion prints: {", ".join(compared)}'
 
 
 @RECORDS
@@ -399,14 +461,32 @@ def test_a_filled_record_prints_none_of_its_secrets(name: str, cls: type, entry:
         )
 
 
-def test_a_record_that_carries_another_prints_no_secret_of_the_inner_one() -> None:
-    """Nesting is covered by the inner record's own repr, and that is the whole mechanism.
+@RECORDS
+def test_a_failed_comparison_of_two_filled_records_prints_none_of_their_secrets(
+    pytestconfig: pytest.Config, name: str, cls: type, entry: Census
+) -> None:
+    """The property itself, measured on pytest's explanation rather than inferred from an annotation."""
+    if _kind(cls) != 'dataclass':
+        return
+    explained = _explained(pytestconfig, _filled(cls, entry, '-left'), _filled(cls, entry, '-right'))
+
+    assert SECRET not in explained, f'{name} prints a secret in a failed comparison:\n{explained}'
+    if set(entry.names) - set(entry.secrets) - _uncompared(cls):
+        assert f'{PUBLIC}-left' in explained, (
+            f'{name} explains no differing field at all, so the assertion above is vacuous:\n{explained}'
+        )
+
+
+def test_a_record_that_carries_another_prints_no_secret_of_the_inner_one(pytestconfig: pytest.Config) -> None:
+    """Nesting is covered by the inner record's own repr and comparison, and that is the whole mechanism.
 
     `MintedKey` and `_SeedSession` are pairs whose halves are the credentials:
     neither hides a field of its own, and neither needs to, because the repr it
-    builds is made of the reprs beneath it. Worth pinning because the
-    alternative design — hiding the *containing* field — would look equally
-    correct and would hide the identifiers a refusal is read by.
+    builds is made of the reprs beneath it, and pytest explains a differing
+    inner record by drilling into that record's own compared fields. Worth
+    pinning because the alternative design — hiding the *containing* field —
+    would look equally correct and would hide the identifiers a refusal is read
+    by.
     """
     minted = b2.MintedKey(
         session=b2.Session(account_id='account', api_url='https://api.example', token=SECRET),
@@ -421,6 +501,15 @@ def test_a_record_that_carries_another_prints_no_secret_of_the_inner_one() -> No
     assert 'key-id' in repr(minted), 'the id still prints: it is what a console listing is matched against'
     assert SECRET not in repr(seeded)
     assert 'ocid1.user.oc1..seed' in repr(seeded), 'the OCIDs still print: they say which kit is open'
+
+    rotated = b2.MintedKey(
+        session=b2.Session(account_id='account', api_url='https://api.example', token=f'{SECRET}-rotated'),
+        app_key=b2.AppKey(key_id='rotated-key-id', key=f'{SECRET}-rotated'),
+    )
+    explained = _explained(pytestconfig, minted, rotated)
+
+    assert SECRET not in explained, explained
+    assert 'rotated-key-id' in explained, 'the explanation reached the inner record, where the key is'
 
 
 def test_a_context_prints_neither_the_token_nor_the_passphrase_it_reaches() -> None:

@@ -59,12 +59,13 @@ class AgeError(RuntimeError):
 class Identity:
     """One age key pair. The secret is uppercase, as age writes it.
 
-    The secret half is kept out of the repr: an `age` identity opens every
-    ciphertext in the escrow, and one `%r` in a log line or one pytest
-    assertion comparing two of these would put it in a transcript.
+    The secret half is kept out of the repr and out of comparison: an `age`
+    identity opens every ciphertext in the escrow, and one `%r` in a log line
+    or one failed pytest assertion comparing two of these would put it in a
+    transcript.
     """
 
-    secret: str = field(repr=False)
+    secret: str = field(repr=False, compare=False)
     public: str
 
 

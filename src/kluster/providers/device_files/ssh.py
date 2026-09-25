@@ -249,7 +249,7 @@ class Device:
 
     host: str
     username: str
-    private_key: str = field(repr=False)
+    private_key: str = field(repr=False, compare=False)
     host_key: str
     port: int = 22
 

@@ -181,7 +181,7 @@ class Forge:
     from a transcript.
     """
 
-    token: str = field(repr=False)
+    token: str = field(repr=False, compare=False)
     run: Runner = run_gh
 
     def listing(self, slot: Slot) -> dict[str, str]:
