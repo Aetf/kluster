@@ -200,6 +200,43 @@ async def test_two_components_of_one_type_cannot_hold_one_child_name_between_the
     assert f'{COMPONENT}${INNER}::held' in message
 
 
+#: A second component type, so that one child type under one name can sit below
+#: two parents and still be two identities.
+OTHER_COMPONENT = 'test:index:OtherHolder'
+
+
+class NamedChild(pulumi.ComponentResource):
+    """A component of a type the caller picks, holding one child under a name the caller picks."""
+
+    def __init__(self, typ: str, name: str, child: str) -> None:
+        super().__init__(typ, name, None, None)
+        self.held = pulumi.CustomResource(INNER, child, {'holder': name}, pulumi.ResourceOptions(parent=self))
+        self.register_outputs({})
+
+
+@pytest.mark.asyncio
+async def test_a_name_two_declarations_of_one_type_answer_to_is_refused_by_every_by_name_reader() -> None:
+    """The ambiguity a URN permits and a name cannot express, refused rather than resolved.
+
+    The child sits below two parents of different types, so the engine sees two
+    identities and the run registers cleanly. Keyed by name, the two collapse
+    into one entry: `names` would count one resource and `by_name` would show
+    whichever registered last. `of_type`, which keeps them apart, is the reader
+    the refusal sends a case to, and it is held here to the two declarations the
+    refusal is about.
+    """
+    monitor = await run_with(Recorder(), stack='one-each', project='mock-monitor')
+    async with declaring():
+        _ = NamedChild(COMPONENT, 'first', 'twice')
+        _ = NamedChild(OTHER_COMPONENT, 'second', 'twice')
+
+    assert sorted(it.inputs['holder'] for it in monitor.of_type(INNER)) == ['first', 'second']
+    for reader in (monitor.names, monitor.by_name):
+        with pytest.raises(AssertionError) as refusal:
+            _ = reader(INNER)
+        assert f"{INNER} was declared more than once under ['twice']" in str(refusal.value), reader.__name__
+
+
 #: Two resource types whose one input is the place each occupies, and one that
 #: is not read: a third type at the same value is not a claim on a place.
 PLACED = 'test:index:Placed'

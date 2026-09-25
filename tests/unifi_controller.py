@@ -6,10 +6,10 @@ answer is an invention: every zone exists, is empty, and has the id `zone_id`
 spells for it. A suite asserting which zone a rule names compares against
 `zone_id` rather than against a spelling of its own.
 
-The suites that declare the firewall and nothing else of the program share this
-module rather than each carrying a copy, because a copy is a second place to
-change when the lookup does, and the copy nobody updates answers a question the
-program no longer asks.
+Every suite whose run reaches the firewall shares this module rather than
+carrying a copy -- its own suites and the whole physical program's -- because a
+copy is a second place to change when the lookup does, and the copy nobody
+updates answers a question the program no longer asks.
 """
 
 from __future__ import annotations

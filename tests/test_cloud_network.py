@@ -87,9 +87,13 @@ async def test_object_storage_is_routed_at_the_service_gateway(network: CloudNet
     way; the difference is whether it is metered egress.
     """
     rules = await network.route_table.route_rules.future()
+    service_gateway = await network.service_gateway.id.future()
+    internet_gateway = await network.internet_gateway.id.future()
 
     assert rules is not None
-    by_destination = {rule.destination: rule.destination_type for rule in rules}
-    assert by_destination[OBJECT_STORAGE_CIDR] == 'SERVICE_CIDR_BLOCK'
-    assert by_destination['0.0.0.0/0'] == 'CIDR_BLOCK'
-    assert by_destination['::/0'] == 'CIDR_BLOCK'
+    # The two gateways are two resources, or "which one" is no question at all.
+    assert service_gateway != internet_gateway
+    by_destination = {rule.destination: (rule.destination_type, rule.network_entity_id) for rule in rules}
+    assert by_destination[OBJECT_STORAGE_CIDR] == ('SERVICE_CIDR_BLOCK', service_gateway)
+    assert by_destination['0.0.0.0/0'] == ('CIDR_BLOCK', internet_gateway)
+    assert by_destination['::/0'] == ('CIDR_BLOCK', internet_gateway)

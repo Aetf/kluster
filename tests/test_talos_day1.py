@@ -122,6 +122,17 @@ async def urns_of(output: pulumi.Output[Any]) -> set[str]:
     return {await resource.urn.future() or '' for resource in await output.resources()}
 
 
+async def ordered_behind(monitor: Recorder, output: pulumi.Output[Any]) -> set[str]:
+    """Every resource `output` waits on, directly or through the dependencies of one it waits on."""
+    behind: set[str] = set()
+    pending = await urns_of(output)
+    while pending:
+        urn = pending.pop()
+        behind.add(urn)
+        pending |= set(monitor.registrations[urn].dependencies) - behind
+    return behind
+
+
 @pytest.mark.asyncio
 async def test_every_node_gets_the_role_it_was_declared_with(fake: Talos) -> None:
     cluster = build_cluster()
@@ -270,6 +281,30 @@ async def test_the_kubeconfig_is_gated_on_the_health_check(fake: Talos) -> None:
     # that finished registering.
     assert await urns_of(day1.health) <= await urns_of(day1.kubeconfig)
     assert await day1.bootstrap.urn.future() in await urns_of(day1.kubeconfig)
+
+
+@pytest.mark.asyncio
+async def test_the_health_gate_waits_for_every_node_to_be_applied(fake: Talos) -> None:
+    """Not only the node that bootstraps: a check run while a node is still being applied reads a cluster that is not done.
+
+    The applies are node-serial, so the last one finishes long after the
+    bootstrap does. A gate ordered behind the bootstrap alone would release the
+    kubeconfig while the remaining nodes are still taking their configuration,
+    and the next stack would be sent at a cluster short of those members.
+
+    Read transitively, because what is required is the order and not which
+    edge carries it: the first node's apply is already behind the bootstrap.
+    """
+    day1 = build()
+    gate = await ordered_behind(fake, day1.health)
+    released = await ordered_behind(fake, day1.kubeconfig)
+
+    # Every node is applied, so the set of them is pinned before it is walked.
+    assert set(day1.applies) == set(ADDRESSES)
+    for node, applied in day1.applies.items():
+        urn = await applied.urn.future()
+        assert urn in gate, f'the health check does not wait for {node} to be applied'
+        assert urn in released, f'the kubeconfig is released before {node} is applied'
 
 
 @pytest.mark.asyncio

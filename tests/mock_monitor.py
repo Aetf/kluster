@@ -491,7 +491,7 @@ async def run_with[MonitorT: pulumi.runtime.Mocks](
 
 
 async def run_under_backstop[MonitorT: pulumi.runtime.Mocks](
-    monitor: MonitorT, *, stack: str, project: str = 'kluster'
+    monitor: MonitorT, *, stack: str, project: str = 'kluster', preview: bool = False
 ) -> MonitorT:
     """`run_with`, with the parent backstop on the run's root stack resource.
 
@@ -509,7 +509,7 @@ async def run_under_backstop[MonitorT: pulumi.runtime.Mocks](
     for a module-private name.
     """
     putils_component._under_construction.set(())  # pyright: ignore[reportPrivateUsage]
-    _ = await run_with(monitor, stack=stack, project=project)
+    _ = await run_with(monitor, stack=stack, project=project, preview=preview)
     install_parent_backstop()
     return monitor
 

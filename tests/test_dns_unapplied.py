@@ -7,13 +7,17 @@ to show the same records either way, or the two stacks could never be brought
 up in the order the migration prescribes. The ZeroTier host block is here for
 the opposite reason: it reaches across nothing at all, and this is where that
 is held.
+
+The run is a preview under the parent backstop `kluster.main` installs, so a
+resource a component leaves unparented fails it here as it would fail
+`pulumi preview`.
 """
 
 from typing import Any
 
 import pulumi
 import pytest_asyncio
-from mock_monitor import Recorder, declaring, run_with
+from mock_monitor import Recorder, declaring, run_under_backstop
 
 from kluster import conventions
 from kluster.components.dns.base import overlay_label
@@ -36,7 +40,7 @@ async def stack() -> EmptyPhysical:
     from kluster.stacks.dns import CLOUDFLARE_API_TOKEN
 
     pulumi.runtime.set_all_config({f'kluster:{CLOUDFLARE_API_TOKEN}': 'a-zones-token'})
-    monitor = await run_with(EmptyPhysical(), stack='dns', preview=True)
+    monitor = await run_under_backstop(EmptyPhysical(), stack='dns', preview=True)
     async with declaring():
         await dns.main()
     return monitor

@@ -9,7 +9,7 @@ platform's module, which is what builds the closure.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -29,7 +29,11 @@ class Delivery[T]:
     makes, because which credential may run it is the mint's knowledge.
     """
 
-    _credential: T
+    #: Out of the repr and out of comparison as well as private: a delivery
+    #: printed in a log line, or compared in a failed assertion -- which prints
+    #: the fields that took part in the comparison -- would otherwise print the
+    #: credential it carries.
+    _credential: T = field(repr=False, compare=False)
     _retire: Callable[[], None]
 
     @staticmethod

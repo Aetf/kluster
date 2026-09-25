@@ -12,6 +12,10 @@ The census these cases read (`conventions.forge`) is held still in
 rule -- the fixture below is `autouse`, so a check kept here would be
 unreachable at exactly the moment it is wanted, which is when this program
 fails to run.
+
+Every run here is under the parent backstop `kluster.main` installs before a
+real run declares anything, so a resource a component leaves unparented fails
+the run here rather than in `pulumi preview`.
 """
 
 import inspect
@@ -21,7 +25,7 @@ from typing import Any
 import pulumi
 import pytest
 import pytest_asyncio
-from mock_monitor import Recorder, declaring, run_with
+from mock_monitor import Recorder, declaring, run_under_backstop
 
 from kluster import conventions
 from kluster.scripts.credentials import devices
@@ -78,7 +82,7 @@ class Forge(Recorder):
 async def stack() -> AsyncGenerator[Forge]:
     """The whole program, declared once: every case below reads the same run."""
     pulumi.runtime.set_all_config({f'kluster:{program.ADMIN_TOKEN}': TOKEN})
-    monitor = await run_with(Forge(), stack='github')
+    monitor = await run_under_backstop(Forge(), stack='github')
     async with declaring():
         await program.main()
     yield monitor
@@ -159,6 +163,14 @@ def test_a_reviewer_stands_in_front_of_exactly_the_gated_environments(stack: For
         # Off for the same reason `enforce_admins` is on: a door with a key
         # under the mat is not a door.
         assert environments[name]['canAdminsBypass'] is False
+        # Off because the one reviewer is the operator who opened the change:
+        # with self-review refused, no gated deploy could ever be approved.
+        assert environments[name]['preventSelfReview'] is False
+    # Both settings only qualify a reviewer, so an ungated Environment is sent
+    # neither.
+    for name in set(environments) - gated:
+        assert 'preventSelfReview' not in environments[name], name
+        assert 'canAdminsBypass' not in environments[name], name
 
 
 def test_the_run_asks_the_account_nothing(stack: Forge) -> None:
@@ -188,10 +200,18 @@ def test_merges_are_rebases_only(stack: Forge) -> None:
 
 
 def test_destroying_the_stack_cannot_delete_the_repositories(stack: Forge) -> None:
+    """Twice over: the engine refuses to delete a protected resource, and the provider archives rather than deletes.
+
+    The protection is a resource option, so it is read off the registration
+    request and under the repository's own type -- the component holding it
+    carries the same name and no such option.
+    """
     repositories = stack.by_name(REPOSITORY)
 
     assert set(repositories) == {repository.name for repository in conventions.forge.REPOSITORIES}
     assert all(inputs['archiveOnDestroy'] is True for inputs in repositories.values())
+    for repository in conventions.forge.REPOSITORIES:
+        assert stack.options_of(repository.name, REPOSITORY).protect is True, repository.name
 
 
 def test_each_repository_is_declared_with_the_visibility_the_census_records(stack: Forge) -> None:
@@ -211,6 +231,9 @@ def test_secret_scanning_is_only_claimed_where_the_plan_offers_it(stack: Forge) 
         inputs = repositories[repository.name]
         if repository.plan_offers_public_features:
             assert inputs['securityAndAnalysis']['secretScanning'] == {'status': 'enabled'}
+            # And push protection with it: scanning alone reports a pushed
+            # secret after it is public, where push protection refuses the push.
+            assert inputs['securityAndAnalysis']['secretScanningPushProtection'] == {'status': 'enabled'}
         else:
             assert 'securityAndAnalysis' not in inputs
 
@@ -287,7 +310,7 @@ async def test_a_run_without_the_token_refuses_by_name_and_names_what_fills_it()
     # otherwise run every later case in the module against an empty config.
     try:
         pulumi.runtime.set_all_config({})
-        monitor = await run_with(Forge(), stack='github')
+        monitor = await run_under_backstop(Forge(), stack='github')
 
         with pytest.raises(ValueError, match=program.ADMIN_TOKEN) as refusal:
             await program.main()
@@ -435,7 +458,7 @@ async def test_required_checks_on_a_repository_the_plan_cannot_guard_are_refused
     looking guarded and not be, which is the same quiet failure the declared
     label exists to prevent.
     """
-    _ = await run_with(Forge(), stack='github')
+    _ = await run_under_backstop(Forge(), stack='github')
 
     with pytest.raises(ValueError, match='no branch protection'):
         _ = ManagedRepository(
