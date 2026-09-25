@@ -47,9 +47,18 @@ and the run is bounded twice against that, at two scales:
     about a minute on an idle many-core workstation and about two on a
     two-core runner, and it grows with every campaign.
 
-The outer number is carried wherever the gate's command is written out —
-AGENTS.md's gate line, the command above, README.md's, `checks.yml`'s
-`Tests` step — and the per-case number lives in `pyproject.toml` alone.
+The outer number is carried wherever the gate's command is written out,
+and the per-case number lives in `pyproject.toml` alone.
+`tests/test_gate_command.py` holds every launch of `pytest` it finds to one
+form, timed and through `mise`, and every launch of the whole suite to one
+number. What CI executes it finds by definition: every launch it knows
+the spelling of — `pytest` or `py.test` as a word or at the end of a path,
+or `-m pytest` — in any workflow or local action, today the `Tests` step
+of `checks.yml` and of `sdk-regenerate.yml`. The prose it reads is a
+named set of documents, each read whole — AGENTS.md, README.md and this
+one, the ones that write the command out. Any other document points at
+one of those rather than writing its own. A run aimed at part of the
+suite, such as a drill's (§5), is not the gate and carries its own number.
 
 ### 1.1 A test process holds no credentials in its environment
 
@@ -162,11 +171,16 @@ from kluster.components.cloud import CloudNetwork
 
 
 class Cloud(Recorder):
-    """The one answer this suite is about: the prefix the account assigns."""
+    """What the account decides: the prefix it assigns, and its service catalogue."""
 
     def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
         if args.typ == 'oci:Core/vcn:Vcn':
             return {'ipv6cidrBlocks': ['2001:db8::/56']}
+        return {}
+
+    def answer(self, args: pulumi.runtime.MockCallArgs) -> dict[str, Any]:
+        if args.token == 'oci:Core/getServices:getServices':
+            return {'services': [{'id': 'ocid1.service.test', 'name': 'OCI Object Storage', 'cidrBlock': 'oci-os'}]}
         return {}
 
 
@@ -498,7 +512,7 @@ absolute paths do it: the console script's shebang — the first line of
 `.venv/bin/pytest` is `#!` and the absolute path of that checkout's
 `.venv/bin/python` — and the `.pth` file the editable install of
 `kluster` leaves in `site-packages`, naming that checkout's `src`. `uv
-run pytest` execs the script, the script execs the other interpreter,
+run` execs the `pytest` script, which execs the other interpreter,
 and the other interpreter imports the other `src`. The obvious spot
 check passes on the same tree: `uv run`'s own sync reinstalls the
 editable package, so `uv run python -c 'import kluster;
