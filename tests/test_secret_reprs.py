@@ -35,8 +35,8 @@ same module uncaught.
 the type promises nothing about arriving as one — a test hands over the
 literal — so a field of that type carrying a credential is hidden like any
 other. `container` and `k8s` are here for that class of field: a mounted
-file's contents, a seed's contents, the ACME token, and a produced Secret's
-own data.
+file's contents, an initial state's contents, the ACME token, and a produced
+Secret's own data.
 
 **A field that holds a record is classified by what that record prints**, not
 by what it holds: `slots.Context` carries the forge's admin token through a
@@ -230,10 +230,10 @@ CENSUS: dict[type, Census] = {
     # The zone-scoped token the proxy answers DNS-01 challenges with.
     container.CaddyService: Census('service pin acme_token vhosts legacy', secret='acme_token'),
     container.ContainerDeclaration: Census('service pin'),
-    # A seed is a service's own configuration.
+    # An initial state is a service's own configuration.
     container.InitialState: Census('into content', secret='content'),
-    # With `secret` set, the ACME token or the routing daemon's configuration
-    # holding the BGP password; hidden whichever it is, since the field is one.
+    # With `secret` set, a credential the image reads (the ACME token today);
+    # hidden whatever the file holds, since the field is one.
     container.MountedFile: Census('name target content secret', secret='content'),
     container.OverlayDaemon: Census('service pin'),
     container.ResolverService: Census('service pin'),

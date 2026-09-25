@@ -74,9 +74,10 @@ KEY_SUFFIX = '.pub'
 #: accident would be wrong for the next account.
 ACCOUNT_HOME = '/root'
 
-#: The file the device's ssh daemon actually reads. It is off `/data`, so a
-#: firmware update takes it away and the converger is what puts the
-#: installation's key back.
+#: The file the device's ssh daemon actually reads. It is off `/data`: the
+#: firmware updates observed so far carry `/root` across, but a major-version
+#: jump or a factory reset can take it away, and the converger is what puts the
+#: installation's key back then (physical/gateway.md §1.4).
 AUTHORIZED_KEYS = f'{ACCOUNT_HOME}/.ssh/authorized_keys'
 
 #: The converger, and the unit that runs it at boot.

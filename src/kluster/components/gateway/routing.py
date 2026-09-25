@@ -101,13 +101,15 @@ FRR_DIRECTORY = 'frr'
 FRR_CONFIG = f'{skeleton_path(FRR_DIRECTORY)}/frr.conf'
 FRR_LIVE_CONFIG = '/etc/frr/frr.conf'
 
-#: What the converger last got the daemon to accept, as a checksum beside the
-#: daemon's own copy. It is what makes "already done" mean the reload happened
-#: rather than merely that the bytes are in place: a run whose reload failed
+#: What the converger last restarted the daemon onto, as a checksum beside the
+#: daemon's own copy. It is what makes "already done" mean the restart happened
+#: rather than merely that the bytes are in place: a run whose restart failed
 #: leaves the file installed, and without this the next run would find the two
 #: copies equal and exit successfully with the daemon still on the old
-#: configuration. Off `/data` with the file it describes, so a firmware update
-#: takes both and the next boot installs and reloads from scratch.
+#: configuration. It records a restart that returned, not a configuration the
+#: daemons accepted — that surfaces only at the supervisor's push. Off `/data`
+#: with the file it describes, so a firmware update takes both and the next
+#: boot installs and restarts from scratch.
 FRR_APPLIED = f'{FRR_LIVE_CONFIG}.{conventions.CLUSTER_NAME}-applied'
 
 #: The session password is in it, so it is not world-readable.

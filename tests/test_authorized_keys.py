@@ -186,8 +186,9 @@ async def test_a_set_with_no_key_in_it_is_refused(mechanism: DevicePersistence) 
     """The converger removes nothing, so an empty set is not a revocation.
 
     What it would be instead is a device this program can no longer open a
-    session on once a firmware update takes `/root` away — declared by a
-    component that cannot fail, because there is nothing for it to do.
+    session on once a major-version jump or a factory reset takes `/root`
+    away — declared by a component that cannot fail, because there is nothing
+    for it to do.
     """
     with pytest.raises(ValueError, match='at least one key'):
         _ = AuthorizedKeys('empty', connection=CONNECTION, mechanism=mechanism, keys=())

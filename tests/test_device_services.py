@@ -645,29 +645,29 @@ def test_what_the_converger_will_stamp_is_the_files_this_component_declares(moni
     """
     for declaration in declarations():
         service = declaration.service.name
-        seed = declaration.initial_state
+        initial = declaration.initial_state
         written = machine_files(monitor, service)
-        seeded = {
+        delivered = {
             path for path in written if path.startswith(f'{nspawn.machine_path(service)}/{nspawn.INITIAL_STATE}/')
         }
 
-        assert written - seeded == {
+        assert written - delivered == {
             nspawn.nspawn_path(service),
             *(container.mounted_path(service, mounted) for mounted in declaration.mounted_files),
         }, service
-        assert seeded == (set() if seed is None else {nspawn.initial_state_path(service, seed.into)}), service
+        assert delivered == (set() if initial is None else {nspawn.initial_state_path(service, initial.into)}), service
 
 
 def test_a_resolvers_own_configuration_is_installed_once_and_then_left_alone(monitor: Recorder) -> None:
     """The instance rewrites the file the moment the `dns` stack adds a rewrite.
 
-    So the seed is delivered into a directory of the machine's that holds
-    nothing else, and the converger copies that directory onto the working
-    directory only while the working directory is empty — which is the state of
-    a machine the device has never run, and never the state of one that has
-    been running. Being in there is also what keeps it out of the content
-    stamp: a change to it can never be a reason to restart an instance that has
-    already made the file its own.
+    So the initial state is delivered into a directory of the machine's that
+    holds nothing else, and the converger copies that directory onto the
+    working directory only while the working directory is empty — which is the
+    state of a machine the device has never run, and never the state of one
+    that has been running. Being in there is also what keeps it out of the
+    content stamp: a change to it can never be a reason to restart an instance
+    that has already made the file its own.
     """
     alice = declared_for('adguard-alice')
     initial = alice.initial_state
@@ -714,9 +714,9 @@ def test_a_resolver_is_bound_at_the_working_directory_its_image_is_started_with(
 def test_every_piece_of_a_machine_lands_in_that_machines_directory(monitor: Recorder) -> None:
     """A machine can be inspected, moved or deleted whole, which is the point.
 
-    Its tree, its settings, the files it mounts and the state it is seeded with
-    are one directory, so nothing about a service is left behind somewhere else
-    when the service goes.
+    Its tree, its settings, the files it mounts and the initial state it is
+    given are one directory, so nothing about a service is left behind
+    somewhere else when the service goes.
     """
     for service in SERVICES:
         directory = f'{nspawn.machine_path(service)}/'

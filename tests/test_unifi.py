@@ -208,11 +208,10 @@ async def test_the_cluster_zone_talks_to_the_home_in_both_directions() -> None:
     """The two directions between the new zone and the stock internal one.
 
     Outward carries the recorded workload dependencies — the home-automation
-    API among them — and inward is the reachability the nodes already had
-    while they shared the untagged LAN. Both are whole-zone, both families,
-    every protocol: what a node's workloads may call is decided where those
-    workloads are declared, and narrowing it here would put that decision
-    behind a gateway credential.
+    API among them — and inward is the trusted VLANs reaching the nodes
+    directly. Both are whole-zone, both families, every protocol: what a node's
+    workloads may call is decided where those workloads are declared, and
+    narrowing it here would put that decision behind a gateway credential.
     """
     firewall = build()
 
@@ -278,7 +277,7 @@ async def test_the_iot_vlan_is_carved_out_of_the_way_into_the_cluster() -> None:
 
 @pytest.mark.asyncio
 async def test_the_pinhole_lands_in_the_cluster_zone_rather_than_the_internal_one() -> None:
-    """The rule follows the worker, which is no longer on the internal side.
+    """The rule follows the worker, which sits on the cluster VLAN, not the internal side.
 
     A pinhole still pointing at the internal zone would be admitted into a
     zone the destination address is not in — a rule that reads as if the peer
@@ -292,8 +291,8 @@ async def test_the_pinhole_lands_in_the_cluster_zone_rather_than_the_internal_on
     assert destination is not None
     assert destination.zone_id == f'{NAME}-zone_id'
 
-    # The IoT rules are untouched by the move: the pool they name is still no
-    # object at all, so they still fall through to the uplink pair.
+    # The IoT rules stay on the uplink pair: the pool they name is no object
+    # at all, so they fall through to it.
     for policy in (firewall.iot_media_v4, firewall.iot_pool_v4):
         iot_destination = await policy.destination.future()
         assert iot_destination is not None

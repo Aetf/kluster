@@ -5,7 +5,8 @@ in that machine's own directory under the custom root: the root filesystem
 unpacked from its pin, its settings file, the configuration the image reads,
 the writable state bind-mounted into it, and — where the software behind it
 rewrites its own configuration — an initial state, in a directory of its own so
-that what seeds a service and what the service reads never share a name.
+that the initial state and the live file the service reads never share a
+name.
 
 **A service is declared by its own type.** What a service *is* — where it keeps
 state, which device nodes it needs, which environment its image reads — is a
@@ -104,17 +105,17 @@ SECRET_MODE = '0600'
 # What the images are
 # ---------------------------------------------------------------------------
 
-#: The resolvers both AdGuard instances forward to. Two providers on purpose:
+#: The resolvers every AdGuard instance forwards to. Two providers on purpose:
 #: the LAN's name service must not fail with any single one of them.
 ADGUARD_UPSTREAMS = ('https://dns.quad9.net/dns-query', 'https://dns.cloudflare.com/dns-query')
 
 #: The resolvers' own working directory, bind-mounted from the device so that a
 #: digest bump replaces the software and keeps the configuration; and the file
 #: inside it the instance is started against, which is what an initial state is
-#: named for — a seed is delivered under the path it lands at, in a directory
-#: of the machine's that holds nothing else (`nspawn.INITIAL_STATE`), so the
-#: live file and the seed are separated by *where* they sit rather than by two
-#: spellings of one name.
+#: named for — an initial-state file is delivered under the path it lands at,
+#: in a directory of the machine's that holds nothing else
+#: (`nspawn.INITIAL_STATE`), so the live file and its initial state are
+#: separated by *where* they sit rather than by two spellings of one name.
 #:
 #: The working directory is the image's, not a path of this program's choosing:
 #: the resolver is started with `-w /data/adguard -c /data/adguard/AdGuardHome.yaml`
@@ -162,7 +163,7 @@ CONTAINER_BRIDGE = 'br5'
 #: The capability every image here configures its own interface with. It is
 #: load-bearing for the machine in the host's network namespace: a machine with
 #: a private network keeps `CAP_NET_ADMIN` in nspawn's default set anyway, so
-#: naming it changes nothing for the bridged three and is what the host-networked
+#: naming it changes nothing for a bridged machine and is what a host-networked
 #: one needs stated. A constant rather than a literal in the template because
 #: the alternative the device ran before this program owned the mechanism was
 #: `all`, and narrowing it is a decision worth finding.
@@ -231,11 +232,11 @@ class MountedFile:
     this program's on every deployment, which is what separates it from an
     initial-state file.
 
-    `content` does not print. With `secret` set it is the ACME token or the
-    routing daemon's configuration with the BGP password in it; the stack hands
-    it over as an `Output`, which discloses nothing, but a test hands over the
-    literal, and the field is hidden for what it holds rather than for how one
-    of its types prints.
+    `content` does not print. With `secret` set it holds a credential the image
+    reads (the ACME token caddy answers DNS-01 challenges with); the stack
+    hands it over as an `Output`, which discloses nothing, but a test hands
+    over the literal, and the field is hidden for what it holds rather than for
+    how one of its types prints.
     """
 
     name: str
@@ -259,15 +260,16 @@ class InitialState:
     because a change to it can never be a reason to restart something that has
     already made the file its own.
 
-    One name and not two: what keeps a seed from overwriting the live file is
-    the directory it is delivered into (`nspawn.initial_state_path`), which
-    holds nothing but seeds and is the shape the converger copies. So the name
-    here is the path the file lands at inside the state directory, and the
-    device needs to be told nothing else about it.
+    One name and not two: what keeps an initial-state file from overwriting the
+    live file is the directory it is delivered into
+    (`nspawn.initial_state_path`), which holds nothing but initial state and is
+    the shape the converger copies. So the name here is the path the file lands
+    at inside the state directory, and the device needs to be told nothing else
+    about it.
 
     `content` does not print, on the same rule as `MountedFile.content`: what
-    a seed holds is a service's own configuration, and the type carries no
-    promise that it arrives as an `Output`.
+    an initial state holds is a service's own configuration, and the type
+    carries no promise that it arrives as an `Output`.
     """
 
     #: Where it lands, relative to the service's state directory — and equally
@@ -584,7 +586,7 @@ def nspawn_file(declaration: ServiceDeclaration) -> str:
 def net_setup_environment(address: IPv4Address) -> dict[str, str]:
     """The addressing an image's own network setup reads from PID 1's environment.
 
-    The address is configured rather than learned because the two resolvers are
+    The address is configured rather than learned because the resolvers are
     what hands out the leases' name servers: a resolver that waited for a lease
     to learn its own address would be waiting on itself. The gateway cannot
     reserve one for it either — its controller does not manage clients on the
@@ -633,7 +635,7 @@ def caddyfile(declaration: CaddyService) -> str:
     credential (gateway.md §1). Two properties of *which* certificate follow
     from that separation (rfc-002 §9.3):
 
-    -   **One wildcard, not three per-name certificates.** These names resolve
+    -   **One wildcard, not a certificate per name.** These names resolve
         nowhere publicly (dns.md §4), and every issued certificate is published
         in Certificate Transparency logs, so per-name issuance would republish
         exactly the census that resolving nowhere hides.
@@ -645,8 +647,8 @@ def caddyfile(declaration: CaddyService) -> str:
         gateway serves none of the public names the apex answers for, so it
         asks for less and the two sets stay different.
 
-    One site block therefore serves every name in that zone, matching the three
-    vhosts inside it by host and refusing everything else — a name under the
+    One site block therefore serves every name in that zone, matching each
+    vhost inside it by host and refusing everything else — a name under the
     zone that nothing here serves gets the connection closed rather than an
     answer from whichever block happened to be first. A wildcard covers one
     label, so every name the gateway serves has to be one label under the zone;
@@ -835,9 +837,9 @@ class Container(Component):
         }
         initial = declaration.initial_state
         # Under the machine's initial-state directory rather than beside the
-        # files it mounts: that is what keeps a seed out of the content stamp,
-        # which covers the machine's directory itself, and what lets the
-        # converger place it without being told where it goes.
+        # files it mounts: that is what keeps the initial state out of the
+        # content stamp, which covers the machine's directory itself, and what
+        # lets the converger place it without being told where it goes.
         self.initial_state: DeviceFile | None = (
             None
             if initial is None
