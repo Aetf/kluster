@@ -1,7 +1,7 @@
 # This stack's configuration is encrypted under a passphrase of its own rather
 # than the estate's (docs/credentials.md §1 rule 6). The `encryptionsalt` below
 # is a verifier for that passphrase: `mise.toml` exports it as
-# `KLUSTER_GITHUB_PASSPHRASE`, a hand-run `pulumi` passes it in as
+# `KLUSTER_GITHUB_PASSPHRASE`, `mise run github` hands it to `pulumi` as
 # `PULUMI_CONFIG_PASSPHRASE` (docs/framework/github.md §1), and under any other
 # value `pulumi` refuses with `incorrect passphrase` and writes nothing. The
 # salt is never deleted by hand: a stack file without one is keyed to whatever

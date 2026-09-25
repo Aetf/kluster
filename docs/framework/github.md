@@ -23,7 +23,7 @@ noop-automerge waved through. That collapses the credential partition
 ci.md §3 is built on, where no stack holds more than its own layer.
 
 The trade is cheap in the direction that matters: the forge changes a
-few times a year, so a manual `pulumi up -s github` costs almost
+few times a year, so a manual `mise run github up` costs almost
 nothing, while the credential would otherwise sit in CI permanently.
 The same reasoning the `physical` gate rests on (ci.md §3), taken one
 step further: `physical` can root the gateway, `github` can remove the
@@ -32,7 +32,7 @@ gate that guards `physical`.
 So **no workflow touches this stack at all**, drift detection
 included: the weekly `drift` matrix carries the four stacks CI
 deploys and not this one (ci.md §3). Drift in the forge is read the
-way an apply is prepared — a `pulumi preview --refresh -s github` on
+way an apply is prepared — a `mise run github preview --refresh` on
 the machine that holds this stack's passphrase, which no job does —
 which is why leaving the stack out of CI costs no freshness check, only
 the schedule of one.
@@ -102,23 +102,40 @@ in an Environment.
 stack" is a property of how a stack is invoked.** Every `credentials`
 command resolves it from the stack it is acting on, in one place — a
 `Stack` derives its own environment from its own name, so no call site
-can pair one stack with another's passphrase. For a `pulumi` run by
-hand, `mise.toml` exports the value as `KLUSTER_GITHUB_PASSPHRASE` and
-the invocation passes it in:
+can pair one stack with another's passphrase. A `pulumi` run by hand
+gets the same property from a task. `mise.toml` exports this stack's
+passphrase as `KLUSTER_GITHUB_PASSPHRASE` rather than as the ambient
+`PULUMI_CONFIG_PASSPHRASE`, and `mise run github <pulumi args>` runs
+`pulumi` with the stack fixed to `github` and that value passed in, so
+the stack and its passphrase are named in one place:
 
-    PULUMI_CONFIG_PASSPHRASE="$KLUSTER_GITHUB_PASSPHRASE" pulumi preview -s github
+    mise run github preview
+    mise run github up
+    mise run github config get githubAdminToken
 
-Getting it wrong is not silent. `encryptionsalt` is a verifier, so
-`pulumi` answers `error: incorrect passphrase`, exits non-zero and
-writes nothing — for a read and for a write alike. (What would re-key a
-stack quietly is any `pulumi` command against a file with *no* salt, a
+The plain form is the whole of it for everything this page runs. Only
+a command carrying a `--`, `-h` or `--help` of its own needs more,
+because mise takes those words for itself: they go after a leading
+`--`, as in `mise run github -- up --help`. The task refuses an argument
+that names a stack of its own (`-s`, `--stack`); the one it runs against
+is never the caller's to choose. `mise.toml` carries the rest of its
+contract.
+
+Getting it wrong is not silent. A bare `pulumi … -s github` meets the
+estate passphrase, and `encryptionsalt` is a verifier, so `pulumi`
+answers `error: incorrect passphrase`, exits non-zero and writes
+nothing — for a read and for a write alike. (What would re-key a stack
+quietly is any `pulumi` command against a file with *no* salt, a
 `preview` as much as a `config set --secret`: with nothing to verify
 against, `pulumi` mints a salt from the ambient passphrase and writes it
 in, which is why credentials.md §4.2 forbids deleting that line.) A
-`credentials` run on a machine holding no passphrase for
-this stack refuses one step earlier still, naming the stack and the
-command that fills it, rather than letting `pulumi` refuse at the far
-end of whatever was in progress.
+machine holding no passphrase for this stack is refused one step earlier
+still. The task will not start `pulumi` with `KLUSTER_GITHUB_PASSPHRASE`
+empty, which is what it resolves to on such a machine, and inside a
+`jj` workspace, where the slots do not answer and only a value the
+caller exported gets through; a `credentials` run names the stack and
+the command that fills it. Neither lets `pulumi` refuse at the
+far end of whatever was in progress.
 
 ## 2. What the plan permits today
 
@@ -285,9 +302,9 @@ third's paragraph says how to read whether it is.
 records:
 
 ```sh
-# Already run. These are the commands that put the two entries in state.
-mise x -- pulumi import -s github github:index/repository:Repository kluster kluster
-mise x -- pulumi import -s github github:index/repository:Repository kluster-ops kluster-ops
+# Already run: the two imports that put these entries in state.
+mise run github import github:index/repository:Repository kluster kluster
+mise run github import github:index/repository:Repository kluster-ops kluster-ops
 ```
 
 The generated code `import` prints is ignored: the resources are already
@@ -303,7 +320,8 @@ Environment under its repository. An import at the default (unparented)
 URN produces a state entry the program cannot match, so the next preview
 is "create the parented one, delete the imported one", and the delete is
 blocked by the protection the import just applied. Recovering from that
-is `pulumi state unprotect <urn>` then `pulumi state delete <urn>`: both
+is `mise run github state unprotect <urn>` then
+`mise run github state delete <urn>`: both
 touch state only, leaving the Environment on GitHub for the create to
 adopt.
 
@@ -320,13 +338,13 @@ Importing removes the create instead, which is why this is an import
 rather than a version ceiling: with the label in state no apply creates
 it, and which create the provider would have made stops mattering.
 Whether it is in state already is read from
-`pulumi stack --show-urns -s github` before the command is run rather
+`mise run github stack --show-urns` before the command is run rather
 than from this page: a create on 6.14.0 adopts, so an `up` on that
 version that reached the label is what put it in state, and the import
 is owed only while nothing has.
 
 ```sh
-mise x -- pulumi import -s github github:index/issueLabel:IssueLabel kluster-expect-changes kluster:expect-changes \
+mise run github import github:index/issueLabel:IssueLabel kluster-expect-changes kluster:expect-changes \
     --parent 'repository=urn:pulumi:github::kluster-py::kluster:components:forge:ManagedRepository$github:index/repository:Repository::kluster' \
     --protect=false
 ```
@@ -336,8 +354,8 @@ the two repositories, the label carries no `protect` in the program.
 `--parent` is what keeps it out of the trap above, because the program
 declares every label under its repository, and the URN that flag names
 is the repository's as state holds it: under the component, so the type
-chain runs `ManagedRepository$Repository`. `pulumi stack --show-urns -s
-github` prints it, and that print rather than this page is what the
+chain runs `ManagedRepository$Repository`. `mise run github stack
+--show-urns` prints it, and that print rather than this page is what the
 flag is copied from.
 
 **The import lands under the default provider, and nothing refuses
