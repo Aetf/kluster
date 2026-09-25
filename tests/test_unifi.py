@@ -28,12 +28,12 @@ answers the zone lookups and hands back the inputs each resource was given.
 import inspect
 from collections.abc import Mapping
 from ipaddress import IPv4Address, IPv4Interface, IPv6Address
-from typing import Any, cast
 
 import pulumi
 import pytest
 import pytest_asyncio
-from mock_monitor import Recorder, declaring, run_with
+from mock_monitor import declaring, run_with
+from unifi_controller import ZONE_LOOKUP, Controller, zone_id
 
 from kluster import conventions
 from kluster.components.gateway import unifi
@@ -45,20 +45,10 @@ SITE = 'default'
 WORKER_GUA = '2001:db8:1:70::10'
 
 
-class Controller(Recorder):
-    """A monitor that answers the zone lookups; every zone exists and is empty."""
-
-    def answer(self, args: pulumi.runtime.MockCallArgs) -> dict[str, Any]:
-        if args.token == 'unifi:index/getFirewallZone:getFirewallZone':
-            name = str(cast('dict[str, Any]', args.args)['name'])
-            return {'id': f'zone-{name}', 'name': name, 'networks': [], 'site': SITE}
-        return {}
-
-
 @pytest_asyncio.fixture(autouse=True)
 async def mocks() -> Controller:
     pulumi.runtime.set_all_config({f'kluster:{unifi.API_KEY}': API_KEY})
-    return await run_with(Controller(), stack='physical')
+    return await run_with(Controller(site=SITE), stack='physical')
 
 
 def build(static_hosts: Mapping[str, IPv4Address | IPv6Address] | None = None) -> unifi.SiteFirewall:
@@ -117,6 +107,27 @@ async def test_the_census_is_exactly_the_designed_set(mocks: Controller) -> None
     # The only port forward on the device.
     assert by_type['unifi:index/portForward:PortForward'] == [f'{NAME}-peer-v4']
     assert 'unifi:index/dnsRecord:DnsRecord' not in by_type
+
+
+@pytest.mark.asyncio
+async def test_every_policy_is_declared_in_force(mocks: Controller) -> None:
+    """A disabled policy is still on the census, still in its pair's order, and matches nothing.
+
+    Every other case here reads a policy's shape — its zones, its sources, its
+    rank — and a policy switched off keeps all of them. For a drop that is the
+    worst way to be wrong: the carve-out reads as in force while the IoT VLAN
+    keeps reaching whatever it was meant to be kept from.
+    """
+    async with declaring():
+        build()
+
+    policies = mocks.by_name('unifi:index/firewallZonePolicy:FirewallZonePolicy')
+
+    # A loop is only a claim about what it visits. Which policies there are is
+    # the census case's to pin; this one only refuses to pass by visiting none.
+    assert policies, 'the build declared no zone policy'
+    for name, inputs in policies.items():
+        assert inputs.get('enabled') is True, name
 
 
 @pytest.mark.asyncio
@@ -194,7 +205,7 @@ async def test_the_new_zone_is_given_the_egress_its_nodes_cannot_work_without() 
     destination = await firewall.cluster_egress.destination.future()
     assert source is not None and destination is not None
     assert source.zone_id == f'{NAME}-zone_id'
-    assert destination.zone_id == f'zone-{unifi.ZONE_EXTERNAL}'
+    assert destination.zone_id == zone_id(unifi.ZONE_EXTERNAL)
     # The whole zone, both families and every protocol: what a node reaches on
     # the internet is not a decision the gateway is in a position to make.
     assert source.ips is None
@@ -221,7 +232,7 @@ async def test_the_cluster_zone_talks_to_the_home_in_both_directions() -> None:
     destination = await outward.destination.future()
     assert source is not None and destination is not None
     assert source.zone_id == f'{NAME}-zone_id'
-    assert destination.zone_id == f'zone-{unifi.ZONE_INTERNAL}'
+    assert destination.zone_id == zone_id(unifi.ZONE_INTERNAL)
     assert source.ips is None and destination.ips is None
 
     inward = firewall.internal_cluster
@@ -229,7 +240,7 @@ async def test_the_cluster_zone_talks_to_the_home_in_both_directions() -> None:
     source = await inward.source.future()
     destination = await inward.destination.future()
     assert source is not None and destination is not None
-    assert source.zone_id == f'zone-{unifi.ZONE_INTERNAL}'
+    assert source.zone_id == zone_id(unifi.ZONE_INTERNAL)
     assert destination.zone_id == f'{NAME}-zone_id'
     # No source literal: the carve-out is a separate drop ahead of it, not a
     # narrowing of this one, so that what it excludes is a rule of its own.
@@ -266,7 +277,7 @@ async def test_the_iot_vlan_is_carved_out_of_the_way_into_the_cluster() -> None:
         source = await policy.source.future()
         destination = await policy.destination.future()
         assert source is not None and destination is not None
-        assert source.zone_id == f'zone-{unifi.ZONE_INTERNAL}'
+        assert source.zone_id == zone_id(unifi.ZONE_INTERNAL)
         assert source.ips == [expected]
         # The whole zone on the far side: the node subnet *is* a network
         # object, so unlike the pool it needs no group to be named.
@@ -296,7 +307,7 @@ async def test_the_pinhole_lands_in_the_cluster_zone_rather_than_the_internal_on
     for policy in (firewall.iot_media_v4, firewall.iot_pool_v4):
         iot_destination = await policy.destination.future()
         assert iot_destination is not None
-        assert iot_destination.zone_id == f'zone-{unifi.ZONE_EXTERNAL}'
+        assert iot_destination.zone_id == zone_id(unifi.ZONE_EXTERNAL)
 
 
 @pytest.mark.asyncio
@@ -377,18 +388,20 @@ async def test_every_pool_rule_is_sourced_from_the_iot_vlan_alone() -> None:
 
 
 #: Each ordering resource, the zone pair it orders, and the policies it puts
-#: ahead of that pair's predefined rules. Four rows because the design uses
-#: four pairs; the claim is one, and it is the same for every one of them.
+#: ahead of that pair's predefined rules: every pair the census orders, but
+#: the inward one, which ranks its drops ahead of its allow — the reverse of the
+#: pool pair — and has a case of its own below. For these the claim is one, and
+#: it is the same for every one of them.
 ORDERINGS = [
     (
         'pool_order',
-        f'zone-{unifi.ZONE_INTERNAL}',
-        f'zone-{unifi.ZONE_EXTERNAL}',
+        zone_id(unifi.ZONE_INTERNAL),
+        zone_id(unifi.ZONE_EXTERNAL),
         [f'{NAME}-iot-media-v4_id', f'{NAME}-iot-media-v6_id', f'{NAME}-iot-pool-v4_id', f'{NAME}-iot-pool-v6_id'],
     ),
-    ('peer_order', f'zone-{unifi.ZONE_EXTERNAL}', f'{NAME}-zone_id', [f'{NAME}-peer-v6_id']),
-    ('cluster_egress_order', f'{NAME}-zone_id', f'zone-{unifi.ZONE_EXTERNAL}', [f'{NAME}-cluster-egress_id']),
-    ('cluster_internal_order', f'{NAME}-zone_id', f'zone-{unifi.ZONE_INTERNAL}', [f'{NAME}-cluster-internal_id']),
+    ('peer_order', zone_id(unifi.ZONE_EXTERNAL), f'{NAME}-zone_id', [f'{NAME}-peer-v6_id']),
+    ('cluster_egress_order', f'{NAME}-zone_id', zone_id(unifi.ZONE_EXTERNAL), [f'{NAME}-cluster-egress_id']),
+    ('cluster_internal_order', f'{NAME}-zone_id', zone_id(unifi.ZONE_INTERNAL), [f'{NAME}-cluster-internal_id']),
 ]
 
 
@@ -441,7 +454,7 @@ async def test_the_iot_drop_precedes_the_allow_that_would_otherwise_answer_for_i
         f'{NAME}-internal-cluster_id',
     ]
     assert await order.after_predefined_ids.future() is None
-    assert await order.source_zone_id.future() == f'zone-{unifi.ZONE_INTERNAL}'
+    assert await order.source_zone_id.future() == zone_id(unifi.ZONE_INTERNAL)
     assert await order.destination_zone_id.future() == f'{NAME}-zone_id'
 
 
@@ -459,8 +472,8 @@ async def test_the_pool_rules_are_declared_on_the_uplink_pair() -> None:
         source = await policy.source.future()
         destination = await policy.destination.future()
         assert source is not None and destination is not None
-        assert source.zone_id == f'zone-{unifi.ZONE_INTERNAL}'
-        assert destination.zone_id == f'zone-{unifi.ZONE_EXTERNAL}'
+        assert source.zone_id == zone_id(unifi.ZONE_INTERNAL)
+        assert destination.zone_id == zone_id(unifi.ZONE_EXTERNAL)
 
 
 @pytest.mark.asyncio
@@ -596,4 +609,4 @@ async def test_every_controller_resource_and_lookup_is_signed_by_it(mocks: Contr
     assert controller, 'the build declared no controller resources at all'
     for declaration in controller:
         assert f'{NAME}-unifi' in declaration.provider, f'{declaration.name} is not signed by the provider'
-    assert f'{NAME}-unifi' in mocks.call_providers['unifi:index/getFirewallZone:getFirewallZone']
+    assert f'{NAME}-unifi' in mocks.call_providers[ZONE_LOOKUP]
