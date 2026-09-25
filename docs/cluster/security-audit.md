@@ -122,8 +122,8 @@ lifecycle) so deletes are recoverable; per-consumer prefix-scoped keys
 `volsync/<ns>/…`, and its prune's deletes degrade to lifecycle-purged
 hides — retention semantics survive, destruction doesn't); no
 delete-capable key in any automation, the master credential offline
-only, account 2FA on. Verified: a scoped key cannot touch a foreign
-prefix.
+only, account 2FA on. That a scoped key cannot list or delete a
+foreign prefix is checked at bootstrap (physical.md §6).
 
 **Lives in.** storage.md §4 (integrity rules), physical.md §6
 (verification), architecture.md §4.1.
@@ -134,13 +134,17 @@ prefix.
 
 ### M1 — Public Postgres state backend: authentication and OS
 
-**Attack.** ci.md §1 exposes 5432 publicly with TLS + scram on an
-unattended 1 GB micro whose database holds `machine_secrets` behind one
-passphrase. Password auth on the open internet is a standing
+**Attack.** ci.md §1 exposes 5432 publicly on an unattended 1 GB
+micro whose database holds `machine_secrets` behind one passphrase.
+Password authentication on the open internet is a standing
 brute-force + Postgres-CVE surface, and the OS was left unspecified.
 
-**Fix.** Client-certificate verification made **mandatory** (not
-"available hardening") — *amended 2026-08-24*: the NSG-allowlist half
+**Fix.** The client certificate is the authentication: the server
+admits a remote connection only over TLS with a certificate it verifies in
+full, and offers no password method at all (the appliance's
+`pg_hba.conf`, in `deploy/state-backend/butane.yaml.j2`).
+That verification is **mandatory** (not "available hardening") —
+*amended 2026-08-24*: the NSG-allowlist half
 of the fix was dropped as unimplementable (`api.github.com/meta` lists
 thousands of CIDRs against an NSG rule quota in the hundreds, and a
 home-/32-only rule would break CI), so client-cert mTLS is
@@ -403,7 +407,7 @@ rather than pull. *Lives in* ci.md §4.
     encryption at rest, hourly snapshots off-provider, the cold-standby
     drill). Of those, the encryption is in the control plane's machine
     configuration; the snapshots are an ops-repo workflow, and that
-    repository carries no workflows, so none is taken; and the drill is
+    workflow is unwritten, so none is taken; and the drill is
     unwritten (nodes.md §5 Tier 0). H1/H4 harden the *mechanism*, not
     the placement decision.
 -   **Combined CP+ingress+worker nodes** — the cost basis of the

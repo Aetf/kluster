@@ -30,16 +30,21 @@ the `dns` stack (declarative/dns.md), which consumes this stack's IP
 outputs.
 
 Explicitly **not** owned: the state-backend E2.1.Micro (a bootstrap
-dependency of Pulumi itself — hand-created, documented in
-[framework/ci.md](../framework/ci.md) §1) and anything speaking the k8s
-API (that's `k8s-base`/`apps`).
+dependency of Pulumi itself — created by the `state-backend provision`
+script, documented in [framework/ci.md](../framework/ci.md) §1) and
+anything speaking the k8s API (that's `k8s-base`/`apps`).
 
 Stack outputs (the machine facts other stacks may reference,
-[README.md](README.md) §2): `kubeconfig`, `talosconfig`, per-node
+[README.md](README.md) §2) are named by `conventions.PHYSICAL_OUTPUTS`
+(`conventions/outputs.py`), which is the list and which a test holds
+the stack's exports to: `kubeconfig`, `talosconfig`, per-node
 public/private IPs, both of the NLB's public addresses (IPv4 and IPv6 —
 the cluster anchor in `dns` carries an A and an AAAA), the
-dedicated-VIP addresses (reserved public + secondary private), and
-bucket names/endpoints.
+dedicated-VIP addresses (reserved public + secondary private), the
+backup bucket's name and S3 endpoint, the backup keys (one application
+key per scope, `backup_keys`), and each CI overlay member's join
+credential (`ci_zerotier_identity_physical`,
+`ci_zerotier_identity_dns`).
 
 ## 1. OCI (pulumi-oci)
 
@@ -82,14 +87,18 @@ bucket names/endpoints.
     is workload-specific: a workload reaches the address or the volume
     through scheduling constraints declared with it.
 -   **NLB**: one Network Load Balancer with source-IP preservation
-    (verification item) and a backend set of the three nodes, declared
-    here; **listeners are not a fixed list** — the management listeners
-    (6443/50000) live here, while service listeners are declared beside
+    (verification item) and one backend set per management port
+    (`conventions.ManagementPorts`, each named by its field) holding
+    every cloud node, declared here; **listeners are not a fixed
+    list** — the management listeners (6443/50000) live here, while
+    service listeners are declared beside
     the services that need them, exactly like security rules and DNS
     records.
--   **Buckets**: none on this provider. The one object bucket is the
-    backup bucket, which lives on B2 precisely because it must not
-    share a provider with what it insures (storage.md §4).
+-   **Buckets**: none on this provider. The installation's
+    cluster-data bucket is the backup bucket, which lives on B2
+    precisely because it must not share a provider with what it
+    insures; the state backend's buckets are its provision script's,
+    not this stack's (storage.md §4).
 -   **Protection**: data- and identity-bearing resources here — block
     volumes and their attachments, the reserved public IP,
     `machine_secrets` — carry `protect=True` per storage.md §3.3.

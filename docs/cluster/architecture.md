@@ -19,7 +19,7 @@ lock-in, and declarative management using Pulumi.
 
 ### 1.1 High-Level Design
 
--   **Cloud site (OCI, Ashburn)**: **three A1.Flex nodes (1 OCPU / 8 GB
+-   **Cloud site (OCI, Phoenix)**: **three A1.Flex nodes (1 OCPU / 8 GB
     each) forming the HA control plane** — etcd quorum stays within one
     region, so Raft never crosses the WAN — and simultaneously serving as
     the ingress/worker pool for internet-facing and stable-IP workloads
@@ -56,11 +56,11 @@ graph TD
  User(Public Users)  
  end  
   
- subgraph "Cloud Site (OCI Ashburn, one VCN)"  
+ subgraph "Cloud Site (OCI Phoenix, one VCN)"  
  NLB(OCI Network Load Balancer <br> free; stable public v4+v6 <br> DNS anchor; source-IP preserving)  
- CP1[cloud-1 CP+ingress <br> 1 OCPU / 8 GB]  
- CP2[cloud-2 CP+ingress <br> 1 OCPU / 8 GB <br> hath + its dedicated VIP]  
- CP3[cloud-3 CP+ingress <br> 1 OCPU / 8 GB]  
+ CP1[cp1 CP+ingress <br> 1 OCPU / 8 GB <br> hath + its dedicated VIP]  
+ CP2[cp2 CP+ingress <br> 1 OCPU / 8 GB]  
+ CP3[cp3 CP+ingress <br> 1 OCPU / 8 GB]  
  NLB --> CP1  
  NLB --> CP2  
  NLB --> CP3  
@@ -79,7 +79,7 @@ subgraph "Homelab Physical Server"
   
  %% Routing Flow  
  User -- "A/AAAA → NLB IP" --> NLB  
- User -- "hath: dedicated reserved IP" --> CP2  
+ User -- "hath: dedicated reserved IP" --> CP1  
  DMSE -- "FRR BGP Peering (v4+v6)" --> Homelab_VM  
  DMSE --- ZT_Net  
    
@@ -704,8 +704,10 @@ The entire stack is deployed via Pulumi using multiple providers:
     resources, API-key auth) since v1.0.0 (2025-03; v1.1.0 2026-07,
     active), consumed through the same any-Terraform-provider bridge
     as zerotier (§5.3). The resource is marked experimental and
-    targets UniFi OS ≥9 — verified against the UDM's current Network
-    release at bootstrap (physical.md §6); fallback if it or the
+    targets UniFi OS ≥9 — round-tripped against the UDM's current
+    Network release by a probe on scratch objects before the cutover
+    window (physical/gateway-cutover.md §3, physical.md §6); fallback
+    if it or the
     bridge misbehaves: a `UnifiFirewallPolicy` resource on the
     device-files dynamic provider (§5.2) driving the v2 API directly
     (the AdGuard-rewrite technique). Younger rewrites
@@ -832,8 +834,10 @@ already lives:
 
 -   **Routes become trivial**: ZeroTier Central managed routes for the home
     VLAN subnets and the `lan` pool (`10.0.5.0/24`, `192.168.70.0/24`,
-    `192.168.80.0/24`, `192.168.90.0/24`, and `192.168.71.0/24` + its
-    ULA /64) all via the UDM's overlay address. The UDM reaches the pool through its own
+    `192.168.80.0/24`, `192.168.90.0/24`, and `192.168.71.0/24`) all
+    via the UDM's overlay address. Every managed route is IPv4: the
+    pool's ULA /64 is deliberately not among them, and the overlay
+    assigns no IPv6 address (physical/gateway.md §2.2). The UDM reaches the pool through its own
     BGP-learned route (§3.4) — one hop, no host in the path. The
     legacy `10.42.0.0/24`-via-VPS route retires with the VPS.
 -   **Management-path independence**: CI's per-run overlay join (ci.md §2)

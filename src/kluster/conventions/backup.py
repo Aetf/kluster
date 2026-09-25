@@ -105,7 +105,7 @@ def barman_repo_path(namespace: str, cluster: str) -> str:
 ETCD_SNAPSHOT_PREFIX = 'etcd'
 STATE_DUMP_PREFIX = 'pulumi-state'
 
-#: The one object bucket, and it is not on the provider whose loss it insures
+#: The backup bucket, and it is not on the provider whose loss it insures
 #: (storage.md §4): a backup kept at that provider is not a backup. The name is
 #: explicit because a B2 bucket name is global and the bucket is addressed from
 #: outside this program.

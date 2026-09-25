@@ -15,7 +15,11 @@ resort, object storage used directly where an app supports it.
 > **Longhorn deferred out of the initial build** in favor of local-path +
 > VolSync (§3), with adoption criteria on file. Companion to
 > [nodes.md](nodes.md); topology and pools per
-> [architecture.md](architecture.md). Not implemented.
+> [architecture.md](architecture.md). Declared in code: the backup
+> bucket and its keys (`BackupBucket`, §4) and the cloud block volumes
+> (`conventions.NODE_VOLUMES`, §6), both by the `physical` stack. The
+> storage classes, VolSync and CNPG are the `k8s-base` stack's, which is
+> unwritten. None of it is provisioned.
 
 ## 1. Principles
 
@@ -195,11 +199,17 @@ if B2's 3×-stored egress allowance ever bites.
 **Placement rule (2026-08-22)**: the **backup** bucket must not live
 with the provider whose loss it insures — OCI tenancy termination is an
 enumerated risk (nodes.md §3.1), so cluster backups stay on B2
-regardless of where the cloud pool lands. It is also the installation's
-only object bucket: the second one this rule used to distinguish itself
-from was the JuiceFS chunk bucket, and that filesystem is gone (§6). The
-bucket, its keys and its lifecycle rules are Pulumi-managed like
-everything else.
+regardless of where the cloud pool lands. The bucket, its keys and its
+lifecycle rules are Pulumi-managed, declared by the `physical` stack
+(`BackupBucket`).
+
+It is not the installation's only bucket. The state backend keeps two
+of its own: its dumps land in a bucket on the same B2 account
+(`kluster-state-backend`, physical/state-backend.md §5), and its boot
+image is imported through an OCI Object Storage bucket, which holds
+nothing the placement rule insures. The state backend exists before
+Pulumi can run, so both are created by the `state-backend provision`
+script rather than by a stack (framework/ci.md §1).
 
 **Backup-integrity rules (2026-08-23)** — backups are the actual HA
 mechanism (§5), so backup *deletability* is a first-class threat
@@ -235,9 +245,8 @@ Per nodes.md §5, durability = declarative rebuild + backups + drills:
 
 1.  **etcd**: hourly snapshots from the Talos control plane, shipped to
     `b2://…/etcd/`, retained ~14 days — an ops-repo workflow, and that
-    repository carries no workflows, so none is taken (nodes.md §5
-    Tier 0). Restore path is documented Talos
-    `--recover-from-snapshot` bootstrap, to be drilled both in-place and
+    workflow is unwritten, so none is taken (nodes.md §5 Tier 0).
+    Restore path is documented Talos `--recover-from-snapshot` bootstrap, to be drilled both in-place and
     onto a substitute node (the CP cold-standby path, nodes.md §5 Tier 0);
     neither form has run.
 2.  **Volumes**: VolSync restic backups on every working-state PVC
@@ -324,14 +333,14 @@ The dav share serves the same dataset and follows the same volume.
 
 **Lifting the quarantine: the criterion is not on file.** Containment
 has two levers and only one of them has a written test. *Admitting
-another workload* is governed — the three clauses above, per app, in
-writing (declarative/workloads.md §2), and admitting a second one does
-not by itself change the deployment shape: it is a second sidecar with a
-second filesystem, which is what the per-app blast radius means.
+a workload* is governed — the three clauses above, per app, in
+writing (declarative/workloads.md §2) — and admitting one does not by
+itself change the deployment shape: each is a sidecar with a filesystem
+of its own, which is what the per-app blast radius means.
 *Installing the CSI driver* is the lever with no test behind it. It is
-refused today because the census is one and a sidecar serves it, but
-nothing here says at what census, or under what guarantee, a driver
-would become the cheaper answer — so "should we install the CSI driver?"
+refused today because the census is zero and there is nothing for a
+driver to serve, but nothing here says at what census, or under what
+guarantee, a driver would become the cheaper answer — so "should we install the CSI driver?"
 currently resolves to "no" by default rather than by argument.
 
 The criterion this needs is the §3.2 shape, and writing it is a decision
@@ -341,7 +350,7 @@ controller plus its per-node agents — the standing-rent test of
 nodes.md §4.4), and a **statement of what survives the change** (how
 per-app metadata isolation and per-app failure domains hold up once one
 driver mediates every mount, since that sharing is precisely what root
-cause (b) came from — §1). Until both exist, the census staying at one
+cause (b) came from — §1). Until both exist, the census staying at zero
 is the whole reason the driver stays out, and growing the census is a
 reason to write the criterion, not a license to skip it.
 
