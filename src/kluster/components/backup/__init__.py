@@ -95,9 +95,9 @@ class Scope:
 def etcd_scope() -> Scope:
     """The control plane's hourly snapshots: an ops-repo workflow's to ship.
 
-    That repository carries no workflows, so none is taken (nodes.md §5
-    Tier 0); the scope is declared with the bucket so that the writer key is
-    there when one is.
+    That workflow is unwritten, so none is taken (nodes.md §5 Tier 0); the
+    scope is declared with the bucket so that the writer key is there when one
+    is.
     """
     return Scope(name='etcd', prefix=f'{conventions.ETCD_SNAPSHOT_PREFIX}/')
 
@@ -210,7 +210,8 @@ def s3_endpoint(region: str) -> str:
 
     The region is a property of the account rather than of the bucket, and no
     API call returns it in this form — it is read off the bucket's own page in
-    the console (`us-west-004` and the like) and carried as configuration.
+    the console (`us-west-004` and the like) and recorded as
+    `conventions.B2_ACCOUNT.region`, which the stack passes down.
     """
     return f'https://s3.{region}.backblazeb2.com'
 

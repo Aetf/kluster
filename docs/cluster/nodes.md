@@ -11,10 +11,11 @@ baseline to beat is the legacy Vultr VPS at $30/mo all-in.
 > homelab VM is a pure worker (§4); Vultr is the scripted fallback. All
 > prices are as-of August 2026, USD, verified against official price
 > pages/APIs, and must be re-verified in the provider calculators before
-> commit. The cloud pool's shape is declared in code — the node names,
+> commit. Both pools are declared in code — the node names and
 > OCPU/RAM/boot-volume numbers of §3.1 live in `kluster.conventions` and
-> the `physical` stack builds instances from them — but no node has been
-> provisioned, and the homelab VM of §4 is not declared at all.
+> the `physical` stack builds instances from them, and the same stack
+> declares the homelab VM of §4 (`HomelabHost`, `components/homelab`) —
+> but no node has been provisioned.
 > (Decision history: AWS →
 > GCP (2026-04) → tentatively Hetzner (2026-08-21, voided by its
 > 2026-06-15 US price hike) → OCI.)
@@ -183,8 +184,8 @@ KubeSpan TX steady state, with multi-hundred-GB spike days):
         tenancies still hold 4 OCPU / 24 GB *as of August 2026*, but
         contemporary coverage expects PAYG to converge to the same
         limits eventually — the architecture must stay valid at 12 GB
-        (it does: platform floor ~2 GiB + cloud workloads + sidecar fit
-        with room to spare, §4.4). Mechanically the allowance is
+        (it does: platform floor ~2 GiB + cloud workloads fit with room
+        to spare, §4.4). Mechanically the allowance is
         1,500 OCPU-hours + 9,000 GB-hours/month across A1 VMs; PAYG is
         billed (not killed) beyond it.
     -   PAYG tenancies are **exempt from the idle-reclaim policy** (the
@@ -437,10 +438,10 @@ answered with `kubectl top` on the legacy cluster (2026-08-22), of
 | --- | --- | --- |
 | k3s server + containerd (host procs) | ~1.7 GiB | CP moved cloud-side; the homelab VM keeps only kubelet+containerd (~0.5 GiB). The CP cost re-appears as ~2–2.5 GiB × 3 on the cloud nodes — paid out of free OCI RAM, not out of the 32 GB host |
 | Monitoring (prometheus 948 Mi, grafana 428 Mi, exporters/operator/alertmanager ~200 Mi) | ~1.6 GiB | **switch to VictoriaMetrics** (vmsingle + vmagent + vmalert): PromQL-compatible, typically ~1/5 the RAM at this scale; grafana stays. Target ≤0.7 GiB |
-| Shared-JuiceFS stack (CSI ×5, redis, 4 mount pods) | ~1.0 GiB | CSI/redis/dashboard gone by design; one per-app sidecar mount remains, **budgeted honestly at 0.5–1 GiB requests** — root cause (b) of the legacy instability was starving exactly this process (storage.md §6) |
+| Shared-JuiceFS stack (CSI ×5, redis, 4 mount pods) | ~1.0 GiB | gone by design: no CSI driver, no shared metadata store, and no workload mounts JuiceFS (storage.md §6). A workload admitted later brings its own sidecar mount, **budgeted honestly at 0.5–1 GiB requests** — root cause (b) of the legacy instability was starving exactly this process |
 | Everything else in kube-system (coredns, metrics-server, cert-manager, sealed-secrets, nfd, local-path, reloader) | ~0.45 GiB | kept as-is — **sealed-secrets stays** (the secret-management model is unchanged from kluster-code); only the JuiceFS dashboard is dropped |
 | CNPG operator + traefik | ~0.3 GiB | CNPG stays; traefik → the two Envoy gateways (similar) |
-| **Total** | **~5 GiB (~30%)** | **projected ~4–4.5 GiB** |
+| **Total** | **~5 GiB (~30%)** | **projected ~3.5 GiB** |
 
 The projection *includes* what the new design adds (Cilium agents are
 heavier than flannel+kube-proxy, two gateways, VolSync controller) and
@@ -457,11 +458,10 @@ size is set by the fixed floors, not by workloads**. Platform floor
 (etcd+apiserver+controllers) another ~2–2.5 GiB — before the first app
 pod. This is what made 2–4 GB paid instances structurally cramped and
 what the 8 GB A1 nodes absorb for free: each still keeps ~4 GiB for
-hath (~0.3), syncthing/dav (~0.3), the JuiceFS sidecar at its honest
-0.5–1 GiB request, and Envoy. Meanwhile, the homelab side, though
-tighter on paper, is the flexible one: workloads can be trimmed, ARC
-squeezed, and RAM added (§4.2) — memory pressure there is real but
-manageable.
+hath (~0.3), syncthing/dav (~0.3) and Envoy. Meanwhile, the homelab
+side, though tighter on paper, is the flexible one: workloads can be
+trimmed, ARC squeezed, and RAM added (§4.2) — memory pressure there is
+real but manageable.
 
 ## 5. High availability, honestly
 
@@ -477,7 +477,7 @@ by construction; Tier 0 remains the foundation everything else sits on:
     stack is first applied (migration.md §1 step 2); nothing writes to
     it. The legs: hourly etcd snapshots shipped to B2 (off-provider by
     the storage.md §4 placement rule) — an ops-repo workflow, and that
-    repository carries no workflows, so none is taken; VolSync volume
+    workflow is unwritten, so none is taken; VolSync volume
     backups and CNPG barman to the same bucket (storage.md §5) —
     installed by the `k8s-base` stack, which is unwritten, so neither
     runs; and periodically *drilled* restores — the drill program of

@@ -22,10 +22,14 @@ the instance moves from the homelab host to an **OCI VM.Standard.E2.1.Micro**
     and to a per-run ZeroTier join. On the micro, the hot path needs no
     home connectivity at all.
 -   **Bootstrap dependency, not Pulumi-managed**: like its predecessor,
-    the backend must exist before Pulumi can act, so it is provisioned by
-    the ported `deploy/state-backend/` — the micro instance itself is
-    the one hand-created OCI resource, designed in
-    physical/state-backend.md.
+    the backend must exist before Pulumi can act, so no stack declares
+    it. The `state-backend provision` console script
+    (`src/kluster/scripts/state_backend/`) creates it: through the OCI
+    Python SDK the micro instance and the network, reserved address and
+    boot image it needs, and the bucket that image is imported through,
+    and through B2's API its dump bucket. What the
+    box runs is the machine definition in `deploy/state-backend/`; the
+    design is physical/state-backend.md.
 -   **The box itself is a designed appliance, not a pet** — Fedora
     CoreOS provisioned entirely at create time from
     `deploy/state-backend/`, re-provision as the only apply path,
@@ -41,9 +45,10 @@ the instance moves from the homelab host to an **OCI VM.Standard.E2.1.Micro**
     instances bill from the same tenancy A1 pool the three cluster
     nodes already budget to its conservative limit (nodes.md §3.2),
     while the E2.1.Micro is separately Always Free.
--   **Exposure, as CI sees it**: public 5432, TLS + scram +
-    **mandatory client certificates** (`verify-full` by literal IP —
-    no DNS in the hot path). CI holds the `ci` client cert as an
+-   **Exposure, as CI sees it**: public 5432, TLS with **mandatory
+    client certificates** as the only authentication — no password
+    method is offered — and the server verified `verify-full` by
+    literal IP (no DNS in the hot path). CI holds the `ci` client cert as an
     Environment secret; local runs hold `operator` in the mise env.
     The NSG permits 5432 from anywhere — the client cert is
     deliberately the only wall (state-backend.md §4; the
@@ -189,11 +194,14 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
 
 -   **The prose gate is what makes `checks` long, and one file per
     invocation is a measured constraint rather than caution.**
-    `ltex-cli-plus` checks the markdown a pull request changed, one file
-    per invocation under a 120-second bound. A change to the checker or
-    to what it reads — the `mise.toml` pin, either `.vscode/` word list,
-    `checks.yml` itself — is checked against **every** markdown file in
-    the tree instead, so that a bumped checker or a dropped dictionary
+    `ltex-cli-plus` checks the markdown files an event added or
+    modified — a pull request's against the `main` it merges onto, a
+    push's against the commit `main` moved from — one file per
+    invocation under a 120-second bound. An event checks **every**
+    markdown file in the tree instead when it has no base commit to
+    diff against, or when it changes the checker or what it reads — the
+    `mise.toml` pin, either `.vscode/` word list, `checks.yml` itself —
+    so that a bumped checker or a dropped dictionary
     word is proven against the prose it judges rather than landing for
     the next change to an affected file to fail on. That whole-tree pass
     is where the cost sits: a file is five to eight seconds on a
@@ -351,10 +359,13 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     other pushes code and never starts a run by itself. The residual is
     the key's placement: the dispatch App's key is a repository secret
     readable by any same-repository job, and its token pushes to
-    unprotected branches of `kluster` and `kluster-ops` but to neither
-    `main` (protected, checks required) nor any workflow file (no
-    `workflows` permission) — the same "anyone who can push a branch"
-    boundary this repository already accepts. A merge route of the
+    `kluster`'s unprotected branches and to any branch of
+    `kluster-ops`, `main` included — a private repository has no branch
+    protection on this plan (github.md §2) — but never to `kluster`'s
+    `main` (protected, checks required) and to no workflow file in
+    either (no `workflows` permission). On `kluster` that is the same
+    "anyone who can push a branch" boundary this repository already
+    accepts; on `kluster-ops` it is the fence of architecture.md §4.3. A merge route of the
     regeneration workflow's own is not part of it and never was: it
     would be a second copy of `prove`, for a proof it cannot improve on.
 -   **Plan-pinning (`preview --save-plan` / `up --plan`) is deliberately
@@ -643,8 +654,8 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     hub, architecture.md §4.3) owns the complete scheduled census:
     the hourly **etcd snapshot** (designed as `talosctl etcd
     snapshot` against the NLB endpoint → upload to B2 — no in-cluster
-    CronJob, no talosconfig copied into the cluster; that repository
-    carries no workflows, so none is taken — nodes.md §5 Tier 0), the
+    CronJob, no talosconfig copied into the cluster; that workflow is
+    unwritten, so none is taken — nodes.md §5 Tier 0), the
     **freshness checks
     for backups vmalert can't see** (object-age assertions on the
     B2 `etcd/` and state-backend `pg_dump` prefixes, the
@@ -721,11 +732,14 @@ pins. A PR builds both architectures and publishes nothing, so the
 manifest job does not run there.
 
 The per-image `.conf` is the contract: it is *sourced*, and beyond the
-build args it declares **`IMAGE`** (the ghcr path) and **`TAG`**, the
-latter written as an expression over the other keys
-(`TAG="${PG_MAJOR}.${PG_MINOR}-${PG_REV}-${VECTORCHORD_SEMVER}"`) so
-that the composite tags the CNPG operands need still reduce a bump to
-the one line renovate edits. The two names are reserved and are not
+build args it declares **`IMAGE`** (the image's name, which the
+workflow places under the repository owner's ghcr namespace) and
+**`TAG`**. A tag may be written as an expression over the other keys —
+`TAG="${PG_TAG%-*}-${VECTORCHORD_SEMVER}"` in `vchord-cnpg.conf`,
+`TAG="${PG_TAG}-${PGCRON_REV}"` in `pgcron-cnpg.conf` — so that the
+composite tags the CNPG operands need still reduce a bump to the one
+line renovate edits, or as a literal where the tag holds what no key
+does, as in `golinks.conf` (its commit's date and short hash). The two names are reserved and are not
 passed on as build args, and what buildah is handed is the *resolved*
 values rather than the file's lines — the confs carry renovate hints and
 prose comments that are not build args at all. `TARGETARCH` is supplied

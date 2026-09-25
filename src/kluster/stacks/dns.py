@@ -5,7 +5,7 @@ what lands here is what has no app to co-locate with — mail, the overlay host
 block, verifications, the family and parked zones — plus the anchors every app
 record points at, plus the split-horizon rewrites for every app: they are
 read from the same plain-data route declaration `apps` builds its routes
-from, and they are the reason this is the one stack that joins ZeroTier.
+from, and they are the reason this stack joins ZeroTier.
 
 The records themselves are data, written as blocks — the records that appear
 together, in every zone of one set (`kluster.components.dns.base`,
@@ -81,7 +81,7 @@ async def main() -> None:
     # dynamic resource exists, the provider process never starts and the login
     # is never read. Nothing here reads it in any case -- it opens the rewrite
     # provider and nothing else, so the provider reads it in `configure`
-    # (rfc-002 §7.4), and where each instance is reached is the census's answer
+    # (framework/pulumi.md §5.2), and where each instance is reached is the census's answer
     # rather than a key this stack carries.
     entries = rewrites(conventions.routes.ROUTES)
     for resolver in conventions.gateway.RESOLVERS:
@@ -100,8 +100,7 @@ def _anchor_addresses(physical: pulumi.StackReference) -> base.AnchorAddresses:
     exports under, so an output renamed there is renamed here in the same
     edit. Nothing here awaits: an address the `physical` stack has not published yet travels into
     the record as an unresolved output rather than raising, so this program
-    declares the same records whether or not `physical` has been applied —
-    which is the state it is in today.
+    declares the same records whether or not `physical` has been applied.
     """
     outputs = conventions.PHYSICAL_OUTPUTS
     return base.AnchorAddresses(

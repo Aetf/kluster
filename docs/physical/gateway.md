@@ -336,8 +336,8 @@ and both scripts key on that one fact, so what is mirrored and what
 `40-machines.sh` takes for a machine cannot be two different sets — and
 neither can the declaration and a list delivered beside it, because
 there is none. Every other per-machine fact is read the same way, off
-that machine's own directory: what its content stamp covers, and what a
-machine that has never run is seeded with. A directory with no settings
+that machine's own directory: what its content stamp covers, and the
+initial state a machine that has never run starts from. A directory with no settings
 file is not a machine and is skipped, which is what keeps a
 half-migrated or hand-made sibling directory from being started; a
 machine whose settings file went away is one that is no longer
@@ -374,7 +374,7 @@ the service anything about itself. An unchanged stamp plus an active
 machine means nothing to do. The initial state is outside the set by
 construction — it sits in a directory of its own, and the stamp walks
 files — because a machine that has run once owns its state, and a
-change to what it was seeded with is never a reason to bounce it.
+change to its initial state is never a reason to bounce it.
 
 The stamped set names the root filesystem's **digest marker** rather
 than the tree, because walking a root filesystem to learn it has not
@@ -384,14 +384,19 @@ written by the push and records which published artifact a tree came
 from, while a **content stamp** is written by that script and records
 what it last acted on. The first is an input to the second.
 
-**A push that leaves a machine down fails, and the machine goes back.**
+**A push that leaves a machine down fails, and a bad tree goes back.**
 Converging is not evidence that a machine runs, so every file's
-post-apply hook asks systemd whether that machine reached active. If it
-did not, the hook swaps the machine's root filesystem back to the tree
+post-apply hook asks systemd whether that machine reached active, and
+**exits non-zero** if it did not. The root filesystem's own hook does
+more first: it swaps the machine's root filesystem back to the tree
 this push displaced — the push leaves it beside the live one until the
 next push clears it — takes away the digest marker, which is now a
-claim about a tree the device no longer runs, restarts the machine,
-and **exits non-zero**. The resource fails: the apply is red, the next
+claim about a tree the device no longer runs, and restarts the
+machine. Only that hook swaps. The tree is the one thing on the device
+with a displaced copy beside it; a configuration file's hook that
+swapped it would replace a tree that had nothing to do with the
+failure and leave the bad configuration in place, for the next push to
+re-apply. Either way the resource fails: the apply is red, the next
 preview still has the work to do, and the operator finds a failed push
 rather than a resolver that has been down since a push that reported
 success. The same swap is a one-command tool
@@ -439,6 +444,25 @@ by hand. It occupies two roots:
     offline package cache, plus whatever directory a layer of the
     gateway asks for.
 
+**Only `/data` is promised across a firmware update.** An update
+wipes `/usr` and `/var` — every apt-installed package and the dpkg
+records of them — and every update observed so far has carried `/etc`
+and `/root` across, by a migration the vendor does not document.
+Only the start of the boot chain relies on that migration:
+`udm-boot.service` and its enable link are in `/etc/systemd/system`,
+and the chain cannot put back the unit that runs it — the paragraph on
+that unit below is its recovery. Everything else this program needs
+off `/data` is put back from `/data` by the chain at boot, which
+converges nothing after an ordinary update and is load-bearing after a
+major-version jump or a factory reset, where the migration may not
+happen. Whether an update that carries `/etc` across puts back the
+stock copy of a file the firmware itself ships — FRR's daemon list, or
+its configuration (§1.3) — is not established. `frr-config.sh` checks
+the daemon list's switch and compares the daemon's copy with the source
+on every run, so it repairs either file whichever way that falls; what
+the answer decides is whether the first boot after an update parses the
+configuration against the new firmware's parser (§1.3).
+
 Three files are the mechanism itself.
 
 **`udm-boot.service` is carried verbatim from upstream**, with the
@@ -452,11 +476,13 @@ restores everything else.
 transaction, because packages version-locked to one another cannot be
 resolved a package at a time. *Which* packages is data — the union of
 what the layers above require, rendered into the script — and
-everything else about it is mechanism. When apt succeeds, the debs it
-downloaded become the offline cache in `dpkg/`, which is the fallback
-for the post-update boot where apt is unreachable. The cache is
-refreshed by replacing the whole directory in one rename, so **`dpkg/`
-is that script's alone**: a file this program wrote there would be
+everything else about it is mechanism. When apt succeeds, the script
+downloads the whole set again, and only when that download succeeds do
+the debs become the offline cache in `dpkg/`, which is the fallback for
+the post-update boot where apt is unreachable; a refresh whose download
+fails says so and keeps the old cache whole. The cache is refreshed by
+moving the old directory aside and the new one into place, so
+**`dpkg/` is that script's alone**: a file this program wrote there would be
 deleted by the next refresh and reported as drift forever after.
 
 **`20-units.sh` converges the unit sources** into
@@ -576,7 +602,7 @@ in the firmware's list of what runs, and the daemon running at boot.
     authentication password, so it is a secret in state and not
     world-readable on the device.
 -   **`/etc/frr/frr.conf`** is the one the daemon opens. It is off
-    `/data`, so a firmware update takes it away.
+    `/data`, so nothing promises it across a firmware update (§1.2).
 
 Between them sits **`frr-config.sh`**, an executable in `bin/` run by
 **`frr-config.service`**, a `Type=oneshot` unit wanted by
@@ -588,9 +614,9 @@ and does nothing where all three already hold.
 `/etc/frr/daemons` is the firmware's own file — the list of which
 daemons of the suite the supervisor starts — and it ships with the
 protocol daemon off (`bgpd=no`), which is why a device nobody has
-declared a session on holds none. A firmware update restores that file
-exactly as it restores `frr.conf`, so `frr-config.sh` switches the line
-on at every run and then **asserts** it: a file reshaped until the
+declared a session on holds none. It is off `/data` like `frr.conf`,
+and a firmware update may put back the stock file (§1.2), so
+`frr-config.sh` switches the line on at every run and then **asserts** it: a file reshaped until the
 substitution matches nothing would otherwise leave the executable
 reporting success over a daemon that never starts the protocol. A
 switch that had to be flipped is itself a reason to restart, so the
@@ -636,9 +662,13 @@ successful `frr.service` proves less than it looks: starting the unit
 starts only the supervisor, which returns, and the configuration is
 pushed into the daemons afterward by the supervisor itself — whose
 failure fails nothing. The installed file and its stamp therefore prove
-*installed*, not *accepted*, and the pre-check is what turns a firmware
-update whose parser no longer likes one of these lines into a
-converge-time failure instead of a peer that never establishes.
+*installed*, not *accepted*, and the pre-check is what turns a parser
+that no longer likes one of these lines into a converge-time failure
+instead of a peer that never establishes — on every run that installs
+the file. A boot that finds the stamp still matching (below) installs
+nothing and parses nothing, so after a firmware update that carried
+`/etc` across, the new parser first meets this file on the next push
+that changes it.
 
 **What says the daemon already holds it is a stamp, not the installed
 file.** The write happens before the restart is attempted, so a run
@@ -648,8 +678,10 @@ daemon nothing, leaving the session on the old configuration under an
 apply that reported success. The stamp is a checksum written beside
 `/etc/frr/frr.conf` after the restart returns, so what is skipped is
 work whose *effect* has landed. It is off `/data` with the file it
-describes: an update takes both, and the next boot installs and
-restarts from scratch.
+describes. Where an update takes or resets either, the next boot
+parses, installs and restarts from scratch; where it carries both
+across and the switch survives, the boot run finds nothing to do and
+parses nothing.
 
 **The daemon's copy is installed `frr:frr` 0640**, which is the daemon
 suite's own convention on this device and what an operator writing the
@@ -744,10 +776,11 @@ holding the only other way in. A key is added when it is absent and
 nothing is ever removed, so retiring one is an act on the device rather
 than a delete of a resource here.
 
-`/root` has survived every firmware update observed so far — the same
-undocumented migration `/etc` gets — so day to day this converges
-nothing. It is load-bearing after a major-version jump or a factory
-reset, on the same reasoning as `20-units.sh`.
+`/root` is off `/data` and stands where `/etc` does (§1.2): carried
+across every firmware update observed so far, and not promised across
+any. So day to day this converges nothing; it is load-bearing after a
+major-version jump or a factory reset, on the same reasoning as
+`20-units.sh`.
 
 What the `physical` stack declares is one key: the public half of the
 credential its own sessions present, which is a constant in
@@ -1436,10 +1469,13 @@ at the registrar.
     UDM, restart the machine or rerun the boot chain's two machine
     scripts (§1.1). If the host is also down: physical presence (LAN).
 -   **Firmware update wiped the services** — trigger: post-update, the
-    machines are gone from `/var/lib/machines` and their settings from
-    `/etc/systemd/nspawn`. The boot chain re-establishes them
-    autonomously (§1.1); verify the overlay comes back (it carries the
-    management path). Fallback if host-networking nspawn misbehaves
+    machines' links are gone from `/var/lib/machines`. The boot chain
+    re-establishes them autonomously (§1.1); verify the overlay comes
+    back (it carries the management path). Where the update did not
+    carry `/etc` across — their settings gone from
+    `/etc/systemd/nspawn` too — the chain did not start either: copy
+    `udm-boot.service` back into place first (§1.2), and it restores
+    the rest. Fallback if host-networking nspawn misbehaves
     post-update: the unifios-utilities apt pattern (architecture.md
     §5.3).
 -   **UDM replaced** — trigger: hardware failure/RMA. Restore from the
@@ -1562,15 +1598,14 @@ on a pair holding both a drop and an allow the position *is* the rule.
     is declared; narrowing it here would move that decision behind a
     gateway credential.
 4.  **Internal → cluster zone: allow, with the IoT VLAN dropped ahead
-    of it.** The allow preserves what the trusted VLANs had while the
-    nodes shared the untagged LAN — debugging straight at a node, a
+    of it.** The allow gives the trusted VLANs the reach they have to
+    every host of the Internal zone — debugging straight at a node, a
     ping, a host path that hairpins. The drop is a v4-CIDR/ULA pair
     naming the IoT VLAN as the source, ordered **before** the allow
     because here the allow is the broad rule: declared after it, the
     drop would match nothing while reading as if it were in force.
-    Talos apid, the kubelet and BGP go off the table for the LAN's
-    least-trusted population on day one, and nothing recorded is
-    severed — the single IoT-originated dependency targets the pool,
+    Talos apid, the kubelet and BGP are off the table for the LAN's
+    least-trusted population, and nothing recorded is severed — the single IoT-originated dependency targets the pool,
     not the node subnet. Structurally it is rule 1 one zone over: the
     zone stays open, the untrusted subpopulation is carved out.
 5.  **qbittorrent inbound-v6 pinhole**: to the worker VM's GUA on the

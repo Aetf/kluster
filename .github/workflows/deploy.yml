@@ -124,8 +124,8 @@ jobs:
           version: 2026.9.1
           experimental: true
       - run: mise x uv -- uv sync --locked
-      # The AdGuard rewrites are DNS and live on the UDM, so this is the one
-      # stack that reaches the LAN (dns.md §3).
+      # The AdGuard rewrites are DNS and live on the UDM, so this stack
+      # reaches the LAN (dns.md §3).
       - uses: ./.github/actions/zerotier
         with:
           network_id: ${{ secrets.ZEROTIER_NETWORK_ID }}

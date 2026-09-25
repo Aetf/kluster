@@ -25,11 +25,10 @@ runs:
         set -euo pipefail
         conf="docker/${{ inputs.image }}.conf"
 
-        # The conf is *sourced*, not parsed, because TAG is written as an
-        # expression over the other keys — `TAG="${PG_MAJOR}.${PG_MINOR}-${PG_REV}"`
-        # for the CNPG operands, a bare version for the rest. That keeps a
-        # version bump a one-line edit renovate can make, with the tag
-        # following from it.
+        # The conf is *sourced*, not parsed, because TAG may be written as an
+        # expression over the other keys (`TAG="${PG_TAG}-${PGCRON_REV}"` in
+        # pgcron-cnpg.conf). That keeps a version bump a one-line edit
+        # renovate can make, with the tag following from it.
         set -a; . "$conf"; set +a
 
         # ghcr paths are lowercase and the owner login is not.

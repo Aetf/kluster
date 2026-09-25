@@ -174,8 +174,9 @@ because a second program reads the same table: the `credentials`
 command pushes a secret into every Environment the register names
 (credentials.md §3), and a script may import `conventions` but nothing
 a stack declares from. It also carries the switches a workflow
-branches on: the labels it reads — today `expect-changes` (ci.md §3) —
-and the identities it tests a pull request's author against — today
+branches on: the labels it reads — `expect-changes` on this
+repository (ci.md §3), `alert` on the ops repository (operations.md
+§4) — and the identities it tests a pull request's author against — today
 renovate's — and the repository variables it reads, today the dispatch
 App's client id (`DISPATCH_APP_CLIENT_ID`, ci.md §3). Each is held no
 shorter than what the workflows actually read by a test. A label and a
@@ -244,7 +245,9 @@ in the component. It is the same shape, and the same name, as the
     make the door impassable rather than stricter. Admin bypass is
     off for the same reason `enforce_admins` is on below.
 -   **Labels**: one resource per census entry, which today is
-    `expect-changes` on `kluster` and nothing on `kluster-ops`. A
+    `expect-changes` on `kluster` and `alert` on `kluster-ops`, the
+    label the ops repository's dispatch handler puts on the alert
+    issues it opens and finds them by. A
     workflow that reads a label nothing declares fails in the quietest
     way there is — the condition is simply never true, so the escape
     hatch is unavailable at the moment somebody needs it and nothing
@@ -254,9 +257,9 @@ in the component. It is the same shape, and the same name, as the
     apiece would be meaning nobody put there.
 -   **Repository variables**: one `ActionsVariable` per census entry,
     which today is `DISPATCH_APP_CLIENT_ID` on `kluster` — the dispatch
-    App's client id, which `sdk-regenerate.yml` hands to the action
-    that mints the App's token beside the key (ci.md §3) — and nothing
-    on `kluster-ops`. The value is public: a client id names the App
+    App's client id, which `sdk-regenerate.yml` and `alert.yml` hand to
+    the action that mints the App's token beside the key (ci.md §3) —
+    and nothing on `kluster-ops`. The value is public: a client id names the App
     and authenticates as nothing, so it is a census fact in the clear
     (`conventions.forge.DISPATCH_APP`), and the variable is spelled from
     it rather than typed into the console. A value that would have to
