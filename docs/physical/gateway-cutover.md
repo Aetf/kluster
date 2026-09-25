@@ -122,7 +122,8 @@ not moved.
     and the offline cache cannot satisfy them — *after* the machines have
     been stopped and moved. Installing them in advance takes that failure
     out of the window: `apt-get install -y systemd-container
-    libnss-mymachines skopeo umoci`, on any day before it.
+    libnss-mymachines skopeo umoci`, on any day before it. The pull probe
+    below needs them in place.
 -   **The ACME token is minted and committed**: `credentials derived
     cloudflare-gateway-acme mint` has run and the `physical` stack file
     carrying the token is committed (credentials.md §3). The proxy comes
@@ -153,6 +154,281 @@ not moved.
     same device behind two ports, so what the window needs is one
     address that answers on both — any status code from the second,
     since what is being tested is that something terminates there.
+    The two probes below dial the same `ADDR`. They need the value
+    `ADDR` will hold, not its commit, and are best run before it.
+-   **The device pulls a pinned image the way the push does.** Each
+    machine's root filesystem in step 3 is two commands on the device,
+    and the window is otherwise the first time either runs there: the
+    provider's `pull_script` and `unpack_script`
+    (`providers/device_files/provider.py`) spell their flags from the
+    manual pages of the releases the device's distribution ships —
+    `skopeo` 1.2.2, `umoci` 0.4.7 — and the copy leans on
+    `/etc/containers/policy.json` without naming it. The probe runs
+    both invocations as the provider builds them, against one of the
+    gateway's pins, into a scratch path under `/data`, over the same kind of
+    session the provider opens — a command handed to `ssh`, with no
+    terminal. From the checkout root, in the session that bound `ADDR`,
+    with the packages above installed:
+
+    ```sh
+    IMAGE=$(sed -n 's/^ *versions:image-gateway-zerotier: \(.*\):[^:@/]*\(@sha256:[0-9a-f]*\)$/\1\2/p' Pulumi.yaml)
+    echo "$IMAGE"       # <repository>@sha256:<digest>, tag dropped as the provider drops it;
+                        # an empty line means the pin did not parse
+    T=/data/kluster-probe/rootfs
+    ssh "root@$ADDR" cat /etc/containers/policy.json
+    time ssh "root@$ADDR" "mkdir -p $T.kluster-oci && skopeo copy --quiet docker://$IMAGE oci:$T.kluster-oci:pinned"
+    ssh "root@$ADDR" "umoci raw unpack --image $T.kluster-oci:pinned $T.kluster-unpacking && ls $T.kluster-unpacking"
+    ssh "root@$ADDR" rm -rf /data/kluster-probe
+    ```
+
+    It passes on three readings. The policy file names a `default` of
+    `insecureAcceptAnything`, the permissive default that `skopeo`'s
+    dependency `golang-github-containers-common` ships. The copy exits
+    zero, prints nothing, and takes seconds. Step 3 pulls the proxy's
+    and both resolvers' images at the same time over this uplink —
+    nothing orders the three trees against each other — and holds each
+    pull to one command under the session's `DEFAULT_TIMEOUT`
+    (`providers/device_files/ssh.py`); their images together are several
+    times this one, so a copy here that takes a noticeable fraction of
+    that bound is step 3's pulls running out of it.
+    And the unpack exits zero with `ls` listing a root filesystem's top
+    level — `etc`, `usr` and the rest — rather than a `config.json`
+    beside a `rootfs`, which is the runtime bundle that `umoci unpack`
+    writes and the provider's `raw` subcommand exists to avoid.
+
+    Each failure has one meaning. `command not found` is the packages
+    item above not yet run. A usage error from either tool — a flag, a
+    subcommand or a reference shape the release does not know — is the
+    provider's command shape not fitting the device, and it is fixed in
+    `pull_script` or `unpack_script` before the window; nothing else in
+    the design moves. A copy refused by its signature policy, or failing
+    because the policy file is missing, is the one input to the copy
+    that the provider never names: it passes neither `--policy` nor
+    `--insecure-policy`, so the file or the provider changes before the
+    window. A copy that cannot reach the registry is
+    the device's own resolution or outbound HTTPS failing with its
+    resolvers **up**, which the window, with them down, cannot improve
+    on. And a copy that takes minutes is step 3's concurrent pulls
+    exceeding that bound, after the state has already moved.
+
+    The last line is the cleanup, and all of it: the path is the
+    probe's own, and no machine, unit or declaration names it. Between
+    the unpack and that line the image sits on the device in two forms,
+    which is the same peak each of step 3's pulls reaches.
+-   **The controller round-trips the firewall's resource shapes.**
+    Step 3 is otherwise the first time the bridged filipowm/unifi
+    provider writes to this controller: the targeted apply creates the
+    cluster zone, the zone policies and their orders, and the port
+    forward (gateway.md §4.2). The zone-policy resource is marked
+    experimental upstream, and whether it round-trips — create, a clean
+    preview, delete — decides which provider declares the rules
+    (declarative/physical.md §6). A window that finds out has already
+    moved the machines' state, so the answer comes from scratch objects
+    beforehand.
+
+    The probe is a throwaway Pulumi project with a file backend of its
+    own, in the form framework/testing.md §5.1 gives a scratch probe,
+    run in the stack's own `.venv` so that the SDK — and with it the
+    provider release the engine resolves — is the one the stack pins.
+    Its provider is built with the arguments `SiteFirewall` builds its
+    own with (`components/gateway/unifi.py`), from the same key in the
+    `physical` stack's configuration, at the same `ADDR`; a change to
+    that construction is a change here. It declares a zone of its own
+    with no network in it; an address group of each family, as the
+    census's pool groups are; policies out of that zone in the shapes the
+    census uses — zone to zone in both families, and per family a
+    subnet source to a literal address with a port and a subnet source
+    to a group; the order on that pair; and a forward of an unused WAN
+    port to the worker's address, each named `kluster-probe` in the
+    console. The addresses are the documentation ranges, `192.0.2.0/24`
+    and `2001:db8::/32`. A zone holding no network sources no traffic,
+    so nothing its policies say matches anything; the forward is open for the
+    minutes the probe takes, to an address nothing answers on before
+    the worker exists. The cluster VLAN's network object is not probed:
+    a scratch network is a live VLAN on the gateway rather than an inert
+    object, so that creation stays the window's.
+
+    Confirm in the console that no port forward uses 49999; if one
+    does, pick another unused port for `PORT` below. Then, from the
+    checkout root, in the session that bound `ADDR`:
+
+    ```sh
+    PROBE=$PWD/.claude/unifi-probe
+    PULUMI=$(mise which pulumi)
+    probe() {
+        (cd "$PROBE" && PULUMI_BACKEND_URL="file://$PROBE/state" PULUMI_HOME="$PROBE/home" \
+            PULUMI_CONFIG_PASSPHRASE=probe "$PULUMI" "$@")
+    }
+    mise x uv -- uv sync
+    mkdir -p "$PROBE/state"
+    cat > "$PROBE/Pulumi.yaml" <<'EOF'
+    name: unifi-probe
+    runtime:
+      name: python
+      options:
+        virtualenv: ../../.venv
+    EOF
+    cat > "$PROBE/__main__.py" <<'EOF'
+    import pulumi
+    import pulumi_unifi as unifi
+
+    from kluster import conventions
+    from kluster.components.gateway import url_host
+    from kluster.components.gateway.unifi import API_KEY, HTTP_MAX_RETRIES, ZONE_EXTERNAL
+
+    NAME = 'kluster-probe'
+    PORT = '49999'  # a WAN port no forward on the controller uses
+    site = conventions.gateway.UNIFI_SITE
+    config = pulumi.Config()
+
+    # The arguments SiteFirewall builds its own provider with.
+    provider = unifi.Provider(
+        f'{NAME}-unifi',
+        api_url=f'https://{url_host(config.require("gatewayHost"))}',
+        api_key=config.require_secret(API_KEY),
+        site=site,
+        http_max_retries=HTTP_MAX_RETRIES,
+    )
+    opts = pulumi.ResourceOptions(provider=provider)
+    external = unifi.get_firewall_zone_output(
+        name=ZONE_EXTERNAL, site=site, opts=pulumi.InvokeOptions(provider=provider)
+    ).id
+
+    zone = unifi.FirewallZone(f'{NAME}-zone', name=NAME, site=site, opts=opts)
+    group_v4 = unifi.FirewallGroup(
+        f'{NAME}-group-v4', name=f'{NAME} v4', type='address-group', members=['192.0.2.0/24'],
+        site=site, opts=opts,
+    )
+    group_v6 = unifi.FirewallGroup(
+        f'{NAME}-group-v6', name=f'{NAME} v6', type='ipv6-address-group', members=['2001:db8::/48'],
+        site=site, opts=opts,
+    )
+    Source = unifi.FirewallZonePolicySourceArgs
+    Destination = unifi.FirewallZonePolicyDestinationArgs
+    wide = unifi.FirewallZonePolicy(
+        f'{NAME}-wide', name=f'{NAME} wide', description=NAME, action='ALLOW', ip_version='BOTH',
+        protocol='all', source=Source(zone_id=zone.id), destination=Destination(zone_id=external),
+        auto_allow_return_traffic=True, enabled=True, opts=opts,
+    )
+    literal_v4 = unifi.FirewallZonePolicy(
+        f'{NAME}-literal-v4', name=f'{NAME} literal v4', description=NAME, action='ALLOW',
+        ip_version='IPV4', protocol='tcp', source=Source(zone_id=zone.id, ips=['192.0.2.0/25']),
+        destination=Destination(zone_id=external, ips=['192.0.2.200'], port=443),
+        auto_allow_return_traffic=True, enabled=True, opts=opts,
+    )
+    literal_v6 = unifi.FirewallZonePolicy(
+        f'{NAME}-literal-v6', name=f'{NAME} literal v6', description=NAME, action='ALLOW',
+        ip_version='IPV6', protocol='tcp', source=Source(zone_id=zone.id, ips=['2001:db8:1::/64']),
+        destination=Destination(zone_id=external, ips=['2001:db8:2::1'], port=443),
+        auto_allow_return_traffic=True, enabled=True, opts=opts,
+    )
+    grouped_v4 = unifi.FirewallZonePolicy(
+        f'{NAME}-grouped-v4', name=f'{NAME} grouped v4', description=NAME, action='BLOCK',
+        ip_version='IPV4', protocol='all', source=Source(zone_id=zone.id, ips=['192.0.2.0/25']),
+        destination=Destination(zone_id=external, ip_group_id=group_v4.id), enabled=True, opts=opts,
+    )
+    grouped_v6 = unifi.FirewallZonePolicy(
+        f'{NAME}-grouped-v6', name=f'{NAME} grouped v6', description=NAME, action='BLOCK',
+        ip_version='IPV6', protocol='all', source=Source(zone_id=zone.id, ips=['2001:db8:1::/64']),
+        destination=Destination(zone_id=external, ip_group_id=group_v6.id), enabled=True, opts=opts,
+    )
+    unifi.FirewallZonePolicyOrder(
+        f'{NAME}-order', source_zone_id=zone.id, destination_zone_id=external,
+        before_predefined_ids=[p.id for p in (wide, literal_v4, literal_v6, grouped_v4, grouped_v6)],
+        site=site, opts=opts,
+    )
+    unifi.PortForward(
+        f'{NAME}-forward', name=NAME, port_forward_interface='wan', protocol='tcp_udp', src_ip='any',
+        dst_port=PORT, fwd_ip=str(conventions.HOMELAB_NODE_IPV4), fwd_port=PORT, site=site, opts=opts,
+    )
+    EOF
+    probe stack ls --all       # an empty table: the backend in hand is the probe's own
+    probe stack init probe
+    probe config set gatewayHost "$ADDR"
+    pulumi config get unifiApiKey --stack physical | probe config set --secret unifiApiKey
+    ```
+
+    The rest runs one line at a time, because each reads the result of
+    the one before it — above all, `rm -rf` runs only once `destroy`
+    has succeeded or its leftovers are gone by hand (below):
+
+    ```sh
+    probe up                   # read the plan before confirming it
+    probe preview --refresh --expect-no-changes
+    probe destroy --remove
+    rm -rf "$PROBE"
+    ```
+
+    `probe` is the scratch form rather than a convenience: the binary
+    `mise which` names, with the backend, the plugin home and a
+    passphrase of the probe's own set in the same command, so no run of
+    it can land in the estate's backend. Its first run downloads, into
+    that home, the plugins the SDKs in `.venv` name.
+
+    It passes on three readings. `probe up` plans the stack, its
+    provider and one create for each resource the program declares —
+    the zone, both groups, the policies, the order and the forward — and
+    nothing else, and applies every one. The refreshed preview exits
+    zero proposing no change: every field the controller reads back is
+    the value declared. And `destroy` deletes every one of them, after
+    which the console holds nothing named `kluster-probe`.
+
+    What a failure means depends on where it lands:
+
+    -   **`tls: failed to verify certificate` on the first call.** The
+        controller serves a self-signed certificate of its own that
+        names none of the addresses this program dials, and the
+        provider verifies it unless `allow_insecure`, or `UNIFI_INSECURE`
+        in the environment of whoever runs it, says otherwise.
+        `SiteFirewall` passes no `allow_insecure`, so the window's run
+        would fail the same way on its first controller call. What
+        makes the provider accept this controller is
+        Aetf/kluster-ops#411's to decide, and until it has, verification
+        stays on everywhere: neither this probe nor step 3 runs with
+        `UNIFI_INSECURE` in its environment, and `allow_insecure` is not
+        set by hand. A green run obtained that way sends the
+        controller's key, unverified, to whatever answers at `ADDR` —
+        the exposure that issue exists to rule on — and the window does
+        not open until it has closed.
+    -   **401 or 403, on the lookup of `External` or on the first
+        create.** The key, not the resources: it is not the dedicated
+        administrator's, or that administrator cannot manage the
+        network; the fallback would be refused the same way. The key is
+        re-recorded (`credentials derived unifi record`, credentials.md
+        §3) and the probe runs again.
+    -   **The zone, a group, a policy or the order refused, or a
+        delete refused.** The resources the rules are made of do not
+        round-trip on this controller's release — the case
+        architecture.md §5.1 records a fallback for: a
+        `UnifiFirewallPolicy` resource on the device-files provider,
+        driving the controller's API directly. That resource is not
+        built. The rules move to it before the window, and the window
+        waits on it.
+    -   **The refreshed preview proposes a change.** The diff names the
+        field. A field the controller reads back as another spelling of
+        the same value is answered in the component, by declaring that
+        spelling, and the probe runs again; a field whose value the
+        controller does not keep is the round trip failing, as above.
+    -   **The forward refused.** A refusal of the request itself is the
+        port-forward endpoint not taking writes on this release, and
+        the fallback above is for zone policies only: nothing in the
+        design answers it, so it is filed for a ruling before the
+        window. A refusal that names the destination as outside every
+        network is the controller wanting the cluster VLAN in place
+        first, which the window's run does not arrange — the component
+        gives the forward no dependency on the network — so the
+        component changes before the window. A refusal naming a
+        conflict with an existing forward is the probe's port choice,
+        not the endpoint.
+    -   **The program fails before any row is planned.** That is the
+        probe's own setup — the `.venv`, the configuration — and
+        says nothing about the controller.
+
+    Cleanup after a failure is the same `probe destroy --remove` and
+    `rm -rf`; whatever `destroy` cannot delete is removed in the console
+    by its `kluster-probe` name before the directory goes. The directory
+    goes in every case: the probe's configuration and its state history
+    hold the controller's key under a passphrase anyone can read above.
 -   **The workstation running step 3 resolves through something other
     than alice and bob.** Both are down for the whole of §4, and the
     run dials by name: the stack program reads the account's
@@ -587,12 +863,23 @@ fleet, the Talos bootstrap, the worker VM, the backup bucket, the
 overlay's network and routes — and re-walks the gateway as a no-op
 against the stamps. **It passes when a further `pulumi up` reports no
 changes**, which is the whole-stack form of the reading above and the
-one the soak's previews go on repeating. A cloud resource that fails
-here fails with the LAN's DNS up and time to spend on it: it is
-retried rather than worked around, and nothing about it is a reason to
-touch the device. Until this step has passed, step 2 of the ceremony
-is the only later one that can run — step 3 reads an address off a
-machine this step boots.
+one the soak's previews go on repeating. **One diff may appear there
+without anything having drifted**: `routes` on
+`zerotier:index/network:Network kluster-network`, where the only
+difference is `via` on the `10.144.0.0/16` route — declared absent,
+read back as `""`. None is expected, since the provider hashes the two
+alike; one that appears is that normalization rather than anything
+Central did, and the remedy is in this program, not at Central: the
+overlay component declares `via=''` for the route the census gives no
+`via` (`components/overlay/`), and the reading is taken again once
+that lands. A `routes` diff that differs in anything else — a target,
+or a `via` naming an address — is not this, and is read as gateway.md
+§2.5 step 1 reads the first one. A cloud resource that fails here
+fails with the LAN's DNS up and time to spend on it: it is retried
+rather than worked around, and nothing about it is a reason to touch
+the device. Until this step has passed, step 2 of the ceremony is the
+only later one that can run — step 3 reads an address off a machine
+this step boots.
 
 **Nothing in §4 or §5 is irreversible**, step 5 included: what it
 creates is outside everything §6 undoes, and having it in place
