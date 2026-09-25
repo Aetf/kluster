@@ -6,7 +6,9 @@ handshake with no credential at all, and the age of the newest dump, read off
 a listing of the dump prefix as a key that can list and nothing else. Each
 answers with a `Verdict`, every verdict is printed whether it passed or not,
 and a failure names the playbook that answers it -- an alert with no procedure
-is the one shape architecture.md §4.3 refuses.
+is the one shape architecture.md §4.3 refuses. A key B2 refuses, and B2 not
+answering, are the dump probe's verdicts too, rather than exceptions that
+would take the other probe's verdict down with them.
 
 The thresholds are not this module's: the certificate margin is
 `config.EXPIRY_ALERT_MARGIN`, the dump age is `settings.DUMP_MAX_AGE`, and
@@ -32,9 +34,11 @@ import subprocess as sp
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
+import requests
 from cryptography import x509
 
 from ..credentials import b2
+from ..credentials.masters import CredentialRejected
 from ..credentials.pulumi_config import SlotRefused
 from . import config, settings
 
@@ -56,9 +60,13 @@ PROBES = (CERTIFICATE, DUMPS)
 #: What a run exits with: one bit per failed probe, summed, so a caller reads
 #: which failed off the status alone and a run where both failed is told apart
 #: from either. 1 is not among them, because it is `cli.main`'s: a refusal --
-#: no key in the environment, a key the account rejects -- is a run that could
-#: not probe, which is a different fact from a probe that did and failed.
-FAILED = {CERTIFICATE: 2, DUMPS: 4}
+#: no key in the environment -- is a run that could not probe, which is a
+#: different fact from a probe that did and failed. Nor is 2, which is what
+#: the layers in front of the probe exit with when the command never ran:
+#: argparse refusing an argument, and `uv run` finding no such entry point.
+#: A probe bit that shared it would file an interface break as a probe's
+#: alert.
+FAILED = {CERTIFICATE: 4, DUMPS: 8}
 
 #: The playbooks a failure sends the reader to (state-backend.md §7): an
 #: expiring or wrong certificate is a re-issue, and everything else -- a box
@@ -66,6 +74,12 @@ FAILED = {CERTIFICATE: 2, DUMPS: 4}
 #: from the rebuild path, which doubles as the diagnosis (§6).
 REISSUE_PLAYBOOK = 'physical/state-backend.md §7.1'
 REBUILD_PLAYBOOK = 'physical/state-backend.md §7.3'
+#: Where a run that could not reach B2 sends the reader: the monitoring
+#: section, which says whose outage that is and what retries it.
+MONITORING = 'physical/state-backend.md §6'
+#: Where a list-only key B2 refuses is re-minted: `credentials derived
+#: b2-freshness-dumps mint`, which refills both workflow secrets.
+KEY_PLAYBOOK = 'credentials.md §4'
 
 #: How long one handshake may take. Wall-clock, because nothing here yields
 #: to count turns, and it fails as `TimeoutExpired` naming its seconds.
@@ -254,11 +268,16 @@ def dumps(
     dump that stopped. An object under the prefix that is not named like a
     dump fails too, by name: nothing but the appliance's uploader can write
     there, so a stranger is a fact the operator has to see.
+
+    A probe that could not list fails as one, with a verdict of its own: a
+    key B2 refuses -- at the authorization or at the listing -- or one
+    confined to no bucket, and B2 not answering at all.
     """
     max_age = max_age or settings.DUMP_MAX_AGE
     log.info('checking the age of the newest dump under %s, as the list-only key', b2.DUMP_PREFIX)
-    session, bucket_id = authorize(key_id, key)
-    names = session.file_names(bucket_id, prefix=b2.DUMP_PREFIX)
+    names = _listing(key_id, key, authorize=authorize)
+    if isinstance(names, Verdict):
+        return names
     if not names:
         return Verdict(
             DUMPS,
@@ -292,6 +311,42 @@ def dumps(
     return Verdict(DUMPS, f'the newest dump, {newest}, was taken {hours(age)} ago (allowed: {hours(max_age)})')
 
 
+def _listing(key_id: str, key: str, *, authorize: Authorize) -> tuple[str, ...] | Verdict:
+    """The names under the dump prefix, as the list-only key; or the verdict of a listing that did not happen.
+
+    The refused key's verdict names the variables rather than the key id B2's
+    refusal carries: in the workflow the id is a secret, and a job output
+    holding one is dropped whole. B2 not answering names only the kind of
+    failure, for the same reason -- what a transport error prints is not this
+    module's to vet.
+    """
+    refused = Verdict(
+        DUMPS,
+        f'B2 refused the key in {KEY_ID_ENV} and {KEY_ENV}, or it is confined to no bucket, so the prefix was '
+        'not listed — `credentials derived b2-freshness-dumps mint` mints the list-only key and refills both',
+        KEY_PLAYBOOK,
+    )
+    try:
+        session, bucket_id = authorize(key_id, key)
+        return session.file_names(bucket_id, prefix=b2.DUMP_PREFIX)
+    except CredentialRejected:
+        return refused
+    except requests.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code in (401, 403):
+            return refused
+        return _unanswered(exc)
+    except requests.RequestException as exc:
+        return _unanswered(exc)
+
+
+def _unanswered(exc: requests.RequestException) -> Verdict:
+    return Verdict(
+        DUMPS,
+        f'B2 did not answer the listing ({type(exc).__name__}), so nothing is known about the dumps this run',
+        MONITORING,
+    )
+
+
 def run(
     *,
     only: str | None = None,
@@ -304,24 +359,31 @@ def run(
 
     Every chosen probe runs whatever the earlier ones found: a run that
     stopped at the first failure would leave the second probe's verdict
-    unknown on exactly the morning both are wanted. The credential is read
-    before any probe runs, so an empty slot is refused with its repair rather
-    than after a handshake it has no bearing on.
+    unknown on exactly the morning both are wanted. A probe that could not
+    reach what it measures answers with a failed verdict of its own, so the
+    status still names it. Each verdict is printed as its probe answers: what
+    a probe raises beyond that -- a defect, not a finding -- still ends the
+    run, but after what the earlier ones found is already on the page. The
+    credential is read before any probe runs, so an empty slot is refused
+    with its repair rather than after a handshake it has no bearing on.
     """
     chosen = PROBES if only is None else (only,)
     key = credential(environ) if DUMPS in chosen else None
 
     verdicts: list[Verdict] = []
-    if CERTIFICATE in chosen:
-        verdicts.append(certificate(now=now, handshake=handshake))
-    if key is not None:
-        verdicts.append(dumps(*key, now=now, authorize=authorize))
 
-    for verdict in verdicts:
+    def report(verdict: Verdict) -> None:
+        verdicts.append(verdict)
         if verdict.passed:
             log.info('%s', verdict)
         else:
             log.error('%s', verdict)
+
+    if CERTIFICATE in chosen:
+        report(certificate(now=now, handshake=handshake))
+    if key is not None:
+        report(dumps(*key, now=now, authorize=authorize))
+
     failed = [verdict for verdict in verdicts if not verdict.passed]
     if failed:
         log.error('%d of %d probe(s) failed', len(failed), len(verdicts))

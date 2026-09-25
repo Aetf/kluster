@@ -20,7 +20,9 @@ import importlib
 import importlib.util
 import json
 import logging
+import os
 import shutil
+import time
 import types
 import urllib.parse
 from collections.abc import Callable, Iterator, Sequence
@@ -807,11 +809,17 @@ SLOT = Path('bundle')
 def _run(
     replace: bool = False,
     *,
-    force: bool = True,
+    force: bool = False,
     dump: bool = True,
     dump_output: Path | None = None,
     bundle_dir: Path = SLOT,
 ) -> int:
+    """One `provision`, with no flag the case does not name.
+
+    The plain run is the default because it is the operator's: a case that
+    replaces a box says which of `--force` and `--replace` let it, so a gate
+    that stopped honouring either one is read by the cases that pass it alone.
+    """
     return cli._provision(  # pyright: ignore[reportPrivateUsage]
         object(),  # pyright: ignore[reportArgumentType]
         seed_entry='e',
@@ -891,7 +899,7 @@ def test_a_changed_machine_definition_replaces_the_box(converge: Any) -> None:
     recorder = _Recorder(instance_exists=True, metadata=_built_from(stale))
     converge(recorder)
 
-    assert _run() == PENDING
+    assert _run(force=True) == PENDING
 
     assert (recorder.terminated, recorder.minted, recorder.launched) == (1, 1, 1)
 
@@ -902,7 +910,7 @@ def test_a_box_whose_dump_key_b2_no_longer_has_is_replaced(converge: Any) -> Non
     recorder = _Recorder(instance_exists=True, metadata=_built_from(CURRENT), dump_key_current=False)
     converge(recorder)
 
-    assert _run() == PENDING
+    assert _run(force=True) == PENDING
 
     assert (recorder.terminated, recorder.minted, recorder.launched) == (1, 1, 1)
 
@@ -913,16 +921,18 @@ def test_a_box_without_the_bookkeeping_is_replaced(converge: Any) -> None:
     recorder = _Recorder(instance_exists=True, metadata={})
     converge(recorder)
 
-    assert _run() == PENDING
+    assert _run(force=True) == PENDING
 
     assert (recorder.terminated, recorder.minted, recorder.launched) == (1, 1, 1)
 
 
 def test_replace_rebuilds_a_box_that_matches(converge: Any) -> None:
+    # `--replace` is its own approval: asking for the rebuild is asking for
+    # the termination, so it needs no `--force` beside it.
     recorder = _Recorder(instance_exists=True, metadata=_built_from(CURRENT))
     converge(recorder)
 
-    assert _run(replace=True) == PENDING
+    assert _run(replace=True, force=False) == PENDING
 
     assert (recorder.terminated, recorder.minted, recorder.launched) == (1, 1, 1)
 
@@ -1047,7 +1057,7 @@ def test_a_box_is_dumped_before_it_is_terminated(converge: Any) -> None:
     recorder = _Recorder(instance_exists=True, metadata=_built_from(stale))
     converge(recorder)
 
-    assert _run() == PENDING
+    assert _run(force=True) == PENDING
 
     assert recorder.order == ['image', 'dump', 'terminate', 'launch', 'retire']
     # And it is the artefact `state-backend restore` takes, under the name the
@@ -1064,8 +1074,11 @@ def test_a_dump_that_fails_leaves_the_box_standing(converge: Any) -> None:
     recorder = _Recorder(instance_exists=True, metadata=_built_from(stale), dump_fails=True)
     converge(recorder)
 
-    assert _run() == 1
+    assert _run(force=True) == 1
 
+    # Past the approval, as far as the dump and no further: the image a
+    # replacement stands on is converged first, and nothing after the dump ran.
+    assert recorder.order == ['image']
     assert (recorder.terminated, recorder.minted, recorder.launched) == (0, 0, 0)
 
 
@@ -1096,7 +1109,7 @@ def test_the_dump_key_s_predecessor_is_retired_only_once_the_new_box_exists(conv
     recorder = _Recorder(instance_exists=True, metadata=_built_from(stale))
     converge(recorder)
 
-    assert _run() == PENDING
+    assert _run(force=True) == PENDING
 
     assert recorder.order.index('retire') > recorder.order.index('launch')
     assert (recorder.minted, recorder.retired) == (1, 1)
@@ -1112,7 +1125,7 @@ def test_a_launch_that_fails_leaves_the_superseded_dump_key_standing(
     monkeypatch.setattr(provision, 'ensure_instance', _returning_raise('the shape has no capacity'))
 
     with pytest.raises(RuntimeError, match='the shape has no capacity'):
-        _ = _run()
+        _ = _run(force=True)
 
     assert (recorder.minted, recorder.retired) == (1, 0)
 
@@ -1124,7 +1137,7 @@ def test_no_dump_replaces_a_box_that_cannot_be_dumped(converge: Any) -> None:
     recorder = _Recorder(instance_exists=True, metadata=_built_from(stale), dump_fails=True)
     converge(recorder)
 
-    assert _run(dump=False) == PENDING
+    assert _run(force=True, dump=False) == PENDING
 
     assert (recorder.order, recorder.terminated, recorder.launched) == (
         ['image', 'terminate', 'launch', 'retire'],
@@ -1144,7 +1157,7 @@ def test_a_certificate_inside_the_renewal_margin_is_drift(converge: Any) -> None
     recorder = _Recorder(instance_exists=True, metadata=expiring)
     converge(recorder)
 
-    assert _run() == PENDING
+    assert _run(force=True) == PENDING
 
     assert (recorder.terminated, recorder.launched) == (1, 1)
 
@@ -1167,7 +1180,7 @@ def test_a_box_that_records_no_expiry_is_drift(converge: Any) -> None:
     recorder = _Recorder(instance_exists=True, metadata=_built_from(CURRENT, expiry=''))
     converge(recorder)
 
-    assert _run() == PENDING
+    assert _run(force=True) == PENDING
 
     assert (recorder.terminated, recorder.launched) == (1, 1)
 
@@ -1184,7 +1197,7 @@ def test_a_replaced_box_ends_the_run_holding_nothing(converge: Any, caplog: pyte
     recorder = _Recorder(instance_exists=True, metadata=_built_from(stale))
     converge(recorder)
 
-    assert _run() == PENDING
+    assert _run(force=True) == PENDING
 
     (taken,) = recorder.dumped
     assert any(f'state-backend restore {taken}' in message for message in caplog.messages)
@@ -1203,7 +1216,7 @@ def test_the_dump_goes_where_the_operator_asked(converge: Any, tmp_path: Path) -
     converge(recorder)
     asked = tmp_path / 'elsewhere' / 'taken.dump.age'
 
-    assert _run(dump_output=asked) == PENDING
+    assert _run(force=True, dump_output=asked) == PENDING
 
     assert recorder.dumped == [asked]
 
@@ -1216,7 +1229,7 @@ def test_the_dump_is_taken_over_the_bundle_the_operator_named(converge: Any, tmp
     converge(recorder)
     elsewhere = tmp_path / 'other-slot'
 
-    assert _run(bundle_dir=elsewhere) == PENDING
+    assert _run(force=True, bundle_dir=elsewhere) == PENDING
 
     assert recorder.bundles == [elsewhere]
 
@@ -1231,7 +1244,7 @@ def test_a_replacement_without_a_dump_still_says_where_the_state_is(
     recorder = _Recorder(instance_exists=True, metadata=_built_from(stale), dump_fails=True)
     converge(recorder)
 
-    assert _run(dump=False) == PENDING
+    assert _run(force=True, dump=False) == PENDING
 
     assert any('state-backend restore' in message for message in caplog.messages)
     assert any('B2' in message for message in caplog.messages)
@@ -1251,7 +1264,7 @@ def test_a_box_that_never_answers_still_names_the_dump(
     converge(recorder)
     monkeypatch.setattr(provision, 'wait_for_backend', _returning(False))
 
-    assert _run() == 1
+    assert _run(force=True) == 1
 
     (taken,) = recorder.dumped
     assert any(f'state-backend restore {taken}' in message for message in caplog.messages)
@@ -1336,7 +1349,7 @@ def test_a_failure_before_a_new_box_is_seen_says_to_provision_first(
     breakage(monkeypatch, recorder)
 
     with pytest.raises(RuntimeError, match='refused'):
-        _ = _run()
+        _ = _run(force=True)
 
     (taken,) = recorder.dumped
     (said,) = [message for message in caplog.messages if NO_BOX in message]
@@ -1371,7 +1384,7 @@ def test_a_new_box_that_has_not_answered_is_named_as_one(
     breakage(monkeypatch, recorder)
 
     try:
-        assert _run() == 1
+        assert _run(force=True) == 1
     except RuntimeError as refused:
         assert 'refused' in str(refused)
 
@@ -1410,7 +1423,7 @@ def test_a_plain_re_run_points_the_address_at_the_box_a_failed_run_launched(
     ensure_instance, attach = provision.ensure_instance, provision.attach_reserved_ip
     breakage(monkeypatch, recorder)
     with pytest.raises(RuntimeError, match='refused'):
-        _ = _run()
+        _ = _run(force=True)
     assert recorder.attached == []
     monkeypatch.setattr(provision, 'ensure_instance', ensure_instance)
     monkeypatch.setattr(provision, 'attach_reserved_ip', attach)
@@ -1429,7 +1442,7 @@ def test_a_new_box_that_answers_is_named_as_empty(converge: Any, caplog: pytest.
     recorder = _Recorder(instance_exists=True, metadata=_built_from(stale))
     converge(recorder)
 
-    assert _run() == PENDING
+    assert _run(force=True) == PENDING
 
     assert any(EMPTY in message and 'ocid1.instance.new' in message for message in caplog.messages)
     assert not any(SILENT in message or NO_BOX in message for message in caplog.messages)
@@ -1483,7 +1496,7 @@ def test_the_image_is_converged_before_anything_is_destroyed(converge: Any) -> N
     recorder = _Recorder(instance_exists=True, metadata=_built_from(stale))
     converge(recorder)
 
-    assert _run() == PENDING
+    assert _run(force=True) == PENDING
 
     after = recorder.order[recorder.order.index('terminate') :]
     assert 'image' not in after
@@ -1502,7 +1515,7 @@ def test_a_groundwork_failure_leaves_the_old_box_serving(
     monkeypatch.setattr(MODULES[module], stage, _returning_raise(f'{stage} refused'))
 
     with pytest.raises(RuntimeError, match=f'{stage} refused'):
-        _ = _run()
+        _ = _run(force=True)
 
     assert (recorder.terminated, recorder.minted, recorder.dumped) == (0, 0, [])
     assert recorder.instance_exists
@@ -1522,7 +1535,10 @@ class _Unwritable(_Service):
     as `_Service` answers it, except the route table, which is answered with
     no rules -- the state a converge would write into -- and the reservation,
     which points at `points_at`. The box has one VNIC whose primary private IP
-    is `PRIMARY`. A write named in `allowed` is recorded rather than refused.
+    is `PRIMARY`. A write named in `allowed` is recorded rather than refused,
+    and a repointed reservation is recorded with where it was pointed:
+    `updated` holds each as the reservation's id and the private IP it now
+    names.
     """
 
     def __init__(
@@ -1536,6 +1552,7 @@ class _Unwritable(_Service):
         super().__init__(calls, kinds)
         self.points_at: str = points_at
         self.allowed: frozenset[str] = allowed
+        self.updated: list[tuple[str, str]] = []
 
     def __getattr__(self, method: str) -> Callable[..., Any]:
         if method.startswith(('list_', 'get_', '_')) or method in self.__dict__.get('allowed', ()):
@@ -1544,6 +1561,13 @@ class _Unwritable(_Service):
 
     def create_public_ip(self, *_args: object, **_kwargs: object) -> Any:
         raise AssertionError('create_public_ip was called by a run that must only read OCI')
+
+    def update_public_ip(self, public_ip_id: str, details: Any) -> Any:
+        if 'update_public_ip' not in self.allowed:
+            raise AssertionError('update_public_ip was called by a run that must only read OCI')
+        self.calls.append('update_public_ip')
+        self.updated.append((public_ip_id, str(details.private_ip_id)))
+        return _Page([])
 
     def get_route_table(self, *_args: object, **_kwargs: object) -> Any:
         self.calls.append('get_route_table')
@@ -1662,10 +1686,14 @@ def test_a_plain_provision_points_a_loose_reservation_back_at_a_matching_box(
     recorder = _Recorder(instance_exists=True, metadata=_built_from(CURRENT))
     converge(recorder)
     clients = _unwritable(monkeypatch, points_at='ocid1.privateip.elsewhere', allowed=frozenset({'update_public_ip'}))
+    (reservation,) = clients.network.ips
 
     assert _run(force=False) == 0
 
     assert [call for call in clients.calls if not call.startswith(('list_', 'get_'))] == ['update_public_ip']
+    # And the write is the repair rather than a call: the reservation now
+    # names the box's primary private IP, not wherever it pointed before.
+    assert cast('_Unwritable', clients.network).updated == [(reservation.id, PRIMARY)]
 
 
 def _returning_raise(message: str) -> Callable[..., Any]:
@@ -2205,20 +2233,10 @@ class _Compute:
         return type('Response', (), {'data': type('Instance', (), {'lifecycle_state': 'RUNNING'})()})()
 
 
-def test_a_launch_puts_the_whole_bill_of_materials_on_the_box() -> None:
-    """What the box carries is the only thing the next converge can read.
-
-    A value the run computes and then does not attach is invisible: the box
-    comes back reporting nothing for it, the next converge calls that drift,
-    and — for the expiry — every run after it reports the same replacement,
-    which once forced hands the operator a restore. So this drives the real launch and reads the
-    metadata off the request, rather than off a fake that was handed the
-    values.
-    """
-    compute = _Compute()
+def _launch(compute: Any) -> str:
+    """The real launch, over `compute` and nothing else of OCI."""
     clients = cast('Any', type('Clients', (), {'compute': compute, 'compartment_id': 'ocid1.compartment.test'})())
-
-    instance_id = provision.ensure_instance(
+    return provision.ensure_instance(
         clients,
         subnet_id='subnet',
         nsg_id='nsg',
@@ -2233,6 +2251,21 @@ def test_a_launch_puts_the_whole_bill_of_materials_on_the_box() -> None:
         ssh_host_key_pub=PIN,
     )
 
+
+def test_a_launch_puts_the_whole_bill_of_materials_on_the_box() -> None:
+    """What the box carries is the only thing the next converge can read.
+
+    A value the run computes and then does not attach is invisible: the box
+    comes back reporting nothing for it, the next converge calls that drift,
+    and — for the expiry — every run after it reports the same replacement,
+    which once forced hands the operator a restore. So this drives the real launch and reads the
+    metadata off the request, rather than off a fake that was handed the
+    values.
+    """
+    compute = _Compute()
+
+    instance_id = _launch(compute)
+
     assert instance_id == 'ocid1.instance.launched'
     metadata = cast('dict[str, str]', compute.launched.metadata)
     assert json.loads(metadata[provision.CONFIG_METADATA]) == CURRENT
@@ -2243,6 +2276,152 @@ def test_a_launch_puts_the_whole_bill_of_materials_on_the_box() -> None:
     assert provision.instance_config(type('Instance', (), {'metadata': metadata})()) == provision.InstanceConfig(
         digests=CURRENT, dump_key_id='key-id', server_cert_expiry=FRESH
     )
+
+
+def test_a_launch_gives_the_box_no_address_but_the_reserved_one() -> None:
+    """An ephemeral public address is a second way in that nothing here names.
+
+    The reservation, the host-key pin and the certificate's SAN are all
+    written against the reserved address; a box also reachable at another one
+    is reachable where none of them apply.
+    """
+    compute = _Compute()
+
+    _ = _launch(compute)
+
+    assert compute.launched.create_vnic_details.assign_public_ip is False
+
+
+def test_a_launch_turns_off_the_unauthenticated_metadata_endpoint() -> None:
+    """The legacy metadata endpoint serves the instance's metadata without a token.
+
+    That metadata is the Ignition, with the box's secrets in it, handed to
+    anything on the box that asks.
+    """
+    compute = _Compute()
+
+    _ = _launch(compute)
+
+    assert compute.launched.instance_options.are_legacy_imds_endpoints_disabled is True
+
+
+@pytest.fixture
+def clock(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """The provisioner's clock, advanced only by its own `sleep`.
+
+    A wait's budget is then a number of polls rather than of seconds, so a
+    case about what a wait does with an answer never races the machine it
+    runs on.
+    """
+    now = [0.0]
+
+    def nap(seconds: float) -> None:
+        now[0] += seconds
+
+    monkeypatch.setattr(provision.time, 'monotonic', lambda: now[0])
+    monkeypatch.setattr(provision.time, 'sleep', nap)
+    return now
+
+
+def _instance_in(state: str) -> Any:
+    """A `get_instance` response for an instance in `state`."""
+    return type('Response', (), {'data': type('Instance', (), {'lifecycle_state': state})()})()
+
+
+def _polled(*answers: Any) -> tuple[Callable[[], Any], list[int]]:
+    """A `fetch` for `_await_state` that gives `answers` in order, raising any that is an exception.
+
+    The second value counts the polls, so a case can tell a wait that ended
+    on an answer from one that ran out of budget after it.
+    """
+    remaining = list(answers)
+    polls: list[int] = []
+
+    def fetch() -> Any:
+        polls.append(1)
+        answer = remaining.pop(0) if len(remaining) > 1 else remaining[0]
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
+
+    return fetch, polls
+
+
+def _service_error(status: int) -> Any:
+    """What the SDK raises for an OCI error answer, reached through the module that catches it."""
+    headers: dict[str, str] = {}
+    return provision.oci.exceptions.ServiceError(status, 'NotAuthorizedOrNotFound', headers, 'not yet visible')
+
+
+@pytest.mark.usefixtures('clock')
+def test_a_wait_rides_out_the_404_a_young_resource_answers_with() -> None:
+    # OCI answers 404 for a resource it has just accepted until it is
+    # visible to reads, which on a new tenancy takes a while; a wait that
+    # gave up on the first one would lose an import it had started.
+    fetch, polls = _polled(_service_error(404), _service_error(404), _instance_in('RUNNING'))
+
+    resource = provision._await_state(fetch, 'RUNNING', what='the box')  # pyright: ignore[reportPrivateUsage]
+
+    assert resource.lifecycle_state == 'RUNNING'
+    assert len(polls) == 3
+
+
+@pytest.mark.usefixtures('clock')
+def test_a_wait_does_not_ride_out_any_other_error() -> None:
+    # The control for the case above: only the 404 is transient.
+    fetch, _ = _polled(_service_error(500))
+
+    with pytest.raises(provision.oci.exceptions.ServiceError):
+        _ = provision._await_state(fetch, 'RUNNING', what='the box')  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.usefixtures('clock')
+def test_a_wait_ends_at_a_failed_state_by_naming_it() -> None:
+    """A resource that failed does not recover, and the wait says so at once.
+
+    Rather than polling it for the rest of the budget -- up to an hour for an
+    image -- and then reporting a timeout, which sends the reader looking for
+    something slow instead of something broken.
+    """
+    fetch, polls = _polled(_instance_in('PROVISIONING'), _instance_in('FAILED'))
+
+    with pytest.raises(RuntimeError, match='the box ended in FAILED'):
+        _ = provision._await_state(fetch, 'RUNNING', what='the box')  # pyright: ignore[reportPrivateUsage]
+
+    assert len(polls) == 2
+
+
+class _Terminating:
+    """Enough of the compute client to watch one termination: the call, then the instance going away."""
+
+    def __init__(self) -> None:
+        self.terminated: list[tuple[str, dict[str, object]]] = []
+        self.states: list[str] = ['TERMINATING', 'TERMINATED']
+
+    def terminate_instance(self, instance_id: str, **kwargs: object) -> Any:
+        self.terminated.append((instance_id, kwargs))
+        return None
+
+    def get_instance(self, _instance_id: str) -> Any:
+        return _instance_in(self.states.pop(0) if len(self.states) > 1 else self.states[0])
+
+
+@pytest.mark.usefixtures('clock')
+def test_a_terminated_box_takes_its_boot_volume_with_it() -> None:
+    """A preserved boot volume is a second copy of the state, kept by nobody.
+
+    It would outlive every replacement, one more per rebuild, holding
+    whatever the box held -- the database included -- outside the dump's
+    retention and the escrow's recipients.
+    """
+    compute = _Terminating()
+    clients = cast('Any', type('Clients', (), {'compute': compute})())
+
+    provision.terminate_instance(clients, 'ocid1.instance.old')
+
+    assert compute.terminated == [('ocid1.instance.old', {'preserve_boot_volume': False})]
+    # And the call returns once the box is gone, not once it was asked to go.
+    assert compute.states == ['TERMINATED']
 
 
 # -- what a live appliance forbids -------------------------------------------
@@ -2321,6 +2500,45 @@ def test_a_certificate_already_dead_says_so() -> None:
 def test_an_expiry_that_is_not_a_date_is_read_as_no_expiry_at_all() -> None:
     # A value nothing can parse is the same evidence as no value: none.
     assert config.renewal_due('the day after tomorrow', now=NOW) is not None
+
+
+@pytest.fixture
+def far_from_utc(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """The process's local zone ten hours east of UTC, for the length of the case.
+
+    What tells "read as UTC" apart from "read as local time" is a machine
+    whose local time is not UTC; a CI runner's is, so the case sets one.
+    """
+    before = os.environ.get('TZ')
+    monkeypatch.setenv('TZ', 'Etc/GMT-10')
+    time.tzset()
+    yield
+    # `monkeypatch` restores the variable after this teardown, too late for
+    # the zone the C library reads from it, so it is put back here first.
+    if before is None:
+        monkeypatch.delenv('TZ')
+    else:
+        monkeypatch.setenv('TZ', before)
+    time.tzset()
+
+
+@pytest.mark.usefixtures('far_from_utc')
+def test_an_expiry_recorded_without_an_offset_is_read_as_utc() -> None:
+    """An older render could record the expiry naive, and it still answers, in UTC.
+
+    Compared as it is against an aware `now`, a naive value raises rather than
+    answering, which ends the converge on a box that says nothing wrong. Read
+    as the machine's local time, it moves by the zone's offset. UTC is what
+    every writer of the field means, so a point six hours either side of the
+    margin lands on the side it would with its offset written, ten hours from
+    UTC or not.
+    """
+    outside = (NOW + config.RENEWAL_MARGIN + dt.timedelta(hours=6)).replace(tzinfo=None)
+    inside = (NOW + config.RENEWAL_MARGIN - dt.timedelta(hours=6)).replace(tzinfo=None)
+
+    assert config.renewal_due(outside.isoformat(), now=NOW) is None
+    reason = config.renewal_due(inside.isoformat(), now=NOW)
+    assert reason is not None and inside.date().isoformat() in reason
 
 
 # -- the box's SSH identity: minted at render, delivered, pinned at exec ------

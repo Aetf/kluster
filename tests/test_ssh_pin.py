@@ -216,6 +216,40 @@ def test_a_server_holding_a_different_key_is_refused(tmp_path: Path) -> None:
     assert REFUSED in dialed.stderr
 
 
+def test_a_new_pin_replaces_the_one_before_it(tmp_path: Path) -> None:
+    """The slot holds one identity for the address, never a history of them.
+
+    The address is reserved and the box behind it is replaced, so the
+    identity the last run delivered is the only correct one. A file that
+    kept the earlier line beside it would accept every box the address has
+    ever named -- including one that is gone, whose key is wherever its
+    boot volume went.
+    """
+    before = Host(tmp_path, 'before')
+    after = Host(tmp_path, 'after')
+
+    first = config.write_known_hosts(tmp_path / 'slot', address=ADDRESS, public_key=before.public)
+    second = config.write_known_hosts(tmp_path / 'slot', address=ADDRESS, public_key=after.public)
+
+    assert second == first
+    assert second.read_text() == f'{ADDRESS} {after.public}\n'
+
+
+@needs_ssh
+@needs_sshd
+def test_a_server_holding_a_superseded_pin_is_refused(tmp_path: Path) -> None:
+    # The case above as OpenSSH reads the file: after a replacement, the box
+    # the address used to name is an interposer like any other.
+    before = Host(tmp_path, 'before')
+    after = Host(tmp_path, 'after')
+    _ = config.write_known_hosts(tmp_path / 'slot', address=ADDRESS, public_key=before.public)
+
+    dialed = _dial(tmp_path, serving=before, pinned=after)
+
+    assert dialed.returncode != 0
+    assert REFUSED in dialed.stderr
+
+
 @needs_ssh
 @needs_sshd
 def test_a_server_holding_the_pinned_key_gets_past_the_host_key_phase(tmp_path: Path) -> None:
@@ -234,15 +268,21 @@ def test_a_server_holding_the_pinned_key_gets_past_the_host_key_phase(tmp_path: 
     assert PAST_THE_HOST_KEY in dialed.stderr
 
 
-#: How long a master left behind by a failed case can outlive it. Short, so a
-#: case that never reaches its own teardown still cleans up on its own.
-CONTROL_PERSIST = 5
+#: How long the master outlives the bare login that started it. Above the
+#: per-case bound (`timeout` in `pyproject.toml`), so nothing the case does
+#: can take longer than the master stays up: a stall between the bare login
+#: and the pinned exec -- swap, a contended machine -- ends the case by its
+#: bound, naming the stall, rather than by a master that went away and a
+#: message about reuse. The teardown's `-O exit` is what removes it, on every
+#: way out of the case; this is only how long one survives a run killed
+#: outright.
+CONTROL_PERSIST = 120
 
 
 @needs_ssh
 @needs_sshd
 @needs_home_backed_configuration
-def test_a_multiplexing_master_cannot_carry_the_pinned_exec(tmp_path: Path) -> None:
+def test_a_multiplexing_master_cannot_carry_the_pinned_exec(tmp_path: Path, pytestconfig: pytest.Config) -> None:
     """A client configuration is not something the pin may depend on being absent.
 
     `ControlMaster auto` in a `Host *` block is ordinary on an operator's
@@ -255,6 +295,8 @@ def test_a_multiplexing_master_cannot_carry_the_pinned_exec(tmp_path: Path) -> N
     Suppressing the two known-hosts files does not reach it; `-F /dev/null`
     does, and that is the mutation this case exists for.
     """
+    bound = float(pytestconfig.getoption('timeout', None) or pytestconfig.getini('timeout') or 0)
+    assert not bound or CONTROL_PERSIST > bound, 'the master could expire inside the case that needs it'
     interposer = Host(tmp_path, 'interposer')
     appliance = Host(tmp_path, 'appliance')
     identity = Host(tmp_path, 'identity')
