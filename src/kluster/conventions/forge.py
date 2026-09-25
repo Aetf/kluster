@@ -323,8 +323,9 @@ DEPLOYMENT = Repository(
 )
 
 #: The notification and drill repository. Private on purpose — it holds the
-#: alert issues and every scheduled workflow — which is what puts branch
-#: protection and secret scanning out of its reach.
+#: alert issues and every scheduled workflow in the system but for the
+#: in-cluster drills the cluster runs itself (operations.md §4) — which is what
+#: puts branch protection and secret scanning out of its reach.
 OPS = Repository(
     name='kluster-ops',
     public=False,
