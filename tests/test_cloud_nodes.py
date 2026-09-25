@@ -1,10 +1,10 @@
 """The node fleet's shape.
 
 The properties asserted here are the ones a later `pulumi diff` cannot show
-because they are structural: that no two nodes share an availability domain,
-that the legacy metadata endpoint is off on every one of them, and that the
-dedicated VIP is a reserved address attached to a secondary private IP rather
-than an ephemeral one.
+because they are structural -- that no two nodes share an availability
+domain, for instance, that the dedicated VIP is a reserved address attached
+to a secondary private IP rather than an ephemeral one, or that moving a
+management port renames nothing that state or the balancer keys on.
 """
 
 from typing import Any
@@ -12,10 +12,11 @@ from typing import Any
 import pulumi
 import pytest
 import pytest_asyncio
-from mock_monitor import Recorder, decline_every_invoke, run_with
+from mock_monitor import Declaration, Recorder, declaring, decline_every_invoke, run_with
 
 from kluster import conventions
 from kluster.components.cloud.nodes import CloudNodes, NodeLoadBalancer
+from kluster.conventions import ManagementPorts
 
 COMPARTMENT_ID = 'ocid1.compartment.test'
 SUBNET_ID = 'ocid1.subnet.test'
@@ -182,7 +183,7 @@ async def test_a_vnic_lookup_the_engine_declines_leaves_the_vip_unknown_rather_t
 async def test_every_management_port_preserves_the_client_address(balancer: NodeLoadBalancer) -> None:
     # The backend sets are the management ports and nothing else: the same
     # structure the node firewall opens and the cluster endpoint names.
-    assert set(balancer.backend_sets) == set(conventions.MANAGEMENT_PORTS)
+    assert set(balancer.backend_sets) == set(ManagementPorts._fields)
     for backend_set in balancer.backend_sets.values():
         assert await backend_set.is_preserve_source.future() is True
 
@@ -213,3 +214,66 @@ async def test_a_family_the_provider_never_handed_out_is_refused(monitor: Oci) -
     assert await balancer.address.future() == LB_ADDRESS
     with pytest.raises(ValueError, match='no public IPv6 address'):
         _ = await balancer.address_v6.future()
+
+
+#: The types everything declared per management port is registered under.
+BACKEND_SET = 'oci:NetworkLoadBalancer/backendSet:BackendSet'
+LISTENER = 'oci:NetworkLoadBalancer/listener:Listener'
+BACKEND = 'oci:NetworkLoadBalancer/backend:Backend'
+
+
+async def declared_per_port(ports: ManagementPorts, monkeypatch: pytest.MonkeyPatch) -> list[Declaration]:
+    """The fleet and its balancer declared under `ports`, read back per management port."""
+    recorder = await run_with(Oci(), stack='physical')
+    monkeypatch.setattr(conventions, 'MANAGEMENT_PORTS', ports)
+    async with declaring():
+        _ = build_nodes()
+    return [it for it in recorder.declared if it.typ in {BACKEND_SET, LISTENER, BACKEND}]
+
+
+def every_name(declarations: list[Declaration]) -> list[tuple[str, str, Any, Any, Any]]:
+    """Every name a per-port resource carries: logical, OCI, and the backend set's it points at."""
+    return sorted(
+        (
+            it.typ,
+            it.name,
+            it.inputs.get('name'),
+            it.inputs.get('defaultBackendSetName'),
+            it.inputs.get('backendSetName'),
+        )
+        for it in declarations
+    )
+
+
+def forwarded_ports(declarations: list[Declaration]) -> set[int]:
+    """The ports the listeners and backends were declared on."""
+    return {int(it.inputs['port']) for it in declarations if it.typ in {LISTENER, BACKEND}}
+
+
+@pytest.mark.asyncio
+async def test_moving_a_management_port_renames_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A name is an identity in state and, for a backend set or a listener, immutable on the balancer.
+
+    The census lets a port's number be edited (`ManagementPorts`), so a name
+    spliced from the number would turn that edit into a delete and a create of
+    the cluster endpoint's backend sets and listeners -- the stable address
+    the management APIs are reached on. Named after the field, the edit
+    changes inputs and no name.
+    """
+    census = conventions.MANAGEMENT_PORTS
+    moved = ManagementPorts(*(port + 1 for port in census))
+    declared = await declared_per_port(census, monkeypatch)
+    redeclared = await declared_per_port(moved, monkeypatch)
+
+    # The edit reached the declarations; without it, equal names prove nothing.
+    assert forwarded_ports(declared) == set(census)
+    assert forwarded_ports(redeclared) == set(moved)
+    assert every_name(redeclared) == every_name(declared)
+    # Unchanged is not enough: an index is as stable as a field. Each name
+    # carries the field of the port it serves.
+    for it in declared:
+        field = it.inputs.get('backendSetName') or it.inputs.get('defaultBackendSetName') or it.inputs['name']
+        assert field in ManagementPorts._fields, it.name
+        assert f'-{field}' in it.name, it.name
+    # And the name on the balancer is the field itself.
+    assert {it.inputs['name'] for it in declared if it.typ in {BACKEND_SET, LISTENER}} == set(ManagementPorts._fields)
