@@ -256,7 +256,7 @@ def _account(root: Root, field: Field) -> str:
 def _clean(field: Field, raw: str) -> str | None:
     """A layer's raw text as a value, or None when there is nothing in it.
 
-    Surrounding whitespace is a copy-paste artefact everywhere except a PEM,
+    Surrounding whitespace is a copy-paste artifact everywhere except a PEM,
     where the text *is* the value and the line structure is part of it. An
     empty layer is treated as absent rather than as an empty credential: a
     file someone truncated should cost a prompt, not a provider refusal.

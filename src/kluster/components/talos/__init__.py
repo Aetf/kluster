@@ -169,7 +169,7 @@ def control_plane_patch(*, cert_sans: Sequence[str], secretbox_secret: str | Non
     return config
 
 
-def local_path_patch(root: str = conventions.LOCAL_PATH_ROOT) -> dict[str, Any]:
+def local_path_patch() -> dict[str, Any]:
     """The directory the `local-path` StorageClass hands out (storage.md §2).
 
     The provisioner is `k8s-base`'s; the path underneath it is machine
@@ -182,9 +182,9 @@ def local_path_patch(root: str = conventions.LOCAL_PATH_ROOT) -> dict[str, Any]:
             'kubelet': {
                 'extraMounts': [
                     {
-                        'destination': root,
+                        'destination': conventions.LOCAL_PATH_ROOT,
                         'type': 'bind',
-                        'source': root,
+                        'source': conventions.LOCAL_PATH_ROOT,
                         'options': ['bind', 'rshared', 'rw'],
                     }
                 ]

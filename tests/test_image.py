@@ -1,10 +1,10 @@
-"""The fleet's two Talos artefacts, and how the worker's one reaches a volume.
+"""The fleet's two Talos artifacts, and how the worker's one reaches a volume.
 
 The cloud half is an import into OCI's catalogue and has been for as long as
 the stack has existed. The worker's half is the interesting one: the factory
 serves `nocloud` compressed, the libvirt provider will not decompress what it
 is handed, and a raw image cannot back a copy-on-write chain — so the program
-itself fetches the artefact, decompresses it where it runs, and hands libvirt a
+itself fetches the artifact, decompresses it where it runs, and hands libvirt a
 file. What is asserted below is mostly the consequences of that: the file is
 named by what it contains and by nothing else, a stream that ends early leaves
 nothing that looks finished, and a machine that has never seen the file is not
@@ -49,7 +49,7 @@ class Factory(Recorder):
     The URL is built the way the factory builds it -- `nocloud` is served as
     `.raw.xz`, `oracle` as `.qcow2` -- because the shape of that name is part of
     what the program depends on. Every request is kept, so a case can ask which
-    artefact was asked for rather than only which URL came back.
+    artifact was asked for rather than only which URL came back.
     """
 
     def __init__(self) -> None:
@@ -87,7 +87,7 @@ def build_worker() -> image.TalosNocloudImage:
 
 
 @pytest.mark.asyncio
-async def test_the_two_artefacts_do_not_share_a_schematic() -> None:
+async def test_the_two_artifacts_do_not_share_a_schematic() -> None:
     cloud = await build_cloud().schematic.schematic.future()
     worker = await build_worker().schematic.schematic.future()
 
@@ -110,13 +110,13 @@ async def test_the_worker_carries_the_gpu_firmware_before_it_has_a_gpu() -> None
 
 
 @pytest.mark.asyncio
-async def test_the_worker_asks_the_factory_for_the_nocloud_x86_artefact(factory: Factory) -> None:
+async def test_the_worker_asks_the_factory_for_the_nocloud_x86_artifact(factory: Factory) -> None:
     worker = build_worker()
 
-    url = await worker.artefact.url.future()
+    url = await worker.artifact.url.future()
 
     assert url == f'{FACTORY}/{WORKER_SCHEMATIC}/{TALOS_VERSION}/nocloud-amd64.raw.xz'
-    # And it asked for that artefact rather than merely receiving it: platform
+    # And it asked for that artifact rather than merely receiving it: platform
     # and architecture are what pick one file out of the factory's matrix.
     assert {'platform': 'nocloud', 'architecture': 'amd64'}.items() <= factory.invokes[-1].items()
 
@@ -128,7 +128,7 @@ async def test_the_worker_asks_the_factory_for_the_nocloud_x86_artefact(factory:
 async def test_the_cloud_image_is_still_imported_from_the_factory_url() -> None:
     cloud = build_cloud()
 
-    # The worker's artefact is new; the OCI import is not, and nothing about
+    # The worker's artifact is new; the OCI import is not, and nothing about
     # sharing a base class may have moved it.
     details = await cloud.image.image_source_details.future()
     assert details is not None
@@ -145,7 +145,7 @@ async def test_a_factory_lookup_the_engine_declines_leaves_the_source_unknown_ra
     """The unknown degrades the one input, and nothing surfaces as a traceback.
 
     Awaiting the lookup through `resolve` is what puts it under the rule every
-    other awaited value in the artefact follows (framework/pulumi.md §1.2): an
+    other awaited value in the artifact follows (framework/pulumi.md §1.2): an
     unknown aborts the coroutine, that input alone becomes unknown, and the
     rest of the image is declared as it would have been. Awaited directly, the
     same answer is a `None` for an `assert` to trip over -- a traceback on a
@@ -169,17 +169,17 @@ async def test_a_factory_lookup_the_engine_declines_leaves_the_source_unknown_ra
     assert not isinstance(details.get('sourceUri'), str)
 
 
-def test_each_artefact_keeps_its_own_type_token() -> None:
+def test_each_artifact_keeps_its_own_type_token() -> None:
     # A subclass inherits its base's token unless it states one, and a token is
-    # part of every URN: sharing one would file both artefacts in the state
+    # part of every URN: sharing one would file both artifacts in the state
     # under the same type and rename resources whenever the hierarchy moved.
     assert image.TalosImage.__pulumi_type__ == 'kluster:physical:image:TalosImage'
     assert image.TalosNocloudImage.__pulumi_type__ == 'kluster:physical:image:TalosNocloudImage'
-    assert image.TalosImage.__pulumi_type__ != image.TalosArtefact.__pulumi_type__
+    assert image.TalosImage.__pulumi_type__ != image.TalosArtifact.__pulumi_type__
 
 
-def test_each_artefact_states_its_platform_and_architecture_rather_than_taking_them() -> None:
-    """The subclass is the artefact, so the artefact's shape is not a parameter.
+def test_each_artifact_states_its_platform_and_architecture_rather_than_taking_them() -> None:
+    """The subclass is the artifact, so the artifact's shape is not a parameter.
 
     Platform and architecture pick one file out of the factory's matrix the
     way the extension roll does, and no caller varies either: the cloud image
@@ -188,27 +188,27 @@ def test_each_artefact_states_its_platform_and_architecture_rather_than_taking_t
     being the subclass's (style/pulumi.md), so the base requires both and
     each subclass states its own.
     """
-    for artefact in (image.TalosImage, image.TalosNocloudImage):
-        parameters = inspect.signature(artefact.__init__).parameters
-        assert 'platform' not in parameters, artefact.__name__
-        assert 'architecture' not in parameters, artefact.__name__
-    base = inspect.signature(image.TalosArtefact.__init__).parameters
+    for artifact in (image.TalosImage, image.TalosNocloudImage):
+        parameters = inspect.signature(artifact.__init__).parameters
+        assert 'platform' not in parameters, artifact.__name__
+        assert 'architecture' not in parameters, artifact.__name__
+    base = inspect.signature(image.TalosArtifact.__init__).parameters
     assert base['platform'].default is inspect.Parameter.empty
     assert base['architecture'].default is inspect.Parameter.empty
 
 
 def test_the_shared_base_cannot_be_built_on_its_own() -> None:
-    """The base opens the parent backstop's scope and declares no artefact.
+    """The base opens the parent backstop's scope and declares no artifact.
 
     Closing that scope is `register_outputs`, which the base runs after the
-    subclass has declared its artefact. A base built directly would therefore
+    subclass has declared its artifact. A base built directly would therefore
     leave the scope open, and the next resource declared without a parent —
     including a sibling component the stack program builds afterwards — would
     be refused in this component's name rather than its own.
     """
     with pytest.raises(TypeError, match='abstract'):
-        _ = image.TalosArtefact(  # pyright: ignore[reportAbstractUsage]
-            'kluster-artefact',
+        _ = image.TalosArtifact(  # pyright: ignore[reportAbstractUsage]
+            'kluster-artifact',
             talos_version=TALOS_VERSION,
             extensions=(),
             architecture='arm64',
@@ -216,11 +216,11 @@ def test_the_shared_base_cannot_be_built_on_its_own() -> None:
         )
 
 
-# -- where the artefact lands ------------------------------------------------
+# -- where the artifact lands ------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_the_local_artefact_is_named_by_what_it_contains() -> None:
+async def test_the_local_artifact_is_named_by_what_it_contains() -> None:
     worker = build_worker()
 
     # Schematic and version, and nothing else. The path is an input of the
@@ -234,7 +234,7 @@ async def test_the_local_artefact_is_named_by_what_it_contains() -> None:
 
 def test_the_cache_is_somewhere_both_a_workstation_and_a_runner_have() -> None:
     # `/var/tmp` rather than `$HOME` or `$TMPDIR`: the path travels in state as
-    # an input, and it is disk-backed, which a 1.25 GB artefact wants.
+    # an input, and it is disk-backed, which a 1.25 GB artifact wants.
     assert image.IMAGE_CACHE == Path('/var/tmp/kluster-talos-images')
 
 
@@ -272,7 +272,7 @@ def serve(monkeypatch: pytest.MonkeyPatch, *chunks: bytes) -> list[str]:
     return requested
 
 
-def test_a_fetched_artefact_lands_decompressed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_fetched_artifact_lands_decompressed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     compressed = lzma.compress(PAYLOAD)
     _ = serve(monkeypatch, compressed[:20], compressed[20:])
     path = tmp_path / 'nested' / 'talos.raw'
@@ -284,7 +284,7 @@ def test_a_fetched_artefact_lands_decompressed(tmp_path: Path, monkeypatch: pyte
     assert path.read_bytes() == PAYLOAD
 
 
-def test_an_artefact_already_on_disk_is_reused_rather_than_fetched_again(
+def test_an_artifact_already_on_disk_is_reused_rather_than_fetched_again(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     requested = serve(monkeypatch, lzma.compress(PAYLOAD))
@@ -295,7 +295,7 @@ def test_an_artefact_already_on_disk_is_reused_rather_than_fetched_again(
 
     # A file under the final name is complete by construction — the download
     # is renamed into place, never written into place — so re-creating the
-    # resource on a machine that still has the artefact costs nothing.
+    # resource on a machine that still has the artifact costs nothing.
     assert requested == []
 
 
@@ -306,7 +306,7 @@ def test_a_stream_that_ends_early_leaves_nothing_that_looks_finished(
     _ = serve(monkeypatch, truncated)
     path = tmp_path / 'talos.raw'
 
-    with pytest.raises(talos_factory.TruncatedArtefact):
+    with pytest.raises(talos_factory.TruncatedArtifact):
         talos_factory.materialise('https://factory.invalid/nocloud-amd64.raw.xz', path)
 
     # The failure mode this guards against is silent: half an image written
@@ -334,13 +334,13 @@ def test_creating_the_resource_fetches_it_and_is_identified_by_the_path(
     assert path.read_bytes() == PAYLOAD
 
 
-def test_a_new_schematic_is_a_new_artefact_rather_than_an_update(tmp_path: Path) -> None:
+def test_a_new_schematic_is_a_new_artifact_rather_than_an_update(tmp_path: Path) -> None:
     olds = props('https://factory.invalid/old.raw.xz', tmp_path / 'old.raw')
     news = props('https://factory.invalid/new.raw.xz', tmp_path / 'new.raw')
 
     result = talos_factory.FactoryImageProvider().diff('old', olds, news)
 
-    # There is no update: the resource *is* one artefact at one path, so a
+    # There is no update: the resource *is* one artifact at one path, so a
     # different image is a different resource. The volume it feeds is
     # protected, which turns the consequence into a refusal an operator has to
     # answer rather than a disk that vanishes.
@@ -360,12 +360,12 @@ def test_a_preview_that_cannot_know_the_url_does_not_claim_a_change(tmp_path: Pa
     assert result.changes is None
 
 
-def test_a_local_artefact_that_is_gone_is_not_a_deleted_resource(tmp_path: Path) -> None:
+def test_a_local_artifact_that_is_gone_is_not_a_deleted_resource(tmp_path: Path) -> None:
     stored = props('https://factory.invalid/a.raw.xz', tmp_path / 'absent.raw')
 
     result = talos_factory.FactoryImageProvider().read('an-id', stored)
 
-    # The file is a build artefact, not managed state: every CI runner starts
+    # The file is a build artifact, not managed state: every CI runner starts
     # without it. A refresh that called this a deleted resource would take the
     # worker's boot disk down with it on the next apply.
     assert result.id == 'an-id'

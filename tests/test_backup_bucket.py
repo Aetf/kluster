@@ -32,6 +32,12 @@ from kluster.components.backup import (
 BUCKET_ID = 'b2-bucket-id'
 REGION = 'us-west-004'
 
+#: The bucket's name and its version-retention floor, both the caller's to
+#: state. Neither is the fleet's own, so a component that read either off
+#: `conventions` instead of its parameter would fail the cases that look.
+BUCKET_NAME = 'a-backup-bucket'
+RETENTION_DAYS = 7
+
 
 #: The key pair the component builds its provider from. Both are invented:
 #: what the suite checks is that they are read here at all, and that every
@@ -67,7 +73,7 @@ SCOPES: tuple[Scope, ...] = (etcd_scope(),)
 
 
 def build(scopes: Sequence[Scope] = SCOPES) -> BackupBucket:
-    return BackupBucket('kluster', region=REGION, scopes=scopes)
+    return BackupBucket('kluster', region=REGION, bucket_name=BUCKET_NAME, retention_days=RETENTION_DAYS, scopes=scopes)
 
 
 @pytest.mark.asyncio
@@ -126,13 +132,14 @@ def test_the_prefixes_come_from_the_one_bucket_layout() -> None:
 
 @pytest.mark.asyncio
 async def test_old_versions_age_out_and_current_ones_never_do() -> None:
+    assert RETENTION_DAYS != conventions.BACKUP_VERSION_RETENTION_DAYS
     bucket = build()
     rules = await bucket.bucket.lifecycle_rules.future()
     assert rules is not None
     assert len(rules) == 1
     rule = rules[0]
 
-    assert rule.days_from_hiding_to_deleting == conventions.BACKUP_VERSION_RETENTION_DAYS
+    assert rule.days_from_hiding_to_deleting == RETENTION_DAYS
     # The dangerous knob: `daysFromUploadingToHiding` hides *current* files on
     # a timer, which in a backup bucket is a scheduled deletion of live
     # backups. It must stay unset.
@@ -153,9 +160,10 @@ async def test_abandoned_multipart_uploads_are_cancelled() -> None:
 
 @pytest.mark.asyncio
 async def test_the_bucket_is_private_and_protected() -> None:
+    assert BUCKET_NAME != conventions.BUCKET_BACKUP
     bucket = build()
     assert await bucket.bucket.bucket_type.future() == 'allPrivate'
-    assert await bucket.bucket.bucket_name.future() == conventions.BUCKET_BACKUP
+    assert await bucket.bucket.bucket_name.future() == BUCKET_NAME
     assert bucket.bucket._protect is True  # pyright: ignore[reportPrivateUsage]
 
 

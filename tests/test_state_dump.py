@@ -162,7 +162,7 @@ def test_the_box_and_the_operator_read_a_listing_the_same_way(what: str, listing
     The box counts the names the operator's side collects, so the two answer
     the same number and not merely the same yes-or-no: a listing either side
     accepted and the other refused would make a nightly object and a
-    hand-taken one different artefacts, and a count that drifts is how that
+    hand-taken one different artifacts, and a count that drifts is how that
     starts. The box's side is run as the box runs it -- the script's
     `count-tables` mode is the same `awk` the nightly run reads its own
     listing with.

@@ -1060,7 +1060,7 @@ def test_a_box_is_dumped_before_it_is_terminated(converge: Any) -> None:
     assert _run(force=True) == PENDING
 
     assert recorder.order == ['image', 'dump', 'terminate', 'launch', 'retire']
-    # And it is the artefact `state-backend restore` takes, under the name the
+    # And it is the artifact `state-backend restore` takes, under the name the
     # appliance's own objects carry, so the playbook's next step names a file
     # that is already there.
     (taken,) = recorder.dumped

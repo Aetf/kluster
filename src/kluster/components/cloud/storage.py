@@ -19,7 +19,6 @@ from __future__ import annotations
 import pulumi
 import pulumi_oci as oci
 
-from kluster import conventions
 from putils import Component
 
 
@@ -34,7 +33,7 @@ class NodeVolume(Component):
         availability_domain: pulumi.Input[str],
         instance_id: pulumi.Input[str],
         size_gb: int,
-        vpus_per_gb: int = conventions.NODE_VOLUME_VPUS,
+        vpus_per_gb: int,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         super().__init__(name, opts=opts)

@@ -109,7 +109,10 @@ SYMBOLIC_LINK = 'symbolic link'
 REGULAR_FILE = 'regular file'
 REGULAR_EMPTY_FILE = 'regular empty file'
 
-#: The suffix a staged write uses before it is moved into place.
+#: The suffix a staged write uses before it is moved into place. Its name is
+#: spelled out for the reason `provider.py` gives for its own suffixes: a
+#: provider imports no `conventions`, and an input nobody varies is not worth
+#: carrying on every resource.
 STAGING_SUFFIX = '.kluster-staged'
 
 

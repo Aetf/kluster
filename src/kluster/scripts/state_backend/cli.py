@@ -162,7 +162,7 @@ def build_parser() -> argparse.ArgumentParser:
     # §1). Needs no offline database, so it does not ask for one.
     ssh_cmd = actions.add_parser('ssh', help='log in to the appliance for diagnosis')
     _ = ssh_cmd.add_argument('command', nargs='*', help='run this instead of a login shell')
-    _ = actions.add_parser('pins', help='check the pinned artefacts against their digests')
+    _ = actions.add_parser('pins', help='check the pinned artifacts against their digests')
 
     bundle = actions.add_parser('bundle', help='write a client bundle (ca/cert/key/url)')
     _ = bundle.add_argument('name', choices=['ci', 'operator'])
@@ -648,7 +648,7 @@ def _refuse_to_overwrite(destination: Path) -> None:
 def _write_dump(destination: Path, *, bundle_dir: Path, recipients: Sequence[str]) -> None:
     """`pg_dump -Fc` under age, verified before the file is called a dump.
 
-    The single writer of the operator-side artefact, behind both commands that
+    The single writer of the operator-side artifact, behind both commands that
     produce one — `state-backend dump`, and the converge dumping a box it is
     about to destroy — so the two cannot drift into producing different files.
     """

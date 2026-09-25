@@ -274,10 +274,6 @@ def frr_config(
     *,
     neighbour: IPv4Address,
     password: str,
-    local_asn: int = conventions.UDM_ASN,
-    peer_asn: int = conventions.CLUSTER_ASN,
-    pool_v4: IPv4Network = conventions.LAN_POOL.v4,
-    pool_v6: IPv6Network = conventions.LAN_POOL.v6,
 ) -> str:
     """The routing daemon's configuration, rendered from the peer's address.
 
@@ -306,10 +302,10 @@ def frr_config(
             peer=str(neighbour),
             peer_description=f'{conventions.CLUSTER_NAME} {conventions.HOMELAB_NODE}',
             password=password,
-            local_asn=local_asn,
-            peer_asn=peer_asn,
-            pool_v4=pool_v4,
-            pool_v6=pool_v6,
+            local_asn=conventions.UDM_ASN,
+            peer_asn=conventions.CLUSTER_ASN,
+            pool_v4=conventions.LAN_POOL.v4,
+            pool_v6=conventions.LAN_POOL.v6,
             v4_list=f'{conventions.CLUSTER_NAME}-lan-pool-v4',
             v6_list=f'{conventions.CLUSTER_NAME}-lan-pool-v6',
             max_prefixes=MAX_PREFIXES,

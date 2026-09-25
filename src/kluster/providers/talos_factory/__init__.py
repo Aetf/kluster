@@ -1,6 +1,6 @@
-"""The Talos Image Factory's artefacts, on the machine running the program.
+"""The Talos Image Factory's artifacts, on the machine running the program.
 
-**The worker's artefact takes a detour through the machine running the
+**The worker's artifact takes a detour through the machine running the
 program.** The factory serves `nocloud` as `.raw.xz`; the libvirt provider does
 not decompress an xz source (dmacvicar/terraform-provider-libvirt#390) and a
 raw image cannot back a copy-on-write chain, so there is no way to hand libvirt
@@ -14,7 +14,7 @@ checked for truncation against the length the server declared, it needs neither
 `curl` nor `xz` on the machine running the program, and the seam a test
 replaces is a Python function rather than a shell command.
 
-What is *done* with an artefact — which schematic it was built from, which
+What is *done* with an artifact — which schematic it was built from, which
 volume or catalogue it feeds — belongs to the components in
 `kluster.components.talos`, not here.
 """
@@ -33,57 +33,57 @@ import requests
 from pulumi.runtime import rpc
 
 __all__ = (
-    'ARTEFACT_MODE',
+    'ARTIFACT_MODE',
     'CHUNK_BYTES',
     'FETCH_TIMEOUT',
     'FactoryImage',
     'FactoryImageProvider',
-    'TruncatedArtefact',
+    'TruncatedArtifact',
     'fetch',
     'materialise',
 )
 
 #: How long a single read from the factory may stall before the fetch is
-#: abandoned. Not a budget for the whole transfer — the artefact is large and a
+#: abandoned. Not a budget for the whole transfer — the artifact is large and a
 #: slow link is not a failure; a link that has stopped moving is.
 FETCH_TIMEOUT = 60
 
-#: Bytes pulled from the network per decompression step. The artefact never
+#: Bytes pulled from the network per decompression step. The artifact never
 #: exists in memory whole, in either form.
 CHUNK_BYTES = 1 << 20
 
-#: The mode the finished artefact is left at. `tempfile` creates the download
+#: The mode the finished artifact is left at. `tempfile` creates the download
 #: private to its owner, and this is a public image whose only secret is the
 #: bandwidth it took to get.
-ARTEFACT_MODE = 0o644
+ARTIFACT_MODE = 0o644
 
 
 @final
-class TruncatedArtefact(Exception):
-    """The stream ended before the compressed artefact did."""
+class TruncatedArtifact(Exception):
+    """The stream ended before the compressed artifact did."""
 
     def __init__(self, url: str) -> None:
-        super().__init__(f'{url} ended mid-stream: the artefact is incomplete and was not kept')
+        super().__init__(f'{url} ended mid-stream: the artifact is incomplete and was not kept')
         self.url: str = url
 
 
 def fetch(url: str) -> requests.Response:
-    """Open the artefact's byte stream. The one seam a test replaces."""
+    """Open the artifact's byte stream. The one seam a test replaces."""
     response = requests.get(url, stream=True, timeout=FETCH_TIMEOUT)
     response.raise_for_status()
     return response
 
 
 def materialise(url: str, path: Path) -> None:
-    """Leave the artefact at `url` sitting decompressed at `path`.
+    """Leave the artifact at `url` sitting decompressed at `path`.
 
-    A file already at `path` is the artefact and is reused: the download lands
+    A file already at `path` is the artifact and is reused: the download lands
     under a temporary name in the same directory and is renamed only once the
     xz stream has ended cleanly, so a file under the final name is whole by
     construction. That is what keeps a re-created resource — or a second stack
     on the same machine — from spending a gigabyte of bandwidth again.
 
-    Fetching and decompressing are the same pass. Neither form of the artefact
+    Fetching and decompressing are the same pass. Neither form of the artifact
     is ever held in memory, and a failure removes the partial file rather than
     leaving something that looks finished.
     """
@@ -100,10 +100,10 @@ def materialise(url: str, path: Path) -> None:
             for chunk in response.iter_content(CHUNK_BYTES):
                 _ = sink.write(decompressor.decompress(chunk))
         if not decompressor.eof:
-            raise TruncatedArtefact(url)
-        partial.chmod(ARTEFACT_MODE)
+            raise TruncatedArtifact(url)
+        partial.chmod(ARTIFACT_MODE)
         # Atomic, and within one directory so it stays atomic: either the
-        # whole artefact is under its final name or nothing is.
+        # whole artifact is under its final name or nothing is.
         _ = partial.replace(path)
     finally:
         partial.unlink(missing_ok=True)
@@ -116,14 +116,14 @@ def _is_unknown(value: Any) -> bool:
 
 @final
 class FactoryImageProvider(dynamic.ResourceProvider):
-    """One factory artefact, decompressed on whatever machine runs the program.
+    """One factory artifact, decompressed on whatever machine runs the program.
 
-    There is no update: the resource *is* a particular artefact at a particular
+    There is no update: the resource *is* a particular artifact at a particular
     path, so a different schematic or a different Talos version is a different
     file and a replacement.
 
     **`read` is deliberately the inherited one, which reports no drift.** The
-    file is a build artefact rather than managed state — a CI runner is fresh
+    file is a build artifact rather than managed state — a CI runner is fresh
     every time and has none of them — and a refresh that called a missing file
     a deleted resource would take the worker's disk down with it.
     """
@@ -143,7 +143,7 @@ class FactoryImageProvider(dynamic.ResourceProvider):
         return dynamic.DiffResult(
             changes=bool(replaces),
             replaces=replaces,
-            # The paths differ whenever the artefact does, so the new file can
+            # The paths differ whenever the artifact does, so the new file can
             # exist before the old one goes.
             delete_before_replace=False,
         )
@@ -154,7 +154,7 @@ class FactoryImageProvider(dynamic.ResourceProvider):
 
 @final
 class FactoryImage(dynamic.Resource, module='physical', name='FactoryImage'):
-    """A factory artefact, fetched and decompressed at `path`.
+    """A factory artifact, fetched and decompressed at `path`.
 
     The `module` half of the type token names the stack that declares this
     resource rather than the package it lives in: the token is part of every

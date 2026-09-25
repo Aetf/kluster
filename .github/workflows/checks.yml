@@ -64,7 +64,7 @@ jobs:
 
       # Renovate can bump a pinned version but cannot recompute its digest;
       # this is what stops a stale hash from reaching the appliance.
-      - name: Pinned artefacts
+      - name: Pinned artifacts
         run: mise x uv -- uv run state-backend pins
 
       # The prose gate AGENTS.md describes, run the way it says: the two word
