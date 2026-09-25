@@ -435,18 +435,20 @@ throwaway project or `stack init` run to see what the CLI does, against a
 in the live backend, and the route there is `mise x`: `mise.toml` resolves
 `PULUMI_BACKEND_URL` and the passphrase from the checkout's slots **ahead of
 the shell** (the slot is the source), so an exported `file://` URL is
-overridden wherever a slot answers. Two slots can:
+overridden wherever a slot answers. The slots are the ones in the checkout
+that holds `.credentials/` — on a workstation, the primary checkout — and
+they answer anywhere in it except under its `.claude/`. Every `jj`
+workspace sits there: mise renders the enclosing checkout's `mise.toml` as
+well when it runs in a workspace, and under `.claude/` those templates
+yield nothing, so a workspace's `mise x` hands on what the shell exported
+(`kluster-ops#387`). A `pulumi` run that needs the slots therefore runs
+from the primary checkout, never from a workspace.
 
--   **The checkout's own**, in the primary checkout, by design.
--   **A parent checkout's**, in a `jj` workspace nested under it. A workspace
-    has no slots of its own, but mise also loads every `mise.toml` above the
-    directory it runs in, so a workspace under `.claude/workspaces/` receives
-    the primary checkout's backend URL and passphrase all the same
-    (`kluster-ops#387`).
-
-So a probe never runs `pulumi` through a checkout's `mise x`, `-C` included.
-It calls the binary mise resolves, and sets its backend in that same
-command, with every scratch path under the workspace's own `.claude/`:
+A probe still never runs `pulumi` through a checkout's `mise x`, `-C`
+included: in the primary checkout the slot wins, and `-C` reaches that
+checkout from anywhere. It calls the binary mise resolves, and sets its
+backend in that same command, with every scratch path under the
+workspace's own `.claude/`:
 
     PULUMI_BACKEND_URL=file://<scratch>/state PULUMI_HOME=<scratch>/home \
     PULUMI_CONFIG_PASSPHRASE=<anything> "$(mise which pulumi)" stack ls --all
