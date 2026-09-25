@@ -31,6 +31,7 @@ from typing import final
 import pulumi
 import pytest
 import pytest_asyncio
+from fake_systemd import FakeSystemd
 from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
@@ -400,49 +401,18 @@ class _MachinesRendering:
 class _Device:
     """A device the converger can be run against: its two directories and a systemd.
 
-    `commands` is what the fake `systemctl` appends every invocation to, and
-    `active` is the set of units it believes are running — a directory, so the
-    script's own `systemctl restart` is what puts a unit in it and the case can
-    read afterwards whether a machine was bounced. `failing` holds the units
-    whose start is to fail.
+    `systemd` is the stand-in the script's `systemctl` reaches, carrying the
+    two units a device's firmware ships and this converger asks about: the
+    target machines hang off, and the template every machine is an instance
+    of. What it holds afterwards is which machines are enabled and running,
+    and every call the script made to get them there.
     """
 
     script: Path
     machines: Path
     live: Path
-    commands: Path
     complaints: Path
-    active: Path
-    failing: Path
-    tools: Path
-
-
-SYSTEMCTL = """#!/bin/sh
-echo "$*" >>{commands}
-verb=$1
-shift
-case "$verb" in
-    is-active)
-        [ "$1" = --quiet ] && shift
-        [ -e {active}/"$1" ]
-        exit $?
-        ;;
-    is-enabled)
-        exit 1
-        ;;
-    restart | start)
-        [ ! -e {failing}/"$1" ] || exit 1
-        : >{active}/"$1"
-        exit 0
-        ;;
-    disable)
-        [ "$1" = --now ] && shift
-        rm -f {active}/"$1"
-        exit 0
-        ;;
-esac
-exit 0
-"""
+    systemd: FakeSystemd
 
 
 @pytest.fixture
@@ -452,20 +422,12 @@ def device(tmp_path: Path) -> _Device:
         script=tmp_path / nspawn.MACHINES_SCRIPT,
         machines=tmp_path / 'machines',
         live=tmp_path / 'live',
-        commands=tmp_path / 'commands',
         complaints=tmp_path / 'complaints',
-        active=tmp_path / 'active',
-        failing=tmp_path / 'failing',
-        tools=tmp_path / 'tools',
+        systemd=FakeSystemd(tmp_path / 'systemd'),
     )
-    for directory in (box.machines, box.active, box.failing, box.tools):
-        directory.mkdir()
-
-    systemctl = box.tools / 'systemctl'
-    _ = systemctl.write_text(
-        SYSTEMCTL.format(commands=box.commands, active=box.active, failing=box.failing), encoding='utf-8'
-    )
-    systemctl.chmod(0o755)
+    box.machines.mkdir()
+    box.systemd.ship('machines.target')
+    box.systemd.ship(f'{nspawn.UNIT_TEMPLATE}.service', '[Install]\nWantedBy=machines.target\n')
 
     _ = box.script.write_text(
         templates.render(
@@ -528,10 +490,10 @@ def converge(device: _Device, *, environment: dict[str, str] | None = None) -> t
     What it wrote to the boot log's error stream is kept beside that, because
     on this device the log is the whole of what an unattended boot reports.
     """
-    device.commands.unlink(missing_ok=True)
+    _ = device.systemd.take_calls()
     completed = subprocess.run(  # noqa: S603 -- a rendered script of this repository's own
         ['/bin/bash', str(device.script)],  # noqa: S607 -- the shell the device's own scripts name
-        env={'PATH': f'{device.tools}:/usr/bin:/bin', **(environment or {})},
+        env={'PATH': f'{device.systemd.tools}:/usr/bin:/bin', **(environment or {})},
         capture_output=True,
         check=False,
         # A converger that does not return is the failure this bounds: the
@@ -540,8 +502,7 @@ def converge(device: _Device, *, environment: dict[str, str] | None = None) -> t
         timeout=30,
     )
     _ = device.complaints.write_bytes(completed.stderr)
-    recorded = device.commands.read_text(encoding='utf-8').split('\n') if device.commands.exists() else []
-    return completed.returncode, [line for line in recorded if line]
+    return completed.returncode, device.systemd.take_calls()
 
 
 def started(commands: list[str]) -> set[str]:
@@ -571,7 +532,7 @@ def test_the_converger_is_told_no_machines_and_finds_them_anyway(device: _Device
     assert started(commands) == {'alice', 'bob'}
     for machine in ('alice', 'bob'):
         assert (device.live / machine).resolve() == device.machines / machine / nspawn.ROOTFS
-        assert f'enable {nspawn.UNIT_TEMPLATE}{machine}.service' in commands
+    assert device.systemd.enabled == {'machines.target', nspawn.machine_unit('alice'), nspawn.machine_unit('bob')}
 
 
 def test_a_device_with_no_machines_on_it_converges_to_nothing(device: _Device) -> None:
@@ -626,8 +587,11 @@ def test_a_machine_whose_settings_went_away_is_retired_and_its_tree_cannot_bring
     status, commands = converge(device)
 
     assert status == 0
-    assert f'disable --now {nspawn.UNIT_TEMPLATE}alice.service' in commands
+    assert nspawn.machine_unit('alice') not in device.systemd.enabled | device.systemd.active
     assert not (device.live / 'alice').exists()
+    assert device.complaints.read_text(encoding='utf-8') == '', (
+        "the links a retirement removes are not the boot log's to report; the converger says what it retired"
+    )
     assert (directory / nspawn.ROOTFS).is_dir(), 'the tree is exactly what is left behind'
 
     status, commands = converge(device)
@@ -669,6 +633,27 @@ def test_a_converged_machine_is_left_alone_by_the_next_run(device: _Device) -> N
 
     assert status == 0
     assert started(commands) == set()
+    assert not [command for command in commands if 'enable' in command.split()], 'what is enabled stays enabled'
+
+
+def test_a_machine_that_went_down_is_started_again_though_nothing_about_it_moved(device: _Device) -> None:
+    """The stamp says what the machine was last started on, not that it is running.
+
+    A machine that exited, or that somebody stopped, has a stamp that still
+    matches every file it is made of, so the stamp alone would call it
+    converged — and the boot or push that was meant to bring it back would
+    leave it down with nothing reporting it.
+    """
+    _ = declare(device, 'alice')
+    _ = declare(device, 'bob')
+    _ = converge(device)
+
+    device.systemd.stop(nspawn.machine_unit('alice'))
+    status, commands = converge(device)
+
+    assert status == 0
+    assert started(commands) == {'alice'}
+    assert device.systemd.active == {nspawn.machine_unit('alice'), nspawn.machine_unit('bob')}
 
 
 def test_a_machine_is_restarted_when_a_file_it_mounts_changes(device: _Device) -> None:
@@ -852,8 +837,10 @@ def test_a_healthy_device_gives_the_boot_log_nothing_to_read(device: _Device) ->
 
     Every part of a machine's directory that is not a file — the tree, the
     trees a push parks beside it, the state, the initial state — is walked past
-    rather than read, so a converged device is silent and anything on that
-    stream is a device that needs somebody.
+    rather than read, and the links enabling a machine makes are enabled
+    quietly — the converger says on its output what it enabled — so a
+    converged device is silent and anything on that stream is a device that
+    needs somebody.
     """
     _ = declare(device, 'alice', files={'Caddyfile': 'one\n'}, initial_state={'AdGuardHome.yaml': 'listen\n'})
     (device.machines / 'alice' / f'{nspawn.ROOTFS}{SUPERSEDED_SUFFIX}').mkdir()
@@ -1001,7 +988,7 @@ def test_a_machine_that_failed_to_start_fails_the_run_and_leaves_its_stamp_unwri
     """
     broken = declare(device, 'alice')
     _ = declare(device, 'bob')
-    _ = (device.failing / nspawn.machine_unit('alice')).write_text('', encoding='utf-8')
+    device.systemd.failing(nspawn.machine_unit('alice'))
 
     status, commands = converge(device)
 

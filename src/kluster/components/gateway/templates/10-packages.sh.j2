@@ -17,13 +17,17 @@
 # atomically replaces {{ cache }}. The cache is consumed only when apt is
 # unreachable on a post-update boot; a stale cache cannot persist silently
 # because every successful apt install refreshes it against the running
-# firmware. The directory is this script's alone -- the swap below replaces it
-# whole, so nothing else may keep a file in it.
+# firmware, and a refresh whose download fails says so. The snapshot is taken
+# only of a download of the whole set: a partial one never replaces a cache
+# that could install everything. The directory is this script's alone -- the
+# swap below replaces it whole, so nothing else may keep a file in it.
 
 set -u
 
 PACKAGES=({{ packages | join(' ') }})
 CACHE={{ cache }}
+# Where apt leaves the debs it downloads.
+ARCHIVES={{ archives }}
 
 installed() {
     local p
@@ -47,13 +51,14 @@ if apt-get install -y "${PACKAGES[@]}"; then
     echo "packages: refreshing the offline cache in $CACHE"
     # Ensure every package of the set is present in the archives dir, not just
     # the ones this boot happened to install (a partially-surviving set would
-    # otherwise produce a partial cache).
-    apt-get install -y --download-only --reinstall "${PACKAGES[@]}" ||
+    # otherwise produce a partial cache). If that download fails, the archives
+    # hold only what the install fetched, so the old cache stays as it is.
+    if ! apt-get install -y --download-only --reinstall "${PACKAGES[@]}"; then
         echo "packages: cache refresh download failed, keeping the old cache"
-    if compgen -G '/var/cache/apt/archives/*.deb' >/dev/null; then
+    elif compgen -G "$ARCHIVES/*.deb" >/dev/null; then
         rm -rf "$CACHE.new" "$CACHE.old"
         mkdir -p "$CACHE.new"
-        cp /var/cache/apt/archives/*.deb "$CACHE.new/"
+        cp "$ARCHIVES"/*.deb "$CACHE.new/"
         [ -d "$CACHE" ] && mv "$CACHE" "$CACHE.old"
         mv "$CACHE.new" "$CACHE"
         rm -rf "$CACHE.old"

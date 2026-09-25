@@ -114,7 +114,10 @@ install_initial_state() {
 
 mkdir -p "$LIVE"
 # machinectl would do this implicitly; enabling the instance units does not.
-systemctl is-enabled machines.target >/dev/null 2>&1 || systemctl enable machines.target
+if ! systemctl is-enabled machines.target >/dev/null 2>&1; then
+    echo "machines: enabling machines.target"
+    systemctl --quiet enable machines.target
+fi
 
 # Retire what is no longer declared. Only links into the machines root are
 # candidates: anything else under $LIVE is somebody else's container. A machine
@@ -130,7 +133,7 @@ for link in "$LIVE"/*; do
     machine=$(basename "$link")
     declared "$machine" && continue
     echo "machines: retiring $machine"
-    systemctl disable --now "{{ unit_template }}$machine.service" || true
+    systemctl --quiet disable --now "{{ unit_template }}$machine.service" || true
     rm -f "$link"
 done
 
@@ -164,7 +167,10 @@ for dir in "$MACHINES"/*/; do
     fi
 
     unit={{ unit_template }}$machine.service
-    systemctl is-enabled "$unit" >/dev/null 2>&1 || systemctl enable "$unit"
+    if ! systemctl is-enabled "$unit" >/dev/null 2>&1; then
+        echo "machines: enabling $unit"
+        systemctl --quiet enable "$unit"
+    fi
 
     # The writable state is a bind source, and nspawn refuses to start a
     # machine whose bind source is missing -- so the directory exists for every
