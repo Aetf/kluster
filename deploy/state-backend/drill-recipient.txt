@@ -1,0 +1,4 @@
+# The drill age identity, public half (docs/credentials.md §3). The private
+# half is the GitHub secret Aetf/kluster-ops (drill): DRILL_AGE_IDENTITY; nothing on disk holds it.
+# Written by `credentials derived drill-age-identity generate`; replaced by `--rotate`.
+age10f6k9nhueqc2rvlr5ys5t7uv7xl8es4wjg46sc7kkq20w46n4arqvvp7ev
