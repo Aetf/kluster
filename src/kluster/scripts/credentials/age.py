@@ -50,7 +50,7 @@ TIMEOUT = 30
 SECRET_PREFIX = 'AGE-SECRET-KEY-1'
 PUBLIC_PREFIX = 'age1'
 
-#: ASCII armour, because a ciphertext in the escrow is a file git carries.
+#: ASCII armor, because a ciphertext in the escrow is a file git carries.
 ARMOR_BEGIN = '-----BEGIN AGE ENCRYPTED FILE-----'
 ARMOR_END = '-----END AGE ENCRYPTED FILE-----'
 
@@ -171,7 +171,7 @@ def _reason(refusal: str) -> str:
 
 
 def encrypt(plaintext: str, recipients: Sequence[str]) -> str:
-    """Armoured ciphertext readable by every recipient given.
+    """Armored ciphertext readable by every recipient given.
 
     Multi-recipient is the point rather than a nicety: it is what lets the
     escrow be re-wrapped for a successor custodian, and what lets a dump be
@@ -199,7 +199,7 @@ def decrypt(path: Path, identities: Sequence[str]) -> str:
     return _run([BINARY, '--decrypt', '--identity', '-', str(path)], stdin=stdin)
 
 
-def is_armoured(text: str) -> bool:
+def is_armored(text: str) -> bool:
     """Whether this looks like an age file at all — the check that needs no key."""
     stripped = text.strip()
     return stripped.startswith(ARMOR_BEGIN) and stripped.endswith(ARMOR_END)

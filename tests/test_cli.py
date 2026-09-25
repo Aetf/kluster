@@ -303,7 +303,7 @@ def test_every_leaf_dispatches(argv: list[str], dispatch: Dispatch, caplog: pyte
 
     if target is None:
         # A seed row with no implementation is a subcommand that refuses by
-        # name, which is the documented behaviour, not a crash.
+        # name, which is the documented behavior, not a crash.
         assert code == 1
         assert REFUSAL in caplog.text
         return

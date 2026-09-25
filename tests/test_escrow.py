@@ -307,7 +307,7 @@ def test_import_takes_a_real_ca_key(vault: escrow.Vault) -> None:
 
 
 def test_a_token_label_asks_only_that_there_be_a_value(vault: escrow.Vault) -> None:
-    # Nothing recognisable about a passphrase or a bearer token, so the shape
+    # Nothing recognizable about a passphrase or a bearer token, so the shape
     # is the empty check and no more: a check that guessed at length or
     # alphabet would refuse values the consumers accept.
     _ = escrow.adopt(vault, escrow.ALERTMANAGER, 'a-token-from-somewhere-else')
@@ -771,7 +771,7 @@ def test_check_catches_a_ciphertext_that_is_not_one(vault: escrow.Vault) -> None
 
     problems = escrow.check(vault.registry)
 
-    assert any('not an armoured age file' in problem for problem in problems)
+    assert any('not an armored age file' in problem for problem in problems)
 
 
 def test_check_catches_a_hole_in_the_generations(vault: escrow.Vault) -> None:

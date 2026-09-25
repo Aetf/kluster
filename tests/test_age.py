@@ -48,13 +48,13 @@ def test_two_identities_are_two_identities() -> None:
 
 
 @needs_age
-def test_a_file_is_armoured_and_recognised_as_one(tmp_path: Path) -> None:
+def test_a_file_is_armored_and_recognized_as_one(tmp_path: Path) -> None:
     # The escrow's `check` runs without a key, so "is this an age file at all"
     # has to be answerable from the bytes.
-    armoured = age.encrypt('x', [age.generate().public])
+    armored = age.encrypt('x', [age.generate().public])
 
-    assert age.is_armoured(armoured)
-    assert not age.is_armoured('-----BEGIN CERTIFICATE-----\nnope\n-----END CERTIFICATE-----')
+    assert age.is_armored(armored)
+    assert not age.is_armored('-----BEGIN CERTIFICATE-----\nnope\n-----END CERTIFICATE-----')
 
 
 @needs_age
