@@ -32,6 +32,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from memory_kit import MemoryKit
 
+from oci_conventions import with_recorded_compartment
 from kluster import conventions
 from kluster.scripts.credentials import b2, escrow, oci_iam, oci_slot, pki, workstation
 from kluster.scripts.credentials.delivery import Delivery
@@ -361,6 +362,10 @@ def test_a_fresh_reservation_s_refusal_offers_the_one_repair_there_is() -> None:
 # -- where the appliance's own credential comes from -------------------------
 
 COMPARTMENT = 'ocid1.compartment.oc1..appliance'
+#: The OCID the appliance's compartment is recorded against here: the test's
+#: own, so no case depends on what the live entry records, and distinct from
+#: `COMPARTMENT` so a superseded configuration's answer cannot pass for it.
+RECORDED_COMPARTMENT = 'ocid1.compartment.oc1..appliance-recorded'
 APPLIANCE_USER = 'ocid1.user.oc1..kluster-state-backend'
 APPLIANCE_TENANCY = 'ocid1.tenancy.oc1..installation'
 
@@ -382,7 +387,14 @@ def _mint() -> Path:
     return oci_slot.write(key)
 
 
-def test_the_appliance_signs_as_the_key_minted_for_it(slots: Path) -> None:
+@pytest.fixture
+def recorded(monkeypatch: pytest.MonkeyPatch) -> str:
+    """The appliance's compartment as `conventions` records it once it exists."""
+    _ = with_recorded_compartment(monkeypatch, conventions.STATE_BACKEND, RECORDED_COMPARTMENT)
+    return RECORDED_COMPARTMENT
+
+
+def test_the_appliance_signs_as_the_key_minted_for_it(slots: Path, recorded: str) -> None:
     _ = _mint()
 
     client = provision.OciClients.load()
@@ -390,7 +402,7 @@ def test_the_appliance_signs_as_the_key_minted_for_it(slots: Path) -> None:
     # The slot is the signing configuration, and where the appliance may act is
     # a convention beside it: the mapping is the one place the compartment is
     # written down, so nothing can drift from it.
-    assert client.compartment_id == conventions.OCI_TENANCY.compartments[conventions.STATE_BACKEND].ocid
+    assert client.compartment_id == recorded
     assert (client.config['user'], client.config['tenancy']) == (APPLIANCE_USER, APPLIANCE_TENANCY)
 
 
@@ -406,23 +418,21 @@ def test_an_explicit_compartment_wins_over_the_convention(slots: Path) -> None:
     assert client.held is False
 
 
-def test_the_appliance_s_own_compartment_is_the_held_one(slots: Path) -> None:
+def test_the_appliance_s_own_compartment_is_the_held_one(slots: Path, recorded: str) -> None:
     """Only the compartment `conventions` records is held to `settings.ADDRESS`.
 
     The mapping's default is held; the same compartment named explicitly is
     the same site, so it is held too; any other names another site.
     """
     _ = _mint()
-    own = conventions.OCI_TENANCY.compartments[conventions.STATE_BACKEND].ocid
-    assert own is not None
 
     assert provision.OciClients.load().held is True
-    assert provision.OciClients.load(own).held is True
+    assert provision.OciClients.load(recorded).held is True
     assert provision.OciClients.load('ocid1.compartment.oc1..elsewhere').held is False
 
 
 def test_the_superseded_configuration_is_read_once_and_loudly(
-    slots: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    slots: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, recorded: str
 ) -> None:
     # A workstation that predates the mint keeps provisioning: what is at the
     # old path is a complete answer, and the warning names its replacement.
@@ -432,7 +442,7 @@ def test_the_superseded_configuration_is_read_once_and_loudly(
     superseded.parent.mkdir()
     _mint().rename(superseded)
     # A hand-written configuration carried the compartment in the same file,
-    # which is the one place that value still comes from.
+    # and that value still wins over the one `conventions` records.
     with superseded.open('a') as handle:
         _ = handle.write(f'compartment-id={COMPARTMENT}\n')
     monkeypatch.setattr(provision, 'LEGACY_CONFIG_FILE', superseded)

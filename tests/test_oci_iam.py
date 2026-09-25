@@ -15,7 +15,7 @@ import itertools
 import logging
 import re
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +26,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric.types import PrivateKeyTypes
 
-from oci_conventions import with_compartment, with_tenancy_ocid
+from oci_conventions import with_compartment, with_recorded_compartment, with_tenancy_ocid, with_unrecorded_compartment
 from kluster import conventions
 from kluster.scripts.credentials import entries, masters, oci_iam
 from kluster.scripts.credentials.kdbx import KdbxStore
@@ -256,6 +256,11 @@ class FakeIdentity:
         a call never reached the shim reads `shim_calls`.
         """
         self.shim_calls.append(endpoint)
+
+    def hold(self, compartment: conventions.Compartment) -> None:
+        """Give the tenancy the compartment `conventions` records, under its OCID."""
+        assert compartment.ocid is not None
+        self.compartments[compartment.ocid] = Named(id=compartment.ocid, name=compartment.name)
 
     def list_groups(self, compartment_id: str, name: str | None = None) -> Response:
         self.check_shim('ListGroups')
@@ -997,12 +1002,10 @@ def seeded(kit: KdbxStore, tenancy: Tenancy, root: masters.Credential) -> KdbxSt
 def unrecorded(monkeypatch: pytest.MonkeyPatch) -> None:
     """`conventions` before the physical compartment's first mint.
 
-    The recorded OCID is today's fact; these tests exercise the paths that
-    produced it — creation, adoption by name, the announce — which exist for
-    the next consumer whose entry carries no OCID yet.
+    These tests exercise the paths a consumer's first mint takes -- creation,
+    adoption by name, the announce -- whatever the live entry records.
     """
-    intended = conventions.OCI_TENANCY.compartments[conventions.PHYSICAL]
-    with_compartment(monkeypatch, conventions.Compartment(consumer=intended.consumer, name=intended.name))
+    _ = with_unrecorded_compartment(monkeypatch, conventions.PHYSICAL)
 
 
 def _compartments(tenancy: Tenancy) -> list[str]:
@@ -1127,10 +1130,10 @@ def test_the_drill_compartment_is_recorded_apart_from_every_other() -> None:
     That bound is a fact about the tenancy, and what this repository can hold
     of it is the record: the compartment is named for the drill and for no
     stack, its name is nobody else's, and nothing a stack declares reads its
-    entry -- so a resource can reach it only through the drill's own key. The
-    OCID is absent until the first mint prints it, which `Compartment.require`
-    refuses by naming the composite row rather than an `oci-drill` mint that
-    does not exist.
+    entry -- so a resource can reach it only through the drill's own key.
+    Before the first mint prints the OCID, `Compartment.require` refuses by
+    naming the composite row rather than an `oci-drill` mint that does not
+    exist.
     """
     compartments = conventions.OCI_TENANCY.compartments
     drill = compartments[conventions.DRILL]
@@ -1141,7 +1144,7 @@ def test_the_drill_compartment_is_recorded_apart_from_every_other() -> None:
     assert drill.ocid is None or drill.ocid not in {other.ocid for other in compartments.values() if other is not drill}
     assert drill.mint == f'credentials derived {conventions.DRILL}-credentials mint'
     with pytest.raises(conventions.CompartmentMissing, match=re.escape(drill.mint)):
-        _ = conventions.Compartment(consumer=conventions.DRILL, name=drill.name, minted_by=drill.minted_by).require()
+        _ = replace(drill, ocid=None).require()
 
 
 def test_the_drill_identity_administers_its_compartment_and_reaches_nothing_outside_it() -> None:
@@ -1160,19 +1163,37 @@ def test_the_drill_identity_administers_its_compartment_and_reaches_nothing_outs
 
 
 def test_a_drill_mint_creates_the_drill_compartment_and_confines_the_key_to_it(
-    seeded: KdbxStore, tenancy: Tenancy
+    seeded: KdbxStore, tenancy: Tenancy, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    intended = conventions.OCI_TENANCY.compartments[conventions.DRILL]
+    intended = with_unrecorded_compartment(monkeypatch, conventions.DRILL)
 
-    _ = oci_iam.mint_api_key(seeded, consumer=conventions.DRILL, seed_entry=SEED_ENTRY, connect=tenancy)
+    with caplog.at_level(logging.WARNING):
+        _ = oci_iam.mint_api_key(seeded, consumer=conventions.DRILL, seed_entry=SEED_ENTRY, connect=tenancy)
 
-    # The recorded entry carries no OCID yet, so this is the create-and-announce
-    # path the `physical` compartment once took: the compartment the policy
-    # names is the one this run made, under the drill's own name.
+    # Before the first mint the entry carries no OCID, so this is the
+    # create-and-announce path: the compartment the policy names is the one
+    # this run made, under the drill's own name, and its OCID is printed as
+    # the line to record.
     assert _compartments(tenancy) == [intended.name]
     created = next(iter(tenancy.identity.compartments.values()))
     name = f'{conventions.CLUSTER_NAME}-{conventions.DRILL}'
     assert _policy(tenancy, name) == [f'Allow group {name} to manage all-resources in compartment id {created.id}']
+    assert created.id in caplog.text
+
+
+def test_a_drill_mint_confines_the_key_to_the_recorded_drill_compartment_and_creates_nothing(
+    seeded: KdbxStore, tenancy: Tenancy, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorded = with_recorded_compartment(monkeypatch, conventions.DRILL, 'ocid1.compartment.oc1..drill-recorded')
+    tenancy.identity.hold(recorded)
+
+    _ = oci_iam.mint_api_key(seeded, consumer=conventions.DRILL, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    # Once the OCID is recorded the mint is held to it: the compartment is
+    # adopted rather than made again, and the policy names the recorded one.
+    assert list(tenancy.identity.compartments) == [recorded.ocid]
+    name = f'{conventions.CLUSTER_NAME}-{conventions.DRILL}'
+    assert _policy(tenancy, name) == [f'Allow group {name} to manage all-resources in compartment id {recorded.ocid}']
 
 
 def test_a_compartment_named_on_the_command_line_is_taken_as_given(seeded: KdbxStore, tenancy: Tenancy) -> None:
@@ -1191,7 +1212,7 @@ def test_a_compartment_named_on_the_command_line_is_taken_as_given(seeded: KdbxS
 
 
 def test_a_seed_from_another_tenancy_creates_nothing(
-    seeded: KdbxStore, tenancy: Tenancy, monkeypatch: pytest.MonkeyPatch
+    seeded: KdbxStore, tenancy: Tenancy, monkeypatch: pytest.MonkeyPatch, unrecorded: None
 ) -> None:
     with_tenancy_ocid(monkeypatch, ELSEWHERE)
     before = dict(tenancy.identity.users)
@@ -1204,7 +1225,8 @@ def test_a_seed_from_another_tenancy_creates_nothing(
 
     # The seed's row names its tenancy, so opening the kit is enough to know
     # it and the refusal costs nothing. Held against `conventions` after the
-    # mint instead, the same run would refuse and leave a compartment, a user,
+    # mint instead, the same run -- from the unrecorded state, where the mint
+    # creates the compartment -- would refuse and leave a compartment, a user,
     # a group, a policy and a live signing key behind in an account this
     # installation does not own.
     assert tenancy.identity.compartments == {}

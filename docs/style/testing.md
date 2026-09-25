@@ -40,6 +40,12 @@ for anybody other than the person editing the value**. A class rename
 moves a type token its author never types — a literal catches that. A
 table row's field is edited at the field, under that field's own
 documentation — a literal beside it only says the same thing twice.
+A census row's **state** is a value like any other: recorded or not
+yet, present or absent. A test that inherits the live state as its
+premise goes red on the day a site fact is recorded, which is an edit
+and not a defect, so a test that needs a particular state sets it up.
+So does a test whose assertion can fail in only one of the states: the
+live state can weaken it without ever turning it red.
 
 **That test asks for a second source, not a second site.** Read alone it
 licenses restating a function: an assertion holding an accessor's result

@@ -33,9 +33,9 @@ import pytest
 from cloudflare_api import ACCOUNT_ID, FakeApi, console_seed
 from fake_pulumi import RecordedPulumi
 from memory_kit import MemoryKit
-from test_oci_iam import ROOT_USER, TENANCY, Named, Tenancy
+from test_oci_iam import ROOT_USER, TENANCY, Tenancy
 
-from oci_conventions import with_compartment, with_tenancy_ocid
+from oci_conventions import with_recorded_compartment, with_tenancy_ocid, with_unrecorded_compartment
 from kluster import conventions
 from kluster.scripts.credentials import (
     b2,
@@ -566,8 +566,7 @@ def test_the_compartment_comes_from_conventions_when_no_flag_names_one(
     slot, _ = physical_stack
     # The pre-record state: `conventions` names the compartment but holds no
     # OCID yet, which is every consumer's shape before its first mint.
-    intended = conventions.OCI_TENANCY.compartments[conventions.PHYSICAL]
-    with_compartment(monkeypatch, conventions.Compartment(consumer=intended.consumer, name=intended.name))
+    intended = with_unrecorded_compartment(monkeypatch, conventions.PHYSICAL)
 
     _ = derived.oci_physical(oci_kit, stack=slot, connect=tenancy)
 
@@ -587,18 +586,23 @@ def test_the_compartment_comes_from_conventions_when_no_flag_names_one(
 ELSEWHERE = 'ocid1.tenancy.oc1..elsewhere'
 
 
+#: The OCID the `physical` compartment is recorded against here: the test's
+#: own, so no case depends on what the live entry records.
+RECORDED_COMPARTMENT = 'ocid1.compartment.oc1..physical-recorded'
+
+
 @pytest.fixture
-def recorded_compartment(tenancy: Tenancy) -> None:
-    """The `physical` compartment as `conventions` records it, present in the fake.
+def recorded_compartment(tenancy: Tenancy, monkeypatch: pytest.MonkeyPatch) -> conventions.Compartment:
+    """The `physical` compartment recorded in `conventions`, and present in the fake.
 
     The state the installation is in once a consumer has been minted for: the
     OCID is committed, so a mint that names no compartment of its own adopts
     that one. A case about what happens after the compartment is settled does
     not have to say any of this.
     """
-    intended = conventions.OCI_TENANCY.compartments[conventions.PHYSICAL]
-    assert intended.ocid is not None
-    tenancy.identity.compartments[intended.ocid] = Named(id=intended.ocid, name=intended.name)
+    recorded = with_recorded_compartment(monkeypatch, conventions.PHYSICAL, RECORDED_COMPARTMENT)
+    tenancy.identity.hold(recorded)
+    return recorded
 
 
 @pytest.mark.usefixtures('recorded_compartment')
@@ -675,21 +679,21 @@ def test_the_config_keys_the_mint_writes_are_the_ones_the_map_promises(
 
 
 def test_the_recorded_compartment_is_adopted_not_recreated(
-    oci_kit: KdbxStore, tenancy: Tenancy, physical_stack: tuple[pulumi_config.Stack, RecordedPulumi]
+    oci_kit: KdbxStore,
+    tenancy: Tenancy,
+    physical_stack: tuple[pulumi_config.Stack, RecordedPulumi],
+    recorded_compartment: conventions.Compartment,
 ) -> None:
     slot, _ = physical_stack
-    # The post-record state `conventions` carries today: the OCID is written,
-    # so the mint must find that compartment and act in it, creating nothing.
-    intended = conventions.OCI_TENANCY.compartments[conventions.PHYSICAL]
-    assert intended.ocid is not None
-    tenancy.identity.compartments[intended.ocid] = Named(id=intended.ocid, name=intended.name)
 
     _ = derived.oci_physical(oci_kit, stack=slot, connect=tenancy)
 
+    # The post-record state: the OCID is written, so the mint must find that
+    # compartment and act in it, creating nothing.
     name = f'{conventions.CLUSTER_NAME}-{derived.PHYSICAL_STACK}'
-    assert list(tenancy.identity.compartments) == [intended.ocid]
+    assert list(tenancy.identity.compartments) == [recorded_compartment.ocid]
     assert [policy.statements for policy in tenancy.identity.policies.values() if policy.name == name] == [
-        [f'Allow group {name} to manage all-resources in compartment id {intended.ocid}']
+        [f'Allow group {name} to manage all-resources in compartment id {recorded_compartment.ocid}']
     ]
 
 
@@ -851,6 +855,10 @@ def test_the_appliance_row_is_refused_in_another_account_before_anything_is_crea
     oci_kit: KdbxStore, tenancy: Tenancy, slots: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with_tenancy_ocid(monkeypatch, ELSEWHERE)
+    # The state before the appliance's first mint, where a run that reached
+    # the compartment step would create one, so the empty tenancy below tells
+    # a refusal from a late one.
+    _ = with_unrecorded_compartment(monkeypatch, conventions.STATE_BACKEND)
     users, policies = dict(tenancy.identity.users), dict(tenancy.identity.policies)
 
     # No compartment is named, so this is the ordinary path rather than the

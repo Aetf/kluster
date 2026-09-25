@@ -1,8 +1,9 @@
 """The drill credentials: two mints, five carriers, one Environment.
 
-Against the fake tenancy `test_oci_iam` drives, the fake B2 account
-`test_b2` extends with the file listing, and a `gh` that runs nothing and
-remembers what it was handed, because what is under test is the composite:
+Against the fake tenancy `test_oci_iam` drives, holding the drill compartment
+`conventions` is made to record, the fake B2 account `test_b2` extends with
+the file listing, and a `gh` that runs nothing and remembers what it was
+handed, because what is under test is the composite:
 that the OCI key confined to the drill compartment and the B2 key confined to
 the dump prefix both land, as the carriers the register names, in the ops
 repository's `drill` Environment and nowhere else -- and that each half keeps
@@ -31,7 +32,7 @@ from memory_kit import MemoryKit
 from test_b2 import ReadableFakeApi
 from test_oci_iam import ROOT_USER, TENANCY, Tenancy
 
-from oci_conventions import with_tenancy_ocid
+from oci_conventions import with_recorded_compartment, with_tenancy_ocid, with_unrecorded_compartment
 from kluster import conventions
 from kluster.scripts.credentials import b2, derived, masters, oci_iam
 from kluster.scripts.credentials.github_secrets import Forge, Slot
@@ -44,6 +45,9 @@ OPS_REPOSITORY = conventions.forge.OPS.full_name
 DRILL_ENVIRONMENT = conventions.forge.DRILL.name
 DRILL_NAME = f'{conventions.CLUSTER_NAME}-{conventions.DRILL}'
 ELSEWHERE = 'ocid1.tenancy.oc1..elsewhere'
+#: The OCID the drill compartment is recorded against here: the test's own,
+#: so no case depends on whether the live entry has one yet.
+DRILL_COMPARTMENT = 'ocid1.compartment.oc1..drill-recorded'
 
 #: Every event both fakes see, in the order the mint caused them: `('gh',
 #: <secret name>)` for a push, `('b2', <api>)` for a B2 call. The order of
@@ -98,9 +102,16 @@ def forge(sink: TimedGh) -> Forge:
 
 @pytest.fixture
 def tenancy(monkeypatch: pytest.MonkeyPatch) -> Tenancy:
-    """The fake account, and `conventions` recording it as this program's own."""
+    """The fake account, `conventions` recording it and its drill compartment, and the compartment in it.
+
+    The state the installation is in once the drill has been minted for: the
+    mint adopts the recorded compartment and creates none. The path that
+    creates it and announces the OCID is `test_oci_iam`'s.
+    """
     with_tenancy_ocid(monkeypatch, TENANCY)
-    return Tenancy()
+    fake = Tenancy()
+    fake.identity.hold(with_recorded_compartment(monkeypatch, conventions.DRILL, DRILL_COMPARTMENT))
+    return fake
 
 
 @pytest.fixture
@@ -200,13 +211,12 @@ def test_the_oci_key_is_confined_to_the_drill_compartment_and_is_its_own_princip
 ) -> None:
     _ = _mint(kit, forge, tenancy)
 
-    # The compartment this run made is the drill's own, named for it and for
-    # no stack, and the policy is one statement over it: what the key may
-    # touch is that boundary, and what the boundary holds is the bound.
-    (compartment,) = tenancy.identity.compartments.values()
-    assert compartment.name == conventions.OCI_TENANCY.compartments[conventions.DRILL].name
+    # The compartment is the recorded one, adopted rather than made again, and
+    # the policy is one statement over it: what the key may touch is that
+    # boundary, and what the boundary holds is the bound.
+    assert list(tenancy.identity.compartments) == [DRILL_COMPARTMENT]
     assert [policy.statements for policy in tenancy.identity.policies.values() if policy.name == DRILL_NAME] == [
-        [f'Allow group {DRILL_NAME} to manage all-resources in compartment id {compartment.id}']
+        [f'Allow group {DRILL_NAME} to manage all-resources in compartment id {DRILL_COMPARTMENT}']
     ]
     # A principal beside the seed's, not a widening of it.
     assert sorted(user.name for user in tenancy.identity.users.values()) == [DRILL_NAME, oci_iam.SEED_NAME]
@@ -366,6 +376,7 @@ def test_no_dump_bucket_is_refused_before_a_key_is_minted(
 ) -> None:
     mints = api.calls.count('b2_create_key')
     users, keys = dict(tenancy.identity.users), {user: list(held) for user, held in tenancy.identity.keys.items()}
+    compartments = dict(tenancy.identity.compartments)
 
     # No `bucket_id` fixture: the appliance has never been provisioned, so the
     # bucket the reader would be confined to does not exist and there is
@@ -382,7 +393,7 @@ def test_no_dump_bucket_is_refused_before_a_key_is_minted(
     assert gh.values == {}
     assert tenancy.identity.users == users
     assert tenancy.identity.keys == keys
-    assert tenancy.identity.compartments == {}
+    assert tenancy.identity.compartments == compartments
 
 
 def test_a_seed_from_another_tenancy_is_refused_before_anything_is_created(
@@ -395,6 +406,11 @@ def test_a_seed_from_another_tenancy_is_refused_before_anything_is_created(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     with_tenancy_ocid(monkeypatch, ELSEWHERE)
+    # The state before the first mint, where a run that reached the
+    # compartment step would create one: only there does "refused before
+    # anything is created" tell a refusal from a late one.
+    _ = with_unrecorded_compartment(monkeypatch, conventions.DRILL)
+    tenancy.identity.compartments.clear()
     before = dict(tenancy.identity.users)
 
     # There is no `--compartment` to drop this check with: the drill
