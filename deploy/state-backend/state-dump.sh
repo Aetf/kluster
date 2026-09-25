@@ -8,22 +8,27 @@
 # curl, jq, gawk, sed, podman -- is in the image (state-backend.md §1
 # names the rule, and the test that holds the template to it).
 #
-# **The nightly object is verified the same way the operator's is.** A dump is
-# listed with `pg_restore --list` and a listing naming no table fails the run,
-# which is what catches a dump of a database that has lost its tables -- the
-# shape a box produces after a replacement nobody followed with a restore. The
-# next reader of an object nobody listed is the restore that needed it, a
-# retention window later. That check reads an archive rather than a stream, so
-# the dump lands in the clear beside its own ciphertext for the two steps that
-# read it instead of being piped straight into `age`.
+# **Every object under the dump prefix holds at least one stack checkpoint,
+# and this is the uploader that refuses anything else** (state-backend.md
+# §5). The operator's `state.verify_dump` holds its archives to the same
+# rule. A backend serving no stack -- a box replaced and not yet restored,
+# or a site before its first `pulumi stack init` -- dumps to a plausible
+# archive whose restore brings nothing back, and uploaded, it would become
+# the newest object: the one every recovery takes. So the run reads the
+# archive it is about to encrypt, counts the stack checkpoints in its rows,
+# and fails without uploading when there are none; the newest object stays
+# the last dump that held state. Reading an archive rather than a stream is
+# why the dump lands in the clear beside its own ciphertext for the steps
+# that read it instead of being piped straight into `age`.
 #
 # The upload credential holds `writeFiles` alone -- it cannot list, read, or
 # delete, which is why the bucket is addressed by id (listing is not permitted)
 # and why pruning is a bucket lifecycle rule rather than this script's job.
 #
-# `state-dump count-tables` reads a `pg_restore --list` listing on standard
-# input and prints how many tables it names: the parser below, reachable on
-# its own so the suite can hold it to the operator's copy of the grammar.
+# `state-dump count-stacks` reads what `pg_restore --data-only` prints on
+# standard input and prints how many stack checkpoints its rows hold: the
+# parser below, reachable on its own so the suite can hold it to the
+# operator's copy of the grammar. It reads `$PG_DATABASE` as the run does.
 #
 # Every stage announces itself before it starts. The journal is this box's
 # only trace, and a run that hangs says where it hangs only if the stage
@@ -50,55 +55,61 @@ SPOOL=${STATE_DUMP_SPOOL:-/var/tmp}
 RECIPIENTS=${STATE_DUMP_RECIPIENTS:-/etc/kluster/age-recipients.txt}
 AGE=${STATE_DUMP_AGE:-/opt/bin/age}
 
-# What an entry line calls a table in `pg_restore --list` output, and the
-# word that follows it when the entry is the rows rather than the definition.
-TABLE='TABLE'
-DATA='DATA'
+# Where the state is: the table Pulumi's Postgres backend keeps it in -- the
+# backend's default name, since the connection string names no `table=`
+# (`config.ClientBundle.url`) -- and the directory, under the database's
+# own prefix, that holds one checkpoint key per stack. `state.STATE_TABLE`
+# and `state.STACKS` are the same two, and the suite holds them equal.
+STATE_TABLE='pulumi_state'
+STACKS='.pulumi/stacks/'
 
 log() { printf 'state-dump: %s\n' "$*"; }
 die() { printf 'state-dump: %s\n' "$*" >&2; exit 1; }
 
-# How many tables the `pg_restore --list` output on standard input names.
+# How many stack checkpoints the `pg_restore --data-only` output on standard
+# input holds.
 #
-# An entry line is `<id>; <catalogue oid> <oid> <what> <schema> <name>
-# <owner>`, and `<what>` is one word for a table's definition and two --
-# `TABLE DATA` -- for its rows. Comment lines, which is the whole header,
-# start with the semicolon.
+# The state table's rows are one `COPY <schema>.<table> (key, data,
+# updated_at) FROM stdin;` block, a row per line with the key first and a
+# tab after it, ended by a line holding `\.`; an archive with no such table
+# prints no block. Every key is `<database>/<path>`, and a stack's
+# checkpoint is `<database>/.pulumi/stacks/<project>/<name>.json`, or
+# `.json.gz` or `.json.zst` when the backend compresses
+# (`PULUMI_DIY_BACKEND_GZIP`, `PULUMI_DIY_BACKEND_ZSTD`). That is the reading
+# `pulumi stack ls` makes: the meta, `.bak`, history and backup rows beside a
+# checkpoint are not stacks, and a backend whose stacks were all removed
+# keeps only `.bak` rows.
 #
-# **This is the operator's `state.tables` with the names counted instead of
-# returned**, down to the same set: a table contributes its definition and
-# its rows as two entries, so counting entries would answer twice what the
-# other side answers once. The grammar is copied line for line because
-# nothing of this repository is installed on the appliance, and the
-# alternative to a copy is no check here at all; `tests/test_state_dump.py`
-# runs both over one table of listings and compares the numbers, not their
-# truthiness.
-count_tables() {
-  awk -v table="$TABLE" -v data="$DATA" '
-    /^;/ { next }
-    {
-      at = index($0, ";")
-      if (at == 0) next
-      n = split(substr($0, at + 1), part)
-      if (n < 4 || part[3] != table) next
-      start = (part[4] == data) ? 5 : 4
-      if (n >= start + 1) found[part[start] "." part[start + 1]] = 1
+# **This is the operator's `state.checkpoints` with the keys counted instead
+# of returned.** The grammar is copied line for line because nothing of this
+# repository is installed on the appliance, and the alternative to a copy is
+# no check here at all; `tests/test_state_dump.py` runs both over one table
+# of inputs and compares the numbers, and `tests/test_state_roles.py` holds
+# both to what the pinned `pulumi` writes.
+count_stacks() {
+  awk -v table="$STATE_TABLE" -v prefix="$PG_DATABASE/$STACKS" '
+    inside && $0 == "\\." { inside = 0; next }
+    inside {
+      key = substr($0, 1, index($0 "\t", "\t") - 1)
+      if (index(key, prefix) == 1 && substr(key, length(prefix) + 1) ~ /^.+\.json(\.gz|\.zst)?$/) count++
+      next
     }
-    END { count = 0; for (name in found) count++; print count }
+    $1 == "COPY" && $NF == "stdin;" { name = $2; sub(/^.*\./, "", name); inside = (name == table) }
+    END { print count + 0 }
   '
 }
 
-# pg_dump to an archive, list it, then encrypt the archive to `$2` in `$1`.
+# pg_dump to an archive, read it, then encrypt the archive to `$2` in `$1`.
 #
-# Three steps rather than one pipeline: a stream cannot be listed, and an
-# unlistable object is one nobody discovers until a restore needs it. The
+# Separate steps rather than one pipeline: a stream cannot be read twice, and
+# an object nobody read is one nobody discovers until a restore needs it. The
 # plaintext is removed as soon as the ciphertext exists, so the peak is one
 # copy of the state plus its (already compressed) encryption.
 dump() {
   local spool=$1 ciphertext=$2
-  local archive="$spool/state.dump" listing="$spool/listing" complaint="$spool/complaint"
+  local archive="$spool/state.dump" complaint="$spool/complaint"
   local -a recipients=()
-  local line status
+  local line status stacks
 
   # A bare `read` strips the whitespace around a line; blank lines are
   # skipped, or age would be handed a recipient it rejects.
@@ -111,22 +122,40 @@ dump() {
 
   # `pg_restore` comes from the same container as `pg_dump`; reading the
   # archive on standard input is what saves mounting the spool into it.
-  # What this catches is a listing that names no table -- a dump of a
-  # database with nothing in it. It is not a truncation check: a
-  # custom-format archive keeps its table of contents at the head, so a file
-  # cut to a few kilobytes still lists.
+  # The listing is the check that `pg_restore` can read the archive at all.
+  # It is not a truncation check: a custom-format archive keeps its table of
+  # contents at the head, so a file cut to a few kilobytes still lists.
   log 'listing the archive'
   status=0
-  podman exec -i "$CONTAINER" pg_restore --list < "$archive" > "$listing" 2> "$complaint" || status=$?
+  podman exec -i "$CONTAINER" pg_restore --list < "$archive" > /dev/null 2> "$complaint" || status=$?
   if (( status != 0 )); then
     # With the output captured, what pg_restore said is the only account
     # of why it refused the archive, and a status on its own sends the
     # reader to a box nobody logs into to reproduce it by hand.
     die "pg_restore --list failed ($status): $(< "$complaint")"
   fi
-  if [[ $(count_tables < "$listing") == 0 ]]; then
-    die 'the archive lists no tables, so it is not a dump of the state backend'
+
+  # The rows go straight into the parser rather than to a file: they are the
+  # state in the clear, and the parser keeps nothing of them but a count.
+  # This read is also the truncation check the listing is not: the database
+  # has one data block, the state table's, so an archive cut anywhere past
+  # its table of contents fails here -- possibly after printing every row --
+  # and `pipefail` carries that status past the counter to the test below,
+  # which is what refuses it whatever the count.
+  log "counting the stack checkpoints in the archive's $STATE_TABLE rows"
+  status=0
+  stacks=$(podman exec -i "$CONTAINER" pg_restore --data-only --table="$STATE_TABLE" --file=- \
+    < "$archive" 2> "$complaint" | count_stacks) || status=$?
+  if (( status != 0 )); then
+    die "pg_restore --data-only failed ($status): $(< "$complaint")"
   fi
+  if (( stacks == 0 )); then
+    die "the archive holds no stack checkpoint (no key under $PG_DATABASE/$STACKS in $STATE_TABLE), so" \
+      'nothing was uploaded: every object under the dump prefix holds one (state-backend.md §5).' \
+      'Either this box was replaced and its state is not restored yet -- `state-backend restore`' \
+      'puts it back -- or no `pulumi stack init` has run against it yet'
+  fi
+  log "the archive holds $stacks stack checkpoint(s)"
 
   log "encrypting to $(( ${#recipients[@]} / 2 )) recipient(s)"
   "$AGE" --encrypt "${recipients[@]}" < "$archive" > "$ciphertext" || die "age failed ($?)"
@@ -188,6 +217,6 @@ main() {
 
 case ${1-} in
   '') main ;;
-  count-tables) count_tables ;;
+  count-stacks) count_stacks ;;
   *) die "unknown mode: $1" ;;
 esac

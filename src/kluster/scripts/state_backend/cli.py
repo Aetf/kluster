@@ -555,32 +555,9 @@ def _provision(
                 taken = _dump_before_replacing(roots, output=dump_output, bundle_dir=bundle_dir, owed=owed)
                 if taken is None:
                     return 1
-                # A box an earlier replacement left empty dumps once anything
-                # has opened it, and holds no stack: the record keeps the
-                # dump the state is in unless this box serves one. A box that
-                # does not answer the question is not read as empty.
-                if owed is None:
-                    owed = str(taken)
-                else:
-                    try:
-                        serving = state.stacks(state.connection(bundle_dir))
-                    except StateError as exc:
-                        log.error(
-                            'the box answered the dump but not `pulumi stack ls` (%s), so whether %s or %s holds the '
-                            'state cannot be told; nothing has been destroyed, and a re-run asks again',
-                            exc,
-                            taken,
-                            owed or 'the newest object in B2',
-                        )
-                        return 1
-                    if serving:
-                        owed = str(taken)
-                    else:
-                        log.warning(
-                            '%s holds no stack, so the restore still owed takes %s',
-                            taken,
-                            owed or 'the newest object in B2',
-                        )
+                # A dump that passed holds a stack (`state.verify_dump`), so
+                # it is where the state is, whatever an earlier record said.
+                owed = str(taken)
             elif owed is None:
                 log.warning('--no-dump: replacing without a dump, so everything since the nightly one is lost')
                 owed = ''
@@ -784,12 +761,12 @@ def _dump_before_replacing(
     being replaced — by default the workstation slot, which holds exactly
     that: same CA, same address.
 
-    A box an earlier replacement left empty (`owed`) names no table until
-    something opens it; once the backend has created its empty table the
-    dump passes and holds no stack, and the record keeps the earlier dump
-    (`_provision`). Where its dump fails, the refusal says what `--no-dump`
-    costs on both readings of the record, since the record cannot tell an
-    empty box from one whose state went back from another checkout.
+    A box an earlier replacement left empty (`owed`) cannot be dumped,
+    whether or not anything has opened it since: its archive holds no stack
+    checkpoint, and `state.verify_dump` refuses it. So the record keeps the
+    earlier dump, and the refusal says what `--no-dump` costs on both
+    readings of the record, since the record cannot tell an empty box from
+    one whose state went back from another checkout.
     """
     destination = (output if output is not None else Path(state.dump_name())).resolve()
     log.info('dumping the running box before it is replaced, into %s', destination)
@@ -798,7 +775,13 @@ def _dump_before_replacing(
     except StateError as exc:
         log.error('the dump of the running box failed: %s', exc)
         log.error('nothing has been destroyed; the box is still serving')
-        if owed is None:
+        if owed is None and isinstance(exc, state.NoStack):
+            log.error(
+                'this box serves no stack, so --no-dump loses nothing of it; if another checkout replaced it, '
+                "the `%s` beside that checkout's bundle names the dump the state is in",
+                RESTORE_OWED,
+            )
+        elif owed is None:
             log.error(
                 'a missing or stale bundle is `state-backend bundle operator --address <ip>`; '
                 '--no-dump replaces a box that cannot be dumped at all, and loses what is not in the nightly object'
@@ -851,10 +834,11 @@ def _dump(store: KdbxStore, *, registry: escrow.Registry, bundle_dir: Path, outp
     """A dump on demand, in the form the appliance's own timer writes.
 
     Encrypted to the escrow's recipients rather than left in plain text, and
-    listed before it is called a dump: an archive naming no table is a dump of
-    a database that has lost its state — what a replaced box holds until
-    anything opens it and the backend creates its empty table — and the operator taking one is usually about to destroy the box
-    it came from (§7.2).
+    read for a stack checkpoint before it is called a dump: an archive
+    holding none is a dump of a backend serving no stack — what a replaced
+    box holds until its restore, whether or not anything has opened it —
+    and the operator taking one is usually about to destroy the box it came
+    from (§7.2).
     """
     destination = (output if output is not None else Path(state.dump_name())).resolve()
     _refuse_to_overwrite(destination)
@@ -869,15 +853,17 @@ def _dump(store: KdbxStore, *, registry: escrow.Registry, bundle_dir: Path, outp
 def _served(target: state.Connection) -> list[str]:
     """The stacks the backend serves, or nothing if it cannot answer at all.
 
-    Used before a restore, where a backend that refuses the question is the
-    ordinary case: a box provisioned minutes ago has an empty database that
-    no `pulumi` has ever written a layout into. So this only ever reports a
-    positive answer, and the caller's guard only ever fires on one.
+    Used before a restore, into a box that ordinarily serves nothing. A box
+    provisioned minutes ago answers with no stack rather than refusing: the
+    question opens the backend, which creates its table and writes its meta
+    row on the way. A backend that does not answer at all is read as
+    serving nothing too, because the caller's guard is there to stop a
+    restore over live state, and only a positive answer shows it.
     """
     try:
         return state.stacks(target)
     except StateError as exc:
-        log.info('the backend cannot list stacks yet (%s); a box provisioned minutes ago cannot either', exc)
+        log.info('the backend did not answer `pulumi stack ls` (%s); reading it as serving no stack', exc)
         return []
 
 

@@ -329,6 +329,9 @@ def test_a_dump_older_than_the_age_fails_into_the_rebuild_playbook(api: FakeApi,
     assert verdict.playbook == 'physical/state-backend.md §7.3'
     assert '37.0 h' in verdict.observed
     assert 'stopped' in verdict.observed
+    # The box refusing an archive that holds no stack is one way the timer
+    # stops landing objects: a box replaced and not restored reads as stale.
+    assert 'holding no stack' in verdict.observed
 
 
 def test_the_age_is_the_settings_and_not_a_number_of_its_own(
@@ -348,11 +351,14 @@ def test_an_empty_prefix_is_its_own_failure(api: FakeApi, lister: tuple[b2.AppKe
 
     verdict = _dumps(key)
 
-    # A box rebuilt and never restored, or a timer that never fired: neither
-    # is a dump that stopped, and the message says which prefix is empty.
+    # No dump holding state has landed: the box refuses to upload one that
+    # holds no stack, or its timer never fired. Neither is a dump that
+    # stopped, and the message says which prefix is empty and names both.
     assert verdict.playbook == 'physical/state-backend.md §7.3'
     assert 'no object under' in verdict.observed
     assert PREFIX in verdict.observed
+    assert 'holds no stack' in verdict.observed
+    assert 'never fired' in verdict.observed
 
 
 def test_an_object_not_named_like_a_dump_fails_by_name(api: FakeApi, lister: tuple[b2.AppKey, str]) -> None:

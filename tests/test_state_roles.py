@@ -18,8 +18,10 @@ temporary files, and `podman cp` is the channel that reaches it either way.
 The properties held here are the ones the box's roles exist for: the bootstrap
 superuser answers on the container's local socket and to no certificate, the
 client roles are not superusers, `pulumi` writes as one client role and reads
-as the other, and a dump from a box whose client roles are superusers restores
-into one whose roles are not.
+as the other, a dump from a box whose client roles are superusers restores
+into one whose roles are not, and the appliance's dump script and the
+operator's `state.verify_dump` count the stack checkpoints the pinned `pulumi`
+writes -- none on a box the backend has only opened, one after `stack init`.
 
 **Skipped where the image cannot be run without fetching it.** A test that
 pulls an image needs the network. This one runs where the pinned image is
@@ -61,6 +63,17 @@ PODMAN_TIMEOUT = 120
 
 #: The unit whose `podman run` this repeats.
 UNIT = 'pgstate.service'
+
+#: Where the pinned `pulumi` keeps a stack's checkpoint: the backend's default
+#: table, and the directory of keys under the database's own prefix. Written
+#: out rather than read from `state`, because what these cases measure is the
+#: backend, and `state` is what is held to it.
+BACKEND_TABLE = 'pulumi_state'
+BACKEND_STACKS = '.pulumi/stacks/'
+
+#: The environment the dump unit runs its script under, and the script.
+DUMP_ENV = PurePosixPath('/etc/kluster/state-dump.env')
+DUMP_SCRIPT = config.DEPLOY_DIR / config.DUMP_SCRIPT
 
 #: What the image's entrypoint prints once initialization is over, and what
 #: the serving Postgres prints once it is up. The second alone is not enough:
@@ -367,8 +380,8 @@ def _psql(clients: Path, target: state.Connection, sql: str) -> str:
     return done.stdout.strip()
 
 
-def _stack_init(target: state.Connection, project: Path, stack: str) -> None:
-    """Write a stack into the backend: what `pulumi` does with it, not a row."""
+def _stack_init(target: state.Connection, project: Path, stack: str, env: dict[str, str] | None = None) -> None:
+    """Write a stack into the backend: what `pulumi` does with it, not a row. `env` is overlaid on the run's."""
     project.mkdir(parents=True, exist_ok=True)
     _ = (project / 'Pulumi.yaml').write_text(f'name: {project.name}\nruntime: yaml\n')
     _ = pulumi_config.run_pulumi(
@@ -378,6 +391,7 @@ def _stack_init(target: state.Connection, project: Path, stack: str) -> None:
             pulumi_config.BACKEND_URL_ENV: target.url,
             pulumi_config.PASSPHRASE_ENV: fake(pulumi_config.PASSPHRASE_ENV),
             **target.env,
+            **(env or {}),
         },
         stdin=None,
     )
@@ -491,3 +505,105 @@ def test_a_dump_from_a_box_whose_client_roles_are_superusers_restores(
 
     for role in CLIENT_ROLES:
         assert _names(state.stacks(_bundle(roots, box, clients, role))) == [STACK], role
+
+
+def _dump_env(ignition: dict[str, Any]) -> dict[str, str]:
+    """What the dump unit's `EnvironmentFile=` sets, as the Ignition delivers it."""
+    (delivered,) = [file for file in _delivered(ignition) if file.path == DUMP_ENV]
+    pairs = (line.split('=', 1) for line in delivered.content.decode().splitlines() if '=' in line)
+    return {name.strip(): value.strip() for name, value in pairs}
+
+
+def _nightly(box: Box, clients: Path, env: dict[str, str], name: str) -> Path:
+    """An archive of the box taken the way the dump unit takes one, where the client tools can read it.
+
+    `pg_dump -Fc` over the container's local socket, as the unit's role, with
+    its output a pipe rather than a file: the archive then carries no data
+    offsets, which is what the script's later reads of it have to cope with.
+    """
+    archive = clients / f'{name}.dump'
+    _ = archive.write_bytes(_podman('exec', box.name, 'pg_dump', '-Fc', '-U', env['PG_ROLE'], env['PG_DATABASE']))
+    return archive
+
+
+def _box_count(box: Box, archive: Path, env: dict[str, str]) -> int:
+    """The script's count of an archive's stack checkpoints, over rows read the way the script reads them."""
+    printed = _podman(
+        'exec',
+        '-i',
+        box.name,
+        'pg_restore',
+        '--data-only',
+        f'--table={BACKEND_TABLE}',
+        '--file=-',
+        stdin=archive.read_bytes(),
+    )
+    counted = sp.run(
+        [str(DUMP_SCRIPT), 'count-stacks'],
+        input=printed,
+        env={'PATH': os.environ['PATH'], 'PG_DATABASE': env['PG_DATABASE']},
+        capture_output=True,
+        timeout=PODMAN_TIMEOUT,
+        check=False,
+    )
+    assert counted.returncode == 0, counted.stderr.decode()
+    return int(counted.stdout)
+
+
+#: The backend's compression settings, the variable that turns each on, and
+#: the suffix its checkpoint then carries. Each has an alternative name
+#: (`PULUMI_SELF_MANAGED_STATE_*`), cleared too so the operator's shell
+#: decides nothing here.
+COMPRESSION: dict[str, tuple[dict[str, str], str]] = {
+    'none': ({}, '.json'),
+    'gzip': ({'PULUMI_DIY_BACKEND_GZIP': 'true'}, '.json.gz'),
+    'zstd': ({'PULUMI_DIY_BACKEND_ZSTD': 'true'}, '.json.zst'),
+}
+COMPRESSION_ENV = (
+    'PULUMI_DIY_BACKEND_GZIP',
+    'PULUMI_DIY_BACKEND_ZSTD',
+    'PULUMI_SELF_MANAGED_STATE_GZIP',
+    'PULUMI_SELF_MANAGED_STATE_ZSTD',
+)
+
+
+@pytest.mark.parametrize(('compression', 'suffix'), list(COMPRESSION.values()), ids=list(COMPRESSION))
+def test_both_copies_of_the_checkpoint_grammar_count_what_pulumi_writes(
+    start: Start,
+    ignition: dict[str, Any],
+    roots: config.Roots,
+    clients: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    compression: dict[str, str],
+    suffix: str,
+) -> None:
+    """The rule of state-backend.md §5, against the backend's own layout rather than a fixture of it.
+
+    The backend lays out its keys itself, and a `pulumi` release could move
+    them; the grammar in the script and in `state` would then count nothing
+    on a box serving stacks, and every nightly would refuse. Here the pinned
+    `pulumi` writes them into the pinned image: a box `pulumi stack ls` has
+    opened holds the table and its meta row and counts 0 on both sides, and
+    after `stack init` -- which writes the checkpoint and the `.bak` beside
+    it, compressed as the backend is told to -- 1 on both.
+    """
+    for variable in COMPRESSION_ENV:
+        monkeypatch.delenv(variable, raising=False)
+    box = _appliance(start, ignition)
+    env = _dump_env(ignition)
+    operator = _bundle(roots, box, clients, settings.OPERATOR_ROLE)
+    # The premise: nothing has opened this box yet.
+    assert box.local(f"SELECT to_regclass('{BACKEND_TABLE}') IS NULL") == 't'
+
+    assert state.stacks(operator) == []
+    opened = _nightly(box, clients, env, 'opened')
+    assert box.local(f'SELECT count(*) FROM {BACKEND_TABLE}') == '1'
+    assert _box_count(box, opened, env) == 0
+    with pytest.raises(state.StateError, match='holds no stack checkpoint'):
+        _ = state.verify_dump(opened)
+
+    _stack_init(operator, tmp_path / 'project', STACK, compression)
+    serving = _nightly(box, clients, env, 'serving')
+    assert _box_count(box, serving, env) == 1
+    assert state.verify_dump(serving) == [f'{env["PG_DATABASE"]}/{BACKEND_STACKS}project/{STACK}{suffix}']

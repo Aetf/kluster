@@ -249,7 +249,9 @@ systemd:
 
     # age is fetched once and pinned by hash: FCOS has no package-manager path
     # this design would accept, and the encryptor must exist before the first
-    # dump runs. Renovate bumps the pin in this file.
+    # dump runs. The pin is `settings.AGE_VERSION`, `AGE_URL` and `AGE_SHA256`
+    # in scripts/state_backend/settings.py, rendered in below; a custom regex
+    # manager in renovate.json5 moves the version there, not here.
     - name: age-install.service
       enabled: true
       contents: |
@@ -307,8 +309,10 @@ systemd:
         ExecStart=/usr/local/bin/state-dump
         ExecStartPost=-/usr/bin/rm -f /etc/motd.d/10-state-dump.motd
 
-    # Where a failure goes, and how far it gets. No probe watches the objects
-    # yet, so this reaches exactly one place: Fedora CoreOS prints
+    # Where a failure goes, and how far it gets. What watches the objects does
+    # so from outside, and sees their names and stamps, never why a run failed
+    # (`state-backend probe`, state-backend.md §6). So the box's own account
+    # of a failure reaches exactly one place: Fedora CoreOS prints
     # /etc/motd.d/* at an interactive ssh login — a plain `state-backend
     # ssh`; one given a command prints none — and that login is how an
     # operator gets there. It pages nobody. What it buys is that a dump which

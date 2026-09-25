@@ -9,7 +9,7 @@ this file is how to operate it.
 | Path | What |
 | --- | --- |
 | `butane.yaml.j2` (template) | The machine, whole: the Postgres unit — a plain systemd unit running `podman run`, auto-updated by label, not a quadlet — PKI, `pg_hba` and the Postgres roles, the age recipients, the unit that installs the pinned `age`, the dump timer, the reboot window. |
-| `state-dump.sh` | What that timer runs — `pg_dump` → `pg_restore --list` → age → B2. Shell, because the box has no interpreter: it uses what the Fedora CoreOS image ships plus the `age` the template installs, and a test holds the template to that (docs/physical/state-backend.md §1). |
+| `state-dump.sh` | What that timer runs — `pg_dump` → `pg_restore`, refusing an archive that holds no stack → age → B2. Shell, because the box has no interpreter: it uses what the Fedora CoreOS image ships plus the `age` the template installs, and a test holds the template to that (docs/physical/state-backend.md §1). |
 | `operator-keys.txt` | SSH keys for diagnosis (`state-backend ssh`). The box is never configured by hand, and a key absent here means no access until the next re-provision. |
 | `drill-recipient.txt` | The public half of the drill age identity, one recipient. Written by `credentials derived drill-age-identity generate` — which pushes the private half into the ops repository's `drill` Environment first — and committed; absent until that generator has run, and the appliance then encrypts to the escrowed generations alone. |
 
@@ -183,10 +183,12 @@ to enforce it.
 
 ## Losing it
 
-The daily dump is listed with `pg_restore --list` on the box before it leaves
-it — an archive whose table of contents names no table is a dump of a database
-that has lost its state, which is what a replaced box holds until its restore
-— and age-encrypted to the recipients `config.age_recipients` renders into
+The daily dump is read on the box before it leaves it — an archive holding no
+stack checkpoint is refused and nothing is uploaded, since its restore would
+bring nothing back: a box replaced and not yet restored, or a site before its
+first `pulumi stack init`, so the newest object is always the last dump that
+held state (docs/physical/state-backend.md §5) — and age-encrypted to the
+recipients `config.age_recipients` renders into
 the Butane file, one kind of recipient per reader. The escrowed
 `backup/age/<generation>` identities serve the operator: random at creation,
 their only stored copies the ciphertexts under `escrow/`, which the kit's
