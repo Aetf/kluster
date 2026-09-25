@@ -481,10 +481,37 @@ everything else about it is mechanism. When apt succeeds, the script
 downloads the whole set again, and only when that download succeeds do
 the debs become the offline cache in `dpkg/`, which is the fallback for
 the post-update boot where apt is unreachable; a refresh whose download
-fails says so and keeps the old cache whole. The cache is refreshed by
-moving the old directory aside and the new one into place, so
-**`dpkg/` is that script's alone**: a file this program wrote there would be
-deleted by the next refresh and reported as drift forever after.
+fails says so and keeps the old cache whole. **apt downloads into a
+directory of the script's own** — `dpkg.download` beside the cache,
+emptied before the install and removed when the script exits — and never
+into its shared `/var/cache/apt/archives`, where any other apt run on the
+device leaves its debs. So the cache holds what apt fetched for the set
+and nothing else, and a deb a vendor's tooling or a hand-run apt left
+behind is neither cached nor installed from the cache. On a post-update
+boot every package of the set is missing, and what apt fetches is the
+set's whole closure missing from the firmware base. On a boot where part
+of the set survived, it is the whole set but only the dependencies
+fetched by that boot's install, because a reinstall fetches the packages
+it names and not what they depend on; an offline boot from such a cache
+fails at `dpkg` for want of the rest, and the script reports it. The
+cache is refreshed by moving the old directory aside and the new one
+into place, so **`dpkg/` is that script's alone**: a file this program
+wrote there would be deleted by the next refresh and reported as drift
+forever after.
+
+**Nothing orders this script against `frr-config.service`** (§1.3).
+Where a firmware update carried `/etc` across, that unit starts at boot
+beside `udm-boot.service` rather than after it, so it may parse and
+stamp the routing configuration before this script has installed
+anything. That is harmless while nothing this script installs is FRR's:
+the suite ships in the firmware, the set names none of its packages,
+and the cache holds only what apt fetched for the set, so the parser
+that unit checks against is the one the firmware shipped, whichever runs
+first. A set that ever pulled an FRR package in would need the order
+declared, and not as `After=udm-boot.service` on that unit:
+`20-units.sh` runs inside `udm-boot.service`, starts the unit whenever
+it is not running and waits for it, so the unit's start would wait on
+the very unit that is waiting on it.
 
 **`20-units.sh` converges the unit sources** into
 `/etc/systemd/system`, enables them, and restarts the ones whose file

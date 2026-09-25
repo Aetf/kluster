@@ -11,23 +11,36 @@
 # set is installed in a single transaction, because packages that are
 # version-locked to each other cannot be resolved one at a time.
 #
-# Cache design: when apt succeeds on a post-update boot, the debs it downloads
-# are exactly the set missing from the new firmware base (dependency closure
-# included, resolved against the firmware's own dpkg database). That snapshot
-# atomically replaces {{ cache }}. The cache is consumed only when apt is
-# unreachable on a post-update boot; a stale cache cannot persist silently
-# because every successful apt install refreshes it against the running
-# firmware, and a refresh whose download fails says so. The snapshot is taken
-# only of a download of the whole set: a partial one never replaces a cache
-# that could install everything. The directory is this script's alone -- the
-# swap below replaces it whole, so nothing else may keep a file in it.
+# Cache design: apt downloads into a directory of this script's own, never into
+# its shared archives, and only what lands there becomes the cache. So the cache
+# holds the set and the dependencies apt fetched for it, and a deb that any
+# other apt run left in the shared archives -- a vendor's, or one by hand -- is
+# neither cached nor installed from the cache. On a post-update boot every
+# package of the set is missing, so the install fetches the set's whole
+# closure missing from the new firmware base (resolved against the firmware's
+# own dpkg database). The download that follows fetches every package of the
+# set by name, so a boot on which part of the set survived still caches the
+# whole set -- with only the dependencies that boot's install fetched, because
+# --reinstall re-fetches the packages it names and not what they depend on.
+#
+# That snapshot atomically replaces {{ cache }}. The cache is consumed only
+# when apt is unreachable on a post-update boot; a stale cache cannot persist
+# silently because every successful apt install refreshes it against the
+# running firmware, and a refresh whose download fails says so. The snapshot is
+# taken only once every package of the set has downloaded: a failed download
+# never replaces the cache. {{ cache }} is this script's alone -- the swap
+# below replaces it whole, so nothing else may keep a file in it.
 
 set -u
 
 PACKAGES=({{ packages | join(' ') }})
 CACHE={{ cache }}
-# Where apt leaves the debs it downloads.
-ARCHIVES={{ archives }}
+# Where apt downloads the set: emptied before the install and removed when this
+# script exits, so it holds what apt fetched for the set on this run and
+# nothing else. apt creates the partial/ directory it downloads through, but
+# only inside an archives directory that already exists.
+DOWNLOAD=$CACHE.download
+APT=(apt-get -o "Dir::Cache::archives=$DOWNLOAD")
 
 installed() {
     local p
@@ -41,24 +54,28 @@ if installed; then
     exit 0
 fi
 
+trap 'rm -rf "$DOWNLOAD"' EXIT
+rm -rf "$DOWNLOAD"
+mkdir -p "$DOWNLOAD"
+
 echo "packages: installing ${PACKAGES[*]} via apt (post-firmware-update boot)..."
 # /var/lib/apt/lists is empty after a firmware update; without an update the
 # install below cannot resolve anything. Its own failure is not fatal -- the
 # install will fail and we fall back to the cache.
 apt-get update || echo "packages: apt-get update failed, continuing"
 
-if apt-get install -y "${PACKAGES[@]}"; then
-    echo "packages: refreshing the offline cache in $CACHE"
-    # Ensure every package of the set is present in the archives dir, not just
-    # the ones this boot happened to install (a partially-surviving set would
-    # otherwise produce a partial cache). If that download fails, the archives
-    # hold only what the install fetched, so the old cache stays as it is.
-    if ! apt-get install -y --download-only --reinstall "${PACKAGES[@]}"; then
+if "${APT[@]}" install -y "${PACKAGES[@]}"; then
+    echo "packages: downloading ${PACKAGES[*]} to refresh the offline cache in $CACHE"
+    # Ensure every package of the set is downloaded, not just the ones this
+    # boot happened to install (a partially-surviving set would otherwise
+    # produce a partial cache). If that download fails, the download directory
+    # holds only what the install fetched, so the old cache stays as it is.
+    if ! "${APT[@]}" install -y --download-only --reinstall "${PACKAGES[@]}"; then
         echo "packages: cache refresh download failed, keeping the old cache"
-    elif compgen -G "$ARCHIVES/*.deb" >/dev/null; then
+    elif compgen -G "$DOWNLOAD/*.deb" >/dev/null; then
         rm -rf "$CACHE.new" "$CACHE.old"
         mkdir -p "$CACHE.new"
-        cp "$ARCHIVES"/*.deb "$CACHE.new/"
+        mv "$DOWNLOAD"/*.deb "$CACHE.new/"
         [ -d "$CACHE" ] && mv "$CACHE" "$CACHE.old"
         mv "$CACHE.new" "$CACHE"
         rm -rf "$CACHE.old"

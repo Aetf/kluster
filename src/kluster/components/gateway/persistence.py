@@ -50,7 +50,9 @@ way.
 **`dpkg/` is `10-packages.sh`'s alone.** The cache is refreshed by moving the
 old directory aside and the new one into place, so any file Pulumi wrote in it
 would be deleted by the next refresh and reported as drift forever. This layer
-declares that the directory exists and never what is in it.
+declares that the directory exists and never what is in it, and declares
+nothing about the `dpkg.*` directories beside it, which the script makes and
+removes as it runs.
 
 **A directory is a resource, not a file that stands for one.** `skeleton_dir`
 declares a `DeviceDirectory`, whose existence, mode and ownership are compared
@@ -90,7 +92,6 @@ from kluster.providers.device_files.provider import Connection, DeviceDirectory,
 from putils import Component
 
 __all__ = (
-    'APT_ARCHIVES_DIR',
     'BIN',
     'BIN_DIR',
     'DIRECTORY_MODE',
@@ -137,7 +138,9 @@ TEMPLATE_PACKAGE = 'kluster.components.gateway'
 
 #: The custom root's skeleton: executables, the offline deb cache, and the unit
 #: sources `20-units.sh` converges. Every other directory under the custom root
-#: belongs to a layer above and arrives through `skeleton_dir`.
+#: belongs to a layer above and arrives through `skeleton_dir`, except the
+#: `dpkg.*` siblings `10-packages.sh` works through while it runs — the directory
+#: apt downloads the set into, and the two halves of the cache's swap.
 #:
 #: The names and the three paths are unpacked from that same tuple rather than
 #: spelled again, so a directory added to the skeleton without a name to reach
@@ -151,10 +154,6 @@ BIN_DIR, DPKG_DIR, UNIT_SOURCE_DIR = (f'{conventions.gateway.CUSTOM_ROOT}/{name}
 #: Where systemd reads the units `20-units.sh` installs, which is off `/data`
 #: and therefore nothing a firmware update promises to keep.
 LIVE_UNIT_DIR = '/etc/systemd/system'
-
-#: Where apt leaves the debs it downloads, which `10-packages.sh` snapshots into
-#: the offline cache on the boot apt succeeds.
-APT_ARCHIVES_DIR = '/var/cache/apt/archives'
 
 #: The three files this layer is. The numbers are the boot order: packages
 #: first, because everything after them may need what they install; the unit
@@ -292,12 +291,11 @@ def dropin_hook(unit: str, name: str) -> str:
 @final
 @dataclass(frozen=True)
 class _PackagesParams:
-    """What `10-packages.sh.j2` reads: the set, where the cache lives, and where apt downloads to."""
+    """What `10-packages.sh.j2` reads: the set, and where the cache lives."""
 
     cluster: str
     packages: tuple[str, ...]
     cache: str
-    archives: str
 
 
 @final
@@ -318,13 +316,13 @@ class _UnitsParams:
     dropin_suffix: str
 
 
-def packages_script(packages: Sequence[str], *, cache: str = DPKG_DIR, archives: str = APT_ARCHIVES_DIR) -> str:
+def packages_script(packages: Sequence[str], *, cache: str = DPKG_DIR) -> str:
     """The boot-chain script that reinstalls what a firmware update wiped.
 
     The set is data and everything else is mechanism: one transaction so that
     version-locked packages resolve together, an offline cache refreshed from
-    what apt downloaded on the boot it succeeded, and that cache as the fallback
-    for the boot where apt is unreachable.
+    what apt downloaded for the set on the boot it succeeded, and that cache as
+    the fallback for the boot where apt is unreachable.
 
     The set is sorted and deduplicated here, so the file the device holds is a
     function of what the installation requires rather than of the order the
@@ -332,9 +330,11 @@ def packages_script(packages: Sequence[str], *, cache: str = DPKG_DIR, archives:
     reads the array — a package name is a caller's string, and one carrying a
     space would otherwise become two entries the device cannot install.
 
-    `cache` and `archives` are the two directories the script moves debs
-    between. They default to the device's own, and are parameters so the
-    script can be run against a tree that is not a device.
+    `cache` is the offline cache, and the directory apt downloads the set into
+    sits beside it, so what the cache can ever hold is what apt fetched for the
+    set: never apt's shared archives, where any other apt run leaves its debs.
+    It defaults to the device's own, and is a parameter so the script can be
+    run against a tree that is not a device.
     """
     return templates.render(
         TEMPLATE_PACKAGE,
@@ -343,7 +343,6 @@ def packages_script(packages: Sequence[str], *, cache: str = DPKG_DIR, archives:
             cluster=conventions.CLUSTER_NAME,
             packages=tuple(shlex.quote(package) for package in sorted(set(packages))),
             cache=cache,
-            archives=archives,
         ),
     )
 
