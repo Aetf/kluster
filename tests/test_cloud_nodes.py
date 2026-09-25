@@ -3,7 +3,8 @@
 The properties asserted here are the ones a later `pulumi diff` cannot show
 because they are structural -- that no two nodes share an availability
 domain, for instance, that the dedicated VIP is a reserved address attached
-to a secondary private IP rather than an ephemeral one, or that moving a
+to a secondary private IP rather than an ephemeral one, that every port the
+balancer forwards answers on both of its addresses, or that moving a
 management port renames nothing that state or the balancer keys on.
 """
 
@@ -24,7 +25,15 @@ from kluster.stacks import physical
 
 COMPARTMENT_ID = 'ocid1.compartment.test'
 SUBNET_ID = 'ocid1.subnet.test'
-VNIC_ID = 'ocid1.vnic.oc1.phx.augmented'
+
+
+def vnic_of(instance_id: str) -> str:
+    """The primary VNIC the account reads back for an instance: one of its own, so a lookup that crossed nodes shows."""
+    return f'ocid1.vnic.oc1.phx.{instance_id}'
+
+
+#: The instance id the mock answers the dedicated VIP's node with.
+VIP_NODE_ID = 'kluster-cp1_id'
 
 LB_ADDRESS = '203.0.113.10'
 LB_ADDRESS_V6 = '2001:db8::10'
@@ -56,11 +65,19 @@ FAULT_DOMAINS = [f'FAULT-DOMAIN-{n}' for n in (1, 2, 3)]
 class Oci(Recorder):
     """What the account reads back: the balancer's addresses, the node's VNIC, and the region's domains."""
 
-    def __init__(self, availability_domains: list[str] = AVAILABILITY_DOMAINS) -> None:
+    def __init__(
+        self, availability_domains: list[str] = AVAILABILITY_DOMAINS, ipv6_addresses: list[str] | None = None
+    ) -> None:
         super().__init__()
         #: The ADs the region offers, which a case narrows to stand in for a
         #: smaller region.
         self.availability_domains: list[str] = availability_domains
+        #: What every VNIC reads back as its IPv6 addresses, where a case
+        #: stands in for one that does not hold exactly its own one.
+        self.ipv6_addresses: list[str] | None = ipv6_addresses
+        #: Otherwise each VNIC's one GUA, handed out in the order the VNICs
+        #: are first read, so no two share one.
+        self.guas: dict[str, str] = {}
 
     def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
         if args.typ == 'oci:NetworkLoadBalancer/networkLoadBalancer:NetworkLoadBalancer':
@@ -71,7 +88,13 @@ class Oci(Recorder):
     def answer(self, args: pulumi.runtime.MockCallArgs) -> dict[str, Any]:
         match args.token:
             case 'oci:Core/getVnicAttachments:getVnicAttachments':
-                return {'vnicAttachments': [{'vnicId': VNIC_ID}]}
+                instance_id = str(cast('dict[str, Any]', args.args)['instanceId'])
+                return {'vnicAttachments': [{'vnicId': vnic_of(instance_id)}]}
+            case 'oci:Core/getVnic:getVnic':
+                vnic_id = str(cast('dict[str, Any]', args.args)['vnicId'])
+                gua = self.guas.setdefault(vnic_id, f'2001:db8:1::{len(self.guas) + 1:x}')
+                held = [gua] if self.ipv6_addresses is None else self.ipv6_addresses
+                return {'ipv6addresses': held}
             case 'oci:Identity/getAvailabilityDomains:getAvailabilityDomains':
                 return {'availabilityDomains': [{'name': name} for name in self.availability_domains]}
             case 'oci:Identity/getFaultDomains:getFaultDomains':
@@ -199,7 +222,7 @@ async def test_the_vip_is_a_reserved_address_on_a_secondary_private_ip(nodes: Cl
     reserving it and attaching it to a second private IP buys.
     """
     assert await nodes.reserved_ip.lifetime.future() == 'RESERVED'
-    assert await nodes.secondary_ip.vnic_id.future() == VNIC_ID
+    assert await nodes.secondary_ip.vnic_id.future() == vnic_of(VIP_NODE_ID)
     assert await nodes.reserved_ip.private_ip_id.future() == await nodes.secondary_ip.id.future()
 
 
@@ -233,16 +256,69 @@ async def test_a_vnic_lookup_the_engine_declines_leaves_the_vip_unknown_rather_t
 
 @pytest.mark.asyncio
 async def test_every_management_port_preserves_the_client_address(balancer: NodeLoadBalancer) -> None:
-    # The backend sets are the management ports and nothing else: the same
-    # structure the node firewall opens and the cluster endpoint names.
-    assert set(balancer.backend_sets) == set(ManagementPorts._fields)
-    for backend_set in balancer.backend_sets.values():
-        assert await backend_set.is_preserve_source.future() is True
+    # The backend sets are the management ports and nothing else, on each
+    # family: the same structure the node firewall opens and the cluster
+    # endpoint names.
+    assert set(balancer.backend_sets) == {'IPV4', 'IPV6'}
+    for family, backend_sets in balancer.backend_sets.items():
+        assert set(backend_sets) == set(ManagementPorts._fields), family
+        for backend_set in backend_sets.values():
+            assert await backend_set.is_preserve_source.future() is True
 
 
 @pytest.mark.asyncio
-async def test_every_node_backs_every_management_port(nodes: CloudNodes) -> None:
-    assert len(nodes.backends) == len(conventions.MANAGEMENT_PORTS) * 3
+async def test_every_node_backs_every_backend_set_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    declared = await declared_per_port(conventions.MANAGEMENT_PORTS, monkeypatch)
+    backend_sets = {it.inputs['name'] for it in declared if it.typ == BACKEND_SET}
+    backed = Counter(it.inputs['backendSetName'] for it in declared if it.typ == BACKEND)
+
+    assert len(backend_sets) == len(conventions.MANAGEMENT_PORTS) * 2
+    assert backed == dict.fromkeys(backend_sets, 3)
+
+
+@pytest.mark.asyncio
+async def test_a_backend_reaches_its_node_on_the_family_of_its_set(monitor: Oci, nodes: CloudNodes) -> None:
+    """An IPv4 backend names the instance; an IPv6 one names the node's own GUA.
+
+    An instance OCID stands for the primary VNIC's primary private IP, which is
+    IPv4, so an IPv6 backend set can only be told the address. Each backend is
+    paired with the node its name carries, so an address that belongs to
+    another node -- the same VNIC read for every node, or each node handed its
+    neighbour's -- fails on the backend that carries it.
+    """
+    for backend in nodes.backends:
+        _ = await backend.urn.future()
+    backends = monitor.of_type(BACKEND)
+    assert len(backends) == len(conventions.MANAGEMENT_PORTS) * len(nodes.instances) * 2
+    for it in backends:
+        node = it.name.rsplit('-', 1)[1]
+        instance_id = str(await nodes.instances[node].id.future())
+        if str(it.inputs['backendSetName']).endswith('-ipv6'):
+            assert 'targetId' not in it.inputs, it.name
+            assert it.inputs['ipAddress'] == monitor.guas[vnic_of(instance_id)], it.name
+        else:
+            assert 'ipAddress' not in it.inputs, it.name
+            assert it.inputs['targetId'] == instance_id, it.name
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('held', [[], ['2001:db8:1::a', '2001:db8:1::b']], ids=['none', 'two'])
+async def test_a_node_without_exactly_one_ipv6_address_is_refused(held: list[str]) -> None:
+    """Guessing would put a wrong address, or no address, in a backend set."""
+    _ = await run_with(Oci(ipv6_addresses=held), stack='physical')
+    nodes = build_nodes(await placements())
+
+    # A backend the refusal reaches fails whole, its every output with it, so
+    # each is read and the refusals counted: one per port on each node's IPv6
+    # side, and none on the IPv4 side, which is told the instance instead.
+    refused = 0
+    for backend in nodes.backends:
+        try:
+            _ = await backend.ip_address.future()
+        except ValueError as error:
+            assert f'holds {len(held)} IPv6 addresses on its primary VNIC, not one' in str(error)
+            refused += 1
+    assert refused == len(conventions.MANAGEMENT_PORTS) * 3
 
 
 @pytest.mark.asyncio
@@ -274,13 +350,19 @@ LISTENER = 'oci:NetworkLoadBalancer/listener:Listener'
 BACKEND = 'oci:NetworkLoadBalancer/backend:Backend'
 
 
-async def declared_per_port(ports: ManagementPorts, monkeypatch: pytest.MonkeyPatch) -> list[Declaration]:
-    """The fleet and its balancer declared under `ports`, read back per management port."""
+async def declared_fleet(ports: ManagementPorts, monkeypatch: pytest.MonkeyPatch) -> Oci:
+    """The fleet and its balancer declared under `ports`, as the run recorded them."""
     recorder = await run_with(Oci(), stack='physical')
     monkeypatch.setattr(conventions, 'MANAGEMENT_PORTS', ports)
     order = await placements()
     async with declaring():
         _ = build_nodes(order)
+    return recorder
+
+
+async def declared_per_port(ports: ManagementPorts, monkeypatch: pytest.MonkeyPatch) -> list[Declaration]:
+    """The fleet and its balancer declared under `ports`, read back per management port."""
+    recorder = await declared_fleet(ports, monkeypatch)
     return [it for it in recorder.declared if it.typ in {BACKEND_SET, LISTENER, BACKEND}]
 
 
@@ -303,6 +385,44 @@ def forwarded_ports(declarations: list[Declaration]) -> set[int]:
     return {int(it.inputs['port']) for it in declarations if it.typ in {LISTENER, BACKEND}}
 
 
+def family_of(declaration: Declaration) -> str:
+    """The family a listener or a backend set answers on: its `ip_version`, which every one states."""
+    return str(declaration.inputs['ipVersion'])
+
+
+@pytest.mark.asyncio
+async def test_every_port_the_balancer_forwards_is_served_on_each_family_it_holds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both of the anchor's addresses answer on every port either of them does.
+
+    The families are read off the balancer's own `nlb_ip_version`, the
+    declaration that decides which public addresses it holds and so which the
+    `dns` stack's anchor publishes. A listener answers on one family and
+    forwards only to a backend set of that family, so serving a port means a
+    listener of the family, pointing at a backend set of the same family, which
+    every node backs.
+    """
+    recorder = await declared_fleet(conventions.MANAGEMENT_PORTS, monkeypatch)
+    declared = [it for it in recorder.declared if it.typ in {BACKEND_SET, LISTENER, BACKEND}]
+    (balancer,) = recorder.of_type('oci:NetworkLoadBalancer/networkLoadBalancer:NetworkLoadBalancer')
+    families = set(str(balancer.inputs['nlbIpVersion']).split('_AND_'))
+    backend_sets = {it.inputs['name']: it for it in declared if it.typ == BACKEND_SET}
+    backed = Counter(it.inputs['backendSetName'] for it in declared if it.typ == BACKEND)
+
+    served: set[tuple[int, str]] = set()
+    for listener in (it for it in declared if it.typ == LISTENER):
+        backend_set = backend_sets[listener.inputs['defaultBackendSetName']]
+        assert family_of(backend_set) == family_of(listener), listener.name
+        assert backed[backend_set.inputs['name']] == 3, listener.name
+        served.add((int(listener.inputs['port']), family_of(listener)))
+
+    # The ports are the census's, so an empty fleet cannot pass this.
+    assert forwarded_ports(declared) == set(conventions.MANAGEMENT_PORTS)
+    assert families == {'IPV4', 'IPV6'}
+    assert served == set(product(forwarded_ports(declared), families))
+
+
 @pytest.mark.asyncio
 async def test_moving_a_management_port_renames_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     """A name is an identity in state and, for a backend set or a listener, immutable on the balancer.
@@ -323,10 +443,15 @@ async def test_moving_a_management_port_renames_nothing(monkeypatch: pytest.Monk
     assert forwarded_ports(redeclared) == set(moved)
     assert every_name(redeclared) == every_name(declared)
     # Unchanged is not enough: an index is as stable as a field. Each name
-    # carries the field of the port it serves.
+    # carries the field of the port it serves, and the family after it on any
+    # family but IPv4's.
     for it in declared:
-        field = it.inputs.get('backendSetName') or it.inputs.get('defaultBackendSetName') or it.inputs['name']
+        named = it.inputs.get('backendSetName') or it.inputs.get('defaultBackendSetName') or it.inputs['name']
+        field = named.removesuffix('-ipv6')
         assert field in ManagementPorts._fields, it.name
-        assert f'-{field}' in it.name, it.name
-    # And the name on the balancer is the field itself.
-    assert {it.inputs['name'] for it in declared if it.typ in {BACKEND_SET, LISTENER}} == set(ManagementPorts._fields)
+        assert f'-{named}' in it.name, it.name
+    # And the name on the balancer is the field itself, or the field and the family.
+    assert {it.inputs['name'] for it in declared if it.typ in {BACKEND_SET, LISTENER}} == {
+        *ManagementPorts._fields,
+        *(f'{field}-ipv6' for field in ManagementPorts._fields),
+    }

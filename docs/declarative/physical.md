@@ -87,13 +87,21 @@ credential (`ci_zerotier_identity_physical`,
     is workload-specific: a workload reaches the address or the volume
     through scheduling constraints declared with it.
 -   **NLB**: one Network Load Balancer with source-IP preservation
-    (verification item) and one backend set per management port
-    (`conventions.ManagementPorts`, each named by its field) holding
-    every cloud node, declared here; **listeners are not a fixed
-    list** — the management listeners (6443/50000) live here, while
-    service listeners are declared beside
-    the services that need them, exactly like security rules and DNS
-    records.
+    (verification item), **dual-stack**: it holds a public IPv4 and a
+    public IPv6, and serves every port it forwards on both. OCI's
+    listeners and backend sets are single-family — each carries one
+    `ip_version`, and a listener forwards only to a backend set of its
+    own family — so each management port
+    (`conventions.ManagementPorts`) has a listener and a backend set
+    per family, each holding every cloud node: named by the port's
+    field for IPv4 (`kubernetes`) and by the field and the family for
+    IPv6 (`kubernetes-ipv6`). An IPv4 backend names the instance; an
+    IPv6 backend names the node's GUA, because an instance OCID stands
+    for the primary private IPv4. Declared here; **listeners are not a
+    fixed list** — the management listeners (6443/50000) live here,
+    while service listeners are declared beside the services that need
+    them, exactly like security rules and DNS records, and a service
+    listener is one per family as well.
 -   **Buckets**: none on this provider. The installation's
     cluster-data bucket is the backup bucket, which lives on B2
     precisely because it must not share a provider with what it
@@ -374,6 +382,17 @@ A1 capacity at creation; Egress Gateway under the chosen routing mode +
 reserved-IP↔secondary-private-IP NAT; Cilium MTU over the KubeSpan
 underlay; talosctl reaching the homelab node via cloud endpoints (apid
 proxy); VFIO iGPU passthrough capability on a scratch VM.
+
+One part of the NLB item is answered earlier, by the first
+`pulumi up` that creates the balancer's IPv6 backends: each names a
+node's GUA inside a source-preserving backend set, which OCI's console
+guide refuses ("Preserve source IP must be disabled in the backend set
+to add an IP address-based backend server") and Oracle's cloud
+controller manager declares. A refusal fails that `up` at those
+backends, which nothing depends on. The fallback is
+`is_preserve_source` off on the IPv6 backend sets alone, and its cost
+is that the apiserver's audit log records the balancer's address for
+every request through the IPv6 front.
 
 Two verifications come **before** the first `pulumi up` rather than in
 the gate, because that run's first half — the targeted apply of the

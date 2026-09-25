@@ -178,11 +178,14 @@ Mechanics shared by both pools:
 Internet ingress is two layers, both free:
 
 1.  **The NLB is the stable public anchor.** All public A/AAAA records
-    point at the free OCI Network Load Balancer's IP — which is
-    independent of every instance, so node rebuilds never touch DNS. The
-    NLB is L3/4 pass-through with **source-IP preservation** and health
-    checks; one listener per public port (80, 443, syncthing 22000/tcp+udp,
-    …), backend set = the three cloud nodes.
+    point at the free OCI Network Load Balancer's IPs — one public IPv4
+    and one public IPv6, independent of every instance, so node rebuilds
+    never touch DNS. The NLB is L3/4 pass-through with **source-IP
+    preservation** and health checks, and it serves both families: OCI
+    listeners are single-family, so each public port (80, 443, syncthing
+    22000/tcp+udp, …) has one listener per family, each with a backend
+    set of its own family holding the three cloud nodes — by instance on
+    IPv4, by GUA on IPv6.
 2.  **Cilium terminates on the node primary addresses — the on-the-wire
     forms.** OCI 1:1-NATs each public IPv4 to the VNIC's primary
     *private* IP (the interface never carries the public address), so
@@ -192,8 +195,9 @@ Internet ingress is two layers, both free:
     public v4 literals would never match arriving traffic. Every
     internet Service requests *all three* via the `lbipam.cilium.io/ips`
     annotation (plus a `sharing-key`, ports disambiguate). The NLB DNATs
-    the front IP to a healthy backend node's private IP, where the KPR
-    datapath matches the
+    the front IP to a healthy backend node's address of the same family
+    — the primary private IP for the IPv4 front, the GUA for the IPv6
+    one — where the KPR datapath matches the
     frontend and forwards to a pod — locally (`externalTrafficPolicy:
     Local`, client IP preserved end-to-end through the pass-through NLB)
     or via SNAT to another node (`Cluster`).
