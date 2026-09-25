@@ -27,7 +27,7 @@ except where a bullet says otherwise:
 * `ltex-cli-plus` on every markdown file touched, one file at a time —
   how it reaches the repository's word lists is under "Writing the
   prose". CI runs it the same way, over the markdown the pull request
-  changed.
+  changed, or over every markdown file in the cases that section names.
 * a claim the change made false is swept for — not the identifier that
   moved. How to shape the patterns, and what a sweep that found nothing
   owes the pull request, are in
@@ -41,8 +41,8 @@ documentation the change makes true ships with it rather than after it.
 
 ## Writing the code
 
-* Read `docs/framework/pulumi.md` before writing components;
-  `docs/rfc/rfc-001-native-async-inputs.md` has the internals. Key rules:
+* Read `docs/framework/pulumi.md` before writing components; its §1–2
+  are the framework itself and how `putils` implements it. Key rules:
   - Sub-resources are created synchronously in `Component.__init__`; async input
     prep goes through `async_output`, and outputs are awaited only via `resolve`
     inside those coroutines (`resolve` hard-errors anywhere else, including the
@@ -51,20 +51,25 @@ documentation the change makes true ships with it rather than after it.
     script's `sys.exit` would kill the `pulumi.run` async entrypoint.
 * Python code standard, enforced on everything under `src/`, `tests/`, and
   `deploy/`: **fully type-annotated, and `basedpyright` strict passes clean**.
-  Config lives in `pyproject.toml`; the only relaxations are
-  `reportAny`/`reportExplicitAny`/`reportUnusedCallResult`, which fight a
-  provider-SDK codebase more than they help. Generated bindings —
-  `packages/crds` and the SDKs under `sdks/` — are excluded; they are not
-  ours to annotate.
+  Config lives in `pyproject.toml`; the only project-wide relaxations
+  are `reportAny`/`reportExplicitAny`/`reportUnusedCallResult`, which
+  fight a provider-SDK codebase more than they help. A module that is
+  glue over an untyped or partially typed library turns off, for that
+  file alone, the checks the library defeats — a file-level
+  `# pyright: report…=false` comment, and the file names the library.
+  Generated bindings — `packages/crds` and the SDKs under `sdks/` — are
+  excluded; they are not ours to annotate.
 * **The source tree is layered, and the layering is a checked contract.**
   `kluster.stacks` → `kluster.components` → `kluster.providers` →
   `kluster.lib` → `kluster.conventions` → `putils`: a layer imports what is
-  below it and nothing above it, and four further edges are forbidden
-  outright (a script reaches no declaration; a custom provider knows no
-  `conventions`; `putils` knows no installation; only `kluster.main`
-  imports a stack program). `import-linter` enforces it. The contract is
-  in `pyproject.toml`; what each layer is for is
-  `docs/rfc/rfc-002-src-layout-and-the-gateway.md` §2.
+  below it and nothing above it, and further edges are forbidden
+  outright, each named in the contract (a script reaches no
+  declaration; a custom provider knows no `conventions`; `putils` knows
+  no installation; only `kluster.main` imports a stack program).
+  `import-linter` enforces it. The contract in `pyproject.toml` is the
+  canon for the layers and the forbidden edges; what each layer is for,
+  and why each edge is forbidden, is
+  [docs/style/pulumi.md](docs/style/pulumi.md) under "Layering".
 * **Scripts are Python**, not shell — a shell script needs a reason (a
   handful of lines with no logic, or a context with no interpreter). They
   live under `src/kluster/scripts/` and are exposed as console scripts in
@@ -95,10 +100,17 @@ documentation the change makes true ships with it rather than after it.
       mise x -- ltex-cli-plus --client-configuration=.claude/ltex.json <file.md>
 
   The `checks` workflow runs exactly that, one invocation per markdown
-  file the pull request changed, and any finding fails it — the checker
-  exits non-zero on `info` findings too. A file the change did not touch
-  is not checked there, so a finding an untouched file already carries
-  on `main` surfaces on the first change that touches it.
+  file, and any finding fails it — the checker exits non-zero on `info`
+  findings too. Which files is decided in `checks.yml`'s prose step.
+  Ordinarily it is the markdown the change touched. It is **every**
+  markdown file in the tree when the run has no base commit to diff
+  against, and when the change touches the checker or what it reads —
+  the `machinery` list in that step, which names `mise.toml` (where the
+  checker is pinned), both word lists and `checks.yml` itself
+  ([docs/framework/ci.md](docs/framework/ci.md) §3 says why). Outside
+  those cases a file the change did not touch is not checked, so a
+  finding an untouched file already carries on `main` surfaces on the
+  first change that touches it.
 
   - Both word-list files are one entry per line with **no comment
     syntax**, and the dictionary is **case-sensitive** — `homelab` and
@@ -231,6 +243,10 @@ documentation the change makes true ships with it rather than after it.
   in, still without fetching.
 * Implementation-period issues live in the `kluster-ops` repo, not in this
   one and not in a checked-in list. What is unimplemented *here* announces
-  itself: an unwritten stack raises from its entrypoint, and a register row
-  with no implementation is a subcommand that refuses by name. Build order is
+  itself: an unwritten stack raises from its entrypoint; a seed whose mint
+  is not written is a `credentials seed` member that refuses by name; and
+  a derived row whose producer is not built is marked `unbuilt`, with what
+  stands in the way, by `credentials derived ls`, which needs no kit. Such
+  a row has no `credentials derived <row>` subcommand, so naming one is an
+  argument error (`invalid choice`) rather than a refusal. Build order is
   `docs/cluster/migration.md` §1.

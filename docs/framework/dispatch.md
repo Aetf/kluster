@@ -396,8 +396,10 @@ review is the decision to merge:
     provider-facing left unproven without saying so.
 2.  **Architecture & style**, against [`docs/style/`](../style/):
     config read at the right layer, resources on the right component,
-    providers inherited not re-plumbed, names and comments that
-    survive the style rules' tests, censuses where they belong.
+    native providers inherited rather than re-plumbed, a dynamic
+    resource's address and pin declared as its own inputs, names and
+    comments that survive the style rules' tests, censuses where they
+    belong.
     [style/pulumi.md](../style/pulumi.md) keeps that reviewer's
     standing questions.
 
