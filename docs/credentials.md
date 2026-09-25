@@ -1455,10 +1455,13 @@ so a lost `.credentials/` costs a few commands and no credential.
 
 `mise.toml` reads this directory — the passphrase, the backend URL and
 the three `PGSSL*` variables naming the bundle beside it — falling back
-to whatever the environment already holds. In a `jj` workspace nested
-under a checkout, that environment is the parent checkout's slots, which
-mise renders first (`kluster-ops#387`); a scratch probe therefore runs
-`pulumi` as [framework/testing.md](framework/testing.md) §5.1 says. It
+to whatever the environment already holds, and a slot that exists
+outranks the environment. The slots answer for the checkout that holds
+them and not under its `.claude/`, where every `jj` workspace sits, so a
+workspace's `mise x` hands on the caller's values and a `pulumi` run that
+needs this directory runs from the checkout that holds it
+(`kluster-ops#387`); a scratch probe runs `pulumi` as
+[framework/testing.md](framework/testing.md) §5.1 says. It
 reads no provider credential at all, because none is here: each is a config secret in the
 stack that reads it, which the program opens with the passphrase this
 directory carries. **CI
