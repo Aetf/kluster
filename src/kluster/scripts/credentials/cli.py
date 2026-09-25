@@ -108,15 +108,16 @@ _ORDER = """when to run what:
          passphrase in the environment of every pulumi run from here on.
     5. credentials derived cloudflare-zones mint
        credentials derived cloudflare-gateway-acme mint
-         The two tokens the Cloudflare seed mints: the zone-scoped provider
+         The Cloudflare seed's delivered tokens: the zone-scoped provider
          token into the dns stack's config, and the gateway's own ACME
          token -- scoped to the zones it issues its vhosts under --
          into the physical stack's. Each file is then committed. One
          derived row per command; re-running one rotates it.
     6. credentials derived oci-physical mint
        credentials derived b2-management mint
-         The two provider credentials the physical stack runs on, into its
-         config, which is then committed like the one above. The first also
+         The physical stack's minted provider credentials, its OCI key and
+         its B2 management key, into its config, which is then committed
+         like the one above. The first also
          creates that stack's compartment where it does not exist yet, and
          prints the OCID to record in conventions and commit.
     7. credentials derived github-passphrase generate
@@ -921,7 +922,7 @@ def build_parser() -> argparse.ArgumentParser:
         derived.DRILL_CREDENTIALS_ROW,
         help="the rebuild drill's OCI key over its own compartment and B2 key over the dump prefix",
         description=(
-            'The two provider credentials the state-backend rebuild drill runs on, beside the age identity above: '
+            'The provider credentials the state-backend rebuild drill runs on, beside the age identity above: '
             'an OCI user administering the drill compartment and a stranger outside it, and a B2 key that lists '
             "and reads the dump prefix and can write nothing. Both land in the ops repository's `drill` "
             'Environment and nowhere else. Rotating either is re-running this; the compartment is the one '

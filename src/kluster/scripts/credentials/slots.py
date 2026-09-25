@@ -40,11 +40,12 @@ business of that command:
     of is read back out of state.
 -   **manual** -- a value this system does not produce. Some are pasted from a
     console (the Home Assistant webhook, whose slot is its only storage), some
-    are made in the console that checks them and delivered by a command of
-    their own (the UniFi key, the AdGuard login, the ZeroTier Central token,
-    the GitHub admin token and the gateway's BGP session password,
-    `devices.py`), and some are installed by another tracker's automation
-    entirely (the UDM and libvirt SSH identities, §3).
+    are made by hand and delivered by a command of their own (`devices.py`) --
+    in the console that checks them for the UniFi key, the AdGuard login, the
+    ZeroTier Central token and the GitHub admin token, and drawn by the
+    operator for the gateway's BGP session password, which no console makes --
+    and some are installed by another tracker's automation entirely (the UDM
+    and libvirt SSH identities, §3).
 -   **decided** -- not a credential at all, but a constant this repository
     holds in `conventions` that a continuous-integration job needs beside one.
     There is one: the overlay network's id, which a workflow can only pass as a
@@ -57,10 +58,16 @@ rather than inventing a name a future workflow would have to guess right. A
 reason is filed **under the channel it is about**, in the same vocabulary §3's
 Slot column is written in, so a cell that marks one channel `pending` is held
 against the reason for *that* channel rather than against any reason the row
-happens to carry. `derived ls` prints them, `derived sync` skips the row saying
-so, and `derived sync --only <row>` refuses by name. That is the discipline the
-seed layer already uses: a register row with no implementation is a command
-that refuses, not a command that is missing.
+happens to carry. `derived ls` prints each reason; `derived sync` passes over a
+row with no GitHub slot, naming what it waits on unless the row is minted -- a
+minted row is outside `sync`'s scope and is passed over silently -- and
+`derived sync --only <row>` refuses either by name.
+
+**An unbuilt row announces itself, differently per layer.** A seed row with no
+implementation is a command that refuses by name. A derived row whose producer
+does not exist has no subcommand at all: its source is marked `unbuilt`, which
+`derived ls` prints, and `derived sync --only <row>` refuses it by name as it
+refuses every minted row.
 
 Pushing is resolve, push, verify, every run, and it retires nothing. One row
 issues rather than copies -- the client bundle, whose leaf key exists only in
@@ -118,7 +125,8 @@ PHYSICAL_STACK = derived.PHYSICAL_STACK
 DNS_STACK = derived.ZONES_STACK
 
 #: The secret the ops repository's weekly drift trigger reads the trigger App's
-#: private key from (ci.md §3). A repository secret of `kluster-ops` rather
+#: private key from (ci.md §3) -- a workflow designed and not built
+#: (`kluster-ops#57`); the secret is pushed ahead of it. A repository secret of `kluster-ops` rather
 #: than an Environment one: the job belongs to no stack, and the key's whole
 #: power is to start runs on the deployment repository. The name is a contract
 #: with a workflow in another repository, so it is a constant here and is
@@ -126,22 +134,23 @@ DNS_STACK = derived.ZONES_STACK
 TRIGGER_APP_KEY = 'TRIGGER_APP_PRIVATE_KEY'
 
 #: The secret the dispatch App's private key is read from, and an installation
-#: token minted from for the length of one run. Two workflows read it:
-#: `sdk-regenerate.yml` today, which pushes a regeneration onto a renovate
-#: branch of `kluster` as the App so that the pushed head's runs start on their
-#: own, and the alert producer (`alert.yml`, called by every workflow that runs
-#: on `main`; ci.md §3), which posts alerts to `kluster-ops`. The App
+#: token minted from for the length of one run. `sdk-regenerate.yml` reads it
+#: to push a regeneration onto a renovate branch of `kluster` as the App, so
+#: that the pushed head's runs start on their own; and the `alert` job every
+#: workflow on `main` but `deploy.yml` ends in hands it to the alert producer
+#: (`alert.yml`; ci.md §3), which posts alerts to `kluster-ops`. The App
 #: is installed on both repositories (`conventions.forge`, `Repository.apps`),
 #: and each mint is scoped to the one its run pushes to. A repository secret of
-#: `kluster` rather than an Environment one: neither job belongs to a stack.
+#: `kluster` rather than an Environment one: none of those jobs belongs to a
+#: stack.
 #: Its exposure is the fence's (cluster/architecture.md §4.3): any same-repo
 #: branch can read it, previews included, and what that buys is a token that
 #: can write non-workflow files onto `kluster`'s unprotected branches and onto
 #: any branch of `kluster-ops` (a private repository has no branch protection
 #: on this plan), and post alerts to the latter, and nothing else: no workflow
 #: file in either, since the App holds no `workflows` permission. The name is a
-#: contract with both workflows, so it is a constant here and is renamed only
-#: together with them.
+#: contract with every workflow that names it, so it is a constant here and is
+#: renamed only together with them.
 DISPATCH_APP_KEY = 'DISPATCH_APP_PRIVATE_KEY'
 
 #: The secret the ops repository's dispatch handler reads the Home Assistant
@@ -803,6 +812,13 @@ _ETCD_PREFIX_UNBUILT = (
 #: controller arrives with `k8s-base`.
 _CLUSTER_UNBUILT = 'the sealed-secrets controller and its consumer arrive with `k8s-base`, so no manifest path exists'
 
+#: Why the restic passwords' sealed copy has no address: the helper that seals
+#: each one beside its volume is not written.
+_BACKED_PVC_UNBUILT = (
+    'the `backed_pvc` helper that generates and seals each password is unwritten (declarative/workloads.md §3), '
+    'so no manifest path exists'
+)
+
 #: Sinks this map used to carry, and where the fact each one delivered lives
 #: now. Retiring a sink moves a fact rather than deleting it, so the name that
 #: addressed the old home answers with the new one instead of with "no such
@@ -855,7 +871,7 @@ ROWS: dict[str, Row] = {
         source=Minted(
             'credentials derived cloudflare-dns01 mint', unbuilt='cert-manager has no slot to be sealed into'
         ),
-        targets=(SealedSecret("cert-manager's DNS-01 solver token"),),
+        pending={'SealedSecret': _CLUSTER_UNBUILT},
     ),
     derived.GATEWAY_ACME_ROW: Row(
         register='Cloudflare token (gateway ACME)',
@@ -883,9 +899,9 @@ ROWS: dict[str, Row] = {
         source=Minted('the `physical` stack, from the B2 seed', unbuilt='the prefix-scoped keys are not declared'),
         # The appliance's cron is not among the consumers: the key it uploads
         # dumps with is `writeFiles` alone, which is the dump-key row below and
-        # not a writer key.
-        targets=(SealedSecret('the VolSync, CNPG barman and etcd-snapshot repository keys'),),
-        pending={'ops-repo secret': _OPS_UNBUILT},
+        # not a writer key. The in-cluster copies are for VolSync, CNPG barman
+        # and the etcd snapshots.
+        pending={'SealedSecret': _CLUSTER_UNBUILT, 'ops-repo secret': _OPS_UNBUILT},
     ),
     'b2-dump': Row(
         register='B2 dump key (micro)',
@@ -1019,7 +1035,10 @@ ROWS: dict[str, Row] = {
         # generations; the Butane template renders whatever that returns.
         targets=(
             derived.DRILL_AGE_IDENTITY_SLOT,
-            OnBox('the public half, the third Butane recipient, read from the committed recipient file'),
+            OnBox(
+                'the public half, a Butane recipient after the backup generations, '
+                'read from the committed recipient file'
+            ),
         ),
     ),
     'restic-passwords': Row(
@@ -1028,10 +1047,17 @@ ROWS: dict[str, Row] = {
             'the `backed_pvc` helper, one per volume',
             unbuilt='the helper is unwritten (declarative/workloads.md §3)',
         ),
-        # Nothing pending: `backed_pvc` generates and seals its own password, so
-        # both channels §3 names for this row are addressed by the helper rather
-        # than by a `credentials` command.
-        targets=(PulumiState('apps', 'one password per backed volume'), SealedSecret("VolSync's repository secret")),
+        # The `backed_pvc` helper is the producer of both channels -- it
+        # generates the password into the `apps` stack's state and seals it --
+        # so no `credentials` command will address either. Neither has an
+        # address until the helper and the `apps` program it runs in exist.
+        pending={
+            'Pulumi state': (
+                'the `backed_pvc` helper that generates each password is unwritten, and so is the `apps` '
+                'program whose state would hold it (declarative/workloads.md §3)'
+            ),
+            'SealedSecret': _BACKED_PVC_UNBUILT,
+        },
     ),
     'talos': Row(
         register='Talos machine secrets + talosconfig',

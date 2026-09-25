@@ -12,10 +12,11 @@ is not in this repository.
 The labels are listed in
 [`docs/credentials.md`](../docs/credentials.md) and enumerated in code in
 `src/kluster/scripts/credentials/escrow.py`. They cover the secrets no
-provider mints — the Pulumi state passphrase, the state-backend CA key,
-the identities the state-backend's database dumps are encrypted to, the
-token the alert poller reads with, and the private key of each of the two
-single-purpose GitHub Apps. Certificates issued under that CA
+provider mints — the Pulumi state passphrase, the `github` stack's own
+config passphrase, the state-backend CA key, the identities the
+state-backend's database dumps are encrypted to, the token the alert
+poller reads with, and the private key of each single-purpose GitHub
+App. Certificates issued under that CA
 are not here: they are re-issued from it on demand, so keeping a copy
 would store a secret whose loss costs nothing.
 

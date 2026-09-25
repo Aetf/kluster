@@ -11,8 +11,9 @@ facts about them.
 ## 1. Rules
 
 1.  **Two tiers, and only two.** A credential is either **kit-held**
-    (§2) — offline, touched at bring-up and at rotation and never in
-    between, either a seed capable of minting others or the recovery
+    (§2) — offline, opened by an operator's command and never by
+    anything that runs unattended (§2.1), either a seed capable of
+    minting others or the recovery
     key that opens what §2.2 escrows — or **derived** (§3): minted
     from a seed, or generated at random and escrowed, and either way
     delivered straight into its consumer's slot by a script. There is
@@ -59,26 +60,37 @@ facts about them.
     under the checkout's git-ignored `.credentials/` (§4.4), written by
     a `credentials` or `state-backend` command and read
     non-interactively afterward — by `mise.toml` building a `pulumi`
-    run's environment, or by a script that must not stop to ask. It is
-    the channel for what CI holds as an Environment secret and a
-    workstation needs anyway: the Pulumi passphrase and the state
-    backend's `operator` bundle. Deliberately not the desktop secret
-    store, which is where account roots go (§2) — a root is interactive
-    and rare, so a store that asks a session to unlock suits it, while
-    these are read on *every* `pulumi` run by a template that can
-    neither prompt nor unlock a keyring. **No provider credential is
-    here**: each of those is a config secret in the stack that reads it,
-    which is the channel below and the reason a `pulumi` run needs no
-    prepared shell beyond the passphrase. A slot holds only what a
-    command can write again — the passphrase is recovered from escrow,
-    the bundle re-issued — so losing one costs a command and never a
-    credential.
+    run's environment, or by a script that must not stop to ask. It
+    holds what a workstation reads that way: the Pulumi passphrases —
+    the estate's and each stack's held apart — the state backend's
+    `operator` bundle, and the appliance provisioner's OCI key (§4.4). Deliberately not the
+    desktop secret store, which is where account roots go (§2) — a root
+    is interactive and rare, so a store that asks a session to unlock
+    suits it, while the passphrases and the bundle are read on *every*
+    `pulumi` run by a template that can neither prompt nor unlock a
+    keyring; a root lands in a slot, its token file, only on a machine
+    that has no such store. **A provider credential is a slot here only
+    where a command rather than a stack consumes it** — the appliance
+    provisioner's OCI key, whose consumer `state-backend provision`
+    builds the backend every stack needs (§3), and a root's token file.
+    A stack may keep a working copy of its own config secret under
+    `.credentials/` for the `0700` boundary — the libvirt identity
+    `physical` writes to `libvirt/` on every run (§4.4) — which is not a
+    slot. Every credential a stack authenticates with is a config secret in
+    that stack, which is the channel below and the reason a `pulumi`
+    run needs no prepared shell beyond the passphrase. A slot holds
+    only what a command can write again — the passphrase is recovered
+    from escrow, the bundle re-issued, the OCI key minted again — so
+    losing one costs a command and never a credential.
 
     The two Pulumi channels are separate rows because their exposure
     is opposite. **Config secret** lives in `Pulumi.<stack>.yaml` and
     is committed: its ciphertext is public the moment the repo is, so
-    it carries only what must exist *before* a program can run —
-    provider credentials. **State** lives in the state backend's
+    it carries only what a program needs *before* it can run, never
+    what a program generates — the credentials its providers
+    authenticate with, and the secrets it writes onto a device it
+    manages, the gateway's ACME token and BGP session password among
+    them. **State** lives in the state backend's
     Postgres and never enters git, which makes it the stronger of the
     two and the right home for what a program *generates* (Talos
     machine secrets, ZeroTier identities, restic repository
@@ -271,16 +283,19 @@ itself is self-service (§4.3).
     copy onto both sticks.
 -   **Row shape**: `seeds/<name>`, one group deep. `UserName` holds the
     credential's public identifier — the half that appears in a console
-    and is not a secret — and `Password` holds the secret, and nothing
-    else does. The recovery key (§2.2) needs nothing beyond that
-    shape: its public recipient is the identifier, its private identity
-    is the secret. Key material that is a *file* is an attachment: the
+    and is not a secret — and the secret is the entry's `Password`
+    where it is a string. The recovery key (§2.2) needs nothing beyond
+    that shape: its public recipient is the identifier, its private
+    identity is the secret. Key material that is a *file* is an
+    attachment instead, and the row's `Password` is then empty: the
     OCI API key. The OCI row is the one
     that needs more than those two fields, an API key there being five
     things: `UserName` is the user `OCID`, the PEM is the attachment,
-    and the **tenancy `OCID` is a protected custom attribute** — the
-    same protection class as the password field, because an `OCID` is
-    an account identifier and a listing has no reason to hand it out. The
+    and the **tenancy `OCID` is a custom attribute**, stored protected
+    as every custom attribute the scripts write is, although the value
+    is no secret — `conventions.OCI_TENANCY` publishes it, and §3 counts
+    it among the installation's public facts. The row's copy is what
+    the seed's own account check reads before a write (§4). The
     remaining two are recovered rather than stored: the region is a
     constant in the code, and the fingerprint is a function of the
     public key, so a stored copy could only ever disagree with the key
@@ -300,11 +315,21 @@ itself is self-service (§4.3).
     console-made credentials §3 carries — the ZeroTier Central token,
     the GitHub admin token, the two GitHub App keys — or re-seed after a
     total loss.
--   **Opened twice in a system's life**: at bring-up (§4.1) and at
-    rotation (§4.2) — plus the yearly offline day, which opens one kit
-    and verifies it against §2's table. It is emphatically **not** a
-    day-2 operations database: no runbook outside those three asks for
-    it, because no runtime credential is in it.
+-   **Opened by an operator's command, never by anything that runs
+    unattended.** The envelopes come out at bring-up (§4.1), at
+    rotation (§4.2) and on the yearly offline day, which opens one kit
+    and verifies it against §2's table. The workstation's master copy
+    is opened more often: every command that mints from a seed or
+    recovers an escrowed value unlocks it — every `mint`; every command
+    that reads or writes a stack's configuration, for the passphrase;
+    an App key's `record`, which compares against what is filed;
+    `derived <row> recover` — and so do the `state-backend` commands
+    that reach the CA or the backup identities: `provision`, `render`,
+    `bundle`, `dump` and `restore`. No runtime credential is in it: no
+    workflow, timer or cluster component opens it, and the commands
+    that run on a machine holding no kit at all are `credentials root`,
+    `derived ls` and `derived check`, and `state-backend pins`, `ssh`,
+    `probe` and a `restore` handed `--identity-file`.
 -   **Refresh discipline**: rotation writes a **new database file**
     (§4.2) and re-encrypts the escrow registry to the new kit's
     recovery key in the same run, and re-issuing the kit is copying
@@ -389,7 +414,7 @@ Consequences, all deliberate:
     imported as a generation, not by being replaced (§4.2).
 -   **Nothing reads escrow at runtime.** Opening a ciphertext needs the
     recovery private key, which is in the kit and nowhere else, and it
-    happens during bring-up, rotation, provisioning, or a recovery —
+    happens only inside an operator's command (§2.1) —
     the Alertmanager token is read by a running poller, the key that
     could open its escrow never is. That is what keeps §1's rule 4 true
     of the widest-scoped row in the register: it opens every escrowed
@@ -467,23 +492,23 @@ cell would say `pending` to an operator already being served.
 | OCI API key (`physical`) | OCI seed key | Its own user, group and policy; administrator of the `physical` compartment and a stranger outside it | Pulumi config secret | `physical` |
 | OCI API key (state backend) | OCI seed key | The same shape, over the appliance's own compartment | workstation slot (§4.4) | `state-backend provision` |
 | Cloudflare token (zones) | CF seed token | DNS edit, this installation's zones only | Pulumi config secret | `dns`, `apps` |
-| Cloudflare token (DNS-01) | CF seed token | `_acme-challenge` edit only | SealedSecret | cert-manager |
+| Cloudflare token (DNS-01) | CF seed token | `_acme-challenge` edit only | SealedSecret (pending) | cert-manager |
 | Cloudflare token (gateway ACME) | CF seed token | DNS edit on the zones the gateway's own vhosts are served under | Pulumi config secret (`physical`) · device secret (caddy's token file) | the gateway's caddy, written onto the device by `physical` |
 | B2 management key | B2 seed key | Bucket/key/lifecycle admin, **no file capabilities** | Pulumi config secret | `physical` |
-| B2 writer keys | B2 seed key (via `physical`) | Prefix-scoped, `list+read+write`, **no `deleteFiles`** — deletes degrade to lifecycle-purged hides (audit H4): VolSync, CNPG barman, etcd snapshots | SealedSecret · ops-repo secret (pending) | restic/barman, ops-repo workflow |
+| B2 writer keys | B2 seed key (via `physical`) | Prefix-scoped, `list+read+write`, **no `deleteFiles`** — deletes degrade to lifecycle-purged hides (audit H4): VolSync, CNPG barman, etcd snapshots | SealedSecret (pending) · ops-repo secret (pending) | restic/barman, ops-repo workflow |
 | B2 dump key (micro) | B2 seed key | `writeFiles` alone, dump prefix | on-box (Ignition) | state-backend pg_dump timer |
-| B2 freshness key (state dumps) | B2 seed key (`credentials derived b2-freshness-dumps mint`) | `listFiles` alone, confined to the dump prefix of the appliance's bucket: names, never a byte | ops-repo secret (`B2_FRESHNESS_DUMPS_KEY_ID`, `B2_FRESHNESS_DUMPS_KEY`) | `state-backend probe`, run by the ops repo's scheduled probes workflow (state-backend.md §6) |
+| B2 freshness key (state dumps) | B2 seed key (`credentials derived b2-freshness-dumps mint`) | `listFiles` alone, confined to the dump prefix of the appliance's bucket: names, never a byte | ops-repo secret (`B2_FRESHNESS_DUMPS_KEY_ID`, `B2_FRESHNESS_DUMPS_KEY`) | `state-backend probe`, run daily by the ops repo's `probes.yml` (state-backend.md §6), which starts no job until the ops repository's Actions billing is restored (`kluster-ops#393`) |
 | B2 freshness key (etcd) | B2 seed key | The same shape over the etcd snapshots' prefix of the backup bucket, which a B2 key cannot share with the one above: a key confines to one bucket | ops-repo secret (pending) | the etcd snapshot age probe |
-| GitHub App key (dispatch) | Made on the App's own page (no key API) | Signs a JWT for that App alone, which mints a per-run installation token carrying contents:write on `kluster` and `kluster-ops` — the App is installed on both, and each mint is scoped to the one repository its run pushes to. The residual: the key is a repository secret any same-repository job can read, and its token pushes to unprotected branches of both repositories but to neither `main` (protected, checks required) nor any workflow file (no `workflows` permission) — the same "anyone who can push a branch" boundary this repository already accepts (ci.md §3) | escrow as `github/dispatch-key` · `kluster` repository secret (`DISPATCH_APP_PRIVATE_KEY`) | `sdk-regenerate.yml`, whose push onto a renovate branch is the App's act so that the pushed head's runs start on their own (ci.md §3); the alert producer (`alert.yml`), called by every workflow that runs on `main`, once built |
-| GitHub App key (trigger) | Made on the App's own page (no key API) | The same, for a per-run installation token carrying actions:write on `kluster` | escrow as `github/trigger-key` · ops-repo secret (`TRIGGER_APP_PRIVATE_KEY`) | Weekly drift trigger (the ops repo's `drift-trigger.yml`) |
+| GitHub App key (dispatch) | Made on the App's own page (no key API) | Signs a JWT for that App alone, which mints a per-run installation token carrying contents:write on `kluster` and `kluster-ops` — the App is installed on both, and each mint is scoped to the one repository its run pushes to. The residual: the key is a repository secret any same-repository job can read, and its token pushes non-workflow files to `kluster`'s unprotected branches — not to `main`, which is protected with checks required — and to any branch of `kluster-ops`, a private repository with no branch protection on this plan; it writes no workflow file in either (no `workflows` permission) — the same "anyone who can push a branch" boundary this repository already accepts (ci.md §3) | escrow as `github/dispatch-key` · `kluster` repository secret (`DISPATCH_APP_PRIVATE_KEY`) | `sdk-regenerate.yml`, whose push onto a renovate branch is the App's act so that the pushed head's runs start on their own (ci.md §3); the alert producer (`alert.yml`), to which the `alert` job every workflow on `main` but `deploy.yml` ends in (ci.md §3) hands the key, and which posts the alert to `kluster-ops` |
+| GitHub App key (trigger) | Made on the App's own page (no key API) | The same, for a per-run installation token carrying actions:write on `kluster` | escrow as `github/trigger-key` · ops-repo secret (`TRIGGER_APP_PRIVATE_KEY`) | Weekly drift trigger, the ops repo's `drift-trigger.yml`, which is not built (`kluster-ops#57`) |
 | overlay CI member identities (`ci-physical`, `ci-dns`) | generated in-state (`zerotier_identity`) | One per joining stack, `ci`-tagged and flow-rule-confined (gateway.md §2.3) | CI env | CI per-run join |
 | Pulumi state passphrase | generated, escrowed as `pulumi/passphrase` | Decrypts state secrets, and the config secrets of every stack but `github` | escrow · CI env (all stacks) · workstation slot | every `pulumi` run |
 | `github` stack passphrase | generated, escrowed as `github/passphrase` | Decrypts the `github` stack's config secrets and nothing else | escrow · workstation slot | a `pulumi` run against `github`, and the `credentials` commands that reach that stack's config |
 | State-backend CA | generated, escrowed as `state-backend/ca` | Issues every certificate below | escrow (private half) · on-box and every bundle (the certificate) | certificate issuance |
 | State-backend certificates (server, `ci`, `operator`) | issued from the CA, keys generated at issuance and never escrowed | postgres:// mTLS | on-box (server) · CI env · workstation slot (the `operator` bundle) | Pulumi state access |
 | age backup identity | generated, escrowed as `backup/age/<generation>` | Decrypts state-backend pg_dumps | escrow · on-box (public half, a Butane recipient) | micro cron, a restore run from the kit |
-| Drill age identity | generated by `credentials derived drill-age-identity generate` and escrowed nowhere: the same generator as the backup identities (`age-keygen`), outside the generations | Its contract is the newest dump alone, with retention coverage left to the escrowed generations; what it *opens* is every dump written since it became a recipient and still in retention, whose payload secrets stay under the state passphrase | ops-repo Environment (`drill`, the private half, as `DRILL_AGE_IDENTITY`) · on-box (the public half, the third Butane recipient, read from `deploy/state-backend/drill-recipient.txt`) | Quarterly rebuild drill (state-backend.md §7.3) |
-| restic repo passwords | generated in-state (`backed_pvc`) | Per-PVC repos | Pulumi state · SealedSecret (via `backed_pvc`) | VolSync |
+| Drill age identity | generated by `credentials derived drill-age-identity generate` and escrowed nowhere: the same generator as the backup identities (`age-keygen`), outside the generations | Its contract is the newest dump alone, with retention coverage left to the escrowed generations; what it *opens* is every dump written since it became a recipient and still in retention, whose payload secrets stay under the state passphrase | ops-repo Environment (`drill`, the private half, as `DRILL_AGE_IDENTITY`) · on-box (the public half, the Butane recipient after the backup generations, read from `deploy/state-backend/drill-recipient.txt`) | Quarterly rebuild drill (state-backend.md §7.3) |
+| restic repo passwords | generated in-state (`backed_pvc`) | Per-PVC repos | Pulumi state (pending) · SealedSecret (via `backed_pvc`; pending) | VolSync |
 | Talos machine secrets + talosconfig | generated by `physical` | Cluster PKI roots | Pulumi state · ops-repo secret (pending) | Talos ops, etcd snapshot workflow |
 | kubeconfig | `physical` output | cluster-admin | Pulumi state | `k8s-base` and `apps`, through a StackReference |
 | UDM SSH key, libvirt SSH identity | installed by automation on each side: the gateway's `AuthorizedKeys` keeps the UDM key on the device (physical/gateway.md §1.4), aconfmgr provisions the homelab host's dedicated service user together with its key (physical/homelab-host.md §4) | device-file push (host key pinned) / `virsh` as a `libvirt`-group user | Pulumi config secret; the UDM key's public half is a constant | `physical` |
@@ -720,16 +745,19 @@ pushed by `credentials derived sync` from the escrow copy (§2.2), which
 stays the permanent store: an App key downloads once, and a lost slot
 is a re-push rather than a console visit. `credentials derived sync
 --only github-trigger-key` recovers the trigger key and pushes it as
-`TRIGGER_APP_PRIVATE_KEY`, the name the ops repository's
-`drift-trigger.yml` reads it under; `--only github-dispatch-key` pushes
-the dispatch key as `DISPATCH_APP_PRIVATE_KEY`, a repository secret of
-`kluster`, the name `sdk-regenerate.yml` reads it under today and the
-alert producer `alert.yml` will. A repository secret rather than an
-Environment's because neither job belongs to a stack, and its exposure
-is the fence's: any same-repo branch can read it, previews included,
-which buys a token that can push non-workflow files onto unprotected
-branches of `kluster` and `kluster-ops`, and post alerts to the latter,
-and nothing else (cluster/architecture.md §4.3, ci.md §3). Rotating one
+`TRIGGER_APP_PRIVATE_KEY`, the name the ops repository's drift trigger,
+`drift-trigger.yml`, is designed to read it under — a workflow not built
+yet (`kluster-ops#57`); `--only github-dispatch-key` pushes the dispatch
+key as `DISPATCH_APP_PRIVATE_KEY`, a repository secret of `kluster`, the
+name `sdk-regenerate.yml` reads it under and the one the `alert` job
+every workflow on `main` but `deploy.yml` ends in (ci.md §3) hands to
+the alert producer `alert.yml`. A repository secret rather than an
+Environment's because none of those jobs belongs to a stack, and its
+exposure is the fence's: any same-repo branch can read it, previews
+included, which buys a token that can push non-workflow files onto
+`kluster`'s unprotected branches and onto any branch of `kluster-ops`,
+and post alerts to the latter, and nothing else (cluster/architecture.md
+§4.3, ci.md §3). Rotating one
 is another key on that page, recorded here as the label's next
 generation, `sync --only` for that row, and the superseded key deleted
 on the page in the same visit. The client id the JWT is issued under
@@ -740,8 +768,8 @@ clear in `conventions/forge.py` (`DISPATCH_APP`), the way the tenancy
 OCID and the Cloudflare account id are. The forge declares it as the
 `kluster` repository variable `DISPATCH_APP_CLIENT_ID` from that record
 (framework/github.md §3), landed by `mise run github up` like every
-other resource of that stack, and `sdk-regenerate.yml` hands it to the
-minting action beside the key.
+other resource of that stack, and `sdk-regenerate.yml` and `alert.yml`
+each hand it to the minting action beside the key.
 
 ## 4. The scripts
 
@@ -757,8 +785,9 @@ rows. A row is named the same way everywhere — words joined by `-`, as
 What differs between §3's rows is the verb, because what differs between
 them is how the value comes into being: `mint` for a row a seed mints,
 `generate` / `import` / `recover` for a row generated here and escrowed
-(§2.2), and `record` for a row made in a console because no API of that
-platform makes one — into the stack that authenticates with it, or into
+(§2.2), and `record` for a row a person makes — in a console, where no
+API of that platform makes one, or by drawing it, where no console does
+— into the stack that authenticates with it, or into
 the escrow where a row whose consumer does not exist yet rests. The escrow
 *directory* keeps the `/` paths it files ciphertexts under
 (`escrow/pulumi/passphrase/1.age`); only the command surface uses the row
@@ -783,17 +812,19 @@ name.
 | `credentials derived oci-physical mint` | After the state backend exists. The same mint for the `physical` stack, into that stack's config secrets; the stack file is then committed. It also creates that stack's compartment where the tenancy has none, and prints the `OCID` to record in `conventions` and commit. Before it creates anything, it refuses a seed that belongs to an account other than the one `conventions` records. |
 | `credentials derived b2-management mint` | After the state backend exists. Mints the B2 management key (§3) from the B2 seed into the `physical` stack's config secret. Before it creates anything, it refuses a seed that authorizes as an account other than the one `conventions` records. Re-running it rotates that key and retires the one it replaces. |
 | `credentials derived b2-freshness-dumps mint` | After the state backend exists — its bucket is what confines the key, and the key is proven by listing the dump prefix as itself. Mints the freshness probe's list-only B2 key (§3) and pushes both halves into the ops repository as repository secrets, as the GitHub admin token, each verified through the listing before the key it supersedes is retired. Re-running it rotates the key. |
+| `credentials derived drill-age-identity generate [--rotate]` | After `derived github-admin record`, whose token it pushes as, and before the rebuild drill first runs. Draws a fresh age identity and pushes its private half into the ops repository's `drill` Environment as `DRILL_AGE_IDENTITY`; once the listing shows the push landed, it writes the public half to `deploy/state-backend/drill-recipient.txt`, a file to commit. The private half never touches a disk. A recipient already on file refuses a second run, the file being the one durable trace of a key in service; `--rotate` draws the successor over both. The appliance encrypts to a new recipient only after `state-backend provision --force` and a `restore` of the dump that run takes (§3). |
 | `credentials derived drill-credentials mint [--only <half>]` | After the state backend exists — its bucket is what confines the B2 key, and the key is proven by listing the dump prefix as itself — and beside the drill age identity, which the same Environment holds. Mints the rebuild drill's two provider keys (§3) and pushes their five carriers into the ops repository's `drill` Environment as the GitHub admin token, each verified through the listing before the key it supersedes is retired. The OCI half creates the `drill` compartment where the tenancy has none and prints the `OCID` to record in `conventions` and commit; it takes no `--compartment`, because the drill compartment is a recorded name in the recorded tenancy and the mint is held to it. Re-running it rotates both keys; `--only oci` or `--only b2` rotates one. |
 | `credentials derived unifi record` | After the state backend exists, and after the controller has minted a key for its dedicated local admin — which the command prints the steps for. Takes the key without echoing it, into the `physical` stack's config; the stack file is then committed. The controller's address is not recorded beside it, being the overlay address `conventions` assigns. Re-running it is how a replaced key is delivered. |
 | `credentials derived adguard record` | The same, for the admin login both AdGuard instances answer to, into the `dns` stack's config — the stack that writes the split-horizon rewrites. |
 | `credentials derived zerotier record` | The same again, for the ZeroTier Central API token, into the `physical` stack's config — which network of that account is this installation's overlay is a constant in `conventions` rather than a value recorded beside the token. Central publishes no token API, so a token created in its web console and re-recorded here is the whole of a rotation; the superseded one is deleted in the same console. |
+| `credentials derived bgp record` | The same shape for the BGP session password, into the `physical` stack's config, except that no console makes it: the operator draws it — the command prints `openssl rand -base64 24` as the step — and hands it in. The stack writes it into the routing daemon's configuration on the gateway; the worker's end of the session, Cilium's BGPv2 `authSecretRef`, is a SealedSecret that arrives with `k8s-base`. Rotating it is a fresh draw and this command again, then both ends re-applied, the session being down from the first apply to the second. |
 | `credentials derived github-admin record` | Once per installation, and again on each rotation, for the GitHub admin token — into the `github` stack's config, which is where the stack and every command that pushes a GitHub secret read it. Nothing in this repository can create the value: GitHub publishes no API that makes a personal access token, so a token generated on the account's settings page and recorded here is the whole of a rotation, and the superseded one is deleted on the same page. It runs before `derived sync`, which authenticates as it. |
 | `credentials derived github-dispatch-key record` / `credentials derived github-trigger-key record` | After the kit exists, and after the App's page has generated a private key — which the command prints the steps for. Takes the key on standard input and escrows it as the row's next generation, so a re-run with a key already on file changes nothing and a re-run with a fresh one is the rotation. `--from-kit` reads it out of the entry a kit that still carries the key as a seed row holds, instead of from standard input. |
 | `credentials derived ls` | Any time, with or without a kit. Prints the slot map (below): every §3 credential, where its value comes from, and every slot it lands in, the ones still waiting on a consumer included. It reads a checked-in file, so it needs no token, no kit and no network. |
-| `credentials derived sync [--only <row>] [--bundle-dir <path>]` | Once during bring-up, and again whenever one of those values moves or a slot is lost. Copies into their GitHub secrets the rows whose value lives somewhere else — read back out of a stack's state, recovered from the escrow, or typed in because the slot is its only storage — resolve, push, verify, per row. A row born into its slot is out of scope and is passed over; naming one is refused, pointing at the `mint` that owns it. `--only` addresses one row, and is what replaces a value that was typed in. |
+| `credentials derived sync [--only <row>] [--bundle-dir <path>]` | Once during bring-up, and again whenever one of those values moves or a slot is lost. Copies into their GitHub secrets the rows whose value lives somewhere else — recovered from the escrow; issued under the escrowed CA, as the `ci` client bundle is, afresh on every run; read back out of a stack's state; taken from `conventions`, as the overlay network's id is, which a workflow can only be handed as a secret; or typed in because the slot is its only storage — resolve, push, verify, per row. A row born into its slot is out of scope and is passed over; naming one is refused, pointing at the `mint` that owns it. `--only` addresses one row, and is what replaces a value that was typed in. |
 | `credentials derived <row> recover [--generation <n>] [--stdout]` | Reading an escrowed secret back out. `derived pulumi-passphrase recover` is the common one: it fills the passphrase slot (§4.4) so `mise.toml` finds it and a local preview needs no offline database; `--stdout` prints instead of writing, for a pipe into another machine. `--generation` opens an older one — the certificate issued under a superseded CA, the dump written under a superseded age identity — where the default is the newest. |
 | `state-backend bundle operator --address <ip> [--directory <path>]` | Once per workstation, or after a certificate reissue. Writes the client bundle into its slot; `state-backend provision` ends by doing the same thing. `--directory` writes it somewhere else instead — a second checkout, or a directory being staged for another machine — and the default is the slot. |
-| `credentials derived <row> generate` | Rotating one escrowed credential (§4.2). Generates a new value, commits its ciphertext as the row's next generation and writes it into a workstation slot where the row has one — the two passphrases do, and a row without one reaches its consumer through that consumer's own procedure (§4.2). One act, no other row touched. |
+| `credentials derived <row> generate` | Rotating one escrowed credential (§4.2). Generates a new value, commits its ciphertext as the row's next generation and writes it into a workstation slot where the row has one — the passphrases do, and a row without one reaches its consumer through that consumer's own procedure (§4.2). One act, no other row touched. |
 | `credentials derived <row> import [--from-slot]` | Escrows a value that already exists as the row's next generation, changing nothing a consumer holds (§4.2). The value comes from standard input, or from the row's workstation slot with `--from-slot` — which is how a passphrase already sitting in `.credentials/` is escrowed without being copied through a shell. Refuses an empty or wrong-shaped value: a pipe whose producer failed dies here, not at the recovery that trusted the ciphertext. |
 | `credentials kit rotate --into <new kit>` | Rotation (§4.2). Writes a new database and re-wraps the escrow to the successor recovery key in the same run; the retired one stays. A run that stopped part way is resumed by running it again with the same `--into`: the successor is opened rather than created, and each row it holds is finished rather than rotated twice. |
 | `credentials kit rewrap` | The re-wrap on its own, for a recipients file edited by hand: it takes no recipients, re-encrypts every generation to whatever `escrow/RECIPIENTS` already names, and refuses a run that no identity in hand could open afterward. It opens with the one key the kit holds, so a rotation interrupted part way is not its case (§4.2: that is `kit rotate --into` the same file, again); an ordinary kit rotation never calls it. |
@@ -886,30 +917,41 @@ and `--escrow` names the registry directory (otherwise this checkout's
 `escrow/`). A kit on removable media and a registry in a second clone
 are the two cases they exist for.
 
-A third option, `--bundle-dir`, is on every command that delivers into a
-stack's configuration rather than in front of the subject — each `mint`
-that writes a config secret, each `record`, and `derived sync`. A stack's
-configuration lives in the state backend, so pushing into it means
-reaching the backend, which is the client bundle plus the passphrase the
-kit recovers; the flag says which bundle, and the default is the
-workstation slot (§4.4) `state-backend bundle operator` writes.
-`derived oci-state-backend mint` is the one mint without it, because its
-value goes into a workstation slot and there is no backend yet to reach.
+A third option, `--bundle-dir`, sits on every command that reaches the
+state backend rather than in front of the subject: each that writes into
+a stack's configuration — every `mint` of a config secret, every device
+row's `record` — and each that pushes a GitHub secret, because the admin
+token it pushes as is read out of the `github` stack's configuration —
+`derived sync`, `derived drill-age-identity generate`, and the mints that
+push their own carriers. A config command selects its stack in the state
+backend, so reading or writing a stack's configuration means reaching
+the backend, which is
+the client bundle plus the passphrase the kit recovers; the flag says
+which bundle, and the default is the workstation slot (§4.4)
+`state-backend bundle operator` writes. `derived oci-state-backend mint`
+is the one mint without it, because its value goes into a workstation
+slot and there is no backend yet to reach, and the App keys' `record`
+has none either: it files into the escrow and reaches no stack.
 
 §3's minted rows are `credentials derived <row> mint`, and its escrowed
 rows are `credentials derived <row> generate`. A row is implemented when
 its consumer exists: minting a credential
 that has no slot to be delivered into would park a secret, which rule 2
-forbids. Five are delivered today — the zones token, the gateway's ACME
-token, the two OCI keys and the B2 management key; the DNS-01 token
-joins them with cert-manager. The GitHub-secret half of a row is
+forbids. Delivered today are the zones token, the gateway's ACME token,
+the OCI keys of the `physical` stack and of the appliance, the B2
+management key, the state dumps' freshness key and the drill's OCI and
+B2 keys — and the drill age identity, which its `generate` draws rather
+than mints and delivers the same way. The DNS-01 token joins them with
+cert-manager, the writer keys and the etcd freshness key with the
+backup bucket and their consumers. The GitHub-secret half of a row is
 delivered separately, by `credentials derived sync` rather than by the
 row's own command, for the rows whose value can be obtained without
 minting one (below).
 
 §3's **device rows** are neither minted nor escrowed, so they are
-`credentials derived <row> record`: the command prints the console
-steps that create the credential, takes the value without echoing it,
+`credentials derived <row> record`: the command prints the steps that
+create the credential — in a console, or by drawing it where no console
+does — takes the value without echoing it,
 and pushes it into the config of the stack that reads it, proven by
 reading it back like every other config secret. A value may be handed in
 instead of typed, which is what makes a scripted run possible — a secret
@@ -1008,9 +1050,10 @@ workflow would have to guess right. Each reason is filed under the channel
 it is about, in the same vocabulary the Slot column is written in, so the
 qualifier there and the reason here name one slot rather than two.
 
-**The GitHub secrets are filled by a `credentials` command run from the
-workstation.** Besides the Pulumi config secret, that is the only channel
-with a sink today. Deliberately not the `github` stack: that stack
+**The GitHub secrets are filled by `credentials` commands run from the
+workstation** — `derived sync`, and the commands that push their own
+carriers; which other channels a command writes today, and which none
+does yet, is §4.1's list. Deliberately not the `github` stack: that stack
 declares the *structure* — which repositories exist, which Environments,
 which of them a reviewer gates — and is applied by hand a few times a
 year, while these values rotate on their own cadence and some are
@@ -1056,29 +1099,29 @@ password typed into a process nobody is watching. Nothing is ever
 written to the store implicitly: a `remember` command is the only thing
 that puts a value there.
 
-1.  `credentials root <name> remember` — once per machine and root,
+0.  `credentials root <name> remember` — once per machine and root,
     for the account roots the mints borrow (§2). Skipping it costs a
     prompt rather than a failure, which is also how a headless run works.
-2.  `credentials kit bootstrap` — fills the kit with every §2 row, the
+1.  `credentials kit bootstrap` — fills the kit with every §2 row, the
     recovery key included, creating the kit if it is absent. A row
     whose platform can mint it is minted; the rest stop and print their
     console steps. The kit is all it writes secrets to; the recovery
     row additionally writes `escrow/RECIPIENTS` into the checkout — the
     public half, and a file to commit.
-3.  `credentials derived oci-state-backend mint` — the appliance's own
+2.  `credentials derived oci-state-backend mint` — the appliance's own
     OCI key (§3), minted from the seed into the workstation slot the next
     stage reads. It comes first among §3's rows because it is the only one
     whose consumer runs before the state backend exists. The compartment
     it is confined to is the one `conventions` names for the appliance,
     adopted where it exists and created where it does not.
-4.  `state-backend provision` — the Pulumi state backend, which every
+3.  `state-backend provision` — the Pulumi state backend, which every
     stack needs before it can act, and the first thing to escrow (§2.2):
     it generates the CA and the age identity, commits their ciphertexts,
     and the appliance's Ignition carries what is public about them — the
     server certificate issued under that CA and the age identity's public
     half — plus a B2 dump key minted from the B2 seed. The run ends by
     writing the `operator` client bundle into its workstation slot (§4.4).
-5.  `credentials derived pulumi-passphrase generate` — the one escrowed
+4.  `credentials derived pulumi-passphrase generate` — the one escrowed
     row no stage above mints, because it has no single installer: the
     state backend owns the CA and the backup identities and generates
     them in the run that installs them, while the state passphrase
@@ -1093,17 +1136,25 @@ that puts a value there.
     A kit that predates the escrow carries a live passphrase already and
     uses `import` here instead (§4.2), which escrows that value rather
     than replacing it.
-6.  `credentials derived cloudflare-zones mint`,
-    `credentials derived oci-physical mint` and
-    `credentials derived b2-management mint` — the §3 rows whose slot is a
-    stack's committed configuration, which is then committed. One row per
-    command, and re-running one rotates that row. The OCI row creates the
-    `physical` stack's compartment on its first run and prints the `OCID`,
-    which is recorded in `conventions` and committed with the rest.
+5.  `credentials derived cloudflare-zones mint` and
+    `credentials derived cloudflare-gateway-acme mint` — the Cloudflare
+    seed's delivered tokens: the zones token into the `dns` stack's
+    committed configuration, and the gateway's ACME token into the
+    `physical` stack's, which that stack requires before it runs because
+    it writes the token onto the device. Each file is then committed.
+6.  `credentials derived oci-physical mint` and
+    `credentials derived b2-management mint` — `physical`'s minted
+    provider credentials, its OCI key and its B2 management key, into its
+    committed
+    configuration, which is then committed like the one above. One row
+    per command, and re-running one rotates that row. The OCI row
+    creates the `physical` stack's compartment on its first run and
+    prints the `OCID`, which is recorded in `conventions` and committed
+    with the rest.
 7.  `credentials derived github-passphrase generate` — the `github`
     stack's own passphrase, before anything reads or writes that stack's
-    config. It is stage 5's command on a second row, and it is separate
-    from stage 5 for the one reason the row exists: this value goes to no
+    config. It is stage 4's command on a second row, and it is separate
+    from stage 4 for the one reason the row exists: this value goes to no
     Environment, so the stack whose config carries the forge's admin token
     is unreadable by anything CI can start (§1 rule 6). A machine that
     skips it does not silently fall back to the estate passphrase:
@@ -1143,9 +1194,15 @@ that puts a value there.
 A stage that fails is re-run; nothing is parked. Once the last one is
 done, the kit goes back in its envelope.
 
-**What is not built yet** (`kluster-ops#1`): the §3 rows below. Three slot
-kinds have a sink — the Pulumi config secret, the workstation slot and the
-GitHub secret — and the rest have none.
+**What is not built yet**: the §3 rows below. Each channel but the
+SealedSecret has a writer in this repository. `credentials kit` and
+`seed` write the offline store; `credentials` writes the Pulumi config
+secrets, the escrow and the GitHub secrets;
+`credentials` and `state-backend` both write workstation slots;
+`state-backend provision` writes the on-box files; and each stack
+program writes its own Pulumi state and, for `physical`, the device
+secrets. No stack declares a SealedSecret yet, because the controller
+that opens one arrives with `k8s-base`.
 
 -   The **SSH identities** (the UDM key and the libvirt identity) have no
     command on this side. Neither is created in a console, so there are
@@ -1153,13 +1210,14 @@ GitHub secret — and the rest have none.
     (§3), and what is left here is a paste into `physical`'s
     configuration. The **in-cluster secrets** (the DNS-01 token and the
     writer keys, sealable only once `k8s-base` has the sealed-secrets
-    controller up) have neither half.
+    controller up) have neither half (`kluster-ops#42`).
 -   Part of the **CI Environment half** (ci.md §3). The sink exists (§4)
     and fills what a workstation can obtain: the state passphrase and the
-    `ci` client bundle, both into every Environment, and the dispatch
-    App's key as a repository secret. What is left waits on
-    something other than the sink — the ZeroTier CI identities, on the
-    `physical` stack that generates them.
+    `ci` client bundle into every Environment, the overlay network's id
+    into the Environments whose jobs join it, and the dispatch App's key
+    as a repository secret. What is left waits on something other than
+    the sink — the ZeroTier CI identities, on the `physical` stack that
+    generates them.
 -   The **ops-repo channel** lands through the sink (§4) for every row
     whose workflow is designed down to the secret it reads: the drill
     age identity's private half, which its generator pushes, and the
@@ -1169,9 +1227,13 @@ GitHub secret — and the rest have none.
     the trigger App's key, which stage 10 pushes, and the Home Assistant
     webhook, which stage 10 asks for and pushes. Every other row above
     naming an ops-repo secret lands nowhere, because the workflow that
-    would read it is not built — nothing there names a secret for it,
-    and nothing there reads the drill Environment yet either
-    (state-backend.md §7.3).
+    would read it is not built (`kluster-ops#57`) — nothing there names
+    a secret for it. Of the workflows reading the secrets that do land,
+    `probes.yml` alone exists, and it starts no job until the ops
+    repository's Actions billing is restored (`kluster-ops#393`); the
+    drift trigger and the dispatch handler are not built, and nothing
+    there reads the drill Environment yet either (state-backend.md
+    §7.3).
 -   **`alertmanager/read`** is generated and escrowed, and what it lacks
     is a consumer: neither the issue-sync poller nor the HTTPRoute that
     matches its header exists, so the ops-repo secret and the config
@@ -1180,19 +1242,26 @@ GitHub secret — and the rest have none.
     parking rule 2 forbids — §2.2's register expects this label, so
     `derived check` reports its absence as a problem — and the token on
     file is the value those two consumers will be built around rather
-    than one they replace.
--   The **slot-drift probe** (§4). The map it would read is checked in;
-    the scheduled workflow that compares it against reality is not.
+    than one they replace. The poller is an ops-repository workflow
+    (`kluster-ops#57`).
+-   The **slot-drift probe** (§4, `kluster-ops#1`). The map it would
+    read is checked in; the scheduled workflow that compares it against
+    reality is not.
 
 Restic passwords will not join that list: they arrive with the
 `backed_pvc` helper (declarative/workloads.md §3), which is itself
 unwritten but generates its own password into state and seals it, so a
 new volume will need no `credentials` run (rule 6). Until the commands
-above exist, a bring-up delivers the seed kit, the state backend, the
-provider credentials the `dns` and `physical` stacks run on, the three
-console-made credentials those stacks authenticate with, the two App
-keys into the escrow, and the GitHub secrets whose values a workstation
-can obtain; the rest of §3 is design rather than procedure.
+above exist, a bring-up delivers the seed kit; the appliance's OCI key
+and the state backend it provisions; the estate passphrase and the
+`github` stack's own; the zones token, the gateway's ACME token, the
+`physical` OCI key and the B2 management key; the credentials made by
+hand that a stack reads — the
+UniFi key, the AdGuard login, the ZeroTier Central token, the BGP
+session password and the GitHub admin token; the App keys into the
+escrow; and the GitHub secrets whose values a workstation can obtain.
+The commands outside that sequence deliver the drill's keys and the
+dump freshness key. The rest of §3 is design rather than procedure.
 
 **Resumable by probing, not by bookkeeping.** `kit bootstrap` asks whether
 each row is already in the kit and skips it if so, so an interrupted run
@@ -1395,7 +1464,9 @@ a secret does exist there the mismatch is loud in its own way —
 `failed to decrypt: incorrect passphrase`, the state's own salt being a
 verifier checked when a secret is read — so the case this glosses over is
 a refusal and never a corruption. The estate passphrase adopts the same
-way, plus a `derived sync` to re-push it to every Environment.
+way, plus a `derived sync` to re-push it to every Environment. That
+re-encryption is the whole of a rotation made for custody; a passphrase
+that has leaked asks for more (below).
 
 **Never repair that disagreement by deleting `encryptionsalt`.** With no
 salt there is nothing to verify against, and `pulumi` mints one from
@@ -1436,6 +1507,33 @@ row, adopted consumer by consumer. No design escapes this: one offline
 secret able to reproduce every generated credential is what buys the
 ability to recover them at all, and the derivation seed concentrated
 exposure the same way.
+
+**A leaked passphrase is a rotation of what it encrypted, not a
+re-encryption.** Every `Pulumi.<stack>.yaml` is committed to a public
+repository, so each ciphertext a stack's configuration has ever held
+stays in the history, and whoever holds the passphrase opens all of
+them; `change-secrets-provider` protects what is written after it and
+nothing written before. The order mirrors the recovery key's: a new
+generation of the passphrase first, adopted as above, so that what
+comes next is encrypted to a value the holder of the old one lacks; then
+every secret a stack under that passphrase holds as a config secret,
+the history having disclosed each. A §3 row whose Slot is a Pulumi
+config secret there is issued again and delivered by its own command: a
+minted row by re-running its `mint`, which retires its predecessor; a
+console-made row by a new value, its `record`, and the superseded one
+deleted in that console; the BGP password by a fresh draw, its `record`
+and both ends re-applied; the SSH identities by a new pair (§3). A
+`secure:` value that is no §3 row is its owner's to replace, or, where
+it is private rather than a credential, disclosed for good
+(`budgetAlertRecipients` today, whose class `kluster-ops#405` settles).
+A credential retired before the leak costs nothing, being dead at its
+platform. The same passphrase encrypts the stack's state (rule 6),
+which is not in git: a state secret is exposed only to whoever also
+reached that state, and anywhere that held the passphrase beside a way
+into the backend counts. Today every CI Environment holds the estate
+passphrase and the `ci` bundle, so a passphrase that leaked out of a job
+is a state leak as well, and each state secret is then replaced with the
+resource that owns it.
 
 Rotation cadence lives with the drill program (operations.md §4); the
 yearly offline day verifies the current kit against §2.
@@ -1479,48 +1577,56 @@ never a hunt for per-machine environment wiring:
 | `roots/<root>.<field>` | An account root's token file — the second layer of §2's chain, written only on a machine with no desktop secret store. No tool reads one on its own; a `credentials` run does, when a mint asks for the root. | `credentials root <name> remember` |
 | `state-backend/` | The `operator` client bundle: CA, certificate, key, and the connection string for the appliance they authenticate against — which names the appliance and none of the files. The key is `0600`, which libpq insists on. | `state-backend provision`, `state-backend bundle operator` |
 | `oci/state-backend/` | The appliance provisioner's own OCI key (§3): an SDK configuration file plus the `0600` PEM beside it, which is the key `state-backend` signs with whatever its `key_file` entry names. An SDK configuration rather than a shape of this repository's own, because the SDK is what signs with it. The compartment it acts in is not here — that is a convention its reader shares (§3). | `credentials derived oci-state-backend mint` |
+| `libvirt/` | Working files, not slots (physical/homelab-host.md): the libvirt provider's SSH identity and the host's pinned key, copied `0600` out of `physical`'s config on every run that opens it. | the `physical` stack |
 
 **The directory is `0700`, and that is the boundary that matters**: it
 is what keeps every entry inside it private, whatever mode the file
-itself carries. Two files are stricter on their own account — the client
-key, because libpq refuses a key anything but its owner can read, and the
-OCI key beside its configuration — and the rest are written at the process
-`umask` under that directory. Only the kit is irreplaceable, and it is
-irreplaceable in the envelopes rather than here; every other entry is
-recovered, re-issued or re-pasted by the command in the right-hand column,
-so a lost `.credentials/` costs a few commands and no credential.
+itself carries. Each secret a command or a stack puts there is `0600` on
+its own account as well (`lib/workstation.write`): the passphrases, a
+root's token file, the OCI key and its configuration, the libvirt
+identity and its pinned host key, and the client key, which libpq
+refuses to use when anyone but its owner can read it. What takes the
+process `umask` under that directory holds no private key in the clear —
+the bundle's CA, certificate and connection string, the appliance's
+host-key pin beside them, and the kit, which is encrypted. Only the kit
+is irreplaceable, and it is irreplaceable in the envelopes rather than
+here; every other entry is recovered, re-issued or re-pasted by the
+command in the right-hand column, so a lost `.credentials/` costs a few
+commands and no credential.
 
-`mise.toml` reads this directory — the passphrase, the backend URL and
-the three `PGSSL*` variables naming the bundle beside it — falling back
-to whatever the environment already holds, and a slot that exists
-outranks the environment. The slots answer for the checkout that holds
-them and not under its `.claude/`, where every `jj` workspace sits, so a
-workspace's `mise x` hands on the caller's values and a `pulumi` run that
-needs this directory runs from the checkout that holds it
-(`kluster-ops#387`); a scratch probe runs `pulumi` as
-[framework/testing.md](framework/testing.md) §5.1 says. It
-reads no provider credential at all, because none is here: each is a config secret in the
-stack that reads it, which the program opens with the passphrase this
-directory carries. **CI
+`mise.toml` reads this directory — the passphrase slots, the backend
+URL and the three `PGSSL*` variables naming the bundle beside it —
+falling back to whatever the environment already holds, and a slot that
+exists outranks the environment. The slots answer for the checkout that
+holds them and not under its `.claude/`, where every `jj` workspace
+sits, so a workspace's `mise x` hands on the caller's values and a
+`pulumi` run that needs this directory runs from the checkout that holds
+it (`kluster-ops#387`); a scratch probe runs `pulumi` as
+[framework/testing.md](framework/testing.md) §5.1 says. It reads no
+provider credential at all. Of those this directory holds, the
+appliance's OCI key is read by `state-backend` alone and the libvirt
+identity is `physical`'s working copy of its own config secret; each
+credential a stack authenticates with is a config secret in that stack,
+which the program opens with the passphrase this directory carries. **CI
 walks the same path rather than a parallel one.** The four Environment
 secrets that carry the `ci` bundle (`PULUMI_BACKEND_URL`,
 `PULUMI_BACKEND_CA`, `PULUMI_BACKEND_CERT`, `PULUMI_BACKEND_KEY`) are
 file contents, not variables a job reads: a composite action writes them
 into the checkout's `state-backend/` slot before any `pulumi` runs, and
 the same template resolves them there exactly as it does here. Only the
-passphrase reaches a job as environment. Because each is
-read by template rather than by a program, nothing on that path can
-prompt: that is the whole reason these are files and not secret-store
-entries (§1 rule 6).
+passphrase reaches a job as environment. Because each is read by
+template rather than by a program, nothing on that path can prompt: that
+is the whole reason these are files and not secret-store entries (§1
+rule 6).
 
 **Moving to another workstation** is copying the directory (`rsync -a`),
-minus `kit.kdbx` unless that machine is meant to hold the kit — one
-copy in place of the mixture of an `rsync` under `~/.config` and a piped
+minus `kit.kdbx` unless that machine is meant to hold the kit — one copy
+in place of the mixture of an `rsync` under `~/.config` and a piped
 passphrase that it replaces. A second workstation needs nothing more to
-apply any stack: every provider credential travels in the committed
-stack files, which the passphrase in this directory opens. **The client
-bundle travels as it is, wherever the second checkout sits**: its
-connection string names the appliance and no file at all
+apply any stack: every credential a stack authenticates with travels in
+the committed stack files, which the passphrase in this directory opens.
+**The client bundle travels as it is, wherever the second checkout
+sits**: its connection string names the appliance and no file at all
 (`postgres://<role>@<ip>:5432/…?sslmode=verify-full`), and the three
 certificates are found through `PGSSLROOTCERT`, `PGSSLCERT` and
 `PGSSLKEY`, which `mise.toml` resolves from this directory's own
@@ -1544,9 +1650,10 @@ exception: the appliance's OCI configuration, whose predecessor is a
 hand-made configuration under `~/.config` rather than a minted credential
 at all. `state-backend` still reads that one when the slot is empty, with
 a warning naming the command that replaces it, and the fallback is marked
-in the code for deletion (`kluster-ops#41`). A copy of any other slot
-at an older location — a client bundle under `~/.config/kluster/`, a
-`.pulumi.secret` or `.github.token` at the checkout's root — is inert,
+in the code for deletion once every workstation has run that command. A
+copy of any other slot at an older location — a client bundle under
+`~/.config/kluster/`, a `.pulumi.secret` or `.github.token` at the
+checkout's root — is inert,
 and deleting it is the last step of moving that machine onto
 `.credentials/`. Both root-level names stay in `.gitignore` all the same,
 so that no `jj` command ever records a copy left there in a change.
