@@ -490,7 +490,7 @@ cell would say `pending` to an operator already being served.
 | UniFi API key | Dedicated local admin | Network API | Pulumi config secret | `physical` |
 | AdGuard API credentials | AdGuard admin (no scoped API — audit M6) | alice/bob rewrite API | Pulumi config secret | `dns` rewrites |
 | ZeroTier Central API token | Made in the Central console (no token API) | The whole Central account: the installation's network, its members and its flow rules | Pulumi config secret (`zerotierApiToken`; the network id beside it is a constant in `conventions`, not a secret) | `physical` |
-| GitHub admin token | Made in the GitHub UI (no token API) | This account's repositories — branch protection, rulesets, Environments and their gates: `repo`, the narrowest scope that covers them | Pulumi config secret (`githubAdminToken`) | `github`, and `credentials derived sync`, which pushes every GitHub secret as it |
+| GitHub admin token | Made in the GitHub UI (no token API) | A fine-grained token on the account, confined to the repositories `conventions.forge` declares and to the repository permissions the calls made as it need (the set is below the table) | Pulumi config secret (`githubAdminToken`) | `github`, and every `credentials` command that pushes a GitHub secret as it: `derived sync`, `derived drill-age-identity generate`, and the mints that push their own carriers |
 | BGP session password | Drawn by the operator (no console makes it; `credentials derived bgp record` delivers it) | One BGP session, the gateway↔worker peering (cluster-infra.md §2): an MD5 password both ends are configured with | Pulumi config secret (`gatewayBgpPassword`) · device secret (the routing daemon's configuration) · SealedSecret (Cilium's `authSecretRef`; pending) | `physical`, which writes it onto the device; Cilium BGPv2 on the worker |
 | Alertmanager read token | generated, escrowed as `alertmanager/read` | `GET /api/v2/alerts` only, by HTTPRoute method+path+header match | escrow · ops-repo secret (pending) · Pulumi config secret (the HTTPRoute's match, rendered with that route; pending) | Issue-sync poller |
 | HA webhook URL/ID | Home Assistant | One notify endpoint | SealedSecret (pending) · ops-repo secret (`HA_WEBHOOK_URL`) | alertmanager (pending), the ops repo's dispatch handler. Until `deploy.yml`'s `notify-failure` job becomes a caller of the alert producer it reads the legacy `kluster` repository secret `HAOS_DEPLOY_WEBHOOK_URL`, which this register no longer claims and `sync` does not touch; the operator deletes it from the repository with that job's conversion |
@@ -611,17 +611,53 @@ as broad as the account it belongs to because Central offers nothing
 narrower. **The GitHub admin token is the fourth**, and the same shape
 again: GitHub publishes no API that creates a personal access token, so
 one made on the account's own settings page is what the `github` stack
-declares the forge with. It is a **classic** token scoped `repo`, which
-is the narrowest that scope list offers, and the excess it carries
-beyond branch protection, rulesets, Environments and their gates is the
-row's own residual. A fine-grained token's `Administration` permission
-would be narrower still, and the reason this row is not one is the ops
-repository: a fine-grained token is scoped to repositories of a single
-owner and this stack declares two, one of them private, so the classic
-token is what covers the pair with one credential rather than two whose
-rotations could drift apart. None of them is minted here, so
-`credentials derived <row> record` (§4) is the delivery
-alone: the console steps, the value, the stack config that reads it. The
+declares the forge with. It is a **fine-grained** token whose resource
+owner is the account (`conventions.forge.ACCOUNT`), with repository
+access to exactly the repositories `conventions.forge` declares — today
+`Aetf/kluster` and `Aetf/kluster-ops`, one of them private, both owned
+by that account, as a fine-grained token requires of every repository it
+covers. Its permissions are every repository permission a call made as
+it needs — a call by the `github` stack, or by a `credentials` command
+that pushes a GitHub secret as it. For a REST call, GitHub's
+[table of the permissions each endpoint needs](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens)
+says which. The branch-protection rule the stack declares goes through
+GraphQL, which that table does not cover, and a repository's merge
+settings are returned only to a token that can write its contents,
+which no row of the table records. Today the set is, on every
+repository the token covers:
+
+-   **Administration**, read and write: the repository's own settings,
+    its vulnerability alerts, the branch protection on `main`, and each
+    Environment with its reviewer gate.
+-   **Contents**, read and write: the merge settings on each repository,
+    which GitHub returns only to a token that can write contents;
+    without it, they read back as off, and every preview re-applies them.
+-   **Issues**, read and write: the labels a workflow branches on
+    (GitHub accepts **Pull requests** in its place).
+-   **Variables**, read and write: the Actions variables a workflow reads.
+-   **Actions**, read: reading an Environment back.
+-   **Secrets**, read and write: the repository secrets pushed as it.
+-   **Environments**, read and write: the Environment secrets pushed as
+    it.
+
+A resource the census gains can add to that set, and a gap shows up as
+one of these: a REST call refused with `403 Resource not accessible by
+personal access token`, where GitHub names the permission it needed in
+an `X-Accepted-GitHub-Permissions` response header that the error
+Pulumi prints does not carry; an error in the GraphQL response that
+reads or writes the branch-protection rule; a `404` from a private
+repository left out of the token's selection; and, for Contents, a diff
+on the merge settings that never clears.
+
+The token is fine-grained rather than classic because it reaches only
+the repositories it names, where a classic token scoped `repo` reaches
+every repository the account can. On those repositories it reaches
+everything — settings, protection, contents, and who else may write to
+them — and that is the row's residual.
+
+None of these console-made credentials is minted here, so
+`credentials derived <row> record` (§4) is the delivery alone: the
+console steps, the value, the stack config that reads it. The
 consumer decides which stack — `physical` drives the UDM's Network API
 and the overlay's Central account, `dns` writes the AdGuard rewrites,
 `github` declares the forge — and nothing is recorded beside the token.
@@ -645,29 +681,30 @@ none — and the reasons differ, which matters because only one of them is
 a wall. **Creating and retiring are API absences**: no endpoint of
 these platforms makes a personal access token, a UniFi key, a Central
 token or an AdGuard login, or deletes one, so a console visit is the
-whole of both. **Verifying is a decision.** Any authenticated call is a
-verification, and for the GitHub row a cheap one exists — a classic
-token's scopes come back in the `X-OAuth-Scopes` header of any request —
-so what stands in for it is chosen rather than forced: the first
-`mise run github preview` authenticates as the token, against the real
-account, and shows what it would change, which is a stronger proof than
-a scope string and is a step the operator takes anyway. If a `record`
-that failed fast were ever worth more than that, this is the row where
-adding the check is cheap, and this sentence is what says so. That the
-platforms mint nothing is also why none of them is a seed: they
-mint nothing, so there is nothing for the kit to hold or to reproduce.
-What guarantees a lost one can be replaced is the account or appliance
-behind it — the Central and GitHub accounts are among the account roots
-§2 keeps out of the kit, and the two appliances are the installation's
-own.
+whole of both. **Verifying is a decision.** Any authenticated call
+verifies that a credential opens something, and for most of these rows
+that is the whole question. For the GitHub row it is not: no endpoint a
+fine-grained token can call lists its own permissions, and a read
+proves only the read half of one, so no cheap check exists for `record`
+to run. What stands in is `mise run github preview --refresh`, which
+reads every declared resource as the token, and then the first `up`
+that writes each kind of resource — both steps the operator takes
+anyway. That the platforms mint nothing is also why none of them is a
+seed: they mint nothing, so there is nothing for the kit to hold or to
+reproduce. What guarantees a lost one can be replaced is the account
+or appliance behind it — the Central and GitHub accounts are among the
+account roots §2 keeps out of the kit, and the two appliances are the
+installation's own.
 
 **The GitHub admin token is read back as well as read.** It is the one
-row of this shape with a second consumer: `credentials derived sync`
-authenticates to the forge as it before pushing any GitHub secret
-(ci.md §3), and it takes it out of the `github` stack's configuration
-rather than from a copy of its own. One credential, one home — which is
-also why `sync` needs the state backend reachable and the passphrase in
-hand, as every other command that reads a config secret does.
+row of this shape with consumers beyond its stack: every `credentials`
+command that pushes a GitHub secret authenticates to the forge as it —
+`derived sync` (ci.md §3), `derived drill-age-identity generate`, and
+the mints that push their own carriers — and each takes it out of the
+`github` stack's configuration rather than from a copy of its own. One
+credential, one home — which is also why those commands need the state
+backend reachable and the passphrase in hand, as every other command
+that reads a config secret does.
 
 **Two more are made in a console and read by a workflow.** Each
 single-purpose GitHub App has a private key generated on its own settings
@@ -750,7 +787,7 @@ name.
 | `credentials derived unifi record` | After the state backend exists, and after the controller has minted a key for its dedicated local admin — which the command prints the steps for. Takes the key without echoing it, into the `physical` stack's config; the stack file is then committed. The controller's address is not recorded beside it, being the overlay address `conventions` assigns. Re-running it is how a replaced key is delivered. |
 | `credentials derived adguard record` | The same, for the admin login both AdGuard instances answer to, into the `dns` stack's config — the stack that writes the split-horizon rewrites. |
 | `credentials derived zerotier record` | The same again, for the ZeroTier Central API token, into the `physical` stack's config — which network of that account is this installation's overlay is a constant in `conventions` rather than a value recorded beside the token. Central publishes no token API, so a token created in its web console and re-recorded here is the whole of a rotation; the superseded one is deleted in the same console. |
-| `credentials derived github-admin record` | Once per installation, and again on each rotation, for the GitHub admin token — into the `github` stack's config, which is where both the stack and `credentials derived sync` read it. Nothing in this repository can create the value: GitHub publishes no API that makes a personal access token, so a token generated on the account's settings page and recorded here is the whole of a rotation, and the superseded one is deleted on the same page. It runs before `derived sync`, which authenticates as it. |
+| `credentials derived github-admin record` | Once per installation, and again on each rotation, for the GitHub admin token — into the `github` stack's config, which is where the stack and every command that pushes a GitHub secret read it. Nothing in this repository can create the value: GitHub publishes no API that makes a personal access token, so a token generated on the account's settings page and recorded here is the whole of a rotation, and the superseded one is deleted on the same page. It runs before `derived sync`, which authenticates as it. |
 | `credentials derived github-dispatch-key record` / `credentials derived github-trigger-key record` | After the kit exists, and after the App's page has generated a private key — which the command prints the steps for. Takes the key on standard input and escrows it as the row's next generation, so a re-run with a key already on file changes nothing and a re-run with a fresh one is the rotation. `--from-kit` reads it out of the entry a kit that still carries the key as a seed row holds, instead of from standard input. |
 | `credentials derived ls` | Any time, with or without a kit. Prints the slot map (below): every §3 credential, where its value comes from, and every slot it lands in, the ones still waiting on a consumer included. It reads a checked-in file, so it needs no token, no kit and no network. |
 | `credentials derived sync [--only <row>] [--bundle-dir <path>]` | Once during bring-up, and again whenever one of those values moves or a slot is lost. Copies into their GitHub secrets the rows whose value lives somewhere else — read back out of a stack's state, recovered from the escrow, or typed in because the slot is its only storage — resolve, push, verify, per row. A row born into its slot is out of scope and is passed over; naming one is refused, pointing at the `mint` that owns it. `--only` addresses one row, and is what replaces a value that was typed in. |
@@ -1441,7 +1478,7 @@ never a hunt for per-machine environment wiring:
 | `github.passphrase` | The `github` stack's own passphrase (§2.2), which opens that stack's config and nothing else. Here for the same reason and read the same way, under its own variable: `PULUMI_CONFIG_PASSPHRASE` is process-global, so which passphrase is right depends on the `-s` a command carries. | `credentials derived github-passphrase generate`, `credentials derived github-passphrase recover` |
 | `roots/<root>.<field>` | An account root's token file — the second layer of §2's chain, written only on a machine with no desktop secret store. No tool reads one on its own; a `credentials` run does, when a mint asks for the root. | `credentials root <name> remember` |
 | `state-backend/` | The `operator` client bundle: CA, certificate, key, and the connection string for the appliance they authenticate against — which names the appliance and none of the files. The key is `0600`, which libpq insists on. | `state-backend provision`, `state-backend bundle operator` |
-| `oci/state-backend/` | The appliance provisioner's own OCI key (§3): an SDK configuration file plus the `0600` PEM it names. An SDK configuration rather than a shape of this repository's own, because the SDK is the whole of the reader. The compartment it acts in is not here — that is a convention its reader shares (§3). | `credentials derived oci-state-backend mint` |
+| `oci/state-backend/` | The appliance provisioner's own OCI key (§3): an SDK configuration file plus the `0600` PEM beside it, which is the key `state-backend` signs with whatever its `key_file` entry names. An SDK configuration rather than a shape of this repository's own, because the SDK is what signs with it. The compartment it acts in is not here — that is a convention its reader shares (§3). | `credentials derived oci-state-backend mint` |
 
 **The directory is `0700`, and that is the boundary that matters**: it
 is what keeps every entry inside it private, whatever mode the file
@@ -1492,11 +1529,15 @@ carried on because it is the one libpq and the driver behind Pulumi's
 Postgres backend both read; a connection string expands nothing, which
 is why the paths are not in it (physical/state-backend.md §3).
 
-The OCI configuration is the one entry that does not travel: the SDK
-expands nothing either, so its `key_file` names the PEM beside it by
-absolute path into this checkout. A checkout at a different path
-re-runs `credentials derived oci-state-backend mint` on a machine that
-holds the kit.
+**The OCI slot travels as it is too, by a different route.** Its
+configuration's `key_file` names the PEM by absolute path into the
+checkout that minted it, because the SDK expands nothing either and a
+reader handed the file alone needs a path that opens. `state-backend`
+is not such a reader: it signs with the PEM beside the configuration it
+read, whatever the entry says, so the entry is a default and a copy at
+another path provisions with no edit and no re-mint. Only a tool
+pointed at the copied file directly — the `oci` CLI — still follows the
+entry back to the minting checkout.
 
 Every slot is read where it is now and nowhere else, with one
 exception: the appliance's OCI configuration, whose predecessor is a

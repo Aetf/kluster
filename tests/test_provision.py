@@ -32,7 +32,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from memory_kit import MemoryKit
 
-from oci_conventions import with_recorded_compartment
+from oci_conventions import with_recorded_compartment, with_unrecorded_compartment
 from kluster import conventions
 from kluster.scripts.credentials import b2, escrow, oci_iam, oci_slot, pki, workstation
 from kluster.scripts.credentials.delivery import Delivery
@@ -406,6 +406,103 @@ def test_the_appliance_signs_as_the_key_minted_for_it(slots: Path, recorded: str
     assert (client.config['user'], client.config['tenancy']) == (APPLIANCE_USER, APPLIANCE_TENANCY)
 
 
+def _copy_slots(slots: Path, destination: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """`.credentials/` copied into a checkout at another path, and read from there."""
+    copied = destination / '.credentials'
+    _ = shutil.copytree(slots, copied)
+    monkeypatch.setattr(workstation, 'directory', lambda: copied)
+    return copied
+
+
+def test_a_slot_copied_to_a_checkout_at_another_path_provisions_as_it_is(
+    slots: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recorded: str
+) -> None:
+    _ = _mint()
+    copied = _copy_slots(slots, tmp_path / 'elsewhere', monkeypatch)
+    # The minting checkout is gone, so the `key_file` the configuration was
+    # written with names nothing -- which is where a copy on another machine
+    # stands.
+    shutil.rmtree(slots)
+
+    client = provision.OciClients.load()
+
+    assert client.config['key_file'] == str(oci_slot.key_path())
+    assert oci_slot.key_path().is_relative_to(copied)
+    # Building an SDK client validates the configuration and loads the key,
+    # which is everything short of a request.
+    _ = client.identity
+
+
+def test_the_slot_signs_with_the_key_beside_it_rather_than_the_one_it_names(
+    slots: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recorded: str
+) -> None:
+    minted = _mint()
+    _ = _copy_slots(slots, tmp_path / 'elsewhere', monkeypatch)
+    # The path the copy's configuration names now holds another key, as it
+    # does once the minting checkout mints again: following the entry would
+    # sign with a key whose fingerprint the configuration does not carry.
+    _ = (minted.parent / oci_slot.KEY).write_text(oci_iam.generate_key().private_pem)
+
+    config = provision.OciClients.load().config
+
+    assert config['key_file'] == str(oci_slot.key_path())
+    assert oci_iam.fingerprint(Path(config['key_file']).read_text()) == config['fingerprint']
+
+
+def test_a_slot_missing_its_key_names_the_repair(slots: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A configuration copied without the PEM beside it: the entry it was written
+    # with still opens a key, in the checkout it came from, and is not used.
+    _ = _mint()
+    _ = _copy_slots(slots, tmp_path / 'elsewhere', monkeypatch)
+    oci_slot.key_path().unlink()
+
+    with pytest.raises(oci_slot.SlotUnusable, match='copy the whole slot directory'):
+        _ = provision.OciClients.load()
+
+
+def test_the_slot_answers_with_its_credential_and_nothing_added_to_it(slots: Path, recorded: str) -> None:
+    # A key pasted into the file would outrank the PEM beside it in the SDK's
+    # signer, so the slot would sign as something other than its own key.
+    written = _mint()
+    with written.open('a') as handle:
+        _ = handle.write('key_content = not-the-key-beside-it\n')
+
+    config = provision.OciClients.load().config
+
+    assert set(config) == {*oci_slot.CREDENTIAL, 'key_file'}
+
+
+def test_a_slot_whose_profile_lost_a_field_names_the_repair(slots: Path) -> None:
+    written = _mint()
+    _ = written.write_text('\n'.join(line for line in written.read_text().splitlines() if 'fingerprint' not in line))
+
+    with pytest.raises(oci_slot.SlotUnusable, match='no fingerprint in its'):
+        _ = provision.OciClients.load()
+
+
+def test_a_slot_that_does_not_parse_names_the_repair(slots: Path) -> None:
+    _ = _mint().write_text('user = no section header above this line\n')
+
+    with pytest.raises(oci_slot.SlotUnusable, match='does not parse'):
+        _ = provision.OciClients.load()
+
+
+def test_a_slot_with_no_compartment_to_act_in_is_not_told_to_name_one_in_the_slot(
+    slots: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The slot answers with its credential alone, so a `compartment-id`
+    # written into it would be ignored: the refusal names only repairs that
+    # take.
+    _ = with_unrecorded_compartment(monkeypatch, conventions.STATE_BACKEND)
+    _ = _mint()
+
+    with pytest.raises(conventions.CompartmentMissing) as refused:
+        _ = provision.OciClients.load()
+
+    assert '--compartment' in str(refused.value)
+    assert 'compartment-id' not in str(refused.value)
+
+
 def test_an_explicit_compartment_wins_over_the_convention(slots: Path) -> None:
     _ = _mint()
 
@@ -457,7 +554,7 @@ def test_the_superseded_configuration_is_read_once_and_loudly(
 def test_a_machine_with_no_credential_is_told_what_mints_one(slots: Path) -> None:
     # The SDK's own answer is a missing file; this one names the command that
     # creates it, which is the whole difference between a stop and a step.
-    with pytest.raises(ValueError, match='credentials derived oci-state-backend mint'):
+    with pytest.raises(oci_slot.SlotUnusable, match='credentials derived oci-state-backend mint'):
         _ = provision.OciClients.load()
 
 

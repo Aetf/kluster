@@ -14,7 +14,7 @@ side of the system only delivers it:
     web console and scopes to the whole account;
 -   the **GitHub admin token**, a personal access token created in the GitHub
     UI, which is what the `github` stack declares the forge with and what
-    `credentials derived sync` pushes every GitHub secret as;
+    every `credentials` command that pushes a GitHub secret authenticates as;
 -   the **BGP session password**, the one row here no console makes: it is a
     shared secret both ends of the gateway's routing session are configured
     with, either end accepts any string, and the operator draws it. The
@@ -96,6 +96,23 @@ GITHUB_STACK = derived.GITHUB_STACK
 #: because a caller indexes `DEVICES` by it, and a member spelled in two places
 #: is a member that can drift into a `KeyError`.
 GITHUB_ADMIN = 'github-admin'
+
+#: The repository permissions the GitHub admin token is made with, and the
+#: access each needs. credentials.md §3 defines the set -- every permission a
+#: call made as the token needs, by the `github` stack or by a command that
+#: pushes a GitHub secret -- and says what needs each member; this is the one
+#: copy of the members, which the console steps render and a test holds to
+#: that section's list. `Metadata`, read, is not here: GitHub grants it to
+#: every fine-grained token.
+GITHUB_ADMIN_PERMISSIONS: tuple[tuple[str, str], ...] = (
+    ('Administration', 'read and write'),
+    ('Contents', 'read and write'),
+    ('Issues', 'read and write'),
+    ('Variables', 'read and write'),
+    ('Actions', 'read'),
+    ('Secrets', 'read and write'),
+    ('Environments', 'read and write'),
+)
 
 #: The row whose slot map entry is more than its config key (`slots.py`): the
 #: stack carries the value on to the device, so the map names that channel
@@ -266,16 +283,27 @@ DEVICES: dict[str, Device] = {
             holds='the admin token the forge is declared with',
             console=(
                 'github.com → Settings → Developer settings → Personal access\n'
-                '  tokens → Tokens (classic) → Generate new token, scope `repo`.\n'
+                '  tokens → Fine-grained tokens → Generate new token.\n'
+                f'  Resource owner: {conventions.forge.ACCOUNT.login}.\n'
+                '  Repository access: Only select repositories —\n'
+                + ''.join(f'    {repository.full_name}\n' for repository in conventions.forge.REPOSITORIES)
+                + '  Repository permissions — the set credentials.md §3 defines, every\n'
+                '  permission a call by the `github` stack or a secret push needs:\n'
+                + ''.join(f'    {name}: {access}\n' for name, access in GITHUB_ADMIN_PERMISSIONS)
+                + '  A gap in what the token was given shows as a `403 Resource not\n'
+                '  accessible by personal access token`, as a GraphQL error on the\n'
+                '  branch protection, as a 404 from a private repository left out\n'
+                '  of the selection, or, for Contents, as a diff on the merge\n'
+                '  settings that never clears.\n'
                 '  GitHub publishes no API that creates a personal access token, so\n'
                 '  this page is the only thing that can make one and nothing here\n'
                 '  can mint a successor: re-running this command with a token made\n'
                 '  there is the whole of a rotation, and the superseded token is\n'
                 '  deleted on the same page.\n'
-                "  It administers this account's repositories — branch protection,\n"
-                '  rulesets, Environments and their gates — which is as narrow as\n'
-                '  the scope list goes, and why no workflow names the `github`\n'
-                '  stack at all (framework/github.md §1).\n'
+                '  It administers those repositories — settings, contents, branch\n'
+                '  protection, Environments — and so can unguard `main`, which is\n'
+                '  why no workflow names the `github` stack at all\n'
+                '  (framework/github.md §1).\n'
                 '  Which account it belongs to is not asked for: that is\n'
                 '  `conventions.forge.ACCOUNT`, and the stack declares against it.'
             ),
@@ -356,10 +384,12 @@ def borrow(device: Device, *, stack: pulumi_config.Stack) -> str:
     """One row's single secret, read back out of the stack that holds it.
 
     The other direction of `deliver`, for the one thing a row here is used for
-    besides being read by its stack: `credentials derived sync` authenticates
-    to the forge as the GitHub admin token before it pushes anything
-    (`github_secrets.py`), and the token's home is this stack's committed
-    configuration like any other provider credential.
+    besides being read by its stack: every `credentials` command that pushes a
+    GitHub secret — `derived sync`, `derived drill-age-identity generate`, and
+    the mints that push their own carriers — authenticates to the forge as the
+    GitHub admin token before it pushes anything (`github_secrets.py`), and the
+    token's home is this stack's committed configuration like any other
+    provider credential.
 
     Restricted to a single-secret row, because a caller that authenticates with
     one wants *the* credential and not a bag: a row with two would have to say

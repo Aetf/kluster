@@ -29,6 +29,7 @@ from kluster.scripts.credentials.age import AgeError
 from kluster.scripts.credentials.escrow import EscrowError
 from kluster.scripts.credentials.kdbx import KdbxError, KdbxStore
 from kluster.scripts.credentials.masters import CredentialRejected
+from kluster.scripts.credentials.oci_slot import SlotUnusable
 from kluster.scripts.credentials.pulumi_config import SlotRefused
 from kluster.scripts.credentials.workstation import WorkstationError
 
@@ -54,10 +55,9 @@ RESTORE_PENDING = 3
 #: repair in its message, and an operator reads a traceback as a crash instead,
 #: with that repair buried under the stack. The census is the import closure
 #: rather than today's call paths, because that is the boundary a test can
-#: hold (`test_provision.py` walks it in both directions); the two members no
+#: hold (`test_provision.py` walks it in both directions); the member no
 #: current call reaches — `SlotRefused`, which `state.stacks` translates into a
-#: `StateError`, and `CompartmentMissing`, whose `require` the provisioner does
-#: not call — are here so that a call that reaches one tomorrow gets the line
+#: `StateError` — is here so that a call that reaches it tomorrow gets the line
 #: rather than the traceback.
 REFUSALS = (
     AgeError,
@@ -66,6 +66,7 @@ REFUSALS = (
     EscrowError,
     KdbxError,
     SlotRefused,
+    SlotUnusable,
     StateError,
     WorkstationError,
 )

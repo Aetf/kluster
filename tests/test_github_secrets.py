@@ -138,7 +138,25 @@ def test_a_real_subprocess_receives_the_value_and_the_token(tmp_path: Path, monk
 def test_a_refusal_says_where_an_operator_would_fix_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _plant(tmp_path, REFUSING_GH, monkeypatch)
 
-    with pytest.raises(SlotRefused, match='no such repository or Environment'):
+    with pytest.raises(SlotRefused, match='no such repository or Environment.*not given this repository'):
+        _ = github_secrets.run_gh(['secret', 'list', '--repo', REPOSITORY], token='the-admin-token', stdin=None)
+
+
+def test_a_refused_token_is_sent_to_the_permission_set(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A fine-grained token is refused per permission rather than per scope, so
+    # the repair is the set §3 defines, not a scope to add.
+    _plant(tmp_path, REFUSING_GH.replace('HTTP 404: Not Found', 'HTTP 403: Resource not accessible'), monkeypatch)
+
+    with pytest.raises(SlotRefused, match=r'lacks a permission this call needs \(credentials\.md §3\)'):
+        _ = github_secrets.run_gh(['secret', 'list', '--repo', REPOSITORY], token='the-admin-token', stdin=None)
+
+
+def test_a_token_that_is_not_accepted_is_sent_to_its_rotation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A 401 is a token GitHub does not recognize -- revoked or expired -- and no
+    # permission added to it would help: the repair is a new token.
+    _plant(tmp_path, REFUSING_GH.replace('HTTP 404: Not Found', 'HTTP 401: Bad credentials'), monkeypatch)
+
+    with pytest.raises(SlotRefused, match='was not accepted: `credentials derived github-admin record`'):
         _ = github_secrets.run_gh(['secret', 'list', '--repo', REPOSITORY], token='the-admin-token', stdin=None)
 
 

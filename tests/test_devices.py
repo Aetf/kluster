@@ -14,11 +14,13 @@ from __future__ import annotations
 import ast
 import io
 import logging
+import re
 from pathlib import Path
 
 import pytest
 from fake_pulumi import RecordedPulumi
 
+from kluster import conventions
 from kluster.scripts.credentials import devices, pulumi_config
 from kluster.scripts.credentials.kdbx import KdbxError
 
@@ -288,6 +290,36 @@ def test_the_delivery_names_the_file_to_commit(typed: None, caplog: pytest.LogCa
     # A push that stopped at `pulumi config set` would leave the credential
     # live on the device and invisible to everyone else's checkout.
     assert f'commit Pulumi.{ADGUARD.stack}.yaml' in caplog.text
+
+
+def test_the_admin_token_s_steps_select_every_repository_the_stack_declares() -> None:
+    # A fine-grained token reaches only the repositories selected when it is
+    # made, so a repository the census gains is one the steps must name: the
+    # list is rendered from the census rather than written beside it.
+    for repository in conventions.forge.REPOSITORIES:
+        assert repository.full_name in GITHUB_ADMIN.console
+
+
+def test_the_admin_token_s_permissions_are_the_set_the_register_lists() -> None:
+    """The permissions the console steps print, against credentials.md §3's list of them.
+
+    Read out of the document rather than copied here: §3 says what needs each
+    permission, the constant is what an operator is told to select, and a
+    member added to one and not the other is a token made without it.
+    """
+    document = (pulumi_config.project_dir() / 'docs' / 'credentials.md').read_text()
+    section = document.split('\n## 3. ', 1)[1].split('\n## 4. ', 1)[0]
+    bullets = re.findall(r'^-   \*\*.*$', section, re.MULTILINE)
+    form = re.compile(r'-   \*\*(.+?)\*\*, (read and write|read):')
+    matched = [form.match(bullet) for bullet in bullets]
+
+    # Every bold-led bullet in §3 is a permission, so one this does not read is
+    # a member written in some other form -- skipped, not compared -- rather
+    # than something else.
+    assert bullets, 'no permission is listed in §3, so nothing was compared'
+    assert all(matched), [bullet for bullet, match in zip(bullets, matched, strict=True) if match is None]
+    listed = {(match.group(1), match.group(2)) for match in matched if match is not None}
+    assert listed == set(devices.GITHUB_ADMIN_PERMISSIONS)
 
 
 def test_a_row_read_back_answers_with_what_was_delivered(typed: None) -> None:
