@@ -564,7 +564,7 @@ def _identity(pem: str, *, with_key: bool) -> str:
 
     Validity dates, serial numbers and signature bytes move on every issuance;
     the subject and the SANs do not. Digesting the latter is what lets a
-    re-render be recognised as the same machine.
+    re-render be recognized as the same machine.
     """
     cert = x509.load_pem_x509_certificate(pem.encode())
     try:

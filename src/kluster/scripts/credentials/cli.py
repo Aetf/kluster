@@ -217,7 +217,7 @@ _ORDER = """when to run what:
     credentials derived <row> record
          The same for an escrowed row nothing here can draw: make another one
          in the console the command prints the steps for, and hand it in. A
-         value the registry already holds is recognised rather than filed a
+         value the registry already holds is recognized rather than filed a
          second time, so a re-run costs nothing.
 
   rotating the kit
@@ -1112,7 +1112,7 @@ def build_parser() -> argparse.ArgumentParser:
                     'an argument another process could read out of the process table. Nothing here mints '
                     'it and nothing here can mint its successor, so re-running this with a value created '
                     'there again is the whole of a rotation. A value the registry already holds is '
-                    'recognised and filed no second time, which is what makes a re-run safe. The new '
+                    'recognized and filed no second time, which is what makes a re-run safe. The new '
                     'ciphertext is a file to commit.'
                 ),
             )

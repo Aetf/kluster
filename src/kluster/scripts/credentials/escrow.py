@@ -155,7 +155,7 @@ def _is_private_key(value: str) -> bool:
     return _PEM_PRIVATE_KEY.match(stripped) is not None and stripped.endswith('-----')
 
 
-#: A password, a token: nothing to recognise beyond there being something.
+#: A password, a token: nothing to recognize beyond there being something.
 TEXT = Shape('a value', lambda value: bool(value.strip()))
 IDENTITY = Shape(f'an age identity, which starts {age.SECRET_PREFIX}', _is_identity)
 PRIVATE_KEY = Shape('a PEM private key, which starts -----BEGIN and ends -----END ... -----', _is_private_key)
@@ -667,11 +667,11 @@ def _store(registry: Registry, label: str, secret: str, *, generation: int, reci
     Written through a temporary sibling so an interrupted run leaves either the
     previous file or the whole new one, never a ciphertext that stops halfway.
     """
-    armoured = age.encrypt(secret, recipients)
+    armored = age.encrypt(secret, recipients)
     path = registry.path(label, generation)
     path.parent.mkdir(parents=True, exist_ok=True)
     staged = path.with_name(f'.{path.name}.new')
-    _ = staged.write_text(armoured)
+    _ = staged.write_text(armored)
     os.replace(staged, path)
     return path
 
@@ -1047,8 +1047,8 @@ def check(registry: Registry) -> list[str]:
             problems.append(f'{label}: generations are {listed}, which is not {FIRST} upwards without a gap')
         for generation in generations:
             path = registry.path(label, generation)
-            if not age.is_armoured(path.read_text()):
-                problems.append(f'{label}: generation {generation} is not an armoured age file')
+            if not age.is_armored(path.read_text()):
+                problems.append(f'{label}: generation {generation} is not an armored age file')
 
     for label in registry.labels():
         if label not in expected and not label.startswith(f'{BACKUP}/'):

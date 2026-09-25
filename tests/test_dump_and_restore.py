@@ -611,10 +611,10 @@ def test_a_truncated_ciphertext_never_becomes_an_archive(
     assert tools.restored is None
 
 
-def test_an_armoured_dump_is_recognised_as_one(tmp_path: Path) -> None:
-    # The escrow's own ciphertexts are armoured, and a dump someone opened
+def test_an_armored_dump_is_recognized_as_one(tmp_path: Path) -> None:
+    # The escrow's own ciphertexts are armored, and a dump someone opened
     # and re-encrypted by hand may be too. Both are age files.
-    path = tmp_path / 'armoured.age'
+    path = tmp_path / 'armored.age'
     _ = path.write_text(age.encrypt('not really an archive', [age.generate().public]))
 
     assert state.encrypted(path)
