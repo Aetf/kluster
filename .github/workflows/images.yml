@@ -4,15 +4,24 @@ name: images
 # operands, emailproxy, golinks (framework/ci.md §4). The loop around it: a
 # `.conf` per image holds its build args and its tag, renovate bumps the
 # version in that file, noop-automerge merges the bump once the preview proves
-# a zero diff, this workflow publishes the ghcr tag, and renovate's image
-# manager then opens the *deploy* PR against the pin for human eyes. Publishing
-# is where this workflow stops — it never deploys.
+# a zero diff, this workflow publishes the ghcr tag, and a consumer's renovate
+# then opens the *deploy* PR against its pin — under a versioning that ignores
+# the tag's fingerprint (framework/ci.md §4); a rebuild under an unchanged
+# version is moved to by hand. Publishing is where this workflow stops — it
+# never deploys.
+#
+# A published tag is never pushed again. The tag carries a fingerprint of what
+# the image is built from (the image-conf action), so a change to that moves
+# the tag and a comment edit does not, and a push run whose tag the registry
+# already serves builds and pushes nothing for that image.
 #
 # Multi-arch is mandatory (the cloud pool is arm64) and is done by building
 # each architecture on its own native runner and stitching a manifest, never by
-# qemu: the vchord operand compiles Rust, which emulation turns from minutes
-# into an unbounded wait. Free `ubuntu-24.04-arm` runners are a public-repo
-# feature, which this repo has been since 2026-08-25.
+# qemu: emulation multiplies the cost of every `RUN` step, while on a native
+# runner the arm64 build costs what the amd64 one does -- the vchord operand
+# installs its two extensions as prebuilt per-architecture packages and
+# compiles nothing. Free `ubuntu-24.04-arm` runners are a public-repo feature,
+# which this repo has been since 2026-08-25.
 #
 # A run that fails outside a pull request raises an `actionable` alert through
 # the producer (`alert.yml`), by framework/ci.md §3's rule.
@@ -29,9 +38,10 @@ on:
     paths: *images
   workflow_dispatch:
 
-# Renovate rebases push in quick succession; don't stack stale runs. Pushes to
-# main are not canceled — an interrupted publish would leave a manifest half
-# stitched.
+# Renovate rebases push in quick succession; don't stack stale runs. A running
+# push to main is not canceled — an interrupted publish would leave a manifest
+# half stitched — but a waiting one is, by the next push to queue behind it,
+# which is why a push selects every image (select-images).
 concurrency:
   group: images-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -58,37 +68,41 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          # The selection diffs against a base -- the merge commit's first
-          # parent on a pull request, `event.before` on a push -- and a shallow
-          # clone has neither.
+          # A pull request's selection diffs against the merge commit's first
+          # parent, which a shallow clone does not have.
           fetch-depth: 0
 
-      # Skipping an unchanged image is safe here in a way that skipping a
-      # preview is not: a published tag is a pure function of its `.conf`, so a
-      # tag that does not exist yet implies a change in `docker/<image>.*`,
-      # which is exactly what this selects on. Rebuilding it anyway would only
-      # re-push bytes that are already there — at vchord's build cost.
+      # A pull request builds the images whose own files it changes: a
+      # published tag is a function of the image's own `.conf` and
+      # `.Containerfile`, so an image it does not touch keeps the tag it has,
+      # and building it would cost vchord's build time to prove nothing.
+      #
+      # Every other run -- a push to `main`, a dispatch -- selects every image,
+      # and the image-conf action's published check skips each one the
+      # registry already serves, at the cost of one registry read. A push
+      # cannot narrow by its diff: the concurrency group keeps one run waiting
+      # and a newer push cancels it, so an image changed only by the cancelled
+      # run would never be selected by anyone, and nothing would say so.
       - name: Select the images to build
         id: select
         env:
           EVENT: ${{ github.event_name }}
-          # push: the commit `main` moved from. PR: the checkout is GitHub's
-          # merge of the head into `main`, so its first parent is the `main`
-          # the change is being merged onto. Not `pull_request.base.sha`,
-          # which is `main` as of the pull request's creation and never
-          # moves, so the diff below would carry every file `main` gained
-          # since -- an image `main` changed rebuilt on pull requests that
-          # never touched it.
-          BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}
+          # On a pull request the checkout is GitHub's merge of the head into
+          # `main`, so its first parent is the `main` the change is being
+          # merged onto. Not `pull_request.base.sha`, which is `main` as of the
+          # pull request's creation and never moves, so the diff below would
+          # carry every file `main` gained since -- an image `main` changed
+          # rebuilt on pull requests that never touched it.
+          BASE: HEAD^1
         run: |
           set -euo pipefail
           all=$(find docker -maxdepth 1 -name '*.Containerfile' -printf '%f\n' 2>/dev/null \
             | sed 's/\.Containerfile$//' | sort || true)
 
-          # No base to diff against (a dispatch, or a freshly created branch)
-          # means build everything, as does a change to the build machinery
-          # itself: that one has to be proven against every image.
-          if [ "$EVENT" = workflow_dispatch ] || ! git cat-file -e "${BASE:-none}^{commit}" 2>/dev/null; then
+          # Anything but a pull request builds everything, as does a pull
+          # request with no base to diff against or one changing the build
+          # machinery itself: that has to be proven against every image.
+          if [ "$EVENT" != pull_request ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
             picked=$all
           else
             changed=$(git diff --name-only "$BASE" HEAD)
@@ -125,12 +139,26 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # Before the conf step, which reads the registry: through the environment
+      # and stdin, never on the command line, because a public repository's
+      # process table is not the place for the token.
+      - name: Log in to ghcr
+        env:
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$REGISTRY_TOKEN" | buildah login -u "$REGISTRY_USER" --password-stdin ghcr.io
+
       - uses: ./.github/actions/image-conf
         id: conf
         with:
           image: ${{ matrix.image }}
+          arch: ${{ matrix.platform.arch }}
 
+      # A pull request builds regardless, because proving the recipe and the
+      # machinery is what its run is for; a push builds only what it will
+      # publish.
       - name: Build
+        if: github.event_name == 'pull_request' || steps.conf.outputs.published != 'true'
         env:
           REF: ${{ steps.conf.outputs.ref }}
           ARGS_FILE: ${{ steps.conf.outputs.args-file }}
@@ -149,25 +177,26 @@ jobs:
       # Per-architecture tags are published rather than kept as artifacts: the
       # manifest job runs on a different machine and stitches from the
       # registry. They stay visible next to the manifest, which is what makes a
-      # half-published image obvious.
+      # half-published image obvious. The check reads the manifest, not these:
+      # a run that pushed them and failed before stitching is retried by the
+      # next one, which pushes them again from the same inputs.
+      #
+      # Only `main` publishes: a dispatch from a branch would publish an
+      # unreviewed image under a well-formed tag, or -- with `main`'s files --
+      # race `main`'s own run from another concurrency group and stitch the
+      # same tag twice.
       - name: Publish the ${{ matrix.platform.arch }} image
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && steps.conf.outputs.published != 'true'
         env:
           REF: ${{ steps.conf.outputs.ref }}
           ARCH: ${{ matrix.platform.arch }}
-          # Through the environment and stdin, never on the command line: a
-          # public repository's process table is not the place for the token.
-          REGISTRY_USER: ${{ github.actor }}
-          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          printf '%s' "$REGISTRY_TOKEN" | buildah login -u "$REGISTRY_USER" --password-stdin ghcr.io
-          buildah push "$REF-$ARCH"
+        run: buildah push "$REF-$ARCH"
 
   manifest:
     needs: [select-images, build]
-    # PR builds publish nothing, so there is nothing to stitch.
-    if: github.event_name != 'pull_request'
+    # PR builds publish nothing, and only `main` publishes (the Publish step
+    # above), so there is nothing to stitch anywhere else.
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -175,6 +204,12 @@ jobs:
         image: ${{ fromJSON(needs.select-images.outputs.images) }}
     steps:
       - uses: actions/checkout@v5
+
+      - name: Log in to ghcr
+        env:
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$REGISTRY_TOKEN" | buildah login -u "$REGISTRY_USER" --password-stdin ghcr.io
 
       - uses: ./.github/actions/image-conf
         id: conf
@@ -184,13 +219,11 @@ jobs:
       # The tag the cluster pins is this manifest, never one of the
       # per-architecture tags it lists.
       - name: Stitch the manifest
+        if: steps.conf.outputs.published != 'true'
         env:
           REF: ${{ steps.conf.outputs.ref }}
-          REGISTRY_USER: ${{ github.actor }}
-          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          printf '%s' "$REGISTRY_TOKEN" | buildah login -u "$REGISTRY_USER" --password-stdin ghcr.io
           buildah manifest create "$REF" \
             "docker://$REF-amd64" \
             "docker://$REF-arm64"

@@ -5,9 +5,9 @@
 # ships barman-cloud; backups go through the barman-cloud CNPG-I plugin
 # instead, so nothing here has to provide it.
 ARG PG_TAG
-ARG PGCRON_REV
+ARG PG_DIGEST
 
-FROM ghcr.io/cloudnative-pg/postgresql:${PG_TAG}
+FROM ghcr.io/cloudnative-pg/postgresql:${PG_TAG}@${PG_DIGEST}
 
 ARG PG_MAJOR
 
