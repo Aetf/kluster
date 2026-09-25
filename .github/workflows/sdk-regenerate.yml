@@ -78,7 +78,7 @@ jobs:
       && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     # Two plugin downloads and a re-lock on top of the gate; the tests carry
-    # checks.yml's own `timeout 300`, and this bound is for everything else.
+    # the gate's own outer `timeout`, and this bound is for everything else.
     timeout-minutes: 30
     steps:
       # The dispatch App's installation token, for this repository alone: the
@@ -164,7 +164,7 @@ jobs:
         run: mise x uv -- uv run lint-imports
       - name: Tests
         if: steps.tree.outputs.regenerated == 'true'
-        run: timeout 300 mise x -- uv run pytest -q
+        run: timeout 1200 mise x -- uv run pytest -q
 
       # Explicit paths, never `-a`: the regeneration is `sdks/` and the lock,
       # and `pulumi install`'s reorder of `pyproject.toml` is not part of the
