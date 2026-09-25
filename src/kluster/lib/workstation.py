@@ -10,7 +10,7 @@ component that writes them.
 One directory holds all of it, for two reasons:
 
 -   **A checkout carries everything local it needs.** No per-machine
-    environment wiring, and no artefact of this system outside the tree it
+    environment wiring, and no artifact of this system outside the tree it
     belongs to. Moving a workstation is `git clone` plus copying one
     directory.
 -   **One thing to protect.** `.credentials/` is `0700`, and so is every
@@ -32,7 +32,9 @@ Which mode a file in it has depends on whether the file is a secret:
 
 The root is found by walking up to the `mise.toml` that defines the project,
 which is the same directory mise calls `config_root` — so a path written here
-and a path read by a mise template cannot drift apart.
+and a path read by a mise template cannot drift apart. `repo_root` is the one
+place that walk is written: every reader of the checkout in this package
+derives from it rather than finding the root its own way.
 """
 
 from __future__ import annotations
@@ -54,17 +56,19 @@ class WorkstationError(RuntimeError):
     """The checkout this code is running from cannot be located."""
 
 
-def repo_root() -> Path:
-    """The checkout this package is running from.
+def repo_root(module: Path = Path(__file__)) -> Path:
+    """The checkout `module` sits in; by default, the one this package is running from.
 
     `mise.toml` is the marker because it is the file whose directory mise
     itself calls `config_root`: the templates in it and the code here resolve
-    the same directory or the code refuses to guess.
+    the same directory or the code refuses to guess. The nearest one wins, so a
+    checkout nested inside another — a workspace under the primary's
+    `.claude/workspaces/` — is its own root, not the one around it.
     """
-    for candidate in Path(__file__).resolve().parents:
+    for candidate in module.resolve().parents:
         if (candidate / 'mise.toml').is_file():
             return candidate
-    raise WorkstationError('no mise.toml above this package: the workstation slots are relative to a checkout')
+    raise WorkstationError(f'no mise.toml above {module}: the workstation slots are relative to a checkout')
 
 
 def directory() -> Path:

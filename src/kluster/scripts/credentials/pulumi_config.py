@@ -25,6 +25,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, cast
 
+from kluster import conventions
+from kluster.lib import workstation
+
 log = logging.getLogger(__name__)
 
 #: How long any one `pulumi` invocation may take. Config commands talk to the
@@ -79,33 +82,25 @@ def run_pulumi(args: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdin:
 def project_dir() -> Path:
     """The checkout holding `Pulumi.yaml` — where a stack's configuration lives.
 
-    Found by walking up from this module, so the command works from any working
-    directory: the file it writes is a file in *this* repository, not in
-    whatever tree the operator happens to stand in.
+    The checkout this package runs from (`workstation.repo_root`), so the
+    command works from any working directory: the file it writes is a file in
+    *this* repository, not in whatever tree the operator happens to stand in.
+    Refused as `SlotRefused` whichever way it fails, because that is what a
+    caller of this module translates into its own refusal (`state_backend.state`).
     """
-    for candidate in Path(__file__).resolve().parents:
-        if (candidate / 'Pulumi.yaml').is_file():
-            return candidate
-    raise SlotRefused('no Pulumi.yaml above this module; the config slots live in a checkout of this repository')
+    try:
+        root = workstation.repo_root()
+    except workstation.WorkstationError as exc:
+        raise SlotRefused(f'the config slots live in a checkout of this repository, and none was found: {exc}') from exc
+    if not (root / 'Pulumi.yaml').is_file():
+        raise SlotRefused(f'no Pulumi.yaml in the checkout at {root}; the config slots live beside it')
+    return root
 
 
 #: The two variables a `pulumi` run in this repository is given. Named,
 #: because both the record below and the slot map spell them.
 BACKEND_URL_ENV = 'PULUMI_BACKEND_URL'
 PASSPHRASE_ENV = 'PULUMI_CONFIG_PASSPHRASE'
-
-#: The stack whose committed configuration is encrypted apart from the rest.
-GITHUB_STACK = 'github'
-
-#: Every stack of this project, by the name `pulumi stack select` takes. The
-#: dispatch table in `kluster.stacks` is the authority; this is its restatement
-#: for a layer that may import no stack program (the layering contract in
-#: `pyproject.toml`), and a test holds the two equal (`tests/test_derived.py`).
-#: What it is for is a delivery that takes a stack by name: a name outside
-#: this set is refused before anything is minted, because the alternative is
-#: `stack init` creating the misspelling in the backend and the mint filling
-#: it while retiring the real stack's live credential by name (`derived`).
-STACKS: frozenset[str] = frozenset({'physical', 'dns', 'k8s-base', 'apps', GITHUB_STACK})
 
 #: Every stack that is **not** on the estate passphrase, and the register row
 #: (§3) the one it *is* on comes from. A census rather than a consequence of
@@ -119,7 +114,12 @@ STACKS: frozenset[str] = frozenset({'physical', 'dns', 'k8s-base', 'apps', GITHU
 #: composes the command and a test can follow the row into the slot map. That
 #: is what holds this honest: a stack cannot be taken off the estate passphrase
 #: without a register row that generates and escrows one.
-APART: Mapping[str, str] = {GITHUB_STACK: 'github-passphrase'}
+#:
+#: Keyed by the stack census (`conventions.STACK_NAMES.github`), the name the
+#: dispatch table runs the forge's program under, so the stack held apart is
+#: the forge's by construction rather than by spelling; the workflow census
+#: that keeps CI away from it (`test_conventions`) reads this mapping.
+APART: Mapping[str, str] = {conventions.STACK_NAMES.github: 'github-passphrase'}
 
 
 @dataclass(frozen=True)

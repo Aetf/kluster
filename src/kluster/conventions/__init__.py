@@ -236,7 +236,15 @@ from kluster.conventions.homelab import (
     HOMELAB_STORAGE_DIR,
     HOMELAB_VCPUS,
 )
-from kluster.conventions.identity import CLUSTER_NAME, DRILL, LABEL_DOMAIN, PHYSICAL, STATE_BACKEND
+from kluster.conventions.identity import (
+    CLUSTER_NAME,
+    DRILL,
+    LABEL_DOMAIN,
+    PHYSICAL,
+    STACK_NAMES,
+    STATE_BACKEND,
+    StackNames,
+)
 from kluster.conventions.outputs import PHYSICAL_OUTPUTS, PhysicalOutputs
 from kluster.conventions.providers import (
     B2_ACCOUNT,
@@ -330,6 +338,7 @@ __all__ = (
     'SERVICE_CIDR_V6',
     'SITE_NETWORKS',
     'SITE_ULA',
+    'STACK_NAMES',
     'STANDARD',
     'STATE_BACKEND',
     'STATE_DUMP_PREFIX',
@@ -352,6 +361,7 @@ __all__ = (
     'PhysicalOutputs',
     'RetentionClass',
     'SiteNetwork',
+    'StackNames',
     'Vip',
     'alert',
     'barman_repo_path',

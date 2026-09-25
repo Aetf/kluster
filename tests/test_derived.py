@@ -157,15 +157,6 @@ def _inits(runner: RecordedPulumi) -> list[list[str]]:
     return [args for args in runner.invocations if args[:2] == ['stack', 'init']]
 
 
-def test_the_stack_census_is_the_dispatch_table() -> None:
-    from kluster import stacks
-
-    # The scripts layer may import no stack program, so the census it refuses
-    # a delivery against is a restatement of the dispatch table rather than
-    # the table itself; this is what keeps the restatement from going stale.
-    assert pulumi_config.STACKS == frozenset(stacks.STACKS)
-
-
 def test_a_stack_no_program_declares_is_refused_naming_the_census(api: FakeApi, kit: KdbxStore) -> None:
     runner = RecordedPulumi()
     slot = pulumi_config.Stack(name='dsn', directory=pulumi_config.project_dir(), run=runner)
@@ -176,7 +167,7 @@ def test_a_stack_no_program_declares_is_refused_naming_the_census(api: FakeApi, 
     # A misspelled `--stack` would otherwise be created in the backend and
     # filled, with the real stack's token retired by name on the way. Refused
     # before the seed is opened: no `pulumi` runs, nothing is minted.
-    assert all(name in str(refusal.value) for name in pulumi_config.STACKS)
+    assert all(name in str(refusal.value) for name in conventions.STACK_NAMES.names())
     assert runner.invocations == []
     assert _live(api) == []
 

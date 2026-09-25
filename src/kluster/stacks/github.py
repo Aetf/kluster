@@ -65,13 +65,6 @@ REQUIRED_CHECKS = ('checks', 'changes')
 #: installation has (credentials.md §3).
 ADMIN_TOKEN = 'githubAdminToken'
 
-#: This program's own stack, named because two things outside it are about
-#: this stack by name: the census of stacks encrypted apart from the estate
-#: passphrase, and the workflow census that holds CI away from it
-#: (github.md §1). A literal in either of those would agree with this one by
-#: spelling rather than by construction.
-STACK = 'github'
-
 
 async def main() -> None:
     config = pulumi.Config()

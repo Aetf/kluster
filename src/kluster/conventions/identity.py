@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 CLUSTER_NAME = 'kluster'
 
 #: The state-backend appliance (physical/state-backend.md), which is one name
@@ -12,9 +14,40 @@ CLUSTER_NAME = 'kluster'
 STATE_BACKEND = 'state-backend'
 
 #: The stack that owns the cloud installation (declarative/physical.md), which
-#: is likewise one name in three places: the stack itself, the IAM principal it
-#: signs as, and the compartment that principal administers.
+#: is likewise one name in three places: the stack itself
+#: (`STACK_NAMES.physical`), the IAM principal it signs as, and the compartment
+#: that principal administers.
 PHYSICAL = 'physical'
+
+
+@dataclass(frozen=True)
+class StackNames:
+    """Every stack of this project, by the name `pulumi stack select` takes (declarative/README.md §1).
+
+    A census two programs read. The Pulumi program dispatches on it
+    (`kluster.stacks.STACKS`) and names the stack a StackReference reaches
+    into by it; the `credentials` command refuses a delivery aimed at a name
+    outside it, and names by it the stacks whose configuration is encrypted
+    under a passphrase of their own (`scripts.credentials.pulumi_config`). A
+    script may import no stack program, so the dispatch table cannot be the
+    census itself.
+
+    One field per stack. A new stack is a field here and a program in the
+    dispatch table, and `test_conventions` holds the two to the same set.
+    """
+
+    physical: str
+    dns: str
+    k8s_base: str
+    apps: str
+    github: str
+
+    def names(self) -> tuple[str, ...]:
+        """Every stack name, in declaration order."""
+        return tuple(value for value in vars(self).values() if isinstance(value, str))
+
+
+STACK_NAMES = StackNames(physical=PHYSICAL, dns='dns', k8s_base='k8s-base', apps='apps', github='github')
 
 #: The unattended rebuild drill (physical/state-backend.md §7.3), which is
 #: one name in four places: the ops repository's Environment its credentials

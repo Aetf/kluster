@@ -58,7 +58,9 @@ async def main() -> None:
     )
     on_cloudflare = pulumi.ResourceOptions(providers=[zone_provider])
 
-    physical = pulumi.StackReference(f'{pulumi.get_organization()}/{pulumi.get_project()}/physical')
+    physical = pulumi.StackReference(
+        f'{pulumi.get_organization()}/{pulumi.get_project()}/{conventions.STACK_NAMES.physical}'
+    )
 
     # The whole declaration, as blocks: what belongs to no application, and
     # what the legacy VPS still serves until each application migrates. Which

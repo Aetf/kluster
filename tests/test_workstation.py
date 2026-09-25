@@ -1,4 +1,4 @@
-"""The modes `kluster.lib.workstation` puts on what it writes.
+"""The modes `kluster.lib.workstation` puts on what it writes, and the checkout it finds.
 
 A secret is `0600` from the moment it exists, which is a property of how the
 file is created and not of what happens to it afterwards: a file written first
@@ -11,6 +11,9 @@ behind here instead of a gap nobody sees.
 The directory half is about a `.credentials/` that a copy brought in wider
 than it should be, and about every directory outside that tree, which is the
 operator's and is not touched.
+
+The root half is about which checkout all of that is relative to, and that
+every reader of the checkout finds the same one.
 """
 
 from __future__ import annotations
@@ -24,6 +27,8 @@ from pathlib import Path
 import pytest
 
 from kluster.lib import workstation
+from kluster.scripts.credentials import pulumi_config
+from kluster.scripts.state_backend import config as appliance
 
 
 def _mode(path: Path) -> int:
@@ -205,3 +210,48 @@ def test_the_staged_file_is_made_beside_the_slot_rather_than_in_the_temporary_di
     _ = workstation.write(slot, 'a-secret')
 
     assert slot.read_text() == 'a-secret\n'
+
+
+def _checkout(root: Path) -> Path:
+    """A checkout at `root`: the markers the root is found by, and a module inside it."""
+    root.mkdir(parents=True, exist_ok=True)
+    _ = (root / 'mise.toml').write_text('')
+    _ = (root / 'Pulumi.yaml').write_text('')
+    module = root / 'src' / 'kluster' / 'lib' / 'workstation.py'
+    module.parent.mkdir(parents=True)
+    _ = module.write_text('')
+    return module
+
+
+def test_a_checkout_nested_in_another_is_its_own_root(tmp_path: Path) -> None:
+    # A workspace under the primary's `.claude/workspaces/` carries markers of
+    # its own, and the code running from it is its own: the slots, the config
+    # files and the deployment material it reads are the workspace's.
+    _ = _checkout(tmp_path / 'primary')
+    nested = tmp_path / 'primary' / '.claude' / 'workspaces' / 'feature'
+    module = _checkout(nested)
+
+    assert workstation.repo_root(module) == nested
+
+
+def test_a_module_outside_any_checkout_is_refused(tmp_path: Path) -> None:
+    if any((level / 'mise.toml').is_file() for level in tmp_path.parents):
+        pytest.skip('the temporary directory is itself inside a checkout')
+    module = tmp_path / 'site-packages' / 'kluster' / 'lib' / 'workstation.py'
+    module.parent.mkdir(parents=True)
+    _ = module.write_text('')
+
+    with pytest.raises(workstation.WorkstationError, match='no mise.toml above'):
+        _ = workstation.repo_root(module)
+
+
+def test_every_reader_of_the_checkout_finds_the_one_this_package_runs_from() -> None:
+    # Run from a workspace nested in the primary checkout, this is the nested
+    # case on the real tree: the root is the tree holding the running code, not
+    # the checkout around it.
+    root = workstation.repo_root()
+
+    assert (root / 'src' / 'kluster' / 'lib' / 'workstation.py').samefile(workstation.__file__)
+    assert pulumi_config.project_dir() == root
+    assert appliance.DEPLOY_DIR.is_relative_to(root)
+    assert (appliance.DEPLOY_DIR / appliance.TEMPLATE).is_file()
