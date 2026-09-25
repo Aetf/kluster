@@ -379,7 +379,7 @@ _DISPATCH_CLIENT_ID = (
     'It is recorded in the clear on `conventions.forge.DISPATCH_APP` (its `client_id`), and the `github` stack declares it as '
     f'the {_declared_on(conventions.forge.DISPATCH_APP_CLIENT_ID)} repository variable '
     f'`{conventions.forge.DISPATCH_APP_CLIENT_ID.name}` the workflows minting from it read, so nothing about it is typed into '
-    'a console. A newly created App has a new one: record it there and land it with `pulumi up -s github`.'
+    'a console. A newly created App has a new one: record it there and land it with `mise run github up`.'
 )
 
 #: The trigger App has no row in the census (`conventions.forge`) and no
@@ -436,12 +436,12 @@ def register() -> dict[str, Label]:
             GITHUB_PASSPHRASE,
             "the `github` stack's own config passphrase, held by no CI job",
             Generated(_token),
-            # Read on a `pulumi ... -s github` the operator runs by hand, and
-            # by the `credentials` commands that reach that stack's config
-            # (credentials.md §4.4).
+            # Read by the `github` task in `mise.toml` (`mise run github
+            # <pulumi args>`), and by the `credentials` commands that reach
+            # that stack's config (credentials.md §4.4).
             slot=WorkstationSlot(
                 path=workstation.github_passphrase_path,
-                read_by='mise.toml exports it as KLUSTER_GITHUB_PASSPHRASE, for a `pulumi ... -s github`',
+                read_by='mise.toml exports it as KLUSTER_GITHUB_PASSPHRASE, for `mise run github <pulumi args>`',
             ),
         ),
         Label(CA, "the state-backend CA's private key", Generated(pki.generate_ca_key), shape=PRIVATE_KEY),

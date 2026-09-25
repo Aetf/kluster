@@ -39,23 +39,26 @@ age = "1.3.1"
 # configuration, which the program reads for itself with a passphrase
 # (credentials.md §3).
 #
-# **Which** passphrase is not something this file can decide, and that is why
+# **Which** passphrase is not something `[env]` can decide, and that is why
 # the `github` one below is exported under a name of its own rather than as
 # `PULUMI_CONFIG_PASSPHRASE`. That variable is process-global -- `pulumi` reads
 # one value per invocation -- while the `github` stack's config is encrypted
-# apart from the estate's, so the right value depends on the `-s` a command has
-# not been given yet. Every `credentials` command resolves it from the stack it
-# is acting on (`pulumi_config.Stack`); a `pulumi` an operator runs by hand
-# against that stack is the one caller this file can help, and it is helped by
-# having the value under a name to pass in:
+# apart from the estate's, so the right value depends on the `-s` a command
+# carries, and a template never sees the command line. Every `credentials`
+# command resolves it from the stack it is acting on (`pulumi_config.Stack`);
+# a `pulumi` an operator runs against that stack goes through the `github`
+# task at the end of this file, which fixes the stack and passes this value in
+# as `PULUMI_CONFIG_PASSPHRASE` together, so the one cannot be paired with the
+# other's stack:
 #
-#     PULUMI_CONFIG_PASSPHRASE="$KLUSTER_GITHUB_PASSPHRASE" pulumi preview -s github
+#     mise run github preview
 #
-# Getting that wrong is not silent: `encryptionsalt` is a verifier, so `pulumi`
-# answers `error: incorrect passphrase` and exits non-zero having written
-# nothing. Note that `PULUMI_CONFIG_PASSPHRASE_FILE` is no use here -- `pulumi`
-# prefers `PULUMI_CONFIG_PASSPHRASE` whenever it is set, including when it is
-# set to the empty string, and this file always sets it.
+# A bare `pulumi ... -s github` meets the estate passphrase, and that is not
+# silent: `encryptionsalt` is a verifier, so `pulumi` answers `error: incorrect
+# passphrase` and exits non-zero having written nothing. Note that
+# `PULUMI_CONFIG_PASSPHRASE_FILE` is no use here -- `pulumi` prefers
+# `PULUMI_CONFIG_PASSPHRASE` whenever it is set, including when it is set to
+# the empty string, and this file always sets it.
 #
 # Every one of them falls back to whatever is already in the environment
 # rather than to an empty string: CI passes them in as Environment secrets,
@@ -169,3 +172,77 @@ PGSSLKEY = """
 {{- env.PGSSLKEY | default(value="") -}}
 {%- endif -%}
 """
+
+# `pulumi <args>` against the `github` stack, under that stack's own
+# passphrase (the `[env]` comment above says why it has a name of its own):
+# `mise run github preview`, `mise run github up --yes`,
+# `mise run github config get <key>`, `mise run github stack --show-urns`. The
+# task declares no `usage`, and that is what hands the arguments on whole:
+# mise then appends them, each quoted, to the end of the script, which is why
+# the script ends by calling `main` bare. A `usage` spec would hand them over
+# as one pre-quoted string instead, and would route the ones after a leading
+# `--` around it.
+#
+# mise keeps three words for itself, and only a `pulumi` command that carries
+# one of them needs anything more than the plain form. A `--help` or `-h`
+# anywhere is its own, and so is a `--`: a leading one always, and from mise
+# 2026.9 on the first one wherever it stands. After a leading `--`, releases
+# before and after that change alike pass the rest through whole, so that is
+# the form for those three: `mise run github -- config set <key> -- <value>`,
+# `mise run github -- up --help`. The `description` below says so too, because
+# it is what mise prints when it takes a `--help` for itself. A `--` swallowed
+# by mise leaves what followed it to be read as flags, and an `-s` there is
+# refused like any other.
+#
+# It is shell rather than a Python console script because all it does is
+# check and rearrange words before `exec pulumi`, and a Python entry point
+# would start the virtualenv ahead of every `pulumi` run.
+#
+# The stack is the task's and never the caller's. An argument that can name
+# one ahead of a `--` -- `--stack`, and any single-dash cluster holding an `s`,
+# which is how `-s dev`, `-sdev` and `-ys dev` all reach the `-s` shorthand --
+# is refused rather than overridden, since a caller who wrote one meant some
+# other stack. `--stack github` is then placed after every flag the caller
+# gave and ahead of any `--`, past which a word is an argument rather than a
+# flag; `pulumi` keeps the last of a repeated flag, so the task's would count
+# even beside one the refusal missed.
+#
+# An empty `KLUSTER_GITHUB_PASSPHRASE` is refused too, before `pulumi` starts.
+# It is what the variable resolves to, unless the caller exported a value, on
+# a machine without the slot and in a workspace under `.claude/`, where the
+# slots do not answer (the `[env]` comment above); handed on, it would reach
+# `pulumi` as an empty passphrase -- refused by the salt, or, in a stack file
+# that has lost its salt, adopted as the new key (docs/credentials.md §4.2).
+[tasks.github]
+description = "pulumi <args> against the github stack, under that stack's own passphrase; a --, -h or --help meant for pulumi goes after a leading --: mise run github -- up --help"
+# Without it mise echoes the script's first line, a `refuse() {` that says
+# nothing, ahead of whatever `pulumi` prints.
+quiet = true
+run = '''
+refuse() {
+  echo "mise run github: $1" >&2
+  exit 2
+}
+main() {
+  [ "$#" -gt 0 ] || refuse 'name a pulumi command, as in `mise run github preview`'
+  n=$#
+  spliced=
+  while [ "$n" -gt 0 ]; do
+    a=$1
+    shift
+    n=$((n - 1))
+    if [ -z "$spliced" ]; then
+      case $a in
+        --) set -- "$@" --stack github; spliced=1 ;;
+        --stack | --stack=* | -s | -s?*) refuse "\`$a\` names a stack; this task runs against \`github\` alone" ;;
+        --*) ;;
+        -*s*) refuse "\`$a\` may carry the \`-s\` shorthand, which names a stack; write another short flag's value as a separate word or as \`--flag=value\`. This task runs against \`github\` alone" ;;
+      esac
+    fi
+    set -- "$@" "$a"
+  done
+  [ -n "$spliced" ] || set -- "$@" --stack github
+  [ -n "${KLUSTER_GITHUB_PASSPHRASE:-}" ] || refuse "KLUSTER_GITHUB_PASSPHRASE is empty, so there is no passphrase for the \`github\` stack. It is read from \`.credentials/github.passphrase\` in the checkout, which \`credentials derived github-passphrase recover\` writes, and never inside a workspace under \`.claude/\`: run from the checkout that holds it."
+  PULUMI_CONFIG_PASSPHRASE=$KLUSTER_GITHUB_PASSPHRASE exec pulumi "$@"
+}
+main'''

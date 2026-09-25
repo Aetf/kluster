@@ -649,7 +649,7 @@ whole of both. **Verifying is a decision.** Any authenticated call is a
 verification, and for the GitHub row a cheap one exists — a classic
 token's scopes come back in the `X-OAuth-Scopes` header of any request —
 so what stands in for it is chosen rather than forced: the first
-`pulumi preview -s github` authenticates as the token, against the real
+`mise run github preview` authenticates as the token, against the real
 account, and shows what it would change, which is a stronger proof than
 a scope string and is a step the operator takes anyway. If a `record`
 that failed fast were ever worth more than that, this is the row where
@@ -702,7 +702,7 @@ App exists, so it is a public fact of the installation recorded in the
 clear in `conventions/forge.py` (`DISPATCH_APP`), the way the tenancy
 OCID and the Cloudflare account id are. The forge declares it as the
 `kluster` repository variable `DISPATCH_APP_CLIENT_ID` from that record
-(framework/github.md §3), landed by `pulumi up -s github` like every
+(framework/github.md §3), landed by `mise run github up` like every
 other resource of that stack, and `sdk-regenerate.yml` hands it to the
 minting action beside the key.
 
