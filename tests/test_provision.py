@@ -685,7 +685,7 @@ def _b2_reads(_session: b2.Session, api: str, _body: dict[str, Any]) -> object:
 
 
 @pytest.fixture
-def converge(monkeypatch: pytest.MonkeyPatch) -> Any:
+def converge(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
     def install(recorder: _Recorder) -> None:
         def ensure_bucket(*_args: object, **_kwargs: object) -> str:
             recorder.buckets_converged += 1
@@ -791,6 +791,9 @@ def converge(monkeypatch: pytest.MonkeyPatch) -> Any:
         roots = cli.config.Roots(ca=cast('Any', object()), age_recipients=())
         monkeypatch.setattr(cli.config.Roots, 'ensure', classmethod(_returning(roots)))
         monkeypatch.setattr(cli.escrow.Vault, 'open', classmethod(_returning(object())))
+        # The workstation slot, where a replacement records the restore it
+        # leaves owed: the case's own, never the checkout's.
+        monkeypatch.setattr(workstation, 'directory', _returning(tmp_path / '.credentials'))
 
     return install
 
@@ -836,7 +839,7 @@ def _run(
 def test_the_replaced_status_is_neither_success_nor_failure() -> None:
     """Its whole job is to be told apart from the two statuses beside it.
 
-    0 says the appliance is current and holds its state, which over an empty
+    0 says the appliance is current and owes no restore, which over an empty
     database is the dangerous answer. 1 says the run failed and nothing more:
     it may have stopped before touching anything, or after destroying the box,
     and which it was is in the run's last words rather than in the status. So
@@ -1282,6 +1285,15 @@ NO_BOX = 'no new box was seen running'
 SILENT = 'has not answered'
 #: What it says of a new box that answers over an empty database.
 EMPTY = 'serves an empty database'
+#: The re-run both of the other two name. From the commit the run built the
+#: new box from, because from any other the re-run reads that box as drifted
+#: and stops short of pointing the address at it.
+RE_RUN = 're-run `state-backend provision` from this commit'
+#: What it says of the dump key the destroyed box held, when retiring it failed.
+LIVE_KEY = 'so it is still live'
+#: What it says of that key when no new box was seen: whether the re-run
+#: retires it depends on whether it finds a box this run launched.
+FOUND_KEY = 'if the re-run finds a box this run launched'
 
 #: A way to break a run, applied once the converge fixture is installed.
 Breakage = Callable[[pytest.MonkeyPatch, _Recorder], None]
@@ -1353,10 +1365,17 @@ def test_a_failure_before_a_new_box_is_seen_says_to_provision_first(
 
     (taken,) = recorder.dumped
     (said,) = [message for message in caplog.messages if NO_BOX in message]
-    assert 're-run `state-backend provision`' in said
+    assert RE_RUN in said
     assert 'old box may still be standing' in said
     assert any(f'state-backend restore {taken}' in message for message in caplog.messages)
     assert not any(EMPTY in message or SILENT in message for message in caplog.messages)
+    # Past the mint, the dump key the destroyed box held is still live. A
+    # re-run that finds no box launches one and retires it; one that finds
+    # the box a lost launch left launches nothing, so the words say both.
+    # Before the mint there is no successor, and nothing to say.
+    past_the_mint = breakage not in (BEFORE_A_NEW_BOX['terminate_instance'], BEFORE_A_NEW_BOX['mint_dump_key'])
+    assert any(FOUND_KEY in message for message in caplog.messages) == past_the_mint
+    assert not any(LIVE_KEY in message for message in caplog.messages)
 
 
 #: Every way a run ends with a new box running that it has not heard answer.
@@ -1392,9 +1411,13 @@ def test_a_new_box_that_has_not_answered_is_named_as_one(
     (taken,) = recorder.dumped
     (said,) = [message for message in caplog.messages if SILENT in message]
     assert 'ocid1.instance.new' in said
+    assert RE_RUN in said
     assert 'points the address at it' in said
     assert any(f'state-backend restore {taken}' in message for message in caplog.messages)
     assert not any(EMPTY in message or NO_BOX in message for message in caplog.messages)
+    # The dump key the destroyed box held is named where its retirement is
+    # what failed, and only there: every other breakage retired it.
+    assert any(LIVE_KEY in message for message in caplog.messages) == (breakage is _refuse_the_retirement)
 
 
 #: Every failure past a launch OCI accepted, after which the reserved address
@@ -1429,7 +1452,9 @@ def test_a_plain_re_run_points_the_address_at_the_box_a_failed_run_launched(
     monkeypatch.setattr(provision, 'attach_reserved_ip', attach)
     recorder.retire_fails = False
 
-    assert _run(force=False) == 0
+    # The box it points the address at is the empty one, so the restore the
+    # stopped run named is still owed (the case below is about that).
+    assert _run(force=False) == PENDING
 
     assert recorder.attached == ['ocid1.instance.new']
     assert (recorder.terminated, recorder.launched) == (1, 1)
@@ -1446,6 +1471,408 @@ def test_a_new_box_that_answers_is_named_as_empty(converge: Any, caplog: pytest.
 
     assert any(EMPTY in message and 'ocid1.instance.new' in message for message in caplog.messages)
     assert not any(SILENT in message or NO_BOX in message for message in caplog.messages)
+
+
+# -- recovering from a replacement that stopped part way ----------------------
+# The stopped run's last words name a re-run and a restore. Everything below
+# drives that recovery on the same fixture, run after run: the compartment a
+# run leaves is the one the next run finds.
+
+#: Both boxes a re-run meets after a replacement that stopped part way: none,
+#: because the run stopped before launching, so the re-run launches one; or
+#: the new one, because it stopped after, so the re-run points the address at
+#: it. Each answers over an empty database.
+STOPPED_PART_WAY: dict[str, Breakage] = {
+    'no box: the mint': _refuse('b2', 'mint_dump_key'),
+    'the new box: the attach': _refuse('provision', 'attach_reserved_ip'),
+}
+
+
+@pytest.mark.parametrize('breakage', list(STOPPED_PART_WAY.values()), ids=list(STOPPED_PART_WAY))
+def test_a_re_run_after_a_replacement_that_stopped_part_way_still_owes_the_restore(
+    converge: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, breakage: Breakage
+) -> None:
+    """The re-run the stopped run names is a step of the recovery, not its end.
+
+    Its box answers and holds nothing, so 0 -- "current and holds its state"
+    -- is the answer a script would stop at with every stack's state still in
+    one file. It exits as the replacement would have, naming that file again.
+    """
+    caplog.set_level(logging.WARNING)
+    stale = dict(CURRENT) | {'butane': 'zzzz'}
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(stale))
+    converge(recorder)
+    mint, attach = b2.mint_dump_key, provision.attach_reserved_ip
+    breakage(monkeypatch, recorder)
+    with pytest.raises(RuntimeError, match='refused'):
+        _ = _run(force=True)
+    (taken,) = recorder.dumped
+    monkeypatch.setattr(b2, 'mint_dump_key', mint)
+    monkeypatch.setattr(provision, 'attach_reserved_ip', attach)
+    caplog.clear()
+
+    assert _run() == PENDING
+
+    assert (recorder.terminated, recorder.launched, recorder.attached) == (1, 1, ['ocid1.instance.new'])
+    assert any(f'state-backend restore {taken}' in message for message in caplog.messages)
+
+
+def _a_backend(monkeypatch: pytest.MonkeyPatch, stacks: Callable[[object], list[str]]) -> None:
+    """The backend a restore talks to, listing what `stacks` answers; the load itself succeeds."""
+    monkeypatch.setattr(cli.state, 'connection', _returning(type('Connection', (), {'url': 'postgres://box'})()))
+    monkeypatch.setattr(cli.state, 'endpoint', _returning('box:5432'))
+    monkeypatch.setattr(cli.state, 'stacks', stacks)
+    monkeypatch.setattr(cli.state, 'encrypted', _returning(False))
+    monkeypatch.setattr(cli.state, 'verify_dump', _returning(['TABLE public stacks']))
+    monkeypatch.setattr(cli.state, 'pg_restore', _returning(None))
+
+
+def _restore_into(bundle_dir: Path, source: Path) -> int:
+    """`state-backend restore <source> --bundle <bundle_dir>`, over a backend that takes it.
+
+    The backend lists no stacks before the load and one after, which is a
+    restore that verifies; what is under test is what it does beside that.
+    """
+    return cli._restore(  # pyright: ignore[reportPrivateUsage]
+        None,
+        registry=escrow.Registry(root=Path('unused')),
+        bundle_dir=bundle_dir,
+        source=source,
+        identity=None,
+        force=False,
+    )
+
+
+def test_the_restore_over_the_slot_is_what_settles_it(
+    converge: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A replacement owes its restore until one lands in the backend its slot names.
+
+    A restore into some other backend -- the rehearsal's scratch box, over a
+    bundle of its own -- is not that restore, so the next converge still
+    names it; the one over the workstation slot's bundle is, and the next
+    converge is 0 again.
+    """
+    stale = dict(CURRENT) | {'butane': 'zzzz'}
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(stale))
+    converge(recorder)
+    assert _run(force=True) == PENDING
+    (taken,) = recorder.dumped
+    listed: list[list[str]] = []
+
+    def stacks(_target: object) -> list[str]:
+        listed.append([] if len(listed) % 2 == 0 else ['physical'])
+        return listed[-1]
+
+    _a_backend(monkeypatch, stacks)
+
+    assert _restore_into(tmp_path / 'scratch', taken) == 0
+    assert _run() == PENDING
+
+    assert _restore_into(workstation.bundle_dir(), taken) == 0
+    assert _run() == 0
+
+
+def test_a_retirement_that_fails_names_the_key_it_left_live(converge: Any, caplog: pytest.LogCaptureFixture) -> None:
+    """The dump key the destroyed box held outlives it when its retirement fails.
+
+    The re-run that recovers the new box launches nothing, so it mints and
+    retires nothing either: the key stays live until the next run that
+    launches a box. The last words say which key, and which run retires it.
+    """
+    caplog.set_level(logging.WARNING)
+    stale = dict(CURRENT) | {'butane': 'zzzz'}
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(stale, dump_key_id='key-old'), retire_fails=True)
+    converge(recorder)
+
+    with pytest.raises(RuntimeError, match='retire refused'):
+        _ = _run(force=True)
+
+    (said,) = [message for message in caplog.messages if LIVE_KEY in message]
+    assert 'key-old' in said
+    assert 'the next run that launches a box retires it' in said
+    assert '`state-backend provision --replace`' in said
+
+
+def test_a_re_run_over_a_box_still_provisioning_is_told_to_re_run(
+    converge: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The box a lost launch leaves can still be provisioning when the re-run finds it.
+
+    It matches the commit, so the re-run points the address at it -- and a
+    box OCI has not finished has no attached network interface to point at.
+    The refusal says why and what to do, which an index into an empty listing
+    did not.
+    """
+    stale = dict(CURRENT) | {'butane': 'zzzz'}
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(stale))
+    converge(recorder)
+    _lose_the_launch(monkeypatch, recorder)
+    with pytest.raises(RuntimeError, match='never reached RUNNING'):
+        _ = _run(force=True)
+    # The attach runs for real: OCI lists the accepted box's interface as
+    # still attaching, the state a launch shows before the box is running.
+    monkeypatch.setattr(provision, 'attach_reserved_ip', WRITERS['attach_reserved_ip'])
+    clients = cast('_Client', provision.OciClients.load())
+    clients.compute.kinds['vnic_attachments'] = [
+        type('Attachment', (), {'vnic_id': 'ocid1.vnic.new', 'lifecycle_state': 'ATTACHING'})()
+    ]
+
+    with pytest.raises(RuntimeError, match='still provisioning') as refused:
+        _ = _run()
+
+    assert 'Re-run `state-backend provision` from this commit' in str(refused.value)
+    assert 'ocid1.instance.new' in str(refused.value)
+
+
+def test_a_box_that_has_no_interface_listed_at_all_is_refused_the_same_way(converge: Any) -> None:
+    # What OCI lists for a launch it has only just accepted: nothing yet.
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(CURRENT))
+    converge(recorder)
+    clients = provision.OciClients.load()
+
+    with pytest.raises(RuntimeError, match='still provisioning'):
+        WRITERS['attach_reserved_ip'](clients, instance_id=recorder.instance_id, public_ip_id='ocid1.publicip.box')
+
+
+def test_a_no_dump_replacement_of_a_box_left_empty_names_the_dump_the_state_is_in(
+    converge: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The chain a re-run from a later commit sets off, ending where the state is.
+
+    The box the stopped run launched no longer matches the commit, so the
+    plain re-run stops; `--force` cannot dump the box; and `--no-dump` is
+    what is left. The state is still in the dump the first run
+    took, which is newer than any nightly object, so that is the file the
+    refusal and the last words name -- not the newest object in B2.
+    """
+    caplog.set_level(logging.WARNING)
+    stale = dict(CURRENT) | {'butane': 'zzzz'}
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(stale))
+    converge(recorder)
+    attach = provision.attach_reserved_ip
+    _refuse('provision', 'attach_reserved_ip')(monkeypatch, recorder)
+    with pytest.raises(RuntimeError, match='refused'):
+        _ = _run(force=True)
+    (taken,) = recorder.dumped
+    monkeypatch.setattr(provision, 'attach_reserved_ip', attach)
+    # The commit moves on before the re-run.
+    monkeypatch.setattr(config, 'digests', _returning(dict(CURRENT) | {'butane': 'yyyy'}))
+    assert _run() == 1
+    # A box nothing has opened lists no table, so its dump fails.
+    recorder.dump_fails = True
+    caplog.clear()
+
+    assert _run(force=True) == 1
+    assert any(str(taken) in message and '--no-dump' in message for message in caplog.messages)
+
+    caplog.clear()
+    assert _run(force=True, dump=False) == PENDING
+    assert recorder.terminated == 2
+    # Said as the replacement starts, and again as its last words.
+    assert any(message.startswith('--no-dump') and str(taken) in message for message in caplog.messages)
+    assert any(f'state-backend restore {taken}' in message for message in caplog.messages)
+    assert not any('so the state is the newest object in B2' in message for message in caplog.messages)
+    assert not any('is lost' in message for message in caplog.messages)
+
+
+def test_a_stale_record_is_not_read_as_an_empty_box(
+    converge: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, tmp_path: Path
+) -> None:
+    """The record says a restore is owed; it cannot say the box is still empty.
+
+    The state went back from another checkout, so this one's record stands
+    over a box serving it. Then the commit moves and Postgres dies -- the
+    rebuild path §6 sends a dead backend to -- so `--force` cannot dump the
+    box. Read as an empty box, the refusal would call `--no-dump` free and
+    send the restore to the record's dump, losing everything since. So the
+    refusal gives both readings, and names the record to delete and the
+    nightly object that is then the state.
+    """
+    caplog.set_level(logging.WARNING)
+    stale = dict(CURRENT) | {'butane': 'zzzz'}
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(stale))
+    converge(recorder)
+    assert _run(force=True) == PENDING
+    (taken,) = recorder.dumped
+    listed: list[list[str]] = []
+
+    def stacks(_target: object) -> list[str]:
+        listed.append([] if len(listed) % 2 == 0 else ['physical'])
+        return listed[-1]
+
+    _a_backend(monkeypatch, stacks)
+    # Another checkout's restore: its own bundle, and this record untouched.
+    assert _restore_into(tmp_path / 'another-checkout', taken) == 0
+    monkeypatch.setattr(config, 'digests', _returning(dict(CURRENT) | {'butane': 'yyyy'}))
+    recorder.dump_fails = True
+    caplog.clear()
+
+    assert _run(force=True) == 1
+
+    (said,) = [message for message in caplog.messages if cli.RESTORE_OWED in message]
+    assert str(taken) in said
+    assert 'delete that file first' in said
+    assert 'nightly' in said
+    assert 'newest object in B2 rather than that dump' in said
+
+    # And the replacement itself, as it starts, says the same of what it loses.
+    caplog.clear()
+    assert _run(force=True, dump=False) == PENDING
+    (warned,) = [message for message in caplog.messages if message.startswith('--no-dump')]
+    assert cli.RESTORE_OWED in warned
+    assert 'loses what is not in the nightly object' in warned
+    assert 'newest object in B2 rather than that dump' in warned
+
+
+def test_a_box_that_dumps_but_cannot_list_its_stacks_is_not_replaced(
+    converge: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Which dump holds the state is asked of the box, and a box that does not answer is not read as empty.
+
+    The record stands over a box serving state that went back from another
+    checkout; the dump of it passes, and then `pulumi stack ls` fails. Read as
+    empty, the record would keep the old dump and the replacement would go on,
+    naming the fresh dump that holds the state in one line only. So the run
+    stops with nothing destroyed, and the record as it was.
+    """
+    stale = dict(CURRENT) | {'butane': 'zzzz'}
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(stale))
+    converge(recorder)
+    assert _run(force=True) == PENDING
+    record = workstation.bundle_dir() / cli.RESTORE_OWED
+    before = record.read_text()
+    monkeypatch.setattr(config, 'digests', _returning(dict(CURRENT) | {'butane': 'yyyy'}))
+
+    def unanswered(_target: object) -> list[str]:
+        raise StateError('pulumi stack ls: connection reset by peer')
+
+    _a_backend(monkeypatch, unanswered)
+
+    assert _run(force=True, dump_output=tmp_path / 'fresh.dump.age') == 1
+
+    assert recorder.terminated == 1
+    assert record.read_text() == before
+
+
+def test_a_dump_of_a_box_left_empty_does_not_replace_the_record(
+    converge: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The first run's dump is where the state is, until a box serves a stack.
+
+    Anything that opens the empty box -- `restore`'s own check, a `pulumi`
+    preview -- creates the backend's table, so its dump lists one and passes
+    while holding no stack. A record that gave way to it would name a dump
+    whose restore brings nothing back, and the first dump nowhere.
+    """
+    caplog.set_level(logging.WARNING)
+    stale = dict(CURRENT) | {'butane': 'zzzz'}
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(stale))
+    converge(recorder)
+    attach = provision.attach_reserved_ip
+    _refuse('provision', 'attach_reserved_ip')(monkeypatch, recorder)
+    with pytest.raises(RuntimeError, match='refused'):
+        _ = _run(force=True)
+    monkeypatch.setattr(provision, 'attach_reserved_ip', attach)
+    monkeypatch.setattr(config, 'digests', _returning(dict(CURRENT) | {'butane': 'yyyy'}))
+    _a_backend(monkeypatch, _returning([]))
+    caplog.clear()
+
+    assert _run(force=True, dump_output=Path('second.dump.age')) == PENDING
+
+    first, second = recorder.dumped
+    assert any(f'state-backend restore {first}' in message for message in caplog.messages)
+    assert not any(f'state-backend restore {second}' in message for message in caplog.messages)
+    caplog.clear()
+    assert _run() == PENDING
+    assert any(f'state-backend restore {first}' in message for message in caplog.messages)
+
+
+def test_a_lost_launch_names_the_key_its_re_run_leaves_live(
+    converge: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """OCI accepted the launch and the wait was lost: minted, not retired, not seen.
+
+    The re-run finds that box, which matches, so it launches nothing and
+    retires nothing: the key the destroyed box held stays live past it, and
+    the last words have to say so without a box to name.
+    """
+    caplog.set_level(logging.WARNING)
+    stale = dict(CURRENT) | {'butane': 'zzzz'}
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(stale, dump_key_id='key-old'))
+    converge(recorder)
+    _lose_the_launch(monkeypatch, recorder)
+
+    with pytest.raises(RuntimeError, match='never reached RUNNING'):
+        _ = _run(force=True)
+
+    assert (recorder.minted, recorder.retired) == (1, 0)
+    (said,) = [message for message in caplog.messages if FOUND_KEY in message]
+    assert 'key-old' in said
+    assert '`state-backend provision --replace`' in said
+
+
+def test_a_terminate_that_takes_the_box_and_then_raises_still_owes_the_restore(
+    converge: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The record goes down before the terminate, because the terminate can raise late.
+
+    Its wait for TERMINATED can give out after OCI has already taken the
+    box. The re-run then finds no box and launches one, which answers over an
+    empty database -- the restore is owed exactly as if the run had gone on.
+    """
+    stale = dict(CURRENT) | {'butane': 'zzzz'}
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(stale))
+    converge(recorder)
+    terminate = cast('Callable[..., None]', provision.terminate_instance)
+
+    def taken_then_raises(*args: object, **kwargs: object) -> None:
+        terminate(*args, **kwargs)
+        raise RuntimeError('the old instance never reached TERMINATED within 15m00s')
+
+    monkeypatch.setattr(provision, 'terminate_instance', taken_then_raises)
+    with pytest.raises(RuntimeError, match='never reached TERMINATED'):
+        _ = _run(force=True)
+
+    assert _run() == PENDING
+    assert recorder.launched == 1
+
+
+def test_a_restore_that_fails_its_verification_leaves_the_restore_owed(
+    converge: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The record goes only once Pulumi lists what came back: a load that
+    # lands nothing is not the restore that was owed.
+    stale = dict(CURRENT) | {'butane': 'zzzz'}
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(stale))
+    converge(recorder)
+    assert _run(force=True) == PENDING
+    (taken,) = recorder.dumped
+    _a_backend(monkeypatch, _returning([]))
+
+    assert _restore_into(workstation.bundle_dir(), taken) == 1
+
+    assert _run() == PENDING
+
+
+def test_a_restore_refused_over_a_serving_backend_calls_the_record_stale(
+    converge: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Where the record stands over a backend that already serves stacks, the
+    # step is deleting the record; `--force` would overwrite that state.
+    caplog.set_level(logging.ERROR)
+    stale = dict(CURRENT) | {'butane': 'zzzz'}
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(stale))
+    converge(recorder)
+    assert _run(force=True) == PENDING
+    (taken,) = recorder.dumped
+    _a_backend(monkeypatch, _returning(['physical']))
+
+    assert _restore_into(workstation.bundle_dir(), taken) == 1
+
+    (said,) = [message for message in caplog.messages if 'record is stale' in message]
+    assert 'not --force' in said
+    assert _run() == PENDING
 
 
 def test_a_run_that_destroyed_nothing_says_nothing_about_a_dump(
@@ -1575,7 +2002,7 @@ class _Unwritable(_Service):
 
     def list_vnic_attachments(self, *_args: object, **_kwargs: object) -> _Page:
         self.calls.append('list_vnic_attachments')
-        return _Page([type('Attachment', (), {'vnic_id': 'ocid1.vnic.box'})()])
+        return _Page([type('Attachment', (), {'vnic_id': 'ocid1.vnic.box', 'lifecycle_state': 'ATTACHED'})()])
 
     def list_private_ips(self, *_args: object, **_kwargs: object) -> _Page:
         self.calls.append('list_private_ips')
@@ -2048,10 +2475,13 @@ def _provision_help() -> str:
     raise AssertionError('the parser grew no subcommands')
 
 
-def test_the_replaced_status_is_published_in_help() -> None:
+def test_the_replaced_status_is_published_in_help(monkeypatch: pytest.MonkeyPatch) -> None:
     # A number a wrapper branches on has to be readable without opening the
     # source. `deploy/state-backend/README.md` carries the same statement for
-    # a reader who is not at a terminal.
+    # a reader who is not at a terminal. argparse wraps at the width
+    # `shutil.get_terminal_size` reports and breaks inside `state-backend`; a
+    # width nothing wraps at keeps the phrase whole on every terminal.
+    monkeypatch.setenv('COLUMNS', '1000')
     help_text = _provision_help()
 
     assert str(cli.RESTORE_PENDING) in help_text
