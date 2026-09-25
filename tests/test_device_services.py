@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
+from gateway_services import ACME_TOKEN, DIGEST, TAG, caddy, pin, served
 from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
@@ -30,28 +31,7 @@ from kluster.providers.device_files.provider import Connection
 NAME = 'kluster'
 HOST = str(conventions.overlay.UDM)
 HOST_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIexample'
-ACME_TOKEN = 'a-zone-scoped-token'
-
-DIGEST = f'sha256:{"f" * 64}'
-TAG = '7'
 SERVICES = tuple(service.name for service in conventions.gateway.SERVICES)
-
-
-def pin(service: str) -> container.Rootfs:
-    return container.Rootfs(repository=f'registry.invalid/installation/{service}', tag=TAG, digest=DIGEST)
-
-
-def caddy(
-    legacy: tuple[conventions.gateway.LegacyVhost, ...] = conventions.gateway.LEGACY_VHOSTS,
-) -> container.CaddyService:
-    """The proxy as the stack declares it, with the census a case is about."""
-    return container.CaddyService(
-        service=conventions.gateway.CADDY,
-        pin=pin('caddy'),
-        acme_token=ACME_TOKEN,
-        vhosts=conventions.gateway.RESOLVERS,
-        legacy=legacy,
-    )
 
 
 def declarations() -> tuple[container.ServiceDeclaration, ...]:
@@ -489,44 +469,6 @@ def test_the_certificate_asked_for_is_the_wildcard_and_never_the_apex() -> None:
 #: The device's live configuration, checked in beside this module: what the
 #: legacy half of the render has to keep serving.
 LIVE_CADDYFILE = Path(__file__).parent / 'data' / 'live-caddyfile'
-
-#: One `@name host <host>` matcher and the `handle` block it guards, which is
-#: how both files spell a vhost. The body ends at the first closing brace back
-#: at the block's own indentation.
-VHOST_BLOCK = re.compile(
-    r'^\t@(?P<matcher>\S+) host (?P<host>\S+)\n\thandle @(?P=matcher) \{\n(?P<body>.*?)\n\t\}$',
-    re.MULTILINE | re.DOTALL,
-)
-
-
-def served(caddyfile: str) -> dict[str, tuple[str, ...]]:
-    """Each vhost in a Caddyfile, as what its block tells Caddy.
-
-    Keyed by the name clients ask for, so the two files are compared on the
-    thing they have in common rather than on how they are laid out. What a
-    block says is its directives with the spelling taken out: comments and
-    indentation dropped, and the two defaults the live file leans on written
-    the way the render writes them — an upstream with no scheme is plain HTTP
-    on port 80, and `tls` inside a transport is what the `https://` scheme
-    already turned on.
-    """
-    return {match['host']: directives(match['body']) for match in VHOST_BLOCK.finditer(caddyfile)}
-
-
-def directives(body: str) -> tuple[str, ...]:
-    lines = (' '.join(line.split()) for line in body.splitlines())
-    return tuple(explicit(line) for line in lines if line and not line.startswith('#') and line != 'tls')
-
-
-def explicit(directive: str) -> str:
-    """One directive with the upstream's scheme and port spelled out."""
-    proxy, _, upstream = directive.partition('reverse_proxy ')
-    if proxy or not upstream:
-        return directive
-    dial, brace, trailer = upstream.partition(' {')
-    if '://' not in dial:
-        dial = f'http://{dial}' if ':' in dial else f'http://{dial}:80'
-    return f'reverse_proxy {dial}{brace}{trailer}'
 
 
 def test_every_name_the_device_serves_today_is_still_served() -> None:
