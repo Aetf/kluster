@@ -38,12 +38,13 @@ from typing import NamedTuple, cast
 
 import pytest
 import yaml
+from fences import prose
+from section_numbers import sections
 
 from kluster import conventions
 from kluster.conventions import backup
 from kluster.components.dns.base import overlay_records
 from kluster.scripts.credentials import pulumi_config
-from test_docs_sections import prose, sections
 
 # --------------------------------------------------------------------------
 # The site, zone, gateway and cloud censuses.

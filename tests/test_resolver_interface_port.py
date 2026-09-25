@@ -21,8 +21,8 @@ anywhere.
 
 from __future__ import annotations
 
-from test_device_services import caddy, served
-from test_flow_rules import RESOLVERS, rules
+from gateway_services import caddy, served
+from overlay_flow_rules import RESOLVERS, rules
 
 from kluster import conventions
 from kluster.components.gateway import container

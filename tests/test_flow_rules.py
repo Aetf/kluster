@@ -8,36 +8,18 @@ directions, that a run reaches four destinations and no fifth one, that nothing
 may open a connection towards a run, and that everyone else falls through
 untouched.
 
-`flow_rules` is a pure function of what it is handed, so the addresses here are
-literals. That the roster and the resolver census are what hand them over is a
-fact about the stack program and is asserted there.
+`flow_rules` is a pure function of what it is handed, so the addresses the
+cases hand it are literals, kept in `overlay_flow_rules`. That the roster and
+the resolver census are what hand them over is a fact about the stack program
+and is asserted there.
 """
 
 from __future__ import annotations
 
-from ipaddress import IPv4Address
+from overlay_flow_rules import GATEWAY_OVERLAY, HOMELAB_OVERLAY, RESOLVERS, rules
 
 from kluster import conventions
 from kluster.components.overlay import flow_rules as rules_module
-
-#: The gateway's overlay address, as a member of the network holds one.
-GATEWAY_OVERLAY = IPv4Address('10.144.1.1')
-#: The homelab host's overlay address: the libvirt session reaches it member to
-#: member, needing no managed route.
-HOMELAB_OVERLAY = IPv4Address('10.144.180.10')
-#: The resolvers' container-VLAN addresses. They are named at their site
-#: addresses because they are containers on the device rather than members of
-#: the overlay, and a routed packet still carries the destination it had before
-#: the forward.
-RESOLVERS = (IPv4Address('10.0.5.11'), IPv4Address('10.0.5.12'))
-
-
-def rules() -> str:
-    return rules_module.flow_rules(
-        gateway_overlay_address=GATEWAY_OVERLAY,
-        homelab_overlay_address=HOMELAB_OVERLAY,
-        resolver_site_addresses=RESOLVERS,
-    )
 
 
 def test_a_run_reaches_four_destinations_and_each_of_them_in_both_directions() -> None:

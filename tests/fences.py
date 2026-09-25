@@ -2,7 +2,9 @@
 
 A test that reads the repository's prose has to know which lines are code: a
 `# ` line inside a fence is a comment rather than a heading, and a command in
-a fence is a command rather than a sentence. `lines` is that one reading.
+a fence is a command rather than a sentence. `lines` is that one reading, and
+`prose` is the same reading handed back as text for a reader that counts
+offsets.
 
 A fence opens on a line that starts, after any indentation, with three or
 more backticks or tildes, and it closes on a line of the same character, at
@@ -35,17 +37,41 @@ class Line(NamedTuple):
     fence: Fence | None
 
 
-def lines(text: str) -> Iterator[Line]:
-    """Every line of `text` but the fence delimiters, each with its block."""
+class _Read(NamedTuple):
+    body: str
+    #: The line break `body` ended on, empty on a last line that has none.
+    ending: str
+    fence: Fence | None
+    delimiter: bool
+
+
+def _read(text: str) -> Iterator[_Read]:
+    """Every line of `text`, delimiters included, each with the block it opens, closes or sits in."""
     fence: Fence | None = None
     marker = ''
-    for number, line in enumerate(text.splitlines(), start=1):
+    for number, line in enumerate(text.splitlines(keepends=True), start=1):
+        body = line.splitlines()[0]
+        ending = line[len(body) :]
         if fence is None:
-            if opened := OPENING.match(line):
+            if opened := OPENING.match(body):
                 marker = opened.group(1)
                 fence = Fence(number, opened.group(2))
+                yield _Read(body, ending, fence, delimiter=True)
                 continue
-        elif re.fullmatch(rf'\s*{re.escape(marker[0])}{{{len(marker)},}}\s*', line):
+        elif re.fullmatch(rf'\s*{re.escape(marker[0])}{{{len(marker)},}}\s*', body):
+            yield _Read(body, ending, fence, delimiter=True)
             fence = None
             continue
-        yield Line(line, fence)
+        yield _Read(body, ending, fence, delimiter=False)
+
+
+def lines(text: str) -> Iterator[Line]:
+    """Every line of `text` but the fence delimiters, each with its block."""
+    for read in _read(text):
+        if not read.delimiter:
+            yield Line(read.body, read.fence)
+
+
+def prose(text: str) -> str:
+    """The text with every fence blanked, delimiters included, its lengths kept so lines and offsets survive."""
+    return ''.join((read.body if read.fence is None else ' ' * len(read.body)) + read.ending for read in _read(text))

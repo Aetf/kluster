@@ -48,13 +48,12 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+from fences import prose
+from section_numbers import sections
+
 ROOT = Path(__file__).parent.parent
 
-FENCE = re.compile(r'^(?:```|~~~)')
 CODE_SPAN = re.compile(r'`[^`\n]*`')
-HEADING = re.compile(r'^#{1,6}\s+(?:§?(\d+(?:\.\d+)*)\.?(?:\s|$))?')
-INLINE_LABEL = re.compile(r'\*\*§(\d+(?:\.\d+)*)\b')
-LIST_ITEM = re.compile(r'^(\d+)\.\s')
 NUMBER = r'\d+(?:\.\d+)*'
 #: A range or a list continues a reference (`§3.1–3.2`, `§§1, 4.4`, `§4-5`);
 #: a comma followed by a date does not (`§1, 2026-08-24`).
@@ -100,40 +99,6 @@ class Reference:
         """The reference as the reader sees it, and which member of a range or list it is."""
         member = f'§{self.section}' if self.written == f'§{self.section}' else f'§{self.section} in {self.written}'
         return f'{self.name} {member}' if self.name else member
-
-
-def prose(text: str) -> str:
-    """The text with fenced code blanked, lengths kept so lines and offsets survive."""
-    out: list[str] = []
-    fenced = False
-    for line in text.splitlines(keepends=True):
-        if FENCE.match(line):
-            fenced = not fenced
-        out.append(' ' * (len(line) - 1) + '\n' if fenced or FENCE.match(line) else line)
-    return ''.join(out)
-
-
-def sections(text: str) -> set[str]:
-    """Every number a reference into this prose can land on."""
-    found: set[str] = set()
-    items: set[str] = set()
-    heading: str | None = None
-    for line in text.splitlines():
-        if match := HEADING.match(line):
-            heading = match.group(1)
-            if heading:
-                found.add(heading)
-        elif heading and (match := LIST_ITEM.match(line)):
-            items.add(f'{heading}.{match.group(1)}')
-    found |= {match.group(1) for match in INLINE_LABEL.finditer(text)}
-    # A list item is `§N.M` only where nothing heading-numbered stands beneath
-    # §N; where a `### N.x` or `**§N.x**` exists, `§N.x` is that and nothing else.
-    beneath = {'.'.join(number.split('.')[:depth]) for number in found for depth in range(1, number.count('.') + 1)}
-    found |= {item for item in items if item.rsplit('.', 1)[0] not in beneath}
-    for number in list(found):
-        parts = number.split('.')
-        found |= {'.'.join(parts[:depth]) for depth in range(1, len(parts))}
-    return found
 
 
 class Corpus:
