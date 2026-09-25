@@ -319,10 +319,12 @@ itself is self-service (§4.3).
     unattended.** The envelopes come out at bring-up (§4.1), at
     rotation (§4.2) and on the yearly offline day, which opens one kit
     and verifies it against §2's table. The workstation's master copy
-    is opened more often: every command that mints from a seed or
-    recovers an escrowed value unlocks it — every `mint`; every command
-    that reads or writes a stack's configuration, for the passphrase;
-    an App key's `record`, which compares against what is filed;
+    is opened more often: every command that mints from a seed, writes
+    to the escrow or recovers an escrowed value unlocks it — every
+    `mint`; every command that reads or writes a stack's configuration,
+    for the passphrase; `derived <row> generate` and `import`, which
+    hold what they write to the recovery key it carries (§2.2); an App
+    key's `record`, which also compares against what is filed;
     `derived <row> recover` — and so do the `state-backend` commands
     that reach the CA or the backup identities: `provision`, `render`,
     `bundle`, `dump` and `restore`. No runtime credential is in it: no
@@ -412,6 +414,22 @@ Consequences, all deliberate:
     catch. A value born outside that path — one a predecessor hands
     over, or one that predates the model — joins the registry by being
     imported as a generation, not by being replaced (§4.2).
+-   **What is escrowed opens with the kit in hand.** Every write to the
+    registry — a generation, an import, a recorded console key —
+    derives the recovery recipient from the identity the kit holds, and
+    refuses before anything is drawn or encrypted unless
+    `escrow/RECIPIENTS` names it. The anchor is the kit rather than a
+    second committed file because a checkout goes stale all at once: a
+    clone that predates a kit rotation holds a recipients file, and any
+    record beside it, that agree with each other and name the retired
+    key, and only the kit in hand says otherwise. So that clone, and a
+    retired kit run against a current registry, are refused rather than
+    filing a generation only the retired key opens; a retired kit run
+    against a clone as stale as itself agrees with it, and its
+    destruction (§4.2) is what ends that case. A recipient beside the
+    kit's — a second custodian's — is not refused, and every write
+    names it: the rule proves the kit opens what is written, not that
+    nobody else can.
 -   **Nothing reads escrow at runtime.** Opening a ciphertext needs the
     recovery private key, which is in the kit and nowhere else, and it
     happens only inside an operator's command (§2.1) —
@@ -824,16 +842,16 @@ name.
 | `credentials derived zerotier record` | The same again, for the ZeroTier Central API token, into the `physical` stack's config — which network of that account is this installation's overlay is a constant in `conventions` rather than a value recorded beside the token. Central publishes no token API, so a token created in its web console and re-recorded here is the whole of a rotation; the superseded one is deleted in the same console. |
 | `credentials derived bgp record` | The same shape for the BGP session password, into the `physical` stack's config, except that no console makes it: the operator draws it — the command prints `openssl rand -base64 24` as the step — and hands it in. The stack writes it into the routing daemon's configuration on the gateway; the worker's end of the session, Cilium's BGPv2 `authSecretRef`, is a SealedSecret that arrives with `k8s-base`. Rotating it is a fresh draw and this command again, then both ends re-applied, the session being down from the first apply to the second. |
 | `credentials derived github-admin record` | Once per installation, and again on each rotation, for the GitHub admin token — into the `github` stack's config, which is where the stack and every command that pushes a GitHub secret read it. Nothing in this repository can create the value: GitHub publishes no API that makes a personal access token, so a token generated on the account's settings page and recorded here is the whole of a rotation, and the superseded one is deleted on the same page. It runs before `derived sync`, which authenticates as it. |
-| `credentials derived github-dispatch-key record` / `credentials derived github-trigger-key record` | After the kit exists, and after the App's page has generated a private key — which the command prints the steps for. Takes the key on standard input and escrows it as the row's next generation, so a re-run with a key already on file changes nothing and a re-run with a fresh one is the rotation. `--from-kit` reads it out of the entry a kit that still carries the key as a seed row holds, instead of from standard input. |
+| `credentials derived github-dispatch-key record` / `credentials derived github-trigger-key record` | After the kit exists, and after the App's page has generated a private key — which the command prints the steps for. Takes the key on standard input and escrows it as the row's next generation, so a re-run with a key already on file changes nothing and a re-run with a fresh one is the rotation. `--from-kit` reads it out of the entry a kit that still carries the key as a seed row holds, instead of from standard input. A new generation is held to the recipients file as `generate`'s is (§2.2). |
 | `credentials derived ls` | Any time, with or without a kit. Prints the slot map (below): every §3 credential, where its value comes from, and every slot it lands in, the ones still waiting on a consumer included. It reads a checked-in file, so it needs no token, no kit and no network. |
 | `credentials derived sync [--only <row>] [--bundle-dir <path>]` | Once during bring-up, and again whenever one of those values moves or a slot is lost. Copies into their GitHub secrets the rows whose value lives somewhere else — recovered from the escrow; issued under the escrowed CA, as the `ci` client bundle is, afresh on every run; read back out of a stack's state; taken from `conventions`, as the overlay network's id is, which a workflow can only be handed as a secret; or typed in because the slot is its only storage — resolve, push, verify, per row. A row born into its slot is out of scope and is passed over; naming one is refused, pointing at the `mint` that owns it. `--only` addresses one row, and is what replaces a value that was typed in. |
 | `credentials derived <row> recover [--generation <n>] [--stdout]` | Reading an escrowed secret back out. `derived pulumi-passphrase recover` is the common one: it fills the passphrase slot (§4.4) so `mise.toml` finds it and a local preview needs no offline database; `--stdout` prints instead of writing, for a pipe into another machine. `--generation` opens an older one — the certificate issued under a superseded CA, the dump written under a superseded age identity — where the default is the newest. |
 | `state-backend bundle operator --address <ip> [--directory <path>]` | Once per workstation, or after a certificate reissue. Writes the client bundle into its slot; `state-backend provision` ends by doing the same thing. `--directory` writes it somewhere else instead — a second checkout, or a directory being staged for another machine — and the default is the slot. |
-| `credentials derived <row> generate` | Rotating one escrowed credential (§4.2). Generates a new value, commits its ciphertext as the row's next generation and writes it into a workstation slot where the row has one — the passphrases do, and a row without one reaches its consumer through that consumer's own procedure (§4.2). One act, no other row touched. |
-| `credentials derived <row> import [--from-slot]` | Escrows a value that already exists as the row's next generation, changing nothing a consumer holds (§4.2). The value comes from standard input, or from the row's workstation slot with `--from-slot` — which is how a passphrase already sitting in `.credentials/` is escrowed without being copied through a shell. Refuses an empty or wrong-shaped value: a pipe whose producer failed dies here, not at the recovery that trusted the ciphertext. |
+| `credentials derived <row> generate` | Rotating one escrowed credential (§4.2). Generates a new value, commits its ciphertext as the row's next generation and writes it into a workstation slot where the row has one — the passphrases do, and a row without one reaches its consumer through that consumer's own procedure (§4.2). One act, no other row touched. Unlocks the kit and refuses, before a value is drawn, an `escrow/RECIPIENTS` that does not name the kit's recovery recipient or holds a line `age` does not parse (§2.2). |
+| `credentials derived <row> import [--from-slot]` | Escrows a value that already exists as the row's next generation, changing nothing a consumer holds (§4.2). The value comes from standard input, or from the row's workstation slot with `--from-slot` — which is how a passphrase already sitting in `.credentials/` is escrowed without being copied through a shell. Refuses an empty or wrong-shaped value: a pipe whose producer failed dies here, not at the recovery that trusted the ciphertext. Unlocks the kit and refuses the same recipients file `generate` does (§2.2). |
 | `credentials kit rotate --into <new kit>` | Rotation (§4.2). Writes a new database and re-wraps the escrow to the successor recovery key in the same run; the retired one stays. A run that stopped part way is resumed by running it again with the same `--into`: the successor is opened rather than created, and each row it holds is finished rather than rotated twice. |
-| `credentials kit rewrap` | The re-wrap on its own, for a recipients file edited by hand: it takes no recipients, re-encrypts every generation to whatever `escrow/RECIPIENTS` already names, and refuses a run that no identity in hand could open afterward. It opens with the one key the kit holds, so a rotation interrupted part way is not its case (§4.2: that is `kit rotate --into` the same file, again); an ordinary kit rotation never calls it. |
-| `credentials derived check` | Any time, kit or no kit: every escrowed row the register names is present, generations run from 1 with no gap, every ciphertext is an ASCII-armored age file, `escrow/RECIPIENTS` holds age recipients, nothing is escrowed under a label the register does not name, and no stray file sits in the directory. It opens nothing, so a clone is enough to run it — which is what would let CI run it, though as of 2026-09-25 no workflow does. |
+| `credentials kit rewrap` | The re-wrap on its own, for a recipients file edited by hand: it takes no recipients, re-encrypts every generation to whatever `escrow/RECIPIENTS` already names, names in a warning each recipient beyond the kit's, and refuses a run that no identity in hand could open afterward. It opens with the one key the kit holds, so a rotation interrupted part way is not its case (§4.2: that is `kit rotate --into` the same file, again); an ordinary kit rotation never calls it. |
+| `credentials derived check` | Any time, kit or no kit: every escrowed row the register names is present, generations run from 1 with no gap, every ciphertext is an ASCII-armored age file, every line of `escrow/RECIPIENTS` is a recipient the pinned `age` parses — a line it refuses is named by its number and its content is never printed, and a line holding a private key, in any case and whatever quotes surround it, is refused before `age` sees it — nothing is escrowed under a label the register does not name, and no stray file sits in the directory. It opens nothing, so a clone and `age` on `PATH` are enough to run it — which is what would let CI run it, though as of 2026-09-25 no workflow does. Having no kit, it cannot tell whether one of those recipients belongs to the kit in hand; each writer checks that (§2.2). |
 | `credentials kit ls [<group>]` / `show <entry>` | Looking without changing. `ls` prints entry paths and reads no field, so it can disclose nothing; a group narrows it to one branch of the kit (`seeds`), where the default is the whole of it. `show` prints one entry's non-secret fields. |
 | `credentials kit password remember` | Once per machine, so a run that lasts minutes is not guarded by a password typed into it. The password is proven against the kit before it is stored, keyed by the kit's resolved path — a kit reached by a new path needs one re-run. |
 | `credentials kit password forget` | Drops that remembered password again, for a machine that should stop holding it. |
@@ -1445,8 +1463,8 @@ slot §3 names where the row has one and commits its ciphertext as the
 row's next generation; adopting it is that one consumer's business — a
 re-provision for the state-backend CA, a re-seal or a secret update for
 the Alertmanager token, the recipient swap that state-backend.md §5
-describes for an age generation. The recovery key is not involved,
-and no other row moves.
+describes for an age generation. The recovery key is only read, to
+hold the new ciphertext to it (§2.2), and no other row moves.
 
 **A passphrase is the row whose consumer is a file in this repository**,
 and adopting a new generation of one is a re-encryption rather than a

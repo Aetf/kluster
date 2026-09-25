@@ -689,10 +689,11 @@ def build_parser() -> argparse.ArgumentParser:
         help='what the escrow is missing or holds malformed; needs no kit',
         description=(
             'Hold the escrow/ directory against the rows that are expected to be in it: a ciphertext for '
-            'every escrowed row, each one really an age file, and generations numbered densely from the '
-            'first. Every problem is reported rather than the first, because a registry is checked to '
-            'learn what is wrong with it. Nothing is decrypted, so this needs no kit -- it is the one '
-            'command a stranger to the system can run.'
+            'every escrowed row, each one really an age file, generations numbered densely from the '
+            'first, and every line of escrow/RECIPIENTS one the pinned `age` accepts as a recipient. Every '
+            'problem is reported rather than the first, because a registry is checked to learn what is '
+            'wrong with it. Nothing is decrypted, so this needs no kit -- it is the one command a stranger '
+            'to the system can run, with `age` on PATH.'
         ),
     )
     checking.set_defaults(action='check')
@@ -1504,14 +1505,19 @@ def main(argv: list[str] | None = None) -> int:
             # The escrowed rows. generate -> escrow -> push: the value reaches
             # the slot the map names for it in the same run, and the push lives
             # here rather than in the registry so that opening an escrow never
-            # writes to a checkout.
+            # writes to a checkout. Both writers take the kit's recovery key
+            # along with the registry, because what they write has to open with
+            # it (credentials.md §2.2).
             # Guarded like the arms above: `args.label` exists because the
             # escrowed row's parser put it there, so an arm reached by a row
             # that has no label would fail on an attribute rather than by name.
             case ('derived', row, 'generate') if row in escrow.rows():
-                _write_slot(args.label, escrow.generate(registry, args.label))
+                _write_slot(args.label, escrow.generate(escrow.Vault.open(store, registry), args.label))
             case ('derived', row, 'import') if row in escrow.rows():
-                _ = escrow.adopt(registry, args.label, _imported(args))
+                # Read before the kit is unlocked, so an empty pipe is refused
+                # without a password prompt in front of it.
+                value = _imported(args)
+                _ = escrow.adopt(escrow.Vault.open(store, registry), args.label, value)
             # The console-made escrowed rows. The registry is opened rather
             # than only written to: whether this value is already filed is
             # answered by comparing against what it holds, which is what makes

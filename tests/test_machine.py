@@ -167,6 +167,22 @@ def test_a_second_run_reuses_what_is_already_escrowed(vault: escrow.Vault) -> No
 
 
 @needs_age
+def test_a_bring_up_refuses_a_registry_the_kit_in_hand_cannot_open(vault: escrow.Vault) -> None:
+    # `RECIPIENTS` naming another key -- a clone that predates a kit rotation.
+    # Minting there would file the CA and a backup identity the kit cannot
+    # open, and a backup label holds one identity for its lifetime, so the
+    # second is past repair the moment it is written. Refused before the first
+    # label is drawn.
+    vault.registry.set_recipients([age.generate().public])
+
+    with pytest.raises(escrow.EscrowError, match='the recovery recipient of the kit in hand'):
+        _ = config.Roots.ensure(vault, appliance_exists=False)
+
+    for label in config.Roots.labels():
+        assert vault.registry.generations(label) == []
+
+
+@needs_age
 def test_writing_a_bundle_does_not_mint_a_ca(vault: escrow.Vault) -> None:
     # `recover` is the read-only door: a machine asking for a client bundle
     # against an empty registry must be told to run the bring-up, not handed a

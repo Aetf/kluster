@@ -211,7 +211,7 @@ class Roots:
                     'Point --escrow at the registry this appliance was built from'
                 )
             log.info('nothing escrowed for %s yet; generating it', label)
-            _ = escrow.generate(vault.registry, label)
+            _ = escrow.generate(vault, label)
         return cls.recover(vault)
 
 
