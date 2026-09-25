@@ -568,6 +568,7 @@ class _Recorder:
         metadata: dict[str, str] | None = None,
         dump_key_current: bool = True,
         dump_fails: bool = False,
+        retire_fails: bool = False,
         address: str = settings.ADDRESS,
     ) -> None:
         self.instance_exists: bool = instance_exists
@@ -578,6 +579,14 @@ class _Recorder:
         self.metadata: dict[str, str] = {} if metadata is None else metadata
         self.dump_key_current: bool = dump_key_current
         self.dump_fails: bool = dump_fails
+        #: Whether retiring the dump key's predecessor raises. It runs after
+        #: the launch, so a raise there leaves a new box running.
+        self.retire_fails: bool = retire_fails
+        #: The running box the compartment lists: the one a case starts with,
+        #: then whichever a launch put there.
+        self.instance_id: str = 'ocid1.instance.existing'
+        #: Every instance the run pointed the reserved address at, in order.
+        self.attached: list[str] = []
         self.minted: int = 0
         self.retired: int = 0
         self.terminated: int = 0
@@ -659,6 +668,20 @@ def _built_from(
     }
 
 
+def _b2_reads(_session: b2.Session, api: str, _body: dict[str, Any]) -> object:
+    """B2 over a bucket that exists with no retention rule, for a run that must only read it.
+
+    The one call answered is the bucket listing. Every other call a converge
+    makes to B2 goes through a step the fixture below replaces -- the mint,
+    the bucket converge, the dump key's check -- so any other call reaching
+    here fails at the call, naming it.
+    """
+    if api == 'b2_list_buckets':
+        rules: list[object] = []
+        return {'buckets': [{'bucketId': 'bucket-id', 'lifecycleRules': rules}]}
+    raise AssertionError(f'{api} was called by a run that must only read B2')
+
+
 @pytest.fixture
 def converge(monkeypatch: pytest.MonkeyPatch) -> Any:
     def install(recorder: _Recorder) -> None:
@@ -677,6 +700,8 @@ def converge(monkeypatch: pytest.MonkeyPatch) -> Any:
             recorder.minted += 1
 
             def retire() -> None:
+                if recorder.retire_fails:
+                    raise RuntimeError('retire refused')
                 recorder.retired += 1
                 recorder.order.append('retire')
 
@@ -685,7 +710,7 @@ def converge(monkeypatch: pytest.MonkeyPatch) -> Any:
         def find(*_args: object, **_kwargs: object) -> Any:
             if not recorder.instance_exists:
                 return None
-            return type('Instance', (), {'id': 'ocid1.instance.existing', 'metadata': recorder.metadata})()
+            return type('Instance', (), {'id': recorder.instance_id, 'metadata': recorder.metadata})()
 
         def terminate(*_args: object, **_kwargs: object) -> None:
             recorder.terminated += 1
@@ -705,17 +730,29 @@ def converge(monkeypatch: pytest.MonkeyPatch) -> Any:
                 digests, dump_key_id=dump_key_id, expiry=server_cert_expiry, host_key=ssh_host_key_pub
             )
             recorder.order.append('launch')
+            # What the next run finds: this box, carrying what it was built from.
+            recorder.instance_exists = True
+            recorder.instance_id = 'ocid1.instance.new'
+            recorder.metadata = recorder.launched_metadata
             return 'ocid1.instance.new'
+
+        def attach(*_args: object, instance_id: str, **_kwargs: object) -> None:
+            recorder.attached.append(instance_id)
 
         def write_known_hosts(directory: Path, *, address: str, public_key: str) -> Path:
             recorder.pinned.append((directory, address, public_key))
             return directory / config.KNOWN_HOSTS_FILE
+
+        def ensure_image(*_args: object, **_kwargs: object) -> str:
+            recorder.order.append('image')
+            return 'image'
 
         # The session is what the account check reads, so it is the one thing
         # the stand-in has to carry; `conventions` records the same account
         # for the same reason the real seed's does.
         session = b2.Session(account_id=ACCOUNT_ID, api_url='https://api.example', token='unused')
         monkeypatch.setattr(b2.Session, 'from_entry', staticmethod(_returning(session)))
+        monkeypatch.setattr(b2.Session, 'post', _b2_reads)
         monkeypatch.setattr(
             conventions, 'B2_ACCOUNT', conventions.B2Account(region='us-west-002', account_id=ACCOUNT_ID)
         )
@@ -729,11 +766,12 @@ def converge(monkeypatch: pytest.MonkeyPatch) -> Any:
             provision, 'ensure_network', _returning(provision.Placement(vcn_id='vcn', subnet_id='subnet'))
         )
         monkeypatch.setattr(provision, 'ensure_security_group', _returning('nsg'))
-        monkeypatch.setattr(provision, 'ensure_image', _returning('image'))
+        monkeypatch.setattr(provision, 'ensure_image', ensure_image)
+        monkeypatch.setattr(provision, 'shape_availability_domain', _returning('phx-ad-1'))
         monkeypatch.setattr(provision, 'find_instance', find)
         monkeypatch.setattr(provision, 'terminate_instance', terminate)
         monkeypatch.setattr(provision, 'ensure_instance', launch)
-        monkeypatch.setattr(provision, 'attach_reserved_ip', _returning(None))
+        monkeypatch.setattr(provision, 'attach_reserved_ip', attach)
         monkeypatch.setattr(provision, 'wait_for_backend', _returning(True))
         monkeypatch.setattr(cli, '_write_dump', write_dump)
         monkeypatch.setattr(config, 'machine', _returning(object()))
@@ -1011,7 +1049,7 @@ def test_a_box_is_dumped_before_it_is_terminated(converge: Any) -> None:
 
     assert _run() == PENDING
 
-    assert recorder.order == ['dump', 'terminate', 'launch', 'retire']
+    assert recorder.order == ['image', 'dump', 'terminate', 'launch', 'retire']
     # And it is the artefact `state-backend restore` takes, under the name the
     # appliance's own objects carry, so the playbook's next step names a file
     # that is already there.
@@ -1088,7 +1126,11 @@ def test_no_dump_replaces_a_box_that_cannot_be_dumped(converge: Any) -> None:
 
     assert _run(dump=False) == PENDING
 
-    assert (recorder.order, recorder.terminated, recorder.launched) == (['terminate', 'launch', 'retire'], 1, 1)
+    assert (recorder.order, recorder.terminated, recorder.launched) == (
+        ['image', 'terminate', 'launch', 'retire'],
+        1,
+        1,
+    )
 
 
 def test_a_certificate_inside_the_renewal_margin_is_drift(converge: Any) -> None:
@@ -1215,66 +1257,182 @@ def test_a_box_that_never_answers_still_names_the_dump(
     assert any(f'state-backend restore {taken}' in message for message in caplog.messages)
 
 
-#: Every step the run takes between destroying the old box and the readiness
-#: probe. Each is a real failure mode — B2 refusing the mint, OCI refusing the
-#: launch, the image import running out of time — and by the time any of them
-#: raises there is no box left and the state is in one file.
-AFTER_THE_TERMINATE = ['mint_dump_key', 'ensure_image', 'ensure_instance', 'attach_reserved_ip']
+# -- what the closing instruction says, from how far the run got --------------
+# Past the terminate the operator's next move depends on what is standing: no
+# new box seen means nothing known to restore into, a box that has not
+# answered cannot take a restore yet, and one that answers is waiting for
+# exactly that.
+
+#: What the run says when it destroyed the box and saw no new one running.
+NO_BOX = 'no new box was seen running'
+#: What it says of a new box that is running and has not answered.
+SILENT = 'has not answered'
+#: What it says of a new box that answers over an empty database.
+EMPTY = 'serves an empty database'
+
+#: A way to break a run, applied once the converge fixture is installed.
+Breakage = Callable[[pytest.MonkeyPatch, _Recorder], None]
+
+MODULES: dict[str, types.ModuleType] = {'provision': provision, 'b2': b2, 'config': config}
 
 
-@pytest.mark.parametrize('stage', AFTER_THE_TERMINATE)
-def test_a_failure_after_the_terminate_still_names_the_dump(
-    converge: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, stage: str
+def _refuse(module: str, stage: str) -> Breakage:
+    """`stage` of `module` raises `<stage> refused`."""
+
+    def breakage(monkeypatch: pytest.MonkeyPatch, _recorder: _Recorder) -> None:
+        monkeypatch.setattr(MODULES[module], stage, _returning_raise(f'{stage} refused'))
+
+    return breakage
+
+
+def _lose_the_launch(monkeypatch: pytest.MonkeyPatch, _recorder: _Recorder) -> None:
+    """OCI accepts the launch, and the wait for the box to be running raises."""
+    launch = cast('Callable[..., str]', provision.ensure_instance)
+
+    def accepted_then_lost(*args: object, **kwargs: object) -> str:
+        _ = launch(*args, **kwargs)
+        raise RuntimeError('ensure_instance refused: the new instance never reached RUNNING')
+
+    monkeypatch.setattr(provision, 'ensure_instance', accepted_then_lost)
+
+
+def _silence_the_box(monkeypatch: pytest.MonkeyPatch, _recorder: _Recorder) -> None:
+    """The new box runs and never answers the readiness probe."""
+    monkeypatch.setattr(provision, 'wait_for_backend', _returning(False))
+
+
+def _refuse_the_retirement(_monkeypatch: pytest.MonkeyPatch, recorder: _Recorder) -> None:
+    """Retiring the dump key's predecessor, after the launch, raises."""
+    recorder.retire_fails = True
+
+
+#: Every way a run fails past the terminate without having seen a new box
+#: running. Each leaves the state in one file, and none can say whether a box
+#: will come up: a launch OCI accepted may yet.
+BEFORE_A_NEW_BOX: dict[str, Breakage] = {
+    'terminate_instance': _refuse('provision', 'terminate_instance'),
+    'mint_dump_key': _refuse('b2', 'mint_dump_key'),
+    'machine': _refuse('config', 'machine'),
+    'ensure_instance': _refuse('provision', 'ensure_instance'),
+    'ensure_instance after the launch': _lose_the_launch,
+}
+
+
+@pytest.mark.parametrize('breakage', list(BEFORE_A_NEW_BOX.values()), ids=list(BEFORE_A_NEW_BOX))
+def test_a_failure_before_a_new_box_is_seen_says_to_provision_first(
+    converge: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, breakage: Breakage
 ) -> None:
-    """The window the published exit statuses depend on being closed.
+    """With no box known to be running, the restore alone may fail against nothing.
 
-    `provision` tells a reader that a run which says nothing about a dump left
-    the old box serving. That is only true if every way out of the stretch
-    after the termination says something — and that stretch is minutes to an
-    hour long, with an image import in the middle of it.
+    So the instruction names the provision that brings a box up where none is
+    and points the address at one that is, before the restore that fills it --
+    and says the old box may still stand, since the terminate may be what
+    failed. It does not describe a new box it never saw.
     """
     caplog.set_level(logging.WARNING)
     stale = dict(CURRENT) | {'butane': 'zzzz'}
     recorder = _Recorder(instance_exists=True, metadata=_built_from(stale))
     converge(recorder)
+    breakage(monkeypatch, recorder)
 
-    def explode(*_args: object, **_kwargs: object) -> Any:
-        raise RuntimeError(f'{stage} refused')
-
-    from kluster.scripts.credentials import b2
-
-    monkeypatch.setattr(b2 if stage == 'mint_dump_key' else provision, stage, explode)
-
-    with pytest.raises(RuntimeError, match=f'{stage} refused'):
+    with pytest.raises(RuntimeError, match='refused'):
         _ = _run()
 
-    # The box is gone, so the dump is the only copy of the state there is.
-    assert recorder.terminated == 1
     (taken,) = recorder.dumped
+    (said,) = [message for message in caplog.messages if NO_BOX in message]
+    assert 're-run `state-backend provision`' in said
+    assert 'old box may still be standing' in said
     assert any(f'state-backend restore {taken}' in message for message in caplog.messages)
+    assert not any(EMPTY in message or SILENT in message for message in caplog.messages)
 
 
-def test_a_terminate_that_raises_part_way_still_names_the_dump(
-    converge: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+#: Every way a run ends with a new box running that it has not heard answer.
+NOT_ANSWERED: dict[str, Breakage] = {
+    'never answers': _silence_the_box,
+    'attach raises': _refuse('provision', 'attach_reserved_ip'),
+    'retire raises': _refuse_the_retirement,
+}
+
+
+@pytest.mark.parametrize('breakage', list(NOT_ANSWERED.values()), ids=list(NOT_ANSWERED))
+def test_a_new_box_that_has_not_answered_is_named_as_one(
+    converge: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, breakage: Breakage
 ) -> None:
-    """The terminate asks OCI to destroy the box, then waits for it to be gone.
+    """A box is running, so the restore has somewhere to go -- once it answers.
 
-    A failure in the waiting half — a timeout, a service error — leaves the
-    request already sent, so the box is going away whatever the exception
-    says. That is why the run counts itself as having destroyed something
-    before the call rather than after it.
+    Not "serves an empty database": it serves nothing yet, and a restore run
+    now fails against it. Nor "no new box": the run names the one it launched,
+    and the provision that points the address at it and waits again.
     """
     caplog.set_level(logging.WARNING)
     stale = dict(CURRENT) | {'butane': 'zzzz'}
     recorder = _Recorder(instance_exists=True, metadata=_built_from(stale))
     converge(recorder)
-    monkeypatch.setattr(provision, 'terminate_instance', _returning_raise('timed out waiting for TERMINATED'))
+    breakage(monkeypatch, recorder)
 
-    with pytest.raises(RuntimeError, match='timed out waiting for TERMINATED'):
-        _ = _run()
+    try:
+        assert _run() == 1
+    except RuntimeError as refused:
+        assert 'refused' in str(refused)
 
+    assert recorder.launched == 1
     (taken,) = recorder.dumped
+    (said,) = [message for message in caplog.messages if SILENT in message]
+    assert 'ocid1.instance.new' in said
+    assert 'points the address at it' in said
     assert any(f'state-backend restore {taken}' in message for message in caplog.messages)
+    assert not any(EMPTY in message or NO_BOX in message for message in caplog.messages)
+
+
+#: Every failure past a launch OCI accepted, after which the reserved address
+#: may not point at the new box -- and with no ephemeral address, nothing
+#: reaches it but through the reservation.
+PAST_THE_LAUNCH: dict[str, Breakage] = {
+    'the wait for the launch': _lose_the_launch,
+    'the key retirement': _refuse_the_retirement,
+    'the attach': _refuse('provision', 'attach_reserved_ip'),
+}
+
+
+@pytest.mark.parametrize('breakage', list(PAST_THE_LAUNCH.values()), ids=list(PAST_THE_LAUNCH))
+def test_a_plain_re_run_points_the_address_at_the_box_a_failed_run_launched(
+    converge: Any, monkeypatch: pytest.MonkeyPatch, breakage: Breakage
+) -> None:
+    """The way back from a failure past the launch is the command the run names.
+
+    The re-run finds the new box, which matches the commit it was built from,
+    and a run that leaves a matching box standing still points the address at
+    it: otherwise it would wait on an address that reaches nothing, every time.
+    """
+    stale = dict(CURRENT) | {'butane': 'zzzz'}
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(stale))
+    converge(recorder)
+    ensure_instance, attach = provision.ensure_instance, provision.attach_reserved_ip
+    breakage(monkeypatch, recorder)
+    with pytest.raises(RuntimeError, match='refused'):
+        _ = _run()
+    assert recorder.attached == []
+    monkeypatch.setattr(provision, 'ensure_instance', ensure_instance)
+    monkeypatch.setattr(provision, 'attach_reserved_ip', attach)
+    recorder.retire_fails = False
+
+    assert _run(force=False) == 0
+
+    assert recorder.attached == ['ocid1.instance.new']
+    assert (recorder.terminated, recorder.launched) == (1, 1)
+
+
+def test_a_new_box_that_answers_is_named_as_empty(converge: Any, caplog: pytest.LogCaptureFixture) -> None:
+    """The shape the replacement is for: up, empty, and waiting for the dump."""
+    caplog.set_level(logging.WARNING)
+    stale = dict(CURRENT) | {'butane': 'zzzz'}
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(stale))
+    converge(recorder)
+
+    assert _run() == PENDING
+
+    assert any(EMPTY in message and 'ocid1.instance.new' in message for message in caplog.messages)
+    assert not any(SILENT in message or NO_BOX in message for message in caplog.messages)
 
 
 def test_a_run_that_destroyed_nothing_says_nothing_about_a_dump(
@@ -1296,6 +1454,218 @@ def test_a_run_that_destroyed_nothing_says_nothing_about_a_dump(
 
     assert recorder.terminated == 0
     assert not any('state-backend restore' in message for message in caplog.messages)
+
+
+# -- what runs before the barrier --------------------------------------------
+# The dump and the terminate are the barrier: past them the estate has no
+# backend. Everything that can fail and does not need the old box gone runs
+# ahead of them, so that its failure leaves the old box serving.
+
+#: Every step of the groundwork a launch stands on, as the module that owns it
+#: and its name. The image import is the long one.
+GROUNDWORK = [
+    ('b2', 'ensure_bucket'),
+    ('provision', 'ensure_network'),
+    ('provision', 'ensure_security_group'),
+    ('provision', 'ensure_reserved_ip'),
+    ('provision', 'ensure_image'),
+    ('provision', 'shape_availability_domain'),
+]
+
+
+def test_the_image_is_converged_before_anything_is_destroyed(converge: Any) -> None:
+    """A release not imported yet is a download, an upload and an import.
+
+    None of it needs the old box gone, so none of it runs in the window where
+    the estate has no backend.
+    """
+    stale = dict(CURRENT) | {'butane': 'zzzz'}
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(stale))
+    converge(recorder)
+
+    assert _run() == PENDING
+
+    after = recorder.order[recorder.order.index('terminate') :]
+    assert 'image' not in after
+    assert recorder.order.index('image') < recorder.order.index('dump')
+
+
+@pytest.mark.parametrize(('module', 'stage'), GROUNDWORK, ids=[stage for _, stage in GROUNDWORK])
+def test_a_groundwork_failure_leaves_the_old_box_serving(
+    converge: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, module: str, stage: str
+) -> None:
+    """The run stops with nothing destroyed, nothing dumped, and nothing to restore."""
+    caplog.set_level(logging.WARNING)
+    stale = dict(CURRENT) | {'butane': 'zzzz'}
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(stale))
+    converge(recorder)
+    monkeypatch.setattr(MODULES[module], stage, _returning_raise(f'{stage} refused'))
+
+    with pytest.raises(RuntimeError, match=f'{stage} refused'):
+        _ = _run()
+
+    assert (recorder.terminated, recorder.minted, recorder.dumped) == (0, 0, [])
+    assert recorder.instance_exists
+    assert not any('state-backend restore' in message for message in caplog.messages)
+
+
+# -- a run that leaves the box standing writes nothing but the address -------
+
+#: The box's primary private IP, which a reservation attached to it points at.
+PRIMARY = 'ocid1.privateip.box'
+
+
+class _Unwritable(_Service):
+    """`_Service` for a run that must only read: a write fails at the call, naming it.
+
+    What a listing holds is `kinds`, as for `_Service`; a `get_` is answered
+    as `_Service` answers it, except the route table, which is answered with
+    no rules -- the state a converge would write into -- and the reservation,
+    which points at `points_at`. The box has one VNIC whose primary private IP
+    is `PRIMARY`. A write named in `allowed` is recorded rather than refused.
+    """
+
+    def __init__(
+        self,
+        calls: list[str],
+        kinds: dict[str, list[Any]],
+        *,
+        points_at: str = PRIMARY,
+        allowed: frozenset[str] = frozenset(),
+    ) -> None:
+        super().__init__(calls, kinds)
+        self.points_at: str = points_at
+        self.allowed: frozenset[str] = allowed
+
+    def __getattr__(self, method: str) -> Callable[..., Any]:
+        if method.startswith(('list_', 'get_', '_')) or method in self.__dict__.get('allowed', ()):
+            return super().__getattr__(method)
+        raise AssertionError(f'{method} was called by a run that must only read OCI')
+
+    def create_public_ip(self, *_args: object, **_kwargs: object) -> Any:
+        raise AssertionError('create_public_ip was called by a run that must only read OCI')
+
+    def get_route_table(self, *_args: object, **_kwargs: object) -> Any:
+        self.calls.append('get_route_table')
+        return type('Response', (), {'data': type('RouteTable', (), {'route_rules': []})()})()
+
+    def list_vnic_attachments(self, *_args: object, **_kwargs: object) -> _Page:
+        self.calls.append('list_vnic_attachments')
+        return _Page([type('Attachment', (), {'vnic_id': 'ocid1.vnic.box'})()])
+
+    def list_private_ips(self, *_args: object, **_kwargs: object) -> _Page:
+        self.calls.append('list_private_ips')
+        return _Page([type('PrivateIp', (), {'id': PRIMARY, 'is_primary': True})()])
+
+    def get_public_ip(self, *_args: object, **_kwargs: object) -> Any:
+        self.calls.append('get_public_ip')
+        return type('Response', (), {'data': type('PublicIp', (), {'private_ip_id': self.points_at})()})()
+
+
+def _unwritable(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    reserved: bool = True,
+    points_at: str = PRIMARY,
+    allowed: frozenset[str] = frozenset(),
+) -> _Client:
+    """A compartment holding everything under the appliance's names, loaded by the next run.
+
+    `reserved` False leaves the reservation out. Every step that writes runs
+    for real over it, rather than as the converge fixture's stand-in.
+    """
+    clients = _compartment()
+    kinds = clients.network.kinds
+    if not reserved:
+        kinds['public_ips'] = []
+    clients.network = _Unwritable(clients.calls, kinds, points_at=points_at, allowed=allowed)
+    clients.compute = _Unwritable(clients.calls, kinds, points_at=points_at, allowed=allowed)
+    monkeypatch.setattr(provision.OciClients, 'load', classmethod(_returning(clients)))
+    for name, writer in WRITERS.items():
+        monkeypatch.setattr(provision, name, writer)
+    monkeypatch.setattr(b2, 'ensure_bucket', BUCKET_CONVERGE)
+    return clients
+
+
+def _b2_without_the_bucket(_session: b2.Session, api: str, _body: dict[str, Any]) -> object:
+    """`_b2_reads` over an account that holds no dump bucket."""
+    if api == 'b2_list_buckets':
+        buckets: list[object] = []
+        return {'buckets': buckets}
+    raise AssertionError(f'{api} was called by a run that must only read B2')
+
+
+#: The steps a converge writes through, as the module under test defines them.
+#: Taken at import, before any fixture replaces them, so that the cases below
+#: run them over their fakes rather than trusting the stand-ins not to write.
+WRITERS: dict[str, Callable[..., Any]] = {
+    name: getattr(provision, name)
+    for name in ('ensure_network', 'ensure_security_group', 'ensure_reserved_ip', 'ensure_image', 'attach_reserved_ip')
+}
+BUCKET_CONVERGE = b2.ensure_bucket
+
+DRIFTED = dict(CURRENT) | {'butane': 'zzzz'}
+
+
+@pytest.mark.parametrize(
+    ('digests', 'reserved', 'bucket', 'status', 'said'),
+    [
+        (CURRENT, True, True, 0, 'nothing to change'),
+        (DRIFTED, True, True, 1, 'the machine definition changed: butane'),
+        (CURRENT, False, True, 1, 'no reserved address carries the appliance name'),
+        (CURRENT, True, False, 1, f'the bucket its dumps go to, {settings.B2_BUCKET}, does not exist'),
+    ],
+    ids=['matching box', 'drifted box', 'box without its reservation', 'box without its bucket'],
+)
+def test_a_plain_provision_writes_nothing_to_either_provider(
+    converge: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    digests: dict[str, str],
+    reserved: bool,
+    bucket: bool,
+    status: int,
+    said: str,
+) -> None:
+    """A report is a read: without a flag, the run compares and leaves everything as it found it.
+
+    Everything the appliance adopts by name is there, bar what a case leaves
+    out, and the box is running with the reservation pointed at it. Nothing
+    around it is as a converge would leave it -- no retention rule on the
+    bucket, no route, no security rules -- so a run that converged before it
+    judged would write here. A box whose reservation or bucket is missing is
+    reported rather than given one.
+    """
+    caplog.set_level(logging.INFO)
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(digests))
+    converge(recorder)
+    clients = _unwritable(monkeypatch, reserved=reserved)
+    if not bucket:
+        monkeypatch.setattr(b2.Session, 'post', _b2_without_the_bucket)
+
+    assert _run(force=False) == status
+
+    assert [call for call in clients.calls if not call.startswith(('list_', 'get_'))] == []
+    assert (recorder.terminated, recorder.minted, recorder.launched) == (0, 0, 0)
+    assert any(said in message for message in caplog.messages)
+
+
+def test_a_plain_provision_points_a_loose_reservation_back_at_a_matching_box(
+    converge: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The one write a run over a standing box makes, and only when it is needed.
+
+    A reservation pointing anywhere but the box leaves the box with no public
+    address at all -- it has no ephemeral one -- which is what a run that
+    stopped between a launch and its attach leaves behind.
+    """
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(CURRENT))
+    converge(recorder)
+    clients = _unwritable(monkeypatch, points_at='ocid1.privateip.elsewhere', allowed=frozenset({'update_public_ip'}))
+
+    assert _run(force=False) == 0
+
+    assert [call for call in clients.calls if not call.startswith(('list_', 'get_'))] == ['update_public_ip']
 
 
 def _returning_raise(message: str) -> Callable[..., Any]:
@@ -1835,7 +2205,7 @@ class _Compute:
         return type('Response', (), {'data': type('Instance', (), {'lifecycle_state': 'RUNNING'})()})()
 
 
-def test_a_launch_puts_the_whole_bill_of_materials_on_the_box(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_launch_puts_the_whole_bill_of_materials_on_the_box() -> None:
     """What the box carries is the only thing the next converge can read.
 
     A value the run computes and then does not attach is invisible: the box
@@ -1845,9 +2215,6 @@ def test_a_launch_puts_the_whole_bill_of_materials_on_the_box(monkeypatch: pytes
     metadata off the request, rather than off a fake that was handed the
     values.
     """
-    # Which availability domain offers the shape is a question for OCI and
-    # not part of what a launch records.
-    monkeypatch.setattr(provision, '_shape_domain', _returning('phx-ad-1'))
     compute = _Compute()
     clients = cast('Any', type('Clients', (), {'compute': compute, 'compartment_id': 'ocid1.compartment.test'})())
 
@@ -1856,6 +2223,9 @@ def test_a_launch_puts_the_whole_bill_of_materials_on_the_box(monkeypatch: pytes
         subnet_id='subnet',
         nsg_id='nsg',
         image_id='image',
+        # Which availability domain offers the shape is a question for OCI and
+        # not part of what a launch records.
+        availability_domain='phx-ad-1',
         ignition='ignition',
         digests=CURRENT,
         dump_key_id='key-id',
@@ -2042,16 +2412,13 @@ def test_the_ignition_delivers_the_host_key_the_machine_carries() -> None:
 
 
 @needs_butane
-def test_the_pin_the_launch_records_is_the_key_the_ignition_delivered(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_pin_the_launch_records_is_the_key_the_ignition_delivered() -> None:
     """A pin from a second render is a box locked out of its own diagnosis path.
 
     Both facts have to come off one `config.machine` call: the Ignition
     carries the private half, the launch metadata carries the public one, and
     nothing downstream can tell a pin on the wrong key from an interposer.
     """
-    monkeypatch.setattr(provision, 'ensure_image', _returning('image'))
-    # Which availability domain offers the shape is a question for OCI.
-    monkeypatch.setattr(provision, '_shape_domain', _returning('phx-ad-1'))
     compute = _Compute()
     clients = cast('Any', type('Clients', (), {'compute': compute, 'compartment_id': 'ocid1.compartment.test'})())
     roots = config.Roots(ca=pki.Authority.from_pem(pki.generate_ca_key()), age_recipients=('age1example',))
@@ -2060,11 +2427,15 @@ def test_the_pin_the_launch_records_is_the_key_the_ignition_delivered(monkeypatc
         clients,
         roots,
         dump_key=b2.AppKey(key_id='key-id', key='key-secret'),
-        found=_surveyed(),
-        placement=provision.Placement(vcn_id='vcn', subnet_id='subnet'),
-        nsg_id='nsg',
-        reserved=provision.ReservedAddress(id='ip-id', address=PINNED_ADDRESS),
-        bucket_id='bucket-id',
+        ground=cli.Groundwork(
+            bucket_id='bucket-id',
+            placement=provision.Placement(vcn_id='vcn', subnet_id='subnet'),
+            nsg_id='nsg',
+            reserved=provision.ReservedAddress(id='ip-id', address=PINNED_ADDRESS),
+            image_id='image',
+            # Which availability domain offers the shape is a question for OCI.
+            availability_domain='phx-ad-1',
+        ),
     )
 
     metadata = cast('dict[str, str]', compute.launched.metadata)
