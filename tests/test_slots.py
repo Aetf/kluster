@@ -17,6 +17,7 @@ import functools
 import json
 import logging
 import re
+from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,7 +28,7 @@ import yaml
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from fake_gh import RecordedGh
-from test_cli import commands as cli_commands
+from credentials_command_tree import commands as cli_commands
 
 from kluster import conventions
 from kluster.scripts.credentials import derived, devices, escrow, pki, pulumi_config, slots
@@ -502,15 +503,25 @@ def test_a_device_row_advertises_the_keys_its_own_command_writes() -> None:
         assert f'credentials derived {member} record' in row.source.describe()
 
 
-def test_the_session_password_row_names_the_device_and_the_sealed_copy_it_waits_on() -> None:
+def channels(row: slots.Row) -> set[str]:
+    """Every channel a row names in §3's vocabulary, whether it delivers into it or waits on it.
+
+    What stays true of a row across the day a pending channel lands: the
+    reason leaves `pending` and the address joins `targets`, and the channel
+    is in this set before and after.
+    """
+    return {slots.register_column(target) for target in row.targets} | set(row.pending)
+
+
+def test_the_session_password_row_names_the_device_and_the_sealed_copy() -> None:
     row = slots.ROWS[devices.BGP]
 
     # Two ends to one session: the gateway's is written onto the device by the
-    # stack that reads the key, and the worker's is a SealedSecret nothing can
-    # seal until the controller arrives. A row saying only "config secret"
-    # would read as a credential the gateway never holds.
+    # stack that reads the key, and the worker's is a SealedSecret. A row
+    # saying only "config secret" would read as a credential the gateway never
+    # holds.
     assert slots.DeviceSecret("the routing daemon's configuration") in row.targets
-    assert set(row.pending) == {'SealedSecret'}
+    assert slots.register_column(slots.SealedSecret('a manifest')) in channels(row)
 
 
 #: `secure:` keys in a committed stack file that authenticate nothing, each with
@@ -672,8 +683,7 @@ def test_the_webhook_is_a_repository_secret_of_the_ops_repository_and_has_left_t
     One sink, a repository secret of the ops repository with no Environment
     -- the handler belongs to none, so an Environment secret would be
     invisible to it and the prefix rule does not apply -- under the name the
-    handler reads. The only channel still pending is the in-cluster copy,
-    which waits on the sealed-secrets controller. And no row of the map
+    handler reads, and the in-cluster copy beside it. And no row of the map
     delivers a webhook into the deployment repository any more: the secret
     `deploy.yml` still reads there is the legacy channel, which this map
     leaves alone rather than re-syncing.
@@ -685,7 +695,7 @@ def test_the_webhook_is_a_repository_secret_of_the_ops_repository_and_has_left_t
     assert slot.environment is None
     assert slot.name == 'HA_WEBHOOK_URL'
     assert not slot.name.startswith(f'{DRILL_ENVIRONMENT.upper()}_')
-    assert set(row.pending) == {'SealedSecret'}
+    assert slots.register_column(slots.SealedSecret('a manifest')) in channels(row)
     assert not [
         slot
         for row in slots.ROWS.values()
@@ -763,16 +773,23 @@ def test_the_freshness_key_is_two_repository_secrets_named_as_the_probe_reads_th
     assert not any(slot.name.startswith(f'{DRILL_ENVIRONMENT.upper()}_') for slot in row.sinks)
 
 
-def test_the_etcd_freshness_key_is_a_second_row_that_waits_on_its_bucket() -> None:
+def test_the_etcd_freshness_key_is_a_second_row_with_slots_of_its_own() -> None:
     # A B2 key confines to one bucket, so the etcd snapshots' probe cannot
-    # share the state dumps' key; its row says what it waits on rather than
-    # naming a secret a future workflow would have to guess right.
+    # share the state dumps' key: a row of its own, minted, addressing the
+    # ops repository.
     row = slots.ROWS['b2-freshness-etcd']
 
     assert isinstance(row.source, slots.Minted)
-    assert row.source.unbuilt
-    assert not row.sinks
-    assert set(row.pending) == {'ops-repo secret'}
+    assert slots.register_column(Slot(repository=OPS_REPOSITORY, name='A_SECRET')) in channels(row)
+
+
+def test_no_github_secret_is_filled_by_two_rows() -> None:
+    # Two rows pushing one secret overwrite each other on every `derived sync`,
+    # and which value survives is the order of the map.
+    filled = Counter(slot for row in slots.ROWS.values() for slot in row.sinks)
+
+    assert filled
+    assert [slot for slot, count in filled.items() if count > 1] == []
 
 
 def test_an_ops_repo_environment_secret_is_named_after_its_environment() -> None:
@@ -1239,16 +1256,31 @@ def test_naming_a_minted_row_is_refused_by_pointing_at_the_command_that_mints_it
         _ = slots.sync(context(RecordedGh()), only='oci-physical')
 
 
+#: A row with no GitHub slot, waiting on two channels: the case the two tests
+#: below are about, set up here rather than borrowed from whichever row of the
+#: map is waiting today.
+WAITING = slots.Row(
+    register='a credential',
+    source=slots.Derived('a-label'),
+    targets=(slots.PulumiState('a-stack', 'a value'),),
+    pending={
+        'ops-repo secret': 'the workflow that would read it is not built',
+        'SealedSecret': 'the controller that would open it is not installed',
+    },
+)
+
+
 def test_a_row_with_no_github_slot_is_skipped_with_its_reason(caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.INFO)
     gh = RecordedGh()
 
-    pushed = slots.sync(context(gh, open_vault=opened), rows={'talos': slots.ROWS['talos']})
+    pushed = slots.sync(context(gh), rows={'waiting': WAITING})
 
     assert pushed == []
+    assert gh.invocations == []
     # Under the channel it is about: the operator reads which slot is waiting,
     # not a sentence they have to match to a cell of §3 themselves.
-    for channel, why in slots.ROWS['talos'].pending.items():
+    for channel, why in WAITING.pending.items():
         assert f'{channel}: {why}' in caplog.text
 
 
@@ -1269,8 +1301,12 @@ def test_a_row_that_cannot_produce_its_value_does_not_stop_the_walk(caplog: pyte
 def test_naming_a_row_with_no_github_slot_is_refused_rather_than_ignored() -> None:
     # A request for one specific row that quietly does nothing is worse than a
     # refusal: the operator walks away believing the slot is filled.
+    gh = RecordedGh()
+
     with pytest.raises(SlotRefused, match='no GitHub secret slot'):
-        _ = slots.sync(context(RecordedGh()), only='talos')
+        _ = slots.sync(context(gh), rows={'waiting': WAITING}, only='waiting')
+
+    assert gh.invocations == []
 
 
 def test_an_unknown_row_name_is_refused_before_anything_is_pushed() -> None:

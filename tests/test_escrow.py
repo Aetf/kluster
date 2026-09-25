@@ -87,6 +87,20 @@ def test_init_refuses_to_replace_a_recovery_key(kit: KdbxStore, registry: escrow
         _ = escrow.init(kit, registry)
 
 
+def test_init_refuses_a_recipients_file_already_in_the_repo(kit: KdbxStore, registry: escrow.Registry) -> None:
+    # A kit with no recovery row beside a committed recipients file: the file
+    # belongs to a key some other kit holds, and replacing it would re-point
+    # every future ciphertext away from the key that opens the existing ones.
+    registry.set_recipients([age.generate().public])
+    before = registry.recipients_file.read_text()
+
+    with pytest.raises(escrow.EscrowError, match='already exists'):
+        _ = escrow.init(kit, registry)
+
+    assert registry.recipients_file.read_text() == before
+    assert not kit.has(escrow.RECOVERY_ENTRY)
+
+
 def test_a_generated_secret_comes_back_out(vault: escrow.Vault) -> None:
     minted = escrow.generate(vault.registry, escrow.PASSPHRASE)
 
@@ -119,6 +133,21 @@ def test_generating_again_is_a_new_generation_beside_the_old_one(vault: escrow.V
     # generation is adopted is generation one.
     assert vault.recover(escrow.PASSPHRASE, 1) == first
     assert vault.recover(escrow.PASSPHRASE) == second
+
+
+def test_generations_count_as_numbers_past_nine(vault: escrow.Vault) -> None:
+    # Ordered as text, `10.age` sorts before `2.age`: generation nine would
+    # read as the latest, and the next write would be filed as ten, over the
+    # ciphertext already there.
+    minted = [escrow.generate(vault.registry, escrow.PASSPHRASE) for _ in range(10)]
+    assert vault.registry.generations(escrow.PASSPHRASE) == list(range(escrow.FIRST, escrow.FIRST + 10))
+    assert vault.recover(escrow.PASSPHRASE) == minted[-1]
+
+    eleventh = escrow.generate(vault.registry, escrow.PASSPHRASE)
+
+    assert vault.registry.latest(escrow.PASSPHRASE) == escrow.FIRST + 10
+    assert vault.recover(escrow.PASSPHRASE) == eleventh
+    assert vault.recover(escrow.PASSPHRASE, escrow.FIRST + 9) == minted[-1]
 
 
 def test_one_labels_rotation_leaves_every_other_label_alone(vault: escrow.Vault) -> None:
@@ -582,6 +611,35 @@ def test_check_catches_a_stray_file(vault: escrow.Vault) -> None:
     problems = escrow.check(vault.registry)
 
     assert any('neither a ciphertext' in problem for problem in problems)
+
+
+def test_check_names_a_label_the_register_does_not(vault: escrow.Vault) -> None:
+    # A ciphertext nothing in the register reads is either a label renamed out
+    # from under its consumer or a secret nobody will ever rotate; both are
+    # the operator's to decide, so `check` says so rather than passing.
+    _ = _filled(vault.registry)
+    unregistered = 'nobody/reads-this'
+    assert unregistered not in escrow.register()
+    stray = vault.registry.path(unregistered, escrow.FIRST)
+    stray.parent.mkdir(parents=True)
+    _ = stray.write_text(age.encrypt('a secret', vault.registry.recipients()))
+
+    (problem,) = escrow.check(vault.registry)
+
+    assert problem.startswith(f'{unregistered}:')
+
+
+def test_check_names_a_recipient_that_is_not_one(vault: escrow.Vault) -> None:
+    # Every later write encrypts to the file's lines, so a line that is not an
+    # age recipient is a write that fails on the day a secret needs escrowing.
+    _ = _filled(vault.registry)
+    # The likeliest slip: the private half pasted where the public one goes.
+    malformed = age.generate().secret
+    vault.registry.set_recipients([*vault.registry.recipients(), malformed])
+
+    (problem,) = escrow.check(vault.registry)
+
+    assert repr(malformed) in problem
 
 
 def test_check_wants_no_kit(registry: escrow.Registry) -> None:

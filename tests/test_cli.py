@@ -25,15 +25,15 @@ names anyone has to keep.
 
 from __future__ import annotations
 
-import argparse
 import inspect
 import io
 import types
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pytest
+from credentials_command_tree import commands
 
 from kluster.scripts.credentials import cli, devices, entries, escrow, masters
 from kluster.scripts.credentials.kdbx import PATH_ENV, KdbxStore
@@ -42,48 +42,6 @@ PASSWORD = 'kit-password'
 
 #: The refusal a seed row with no implementation produces (`cli.main`).
 REFUSAL = 'not yet implemented'
-
-
-def _subparsers(parser: argparse.ArgumentParser) -> argparse._SubParsersAction[argparse.ArgumentParser] | None:  # pyright: ignore[reportPrivateUsage]
-    for action in parser._actions:  # pyright: ignore[reportPrivateUsage]
-        if isinstance(action, argparse._SubParsersAction):  # pyright: ignore[reportPrivateUsage]
-            return cast('argparse._SubParsersAction[argparse.ArgumentParser]', action)  # pyright: ignore[reportPrivateUsage]
-    return None
-
-
-def _fill(parser: argparse.ArgumentParser, into: list[str]) -> None:
-    """Append whatever this level insists on, so a leaf can be reached at all.
-
-    Values are placeholders: every handler is stubbed, so only the dispatch
-    sees them. Required-ness is read off the parser rather than listed here,
-    which is what keeps a newly required option from silently going untested.
-    """
-    for action in parser._actions:  # pyright: ignore[reportPrivateUsage]
-        if isinstance(action, argparse._SubParsersAction | argparse._HelpAction):  # pyright: ignore[reportPrivateUsage]
-            continue
-        placeholder = 'placeholder.kdbx' if action.type is Path else 'placeholder'
-        if action.option_strings:
-            if action.required:
-                into.extend((action.option_strings[0], placeholder))
-        elif action.nargs not in ('?', '*'):
-            into.append(placeholder)
-
-
-def leaves(parser: argparse.ArgumentParser) -> Iterator[list[str]]:
-    """Every command that can actually be run, as the argv that runs it."""
-    prefix: list[str] = []
-    _fill(parser, prefix)
-    subparsers = _subparsers(parser)
-    if subparsers is None:
-        yield prefix
-        return
-    for name, child in subparsers.choices.items():
-        for tail in leaves(child):
-            yield [*prefix, name, *tail]
-
-
-def commands() -> list[list[str]]:
-    return list(leaves(cli.build_parser()))
 
 
 def _module_for(member: str) -> types.ModuleType | None:
@@ -661,6 +619,69 @@ def test_check_runs_without_opening_a_kit(dispatch: Dispatch) -> None:
 
     assert 'escrow.check' in dispatch.reached
     assert not [name for name in dispatch.reached if name.startswith('store.')]
+
+
+def test_check_fails_on_a_registry_with_nothing_in_it(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    # The real check rather than the stub: its exit status is what says a kit
+    # may be destroyed (credentials.md §4.2), so a registry with nothing in it --
+    # no recipients file, no label escrowed -- has to fail the command, not
+    # only print why.
+    empty = tmp_path / 'escrow'
+
+    assert cli.main(['--escrow', str(empty), 'derived', 'check']) == 1
+
+    assert escrow.RECIPIENTS_FILE in caplog.text
+
+
+def test_check_fails_on_a_single_problem_of_any_kind(
+    dispatch: Dispatch, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # One problem is enough, and it need not be a missing label: the status
+    # answers "is the registry whole", not "is it badly broken" or "is
+    # anything still to mint".
+    problem = 'escrow/x/1.age.bak: neither a ciphertext nor part of the registry'
+
+    def check(_registry: escrow.Registry) -> list[str]:
+        return [problem]
+
+    monkeypatch.setattr(cli.escrow, 'check', check)
+
+    assert cli.main(['derived', 'check']) == 1
+
+    assert problem in caplog.text
+
+
+class _Terminal(io.StringIO):
+    """Standard output as an interactive session has it."""
+
+    def isatty(self) -> bool:
+        return True
+
+
+@pytest.mark.parametrize('slotted', [True, False], ids=['asked-to-print', 'no-slot-to-write'])
+def test_recover_refuses_to_print_a_secret_to_a_terminal(
+    slotted: bool, dispatch: Dispatch, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A secret in the scrollback is a secret in the next screen-share, so the
+    # value is printed only into a pipe: a row with no slot to write, or one
+    # told to print instead, refuses where stdout is the terminal. One row
+    # both ways, with the slot taken away here rather than found in the
+    # register, so neither case rests on which rows have one today.
+    terminal = _Terminal()
+    monkeypatch.setattr('sys.stdout', terminal)
+    if not slotted:
+
+        def slot(_label: str) -> escrow.WorkstationSlot | None:
+            return None
+
+        monkeypatch.setattr(cli.escrow, 'slot', slot)
+    argv = ['derived', 'pulumi-passphrase', 'recover', *(['--stdout'] if slotted else [])]
+
+    assert cli.main(argv) == 1
+
+    assert 'a-secret' not in terminal.getvalue()
+    assert 'pipe it somewhere' in caplog.text
+    assert 'workstation.write' not in dispatch.reached
 
 
 def test_seed_create_dispatches_the_row_the_member_names(dispatch: Dispatch) -> None:
