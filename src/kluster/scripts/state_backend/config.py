@@ -350,7 +350,7 @@ class Machine:
     #: fresh by every render like the server key above and delivered the same
     #: way. `NEVER` for the same two reasons, and for one more: its public
     #: half is what `ssh` pins the connection against, and a digest of the
-    #: private one in cloud metadata would buy nothing towards that.
+    #: private one in cloud metadata would buy nothing toward that.
     #: Rotating it is `provision --replace`.
     ssh_host_key: str = _digested(Digested.NEVER)
     age_recipients: tuple[str, ...] = _digested()

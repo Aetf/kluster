@@ -2882,7 +2882,7 @@ def test_an_empty_escrow_beside_a_running_box_refuses_to_generate(empty_escrow: 
         assert empty_escrow.registry.generations(label) == []
 
 
-# -- the certificate the box is walking towards the end of ---------------------
+# -- the certificate the box is walking toward the end of ----------------------
 
 
 def test_the_recorded_expiry_is_the_certificate_s_death_not_its_birth() -> None:

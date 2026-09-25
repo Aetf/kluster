@@ -283,7 +283,7 @@ def _rebuild_reasons(
 
     One reason is not a comparison against the repository at all: the server
     certificate's remaining life. Every digested component is re-derived here
-    and is therefore always young, so an expiry the box is walking towards is
+    and is therefore always young, so an expiry the box is walking toward is
     invisible to equality; what the box records is when its own certificate
     dies, and `config.renewal_due` reads that against the clock.
 

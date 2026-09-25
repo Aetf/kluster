@@ -753,7 +753,7 @@ def test_a_re_run_rotates_the_key_and_reuses_the_identity(
     # Rotating the row is re-running the command: the same principal, a new
     # key, and the predecessor retired once the successor is verified and the
     # slot has taken it — so a run that gets that far leaves the user holding
-    # one key rather than accumulating towards `oci_iam.KEY_QUOTA`.
+    # one key rather than accumulating toward `oci_iam.KEY_QUOTA`.
     assert again == user
     second = runner.config[derived.OCI_PRIVATE_KEY_KEY]
     assert second != first

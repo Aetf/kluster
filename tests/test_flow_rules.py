@@ -5,7 +5,7 @@ mistake in them shows up as a job that cannot reach the gateway — or, far wors
 as one that can reach everything. These cases therefore assert what the design
 argues for rather than the rendering: that each allowed flow is declared in both
 directions, that a run reaches four destinations and no fifth one, that nothing
-may open a connection towards a run, and that everyone else falls through
+may open a connection toward a run, and that everyone else falls through
 untouched.
 
 `flow_rules` is a pure function of what it is handed, so the addresses the
