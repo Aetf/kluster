@@ -105,11 +105,11 @@ does, `check` adds two properties to every resource's checked inputs --
 `session`, the endpoint and a short digest of the credential, and
 `provider_version`, this module's own version. The engine compares checked
 inputs, so a rotation and a change to this module's behavior each render as a
-property diff no caller declared (rfc-002 §7.4). Neither is a change to the
-device: an update whose declared inputs all match re-stamps the resource and
-writes nothing. That whole shape is `kluster.providers.configured`, which every
-custom provider here shares; what is this module's own is which key holds the
-credential and what an endpoint is.
+property diff no caller declared (framework/pulumi.md §5.2). Neither is a change
+to the device: an update whose declared inputs all match re-stamps the resource
+and writes nothing. That whole shape is `kluster.providers.configured`, which
+every custom provider here shares; what is this module's own is which key holds
+the credential and what an endpoint is.
 
 **Only the path is a replacement.** The bytes cannot be at two paths at once, so
 a moved file is created before the old one is deleted. Nothing else about a
@@ -266,9 +266,10 @@ PRIVATE_KEY_CONFIG = 'gatewayPrivateKey'
 VERSION = '4'
 
 #: What `diff` compares, and the whole of it. Its `olds` is the stored *output*
-#: bag while its `news` is the checked *input* bag (rfc-002 §7.5 E7), so a key
-#: that only an operation's outs ever carried lives in `olds` alone -- and a
-#: provider comparing the two bags wholesale reports a change on every run.
+#: bag while its `news` is the checked *input* bag (framework/pulumi.md §5.3
+#: E7), so a key that only an operation's outs ever carried lives in `olds`
+#: alone -- and a provider comparing the two bags wholesale reports a change on
+#: every run.
 FILE_COMPARED = (*FILE_DECLARED, *STAMPS)
 ARTIFACT_COMPARED = (*ARTIFACT_DECLARED, *STAMPS)
 DIRECTORY_COMPARED = (*DIRECTORY_DECLARED, *STAMPS)
@@ -815,8 +816,9 @@ class DeviceFileProvider(DeviceProvider):
     def update(self, _id: str, olds: dict[str, Any], news: dict[str, Any]) -> dynamic.UpdateResult:
         if not run_sync(self._restamp_only(olds, news, FILE_DECLARED)):
             run_sync(self._apply(news))
-        # The outs replace the stored output bag (rfc-002 §7.5 E9), so what state
-        # says about the session that last wrote this file stays true.
+        # The outs replace the stored output bag (framework/pulumi.md §5.3 E9),
+        # so what state says about the session that last wrote this file stays
+        # true.
         return dynamic.UpdateResult(outs=news)
 
     def read(self, id_: str, props: dict[str, Any]) -> dynamic.ReadResult:

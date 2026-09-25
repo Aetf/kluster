@@ -173,10 +173,15 @@ async def test_the_scope_ends_at_register_outputs() -> None:
 
 
 class BuildsProvider(Component, pulumi_type='test:BuildsProvider'):
-    """A component that builds its own provider, with or without owning it.
+    """A component that registers a provider during its own construction.
 
-    rfc-002 §8.1 builds a provider inside the component whose credential opens
-    it, which makes the provider that component's child like anything else.
+    What the cases below ask is whether the backstop exempts a provider, and it
+    does not (framework/pulumi.md §1.3): registered inside a component's scope
+    with no parent, a provider is refused like any other resource, and given one
+    it passes. The child form here is the simplest parent to give it.
+    The shape the tree builds is a sibling instead — a component that owns a
+    connection builds its provider before its own registration, with
+    `putils.own_provider_opts`, which hands it the component's own parent.
     """
 
     def __init__(self, name: str, *, parented: bool) -> None:
@@ -197,7 +202,7 @@ async def test_a_provider_built_inside_a_component_without_a_parent_is_refused()
 
 @pytest.mark.asyncio
 async def test_a_provider_owned_by_the_component_that_built_it_passes() -> None:
-    """Which is the shape rfc-002 §8.1 asks for."""
+    """A parent is all the backstop asks of a provider, as of anything else."""
     component = BuildsProvider('owned-provider', parented=True)
     assert await component.provider.urn.future() is not None
 

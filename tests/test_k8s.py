@@ -18,8 +18,9 @@ from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
 
-#: Chart pins, in the namespace every version pin shares: the kind is the key's
-#: prefix rather than a namespace of its own (rfc-002 §11.1).
+#: Chart pins, in the namespace every pin a stack program reads shares: the kind
+#: is the key's prefix rather than a namespace of its own (framework/pulumi.md
+#: §3.2).
 CHART_CONFIG = {
     'versions:chart-cilium': 'https://helm.cilium.io/:1.20.0',
     'versions:chart-registry-only': 'oci://example.invalid/charts/thing:0.4.0',

@@ -9,10 +9,11 @@
     dynamic-provider mechanism and its measured semantics in
     [framework/pulumi.md](../framework/pulumi.md) §5 with the rendered-configuration
     and version-pin mechanisms in §6 and §3.2, the provider, configuration and
-    data rules in [style/pulumi.md](../style/pulumi.md), the source layering in
-    AGENTS.md and `pyproject.toml`'s import contract, and everything declared —
-    the component tree, the per-node capabilities, the roster, the stack's
-    configuration surface — in [declarative/physical.md](../declarative/physical.md)
+    data rules in [style/pulumi.md](../style/pulumi.md), what each source layer
+    is for in the same document under "Layering" with the layers and the
+    forbidden edges themselves in `pyproject.toml`'s import contract, and
+    everything declared — the component tree, the per-node capabilities, the
+    roster, the stack's configuration surface — in [declarative/physical.md](../declarative/physical.md)
     and [physical/gateway.md](../physical/gateway.md). Where this text and a
     design document disagree, the design document is right. **Decisions that
     moved during construction: the endpoint, §4.3's bridge dependency, the

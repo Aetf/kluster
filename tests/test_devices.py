@@ -72,10 +72,10 @@ def required(name: str) -> dict[str, bool]:
     exists only to configure a provider is read at the line that builds that
     provider, which for a provider a single component owns is inside the
     component (rfc-002 §8.1) and for a dynamic provider is its `configure`
-    (§7.4) -- so the components and the custom providers are searched too. That
-    makes the answer the union over the tree rather than per stack, which is
-    exact enough here because no two stacks name a key the same way and each
-    device row asks only about its own keys.
+    (framework/pulumi.md §5.2) -- so the components and the custom providers
+    are searched too. That makes the answer the union over the tree rather than
+    per stack, which is exact enough here because no two stacks name a key the
+    same way and each device row asks only about its own keys.
 
     The two readers say "encrypted" differently. A stack program or a component
     holds a `pulumi.Config` and chooses the channel by which method it calls, so

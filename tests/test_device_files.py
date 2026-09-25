@@ -8,10 +8,10 @@ has replaced everything that leaves the runner, and no test opens a socket.
 
 **A provider under test is configured first**, because a provider in production
 is: the plugin deserializes it out of a resource's `__provider` property and
-calls `configure` before handing it any operation (rfc-002 §7.5 E2). `configured`
-below does that with a `ConfigureRequest` built the way the plugin builds one --
-the same class, the same project namespace -- so what the tests exercise is the
-real ordering rather than an attribute set by hand.
+calls `configure` before handing it any operation (framework/pulumi.md §5.3
+E2). `configured` below does that with a `ConfigureRequest` built the way the
+plugin builds one -- the same class, the same project namespace -- so what the
+tests exercise is the real ordering rather than an attribute set by hand.
 """
 
 from __future__ import annotations
@@ -260,8 +260,9 @@ def device(monkeypatch: pytest.MonkeyPatch) -> Device:
 
 #: The project the configuration keys below are namespaced by, and the one this
 #: module's declarations are mocked under. An unqualified key is resolved
-#: against the running project, which is how the plugin finds it (rfc-002 §7.5
-#: E2); which project that is has no bearing on anything asserted here.
+#: against the running project, which is how the plugin finds it
+#: (framework/pulumi.md §5.3 E2); which project that is has no bearing on
+#: anything asserted here.
 PROJECT = 'kluster'
 
 
