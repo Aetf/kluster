@@ -10,6 +10,10 @@ here rather than stopping at a named gap. What replaces that gap as a test is
 the same worry stated positively — each provider of the design has to appear in
 what the run registered, because an area that quietly declared nothing would
 leave a stack that comes up looking whole.
+
+Every run here is under the parent backstop `kluster.main` installs before a
+real run declares anything, so a resource a component leaves unparented fails
+the run here rather than in `pulumi preview`.
 """
 
 import inspect
@@ -23,7 +27,8 @@ import pulumi
 import pytest
 import pytest_asyncio
 from device_places import DEVICE_TYPE_PREFIX, PLACES
-from mock_monitor import Recorder, declaring, run_with
+from mock_monitor import Recorder, declaring, run_under_backstop
+from unifi_controller import Controller, zone_id
 
 from oci_conventions import with_compartment, with_tenancy_ocid
 from kluster import conventions
@@ -86,10 +91,10 @@ GATEWAY_CONFIG = {
     'kluster:zerotierApiToken': 'a-central-token',
 }
 
-#: The version pins, in the namespace they share (rfc-002 §11.1). They are
-#: project-level configuration in the committed tree — one copy for five stacks
-#: — and the runtime cannot tell that from a stack's own key, which is exactly
-#: why one namespace works.
+#: The version pins a stack program reads, in the namespace they share
+#: (framework/pulumi.md §3.2). They are project-level configuration in the
+#: committed tree — one copy for five stacks — and the runtime cannot tell that
+#: from a stack's own key, which is exactly why one namespace works.
 VERSIONS_CONFIG = {
     'versions:talos': 'v1.11.0',
     **{
@@ -112,15 +117,17 @@ ACCOUNT_CONFIG = {
 }
 
 
-class Installation(Recorder):
+class Installation(Controller):
     """Every account and appliance the program reaches, as far as it reads them back.
 
     The values are invented; what the suite is for is that each is read at the
-    right line and reaches the right resource.
+    right line and reaches the right resource. The controller's zone lookup is
+    the shared stand-in's (`unifi_controller`), on the site the gateway is
+    declared against.
     """
 
     def __init__(self) -> None:
-        super().__init__()
+        super().__init__(site=conventions.gateway.UNIFI_SITE)
         #: The arguments each machine configuration was rendered from. An
         #: invoke's arguments survive nowhere else, and two of them are read
         #: back: the cluster endpoint, the one place the Kubernetes API port is
@@ -162,9 +169,6 @@ class Installation(Recorder):
 
     def answer(self, args: pulumi.runtime.MockCallArgs) -> dict[str, Any]:
         match args.token:
-            case 'unifi:index/getFirewallZone:getFirewallZone':
-                name = str(cast('dict[str, Any]', args.args)['name'])
-                return {'id': f'zone-{name}', 'name': name, 'networks': [], 'site': 'default'}
             case 'oci:Core/getServices:getServices':
                 return {'services': [{'id': 'ocid1.service.os', 'name': 'Object Storage', 'cidrBlock': 'oci-os'}]}
             case 'oci:Core/getVnicAttachments:getVnicAttachments':
@@ -191,7 +195,7 @@ class Installation(Recorder):
                 url = f'https://factory.talos.dev/image/test/v1.11.0/{platform}-arch.{suffix}'
                 return {'urls': {'diskImage': url}}
             case _:
-                return {}
+                return super().answer(args)
 
 
 #: The compartment the stack acts in, as `conventions` will carry it once the
@@ -234,7 +238,7 @@ async def setup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Installation
     # behind and, worse, overwrite the operator's.
     monkeypatch.setattr(workstation, 'repo_root', lambda: tmp_path)
     pulumi.runtime.set_all_config(dict(STACK_CONFIG))
-    return await run_with(Installation(), stack='physical')
+    return await run_under_backstop(Installation(), stack='physical')
 
 
 #: The provider of each area the design has, by the prefix its type tokens
@@ -344,7 +348,7 @@ async def test_the_cluster_zone_is_opened_to_the_home_with_the_iot_vlan_carved_o
 
     name = f'{conventions.CLUSTER_NAME}-firewall'
     zone = f'{name}-zone_id'
-    internal = 'zone-Internal'
+    internal = zone_id('Internal')
 
     outward = setup.inputs_of(f'{name}-cluster-internal')
     assert outward['action'] == 'ALLOW'
@@ -740,7 +744,7 @@ async def test_every_output_dns_reads_across_the_reference_is_one_this_program_e
         await physical.main()
 
     pulumi.runtime.set_all_config({f'kluster:{dns.CLOUDFLARE_API_TOKEN}': 'a-zones-token'})
-    reader = await run_with(ExportedPhysical(set(exported)), stack='dns')
+    reader = await run_under_backstop(ExportedPhysical(set(exported)), stack='dns')
     async with declaring():
         await dns.main()
 
@@ -1069,8 +1073,8 @@ def test_no_provider_namespace_is_read_at_all() -> None:
     nothing in the program says so. With every provider built explicitly there
     is nothing left for one to carry, so the committed file holds none.
 
-    Two namespaces, not one: `versions:` is this repository's own, holding the
-    pins every stack shares (§11.1).
+    Two namespaces, not one: `versions:` is this repository's own, holding
+    every pin a stack program reads (framework/pulumi.md §3.2).
     """
     namespaces = {key.partition(':')[0] for key in STACK_CONFIG}
     assert namespaces == {'kluster', 'versions'}
@@ -1106,8 +1110,9 @@ async def test_the_program_never_reads_the_devices_own_credential() -> None:
     """`gatewayPrivateKey` configures a provider, so the provider reads it.
 
     For a dynamic provider that line is `configure`, in the plugin's process
-    (rfc-002 §7.4) — so the key is absent from every read this program performs,
-    and a run whose configuration lacks it gets as far as declaring the gateway.
+    (framework/pulumi.md §5.2) — so the key is absent from every read this
+    program performs, and a run whose configuration lacks it gets as far as
+    declaring the gateway.
     What the device-files provider does with a configuration that lacks it is
     the provider's own test.
     """

@@ -7,9 +7,12 @@ to a secondary private IP rather than an ephemeral one, or that moving a
 management port renames nothing that state or the balancer keys on.
 """
 
-from typing import Any
+from collections import Counter
+from itertools import product
+from typing import Any, cast
 
 import pulumi
+import pulumi_oci as oci
 import pytest
 import pytest_asyncio
 from mock_monitor import Declaration, Recorder, declaring, decline_every_invoke, run_with
@@ -17,6 +20,7 @@ from mock_monitor import Declaration, Recorder, declaring, decline_every_invoke,
 from kluster import conventions
 from kluster.components.cloud.nodes import CloudNodes, NodeLoadBalancer
 from kluster.conventions import ManagementPorts
+from kluster.stacks import physical
 
 COMPARTMENT_ID = 'ocid1.compartment.test'
 SUBNET_ID = 'ocid1.subnet.test'
@@ -41,8 +45,22 @@ LB_IP_ADDRESSES = [
 SINGLE_STACK = 'lb-v4-only'
 
 
+#: A region of three availability domains, each offering the three fault
+#: domains OCI names the same way in every AD. Three of each is the smallest
+#: region where spreading across ADs first and filling one AD first give
+#: different fleets.
+AVAILABILITY_DOMAINS = [f'ZRbp:PHX-AD-{n}' for n in (1, 2, 3)]
+FAULT_DOMAINS = [f'FAULT-DOMAIN-{n}' for n in (1, 2, 3)]
+
+
 class Oci(Recorder):
-    """What the account reads back: the balancer's addresses, and the node's VNIC."""
+    """What the account reads back: the balancer's addresses, the node's VNIC, and the region's domains."""
+
+    def __init__(self, availability_domains: list[str] = AVAILABILITY_DOMAINS) -> None:
+        super().__init__()
+        #: The ADs the region offers, which a case narrows to stand in for a
+        #: smaller region.
+        self.availability_domains: list[str] = availability_domains
 
     def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
         if args.typ == 'oci:NetworkLoadBalancer/networkLoadBalancer:NetworkLoadBalancer':
@@ -51,9 +69,18 @@ class Oci(Recorder):
         return {}
 
     def answer(self, args: pulumi.runtime.MockCallArgs) -> dict[str, Any]:
-        if args.token == 'oci:Core/getVnicAttachments:getVnicAttachments':
-            return {'vnicAttachments': [{'vnicId': VNIC_ID}]}
-        return {}
+        match args.token:
+            case 'oci:Core/getVnicAttachments:getVnicAttachments':
+                return {'vnicAttachments': [{'vnicId': VNIC_ID}]}
+            case 'oci:Identity/getAvailabilityDomains:getAvailabilityDomains':
+                return {'availabilityDomains': [{'name': name} for name in self.availability_domains]}
+            case 'oci:Identity/getFaultDomains:getFaultDomains':
+                # Only for an AD the region has: a lookup that named another
+                # would be reading a region that is not this one.
+                assert cast('dict[str, Any]', args.args)['availabilityDomain'] in self.availability_domains
+                return {'faultDomains': [{'name': name} for name in FAULT_DOMAINS]}
+            case _:
+                return {}
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -61,21 +88,22 @@ async def monitor() -> Oci:
     return await run_with(Oci(), stack='physical')
 
 
-#: Three availability domains, each with the three fault domains OCI offers,
-#: laid out the way the stack's `_placements` orders them: every AD used once
-#: before any AD is used twice.
-PLACEMENTS = [
-    ('ZRbp:PHX-AD-1', 'FAULT-DOMAIN-1'),
-    ('ZRbp:PHX-AD-2', 'FAULT-DOMAIN-1'),
-    ('ZRbp:PHX-AD-3', 'FAULT-DOMAIN-1'),
-]
+async def placements() -> list[tuple[str, str]]:
+    """The order the stack hands its nodes placements in, read off the region the monitor answers for.
+
+    The stack's own function rather than a list written to match it: the fleet
+    below is declared from what the program would give it, so a change to the
+    order reaches these cases instead of passing beside them.
+    """
+    cloud = oci.Provider('placements-oci', region='us-phoenix-1')
+    return await physical._placements(COMPARTMENT_ID, cloud)  # pyright: ignore[reportPrivateUsage]
 
 
 def build_balancer(name: str = 'lb') -> NodeLoadBalancer:
     return NodeLoadBalancer(name, compartment_id=COMPARTMENT_ID, subnet_id=SUBNET_ID)
 
 
-def build_nodes(placements: list[tuple[str, str]] = PLACEMENTS) -> CloudNodes:
+def build_nodes(placements: list[tuple[str, str]]) -> CloudNodes:
     return CloudNodes(
         'kluster',
         compartment_id=COMPARTMENT_ID,
@@ -91,10 +119,10 @@ def build_nodes(placements: list[tuple[str, str]] = PLACEMENTS) -> CloudNodes:
     )
 
 
-@pytest.fixture
-def nodes(monitor: Oci) -> CloudNodes:
+@pytest_asyncio.fixture
+async def nodes(monitor: Oci) -> CloudNodes:
     """The fleet as the stack declares it; only one case varies its placements."""
-    return build_nodes()
+    return build_nodes(await placements())
 
 
 @pytest.fixture
@@ -111,10 +139,31 @@ async def test_no_two_nodes_share_an_availability_domain(nodes: CloudNodes) -> N
 
 
 @pytest.mark.asyncio
-async def test_a_single_ad_region_spreads_across_fault_domains_instead(monitor: Oci) -> None:
-    one_ad = [('ZRbp:PHX-AD-1', f'FAULT-DOMAIN-{n}') for n in (1, 2, 3)]
+async def test_every_availability_domain_is_used_once_before_any_is_used_twice(monitor: Oci) -> None:
+    """An AD is the independent failure domain, and a fault domain only the tiebreak (nodes.md §5).
 
-    nodes = build_nodes(one_ad)
+    Read over every prefix of the order, because a fleet takes the first
+    placements and is any size: at no length may one AD hold two nodes while
+    another holds none. In a region whose ADs each offer the same fault
+    domains, as OCI's do, the whole order is every pairing once, so a fleet
+    larger than the ADs is spread across fault domains rather than stacked on
+    one.
+    """
+    order = await placements()
+
+    assert sorted(order) == sorted(product(AVAILABILITY_DOMAINS, FAULT_DOMAINS))
+    for length in range(1, len(order) + 1):
+        taken = Counter(domain for domain, _ in order[:length])
+        counts = [taken[domain] for domain in AVAILABILITY_DOMAINS]
+        assert max(counts) - min(counts) <= 1, f'the first {length} placements are {order[:length]}'
+
+
+@pytest.mark.asyncio
+async def test_a_single_ad_region_spreads_across_fault_domains_instead() -> None:
+    """The fleet the stack declares in a region of one AD, from the order the stack computes for it."""
+    _ = await run_with(Oci(AVAILABILITY_DOMAINS[:1]), stack='physical')
+
+    nodes = build_nodes(await placements())
 
     domains = [await instance.fault_domain.future() for instance in nodes.instances.values()]
     assert len(set(domains)) == 3
@@ -171,9 +220,12 @@ async def test_a_vnic_lookup_the_engine_declines_leaves_the_vip_unknown_rather_t
     ask which kind of run it is in.
     """
     _ = await run_with(Oci(), stack='physical', preview=True)
+    # Read before the invokes are declined: the placements are the stack
+    # program's lookups, and the one declined here is the component's.
+    order = await placements()
     decline_every_invoke()
 
-    nodes = build_nodes()
+    nodes = build_nodes(order)
 
     assert await nodes.secondary_ip.vnic_id.is_known() is False
     assert await nodes.secondary_ip.display_name.is_known() is True
@@ -226,8 +278,9 @@ async def declared_per_port(ports: ManagementPorts, monkeypatch: pytest.MonkeyPa
     """The fleet and its balancer declared under `ports`, read back per management port."""
     recorder = await run_with(Oci(), stack='physical')
     monkeypatch.setattr(conventions, 'MANAGEMENT_PORTS', ports)
+    order = await placements()
     async with declaring():
-        _ = build_nodes()
+        _ = build_nodes(order)
     return [it for it in recorder.declared if it.typ in {BACKEND_SET, LISTENER, BACKEND}]
 
 

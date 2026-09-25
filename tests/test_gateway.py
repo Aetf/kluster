@@ -4,6 +4,10 @@ What the component decides for itself rather than delegating: which layers it
 builds and in which order they are allowed to actuate, what package set the
 device is asked for, and the one file that answers to a daemon instead of to
 the boot chain.
+
+The run is under the parent backstop `kluster.main` installs before a real run
+declares anything, so a child the component tree leaves unparented fails here
+rather than in `pulumi preview`.
 """
 
 from __future__ import annotations
@@ -11,7 +15,7 @@ from __future__ import annotations
 import pulumi
 import pytest
 import pytest_asyncio
-from mock_monitor import declaring, run_with
+from mock_monitor import declaring, run_under_backstop
 from unifi_controller import Controller
 
 from kluster import conventions
@@ -36,7 +40,7 @@ def pin(service: conventions.gateway.ContainerService) -> container.Rootfs:
 @pytest_asyncio.fixture(scope='module', autouse=True)
 async def monitor() -> Controller:
     pulumi.runtime.set_all_config({f'kluster:{unifi.API_KEY}': API_KEY})
-    return await run_with(Controller(site=SITE), stack='physical')
+    return await run_under_backstop(Controller(site=SITE), stack='physical')
 
 
 def declare(name: str, host: str) -> Gateway:

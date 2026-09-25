@@ -30,6 +30,7 @@ import datetime as dt
 import json
 import re
 import tokenize
+import tomllib
 from collections.abc import Iterable, Iterator
 from ipaddress import IPv6Network
 from pathlib import Path
@@ -183,7 +184,8 @@ def test_every_service_names_a_build_the_registry_publishes() -> None:
 
     The resolvers are the case: one `adguard` build behind both, and two
     `versions:image-` keys, which is what lets a new build be proven on one
-    instance before the other (rfc-002 §11.1).
+    instance before the other (`conventions.gateway.image_pin`; the namespace
+    those keys live in is framework/pulumi.md §3.2).
     """
     pins = [conventions.gateway.image_pin(service) for service in conventions.gateway.SERVICES]
     assert len(set(pins)) == len(conventions.gateway.SERVICES)
@@ -848,10 +850,116 @@ def test_no_workflow_identifies_an_account_by_id() -> None:
     assert not reached, f'identifies an account by id, which conventions.forge.Author does not carry: {sorted(reached)}'
 
 
-#: How a workflow step points a `pulumi` command at one stack. Both spellings,
-#: because `-s` and `--stack` are the same flag and a census that knew only the
-#: long one would be blind to the short.
-PULUMI_STACK_FLAG = re.compile(r'(?:--stack[=\s]+|-s\s+)([\w.-]+)')
+#: How a step points a `pulumi` command at one stack: the flag in both of its
+#: spellings, since `-s` and `--stack` are the same flag and a census that knew
+#: only the long one would be blind to the short -- the short one alone or at
+#: the end of a cluster of short flags (`-ys`), its value after a space, an `=`
+#: or nothing; and `stack select`, which points every later command in the
+#: step there, with any flags it carries ahead of the name. The name is bare or
+#: quoted, and read as its last segment, so a fully qualified
+#: `<organization>/<project>/<stack>` is the stack it ends in.
+PULUMI_STACK_NAMED = re.compile(
+    r"""(?:--stack(?:=|\s+)|(?<![\w-])-[A-Za-z]*s(?:=|\s*)|\bstack\s+select\s+(?:--?[\w-]+\s+)*)['"]?(?:[\w.-]+/)*([\w.-]+)"""
+)
+
+#: How a step runs a mise task: `mise run`, its alias `mise r`, the long
+#: `mise tasks run`, or the bare `mise <task>` mise accepts for a task no
+#: command of its own shadows -- each with mise's own flags allowed ahead of it.
+MISE_TASK_RUN = re.compile(
+    r"""\bmise\s+(?:--?[\w-]+\s+)*(?:(?:tasks\s+)?(?:run|r)\s+)?(?:--?[\w-]+\s+)*['"]?([\w:.-]+)"""
+)
+
+
+def _tasks_run_against(stacks: set[str]) -> set[str]:
+    """The mise tasks whose script points `pulumi` at one of `stacks`.
+
+    Read off `mise.toml` rather than named here: a task is a second way to
+    reach a stack, and one that wraps the stack's own passphrase is the easiest
+    way there is. What this does not see: a file task (under `mise-tasks/` or
+    `.mise/tasks/`), and a task whose script reaches the stack through another
+    task -- one that runs `mise run github` -- rather than through `pulumi`.
+    """
+    tasks = cast('dict[str, dict[str, object]]', tomllib.loads((ROOT / 'mise.toml').read_text()).get('tasks', {}))
+    return {
+        name
+        for name, task in tasks.items()
+        if any(match.group(1) in stacks for match in PULUMI_STACK_NAMED.finditer(str(task.get('run', ''))))
+    }
+
+
+def _apart_stack_named(text: str, apart: set[str], tasks: set[str]) -> list[str]:
+    """Every place `text` points a command at a stack in `apart`, as `text` spells it.
+
+    The flag and `stack select` are read only in a file that runs `pulumi` at
+    all, because `-s` means something else to half the tools a workflow calls.
+    A task is read everywhere: its name is the whole of what points it at the
+    stack.
+    """
+    named = [match.group(0) for match in MISE_TASK_RUN.finditer(text) if match.group(1) in tasks]
+    if 'pulumi' in text:
+        named += [match.group(0) for match in PULUMI_STACK_NAMED.finditer(text) if match.group(1) in apart]
+    return named
+
+
+#: Every spelling the census has to catch, with `{stack}` for a stack encrypted
+#: apart and `{task}` for a task that runs against one.
+POINTED_AT = (
+    'pulumi preview --stack {stack}',
+    'pulumi preview --stack={stack}',
+    "pulumi preview --stack '{stack}'",
+    'pulumi preview --stack "{stack}"',
+    'pulumi up -s {stack} --yes',
+    "pulumi up -s '{stack}'",
+    'pulumi stack select {stack}',
+    'pulumi stack select --create {stack}',
+    'pulumi up -s{stack}',
+    'pulumi up -s={stack}',
+    'pulumi up -ys {stack}',
+    'pulumi preview --stack organization/kluster/{stack}',
+    'mise run {task} up --yes',
+    'mise r {task} preview',
+    'mise {task} preview',
+    'mise -q run {task} up',
+    'mise tasks run {task} up',
+)
+
+#: What the census must stay silent on: other stacks, other tasks, an
+#: expression, and the word itself where it is not a stack.
+NOT_POINTED_AT = (
+    'pulumi preview --stack physical --diff',
+    'mise x -- pulumi up --stack apps --yes',
+    'pulumi stack select dns',
+    'mise run lint',
+    'mise x -- pulumi preview --stack ${{{{ matrix.stack }}}}',
+    'git push https://x-access-token@{stack}.com/${{{{ {stack}.repository }}}}',
+    'curl -s https://api.{stack}.com/repos',
+    'ssh -s {stack} sftp',
+)
+
+
+def test_the_census_of_stacks_named_catches_every_spelling_and_nothing_else() -> None:
+    """The census's positive control, and its negative one.
+
+    A census that reads a workflow and finds nothing is only evidence if it
+    would have found the thing it looks for, so each spelling a step could
+    point a command at the apart stack with is shown to it, and so is each
+    near miss it must let pass. The expression is among the near misses on
+    purpose: the census does not catch it, and the case below says what does.
+    """
+    apart = set(pulumi_config.APART)
+    tasks = _tasks_run_against(apart)
+    # The task set is discovered, so it is held to have found something before
+    # the spellings that need a task are walked.
+    assert tasks, 'no mise task runs against a stack encrypted apart, so the task spellings test nothing'
+
+    for stack in sorted(apart):
+        for task in sorted(tasks):
+            for spelling in POINTED_AT:
+                line = spelling.format(stack=stack, task=task)
+                assert _apart_stack_named(line, apart, tasks), f'the census misses {line!r}'
+        for spelling in NOT_POINTED_AT:
+            line = spelling.format(stack=stack)
+            assert not _apart_stack_named(line, apart, tasks), f'the census fires on {line!r}'
 
 
 def test_no_workflow_points_a_pulumi_command_at_the_stack_encrypted_apart() -> None:
@@ -867,24 +975,23 @@ def test_no_workflow_points_a_pulumi_command_at_the_stack_encrypted_apart() -> N
     means holding its passphrase, and a workflow that held it would have it in
     an Environment -- which is the partition being defended (ci.md §3).
 
-    **This census reads literal flags**, so a stack named through an
-    expression -- `--stack ${{ matrix.stack }}`, with the name added to a
-    matrix list -- passes it. Widening it to the text is impractical rather
-    than merely unwritten: every workflow says `github` many times over
-    through `${{ github.* }}`, so a census over the word would be noise. What
-    catches that spelling is the other half of the pair, and it catches it at
-    run time rather than at review time: the job's Environment holds the
-    estate passphrase alone, so the run dies `error: incorrect passphrase`
-    with nothing of that stack's config in reach. This case is the cheap,
-    early half of a guard whose expensive half cannot be evaded.
+    **This census reads literal names**, in the spellings the case above shows
+    it, so a stack named through an expression -- `--stack ${{ matrix.stack }}`,
+    with the name added to a matrix list -- passes it. Widening it to the text
+    is impractical rather than merely unwritten: every workflow says `github`
+    many times over through `${{ github.* }}`, so a census over the word would
+    be noise. What catches that spelling is the other half of the pair, and it
+    catches it at run time rather than at review time: the job's Environment
+    holds the estate passphrase alone, so the run dies `error: incorrect
+    passphrase` with nothing of that stack's config in reach. This case is the
+    cheap, early half of a guard whose expensive half cannot be evaded.
     """
     apart = set(pulumi_config.APART)
+    tasks = _tasks_run_against(apart)
     named = [
-        f'{_name(path)}: {match.group(0)}'
+        f'{_name(path)}: {spelling}'
         for path in _workflows_and_actions()
-        if 'pulumi' in (text := path.read_text())
-        for match in PULUMI_STACK_FLAG.finditer(text)
-        if match.group(1) in apart
+        for spelling in _apart_stack_named(path.read_text(), apart, tasks)
     ]
 
     assert named == [], f'a workflow runs `pulumi` against a stack encrypted apart from the estate: {named}'

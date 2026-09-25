@@ -63,6 +63,7 @@ from kluster.scripts.credentials import (
     age,
     b2,
     cloudflare,
+    delivery,
     escrow,
     github_secrets,
     masters,
@@ -116,6 +117,7 @@ MODULES: tuple[ModuleType, ...] = (
     age,
     b2,
     cloudflare,
+    delivery,
     escrow,
     github_secrets,
     masters,
@@ -150,6 +152,9 @@ CENSUS: dict[type, Census] = {
     cloudflare.VerifiedToken: Census('token_id status'),
     cloudflare.Zone: Census('zone_id name account_id'),
     cloudflare.ZoneToken: Census('token_id value account_id zone_ids', secret='value'),
+    # What a mint created, carried until it is pushed; the retirement is a
+    # closure and prints as a function.
+    delivery.Delivery: Census('_credential _retire', secret='_credential'),
     escrow.Console: Census('steps kit'),
     escrow.Generated: Census('mint'),
     escrow.KitAttachment: Census('entry filename'),
