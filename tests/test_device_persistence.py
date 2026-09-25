@@ -475,42 +475,74 @@ exit 2
 """
 
 #: `apt-get` as the package converger asks it. Online, `install` installs what
-#: is missing and leaves the deb of each package it downloaded in the archives
-#: directory, and `--download-only --reinstall` downloads the whole set there;
-#: offline — the boot after a firmware update with no network, its lists empty
+#: is missing, dependencies included, and leaves the deb of each package it
+#: downloaded in the archives directory; `--download-only --reinstall`
+#: downloads there the packages it is named and not what they depend on, which
+#: is apt's own behaviour (`TryToInstall::operator()` marks only the named
+#: packages for reinstall); offline — the boot after a firmware update with no network, its lists empty
 #: and unfetchable — nothing it is asked for can be found. `refresh-fails` is
 #: the download of the whole set failing on a boot the install itself worked.
+#:
+#: The archives directory is apt's shared one unless `-o
+#: Dir::Cache::archives=` names another, and apt's own terms for it hold: it
+#: makes `partial/` and its `lock` inside, and refuses a directory that is not
+#: there, in apt's words (apt 2.2.4, `pkgAcquire::GetLock`).
 APT_GET = """#!/bin/sh
 echo "apt-get $*" >>{calls}
+archives={archives}
+command=
+download_only=0
+packages=
+value=0
+for word in "$@"; do
+    if [ "$value" -eq 1 ]; then
+        case "$word" in Dir::Cache::archives=*) archives=${{word#Dir::Cache::archives=}} ;; esac
+        value=0
+        continue
+    fi
+    case "$word" in
+        -o) value=1 ;;
+        --download-only) download_only=1 ;;
+        -*) ;;
+        *) if [ -z "$command" ]; then command=$word; else packages="$packages $word"; fi ;;
+    esac
+done
 if [ -e {offline} ]; then
-    [ "$1" = update ] && exit 100
-    for word in "$@"; do
-        case "$word" in -*|install) ;; *) echo "E: Unable to locate package $word" >&2 ;; esac
+    [ "$command" = update ] && exit 100
+    for package in $packages; do
+        echo "E: Unable to locate package $package" >&2
     done
     exit 100
 fi
-[ "$1" = update ] && exit 0
-download_only=0
-for word in "$@"; do
-    [ "$word" = --download-only ] && download_only=1
-done
+[ "$command" = update ] && exit 0
+if [ ! -d "$archives" ]; then
+    echo "E: Archives directory $archives/partial is missing. - Acquire (2: No such file or directory)" >&2
+    exit 100
+fi
+mkdir -p "$archives/partial"
+: >"$archives/lock"
 if [ "$download_only" -eq 1 ] && [ -e {refresh_fails} ]; then
     echo "E: Failed to fetch the archives" >&2
     exit 100
 fi
-for word in "$@"; do
-    case "$word" in
-        -*|install) ;;
-        *)
-            if [ "$download_only" -eq 1 ] || [ ! -e {installed}/"$word" ]; then
-                : >{archives}/"${{word}}_1.0_arm64.deb"
-            fi
-            [ "$download_only" -eq 1 ] || : >{installed}/"$word"
-            ;;
-    esac
+for package in $packages; do
+    wanted=$package
+    [ "$download_only" -eq 1 ] || [ "$package" != {dependent} ] || wanted="$package {dependency}"
+    for one in $wanted; do
+        if [ "$download_only" -eq 1 ] || [ ! -e {installed}/"$one" ]; then
+            : >"$archives/${{one}}_1.0_arm64.deb"
+        fi
+        [ "$download_only" -eq 1 ] || : >{installed}/"$one"
+    done
 done
 exit 0
 """
+
+#: The one dependency the stand-in `apt-get` knows: a package the set needs that
+#: the firmware does not ship, so apt fetches and installs it beside the one
+#: package of the set that depends on it whenever that one is missing.
+DEPENDENT = 'systemd-container'
+DEPENDENCY = 'libcurl3-gnutls'
 
 
 @final
@@ -519,8 +551,12 @@ class _Packages:
     """A device the package converger can be run against, online or not."""
 
     script: Path
-    #: The offline cache and apt's archives, in place of the device's own directories.
+    #: The offline cache, in place of the device's own directory, and the
+    #: directory beside it the converger has apt download into.
     cache: Path
+    download: Path
+    #: apt's shared archives, where any other apt run leaves the debs it
+    #: fetched, and which the converger never reads.
     archives: Path
     #: One empty file per installed package, named for it.
     installed: Path
@@ -540,12 +576,13 @@ def _packages(tmp_path: Path, *, installed: tuple[str, ...], cached: tuple[str, 
     """The package converger, rendered by the production function against a temporary tree.
 
     The package set, its sorting and quoting, and every step are what the
-    device runs; only the two directories it moves debs between are this
-    tree's.
+    device runs; only the cache, and so the download directory beside it, are
+    this tree's.
     """
     device = _Packages(
         script=tmp_path / persistence.PACKAGES_SCRIPT,
         cache=tmp_path / 'cache',
+        download=tmp_path / 'cache.download',
         archives=tmp_path / 'archives',
         installed=tmp_path / 'installed',
         calls=tmp_path / 'calls',
@@ -568,13 +605,18 @@ def _packages(tmp_path: Path, *, installed: tuple[str, ...], cached: tuple[str, 
                 archives=device.archives,
                 offline=device.offline,
                 refresh_fails=device.refresh_fails,
+                dependent=DEPENDENT,
+                dependency=DEPENDENCY,
             )
         )
         tool.chmod(0o755)
-    _ = device.script.write_text(
-        persistence.packages_script(PACKAGES, cache=str(device.cache), archives=str(device.archives))
-    )
+    _ = device.script.write_text(persistence.packages_script(PACKAGES, cache=str(device.cache)))
     return device
+
+
+def _apt(device: _Packages, *words: str) -> str:
+    """One `apt-get` call as the converger makes it, downloading into its own directory."""
+    return ' '.join(('apt-get', '-o', f'Dir::Cache::archives={device.download}', *words))
 
 
 def _install(device: _Packages, *, online: bool, refresh_fails: bool = False) -> tuple[int, list[str]]:
@@ -594,6 +636,16 @@ def _install(device: _Packages, *, online: bool, refresh_fails: bool = False) ->
 
 def _names_in(directory: Path) -> set[str]:
     return {path.name for path in directory.iterdir()}
+
+
+def _debs(directory: Path, *packages: str) -> set[str]:
+    """The names the debs of `packages` have in `directory`."""
+    return {deb(directory, package).name for package in packages}
+
+
+def _offline_install(device: _Packages, *packages: str) -> str:
+    """The one `dpkg -i` an offline boot makes over a cache holding `packages`, in the order the glob gives."""
+    return f'dpkg -i {" ".join(str(device.cache / name) for name in sorted(_debs(device.cache, *packages)))}'
 
 
 def test_a_device_that_kept_every_package_is_asked_to_install_nothing(tmp_path: Path) -> None:
@@ -624,7 +676,7 @@ def test_one_package_missing_is_the_whole_set_installed_in_one_transaction(tmp_p
     assert status == 0
     assert calls == [
         'apt-get update',
-        f'apt-get install -y {" ".join(sorted(PACKAGES))}',
+        _apt(device, 'install', '-y', *sorted(PACKAGES)),
         f'dpkg -i {" ".join(str(deb(device.cache, package)) for package in sorted(PACKAGES))}',
     ]
     assert _names_in(device.installed) == {kept, lost}
@@ -662,10 +714,10 @@ def test_a_boot_where_apt_worked_replaces_the_cache_with_the_whole_set_it_downlo
     status, calls = _install(device, online=True)
 
     assert status == 0
-    assert f'apt-get install -y --download-only --reinstall {" ".join(sorted(PACKAGES))}' in calls
+    assert _apt(device, 'install', '-y', '--download-only', '--reinstall', *sorted(PACKAGES)) in calls
     assert not [call for call in calls if call.startswith('dpkg -i ')]
-    assert _names_in(device.installed) == {kept, lost}
-    assert _names_in(device.cache) == {deb(device.cache, package).name for package in PACKAGES}
+    assert _names_in(device.installed) == {kept, lost, DEPENDENCY}
+    assert _names_in(device.cache) == _debs(device.cache, *PACKAGES, DEPENDENCY)
     assert not [path for path in tmp_path.iterdir() if path.name.startswith(f'{device.cache.name}.')], (
         'nothing of the swap is left beside the cache'
     )
@@ -674,11 +726,11 @@ def test_a_boot_where_apt_worked_replaces_the_cache_with_the_whole_set_it_downlo
 def test_a_boot_whose_refresh_download_failed_keeps_the_old_cache_whole(tmp_path: Path) -> None:
     """A cache is replaced only by a whole set, never by what one install happened to fetch.
 
-    The install downloads just the packages the device was missing, and apt
-    keeps those debs in its archives directory. When the download of the whole
-    set that follows fails, the archives hold that part of the set alone, and
-    a snapshot of them would replace a cache that could install everything
-    with one that cannot — found out on the next boot without a network.
+    The install downloads just the packages the device was missing, into the
+    converger's own download directory. When the download of the whole set
+    that follows fails, that directory holds that part of the set alone, and a
+    snapshot of it would replace a cache that could install everything with
+    one that cannot — found out on the next boot without a network.
     """
     kept, lost = sorted(PACKAGES)
     device = _packages(tmp_path, installed=(kept,), cached=PACKAGES)
@@ -686,10 +738,91 @@ def test_a_boot_whose_refresh_download_failed_keeps_the_old_cache_whole(tmp_path
     status, calls = _install(device, online=True, refresh_fails=True)
 
     assert status == 0
-    assert f'apt-get install -y --download-only --reinstall {" ".join(sorted(PACKAGES))}' in calls
-    assert _names_in(device.installed) == {kept, lost}
-    assert _names_in(device.archives) == {deb(device.archives, lost).name}, 'the install fetched part of the set'
-    assert _names_in(device.cache) == {deb(device.cache, package).name for package in PACKAGES}
+    assert _apt(device, 'install', '-y', '--download-only', '--reinstall', *sorted(PACKAGES)) in calls
+    assert _names_in(device.installed) == {kept, lost, DEPENDENCY}
+    assert _names_in(device.cache) == _debs(device.cache, *PACKAGES)
+    assert not device.download.exists(), 'the download directory goes with the run'
+
+
+def test_a_deb_another_apt_run_left_behind_is_neither_cached_nor_installed(tmp_path: Path) -> None:
+    """The cache holds what apt fetched for the set, and the offline boot installs only that.
+
+    apt's shared archives hold whatever any apt run on the device left there —
+    a vendor's tooling, or somebody by hand — and an `frr` deb among them is the
+    case that matters: installed by this script, it would change the routing
+    daemon's parser under an unchanged firmware. So apt downloads the set into a
+    directory of the converger's own, emptied before the install because an
+    interrupted run can leave debs in it too, and only that becomes the cache.
+    The offline boot that follows installs the set and nothing else.
+    """
+    kept, _ = sorted(PACKAGES)
+    device = _packages(tmp_path, installed=(kept,), cached=())
+    foreign = deb(device.archives, 'frr')
+    _ = foreign.write_text('')
+    device.download.mkdir()
+    _ = deb(device.download, 'frr-pythontools').write_text('')
+
+    status, _ = _install(device, online=True)
+
+    assert status == 0
+    assert _names_in(device.cache) == _debs(device.cache, *PACKAGES, DEPENDENCY)
+    assert foreign.exists(), "the shared archives are not the converger's to empty either"
+
+    # The next firmware update takes every package, and the boot after it has no network.
+    for package in device.installed.iterdir():
+        package.unlink()
+    status, calls = _install(device, online=False)
+
+    assert status == 0
+    assert [call for call in calls if call.startswith('dpkg -i ')] == [_offline_install(device, *PACKAGES, DEPENDENCY)]
+    assert _names_in(device.installed) == {*PACKAGES, DEPENDENCY}
+
+
+def test_a_post_update_boot_caches_what_the_set_depends_on(tmp_path: Path) -> None:
+    """The boot the cache exists for is the one after a firmware update took every package.
+
+    On that boot apt installs the set with every dependency the firmware
+    does not ship, and those debs are the half of the cache the named set is
+    not: a networkless boot after the next update needs them as much as the
+    set. So what the install fetched becomes the cache beside what the refresh
+    fetched, and the offline boot installs all of it in one `dpkg` call.
+    """
+    device = _packages(tmp_path, installed=(), cached=())
+
+    status, _ = _install(device, online=True)
+
+    assert status == 0
+    assert _names_in(device.cache) == _debs(device.cache, *PACKAGES, DEPENDENCY)
+
+    for package in device.installed.iterdir():
+        package.unlink()
+    status, calls = _install(device, online=False)
+
+    assert status == 0
+    assert [call for call in calls if call.startswith('dpkg -i ')] == [_offline_install(device, *PACKAGES, DEPENDENCY)]
+    assert _names_in(device.installed) == {*PACKAGES, DEPENDENCY}
+
+
+def test_a_boot_that_finds_part_of_the_set_caches_only_what_it_fetched(tmp_path: Path) -> None:
+    """The limit physical/gateway.md §1.2 states, held here so that changing it changes this test.
+
+    A push that grows the set is a boot on which the rest of the set survived:
+    the install fetches the new package and its own missing dependencies, and
+    the refresh re-fetches the set by name, which fetches no dependency. So the
+    cache that replaces a whole one lacks what the surviving packages depend
+    on, and the offline boot after the next firmware update cannot install
+    them (Aetf/kluster-ops#436).
+    """
+    grown = next(package for package in PACKAGES if package != DEPENDENT)
+    device = _packages(tmp_path, installed=(), cached=())
+    _ = _install(device, online=True)
+    assert _names_in(device.cache) == _debs(device.cache, *PACKAGES, DEPENDENCY)
+
+    (device.installed / grown).unlink()
+    status, _ = _install(device, online=True)
+
+    assert status == 0
+    assert _names_in(device.cache) == _debs(device.cache, *PACKAGES)
 
 
 def test_the_package_set_is_a_set() -> None:
