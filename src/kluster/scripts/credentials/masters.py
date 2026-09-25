@@ -135,7 +135,7 @@ class Root:
     """One account root (credentials.md §2), and what it is made of."""
 
     #: The `credentials root <member>` name; matches the seed it mints, so
-    #: `seed oci create` and `master oci remember` speak of the same account.
+    #: `seed oci create` and `root oci remember` speak of the same account.
     member: str
     #: Human name, used in every prompt and log line.
     title: str

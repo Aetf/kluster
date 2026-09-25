@@ -153,8 +153,8 @@ def _statements(policy: str, params: object) -> tuple[str, ...]:
 #: ceiling anyway: a principal that can write policy can grant itself the rest.
 STATEMENTS: tuple[str, ...] = _statements(SEED_POLICY, _SeedPolicyParams(group=SEED_NAME))
 
-#: OCI requires RSA for API keys, which is why these are generated rather than
-#: derived: deterministic RSA generation was the footgun §2.2 excluded.
+#: OCI requires RSA for API keys. Each mint draws a fresh key; none is computed
+#: from anything stored.
 KEY_SIZE = 2048
 
 #: The domains API is SCIM, and a SCIM payload names its own schema. The SDK

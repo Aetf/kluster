@@ -648,9 +648,7 @@ def write_client_bundle(bundle: ClientBundle, directory: Path) -> None:
     _ = workstation.secret_dir(directory)
     _ = (directory / CA_FILE).write_bytes(bundle.ca_cert)
     _ = (directory / CERT_FILE).write_bytes(bundle.cert)
-    key_path = directory / KEY_FILE
-    _ = key_path.write_bytes(bundle.key)
-    key_path.chmod(0o600)
+    _ = workstation.write(directory / KEY_FILE, bundle.key.decode())
     _ = (directory / URL_FILE).write_text(bundle.url() + '\n')
     log.info('wrote client bundle to %s', directory)
 

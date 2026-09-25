@@ -22,8 +22,10 @@ The rule enforced here, in full, and deliberately small:
 The second property here is about the one help text that is *not* generated
 from a register: the bring-up order the top-level epilog carries (`cli._ORDER`)
 is written out by hand, so a row added to a register reaches the tree on its
-own but reaches that order only when someone types it in. The walk below is
-what says so, for the register whose rows are all run the same way.
+own but reaches that order only when someone types it in. The walks below are
+what say so: one over every `derived <row> mint` the tree offers, and one over
+the rows a person makes, which two registers hold and which are run the same
+way.
 
 What this cannot check is whether the prose is any good: a help text that says
 nothing at all passes, and one that leans on jargon passes. Comprehensibility
@@ -45,7 +47,7 @@ from typing import cast
 
 import pytest
 
-from kluster.scripts.credentials import cli, devices, escrow
+from kluster.scripts.credentials import cli, derived, devices, escrow
 
 #: The width every help text here is rendered at. Argparse reads `COLUMNS` for
 #: its own wrapping, so setting it makes the rendering the same in a test
@@ -118,8 +120,37 @@ def test_the_tree_really_does_carry_see_also_lines(monkeypatch: pytest.MonkeyPat
     assert [line for line in every_line if line.strip().startswith(SEE_ALSO)]
 
 
+def mint_leaves() -> list[str]:
+    """Every `credentials derived <row> mint` the tree offers, found by walking it.
+
+    Walked rather than listed, so a mint added to the tree is a case here
+    without anyone editing this file.
+    """
+    return [
+        ' '.join(('credentials', *path))
+        for path, _ in _tree(cli.build_parser())
+        if len(path) == 3 and path[0] == 'derived' and path[2] == 'mint'
+    ]
+
+
+def test_the_mint_walk_finds_the_mints() -> None:
+    # A walk that found nothing would leave the case below with no
+    # parameters, which pytest reports as skipped rather than failed.
+    assert f'credentials derived {derived.OCI_PHYSICAL_ROW} mint' in mint_leaves()
+
+
+@pytest.mark.parametrize('command', mint_leaves())
+def test_when_to_run_what_names_every_mint(command: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    order = _rendered('credentials', monkeypatch)
+
+    assert any(command in line for line in order), (
+        f'`{command}` is in the tree but the order in `credentials --help` never runs it: an operator '
+        'who follows that order would finish with the credential unminted.'
+    )
+
+
 def console_rows() -> list[str]:
-    """Every row a bring-up delivers by printing console steps and taking a value.
+    """Every row a bring-up delivers by printing the steps that make it and taking a value.
 
     Two registers hold them and they are run the same way: the device rows,
     whose value goes into a stack's config, and the escrowed rows nothing here
@@ -132,14 +163,14 @@ def console_rows() -> list[str]:
 
 
 @pytest.mark.parametrize('member', console_rows())
-def test_the_bring_up_order_names_every_row_made_in_a_console(member: str, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_bring_up_order_names_every_row_made_by_hand(member: str, monkeypatch: pytest.MonkeyPatch) -> None:
     # Every one of these is delivered the same way and belongs to the same
     # stage of a bring-up, so an operator following the order and a tree built
     # from those registers have to agree about how many there are.
     order = _rendered('credentials', monkeypatch)
 
     assert any(f'credentials derived {member} record' in line for line in order), (
-        f'`{member}` is a row made in a console but the bring-up order never runs it: '
+        f'`{member}` is a row a person makes but the bring-up order never runs it: '
         'an operator who follows that order would finish with the credential undelivered.'
     )
 

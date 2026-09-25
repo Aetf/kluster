@@ -13,12 +13,14 @@ The rule, in full:
     make.
 -   **UserName** is the credential's public identifier -- the half that
     appears in logs and consoles and is not a secret: a B2 key id, an OCI
-    user's OCID, a GitHub App's client id, the recovery key's age recipient.
+    user's OCID, a Cloudflare token's id, the recovery key's age recipient.
     A credential with no such half records what it is instead, so the field
     is never empty and never a secret.
--   **Password** is the secret itself, and nothing else is.
+-   **Password** is the secret itself where the secret is a string, and
+    nothing else is. A row whose secret is a file leaves it empty.
 -   **Attachments** carry key material that is a file rather than a string:
-    the OCI API key, written by the minter that issues it.
+    the OCI API key, written by the minter that issues it. A row whose
+    secret is one names it (`Seed.attachment`).
 -   **Protected custom attributes** carry what is left over when a credential
     is more than an identifier and a secret: the OCI row's tenancy OCID, which
     cannot go in UserName because the user OCID is there, and the identity
@@ -99,6 +101,10 @@ class Seed:
     #: runbook so that `bootstrap` can read it out at the moment it stops.
     console: str = ''
 
+    #: The attachment that holds the secret, where the secret is a file; the
+    #: Password is then empty. Empty where the Password holds it.
+    attachment: str = ''
+
     #: Protected custom attributes the row carries beyond UserName and
     #: Password. Enumerated so a kit can be checked against the register
     #: rather than against someone's memory of it.
@@ -142,6 +148,7 @@ SEEDS: dict[str, Seed] = {
             identifier='the user OCID',
             mints='the per-stack OCI users and their API keys',
             mints_own_successor=True,
+            attachment=OCI_KEY_ATTACHMENT,
             attributes=(OCI_TENANCY_ATTRIBUTE, OCI_DOMAIN_ATTRIBUTE),
             repair=Repair(
                 verb='domain',

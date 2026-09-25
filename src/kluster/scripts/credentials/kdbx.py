@@ -191,8 +191,9 @@ class KdbxStore:
 
         if path.exists():
             raise KdbxError(f'{path} already exists; rotation writes a new file rather than replacing one')
-        # A directory this makes is the operator's alone; one that already
-        # exists is left as the operator set it up.
+        # A directory this makes is the operator's alone. One that already
+        # exists is left as the operator set it up, unless it is
+        # `.credentials/` or lies under it, which `secret_dir` narrows.
         _ = workstation.secret_dir(path.parent)
         db = create_database(str(path), password=password)
         cast('Group', db.root_group).uuid = uuid4()
