@@ -21,7 +21,7 @@ addresses instead, over apid, on top of the configuration the machine booted.
 
 The homelab worker's address runs the other way. Nothing assigns it — the
 cluster VLAN it sits on carries no DHCP server at all, by design, because the
-gateway's BGP neighbour statement names that address as a constant — so the
+gateway's BGP neighbor statement names that address as a constant — so the
 worker states its own address, and states it in the configuration it boots
 with.
 
@@ -234,7 +234,7 @@ class StaticAddress:
 #: nothing else will. Only the homelab worker qualifies. A cloud node is
 #: handed its address by the platform it boots on, but the worker is a VM on
 #: the cluster VLAN, which runs no DHCP server — and three other places
-#: already name its address as a constant: the gateway's FRR neighbour
+#: already name its address as a constant: the gateway's FRR neighbor
 #: statement, the gateway's port forward for the qbittorrent peer port, and
 #: the node day 1 names in the apid calls that configure it. A lease would
 #: make all three a guess (physical/homelab-host.md §2).
@@ -504,7 +504,7 @@ class TalosDay1(Component, pulumi_type='kluster:physical:TalosDay1'):
     request. apid routes by node — a member that is not the named one proxies
     the call across the cluster — so an endpoint only has to be a way in.
     Where a node is not directly reachable, that is what reaches it: it is
-    named as the node and dialled at an endpoint that is.
+    named as the node and dialed at an endpoint that is.
 
     Not every call has that to lean on. Bootstrap is the cluster's first
     contact, before there is a cluster to route through, so it dials the node
@@ -516,9 +516,9 @@ class TalosDay1(Component, pulumi_type='kluster:physical:TalosDay1'):
     :param addresses: node name to the address the node is *named* by. Every
         node of the cluster needs one — a cluster is not healthy because the
         nodes somebody listed are.
-    :param endpoints: node name to the address a call to it is *dialled* at,
+    :param endpoints: node name to the address a call to it is *dialed* at,
         for the nodes where that differs from the address above. A node with
-        no entry is dialled at its own address.
+        no entry is dialed at its own address.
     :param secondary_addresses: node name to an extra address to put on its
         interface (the node's dedicated VIP).
     """
@@ -548,7 +548,7 @@ class TalosDay1(Component, pulumi_type='kluster:physical:TalosDay1'):
         missing = sorted(set(cluster.roles) - set(self._addresses))
         if missing:
             raise ValueError(f'day 1 needs an address for every node, and {missing} have none')
-        #: Where each node is dialled, which is its own address unless the
+        #: Where each node is dialed, which is its own address unless the
         #: caller named a way in to reach it with.
         self._endpoints = {node: (endpoints or {}).get(node, self._addresses[node]) for node in cluster.roles}
 
@@ -570,7 +570,7 @@ class TalosDay1(Component, pulumi_type='kluster:physical:TalosDay1'):
                 f'{name}-{node}-config',
                 node=self._addresses[node],
                 # Not the same address for every node: an apply is routed by
-                # the node it names, so a node behind the mesh is dialled
+                # the node it names, so a node behind the mesh is dialed
                 # wherever the cluster answers.
                 endpoint=self._endpoints[node],
                 client_configuration=client_configuration,

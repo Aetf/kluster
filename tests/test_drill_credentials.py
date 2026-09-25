@@ -69,7 +69,7 @@ class TimedGh:
     a token without the scope, an Environment that is not there -- and it is
     the failure a rotation can meet: the name is already listed from the run
     before, so a push that silently dropped would read as landed, and the
-    failure worth modelling is the one the tool reports.
+    failure worth modeling is the one the tool reports.
     """
 
     gh: RecordedGh

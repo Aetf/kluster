@@ -65,7 +65,7 @@ declarative/physical.md §4.
     to write, install or retire, and no place for this program to
     choose a start order: what a settings file carries is the bridge
     the machine attaches to (or, for the member in the host's network
-    namespace, the cancelling of the virtual ethernet pair the
+    namespace, the canceling of the virtual ethernet pair the
     template would otherwise give it), the binds it needs, and the
     environment its image reads. The ZeroTier member's tunnel device
     is one of those binds, which is also its assertion: nspawn refuses

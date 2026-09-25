@@ -284,7 +284,7 @@ async def test_a_backend_reaches_its_node_on_the_family_of_its_set(monitor: Oci,
     IPv4, so an IPv6 backend set can only be told the address. Each backend is
     paired with the node its name carries, so an address that belongs to
     another node -- the same VNIC read for every node, or each node handed its
-    neighbour's -- fails on the backend that carries it.
+    neighbor's -- fails on the backend that carries it.
     """
     for backend in nodes.backends:
         _ = await backend.urn.future()

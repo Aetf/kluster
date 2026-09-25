@@ -3,7 +3,7 @@ description: >
   Join this installation's ZeroTier network as a pre-authorized CI member,
   using an identity generated in Pulumi state rather than a Central API
   token — a leaked join credential is then one confined member, not the
-  ability to enrol more (physical/gateway.md §2.6).
+  ability to enroll more (physical/gateway.md §2.6).
 
 inputs:
   network_id:

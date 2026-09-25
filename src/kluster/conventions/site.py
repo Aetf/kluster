@@ -129,7 +129,7 @@ class AddressPool:
 #: deliberately not a subnet the gateway serves — not the cluster VLAN the
 #: announcing node sits on and not the server LAN either. It takes the third
 #: octet one along from the cluster VLAN's, so the pool and the nodes that
-#: announce it read as neighbours without ever being one network.
+#: announce it read as neighbors without ever being one network.
 LAN_POOL = AddressPool(
     name='lan',
     v4=IPv4Network('192.168.71.0/24'),

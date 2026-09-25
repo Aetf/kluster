@@ -46,7 +46,7 @@ names a multi-platform index resolves through the device's own architecture,
 which is the one answer that can be right for the machine unpacking it. The
 marker the device keeps records *the pin* -- the manifest's digest, not a
 checksum of the tree beside it. A marker is the device's claim about
-provenance, not a checksum of its neighbour.
+provenance, not a checksum of its neighbor.
 
 **A declared path holds what the declaration names, or nothing is done to it.**
 This is the rule the three resources share, and it is stated here rather than
@@ -91,7 +91,7 @@ about a device it never reached is worse than one that says it could not look.
 
 **A change to any declared input is a change**, whether or not the device already
 agrees: an update rewrites bytes the device may already have, which is free and
-idempotent. The address dialled is declared and converges the same way -- it is
+idempotent. The address dialed is declared and converges the same way -- it is
 the same box behind a new address, during a first bring-up reached over the LAN
 rather than over the overlay (physical/gateway.md §2.5) -- so the file is
 rewritten at the new address rather than moved to it, and nothing is deleted at
@@ -1213,7 +1213,7 @@ class DeviceDirectory(dynamic.Resource, module='device', name='Directory'):
 
         `path` is therefore the only replacement. A directory cannot be in two
         places, and one left behind at the old path would be an orphan nothing
-        declares -- while everything else, the address dialled included, is a
+        declares -- while everything else, the address dialed included, is a
         value the next apply converges where the directory already is.
         """
         super().__init__(

@@ -15,7 +15,7 @@ checked for truncation against the length the server declared, it needs neither
 replaces is a Python function rather than a shell command.
 
 What is *done* with an artifact — which schematic it was built from, which
-volume or catalogue it feeds — belongs to the components in
+volume or catalog it feeds — belongs to the components in
 `kluster.components.talos`, not here.
 """
 
@@ -40,7 +40,7 @@ __all__ = (
     'FactoryImageProvider',
     'TruncatedArtifact',
     'fetch',
-    'materialise',
+    'materialize',
 )
 
 #: How long a single read from the factory may stall before the fetch is
@@ -74,7 +74,7 @@ def fetch(url: str) -> requests.Response:
     return response
 
 
-def materialise(url: str, path: Path) -> None:
+def materialize(url: str, path: Path) -> None:
     """Leave the artifact at `url` sitting decompressed at `path`.
 
     A file already at `path` is the artifact and is reused: the download lands
@@ -130,7 +130,7 @@ class FactoryImageProvider(dynamic.ResourceProvider):
 
     def create(self, props: dict[str, Any]) -> dynamic.CreateResult:
         path = Path(str(props['path']))
-        materialise(str(props['url']), path)
+        materialize(str(props['url']), path)
         return dynamic.CreateResult(id_=str(path), outs=props)
 
     def diff(self, _id: str, olds: dict[str, Any], news: dict[str, Any]) -> dynamic.DiffResult:

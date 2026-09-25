@@ -144,7 +144,7 @@ class SelfSignedUpstream:
 #: than by any service of the census below: what answers behind the name is the
 #: device's own web server, on the self-signed certificate it presents there.
 #:
-#: It is dialled at the device's leg on the container VLAN, spelled from the
+#: It is dialed at the device's leg on the container VLAN, spelled from the
 #: network rather than written out: that is the address the proxy's own default
 #: route and `resolv.conf` already name, so the console, the route and the
 #: resolver cannot disagree about where the device is. Not a loopback address,
@@ -154,7 +154,7 @@ VHOST_CONTROLLER = f'unifi.{ZONE_PRIMARY}'
 CONTROLLER_UPSTREAM = SelfSignedUpstream(host=str(CONTAINER_VLAN.require_gateway()), pass_host_header=True)
 
 #: The controller site the UniFi resources are declared in. `default` is the
-#: internal name whatever the site is labelled in the interface.
+#: internal name whatever the site is labeled in the interface.
 UNIFI_SITE = 'default'
 
 #: The cluster VLAN as controller-side objects: the network the gateway serves
@@ -213,7 +213,7 @@ CADDY = BridgedService(name='caddy', address=IPv4Address('10.0.5.180'), artifact
 #: build on one instance before the other (rfc-002 §11.1).
 #:
 #: Named individually as well as listed, because they are not
-#: interchangeable — alice is the pair's synchronisation origin, and a
+#: interchangeable — alice is the pair's synchronization origin, and a
 #: declaration that means that one says so rather than taking the first of a
 #: tuple.
 ADGUARD_ALICE = BridgedService(
@@ -378,7 +378,7 @@ LEGACY_VHOSTS: tuple[LegacyVhost, ...] = (
     # The controller console, which `VHOST_CONTROLLER` also serves. It keeps the
     # LAN name the device's live configuration dials it at, because this row is
     # a transcription of that file; `CONTROLLER_UPSTREAM` is where the console
-    # is dialled from the network's own address instead.
+    # is dialed from the network's own address instead.
     LegacyVhost(
         label='gw',
         upstream=SelfSignedUpstream(host='dmse.home.arpa', pass_host_header=True),

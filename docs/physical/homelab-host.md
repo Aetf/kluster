@@ -207,7 +207,7 @@ Two files are written into the checkout before the provider is
 constructed, because the provider dials as soon as the engine
 configures it and reads both by path: the **client identity**, `0600`
 inside the `0700` `.credentials/` directory, and a one-line
-**`known_hosts`** pairing the address dialled with the host key pinned
+**`known_hosts`** pairing the address dialed with the host key pinned
 in `conventions`. The pin is a public key and is code rather than
 configuration, for the same reason the gateway's is: whoever could
 replace it could already replace the credential it guards, and a pin a

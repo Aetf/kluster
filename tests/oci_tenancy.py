@@ -166,7 +166,7 @@ class DomainPolicy:
     """What the identity domain refuses, and for how long.
 
     Refusals are per operation because that is how they were met live: one
-    endpoint answering while its neighbour on the same host and the same
+    endpoint answering while its neighbor on the same host and the same
     credential does not.
     """
 

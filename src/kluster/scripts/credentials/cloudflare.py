@@ -262,11 +262,11 @@ def _created_token(answer: object) -> Token:
 
 
 def _permission_groups(answer: object) -> tuple[PermissionGroup, ...]:
-    """`GET /user/tokens/permission_groups`: the account's whole catalogue.
+    """`GET /user/tokens/permission_groups`: the account's whole catalog.
 
     Hundreds of entries covering every product the platform sells, of which
     this repository asks for two by name. `scopes` is optional, so an entry
-    without one carries none: it is in no zone catalogue and matches nothing
+    without one carries none: it is in no zone catalog and matches nothing
     here, which is a fact about that entry rather than a fault in the answer.
     """
     return tuple(
@@ -347,7 +347,7 @@ class Session:
     def require_zone_visibility(self) -> tuple[Zone, ...]:
         """Refuse a seed that authenticates and can mint but sees no zone.
 
-        Behaviour rather than permission names, because the listing is what the
+        Behavior rather than permission names, because the listing is what the
         seed is used for: a token may carry zone read and still be scoped to
         zones this account does not have. Non-empty is the whole test -- which
         zones the installation expects is `conventions`' business, and adoption
@@ -407,8 +407,8 @@ class Session:
         read here rather than written down, so a token is minted with the scope
         the name means rather than with whatever the id used to mean.
         """
-        catalogue = _permission_groups(self._call('GET', '/user/tokens/permission_groups'))
-        by_name = {group.name: group.group_id for group in catalogue if ZONE_RESOURCE in group.scopes}
+        catalog = _permission_groups(self._call('GET', '/user/tokens/permission_groups'))
+        by_name = {group.name: group.group_id for group in catalog if ZONE_RESOURCE in group.scopes}
         missing = [name for name in names if name not in by_name]
         if missing:
             raise CredentialRejected(

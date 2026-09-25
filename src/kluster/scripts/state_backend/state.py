@@ -61,9 +61,9 @@ LISTING_TIMEOUT = 120
 
 #: What the two file formats announce themselves as, in their first bytes.
 #: The appliance writes `age` binary output; the escrow's ciphertexts are
-#: armoured, and a hand-decrypted archive is the `pg_dump` custom format.
+#: armored, and a hand-decrypted archive is the `pg_dump` custom format.
 AGE_MAGIC = b'age-encryption.org/'
-ARMOUR_MAGIC = age.ARMOR_BEGIN.encode()
+ARMOR_MAGIC = age.ARMOR_BEGIN.encode()
 ARCHIVE_MAGIC = b'PGDMP'
 
 #: What a table entry says it is in a `pg_restore --list` line, and the word
@@ -226,7 +226,7 @@ def pg_dump(target: Connection, destination: Path) -> None:
 def tables(listing: str) -> list[str]:
     """The tables a `pg_restore --list` output names, as `schema.name`.
 
-    An entry line is `<id>; <catalogue oid> <oid> <what> <schema> <name>
+    An entry line is `<id>; <catalog oid> <oid> <what> <schema> <name>
     <owner>`, and `<what>` is one word for a table's definition and two —
     `TABLE DATA` — for its rows. Comment lines, which is the whole header,
     start with the semicolon.
@@ -370,8 +370,8 @@ def encrypted(path: Path) -> bool:
     # The first bytes, not the file: this runs before a restore, and the input
     # is a dump of the whole Pulumi state.
     with path.open('rb') as handle:
-        head = handle.read(len(ARMOUR_MAGIC))
-    if head.startswith(AGE_MAGIC) or head.startswith(ARMOUR_MAGIC):
+        head = handle.read(len(ARMOR_MAGIC))
+    if head.startswith(AGE_MAGIC) or head.startswith(ARMOR_MAGIC):
         return True
     if head.startswith(ARCHIVE_MAGIC):
         return False

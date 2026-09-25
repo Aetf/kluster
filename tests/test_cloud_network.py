@@ -22,7 +22,7 @@ OBJECT_STORAGE_CIDR = 'oci-phx-objectstorage'
 
 
 class Oci(Recorder):
-    """The two answers this suite is about: the assigned prefix, and the catalogue.
+    """The two answers this suite is about: the assigned prefix, and the catalog.
 
     Both are things the account decides rather than the program, which is why
     the subnet's block has to be derived from the first and the gateway's

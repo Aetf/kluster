@@ -89,7 +89,7 @@ name: noop-automerge
 #
 # **An operator opt-in by label is ruled out rather than unbuilt** (kluster-ops
 # #244, #247). A label carries no record of who put it there: the event names
-# no labeller, and on a later `synchronize` the actor is the author regardless.
+# no labeler, and on a later `synchronize` the actor is the author regardless.
 # So a label that *removes* a gate is one an author can apply to their own pull
 # request and merge behind, which is the case dispatch.md §3 forbids by name.
 # `expect-changes` is safe against the same hole only because it runs the other

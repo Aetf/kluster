@@ -47,7 +47,7 @@ Bridge={{ bridge }}
 {#- Host networking is the absence of a virtual ethernet pair: the daemon
    creates the interface this device routes through, and an interface created
    inside a private namespace is invisible to the router that has to use it.
-   The template unit asks for a pair, so cancelling it is what has to be said. #}
+   The template unit asks for a pair, so canceling it is what has to be said. #}
 VirtualEthernet=off
 {%- endif %}
 {%- if state_bind or devices or binds %}

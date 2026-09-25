@@ -2362,7 +2362,7 @@ def test_the_pin_matches_the_device_at_whatever_address_the_session_dials() -> N
     The pin is a bare `ssh-ed25519 <blob>` line rather than a `known_hosts`
     entry, and a matcher given a parsed key applies it to whatever host it is
     asked about. That is what lets the same configured value serve a session
-    dialled at the device's overlay address and one dialled at a LAN address
+    dialed at the device's overlay address and one dialed at a LAN address
     during first bring-up (`stacks/physical.py`, `gatewayBootstrapHost`, which
     is a literal address and never a name): the device presents the same key
     either way, and nothing in the pin disagrees.
@@ -2483,7 +2483,7 @@ def test_an_unreadable_stat_is_a_fault_rather_than_a_guess() -> None:
 
 
 def test_a_command_killed_by_a_signal_reports_a_failure() -> None:
-    """A signalled process has no exit status; reading that as success is the
+    """A signaled process has no exit status; reading that as success is the
     one wrong answer available."""
     device, _ = transport(answer(exit_status=None))
 

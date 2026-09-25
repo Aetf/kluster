@@ -126,7 +126,7 @@ class OciClients:
         carries the credential alone and the mapping says where it acts;
         `--compartment` overrides both, and a configuration file that names a
         `compartment-id` of its own — the hand-written one above, or one an
-        operator points this run at — is honoured ahead of the mapping,
+        operator points this run at — is honored ahead of the mapping,
         because a file naming another tenancy's compartment means it. Which
         of those the answer came from is not remembered; whether it *is* the
         mapping's compartment is (`held`), because that is what decides

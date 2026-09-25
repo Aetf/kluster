@@ -137,7 +137,7 @@ What that buys, and what it costs:
     requests are not cumulative, and `preview` is deliberately not a
     required check (github.md §3).
 -   Residual, accepted: a *deploy* job that is waiting on a stack's
-    group can be superseded the same way, and a cancelled job is neither success
+    group can be superseded the same way, and a canceled job is neither success
     nor failure, so that layer would silently not apply. The window is
     small — drift fires weekly, previews last minutes — and the next
     merge applies the same code again. Making it impossible would mean
@@ -811,9 +811,9 @@ inside it. The jobs are `preview (dns)`, `prove (dns)` and `deploy`'s
 push to `main` fails there and skips all four `up` jobs — which is
 also why `notify-failure`, the Home Assistant alert of §3, runs on
 every merge. On a pull request the two `dns` jobs share the `zt-dns`
-concurrency group (§2), and one of the pair is routinely cancelled
+concurrency group (§2), and one of the pair is routinely canceled
 before it runs a single step rather than reaching the failing one. A
-`preview (dns)` that is cancelled with no steps at all was superseded
+`preview (dns)` that is canceled with no steps at all was superseded
 by the lock; it is not a separate problem. **Retires with the M1 first
 `physical` up**: the identity is minted by the run of ceremony step 1
 that follows the cutover window (physical/gateway.md §2.5) — the one
@@ -840,7 +840,7 @@ error: no stack named 'k8s-base' found
 
 Every pull request that touches code runs both entries. `prove` is
 `fail-fast: true`, so an entry that fails first can cancel the other
-two: which names are reported failed and which cancelled varies
+two: which names are reported failed and which canceled varies
 between runs and carries no information. A pull request that touches
 only documentation, `.vscode/` or `.gitignore` runs no `preview` at
 all — `changes` selects an empty set and the matrix job stands down.

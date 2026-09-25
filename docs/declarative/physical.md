@@ -177,11 +177,11 @@ machine_secrets
     quorum never reboots together.
 -   **Where a machine is reached**: apid routes by the node a call
     names, not by the connection it arrives on, so the two halves of an
-    apply are separate answers. The cloud nodes are dialled at their own
+    apply are separate answers. The cloud nodes are dialed at their own
     public addresses, because a call with no cluster to route through —
     the bootstrap is exactly that — has nothing else to use, and a
     balancer would pick whichever backend it liked. The worker is
-    *named* by its cluster-VLAN address and *dialled* at the cluster
+    *named* by its cluster-VLAN address and *dialed* at the cluster
     endpoint, which the NLB forwards on 50000: whichever control plane
     answers proxies the call the rest of the way over KubeSpan, so the
     backend chosen does not matter and nothing outside the site needs a
@@ -274,7 +274,7 @@ device-files provider (SSH, `/data`, idempotent diff/apply, post-apply
 hooks; the UDM's **SSH host key is pinned** — the session crosses
 ZeroTier, and an accept-new first contact would hand a MITM root on
 the gateway. The pin is a `conventions` constant and a declared input
-on every device resource, like the address dialled: a public key that
+on every device resource, like the address dialed: a public key that
 a preview shows is a pin a reviewer can check, where a secret-typed
 configuration value would be redacted in the one place anybody would
 look. The client credential that answers it goes the other way — read

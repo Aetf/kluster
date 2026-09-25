@@ -9,7 +9,7 @@ argue for themselves in writing first.
 Its components will live in areas of `kluster/components/`, the way `physical`
 composes the areas it declares: this module stays the wiring, one component per
 entry of the closed list. What every component shares — installing a pinned
-chart, sealing a secret, labelling a Service into a load-balancer pool — is in
+chart, sealing a secret, labeling a Service into a load-balancer pool — is in
 `kluster.lib.k8s`.
 
 What gates the implementation is recorded rather than assumed: the chart set is

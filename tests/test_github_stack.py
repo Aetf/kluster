@@ -239,7 +239,7 @@ def test_secret_scanning_is_only_claimed_where_the_plan_offers_it(stack: Forge) 
 
 
 def test_vulnerability_alerts_are_asked_for_where_the_provider_still_answers(stack: Forge) -> None:
-    # The `Repository` field of the same name is deprecated in favour of this
+    # The `Repository` field of the same name is deprecated in favor of this
     # resource; asking both ways is how a deprecation becomes a diff loop.
     alerts = stack.by_name(VULNERABILITY_ALERTS)
 

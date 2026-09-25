@@ -154,7 +154,7 @@ class BackupBucket(Component):
                 b2.BucketLifecycleRuleArgs(
                     # The whole bucket: every consumer's versions age out on
                     # the same floor, because the floor is a property of the
-                    # bucket rather than a favour each consumer does itself.
+                    # bucket rather than a favor each consumer does itself.
                     file_name_prefix='',
                     # Deliberately no `days_from_uploading_to_hiding`: that
                     # one hides *current* files on a timer, which for a backup

@@ -25,7 +25,7 @@ def test_each_stack_runs_the_program_named_after_it(name: str) -> None:
 
     Each program is the module the stack is named for, so the dispatch is held
     to the package's own layout rather than to a second copy of the table: a
-    row wired to a neighbour's program would run that neighbour's resources
+    row wired to a neighbor's program would run that neighbor's resources
     under the wrong stack's state.
     """
     program = importlib.import_module(f'{stacks.__name__}.{name.replace("-", "_")}')

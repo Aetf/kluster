@@ -171,7 +171,7 @@ from kluster.components.cloud import CloudNetwork
 
 
 class Cloud(Recorder):
-    """What the account decides: the prefix it assigns, and its service catalogue."""
+    """What the account decides: the prefix it assigns, and its service catalog."""
 
     def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
         if args.typ == 'oci:Core/vcn:Vcn':
@@ -314,7 +314,7 @@ Neither proxy carries:
 -   **Transitivity.** The engine leaves everything downstream of a skipped
     create unknown; the double leaves unknown exactly the property the mock
     wrote, so a case that reads the abort as propagating is asserting
-    something the double never modelled.
+    something the double never modeled.
 -   **The meaning of a property the mock omits.** Outside a preview such a
     property resolves as a **known `None`** rather than as unknown:
     `pulumi/runtime/rpc.py` computes

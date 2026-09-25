@@ -150,7 +150,7 @@ def test_only_the_overlay_daemon_runs_in_the_hosts_network_namespace() -> None:
 
 
 def test_a_bridged_service_is_placed_and_the_overlay_daemon_is_not() -> None:
-    """The settings file is where host networking is said by cancelling a default.
+    """The settings file is where host networking is said by canceling a default.
 
     The template unit gives every machine a virtual ethernet pair, so a machine
     that must be in the host's own namespace has to say so — and a bridge
@@ -407,10 +407,10 @@ def test_the_file_opens_with_the_defaults_the_whole_proxy_runs_on() -> None:
     assert rendered.startswith(f'{{\n\temail {conventions.gateway.ACME_CONTACT}\n\tdebug\n\tadmin off\n}}\n')
 
 
-def test_the_console_is_dialled_at_the_device_and_never_at_the_proxy_itself() -> None:
+def test_the_console_is_dialed_at_the_device_and_never_at_the_proxy_itself() -> None:
     """A loopback address in the proxy's own network namespace is the proxy.
 
-    So the console is dialled at the device's leg on the container VLAN — the
+    So the console is dialed at the device's leg on the container VLAN — the
     address the proxy's default route and its `resolv.conf` already name — and
     the block states the `Host` the console requires: it answers a WebSocket
     upgrade whose `Origin` does not match it with a 500.

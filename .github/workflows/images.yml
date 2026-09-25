@@ -30,7 +30,7 @@ on:
   workflow_dispatch:
 
 # Renovate rebases push in quick succession; don't stack stale runs. Pushes to
-# main are not cancelled — an interrupted publish would leave a manifest half
+# main are not canceled — an interrupted publish would leave a manifest half
 # stitched.
 concurrency:
   group: images-${{ github.ref }}

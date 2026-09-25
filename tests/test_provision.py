@@ -818,7 +818,7 @@ def _run(
 
     The plain run is the default because it is the operator's: a case that
     replaces a box says which of `--force` and `--replace` let it, so a gate
-    that stopped honouring either one is read by the cases that pass it alone.
+    that stopped honoring either one is read by the cases that pass it alone.
     """
     return cli._provision(  # pyright: ignore[reportPrivateUsage]
         object(),  # pyright: ignore[reportArgumentType]
@@ -984,7 +984,7 @@ def test_a_converge_over_a_box_elsewhere_stops_before_anything_uses_the_address(
     keyed by it and the box is dumped and terminated on the strength of it, so
     the refusal has to come at the read, not at any one consumer: a converge
     that adopted the found address would rebuild the box, write bundles and a
-    pin against it, and leave the probe dialling the recorded one.
+    pin against it, and leave the probe dialing the recorded one.
     """
     recorder = _Recorder(instance_exists=instance_exists, metadata=_built_from({'butane': 'stale'}), address=ELSEWHERE)
     converge(recorder)
@@ -2773,7 +2773,7 @@ def test_a_box_that_records_no_host_key_is_refused_rather_than_trusted() -> None
     """Silence is the state the pin exists to rule out.
 
     A box built before the pin was recorded would otherwise fall back to the
-    behaviour this replaced: whatever answers at the address is the box.
+    behavior this replaced: whatever answers at the address is the box.
     """
     with pytest.raises(RuntimeError, match='records no SSH host key'):
         _ = provision.host_key_pin(_running(''))
