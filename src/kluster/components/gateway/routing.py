@@ -7,18 +7,18 @@ session ships with the firmware; what this program owns is the configuration it
 reads, the converger that installs it, and the daemon's on-state — because a
 configuration nothing reads holds no session.
 
-**The on-state is two facts, and the firmware resets both.** The protocol
-daemon is switched off in the firmware's own daemon list, and the daemon suite
-is not enabled, so the site has no routing daemon until this program declares
-one. The toggle is converged by the same executable that installs the
-configuration, re-checked on every run because a firmware update restores the
-firmware's file. What starts the daemon at boot is a `Wants=` edge in the
-converger's unit rather than an enable: the enable is a mutation of `/etc` that
-a boot script would have to re-assert and a second path would have to undo,
-while the edge is a line in a file this program already delivers, converges and
-retires. Its consequence is worth knowing before reading the device:
-`systemctl is-enabled` for the daemon stays `disabled` forever, and says
-nothing about whether the daemon runs.
+**The on-state is two facts, and a firmware update may reset both.** The
+protocol daemon is switched off in the firmware's own daemon list, and the
+daemon suite is not enabled, so the site has no routing daemon until this
+program declares one. The toggle is converged by the same executable that
+installs the configuration, re-checked on every run because a firmware update
+may put back the firmware's stock file. What starts the daemon at boot is a
+`Wants=` edge in the converger's unit rather than an enable: the enable is a
+mutation of `/etc` that a boot script would have to re-assert and a second path
+would have to undo, while the edge is a line in a file this program already
+delivers, converges and retires. Its consequence is worth knowing before
+reading the device: `systemctl is-enabled` for the daemon stays `disabled`
+forever, and says nothing about whether the daemon runs.
 
 **The configuration is desired state, the daemon's copy is not.** The file
 lands under the custom root, where a firmware update leaves it, and the daemon
@@ -41,7 +41,9 @@ pushes the file into the daemons after the unit has already returned, so its
 rejection of a line fails nothing — an installed file and a stamp prove
 installed, not accepted. Parsing the source first is what turns a firmware
 update whose parser no longer likes one of these lines into a converge-time
-failure rather than a peer that never establishes.
+failure rather than a peer that never establishes — and the stamp names the
+parser the parse ran on, so the first run on a new firmware, or on a replaced
+parser, parses again even where nothing else changed.
 
 **The content is a secret**, because the session's authentication password is
 in it — which is also why the file is not world-readable on the device.
@@ -71,6 +73,7 @@ __all__ = (
     'BGP_DAEMON',
     'CONVERGER',
     'CONVERGER_UNIT',
+    'FIRMWARE_RELEASE',
     'FRR_APPLIED',
     'FRR_CONFIG',
     'FRR_DAEMON_LIST',
@@ -79,6 +82,7 @@ __all__ = (
     'FRR_LIVE_CONFIG',
     'FRR_MODE',
     'FRR_OWNER',
+    'FRR_PARSER',
     'FRR_RESTART',
     'FRR_SERVICE',
     'FRR_SYNTAX_CHECK',
@@ -96,21 +100,41 @@ __all__ = (
 FRR_DIRECTORY = 'frr'
 
 #: The configuration as desired state, and as the daemon reads it. The second
-#: is off `/data` and therefore what a firmware update takes away, which is the
-#: whole reason the first exists.
+#: is off `/data`, so nothing promises it across a firmware update
+#: (physical/gateway.md §1.2), which is the whole reason the first exists.
 FRR_CONFIG = f'{skeleton_path(FRR_DIRECTORY)}/frr.conf'
 FRR_LIVE_CONFIG = '/etc/frr/frr.conf'
 
-#: What the converger last restarted the daemon onto, as a checksum beside the
-#: daemon's own copy. It is what makes "already done" mean the restart happened
-#: rather than merely that the bytes are in place: a run whose restart failed
-#: leaves the file installed, and without this the next run would find the two
-#: copies equal and exit successfully with the daemon still on the old
-#: configuration. It records a restart that returned, not a configuration the
-#: daemons accepted — that surfaces only at the supervisor's push. Off `/data`
-#: with the file it describes, so a firmware update takes both and the next
-#: boot installs and restarts from scratch.
+#: What the converger last restarted the daemon onto, beside the daemon's own
+#: copy: one line, the source's checksum followed by the parser that checked it
+#: — the firmware release (`FIRMWARE_RELEASE`) and the checksum of the parser's
+#: binary (`FRR_PARSER`). It is what makes "already done" mean the
+#: restart happened rather than merely that the bytes are in place: a run whose
+#: restart failed leaves the file installed, and without this the next run
+#: would find the two copies equal and exit successfully with the daemon still
+#: on the old configuration. It records a restart that returned, not a
+#: configuration the daemons accepted — that surfaces only at the supervisor's
+#: push. It is off `/data`, so nothing promises it across a firmware update,
+#: and nothing promises its loss either: an update that left it in place would
+#: otherwise skip the parse on a parser nobody has run the file through, so the
+#: parser is in it, and a stamp naming another release or another binary — or
+#: neither — is stale.
 FRR_APPLIED = f'{FRR_LIVE_CONFIG}.{conventions.CLUSTER_NAME}-applied'
+
+#: The firmware's release string, one line in the read-only image, of the form
+#: `UDMPROSE.al324.v5.1.33.44ce47b.260909.0025`. The daemon suite is a package
+#: of the image rather than one this program installs, so a new release is how
+#: a new parser ordinarily arrives — the command matcher in the suite's shared
+#: library as well as the command definitions in `FRR_PARSER`. The suite's own
+#: version is narrower and not enough. This firmware's `vtysh` takes no
+#: `--version`, and its `--help` reports the upstream release, which a vendor
+#: rebuild carrying patches leaves unchanged. The package version that would
+#: name the rebuild is read from the package database, which moves into the
+#: writable layer the first time a package is installed; what an update does to
+#: that layer is observed rather than promised, and a copy carried across would
+#: name the previous firmware's build. A release that changed nothing of the
+#: parser costs one restart, at the boot that already started the daemon.
+FIRMWARE_RELEASE = '/usr/lib/version'
 
 #: The session password is in it, so it is not world-readable.
 FRR_MODE = '0640'
@@ -124,9 +148,9 @@ FRR_GROUP = 'frr'
 
 #: The firmware's list of which daemons of the suite run, and the one entry in
 #: it this program has an opinion about. The file is the firmware's own and an
-#: update restores it, so the entry is converged on every run rather than
-#: edited once; the protocol daemon is off in the stock file, which is why the
-#: site has no session until this program switches it on.
+#: update may put back the stock file, so the entry is converged on every run
+#: rather than edited once; the protocol daemon is off in the stock file, which
+#: is why the site has no session until this program switches it on.
 FRR_DAEMON_LIST = '/etc/frr/daemons'
 BGP_DAEMON = 'bgpd'
 
@@ -140,12 +164,20 @@ CONVERGER_UNIT = 'frr-config.service'
 #: is a change to one constant.
 FRR_SERVICE = 'frr.service'
 
+#: The parser's binary, whose checksum the stamp carries beside the release. A
+#: suite installed outside the image — by hand, or by anything versioned apart
+#: from the firmware — would replace it under the same release, and the command
+#: definitions a file is parsed against are compiled into it. A
+#: replacement that left this binary and the release both unchanged is the one
+#: parser change the stamp does not see.
+FRR_PARSER = 'vtysh'
+
 #: How a candidate configuration is parsed before anything is installed: the
 #: file to parse is appended. It parses against the command tree the installed
 #: daemons have, with none of them running, which is the only check available
 #: here that a line will be parsed rather than merely written — what the daemon
 #: itself refuses still surfaces only at the supervisor's push.
-FRR_SYNTAX_CHECK = 'vtysh -C -f'
+FRR_SYNTAX_CHECK = f'{FRR_PARSER} -C -f'
 
 #: How the daemon is put onto the configuration. A restart rather than a
 #: reload, because the reload verb needs a helper script this firmware does not
@@ -217,6 +249,8 @@ class _ConvergerParams:
     source: str
     live: str
     stamp: str
+    firmware: str
+    parser: str
     daemons: str
     daemon: str
     owner: str
@@ -291,7 +325,7 @@ def converger_script() -> str:
     state after this program stops declaring the file, and not one in which
     taking the daemon's configuration away would be an improvement — and
     nothing when the daemon is already switched on and running what the source
-    says.
+    says, as checked by the parser the device has now.
 
     **The toggle is asserted, not merely edited.** Switching the protocol
     daemon on is a substitution on the firmware's own line, and a firmware that
@@ -305,7 +339,12 @@ def converger_script() -> str:
     the two copies would find them equal and report success over a daemon still
     running the old configuration. The stamp is written after the restart
     returns, which is what makes the whole effect idempotent rather than only
-    the copy.
+    the copy. It names the parser beside the source's checksum — the firmware
+    release and the parser binary's checksum — so a run on a new release, or
+    over a replaced binary, parses and restarts again: the parse is what vouches
+    for the file, and it vouched only for the parser it ran on. A release that
+    cannot be read, or reads empty, fails the run before anything is touched,
+    because without it the stamp could not say which parser it means.
     """
     return templates.render(
         TEMPLATE_PACKAGE,
@@ -315,6 +354,8 @@ def converger_script() -> str:
             source=FRR_CONFIG,
             live=FRR_LIVE_CONFIG,
             stamp=FRR_APPLIED,
+            firmware=FIRMWARE_RELEASE,
+            parser=FRR_PARSER,
             daemons=FRR_DAEMON_LIST,
             daemon=BGP_DAEMON,
             owner=FRR_OWNER,

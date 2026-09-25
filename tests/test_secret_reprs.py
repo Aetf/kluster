@@ -213,7 +213,7 @@ CENSUS: dict[type, Census] = {
     slots.WorkstationSlot: Census('name'),
     routing.RoutingSession: Census('neighbour password', secret='password'),
     routing._ConvergerParams: Census(  # pyright: ignore[reportPrivateUsage]
-        'cluster source live stamp daemons daemon owner group mode check restart'
+        'cluster source live stamp firmware parser daemons daemon owner group mode check restart'
     ),
     routing._FrrParams: Census(  # pyright: ignore[reportPrivateUsage]
         'cluster peer peer_description password local_asn peer_asn pool_v4 pool_v6 v4_list v6_list max_prefixes',

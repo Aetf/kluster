@@ -148,7 +148,7 @@ SKELETON = 'machines'
 MACHINES = persistence.skeleton_path(SKELETON)
 
 #: The two directories off `/data` that hold what a machine needs to run, and
-#: which a firmware update therefore takes away: the settings
+#: which a firmware update therefore does not promise to keep: the settings
 #: `systemd-nspawn@.service` reads, and the roots systemd resolves a machine
 #: name through.
 LIVE_NSPAWN_DIR = '/etc/systemd/nspawn'

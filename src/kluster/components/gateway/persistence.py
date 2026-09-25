@@ -1,9 +1,10 @@
 """The device's persistence mechanism: what re-establishes customization at boot.
 
-A firmware update wipes everything the device runs except `/data`, so every
-customization of this machine is a file under `/data` plus something that puts
-it back into effect with no Pulumi reachable. That something is the boot chain,
-and this module owns it:
+`/data` is all a firmware update promises to keep — what else comes through one
+comes through by a migration nothing documents — so every customization of this
+machine is a file under `/data` plus something that puts it back into effect
+with no Pulumi reachable. That something is the boot chain, and this module
+owns it:
 
 -   **`udm-boot.service`**, vendored from upstream and pinned in its own
     header. It is a oneshot that runs every file in `/data/on_boot.d` in
@@ -46,10 +47,10 @@ it: the source is gone, so the hook disables the unit and removes the live copy
 instead of converging it, and a drop-in comes off the unit it amended the same
 way.
 
-**`dpkg/` is `10-packages.sh`'s alone.** The cache is refreshed by replacing the
-whole directory in one rename, so any file Pulumi wrote in it would be deleted
-by the next refresh and reported as drift forever. This layer declares that the
-directory exists and never what is in it.
+**`dpkg/` is `10-packages.sh`'s alone.** The cache is refreshed by moving the
+old directory aside and the new one into place, so any file Pulumi wrote in it
+would be deleted by the next refresh and reported as drift forever. This layer
+declares that the directory exists and never what is in it.
 
 **A directory is a resource, not a file that stands for one.** `skeleton_dir`
 declares a `DeviceDirectory`, whose existence, mode and ownership are compared
@@ -148,7 +149,7 @@ BIN, DPKG, UNITS = SKELETON
 BIN_DIR, DPKG_DIR, UNIT_SOURCE_DIR = (f'{conventions.gateway.CUSTOM_ROOT}/{name}' for name in SKELETON)
 
 #: Where systemd reads the units `20-units.sh` installs, which is off `/data`
-#: and therefore what a firmware update takes away.
+#: and therefore nothing a firmware update promises to keep.
 LIVE_UNIT_DIR = '/etc/systemd/system'
 
 #: Where apt leaves the debs it downloads, which `10-packages.sh` snapshots into
