@@ -11,8 +11,12 @@ from __future__ import annotations
 import base64
 import gzip
 import json
+import logging
+import os
 import shlex
 import shutil
+import subprocess
+import sys
 import urllib.parse
 from dataclasses import fields
 from pathlib import Path
@@ -20,6 +24,8 @@ from typing import Any
 
 import drill_recipient_redirect
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from memory_kit import MemoryKit
 
 from kluster.scripts.credentials import age, escrow, pki
@@ -118,7 +124,6 @@ def test_the_certificate_the_box_gets_matches_the_key_it_gets(roots: config.Root
     # One issuance, both halves. Two calls would give the box a certificate
     # its private key does not answer for, and 5432 would never come up.
     from cryptography import x509
-    from cryptography.hazmat.primitives import serialization
 
     values = config.machine(roots, address=ADDRESS, dump_key_id='k', dump_key='s', bucket_id='b')
     cert = x509.load_pem_x509_certificate(values.server_cert.encode())
@@ -203,12 +208,13 @@ def test_the_drill_recipient_on_file_follows_the_escrowed_generations(
     are not recipients.
     """
     _ = config.Roots.ensure(vault, appliance_exists=False)
-    _ = drill_recipient_file.write_text(f'# the drill key, public half\n{DRILL_RECIPIENT}\n')
+    drill = age.generate().public
+    _ = drill_recipient_file.write_text(f'# the drill key, public half\n{drill}\n')
 
     recipients = config.age_recipients(vault)
 
     generations = tuple(age.recipient(vault.recover(label)) for label in escrow.backup_labels())
-    assert recipients == (*generations, DRILL_RECIPIENT)
+    assert recipients == (*generations, drill)
 
 
 @needs_age
@@ -241,13 +247,151 @@ def test_a_second_drill_recipient_on_file_is_refused_by_naming_the_rotation(dril
         _ = config.drill_recipient(drill_recipient_file)
 
 
-def test_a_drill_recipient_that_is_not_one_is_refused(drill_recipient_file: Path) -> None:
-    # A secret pasted where the public half belongs would be committed in the
-    # clear and encrypt to nobody.
-    _ = drill_recipient_file.write_text('AGE-SECRET-KEY-1NOTARECIPIENT\n')
+@pytest.fixture
+def age_argv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Where every argv `age` is started with during the case lands, one JSON line each.
 
-    with pytest.raises(age.AgeError, match='not an age recipient'):
+    A stand-in `age` on PATH records its argv and hands over to the real one
+    (the probe `tests/test_age.py` holds `age.check_recipient` to), so what a
+    case checks is what any process on the machine could have read while the
+    drill recipient was being checked. The file is absent until the tool is
+    started.
+    """
+    real = shutil.which(age.BINARY)
+    assert real is not None
+    shim = tmp_path / 'bin' / age.BINARY
+    shim.parent.mkdir()
+    log = tmp_path / 'argv.jsonl'
+    _ = shim.write_text(
+        f'#!{sys.executable}\n'
+        'import json, os, sys\n'
+        f'with open({str(log)!r}, "a") as f: f.write(json.dumps(sys.argv) + "\\n")\n'
+        f'os.execv({real!r}, [{real!r}, *sys.argv[1:]])\n'
+    )
+    shim.chmod(0o755)
+    monkeypatch.setenv('PATH', f'{shim.parent}{os.pathsep}{os.environ["PATH"]}')
+    return log
+
+
+def _started(log: Path) -> list[str]:
+    return log.read_text().splitlines() if log.exists() else []
+
+
+@needs_age
+def test_a_drill_recipient_is_taken_on_the_tools_parse(drill_recipient_file: Path, age_argv: Path) -> None:
+    # The generator's shape -- comment lines, then the recipient -- and the
+    # pinned `age` asked about the line, on standard input rather than argv.
+    public = age.generate().public
+    _ = drill_recipient_file.write_text(f'# The drill age identity, public half.\n{public}\n')
+
+    assert config.drill_recipient(drill_recipient_file) == public
+
+    started = _started(age_argv)
+    assert len(started) == 1
+    assert public not in started[0]
+
+
+def _mistyped(public: str) -> str:
+    """`public` with its last six characters replaced: the prefix survives and the checksum does not."""
+    return f'{public[:-6]}{"qqqqqq" if not public.endswith("qqqqqq") else "pppppp"}'
+
+
+@needs_age
+def test_a_drill_recipient_with_a_character_wrong_is_refused(drill_recipient_file: Path) -> None:
+    # It still starts `age1`, and only its checksum says it names nobody: baked
+    # into the Butane, every nightly dump would be encrypted to it.
+    mistyped = _mistyped(age.generate().public)
+    _ = drill_recipient_file.write_text(f'# The drill age identity, public half.\n{mistyped}\n')
+
+    with pytest.raises(age.AgeError, match='not an age recipient') as refused:
         _ = config.drill_recipient(drill_recipient_file)
+
+    assert mistyped not in str(refused.value)
+
+
+def _pasted(secret: str, shape: str) -> str:
+    """A private key in the shape it is pasted in: as `age-keygen` prints it, quoted, or lower-cased."""
+    return {'bare': secret, 'quoted': f'"{secret}"', 'lower': secret.lower()}[shape]
+
+
+@needs_age
+@pytest.mark.parametrize('shape', ['bare', 'quoted', 'lower'])
+def test_a_private_key_pasted_as_the_drill_recipient_is_refused_unseen(
+    shape: str,
+    drill_recipient_file: Path,
+    age_argv: Path,
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The private half where the public one goes: refused, and never repeated.
+
+    Committed, it would sit in the clear in a public repository and encrypt
+    to nobody. The refusal names the file and not the line, and the line
+    reaches no argv, because it is refused before the tool is started.
+    """
+    secret = age.generate().secret
+    value = _pasted(secret, shape)
+    _ = drill_recipient_file.write_text(f'# The drill age identity, public half.\n{value}\n')
+
+    with caplog.at_level(logging.DEBUG), pytest.raises(age.AgeError, match='private half') as refused:
+        _ = config.drill_recipient(drill_recipient_file)
+
+    # Any ten characters of the key's body, not only its well-known prefix: a
+    # refusal carrying the tail of the line would leak the key all the same.
+    body = secret[len(age.SECRET_PREFIX) :].upper()
+    pieces = [body[i : i + 10] for i in range(len(body) - 9)]
+    captured = capsys.readouterr()
+    for said in (str(refused.value), caplog.text, captured.out, captured.err):
+        assert age.SECRET_PREFIX not in said.upper()
+        assert not [piece for piece in pieces if piece in said.upper()]
+    assert _started(age_argv) == []
+
+
+def test_a_drill_recipient_with_no_tool_to_ask_says_where_the_tool_is_pinned(
+    drill_recipient_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A file on disk is a question for `age`, and a missing `age` is not a
+    # wrong line: the operator is sent to the PATH rather than to the file.
+    monkeypatch.setattr(age, 'BINARY', 'age-that-is-not-installed')
+    _ = drill_recipient_file.write_text(f'{DRILL_RECIPIENT}\n')
+
+    with pytest.raises(age.AgeMissing, match='mise.toml'):
+        _ = config.drill_recipient(drill_recipient_file)
+
+
+@needs_age
+def test_a_recipient_the_generator_does_not_draw_is_refused(drill_recipient_file: Path) -> None:
+    # An SSH key is a recipient `age` takes, and not one the drill can open:
+    # the drill's identity is an age key, so its public half is an `age1` one.
+    ssh = (
+        Ed25519PrivateKey.generate()
+        .public_key()
+        .public_bytes(encoding=serialization.Encoding.OpenSSH, format=serialization.PublicFormat.OpenSSH)
+        .decode()
+    )
+    _ = drill_recipient_file.write_text(f'{ssh}\n')
+
+    with pytest.raises(age.AgeError, match='not a native `age1') as refused:
+        _ = config.drill_recipient(drill_recipient_file)
+
+    assert ssh not in str(refused.value)
+
+
+@needs_age
+def test_a_post_quantum_drill_recipient_is_refused(drill_recipient_file: Path) -> None:
+    # `age1pq1…` parses, and passes a bare `age1` prefix test, but `age` will
+    # not mix it with the escrowed generations' classic recipients: every
+    # nightly dump would fail to encrypt. Native means one `1`, the separator.
+    drawn = subprocess.run([age.KEYGEN, '-pq'], capture_output=True, text=True, check=True, timeout=age.TIMEOUT)
+    secret = next(line for line in drawn.stdout.splitlines() if line.startswith(age.SECRET_STEM))
+    pq = age.recipient(secret)
+    assert pq.startswith(f'{age.PUBLIC_PREFIX}pq1')
+    _ = drill_recipient_file.write_text(f'{pq}\n')
+
+    with pytest.raises(age.AgeError, match='not a native `age1') as refused:
+        _ = config.drill_recipient(drill_recipient_file)
+
+    assert pq not in str(refused.value)
 
 
 def _delivered(ignition: str, path: str) -> str:
