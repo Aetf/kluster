@@ -475,9 +475,11 @@ exit 2
 """
 
 #: `apt-get` as the package converger asks it. Online, `install` installs what
-#: is missing and leaves the deb of each package it downloaded in the archives
-#: directory, and `--download-only --reinstall` downloads the whole set there;
-#: offline — the boot after a firmware update with no network, its lists empty
+#: is missing, dependencies included, and leaves the deb of each package it
+#: downloaded in the archives directory; `--download-only --reinstall`
+#: downloads there the packages it is named and not what they depend on, which
+#: is apt's own behaviour (`TryToInstall::operator()` marks only the named
+#: packages for reinstall); offline — the boot after a firmware update with no network, its lists empty
 #: and unfetchable — nothing it is asked for can be found. `refresh-fails` is
 #: the download of the whole set failing on a boot the install itself worked.
 #:
@@ -524,13 +526,23 @@ if [ "$download_only" -eq 1 ] && [ -e {refresh_fails} ]; then
     exit 100
 fi
 for package in $packages; do
-    if [ "$download_only" -eq 1 ] || [ ! -e {installed}/"$package" ]; then
-        : >"$archives/${{package}}_1.0_arm64.deb"
-    fi
-    [ "$download_only" -eq 1 ] || : >{installed}/"$package"
+    wanted=$package
+    [ "$download_only" -eq 1 ] || [ "$package" != {dependent} ] || wanted="$package {dependency}"
+    for one in $wanted; do
+        if [ "$download_only" -eq 1 ] || [ ! -e {installed}/"$one" ]; then
+            : >"$archives/${{one}}_1.0_arm64.deb"
+        fi
+        [ "$download_only" -eq 1 ] || : >{installed}/"$one"
+    done
 done
 exit 0
 """
+
+#: The one dependency the stand-in `apt-get` knows: a package the set needs that
+#: the firmware does not ship, so apt fetches and installs it beside the one
+#: package of the set that depends on it whenever that one is missing.
+DEPENDENT = 'systemd-container'
+DEPENDENCY = 'libcurl3-gnutls'
 
 
 @final
@@ -593,6 +605,8 @@ def _packages(tmp_path: Path, *, installed: tuple[str, ...], cached: tuple[str, 
                 archives=device.archives,
                 offline=device.offline,
                 refresh_fails=device.refresh_fails,
+                dependent=DEPENDENT,
+                dependency=DEPENDENCY,
             )
         )
         tool.chmod(0o755)
@@ -622,6 +636,16 @@ def _install(device: _Packages, *, online: bool, refresh_fails: bool = False) ->
 
 def _names_in(directory: Path) -> set[str]:
     return {path.name for path in directory.iterdir()}
+
+
+def _debs(directory: Path, *packages: str) -> set[str]:
+    """The names the debs of `packages` have in `directory`."""
+    return {deb(directory, package).name for package in packages}
+
+
+def _offline_install(device: _Packages, *packages: str) -> str:
+    """The one `dpkg -i` an offline boot makes over a cache holding `packages`, in the order the glob gives."""
+    return f'dpkg -i {" ".join(str(device.cache / name) for name in sorted(_debs(device.cache, *packages)))}'
 
 
 def test_a_device_that_kept_every_package_is_asked_to_install_nothing(tmp_path: Path) -> None:
@@ -692,8 +716,8 @@ def test_a_boot_where_apt_worked_replaces_the_cache_with_the_whole_set_it_downlo
     assert status == 0
     assert _apt(device, 'install', '-y', '--download-only', '--reinstall', *sorted(PACKAGES)) in calls
     assert not [call for call in calls if call.startswith('dpkg -i ')]
-    assert _names_in(device.installed) == {kept, lost}
-    assert _names_in(device.cache) == {deb(device.cache, package).name for package in PACKAGES}
+    assert _names_in(device.installed) == {kept, lost, DEPENDENCY}
+    assert _names_in(device.cache) == _debs(device.cache, *PACKAGES, DEPENDENCY)
     assert not [path for path in tmp_path.iterdir() if path.name.startswith(f'{device.cache.name}.')], (
         'nothing of the swap is left beside the cache'
     )
@@ -715,8 +739,8 @@ def test_a_boot_whose_refresh_download_failed_keeps_the_old_cache_whole(tmp_path
 
     assert status == 0
     assert _apt(device, 'install', '-y', '--download-only', '--reinstall', *sorted(PACKAGES)) in calls
-    assert _names_in(device.installed) == {kept, lost}
-    assert _names_in(device.cache) == {deb(device.cache, package).name for package in PACKAGES}
+    assert _names_in(device.installed) == {kept, lost, DEPENDENCY}
+    assert _names_in(device.cache) == _debs(device.cache, *PACKAGES)
     assert not device.download.exists(), 'the download directory goes with the run'
 
 
@@ -741,7 +765,7 @@ def test_a_deb_another_apt_run_left_behind_is_neither_cached_nor_installed(tmp_p
     status, _ = _install(device, online=True)
 
     assert status == 0
-    assert _names_in(device.cache) == {deb(device.cache, package).name for package in PACKAGES}
+    assert _names_in(device.cache) == _debs(device.cache, *PACKAGES, DEPENDENCY)
     assert foreign.exists(), "the shared archives are not the converger's to empty either"
 
     # The next firmware update takes every package, and the boot after it has no network.
@@ -750,10 +774,55 @@ def test_a_deb_another_apt_run_left_behind_is_neither_cached_nor_installed(tmp_p
     status, calls = _install(device, online=False)
 
     assert status == 0
-    assert [call for call in calls if call.startswith('dpkg -i ')] == [
-        f'dpkg -i {" ".join(str(deb(device.cache, package)) for package in sorted(PACKAGES))}'
-    ]
-    assert _names_in(device.installed) == set(PACKAGES)
+    assert [call for call in calls if call.startswith('dpkg -i ')] == [_offline_install(device, *PACKAGES, DEPENDENCY)]
+    assert _names_in(device.installed) == {*PACKAGES, DEPENDENCY}
+
+
+def test_a_post_update_boot_caches_what_the_set_depends_on(tmp_path: Path) -> None:
+    """The boot the cache exists for is the one after a firmware update took every package.
+
+    On that boot apt installs the set with every dependency the firmware
+    does not ship, and those debs are the half of the cache the named set is
+    not: a networkless boot after the next update needs them as much as the
+    set. So what the install fetched becomes the cache beside what the refresh
+    fetched, and the offline boot installs all of it in one `dpkg` call.
+    """
+    device = _packages(tmp_path, installed=(), cached=())
+
+    status, _ = _install(device, online=True)
+
+    assert status == 0
+    assert _names_in(device.cache) == _debs(device.cache, *PACKAGES, DEPENDENCY)
+
+    for package in device.installed.iterdir():
+        package.unlink()
+    status, calls = _install(device, online=False)
+
+    assert status == 0
+    assert [call for call in calls if call.startswith('dpkg -i ')] == [_offline_install(device, *PACKAGES, DEPENDENCY)]
+    assert _names_in(device.installed) == {*PACKAGES, DEPENDENCY}
+
+
+def test_a_boot_that_finds_part_of_the_set_caches_only_what_it_fetched(tmp_path: Path) -> None:
+    """The limit physical/gateway.md §1.2 states, held here so that changing it changes this test.
+
+    A push that grows the set is a boot on which the rest of the set survived:
+    the install fetches the new package and its own missing dependencies, and
+    the refresh re-fetches the set by name, which fetches no dependency. So the
+    cache that replaces a whole one lacks what the surviving packages depend
+    on, and the offline boot after the next firmware update cannot install
+    them (Aetf/kluster-ops#436).
+    """
+    grown = next(package for package in PACKAGES if package != DEPENDENT)
+    device = _packages(tmp_path, installed=(), cached=())
+    _ = _install(device, online=True)
+    assert _names_in(device.cache) == _debs(device.cache, *PACKAGES, DEPENDENCY)
+
+    (device.installed / grown).unlink()
+    status, _ = _install(device, online=True)
+
+    assert status == 0
+    assert _names_in(device.cache) == _debs(device.cache, *PACKAGES)
 
 
 def test_the_package_set_is_a_set() -> None:

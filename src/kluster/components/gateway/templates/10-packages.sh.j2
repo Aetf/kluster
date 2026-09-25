@@ -41,6 +41,10 @@ CACHE={{ cache }}
 # only inside an archives directory that already exists.
 DOWNLOAD=$CACHE.download
 APT=(apt-get -o "Dir::Cache::archives=$DOWNLOAD")
+# Set before anything is downloaded, so that a run which exits anywhere, or is
+# stopped by a signal, takes the directory with it; one killed outright leaves
+# it for the next run, which empties it before the install.
+trap 'rm -rf "$DOWNLOAD"' EXIT
 
 installed() {
     local p
@@ -54,7 +58,6 @@ if installed; then
     exit 0
 fi
 
-trap 'rm -rf "$DOWNLOAD"' EXIT
 rm -rf "$DOWNLOAD"
 mkdir -p "$DOWNLOAD"
 

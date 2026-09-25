@@ -504,14 +504,15 @@ Where a firmware update carried `/etc` across, that unit starts at boot
 beside `udm-boot.service` rather than after it, so it may parse and
 stamp the routing configuration before this script has installed
 anything. That is harmless while nothing this script installs is FRR's:
-the suite ships in the firmware, the set names none of its packages,
-and the cache holds only what apt fetched for the set, so the parser
-that unit checks against is the one the firmware shipped, whichever runs
-first. A set that ever pulled an FRR package in would need the order
-declared, and not as `After=udm-boot.service` on that unit:
-`20-units.sh` runs inside `udm-boot.service`, starts the unit whenever
-it is not running and waits for it, so the unit's start would wait on
-the very unit that is waiting on it.
+the suite ships in the firmware, and the set and the dependencies apt
+fetches for it include none of its packages, so the parser that unit
+checks against is the one the firmware shipped, whichever runs first. A
+set that ever pulled an FRR package in would need the order declared,
+and not as any ordering between that unit and `udm-boot.service` — an
+`After=` on the one or a `Before=` drop-in on the other: `20-units.sh`
+runs inside `udm-boot.service`, starts the unit whenever it is not
+running and waits for it, so the unit's start would wait on the very
+unit that is waiting on it.
 
 **`20-units.sh` converges the unit sources** into
 `/etc/systemd/system`, enables them, and restarts the ones whose file
