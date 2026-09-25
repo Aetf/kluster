@@ -1,12 +1,20 @@
 name: Image conf
 description: >
-  Derive an image's ghcr reference and build-arg file from its docker/*.conf,
-  so the build and the manifest jobs read the tag from one place.
+  Derive an image's ghcr reference and build-arg file from its docker/*.conf
+  and Containerfile, so the build and the manifest jobs read the tag from one
+  place, and say whether that reference is already published.
 
 inputs:
   image:
     description: The docker/<image>.conf basename.
     required: true
+  arch:
+    description: >
+      The architecture being built (`amd64`, `arm64`), which selects the
+      conf's per-architecture keys into the build-arg file. Empty for a job
+      that builds nothing.
+    required: false
+    default: ''
 
 outputs:
   ref:
@@ -15,24 +23,35 @@ outputs:
   args-file:
     description: The conf reduced to build args, for `buildah --build-arg-file`.
     value: ${{ steps.conf.outputs.args-file }}
+  published:
+    description: >
+      `true` when the registry already serves `ref`, which a publish then
+      leaves alone; `false` when it answers that the tag is unknown.
+    value: ${{ steps.conf.outputs.published }}
 
 runs:
   using: composite
   steps:
     - id: conf
       shell: bash
+      env:
+        IMAGE_NAME: ${{ inputs.image }}
+        ARCH: ${{ inputs.arch }}
       run: |
         set -euo pipefail
-        conf="docker/${{ inputs.image }}.conf"
+        # Copied before the conf is sourced: under `set -a` a conf key of the
+        # same name would replace either one.
+        image=$IMAGE_NAME
+        arch=$ARCH
+        conf="docker/$image.conf"
+        recipe="docker/$image.Containerfile"
 
         # The conf is *sourced*, not parsed, because TAG may be written as an
-        # expression over the other keys (`TAG="${PG_TAG}-${PGCRON_REV}"` in
-        # pgcron-cnpg.conf). That keeps a version bump a one-line edit
-        # renovate can make, with the tag following from it.
+        # expression over the other keys
+        # (`TAG="${PG_TAG%-*}-${VECTORCHORD_SEMVER}"` in vchord-cnpg.conf).
+        # That keeps a version bump a one-line edit renovate can make, with
+        # the tag following from it.
         set -a; . "$conf"; set +a
-
-        # ghcr paths are lowercase and the owner login is not.
-        echo "ref=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${IMAGE}:${TAG}" >> "$GITHUB_OUTPUT"
 
         # IMAGE and TAG address the registry, everything else addresses the
         # Containerfile; the two names are reserved for that reason.
@@ -41,12 +60,59 @@ runs:
         # the conf's lines: the confs carry renovate hints and prose comments
         # that buildah must not be handed, and a value written in terms of
         # another key -- or in quotes -- has to arrive resolved rather than
-        # verbatim.
-        args="$RUNNER_TEMP/${{ inputs.image }}.build-args"
+        # verbatim. The keys are sorted bytewise, whatever the runner's locale,
+        # because their order is part of the fingerprint below.
+        args="$RUNNER_TEMP/$image.build-args"
         : > "$args"
         keys=$(sed -nE 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=.*/\1/p' "$conf" \
-          | grep -vxE 'IMAGE|TAG' | sort -u || true)
+          | grep -vxE 'IMAGE|TAG' | LC_ALL=C sort -u || true)
         for key in $keys; do
           printf '%s=%s\n' "$key" "${!key}" >> "$args"
         done
+
+        # What the image is built from, and nothing else: the Containerfile
+        # without its comments and blank lines, and every resolved build arg,
+        # both architectures' included. A comment edit leaves it where it was;
+        # a moved digest, version or instruction moves it. The workflow and
+        # this action are not in it, so a machinery change republishes nothing
+        # (framework/ci.md §4).
+        fingerprint=$( {
+          grep -vE '^[[:space:]]*(#|$)' "$recipe" || true
+          printf '\0'
+          cat "$args"
+        } | sha256sum | cut -c1-12)
+
+        # A key ending in the architecture's name reaches that architecture's
+        # build without the suffix, after the fingerprint is taken: an upstream
+        # published per architecture is pinned once per architecture, and the
+        # Containerfile names it once.
+        if [ -n "$arch" ]; then
+          suffix="_${arch^^}"
+          for key in $keys; do
+            case $key in
+              *"$suffix") printf '%s=%s\n' "${key%"$suffix"}" "${!key}" >> "$args" ;;
+            esac
+          done
+        fi
+
+        # ghcr paths are lowercase and the owner login is not.
+        ref="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${IMAGE}:${TAG}-${fingerprint}"
+        echo "ref=$ref" >> "$GITHUB_OUTPUT"
         echo "args-file=$args" >> "$GITHUB_OUTPUT"
+
+        # A published tag is never pushed again. Only the registry's own answer
+        # that the manifest is unknown counts as absent: any other failure --
+        # the network, an auth refusal -- stops the job, because reading it as
+        # absent would push over whatever the tag already serves. The caller
+        # logs in first, so a package that is not public reads the same way.
+        echo "Checking whether $ref is already published..."
+        if out=$(skopeo inspect --raw "docker://$ref" 2>&1 >/dev/null); then
+          echo "$ref is already published; a push run leaves it alone."
+          echo "published=true" >> "$GITHUB_OUTPUT"
+        elif grep -qi 'manifest unknown' <<<"$out"; then
+          echo "$ref is not published yet."
+          echo "published=false" >> "$GITHUB_OUTPUT"
+        else
+          printf 'Could not tell whether %s is published:\n%s\n' "$ref" "$out" >&2
+          exit 1
+        fi

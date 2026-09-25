@@ -6,20 +6,20 @@
 # pgvecto.rs ships its .deb inside a per-architecture image, VectorChord as a
 # release asset — so nothing here compiles Rust, and the arm64 build costs the
 # same as the amd64 one.
-ARG PG_MAJOR
 ARG PG_TAG
-ARG PGVECTO_RS_SEMVER
+ARG PG_DIGEST
+# This architecture's `<tag>@<digest>`, which the build derives from the conf's
+# PGVECTO_RS_AMD64 or PGVECTO_RS_ARM64.
+ARG PGVECTO_RS
+
+FROM docker.io/tensorchord/pgvecto-rs-binary:${PGVECTO_RS} AS pgvecto-binary
+
+FROM ghcr.io/cloudnative-pg/postgresql:${PG_TAG}@${PG_DIGEST}
+
+ARG PG_MAJOR
 ARG VECTORCHORD_SEMVER
 # Supplied by the build, not by the conf: under a native build the runner
 # decides the architecture.
-ARG TARGETARCH
-
-FROM docker.io/tensorchord/pgvecto-rs-binary:pg${PG_MAJOR}-v${PGVECTO_RS_SEMVER}-${TARGETARCH} AS pgvecto-binary
-
-FROM ghcr.io/cloudnative-pg/postgresql:${PG_TAG}
-
-ARG PG_MAJOR
-ARG VECTORCHORD_SEMVER
 ARG TARGETARCH
 
 USER root

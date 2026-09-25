@@ -444,10 +444,11 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     refuses, or a step that failed on something outside the
     repository (a tool download, the registry); re-run it for the
     second, and open a pull request that fixes the tree for the first.
-    An `images` failure leaves a tag missing or half stitched, and no
-    later push notices it, since the selection reads the diff rather
-    than the registry: once the cause is gone, re-run the failed jobs,
-    or dispatch the workflow, which builds every image (§4).
+    An `images` failure leaves a tag missing or half stitched until the
+    next run on `main`: every one selects every image and builds and
+    publishes whichever tag is missing (§4), but a push triggers it only
+    when it touches `docker/**` or the workflow. So once the cause is
+    gone, re-run the failed jobs, or dispatch the workflow from `main`.
 -   **Version control is `jj`, and nothing here notices**: the forge
     sees git objects, so every workflow, check and merge behaves as it
     would under git — with the one accepted loss that rebase-merge does
@@ -702,16 +703,19 @@ co-location principle as DNS records and firewall rules), and the
 proven single-repo loop is kept intact — a `.conf` version file per
 image, renovate's comment-driven regex managers bumping it,
 noop-automerge merging on green, the workflow publishing the ghcr tag,
-and renovate then opening the *deploy* PR against the image pin for
-human eyes. homelab-containers keeps its host/UDM scope (nspawn
+and a consumer's renovate then opening the *deploy* PR against the
+image pin for human eyes, under the versioning the end of this section
+names. homelab-containers keeps its host/UDM scope (nspawn
 rootfs).
 
 Upgrades over the legacy workflow, both mandatory now:
 
 -   **Multi-arch is required** — the cloud pool is arm64 (splitpro's
     CNPG operand runs there). Builds use GitHub's free native arm64
-    runners (public repos) + a manifest-stitch job; no qemu, which also
-    keeps the Rust-heavy vchord build viable. Free arm64 runners
+    runners (public repos) + a manifest-stitch job; no qemu, whose
+    emulation multiplies the cost of every `RUN` step. The vchord
+    operand installs its extensions as prebuilt per-architecture
+    packages, so nothing compiles on either runner. Free arm64 runners
     require a public repository: **this repo is public since
     2026-08-25**, after the history scrub that removed the
     kluster-code-era `Pulumi.dev.yaml` ciphertext and encryption salt
@@ -724,36 +728,92 @@ Upgrades over the legacy workflow, both mandatory now:
     (old-tracker rule).
 
 As built, `images.yml` is three jobs and the `alert` job (§3).
-**`select-images`** discovers the
-image set by globbing `docker/*.Containerfile` and narrows it to the
+**`select-images`** discovers the image set by globbing
+`docker/*.Containerfile`. On a pull request it narrows the set to the
 images whose own files moved — safe in a way the preview path-filter is
-not, because a published tag is a pure function of its `.conf`, so a tag
-that does not exist yet implies a change in `docker/<image>.*`; a change
-to the workflow or its action selects everything instead. Its name is
-distinct from `preview.yml`'s `changes` on purpose: a job name is a
-check-run name, and `changes` is a required context (§5) that this
-workflow's filtered trigger would otherwise fill a second time on the
-pull requests that touch `docker/**`. **`build`** is a matrix of
-image × architecture, each entry on its native runner (`ubuntu-24.04`,
-`ubuntu-24.04-arm`), publishing `:<tag>-amd64` / `:<tag>-arm64`.
-**`manifest`** stitches those two into the tag the cluster actually
-pins. A PR builds both architectures and publishes nothing, so the
-manifest job does not run there.
+not, because a published tag is a function of the image's own `.conf`
+and `.Containerfile` (below), so an image the change does not touch
+keeps the tag it has; a change to the workflow or its action selects
+everything instead. Every other run — a push to `main`, a dispatch —
+selects every image, and the published check (below) skips each one
+the registry already serves. A push cannot narrow by its diff: the
+concurrency group keeps one run waiting, a newer push cancels it, and
+an image changed only by the cancelled run would never be selected.
+Its name is distinct from `preview.yml`'s `changes` on purpose: a job
+name is a check-run name, and `changes` is a required context (§5) that
+this workflow's filtered trigger would otherwise fill a second time on
+the pull requests that touch `docker/**`. **`build`** is a matrix of image × architecture, each
+entry on its native runner (`ubuntu-24.04`, `ubuntu-24.04-arm`),
+publishing `:<tag>-amd64` / `:<tag>-arm64`. **`manifest`** stitches
+those two into the tag the cluster actually pins. Only a run on `main`
+publishes: a PR builds both architectures and publishes nothing, and so
+does a dispatch from any other branch, which would otherwise publish an
+unreviewed image under a well-formed tag, or race `main`'s own run for
+the same one.
 
 The per-image `.conf` is the contract: it is *sourced*, and beyond the
 build args it declares **`IMAGE`** (the image's name, which the
 workflow places under the repository owner's ghcr namespace) and
 **`TAG`**. A tag may be written as an expression over the other keys —
-`TAG="${PG_TAG%-*}-${VECTORCHORD_SEMVER}"` in `vchord-cnpg.conf`,
-`TAG="${PG_TAG}-${PGCRON_REV}"` in `pgcron-cnpg.conf` — so that the
-composite tags the CNPG operands need still reduce a bump to the one
-line renovate edits, or as a literal where the tag holds what no key
-does, as in `golinks.conf` (its commit's date and short hash). The two names are reserved and are not
-passed on as build args, and what buildah is handed is the *resolved*
-values rather than the file's lines — the confs carry renovate hints and
-prose comments that are not build args at all. `TARGETARCH` is supplied
-by the workflow, because under native builds the runner decides the
-architecture.
+`TAG="${PG_TAG%-*}-${VECTORCHORD_SEMVER}"` in `vchord-cnpg.conf` — so
+that the composite tags the CNPG operands need still reduce a bump to
+the one line renovate edits, or as a literal where the tag holds what no
+key does, as in `golinks.conf` (its commit's date and short hash). The
+two names are reserved and are not passed on as build args, and what
+buildah is handed is the *resolved* values rather than the file's lines
+— the confs carry renovate hints and prose comments that are not build
+args at all. `TARGETARCH` is supplied by the workflow, because under
+native builds the runner decides the architecture, and a key ending in
+an architecture's name (`PGVECTO_RS_AMD64`) also reaches that
+architecture's build without the suffix, for an upstream published as
+one image per architecture.
+
+**A published tag is never pushed again, and a rebuild pulls what the
+files name.** Two rules hold that, and `tests/test_images.py` holds
+both:
+
+-   **Every base is pinned by digest** — `FROM <image>:<tag>@<digest>`
+    in the `.Containerfile`, or a tag key with a `_DIGEST` key beside it
+    (or one `<tag>@<digest>` value) in the conf where the base is
+    spelled through a build argument. The digest is the multi-arch index
+    where the upstream publishes one, and the per-architecture image
+    where it publishes one image per architecture. Renovate moves a
+    digest with its tag on a version bump, and refreshes it alone when
+    the upstream rebuilds the same tag; those refreshes arrive as one
+    grouped pull request on the first of the month. A tag that is not a
+    version by itself, such as the `pgvecto.rs` binary image's
+    `pg15-v0.3.0-amd64`, carries a regex versioning in its renovate
+    hint, so a release is still read off it. What is not pinned
+    is what a `RUN` step fetches — an `apt-get install`, a `pip install`
+    of the pinned release's dependencies — so a rebuild is not
+    bit-for-bit; the next rule is what keeps that from reaching a tag.
+-   **The published tag is the conf's `TAG` and a fingerprint** —
+    `<TAG>-<12 hex digits>`, of the `.Containerfile` without its
+    comments and blank lines and of every resolved build argument. A
+    change to what the image is built from moves the tag, a comment edit
+    does not, and a push run whose tag the registry already serves (the
+    `image-conf` action reads the manifest with `skopeo`) builds and
+    pushes nothing for that image. Only the registry's answer that the
+    manifest is unknown counts as unpublished; any other failure stops
+    the job rather than risk a push over what the tag serves. The
+    workflow and the action are not in the fingerprint, so an edit to
+    the machinery alone republishes nothing — a machinery change that
+    should change the images needs an edit the fingerprint reads — an
+    instruction or a build argument (a `LABEL`, a conf key) — in each
+    image it should rebuild. The per-architecture
+    tags are the exception, because the check reads the manifest: a
+    run that failed before stitching leaves them behind, and the next
+    run pushes them again from the same inputs. Nothing pins them.
+
+A consumer therefore pins a tag that never changes under it. The
+fingerprint is the last dash-separated part of the tag, which the
+`docker` versioning renovate applies by default reads as a suffix, and
+it only offers updates within one suffix: a consumer's renovate follows
+these images only under a versioning that matches the fingerprint
+without capturing it, such as
+`regex:^(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)-[0-9a-f]{12}$` for
+emailproxy. A refresh under an unchanged version compares equal under
+such a pattern, so it reaches a consumer by hand.
 
 The blog is deliberately **not** an image (workloads.md §4: built
 branch + git-sync).

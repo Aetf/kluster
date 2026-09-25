@@ -19,8 +19,9 @@
   dockerfile: {
     // The self-built images' recipes are `*.Containerfile`, which the
     // dockerfile manager does not look at by default. It reads their `FROM`
-    // lines; the pins written as build args live in the matching `.conf` and
-    // are covered by a custom manager below.
+    // lines, each a tag with its digest, and moves the two together; the pins
+    // written as build args live in the matching `.conf` and are covered by a
+    // custom manager below.
     managerFilePatterns: [
       '/^docker/[^/]+\\.Containerfile$/',
     ],
@@ -225,6 +226,58 @@
       enabled: true,
     },
     {
+      // The self-built images' `FROM` lines are pinned by digest (ci.md §4),
+      // and one written without a digest gets a pull request adding it. Only
+      // the dockerfile manager: a `.conf` pin carries its digest by the shape
+      // the custom manager below reads, and a test holds every one to it.
+      matchFileNames: [
+        'docker/**',
+      ],
+      matchManagers: [
+        'dockerfile',
+      ],
+      pinDigests: true,
+    },
+    {
+      // A digest moving under an unchanged tag is the upstream rebuilding it,
+      // which here is a rebuild under a new tag of ours: the published tag
+      // carries a fingerprint of what the image is built from. Those refreshes
+      // are not decisions the way a version bump is, so they travel together,
+      // on the first of the month (the `schedule:monthly` preset's window):
+      // one pull request, and one new tag per image, rather than one of each
+      // per upstream rebuild.
+      matchFileNames: [
+        'docker/**',
+      ],
+      matchUpdateTypes: [
+        'digest',
+      ],
+      groupName: 'self-built image bases',
+      groupSlug: 'image-bases',
+      schedule: [
+        '* 0-3 1 * *',
+      ],
+    },
+    {
+      // A pgvecto.rs release, read off the per-architecture tags in
+      // `vchord-cnpg.conf`. It is an extension upgrade of immich's existing
+      // database rather than a rebuild, so it waits on the dashboard, and the
+      // two architectures' references move in one pull request: apart, the
+      // image would pair two releases. Digest refreshes are not matched here
+      // and stay in the monthly group above.
+      matchDepNames: [
+        'docker.io/tensorchord/pgvecto-rs-binary',
+      ],
+      matchUpdateTypes: [
+        'major',
+        'minor',
+        'patch',
+      ],
+      dependencyDashboardApproval: true,
+      groupName: 'pgvecto.rs release',
+      groupSlug: 'pgvecto-rs',
+    },
+    {
       // The any-Terraform-provider bridge every SDK under `sdks/` is generated
       // with. One dependency written once per SDK, so one bump moves every
       // entry and regenerates every SDK; alone, because a bridge release
@@ -274,12 +327,22 @@
       // dockerfile manager uses in a Dockerfile. A pin without such a comment
       // is deliberately manual (golinks tracks a commit on a branch with no
       // releases, which is not a version stream).
+      //
+      // An image pin comes in one of two shapes, one pattern each. A version
+      // key with its digest on the next line, a key ending in `_DIGEST`, is
+      // the first pattern with the digest captured beside the version, so a
+      // bump moves both and a refresh moves the digest alone. A whole
+      // `<tag>@<digest>` in one value is the second, for a tag that is not a
+      // version by itself: renovate refreshes its digest, and moves tag and
+      // digest together on a release read off the tag through the
+      // `versioning=` its hint names.
       customType: 'regex',
       managerFilePatterns: [
         '/^docker/[^/]+\\.conf$/',
       ],
       matchStrings: [
-        '# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: versioning=(?<versioning>\\S+))?(?: extractVersion=(?<extractVersion>\\S+))?\\s+[A-Za-z_][A-Za-z0-9_]*=(?<currentValue>\\d[\\w.+-]*)',
+        '# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: versioning=(?<versioning>\\S+))?(?: extractVersion=(?<extractVersion>\\S+))?\\s+[A-Za-z_][A-Za-z0-9_]*=(?<currentValue>\\d[\\w.+-]*)(?:\\s+[A-Za-z_][A-Za-z0-9_]*_DIGEST=(?<currentDigest>sha256:[0-9a-f]{64}))?',
+        '# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: versioning=(?<versioning>\\S+))?\\s+[A-Za-z_][A-Za-z0-9_]*=(?<currentValue>[A-Za-z][\\w.-]*)@(?<currentDigest>sha256:[0-9a-f]{64})',
       ],
     },
     {
