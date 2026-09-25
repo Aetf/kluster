@@ -13,6 +13,9 @@ name: images
 # qemu: the vchord operand compiles Rust, which emulation turns from minutes
 # into an unbounded wait. Free `ubuntu-24.04-arm` runners are a public-repo
 # feature, which this repo has been since 2026-08-25.
+#
+# A run that fails outside a pull request raises an `actionable` alert through
+# the producer (`alert.yml`), by framework/ci.md §3's rule.
 
 on:
   push:
@@ -192,3 +195,15 @@ jobs:
             "docker://$REF-amd64" \
             "docker://$REF-arm64"
           buildah manifest push --all "$REF" "docker://$REF"
+
+  # The alert job (framework/ci.md §3); its playbook is §3.1 there.
+  alert:
+    needs: [select-images, build, manifest]
+    if: always() && github.event_name != 'pull_request' && contains(needs.*.result, 'failure')
+    uses: ./.github/workflows/alert.yml
+    with:
+      tier: actionable
+      summary: images failed
+      playbook: docs/framework/ci.md §3.1
+    secrets:
+      dispatch-app-private-key: ${{ secrets.DISPATCH_APP_PRIVATE_KEY }}

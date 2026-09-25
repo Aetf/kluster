@@ -270,15 +270,24 @@ RENOVATE = Author('renovate[bot]')
 
 #: The App whose installation token pushes where `GITHUB_TOKEN` must not: onto
 #: a renovate branch from `sdk-regenerate.yml`, so that the pushed head's runs
-#: start on their own (ci.md §3), and the alert producer once built. Its key is
-#: the `github-dispatch-key` register row; its client id is what the variable
-#: below carries.
+#: start on their own (ci.md §3), and a `repository_dispatch` into the ops
+#: repository from the alert producer, `alert.yml` (`conventions.alert`). Its
+#: key is the `github-dispatch-key` register row; its client id is what the
+#: variable below carries.
 DISPATCH_APP = App(slug='kluster-dispatch', client_id='Iv23liR3WBm3bxvOVqch')
 
-#: How `sdk-regenerate.yml` learns which App its key belongs to: the client id
-#: is handed to `actions/create-github-app-token` beside the key, and this is
-#: the variable it reads it from.
+#: How a workflow minting the dispatch App's token learns which App its key
+#: belongs to: the client id is handed to `actions/create-github-app-token`
+#: beside the key, and this is the variable `sdk-regenerate.yml` and
+#: `alert.yml` read it from.
 DISPATCH_APP_CLIENT_ID = Variable('DISPATCH_APP_CLIENT_ID', DISPATCH_APP.client_id)
+
+#: The label the ops repository's dispatch handler puts on every `actionable`
+#: alert issue it opens, and the one it lists open issues by to find the issue
+#: an alert's `key` already has (operations.md §4). Declared rather than made by
+#: hand for the reason every label is, and because a hand-made label of the
+#: same name collides with the declared one rather than being adopted by it.
+ALERT = Label('alert', 'An alert issue: the dispatch handler applies it and lists open alerts by it (operations.md §4)')
 
 #: The ops repository's only Environment, which carries the unattended drills'
 #: credentials. Ungated because its scope is the gate (credentials.md §4).
@@ -320,9 +329,11 @@ OPS = Repository(
     name='kluster-ops',
     public=False,
     environments=(DRILL,),
-    # Installed for the alert producer, whose workflow is not built yet
-    # (credentials.md §3); the variable that names the App to it arrives with
-    # that workflow, so the roll of variables is empty until then.
+    labels=(ALERT,),
+    # Installed for the alert producer, whose token dispatches into this
+    # repository (credentials.md §3). The producer runs in `kluster` and reads
+    # the client id from that repository's variable, so this row declares
+    # none: a variable belongs to the repository whose workflow reads it.
     apps=(DISPATCH_APP,),
 )
 

@@ -15,15 +15,17 @@ structure rather than a flat namespace, so using one without its siblings does
 not parse (rfc-002 §10.1). Most of the surface is re-exported here, so a reader
 says `conventions.X` and does not have to know which module owns `X`.
 
-**Four modules are read qualified instead**: `conventions.gateway`,
-`conventions.overlay`, `conventions.forge` and `conventions.routes`. For the
-first two the module path carries what a prefix otherwise would (rfc-002
-§3.1) — `conventions.overlay.ROSTER`, `conventions.gateway.SERVICES` — and it
-is the distinction the naming rules care about most: which network a name
-belongs to is never a thing to guess. `forge` and `routes` are qualified from
-the other side: their names are common nouns — `Repository`, `Environment`,
-`Account`; `Route`, `Extra`, `SELF` — that mean one particular thing only
-while the forge or the census stands beside them.
+**A module whose names need its own name beside them is read qualified
+instead** — `conventions.<module>.X`, never re-exported. Today that is
+`gateway`, `overlay`, `forge`, `routes` and `alert`, for one of two reasons.
+For `gateway` and `overlay` the module path carries what a prefix otherwise
+would (rfc-002 §3.1) — `conventions.overlay.ROSTER`,
+`conventions.gateway.SERVICES` — and it is the distinction the naming rules
+care about most: which network a name belongs to is never a thing to guess.
+`forge`, `routes` and `alert` are qualified from the other side: their names
+are common nouns — `Repository`, `Environment`, `Account`; `Route`, `Extra`,
+`SELF`; `EVENT`, `Tier`, `FIELDS` — that mean one particular thing only while
+the forge, the census or the alert stands beside them.
 
 Glossary
 --------
@@ -158,7 +160,7 @@ CI
 
 from __future__ import annotations
 
-from kluster.conventions import forge, gateway, overlay, routes
+from kluster.conventions import alert, forge, gateway, overlay, routes
 from kluster.conventions.backup import (
     BACKUP_VERSION_RETENTION_DAYS,
     BUCKET_BACKUP,
@@ -351,6 +353,7 @@ __all__ = (
     'RetentionClass',
     'SiteNetwork',
     'Vip',
+    'alert',
     'barman_repo_path',
     'forge',
     'gateway',

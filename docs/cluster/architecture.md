@@ -470,7 +470,15 @@ producer paths exist by necessity, not preference:
 
 The shared convention is what makes the paths one channel: a push
 reads identically regardless of origin, and always names its
-playbook.
+playbook. **The dispatch intake's payload is a census**,
+`kluster.conventions.alert` — the event type, the tiers and the
+fields; operations.md §4 is the contract built on it. Every workflow
+that posts to the intake, and the handler, spells them from there or
+holds its own spelling equal to it by test: this repo's in
+`tests/test_conventions.py`, the handler's on the ops repo's side,
+since nothing here can read it. The in-cluster path does not carry
+it: alertmanager's body is fixed (below), and it meets the
+convention at the push, not at the dispatch.
 
 **Two delivery tiers + the GitHub-issue leg (2026-08-24).** The
 payload convention carries a tier, and the tier decides delivery:
@@ -489,6 +497,12 @@ payload convention carries a tier, and the tier decides delivery:
     (below): the ops repo's dispatch handler escalates CI-origin
     alerts in place; the cluster side raises a meta-alert.
 
+The census carries a third tier that is not a delivery: **`heartbeat`**,
+a check-in with neither push nor issue, which the handler forwards to
+HA so that the source's timer restarts — how a scheduled ops-repo
+workflow that stops running is noticed (operations.md §4). Every event
+from a watched source is a check-in whatever its tier.
+
 **All delivery logic lives in the ops repo (2026-08-24; renamed
 `kluster-alerts` → `kluster-ops` when it absorbed the system's
 scheduled automation — ci.md §3).** `kluster-ops` is the notification
@@ -498,18 +512,25 @@ What remains outside it is producer plumbing, not logic — one
 dispatch call in CI, one receiver line in alertmanager. Two intake
 paths, matched to the producers' shapes:
 
--   **CI (event-shaped): one dispatch, nothing else.** The shared
-    producer step in CI POSTs a `repository_dispatch` with the
-    convention payload to the ops repo, using an installation
+-   **CI (event-shaped): one dispatch, nothing else.** The
+    producer, `alert.yml`, is a reusable workflow that every
+    workflow running on `main` ends in (ci.md §3, which states the
+    rule and names any workflow it still excuses): it POSTs a
+    `repository_dispatch` with the convention payload to the ops
+    repo, using an installation
     token minted per run from the dispatch App (below) — CI
     neither calls HA nor touches issues. The ops
     repo's **dispatch handler** workflow then does the delivery: HA
     push per tier, issue for `actionable`, and — being already in
     the issue-making place — escalates any tier to an issue when
-    the HA webhook fails. Accepted cost: CI-origin pushes gain
+    the HA webhook fails. The handler is not built: until it is, a
+    dispatch is accepted and starts nothing, so a CI alert is a red
+    run and nothing more. Accepted cost: CI-origin pushes gain
     Actions-startup latency (seconds to minutes; deploy failures
     and scheduled checks are not pages). The HA webhook credential
-    leaves CI entirely. (`GITHUB_TOKEN` clarity: every workflow run
+    leaves CI entirely once ci.md §3 excuses no workflow from the
+    producer.
+    (`GITHUB_TOKEN` clarity: every workflow run
     in every repo gets one, scoped to its own repo — CI keeps its
     own for checkout/automerge; the ops repo's workflows use
     *theirs* to open issues; the App exists only because a token
