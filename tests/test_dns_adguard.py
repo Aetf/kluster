@@ -6,6 +6,12 @@ calls `configure` before handing it any operation (rfc-002 §7.5 E2). `provider`
 below does that with a `ConfigureRequest` built the way the plugin builds one --
 the same class, the same project namespace -- so what the tests exercise is the
 real ordering rather than attributes set by hand.
+
+**The stand-in can refuse** (testing.md §4). An instance told to refuse an
+endpoint answers it with an error status and a body that is not JSON, and
+changes nothing. A case catches an operation that reads a refusal as success
+by expecting the operation to raise; what the instance holds afterwards is the
+stand-in's doing, not the provider's.
 """
 
 from __future__ import annotations
@@ -41,14 +47,27 @@ PROPS: dict[str, Any] = {
 }
 
 
+#: The status a refusing instance answers with: AdGuard Home's answer to a
+#: `/control/` request whose login it does not accept. What a case asks is
+#: that an error status is not read as success, so no case turns on which
+#: error it is.
+REFUSED = 401
+
+
 class FakeResponse:
-    def __init__(self, payload: object) -> None:
+    def __init__(self, url: str, payload: object, status: int = 200) -> None:
+        self.url: str = url
         self.payload: object = payload
+        self.status_code: int = status
 
     def raise_for_status(self) -> None:
-        return None
+        if self.status_code >= 400:
+            raise requests.HTTPError(f'{self.status_code} Client Error for url: {self.url}')
 
     def json(self) -> object:
+        if self.status_code >= 400:
+            # A refusal's body is empty or plain text, never the payload.
+            raise requests.JSONDecodeError('Expecting value', '', 0)
         return self.payload
 
 
@@ -58,10 +77,13 @@ class Instance:
 
     #: The rewrites the instance holds, in the order it holds them.
     entries: list[dict[str, str]] = field(default_factory=list[dict[str, str]])
-    #: Every write, as `(endpoint name, body)`.
+    #: Every write, as `(endpoint name, body)`, refused ones included.
     posts: list[tuple[str, dict[str, str]]] = field(default_factory=list[tuple[str, dict[str, str]]])
     #: Every session opened onto it, so a test can ask what it authenticated as.
     opened: list[FakeSession] = field(default_factory=list['FakeSession'])
+    #: The endpoints (`list`, `add`, `delete`) the instance refuses. A refused
+    #: request changes nothing the instance holds.
+    refusing: set[str] = field(default_factory=set[str])
 
     def session(self) -> FakeSession:
         """A `requests.Session` onto this instance, as the provider builds one."""
@@ -77,15 +99,22 @@ class FakeSession:
 
     def get(self, url: str, timeout: int = 0) -> FakeResponse:
         assert url.endswith('/control/rewrite/list')
-        return FakeResponse(list(self.instance.entries))
+        if 'list' in self.instance.refusing:
+            return FakeResponse(url, None, REFUSED)
+        return FakeResponse(url, list(self.instance.entries))
 
     def post(self, url: str, json: dict[str, str], timeout: int = 0) -> FakeResponse:
-        self.instance.posts.append((url.rsplit('/', 1)[-1], json))
-        if url.endswith('/add'):
+        endpoint = url.rsplit('/', 1)[-1]
+        self.instance.posts.append((endpoint, json))
+        if endpoint in self.instance.refusing:
+            return FakeResponse(url, None, REFUSED)
+        if endpoint == 'add':
             self.instance.entries.append(json)
         else:
-            self.instance.entries.remove(json)
-        return FakeResponse({})
+            # AdGuard removes every entry equal to the pair, and answers a
+            # pair it does not hold with success all the same.
+            self.instance.entries = [entry for entry in self.instance.entries if entry != json]
+        return FakeResponse(url, {})
 
 
 @pytest.fixture(autouse=True)
@@ -351,3 +380,44 @@ def test_delete_removes_exactly_the_declared_pair(instance: Instance) -> None:
 
     assert instance.entries == [{'domain': 'tube.ucw.phd', 'answer': '192.168.71.1'}]
     assert instance.posts[0][0] == 'delete'
+
+
+def test_a_refused_add_fails_the_create_rather_than_recording_a_row(instance: Instance) -> None:
+    """A create that reports success is a row state records and the instance lacks.
+
+    LAN clients would then take the public answer for a name every preview
+    shows as rewritten.
+    """
+    instance.refusing = {'add'}
+
+    with pytest.raises(requests.HTTPError):
+        _ = provider().create(dict(PROPS))
+
+    assert instance.posts == [('add', {'domain': 'photos.ucw.phd', 'answer': '192.168.71.1'})]
+
+
+def test_a_refused_delete_fails_the_delete(instance: Instance) -> None:
+    """A delete that reports success drops the row from state while the instance still answers it.
+
+    The rewrite would then stay live with nothing declaring it, and no later
+    run would ever look for it again.
+    """
+    instance.entries = [{'domain': 'photos.ucw.phd', 'answer': '192.168.71.1'}]
+    instance.refusing = {'delete'}
+
+    with pytest.raises(requests.HTTPError):
+        provider().delete('an-id', dict(PROPS))
+
+
+def test_a_refused_list_fails_the_read_rather_than_reporting_the_row_gone(instance: Instance) -> None:
+    """A refusal says nothing about what the instance holds.
+
+    Read as an empty list, it would report a row that is still there as
+    deleted, and the next up would plan a create for it. The error the read
+    raises is the instance's refusal, not a failure to parse its body.
+    """
+    instance.entries = [{'domain': 'photos.ucw.phd', 'answer': '192.168.71.1'}]
+    instance.refusing = {'list'}
+
+    with pytest.raises(requests.HTTPError):
+        _ = provider().read('an-id', dict(PROPS))

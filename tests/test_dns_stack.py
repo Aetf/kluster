@@ -3,18 +3,26 @@
 What it catches is wiring rather than data: that every zone is declared with
 its records, that the anchors carry the physical stack's addresses rather
 than literals, and that the rewrites are emitted from the route census.
+
+Every run here is under the parent backstop `kluster.main` installs before a
+real run declares anything, so a resource the program leaves unparented fails
+the run here rather than in `pulumi preview`. The route census is set by each
+run rather than inherited: one run holds it empty and one holds a single row,
+because what the stack declares for rewrites is a function of that state.
 """
 
 from collections import Counter
 from typing import Any
 
 import pulumi
+import pytest
 import pytest_asyncio
 import yaml
-from mock_monitor import Recorder, declaring, run_with
+from mock_monitor import Recorder, declaring, run_under_backstop
 
 from kluster import conventions
 from kluster.components.dns.base import overlay_label
+from kluster.components.dns.rewrites import rewrites
 
 LB_ADDRESS = '203.0.113.10'
 LB_ADDRESS_V6 = '2001:db8::10'
@@ -25,6 +33,13 @@ ZONE = 'cloudflare:index/zone:Zone'
 DNSSEC = 'cloudflare:index/zoneDnssec:ZoneDnssec'
 RECORD = 'cloudflare:index/dnsRecord:DnsRecord'
 RESOLVER_REWRITES = 'kluster:components:dns:rewrites:ResolverRewrites'
+REWRITE = 'pulumi-python:dynamic:Resource'
+
+#: The one row the routed run declares: a name answered on both sides,
+#: published in the primary zone alone.
+ROUTE = conventions.routes.Route(
+    host='photos', exposure=conventions.routes.Exposure.SPLIT, zones=conventions.PRIMARY_ONLY
+)
 
 
 class AppliedPhysical(Recorder):
@@ -43,16 +58,30 @@ class AppliedPhysical(Recorder):
         return {}
 
 
-@pytest_asyncio.fixture(scope='module', autouse=True)
-async def stack() -> AppliedPhysical:
+async def declare_program(routes: tuple[conventions.routes.Route, ...]) -> AppliedPhysical:
+    """The whole program, declared once against `routes` and under the backstop."""
     from kluster.stacks import dns
     from kluster.stacks.dns import CLOUDFLARE_API_TOKEN
 
     pulumi.runtime.set_all_config({f'kluster:{CLOUDFLARE_API_TOKEN}': API_TOKEN})
-    monitor = await run_with(AppliedPhysical(), stack='dns')
-    async with declaring():
-        await dns.main()
+    monitor = await run_under_backstop(AppliedPhysical(), stack='dns')
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(conventions.routes, 'ROUTES', routes)
+        async with declaring():
+            await dns.main()
     return monitor
+
+
+@pytest_asyncio.fixture(scope='module', autouse=True)
+async def stack() -> AppliedPhysical:
+    """The program with an empty route census."""
+    return await declare_program(())
+
+
+@pytest_asyncio.fixture(scope='module')
+async def routed() -> AppliedPhysical:
+    """The program with a census of one row, `ROUTE`."""
+    return await declare_program((ROUTE,))
 
 
 def records_of(stack: AppliedPhysical, zone: str) -> dict[str, dict[str, Any]]:
@@ -73,6 +102,18 @@ def test_every_zone_is_declared_once(stack: AppliedPhysical) -> None:
     }
     account = conventions.CLOUDFLARE_ACCOUNT.account_id
     assert all(inputs['account'] == {'id': account} for inputs in stack.by_name(ZONE).values())
+
+
+def test_every_zone_is_protected(stack: AppliedPhysical) -> None:
+    """The zone is the registrar-facing object, so a destroy must not reach it.
+
+    Deleting a zone takes the delegation with it and every record below; a
+    replace is a delete. Read off the registration request, where the option
+    is, and under the zone's own type: the component that holds it carries
+    the same name and no such option.
+    """
+    for zone in conventions.ALL_ZONES:
+        assert stack.options_of(zone, ZONE).protect is True, zone
 
 
 def test_every_zone_is_signed(stack: AppliedPhysical) -> None:
@@ -240,14 +281,33 @@ def test_a_rewrite_component_is_declared_for_every_resolver_the_census_names(sta
 
 
 def test_no_rewrite_is_declared_while_no_app_declares_a_route(stack: AppliedPhysical) -> None:
-    """The rewrites follow the route census, and it is empty until `apps` lands.
+    """With no row to write, the components declare no dynamic resource.
 
-    With no row to write, the components declare no dynamic resource, so the
-    provider process never starts and the AdGuard login is never read — which
-    is what lets the stack deploy before that login exists, the state it is in
-    today.
+    So the provider process never starts and the AdGuard login is never read,
+    which is what lets the stack deploy before that login exists. The census
+    is empty in this run because the run sets it so.
     """
-    assert not stack.by_name('pulumi-python:dynamic:Resource')
+    assert not stack.by_name(REWRITE)
+
+
+def test_a_route_in_the_census_is_rewritten_on_every_resolver(routed: AppliedPhysical) -> None:
+    """The wiring from the route census to the rewrites, held on a census of one row.
+
+    What a row implies is `rewrites`' subject (`test_dns_rewrites.py`); what
+    is asserted here is that the program hands that derivation the census
+    rather than anything else, and hands every instance the result. The names
+    are stated independently of the derivation, so a run that derives nothing
+    at all fails here rather than agreeing with itself.
+    """
+    written = {(inputs['instance'], inputs['domain'], inputs['answer']) for inputs in routed.by_name(REWRITE).values()}
+    implied = {
+        (resolver.name, entry.domain, str(entry.answer))
+        for resolver in conventions.gateway.RESOLVERS
+        for entry in rewrites((ROUTE,))
+    }
+
+    assert written == implied
+    assert {domain for _, domain, _ in written} == {f'{ROUTE.host}.{conventions.ZONE_PRIMARY}'}
 
 
 def test_every_zone_and_record_is_signed_by_one_explicit_provider(stack: AppliedPhysical) -> None:

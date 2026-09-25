@@ -21,7 +21,7 @@ import pulumi.runtime
 import pulumi.runtime.settings
 import pytest
 import pytest_asyncio
-from mock_monitor import Recorder, declaring, run_with
+from mock_monitor import Recorder, declaring, run_under_backstop, run_with
 
 from putils import Component, UnparentedChildError, install_parent_backstop
 from putils import component as putils_component
@@ -46,16 +46,9 @@ async def backstop() -> None:
     """Mocks, an empty scope, and the backstop on the root stack resource.
 
     Emptying the scope is what makes this module independent of the ones ahead
-    of it: a component whose ``__init__`` raises never reaches
-    `register_outputs`, so it stays open, and several suites elsewhere assert
-    that a component refuses a bad argument. That ends a program — which is the
-    documented behavior — but not a test process, so the isolation is the test
-    process's to arrange, and it is the only thing here that reaches for a
-    module-private name.
+    of it; `run_under_backstop` says why a test process needs it.
     """
-    putils_component._under_construction.set(())  # pyright: ignore[reportPrivateUsage]
-    _ = await run_with(Recorder(), stack='test', project='putils')
-    install_parent_backstop()
+    _ = await run_under_backstop(Recorder(), stack='test', project='putils')
 
 
 def refused(build: Callable[[], object]) -> str:
