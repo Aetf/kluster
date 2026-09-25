@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 from fake_pulumi import RecordedPulumi
 
+from kluster.lib import workstation
 from kluster.scripts.credentials import pulumi_config
 
 STACK = 'dns'
@@ -109,6 +110,26 @@ def test_the_project_directory_is_the_checkout_holding_pulumi_yaml() -> None:
     # The command writes a file in this repository, so it works from any
     # working directory rather than from the one the operator stands in.
     assert (pulumi_config.project_dir() / 'Pulumi.yaml').is_file()
+
+
+def test_a_checkout_that_cannot_be_found_is_refused_as_a_slot(monkeypatch: pytest.MonkeyPatch) -> None:
+    # `state_backend.state` translates this module's refusal into its own and
+    # passes anything else through untranslated, so the checkout's own error
+    # is handed over as one.
+    def nowhere() -> Path:
+        raise workstation.WorkstationError('no mise.toml above this package')
+
+    monkeypatch.setattr(workstation, 'repo_root', nowhere)
+
+    with pytest.raises(pulumi_config.SlotRefused, match='no mise.toml above'):
+        _ = pulumi_config.project_dir()
+
+
+def test_a_checkout_without_pulumi_yaml_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(workstation, 'repo_root', lambda: tmp_path)
+
+    with pytest.raises(pulumi_config.SlotRefused, match='no Pulumi.yaml'):
+        _ = pulumi_config.project_dir()
 
 
 @pytest.fixture

@@ -18,18 +18,22 @@ from collections.abc import Awaitable, Callable
 
 import pulumi
 
+from kluster import conventions
+
 from . import apps, dns, github, k8s_base, physical
 
 __all__ = ('STACKS', 'run_selected')
 
 #: Stack name → the program that declares it. The names are the Pulumi stack
-#: names, so `pulumi stack select physical` is the whole dispatch mechanism.
+#: names, so `pulumi stack select physical` is the whole dispatch mechanism,
+#: and they are read from `conventions.STACK_NAMES` because the `credentials`
+#: command, which may import no program here, names the same stacks.
 STACKS: dict[str, Callable[[], Awaitable[None]]] = {
-    'physical': physical.main,
-    'dns': dns.main,
-    'k8s-base': k8s_base.main,
-    'apps': apps.main,
-    'github': github.main,
+    conventions.STACK_NAMES.physical: physical.main,
+    conventions.STACK_NAMES.dns: dns.main,
+    conventions.STACK_NAMES.k8s_base: k8s_base.main,
+    conventions.STACK_NAMES.apps: apps.main,
+    conventions.STACK_NAMES.github: github.main,
 }
 
 

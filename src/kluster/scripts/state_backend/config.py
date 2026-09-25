@@ -33,8 +33,11 @@ from . import settings
 log = logging.getLogger(__name__)
 
 #: `deploy/` sits outside the package: it is deployment material, not library
-#: code, and the appliance's definition is meant to be readable on its own.
-DEPLOY_DIR = Path(__file__).resolve().parents[4] / 'deploy' / 'state-backend'
+#: code, and the appliance's definition is meant to be readable on its own. So
+#: it is found in the checkout this package runs from (`workstation.repo_root`),
+#: and a copy of the package outside any checkout refuses by name on import
+#: rather than reading whatever directory a fixed depth lands on.
+DEPLOY_DIR = workstation.repo_root() / 'deploy' / 'state-backend'
 
 TEMPLATE = 'butane.yaml.j2'
 DUMP_SCRIPT = 'state-dump.sh'

@@ -66,16 +66,14 @@ log = logging.getLogger(__name__)
 
 #: The stack that manages the installation's DNS records, and therefore the slot
 #: the zones token is delivered into.
-ZONES_STACK = 'dns'
+ZONES_STACK = conventions.STACK_NAMES.dns
 
 #: The stack that declares the forge itself, and therefore the slot the GitHub
 #: admin token is delivered into. Nothing here mints that token -- it is made by
 #: hand in the GitHub UI (`devices.py`) -- but the stack it is delivered to is
-#: named beside the others, because a stack name spelled in two modules is a
-#: stack name that can drift. Taken from `pulumi_config`, which is where the
-#: name has to be anyway: that module carries the census of stacks encrypted
-#: apart from the estate passphrase, and this is the one on it.
-GITHUB_STACK = pulumi_config.GITHUB_STACK
+#: named here beside the others, so every row that delivers into a stack reads
+#: it from one module, under the role that stack plays for the row.
+GITHUB_STACK = conventions.STACK_NAMES.github
 
 #: The zones the gateway may answer a DNS-01 challenge in, and the whole of its
 #: token's scope.
@@ -134,7 +132,7 @@ GATEWAY_ACME_KEY = 'gatewayAcmeToken'
 #: name, so a delivery aimed somewhere else would revoke this stack's live
 #: credential on its way to filling another stack's slot. Identity is fixed,
 #: so delivery is too.
-PHYSICAL_STACK = conventions.PHYSICAL
+PHYSICAL_STACK = conventions.STACK_NAMES.physical
 
 #: Where the `physical` stack reads the OCI signing configuration. Bare, and
 #: therefore in this project's namespace, for the reason the zones token above
@@ -235,7 +233,7 @@ def _deliverable(stack: pulumi_config.Stack, *, own: str) -> None:
     new one is verified: aimed at a misspelling, it would create that stack in
     the backend, fill it, and revoke the live credential of the stack that
     reads it. So the name has to be one the project declares
-    (`pulumi_config.STACKS`), and any stack but the row's own has to exist
+    (`conventions.STACK_NAMES`), and any stack but the row's own has to exist
     already -- a mint fills configuration, and creating a stack is that
     stack's own bring-up rather than a side effect of delivering a token to
     it. The row's own stack is the exception because its first mint *is* its
@@ -245,10 +243,10 @@ def _deliverable(stack: pulumi_config.Stack, *, own: str) -> None:
     Before the kit is opened and before anything is minted, so a refusal here
     leaves no token live at the provider and no stack in the backend.
     """
-    if stack.name not in pulumi_config.STACKS:
+    if stack.name not in conventions.STACK_NAMES.names():
         raise pulumi_config.SlotRefused(
             f'{stack.name!r} is no stack of this project, so nothing would read a token delivered there; '
-            f'the stacks are {", ".join(sorted(pulumi_config.STACKS))}'
+            f'the stacks are {", ".join(sorted(conventions.STACK_NAMES.names()))}'
         )
     if stack.name != own and not stack.exists():
         raise pulumi_config.SlotRefused(
