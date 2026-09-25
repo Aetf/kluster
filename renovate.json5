@@ -123,10 +123,11 @@
       // workflow is not on) or by other dependency names.
       //
       // Both names, because the action and the program it fetches are separate
-      // dependencies: `jdx/mise` is what a `version:` input on the action would
-      // be, and it belongs in this group for the same reason. No workflow
-      // passes that input today, so that half matches nothing and costs
-      // nothing.
+      // dependencies: the `version:` input the workflows pass to the action is
+      // one renovate reads as a dependency of its own, named `jdx/mise`. That
+      // half is the one carrying mise's own releases, so dropping it would
+      // send exactly the bump this rule exists for back into the `github
+      // actions` group.
       matchDepNames: [
         'jdx/mise-action',
         'jdx/mise',
@@ -151,8 +152,8 @@
       // and approved before it is opened at all.
       //
       // Matched by dependency and not by file. Its pin lives in the
-      // project-level `versions:` block of `Pulumi.yaml` (rfc-002 §11.1),
-      // which is the file every other pin in the repository will share — and
+      // project-level `versions:` block of `Pulumi.yaml` (framework/pulumi.md
+      // §3.2), which the chart and image pins share — and
       // an in-cluster chart bump must not inherit a gate that exists because
       // `physical` cannot be previewed.
       matchDepNames: [
@@ -302,7 +303,7 @@
     {
       // The Talos version is a Pulumi config value, which no manager reads. It
       // lives in the project-level `versions:` namespace, so one file holds it
-      // for every stack (rfc-002 §11.1).
+      // for every stack (framework/pulumi.md §3.2).
       customType: 'regex',
       managerFilePatterns: [
         '/^Pulumi\\.yaml$/',
@@ -352,8 +353,8 @@
     {
       // The image pins in the same project-level block. Each value is a whole
       // reference, so repository, tag and digest all come off the line and no
-      // annotation comment is needed to say what is being pinned (rfc-002
-      // §11.1).
+      // annotation comment is needed to say what is being pinned
+      // (framework/pulumi.md §3.2).
       //
       // Tag and digest are captured together, so one data source moves the
       // pair and the reference the program pulls by stays whole. The

@@ -398,18 +398,19 @@ apply.
 
 -   **The Apps themselves, and their installations.** Creating an App
     and generating its private key is console-only (credentials.md
-    §2), which is why those keys are seeds rather than derived
-    credentials. An App's installation is console state too, for a
-    measured reason: the endpoints that manage which repositories an
-    installation covers (`/user/installations/…`) reject a personal
-    access token of either kind — they take only a user-to-server
-    token from that App's own OAuth flow, an 8-hour credential the
-    register has no tier for. Declaring one console page would cost a
-    browser round trip before every apply, or turning off token
-    expiry on both Apps (kluster-ops#11). Reading the state is cheap
-    by comparison — an App can list its own installations with a JWT
-    signed by the private key already in the kit — so an audit is the
-    open option, not enforcement. What the census records of an App is
+    §2.2), which is why each key is a derived row that is recorded and
+    escrowed rather than minted (credentials.md §3). An App's
+    installation is console state too, for a measured reason: the
+    endpoints that manage which repositories an installation covers
+    (`/user/installations/…`) reject a personal access token of
+    either kind — they take only a user-to-server token from that App's
+    own OAuth flow, an 8-hour credential the register has no tier for.
+    Declaring one console page would cost a browser round trip before
+    every apply, or turning off token expiry on both Apps
+    (kluster-ops#11). Reading the state is cheap by comparison — an App
+    can list its own installations with a JWT signed by its private
+    key, which the escrow already holds — so an audit is the open
+    option, not enforcement. What the census records of an App is
     its public identity and where it is installed (§3); nothing here
     creates or installs one.
 -   **Environment secret *values*.** Those are the `credentials`

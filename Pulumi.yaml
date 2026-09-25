@@ -8,10 +8,10 @@ description: Kluster configurations
 
 # Project-level configuration: values that apply to every stack, which a
 # stack's own file overrides only where it deliberately runs something
-# different from the rest (rfc-002 §11.1).
+# different from the rest (docs/framework/pulumi.md §3.2).
 #
-# The `versions:` namespace is what this is for. Every pin the repository
-# holds lives here, one kind per key prefix, so that five stack programs read
+# The `versions:` namespace is what this is for. Every pin a stack program
+# reads lives here, one kind per key prefix, so that five stack programs read
 # one copy instead of five files drifting apart -- Pulumi has no include
 # between stack configurations, and this is the mechanism that does not need
 # one. `pulumi config set` cannot write project-level values, so these are

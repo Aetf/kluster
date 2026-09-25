@@ -7,6 +7,43 @@ topic; this page is about using them well.
 
 ## Layering
 
+**The source tree is layered, and the layering is a checked contract.**
+The layers, from the top, and what each is for:
+
+-   `kluster.stacks` holds the stack programs, which are wiring and
+    declare no resource of their own (below).
+-   `kluster.components` holds every reusable unit of resources, one
+    package per area. The areas are one layer, so they may import each
+    other.
+-   `kluster.providers` holds the code that talks to a system Pulumi has
+    no provider for, one package per system — its resources, their
+    provider, and the transport that reaches it — beside the modules
+    those packages share ([framework/pulumi.md](../framework/pulumi.md)
+    §5).
+-   `kluster.lib` holds the helpers no area owns: typed configuration
+    reading, the rendered-configuration mechanism, the workstation slot
+    mechanics, the Kubernetes helpers and the version pins.
+-   `kluster.conventions` holds the decisions and identities that no
+    layer owns, one module per domain (the next section); every layer
+    above it may read them except `kluster.providers` (below).
+-   `putils` is the Pulumi framework
+    ([framework/pulumi.md](../framework/pulumi.md) §1 and §2), which
+    knows nothing about this installation.
+
+A layer imports what is below it and nothing above it, and further
+edges are forbidden outright. A script — `kluster.scripts`, the console entry
+points — imports no stack program, component or provider: it is a
+program of its own, so a command someone runs by hand never drags a
+stack's resource graph in. A provider imports no `conventions`: it is
+generic code for a class of system, and which host, which name and which
+credential are its callers' decisions. `putils` imports nothing from
+`kluster`. And nothing outside `kluster.stacks` but the entrypoint,
+`kluster.main`, imports a stack program: something another module
+imports for its contents is a component, whatever directory it sits in.
+The contract in `pyproject.toml` is the canon for the layers and the
+forbidden edges, and `import-linter` enforces it; where this section and
+the contract disagree, the contract is right.
+
 **Every reusable unit of resources is a component, and the tree is the
 architecture.** A stack program (`stacks/*.py`) is wiring: it reads
 stack configuration, builds the top-level components, exports outputs —
@@ -28,12 +65,19 @@ business and no key should exist.
 implementation detail of one component is constructed inside it and not
 visible outside. A provider several components share is constructed by
 the stack program and set on each of them: built inside any one of them
-it would be reached into by the rest. Child resources inherit the
+it would be reached into by the rest. Child resources inherit a native
 provider through component `opts` — never re-plumbed per resource; an
-invoke inherits only through a parent, so it names one. Connection state
-(host, credentials) lives on the provider, not on every resource that
-uses it. Custom providers are code of their own kind and live in their
-own subpackage, apart from the declaration logic that uses them.
+invoke inherits only through a parent, so it names one. A native
+provider's connection state (host, credentials) lives on the provider,
+not on every resource that uses it. A dynamic provider has no provider
+resource to inherit or to hold that state: it is pickled into every
+resource it manages, so it carries no state at all. What it connects
+to — the address, and the host key where one is pinned — is a declared
+input of each of those resources, and any credential it needs is read
+from stack configuration inside the provider's own process
+([framework/pulumi.md](../framework/pulumi.md) §5.2). Custom providers
+are code of their own kind and live in their own subpackage, apart from
+the declaration logic that uses them.
 
 **Every provider is explicit, and its credential is read at the line
 that builds it** — wherever that line is, and by nothing else. A
@@ -229,8 +273,9 @@ The architecture reviewer's standing questions, for the review stage
 -   Does every case that holds a census against something have a side
     the census is not the source of, and does no test restate a
     census's typed content ([testing.md](testing.md))?
--   Does every new resource hang off the right component, with
-    providers inherited rather than re-plumbed?
+-   Does every new resource hang off the right component, with native
+    providers inherited rather than re-plumbed, and a dynamic resource's
+    address and pin declared as its own inputs?
 -   Would the diff's names survive the "no metaphor, one term per
     concept" test, and is every logical name built only from values
     that cannot move?
