@@ -85,7 +85,7 @@ whose options name no parent, naming both the resource and the component.
 It refuses rather than repairs, and rfc-002 §8.2 is where that reads as a
 conclusion rather than an assertion.
 
-Two consequences worth knowing:
+Consequences worth knowing:
 
 -   **The scope is `super().__init__()` … `register_outputs()`**, which is why
     every component ends its constructor with the latter. A component is
@@ -93,11 +93,18 @@ Two consequences worth knowing:
     needs no parent of its own while a nested one does; a component that never
     calls `register_outputs` stays on the scope and the next unparented
     resource is refused in its name instead of its own.
--   **Nothing is exempt** — a provider built inside a component is a child of
-    it like everything else. Resources declared outside any component, which is
-    what a stack program does, pass untouched.
+-   **Nothing is exempt**, providers included. Resources declared outside any
+    component, which is what a stack program does, pass untouched.
+-   **A provider a component builds for itself is its sibling, not its
+    child.** It is built before the component's own `super().__init__()`,
+    because a provider reaches a subtree through the component's options and
+    those are fixed at registration. `own_provider_opts(opts)` gives it the
+    parent the component was given — which is also what keeps it from being
+    refused inside an enclosing component — and `with_provider(opts, provider)`
+    is the component's own options with the provider added, so every resource
+    under the component inherits it without naming it.
 
-`kluster.main` installs it once, before any stack program runs; a resource
+`kluster.main` installs the backstop once, before any stack program runs; a resource
 carries only the transformations that existed when its parent was built, so
 the call has to come first.
 
@@ -243,11 +250,14 @@ applied, and nothing between the two runs may read one (§3.1).
 
 ## 2. Integration with `putils`
 
-The framework is implemented in the library `src/putils` (stable; verified by
-`tests/test_async_properties.py`):
+The framework is implemented in the library `src/putils` (stable; the async
+half is verified by `tests/test_async_properties.py` and the parent backstop
+by `tests/test_parenting.py`):
 
 -   `component.py`: Provides the base `Component` class (auto `pulumi_type`,
-    `child_opts()`).
+    `child_opts()`), the parent backstop (`install_parent_backstop`, §1.3),
+    and the two helpers for a provider a component builds for itself
+    (`own_provider_opts` and `with_provider`, §1.3).
 -   `paio.py`: Handles bridging `asyncio` with Pulumi, including `async_output`
     and `resolve`.
 
@@ -320,7 +330,7 @@ it, neither of which bites for a pin: `pulumi config set` cannot write
 there, so the values are hand-edited YAML; and a key in someone else's
 namespace may carry a value but neither a type nor a default.
 
-Every version pin the repository holds lives in that block, in one
+Every version pin a stack program reads lives in that block, in one
 `versions:` namespace with **the kind in the key** —
 `versions:talos`, `versions:chart-<name>` and `versions:image-<name>`,
 a container root filesystem being an image like any other. One
@@ -328,9 +338,20 @@ namespace because they are one kind of fact, a build somebody else
 produced and this repository selects by version; the prefix because it
 is what lets one renovate manager per kind match its own entries and
 nothing else. `lib/versions.py` exposes one accessor per kind, each
-returning a parsed value rather than the raw string and each refusing a
-missing or malformed pin by naming the key, so a pin nobody set fails
-where it is read instead of somewhere downstream.
+checking the pin's shape and returning it parsed — a chart as its
+repository and version, an image as its repository, tag and digest, the
+Talos release as a tag checked to be one — and each refusing a missing
+or malformed pin by naming the key, so a pin nobody set fails where it
+is read instead of somewhere downstream.
+
+A pin no stack program reads lives with the tool that reads it: Python
+dependencies in `pyproject.toml` and `uv.lock`, the command-line tools
+in `mise.toml`, the bridged provider SDKs in `Pulumi.yaml`'s own
+`packages:` block, a script's pins in that script's modules
+(`update_crds/pins.py`, `state_backend/settings.py`), the container
+builds' pins beside their build files under `docker/`, and the actions
+and mise's own release in the workflows that call them
+(`.github/workflows/`).
 
 ## 4. CRD Types Handling
 
@@ -418,14 +439,15 @@ nothing for `opts.provider` to point at — provider options are matched
 by the package half of the type token, and no provider resource can be
 `pulumi-python`. A dynamic provider therefore does not inherit down a
 component tree the way every other one does: it travels to its
-resources as an ordinary Python object a component hands to its
-children, and the instance is pickled into a
-reserved property on **each** resource it manages, `__provider`, marked
-secret. Three more limits come with the choice: Python and TypeScript
-only; `pulumi import` and `get` unavailable; and the package half of
-the type token always `pulumi-python`, so a policy pack cannot tell one
-dynamic resource kind from another by package (the `module`/`name`
-halves are the program's — `pulumi-python:dynamic/device:File`).
+resources as an ordinary Python object, pickled into a reserved
+property on **each** resource it manages, `__provider`, marked secret;
+here every resource's constructor builds a fresh instance of its
+class's provider. Three more limits come with the choice:
+Python and TypeScript only; `pulumi import` and `get` unavailable; and
+the package half of the type token always `pulumi-python`, so a policy
+pack cannot tell one dynamic resource kind from another by package (the
+`module`/`name` halves are the program's —
+`pulumi-python:dynamic/device:File`).
 
 **So a provider here carries no connection state**, and that is a
 design rather than an accident of the mechanism: instance attributes

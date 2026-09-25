@@ -1,7 +1,9 @@
 """The Pulumi program: dispatch to the selected stack.
 
 Registered by `__main__.py` through `pulumi.run`, so the async entrypoint runs
-on Pulumi's own event loop and `putils.resolve` works throughout.
+on Pulumi's own event loop and plain `await` works throughout. `putils.resolve`
+does not: it refuses outside an `async_output` coroutine, this entrypoint
+included (docs/framework/pulumi.md §1.4).
 """
 
 from __future__ import annotations

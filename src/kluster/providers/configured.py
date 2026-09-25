@@ -3,8 +3,9 @@
 A dynamic provider is pickled into every resource it manages, so an attribute
 carrying a credential would be a copy of that credential on each of them and a
 rotation would rewrite all of them. The shape that avoids it is the one every
-custom provider here takes (framework/pulumi.md §5.2, rfc-002 §7.4), and this
-module is that shape with the parts that differ left abstract:
+custom provider here that opens a credentialed session takes
+(framework/pulumi.md §5.2), and this module is that shape with the parts that
+differ left abstract:
 
 -   **Nothing is state.** Attributes are unset where the program builds the
     provider and `__getstate__` returns an empty bag, so what lands in state is
@@ -13,12 +14,12 @@ module is that shape with the parts that differ left abstract:
 -   **The credential is read in `configure`**, which runs inside the
     resource-provider process, once, before any operation, and receives the
     stack's configuration project-namespaced and with secrets already
-    decrypted (rfc-002 §7.5 E2). The process inherits the environment too, so
-    exclusivity is this repository's rule rather than the runtime's: a
-    credential that only opens the provider's own session lives in stack
-    configuration -- the store rule under "Layering" in style/pulumi.md -- and
-    nowhere else: not in the environment, not on a resource, not in a pickle,
-    not in any component's signature. The value is read here, out of the
+    decrypted (framework/pulumi.md §5.3 E2). The process inherits the
+    environment too, so exclusivity is this repository's rule rather than the
+    runtime's: a credential that only opens the provider's own session lives in
+    stack configuration -- the store rule under "Layering" in style/pulumi.md --
+    and nowhere else: not in the environment, not on a resource, not in a
+    pickle, not in any component's signature. The value is read here, out of the
     process's own configuration and by no program, and that is what keeps it
     out of the pickle.
 -   **`check` stamps what the pickle no longer shows.** With an inert pickle
@@ -27,17 +28,18 @@ module is that shape with the parts that differ left abstract:
     endpoint and a short digest of the credential, and `provider_version`, the
     provider module's own version constant. They are inputs rather than
     outputs because the engine renders its comparison against the checked
-    inputs (rfc-002 §7.5 E4, E8).
+    inputs (framework/pulumi.md §5.3 E4, E8).
 
 A subclass supplies four things: which configuration keys hold the credential,
 what the fingerprint is taken over, how a property bag reads as an endpoint,
 and its own version. Two obligations come with them. **The version is bumped by
 hand when an operation's behavior changes** -- a provider class is pickled by
 reference, so editing the body of `create` changes not one byte of state and
-produces no diff at all (rfc-002 §7.5 E1). And **an update tells a moved stamp
-from a changed input**: the stamps move without the far side changing, so an
-update that acted on one would rewrite every resource the provider manages on
-every rotation, which is the opposite of what the stamps are for.
+produces no diff at all (framework/pulumi.md §5.3 E1). And **an update tells a
+moved stamp from a changed input**: the stamps move without the far side
+changing, so an update that acted on one would rewrite every resource the
+provider manages on every rotation, which is the opposite of what the stamps
+are for.
 """
 
 from __future__ import annotations
@@ -87,8 +89,8 @@ def declared_change(olds: Mapping[str, Any], news: Mapping[str, Any], keys: tupl
 
     Over an explicit list of keys, because the two bags are not symmetrical:
     `olds` is the stored *output* bag while `news` is the checked *input* bag
-    (rfc-002 §7.5 E7), so a provider comparing them wholesale sees every
-    create-time output as a difference and reports a change on every run.
+    (framework/pulumi.md §5.3 E7), so a provider comparing them wholesale sees
+    every create-time output as a difference and reports a change on every run.
     """
     return any(olds.get(key) != news.get(key) for key in keys)
 
@@ -116,9 +118,9 @@ class ConfiguredProvider(dynamic.ResourceProvider, abc.ABC):
     **The credential is not an attribute until `configure` has run**, which is
     the module docstring's first bullet seen from the inside: the plugin
     deserializes and configures the provider before any operation reaches it
-    (rfc-002 §7.5 E2, E3), so an operation may read it. Giving it a default
-    would not make anything safer -- it would turn a provider that was never
-    configured into one that dials with the wrong credential.
+    (framework/pulumi.md §5.3 E2, E3), so an operation may read it. Giving it a
+    default would not make anything safer -- it would turn a provider that was
+    never configured into one that dials with the wrong credential.
     """
 
     def configure(self, req: dynamic.ConfigureRequest) -> None:
@@ -172,9 +174,9 @@ class ConfiguredProvider(dynamic.ResourceProvider, abc.ABC):
 
         The digest is stored and previewed in the clear, deliberately. A property
         a provider synthesizes carries no secret marking however secret the
-        configuration behind it (rfc-002 §7.5 E10), and this one is meant to be
-        read: a truncated digest of a credential is not the credential, and a
-        redacted value would make illegible the diff this property exists to
-        render.
+        configuration behind it (framework/pulumi.md §5.3 E10), and this one is
+        meant to be read: a truncated digest of a credential is not the
+        credential, and a redacted value would make illegible the diff this
+        property exists to render.
         """
         return f'{self._endpoint(props)}#{fingerprint(self._credential())}'

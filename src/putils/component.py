@@ -4,7 +4,7 @@ that keeps a component's sub-resources attached to it.
 
 Sub-resources are created synchronously in ``__init__`` like plain Pulumi
 code; inputs that need async preparation are wrapped with `putils.async_output`.
-See docs/rfc/rfc-001-native-async-inputs.md.
+See docs/framework/pulumi.md §1.
 """
 
 from __future__ import annotations
@@ -132,11 +132,12 @@ def with_provider(opts: Optional[pulumi.ResourceOptions], provider: pulumi.Provi
     """A component's own options, carrying `provider` for its whole subtree.
 
     This is how a provider reaches the resources under a component without any
-    of them naming it (rfc-002 §8.1): a provider in a component's `providers`
-    map is inherited by every child that names the component as its parent, and
-    transitively by their children, with the first match by package name
-    winning. `child_opts(provider=...)` therefore belongs nowhere in a
-    component body — the provider is stated once, where it is built.
+    of them naming it (docs/framework/pulumi.md §1.3): a provider in a
+    component's `providers` map is inherited by every child that names the
+    component as its parent, and transitively by their children, with the first
+    match by package name winning. `child_opts(provider=...)` therefore belongs
+    nowhere in a component body — the provider is stated once, where it is
+    built.
     """
     return pulumi.ResourceOptions.merge(opts, pulumi.ResourceOptions(providers=[provider]))
 

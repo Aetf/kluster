@@ -1,9 +1,9 @@
 """Version pins: one configuration namespace, the kind in the key.
 
-Everything this repository pins is the same kind of fact — a build somebody
+Every pin a stack program reads is the same kind of fact — a build somebody
 else produced, selected by version — so the Talos release, the Helm charts and
 the container images share one `versions:` namespace and differ by a prefix on
-the key (rfc-002 §11.1):
+the key (docs/framework/pulumi.md §3.2):
 
     versions:talos: v1.13.9
     versions:chart-cert-manager: https://charts.jetstack.io:v1.19.1
@@ -11,8 +11,7 @@ the key (rfc-002 §11.1):
 
 The gateway's container root filesystems are in that third kind rather than a
 kind of their own: they are published as registry images, so an image reference
-is what pins them and there is nothing left that made them special (rfc-002
-§11.1).
+is what pins them and there is nothing left that made them special.
 
 The prefix is what lets one renovate manager per kind match its own entries and
 nothing else. The keys live in the project-level `config:` block of
@@ -21,8 +20,11 @@ copy and a stack overrides a pin only when it deliberately runs a different
 version from the rest; `pulumi config set` cannot write there, which is what a
 renovate-maintained pin wants anyway.
 
-Each accessor returns a parsed value rather than the raw string, and each
-refuses a missing or malformed pin by naming the key.
+Pins no stack program reads live with the tool that reads them
+(docs/framework/pulumi.md §3.2), and this module knows nothing of them.
+
+Each accessor checks the pin's shape and returns it parsed, and each refuses a
+missing or malformed pin by naming the key.
 """
 
 from __future__ import annotations
@@ -32,11 +34,19 @@ from typing import NamedTuple, final
 
 import pulumi
 
-#: The one namespace every pin lives in.
+#: The one namespace every pin a stack program reads lives in.
 NAMESPACE = 'versions'
 
 #: The whole key of the one pin there is exactly one of.
 TALOS = 'talos'
+
+#: A Talos release as upstream tags one: `v<major>.<minor>.<patch>`. That
+#: spelling is what the image factory's paths and the image names built from the
+#: pin carry, so a bare `1.13.9` or a minor line such as `v1.13` names nothing
+#: the factory serves. A pre-release is refused too: the renovate manager for
+#: this key reads `v[\d.]+`, so it would track a pre-release as the release it
+#: precedes and rewrite the pin into a tag that does not exist.
+_TALOS_RELEASE = re.compile(r'v\d+\.\d+\.\d+')
 
 #: A registry digest, in the one form a reference carries it: algorithm-qualified
 #: and lower case, because that is what a registry serves and what a comparison
@@ -165,7 +175,7 @@ class ChartVersions(_Kind):
 
 @final
 class Versions:
-    """Every pin the repository holds, by kind."""
+    """Every pin a stack program reads, by kind."""
 
     chart = ChartVersions()
     image = ImageVersions()
@@ -179,11 +189,17 @@ class Versions:
         construction, and a second key would be a second place for it to be
         wrong. It has no `<name>` because there is one of it, which is also why
         it is the one kind that is a whole key rather than a prefix.
+
+        The value is the release tag itself, since that is what every reader
+        passes on, and it is checked to be one before any of them does.
         """
         try:
-            return _CONFIG.require(TALOS)
+            release = _CONFIG.require(TALOS)
         except pulumi.ConfigMissingError as error:
             raise KeyError(f'nothing pins the Talos release: set {NAMESPACE}:{TALOS} in Pulumi.yaml') from error
+        if _TALOS_RELEASE.fullmatch(release) is None:
+            raise ValueError(f'{NAMESPACE}:{TALOS} is not a Talos release tag (`v<major>.<minor>.<patch>`)')
+        return release
 
 
 versions = Versions()

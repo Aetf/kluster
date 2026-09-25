@@ -1,7 +1,7 @@
 """Version pins: one namespace, the kind in the key, a parsed value out.
 
-What is under test is the boundary (rfc-002 §11.1). Every pin in this
-repository is a string an operator or a renovate branch edited, and the
+What is under test is the boundary (docs/framework/pulumi.md §3.2). Every pin
+a stack program reads is a string an operator or a renovate branch edited, and the
 accessor is the one place that turns it into something typed and refuses a
 missing or malformed one by naming the key rather than failing further in.
 """
@@ -38,7 +38,7 @@ def test_every_kind_shares_one_namespace_and_differs_by_key_prefix() -> None:
     because the keys are project-level configuration rather than five stacks'
     copies of the same value. The gateway's root filesystems are in the `image`
     kind and not one of their own: they are registry images, so an image
-    reference is what pins them (rfc-002 §11.1).
+    reference is what pins them.
     """
     assert versions.talos == 'v1.13.9'
     assert versions.chart['cert-manager'] == ChartVersion('https://charts.jetstack.io', 'v1.19.1')
@@ -106,6 +106,25 @@ def test_a_registry_named_with_a_port_keeps_it_out_of_the_tag() -> None:
     )
 
     assert versions.image['gateway-caddy'] == ImagePin('registry.invalid:5000/installation/caddy', '3', DIGEST)
+
+
+@pytest.mark.parametrize(
+    'value',
+    ['1.13.9', 'v1.13', 'latest', 'v1.13.9 ', '', 'v1.14.0-beta.1'],
+    ids=['no v', 'minor line', 'not a version', 'trailing space', 'empty', 'pre-release'],
+)
+def test_a_talos_pin_that_is_not_a_release_tag_is_refused_by_name(value: str) -> None:
+    """The tag is what the image factory's paths and the image names carry.
+
+    So a value in any other spelling is refused where it is read, naming the
+    key, rather than reaching the factory as a release it does not serve. A
+    pre-release is refused as well, because the renovate manager for the key
+    would track it as the release it precedes.
+    """
+    pulumi.runtime.set_all_config(dict(PINS) | {'versions:talos': value})
+
+    with pytest.raises(ValueError, match='versions:talos'):
+        _ = versions.talos
 
 
 def test_a_chart_pin_that_names_no_version_at_all_is_refused_by_name() -> None:
