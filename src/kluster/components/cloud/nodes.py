@@ -24,6 +24,16 @@ balancer, the backends in Pulumi and, through the autoname derived from that,
 on the balancer: a name is an identity that state and the balancer key on,
 and the number is a value the structure lets anyone edit.
 
+The balancer is dual-stack, and OCI's listeners and backend sets are not: each
+carries one `ip_version`, a listener forwards only to a backend set of its own
+family, and a backend set holds only backends of that family. So every
+management port is declared once per family the balancer holds (`FAMILIES`) --
+a listener, a backend set and a backend per node for each -- and a port served
+on one family alone is a port the other address of the same anchor refuses.
+IPv4 is the family the cluster endpoint names, and its children carry the
+field alone; every other family's carry the family after the field
+(`kubernetes-ipv6`).
+
 The load balancer is a component of its own because the dependency runs
 through it: a node's machine configuration names the cluster endpoint, which
 *is* the load balancer's address, while the backends that point at the nodes
@@ -48,6 +58,16 @@ from putils import Component, async_output, resolve
 #: read leaves the address record's own `ip_version` field unset.
 FAMILY_SEPARATOR: Mapping[str, str] = {'IPv4': '.', 'IPv6': ':'}
 
+#: The families the balancer holds a public address of, spelled the way a
+#: listener's and a backend set's `ip_version` takes them. The balancer's own
+#: `nlb_ip_version` is these joined (`IPV4_AND_IPV6`), so the addresses it is
+#: handed and the listeners that answer on them are one list.
+FAMILIES: tuple[str, ...] = ('IPV4', 'IPV6')
+
+#: The family the cluster endpoint and the certificate SANs name. Its children
+#: carry the field alone; `named` puts every other family's after the field.
+ENDPOINT_FAMILY = 'IPV4'
+
 
 def management_ports() -> list[tuple[str, int]]:
     """Each management port as its field in `conventions.ManagementPorts` and its number.
@@ -59,8 +79,19 @@ def management_ports() -> list[tuple[str, int]]:
     return list(zip(ports._fields, ports, strict=True))
 
 
+def named(field: str, family: str) -> str:
+    """What everything declared for one management port on one family is named after.
+
+    The field alone for the endpoint's family, the field and the family for
+    any other. Both halves are identities that state and the balancer key on,
+    so the rule is fixed: a family renamed into or out of the bare field is
+    every one of its listeners and backend sets replaced.
+    """
+    return field if family == ENDPOINT_FAMILY else f'{field}-{family.lower()}'
+
+
 class NodeLoadBalancer(Component):
-    """The NLB and its management backend sets — the cluster's endpoint."""
+    """The NLB and its management backend sets, on each family it holds — the cluster's endpoint."""
 
     def __init__(
         self,
@@ -82,35 +113,51 @@ class NodeLoadBalancer(Component):
             # `is_preserve_source` below; this flag is the different,
             # transparent-routing mode and stays off.
             is_preserve_source_destination=False,
-            nlb_ip_version='IPV4_AND_IPV6',
+            nlb_ip_version='_AND_'.join(FAMILIES),
             opts=self.child_opts(),
         )
 
-        #: Keyed by the port's field in `conventions.ManagementPorts`, which is
-        #: each backend set's OCI name and what its logical name carries.
-        self.backend_sets = {
-            field: oci.networkloadbalancer.BackendSet(
-                f'{name}-nlb-{field}',
-                name=field,
-                network_load_balancer_id=self.load_balancer.id,
-                policy='FIVE_TUPLE',
-                is_preserve_source=True,
-                health_checker=oci.networkloadbalancer.BackendSetHealthCheckerArgs(protocol='TCP', port=port),
-                opts=self.child_opts(),
-            )
-            for field, port in management_ports()
+        #: Keyed by family and then by the port's field in
+        #: `conventions.ManagementPorts`; `named` of the two is each backend
+        #: set's OCI name and what its logical name carries.
+        self.backend_sets: dict[str, dict[str, oci.networkloadbalancer.BackendSet]] = {
+            family: {
+                field: oci.networkloadbalancer.BackendSet(
+                    f'{name}-nlb-{named(field, family)}',
+                    name=named(field, family),
+                    network_load_balancer_id=self.load_balancer.id,
+                    policy='FIVE_TUPLE',
+                    # On for every family: the apiserver's audit log on the
+                    # public 6443 (security-audit.md M3) records the client's
+                    # address, which without preservation is the balancer's.
+                    # It is also what makes the subnet's rule for a backend the
+                    # same rule as the listener's: a forwarded packet reaches
+                    # the node carrying the client's address.
+                    is_preserve_source=True,
+                    health_checker=oci.networkloadbalancer.BackendSetHealthCheckerArgs(protocol='TCP', port=port),
+                    # Stated for every family, IPv4 included: the API
+                    # reference gives the field no default, and it is fixed
+                    # when the set is created.
+                    ip_version=family,
+                    opts=self.child_opts(),
+                )
+                for field, port in management_ports()
+            }
+            for family in FAMILIES
         }
 
         self.listeners = [
             oci.networkloadbalancer.Listener(
-                f'{name}-nlb-listener-{field}',
-                name=field,
+                f'{name}-nlb-listener-{named(field, family)}',
+                name=named(field, family),
                 network_load_balancer_id=self.load_balancer.id,
-                default_backend_set_name=self.backend_sets[field].name,
+                default_backend_set_name=self.backend_sets[family][field].name,
                 port=port,
                 protocol='TCP',
+                ip_version=family,
                 opts=self.child_opts(),
             )
+            for family in FAMILIES
             for field, port in management_ports()
         ]
 
@@ -239,22 +286,35 @@ class CloudNodes(Component):
             opts=self.child_opts(protect=True),
         )
 
+        # One lookup per node, shared by every port's IPv6 backend on it.
+        guas = {node: async_output(lambda node=node: self._ipv6_address(node)) for node in self.instances}
         self.backends = [
             oci.networkloadbalancer.Backend(
-                f'{name}-nlb-{field}-{node}',
-                backend_set_name=load_balancer.backend_sets[field].name,
+                f'{name}-nlb-{named(field, family)}-{node}',
+                backend_set_name=load_balancer.backend_sets[family][field].name,
                 network_load_balancer_id=load_balancer.load_balancer.id,
-                target_id=instance.id,
+                # An instance OCID stands for the primary VNIC's primary
+                # private IP, which is IPv4, so an IPv6 backend names its
+                # address instead -- the node's GUA, read off that VNIC. OCI's
+                # console guide says an address-named backend cannot join a
+                # source-preserving set; Oracle's cloud controller manager
+                # declares its IPv6 backends exactly so (`getBackends`). The
+                # first `up` that creates these settles it, and
+                # declarative/physical.md §6 names the fallback.
+                target_id=instance.id if family == 'IPV4' else None,
+                ip_address=None if family == 'IPV4' else guas[node],
                 # No `name`: pulumi-oci autonames it from the logical name
                 # (`<logical>-<7 hex>`), so the name on the balancer carries
-                # the field too. A backend's port is not updatable, so a port
-                # edit replaces the backend; an autonamed replacement gets a
-                # fresh name and is created before the old one is deleted,
-                # where a fixed name makes the provider delete first and
-                # leaves the node out of the set until its replacement lands.
+                # the field and the family too. A backend's port is not
+                # updatable, so a port edit replaces the backend; an autonamed
+                # replacement gets a fresh name and is created before the old
+                # one is deleted, where a fixed name makes the provider delete
+                # first and leaves the node out of the set until its
+                # replacement lands.
                 port=port,
                 opts=self.child_opts(),
             )
+            for family in FAMILIES
             for field, port in management_ports()
             for node, instance in sorted(self.instances.items())
         ]
@@ -266,12 +326,36 @@ class CloudNodes(Component):
         return str(placements[position % len(placements)][half])
 
     async def _dedicated_vip_vnic_id(self) -> str:
-        """The primary VNIC of the node that holds the dedicated VIP.
+        """The primary VNIC of the node that holds the dedicated VIP."""
+        return await self._primary_vnic_id(self.dedicated_vip)
+
+    async def _ipv6_address(self, node: str) -> str:
+        """The one IPv6 address `node` holds: the GUA its primary VNIC was created with.
+
+        The instance was created with `assign_ipv6ip`, so a VNIC reading back
+        with none, or with more than one to choose between, is refused rather
+        than guessed at: either would put a wrong address in a backend set.
+        """
+        vnic_id = await self._primary_vnic_id(self.instances[node])
+        vnic = await resolve(
+            oci.core.get_vnic_output(
+                vnic_id=vnic_id,
+                # Parented for the provider, as the attachment lookup is.
+                opts=pulumi.InvokeOptions(parent=self),
+            )
+        )
+        addresses = list(vnic.ipv6addresses or [])
+        if len(addresses) != 1:
+            raise ValueError(f'{node} holds {len(addresses)} IPv6 addresses on its primary VNIC, not one')
+        return str(addresses[0])
+
+    async def _primary_vnic_id(self, instance: oci.core.Instance) -> str:
+        """The primary VNIC of `instance`.
 
         Instances expose their attachments rather than their VNICs, so the id
         is read back through the attachment list.
         """
-        instance_id, compartment_id = await resolve(self.dedicated_vip.id, self.dedicated_vip.compartment_id)
+        instance_id, compartment_id = await resolve(instance.id, instance.compartment_id)
         attachments = await resolve(
             oci.core.get_vnic_attachments_output(
                 compartment_id=compartment_id,

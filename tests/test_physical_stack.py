@@ -173,6 +173,8 @@ class Installation(Controller):
                 return {'services': [{'id': 'ocid1.service.os', 'name': 'Object Storage', 'cidrBlock': 'oci-os'}]}
             case 'oci:Core/getVnicAttachments:getVnicAttachments':
                 return {'vnicAttachments': [{'vnicId': VNIC_ID}]}
+            case 'oci:Core/getVnic:getVnic':
+                return {'ipv6addresses': ['2603:c020:8000:1200::a']}
             case 'oci:Identity/getAvailabilityDomains:getAvailabilityDomains':
                 return {'availabilityDomains': [{'name': 'ZRbp:PHX-AD-1'}]}
             case 'oci:Identity/getFaultDomains:getFaultDomains':

@@ -216,7 +216,8 @@ is one nobody here asked for, is the issue's question.
     this installation, which publishes no name of ours for them to alias.
     `base.py` says the same beside the literals. New anchors:
     `kluster.hosts` → the NLB, an A *and* an AAAA because the load
-    balancer is dual-stack (architecture.md §3.2), and
+    balancer is dual-stack and serves every port it forwards on both
+    families (architecture.md §3.2, physical.md §1), and
     `vip1.hosts` → the dedicated VIP (operator convenience; hath itself
     needs no DNS). Both read `physical`'s outputs rather than literals:
     `cluster_endpoint` and `cluster_endpoint_v6` for the balancer,
@@ -529,7 +530,8 @@ helper has no say in it (cluster-infra.md §2, physical/gateway.md
 
 `public_port(…)` is the raw TCP/UDP analog, and it stays a helper of
 its own because it emits something no HTTP route does: it is the
-**only** helper that emits an NLB listener and its security rule
+**only** helper that emits NLB listeners — one per family the
+balancer holds — and their security rule
 (physical.md §1's derived-not-enumerated principle) — an HTTP route
 rides listeners the cluster already has.
 
