@@ -426,7 +426,7 @@ on the UDM.
     flow rule that admits a `dns` run all meet on. There is no endpoint
     key to set, and therefore nothing for a stale one to disagree with;
     `Pulumi.dns.yaml` carries the AdGuard login and nothing else about
-    the pair. Dialling the instance's own public name instead would have
+    the pair. Dialing the instance's own public name instead would have
     the runner resolve a name that only a split-horizon rewrite answers,
     which is the thing the run is declaring.
 -   **A rewrite is identified by its instance, not by its address.**

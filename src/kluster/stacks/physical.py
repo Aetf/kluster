@@ -216,11 +216,11 @@ async def main() -> None:
     # Which address reaches which machine is two answers, because apid routes
     # by the node a call names rather than by the connection it arrives on:
     #
-    # -   The cloud nodes are dialled at their own public addresses. A call
+    # -   The cloud nodes are dialed at their own public addresses. A call
     #     with no cluster to route through has nothing else to use — bootstrap
     #     is the first contact of all — and a balancer would pick whichever
     #     backend it liked.
-    # -   The worker is named by its cluster-VLAN address and dialled at the
+    # -   The worker is named by its cluster-VLAN address and dialed at the
     #     cluster endpoint, which the balancer forwards on 50000. Whichever
     #     control plane answers proxies the call to the worker over KubeSpan,
     #     so the backend the balancer chose does not matter and nothing outside
@@ -283,7 +283,7 @@ async def main() -> None:
     # The image is the worker's own artifact: the fleet's Talos version, a
     # schematic of its own (x86, and the i915 firmware the GPU cutover wants
     # present from day 0), and a file on this machine rather than an entry in a
-    # cloud catalogue. No cloud provider on it: nothing it declares reaches the
+    # cloud catalog. No cloud provider on it: nothing it declares reaches the
     # account.
     worker_image = TalosNocloudImage(f'{conventions.CLUSTER_NAME}-worker', talos_version=talos_version)
     # No endpoint and no credential among the VM's arguments: the libvirt
@@ -481,7 +481,7 @@ def _gateway(config: pulumi.Config) -> Gateway:
             pin=_rootfs(conventions.gateway.OVERLAY),
         ),
         routing=RoutingSession(
-            neighbour=conventions.HOMELAB_NODE_IPV4,
+            neighbor=conventions.HOMELAB_NODE_IPV4,
             password=config.require_secret(GATEWAY_BGP_PASSWORD),
         ),
         # The key this stack's own sessions present, and the only one this

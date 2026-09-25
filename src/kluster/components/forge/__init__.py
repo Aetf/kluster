@@ -116,7 +116,7 @@ class ManagedRepository(Component):
         on_repository = pulumi.ResourceOptions(parent=self.repository)
 
         # Its own resource rather than the `Repository` field of the same
-        # name, which the provider deprecated in favour of exactly this.
+        # name, which the provider deprecated in favor of exactly this.
         self.alerts = github.RepositoryVulnerabilityAlerts(
             name,
             repository=self.repository.name,
@@ -126,7 +126,7 @@ class ManagedRepository(Component):
 
         # A label a workflow branches on is a resource, because a workflow
         # that reads a label nothing declares fails in the quietest way there
-        # is: the condition is simply never true, the behaviour it guards is
+        # is: the condition is simply never true, the behavior it guards is
         # unavailable at the moment somebody needs it, and nothing reports it.
         self.labels = {
             label.name: github.IssueLabel(

@@ -77,7 +77,7 @@ def test_a_forgotten_parameter_is_refused_rather_than_rendered_empty(package: st
 
     A configuration file with a blank where a name should be is accepted by
     most of the programs this repository writes for, and the mistake then
-    surfaces as behaviour rather than as an error.
+    surfaces as behavior rather than as an error.
     """
     with pytest.raises(UndefinedError):
         templates.render(package, 'templates/greeting.txt.j2')

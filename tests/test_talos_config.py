@@ -128,7 +128,7 @@ def test_a_node_nothing_addresses_is_left_to_its_lease() -> None:
 
 
 def test_the_worker_states_its_own_address_instead_of_leasing_one() -> None:
-    # The gateway's FRR neighbour statement, the qbittorrent port forward and
+    # The gateway's FRR neighbor statement, the qbittorrent port forward and
     # day 1's apid endpoint all name this address as a constant; a lease would
     # make each of them a guess — and the cluster VLAN runs no DHCP server to
     # offer one in any case (physical/homelab-host.md §2).

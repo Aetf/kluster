@@ -41,7 +41,7 @@ admin with one request.
 
 **Fix.** The k8s-base cluster-wide baseline network policy denies pod
 egress to `169.254.0.0/16` — this, not IMDSv2, is the real control;
-legacy IMDS (v1) is disabled on the instances as defence in depth.
+legacy IMDS (v1) is disabled on the instances as defense in depth.
 Verified at bootstrap (pod curl to the endpoint must be denied).
 
 **Lives in.** cluster-infra.md §2 (policy), physical.md §1 (IMDS
@@ -209,7 +209,7 @@ threat model discussed "node compromised" but not "which workload most
 likely causes it".
 
 **Fix.** Not an architecture reversal (combined roles are the cost
-basis) but defence in depth: restricted-PSS default for app namespaces,
+basis) but defense in depth: restricted-PSS default for app namespaces,
 strict limits, per-app NetworkPolicy, and the co-location stated as an
 accepted residual risk.
 
@@ -291,7 +291,7 @@ Certificate Transparency, undoing the NXDOMAIN hiding. Fix: per-zone
 With all DNS in Pulumi and issuance entirely DNS-01, every zone the
 `dns` stack holds has DNSSEC enabled and carries the CAA records its
 issuer set calls for (`components/dns/zone.py`) — cheap misissuance
-defence. The set is per zone, decided by who issues for it
+defense. The set is per zone, decided by who issues for it
 (`ZONE_ISSUERS` in `components/dns/base.py`): a zone the cluster alone
 serves pins Let's Encrypt, a zone holding a Cloudflare-proxied name
 authorizes the edge's issuer set as well, and a zone something outside

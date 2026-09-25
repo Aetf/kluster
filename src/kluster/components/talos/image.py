@@ -4,7 +4,7 @@ The fleet runs two artifacts of the same family, and neither of them is a stock
 image:
 
 -   the **cloud nodes** boot an OCI custom image. There is no official Talos
-    image in OCI's catalogue, so one is built by the Image Factory and imported.
+    image in OCI's catalog, so one is built by the Image Factory and imported.
 -   the **homelab worker** boots a `nocloud` disk image written into a libvirt
     volume. Its schematic is not the cloud one — it carries the i915 firmware
     the Wave C GPU cutover needs present from day 0 (physical/homelab-host.md
@@ -83,7 +83,7 @@ class TalosArtifact(Component, abc.ABC):
     """A pinned Image Factory schematic, and where the factory serves it.
 
     The half both artifacts share. A subclass supplies `_declare_artifact`,
-    which is what is done with the URL: imported into a cloud catalogue, or
+    which is what is done with the URL: imported into a cloud catalog, or
     fetched onto the machine running the program — and the three facts that
     pick its artifact out of the factory's matrix: `extensions`, the roll that
     makes its schematic the one it is, and the `platform` and `architecture`

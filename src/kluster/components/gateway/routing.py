@@ -197,7 +197,7 @@ MAX_PREFIXES = 64
 class RoutingSession:
     """The BGP session the gateway learns the `lan` pool over.
 
-    `neighbour` is the worker VM's address, which the routing daemon's
+    `neighbor` is the worker VM's address, which the routing daemon's
     configuration names. That address is a constant rather than another
     resource's output on purpose — the session must not depend on a lease.
     `password` authenticates the session, so that claiming the peer's address is
@@ -207,7 +207,7 @@ class RoutingSession:
     types prints.
     """
 
-    neighbour: IPv4Address
+    neighbor: IPv4Address
     password: pulumi.Input[str] = field(repr=False, compare=False)
 
 
@@ -272,7 +272,7 @@ class _UnitParams:
 
 def frr_config(
     *,
-    neighbour: IPv4Address,
+    neighbor: IPv4Address,
     password: str,
 ) -> str:
     """The routing daemon's configuration, rendered from the peer's address.
@@ -299,7 +299,7 @@ def frr_config(
         'templates/frr.conf.j2',
         _FrrParams(
             cluster=conventions.CLUSTER_NAME,
-            peer=str(neighbour),
+            peer=str(neighbor),
             peer_description=f'{conventions.CLUSTER_NAME} {conventions.HOMELAB_NODE}',
             password=password,
             local_asn=conventions.UDM_ASN,
@@ -430,7 +430,7 @@ class SiteRouting(Component):
             connection=connection,
             path=FRR_CONFIG,
             content=pulumi.Output.from_input(session.password).apply(
-                lambda password: frr_config(neighbour=session.neighbour, password=password)
+                lambda password: frr_config(neighbor=session.neighbor, password=password)
             ),
             mode=FRR_MODE,
             owner=conventions.gateway.SSH_USER,

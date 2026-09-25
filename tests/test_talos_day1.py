@@ -39,7 +39,7 @@ SECONDARY = '10.20.0.42'
 class Talos(Recorder):
     """A Talos provider that answers like the real one, minus a cluster.
 
-    It carries the two behaviours the chain depends on: a secrets bundle that
+    It carries the two behaviors the chain depends on: a secrets bundle that
     contains a generated secretbox key, and a health check that reports what
     it was asked about.
     """
@@ -181,7 +181,7 @@ async def test_configuration_is_applied_over_apid_without_rebooting_the_quorum(f
 
 
 @pytest.mark.asyncio
-async def test_a_node_without_an_endpoint_is_dialled_where_it_is_named(fake: Talos) -> None:
+async def test_a_node_without_an_endpoint_is_dialed_where_it_is_named(fake: Talos) -> None:
     # The ordinary case, and the one the cloud nodes are in: the address that
     # names the node is also the address that reaches it.
     day1 = build()
@@ -192,10 +192,10 @@ async def test_a_node_without_an_endpoint_is_dialled_where_it_is_named(fake: Tal
 
 
 @pytest.mark.asyncio
-async def test_a_node_behind_the_mesh_is_named_by_its_own_address_and_dialled_elsewhere(fake: Talos) -> None:
+async def test_a_node_behind_the_mesh_is_named_by_its_own_address_and_dialed_elsewhere(fake: Talos) -> None:
     # apid routes by the node a call names, so a node that nothing outside the
     # site can open a connection to is still administered: it is named by its
-    # own address and dialled at one that answers, and whichever member that
+    # own address and dialed at one that answers, and whichever member that
     # is proxies the call the rest of the way.
     day1 = build(endpoints={'homelab': BALANCER})
     worker = day1.applies['homelab']
@@ -385,7 +385,7 @@ async def test_the_worker_boots_with_the_address_the_gateway_was_told_about(fake
     cluster = build_cluster(worker_nodes=(conventions.HOMELAB_NODE,), bgp_peers={})
     interface = interfaces(await patches_of(cluster, conventions.HOMELAB_NODE))[0]
     assert interface['addresses'] == [str(STATIC_ADDRESSES[conventions.HOMELAB_NODE].address)]
-    # The very constant the gateway's neighbour statement reads, not merely
+    # The very constant the gateway's neighbor statement reads, not merely
     # some address: the two sides agreeing is the whole point.
     assert IPv4Interface(interface['addresses'][0]).ip == conventions.HOMELAB_NODE_IPV4
     assert interface['dhcp'] is False

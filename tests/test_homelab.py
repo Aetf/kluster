@@ -309,7 +309,7 @@ def test_the_endpoint_names_the_service_user_and_the_privileged_daemon(tmp_path:
     assert (parts.scheme, parts.netloc, parts.path) == ('qemu+ssh', f'virt@{HOST}', '/system')
 
 
-def test_the_identity_is_materialised_where_only_this_machine_can_read_it(tmp_path: Path) -> None:
+def test_the_identity_is_materialized_where_only_this_machine_can_read_it(tmp_path: Path) -> None:
     """The credential is configuration; the file it becomes is not.
 
     A path is a property of the machine running the program, and this program

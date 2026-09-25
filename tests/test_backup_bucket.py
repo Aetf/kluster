@@ -119,7 +119,7 @@ async def test_each_key_reaches_one_prefix_and_one_bucket() -> None:
 
     for key in bucket.keys.values():
         # Scoped to this bucket, not to the account: a key that could reach
-        # another bucket is not prefix-scoped, it is merely prefix-flavoured.
+        # another bucket is not prefix-scoped, it is merely prefix-flavored.
         assert await key.bucket_ids.future() == [BUCKET_ID]
 
 
@@ -150,7 +150,7 @@ async def test_old_versions_age_out_and_current_ones_never_do() -> None:
 
 
 @pytest.mark.asyncio
-async def test_abandoned_multipart_uploads_are_cancelled() -> None:
+async def test_abandoned_multipart_uploads_are_canceled() -> None:
     bucket = build()
     rules = await bucket.bucket.lifecycle_rules.future()
     assert rules is not None
@@ -188,7 +188,7 @@ async def test_the_credential_halves_are_reachable_by_scope() -> None:
 
 def test_a_prefix_without_a_separator_is_refused() -> None:
     # `volsync/app` also matches `volsync/apple/…`, so a key scoped that way
-    # reads a neighbour's backups.
+    # reads a neighbor's backups.
     with pytest.raises(ValueError, match='trailing separator'):
         build([Scope(name='sloppy', prefix='volsync/app')])
 

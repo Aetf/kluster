@@ -309,7 +309,7 @@ def test_no_census_parameter_carries_a_default() -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_controller_is_dialled_where_the_roster_placed_the_gateway(setup: Installation) -> None:
+async def test_the_controller_is_dialed_where_the_roster_placed_the_gateway(setup: Installation) -> None:
     """The controller's address is derived, not recorded beside its key.
 
     The gateway's overlay address is handed out by this program's own ZeroTier
@@ -397,7 +397,7 @@ async def test_the_site_resolver_is_given_no_static_host(setup: Installation) ->
 
 
 @pytest.mark.asyncio
-async def test_the_libvirt_session_is_dialled_where_the_roster_placed_the_host(
+async def test_the_libvirt_session_is_dialed_where_the_roster_placed_the_host(
     setup: Installation,
     tmp_path: Path,
 ) -> None:

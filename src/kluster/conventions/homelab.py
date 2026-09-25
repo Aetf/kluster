@@ -8,7 +8,7 @@ from ipaddress import IPv4Address
 HOMELAB_NODE = 'worker'
 
 #: Its address is a constant rather than a lease: the gateway's FRR names it
-#: as a BGP neighbour, the peer-port forward sends traffic to it and day 1
+#: as a BGP neighbor, the peer-port forward sends traffic to it and day 1
 #: dials apid at it, so it is configured statically in machine config on one
 #: side and read from here on the others (physical/homelab-host.md §2).
 #: Nodes number from `.10`; `.1` is the gateway's leg and `.2` the homelab
@@ -52,5 +52,5 @@ HOMELAB_STORAGE_DIR = '/var/lib/libvirt/kluster'
 #: credential. Stored in the installation's `authorized_keys` form — the bare
 #: `ssh-ed25519 AAAA…` blob, no host name in front of it
 #: (`providers/device_files/ssh.py`) — so the address it is written against is
-#: decided where the session is dialled rather than carried around with the key.
+#: decided where the session is dialed rather than carried around with the key.
 HOMELAB_HOST_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIHV/ogdnUUf2j2DIffv86Ra43SS672UCZt3kXSvs6FF'

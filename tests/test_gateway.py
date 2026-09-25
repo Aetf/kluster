@@ -61,7 +61,7 @@ def declare(name: str, host: str) -> Gateway:
         overlay_daemon=container.OverlayDaemon(
             service=conventions.gateway.OVERLAY, pin=pin(conventions.gateway.OVERLAY)
         ),
-        routing=routing.RoutingSession(neighbour=conventions.HOMELAB_NODE_IPV4, password=BGP_PASSWORD),
+        routing=routing.RoutingSession(neighbor=conventions.HOMELAB_NODE_IPV4, password=BGP_PASSWORD),
         keys=(CI_KEY,),
         site=SITE,
         worker_gua=None,

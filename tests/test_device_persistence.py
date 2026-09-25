@@ -46,7 +46,7 @@ DEVICE_DIRECTORY = 'pulumi-python:dynamic/device:Directory'
 
 NAME = 'mechanism'
 CONSUMER = 'consumer'
-NEIGHBOURS = 'neighbours'
+NEIGHBORS = 'neighbors'
 HOST = str(conventions.overlay.UDM)
 HOST_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIexample'
 
@@ -86,7 +86,7 @@ class Layer(Component, pulumi_type='test:gateway:Layer'):
         self.register_outputs({})
 
 
-class Neighbours(Component, pulumi_type='test:gateway:Neighbours'):
+class Neighbors(Component, pulumi_type='test:gateway:Neighbors'):
     """Two executables whose names differ only after the dot."""
 
     def __init__(self, name: str, *, mechanism: DevicePersistence, opts: pulumi.ResourceOptions | None = None) -> None:
@@ -253,7 +253,7 @@ def test_an_executable_is_delivered_and_nothing_is_told_about_it(monitor: Record
     """A program in `bin/` is run by a unit, so installing one is not an event.
 
     Only the named file is managed: an executable placed on the device by hand
-    beside it is a neighbour this program never looks at, which is what makes
+    beside it is a neighbor this program never looks at, which is what makes
     the directory shared rather than owned.
     """
     inputs = monitor.inputs_of(f'{CONSUMER}-bin-{PROGRAM}')
@@ -274,10 +274,10 @@ async def test_two_files_whose_names_share_a_stem_are_two_resources(
     has two files, and the second declaration would silently replace the first.
     """
     async with declaring():
-        _ = Neighbours(NEIGHBOURS, mechanism=mechanism)
+        _ = Neighbors(NEIGHBORS, mechanism=mechanism)
 
-    shell = monitor.inputs_of(f'{NEIGHBOURS}-bin-example.sh')
-    python = monitor.inputs_of(f'{NEIGHBOURS}-bin-example.py')
+    shell = monitor.inputs_of(f'{NEIGHBORS}-bin-example.sh')
+    python = monitor.inputs_of(f'{NEIGHBORS}-bin-example.py')
 
     assert shell['path'] == f'{persistence.BIN_DIR}/example.sh'
     assert python['path'] == f'{persistence.BIN_DIR}/example.py'

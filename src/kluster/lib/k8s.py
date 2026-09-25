@@ -3,7 +3,7 @@
 Only what both stacks need: installing a pinned upstream chart, reaching into
 what one rendered, declaring a SealedSecret in the shape
 [declarative/cluster-infra.md](../../docs/declarative/cluster-infra.md) §1.1
-fixes, and labelling a Service into a Cilium load-balancer pool. Anything
+fixes, and labeling a Service into a Cilium load-balancer pool. Anything
 specific to one component belongs with that component, not here.
 
 These are functions returning provider resources rather than subclasses of

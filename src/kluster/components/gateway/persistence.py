@@ -189,7 +189,7 @@ def on_boot_path(name: str) -> str:
 
 
 def executable_path(name: str) -> str:
-    """Where one executable sits. Neighbours placed by hand are left alone."""
+    """Where one executable sits. Neighbors placed by hand are left alone."""
     return f'{BIN_DIR}/{name}'
 
 

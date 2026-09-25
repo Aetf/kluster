@@ -487,11 +487,11 @@ def test_a_permission_group_without_a_name_is_skipped_rather_than_refusing_the_t
     assert cloudflare._carried(answer) == frozenset({cloudflare.MINTING_PERMISSION})  # pyright: ignore[reportPrivateUsage]
 
 
-def test_a_catalogue_entry_that_names_no_scope_does_not_stop_a_mint(api: FakeApi) -> None:
+def test_a_catalog_entry_that_names_no_scope_does_not_stop_a_mint(api: FakeApi) -> None:
     _ = _installation(api)
-    # The catalogue is the whole platform's, and `scopes` is optional on it.
+    # The catalog is the whole platform's, and `scopes` is optional on it.
     # An entry for a product this repository never asks about is in no zone
-    # catalogue, which is a fact about that entry rather than a broken answer.
+    # catalog, which is a fact about that entry rather than a broken answer.
     api.groups['some-other-product'] = {'name': 'Some Other Product Write'}
     session = cloudflare.Session.authorize(_seed(api))
 
@@ -500,13 +500,13 @@ def test_a_catalogue_entry_that_names_no_scope_does_not_stop_a_mint(api: FakeApi
     assert _named(api, STACK_TOKEN) == [minted.token_id]
 
 
-def test_a_catalogue_entry_whose_scopes_are_not_a_list_is_refused_by_name() -> None:
-    catalogue = [{'id': 'dns-write', 'name': 'DNS Write', 'scopes': cloudflare.ZONE_RESOURCE}]
+def test_a_catalog_entry_whose_scopes_are_not_a_list_is_refused_by_name() -> None:
+    catalog = [{'id': 'dns-write', 'name': 'DNS Write', 'scopes': cloudflare.ZONE_RESOURCE}]
 
     # Optional is not "anything": a field that is there says what it says, and
-    # a scope catalogue read as the characters of one string grants nothing.
+    # a scope catalog read as the characters of one string grants nothing.
     with pytest.raises(payload.ResponseRejected, match='scopes is'):
-        _ = cloudflare._permission_groups(catalogue)  # pyright: ignore[reportPrivateUsage]
+        _ = cloudflare._permission_groups(catalog)  # pyright: ignore[reportPrivateUsage]
 
 
 def test_a_verification_without_a_status_is_refused_rather_than_read_as_inactive() -> None:

@@ -1,6 +1,6 @@
 """The fleet's two Talos artifacts, and how the worker's one reaches a volume.
 
-The cloud half is an import into OCI's catalogue and has been for as long as
+The cloud half is an import into OCI's catalog and has been for as long as
 the stack has existed. The worker's half is the interesting one: the factory
 serves `nocloud` compressed, the libvirt provider will not decompress what it
 is handed, and a raw image cannot back a copy-on-write chain — so the program
@@ -277,7 +277,7 @@ def test_a_fetched_artifact_lands_decompressed(tmp_path: Path, monkeypatch: pyte
     _ = serve(monkeypatch, compressed[:20], compressed[20:])
     path = tmp_path / 'nested' / 'talos.raw'
 
-    talos_factory.materialise('https://factory.invalid/nocloud-amd64.raw.xz', path)
+    talos_factory.materialize('https://factory.invalid/nocloud-amd64.raw.xz', path)
 
     # Decompressed, whole, and in a directory the program created: the libvirt
     # provider is handed a plain raw image because it will not unpack an xz.
@@ -291,7 +291,7 @@ def test_an_artifact_already_on_disk_is_reused_rather_than_fetched_again(
     path = tmp_path / 'talos.raw'
     _ = path.write_bytes(PAYLOAD)
 
-    talos_factory.materialise('https://factory.invalid/nocloud-amd64.raw.xz', path)
+    talos_factory.materialize('https://factory.invalid/nocloud-amd64.raw.xz', path)
 
     # A file under the final name is complete by construction — the download
     # is renamed into place, never written into place — so re-creating the
@@ -307,7 +307,7 @@ def test_a_stream_that_ends_early_leaves_nothing_that_looks_finished(
     path = tmp_path / 'talos.raw'
 
     with pytest.raises(talos_factory.TruncatedArtifact):
-        talos_factory.materialise('https://factory.invalid/nocloud-amd64.raw.xz', path)
+        talos_factory.materialize('https://factory.invalid/nocloud-amd64.raw.xz', path)
 
     # The failure mode this guards against is silent: half an image written
     # into a volume boots into nothing, and the next run would have reused it.

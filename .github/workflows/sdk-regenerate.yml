@@ -38,7 +38,7 @@ name: sdk-regenerate
 # gone green; `noop-automerge.yml` is where that is decided and ci.md §3 is
 # where the rule is stated. The comment this workflow leaves says as much.
 #
-# **Recognised by outcome, not by parsing.** The block is regenerated whenever
+# **Recognized by outcome, not by parsing.** The block is regenerated whenever
 # a renovate branch touches `Pulumi.yaml` at all, and a regeneration that
 # changes nothing under `sdks/` -- a `versions:` bump, or a second run on a
 # head already regenerated -- ends here with nothing to do. What decides that

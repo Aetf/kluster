@@ -159,7 +159,7 @@ async def test_the_cluster_vlan_hands_out_no_leases() -> None:
     """Every node states its own address, so a lease is a second opinion.
 
     Three other places treat the worker's address as a constant — the FRR
-    neighbour statement, the port forward and day 1's apid endpoint — and a
+    neighbor statement, the port forward and day 1's apid endpoint — and a
     DHCP server on this VLAN is exactly the thing that could hand out a
     different one.
     """
@@ -462,7 +462,7 @@ async def test_the_iot_drop_precedes_the_allow_that_would_otherwise_answer_for_i
 async def test_the_pool_rules_are_declared_on_the_uplink_pair() -> None:
     """The pool sits in no zone ipset, so its traffic is classified as uplink.
 
-    This is the one piece of measured device behaviour the whole IoT half
+    This is the one piece of measured device behavior the whole IoT half
     depends on. Declaring these rules on the internal-to-internal pair would
     produce four resources that apply to nothing.
     """

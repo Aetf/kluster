@@ -328,7 +328,7 @@ def _retry() -> Any:
     """Bounded retries for the propagation window after an IAM write.
 
     A freshly uploaded API key is accepted by the control plane before the
-    signing path honours it, and a fresh user is `NotAuthorizedOrNotFound` for
+    signing path honors it, and a fresh user is `NotAuthorizedOrNotFound` for
     a moment after it exists. OCI exposes no readiness signal for either, so
     the SDK's own backoff is what turns the window into latency; a real
     permission problem still surfaces, just later.
@@ -1648,7 +1648,7 @@ def mint_api_key(
     # remember to run is a converge that is forgotten -- with the failure
     # landing mid-mint, as a refusal to create the compartment. `policy`
     # corrects drift, so a seed whose policy predates a statement adopts it
-    # here; OCI takes a few seconds to honour the widened policy, which the
+    # here; OCI takes a few seconds to honor the widened policy, which the
     # client's retry strategy spends waiting rather than failing on.
     log.info("converging the seed's own policy, which is what may create the compartment below")
     _ = seed.iam.policy(SEED)

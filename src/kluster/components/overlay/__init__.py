@@ -63,7 +63,7 @@ the network-administration token out of every environment that joins.
 
 **The overlay is IPv4-only.** No member carries a v6 assignment and no v6 route
 is managed, which is what makes the confinement rules complete: a continuous-
-integration member with a v6 address would have its own neighbour discovery
+integration member with a v6 address would have its own neighbor discovery
 eaten by its own drop rule, and there is nothing on the overlay for it to reach
 over v6 that it cannot reach over v4.
 """

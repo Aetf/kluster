@@ -22,7 +22,7 @@ host directory is bound onto them.
 
 **The images are Alpine with s6-overlay, not systemd.** They ship that init at
 `/sbin/init` so that `Boot=on` finds it, and a machine's settings therefore
-declare nothing that only a systemd guest would honour. Two consequences run
+declare nothing that only a systemd guest would honor. Two consequences run
 through this module. A container is told things through **its PID 1's
 environment**, because that is what its own startup scripts read; a drop-in
 written for a network manager the image does not run is a file nobody opens.

@@ -256,7 +256,7 @@ CENSUS: dict[type, Census] = {
     slots.SealedSecret: Census('what'),
     slots.StateRead: Census('stack output'),
     slots.WorkstationSlot: Census('name'),
-    routing.RoutingSession: Census('neighbour password', secret='password'),
+    routing.RoutingSession: Census('neighbor password', secret='password'),
     routing._ConvergerParams: Census(  # pyright: ignore[reportPrivateUsage]
         'cluster source live stamp firmware parser daemons daemon owner group mode check restart'
     ),

@@ -353,7 +353,7 @@ def test_a_multiplexing_master_cannot_carry_the_pinned_exec(tmp_path: Path, pyte
         reuse, pinned = _through_one_directory(_pinned_argv(known_hosts, proxy), cwd=sockets, home=home)
 
         # The probe got through to a server it holds no pin for and could not
-        # have dialled, so the master is reusable from where the pinned client
+        # have dialed, so the master is reusable from where the pinned client
         # ran -- without which its refusal below would be a refusal for want
         # of a master, and the case would prove nothing about the pin.
         assert reuse.returncode == 0, (

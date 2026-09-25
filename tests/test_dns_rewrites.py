@@ -4,7 +4,7 @@ Two subjects, in the order the module puts them. The derivation is plain data
 and needs no runtime: what a route implies is a function of the row. The
 component is the declaration — which instance a row says it belongs to, where
 that instance is reached, and what a resource is called. The provider's own
-behaviour when any of those moves is `test_dns_adguard.py`.
+behavior when any of those moves is `test_dns_adguard.py`.
 """
 
 import importlib

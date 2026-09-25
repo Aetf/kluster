@@ -233,7 +233,7 @@ async def site(monitor: Recorder) -> SiteRouting:
             NAME,
             connection=connection,
             mechanism=mechanism,
-            session=RoutingSession(neighbour=conventions.HOMELAB_NODE_IPV4, password=BGP_PASSWORD),
+            session=RoutingSession(neighbor=conventions.HOMELAB_NODE_IPV4, password=BGP_PASSWORD),
         )
     return declared
 
@@ -244,7 +244,7 @@ async def site(monitor: Recorder) -> SiteRouting:
 
 
 def test_the_routing_configuration_confines_what_the_peer_may_announce() -> None:
-    """Three defences, and each of them is a line a reviewer can find.
+    """Three defenses, and each of them is a line a reviewer can find.
 
     Without the prefix-list, anything holding the worker's address could
     announce the resolvers' own /32s and take the LAN's name service with it;
@@ -252,7 +252,7 @@ def test_the_routing_configuration_confines_what_the_peer_may_announce() -> None
     table gave out; without the password, holding the address would be enough
     to be the peer.
     """
-    rendered = routing.frr_config(neighbour=conventions.HOMELAB_NODE_IPV4, password=BGP_PASSWORD)
+    rendered = routing.frr_config(neighbor=conventions.HOMELAB_NODE_IPV4, password=BGP_PASSWORD)
     peer = str(conventions.HOMELAB_NODE_IPV4)
 
     assert f'neighbor {peer} remote-as {conventions.CLUSTER_ASN}' in rendered

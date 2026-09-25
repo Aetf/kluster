@@ -177,7 +177,7 @@ def connection_uri(*, host: str, private_key: str, root: Path | None = None) -> 
     move the anchor silently**, which is why the caveat is written here rather
     than assumed.
 
-    What the provider honours here is not libvirt's own remote driver: the
+    What the provider honors here is not libvirt's own remote driver: the
     bridged Terraform provider parses the URI itself and dials over Go's SSH
     client (`libvirt/uri/ssh.go`). Three query parameters follow from that, and
     the spellings are the provider's rather than OpenSSH's:

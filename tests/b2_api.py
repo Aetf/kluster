@@ -122,7 +122,7 @@ class FakeApi:
     #: not only what came back.
     posted: list[tuple[str, dict[str, Any]]] = field(default_factory=list[tuple[str, dict[str, Any]]])
     #: How many keys one `b2_list_keys` page may hold. The server picks this,
-    #: so a caller cannot assume its own `maxKeyCount` was honoured.
+    #: so a caller cannot assume its own `maxKeyCount` was honored.
     page_limit: int = 1000
     #: bucket id -> the object names it holds.
     objects: dict[str, list[str]] = field(default_factory=dict[str, list[str]])

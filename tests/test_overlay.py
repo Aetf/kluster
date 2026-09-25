@@ -373,7 +373,7 @@ def test_no_member_is_handed_an_address_the_roster_did_not_choose(stack: Central
 
     Both derived IPv6 schemes are off for the same reason, and because a
     continuous-integration member with an address in a family its drop rules
-    cannot see would eat its own neighbour discovery.
+    cannot see would eat its own neighbor discovery.
     """
     network = stack.inputs_of(f'{NAME}-network')
     assert network['assignIpv6s'] == [{'rfc4193': False, 'sixplane': False, 'zerotier': False}]
@@ -430,7 +430,7 @@ def test_the_administration_token_is_read_where_the_provider_is_built() -> None:
     Central mints no credential smaller than the whole account, which is the
     reason the resources it may reach are exactly the ones this component
     declares -- and the reason the token is read at the line that builds the
-    provider rather than travelling through a signature that has no other
+    provider rather than traveling through a signature that has no other
     opinion about it (rfc-002 §8.1).
     """
     assert 'api_token' not in inspect.signature(overlay_module.Overlay.__init__).parameters

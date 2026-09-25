@@ -883,7 +883,7 @@ def test_a_stamp_ignores_a_write_a_push_has_in_flight_or_abandoned(device: _Devi
     So one machine's converger hook runs while another machine's file is
     part-written, and a run that counted the staged name would stamp a machine
     differently depending on when it was taken — restarting services for a
-    neighbour's write. The same file is what a push that died mid-write leaves
+    neighbor's write. The same file is what a push that died mid-write leaves
     behind, and it must not become a reason to bounce anything either.
     """
     directory = declare(device, 'alice', files={'Caddyfile': 'one\n'})

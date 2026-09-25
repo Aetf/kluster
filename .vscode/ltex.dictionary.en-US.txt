@@ -75,7 +75,6 @@ dav
 db
 dd
 dedup
-defence
 deletability
 deployer
 dicts

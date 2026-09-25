@@ -83,7 +83,7 @@ def test_the_lan_pool_is_numbered_by_the_same_rule_as_the_networks() -> None:
     """The pool is not a network the gateway serves, but it is at the site.
 
     Its /64 follows the cluster VLAN's the way its IPv4 subnet follows that
-    VLAN's, so the two read as neighbours without ever being one network.
+    VLAN's, so the two read as neighbors without ever being one network.
     """
     assert conventions.LAN_POOL.v6 == IPv6Network('fd1a:665f:8bcb:71::/64')
     assert conventions.LAN_POOL.v6.subnet_of(conventions.SITE_ULA)
@@ -628,7 +628,7 @@ LABEL_IN_A_CONDITION = re.compile(r"pull_request\.labels\.\*\.name,\s*'([^']+)'"
 #: How a workflow compares who is behind the event against a login: one of the
 #: contexts that carries one -- `github.actor`, `github.triggering_actor`, a
 #: `user.login`, a `sender.login` -- either way round the comparison is
-#: written. `!=` is matched as well as `==`, because a login misspelt in a
+#: written. `!=` is matched as well as `==`, because a login misspelled in a
 #: negative test fails *open*, which is the worse of the two directions to
 #: leave unpinned. Two groups, one per way round, so a match carries the login
 #: in whichever of them is not empty.
@@ -689,7 +689,7 @@ def test_every_environment_a_workflow_deploys_into_is_one_the_census_carries() -
 def test_every_label_a_workflow_branches_on_is_one_the_census_carries() -> None:
     """A label a workflow reads and nothing declares fails in the quietest way there is.
 
-    The condition is simply never true, so the behaviour it guards is
+    The condition is simply never true, so the behavior it guards is
     unavailable at the moment somebody needs it and nothing anywhere reports
     that. Reading the workflows, and the actions their steps call, is what
     keeps the census from being shorter than what they depend on.
