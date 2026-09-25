@@ -8,6 +8,7 @@ that the pin the appliance downloads is the pin this suite exercises.
 
 from __future__ import annotations
 
+import re
 import shutil
 from pathlib import Path
 
@@ -128,3 +129,72 @@ def test_local_age_matches_the_appliance_pin() -> None:
 
     tools = tomllib.loads((Path(__file__).parent.parent / 'mise.toml').read_text())['tools']
     assert f'v{tools["age"]}' == settings.AGE_VERSION
+
+
+def package_rule(config: str, at: int) -> tuple[int, str]:
+    """The `packageRules` entry around offset `at`: where it starts, and its lines bar comments.
+
+    An entry is the braces around the offset, which holds because no entry
+    nests an object and no comment inside one carries a brace.
+    """
+    start = config.rindex('{', 0, at)
+    lines = config[start : config.index('}', at)].splitlines()
+    return start, '\n'.join(line for line in lines if not line.lstrip().startswith('//'))
+
+
+def listed(rule: str, key: str) -> list[str]:
+    """The strings a rule lists under `key`, or none when it has no such key."""
+    found = re.search(rf'^\s*{key}: \[([^\]]*)\],$', rule, re.MULTILINE)
+    return re.findall(r"'([^']*)'", found[1]) if found else []
+
+
+def group(rule: str) -> list[str]:
+    """The group name and slug a rule sets, in the order it writes them."""
+    return re.findall(r"^\s*group(?:Name|Slug): '([^']*)',$", rule, re.MULTILINE)
+
+
+def test_renovate_bumps_both_pins_in_one_pull_request() -> None:
+    """The pair the test above holds equal has to move in one renovate pull request.
+
+    Apart, each half fails that test on its own. The mise manager reads
+    `mise.toml`, and the rule matching that manager puts every tool in the
+    toolchain group; the rule taking age back out has to come after that one
+    — the last match wins a field — match that one dependency of that one
+    manager, spelled the way `mise.toml` keys it, and name the group the rule
+    for `settings.py` names. The slug is the branch, so a slug of its own is a
+    second pull request again, and nothing goes red on a pull request for it:
+    renovate reads its configuration from the default branch.
+
+    Held as text, because there is no JSON5 parser here.
+    """
+    import tomllib
+
+    from kluster.scripts.state_backend import settings
+
+    root = Path(__file__).parent.parent
+    config = (root / 'renovate.json5').read_text()
+    appliance = "'src/kluster/scripts/state_backend/settings.py'"
+    assert config.count(appliance) == 1
+    _, appliance_rule = package_rule(config, config.index(appliance))
+
+    # Two entries name the mise manager: the toolchain rule matches all of it,
+    # and the rule for age narrows it to one dependency.
+    mise = [package_rule(config, found.start()) for found in re.finditer("'mise'", config)]
+    (toolchain_start,) = [start for start, rule in mise if not listed(rule, 'matchDepNames')]
+    ((age_start, age_rule),) = [(start, rule) for start, rule in mise if listed(rule, 'matchDepNames')]
+    assert toolchain_start < age_start
+
+    # Renovate tells the keys a rule matches on from the fields it applies by
+    # their prefix, and a matcher beyond these two would narrow the rule.
+    keys = re.findall(r'^\s*(\w+):', age_rule, re.MULTILINE)
+    assert [key for key in keys if key.startswith(('match', 'exclude'))] == ['matchManagers', 'matchDepNames']
+    assert listed(age_rule, 'matchManagers') == ['mise']
+
+    # The mise manager names a tool by its key under `[tools]`, a backend
+    # prefix included, so the rule matches only while it spells that key.
+    (tool,) = listed(age_rule, 'matchDepNames')
+    tools = tomllib.loads((root / 'mise.toml').read_text())['tools']
+    assert f'v{tools[tool]}' == settings.AGE_VERSION
+
+    assert len(group(appliance_rule)) == 2
+    assert group(age_rule) == group(appliance_rule)
