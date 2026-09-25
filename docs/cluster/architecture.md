@@ -620,16 +620,20 @@ Costs and facts on record:
     cluster-infra.md §1; its own register row). (The scheduled-workflow inactivity auto-disable
     concern is resolved structurally: the 60-day rule applies to
     public repos, every scheduled workflow lives in the private ops
-    repo, and the public kluster repo keeps none — ci.md §3.)
+    repo but for the in-cluster drills the cluster runs itself
+    (operations.md §4), and the public kluster repo keeps none — ci.md
+    §3.)
 
 **Issues live in the dedicated private ops repo (2026-08-24).**
 This repo is public (2026-08-25), so alert issues must never live
 here — hosting them in-repo would have made a certain migration look
 like a conditional. The always-private `kluster-ops`
 holds the dispatch-receiving workflow, the issues — and, by the same
-decision's amendment, **every scheduled workflow in the system**
-(ci.md §3: the deployment repo stays event-driven; the ops repo owns
-everything on a clock). It also keeps alert noise out of this repo's
+decision's amendment, **every scheduled workflow in the system but
+for the in-cluster drills the cluster runs itself** (operations.md
+§4; ci.md §3: the deployment repo stays event-driven, and the ops
+repo owns the rest of what runs on a clock). It also keeps alert
+noise out of this repo's
 issue tracker, which the public repo needs for real issues. Consequences on record:
 
 -   **Content rule is secret hygiene, not a field whitelist.**

@@ -445,8 +445,12 @@ Consequences, all deliberate:
     which is why the recovery chain (kit → recovery key →
     `escrow/backup/age/<generation>` → the dump in B2 → state) is
     designed to be drilled rather than assumed (operations.md §4).
-    Designed, not yet done: no drill has run, and the restore step of
-    that chain has never run against a live box either.
+    As of 2026-09-25 no drill has run, and every link of that chain
+    but the B2 one has run by hand: a dump opened with an escrowed
+    generation and restored, into a scratch box on 2026-09-18 and into
+    the production appliance on its first replace-and-restore on
+    2026-09-25 (physical/state-backend.md §7.3.1). No dump the
+    appliance uploaded had been opened by then (`kluster-ops#281`).
 -   **Escrow constrains no algorithm.** An escrowed key is generated
     the way its consumer wants it and stored as the bytes it is, so the
     state-backend PKI's curve and age's X25519 are each their own
@@ -747,7 +751,8 @@ is a re-push rather than a console visit. `credentials derived sync
 --only github-trigger-key` recovers the trigger key and pushes it as
 `TRIGGER_APP_PRIVATE_KEY`, the name the ops repository's drift trigger,
 `drift-trigger.yml`, is designed to read it under — a workflow not built
-yet (`kluster-ops#57`); `--only github-dispatch-key` pushes the dispatch
+as of 2026-09-25 (`kluster-ops#57`); `--only github-dispatch-key` pushes
+the dispatch
 key as `DISPATCH_APP_PRIVATE_KEY`, a repository secret of `kluster`, the
 name `sdk-regenerate.yml` reads it under and the one the `alert` job
 every workflow on `main` but `deploy.yml` ends in (ci.md §3) hands to
@@ -828,7 +833,7 @@ name.
 | `credentials derived <row> import [--from-slot]` | Escrows a value that already exists as the row's next generation, changing nothing a consumer holds (§4.2). The value comes from standard input, or from the row's workstation slot with `--from-slot` — which is how a passphrase already sitting in `.credentials/` is escrowed without being copied through a shell. Refuses an empty or wrong-shaped value: a pipe whose producer failed dies here, not at the recovery that trusted the ciphertext. |
 | `credentials kit rotate --into <new kit>` | Rotation (§4.2). Writes a new database and re-wraps the escrow to the successor recovery key in the same run; the retired one stays. A run that stopped part way is resumed by running it again with the same `--into`: the successor is opened rather than created, and each row it holds is finished rather than rotated twice. |
 | `credentials kit rewrap` | The re-wrap on its own, for a recipients file edited by hand: it takes no recipients, re-encrypts every generation to whatever `escrow/RECIPIENTS` already names, and refuses a run that no identity in hand could open afterward. It opens with the one key the kit holds, so a rotation interrupted part way is not its case (§4.2: that is `kit rotate --into` the same file, again); an ordinary kit rotation never calls it. |
-| `credentials derived check` | Any time, kit or no kit: every escrowed row the register names is present, generations run from 1 with no gap, every ciphertext is an ASCII-armored age file, `escrow/RECIPIENTS` holds age recipients, nothing is escrowed under a label the register does not name, and no stray file sits in the directory. It opens nothing, so a clone is enough to run it — which is what would let CI run it, though no workflow does today. |
+| `credentials derived check` | Any time, kit or no kit: every escrowed row the register names is present, generations run from 1 with no gap, every ciphertext is an ASCII-armored age file, `escrow/RECIPIENTS` holds age recipients, nothing is escrowed under a label the register does not name, and no stray file sits in the directory. It opens nothing, so a clone is enough to run it — which is what would let CI run it, though as of 2026-09-25 no workflow does. |
 | `credentials kit ls [<group>]` / `show <entry>` | Looking without changing. `ls` prints entry paths and reads no field, so it can disclose nothing; a group narrows it to one branch of the kit (`seeds`), where the default is the whole of it. `show` prints one entry's non-secret fields. |
 | `credentials kit password remember` | Once per machine, so a run that lasts minutes is not guarded by a password typed into it. The password is proven against the kit before it is stored, keyed by the kit's resolved path — a kit reached by a new path needs one re-run. |
 | `credentials kit password forget` | Drops that remembered password again, for a machine that should stop holding it. |
@@ -1072,8 +1077,9 @@ and its timestamp moved. That distinguishes a delivered secret from a
 refused one, which is the failure worth guarding against; nothing on this
 channel can distinguish a correct value from a corrupted one.
 
-One piece is designed and not built (`kluster-ops#1`), and is described
-here because the rest of the register is written against it:
+As of 2026-09-25 one piece is designed and not built (`kluster-ops#1`),
+and is described here because the rest of the register is written
+against it:
 
 -   **Slot-drift probe**: an ops-repo scheduled workflow comparing the
     slot map against reality in both directions — `gh` secret listings
@@ -1225,14 +1231,15 @@ that opens one arrives with `k8s-base`.
     both in the `drill` Environment; and, as repository secrets, the
     state dumps' freshness key, which its mint pushes as two carriers,
     the trigger App's key, which stage 10 pushes, and the Home Assistant
-    webhook, which stage 10 asks for and pushes. Every other row above
-    naming an ops-repo secret lands nowhere, because the workflow that
+    webhook, which stage 10 asks for and pushes. As of 2026-09-25 every
+    other row above naming an ops-repo secret lands nowhere, because the
+    workflow that
     would read it is not built (`kluster-ops#57`) — nothing there names
     a secret for it. Of the workflows reading the secrets that do land,
     `probes.yml` alone exists, and it starts no job until the ops
     repository's Actions billing is restored (`kluster-ops#393`); the
     drift trigger and the dispatch handler are not built, and nothing
-    there reads the drill Environment yet either (state-backend.md
+    there reads the drill Environment either (state-backend.md
     §7.3).
 -   **`alertmanager/read`** is generated and escrowed, and what it lacks
     is a consumer: neither the issue-sync poller nor the HTTPRoute that

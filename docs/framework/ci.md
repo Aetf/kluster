@@ -60,10 +60,15 @@ the instance moves from the homelab host to an **OCI VM.Standard.E2.1.Micro**
     a **scheduled `pg_dump` to B2** (a timer on the micro),
     **age-encrypted before upload** — the dump holds every stack's
     ciphertext and salt, and B2 is where credentials concentrate —
-    its restore to be drilled with the rest of nodes.md §5 Tier 0
-    (the state-backend rebuild playbook; written down, never run —
-    operations.md §4). RPO ≤ 24 h on state is fine — state is
-    re-derivable from reality (`pulumi refresh`/import) at worst.
+    its restore to be drilled with the rest of nodes.md §5 Tier 0 (the
+    state-backend rebuild playbook, physical/state-backend.md §7.3). As
+    of 2026-09-25 its scheduled drill has not run (operations.md §4).
+    Its operator form, physical/state-backend.md §7.3.1, ran against a
+    scratch box on 2026-09-18, on a workstation dump and without step
+    1's fetch from B2, and `state-backend restore` ran against the
+    appliance in its first replace-and-restore on 2026-09-25. RPO ≤ 24 h
+    on state is fine — state is re-derivable from reality
+    (`pulumi refresh`/import) at worst.
 -   The legacy homelab Postgres backend keeps serving kluster-code
     untouched until that cluster retires.
 
@@ -395,9 +400,10 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     payload formatting, deduplication and the GitHub-issue leg
     (cluster/architecture.md §4.3). The producer is built and every
     other workflow that runs on `main` calls it (the alert-producer
-    bullet below); `deploy.yml` is the one that does not yet, because
-    its alert is the one that reaches a phone today and the ops repo's
-    dispatch handler that would deliver the producer's is not built.
+    bullet below); `deploy.yml` is the one that does not, because as of
+    2026-09-25 its alert is the one that reaches a phone and the ops
+    repo's dispatch handler that would deliver the producer's is not
+    built.
     When the handler is, this job becomes the `alert` job every other
     workflow ends in, and the webhook secret leaves the repository.
 -   **Every workflow that runs on `main` ends in the alert job, and
@@ -426,10 +432,10 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     repository variable, and posts one dispatch of the payload
     `conventions/alert.py` spells (operations.md §4). A missing
     key fails the mint by name, and the alert job goes red rather
-    than passing with a warning. **The receiver is not built**: until
-    the ops repo's dispatch handler exists, a dispatch is accepted
-    with a `204` and starts nothing, so an alert today is a red run in
-    this repository's Actions tab and a green `alert` job beside it.
+    than passing with a warning. **As of 2026-09-25 the receiver is not
+    built**: until the ops repo's dispatch handler exists, a dispatch is
+    accepted with a `204` and starts nothing, so an alert is a red run
+    in this repository's Actions tab and a green `alert` job beside it.
     Every alert these callers raise is `actionable`, keyed by its
     workflow, and names its playbook: §3.1 for `checks` and `images`,
     §3.2 for `drift`.
@@ -462,13 +468,13 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     above): an `actionable` alert keyed `kluster/drift`, whose
     playbook is §3.2. Keyed by the workflow, a drift that persists is
     to be one open issue collecting a comment a week rather than a
-    page a week. **How the human learns of it is half built**: the
-    producer posts the alert, and the ops repo's dispatch handler
-    that would turn it into a push and an issue does not exist yet,
-    so today a diff is a failed workflow run and nothing more. The
-    workflow has also never run: its trigger
-    lives in the ops repo, behind the trigger App and an Environment
-    layout that is still to be created.
+    page a week. **As of 2026-09-25, how the human learns of it is
+    half built**: the producer posts the alert, and the ops repo's
+    dispatch handler that would turn it into a push and an issue does
+    not exist, so a diff is a failed workflow run and nothing more.
+    The workflow has also never run, because the ops repo's
+    `drift-trigger.yml`, which would trigger it, is not written
+    (`kluster-ops#57`).
     `--refresh` is load-bearing for the second source: a plain
     preview diffs code against *cached* state and never queries
     providers, so a console hand-edit leaves code == state and
@@ -579,8 +585,8 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     gate** (credentials.md §4). The Environment exists; its three
     credentials are filled by `credentials derived drill-age-identity
     generate` and `credentials derived drill-credentials mint`
-    (credentials.md §3); the ops repo carries no workflow that would
-    read any of them (operations.md §4).
+    (credentials.md §3); as of 2026-09-25 the ops repo carries no
+    workflow that would read any of them (operations.md §4).
 -   **What fills these Environments is a workstation, not a stack and
     not a job.** The register's executable form is the `credentials`
     console script (`src/kluster/scripts/credentials/`), whose slot map
@@ -644,18 +650,20 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     credential nobody has typed in — is reported by name and the walk
     continues, so the exit status of a full `sync` is the answer to
     "is the map filled".
--   **Everything on a clock lives in the ops repo; this repo is
-    event-driven only** (2026-08-24, amending the 2026-08-23 "one
+-   **Every scheduled workflow lives in the ops repo, but for the
+    in-cluster drills the cluster runs itself (operations.md §4); this
+    repo is event-driven only** (2026-08-24, amending the 2026-08-23 "one
     scheduled workflow here" decision): once public, this repo's
     scheduled workflows would sit under GitHub's 60-day inactivity
     auto-disable — and the freshness checks silently dying with the
     thing they watch is exactly what the dead-man design exists to
     prevent. So the private **`kluster-ops`** repo (the notification
-    hub, architecture.md §4.3) owns the complete scheduled census:
+    hub, architecture.md §4.3) owns the rest of the scheduled census:
     the hourly **etcd snapshot** (designed as `talosctl etcd
     snapshot` against the NLB endpoint → upload to B2 — no in-cluster
-    CronJob, no talosconfig copied into the cluster; that workflow is
-    unwritten, so none is taken — nodes.md §5 Tier 0), the
+    CronJob, no talosconfig copied into the cluster; as of 2026-09-25
+    that workflow is unwritten, so none is taken — nodes.md §5 Tier 0),
+    the
     **freshness checks
     for backups vmalert can't see** (object-age assertions on the
     B2 `etcd/` and state-backend `pg_dump` prefixes, the
@@ -676,7 +684,8 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     repo is to hold real credentials (talosconfig, the B2 etcd
     write key, the drill set — register rows in credentials.md,
     pending but for the drill set, whose generator and mint fill
-    the `drill` Environment; nothing there reads any of them yet),
+    the `drill` Environment; as of 2026-09-25 nothing there reads any
+    of them),
     which is what forced the dispatch App's fencing
     (architecture.md §4.3), and its Actions-minutes bill is
     accounted there too. This repo keeps only the event-driven
@@ -765,8 +774,8 @@ cluster/security-audit.md are audit findings and unrelated.
 
 `drift` is left out of the job lists below. Its matrix names all four
 stacks and every entry would fail, for whichever of the two reasons
-below applies to its stack, but the workflow has never run at all
-(§3), so nothing about it here is an observation.
+below applies to its stack, but as of 2026-09-25 the workflow has
+never run at all (§3), so nothing about it here is an observation.
 
 **A merge is gated on `checks` and `changes`, and on nothing else.**
 `main` requires exactly those two contexts on an up-to-date branch,

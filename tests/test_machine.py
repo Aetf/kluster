@@ -18,6 +18,7 @@ from dataclasses import fields
 from pathlib import Path
 from typing import Any
 
+import drill_recipient_redirect
 import pytest
 from memory_kit import MemoryKit
 
@@ -44,9 +45,7 @@ def drill_recipient_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Pat
     committed one there decides nothing here: the cases below are about what
     the function does with the file, not about the repository's state.
     """
-    path = tmp_path / config.DRILL_RECIPIENT
-    monkeypatch.setattr(config, 'DRILL_RECIPIENT_FILE', path)
-    return path
+    return drill_recipient_redirect.redirect(monkeypatch, tmp_path)
 
 
 @pytest.fixture

@@ -49,7 +49,7 @@ the way the waiting rows do: as a reviewed pull request.
 | **Cluster images, infra and app alike** (CNPG operands, self-built, third-party app images) | renovate | CI chain (merge = deploy) | **Minor automerge** (patch stream folded into minor — the legacy `patch: enabled: false` precedent); **major behind dashboard approval + review**; CNPG operand major additionally gated on the self-built image line (workloads.md §4). The safety valve is the deploy-failure alert, not a per-bump eyeball — this deliberately reverses legacy's "applications get eyeballed" stance |
 | blog image / built branch | blog repo CI | git-sync | Automatic — content, not code |
 | nspawn rootfs (caddy, AdGuard, ZeroTier) | renovate here — docker datasource, reading whole references off the `versions:image-gateway-…` pins | `physical` stack: the device pulls the pinned manifest itself and unpacks it beside the tree it is running, then the boot chain's machine script restarts what changed | Reviewed; the run-number tag reads as a major bump, so every one waits on dashboard approval |
-| State-backend pins (FCOS stream handled by Zincati; `postgres:NN` in Butane) | Zincati (periodic window) / renovate on `deploy/state-backend/` | auto / manual re-provision | state-backend.md §4 |
+| State-backend pins: the FCOS stream; the Postgres major line (`settings.POSTGRES_IMAGE`, rendered into the Butane file); the age release (`settings.AGE_VERSION`) | Zincati (periodic window) for the OS; renovate for the two settings, one custom manager each on `state_backend/settings.py` | Zincati, and `podman-auto-update.timer` for the Postgres minor stream: auto. A settings bump: a manual replace-and-restore, `state-backend provision --force` and then `state-backend restore` of the dump that run names (state-backend.md §7.2) | Reviewed, grouped apart from everything else because each bump replaces the box. An age bump arrives as two renovate pull requests: renovate's mise manager reads the `age` pin in `mise.toml` too and files it under the `toolchain` group (until `kluster-ops#443` groups it with the state-backend pins). `tests/test_age.py` holds the two pins equal, so neither passes until the other's half is added to it by hand, together with `AGE_SHA256` beside `settings.AGE_VERSION`, which the `checks` workflow's `state-backend pins` refuses stale. state-backend.md §1–2, and §7 for the age pin |
 | Pulumi SDK + providers, Python deps, Actions versions | renovate | **noop-automerge workflow** — merges once the preview is proven empty (the zero-diff rule, ci.md); that proof previews stacks that do not exist yet, so nothing takes this path today (paragraph above) | Automerged when diff-free; a bump that produces a real diff falls out of the noop path to human review; major behind dashboard approval |
 | UDM firmware | **vendor-controlled** (auto-update schedule; outage history on record) | — | Not ours to pin; the device's services self-heal via on_boot.d, overlay recovery runbook gateway.md §3 |
 
@@ -103,17 +103,20 @@ and the human appears exactly where an offline secret or physical
 action is irreducible.
 
 **The enabler for the biggest drill**: pg_dumps gain a third age
-recipient — an **ops-repo-held drill key** (credentials.md §3),
-living in that repository's `drill` Environment. The key is drawn by
+recipient — an **ops-repo-held drill key** (credentials.md §3), living
+in that repository's `drill` Environment. The key is drawn by
 `credentials derived drill-age-identity generate`, which pushes the
 private half into that Environment and writes the public half to
 `deploy/state-backend/drill-recipient.txt`; the appliance encrypts to
 it from the converge that adopts the committed file (state-backend.md
-§5), and until that converge the dumps carry the escrowed generations
-alone. Nothing yet reads the key: the ops repository carries no
-workflow, so a rebuild today is still an operator opening the object
-with the kit. The rest of this paragraph is the argument for holding
-it there. It adds no new
+§5), and a dump written before that converge carries the escrowed
+generations alone. As of 2026-09-25 nothing reads the key: of the ops
+repository's workflows, `lint.yml` checks the workflow files
+themselves and `probes.yml` runs `state-backend probe`, and neither
+opens a dump, while the rebuild drill's workflow is not written
+(`kluster-ops#57`). A rebuild is an operator opening the object with
+the kit. The rest of this paragraph is the argument for holding it
+there. It adds no new
 *class* of exposure. The kluster CI already reads the live database
 through its client cert, so a dump-decrypting key in a second GitHub
 repository widens the reach of a forge compromise by one repository
@@ -139,23 +142,30 @@ exposed key reads in the clear is the resource graph and the
 non-secret configuration. With the key held there, the state-backend
 rebuild drill can run unattended end to end once its workflow exists.
 
-**Nothing in the table below runs.** The ops repository carries no
-`.github/workflows` directory, so neither the state-backend rebuild nor
-the etcd restore-verify is scheduled, and the two in-cluster drills wait
-on the `k8s-base` stack that would install the operators they drive and
-the alerting they report into (§1). The last column is the designed
-form rather than a census of schedulers: today every row is an operator
-act, and the only one written out as a procedure is the state-backend
-restore (state-backend.md §7.3.1). By the standing principle above,
-that makes every recovery path on this table an assumed-broken one.
+**As of 2026-09-25, nothing in the table below runs.** One row has its
+workflow: of the credential expiry tripwires, the state-backend server
+certificate's is scheduled daily in the ops repository's `probes.yml`
+(state-backend.md §6), which has started no job, because no job in
+that repository starts until its Actions billing is restored
+(`kluster-ops#393`). The other ops-repo rows have no workflow written
+(`kluster-ops#57`): not the state-backend rebuild, and not the etcd
+restore-verify, nor the scheduled snapshot it would restore. The
+in-cluster rows wait on the `k8s-base` stack that would install the
+operators the two restores drive and the alerting every in-cluster row
+reports into (§1), and the orphan-volume audit's recipe (storage.md
+§3.3) is not written either. The last column is the designed form
+rather than a census of schedulers: every row is an operator act, and
+the only one written out as a procedure is the state-backend restore
+(state-backend.md §7.3.1). By the standing principle above, that makes
+every recovery path on this table an assumed-broken one.
 
-| Drill | Cadence | Form (designed; none of it is scheduled today) |
+| Drill | Cadence | Form (designed) |
 | --- | --- | --- |
 | CNPG restore (immich pattern, ported from legacy) | Monthly | In-cluster workflow, alert on failure |
 | State-backend rebuild — scratch micro from Butane → restore latest dump (drill key) → verify → destroy (state-backend.md §7.3) | Quarterly | Ops-repo workflow, alert on failure |
 | etcd snapshot restore-verify — latest B2 snapshot into a scratch etcd, health + key sanity | Monthly | Ops-repo workflow, alert on failure |
 | VolSync spot-restore — rotating PVC into a scratch namespace, checksum, tear down | Monthly | In-cluster workflow, alert on failure |
-| Orphan-volume audit, target zero (storage.md §3.3) | Quarterly | Ops-repo workflow; `actionable` alert only on findings |
+| Orphan-volume audit, target zero (storage.md §3.3) | Quarterly | In-cluster workflow, alert only on findings |
 | Credential expiry tripwires (credentials.md §4) | Continuous (scheduled probes) | Ops-repo probes; `actionable` alert when an expiry approaches |
 | **Offline day**: age key rotation (proves offline custody, state-backend.md §7.4) + full cold-standby reverse bootstrap on homelab libvirt (nodes.md §5) + offline-kit verification against the register (credentials.md §2.1) + a `pulumi preview` against the Vultr-fallback stack config (nodes.md §3.1 — proves the scripted fallback still computes, creating nothing) + anything the probes can't reach | Yearly | One `actionable` issue, human-run |
 
@@ -174,18 +184,19 @@ so a probe has no field to read. Honoring it is part of the yearly
 offline day until the register carries it.
 
 Every scheduled drill above belongs in the **ops repo** (ci.md §3 —
-the deployment repo carries no scheduled workflows; the two
-in-cluster drills, VolSync spot-restore and the CNPG restore, are
-the exceptions — kube-native scratch-namespace operations driven by
-the cluster itself, so the ops repo never needs a kubeconfig). Each
-automated drill is to be covered against stopping silently — an
-ops-repo drill by the dead-man below, an in-cluster one by a
-**freshness alert** (the backup-freshness family, cluster-infra.md
-§3) — because a drill that silently stops running is
-indistinguishable from a failing one. Until the workflows, the
-dead-man and that alert family exist, a drill that never started is
-indistinguishable from both. The only
-calendar ritual left is the yearly offline-day issue.
+the deployment repo carries no scheduled workflows; the in-cluster
+drills are the exceptions: VolSync spot-restore and the CNPG restore,
+kube-native scratch-namespace operations driven by the cluster itself,
+so the ops repo never needs a kubeconfig; and the orphan-volume audit,
+which compares each node's on-disk volume directories against the live
+volumes and so needs what only a node can read). Each automated drill
+is to be covered against stopping silently — an ops-repo drill by the
+dead-man below, an in-cluster one by a **freshness alert** (the
+backup-freshness family, cluster-infra.md §3) — because a drill that
+silently stops running is indistinguishable from a failing one. Until
+the workflows, the dead-man and that alert family exist, a drill that
+never started is indistinguishable from both. The only calendar ritual
+left is the yearly offline-day issue.
 
 **The alert contract.** Every ops-repo drill and probe above, and
 every workflow here that fails on `main` (framework/ci.md §3 names

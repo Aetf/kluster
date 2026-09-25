@@ -102,21 +102,31 @@ empty cluster:
 this chart set; the legacy chart list retires with kluster-code. The
 register the regeneration reads — every chart, its repository, its
 pinned version, and the floor that pin has to clear — is
-`src/kluster/scripts/update_crds/pins.py`, and the pins there are the
-same ones the stack's `chart:` config carries. Rendering is **offline**:
-a pinned Helm 3 binary renders each chart and the CRDs are filtered out
-of the result, so the bindings describe the pinned chart set rather
-than whatever some cluster happens to have installed. Two consequences
-worth naming. Cilium's chart contains no CRD at all — the agent
-registers its own at runtime — so its definitions are read from the
-checked-in YAML at the matching release tag, and the tag and the chart
-version move together. And the VictoriaMetrics stack installs only
-`operator.victoriametrics.com`: this cluster has no `ServiceMonitor`
-and no `PodMonitor`, so a scrape target is declared as the
-VictoriaMetrics object, never as a prometheus-operator one.
-Because the render never contacts a cluster, it cannot prove the set is
-*complete* — a chart that creates a definition at runtime the way Cilium
-does would simply be missing. The first live `up` is what proves it.
+`src/kluster/scripts/update_crds/pins.py`. It is not where a stack
+reads a chart's version: that is `versions:chart-<name>` in
+`Pulumi.yaml` (framework/pulumi.md §3.2), and nothing holds the two
+equal, so a chart bump is a Renovate-opened pin edit in `Pulumi.yaml`
+plus a hand edit to the same chart's entry in `pins.py` and, for a
+chart whose CRDs are rendered, a regeneration. As of 2026-09-25
+`Pulumi.yaml` carries no chart pin, since no stack installs a chart,
+and no Renovate manager matches one (`kluster-ops#249`); until both
+exist, `pins.py` is the one place a chart version is written, and it
+moves by hand.
+
+Rendering is **offline**: a pinned Helm 3 binary renders each chart
+and the CRDs are filtered out of the result, so the bindings describe
+the pinned chart set rather than whatever some cluster happens to have
+installed. Two consequences worth naming. Cilium's chart contains no
+CRD at all — the agent registers its own at runtime — so its
+definitions are read from the checked-in YAML at the matching release
+tag, and the tag and the chart version move together. And the
+VictoriaMetrics stack installs only `operator.victoriametrics.com`:
+this cluster has no `ServiceMonitor` and no `PodMonitor`, so a scrape
+target is declared as the VictoriaMetrics object, never as a
+prometheus-operator one. Because the render never contacts a cluster,
+it cannot prove the set is *complete* — a chart that creates a
+definition at runtime the way Cilium does would simply be missing. The
+first live `up` is what proves it.
 
 ### 1.1 Secrets placement rules
 
