@@ -28,7 +28,7 @@ from cloudflare_api import MINTING_POLICY
 from cloudflare_api import FakeApi as CloudflareApi
 from cloudflare_api import console_seed
 from oci_conventions import with_tenancy_ocid
-from test_oci_iam import ROOT_USER, TENANCY, Tenancy
+from oci_tenancy import ROOT_USER, TENANCY, Tenancy
 
 from kluster import conventions
 from kluster.scripts.credentials import (

@@ -1,8 +1,8 @@
 """The drill credentials: two mints, five carriers, one Environment.
 
-Against the fake tenancy `test_oci_iam` drives, holding the drill compartment
-`conventions` is made to record, the fake B2 account `test_b2` extends with
-the file listing, and a `gh` that runs nothing and remembers what it was
+Against the fake tenancy in `oci_tenancy`, holding the drill compartment
+`conventions` is made to record, the fake B2 account in `b2_api`, file
+listing included, and a `gh` that runs nothing and remembers what it was
 handed, because what is under test is the composite:
 that the OCI key confined to the drill compartment and the B2 key confined to
 the dump prefix both land, as the carriers the register names, in the ops
@@ -29,8 +29,8 @@ import pytest
 import requests
 from fake_gh import RecordedGh
 from memory_kit import MemoryKit
-from test_b2 import ReadableFakeApi
-from test_oci_iam import ROOT_USER, TENANCY, Tenancy
+from b2_api import FakeApi as B2Api
+from oci_tenancy import ROOT_USER, TENANCY, Tenancy
 
 from oci_conventions import with_recorded_compartment, with_tenancy_ocid, with_unrecorded_compartment
 from kluster import conventions
@@ -115,8 +115,8 @@ def tenancy(monkeypatch: pytest.MonkeyPatch) -> Tenancy:
 
 
 @pytest.fixture
-def api(monkeypatch: pytest.MonkeyPatch, timeline: Timeline) -> ReadableFakeApi:
-    fake = ReadableFakeApi()
+def api(monkeypatch: pytest.MonkeyPatch, timeline: Timeline) -> B2Api:
+    fake = B2Api()
 
     def timed_post(url: str, *, json: dict[str, Any], headers: dict[str, str], timeout: int) -> requests.Response:
         timeline.append(('b2', url.rsplit('/', 1)[-1]))
@@ -133,7 +133,7 @@ def api(monkeypatch: pytest.MonkeyPatch, timeline: Timeline) -> ReadableFakeApi:
 
 
 @pytest.fixture
-def kit(tenancy: Tenancy, api: ReadableFakeApi) -> KdbxStore:
+def kit(tenancy: Tenancy, api: B2Api) -> KdbxStore:
     """A kit holding both seeds, created the way a bring-up creates them."""
     store = MemoryKit()
     oci_root = masters.Credential(
@@ -223,7 +223,7 @@ def test_the_oci_key_is_confined_to_the_drill_compartment_and_is_its_own_princip
 
 
 def test_the_b2_carriers_are_the_read_only_key_on_the_dump_prefix(
-    kit: KdbxStore, forge: Forge, gh: RecordedGh, tenancy: Tenancy, api: ReadableFakeApi, bucket_id: str
+    kit: KdbxStore, forge: Forge, gh: RecordedGh, tenancy: Tenancy, api: B2Api, bucket_id: str
 ) -> None:
     delivered = _mint(kit, forge, tenancy)
 
@@ -249,7 +249,7 @@ def test_each_half_retires_only_after_its_carriers_are_in_the_listing(
     forge: Forge,
     gh: RecordedGh,
     tenancy: Tenancy,
-    api: ReadableFakeApi,
+    api: B2Api,
     bucket_id: str,
     timeline: Timeline,
 ) -> None:
@@ -274,7 +274,7 @@ def test_each_half_retires_only_after_its_carriers_are_in_the_listing(
 
 
 def test_a_push_that_fails_leaves_the_predecessors_live_and_the_other_half_unminted(
-    kit: KdbxStore, forge: Forge, gh: RecordedGh, sink: TimedGh, tenancy: Tenancy, api: ReadableFakeApi, bucket_id: str
+    kit: KdbxStore, forge: Forge, gh: RecordedGh, sink: TimedGh, tenancy: Tenancy, api: B2Api, bucket_id: str
 ) -> None:
     _ = _mint(kit, forge, tenancy)
     user = _drill_user(tenancy)
@@ -302,7 +302,7 @@ def test_a_push_that_fails_leaves_the_predecessors_live_and_the_other_half_unmin
 
 
 def test_a_b2_push_that_fails_leaves_the_reader_the_environment_holds_live(
-    kit: KdbxStore, forge: Forge, gh: RecordedGh, sink: TimedGh, tenancy: Tenancy, api: ReadableFakeApi, bucket_id: str
+    kit: KdbxStore, forge: Forge, gh: RecordedGh, sink: TimedGh, tenancy: Tenancy, api: B2Api, bucket_id: str
 ) -> None:
     _ = _mint(kit, forge, tenancy, only=derived.DRILL_B2_HALF)
     delivered = _pushed(gh, 'DRILL_B2_KEY_ID')
@@ -324,7 +324,7 @@ def test_a_b2_push_that_fails_leaves_the_reader_the_environment_holds_live(
 
 
 def test_a_push_the_listing_does_not_show_ends_the_run_before_the_next_carrier(
-    kit: KdbxStore, forge: Forge, gh: RecordedGh, tenancy: Tenancy, api: ReadableFakeApi, bucket_id: str
+    kit: KdbxStore, forge: Forge, gh: RecordedGh, tenancy: Tenancy, api: B2Api, bucket_id: str
 ) -> None:
     gh.forgets = True
 
@@ -340,7 +340,7 @@ def test_a_push_the_listing_does_not_show_ends_the_run_before_the_next_carrier(
 
 
 def test_only_mints_one_half_and_leaves_the_other_untouched(
-    kit: KdbxStore, forge: Forge, gh: RecordedGh, tenancy: Tenancy, api: ReadableFakeApi, bucket_id: str
+    kit: KdbxStore, forge: Forge, gh: RecordedGh, tenancy: Tenancy, api: B2Api, bucket_id: str
 ) -> None:
     oci_only = _mint(kit, forge, tenancy, only=derived.DRILL_OCI_HALF)
 
@@ -360,7 +360,7 @@ def test_only_mints_one_half_and_leaves_the_other_untouched(
 
 
 def test_a_half_the_drill_does_not_have_is_refused_before_anything_is_minted(
-    kit: KdbxStore, forge: Forge, gh: RecordedGh, tenancy: Tenancy, api: ReadableFakeApi, bucket_id: str
+    kit: KdbxStore, forge: Forge, gh: RecordedGh, tenancy: Tenancy, api: B2Api, bucket_id: str
 ) -> None:
     with pytest.raises(SlotRefused, match='no half of the drill credentials'):
         _ = _mint(kit, forge, tenancy, only='cloudflare')
@@ -372,7 +372,7 @@ def test_a_half_the_drill_does_not_have_is_refused_before_anything_is_minted(
 
 @pytest.mark.parametrize('only', [None, derived.DRILL_B2_HALF], ids=['both-halves', 'b2-only'])
 def test_no_dump_bucket_is_refused_before_a_key_is_minted(
-    kit: KdbxStore, forge: Forge, gh: RecordedGh, tenancy: Tenancy, api: ReadableFakeApi, only: str | None
+    kit: KdbxStore, forge: Forge, gh: RecordedGh, tenancy: Tenancy, api: B2Api, only: str | None
 ) -> None:
     mints = api.calls.count('b2_create_key')
     users, keys = dict(tenancy.identity.users), {user: list(held) for user, held in tenancy.identity.keys.items()}
@@ -401,7 +401,7 @@ def test_a_seed_from_another_tenancy_is_refused_before_anything_is_created(
     forge: Forge,
     gh: RecordedGh,
     tenancy: Tenancy,
-    api: ReadableFakeApi,
+    api: B2Api,
     bucket_id: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

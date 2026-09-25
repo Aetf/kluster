@@ -51,13 +51,6 @@ BUCKET = 'kluster-state'
 PREFIX = conventions.STATE_DUMP_PREFIX
 RETENTION_DAYS = 30
 
-
-#: The file listing is part of the shared fake (`b2_api.FakeApi`), where the
-#: rows that list the dump prefix -- the drill's reader and the freshness
-#: probe's key -- are verified against it. The name stays as the alias
-#: `test_drill_credentials` imports it under.
-ReadableFakeApi = FakeApi
-
 LIST_FILE_NAMES = 'b2_list_file_names'
 
 
