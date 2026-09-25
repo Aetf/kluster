@@ -364,15 +364,21 @@ source-preservation semantics; etcd fsync latency on OCI block volumes;
 A1 capacity at creation; Egress Gateway under the chosen routing mode +
 reserved-IP↔secondary-private-IP NAT; Cilium MTU over the KubeSpan
 underlay; talosctl reaching the homelab node via cloud endpoints (apid
-proxy); VFIO iGPU passthrough capability on a scratch VM; the bridged
+proxy); VFIO iGPU passthrough capability on a scratch VM.
+
+Two verifications come **before** the first `pulumi up` rather than in
+the gate, because that run's first half — the targeted apply of the
+gateway cutover — is what exercises them, and it runs with the LAN's
+resolvers down and the machines' state already moved: the bridged
 filipowm/unifi provider round-tripping a scratch
 `firewall_zone_policy` (create → clean diff → delete) against the
 UDM's current Network release — the resource is experimental and
 targets UniFi OS ≥9, and a failure here flips the rules to the
 device-files provider's `UnifiFirewallPolicy` fallback
-(architecture.md §5.1) —
-plus the legacy port-forward endpoint still accepting writes on a
-zone-firewall controller.
+(architecture.md §5.1) — plus the legacy port-forward endpoint still
+accepting writes on a zone-firewall controller. Both are one probe on
+scratch objects, run on any day before the window
+([physical/gateway-cutover.md](../physical/gateway-cutover.md) §3).
 
 Security verifications (from the 2026-08-23 audit,
 cluster/security-audit.md): a pod's request to `169.254.169.254` is

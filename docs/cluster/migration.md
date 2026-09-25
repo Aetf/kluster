@@ -48,10 +48,12 @@ owns sequencing, data movement, and teardown.
 
 1.  Manual preconditions: OCI tenancy on PAYG (home region choice is
     permanent), the state-backend micro + Postgres + pg_dump timer
-    (ci.md §1), Talos OCI image via Image Factory, the homelab
-    host-prep aconfmgr change-set (bridge, subvolume/storage pool,
-    libvirt SSH identity, NFS exports — physical/homelab-host.md §4). ZeroTier
-    Central config is Pulumi-managed (architecture.md §5.3); the
+    (ci.md §1), the homelab host-prep aconfmgr change-set (bridge,
+    subvolume/storage pool, libvirt SSH identity, NFS exports —
+    physical/homelab-host.md §4). The Talos image is not among them:
+    the stack builds it through the Image Factory and imports it itself
+    (declarative/physical.md §1). ZeroTier Central config is
+    Pulumi-managed (architecture.md §5.3); the
     legacy `10.42.0.0/24`-via-VPS managed route is deleted in Wave F.
     **The overlay's home-LAN routes are net-new** (today the overlay and
     the LANs are not connected at all): the UDM container deploys via an
@@ -75,16 +77,22 @@ owns sequencing, data movement, and teardown.
     running the layout gw-config built, so the first of those applies
     opens with a cutover window that moves the live container state
     under the declared paths — procedure, verification and rollback:
-    physical/gateway-cutover.md. `dns` up: zones + base records
-    imported wholesale (records still pointing at `archvps.hosts`; the
-    import census also drops dead weight — `abacus.hosts`, its overlay
-    entry, jupyter/mc records).
+    physical/gateway-cutover.md. **The controller-side verifications
+    come before that window, not after `k8s-base`**: the zone-policy
+    round trip and the port-forward write (declarative/physical.md §6)
+    are first exercised by the window's own apply, so they run as a
+    probe on scratch objects on some day before it, beside the probe of
+    the device's image pull (physical/gateway-cutover.md §3). `dns` up:
+    zones + base records imported wholesale (records still pointing at
+    `archvps.hosts`; the import census also drops dead weight —
+    `abacus.hosts`, its overlay entry, jupyter/mc records).
 3.  `k8s-base` up; sealing key restored; backup-freshness alerts
     live. (Talos-level checks that need no CNI — etcd fsync, A1
     capacity, talosctl→homelab via cloud endpoints — may run before
     this step; everything Cilium-shaped cannot.)
 4.  **Verification gate** — the consolidated checklist
-    (physical.md §6), run **after `k8s-base`** because most items
+    (physical.md §6) less the controller-side items item 2 ran before
+    the window, run **after `k8s-base`** because most items
     exercise Cilium: LB-IPAM pool with the on-the-wire node IPs; NLB
     dual-stack + source preservation; Egress Gateway under the
     routing mode + reserved-IP NAT; MTU over KubeSpan; the security

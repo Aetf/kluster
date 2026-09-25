@@ -1316,9 +1316,9 @@ Facts that shape it (decided 2026-08-24):
     peer is the UDM itself, whose ZeroTier socket (host-networking
     container) sits on the WAN interface un-NATed — the direct path
     should form on first contact, and traffic flows (slowly, via ZeroTier
-    relays) even before it does. Verified as §2.4 item 7;
-    seconds-class expected, and if it stays minutes it is a per-job
-    fixed cost, not a correctness problem.
+    relays) even before it does. Seconds-class is the expectation, not
+    a measurement: §2.4 item 7 is what measures it. If it stays
+    minutes it is a per-job fixed cost, not a correctness problem.
 
 ### 2.7 Managed DNS: the pushed search domain
 
