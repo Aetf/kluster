@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import gzip
 import json
+import shlex
 import shutil
 import urllib.parse
 from dataclasses import fields
@@ -21,7 +22,7 @@ import pytest
 from memory_kit import MemoryKit
 
 from kluster.scripts.credentials import age, escrow, pki
-from kluster.scripts.state_backend import config
+from kluster.scripts.state_backend import config, settings
 
 needs_age = pytest.mark.skipif(shutil.which(age.BINARY) is None, reason='age is not on PATH (mise x -- ...)')
 needs_butane = pytest.mark.skipif(shutil.which('butane') is None, reason='butane is not on PATH (mise x -- ...)')
@@ -270,3 +271,92 @@ def test_the_ignition_carries_every_recipient_the_roots_name_one_per_line() -> N
     ignition = config.render_ignition(built)
 
     assert _delivered(ignition, RECIPIENTS_FILE).split() == [RECIPIENT, 'age1second', DRILL_RECIPIENT]
+
+
+#: Where the Butane template puts the files that decide who may connect as whom.
+HBA_FILE = '/etc/kluster/pki/pg_hba.conf'
+INIT_FILE = '/etc/kluster/initdb/00-roles.sql'
+DUMP_ENV_FILE = '/etc/kluster/state-dump.env'
+POSTGRES_UNIT = 'pgstate.service'
+CLIENT_ROLES = {settings.CI_ROLE, settings.OPERATOR_ROLE}
+
+
+def _postgres_env(ignition: str) -> dict[str, str]:
+    """The `--env` pairs the Postgres unit hands the image."""
+    document: Any = json.loads(ignition)
+    unit = next(entry for entry in document['systemd']['units'] if entry['name'] == POSTGRES_UNIT)
+    argv = shlex.split(str(unit['contents']).replace('\\\n', ' '))
+    return dict(argv[at + 1].split('=', 1) for at, arg in enumerate(argv) if arg == '--env')
+
+
+def _statements(sql: str) -> list[str]:
+    """The SQL statements in a script, comments dropped and whitespace folded."""
+    code = ' '.join(line.split('--', 1)[0] for line in sql.splitlines())
+    return [' '.join(statement.split()) for statement in code.split(';') if statement.strip()]
+
+
+@pytest.fixture
+def ignition(roots: config.Roots) -> str:
+    built = config.machine(roots, address=ADDRESS, dump_key_id='key-id', dump_key='secret', bucket_id='bucket')
+    return config.render_ignition(built)
+
+
+@needs_butane
+def test_no_role_a_certificate_names_is_the_superuser(ignition: str) -> None:
+    """The image's bootstrap superuser is a role no client certificate becomes.
+
+    The image makes whatever `POSTGRES_USER` names its superuser, and a
+    client role there would put every CI job's certificate one `COPY ... TO
+    PROGRAM` away from a shell beside the server's key. pg_hba is the other
+    half: the superuser is admitted on the local socket alone, and over TCP
+    only the two client roles are, into the state's database alone -- so a
+    certificate the CA signs for any other name is worth nothing here.
+    """
+    superuser = _postgres_env(ignition)['POSTGRES_USER']
+    assert superuser not in CLIENT_ROLES
+
+    rules = [line.split() for line in _delivered(ignition, HBA_FILE).splitlines() if line.strip()]
+    assert [rule[:3] for rule in rules if rule[0] == 'local'] == [['local', 'all', superuser]]
+    remote = [rule for rule in rules if rule[0] != 'local']
+    assert remote
+    for rule in remote:
+        assert rule[0] == 'hostssl', rule
+        assert rule[1] == settings.DATABASE, rule
+        assert set(rule[2].split(',')) == CLIENT_ROLES, rule
+        assert rule[4] == 'cert', rule
+
+    # The dump reaches Postgres over the local socket, as the one role
+    # admitted there.
+    assert f'PG_ROLE={superuser}' in _delivered(ignition, DUMP_ENV_FILE).splitlines()
+
+
+@needs_butane
+def test_the_client_roles_hold_the_state_and_nothing_more(ignition: str) -> None:
+    """Both client roles are non-superuser members of one owner, acting as it.
+
+    Ownership is what the backend needs, not rows alone: it runs `CREATE
+    INDEX IF NOT EXISTS` every time it opens, which Postgres answers only for
+    the table's owner. Every session acting as the owner is what makes the
+    table the backend creates, and whatever a restore loads, the owner's
+    whichever client got there first. The grants are the rest of what the
+    backend needs -- connecting, and creating in the schema its table lives
+    in -- and they are held to that set, so a grant added later is a change
+    this case names.
+    """
+    statements = _statements(_delivered(ignition, INIT_FILE))
+    owners: set[str] = set()
+    for role in CLIENT_ROLES:
+        words = next(statement for statement in statements if statement.startswith(f'CREATE ROLE {role} ')).split()
+        assert {'LOGIN', 'NOSUPERUSER'} <= set(words), words
+        owner = words[words.index('IN') + 2]
+        assert f'ALTER ROLE {role} IN DATABASE {settings.DATABASE} SET role = {owner}' in statements
+        owners.add(owner)
+    (owner,) = owners
+    assert {'NOLOGIN', 'NOSUPERUSER'} <= set(
+        next(statement for statement in statements if statement.startswith(f'CREATE ROLE {owner} ')).split()
+    )
+    assert not [statement for statement in statements if 'SUPERUSER' in statement.replace('NOSUPERUSER', '')]
+    assert {statement for statement in statements if statement.startswith('GRANT ')} == {
+        f'GRANT CONNECT ON DATABASE {settings.DATABASE} TO {owner}',
+        f'GRANT USAGE, CREATE ON SCHEMA public TO {owner}',
+    }

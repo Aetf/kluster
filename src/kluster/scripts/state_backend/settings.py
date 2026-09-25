@@ -46,6 +46,12 @@ POSTGRES_IMAGE = 'docker.io/library/postgres:17'
 POSTGRES_UID = 999
 
 DATABASE = 'pulumi_state'
+
+#: The client roles: the Common Names the CA issues client certificates to,
+#: and the only roles the box admits over TCP. Neither is a superuser; both
+#: act as the role that owns the state (state-backend.md §2). That role and
+#: the superuser are named in the Butane template alone, since no client ever
+#: connects as either.
 CI_ROLE = 'ci'
 OPERATOR_ROLE = 'operator'
 PORT = 5432

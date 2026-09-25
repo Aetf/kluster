@@ -8,6 +8,17 @@
 # Secrets ride Ignition deliberately (§1): no untrusted workload runs here, so
 # instance metadata is readable only by the instance itself and by OCI
 # principals who are root-equivalent for this box anyway.
+#
+# Two Postgres roles are this box's alone, so they are named here rather than
+# in `settings.py`: no client ever connects as either, and a change to either
+# name is a change to this file, which the converge compares whole.
+#   - `superuser` is the image's bootstrap superuser. It answers on the
+#     container's local socket and nowhere else (pg_hba below); its users are
+#     the image's own initialization and the dump timer.
+#   - `owner` owns the state. It cannot log in: the two client roles are its
+#     members, and every session they open acts as it (00-roles.sql below).
+{%- set superuser = 'postgres' %}
+{%- set owner = 'state_owner' %}
 variant: fcos
 version: 1.5.0
 
@@ -91,10 +102,15 @@ storage:
         inline: |
           {{ ssh_host_key_pub }}
 
-    # Certificate authentication is the only way in over TCP: a client
-    # certificate's CN is the role it becomes. The local socket is trusted
-    # because reaching it already means being root on this box — the image's
-    # own initdb and the dump timer are its only users.
+    # Who may connect, as whom, and how; a connection no line matches is
+    # refused. Over TCP a certificate is the only way in, a client
+    # certificate's CN is the role it becomes, and only the two client roles
+    # may become one, into the state's database alone: the CA can sign any
+    # CN, and this is what makes a certificate naming the superuser worth
+    # nothing. The superuser is admitted on the container's local socket only,
+    # which nothing outside the container can reach -- getting there is
+    # `podman exec` as root on this box -- so it is trusted and carries no
+    # certificate.
     - path: /etc/kluster/pki/pg_hba.conf
       mode: 0644
       user:
@@ -103,18 +119,39 @@ storage:
         id: {{ postgres_uid }}
       contents:
         inline: |
-          local   all   all                 trust
-          hostssl all   all   0.0.0.0/0     cert clientcert=verify-full
-          hostssl all   all   ::/0          cert clientcert=verify-full
+          local    all             {{ superuser }}                     trust
+          hostssl  {{ database }}  {{ ci_role }},{{ operator_role }}  0.0.0.0/0  cert clientcert=verify-full
+          hostssl  {{ database }}  {{ ci_role }},{{ operator_role }}  ::/0       cert clientcert=verify-full
 
+    # Run once, by the image's entrypoint, when it initializes an empty data
+    # directory: as the superuser, connected to {{ database }}.
     - path: /etc/kluster/initdb/00-roles.sql
       mode: 0644
       contents:
         inline: |
-          -- Roles are certificate subjects, so they carry no passwords. The
-          -- image creates {{ ci_role }} and the database; this adds the
-          -- operator and the mapping the CN-based auth expects.
-          CREATE ROLE {{ operator_role }} LOGIN SUPERUSER;
+          -- The client roles are certificate subjects, so they carry no
+          -- passwords, and neither is a superuser: what they hold is what
+          -- Pulumi's Postgres backend needs and nothing else
+          -- (docs/physical/state-backend.md §2).
+          --
+          -- That is ownership of its table, not only rows in it. Every time
+          -- the backend opens, it runs `CREATE TABLE IF NOT EXISTS` and
+          -- `CREATE INDEX IF NOT EXISTS`, and Postgres checks CREATE on the
+          -- schema, and ownership of the table, before it looks for either
+          -- object: a role that can only read and write rows is refused on
+          -- its first command. So the table belongs to {{ owner }}, both
+          -- client roles are its members, and every session either opens acts
+          -- as it -- which is what makes the table the backend creates at
+          -- first use, and everything a restore loads, belong to the owner,
+          -- whichever client got there first.
+          CREATE ROLE {{ owner }} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE;
+          CREATE ROLE {{ ci_role }} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE IN ROLE {{ owner }};
+          CREATE ROLE {{ operator_role }} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE IN ROLE {{ owner }};
+          ALTER ROLE {{ ci_role }} IN DATABASE {{ database }} SET role = {{ owner }};
+          ALTER ROLE {{ operator_role }} IN DATABASE {{ database }} SET role = {{ owner }};
+          REVOKE ALL ON DATABASE {{ database }} FROM PUBLIC;
+          GRANT CONNECT ON DATABASE {{ database }} TO {{ owner }};
+          GRANT USAGE, CREATE ON SCHEMA public TO {{ owner }};
 
     # --- Backup pipeline ---------------------------------------------------
     - path: /etc/kluster/age-recipients.txt
@@ -125,12 +162,14 @@ storage:
           {{ recipient }}
 {%- endfor %}
 
+    # The dump reaches Postgres through `podman exec`, over the local socket,
+    # so the role it connects as is the one pg_hba admits there.
     - path: /etc/kluster/state-dump.env
       mode: 0600
       contents:
         inline: |
           PG_DATABASE={{ database }}
-          PG_ROLE={{ ci_role }}
+          PG_ROLE={{ superuser }}
           B2_KEY_ID={{ b2_dump_key_id }}
           B2_KEY={{ b2_dump_key }}
           B2_BUCKET_ID={{ b2_bucket_id }}
@@ -166,6 +205,10 @@ systemd:
     # Postgres, pinned to a major line; podman-auto-update follows the minor
     # stream, safe for the same reason the OS stream is — nothing here
     # outlives pg_dump plus a re-provision.
+    #
+    # `POSTGRES_HOST_AUTH_METHOD=trust` is what lets the image initialize a
+    # superuser that has no password. The pg_hba.conf it writes into the data
+    # directory to match is never read: `hba_file` names the one above.
     - name: pgstate.service
       enabled: true
       contents: |
@@ -183,7 +226,7 @@ systemd:
           --publish 5432:5432 \
           --shm-size 128m \
           --env POSTGRES_DB={{ database }} \
-          --env POSTGRES_USER={{ ci_role }} \
+          --env POSTGRES_USER={{ superuser }} \
           --env POSTGRES_HOST_AUTH_METHOD=trust \
           --volume /var/lib/pgstate:/var/lib/postgresql/data:Z \
           --volume /etc/kluster/pki:/pki:ro,Z \
