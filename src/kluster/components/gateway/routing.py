@@ -208,7 +208,7 @@ class RoutingSession:
     """
 
     neighbour: IPv4Address
-    password: pulumi.Input[str] = field(repr=False)
+    password: pulumi.Input[str] = field(repr=False, compare=False)
 
 
 @final
@@ -225,7 +225,7 @@ class _FrrParams:
     cluster: str
     peer: str
     peer_description: str
-    password: str = field(repr=False)
+    password: str = field(repr=False, compare=False)
     local_asn: int
     peer_asn: int
     pool_v4: IPv4Network

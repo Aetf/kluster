@@ -356,8 +356,8 @@ class Context:
     runner: pulumi_config.Runner = pulumi_config.run_pulumi
     #: How a manual row asks. `getpass`, so a typed value never echoes.
     ask: Callable[[str], str] = getpass.getpass
-    _vault: escrow.Vault | None = field(default=None, init=False, repr=False)
-    _environment: pulumi_config.BackendEnvironment | None = field(default=None, init=False, repr=False)
+    _vault: escrow.Vault | None = field(default=None, init=False, repr=False, compare=False)
+    _environment: pulumi_config.BackendEnvironment | None = field(default=None, init=False, repr=False, compare=False)
 
     @property
     def vault(self) -> escrow.Vault:

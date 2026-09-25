@@ -960,7 +960,7 @@ class Vault:
     """
 
     registry: Registry
-    identity: str = field(repr=False)
+    identity: str = field(repr=False, compare=False)
 
     @classmethod
     def open(cls, kit: KdbxStore, registry: Registry | None = None, *, entry: str = RECOVERY_ENTRY) -> Vault:

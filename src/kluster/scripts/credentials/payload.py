@@ -71,7 +71,7 @@ class Payload:
     #: The answer as it arrived, which for a mint includes the credential the
     #: provider discloses once. Kept out of the repr for that reason; `where`
     #: still prints, and is what a refusal is read by.
-    fields: dict[str, object] = field(repr=False)
+    fields: dict[str, object] = field(repr=False, compare=False)
 
     @classmethod
     def of(cls, answer: object, where: str) -> Payload:

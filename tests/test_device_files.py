@@ -415,13 +415,16 @@ def test_a_created_file_opens_the_session_with_the_configured_credential(device:
     """The address and the pin are declared; the key that answers them is not.
 
     It comes from `configure`, so no property bag carries it and no caller could
-    have passed a different one.
+    have passed a different one. The key is read off the device rather than
+    compared with it: a device's equality leaves the key out, so that a failed
+    assertion between two of them cannot print it.
     """
     _ = file_provider().create(file_props())
 
     assert device.devices == [
         ssh.Device(host=HOST, username='root', private_key=PRIVATE_KEY, host_key=HOST_KEY, port=22)
     ]
+    assert all(opened.private_key == PRIVATE_KEY for opened in device.devices), 'not the configured key'
     assert 'private_key' not in file_props()
 
 

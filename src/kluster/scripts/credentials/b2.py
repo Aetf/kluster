@@ -243,7 +243,7 @@ class AppKey:
     """
 
     key_id: str
-    key: str = field(repr=False)
+    key: str = field(repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -413,7 +413,7 @@ class Session:
 
     account_id: str
     api_url: str
-    token: str = field(repr=False)
+    token: str = field(repr=False, compare=False)
 
     @classmethod
     def authorize(cls, key_id: str, key: str) -> Session:

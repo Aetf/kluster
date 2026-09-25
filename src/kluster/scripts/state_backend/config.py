@@ -228,7 +228,7 @@ class ClientBundle:
     address: str
     ca_cert: bytes
     cert: bytes
-    key: bytes = field(repr=False)
+    key: bytes = field(repr=False, compare=False)
 
     def url(self) -> str:
         """The connection string: everything about the backend, nothing about this machine.
@@ -286,7 +286,8 @@ class Digested(enum.Enum):
     (`digests`), and some fields cannot be compared as their value: the
     certificates are re-issued on every render, and the secrets must not be
     digested at all. `NEVER` is therefore the enum's name for "this field is a
-    secret", which is why it decides the repr as well as the digest.
+    secret", which is why it decides the repr and the record's equality as
+    well as the digest.
     """
 
     #: The value itself, JSON-encoded. The default, and the safe one.
@@ -307,11 +308,14 @@ def _digested(how: Digested = Digested.VALUE) -> Any:
     leave a rule pointing at nothing — which for a `NEVER` field would mean
     putting a secret's digest into cloud metadata.
 
-    A `NEVER` field is kept out of the repr by the same declaration, so a
-    secret added to this record later is covered by saying the one thing its
-    author has to say anyway rather than by remembering a second annotation.
+    A `NEVER` field is kept out of the repr and out of comparison by the same
+    declaration, so a secret added to this record later is covered by saying
+    the one thing its author has to say anyway rather than by remembering two
+    more annotations. Comparison is the half a failed assertion reads: pytest
+    prints every compared field that differs, repr or no repr.
     """
-    return field(metadata={'digest': how}, repr=how is not Digested.NEVER)
+    secret = how is Digested.NEVER
+    return field(metadata={'digest': how}, repr=not secret, compare=not secret)
 
 
 @dataclass(frozen=True)

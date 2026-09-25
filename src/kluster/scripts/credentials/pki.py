@@ -47,7 +47,7 @@ class Credential:
     The key does not print; the certificate is public and does.
     """
 
-    key_pem: bytes = field(repr=False)
+    key_pem: bytes = field(repr=False, compare=False)
     cert_pem: bytes
 
 
@@ -96,7 +96,7 @@ class Authority:
     this record, and what the field holds is the escrowed private key.
     """
 
-    key: ec.EllipticCurvePrivateKey = field(repr=False)
+    key: ec.EllipticCurvePrivateKey = field(repr=False, compare=False)
 
     @classmethod
     def from_pem(cls, pem: str | bytes) -> Authority:

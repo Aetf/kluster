@@ -241,7 +241,7 @@ class MountedFile:
 
     name: str
     target: str
-    content: pulumi.Input[str] = field(repr=False)
+    content: pulumi.Input[str] = field(repr=False, compare=False)
     secret: bool = False
 
 
@@ -275,7 +275,7 @@ class InitialState:
     #: Where it lands, relative to the service's state directory — and equally
     #: where it is delivered, relative to the machine's initial-state directory.
     into: str
-    content: pulumi.Input[str] = field(repr=False)
+    content: pulumi.Input[str] = field(repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -391,7 +391,7 @@ class CaddyService(BridgedDeclaration):
     the file this renders changes when the census does and at no other time.
     """
 
-    acme_token: pulumi.Input[str] = field(repr=False)
+    acme_token: pulumi.Input[str] = field(repr=False, compare=False)
     vhosts: tuple[conventions.gateway.BridgedService, ...]
     legacy: tuple[conventions.gateway.LegacyVhost, ...]
 
