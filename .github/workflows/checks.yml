@@ -2,7 +2,9 @@ name: checks
 
 # Everything that can be judged without touching the cloud: formatting, lint,
 # types, unit tests, the appliance's pinned digests, and the prose of the
-# markdown a change touches. No secrets, so it runs for forks too.
+# markdown a change touches. The checks read no secret, so they run for forks
+# too; the one job that does -- `alert`, on a red push to `main` -- never runs
+# for a pull request.
 
 on:
   pull_request:
@@ -147,3 +149,15 @@ jobs:
             [ "$rc" -eq 0 ] || status=$rc
           done <<<"$files"
           exit "$status"
+
+  # The alert job (framework/ci.md §3); its playbook is §3.1 there.
+  alert:
+    needs: [checks]
+    if: always() && github.event_name != 'pull_request' && contains(needs.*.result, 'failure')
+    uses: ./.github/workflows/alert.yml
+    with:
+      tier: actionable
+      summary: checks failed on main
+      playbook: docs/framework/ci.md §3.1
+    secrets:
+      dispatch-app-private-key: ${{ secrets.DISPATCH_APP_PRIVATE_KEY }}

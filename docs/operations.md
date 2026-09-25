@@ -178,12 +178,67 @@ the deployment repo carries no scheduled workflows; the two
 in-cluster drills, VolSync spot-restore and the CNPG restore, are
 the exceptions — kube-native scratch-namespace operations driven by
 the cluster itself, so the ops repo never needs a kubeconfig). Each
-automated drill is to be covered by a **freshness alert**
-(the backup-freshness family, cluster-infra.md §3): a drill that
-silently stops running is indistinguishable from a failing one. Until
-the workflows and that alert family exist, a drill that never started
-is indistinguishable from both. The only
+automated drill is to be covered against stopping silently — an
+ops-repo drill by the dead-man below, an in-cluster one by a
+**freshness alert** (the backup-freshness family, cluster-infra.md
+§3) — because a drill that silently stops running is
+indistinguishable from a failing one. Until the workflows, the
+dead-man and that alert family exist, a drill that never started is
+indistinguishable from both. The only
 calendar ritual left is the yearly offline-day issue.
+
+**The alert contract.** Every ops-repo drill and probe above, and
+every workflow here that fails on `main` (framework/ci.md §3 names
+any it still excuses), reports through the dispatch intake
+(architecture.md §4.3); the in-cluster drills report through
+alertmanager, outside this contract. What every side of the intake
+agrees on is fixed here, and it is the contract the Home Assistant
+side is built against:
+
+-   **The event.** One `repository_dispatch` into the ops repo, whose
+    event type, tiers and payload fields are the census
+    `kluster.conventions.alert`, which says what each field holds.
+    A source is `<repo>/<workflow>`, the workflow named by its file
+    name without the suffix. CI sends the event through its producer,
+    `alert.yml` (ci.md §3); the ops repo's own workflows are to send
+    the same event with their own token, so there is one intake and
+    one payload.
+-   **The handler's post to Home Assistant.** The ops repo's dispatch
+    handler opens or comments the `actionable` issue — one open issue
+    per `key`, labeled `alert`, assigned to the operator — and then
+    POSTs `{tier, source, summary, playbook, run, issue, push}` to the
+    webhook in its `HA_WEBHOOK_URL` secret. `push` is true for
+    `notify`, true for `actionable` when the issue is new or the issue
+    step failed, and false for a repeat and for `heartbeat`. A failed
+    POST is escalated to an issue of its own.
+-   **Home Assistant's side.** One intake automation, a webhook
+    trigger that accepts `POST` from the internet, with two branches
+    on the body: restart the source's timer when the source has one,
+    and, when `push` is true, a phone notification titled
+    `[<tier>] <source>: <summary>` whose message is the playbook and
+    whose tap target is the issue, or the run where there is none. The
+    webhook id is the whole of Home Assistant's credential; it holds
+    no GitHub token. The legacy deploy-failure automation beside it
+    is kluster-code's and keeps its own id until that repository's
+    cutover; this repository's `deploy.yml` posts to it too until it
+    calls the producer.
+-   **The dead-man.** Every scheduled ops-repo workflow is watched by a
+    Home Assistant timer, `timer.kluster_ops_<workflow>` (the
+    workflow's file name without the suffix, hyphens as underscores),
+    whose duration is `conventions.backup.max_age` of
+    the workflow's cadence and which survives a restart; every post
+    from `kluster-ops/<workflow>` restarts it, whatever its tier, and
+    its expiry pushes "no check-in from kluster-ops/<workflow>". Its
+    playbook is that workflow's Actions page: disabled
+    (`gh workflow enable`), a run that never started (fire it by
+    hand), or a green run whose post landed on a webhook id nothing
+    is registered under (`credentials derived sync --only
+    haos-webhook`).
+
+What is built of it is the census and CI's producer. The handler, the
+ops repo's own intake, and the Home Assistant automation and timers
+are not: until the handler exists, a dispatch is accepted and starts
+nothing, and a CI alert is a red run and nothing more.
 
 ## 5. Playbook index
 
@@ -198,7 +253,8 @@ Owning docs keep the content — the index only locates it.
 | Node replacement (CP node, worker VM, block volume and VIP extras) | §3 here |
 | Upgrades (Talos serial, Cilium canary) | §2 here |
 | Backup restores (CNPG, VolSync, etcd) | storage.md §5; the drills are §4 here |
-| Alert-channel failure (HA push down → meta-alert; GitHub leg down) | architecture.md §4.3 |
+| Alert-channel failure (HA push down → meta-alert; GitHub leg down; a scheduled ops-repo workflow that stopped checking in) | architecture.md §4.3; the contract and the dead-man are §4 here |
+| CI alerts (a red `checks` or `images` run; a drift diff) | framework/ci.md §3.1 and §3.2 |
 
 vmalert rule families adopt this index as they are ported: an alert
 that cannot point at a row (or at its owner doc's census) does not

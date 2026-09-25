@@ -353,7 +353,7 @@ def test_each_label_a_workflow_branches_on_is_a_declared_resource(stack: Forge) 
     # census on both sides: a census that lost its labels would leave the
     # comparison `set() == set()` and the loop body unentered, and the whole
     # case would pass having asserted nothing (ops#184).
-    assert set(labels) == {'kluster-expect-changes'}
+    assert set(labels) == {'kluster-expect-changes', 'kluster-ops-alert'}
     assert set(labels) == {
         f'{repository.name}-{label.name}'
         for repository in conventions.forge.REPOSITORIES

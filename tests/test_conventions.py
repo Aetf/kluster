@@ -42,6 +42,7 @@ from kluster import conventions
 from kluster.conventions import backup
 from kluster.components.dns.base import overlay_records
 from kluster.scripts.credentials import pulumi_config
+from test_docs_sections import prose, sections
 
 # --------------------------------------------------------------------------
 # The site, zone, gateway and cloud censuses.
@@ -900,6 +901,420 @@ def test_the_stack_encrypted_apart_is_the_one_the_forge_program_declares() -> No
     from kluster.stacks import github
 
     assert set(pulumi_config.APART) == {github.STACK}
+
+
+# --------------------------------------------------------------------------
+# The alert payload and its producer.
+# --------------------------------------------------------------------------
+# `conventions.alert` is the payload every alert travels as, and nothing in
+# this tree reads it at run time: the writer is `alert.yml`, a workflow no
+# import reaches, and the reader is the ops repository's dispatch handler,
+# which nothing here can see. So what holds the convention on this side is the
+# cases below -- the producer's event type, inputs and payload keys against the
+# census, every workflow that runs on `main` against the rule for calling it,
+# and the credential it mints with against the register's map and the forge.
+
+#: The reusable workflow every alert in CI goes through, as a caller's
+#: `uses:` names it.
+PRODUCER = GITHUB / 'workflows' / 'alert.yml'
+PRODUCER_USES = './.github/workflows/alert.yml'
+
+#: The triggers that do **not** run a workflow on `main` outside a pull
+#: request: a pull request's own, and being called by another workflow -- a
+#: called workflow runs as a job of its caller, whose `alert` sees its failure,
+#: and the producer is one. Every other trigger does -- `push` and
+#: `workflow_dispatch` today, and `repository_dispatch`, `workflow_run`,
+#: `release` or `merge_group` the day one is added -- so the rule is read as
+#: the complement of this set rather than as a list of the ones that count.
+NOT_ON_MAIN = frozenset({'pull_request', 'workflow_call'})
+
+#: The one condition every `alert` job is written with (framework/ci.md §3):
+#: after every needed job, whatever its result; never for a pull request; and
+#: only when one of them failed. Compared whole, whitespace folded, because a
+#: condition that merely contains these words can mean their opposite --
+#: `!contains(...)`, or `always() || ...`.
+ALERT_CONDITION = "always() && github.event_name != 'pull_request' && contains(needs.*.result, 'failure')"
+
+#: The workflows that run on `main` and do not end in the alert job yet, each
+#: with the reason. An entry is removed by the change that converts its
+#: workflow, and the case below goes red if an entry outlives its reason in
+#: either direction: a workflow that no longer runs on `main`, or one that
+#: already calls the producer.
+NOT_YET_CALLING = {
+    'deploy.yml': (
+        'keeps its `notify-failure` job, which posts to Home Assistant directly, until the ops '
+        "repository's dispatch handler is there to receive the producer's dispatch"
+    ),
+}
+
+#: How the producer names the event it posts, and how it names the target of
+#: the post: `event_type:` inside the payload `jq` builds, and the
+#: `repos/<owner>/<name>/dispatches` endpoint.
+EVENT_TYPE_IN_A_PAYLOAD = re.compile(r'\bevent_type:\s*["\']?([A-Za-z0-9_.-]+)')
+DISPATCH_TARGET = re.compile(r'repos/\$\w+/([A-Za-z0-9_.-]+)/dispatches')
+#: The payload object `jq` builds, and each entry of it as a key and the
+#: `jq` variable it takes its value from.
+CLIENT_PAYLOAD = re.compile(r'client_payload:\s*\{(.*?)\}', re.DOTALL)
+PAYLOAD_ENTRY = re.compile(r'\b(\w+):\s*\$(\w+)')
+#: How the producer's step binds a `jq` variable to a shell variable
+#: (`--arg tier "$TIER"`, `--arg key "${KEY:-$source}"`), and how its `env:`
+#: fills a shell variable from an input (`TIER: ${{ inputs.tier }}`).
+JQ_ARGUMENT = re.compile(r'--arg (\w+) "\$\{?(\w+)')
+INPUT_IN_ENV = re.compile(r'^\$\{\{\s*inputs\.(\w+)\s*\}\}$')
+#: GitHub's cap on the top-level properties of a dispatch's client payload
+#: (REST API, "Create a repository dispatch event": `client_payload` takes at
+#: most 10). A payload over it is refused outright.
+CLIENT_PAYLOAD_PROPERTIES_LIMIT = 10
+#: A secret as an expression reads it; the names a reusable workflow declares
+#: may carry hyphens, which repository secret names cannot.
+SECRET_IN_AN_EXPRESSION = re.compile(r'\bsecrets\.([A-Za-z0-9_-]+)')
+#: A repository variable as the mint's `client-id` reads it, whole.
+CLIENT_ID_VARIABLE = re.compile(r'^\$\{\{\s*vars\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}$')
+#: A playbook reference: a document of this repository and a numbered section.
+PLAYBOOK_REFERENCE = re.compile(r'^(docs/[\w./-]+\.md) §(\d+(?:\.\d+)*)$')
+#: The permissions a mint asks for, as `actions/create-github-app-token`
+#: spells them: one input per permission, and none at all means every
+#: permission the installation has.
+PERMISSION_INPUT = 'permission-'
+
+
+def _mapping(value: object, what: str) -> dict[str, object]:
+    assert isinstance(value, dict), f'{what} is not a mapping'
+    return cast('dict[str, object]', value)
+
+
+def _workflow(path: Path) -> dict[str, object]:
+    return _mapping(yaml.safe_load(path.read_text()), _name(path))
+
+
+def _on(workflow: dict[str, object]) -> object:
+    keyed = cast('dict[object, object]', workflow)
+    return keyed.get('on', keyed.get(True))
+
+
+def _triggers(workflow: dict[str, object]) -> set[str]:
+    """The events a workflow runs on, in any of the three shapes `on:` takes.
+
+    YAML 1.1 reads a bare `on` key as the boolean `true`, which is how PyYAML
+    hands it back, so a read under the string alone finds no trigger in any
+    workflow here.
+    """
+    on = _on(workflow)
+    if isinstance(on, str):
+        return {on}
+    if isinstance(on, list):
+        return {str(event) for event in cast('list[object]', on)}
+    return {str(event) for event in _mapping(on, 'on:')}
+
+
+def _jobs(workflow: dict[str, object], what: str) -> dict[str, dict[str, object]]:
+    jobs = _mapping(workflow.get('jobs'), f'{what} jobs:')
+    return {name: _mapping(job, f'{what} job {name}') for name, job in jobs.items()}
+
+
+def _needs(job: dict[str, object]) -> set[str]:
+    needs = job.get('needs', [])
+    return {needs} if isinstance(needs, str) else {str(need) for need in cast('list[object]', needs)}
+
+
+def _workflows_running_on_main() -> dict[str, dict[str, object]]:
+    return {
+        path.name: workflow
+        for path in _workflows_and_actions()
+        if path.parent.name == 'workflows' and _triggers(workflow := _workflow(path)) - NOT_ON_MAIN
+    }
+
+
+def _producer_callers() -> dict[str, dict[str, object]]:
+    """Every job in every workflow that calls the producer, as `<file>: <job>`."""
+    return {
+        f'{path.name}: {name}': job
+        for path in _workflows_and_actions()
+        if path.parent.name == 'workflows'
+        for name, job in _jobs(_workflow(path), path.name).items()
+        if job.get('uses') == PRODUCER_USES
+    }
+
+
+def _producer_step(uses: str | None) -> dict[str, object]:
+    """The producer's one step whose `uses:` starts with `uses`, or its one `run:` step for `None`."""
+    steps = [
+        _mapping(step, 'a step')
+        for step in cast('list[object]', _jobs(_workflow(PRODUCER), 'alert.yml')['dispatch'].get('steps'))
+    ]
+    found = [
+        step
+        for step in steps
+        if (uses is None and 'run' in step) or (uses is not None and str(step.get('uses', '')).startswith(uses))
+    ]
+    assert len(found) == 1, f'the producer has {len(found)} steps of that kind'
+    return found[0]
+
+
+def _producer_call() -> dict[str, object]:
+    """The producer's `on.workflow_call`: the inputs and the secrets it declares."""
+    return _mapping(_mapping(_on(_workflow(PRODUCER)), 'on:').get('workflow_call'), 'workflow_call')
+
+
+def test_every_workflow_that_runs_on_main_ends_in_the_alert_job() -> None:
+    """A red run on `main` that raises no alert is one nobody hears about.
+
+    Nothing stands between a merge and what runs after it, so a workflow that
+    fails on `main` without calling the producer is silent in the way the
+    alert discipline exists to prevent (cluster/architecture.md §4.3). The
+    rule is written as a definition -- every workflow with a trigger other
+    than `pull_request` and `workflow_call`, since a called workflow runs as a
+    job of its caller, whose `alert` sees its failure -- so a workflow added
+    later is held to it without anyone remembering to list it. Each such workflow ends in a job named
+    `alert` that calls the producer, needs every other job of the workflow (a
+    job it does not need is one whose failure it cannot see), and carries the
+    one condition every caller writes, which stands it down for a pull request
+    because a fork's run holds no secret to mint with and a pull request's
+    failure is already on it.
+    """
+    running_on_main = _workflows_running_on_main()
+
+    # A trigger read that stopped matching would empty the set and pass the
+    # loop below on nothing. `drift` is in it by its one trigger,
+    # `workflow_dispatch`, which a read of `push` alone would miss.
+    assert 'drift.yml' in running_on_main
+    for name, reason in NOT_YET_CALLING.items():
+        assert name in running_on_main, f'{name} is excused from the alert job but does not run on main: {reason}'
+        calling = [job for job in _jobs(running_on_main[name], name).values() if job.get('uses') == PRODUCER_USES]
+        assert not calling, f'{name} calls the producer; drop its excuse'
+
+    findings: list[str] = []
+    for name, workflow in sorted(running_on_main.items()):
+        if name in NOT_YET_CALLING:
+            continue
+        jobs = _jobs(workflow, name)
+        alert = jobs.get('alert')
+        if alert is None:
+            findings.append(f'{name} has no `alert` job')
+            continue
+        if alert.get('uses') != PRODUCER_USES:
+            findings.append(f'{name}: `alert` does not use {PRODUCER_USES}')
+        if (missing := set(jobs) - {'alert'} - _needs(alert)) or _needs(alert) - set(jobs):
+            findings.append(
+                f'{name}: `alert` needs {sorted(_needs(alert))}, not every other job (missing {sorted(missing)})'
+            )
+        condition = ' '.join(str(alert.get('if', '')).split())
+        if condition != ALERT_CONDITION:
+            findings.append(f'{name}: `alert` is conditioned {condition!r}, not {ALERT_CONDITION!r}')
+
+    assert findings == [], findings
+
+
+def test_the_event_type_is_spelled_once() -> None:
+    """The producer posts the census's event type, and nothing else under `.github/` posts one.
+
+    A dispatch whose event type the handler does not filter for is accepted
+    with a `204` and starts nothing, so a producer that drifted from the
+    census is silent at exactly the moment it was meant to speak. The second
+    half keeps the producer the one place a dispatch is made: a second caller
+    of the endpoint would be a second spelling nothing here holds.
+    """
+    from kluster.conventions import alert
+
+    assert EVENT_TYPE_IN_A_PAYLOAD.findall(PRODUCER.read_text()) == [alert.EVENT]
+    elsewhere = sorted(
+        str(path.relative_to(GITHUB))
+        for path in GITHUB.rglob('*')
+        if path.is_file() and path != PRODUCER and re.search(r'dispatches|event_type', path.read_text())
+    )
+    assert elsewhere == [], f'a dispatch is spelled outside the producer: {elsewhere}'
+
+
+def test_the_producer_takes_every_field_but_the_computed_ones_and_sends_them_all() -> None:
+    """The payload the producer builds carries exactly the census's fields, each from its own input.
+
+    A caller passes what only it knows -- the tier, the summary, the
+    playbook, a key, details -- and the producer fills in the rest from the
+    run. An input the census does not carry is a field the handler never
+    reads; a field the payload drops is one the handler reads as missing,
+    and for `tier`, `key` or `summary` that is a malformed alert. The keys
+    alone are not enough: a payload whose `tier` carries the summary has the
+    right keys and is malformed all the same, so each field is followed from
+    the input through `env:` and `jq`'s `--arg` to the payload entry.
+    """
+    from kluster.conventions import alert
+
+    assert set(alert.COMPUTED) <= set(alert.FIELDS)
+    assert len(alert.FIELDS) <= CLIENT_PAYLOAD_PROPERTIES_LIMIT
+    inputs = _mapping(_producer_call().get('inputs'), 'workflow_call inputs')
+    assert set(inputs) == set(alert.FIELDS) - set(alert.COMPUTED)
+
+    step = _producer_step(None)
+    script = str(step['run'])
+    payload = CLIENT_PAYLOAD.search(script)
+    assert payload is not None, 'the producer builds no client_payload'
+    entries = PAYLOAD_ENTRY.findall(payload.group(1))
+    assert sorted(key for key, _ in entries) == sorted(alert.FIELDS), entries
+    crossed = [f'{key}: ${variable}' for key, variable in entries if key != variable]
+    assert crossed == [], f"a payload entry takes another field's value: {crossed}"
+
+    arguments = dict(JQ_ARGUMENT.findall(script))
+    env = _mapping(step.get('env'), 'the step env:')
+    unbound: list[str] = []
+    for field in sorted(inputs):
+        shell = arguments.get(field)
+        filled = INPUT_IN_ENV.match(str(env.get(field.upper(), '')))
+        if shell != field.upper() or filled is None or filled.group(1) != field:
+            unbound.append(f'{field}: --arg from ${shell}, env {field.upper()} from {env.get(field.upper())!r}')
+    assert unbound == [], unbound
+
+
+def test_every_tier_a_caller_passes_is_one_the_census_names() -> None:
+    """A tier outside the census is an alert the handler refuses as malformed.
+
+    It is still delivered -- as an issue about the producer -- but not as the
+    alert it was meant to be, and a spelling like `warning` reads as a
+    perfectly good tier to whoever wrote it.
+    """
+    from kluster.conventions import alert
+
+    callers = _producer_callers()
+
+    assert 'drift.yml: alert' in callers
+    passed = {name: _mapping(job.get('with'), f'{name} with:').get('tier') for name, job in callers.items()}
+    unknown = sorted(f'{name} passes {tier!r}' for name, tier in passed.items() if tier not in set(alert.Tier))
+    assert unknown == [], unknown
+
+
+def test_every_playbook_a_caller_passes_is_a_section_that_exists() -> None:
+    """An alert whose playbook does not resolve is an alert shipped without one.
+
+    The discipline is that no alert ships without its written procedure
+    (cluster/architecture.md §4.3), and the handler renders the reference as a
+    link into this repository: a file that moved or a section renumbered is a
+    link to nothing at the moment somebody needs it.
+    """
+    callers = _producer_callers()
+
+    assert 'drift.yml: alert' in callers
+    dangling: list[str] = []
+    for name, job in sorted(callers.items()):
+        playbook = str(_mapping(job.get('with'), f'{name} with:').get('playbook'))
+        reference = PLAYBOOK_REFERENCE.match(playbook)
+        if reference is None:
+            dangling.append(f'{name}: {playbook!r} is not `docs/<file>.md §N`')
+            continue
+        document = ROOT / reference.group(1)
+        if not document.is_file() or reference.group(2) not in sections(prose(document.read_text())):
+            dangling.append(f'{name}: {playbook} is no section of this repository')
+    assert dangling == [], dangling
+
+
+def test_the_secret_the_producer_is_handed_is_the_one_the_map_fills() -> None:
+    """Every caller hands the producer the dispatch App's key, from where the register puts it.
+
+    The name is a contract between the workflows and the `credentials` slot
+    map, and a rename on either side is a mint that fails on an empty key at
+    the first alert. Where the map puts it matters as much as what it calls
+    it: a repository secret of this repository, because the alert job belongs
+    to no stack and names no Environment, and an Environment secret is
+    invisible to a job that does not.
+    """
+    from kluster.scripts.credentials import slots
+    from kluster.scripts.credentials.github_secrets import Slot
+
+    declared = set(_mapping(_producer_call().get('secrets'), 'workflow_call secrets'))
+    assert declared, 'the producer declares no secret'
+    assert set(SECRET_IN_AN_EXPRESSION.findall(PRODUCER.read_text())) == declared
+
+    callers = _producer_callers()
+    assert 'drift.yml: alert' in callers
+    handed: set[str] = set()
+    for name, job in callers.items():
+        secrets = _mapping(job.get('secrets'), f'{name} secrets:')
+        assert set(secrets) == declared, f'{name} hands {sorted(secrets)}, the producer declares {sorted(declared)}'
+        handed |= {found for value in secrets.values() for found in SECRET_IN_AN_EXPRESSION.findall(str(value))}
+    assert handed == {slots.DISPATCH_APP_KEY}
+
+    filled = [
+        target
+        for row in slots.ROWS.values()
+        for target in row.targets
+        if isinstance(target, Slot) and target.name == slots.DISPATCH_APP_KEY
+    ]
+    assert filled == [Slot(repository=conventions.forge.DEPLOYMENT.full_name, name=slots.DISPATCH_APP_KEY)]
+
+
+def test_the_producer_mints_for_the_ops_repository_with_an_app_installed_there() -> None:
+    """The client id the producer reads names an App the target repository carries.
+
+    `actions/create-github-app-token` resolves the App's installation on the
+    repositories it is asked for, so a client id whose App is not installed on
+    the ops repository is a mint that fails at the first alert. The variable
+    is this repository's (the workflow runs here), and the installation that
+    matters is the ops repository's (the dispatch lands there): two rows of
+    the forge, which is why the relation between them is held here rather than
+    by `test_an_apps_client_id_is_a_variable_only_where_the_app_is_installed`,
+    which holds one row. The endpoint the dispatch goes to is the same
+    repository, spelled in the workflow, and held to the forge too.
+    """
+    mint = _mapping(_producer_step('actions/create-github-app-token@').get('with'), 'the mint')
+
+    variable = CLIENT_ID_VARIABLE.match(str(mint.get('client-id')))
+    assert variable is not None, 'the client id is not read from a repository variable'
+    values = {declared.name: declared.value for declared in conventions.forge.DEPLOYMENT.variables}
+    assert variable.group(1) in values, (
+        f'{variable.group(1)} is declared for {conventions.forge.DEPLOYMENT.name} nowhere'
+    )
+    client_ids = {app.client_id for app in conventions.forge.OPS.apps}
+    assert values[variable.group(1)] in client_ids, (
+        'the App the producer mints as is not installed on the ops repository'
+    )
+
+    assert mint.get('repositories') == conventions.forge.OPS.name
+    assert DISPATCH_TARGET.findall(PRODUCER.read_text()) == [conventions.forge.OPS.name]
+
+    # What a `repository_dispatch` costs, and nothing else. An absent
+    # permission input is not a narrower token but the widest one: the mint
+    # then asks for every permission the installation has.
+    permissions = {str(key): value for key, value in mint.items() if str(key).startswith(PERMISSION_INPUT)}
+    assert permissions == {f'{PERMISSION_INPUT}contents': 'write'}, permissions
+
+
+def test_every_caller_is_named_for_its_file() -> None:
+    """A caller's `name:` is its file name without the suffix, because that is what the alert's source says.
+
+    The producer reads the workflow's name from the run, not its file, so the
+    `source` -- and with it the default deduplication key -- is whatever the
+    caller's `name:` says (`conventions.alert`). One that drifts from the file
+    is an alert whose source names no workflow anybody can find, and a rename
+    of the `name:` alone is a new key: the open issue for the old one is never
+    commented again.
+    """
+    callers = {name.split(': ')[0] for name in _producer_callers()}
+
+    assert 'drift.yml' in callers
+    misnamed = sorted(
+        f'{file} is named {_workflow(GITHUB / "workflows" / file).get("name")!r}'
+        for file in callers
+        if _workflow(GITHUB / 'workflows' / file).get('name') != Path(file).stem
+    )
+    assert misnamed == [], misnamed
+
+
+def test_the_alert_label_is_declared_and_on_no_public_repository() -> None:
+    """The label the dispatch handler finds an alert's open issue by is declared, and only where the issues live.
+
+    The handler lists open issues by this label to find the one an alert's
+    `key` already has, and opens a new one carrying it (operations.md §4).
+    Nothing in this tree reads the label -- the handler is a workflow in the
+    ops repository -- so the census entry is the only thing that makes the
+    `github` stack declare it; a label the handler lists by and nothing
+    declares is an empty list, and every repeat of an alert opens a second
+    issue. It sits on the ops repository and on no public one, because alert
+    issues never live in a public tracker (cluster/architecture.md §4.3).
+    """
+    carrying = [
+        repository for repository in conventions.forge.REPOSITORIES if conventions.forge.ALERT in repository.labels
+    ]
+
+    assert carrying, 'no repository declares the alert label'
+    assert [repository.name for repository in carrying if repository.public] == []
 
 
 # --------------------------------------------------------------------------

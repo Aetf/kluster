@@ -145,9 +145,12 @@ Job names below are the ones the checks tab shows.
 ```
 PR      checks.yml:         checks
 push                          (AGENTS.md's gate as CI runs it, without
-                               the cloud; one job, so that `checks` is the
-                               one required context it reports (§5) — the
-                               step list is the workflow's own)
+                               the cloud; the gate is one job, so that
+                               `checks` is the one required context it
+                               reports (§5) — the step list is the
+                               workflow's own; the `alert` job beside it
+                               runs only on a push)
+                            ──failed on a push──→ alert
 
 PR      preview.yml:        changes ─→ preview (dns | k8s-base | apps)
                               (parallel, report-only; all three or none —
@@ -176,6 +179,12 @@ merge   deploy.yml:         plan-physical ──zero diff──→ (up-physical 
 
 weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
                               (workflow_dispatch only, fired from the ops repo)
+                            any entry failed ──→ alert
+
+        alert.yml:          dispatch
+                              (called, never triggered: it is the `alert`
+                               job above, and images.yml's, which §4
+                               covers — see the alert-producer bullet)
 ```
 
 -   **The prose gate is what makes `checks` long, and one file per
@@ -336,8 +345,8 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     dispatch App's permission set is `contents: write` and nothing else,
     an installation adds repositories and no permissions, and
     `repositories:` scopes each run's token to the one repository that
-    run pushes to — this one here, and the ops repository alone once the
-    alert producer mints its own. The trigger App keeps `actions: write` alone, so the
+    run pushes to — this one here, and the ops repository alone in the
+    alert producer's mint. The trigger App keeps `actions: write` alone, so the
     partition stands: one App starts runs and never pushes code, the
     other pushes code and never starts a run by itself. The residual is
     the key's placement: the dispatch App's key is a repository secret
@@ -370,14 +379,58 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     raise a phone notification.
 
     This is an interim shape, not the designed one. The design has CI
-    hold no Home Assistant credential at all: one shared producer step
-    posts a `repository_dispatch` to the ops repo, which owns tier
-    semantics, payload formatting, deduplication and the GitHub-issue
-    leg (cluster/architecture.md §4.3). That producer step is **not
-    built**; the dispatch App whose token it would use already pushes
-    for `sdk-regenerate.yml` (above), and its key sits where the step
-    will read it. When the step is, this job becomes the dispatch call
-    and the webhook secret leaves the repository.
+    hold no Home Assistant credential at all: the shared producer posts
+    a `repository_dispatch` to the ops repo, which owns tier semantics,
+    payload formatting, deduplication and the GitHub-issue leg
+    (cluster/architecture.md §4.3). The producer is built and every
+    other workflow that runs on `main` calls it (the alert-producer
+    bullet below); `deploy.yml` is the one that does not yet, because
+    its alert is the one that reaches a phone today and the ops repo's
+    dispatch handler that would deliver the producer's is not built.
+    When the handler is, this job becomes the `alert` job every other
+    workflow ends in, and the webhook secret leaves the repository.
+-   **Every workflow that runs on `main` ends in the alert job, and
+    the job is one reusable workflow, `alert.yml`.** The rule is a
+    definition rather than a list: a workflow with any trigger other
+    than `pull_request` and `workflow_call` — today `push` and
+    `workflow_dispatch`, `schedule` being ruled out below; a called
+    workflow runs as a job of its caller, whose `alert` sees its
+    failure — ends in a job named `alert` that
+    `needs:` every other job of the workflow, is conditioned
+    `always() && github.event_name != 'pull_request' &&
+    contains(needs.*.result, 'failure')`, and `uses:` the producer.
+    The pull-request guard is load-bearing: a fork's run holds no
+    secret to mint with, and a pull request's failure is already on the
+    pull request. Today that is `checks.yml` on its `push` runs,
+    `images.yml` on its `push` and dispatched runs, and `drift.yml`,
+    with `deploy.yml` the one exception
+    (the bullet above); a test in `checks` holds every workflow the
+    definition reaches to it and names that exception, so a workflow
+    added later that runs on `main` is red until it alerts. The
+    producer mints an installation token of the dispatch App for the
+    ops repository alone — `contents: write`, which is what a
+    `repository_dispatch` costs and the whole of what the App carries —
+    from the `DISPATCH_APP_PRIVATE_KEY` repository secret each caller
+    hands it and the client id in the `DISPATCH_APP_CLIENT_ID`
+    repository variable, and posts one dispatch of the payload
+    `conventions/alert.py` spells (operations.md §4). A missing
+    key fails the mint by name, and the alert job goes red rather
+    than passing with a warning. **The receiver is not built**: until
+    the ops repo's dispatch handler exists, a dispatch is accepted
+    with a `204` and starts nothing, so an alert today is a red run in
+    this repository's Actions tab and a green `alert` job beside it.
+    Every alert these callers raise is `actionable`, keyed by its
+    workflow, and names its playbook: §3.1 for `checks` and `images`,
+    §3.2 for `drift`.
+-   **§3.1 A `checks` or `images` alert is fixed forward.** Read the
+    run. A `checks` failure on `main` is a merged change the gate now
+    refuses, or a step that failed on something outside the
+    repository (a tool download, the registry); re-run it for the
+    second, and open a pull request that fixes the tree for the first.
+    An `images` failure leaves a tag missing or half stitched, and no
+    later push notices it, since the selection reads the diff rather
+    than the registry: once the cause is gone, re-run the failed jobs,
+    or dispatch the workflow, which builds every image (§4).
 -   **Version control is `jj`, and nothing here notices**: the forge
     sees git objects, so every workflow, check and merge behaves as it
     would under git — with the one accepted loss that rebase-merge does
@@ -393,28 +446,45 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     App, installed on this repo alone and carrying **Actions: write
     only**, so it can start runs and never push code. Two Apps
     rather than one because GitHub scopes permissions per App
-    (register rows in credentials.md). The playbook a diff calls for
-    is human review, then reconcile reality or deploy — drift here
-    means something changed behind Pulumi's back, the device files
-    and the OCI console being the realistic sources.
-    **How the human learns of it is not built**: the intended route is
-    the same `actionable` alert the producer step raises
-    (architecture.md §4.3), and neither exists, so today a diff is a
-    failed workflow run and nothing more. The workflow has also never
-    run: its trigger lives in the ops repo, behind the trigger App and
-    an Environment layout that is still to be created.
+    (register rows in credentials.md). A diff fails the run, and a
+    failed run ends in the alert job (the alert-producer bullet
+    above): an `actionable` alert keyed `kluster/drift`, whose
+    playbook is §3.2. Keyed by the workflow, a drift that persists is
+    to be one open issue collecting a comment a week rather than a
+    page a week. **How the human learns of it is half built**: the
+    producer posts the alert, and the ops repo's dispatch handler
+    that would turn it into a push and an issue does not exist yet,
+    so today a diff is a failed workflow run and nothing more. The
+    workflow has also never run: its trigger
+    lives in the ops repo, behind the trigger App and an Environment
+    layout that is still to be created.
     `--refresh` is load-bearing for the second source: a plain
     preview diffs code against *cached* state and never queries
     providers, so a console hand-edit leaves code == state and
     reports zero diff — only the device files would surface without it
     (`DeviceFile`, `DeviceDirectory` and `DeviceArtifact` all read the
-    device in `diff`, architecture.md §5.2). Consequence carried
-    consciously: `--refresh` rewrites state to match reality, so a
-    drift run adopts the drift into state and the next deploy's diff is
-    desired-vs-reality — acceptable, because the alert fires first
-    and reconciling is exactly what its playbook demands. This
-    closes the "hand edits never surface" gap that deleting the
-    post-merge preview left open.
+    device in `diff`, architecture.md §5.2). A preview's refresh
+    writes nothing: the refreshed state is compared and discarded, so
+    the same diff fails every weekly run until it is reconciled
+    (§3.2). This closes the "hand edits never surface" gap that
+    deleting the post-merge preview left open.
+-   **§3.2 A drift alert.** The matrix entry that failed names the
+    stack. Its log ends either in `--expect-no-changes` refusing the
+    changes the refreshed preview found — a diff — or in an error
+    before the comparison (the ZeroTier join, the state backend, a
+    provider credential; §5 names those standing today), which is
+    re-run once its cause is gone and is not drift. A diff means
+    something changed behind Pulumi's back, the device files and the
+    OCI console being the realistic sources. Review it by hand, then
+    either change the code to what reality should be and merge it,
+    which deploys it, or put reality back as the code says with
+    `mise x -- pulumi up --refresh --stack <stack>` from the checkout
+    that holds `.credentials/` (the workstation form README.md gives
+    for a preview). `deploy.yml`'s plain `up` does not do the second:
+    the drift run's refresh is a preview's and writes nothing, so
+    state still holds what the last deploy wrote, and only the device
+    resources, whose `diff` reads the device (architecture.md §5.2),
+    are put back without it.
 -   **Enforceable because the repo is public** (2026-08-25). Branch
     protection and rulesets return `403` on a private repository
     under this account's plan, and an Environment's reviewer gate is
@@ -584,8 +654,14 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     trigger** (below), and the unattended
     **drill workflows** (state-backend rebuild, etcd restore-verify
     — operations.md §4) in the ops repo's `drill` Environment.
-    Their failures need no dispatch hop — the delivery logic is
-    local to that repo. Consequences carried consciously: the ops
+    Every run of them is to post to the same intake as CI's — the
+    same event to the same dispatch handler, with that repository's
+    own token since no repository boundary is crossed, an alert when
+    it failed and a `heartbeat` when it passed — and each is to be
+    watched by a dead-man timer on the Home Assistant side, because a
+    scheduled workflow that stops running cannot report its own
+    absence (operations.md §4, which says what of it is built).
+    Consequences carried consciously: the ops
     repo is to hold real credentials (talosconfig, the B2 etcd
     write key, the drill set — register rows in credentials.md,
     pending but for the drill set, whose generator and mint fill
@@ -620,14 +696,15 @@ Upgrades over the legacy workflow, both mandatory now:
     2026-08-25**, after the history scrub that removed the
     kluster-code-era `Pulumi.dev.yaml` ciphertext and encryption salt
     (cluster/security-audit.md L10). The same flip is what makes the
-    branch protection and reviewer gates in §2 possible at all
+    branch protection and reviewer gates in §3 possible at all
     (framework/github.md §2).
 -   **The CNPG images join the CI** — the legacy manual `just docker-*`
     flow retires; heavy builds are exactly what should not depend on a
     workstation. kluster-code's `docker/` retires with the migration
     (old-tracker rule).
 
-As built, `images.yml` is three jobs. **`select-images`** discovers the
+As built, `images.yml` is three jobs and the `alert` job (§3).
+**`select-images`** discovers the
 image set by globbing `docker/*.Containerfile` and narrows it to the
 images whose own files moved — safe in a way the preview path-filter is
 not, because a published tag is a pure function of its `.conf`, so a tag

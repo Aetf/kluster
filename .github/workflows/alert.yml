@@ -1,0 +1,118 @@
+name: alert
+
+# The alert producer (cluster/architecture.md §4.3): one `repository_dispatch`
+# into the ops repository, carrying the payload `conventions/alert.py` spells,
+# and nothing else. CI neither calls Home Assistant nor touches an issue; the
+# ops repository's dispatch handler owns delivery -- the phone push, the issue
+# for an `actionable` alert, deduplication by `key`.
+#
+# **Who calls it is framework/ci.md §3's rule**, not a list, and a test holds
+# every workflow the rule reaches to it and names the ones it still excuses;
+# the same test file holds this file's inputs, event type and payload keys to
+# the census.
+#
+# **A reusable workflow rather than a composite action** because the unit a
+# caller adds is a job -- `needs` on everything, one condition, no runner of
+# its own to repeat -- and a job-level `uses:` is exactly that. Inside a called
+# workflow the `github` context is the caller's, so `github.workflow` and
+# `github.run_id` below name the run that failed, not this one.
+#
+# **The token is the dispatch App's**, minted per run from the
+# `DISPATCH_APP_PRIVATE_KEY` repository secret the caller hands in and the
+# App's client id in the `DISPATCH_APP_CLIENT_ID` repository variable, which
+# the `github` stack declares from `conventions/forge.py` (credentials.md §3).
+# `repository_dispatch` costs `contents: write` on the target -- GitHub offers
+# no narrower permission for it -- so the mint asks for that and nothing else,
+# scoped to the ops repository alone; the action revokes the token when the
+# job ends. A missing key or client id fails the mint by name, and the job is
+# red: a producer that cannot reach the handler is a finding, not a warning.
+#
+# Every input reaches the shell through `env:` and the payload is built by
+# `jq`, never by `${{ }}` inside `run:`, so a summary or a commit subject
+# cannot break out into the shell.
+
+on:
+  workflow_call:
+    inputs:
+      tier:
+        description: One of `conventions.alert.Tier`.
+        type: string
+        required: true
+      summary:
+        description: One static line, authored with the alert.
+        type: string
+        required: true
+      playbook:
+        description: Where the response is written, as `docs/<file>.md §N`.
+        type: string
+        required: true
+      key:
+        description: The deduplication identity; the source when empty.
+        type: string
+        required: false
+        default: ''
+      details:
+        description: Free text for the issue body. Never a secret-bearing value.
+        type: string
+        required: false
+        default: ''
+    secrets:
+      dispatch-app-private-key:
+        description: The dispatch App's private key.
+        required: true
+
+# The workflow's own token is not used at all; the dispatch is the App
+# token's.
+permissions: {}
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          client-id: ${{ vars.DISPATCH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.dispatch-app-private-key }}
+          owner: ${{ github.repository_owner }}
+          repositories: kluster-ops
+          permission-contents: write
+
+      - name: Post the alert to the ops repository
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          OWNER: ${{ github.repository_owner }}
+          WORKFLOW: ${{ github.workflow }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TIER: ${{ inputs.tier }}
+          KEY: ${{ inputs.key }}
+          SUMMARY: ${{ inputs.summary }}
+          PLAYBOOK: ${{ inputs.playbook }}
+          DETAILS: ${{ inputs.details }}
+        run: |
+          set -euo pipefail
+          source="${GITHUB_REPOSITORY#*/}/$WORKFLOW"
+          echo "Posting the $TIER alert from $source to $OWNER/kluster-ops: $SUMMARY"
+          jq -n \
+            --arg source "$source" \
+            --arg tier "$TIER" \
+            --arg key "${KEY:-$source}" \
+            --arg summary "$SUMMARY" \
+            --arg playbook "$PLAYBOOK" \
+            --arg run "$RUN_URL" \
+            --arg details "$DETAILS" \
+            '{
+               event_type: "kluster-alert",
+               client_payload: {
+                 source: $source,
+                 tier: $tier,
+                 key: $key,
+                 summary: $summary,
+                 playbook: $playbook,
+                 run: $run,
+                 details: $details,
+               },
+             }' > "$RUNNER_TEMP/alert.json"
+          gh api --method POST "repos/$OWNER/kluster-ops/dispatches" --input "$RUNNER_TEMP/alert.json"
+          echo "Posted; the ops repository's dispatch handler delivers it from here."

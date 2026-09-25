@@ -7,14 +7,16 @@ name: drift
 # than none.
 #
 # `--refresh` is load-bearing: a plain preview diffs code against cached state
-# and would report zero for a console hand-edit. The consequence is carried
-# consciously — refreshing adopts the drift into state, so reconciling is what
-# the playbook demands as soon as a diff is seen.
+# and would report zero for a console hand-edit. A preview's refresh writes
+# nothing: the refreshed state is compared and discarded, so the same diff
+# fails every weekly run until it is reconciled (framework/ci.md §3.2).
 #
-# A diff is a failed run and nothing else: the `actionable` alert leg
-# (cluster/architecture.md §4.3) is not built, so seeing it means reading the
-# Actions tab. Recorded as unbuilt in framework/ci.md §3 rather than papered
-# over with a second, private notification path.
+# A diff is a failed run, and a failed run raises an `actionable` alert through
+# the producer (`alert.yml`; cluster/architecture.md §4.3), keyed by this
+# workflow, so that once the ops repository's dispatch handler exists, a drift
+# that persists is one open issue there rather than a page a week
+# (framework/ci.md §3 says what is built). Its playbook is framework/ci.md
+# §3.2.
 
 on:
   workflow_dispatch:
@@ -85,3 +87,17 @@ jobs:
         env:
           PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
         run: mise x -- pulumi preview --stack ${{ matrix.stack }} --refresh --diff --expect-no-changes
+
+  # The alert job (framework/ci.md §3). This workflow has no pull-request
+  # trigger, so the guard on the event is never what stands it down; it is kept
+  # so the condition is the one condition every caller writes.
+  alert:
+    needs: [drift]
+    if: always() && github.event_name != 'pull_request' && contains(needs.*.result, 'failure')
+    uses: ./.github/workflows/alert.yml
+    with:
+      tier: actionable
+      summary: drift check failed on at least one stack
+      playbook: docs/framework/ci.md §3.2
+    secrets:
+      dispatch-app-private-key: ${{ secrets.DISPATCH_APP_PRIVATE_KEY }}

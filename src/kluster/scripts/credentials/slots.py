@@ -130,7 +130,7 @@ TRIGGER_APP_KEY = 'TRIGGER_APP_PRIVATE_KEY'
 #: `sdk-regenerate.yml` today, which pushes a regeneration onto a renovate
 #: branch of `kluster` as the App so that the pushed head's runs start on their
 #: own, and the alert producer (`alert.yml`, called by every workflow that runs
-#: on `main`; ci.md §3) once built, which posts alerts to `kluster-ops`. The App
+#: on `main`; ci.md §3), which posts alerts to `kluster-ops`. The App
 #: is installed on both repositories (`conventions.forge`, `Repository.apps`),
 #: and each mint is scoped to the one its run pushes to. A repository secret of
 #: `kluster` rather than an Environment one: neither job belongs to a stack.
