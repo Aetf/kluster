@@ -199,7 +199,7 @@ def test_rotating_the_recovery_key_re_wraps_rather_than_re_generating(
     kit: KdbxStore, registry: escrow.Registry, tmp_path: Path
 ) -> None:
     _ = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
-    passphrase = escrow.generate(registry, escrow.PASSPHRASE)
+    passphrase = escrow.generate(escrow.Vault.open(kit, registry), escrow.PASSPHRASE)
     retired = kit.get(escrow.RECOVERY_ENTRY)
 
     rotated = lifecycle.rotate(
@@ -592,8 +592,8 @@ def test_a_rotation_interrupted_at_any_row_resumes_into_the_same_successor(
     -- and rotates the rest. The retired kit is read and never written.
     """
     whole = whole_kit(kit, registry, monkeypatch)
-    passphrase = escrow.generate(registry, escrow.PASSPHRASE)
-    _ = escrow.generate(registry, escrow.CA)
+    passphrase = escrow.generate(escrow.Vault.open(kit, registry), escrow.PASSPHRASE)
+    _ = escrow.generate(escrow.Vault.open(kit, registry), escrow.CA)
     retired = kit.path.read_bytes()
     successor = _successor(tmp_path / 'successor.kdbx')
 
@@ -630,7 +630,7 @@ def test_a_completed_rotation_re_run_is_a_no_op_at_every_platform(
     kit: KdbxStore, registry: escrow.Registry, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     whole = whole_kit(kit, registry, monkeypatch)
-    passphrase = escrow.generate(registry, escrow.PASSPHRASE)
+    passphrase = escrow.generate(escrow.Vault.open(kit, registry), escrow.PASSPHRASE)
     successor = _successor(tmp_path / 'successor.kdbx')
     _ = lifecycle.rotate(kit, successor, prompt=_refuse, registry=registry)
     done = _unlocked(successor.path)
@@ -797,7 +797,7 @@ def test_the_environment_recovers_the_passphrase_and_reads_the_url(
     kit: KdbxStore, registry: escrow.Registry, tmp_path: Path
 ) -> None:
     _ = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
-    passphrase = escrow.generate(registry, escrow.PASSPHRASE)
+    passphrase = escrow.generate(escrow.Vault.open(kit, registry), escrow.PASSPHRASE)
     bundle = tmp_path / 'bundle'
     bundle.mkdir()
     _ = (bundle / 'backend-url').write_text('postgres://operator@192.0.2.10:5432/pulumi_state\n')
@@ -815,7 +815,7 @@ def test_a_missing_bundle_still_yields_the_passphrase(
     kit: KdbxStore, registry: escrow.Registry, tmp_path: Path
 ) -> None:
     _ = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
-    _ = escrow.generate(registry, escrow.PASSPHRASE)
+    _ = escrow.generate(escrow.Vault.open(kit, registry), escrow.PASSPHRASE)
 
     found = lifecycle.environment(kit, tmp_path / 'absent', registry)
 
@@ -839,9 +839,10 @@ def test_the_environment_carries_a_passphrase_for_every_stack_encrypted_apart(
     suite reaches `apart` through this function at all.
     """
     _ = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
-    _ = escrow.generate(registry, escrow.PASSPHRASE)
+    _ = escrow.generate(escrow.Vault.open(kit, registry), escrow.PASSPHRASE)
     generated = {
-        stack: escrow.generate(registry, escrow.rows()[row].name) for stack, row in pulumi_config.APART.items()
+        stack: escrow.generate(escrow.Vault.open(kit, registry), escrow.rows()[row].name)
+        for stack, row in pulumi_config.APART.items()
     }
     assert generated, 'nothing to exercise: no stack is encrypted apart from the estate'
 
@@ -866,7 +867,7 @@ def test_a_stack_encrypted_apart_whose_escrow_is_empty_is_left_for_the_refusal(
     the place that knows which stack was asked for and names the row to run.
     """
     _ = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
-    _ = escrow.generate(registry, escrow.PASSPHRASE)
+    _ = escrow.generate(escrow.Vault.open(kit, registry), escrow.PASSPHRASE)
 
     found = lifecycle.environment(kit, tmp_path / 'absent', registry)
 

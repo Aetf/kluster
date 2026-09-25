@@ -49,21 +49,21 @@ def console_key() -> str:
     return pki.generate_ca_key()
 
 
-def _fill(registry: escrow.Registry, label: str) -> str:
+def _fill(vault: escrow.Vault, label: str) -> str:
     """One label at its next generation, however that label's value comes about."""
     origin = escrow.register()[label].origin
     if isinstance(origin, escrow.Generated):
-        return escrow.generate(registry, label)
+        return escrow.generate(vault, label)
     # A console row has nothing to draw: its value arrives from outside, which
     # is what `adopt` is for.
     value = console_key()
-    _ = escrow.adopt(registry, label, value)
+    _ = escrow.adopt(vault, label, value)
     return value
 
 
-def _filled(registry: escrow.Registry) -> dict[str, str]:
+def _filled(vault: escrow.Vault) -> dict[str, str]:
     """Every register label at generation one, and the plaintexts filed."""
-    return {label: _fill(registry, label) for label in escrow.register()}
+    return {label: _fill(vault, label) for label in escrow.register()}
 
 
 def test_init_puts_the_private_half_in_the_kit_and_the_public_half_in_the_repo(
@@ -102,7 +102,7 @@ def test_init_refuses_a_recipients_file_already_in_the_repo(kit: KdbxStore, regi
 
 
 def test_a_generated_secret_comes_back_out(vault: escrow.Vault) -> None:
-    minted = escrow.generate(vault.registry, escrow.PASSPHRASE)
+    minted = escrow.generate(vault, escrow.PASSPHRASE)
 
     assert vault.recover(escrow.PASSPHRASE) == minted
 
@@ -117,15 +117,15 @@ def test_a_secret_that_cannot_be_escrowed_is_never_minted(vault: escrow.Vault, m
     monkeypatch.setattr(age, 'encrypt', refuse)
 
     with pytest.raises(age.AgeError):
-        _ = escrow.generate(vault.registry, escrow.PASSPHRASE)
+        _ = escrow.generate(vault, escrow.PASSPHRASE)
 
     assert vault.registry.generations(escrow.PASSPHRASE) == []
 
 
 def test_generating_again_is_a_new_generation_beside_the_old_one(vault: escrow.Vault) -> None:
-    first = escrow.generate(vault.registry, escrow.PASSPHRASE)
+    first = escrow.generate(vault, escrow.PASSPHRASE)
 
-    second = escrow.generate(vault.registry, escrow.PASSPHRASE)
+    second = escrow.generate(vault, escrow.PASSPHRASE)
 
     assert first != second
     assert vault.registry.generations(escrow.PASSPHRASE) == [1, 2]
@@ -139,11 +139,11 @@ def test_generations_count_as_numbers_past_nine(vault: escrow.Vault) -> None:
     # Ordered as text, `10.age` sorts before `2.age`: generation nine would
     # read as the latest, and the next write would be filed as ten, over the
     # ciphertext already there.
-    minted = [escrow.generate(vault.registry, escrow.PASSPHRASE) for _ in range(10)]
+    minted = [escrow.generate(vault, escrow.PASSPHRASE) for _ in range(10)]
     assert vault.registry.generations(escrow.PASSPHRASE) == list(range(escrow.FIRST, escrow.FIRST + 10))
     assert vault.recover(escrow.PASSPHRASE) == minted[-1]
 
-    eleventh = escrow.generate(vault.registry, escrow.PASSPHRASE)
+    eleventh = escrow.generate(vault, escrow.PASSPHRASE)
 
     assert vault.registry.latest(escrow.PASSPHRASE) == escrow.FIRST + 10
     assert vault.recover(escrow.PASSPHRASE) == eleventh
@@ -153,9 +153,9 @@ def test_generations_count_as_numbers_past_nine(vault: escrow.Vault) -> None:
 def test_one_labels_rotation_leaves_every_other_label_alone(vault: escrow.Vault) -> None:
     # The whole point of the model: rotating the passphrase is not also
     # rotating the CA.
-    before = _filled(vault.registry)
+    before = _filled(vault)
 
-    _ = escrow.generate(vault.registry, escrow.PASSPHRASE)
+    _ = escrow.generate(vault, escrow.PASSPHRASE)
 
     for label, secret in before.items():
         if label != escrow.PASSPHRASE:
@@ -163,7 +163,7 @@ def test_one_labels_rotation_leaves_every_other_label_alone(vault: escrow.Vault)
 
 
 def test_the_escrowed_ca_key_is_a_working_ca(vault: escrow.Vault) -> None:
-    _ = escrow.generate(vault.registry, escrow.CA)
+    _ = escrow.generate(vault, escrow.CA)
 
     authority = pki.Authority.from_pem(vault.recover(escrow.CA))
 
@@ -174,7 +174,7 @@ def test_the_escrowed_ca_key_is_a_working_ca(vault: escrow.Vault) -> None:
 
 def test_an_escrowed_backup_identity_opens_what_it_encrypts(vault: escrow.Vault, tmp_path: Path) -> None:
     label = escrow.backup_labels()[0]
-    _ = escrow.generate(vault.registry, label)
+    _ = escrow.generate(vault, label)
     identity = vault.recover(label)
     path = tmp_path / 'dump.age'
     _ = path.write_text(age.encrypt('a pg_dump', [age.recipient(identity)]))
@@ -184,7 +184,7 @@ def test_an_escrowed_backup_identity_opens_what_it_encrypts(vault: escrow.Vault,
 
 def test_a_backup_identity_label_takes_one_generation_for_its_lifetime(vault: escrow.Vault) -> None:
     label = escrow.backup_labels()[0]
-    first = escrow.generate(vault.registry, label)
+    first = escrow.generate(vault, label)
 
     # The backup generation is the label, and every reader of it -- the
     # appliance's recipient list, the identities a restore opens a dump with --
@@ -193,9 +193,9 @@ def test_a_backup_identity_label_takes_one_generation_for_its_lifetime(vault: es
     # no dump in retention was written to, so both writers refuse it and the
     # first generation is what the label goes on answering with.
     with pytest.raises(escrow.EscrowError, match='one value for its lifetime'):
-        _ = escrow.generate(vault.registry, label)
+        _ = escrow.generate(vault, label)
     with pytest.raises(escrow.EscrowError, match='one value for its lifetime'):
-        _ = escrow.adopt(vault.registry, label, age.generate().secret)
+        _ = escrow.adopt(vault, label, age.generate().secret)
 
     assert vault.registry.generations(label) == [escrow.FIRST]
     assert vault.recover(label) == first
@@ -212,7 +212,7 @@ def test_every_backup_label_is_single_and_nothing_else_is() -> None:
 
 def test_import_escrows_a_value_that_already_exists(vault: escrow.Vault) -> None:
     # The migration path: a live credential carries over unrotated.
-    _ = escrow.adopt(vault.registry, escrow.PASSPHRASE, 'the-live-passphrase')
+    _ = escrow.adopt(vault, escrow.PASSPHRASE, 'the-live-passphrase')
 
     assert vault.registry.generations(escrow.PASSPHRASE) == [1]
     assert vault.recover(escrow.PASSPHRASE) == 'the-live-passphrase'
@@ -221,9 +221,9 @@ def test_import_escrows_a_value_that_already_exists(vault: escrow.Vault) -> None
 def test_import_appends_rather_than_overwriting(vault: escrow.Vault) -> None:
     # Importing onto a label that already holds something must not replace
     # what production is using; it becomes the next generation like any other.
-    minted = escrow.generate(vault.registry, escrow.PASSPHRASE)
+    minted = escrow.generate(vault, escrow.PASSPHRASE)
 
-    _ = escrow.adopt(vault.registry, escrow.PASSPHRASE, 'from-elsewhere')
+    _ = escrow.adopt(vault, escrow.PASSPHRASE, 'from-elsewhere')
 
     assert vault.registry.generations(escrow.PASSPHRASE) == [1, 2]
     assert vault.recover(escrow.PASSPHRASE, 1) == minted
@@ -235,11 +235,11 @@ def test_import_after_import_appends_and_leaves_the_first_file_alone(vault: escr
     # retry must not land on top of the generation the first one wrote: the
     # file is compared byte for byte, because an overwrite that happened to
     # re-encrypt the same plaintext would still have destroyed the original.
-    _ = escrow.adopt(vault.registry, escrow.PASSPHRASE, 'the-live-passphrase')
+    _ = escrow.adopt(vault, escrow.PASSPHRASE, 'the-live-passphrase')
     first = vault.registry.path(escrow.PASSPHRASE, 1)
     written = first.read_bytes()
 
-    second = escrow.adopt(vault.registry, escrow.PASSPHRASE, 'a-second-value')
+    second = escrow.adopt(vault, escrow.PASSPHRASE, 'a-second-value')
 
     assert vault.registry.generations(escrow.PASSPHRASE) == [1, 2]
     assert second == vault.registry.path(escrow.PASSPHRASE, 2)
@@ -257,7 +257,7 @@ def test_import_refuses_a_value_that_is_not_there(vault: escrow.Vault, label: st
     # Said as emptiness whatever the label expects: "this is not a PEM private
     # key" would send the operator looking at the wrong end of the pipe.
     with pytest.raises(escrow.EscrowError, match='empty'):
-        _ = escrow.adopt(vault.registry, label, value)
+        _ = escrow.adopt(vault, label, value)
 
     assert vault.registry.generations(label) == []
 
@@ -268,7 +268,7 @@ def test_import_refuses_something_that_is_not_an_age_identity(vault: escrow.Vaul
     # A wrong-but-non-empty pipe: the recipient rather than the identity is
     # the mistake the labels invite, and it survives every check but the shape.
     with pytest.raises(escrow.EscrowError, match='age identity'):
-        _ = escrow.adopt(vault.registry, label, age.generate().public)
+        _ = escrow.adopt(vault, label, age.generate().public)
 
     assert vault.registry.generations(label) == []
 
@@ -277,14 +277,14 @@ def test_import_takes_a_real_age_identity(vault: escrow.Vault) -> None:
     label = escrow.backup_labels()[0]
     identity = age.generate()
 
-    _ = escrow.adopt(vault.registry, label, identity.secret)
+    _ = escrow.adopt(vault, label, identity.secret)
 
     assert vault.recover(label) == identity.secret
 
 
 def test_import_refuses_something_that_is_not_a_private_key(vault: escrow.Vault) -> None:
     with pytest.raises(escrow.EscrowError, match='PEM private key'):
-        _ = escrow.adopt(vault.registry, escrow.CA, 'BEGIN PRIVATE KEY')
+        _ = escrow.adopt(vault, escrow.CA, 'BEGIN PRIVATE KEY')
 
     assert vault.registry.generations(escrow.CA) == []
 
@@ -293,7 +293,7 @@ def test_import_refuses_a_private_key_that_stops_half_way(vault: escrow.Vault) -
     truncated = pki.generate_ca_key()[:80]
 
     with pytest.raises(escrow.EscrowError, match='PEM private key'):
-        _ = escrow.adopt(vault.registry, escrow.CA, truncated)
+        _ = escrow.adopt(vault, escrow.CA, truncated)
 
     assert vault.registry.generations(escrow.CA) == []
 
@@ -301,7 +301,7 @@ def test_import_refuses_a_private_key_that_stops_half_way(vault: escrow.Vault) -
 def test_import_takes_a_real_ca_key(vault: escrow.Vault) -> None:
     key = pki.generate_ca_key()
 
-    _ = escrow.adopt(vault.registry, escrow.CA, key)
+    _ = escrow.adopt(vault, escrow.CA, key)
 
     assert vault.recover(escrow.CA) == key
 
@@ -310,7 +310,7 @@ def test_a_token_label_asks_only_that_there_be_a_value(vault: escrow.Vault) -> N
     # Nothing recognisable about a passphrase or a bearer token, so the shape
     # is the empty check and no more: a check that guessed at length or
     # alphabet would refuse values the consumers accept.
-    _ = escrow.adopt(vault.registry, escrow.ALERTMANAGER, 'a-token-from-somewhere-else')
+    _ = escrow.adopt(vault, escrow.ALERTMANAGER, 'a-token-from-somewhere-else')
 
     assert vault.recover(escrow.ALERTMANAGER) == 'a-token-from-somewhere-else'
 
@@ -344,7 +344,7 @@ def test_a_console_row_cannot_be_drawn_here(vault: escrow.Vault, label: str) -> 
     # Randomness would produce a PEM nothing on the platform has ever heard
     # of. The refusal names the command that does file one instead.
     with pytest.raises(escrow.EscrowError, match='made in a console'):
-        _ = escrow.generate(vault.registry, label)
+        _ = escrow.generate(vault, label)
 
     assert vault.registry.generations(label) == []
 
@@ -439,7 +439,7 @@ def test_a_kit_carrying_no_such_row_sends_the_operator_to_the_console(kit: KdbxS
 
 def test_an_unregistered_label_is_refused(vault: escrow.Vault) -> None:
     with pytest.raises(escrow.EscrowError, match='no label'):
-        _ = escrow.generate(vault.registry, 'made/up')
+        _ = escrow.generate(vault, 'made/up')
 
 
 def test_a_label_cannot_escape_the_registry(registry: escrow.Registry) -> None:
@@ -448,7 +448,7 @@ def test_a_label_cannot_escape_the_registry(registry: escrow.Registry) -> None:
 
 
 def test_rewrap_preserves_every_plaintext_under_a_new_recipient(vault: escrow.Vault) -> None:
-    before = _filled(vault.registry)
+    before = _filled(vault)
     successor = age.generate()
 
     _ = escrow.rewrap(vault.registry, identities=[successor.secret, vault.identity], recipients=[successor.public])
@@ -459,7 +459,7 @@ def test_rewrap_preserves_every_plaintext_under_a_new_recipient(vault: escrow.Va
 
 
 def test_rewrap_closes_the_door_on_the_retired_key(vault: escrow.Vault) -> None:
-    _ = escrow.generate(vault.registry, escrow.PASSPHRASE)
+    _ = escrow.generate(vault, escrow.PASSPHRASE)
     successor = age.generate()
 
     _ = escrow.rewrap(vault.registry, identities=[successor.secret, vault.identity], recipients=[successor.public])
@@ -472,7 +472,7 @@ def test_rewrap_closes_the_door_on_the_retired_key(vault: escrow.Vault) -> None:
 def test_rewrap_is_resumable(vault: escrow.Vault) -> None:
     # A run that died half way leaves some files under the successor and some
     # under the predecessor; re-running is given both and finishes the job.
-    before = _filled(vault.registry)
+    before = _filled(vault)
     successor = age.generate()
     half = vault.registry.path(escrow.CA, escrow.FIRST)
     _ = half.write_text(age.encrypt(before[escrow.CA], [successor.public]))
@@ -489,7 +489,7 @@ def test_rewrap_refuses_to_lock_the_operator_out(vault: escrow.Vault) -> None:
     # refused rather than warned about. Handing the escrow to a new custodian
     # is adding their recipient beside the existing one, not replacing it
     # with a key this run cannot open.
-    _ = escrow.generate(vault.registry, escrow.PASSPHRASE)
+    _ = escrow.generate(vault, escrow.PASSPHRASE)
 
     with pytest.raises(escrow.EscrowError, match='would lock the escrow'):
         _ = escrow.rewrap(vault.registry, identities=[vault.identity], recipients=[age.generate().public])
@@ -499,7 +499,7 @@ def test_rotating_the_recovery_key_changes_no_plaintext(kit: KdbxStore, registry
     # Kit rotation is pure re-encryption: nothing in production is touched and
     # no consumer is re-run.
     _ = escrow.init(kit, registry)
-    before = _filled(registry)
+    before = _filled(escrow.Vault.open(kit, registry))
     successor = MemoryKit()
 
     escrow.rotate_recovery(kit, successor, registry)
@@ -518,7 +518,7 @@ def test_rotating_the_recovery_key_again_reuses_the_successor_already_stored(
     # finish with the key the successor holds -- a fresh one would strand every
     # ciphertext already under the first.
     _ = escrow.init(kit, registry)
-    before = _filled(registry)
+    before = _filled(escrow.Vault.open(kit, registry))
     successor = MemoryKit()
     stored = age.generate()
     successor.put(escrow.RECOVERY_ENTRY, stored.public, stored.secret)
@@ -539,7 +539,7 @@ def test_rotating_the_recovery_key_refuses_a_successor_holding_the_retired_key(
     # A copy of the kit in hand, or the kit itself, is not a successor: the
     # re-wrap would re-encrypt to the key already named and nothing rotates.
     _ = escrow.init(kit, registry)
-    _ = escrow.generate(registry, escrow.PASSPHRASE)
+    _ = escrow.generate(escrow.Vault.open(kit, registry), escrow.PASSPHRASE)
     successor = MemoryKit()
     successor.put(
         escrow.RECOVERY_ENTRY,
@@ -557,7 +557,7 @@ def test_a_recovery_row_without_a_key_is_written_over(kit: KdbxStore, registry: 
     # Present is not complete: a row the vault cannot open with is no key to
     # reuse, and reusing an empty one would re-wrap to nothing.
     _ = escrow.init(kit, registry)
-    before = _filled(registry)
+    before = _filled(escrow.Vault.open(kit, registry))
     successor = MemoryKit()
     successor.put(escrow.RECOVERY_ENTRY, '', '')
 
@@ -568,14 +568,195 @@ def test_a_recovery_row_without_a_key_is_written_over(kit: KdbxStore, registry: 
     assert registry.recipients() == [successor.get(escrow.RECOVERY_ENTRY, attribute='UserName')]
 
 
+# --------------------------------------------------------------------------
+# What is escrowed opens with the kit in hand (credentials.md §2.2): every
+# write derives the kit's recovery recipient and refuses a recipients file that
+# does not name it. The states a rotation leaves a checkout in, one per case.
+# --------------------------------------------------------------------------
+
+ANCHOR = 'the recovery recipient of the kit in hand'
+
+
+@pytest.fixture
+def successor() -> age.Identity:
+    """The recovery key a kit rotation hands over to."""
+    return age.generate()
+
+
+def _in_hand(vault: escrow.Vault, identity: str) -> escrow.Vault:
+    """The same registry, opened with a different kit's recovery key."""
+    return escrow.Vault(registry=vault.registry, identity=identity)
+
+
+def _refused(vault: escrow.Vault) -> None:
+    """A generation and an import are both refused, and nothing is filed."""
+    with pytest.raises(escrow.EscrowError, match=ANCHOR):
+        _ = escrow.generate(vault, escrow.PASSPHRASE)
+    with pytest.raises(escrow.EscrowError, match=ANCHOR):
+        _ = escrow.adopt(vault, escrow.ALERTMANAGER, 'a-token-from-somewhere-else')
+    assert vault.registry.generations(escrow.PASSPHRASE) == [escrow.FIRST]
+    assert vault.registry.generations(escrow.ALERTMANAGER) == []
+
+
+def test_a_clone_that_predates_a_rotation_is_refused_by_the_successor(
+    vault: escrow.Vault, successor: age.Identity
+) -> None:
+    # The checkout never took the rotation's commit: its recipients file and
+    # every ciphertext beside it still name the retired key, and agree with
+    # each other. Only the kit in hand says otherwise.
+    _ = escrow.generate(vault, escrow.PASSPHRASE)
+
+    _refused(_in_hand(vault, successor.secret))
+
+
+def test_an_interrupted_rotation_is_refused_by_the_successor(vault: escrow.Vault, successor: age.Identity) -> None:
+    # A rotation writes the recipients file last, so one that stopped part way
+    # leaves some ciphertexts under the successor and a file naming the retired
+    # key. Writing beside them is not the way out: finishing the rotation is.
+    _ = escrow.generate(vault, escrow.PASSPHRASE)
+    half = vault.registry.path(escrow.PASSPHRASE, escrow.FIRST)
+    _ = half.write_text(age.encrypt(vault.recover(escrow.PASSPHRASE), [successor.public]))
+
+    _refused(_in_hand(vault, successor.secret))
+
+
+def test_the_retired_kit_writes_into_an_interrupted_rotation_that_the_resumed_one_finishes(
+    kit: KdbxStore, vault: escrow.Vault, successor: age.Identity
+) -> None:
+    # The file still names the retired key and the retired kit is in hand, so
+    # the write is one that kit opens -- and the resumed rotation opens every
+    # file with either key, so the new generation is re-wrapped with the rest.
+    before = escrow.generate(vault, escrow.PASSPHRASE)
+    half = vault.registry.path(escrow.PASSPHRASE, escrow.FIRST)
+    _ = half.write_text(age.encrypt(before, [successor.public]))
+
+    written = escrow.generate(vault, escrow.CA)
+
+    resumed = MemoryKit()
+    resumed.put(escrow.RECOVERY_ENTRY, successor.public, successor.secret)
+    escrow.rotate_recovery(kit, resumed, vault.registry)
+    opened = escrow.Vault.open(resumed, vault.registry)
+    assert opened.recover(escrow.PASSPHRASE) == before
+    assert opened.recover(escrow.CA) == written
+
+
+def test_the_retired_kit_is_refused_by_a_registry_rotated_away_from_it(kit: KdbxStore, vault: escrow.Vault) -> None:
+    # The rotation is merged and the old envelope is the one that came out of
+    # the drawer: whatever it wrote would open only with the key the registry
+    # has just stopped naming.
+    _ = escrow.generate(vault, escrow.PASSPHRASE)
+    escrow.rotate_recovery(kit, MemoryKit(), vault.registry)
+
+    _refused(vault)
+
+
+def test_a_custodian_beside_the_kit_is_written_to_and_named(
+    vault: escrow.Vault, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A second custodian's recipient is a line the file may legitimately
+    # carry, so the rule passes it -- and nothing here can tell a custodian
+    # from a line nobody reviewed, so every write says who else can open it.
+    custodian = age.generate()
+    vault.registry.set_recipients([*vault.registry.recipients(), custodian.public])
+
+    minted = escrow.generate(vault, escrow.PASSPHRASE)
+    _ = escrow.adopt(vault, escrow.ALERTMANAGER, 'a-token-from-somewhere-else')
+
+    named = [record.getMessage() for record in caplog.records if record.levelname == 'WARNING']
+    assert len([message for message in named if custodian.public in message]) == 2
+    assert escrow.Vault(registry=vault.registry, identity=custodian.secret).recover(escrow.PASSPHRASE) == minted
+
+
+def test_recording_in_a_stale_clone_is_refused_in_the_rules_words(vault: escrow.Vault, successor: age.Identity) -> None:
+    # `record` opens what is filed to compare before it writes; against a
+    # registry the kit in hand cannot open, that walk would fail as a
+    # generation no identity matched, which names neither cause nor way out.
+    _ = escrow.record(vault, escrow.DISPATCH_KEY, console_key())
+
+    with pytest.raises(escrow.EscrowError, match=ANCHOR):
+        _ = escrow.record(_in_hand(vault, successor.secret), escrow.DISPATCH_KEY, pki.generate_ca_key())
+
+    assert vault.registry.generations(escrow.DISPATCH_KEY) == [escrow.FIRST]
+
+
+def test_a_rewrap_names_every_recipient_beyond_the_kit(vault: escrow.Vault, caplog: pytest.LogCaptureFixture) -> None:
+    # `kit rewrap` is the command for a hand-edited recipients file, and it
+    # re-encrypts every generation to whatever that file names: the write
+    # where a line nobody reviewed gains the most, so it says who else can
+    # open what it wrote.
+    _ = escrow.generate(vault, escrow.PASSPHRASE)
+    custodian = age.generate()
+    vault.registry.set_recipients([*vault.registry.recipients(), custodian.public])
+    caplog.clear()
+
+    _ = escrow.rewrap(vault.registry, identities=[vault.identity])
+
+    warned = [record.getMessage() for record in caplog.records if record.levelname == 'WARNING']
+    assert len(warned) == 1
+    assert custodian.public in warned[0]
+
+
+def test_a_missing_age_is_not_a_wrong_recipient_line(vault: escrow.Vault, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Reported as a line the tool refused, it would send the operator to a
+    # file that is fine; the tool's absence is raised as itself instead.
+    monkeypatch.setattr(age, 'BINARY', 'age-that-is-not-installed')
+
+    with pytest.raises(age.AgeMissing):
+        _ = vault.registry.recipients()
+    with pytest.raises(age.AgeMissing):
+        _ = escrow.check(vault.registry)
+
+
+def test_a_record_that_files_nothing_names_nobody(vault: escrow.Vault, caplog: pytest.LogCaptureFixture) -> None:
+    # The warning says who else can open what a write wrote. A re-run that
+    # finds the value already filed writes nothing, so it has nobody to name
+    # -- and a warning there would teach the operator to read past it.
+    custodian = age.generate()
+    vault.registry.set_recipients([*vault.registry.recipients(), custodian.public])
+    _ = escrow.record(vault, escrow.DISPATCH_KEY, console_key())
+    assert any(custodian.public in record.getMessage() for record in caplog.records)
+    caplog.clear()
+
+    _ = escrow.record(vault, escrow.DISPATCH_KEY, console_key())
+
+    assert vault.registry.generations(escrow.DISPATCH_KEY) == [escrow.FIRST]
+    assert not [record for record in caplog.records if record.levelname == 'WARNING']
+
+
+def test_a_refused_write_draws_nothing(vault: escrow.Vault, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Refused before the mint rather than after it: a value drawn and then
+    # dropped is harmless, but only for as long as nothing between the two
+    # steps hands it on.
+    drawn: list[str] = []
+
+    def mint() -> str:
+        drawn.append('drawn')
+        return 'a-token'
+
+    monkeypatch.setattr(escrow, '_token', mint)
+    vault.registry.set_recipients([age.generate().public])
+
+    with pytest.raises(escrow.EscrowError, match=ANCHOR):
+        _ = escrow.generate(vault, escrow.PASSPHRASE)
+
+    assert drawn == []
+
+
+def test_a_kit_without_a_recovery_key_is_sent_to_bootstrap(registry: escrow.Registry) -> None:
+    # The anchor is read out of the kit, so a kit that has none has nothing to
+    # anchor a write to; the row that holds one is created by the bootstrap.
+    with pytest.raises(escrow.EscrowError, match='kit bootstrap --only recovery'):
+        _ = escrow.Vault.open(MemoryKit(), registry)
+
+
 def test_check_is_happy_with_a_full_registry(vault: escrow.Vault) -> None:
-    _ = _filled(vault.registry)
+    _ = _filled(vault)
 
     assert escrow.check(vault.registry) == []
 
 
 def test_check_names_a_label_with_nothing_escrowed(vault: escrow.Vault) -> None:
-    _ = _filled(vault.registry)
+    _ = _filled(vault)
     for path in vault.registry.directory(escrow.CA).iterdir():
         path.unlink()
 
@@ -585,7 +766,7 @@ def test_check_names_a_label_with_nothing_escrowed(vault: escrow.Vault) -> None:
 
 
 def test_check_catches_a_ciphertext_that_is_not_one(vault: escrow.Vault) -> None:
-    _ = _filled(vault.registry)
+    _ = _filled(vault)
     _ = vault.registry.path(escrow.PASSPHRASE, escrow.FIRST).write_text('not an age file at all\n')
 
     problems = escrow.check(vault.registry)
@@ -594,9 +775,9 @@ def test_check_catches_a_ciphertext_that_is_not_one(vault: escrow.Vault) -> None
 
 
 def test_check_catches_a_hole_in_the_generations(vault: escrow.Vault) -> None:
-    _ = _filled(vault.registry)
-    _ = escrow.generate(vault.registry, escrow.PASSPHRASE)
-    _ = escrow.generate(vault.registry, escrow.PASSPHRASE)
+    _ = _filled(vault)
+    _ = escrow.generate(vault, escrow.PASSPHRASE)
+    _ = escrow.generate(vault, escrow.PASSPHRASE)
     vault.registry.path(escrow.PASSPHRASE, 2).unlink()
 
     problems = escrow.check(vault.registry)
@@ -605,7 +786,7 @@ def test_check_catches_a_hole_in_the_generations(vault: escrow.Vault) -> None:
 
 
 def test_check_catches_a_stray_file(vault: escrow.Vault) -> None:
-    _ = _filled(vault.registry)
+    _ = _filled(vault)
     _ = vault.registry.directory(escrow.PASSPHRASE).joinpath('1.age.bak').write_text('oops')
 
     problems = escrow.check(vault.registry)
@@ -617,7 +798,7 @@ def test_check_names_a_label_the_register_does_not(vault: escrow.Vault) -> None:
     # A ciphertext nothing in the register reads is either a label renamed out
     # from under its consumer or a secret nobody will ever rotate; both are
     # the operator's to decide, so `check` says so rather than passing.
-    _ = _filled(vault.registry)
+    _ = _filled(vault)
     unregistered = 'nobody/reads-this'
     assert unregistered not in escrow.register()
     stray = vault.registry.path(unregistered, escrow.FIRST)
@@ -632,14 +813,53 @@ def test_check_names_a_label_the_register_does_not(vault: escrow.Vault) -> None:
 def test_check_names_a_recipient_that_is_not_one(vault: escrow.Vault) -> None:
     # Every later write encrypts to the file's lines, so a line that is not an
     # age recipient is a write that fails on the day a secret needs escrowing.
-    _ = _filled(vault.registry)
+    _ = _filled(vault)
     # The likeliest slip: the private half pasted where the public one goes.
     malformed = age.generate().secret
     vault.registry.set_recipients([*vault.registry.recipients(), malformed])
 
     (problem,) = escrow.check(vault.registry)
 
-    assert repr(malformed) in problem
+    # Named by its line, and never repeated: the report of a pasted private
+    # key is read on a screen and pasted into issues.
+    assert 'line 2' in problem
+    assert malformed not in problem
+
+
+def test_check_names_a_recipient_whose_checksum_is_wrong(vault: escrow.Vault) -> None:
+    # A mistyped or truncated hand edit keeps the `age1` prefix; the checksum
+    # is what says the line names nobody, and only the tool's own parse reads
+    # it. Every later write to that line would fail.
+    _ = _filled(vault)
+    (recipient,) = vault.registry.recipients()
+    vault.registry.set_recipients([_mistyped(recipient)])
+
+    (problem,) = escrow.check(vault.registry)
+
+    assert 'line 1' in problem
+
+
+def _mistyped(recipient: str) -> str:
+    """`recipient` with its last six characters replaced, which keeps its prefix and breaks its checksum."""
+    tail = 'qqqqqq' if not recipient.endswith('qqqqqq') else 'pppppp'
+    return f'{recipient[:-6]}{tail}'
+
+
+@pytest.mark.parametrize('kind', ['mistyped', 'private'])
+def test_a_writer_refuses_a_recipient_line_that_is_not_one_by_its_number(vault: escrow.Vault, kind: str) -> None:
+    # Beside the kit's own recipient, so the refusal is the line's and not the
+    # anchor's: every writer reads the file through the one parse `check` does,
+    # and a line age would refuse is refused before anything is drawn -- named
+    # by its number, with a pasted private key never repeated.
+    (recipient,) = vault.registry.recipients()
+    wrong = _mistyped(recipient) if kind == 'mistyped' else age.generate().secret
+    vault.registry.set_recipients([recipient, wrong])
+
+    with pytest.raises(escrow.EscrowError, match='line 2') as refused:
+        _ = escrow.generate(vault, escrow.PASSPHRASE)
+
+    assert wrong not in str(refused.value)
+    assert vault.registry.generations(escrow.PASSPHRASE) == []
 
 
 def test_check_wants_no_kit(registry: escrow.Registry) -> None:
@@ -654,7 +874,7 @@ def test_check_wants_no_kit(registry: escrow.Registry) -> None:
 def test_missing_lists_what_a_bring_up_still_owes(vault: escrow.Vault) -> None:
     assert escrow.missing(vault.registry) == list(escrow.register())
 
-    _ = escrow.generate(vault.registry, escrow.PASSPHRASE)
+    _ = escrow.generate(vault, escrow.PASSPHRASE)
 
     assert escrow.PASSPHRASE not in escrow.missing(vault.registry)
 
@@ -663,7 +883,7 @@ def test_a_retired_backup_generation_is_not_a_complaint(vault: escrow.Vault) -> 
     # A generation that has fallen out of the window keeps its ciphertext
     # until the last dump under it ages out (state-backend.md §5), so `check`
     # must not call it an unregistered label the day the pin moves past it.
-    _ = _filled(vault.registry)
+    _ = _filled(vault)
     retired = vault.registry.path(f'{escrow.BACKUP}/99', escrow.FIRST)
     retired.parent.mkdir(parents=True)
     _ = retired.write_text(age.encrypt(age.generate().secret, vault.registry.recipients()))

@@ -219,7 +219,7 @@ def registry(kit: KdbxStore, tmp_path: Path) -> escrow.Registry:
     registry = escrow.Registry.open(tmp_path / 'escrow')
     _ = escrow.init(kit, registry)
     for label in escrow.backup_labels():
-        _ = escrow.generate(registry, label)
+        _ = escrow.generate(escrow.Vault.open(kit, registry), label)
     return registry
 
 
@@ -384,7 +384,7 @@ def test_a_dump_opens_with_either_live_generation(
     labels = escrow.backup_labels()
     assert len(labels) == 2
     for label in labels:
-        _ = escrow.generate(registry, label)
+        _ = escrow.generate(escrow.Vault.open(kit, registry), label)
     _ = double()
     output = tmp_path / 'taken.dump.age'
 

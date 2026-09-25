@@ -8,8 +8,11 @@ that the pin the appliance downloads is the pin this suite exercises.
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -104,6 +107,180 @@ def test_a_missing_tool_names_where_it_is_pinned(monkeypatch: pytest.MonkeyPatch
 
     with pytest.raises(age.AgeError, match='mise.toml'):
         _ = age.decrypt(Path('irrelevant'), ['AGE-SECRET-KEY-1'])
+
+
+@needs_age
+def test_a_recipient_is_whatever_the_tool_parses_as_one() -> None:
+    age.check_recipient(age.generate().public, name='line 1')
+
+
+def _mistyped(public: str) -> str:
+    """`public` with its last six characters replaced: the prefix survives and the checksum does not."""
+    return f'{public[:-6]}{"qqqqqq" if not public.endswith("qqqqqq") else "pppppp"}'
+
+
+def _not_recipients() -> list[str]:
+    """Lines that are not recipients, some carrying characters a quoting echo would escape."""
+    public = age.generate().public
+    return [_mistyped(public), 'age1yubikey1qqqq', 'not a recipient', f'"{public}"', f'{public}\\', 'ssh-ed25519 AAAA']
+
+
+@needs_age
+def test_a_line_that_is_not_a_recipient_is_refused_by_name_alone() -> None:
+    # Whatever the tool's reason, the refusal names the line and carries no
+    # part of it -- neither as given nor as an echo that escaped its quotes.
+    for value in _not_recipients():
+        with pytest.raises(age.AgeError) as refused:
+            age.check_recipient(value, name='line 4')
+
+        said = str(refused.value)
+        assert said.startswith('line 4 is not an age recipient'), said
+        assert value not in said
+        assert json.dumps(value)[1:-1] not in said
+
+
+def _identities() -> list[str]:
+    """One private key in each shape it is pasted in: bare, lower-cased, quoted, assigned, a JSON member."""
+    secret = age.generate().secret
+    return [secret, secret.lower(), f'"{secret}"', f'SOPS_AGE_KEY="{secret}"', f'"key": "{secret}",']
+
+
+@needs_age
+def test_a_refusal_reads_as_the_line_and_the_tools_reason() -> None:
+    # The reason without the tool's wrapping: the recipients file it read was
+    # standard input, and its position there is the line's own name already.
+    with pytest.raises(age.AgeError) as refused:
+        age.check_recipient(_mistyped(age.generate().public), name='line 4')
+
+    assert str(refused.value) == 'line 4 is not an age recipient (malformed recipient)'
+
+
+@needs_age
+def test_the_position_the_tool_gives_is_left_out_of_its_verdict() -> None:
+    # A line that looks like an identity of some other kind gets past the
+    # prefix refusal, and the tool's verdict on it carries the position it
+    # read it at, which is the line's own name already.
+    with pytest.raises(age.AgeError) as refused:
+        age.check_recipient('AGE-PLUGIN-EXAMPLE-1QQQQ', name='line 2')
+
+    assert str(refused.value) == 'line 2 is not an age recipient (apparent identity found in recipients file)'
+
+
+#: The bech32 alphabet and generator, for a plugin recipient that parses.
+_BECH32 = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l'
+_GENERATOR = (0x3B6A57B2, 0x26508E6D, 0x1EA119FA, 0x3D4233DD, 0x2A1462B3)
+
+
+def _bech32(hrp: str, data: list[int]) -> str:
+    """`data` under `hrp` with a valid checksum -- BIP 173, the encoding age's recipients use."""
+    expanded = [ord(c) >> 5 for c in hrp] + [0] + [ord(c) & 31 for c in hrp]
+    check = 1
+    for value in [*expanded, *data, 0, 0, 0, 0, 0, 0]:
+        top = check >> 25
+        check = (check & 0x1FFFFFF) << 5 ^ value
+        for bit, generator in enumerate(_GENERATOR):
+            check ^= generator if (top >> bit) & 1 else 0
+    check ^= 1
+    return f'{hrp}1' + ''.join(_BECH32[d] for d in [*data, *((check >> 5 * (5 - i)) & 31 for i in range(6))])
+
+
+@needs_age
+def test_a_failure_that_is_not_a_verdict_on_the_line_is_the_bare_refusal() -> None:
+    # A well-formed plugin recipient parses, and fails only when the tool goes
+    # to encrypt to it -- saying which plugin it could not find, which is a
+    # piece of the line. Only a verdict given on a line of the file is kept.
+    value = _bech32('age1s3cretpluginname', [0] * 20)
+
+    with pytest.raises(age.AgeError) as refused:
+        age.check_recipient(value, name='line 3')
+
+    assert str(refused.value) == 'line 3 is not an age recipient'
+
+
+def test_a_reason_that_repeats_the_value_is_left_out(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A verdict on the line that echoes it, raw or escaped, is dropped.
+
+    The pinned `age` names a bad line in a recipients file by its position
+    only; a later one that did not would otherwise print the line.
+    """
+    echoing = tmp_path / age.BINARY
+    _ = echoing.write_text(
+        f'#!{sys.executable}\n'
+        'import json, sys\n'
+        'value = sys.stdin.read().strip()\n'
+        'sys.stderr.write(f"age: error: failed to parse recipient file \\"-\\": \\"-\\": unknown {json.dumps(value)} ({value})\\n")\n'
+        'sys.exit(1)\n'
+    )
+    echoing.chmod(0o755)
+    monkeypatch.setattr(age, 'BINARY', str(echoing))
+    value = 'not "a" recipient'
+
+    with pytest.raises(age.AgeError) as refused:
+        age.check_recipient(value, name='line 5')
+
+    assert str(refused.value) == 'line 5 is not an age recipient'
+
+
+@pytest.mark.parametrize('shape', range(5), ids=['bare', 'lower', 'quoted', 'assigned', 'json'])
+def test_an_identity_is_refused_before_it_reaches_the_tool(shape: int, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Anywhere in the line and in any case: a key copied out of an env or JSON
+    # file brings its quotes along. No tool is there to ask, so the refusal
+    # cannot have come from one.
+    value = _identities()[shape]
+    monkeypatch.setattr(age, 'BINARY', 'age-that-is-not-installed')
+
+    with pytest.raises(age.AgeError, match='private half') as refused:
+        age.check_recipient(value, name='line 2')
+
+    assert str(refused.value).startswith('line 2 ')
+    assert age.SECRET_PREFIX not in str(refused.value).upper()
+
+
+@needs_age
+def test_no_line_reaches_the_tools_argv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """What the tool is asked, as the process table shows it.
+
+    A stand-in `age` on PATH records its argv and hands over to the real one,
+    so what is checked is what any process on the machine could have read
+    while the check ran -- for a line that parses and for every kind that
+    does not.
+    """
+    real = shutil.which(age.BINARY)
+    assert real is not None
+    shim = tmp_path / 'bin' / age.BINARY
+    shim.parent.mkdir()
+    log = tmp_path / 'argv.jsonl'
+    _ = shim.write_text(
+        f'#!{sys.executable}\n'
+        'import json, os, sys\n'
+        f'with open({str(log)!r}, "a") as f: f.write(json.dumps(sys.argv) + "\\n")\n'
+        f'os.execv({real!r}, [{real!r}, *sys.argv[1:]])\n'
+    )
+    shim.chmod(0o755)
+    monkeypatch.setenv('PATH', f'{shim.parent}{os.pathsep}{os.environ["PATH"]}')
+    public = age.generate().public
+    lines = [public, *_not_recipients(), *_identities()]
+
+    for value in lines:
+        try:
+            age.check_recipient(value, name='line 1')
+        except age.AgeError:
+            pass
+
+    recorded = log.read_text()
+    assert len(recorded.splitlines()) == 1 + len(_not_recipients())
+    for value in lines:
+        assert value not in recorded
+        assert json.dumps(value)[1:-1] not in recorded
+
+
+def test_a_missing_tool_is_not_a_refused_recipient(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Every line would read as wrong otherwise, which sends the operator to the
+    # file instead of to the PATH.
+    monkeypatch.setattr(age, 'BINARY', 'age-that-is-not-installed')
+
+    with pytest.raises(age.AgeMissing, match='mise.toml'):
+        age.check_recipient('age1anything', name='line 1')
 
 
 def test_age_url_matches_the_pinned_version() -> None:

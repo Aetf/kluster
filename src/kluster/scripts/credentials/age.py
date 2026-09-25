@@ -16,7 +16,8 @@ disagree.
 `age-keygen -y` take `-` for their identity argument and read it from standard
 input, so a recovery key exists only in this process and in the tool's memory.
 Recipients are public and travel on argv; ciphertexts travel as files, because
-standard input is spoken for.
+standard input is spoken for. A value only being checked as a recipient is not
+yet known to be public, and travels on standard input (`check_recipient`).
 
 A backup generation is a **label with a stored ciphertext**, not a derivation:
 the identity behind `backup/age/<generation>` is random at creation, its age
@@ -28,6 +29,9 @@ derived check` exists to defend.
 
 from __future__ import annotations
 
+import json
+import os
+import re
 import subprocess as sp
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -55,6 +59,10 @@ class AgeError(RuntimeError):
     pass
 
 
+class AgeMissing(AgeError):
+    """The tool is not there to ask, which says nothing about what it was asked."""
+
+
 @dataclass(frozen=True)
 class Identity:
     """One age key pair. The secret is uppercase, as age writes it.
@@ -73,7 +81,7 @@ def _run(argv: list[str], *, stdin: str) -> str:
     try:
         proc = sp.run(argv, input=stdin, capture_output=True, text=True, timeout=TIMEOUT)
     except FileNotFoundError as exc:
-        raise AgeError(f'{argv[0]} is not on PATH; mise.toml pins it, so run under `mise x -- ...`') from exc
+        raise AgeMissing(f'{argv[0]} is not on PATH; mise.toml pins it, so run under `mise x -- ...`') from exc
     if proc.returncode != 0:
         raise AgeError(f'{argv[0]} refused: {proc.stderr.strip() or f"exit {proc.returncode}"}')
     return proc.stdout
@@ -104,6 +112,62 @@ def recipient(secret: str) -> str:
     if not public.startswith(PUBLIC_PREFIX):
         raise AgeError(f'{KEYGEN} returned {public!r}, which is not a recipient')
     return public
+
+
+def check_recipient(value: str, *, name: str) -> None:
+    """Raise unless the pinned `age` takes `value` as a recipient.
+
+    The tool's own parse rather than a prefix test: a recipient with a
+    character wrong still starts `age1`, and only its checksum says it names
+    nobody. Encrypting nothing to it is that parse, with no key and no network.
+
+    Whether the string is a recipient is exactly what is in question, so it
+    is not treated as public, and `name` is what every refusal says in its
+    place. A line holding an identity anywhere in it -- quoted, assigned,
+    lower-cased, as a private key sits in an env or JSON file -- is refused
+    before the tool runs. Every other value reaches the tool on standard
+    input, as a recipients file of one line: never on argv, where any process
+    on the machine could read it, and never echoed back, because the tool
+    reports a bad line in such a file by its position rather than by its
+    content. That costs the tool's specific reason (a bad checksum reads as a
+    malformed recipient). The reason is repeated only where the tool gave it
+    as the verdict on a line of that file (`_reason`), and even then not
+    where it holds the value. Any other failure -- a well-formed plugin
+    recipient whose plugin is not installed fails while encrypting, naming
+    the plugin, which is a piece of the line -- is the bare refusal.
+    """
+    if SECRET_PREFIX in value.upper():
+        raise AgeError(f'{name} holds an age identity, the private half, where a recipient goes')
+    try:
+        _ = _run([BINARY, '--encrypt', '--armor', '--recipients-file', '-', os.devnull], stdin=f'{value}\n')
+    except AgeMissing:
+        raise
+    except AgeError as exc:
+        reason = _reason(str(exc))
+        said = reason if reason and value not in reason and json.dumps(value)[1:-1] not in reason else ''
+        raise AgeError(f'{name} is not an age recipient{f" ({said})" if said else ""}') from None
+
+
+#: How the tool names a line of the recipients file it read from standard
+#: input: the file's name, which marks the verdict as one on the line's parse.
+_STDIN_FILE = '"-": '
+
+#: The line's position in that file, around the verdict. Meaningless once the
+#: one line has a name of its own.
+_POSITION = re.compile(r'^error at line \d+: |\s+at line \d+$')
+
+
+def _reason(refusal: str) -> str:
+    """The tool's verdict on the line, out of `_run`'s refusal, or nothing where the refusal is not one.
+
+    Only a verdict the tool gave as a line of the file on standard input is
+    kept. Those name the line by its position alone; anything else the tool
+    says about a value is free to quote a piece of it.
+    """
+    first = refusal.splitlines()[0]
+    if _STDIN_FILE not in first:
+        return ''
+    return _POSITION.sub('', first.rsplit(_STDIN_FILE, 1)[1]).strip()
 
 
 def encrypt(plaintext: str, recipients: Sequence[str]) -> str:

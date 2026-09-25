@@ -44,7 +44,7 @@ import os
 import re
 import secrets
 import textwrap
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -558,14 +558,43 @@ class Registry:
         return self.directory(label) / f'{generation}{SUFFIX}'
 
     def recipients(self) -> list[str]:
+        """Every recipient the file names, each one parsed by the pinned `age`.
+
+        The file's one reader, so `check` reports a line the tool would refuse
+        and every writer refuses it before anything is drawn. One refusal
+        names every such line by its number, and no refusal carries a line's
+        content: the likeliest wrong line is the private half pasted where
+        the public one goes (`age.check_recipient`). A missing `age` is not a
+        wrong line, and is raised as itself.
+        """
         try:
-            return list(config.lines(self.recipients_file, 'the escrow recipients'))
+            # For its refusals alone: an absent file and one holding nothing
+            # but comments are each said in words of their own below.
+            _ = config.lines(self.recipients_file, 'the escrow recipients')
         except FileNotFoundError as exc:
             raise EscrowError(
                 f'no {self.recipients_file}; `credentials kit bootstrap` writes it while creating the recovery key'
             ) from exc
         except ValueError as exc:
             raise EscrowError(f'{self.recipients_file} names no recipient') from exc
+        values: list[str] = []
+        refused: list[str] = []
+        # Numbered against the file as an editor shows it, which `lines`
+        # does not keep: the same blank and comment lines are skipped.
+        for number, line in enumerate(self.recipients_file.read_text().splitlines(), start=1):
+            value = line.strip()
+            if not value or value.startswith(config.COMMENT):
+                continue
+            try:
+                age.check_recipient(value, name=f'line {number}')
+            except age.AgeMissing:
+                raise
+            except age.AgeError as exc:
+                refused.append(str(exc))
+            values.append(value)
+        if refused:
+            raise EscrowError(f'{self.recipients_file}: {"; ".join(refused)}')
+        return values
 
     def set_recipients(self, values: Sequence[str]) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -647,6 +676,72 @@ def _store(registry: Registry, label: str, secret: str, *, generation: int, reci
     return path
 
 
+def _opens(recipients: Sequence[str], held: Iterable[str]) -> bool:
+    """Whether a file written to `recipients` opens with a key in hand, `held` being those keys' recipients.
+
+    The one rule every write to the registry is held to (credentials.md §2.2).
+    Each writer refuses a write this answers no to in words of its own --
+    `_anchored` for a new generation, `rewrap` for a re-encryption -- and the
+    rule itself is written once, so the writers cannot drift apart on it.
+    """
+    return not set(held).isdisjoint(recipients)
+
+
+def _anchored(vault: Vault, label: str) -> list[str]:
+    """The recipients a write under `label` goes to, refused unless the kit in hand opens it.
+
+    The kit is the anchor rather than anything in the checkout, because a
+    checkout goes stale all at once: a clone that predates a kit rotation
+    holds a recipients file that names the retired key, and nothing beside it
+    in the same clone says otherwise. The recipient is derived from the
+    identity, never read from the row's `UserName`, for the reason
+    `rotate_recovery` gives.
+
+    A recipient beside the kit's passes -- a second custodian's is a line the
+    file may carry (`rewrap`) -- and is named by the write that goes to it
+    (`_file`), not here: a caller held to the rule may still find it has
+    nothing to write (`record`).
+    """
+    recipients = vault.registry.recipients()
+    recipient = age.recipient(vault.identity)
+    if not _opens(recipients, [recipient]):
+        raise EscrowError(
+            f'{vault.registry.recipients_file} does not name {recipient}, the recovery recipient of the kit in '
+            f'hand, so {label} would be escrowed where this kit cannot open it. A checkout whose {DIRECTORY}/ '
+            'predates a kit rotation is brought up to date with the commit that re-wrapped it, and a rotation '
+            'that stopped part way is finished by `credentials kit rotate --into` the same file; a kit that '
+            f'predates this {DIRECTORY}/ is a retired one, and its successor is the kit to run with '
+            '(credentials.md §2.2)'
+        )
+    return recipients
+
+
+def _file(vault: Vault, label: str, secret: str, *, generation: int, recipients: Sequence[str]) -> Path:
+    """Write one generation to recipients `_anchored` has held to the rule, naming every reader beyond the kit."""
+    _name_others(vault.registry, recipients, held=[age.recipient(vault.identity)], written=label)
+    return _store(vault.registry, label, secret, generation=generation, recipients=recipients)
+
+
+def _name_others(registry: Registry, recipients: Sequence[str], *, held: Iterable[str], written: str) -> None:
+    """Warn of every recipient a write goes to beyond the keys in hand.
+
+    Nothing here can tell a second custodian's line from one nobody reviewed,
+    so every write says who else can open what it wrote -- the one moment a
+    line added to the file takes effect, and so the one tripwire this side
+    has. Which lines belong there is a review's question.
+    """
+    held = set(held)
+    for other in recipients:
+        if other not in held:
+            log.warning(
+                'escrow: %s is also encrypted to %s, which %s names beside the kit in hand; whoever holds its '
+                'identity can open it',
+                written,
+                other,
+                registry.recipients_file,
+            )
+
+
 def init(kit: KdbxStore, registry: Registry, *, entry: str = RECOVERY_ENTRY) -> age.Identity:
     """Create the recovery keypair: private half into the kit, recipient into the repo.
 
@@ -674,12 +769,14 @@ def init(kit: KdbxStore, registry: Registry, *, entry: str = RECOVERY_ENTRY) -> 
     return identity
 
 
-def generate(registry: Registry, label: str) -> str:
+def generate(vault: Vault, label: str) -> str:
     """Mint a fresh random secret as the label's next generation, and return it.
 
     The ciphertext is on disk before this returns, which is the safety
     property in one sentence: no caller ever holds a generated secret that
-    the escrow does not carry.
+    the escrow does not carry. A vault rather than the directory alone, so
+    that what is written is something the kit in hand opens (`_anchored`),
+    checked before anything is drawn.
 
     Nothing adopts the new generation on its own. The consumer named in the
     register has to be re-run against it, and until then the previous
@@ -694,19 +791,20 @@ def generate(registry: Registry, label: str) -> str:
             f'{label} is made in a console, not here, so there is nothing to draw; '
             f'`{fill_command(label)}` prints the steps and escrows what they produce'
         )
-    generation = _next_generation(registry, row)
+    generation = _next_generation(vault.registry, row)
+    recipients = _anchored(vault, label)
     secret = row.origin.mint()
     # The row's own mint against the row's own shape: the register says what a
     # label holds in one place, and a mint that stopped agreeing with it fails
     # here rather than at the recovery.
     row.validate(secret)
-    path = _store(registry, label, secret, generation=generation, recipients=registry.recipients())
+    path = _file(vault, label, secret, generation=generation, recipients=recipients)
     log.info('escrow: %s generation %d written to %s (%s)', label, generation, path, row.what)
     log.warning('nothing has adopted it yet: re-run what consumes %s, and commit %s', label, path)
     return secret
 
 
-def adopt(registry: Registry, label: str, secret: str) -> Path:
+def adopt(vault: Vault, label: str, secret: str) -> Path:
     """Escrow a value that already exists as the label's next generation.
 
     The one way a secret enters the registry without being minted here, and it
@@ -724,13 +822,19 @@ def adopt(registry: Registry, label: str, secret: str) -> Path:
     anything is written. An import is the only way a value the escrow did not
     mint gets in, so it is also the only place where "this is not the secret
     you think it is" can be caught before the ciphertext is committed and
-    trusted.
+    trusted. Like `generate`, it writes only what the kit in hand opens
+    (`_anchored`).
     """
     row = _row(label)
     row.validate(secret)
-    generation = _next_generation(registry, row)
-    path = _store(registry, label, secret, generation=generation, recipients=registry.recipients())
-    log.info('escrow: adopted the existing %s as generation %d in %s', label, generation, path)
+    return _adopt(vault, row, secret, recipients=_anchored(vault, label))
+
+
+def _adopt(vault: Vault, row: Label, secret: str, *, recipients: Sequence[str]) -> Path:
+    """File a checked value as the row's next generation, to recipients `_anchored` has already held to the rule."""
+    generation = _next_generation(vault.registry, row)
+    path = _file(vault, row.name, secret, generation=generation, recipients=recipients)
+    log.info('escrow: adopted the existing %s as generation %d in %s', row.name, generation, path)
     return path
 
 
@@ -802,7 +906,7 @@ def record(vault: Vault, label: str, secret: str) -> Path:
     ran", which stops being true the moment a key is replaced in a console.
 
     Opening the registry is what makes that possible, so this is the one writer
-    that needs the recovery key rather than the recipients file alone.
+    that decrypts as well as writes.
     """
     row = _row(label)
     if not isinstance(row.origin, Console):
@@ -812,8 +916,11 @@ def record(vault: Vault, label: str, secret: str) -> Path:
         )
     # Before anything is decrypted: a value that cannot be this row's secret is
     # refused where its source is still known, rather than after a walk that
-    # opened every generation to compare it against.
+    # opened every generation to compare it against -- and so is a registry
+    # the kit in hand cannot open, which the walk would otherwise report as a
+    # generation no identity matched rather than in the rule's own words.
     row.validate(secret)
+    recipients = _anchored(vault, label)
     wanted = secret.strip()
     held = next(
         (
@@ -826,7 +933,7 @@ def record(vault: Vault, label: str, secret: str) -> Path:
     if held is not None:
         log.info('escrow: %s is already generation %d; nothing to file', label, held)
         return vault.registry.path(label, held)
-    return adopt(vault.registry, label, secret)
+    return _adopt(vault, row, secret, recipients=recipients)
 
 
 def rewrap(registry: Registry, *, identities: Sequence[str], recipients: Sequence[str] | None = None) -> list[Path]:
@@ -845,9 +952,10 @@ def rewrap(registry: Registry, *, identities: Sequence[str], recipients: Sequenc
     targets = list(recipients if recipients is not None else registry.recipients())
     if not targets:
         raise EscrowError('no recipient to re-wrap to')
-    held = {age.recipient(secret) for secret in identities}
-    if not held & set(targets):
+    held = [age.recipient(secret) for secret in identities]
+    if not _opens(targets, held):
         raise EscrowError('none of the identities in hand is among the recipients; this would lock the escrow')
+    _name_others(registry, targets, held=held, written='every generation')
 
     # Everything is opened before anything is written: a run that dies part
     # way through then leaves a registry the same identities can still open.
@@ -916,14 +1024,15 @@ def check(registry: Registry) -> list[str]:
 
     Deliberately answerable by someone holding only a clone: presence of every
     expected label, ciphertexts that are age files, generations that count
-    from one without a gap. What it cannot check is whether they decrypt —
-    that needs the kit, and the run that needs the kit is a recovery.
+    from one without a gap, and recipients the pinned `age` parses. What it
+    cannot check is whether they decrypt — that needs the kit, and the run
+    that needs the kit is a recovery. Nor which recipient is the kit's: with
+    no kit there is nothing to compare against, so that is each writer's
+    check (`_anchored`).
     """
     problems: list[str] = []
     try:
-        for value in registry.recipients():
-            if not value.startswith(age.PUBLIC_PREFIX):
-                problems.append(f'{RECIPIENTS_FILE}: {value!r} is not an age recipient')
+        _ = registry.recipients()
     except EscrowError as exc:
         problems.append(str(exc))
 
@@ -954,6 +1063,8 @@ class Vault:
 
     The pairing is a type rather than two arguments because every read needs
     both, and a reader that has the directory but not the key has nothing.
+    Every write needs both as well: what it writes has to open with the key
+    (`_anchored`).
 
     The identity does not print: it is the recovery key, which opens every
     ciphertext in the registry the other half names.
@@ -964,6 +1075,12 @@ class Vault:
 
     @classmethod
     def open(cls, kit: KdbxStore, registry: Registry | None = None, *, entry: str = RECOVERY_ENTRY) -> Vault:
+        if not holds_recovery(kit, entry=entry):
+            raise EscrowError(
+                f'{kit.path} holds no recovery key at {entry!r}. A kit that predates the escrow gets one from '
+                '`credentials kit bootstrap --only recovery`; where a recipients file is already committed, the '
+                'kit that holds its key is the one to run with'
+            )
         return cls(registry=registry if registry is not None else Registry.open(), identity=kit.get(entry))
 
     def recover(self, label: str, generation: int | None = None) -> str:

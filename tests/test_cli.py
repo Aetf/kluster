@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import inspect
 import io
+import shutil
 import types
 from collections.abc import Callable
 from pathlib import Path
@@ -34,14 +35,17 @@ from typing import Any
 
 import pytest
 from credentials_command_tree import commands
+from memory_kit import MemoryKit
 
-from kluster.scripts.credentials import cli, devices, entries, escrow, masters
+from kluster.scripts.credentials import age, cli, devices, entries, escrow, masters
 from kluster.scripts.credentials.kdbx import PATH_ENV, KdbxStore
 
 PASSWORD = 'kit-password'
 
 #: The refusal a seed row with no implementation produces (`cli.main`).
 REFUSAL = 'not yet implemented'
+
+needs_age = pytest.mark.skipif(shutil.which(age.BINARY) is None, reason='age is not on PATH (mise x -- ...)')
 
 
 def _module_for(member: str) -> types.ModuleType | None:
@@ -649,6 +653,103 @@ def test_check_fails_on_a_single_problem_of_any_kind(
     assert cli.main(['derived', 'check']) == 1
 
     assert problem in caplog.text
+
+
+def _kit_in_hand(monkeypatch: pytest.MonkeyPatch, registry: escrow.Registry) -> KdbxStore:
+    """A kit with a recovery key, reached the way every command reaches one, and the registry that key filed.
+
+    In memory rather than a database on disk, which is the slow part; the
+    command opens it through `KdbxStore.from_env` exactly as it opens a real
+    one.
+    """
+    kit = MemoryKit()
+    _ = escrow.init(kit, registry)
+
+    def from_env(_path: Path | None = None) -> KdbxStore:
+        return kit
+
+    monkeypatch.setattr(KdbxStore, 'from_env', from_env)
+    return kit
+
+
+@needs_age
+@pytest.mark.parametrize(('verb', 'piped'), [('generate', ''), ('import', 'a-token-from-somewhere-else')])
+def test_an_escrow_write_the_kit_in_hand_cannot_open_is_refused(
+    verb: str, piped: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # `RECIPIENTS` naming a key other than the kit's: a clone that predates a
+    # kit rotation, or a line replaced by a hand edit. Written, the generation
+    # would open only with that other key. The real command rather than the
+    # dispatch stubs above, because the rule is what the write does with the
+    # kit it was handed, and a row with no workstation slot, so nothing but the
+    # registry can be written.
+    registry = escrow.Registry.open(tmp_path / 'escrow')
+    _ = _kit_in_hand(monkeypatch, registry)
+    registry.set_recipients([age.generate().public])
+    monkeypatch.setattr('sys.stdin', io.StringIO(piped))
+
+    code = cli.main(['--escrow', str(registry.root), 'derived', escrow.row_name(escrow.ALERTMANAGER), verb])
+
+    assert code == 1
+    assert 'the recovery recipient of the kit in hand' in caplog.text
+    assert registry.generations(escrow.ALERTMANAGER) == []
+
+
+#: A private key as it is pasted: bare, lower-cased, and in the shapes it has
+#: in an env, a JSON or a YAML file.
+PASTED_SHAPES = {
+    'bare': '{}',
+    'lower': '{lower}',
+    'quoted': '"{}"',
+    'assigned': 'SOPS_AGE_KEY="{}"',
+    'json': '"key": "{}",',
+}
+
+
+@needs_age
+@pytest.mark.parametrize('shape', PASTED_SHAPES.values(), ids=PASTED_SHAPES.keys())
+def test_check_never_prints_a_private_key_pasted_as_a_recipient(
+    shape: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The likeliest slip in a hand edit, and `check` is the command whose
+    # output is read on a screen and pasted into issues: the line is named by
+    # its number and no part of the key appears, in any case or escaping.
+    registry = escrow.Registry.open(tmp_path / 'escrow')
+    kit = _kit_in_hand(monkeypatch, registry)
+    secret = kit.get(escrow.RECOVERY_ENTRY)
+    registry.set_recipients([*registry.recipients(), shape.format(secret, lower=secret.lower())])
+
+    assert cli.main(['--escrow', str(registry.root), 'derived', 'check']) == 1
+
+    assert 'line 2' in caplog.text
+    assert secret.upper().removeprefix(age.SECRET_PREFIX) not in caplog.text.upper()
+
+
+class _Locked(MemoryKit):
+    """A kit that fails the test the moment anything asks it for a row."""
+
+    def has(self, entry: str) -> bool:
+        raise AssertionError(f'the kit was unlocked for {entry}')
+
+    def get(self, entry: str, attribute: str = 'Password') -> str:
+        raise AssertionError(f'the kit was unlocked for {entry}')
+
+
+def test_import_reads_its_pipe_before_unlocking_the_kit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # An empty pipe is refused with no password prompt in front of it: the
+    # value is read, and found missing, before the kit is opened.
+    def from_env(_path: Path | None = None) -> KdbxStore:
+        return _Locked()
+
+    monkeypatch.setattr(KdbxStore, 'from_env', from_env)
+    monkeypatch.setattr('sys.stdin', io.StringIO(''))
+
+    argv = ['--escrow', str(tmp_path / 'escrow'), 'derived', escrow.row_name(escrow.ALERTMANAGER), 'import']
+    assert cli.main(argv) == 1
+
+    assert 'standard input was empty' in caplog.text
 
 
 class _Terminal(io.StringIO):
