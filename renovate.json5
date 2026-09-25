@@ -175,6 +175,40 @@
       groupSlug: 'state-backend',
     },
     {
+      // The local age, into the appliance's group. `mise.toml` pins the age
+      // this repository's tests run, and a test holds it equal to the
+      // appliance's `settings.AGE_VERSION`, so a release has to move both
+      // pins in one pull request: apart, each half fails that test on its own.
+      // The mise manager reads the pin as the dependency `age` (its bundled
+      // registry resolves the name to `FiloSottile/age` through the aqua
+      // backend); the settings pin is a different dependency, named by the
+      // custom manager below, and the rule above already groups it.
+      //
+      // Position is load-bearing, as for the `jdx/mise-action` rule: this sits
+      // *after* the rule grouping the whole mise manager as the toolchain, so
+      // its group wins. The group's name and slug are the rule above's, and a
+      // test holds them equal: the slug names the branch, so a different one
+      // would be a second pull request again.
+      //
+      // The dependency name is `mise.toml`'s key under `[tools]`, backend
+      // prefix included, so respelling the pin there (`aqua:FiloSottile/age`)
+      // takes it out of this rule; the test reads the name from here and
+      // looks it up there.
+      //
+      // Read from releases, as the settings pin is: the aqua backend would
+      // read tags, and a tag pushed before its release would put this half
+      // into the pull request ahead of the other.
+      matchManagers: [
+        'mise',
+      ],
+      matchDepNames: [
+        'age',
+      ],
+      overrideDatasource: 'github-releases',
+      groupName: 'state-backend appliance',
+      groupSlug: 'state-backend',
+    },
+    {
       // The self-built images (ci.md §4). Each pin here is one image, so they
       // travel one per pull request rather than grouped: a Postgres operand
       // rebuild and a proxy's version bump are not one decision. Patch
