@@ -4,7 +4,10 @@
 the re-provision command, which is what keeps the rebuild path warm. It is not
 therefore harmless — replacing the box destroys every stack's state that is
 not in a dump — so a run that finds drift on a box that exists reports it and
-stops, and `--force` is how a replacement is asked for. `dump` and `restore`
+stops, and `--force` is how a replacement is asked for. A run that leaves the
+box standing, matching or not, writes nothing to OCI or B2 but to point the
+reserved address back at the box: every other such write belongs to a run
+that launches a box. `dump` and `restore`
 are the other half of that path: every playbook that replaces the box is a
 dump, a provision and a restore (physical/state-backend.md §7), with the dump
 taken by the converge itself, and each of them verifies rather than reports.
@@ -98,7 +101,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     provision_cmd = actions.add_parser(
         'provision',
-        help='create the appliance, or converge everything around it',
+        help='create the appliance, or compare the running one to this commit and replace it when asked',
         epilog=(
             'exit status: 0 the appliance is current and holds its state; '
             f'{RESTORE_PENDING} the box was replaced and the state is not back in it yet, so run '
@@ -262,6 +265,9 @@ def _rebuild_reasons(
     and is therefore always young, so an expiry the box is walking towards is
     invisible to equality; what the box records is when its own certificate
     dies, and `config.renewal_due` reads that against the clock.
+
+    Every input is read from OCI or B2 before the run has decided to write to
+    either.
     """
     if replace:
         return ['--replace was asked for']
@@ -286,6 +292,63 @@ def _rebuild_reasons(
     return reasons
 
 
+def _missing_inputs(reserved: provision.ReservedAddress | None, bucket: b2.Bucket | None) -> list[str]:
+    """Why a running box cannot be compared at all: what the comparison reads is missing.
+
+    The address and the bucket are inputs of the box's bill of materials, so
+    a box standing without either is not one this commit describes; its
+    replacement is also what creates them.
+    """
+    reasons: list[str] = []
+    if reserved is None:
+        reasons.append('no reserved address carries the appliance name')
+    if bucket is None:
+        reasons.append(f'the bucket its dumps go to, {settings.B2_BUCKET}, does not exist')
+    return reasons
+
+
+@dataclass(frozen=True)
+class Groundwork:
+    """What a new box stands on that does not depend on the box it replaces.
+
+    Converged before the dump and the terminate, because every piece of it can
+    fail and none of it needs the old box gone: a failure here stops the run
+    with the old box still serving. The image import is the long piece.
+    """
+
+    bucket_id: str
+    placement: provision.Placement
+    nsg_id: str
+    reserved: provision.ReservedAddress
+    image_id: str
+    availability_domain: str
+
+
+def _groundwork(clients: provision.OciClients, session: b2.Session, found: provision.Survey) -> Groundwork:
+    """Create or converge everything the launch needs, short of the dump key."""
+    log.info('converging bucket %s', settings.B2_BUCKET)
+    bucket_id = b2.ensure_bucket(
+        session,
+        settings.B2_BUCKET,
+        prefix=settings.B2_PREFIX,
+        retention_days=settings.B2_RETENTION_DAYS,
+    )
+    log.info('converging the OCI network: VCN, subnet, gateway, security group, reserved address')
+    placement = provision.ensure_network(clients, found)
+    nsg_id = provision.ensure_security_group(clients, placement.vcn_id, found)
+    reserved = provision.ensure_reserved_ip(clients, found)
+    log.info('converging the custom image — a release not imported yet takes ten minutes and more')
+    image_id = provision.ensure_image(clients, found)
+    return Groundwork(
+        bucket_id=bucket_id,
+        placement=placement,
+        nsg_id=nsg_id,
+        reserved=reserved,
+        image_id=image_id,
+        availability_domain=provision.shape_availability_domain(clients, image_id),
+    )
+
+
 @dataclass(frozen=True)
 class LaunchedBox:
     """The box a launch created, and the SSH identity it was built with.
@@ -304,11 +367,7 @@ def _launch_box(
     roots: config.Roots,
     *,
     dump_key: b2.AppKey,
-    found: provision.Survey,
-    placement: provision.Placement,
-    nsg_id: str,
-    reserved: provision.ReservedAddress,
-    bucket_id: str,
+    ground: Groundwork,
 ) -> LaunchedBox:
     """Render this commit's machine around `dump_key` and launch it.
 
@@ -317,7 +376,8 @@ def _launch_box(
     application key's secret once and a box launched without it can never be
     handed one afterwards.
     """
-    log.info('rendering the Ignition config for %s', reserved.address)
+    address = ground.reserved.address
+    log.info('rendering the Ignition config for %s', address)
     # One machine, rendered once: three facts about the box have to come from
     # the same render. The Ignition it boots with, the expiry recorded beside
     # it, and the SSH host key recorded beside that -- a second
@@ -325,28 +385,51 @@ def _launch_box(
     # host key, and the box would be pinned to a key it never held.
     built = config.machine(
         roots,
-        address=reserved.address,
+        address=address,
         dump_key_id=dump_key.key_id,
         dump_key=dump_key.key,
-        bucket_id=bucket_id,
+        bucket_id=ground.bucket_id,
     )
     ignition = config.render_ignition(built)
     host_public_key = config.host_public_key(built)
-    log.info('[6/7] converging the custom image — a release not imported yet takes the better part of an hour')
-    image_id = provision.ensure_image(clients, found)
-    log.info('[7/7] launching the instance')
+    log.info('launching the instance')
     instance_id = provision.ensure_instance(
         clients,
-        subnet_id=placement.subnet_id,
-        nsg_id=nsg_id,
-        image_id=image_id,
+        subnet_id=ground.placement.subnet_id,
+        nsg_id=ground.nsg_id,
+        image_id=ground.image_id,
+        availability_domain=ground.availability_domain,
         ignition=ignition,
-        digests=config.digests(roots, address=reserved.address, dump_key_id=dump_key.key_id, bucket_id=bucket_id),
+        digests=config.digests(roots, address=address, dump_key_id=dump_key.key_id, bucket_id=ground.bucket_id),
         dump_key_id=dump_key.key_id,
         server_cert_expiry=config.expires_at(built),
         ssh_host_key_pub=host_public_key,
     )
     return LaunchedBox(instance_id=instance_id, host_public_key=host_public_key)
+
+
+def _hand_over(roots: config.Roots, *, address: str, launched: LaunchedBox | None) -> bool:
+    """Write what the workstation needs to reach the box, then wait for it to answer.
+
+    Local writes only: the operator's client bundle, and the host-key pin of a
+    box this run built. A run that launched nothing writes no pin -- the box
+    did not change, and `ssh` re-reads the pin from the instance's metadata on
+    every exec regardless.
+    """
+    slot = workstation.bundle_dir()
+    config.write_client_bundle(config.client_bundle(roots.ca, name='operator', address=address), slot)
+    log.info('operator certificate bundle written to %s', slot)
+    if launched is not None:
+        # Placed where `state-backend ssh` reads it, so the first diagnosis
+        # after a replace needs no fetch of its own.
+        known_hosts = config.write_known_hosts(slot, address=address, public_key=launched.host_public_key)
+        log.info('host key pin for %s written to %s', address, known_hosts)
+
+    if not provision.wait_for_backend(address):
+        log.error('the backend did not answer on %s:%d — ssh core@%s to look', address, settings.PORT, address)
+        return False
+    log.info('backend answering on %s:%d', address, settings.PORT)
+    return True
 
 
 def _provision(
@@ -364,7 +447,7 @@ def _provision(
     # Each stage says what it is starting, not only what it finished: the
     # image import and the first boot are minutes-long, and a log that only
     # speaks on success is indistinguishable from a hang while they run.
-    log.info('[1/7] authorizing with OCI, and looking for a box that already exists')
+    log.info('[1/6] authorizing with OCI, and looking for a box that already exists')
     clients = provision.OciClients.load(compartment)
     # Every adopt-by-name read, before the run's first write: what the stages
     # below adopt is decided here, and each of them creates only what the
@@ -376,149 +459,150 @@ def _provision(
     # decides whether this run may generate roots at all: on a live appliance,
     # a label the escrow cannot answer for means the wrong escrow rather than
     # a first run (config.Roots.ensure).
-    log.info('[2/7] opening the escrow with the kit')
+    log.info('[2/6] opening the escrow with the kit')
     roots = config.Roots.ensure(escrow.Vault.open(store, registry), appliance_exists=existing is not None)
 
-    log.info('[3/7] authorizing with B2, then converging bucket %s', settings.B2_BUCKET)
+    log.info('[3/6] authorizing with B2, and looking up bucket %s', settings.B2_BUCKET)
     session = b2.Session.from_entry(store, seed_entry)
-    # Before the bucket, and so before every OCI write and the terminate below:
-    # this is the first thing the run creates, and a seed for another account
-    # would create it there. The mint checks again for its own sake; this one
-    # is what makes the refusal cost nothing on this path.
+    # Before every write this run makes to either provider, the bucket and the
+    # terminate included: a seed for another account would create the bucket there. The
+    # mint checks again for its own sake; this one is what makes the refusal
+    # cost nothing on this path.
     b2.verify_account(session.account_id)
-    bucket_id = b2.ensure_bucket(
-        session,
-        settings.B2_BUCKET,
-        prefix=settings.B2_PREFIX,
-        retention_days=settings.B2_RETENTION_DAYS,
-    )
+    bucket = next(iter(session.buckets(settings.B2_BUCKET)), None)
+    reserved = provision.found_reserved_ip(clients, found)
 
-    log.info('[4/7] converging the OCI network: VCN, subnet, gateway, security group, reserved address')
-    placement = provision.ensure_network(clients, found)
-    nsg_id = provision.ensure_security_group(clients, placement.vcn_id, found)
-    reserved = provision.ensure_reserved_ip(clients, found)
-    log.info('appliance address: %s', reserved.address)
+    # Up to here the run has written to neither provider, and a run that leaves
+    # the box standing -- because it matches, or because its drift was not
+    # asked to be acted on -- writes nothing to either but the one repair below.
+    log.info('[4/6] comparing the running box against this commit')
+    if existing is not None:
+        if reserved is None or bucket is None:
+            reasons = _missing_inputs(reserved, bucket)
+        else:
+            reasons = _rebuild_reasons(
+                roots, session, existing, address=reserved.address, bucket_id=bucket.bucket_id, replace=replace
+            )
+            if not reasons:
+                log.info('appliance %s matches the repository; nothing to change', existing.id)
+                # The one write a run over a standing box can make, and only
+                # when the reservation points elsewhere: a run that stopped
+                # between a launch and the attach leaves the new box with no
+                # public address, and this is the way back to it.
+                provision.attach_reserved_ip(clients, instance_id=str(existing.id), public_ip_id=reserved.id)
+                return 0 if _hand_over(roots, address=reserved.address, launched=None) else 1
+        for reason in reasons:
+            log.warning('%s', reason)
+        if not (replace or force):
+            log.error('%s would be replaced, and nothing has been changed', existing.id)
+            log.error(
+                "a replacement destroys the box holding every stack's state, and its boot volume with it: "
+                're-run with --force to replace this one, or --replace to rebuild a box that matches'
+            )
+            return 1
 
-    log.info('[5/7] comparing the running box against this commit')
-    reasons = (
-        []
-        if existing is None
-        else _rebuild_reasons(roots, session, existing, address=reserved.address, bucket_id=bucket_id, replace=replace)
-    )
+    # Everything fallible that does not need the old box gone, the image
+    # import above all, runs while that box still serves: a failure here ends
+    # the run with nothing destroyed.
+    log.info('[5/6] converging what the new box stands on, before anything is destroyed')
+    ground = _groundwork(clients, session, found)
+
     # The dump this run took of the box it destroyed, for the closing
     # instruction. `None` covers both the run that destroyed nothing and the
     # `--no-dump` run, which have different last words.
     taken: Path | None = None
-    #: The box this run launched, or None on the run that left one standing.
+    #: The box this run launched, once it is running.
     launched: LaunchedBox | None = None
+    answered = False
     # Set the moment the old box starts going away, not when the decision is
     # made: everything after that point owes the operator the closing
     # instruction, including the paths that raise. The `finally` below is what
     # makes that true of every exit, which is what lets the README promise
     # that silence means the old box is still serving.
     destroyed = False
-    announced = False
     try:
-        if existing is not None and not reasons:
-            log.info('appliance %s matches the repository; nothing to rebuild', existing.id)
-            instance_id = str(existing.id)
-        else:
-            if existing is not None:
-                for reason in reasons:
-                    log.warning('%s', reason)
-                if not (replace or force):
-                    log.error('%s would be replaced, and nothing has been changed', existing.id)
-                    log.error(
-                        "a replacement destroys the box holding every stack's state, and its boot volume with it: "
-                        're-run with --force to replace this one, or --replace to rebuild a box that matches'
-                    )
+        if existing is not None:
+            if dump:
+                taken = _dump_before_replacing(roots, output=dump_output, bundle_dir=bundle_dir)
+                if taken is None:
                     return 1
-                if dump:
-                    taken = _dump_before_replacing(roots, output=dump_output, bundle_dir=bundle_dir)
-                    if taken is None:
-                        return 1
-                else:
-                    log.warning('--no-dump: replacing without a dump, so everything since the nightly one is lost')
-                log.warning('replacing %s — 5432 goes away until the new box answers', existing.id)
-                destroyed = True
-                provision.terminate_instance(clients, str(existing.id))
-            # Minting is deliberately on this side of the branch. B2 returns an
-            # application key's secret once, so the box's copy cannot be read back
-            # and re-used, and minting a replacement revokes what the box is
-            # holding: on a run that then leaves the instance alone that breaks
-            # the nightly dump silently, until it next fires. The key's lifetime
-            # is the instance's.
-            log.info('minting the dump key the new box will hold')
-            pending = b2.mint_dump_key(session, bucket_id=bucket_id)
-            # Launching the box is this credential's push, so it runs through
-            # `deliver` and the predecessor is retired only once the box holding
-            # the successor exists -- the order every mint in that package has
-            # (`credentials/delivery.py`).
-            _, launched = pending.deliver(
-                lambda dump_key: _launch_box(
-                    clients,
-                    roots,
-                    dump_key=dump_key,
-                    found=found,
-                    placement=placement,
-                    nsg_id=nsg_id,
-                    reserved=reserved,
-                    bucket_id=bucket_id,
-                )
-            )
-            instance_id = launched.instance_id
-        provision.attach_reserved_ip(clients, instance_id=instance_id, public_ip_id=reserved.id)
+            else:
+                log.warning('--no-dump: replacing without a dump, so everything since the nightly one is lost')
+            log.warning('replacing %s — 5432 goes away until the new box answers', existing.id)
+            destroyed = True
+            provision.terminate_instance(clients, str(existing.id))
+        # After the terminate comes what needs the old box gone or the new one
+        # up -- the launch, which would otherwise adopt the old box by its
+        # name, then the retirement of the dump key's predecessor, the
+        # address pointed at the new box and the wait for it to answer -- and
+        # two steps that need neither: the mint, on the branch that launches
+        # because B2 discloses a key's secret once, and the render that
+        # carries the key. Those two follow the terminate so that a run whose
+        # dump fails has minted no key that nothing holds, and they are the
+        # fallible steps left in the stretch with no backend.
+        log.info('[6/6] minting the dump key the new box will hold, and launching it')
+        pending = b2.mint_dump_key(session, bucket_id=ground.bucket_id)
 
-        slot = workstation.bundle_dir()
-        config.write_client_bundle(config.client_bundle(roots.ca, name='operator', address=reserved.address), slot)
-        log.info('operator certificate bundle written to %s', slot)
-        if launched is not None:
-            # The pin for the box this run built, placed where
-            # `state-backend ssh` reads it, so the first diagnosis after a
-            # replace needs no fetch of its own. A run that launched nothing
-            # writes none: the box did not change, and `ssh` re-reads the pin
-            # from the instance's metadata on every exec regardless.
-            known_hosts = config.write_known_hosts(slot, address=reserved.address, public_key=launched.host_public_key)
-            log.info('host key pin for %s written to %s', reserved.address, known_hosts)
+        # Recorded the moment the launch returns, inside the push: the
+        # predecessor's retirement follows it and can raise, and a box that
+        # is running by then is what the closing instruction has to name.
+        def launch(dump_key: b2.AppKey) -> LaunchedBox:
+            nonlocal launched
+            launched = _launch_box(clients, roots, dump_key=dump_key, ground=ground)
+            return launched
 
-        if not provision.wait_for_backend(reserved.address):
-            log.error(
-                'the backend did not answer on %s:%d — ssh core@%s to look',
-                reserved.address,
-                settings.PORT,
-                reserved.address,
-            )
+        # Launching the box is this credential's push, so it runs through
+        # `deliver` and the predecessor is retired only once the box holding
+        # the successor exists -- the order every mint in that package has
+        # (`credentials/delivery.py`).
+        _, box = pending.deliver(launch)
+        provision.attach_reserved_ip(clients, instance_id=box.instance_id, public_ip_id=ground.reserved.id)
+        answered = _hand_over(roots, address=ground.reserved.address, launched=box)
+        if not answered:
             return 1
-        log.info('backend answering on %s:%d', reserved.address, settings.PORT)
-        if destroyed:
-            announced = True
-            return _restore_pending(taken)
-        return 0
+        return RESTORE_PENDING if destroyed else 0
     finally:
-        # The stretch above is minutes to an hour long — an image import, a
-        # first boot — and every step of it can raise: B2 refusing the mint,
-        # OCI refusing the launch, the import timing out. The box is already
-        # gone by then and the state is in one file, so a run that leaves this
-        # way says so before the traceback does.
-        if destroyed and not announced:
-            _ = _restore_pending(taken)
+        # The stretch above is minutes long -- a launch, a first boot -- and
+        # every step of it can raise: B2 refusing the mint, OCI refusing the
+        # launch. Once the box is going away the state is in one file, so a
+        # run that leaves this way says so before the traceback does.
+        if destroyed:
+            _restore_pending(taken, launched=launched, answered=answered)
 
 
-def _restore_pending(taken: Path | None) -> int:
-    """The last word of a run that replaced the box: the state is not back yet.
+def _restore_pending(taken: Path | None, *, launched: LaunchedBox | None, answered: bool) -> None:
+    """The last words of a run that destroyed the box: the state is not back yet.
 
-    The new box initdb'd an empty data directory, so a `pulumi` run against it
-    reads a backend serving nothing and acts on that. Naming the command is
-    the point — the operator has just watched an image import and a first boot,
-    and what they are holding is half of an operation.
+    Said from how far the run got, because that decides the operator's next
+    move. A run that saw no new box running cannot say whether one exists --
+    a launch OCI accepted may still come up -- and a restore with nothing to
+    go into fails, so it names the provision that brings a box up where none
+    is and points the address at one that is. A box that has not answered
+    cannot take the restore yet. A box that answers serves an empty database
+    -- it initdb'd a fresh data directory -- and a `pulumi` run against it
+    reads a backend serving nothing and acts on that.
     """
+    if launched is None:
+        log.warning(
+            'no new box was seen running: re-run `state-backend provision`, which brings a box up where none '
+            'is and points the address at one that is. If the terminate is what failed, the old box may still be '
+            'standing or still going away; one still standing is found as it was, holding its state, and is owed '
+            'no restore. Otherwise, once a box answers:'
+        )
+    elif not answered:
+        log.warning(
+            'the new box %s has not answered, so it cannot take the restore yet: re-run '
+            '`state-backend provision`, which points the address at it and waits again -- `state-backend ssh` '
+            'reaches it once the address does; once it answers:',
+            launched.instance_id,
+        )
+    else:
+        log.warning('the new box %s serves an empty database until the state goes back into it:', launched.instance_id)
     if taken is None:
-        log.warning('the box was replaced without a dump; the state comes from the newest object in B2:')
+        log.warning('the box was destroyed without a dump, so the state is the newest object in B2:')
         log.warning('    state-backend restore <that object>')
     else:
-        log.warning('the new box serves an empty database until the dump this run took goes back into it:')
         log.warning('    state-backend restore %s', taken)
-    return RESTORE_PENDING
 
 
 def _dump_before_replacing(roots: config.Roots, *, output: Path | None, bundle_dir: Path) -> Path | None:

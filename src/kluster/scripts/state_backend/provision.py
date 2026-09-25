@@ -7,10 +7,12 @@
 # pyright: reportMissingTypeStubs=false, reportUnknownLambdaType=false
 """Creating the appliance in OCI.
 
-Every step is an `ensure_*`: re-running converges rather than duplicating, so
-"re-provision" (the box's only apply path) and "provision" are the same
-command. The one thing this module deliberately does not do is mutate a
-running box — a changed Butane file means a new instance.
+Every step that creates is an `ensure_*`: re-running converges rather than
+duplicating, so "re-provision" (the box's only apply path) and "provision" are
+the same command. `survey` and `found_reserved_ip` create nothing; each
+`ensure_*` may, and which run calls which is `cli._provision`'s decision. The
+one thing this module deliberately does not do is mutate a running box — a
+changed Butane file means a new instance.
 
 Ordering is dictated by the certificate: the server certificate is issued for
 the reserved public IP, so the address must exist before the Ignition that
@@ -20,10 +22,11 @@ Ignition.
 The reserved public IP is the only public address the box has -- the VNIC is
 launched with no ephemeral one, and the reservation is pointed at its primary
 private IP -- and `settings.ADDRESS` is that address as the repository records
-it. Both consumers of the reservation (`ensure_reserved_ip`,
-`reserved_address`) hold what OCI carries against the constant and refuse
-naming both when they differ, before any caller does anything with the
-address: a box at another address is a decision the repository has to record,
+it. Everything that answers with the reservation's address -- today
+`ensure_reserved_ip`, `reserved_address` and `found_reserved_ip` -- holds what
+OCI carries against the constant and refuses naming both when they differ,
+before any caller does anything with the address (`find_reserved_ip` and the
+survey answer with the reservation itself, and hold nothing): a box at another address is a decision the repository has to record,
 not drift for a converge to follow. The hold is a fact about the appliance's
 own compartment: a run pointed at another one (`--compartment`, or a
 configuration file naming one) is another site, whose address the constant
@@ -256,7 +259,7 @@ def _await_state(fetch: Callable[[], Any], target: str, *, what: str, timeout: i
     """Poll `fetch` until its resource reaches `target`.
 
     The SDK's own waiter re-raises the transient 404s the retry strategy
-    above absorbs, which on an hour-long image import means losing the wait to a blip.
+    above absorbs, which on an image import of ten minutes and more means losing the wait to a blip.
     """
     started = time.monotonic()
     deadline = started + timeout
@@ -278,8 +281,8 @@ def _await_state(fetch: Callable[[], Any], target: str, *, what: str, timeout: i
             last = state
             announced = elapsed
         elif elapsed - announced >= 60:
-            # An import runs for the better part of an hour; silence for that
-            # long is indistinguishable from a hang.
+            # An import runs for ten minutes and more; silence for that long
+            # is indistinguishable from a hang.
             log.info('%s: still %s after %s', what, state, _duration(elapsed))
             announced = elapsed
         if state == target:
@@ -655,6 +658,20 @@ def _string(document: object, key: str, *, what: str) -> str:
     return value
 
 
+def found_reserved_ip(clients: OciClients, found: Survey) -> ReservedAddress | None:
+    """The reservation the survey found, or None when nothing is reserved. Creates nothing.
+
+    The converge's read of the reservation, for the comparison a run makes
+    before it decides whether to write anything; `ensure_reserved_ip` is the
+    same read on a run that launches, reserving when this answers None. Held
+    against `settings.ADDRESS` the same way (`hold_address`).
+    """
+    if found.public_ip is None:
+        return None
+    address = hold_address(str(found.public_ip.ip_address), held=clients.held)
+    return ReservedAddress(id=str(found.public_ip.id), address=address)
+
+
 def reserved_address(clients: OciClients) -> str:
     """The appliance's address, looked up rather than created.
 
@@ -854,7 +871,7 @@ def ensure_image(clients: OciClients, found: Survey) -> str:
     return str(image.id)
 
 
-def _shape_domain(clients: OciClients, image_id: str) -> str:
+def shape_availability_domain(clients: OciClients, image_id: str) -> str:
     """An availability domain that actually offers the shape.
 
     Not `domains[0]`: a shape is offered per-AD, and this one is offered in
@@ -993,6 +1010,7 @@ def ensure_instance(
     subnet_id: str,
     nsg_id: str,
     image_id: str,
+    availability_domain: str,
     ignition: str,
     digests: dict[str, str],
     dump_key_id: str,
@@ -1005,13 +1023,16 @@ def ensure_instance(
     beside it carries, which is to say both must come from one `config.machine`
     call: a pin taken from a second render names a key this box was never
     given, and every later `state-backend ssh` refuses the box it describes.
+
+    `availability_domain` must offer `settings.SHAPE` for `image_id`
+    (`shape_availability_domain`); one that does not fails the launch as
+    `404 NotAuthorizedOrNotFound`.
     """
     compute = clients.compute
     instance = find_instance(clients)
     if instance is not None:
         return str(instance.id)
 
-    availability_domain = _shape_domain(clients, image_id)
     log.info('launching %s (%s) in %s', _name('vm'), settings.SHAPE, availability_domain)
     launched = _data(
         compute.launch_instance(

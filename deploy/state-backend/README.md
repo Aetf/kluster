@@ -33,12 +33,19 @@ The kit is `.credentials/kit.kdbx` in the checkout unless `$KLUSTER_KDBX`
 names one elsewhere — on removable media, or shared between checkouts.
 
 Idempotent end to end, so this is equally the bring-up command and the
-re-provision command; that is what keeps the rebuild path warm. It creates (or
-converges) the appliance's own VCN, subnet, gateway, security group and
-reserved public IP, imports the pinned Fedora CoreOS release as a custom image,
-renders the Ignition and launches the instance — then writes the operator's
-client bundle to `.credentials/state-backend/` in the checkout, the workstation
-slot for it (docs/credentials.md §4.4).
+re-provision command; that is what keeps the rebuild path warm. A run that
+launches a box — one that finds none, or a replacement asked for below — creates (or
+converges) the dump bucket and the appliance's own VCN, subnet, gateway,
+security group and reserved public IP, and imports the current release of the
+Fedora CoreOS stream `settings.py` pins, all while any old box still serves;
+then it renders the Ignition and launches the instance. A run that leaves the
+box standing creates nothing; the one write it can make is pointing the
+reserved address back at a box that matches, when the address points anywhere
+else. A run that
+leaves a box to reach — one it matched, or one it just launched — writes the
+operator's client bundle to
+`.credentials/state-backend/` in the checkout, the workstation slot for it
+(docs/credentials.md §4.4).
 
 **It applies the current commit.** A run compares the box to the repository —
 the Butane file, the operator keys, the age recipients, the pins, the
@@ -83,9 +90,9 @@ The three statuses are an interface, so a script can branch on them
 
 | Exit | What happened | What to do |
 | --- | --- | --- |
-| `0` | The appliance is current and holds its state. | Nothing. |
+| `0` | The appliance is current and holds its state — except on a re-run after a replacement that failed part way, which also lands here with the restore that run named still owed. | Nothing, or that restore. |
 | `3` | The box was replaced; the state is not back in it. | Run the `state-backend restore` the run printed. |
-| `1` | The run failed. | Read the error, then the run's last words: they name a dump to restore if it had already replaced the box, and are silent if the old box is still serving. |
+| `1` | The run failed. | Read the error, then the run's last words: once the run has started terminating the old box they name the dump to restore and say how far the replacement got, and they are silent when it stopped before that, with the old box still serving. |
 
 `1` covers a run that stopped before touching anything **and** one that
 stopped after destroying the box, so it cannot be read as "nothing happened";

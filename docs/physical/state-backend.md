@@ -176,17 +176,49 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     to: a plain `state-backend provision` reports what differs and
     stops, and `--force` asks for exactly that replacement.
     (`--replace` is the same request for a box with no drift to find.)
+    **A run that leaves the box standing writes nothing to OCI or B2,
+    but one repair.** What the comparison needs — what OCI holds under
+    the appliance's names, the reserved address, the dump bucket,
+    whether B2 still has the dump key — is looked up, and nothing is
+    created or converged unless the run is going to launch a box: a
+    run that finds no box, which destroys nothing and so has nothing to
+    approve, or a replacement asked for. A re-run after a replacement
+    that stopped part way — one that finds no box and launches one, or
+    finds the new box and points the address at it — exits 0 over an
+    empty database, and the restore the stopped run named is still
+    owed. The report on a
+    drifted box nobody asked to replace writes nothing. The repair is
+    on a matching box: when the reserved address does not point at it,
+    the run points it back — the box has no other public address, and a
+    run that stopped between a launch and its attach leaves exactly that
+    — and against a box the address already points at, the run writes
+    nothing.
     **Neither flag stands in front of a prompt** — the replacement
     decision reads nothing from a terminal, so it means the same thing
     in a playbook and under a scheduler as it does by hand. (The run as
     a whole is not unattended: opening the kit asks for its password
     when the desktop secret store does not hold one, which is the one
     place a `provision` waits for a human.) Once asked for, the run
-    dumps the box it is about to destroy and verifies the dump before
-    terminating anything, which closes the window back to the last
-    nightly one. That makes the replacement depend on the dump,
-    deliberately: a dump that fails stops the run with the box still
-    standing. `--no-dump` is how an operator says the box cannot be
+    first converges everything the new box stands on that does not need
+    the old one gone — the bucket, the network, the reserved address and
+    the custom image — and looks up the availability domain that offers
+    the shape, so a failure in any of them, a failed image import among
+    them, stops the run with the box still serving. Then it dumps the box
+    it is about to destroy and verifies the dump before terminating
+    anything, which closes the window back to the last nightly one. That
+    makes the replacement depend on the dump, deliberately: a dump that
+    fails stops the run with the box still standing. After the terminate
+    comes what needs the old box gone or the new one up — the launch,
+    which would otherwise adopt the old box by its name, then the
+    retirement of the dump key's predecessor, the reserved address
+    pointed at the new box and the wait for it to answer — and two steps
+    that need neither: the mint, on the branch that launches because B2
+    discloses a key's secret once (below), and the render that carries
+    the key. Those two follow the terminate so that a run whose dump
+    fails has minted no key that nothing holds, and they are the
+    fallible steps left in the stretch with no backend. An image release not imported yet
+    is imported ahead of the terminate rather than in the stretch with no
+    backend. `--no-dump` is how an operator says the box cannot be
     dumped at all — unreachable, or a Postgres that will not start,
     which is the case §6 sends here as its diagnosis path — and accepts
     losing everything since the nightly object.
@@ -196,13 +228,28 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     ends by naming the dump it took and the `state-backend restore`
     that puts it back, and exits non-zero until that has happened — a
     status distinct from both the converge that changed nothing and the
-    run that failed.
+    run that failed. Every run that got as far as the terminate ends
+    that way, whichever way it leaves, and what it says around the
+    restore follows how far it got. A new box that answers is named as
+    serving an empty database. One that is running and has not answered
+    is named as such, with a re-run of `state-backend provision`, which
+    points the address at it and waits again — `state-backend ssh`
+    reaches it once the address does — and the restore for once it
+    answers. A run that saw no new box running says so without claiming
+    none exists, since a launch OCI accepted may still come up, and names
+    a `state-backend provision`, which brings a box up where none is and
+    points the address at one that is, before the restore. Since the
+    terminate itself may be what failed, it also says the old box may
+    still stand: one that does is found as it was, holding its state,
+    and is owed no restore.
 -   **The B2 dump key is one of those components, not a special case.**
     B2 returns an application key's secret once, so the box's copy
-    cannot be read back and minting a replacement revokes what it is
-    holding — a run that re-minted and then left the instance untouched
-    broke the nightly dump silently until it next fired. So the key is
-    minted only on the branch that launches a box, and the converge
+    cannot be read back, and every mint is followed by the retirement
+    of the keys it supersedes (`credentials/delivery.py`): on a run that
+    minted and then left the instance untouched, that retirement would
+    revoke the key the box holds, and the nightly dump would fail
+    silently until it next fired. So the key is minted only on the
+    branch that launches a box, and the converge
     asks B2 whether the *recorded* key still exists with the scope
     `b2.dumps` states for it: if it does not, the box cannot be handed the
     intended key without being rebuilt, which is the same replace as
@@ -352,8 +399,8 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
 ## 4. Network exposure
 
 **The appliance owns its own network.** A VCN, public subnet, internet
-gateway, NSG and reserved public IP, all created by the provision script
-and none of them the cluster's: the cluster VCN is a `physical`-stack
+gateway, NSG and reserved public IP, all created by the provision script on a run that
+launches a box, and none of them the cluster's: the cluster VCN is a `physical`-stack
 resource, and putting the box inside it would invert the dependency this
 whole design exists to avoid (Pulumi needs the backend before it can
 create anything). The isolation is a bonus, not the point. The **reserved**
@@ -364,9 +411,9 @@ certificate on every re-provision. The address is recorded as
 from the first provision, the way the compartment is recorded in
 `conventions`, and the one home a reader that holds no bundle — the
 probe of §6 — takes it from. It is public already, on 5432 and 22 and
-in the certificate. `provision` holds the box to it: both reads of the
-reservation refuse, naming both addresses, when the reservation
-carries anything else (`provision.hold_address`), so a moved box is a
+in the certificate. `provision` holds the box to it: every address it
+takes from the reservation is refused, naming both addresses, when the
+reservation carries anything else (`provision.hold_address`), so a moved box is a
 decision the repository records rather than drift a converge follows.
 The hold is on the appliance's own compartment; a run pointed
 elsewhere by `--compartment` is another site and is not held, the way
@@ -430,8 +477,11 @@ there is nothing for it to edit.)
     recoverable, and a restore cannot tell which produced its input.
     The playbooks below take theirs from the converge.
 -   **Retention, explicit: STANDARD class — daily, kept 30 days —
-    enforced by a B2 lifecycle rule on the prefix** (Pulumi-managed
-    with the bucket, storage.md §4), not by the uploader. That keeps
+    enforced by a B2 lifecycle rule on the prefix** (storage.md §4),
+    not by the uploader. `state-backend provision` creates the bucket
+    with the rule and puts the rule back on every run that launches a
+    box; between those runs nothing holds or reports it, so a rule
+    changed by hand stays changed until the next launch. That keeps
     the box's key free of delete/prune capability (the H4
     discipline), and it is what gives retired encryption keys a
     definite end of life (below).
