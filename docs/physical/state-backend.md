@@ -33,12 +33,21 @@ shape nor the domain, which reads like a permissions problem.
 > certificate's expiry, and the age of the newest dump — are
 > `state-backend probe`, built to be run from the ops repository on a
 > schedule; whether that schedule is in place is the ops repository's
-> own record (its README's census of workflows), and until it is, the
-> probe runs when an operator runs it. Still design-only: the
-> key-rotation script of §1 and the scheduled drill of §7.3, so no
-> drill runs. §7.3.1 is the restore rehearsal an
-> operator runs in their place, and it is written down rather than run:
-> `state-backend restore` has never executed against a live box.
+> own record (its README's census of workflows), and until that
+> schedule starts a job, the probe runs when an operator runs it.
+> Every key rotation this document describes is carried out with
+> commands that exist and, for the age identity, a pin edit (§7.4):
+> `state-backend provision --replace` for the server and dump keys
+> (§1), and the commands the §7.1 and §7.4 playbooks name for the CA
+> and the age identity; the one step no command takes is deleting a
+> compromised generation's objects from the bucket early. As of
+> 2026-09-25 the scheduled drill of §7.3 is design-only, so no drill
+> runs. §7.3.1 is
+> the restore rehearsal an operator runs in its place. It ran on
+> 2026-09-18 against a scratch box, on a dump taken from a
+> workstation, and `state-backend restore` ran against
+> the appliance itself in its first replace-and-restore on 2026-09-25;
+> §7.3.1 says which steps each proved, and what neither did.
 
 ## 1. OS & configuration management
 
@@ -52,8 +61,9 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     file plus a provision script wrapping the `oci` CLI (image import
     if needed, instance launch with the rendered Ignition, and the
     trivial NSG — 5432/22 open, §4). Butane renders to Ignition at provision time (`butane` via
-    mise). The Butane file is reviewed like any code: renovate opens
-    pin-bump PRs against it (§2), humans merge them.
+    mise). The Butane file is reviewed like any code, and so are the
+    pins it is rendered with: renovate opens pin-bump PRs against
+    `state_backend/settings.py` (§2), and humans merge them.
 -   **The only apply path is re-provision.** No configuration agent,
     no SSH mutation: any change = PR to the Butane file → run
     `state-backend provision`, which names every way the running box no
@@ -67,12 +77,15 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     is not in it cannot reach the box at all, which is a re-provision
     to fix, not an `ssh-copy-id`. The
     no-drift rule is what makes "the repo describes the box" true. What
-    tests that claim today is a converge an operator runs by hand, which
-    compares the box's bill of materials against the commit (below);
+    tests that claim, as of 2026-09-25, is a converge an operator runs
+    by hand, which compares the box's bill of materials against the
+    commit (below);
     the quarterly drill (§7.3) is designed to prove it on a schedule, by
-    provisioning a scratch box from the same commit, and is not built —
-    the ops repository carries no workflows, so no pass of it has
-    happened.
+    provisioning a scratch box from the same commit, and as of
+    2026-09-25 no pass of it has happened: its workflow is not written
+    (`kluster-ops#57`), and the ops repository's workflows that do
+    exist start no job until its Actions billing is restored
+    (`kluster-ops#393`).
 -   **First contact with the box is not trust-on-first-use.** The
     address is reserved, and the box is cattle, so every replace hands
     the same address a machine with a different SSH identity — and the
@@ -289,10 +302,13 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     the machine's definition, and the `state-backend` console script
     carries the executable form of the operations this document names
     — render, provision/re-provision, ssh, pins, bundle, dump and
-    restore. Key rotation is the exception the status paragraph above
-    names: it is still prose, and by this rule that makes it a bug
-    rather than a design. The playbooks (§7) *invoke* the script; a
-    procedure that exists only as prose in a playbook is a bug.
+    restore. Key rotation rides those commands rather than a script of
+    its own: `provision --replace` rotates the server key and the dump
+    key, and the CA and age identity rotations of §7.1 and §7.4 add the
+    `credentials derived` generator for the new generation, after the
+    pin edit §7.4 starts with for the age identity. The playbooks (§7)
+    *invoke* the script; a procedure that exists only as prose in a
+    playbook is a bug.
 -   **Secrets ride Ignition, accepted**: the server TLS key (§3) and
     the B2 upload credential (§5) are in `user_data`. On this box
     that's fine where it wasn't for cluster nodes (audit H1): no
@@ -815,37 +831,65 @@ is the moment nobody can afford to find out later:
     (operations.md §4). One pass exercises B2 download, decryption,
     provision-from-Butane, restore, and cert delivery. The *offline*
     age identity is proven separately by the yearly rotation (§7.4),
-    which inherently decrypts with it. **The workflow is not built**:
+    which inherently decrypts with it. **As of 2026-09-25 the workflow is
+    not built**:
     the drill key is generated into the ops repository's `drill`
     Environment (§5) and the drill's OCI and B2 keys are minted beside
-    it (credentials.md §3), but that repository carries no workflows, so
-    nothing runs this on a schedule and no pass of it has happened.
-    Until one does, the same ground is covered by hand — §7.3.1, which
+    it (credentials.md §3), but the workflow that would read them is not
+    written (`kluster-ops#57`), so as of 2026-09-25 nothing runs this on
+    a schedule and no pass of it has happened. Nor would a written one
+    start before that repository's Actions billing is restored
+    (`kluster-ops#393`): until then no job there starts, `probes.yml`
+    (§6) included. Until a pass does run, the same ground is covered by
+    hand — §7.3.1, which
     opens the object with the kit, the `--identity-file` form being the
     workflow's.
 -   **§7.4 age identity rotation.** Trigger: yearly cadence, key
-    compromise, custody change. Outline: `credentials derived
-    backup-age-<N+1> generate` → note the rotation date and N−1's
-    earliest-destroy date where the next offline day will read them
-    (nothing stores either — §5) → bump the generation pin, which swaps
-    the Butane recipients `[N, N−1] → [N+1, N]` →
+    compromise, custody change. Outline: bump the generation pin
+    (`settings.AGE_GENERATION`) to N+1, which brings the row
+    `backup-age-<N+1>` into the register and swaps the Butane recipients
+    `[N, N−1] → [N+1, N]` →
+    `credentials derived backup-age-<N+1> generate` → note the rotation
+    date and N−1's earliest-destroy date where the next offline day
+    will read them (nothing stores either — §5) →
     `state-backend provision --force`, which replaces the box and leaves
     it empty like every other replacement here →
-    `state-backend restore <the file that run named>` → verify
-    both decrypt paths → destroy N−1 on its date by deleting its escrow
-    ciphertext (compromise: drop the key from recipients now, fresh
-    dump, early-delete old objects).
+    `state-backend restore <the file that run named>` → verify both
+    decrypt paths →
+    destroy N−1 on its date by deleting its escrow ciphertext
+    (compromise: the recipients are always the pin and the generation
+    below it, so dropping N now is the pin at N+2 with
+    `backup-age-<N+1>` and `backup-age-<N+2>` both generated, then a
+    fresh dump; the objects written under N are deleted from the bucket
+    by hand, which no command here does).
 
 ### 7.3.1 Restore rehearsal
 
-**Status: designed, not yet run.** The rest of §7 is outline because a
-command carries the detail; this one is written out because the command
-it proves — `state-backend restore` — has never run against a live box,
-and because the first replacement of the appliance leaves a backend
-holding nothing until a restore fills it (§1). So the rehearsal comes
-*before* that replacement rather than during it, and it is the operator
-form of the §7.3 drill: same object, same commands, a kit where the
-drill would have had its own key.
+**Status: run on 2026-09-18; its restore ran against the appliance on
+2026-09-25.** The rehearsal of 2026-09-18 (`kluster-ops#281`) ran
+steps 2 to 9 against a scratch box, on a dump an operator took with
+`state-backend dump` from a workstation, because the bucket held no
+object to take (`kluster-ops#385`). The dump opened with the escrowed
+generation in the kit, the restore landed rows, a client with the
+scratch bundle selected a stack, and the times were recorded. Of step
+1, the minted key listed the prefix and found it empty; as of
+2026-09-25 no object has been downloaded from it. The appliance's
+first replace-and-restore, on 2026-09-25 (`kluster-ops#385`), ran
+`state-backend restore` against production, on the dump
+`state-backend provision --force` took of the box it replaced: the
+dump opened with the kit, went in as one transaction, and the
+restored backend served `dns`, `github` and `physical`. Neither opened an object the appliance
+uploaded itself, so as of 2026-09-25 that is unproven: step 1 as
+written, and the decrypt of a nightly with the kit
+(`kluster-ops#281`).
+
+The rest of §7 is outline because a command carries the detail; this
+one is written out because it proves `state-backend restore` against a
+live box ahead of a replacement, and every replacement of the
+appliance leaves a backend holding nothing until a restore fills it
+(§1). So the rehearsal comes *before* a replacement rather than during
+it, and it is the operator form of the §7.3 drill: same object, same
+commands, a kit where the drill would have had its own key.
 
 **It runs against a scratch box, never against the appliance.** The
 appliance is a singleton — `state-backend provision` finds it by

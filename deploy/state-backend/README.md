@@ -194,5 +194,12 @@ B2 under a prefix whose lifecycle rule enforces retention. Recovery is a
 re-provision followed by `state-backend restore` of the newest object — the
 path the drill is designed to exercise (docs/physical/state-backend.md §7.3),
 and the operator form of it, run by hand against a scratch box with the kit, is
-§7.3.1 there. The drill workflow is not built, and no rehearsal has run, so until
-one has the path is assumed broken rather than known to work.
+§7.3.1 there. As of 2026-09-25 the drill workflow is not written
+(`kluster-ops#57`). The operator form has run: the §7.3.1 rehearsal on
+2026-09-18 opened a workstation dump with the kit (a dump encrypted to the same
+escrowed generation as the appliance's), restored it into a scratch box with its
+rows, and selected a stack against it (`kluster-ops#281`); and the first
+production replace-and-restore followed on 2026-09-25 (`kluster-ops#385`). Two
+halves of the path are unproven as of 2026-09-25, and so assumed broken rather
+than known to work: opening, with the kit, an object the appliance uploaded
+itself, and the drill key's `--identity-file` restore.

@@ -23,6 +23,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import drill_recipient_redirect
 import pytest
 from memory_kit import MemoryKit
 
@@ -199,9 +200,7 @@ def drill_recipient_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Pat
     Pointed away from the checkout's own, so whether the operator has
     committed one there decides nothing about what a dump here encrypts to.
     """
-    path = tmp_path / config.DRILL_RECIPIENT
-    monkeypatch.setattr(config, 'DRILL_RECIPIENT_FILE', path)
-    return path
+    return drill_recipient_redirect.redirect(monkeypatch, tmp_path)
 
 
 @pytest.fixture
@@ -325,7 +324,7 @@ def test_a_truncated_archive_is_not_what_this_check_catches(
     `pg_restore --list` reads a file cut short and still answers with
     everything the whole one would have named — an archive truncated to a few
     kilobytes lists its tables and exits zero. So the dump succeeds here, and
-    a double that refused instead would be pinning a check this artefact does
+    a double that refused instead would be pinning a check this artifact does
     not have.
 
     What the listing does catch is the two cases beside this one: a file that
