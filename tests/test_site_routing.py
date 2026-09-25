@@ -23,6 +23,7 @@ from typing import final
 
 import pytest
 import pytest_asyncio
+from fake_systemd import FakeSystemd
 from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
@@ -56,14 +57,15 @@ class _Device:
     live: Path
     stamp: Path
     daemons: Path
-    #: Where the two stand-ins record what they were asked to do, and the flags
-    #: that decide whether they agree to do it: `refusal` is the daemon that
-    #: will not restart, `rejection` the parser that will not take the file.
-    commands: Path
+    #: The `systemctl` the script reaches, shipping the daemon's unit as the
+    #: firmware does, whose process reads the daemon's copy when it starts; a
+    #: daemon that will not come back is a unit whose start fails there.
+    systemd: FakeSystemd
+    #: Where the parser's stand-in records what it was asked to check, and the
+    #: flag that makes it reject the file.
     checks: Path
-    refusal: Path
     rejection: Path
-    #: What `PATH` must start with for those stand-ins to be the ones found.
+    #: What `PATH` must hold for that stand-in to be the one found.
     tools: Path
 
 
@@ -95,9 +97,8 @@ def _device(tmp_path: Path, *, configuration: str, daemons: str = STOCK_DAEMON_L
         live=tmp_path / 'live' / 'frr.conf',
         stamp=tmp_path / 'live' / f'frr.conf.{conventions.CLUSTER_NAME}-applied',
         daemons=tmp_path / 'live' / 'daemons',
-        commands=tmp_path / 'commands',
+        systemd=FakeSystemd(tmp_path / 'systemd'),
         checks=tmp_path / 'checks',
-        refusal=tmp_path / 'refuses',
         rejection=tmp_path / 'rejects',
         tools=tmp_path / 'tools',
     )
@@ -106,12 +107,7 @@ def _device(tmp_path: Path, *, configuration: str, daemons: str = STOCK_DAEMON_L
     device.tools.mkdir()
     _ = device.source.write_text(configuration)
     _ = device.daemons.write_text(daemons)
-
-    systemctl = device.tools / 'systemctl'
-    # Records the verb and the unit, and refuses while the flag file exists —
-    # which is the daemon that will not come back.
-    _ = systemctl.write_text(f'#!/bin/sh\necho "$*" >>{device.commands}\n[ -e {device.refusal} ] && exit 1\nexit 0\n')
-    systemctl.chmod(0o755)
+    device.systemd.ship(routing.FRR_SERVICE, reads=(device.live,))
 
     vtysh = device.tools / 'vtysh'
     # Records which file it was pointed at, and rejects while the flag file
@@ -162,17 +158,17 @@ class _Rendering:
 
 def _converge(device: _Device, *, daemon_answers: bool = True, syntax_accepted: bool = True) -> _Run:
     """Run the converger once, and read back what it did."""
-    for flag, agrees in ((device.refusal, daemon_answers), (device.rejection, syntax_accepted)):
-        if agrees:
-            flag.unlink(missing_ok=True)
-        else:
-            _ = flag.write_text('')
-    device.commands.unlink(missing_ok=True)
+    device.systemd.failing(routing.FRR_SERVICE, not daemon_answers)
+    if syntax_accepted:
+        device.rejection.unlink(missing_ok=True)
+    else:
+        _ = device.rejection.write_text('')
+    _ = device.systemd.take_calls()
     device.checks.unlink(missing_ok=True)
 
     completed = subprocess.run(  # noqa: S603 -- a rendered script of this repository's own
         ['/bin/sh', str(device.script)],  # noqa: S607 -- the shell the device's own scripts name
-        env={'PATH': f'{device.tools}:/usr/bin:/bin'},
+        env={'PATH': f'{device.systemd.tools}:{device.tools}:/usr/bin:/bin'},
         capture_output=True,
         check=False,
     )
@@ -183,7 +179,7 @@ def _converge(device: _Device, *, daemon_answers: bool = True, syntax_accepted: 
 
     return _Run(
         status=completed.returncode,
-        commands=_recorded(device.commands),
+        commands=device.systemd.take_calls(),
         checks=_recorded(device.checks),
         stamped=device.stamp.exists(),
     )
@@ -416,6 +412,32 @@ def test_a_run_that_finds_the_daemon_switched_on_and_holding_the_configuration_d
     assert second.checks == [], 'nothing to install is nothing to parse'
     assert device.live.read_text() == device.source.read_text()
     assert f'{routing.BGP_DAEMON}=yes' in device.daemons.read_text()
+
+
+def test_a_daemons_copy_that_no_longer_matches_is_put_back_though_the_stamp_does(tmp_path: Path) -> None:
+    """The stamp records what the daemon was restarted onto, not what it will read next.
+
+    The daemon's copy is off the custom root and anyone on the device can
+    rewrite it — an operator writing the running configuration out from the
+    daemon does exactly that. The source has not moved, so the stamp still
+    matches it, and a converger that trusted the stamp alone would leave the
+    daemon to load somebody else's file at its next start.
+    """
+    device = _device(tmp_path, configuration='router bgp 65000\n')
+    _ = _converge(device)
+
+    _ = device.live.write_text('router bgp 65000\n neighbor 192.0.2.1 remote-as 65001\n')
+    repaired = _converge(device)
+    restarted_on = device.systemd.started_on(routing.FRR_SERVICE)
+
+    assert repaired.status == 0
+    assert repaired.commands == [f'restart {routing.FRR_SERVICE}']
+    assert device.live.read_text() == device.source.read_text()
+    assert routing.FRR_SERVICE in device.systemd.active
+    assert restarted_on is not None
+    assert restarted_on.reads == {str(device.live): device.source.read_text()}, (
+        'the daemon is restarted onto the copy that was put back, not the one it replaced'
+    )
 
 
 def test_a_daemon_list_a_firmware_update_restored_is_switched_on_again(tmp_path: Path) -> None:

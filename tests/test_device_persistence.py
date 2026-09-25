@@ -6,11 +6,13 @@ a write and after a delete, whose component a file asked for through the layer
 belongs to, and what the two rendered boot-chain scripts say once the data is in
 them.
 
-**The unit converger is also run**, against a temporary tree with a `systemctl`
-that records what it was asked to do, because what matters most about the
-drop-in half of it is a property of the sequence rather than of any line the
-file contains: a drop-in this program no longer declares has to leave the
-device, and one belonging to somebody else has to stay.
+**Both convergers are also run**, against temporary trees with stand-ins for
+what they call — the shared `systemctl` for the unit converger, a `dpkg` and an
+`apt-get` for the package converger — because what matters most about each is
+a property of the sequence rather than of any line the file contains: a drop-in
+this program no longer declares has to leave the device and one belonging to
+somebody else has to stay, a unit that is not enabled or not running is made
+so, and a device missing any one package is given the whole set.
 
 The renderers are plain functions, so most cases read their output directly; the
 component tree is declared once against mocks, which is where a wiring mistake
@@ -28,6 +30,7 @@ import pulumi
 import pytest
 import pytest_asyncio
 from device_places import PLACES
+from fake_systemd import INSTALLABLE, FakeSystemd
 from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
@@ -437,27 +440,256 @@ def test_a_directory_arriving_is_not_an_event_anything_is_told_about(monitor: Re
 
 
 ##
-## What the rendered scripts say
+## What the rendered scripts say, and what the package converger does
 ##
 
 
-def test_the_package_set_is_data_and_the_transaction_is_mechanism() -> None:
+#: `dpkg` as the package converger asks it: `-s` answers whether a package is
+#: installed, the way `dpkg` does on a device that has it or never had it, and
+#: `-i` installs every deb it is handed, named for its package the way a deb's
+#: file is, refusing an archive that is not there. Every call is recorded,
+#: beside `apt-get`'s.
+DPKG = """#!/bin/sh
+echo "dpkg $*" >>{calls}
+case "$1" in
+    -s)
+        if [ -e {installed}/"$2" ]; then
+            printf 'Package: %s\\nStatus: install ok installed\\n' "$2"
+            exit 0
+        fi
+        echo "dpkg-query: package '$2' is not installed and no information is available" >&2
+        exit 1
+        ;;
+    -i)
+        shift
+        for deb in "$@"; do
+            [ -f "$deb" ] || {{ echo "dpkg: error: cannot access archive '$deb': No such file or directory" >&2; exit 1; }}
+            name=${{deb##*/}}
+            : >{installed}/"${{name%%_*}}"
+        done
+        exit 0
+        ;;
+esac
+echo "fake dpkg: $1 is not modeled" >&2
+exit 2
+"""
+
+#: `apt-get` as the package converger asks it. Online, `install` installs what
+#: is missing and leaves the deb of each package it downloaded in the archives
+#: directory, and `--download-only --reinstall` downloads the whole set there;
+#: offline — the boot after a firmware update with no network, its lists empty
+#: and unfetchable — nothing it is asked for can be found. `refresh-fails` is
+#: the download of the whole set failing on a boot the install itself worked.
+APT_GET = """#!/bin/sh
+echo "apt-get $*" >>{calls}
+if [ -e {offline} ]; then
+    [ "$1" = update ] && exit 100
+    for word in "$@"; do
+        case "$word" in -*|install) ;; *) echo "E: Unable to locate package $word" >&2 ;; esac
+    done
+    exit 100
+fi
+[ "$1" = update ] && exit 0
+download_only=0
+for word in "$@"; do
+    [ "$word" = --download-only ] && download_only=1
+done
+if [ "$download_only" -eq 1 ] && [ -e {refresh_fails} ]; then
+    echo "E: Failed to fetch the archives" >&2
+    exit 100
+fi
+for word in "$@"; do
+    case "$word" in
+        -*|install) ;;
+        *)
+            if [ "$download_only" -eq 1 ] || [ ! -e {installed}/"$word" ]; then
+                : >{archives}/"${{word}}_1.0_arm64.deb"
+            fi
+            [ "$download_only" -eq 1 ] || : >{installed}/"$word"
+            ;;
+    esac
+done
+exit 0
+"""
+
+
+@final
+@dataclass(frozen=True)
+class _Packages:
+    """A device the package converger can be run against, online or not."""
+
+    script: Path
+    #: The offline cache and apt's archives, in place of the device's own directories.
+    cache: Path
+    archives: Path
+    #: One empty file per installed package, named for it.
+    installed: Path
+    calls: Path
+    #: The flags that make apt unreachable, and make the whole set's download fail.
+    offline: Path
+    refresh_fails: Path
+    tools: Path
+
+
+def deb(directory: Path, package: str) -> Path:
+    """The file a package's deb is, in the form both stand-ins name it."""
+    return directory / f'{package}_1.0_arm64.deb'
+
+
+def _packages(tmp_path: Path, *, installed: tuple[str, ...], cached: tuple[str, ...]) -> _Packages:
+    """The package converger, rendered by the production function against a temporary tree.
+
+    The package set, its sorting and quoting, and every step are what the
+    device runs; only the two directories it moves debs between are this
+    tree's.
+    """
+    device = _Packages(
+        script=tmp_path / persistence.PACKAGES_SCRIPT,
+        cache=tmp_path / 'cache',
+        archives=tmp_path / 'archives',
+        installed=tmp_path / 'installed',
+        calls=tmp_path / 'calls',
+        offline=tmp_path / 'offline',
+        refresh_fails=tmp_path / 'refresh-fails',
+        tools=tmp_path / 'tools',
+    )
+    for directory in (device.cache, device.archives, device.installed, device.tools):
+        directory.mkdir()
+    for package in installed:
+        _ = (device.installed / package).write_text('')
+    for package in cached:
+        _ = deb(device.cache, package).write_text('')
+    for name, stub in (('dpkg', DPKG), ('apt-get', APT_GET)):
+        tool = device.tools / name
+        _ = tool.write_text(
+            stub.format(
+                calls=device.calls,
+                installed=device.installed,
+                archives=device.archives,
+                offline=device.offline,
+                refresh_fails=device.refresh_fails,
+            )
+        )
+        tool.chmod(0o755)
+    _ = device.script.write_text(
+        persistence.packages_script(PACKAGES, cache=str(device.cache), archives=str(device.archives))
+    )
+    return device
+
+
+def _install(device: _Packages, *, online: bool, refresh_fails: bool = False) -> tuple[int, list[str]]:
+    """Run the package converger once, and read back what it asked of apt and dpkg."""
+    for flag, raised in ((device.offline, not online), (device.refresh_fails, refresh_fails)):
+        if raised:
+            _ = flag.write_text('')
+    completed = subprocess.run(  # noqa: S603 -- a rendered script of this repository's own
+        ['/bin/bash', str(device.script)],  # noqa: S607 -- the shell the device's own scripts name
+        env={'PATH': f'{device.tools}:/usr/bin:/bin'},
+        capture_output=True,
+        check=False,
+    )
+    calls = device.calls.read_text().splitlines() if device.calls.exists() else []
+    return completed.returncode, [call for call in calls if not call.startswith('dpkg -s ')]
+
+
+def _names_in(directory: Path) -> set[str]:
+    return {path.name for path in directory.iterdir()}
+
+
+def test_a_device_that_kept_every_package_is_asked_to_install_nothing(tmp_path: Path) -> None:
+    """Every boot runs this, and on all but the first after an update there is nothing to do."""
+    device = _packages(tmp_path, installed=PACKAGES, cached=())
+
+    status, calls = _install(device, online=True)
+
+    assert status == 0
+    assert calls == []
+
+
+def test_one_package_missing_is_the_whole_set_installed_in_one_transaction(tmp_path: Path) -> None:
     """Which packages is the installation's; how they are installed is the script's.
 
-    The set is rendered into one line and nothing else about the file changes
-    with it: one apt transaction, because packages version-locked to each other
-    cannot be resolved one at a time, and an offline cache for the boot where
-    apt cannot be reached.
+    A firmware update can take some of the set and leave the rest, and a
+    converger that stopped at the first package it found would call that
+    device done. The whole set goes to apt in one transaction, because
+    packages version-locked to each other cannot be resolved one at a time;
+    on the boot where apt cannot be reached, the offline cache is installed in
+    one `dpkg` call for the same reason, and the device ends up with the set.
     """
-    script = persistence.packages_script(PACKAGES)
+    kept, lost = sorted(PACKAGES)
+    device = _packages(tmp_path, installed=(kept,), cached=PACKAGES)
 
-    assert 'PACKAGES=(libnss-mymachines systemd-container)' in script
-    assert f'CACHE={persistence.DPKG_DIR}' in script
-    assert script.count('apt-get install -y "${PACKAGES[@]}"') == 1
-    assert 'dpkg -i "$CACHE"/*.deb' in script
-    # The transport this repository used before it owned the mechanism is not a
-    # package the device needs: the device-file provider carries its own.
-    assert 'rsync' not in script
+    status, calls = _install(device, online=False)
+
+    assert status == 0
+    assert calls == [
+        'apt-get update',
+        f'apt-get install -y {" ".join(sorted(PACKAGES))}',
+        f'dpkg -i {" ".join(str(deb(device.cache, package)) for package in sorted(PACKAGES))}',
+    ]
+    assert _names_in(device.installed) == {kept, lost}
+
+
+def test_a_boot_with_neither_apt_nor_a_cache_fails_rather_than_reporting_the_set_installed(tmp_path: Path) -> None:
+    """The one boot this script exists for is the one it cannot always win.
+
+    With apt unreachable and no cache to fall back on, the package is still
+    missing — and a script that exited successfully over that would leave the
+    push, and the operator reading the boot log, believing the device whole.
+    """
+    kept, _ = sorted(PACKAGES)
+    device = _packages(tmp_path, installed=(kept,), cached=())
+
+    status, _ = _install(device, online=False)
+
+    assert status == 1
+    assert _names_in(device.installed) == {kept}
+
+
+def test_a_boot_where_apt_worked_replaces_the_cache_with_the_whole_set_it_downloaded(tmp_path: Path) -> None:
+    """The cache is a snapshot against the running firmware, never an accumulation.
+
+    What apt downloads on a boot it succeeds is the set resolved against the
+    firmware now running, so that snapshot replaces the cache whole: a deb the
+    old cache held and this firmware no longer needs does not survive into the
+    next offline boot. The whole set is downloaded, not just the package this
+    boot happened to install, so the snapshot is not partial either.
+    """
+    kept, lost = sorted(PACKAGES)
+    device = _packages(tmp_path, installed=(kept,), cached=())
+    _ = (device.cache / 'from-an-older-firmware_0.9_arm64.deb').write_text('')
+
+    status, calls = _install(device, online=True)
+
+    assert status == 0
+    assert f'apt-get install -y --download-only --reinstall {" ".join(sorted(PACKAGES))}' in calls
+    assert not [call for call in calls if call.startswith('dpkg -i ')]
+    assert _names_in(device.installed) == {kept, lost}
+    assert _names_in(device.cache) == {deb(device.cache, package).name for package in PACKAGES}
+    assert not [path for path in tmp_path.iterdir() if path.name.startswith(f'{device.cache.name}.')], (
+        'nothing of the swap is left beside the cache'
+    )
+
+
+def test_a_boot_whose_refresh_download_failed_keeps_the_old_cache_whole(tmp_path: Path) -> None:
+    """A cache is replaced only by a whole set, never by what one install happened to fetch.
+
+    The install downloads just the packages the device was missing, and apt
+    keeps those debs in its archives directory. When the download of the whole
+    set that follows fails, the archives hold that part of the set alone, and
+    a snapshot of them would replace a cache that could install everything
+    with one that cannot — found out on the next boot without a network.
+    """
+    kept, lost = sorted(PACKAGES)
+    device = _packages(tmp_path, installed=(kept,), cached=PACKAGES)
+
+    status, calls = _install(device, online=True, refresh_fails=True)
+
+    assert status == 0
+    assert f'apt-get install -y --download-only --reinstall {" ".join(sorted(PACKAGES))}' in calls
+    assert _names_in(device.installed) == {kept, lost}
+    assert _names_in(device.archives) == {deb(device.archives, lost).name}, 'the install fetched part of the set'
+    assert _names_in(device.cache) == {deb(device.cache, package).name for package in PACKAGES}
 
 
 def test_the_package_set_is_a_set() -> None:
@@ -617,16 +849,14 @@ class _Device:
     script: Path
     source: Path
     live: Path
-    #: Where the `systemctl` stand-in records what it was asked to do.
-    commands: Path
-    #: What that stand-in records at the moment it is asked to restart a unit:
-    #: whether the drop-in below had already been installed by then. It is the
-    #: only way to see an ordering from outside, because both halves of the
-    #: script leave the same tree behind whichever ran first.
-    witness: Path
-    watched: Path
-    #: What `PATH` must start with for that stand-in to be the one found.
-    tools: Path
+    #: The `systemctl` the script reaches, reading its unit files from `live`
+    #: the way systemd reads them from the device's unit directory — so what a
+    #: unit was started on is what that directory held when systemd last read
+    #: it: at the unit's first use, or at the last reload.
+    systemd: FakeSystemd
+    #: What the last run wrote to its error stream, which on the device is the
+    #: boot log.
+    complaints: Path
 
 
 def _device(tmp_path: Path) -> _Device:
@@ -642,26 +872,11 @@ def _device(tmp_path: Path) -> _Device:
         script=tmp_path / persistence.UNITS_SCRIPT,
         source=tmp_path / 'source',
         live=live,
-        commands=tmp_path / 'commands',
-        witness=tmp_path / 'witness',
-        watched=live / f'{UNIT}{persistence.DROPIN_DIR_SUFFIX}' / DROPIN,
-        tools=tmp_path / 'tools',
+        systemd=FakeSystemd(tmp_path / 'systemd', unit_path=(live,)),
+        complaints=tmp_path / 'complaints',
     )
     device.source.mkdir()
     device.live.mkdir()
-    device.tools.mkdir()
-
-    systemctl = device.tools / 'systemctl'
-    _ = systemctl.write_text(
-        f'#!/bin/sh\n'
-        f'echo "$*" >>{device.commands}\n'
-        f'if [ "$1" = restart ]; then\n'
-        f'  if [ -e {device.watched} ]; then echo present >>{device.witness}; '
-        f'else echo absent >>{device.witness}; fi\n'
-        f'fi\n'
-        f'exit 0\n'
-    )
-    systemctl.chmod(0o755)
 
     _ = device.script.write_text(
         templates.render(
@@ -682,15 +897,15 @@ def _device(tmp_path: Path) -> _Device:
 
 def _converge(device: _Device) -> tuple[int, list[str]]:
     """Run the converger once, and read back what it asked of systemd."""
-    device.commands.unlink(missing_ok=True)
+    _ = device.systemd.take_calls()
     completed = subprocess.run(  # noqa: S603 -- a rendered script of this repository's own
         ['/bin/bash', str(device.script)],  # noqa: S607 -- the shell the device's own scripts name
-        env={'PATH': f'{device.tools}:/usr/bin:/bin'},
+        env={'PATH': f'{device.systemd.tools}:/usr/bin:/bin'},
         capture_output=True,
         check=False,
     )
-    recorded = device.commands.read_text().split('\n') if device.commands.exists() else []
-    return completed.returncode, [line for line in recorded if line]
+    _ = device.complaints.write_bytes(completed.stderr)
+    return completed.returncode, device.systemd.take_calls()
 
 
 def _dropin(root: Path, unit: str, name: str, content: str) -> Path:
@@ -756,25 +971,82 @@ def test_a_drop_in_directory_this_program_has_no_source_for_is_left_alone(tmp_pa
 
 
 def test_a_unit_is_restarted_onto_the_drop_ins_it_is_meant_to_have(tmp_path: Path) -> None:
-    """Which half of the script runs first is the whole of this claim.
+    """A unit whose file changed is restarted onto that file and every drop-in it has.
 
-    A unit whose file changed is restarted, and a restart is what makes a
-    statement that only applies at start take effect. Converging the drop-ins
-    afterwards would restart the unit onto the configuration it had before,
-    leaving the new statement waiting for a restart nothing else is going to
-    do — so the stand-in is asked, at the moment of the restart, whether the
-    drop-in is already on the device.
+    A restart is what makes a statement that only applies at start take
+    effect. Converging the drop-ins after the units would restart the unit
+    onto the configuration it had before, and so would a restart after the
+    copy with no reload between them: systemd runs a unit on what it read at
+    its first use or its last reload, not on what is on the disk. Either way
+    the new statement waits for a restart nothing else is going to do — so
+    what is read back is what systemd had loaded for the unit when it
+    restarted it. The unit is enabled already, because an `enable` reloads
+    too and would stand in for a reload the script left out.
     """
     device = _device(tmp_path)
-    _ = (device.source / UNIT).write_text('[Service]\nExecStart=/bin/true\n')
-    _ = (device.live / UNIT).write_text('[Service]\nExecStart=/bin/false\n')
+    _ = (device.source / UNIT).write_text(f'[Service]\nExecStart=/bin/true\n{INSTALLABLE}')
+    _ = (device.live / UNIT).write_text(f'[Service]\nExecStart=/bin/false\n{INSTALLABLE}')
+    device.systemd.enable(UNIT)
+    device.systemd.activate(UNIT)
     _ = _dropin(device.source, UNIT, DROPIN, '[Service]\nRestart=always\n')
+
+    status, commands = _converge(device)
+    restarted_on = device.systemd.started_on(UNIT)
+
+    assert status == 0
+    assert f'restart {UNIT}' in commands
+    assert restarted_on is not None
+    assert restarted_on.unit == f'[Service]\nExecStart=/bin/true\n{INSTALLABLE}'
+    assert restarted_on.dropins == {DROPIN: '[Service]\nRestart=always\n'}
+
+
+def test_a_unit_whose_file_is_in_place_is_enabled_if_it_is_not(tmp_path: Path) -> None:
+    """The live copy surviving is not the enablement surviving.
+
+    The two are different files on the device: the unit is copied into the
+    unit directory, and enabling it is a link from the target that wants it.
+    A device that kept the one and lost the other — or never had the other,
+    because the run that installed the file was cut short before it enabled it —
+    would run the unit until the next boot and then not at all, so the run
+    that finds the file already in place enables it all the same. Quietly: the
+    links `systemctl enable` reports are otherwise written to the boot log,
+    whose readers take anything there for a device that needs somebody.
+    """
+    device = _device(tmp_path)
+    unit = f'[Service]\nExecStart=/bin/true\n{INSTALLABLE}'
+    _ = (device.source / UNIT).write_text(unit)
+    _ = (device.live / UNIT).write_text(unit)
+    device.systemd.activate(UNIT)
 
     status, commands = _converge(device)
 
     assert status == 0
-    assert f'restart {UNIT}' in commands
-    assert device.witness.read_text().split() == ['present']
+    assert UNIT in device.systemd.enabled
+    assert device.complaints.read_text() == ''
+    assert f'restart {UNIT}' not in commands, 'a file that did not change is no reason to bounce the unit'
+
+
+def test_a_unit_that_is_not_running_is_started_and_not_bounced(tmp_path: Path) -> None:
+    """Whether the unit runs is checked on every run, not only when its file moved.
+
+    A unit that exited, or that somebody stopped, has a file identical to its
+    source, so a converger that acted only on a changed file would leave it
+    down on the boot that was meant to bring it back. A start rather than a
+    restart, because a start leaves a unit that is already running alone.
+    """
+    device = _device(tmp_path)
+    unit = f'[Service]\nExecStart=/bin/true\n{INSTALLABLE}'
+    _ = (device.source / UNIT).write_text(unit)
+    _ = (device.live / UNIT).write_text(unit)
+    device.systemd.enable(UNIT)
+
+    status, commands = _converge(device)
+
+    assert status == 0
+    assert f'start {UNIT}' in commands
+    assert f'restart {UNIT}' not in commands
+    assert not [command for command in commands if command.endswith(f'enable {UNIT}')], 'it was enabled already'
+    assert UNIT in device.systemd.active
 
 
 def test_a_run_that_moved_no_drop_in_succeeds(tmp_path: Path) -> None:

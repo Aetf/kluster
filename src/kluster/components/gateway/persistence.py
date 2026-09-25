@@ -89,6 +89,7 @@ from kluster.providers.device_files.provider import Connection, DeviceDirectory,
 from putils import Component
 
 __all__ = (
+    'APT_ARCHIVES_DIR',
     'BIN',
     'BIN_DIR',
     'DIRECTORY_MODE',
@@ -149,6 +150,10 @@ BIN_DIR, DPKG_DIR, UNIT_SOURCE_DIR = (f'{conventions.gateway.CUSTOM_ROOT}/{name}
 #: Where systemd reads the units `20-units.sh` installs, which is off `/data`
 #: and therefore what a firmware update takes away.
 LIVE_UNIT_DIR = '/etc/systemd/system'
+
+#: Where apt leaves the debs it downloads, which `10-packages.sh` snapshots into
+#: the offline cache on the boot apt succeeds.
+APT_ARCHIVES_DIR = '/var/cache/apt/archives'
 
 #: The three files this layer is. The numbers are the boot order: packages
 #: first, because everything after them may need what they install; the unit
@@ -286,11 +291,12 @@ def dropin_hook(unit: str, name: str) -> str:
 @final
 @dataclass(frozen=True)
 class _PackagesParams:
-    """What `10-packages.sh.j2` reads: the set, and where the cache lives."""
+    """What `10-packages.sh.j2` reads: the set, where the cache lives, and where apt downloads to."""
 
     cluster: str
     packages: tuple[str, ...]
     cache: str
+    archives: str
 
 
 @final
@@ -311,7 +317,7 @@ class _UnitsParams:
     dropin_suffix: str
 
 
-def packages_script(packages: Sequence[str]) -> str:
+def packages_script(packages: Sequence[str], *, cache: str = DPKG_DIR, archives: str = APT_ARCHIVES_DIR) -> str:
     """The boot-chain script that reinstalls what a firmware update wiped.
 
     The set is data and everything else is mechanism: one transaction so that
@@ -324,6 +330,10 @@ def packages_script(packages: Sequence[str]) -> str:
     callers happened to state it in, and each name is quoted for the shell that
     reads the array — a package name is a caller's string, and one carrying a
     space would otherwise become two entries the device cannot install.
+
+    `cache` and `archives` are the two directories the script moves debs
+    between. They default to the device's own, and are parameters so the
+    script can be run against a tree that is not a device.
     """
     return templates.render(
         TEMPLATE_PACKAGE,
@@ -331,7 +341,8 @@ def packages_script(packages: Sequence[str]) -> str:
         _PackagesParams(
             cluster=conventions.CLUSTER_NAME,
             packages=tuple(shlex.quote(package) for package in sorted(set(packages))),
-            cache=DPKG_DIR,
+            cache=cache,
+            archives=archives,
         ),
     )
 

@@ -81,7 +81,10 @@ for src in "$srcdir"/*{{ unit_suffix }}; do
         systemctl daemon-reload
         changed=1
     fi
-    systemctl is-enabled "$unit" >/dev/null 2>&1 || systemctl enable "$unit"
+    if ! systemctl is-enabled "$unit" >/dev/null 2>&1; then
+        echo "units: enabling $unit"
+        systemctl --quiet enable "$unit"
+    fi
     [ "$unit" = udm-boot.service ] && continue
     if [ "$changed" -eq 1 ]; then
         echo "units: restarting $unit to pick up the new unit file"
