@@ -25,6 +25,10 @@ from kluster.scripts.state_backend import config
 
 pytestmark = pytest.mark.skipif(shutil.which(age.KEYGEN) is None, reason='age-keygen is not on PATH (mise x -- ...)')
 
+#: For the cases that read a recipient on file back: `age` is what parses it
+#: (`config.drill_recipient`), where `age-keygen` alone draws the identity.
+needs_age = pytest.mark.skipif(shutil.which(age.BINARY) is None, reason='age is not on PATH (mise x -- ...)')
+
 OPS_REPOSITORY = conventions.forge.OPS.full_name
 DRILL_ENVIRONMENT = conventions.forge.DRILL.name
 
@@ -50,6 +54,7 @@ def _pushed(gh: RecordedGh) -> str:
     return value
 
 
+@needs_age
 def test_the_pushed_secret_and_the_written_recipient_are_one_pair(
     forge: Forge, gh: RecordedGh, recipient_file: Path
 ) -> None:
@@ -87,6 +92,7 @@ def test_the_pushed_value_is_the_secret_line_alone(forge: Forge, gh: RecordedGh,
     assert '\n' not in pushed
 
 
+@needs_age
 def test_a_second_generation_is_refused_by_the_recipient_on_file(
     forge: Forge, gh: RecordedGh, recipient_file: Path
 ) -> None:
@@ -103,6 +109,7 @@ def test_a_second_generation_is_refused_by_the_recipient_on_file(
     assert config.drill_recipient(recipient_file) == first
 
 
+@needs_age
 def test_rotate_replaces_both_halves(forge: Forge, gh: RecordedGh, recipient_file: Path) -> None:
     first = derived.drill_age_identity(forge, recipient_file=recipient_file, rotate=False)
 
@@ -123,6 +130,56 @@ def test_rotate_with_nothing_on_file_is_refused(forge: Forge, gh: RecordedGh, re
 
     assert gh.values == {}
     assert not recipient_file.exists()
+
+
+def _mistyped(public: str) -> str:
+    """`public` with its last six characters replaced: the prefix survives and the checksum does not."""
+    return f'{public[:-6]}{"qqqqqq" if not public.endswith("qqqqqq") else "pppppp"}'
+
+
+def _refused_files() -> list[str]:
+    """Recipient files the reader refuses: a hand edit that broke the checksum, and a rotation done by hand."""
+    return [
+        f'# The drill age identity, public half.\n{_mistyped(age.generate().public)}\n',
+        f'{age.generate().public}\n{age.generate().public}\n',
+    ]
+
+
+@needs_age
+@pytest.mark.parametrize('shape', range(2), ids=['bad-checksum', 'two-recipients'])
+def test_rotate_draws_a_successor_over_a_file_the_reader_refuses(
+    shape: int, forge: Forge, gh: RecordedGh, recipient_file: Path
+) -> None:
+    # The only repair there is: the public half cannot be recomputed from an
+    # Environment secret nobody can read back, so `--rotate` asks whether the
+    # file is there and never parses it.
+    _ = recipient_file.write_text(_refused_files()[shape])
+
+    written = derived.drill_age_identity(forge, recipient_file=recipient_file, rotate=True)
+
+    assert age.recipient(_pushed(gh)) == written
+    assert config.drill_recipient(recipient_file) == written
+
+
+@needs_age
+@pytest.mark.parametrize('shape', range(2), ids=['bad-checksum', 'two-recipients'])
+def test_a_file_the_reader_refuses_names_rotate_as_its_repair(
+    shape: int, forge: Forge, gh: RecordedGh, recipient_file: Path
+) -> None:
+    # Without `--rotate` the file is read, and a refusal that stopped at "not
+    # an age recipient" would leave deleting the file as the only way out that
+    # anyone finds. Nothing is drawn, and the line is not repeated.
+    content = _refused_files()[shape]
+    _ = recipient_file.write_text(content)
+
+    with pytest.raises(SlotRefused, match='`--rotate` draws a successor') as refused:
+        _ = derived.drill_age_identity(forge, recipient_file=recipient_file, rotate=False)
+
+    assert gh.values == {}
+    assert recipient_file.read_text() == content
+    for line in content.splitlines():
+        if not line.startswith('#'):
+            assert line not in str(refused.value)
 
 
 def test_a_push_that_does_not_land_leaves_the_file_untouched(gh: RecordedGh, recipient_file: Path) -> None:

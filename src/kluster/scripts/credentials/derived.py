@@ -495,6 +495,13 @@ def drill_age_identity(forge: Forge, *, recipient_file: Path, rotate: bool) -> s
     an operator who believes a key exists where none does is about to skip
     the converge that installs it.
 
+    **`rotate` asks only whether the file is there, and never reads it.** A
+    recipient on file that `appliance.drill_recipient` refuses -- a hand edit
+    or a truncated write, a second line -- is repaired by drawing a
+    successor over it, since the public half cannot be recomputed from an
+    Environment secret nobody can read back. Without `rotate` the file is
+    read, and such a refusal names `--rotate` as the repair.
+
     **Push before write, because the file is the durable half.** An
     Environment secret with no recipient on file costs a re-run; a committed
     recipient whose private half never landed is a dump encrypted to a key
@@ -509,19 +516,28 @@ def drill_age_identity(forge: Forge, *, recipient_file: Path, rotate: bool) -> s
     dump that run takes. The first object the drill can open is the first
     dump written after that replace.
     """
-    on_file = appliance.drill_recipient(recipient_file)
-    if on_file is not None and not rotate:
-        raise pulumi_config.SlotRefused(
-            f'{recipient_file} already names a drill recipient, so a drill key is in service; '
-            '`--rotate` draws its successor, and the sequence it starts is: commit the file, '
-            '`state-backend provision --force`, `state-backend restore` of the dump that run takes, '
-            'then a fresh dump for the drill to open'
-        )
-    if on_file is None and rotate:
-        raise pulumi_config.SlotRefused(
-            f'--rotate, but {recipient_file} names no drill recipient to rotate; the first generation is drawn '
-            'without it'
-        )
+    if rotate:
+        if not recipient_file.is_file():
+            raise pulumi_config.SlotRefused(
+                f'--rotate, but {recipient_file} names no drill recipient to rotate; the first generation is '
+                'drawn without it'
+            )
+    else:
+        try:
+            on_file = appliance.drill_recipient(recipient_file)
+        except age.AgeMissing:
+            raise
+        except age.AgeError as exc:
+            # No refusal of `drill_recipient` carries the line, so this one
+            # does not either.
+            raise pulumi_config.SlotRefused(f'{exc}; `--rotate` draws a successor over it') from exc
+        if on_file is not None:
+            raise pulumi_config.SlotRefused(
+                f'{recipient_file} already names a drill recipient, so a drill key is in service; '
+                '`--rotate` draws its successor, and the sequence it starts is: commit the file, '
+                '`state-backend provision --force`, `state-backend restore` of the dump that run takes, '
+                'then a fresh dump for the drill to open'
+            )
     slot = DRILL_AGE_IDENTITY_SLOT
     log.info('drawing the drill age identity with %s', age.KEYGEN)
     identity = age.generate()

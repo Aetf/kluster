@@ -101,6 +101,23 @@ def drill_recipient(path: Path) -> str | None:
     (physical/state-backend.md §5) -- and an empty one is refused the way
     `operator-keys.txt` is, since a blank where a recipient should be is a
     dump the drill cannot open.
+
+    **The recipient is what the pinned `age` parses as one**
+    (`age.check_recipient`), the check `escrow/RECIPIENTS` is held to: a
+    hand edit or a truncated write still starts `age1`, and whatever this
+    returns is baked into the Butane and encrypted to by every nightly dump.
+    No refusal repeats the line, which is not known to be public until the
+    tool has taken it -- the likeliest wrong line is the private half pasted
+    where the public one goes.
+
+    Then a native X25519 recipient, which is what `age-keygen` draws for the
+    drill: `age1` and no second `1`, since neither `age` nor bech32's data
+    alphabet holds one. Every other kind parses and breaks something. An SSH
+    key opens a dump only for an SSH identity the drill does not have. A
+    plugin recipient (`age1<plugin>1…`) parses wherever its plugin is on the
+    operator's PATH, and the box installs `age` alone. A post-quantum one
+    (`age1pq1…`) cannot be mixed with the escrowed generations' classic
+    recipients, so `age` would refuse every nightly dump.
     """
     if not path.is_file():
         log.info('no drill recipient on file at %s; dumps encrypt to the escrowed generations alone', path)
@@ -114,9 +131,14 @@ def drill_recipient(path: Path) -> str | None:
             f'{path} holds {len(found)} recipients, and the drill key has one slot: '
             '`credentials derived drill-age-identity generate --rotate` is what replaces it'
         )
-    if not found[0].startswith(age.PUBLIC_PREFIX):
-        raise age.AgeError(f'{path} holds {found[0]!r}, which is not an age recipient')
-    return found[0]
+    (value,) = found
+    age.check_recipient(value, name=f'the line in {path}')
+    if not (value.startswith(age.PUBLIC_PREFIX) and value.count('1') == 1):
+        raise age.AgeError(
+            f'the line in {path} is an age recipient but not a native `{age.PUBLIC_PREFIX}…` one, '
+            f'which is what `{age.KEYGEN}` draws for the drill'
+        )
+    return value
 
 
 def age_recipients(vault: escrow.Vault) -> tuple[str, ...]:

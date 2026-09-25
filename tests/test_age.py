@@ -12,6 +12,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -139,10 +140,26 @@ def test_a_line_that_is_not_a_recipient_is_refused_by_name_alone() -> None:
         assert json.dumps(value)[1:-1] not in said
 
 
+def _post_quantum() -> str:
+    """A post-quantum identity, `AGE-SECRET-KEY-PQ-1…`, from the pinned `age-keygen -pq`."""
+    drawn = subprocess.run([age.KEYGEN, '-pq'], capture_output=True, text=True, check=True, timeout=age.TIMEOUT)
+    return next(line for line in drawn.stdout.splitlines() if line.startswith(age.SECRET_STEM))
+
+
 def _identities() -> list[str]:
-    """One private key in each shape it is pasted in: bare, lower-cased, quoted, assigned, a JSON member."""
+    """One private key in each shape it is pasted in: bare, lower-cased, quoted, assigned, a JSON member.
+
+    And a post-quantum one, bare: it does not hold `AGE-SECRET-KEY-1` at all.
+    """
     secret = age.generate().secret
-    return [secret, secret.lower(), f'"{secret}"', f'SOPS_AGE_KEY="{secret}"', f'"key": "{secret}",']
+    return [
+        secret,
+        secret.lower(),
+        f'"{secret}"',
+        f'SOPS_AGE_KEY="{secret}"',
+        f'"key": "{secret}",',
+        _post_quantum(),
+    ]
 
 
 @needs_age
@@ -221,7 +238,7 @@ def test_a_reason_that_repeats_the_value_is_left_out(tmp_path: Path, monkeypatch
     assert str(refused.value) == 'line 5 is not an age recipient'
 
 
-@pytest.mark.parametrize('shape', range(5), ids=['bare', 'lower', 'quoted', 'assigned', 'json'])
+@pytest.mark.parametrize('shape', range(6), ids=['bare', 'lower', 'quoted', 'assigned', 'json', 'post-quantum'])
 def test_an_identity_is_refused_before_it_reaches_the_tool(shape: int, monkeypatch: pytest.MonkeyPatch) -> None:
     # Anywhere in the line and in any case: a key copied out of an env or JSON
     # file brings its quotes along. No tool is there to ask, so the refusal
@@ -233,7 +250,7 @@ def test_an_identity_is_refused_before_it_reaches_the_tool(shape: int, monkeypat
         age.check_recipient(value, name='line 2')
 
     assert str(refused.value).startswith('line 2 ')
-    assert age.SECRET_PREFIX not in str(refused.value).upper()
+    assert age.SECRET_STEM not in str(refused.value).upper()
 
 
 @needs_age

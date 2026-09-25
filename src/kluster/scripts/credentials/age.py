@@ -48,6 +48,10 @@ KEYGEN = 'age-keygen'
 TIMEOUT = 30
 
 SECRET_PREFIX = 'AGE-SECRET-KEY-1'
+#: What every native identity's encoding starts with: the classic
+#: `AGE-SECRET-KEY-1…` that `age-keygen` draws, and the post-quantum
+#: `AGE-SECRET-KEY-PQ-1…` of `age-keygen -pq`.
+SECRET_STEM = 'AGE-SECRET-KEY-'
 PUBLIC_PREFIX = 'age1'
 
 #: ASCII armor, because a ciphertext in the escrow is a file git carries.
@@ -123,9 +127,10 @@ def check_recipient(value: str, *, name: str) -> None:
 
     Whether the string is a recipient is exactly what is in question, so it
     is not treated as public, and `name` is what every refusal says in its
-    place. A line holding an identity anywhere in it -- quoted, assigned,
-    lower-cased, as a private key sits in an env or JSON file -- is refused
-    before the tool runs. Every other value reaches the tool on standard
+    place. A line holding a native identity, classic or post-quantum
+    (`SECRET_STEM`), anywhere in it -- quoted, assigned, lower-cased, as a
+    private key sits in an env or JSON file -- is refused before the tool
+    runs. Every other value reaches the tool on standard
     input, as a recipients file of one line: never on argv, where any process
     on the machine could read it, and never echoed back, because the tool
     reports a bad line in such a file by its position rather than by its
@@ -136,7 +141,7 @@ def check_recipient(value: str, *, name: str) -> None:
     recipient whose plugin is not installed fails while encrypting, naming
     the plugin, which is a piece of the line -- is the bare refusal.
     """
-    if SECRET_PREFIX in value.upper():
+    if SECRET_STEM in value.upper():
         raise AgeError(f'{name} holds an age identity, the private half, where a recipient goes')
     try:
         _ = _run([BINARY, '--encrypt', '--armor', '--recipients-file', '-', os.devnull], stdin=f'{value}\n')
