@@ -175,14 +175,15 @@ OCI_TENANCY = OciTenancy(
             # The rebuild drill's scratch box, its network and its image import
             # (physical/state-backend.md §7.3) live here and nothing else does:
             # the compartment boundary is the whole of what the drill's key may
-            # touch, and what the compartment holds is the bound. No OCID until
-            # the first mint prints it. No `Guardrails` either -- `physical`
-            # declares those per compartment (`components/cloud/guardrails.py`)
-            # and declares none here, so until it does the bound on spend is
-            # this boundary and the account's own limits.
+            # touch, and what the compartment holds is the bound. No
+            # `Guardrails` -- `physical` declares those per compartment
+            # (`components/cloud/guardrails.py`) and declares none here, so
+            # until it does the bound on spend is this boundary and the
+            # account's own limits.
             Compartment(
                 consumer=DRILL,
                 name=f'{CLUSTER_NAME}-{DRILL}',
+                ocid='ocid1.compartment.oc1..aaaaaaaazvdytl2bnen4rld5q4ijni2hlvfpdr6faj6sqsgqfvvj2tnikj5q',
                 minted_by=f'credentials derived {DRILL}-credentials mint',
             ),
         )
