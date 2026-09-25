@@ -5,10 +5,22 @@ The device is a router reached over a management overlay, so its host key is
 from nothing else. `asyncssh` reads `~/.ssh/known_hosts` when `known_hosts` is
 left at its default and validates nothing at all when it is `None`; neither is
 ever constructed here, because a first contact that accepts whatever answers
-would hand an interposer root on the router. The same reasoning switches off the
-other two ambient inputs a client normally has -- no `ssh-agent`
-(`agent_path=None`) and no OpenSSH client configuration (`config=None`) -- so the
-session a continuous-integration runner opens is the session a workstation opens.
+would hand an interposer root on the router.
+
+`known_hosts` is not the only trust a client takes from its home directory.
+Left at its default, `x509_trusted_certs` accepts an X.509 host certificate
+issued by any authority in `~/.ssh/ca-bundle.crt` or `~/.ssh/crt/`, and that
+check never consults the pinned keys, so a server holding such a certificate
+opens a session whatever the pin says. `x509_trusted_certs=None` switches X.509
+host certificates off altogether: the client offers no X.509 host-key format
+and neither location is read for trust. A server holding a certificate then
+either presents its bare key, which the pin refuses like any other
+(`HostKeyRefused`), or shares no host-key format with the client and fails the
+key exchange before presenting anything (`DeviceError`, naming the formats).
+
+The same reasoning switches off the `ssh-agent` (`agent_path=None`) and the
+OpenSSH client configuration (`config=None`), so the session a
+continuous-integration runner opens is the session a workstation opens.
 
 The pin is passed as a *parsed key object*. Handing `known_hosts` a bare
 `ssh-ed25519 AAAA…` string does not pin anything: asyncssh treats a string in
@@ -475,6 +487,7 @@ async def connect(device: Device, *, timeout: float = DEFAULT_TIMEOUT) -> AsyncG
                 username=device.username,
                 client_keys=[client_key],
                 known_hosts=known_hosts,
+                x509_trusted_certs=None,
                 agent_path=None,
                 config=None,
             ),
