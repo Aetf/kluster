@@ -196,4 +196,4 @@ OCI_SEED_USER_EMAIL = f'pulumi@{OCI_TENANCY.user_email_domain}'
 #: against it, and the zones token is minted inside it.
 CLOUDFLARE_ACCOUNT = CloudflareAccount(account_id='c452df7ed633d2335c980bd7cc46a550')
 
-B2_ACCOUNT = B2Account(region='us-west-002')
+B2_ACCOUNT = B2Account(region='us-west-002', account_id='30cafebbaf84')
