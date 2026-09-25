@@ -13,6 +13,9 @@ Pulumi's Postgres backend uses.
 
 from __future__ import annotations
 
+import os
+import stat
+from collections.abc import Iterator
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -70,6 +73,34 @@ def test_the_private_key_is_not_world_readable(authority: pki.Authority, tmp_pat
     config.write_client_bundle(config.client_bundle(authority, name='operator', address='192.0.2.10'), tmp_path)
 
     assert (tmp_path / config.KEY_FILE).stat().st_mode & 0o077 == 0
+
+
+@pytest.fixture
+def open_umask() -> Iterator[None]:
+    """A umask that takes nothing away, restored afterwards: the widest a file can be created."""
+    previous = os.umask(0)
+    try:
+        yield
+    finally:
+        _ = os.umask(previous)
+
+
+@pytest.mark.usefixtures('open_umask')
+def test_the_private_key_is_created_0600_rather_than_narrowed_afterwards(
+    authority: pki.Authority, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # With every `chmod` a no-op, the mode left is the one the key was created
+    # with: a key written first and narrowed second is readable by anyone the
+    # umask let in until the second call.
+    def ignored(*args: object, **kwargs: object) -> None:
+        _ = args, kwargs
+
+    monkeypatch.setattr(os, 'chmod', ignored)
+    monkeypatch.setattr(os, 'fchmod', ignored)
+
+    config.write_client_bundle(config.client_bundle(authority, name='operator', address='192.0.2.10'), tmp_path)
+
+    assert stat.S_IMODE((tmp_path / config.KEY_FILE).stat().st_mode) == 0o600
 
 
 def test_the_directory_it_lands_in_is_the_operators_alone(authority: pki.Authority, tmp_path: Path) -> None:

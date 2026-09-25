@@ -250,9 +250,11 @@ class Label:
     shape: Shape = TEXT
     #: Where `recover` puts the value when nobody asked for it on stdout, so
     #: the ordinary path writes a `0600` file instead of printing a secret.
-    #: Only the passphrase has one; the rest reach their consumers through a
-    #: provisioning run or a seal. A property of the row rather than a second
-    #: table keyed by label, which could name a label the register does not.
+    #: The config passphrases have one, being read by `mise.toml` templates
+    #: that cannot open a kit; the rest reach their consumers through a
+    #: provisioning run, a seal or `credentials derived sync`. A property of
+    #: the row rather than a second table keyed by label, which could name a
+    #: label the register does not.
     slot: WorkstationSlot | None = None
 
     @property
@@ -289,9 +291,9 @@ class Label:
 
         The empty case is called out on its own because it is the one a
         pipeline produces by accident: a producer that crashes before writing
-        anything still leaves `escrow import` a value to escrow, and an
-        escrowed empty string is indistinguishable from a lost secret at the
-        moment its consumer is being rebuilt.
+        anything still leaves `credentials derived <row> import` a value to
+        escrow, and an escrowed empty string is indistinguishable from a lost
+        secret at the moment its consumer is being rebuilt.
         """
         if self.shape.matches(value):
             return

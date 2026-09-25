@@ -167,9 +167,12 @@ _ORDER = """when to run what:
     writes that slot once, and mise.toml reads it on every pulumi run.
 
   day to day
-    Nothing. No runtime credential is in the kit, so no operation outside
-    bring-up, rotation and the yearly offline day opens it.
-    `credentials derived check` needs no kit at all.
+    Nothing. No runtime credential is in the kit: a pulumi run, a CI job
+    and the running cluster read what they need from where it was
+    delivered, and none of them opens it. Every credentials command but
+    `root`, `derived ls` and `derived check` looks for it, and one that
+    mints from a seed or recovers an escrowed value unlocks it; so do the
+    state-backend commands that reach the CA or the backup identities.
 
   when one seed is lost
     credentials kit bootstrap --only <member>
@@ -361,9 +364,10 @@ def build_parser() -> argparse.ArgumentParser:
             'each is made once in a provider console, and it exists so that a seed can be minted without '
             'it afterwards. Roots stay out of the kit, and every one of them is found the same way, first '
             'hit wins -- the desktop secret store, then a token file under the checkout, then an '
-            'environment variable, then a prompt. `remember` fills the two layers this machine can write, '
-            'so a mint that needs a root asks for nothing; a root nobody remembered costs a prompt rather '
-            'than a failure, which is what makes a headless run possible.'
+            'environment variable, then a prompt. `remember` puts each field in one of the two layers this '
+            'machine can write -- the secret store, or the token file where there is no store -- so a mint '
+            'that needs a root asks for nothing; a root nobody remembered costs a prompt rather than a '
+            'failure, which is what makes a headless run possible.'
         ),
         epilog=_see_also('§2'),
     )
@@ -400,10 +404,9 @@ def build_parser() -> argparse.ArgumentParser:
             help='prompt for it and keep it on this machine',
             description=(
                 'Print the console steps that create this root, ask for each of its fields, and keep each '
-                'one where its readers can reach it: the desktop secret store, or a `0600` file under the '
-                'checkout for a field a template has to read on its own -- and for every field on a '
-                'machine with no secret store at all. A value is kept because it was asked for here, '
-                'never as a side effect of a run that happened to read it.'
+                'one in the desktop secret store -- or, on a machine with no secret store, in a `0600` '
+                'token file under the checkout, the layer every lookup tries next. A value is kept because '
+                'it was asked for here, never as a side effect of a run that happened to read it.'
             ),
         )
         _ = root_verbs.add_parser(
@@ -441,8 +444,13 @@ def build_parser() -> argparse.ArgumentParser:
             seed.member,
             help=f'mints {seed.mints}',
             description=(
-                f'The kit entry `{seed.entry}`: its UserName holds {seed.identifier} and its Password '
-                f'holds the secret itself. It mints {seed.mints}. '
+                f'The kit entry `{seed.entry}`: its UserName holds {seed.identifier}, and '
+                + (
+                    f'the secret itself is a file, its attachment `{seed.attachment}`, with the Password left empty'
+                    if seed.attachment
+                    else 'its Password holds the secret itself'
+                )
+                + f'. It mints {seed.mints}. '
                 + (
                     'It is generated here rather than obtained from anywhere, and its private half never '
                     'leaves the kit.'
@@ -494,8 +502,12 @@ def build_parser() -> argparse.ArgumentParser:
         help='the offline store, and what is done to the whole of it',
         description=(
             'The kit is one KeePassXC database, kept offline, holding every seed and the recovery key the '
-            'escrowed secrets are encrypted to -- and nothing a running cluster needs, which is why no '
-            'day-to-day operation opens it. `--kdbx` or $KLUSTER_KDBX says where it is. The verbs here act '
+            'escrowed secrets are encrypted to -- and nothing a running cluster, a `pulumi` run or a CI job '
+            'reads, so none of those opens it. Every `credentials` command but `root`, `derived ls` and '
+            '`derived check` looks for it, and one that mints from a seed or recovers an escrowed value '
+            'unlocks it; so do the `state-backend` commands that reach the CA or the backup identities. '
+            '`--kdbx` or '
+            '$KLUSTER_KDBX says where it is. The verbs here act '
             'on the whole of it: `bootstrap` fills one, `rotate` writes a successor, `rewrap` re-encrypts '
             'the escrow to the key it holds, and `ls`/`show` read it without disclosing a secret. The '
             'database is unlocked once per run, from the desktop secret store when `password remember` '
@@ -632,8 +644,8 @@ def build_parser() -> argparse.ArgumentParser:
     # across the tree, the map and the register's tables. What differs between
     # rows is the verb, because what differs between them is how the value
     # comes into being: `mint` for a row a seed mints, `generate`/`import`/
-    # `recover` for a row drawn here and escrowed, and `record` for a row made
-    # in a console -- delivered into the stack that authenticates with it, or
+    # `recover` for a row drawn here and escrowed, and `record` for a row a
+    # person makes -- delivered into the stack that authenticates with it, or
     # escrowed where nothing reads it yet.
     #
     # A row joins the tree when its consumer exists -- a mint with nowhere to
@@ -649,8 +661,9 @@ def build_parser() -> argparse.ArgumentParser:
             'so re-running one is how it is rotated. `generate`, `import` and `recover` belong to a row '
             'nothing external can mint: it is random, made here, and escrowed -- encrypted to the '
             "recovery key's public half and committed as a ciphertext under escrow/. `record` belongs to "
-            'a row made in a console because no API of that platform makes one: it prints the steps and '
-            'takes what they produce, into the stack that authenticates with the value or into the escrow '
+            'a row a person makes -- in a console, where no API of that platform makes one, or by drawing '
+            'it, where no console does: it prints the steps and takes what they produce, into the stack '
+            'that authenticates with the value or into the escrow '
             'where a row whose consumer is not built yet rests. `ls`, `check` and `sync` act on the map '
             'rather than on one row.'
         ),
@@ -686,10 +699,13 @@ def build_parser() -> argparse.ArgumentParser:
         'sync',
         help='copy into their GitHub slots the rows whose value lives elsewhere',
         description=(
-            'Fill the GitHub secrets of the rows whose value is a copy of something that lives somewhere else: '
-            'a value generated inside a stack and read back out of its state, and a value that is typed in '
-            'because this slot is the only place it is stored. Resolve, push, verify, per row, so a first fill '
-            'and a refill after a channel is lost are one command. '
+            'Fill the GitHub secrets of the rows whose value can be obtained here again and copied in: an '
+            'escrowed secret, recovered with the kit; the `ci` client bundle, issued afresh under the '
+            'escrowed CA on every run, so the one CI held is replaced and keeps working until it expires; a '
+            'value generated inside a stack and read back out of its state; a constant this repository '
+            'records, for a workflow input that can only be a secret; and a value that is typed in because '
+            'this slot is the only place it is stored. Resolve, push, verify, per row, so a first fill and a '
+            'refill after a channel is lost are one command. '
             'A row born into its slot is out of scope: a minted credential is disclosed once, to the call that '
             'creates it, so its own `mint` fills its slot in the same run and asking again would produce a '
             'different credential. Naming one is refused rather than silently doing nothing.'
@@ -821,9 +837,9 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             'Sign as the OCI seed to create the compartment this stack acts in, the user, its group and '
             'the policy that confines that group to the compartment, then write the signing configuration '
-            "into the stack's committed config: the tenancy, the user, the fingerprint and the private key "
-            'encrypted, the region in the clear. The compartment does not travel with the credential -- '
-            'it is a boundary `conventions` names, and the stack reads it there; a compartment created '
+            "into the stack's committed config: the user, the fingerprint and the private key, all "
+            'encrypted. The tenancy, the region and the compartment do not travel with the credential -- '
+            'each is a constant `conventions` names, and the stack reads it there; a compartment created '
             'here for the first time is printed, to be recorded in that file and committed. '
             'Commit the config afterwards; re-running this is the rotation.'
         ),
@@ -867,7 +883,7 @@ def build_parser() -> argparse.ArgumentParser:
         help='the age key the unattended rebuild drill opens the newest dump with',
         description=(
             'The age identity the ops repository holds for the state-backend rebuild drill. Its public half is '
-            'the third recipient every dump is encrypted to, beside the two escrowed generations; its private '
+            'a recipient every dump is encrypted to, after the escrowed backup generations; its private '
             'half is an Environment secret in the ops repository and nothing else -- not a kit row and not an '
             'escrow ciphertext, because every dump it opens also opens with an escrowed generation, so losing '
             'it costs a fresh key and a converge rather than a byte of data.'
@@ -981,33 +997,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_bundle_dir(freshness_mint)
 
-    # The rows whose credential is made in the console that checks it rather
-    # than minted from a seed -- an appliance of the installation, or the
-    # platform itself where that platform publishes no API for making one. `record`
-    # prints the console steps that create it, takes the value without echoing
-    # it and pushes it into the stack that reads it (`devices.py`); nothing
-    # here mints anything, so the delivery is the whole of the act.
+    # The rows whose credential a person makes rather than a seed minting it:
+    # in the console that checks it -- an appliance of the installation, or
+    # the platform itself where that platform publishes no API for making one
+    # -- or, where no console makes one, by drawing it. `record` prints the
+    # steps that create it, takes the value without echoing it and pushes it
+    # into the stack that reads it (`devices.py`); nothing here mints
+    # anything, so the delivery is the whole of the act.
     for device in devices.DEVICES.values():
         device_row = rows.add_parser(
             device.member,
-            help=f'{device.title}, made in the console that checks it',
+            help=f'{device.title}, made by a person rather than minted',
             description=(
-                f'Nothing here mints {device.title}: it is made in the console that checks it -- an '
-                'appliance of the installation, or the platform itself where that platform publishes no '
-                f'API for making one -- and this side of the system only delivers it into the {device.stack} '
-                'stack, the one consumer that authenticates with it.'
+                f'Nothing here mints {device.title}: a person makes it, by the steps `record` prints, and '
+                f"this side of the system only delivers it, into the {device.stack} stack's config."
             ),
         )
         device_verbs = device_row.add_subparsers(dest='action', required=True, metavar='<verb>')
         record = device_verbs.add_parser(
             'record',
-            help=f"take it from the console into the {device.stack} stack's config",
+            help=f"take it by hand into the {device.stack} stack's config",
             description=(
                 'Print the steps that create this credential, take each of its values without echoing a '
                 f"secret, and write them into the {device.stack} stack's committed config, reading them "
-                'back to prove the push landed. Then commit the config. Rotating it is the whole of the '
-                'same sequence with a fresh value from the same console, and one step more: delete the '
-                'superseded credential where it was made, which nothing here can do for you.'
+                'back to prove the push landed. Then commit the config. Rotating it is the same sequence '
+                'with a fresh value, then whatever the printed steps say to do with the superseded one, '
+                'which nothing here can do for you.'
             ),
         )
         for field in device.fields:

@@ -1,12 +1,12 @@
-"""The state-backend's PKI: one escrowed CA key, three re-issuable leaves.
+"""The state-backend's PKI: one escrowed CA key, three kinds of re-issuable leaf.
 
-A single-purpose private CA with exactly three certificates under it — the
-server and the `ci`/`operator` clients (physical/state-backend.md §3).
+A single-purpose private CA that signs three kinds of certificate — the
+server's and the `ci`/`operator` clients' (physical/state-backend.md §3).
 
 **The CA key is the only escrowed half.** It is random at creation and its
 ciphertext lives under `escrow/state-backend/ca` (credentials.md §2.2); losing
-it costs a new CA, which is a re-provision and a redistribution of all three
-client bundles. **Leaf keys are random at issuance and escrowed nowhere**:
+it costs a new CA, which is a re-provision and a fresh bundle for every
+client. **Leaf keys are random at issuance and escrowed nowhere**:
 they are re-issuable from the CA, so keeping a copy would add an exposure that
 buys back nothing. Issuing one twice therefore produces two different keys,
 which is why a caller that needs a certificate and its key takes both halves
@@ -73,7 +73,7 @@ def _name(common_name: str) -> x509.Name:
 
 
 def generate_ca_key() -> str:
-    """A fresh CA private key as PKCS8 PEM — what `escrow generate` stores.
+    """A fresh CA private key as PKCS8 PEM — what the CA row's `generate` escrows.
 
     Text rather than bytes because the escrow's unit is a plaintext string:
     one registry, one shape, whether the secret is a passphrase or a key.

@@ -1,9 +1,10 @@
 """The three things done to a seed kit: build one, replace one, spend one.
 
-`docs/credentials.md` §4 describes them as `bootstrap`, `rotate` and the
-credentials `bringup` pushes. They are one module because they share a shape:
-walk §2's table in order, and for each row either call the platform that can
-mint it or stop and print what a human must do in a console.
+`kit bootstrap` builds a kit and `kit rotate` replaces one (`docs/credentials.md`
+§4); a `derived` command that writes a stack's config spends one, recovering
+from it what opening that stack takes (`environment`). The first two share a
+shape: walk §2's table in order, and for each row either call the platform
+that can mint it or stop and print what a human must do in a console.
 
 Two properties are the point:
 
@@ -19,9 +20,9 @@ Two properties are the point:
     ran.
 -   **One password, and only for the kit.** The kit is unlocked once and
     passed down, so a bootstrap that pauses for two console visits does not
-    ask again on the way back. The account roots a mint needs are not in a
-    database at all: they come from the desktop secret store, or from a
-    prompt when there is none (`masters.py`).
+    ask again on the way back. The account roots a mint needs are not in the
+    kit at all: each is looked up through the chain `masters.py` sets out,
+    which ends in a prompt.
 """
 
 from __future__ import annotations
