@@ -570,8 +570,9 @@ def test_a_retention_someone_changed_is_put_back(api: FakeApi, kit: KdbxStore, d
     _ = b2.ensure_bucket(session, BUCKET, prefix=PREFIX, retention_days=RETENTION_DAYS)
 
     # The rule is the whole reason a compromised appliance cannot walk the
-    # dump history, so drift in it is corrected rather than reported: a rule
-    # that still governs the prefix but keeps files longer is drift too.
+    # dump history, so drift in it is corrected by every run that converges
+    # the bucket: a rule that still governs the prefix but keeps files longer
+    # is drift too.
     assert api.buckets[bucket_id]['lifecycleRules'] == [RETENTION]
 
 

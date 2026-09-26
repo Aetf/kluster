@@ -66,8 +66,9 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     `state_backend/settings.py` (§2), and humans merge them.
 -   **The only apply path is re-provision.** No configuration agent,
     no SSH mutation: any change = PR to the Butane file → run
-    `state-backend provision`, which names every way the running box no
-    longer matches the commit and, once the replacement is asked for
+    `state-backend provision`, which compares the running box, and the
+    network and bucket it stands on, against the commit, names each
+    difference it finds and, once the replacement is asked for
     (below), dumps that box, terminates it and relaunches (minutes of
     5432 downtime — CI retries, local ops re-run). SSH exists (operator key in
     Ignition) for **diagnosis only** — `state-backend ssh` looks the
@@ -78,8 +79,8 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     to fix, not an `ssh-copy-id`. The
     no-drift rule is what makes "the repo describes the box" true. What
     tests that claim, as of 2026-09-25, is a converge an operator runs
-    by hand, which compares the box's bill of materials against the
-    commit (below);
+    by hand, which compares the box's bill of materials, and what the
+    box stands on, against the commit (below);
     the quarterly drill (§7.3) is designed to prove it on a schedule, by
     provisioning a scratch box from the same commit, and as of
     2026-09-25 no pass of it has happened: its workflow is not written
@@ -184,6 +185,42 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     validity ahead of it, so the run after the rebuild is a no-op
     again. A box recording no expiry is drifted for the reason a box
     with no digest map is.
+-   **What the box stands on is compared too, against what a run that
+    launches creates.** The reads that find the box also read the network
+    it stands in and the bucket its dumps go to, and the same report
+    names each of these differences: a VCN, internet gateway, subnet or
+    security group missing under the appliance's name; a disabled
+    gateway; a subnet whose range is not `settings.SUBNET_CIDR`; a route
+    in the table the subnet routes through other than the one sending
+    everything to the gateway, or that one missing; a security rule
+    nobody declared, or a declared one missing; and a dump bucket whose
+    lifecycle rules are not the retention of §5. A security rule is
+    compared whole — direction, protocol, source or destination, ports,
+    statelessness — so a rule narrowed to one address or moved to
+    another port is named as a rule nobody declared beside the declared
+    one it replaced, and an egress rule confined to one port does not
+    stand in for egress to everything. Each difference is one line of
+    the report and exits the way any other drift does: the plain run
+    writes nothing and stops, and the replacement `--force` asks for is
+    also the repair. A run that launches a box converges all of it —
+    a replacement does so before the dump, while the old box still
+    serves: it puts the retention rule back, enables the gateway,
+    rewrites the route table and sets the subnet's range — waiting until
+    the subnet has taken it, since the launch needs the subnet to accept
+    a new interface — and then adds
+    the declared security rules before it removes the others, so a port
+    that box serves on is never left with no rule. A run stopped part
+    way leaves the repairs before the stop in place, with the old box
+    serving, and the next plain run names what is left. So a
+    hand-narrowed rule costs a replacement to undo; repairing it on a
+    standing box would be a second write path on the one run that is
+    otherwise read-only. Everything not named above is outside the
+    comparison. Among what bears on who reaches the box or its dumps: the
+    security lists the subnet carries and the rules in them — as
+    created, the VCN's default list alone, which OCI attaches and unions
+    with the security group, and in which this program declares nothing;
+    which security groups the box's network interface is in, which the
+    launch sets (both `kluster-ops#461`); and the bucket's type.
 -   **A replacement is asked for before it happens, and dumped before
     it happens.** Drift is a reason to replace the box, not permission
     to: a plain `state-backend provision` reports what differs and
@@ -191,8 +228,9 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     (`--replace` is the same request for a box with no drift to find.)
     **A run that leaves the box standing writes nothing to OCI or B2,
     but one repair.** What the comparison needs — what OCI holds under
-    the appliance's names, the reserved address, the dump bucket,
-    whether B2 still has the dump key — is looked up, and nothing is
+    the appliance's names with the routes and security rules inside it,
+    the reserved address, the dump bucket and its rules, whether B2
+    still has the dump key — is looked up, and nothing is
     created or converged unless the run is going to launch a box: a
     run that finds no box, which destroys nothing and so has nothing to
     approve, or a replacement asked for. The report on a
@@ -494,7 +532,8 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
 
 **The appliance owns its own network.** A VCN, public subnet, internet
 gateway, NSG and reserved public IP, all created by the provision script on a run that
-launches a box, and none of them the cluster's: the cluster VCN is a `physical`-stack
+launches a box, compared by every run that finds a box standing and converged by
+every run that launches one (§1), and none of them the cluster's: the cluster VCN is a `physical`-stack
 resource, and putting the box inside it would invert the dependency this
 whole design exists to avoid (Pulumi needs the backend before it can
 create anything). The isolation is a bonus, not the point. The **reserved**
@@ -601,8 +640,9 @@ there is nothing for it to edit.)
     enforced by a B2 lifecycle rule on the prefix** (storage.md §4),
     not by the uploader. `state-backend provision` creates the bucket
     with the rule and puts the rule back on every run that launches a
-    box; between those runs nothing holds or reports it, so a rule
-    changed by hand stays changed until the next launch. That keeps
+    box, and every run that finds a box standing names a rule that
+    differs as drift (§1): a rule changed by hand is reported by the next plain run and stays
+    changed until the next launch. That keeps
     the box's key free of delete/prune capability (the H4
     discipline), and it is what gives retired encryption keys a
     definite end of life (below).
