@@ -35,7 +35,7 @@ class BucketFileVersionArgs:
         :param pulumi.Input[_builtins.str] file_name: The name of the B2 file. **Modifying this attribute will force creation of a new resource.**
         :param pulumi.Input[_builtins.str] source: Path to the local file. **Modifying this attribute will force creation of a new resource.**
         :param pulumi.Input[_builtins.str] content_type: Content type. If not set, it will be set based on the file extension. **Modifying this attribute will force creation of a new resource.**
-        :param pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]] file_info: The custom information that is uploaded with the file. **Modifying this attribute will force creation of a new resource.**
+        :param pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]] file_info: The custom information that is uploaded with the file. B2 converts keys to lower case, so they are stored and returned in lower case. B2 also adds 'sse_c_key_id' to files uploaded in SSE-C mode, and 'large_file_sha1' to large files. **Modifying this attribute will force creation of a new resource.**
         :param pulumi.Input['BucketFileVersionServerSideEncryptionArgs'] server_side_encryption: Server-side encryption settings. **Modifying this attribute will force creation of a new resource.**
         """
         pulumi.set(__self__, "bucket_id", bucket_id)
@@ -111,7 +111,7 @@ class BucketFileVersionArgs:
     @pulumi.getter(name="fileInfo")
     def file_info(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]:
         """
-        The custom information that is uploaded with the file. **Modifying this attribute will force creation of a new resource.**
+        The custom information that is uploaded with the file. B2 converts keys to lower case, so they are stored and returned in lower case. B2 also adds 'sse_c_key_id' to files uploaded in SSE-C mode, and 'large_file_sha1' to large files. **Modifying this attribute will force creation of a new resource.**
         """
         return pulumi.get(self, "file_info")
 
@@ -157,7 +157,7 @@ class _BucketFileVersionState:
         :param pulumi.Input[_builtins.str] content_sha1: SHA1 hash of the content.
         :param pulumi.Input[_builtins.str] content_type: Content type. If not set, it will be set based on the file extension. **Modifying this attribute will force creation of a new resource.**
         :param pulumi.Input[_builtins.str] file_id: The unique identifier for this version of this file.
-        :param pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]] file_info: The custom information that is uploaded with the file. **Modifying this attribute will force creation of a new resource.**
+        :param pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]] file_info: The custom information that is uploaded with the file. B2 converts keys to lower case, so they are stored and returned in lower case. B2 also adds 'sse_c_key_id' to files uploaded in SSE-C mode, and 'large_file_sha1' to large files. **Modifying this attribute will force creation of a new resource.**
         :param pulumi.Input[_builtins.str] file_name: The name of the B2 file. **Modifying this attribute will force creation of a new resource.**
         :param pulumi.Input['BucketFileVersionServerSideEncryptionArgs'] server_side_encryption: Server-side encryption settings. **Modifying this attribute will force creation of a new resource.**
         :param pulumi.Input[_builtins.float] size: The file size.
@@ -276,7 +276,7 @@ class _BucketFileVersionState:
     @pulumi.getter(name="fileInfo")
     def file_info(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]:
         """
-        The custom information that is uploaded with the file. **Modifying this attribute will force creation of a new resource.**
+        The custom information that is uploaded with the file. B2 converts keys to lower case, so they are stored and returned in lower case. B2 also adds 'sse_c_key_id' to files uploaded in SSE-C mode, and 'large_file_sha1' to large files. **Modifying this attribute will force creation of a new resource.**
         """
         return pulumi.get(self, "file_info")
 
@@ -366,7 +366,7 @@ class BucketFileVersion(pulumi.CustomResource):
         :param pulumi.ResourceOptions opts: Options for the resource.
         :param pulumi.Input[_builtins.str] bucket_id: The ID of the bucket. **Modifying this attribute will force creation of a new resource.**
         :param pulumi.Input[_builtins.str] content_type: Content type. If not set, it will be set based on the file extension. **Modifying this attribute will force creation of a new resource.**
-        :param pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]] file_info: The custom information that is uploaded with the file. **Modifying this attribute will force creation of a new resource.**
+        :param pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]] file_info: The custom information that is uploaded with the file. B2 converts keys to lower case, so they are stored and returned in lower case. B2 also adds 'sse_c_key_id' to files uploaded in SSE-C mode, and 'large_file_sha1' to large files. **Modifying this attribute will force creation of a new resource.**
         :param pulumi.Input[_builtins.str] file_name: The name of the B2 file. **Modifying this attribute will force creation of a new resource.**
         :param pulumi.Input[Union['BucketFileVersionServerSideEncryptionArgs', 'BucketFileVersionServerSideEncryptionArgsDict']] server_side_encryption: Server-side encryption settings. **Modifying this attribute will force creation of a new resource.**
         :param pulumi.Input[_builtins.str] source: Path to the local file. **Modifying this attribute will force creation of a new resource.**
@@ -467,7 +467,7 @@ class BucketFileVersion(pulumi.CustomResource):
         :param pulumi.Input[_builtins.str] content_sha1: SHA1 hash of the content.
         :param pulumi.Input[_builtins.str] content_type: Content type. If not set, it will be set based on the file extension. **Modifying this attribute will force creation of a new resource.**
         :param pulumi.Input[_builtins.str] file_id: The unique identifier for this version of this file.
-        :param pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]] file_info: The custom information that is uploaded with the file. **Modifying this attribute will force creation of a new resource.**
+        :param pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]] file_info: The custom information that is uploaded with the file. B2 converts keys to lower case, so they are stored and returned in lower case. B2 also adds 'sse_c_key_id' to files uploaded in SSE-C mode, and 'large_file_sha1' to large files. **Modifying this attribute will force creation of a new resource.**
         :param pulumi.Input[_builtins.str] file_name: The name of the B2 file. **Modifying this attribute will force creation of a new resource.**
         :param pulumi.Input[Union['BucketFileVersionServerSideEncryptionArgs', 'BucketFileVersionServerSideEncryptionArgsDict']] server_side_encryption: Server-side encryption settings. **Modifying this attribute will force creation of a new resource.**
         :param pulumi.Input[_builtins.float] size: The file size.
@@ -550,7 +550,7 @@ class BucketFileVersion(pulumi.CustomResource):
     @pulumi.getter(name="fileInfo")
     def file_info(self) -> pulumi.Output[Mapping[str, _builtins.str]]:
         """
-        The custom information that is uploaded with the file. **Modifying this attribute will force creation of a new resource.**
+        The custom information that is uploaded with the file. B2 converts keys to lower case, so they are stored and returned in lower case. B2 also adds 'sse_c_key_id' to files uploaded in SSE-C mode, and 'large_file_sha1' to large files. **Modifying this attribute will force creation of a new resource.**
         """
         return pulumi.get(self, "file_info")
 

@@ -171,7 +171,7 @@ class BucketDefaultServerSideEncryptionArgsDict(TypedDict):
     """
     mode: NotRequired[pulumi.Input[Optional[_builtins.str]]]
     """
-    Server-side encryption mode.
+    Server-side encryption mode. SSE-B2 is the only supported bucket default.
     """
 
 @pulumi.input_type
@@ -181,7 +181,7 @@ class BucketDefaultServerSideEncryptionArgs:
                  mode: pulumi.Input[Optional[_builtins.str]] = None):
         """
         :param pulumi.Input[_builtins.str] algorithm: Server-side encryption algorithm. AES256 is the only one supported.
-        :param pulumi.Input[_builtins.str] mode: Server-side encryption mode.
+        :param pulumi.Input[_builtins.str] mode: Server-side encryption mode. SSE-B2 is the only supported bucket default.
         """
         if algorithm is not None:
             pulumi.set(__self__, "algorithm", algorithm)
@@ -204,7 +204,7 @@ class BucketDefaultServerSideEncryptionArgs:
     @pulumi.getter
     def mode(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
-        Server-side encryption mode.
+        Server-side encryption mode. SSE-B2 is the only supported bucket default.
         """
         return pulumi.get(self, "mode")
 
@@ -368,7 +368,7 @@ class BucketFileVersionServerSideEncryptionArgsDict(TypedDict):
     """
     mode: NotRequired[pulumi.Input[Optional[_builtins.str]]]
     """
-    Server-side encryption mode.
+    Server-side encryption mode. SSE-B2 and SSE-C are supported.
     """
 
 @pulumi.input_type
@@ -380,7 +380,7 @@ class BucketFileVersionServerSideEncryptionArgs:
         """
         :param pulumi.Input[_builtins.str] algorithm: Server-side encryption algorithm. AES256 is the only one supported.
         :param pulumi.Input['BucketFileVersionServerSideEncryptionKeyArgs'] key: Key used in SSE-C mode.
-        :param pulumi.Input[_builtins.str] mode: Server-side encryption mode.
+        :param pulumi.Input[_builtins.str] mode: Server-side encryption mode. SSE-B2 and SSE-C are supported.
         """
         if algorithm is not None:
             pulumi.set(__self__, "algorithm", algorithm)
@@ -417,7 +417,7 @@ class BucketFileVersionServerSideEncryptionArgs:
     @pulumi.getter
     def mode(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
-        Server-side encryption mode.
+        Server-side encryption mode. SSE-B2 and SSE-C are supported.
         """
         return pulumi.get(self, "mode")
 
