@@ -56,7 +56,7 @@ def _current() -> keyring.backend.KeyringBackend:
     """
     try:
         return keyring.get_keyring()
-    except Exception:  # noqa: BLE001 - an unresolvable backend is "no backend"
+    except Exception:  # noqa: BLE001 -- an unresolvable backend is "no backend"
         return keyring.backends.fail.Keyring()
 
 

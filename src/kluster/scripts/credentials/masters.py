@@ -328,7 +328,7 @@ def _keep(root: Root, field: Field, value: str) -> None:
     """
     try:
         kdbx.store(_account(root, field), value)
-    except Exception as exc:  # noqa: BLE001 - any backend failure is "no store here"
+    except Exception as exc:  # noqa: BLE001 -- any backend failure is "no store here"
         log.warning('no desktop secret store (%s); keeping %s in its token file instead', exc, field.name)
         _ = workstation.write(workstation.root_path(field.file), value)
 

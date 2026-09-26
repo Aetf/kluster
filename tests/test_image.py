@@ -235,7 +235,7 @@ async def test_the_local_artifact_is_named_by_what_it_contains() -> None:
 def test_the_cache_is_somewhere_both_a_workstation_and_a_runner_have() -> None:
     # `/var/tmp` rather than `$HOME` or `$TMPDIR`: the path travels in state as
     # an input, and it is disk-backed, which a 1.25 GB artifact wants.
-    assert image.IMAGE_CACHE == Path('/var/tmp/kluster-talos-images')
+    assert image.IMAGE_CACHE == Path('/var/tmp/kluster-talos-images')  # noqa: SIM300 -- the cache is the subject, as in the case's name
 
 
 # -- fetching and decompressing ----------------------------------------------

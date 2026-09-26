@@ -159,15 +159,6 @@ select = [
 # confusable-character rules (RUF001-RUF003) still catch every other lookalike.
 allowed-confusables = ["–"]
 
-[tool.ruff.lint.per-file-ignores]
-# A Yoda condition is decided by the name's case, and in a test a module
-# constant is often the subject under test: `assert image.IMAGE_CACHE ==
-# Path(...)` would be turned around to put the expected value first.
-"tests/**" = ["SIM300"]
-# A command line is written as `+`-joined lists to keep each flag beside its
-# value; one list is what the formatter spreads one element per line.
-"tests/test_state_roles.py" = ["RUF005"]
-
 ##
 ## Type checker
 ##

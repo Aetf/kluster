@@ -228,7 +228,7 @@ class Box:
     def local(self, sql: str) -> str:
         """SQL as the superuser on the container's local socket: the dump timer's way in."""
         done = sp.run(
-            ['podman', 'exec', self.name, 'psql', '--no-psqlrc', '-v', 'ON_ERROR_STOP=1', '-At']
+            ['podman', 'exec', self.name, 'psql', '--no-psqlrc', '-v', 'ON_ERROR_STOP=1', '-At']  # noqa: RUF005 -- keeps -U, -d and -c beside their values
             + ['-U', self.superuser, '-d', settings.DATABASE, '-c', sql],
             capture_output=True,
             text=True,
@@ -476,7 +476,7 @@ def test_a_dump_from_a_box_whose_client_roles_are_superusers_restores(
     """
     box = _appliance(start, ignition)
     before = start(
-        ['create', '--rm', '--publish', f'{ADDRESS}::{settings.PORT}']
+        ['create', '--rm', '--publish', f'{ADDRESS}::{settings.PORT}']  # noqa: RUF005 -- keeps --publish and each --env beside their values
         + ['--env', f'POSTGRES_DB={settings.DATABASE}', '--env', f'POSTGRES_USER={settings.CI_ROLE}']
         + ['--env', 'POSTGRES_HOST_AUTH_METHOD=trust', IMAGE],
         [

@@ -52,11 +52,11 @@ def test_the_alert_margin_opens_after_the_renewal_margin() -> None:
     # that fires before the converge would have reported is the first
     # reporter rather than the last.
     assert config.EXPIRY_ALERT_MARGIN < config.RENEWAL_MARGIN
-    assert config.EXPIRY_ALERT_MARGIN > dt.timedelta(0)
+    assert dt.timedelta(0) < config.EXPIRY_ALERT_MARGIN
 
 
 def test_the_dump_age_follows_the_one_rule_for_stale() -> None:
-    assert settings.DUMP_MAX_AGE == backup.max_age(settings.DUMP_PERIOD)
+    assert backup.max_age(settings.DUMP_PERIOD) == settings.DUMP_MAX_AGE
 
 
 def test_the_timer_s_calendar_form_says_what_the_period_says() -> None:
@@ -65,7 +65,7 @@ def test_the_timer_s_calendar_form_says_what_the_period_says() -> None:
     # expression names every day and one time of day, and nothing else does.
     daily = re.fullmatch(r'\*-\*-\* \d\d:\d\d:\d\d', settings.DUMP_SCHEDULE) is not None
 
-    assert daily == (settings.DUMP_PERIOD == dt.timedelta(days=1))
+    assert daily == (settings.DUMP_PERIOD == dt.timedelta(days=1))  # noqa: SIM300 -- the predicate reads 'the period is one day'
 
 
 # -- the certificate probe ----------------------------------------------------

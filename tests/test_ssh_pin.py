@@ -296,7 +296,7 @@ def test_a_multiplexing_master_cannot_carry_the_pinned_exec(tmp_path: Path, pyte
     does, and that is the mutation this case exists for.
     """
     bound = float(pytestconfig.getoption('timeout', None) or pytestconfig.getini('timeout') or 0)
-    assert not bound or CONTROL_PERSIST > bound, 'the master could expire inside the case that needs it'
+    assert not bound or bound < CONTROL_PERSIST, 'the master could expire inside the case that needs it'
     interposer = Host(tmp_path, 'interposer')
     appliance = Host(tmp_path, 'appliance')
     identity = Host(tmp_path, 'identity')
