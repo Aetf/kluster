@@ -30,11 +30,9 @@ no edit and no re-mint (§4.4), and only a reader outside this program — the
 `oci` CLI pointed at the copy — still follows the entry back to where the key
 was minted.
 
-There is one such slot, written and read here, for `state_backend.provision`
-— whose fallback to the path this one superseded lives with that caller, so the
-two die together. A second
-workstation-only consumer would earn a parameter back; inventing one now would
-only be a shape nothing has to satisfy.
+There is one such slot, written and read here, for `state_backend.provision`.
+A second workstation-only consumer would earn a parameter back; inventing one
+now would only be a shape nothing has to satisfy.
 """
 
 from __future__ import annotations

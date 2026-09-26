@@ -22,6 +22,8 @@ import json
 import logging
 import os
 import shutil
+import subprocess
+import sys
 import time
 import types
 import urllib.parse
@@ -367,7 +369,8 @@ def test_a_fresh_reservation_s_refusal_offers_the_one_repair_there_is() -> None:
 COMPARTMENT = 'ocid1.compartment.oc1..appliance'
 #: The OCID the appliance's compartment is recorded against here: the test's
 #: own, so no case depends on what the live entry records, and distinct from
-#: `COMPARTMENT` so a superseded configuration's answer cannot pass for it.
+#: `COMPARTMENT` so what a configuration the run is pointed at answers cannot
+#: pass for it.
 RECORDED_COMPARTMENT = 'ocid1.compartment.oc1..appliance-recorded'
 APPLIANCE_USER = 'ocid1.user.oc1..kluster-state-backend'
 APPLIANCE_TENANCY = 'ocid1.tenancy.oc1..installation'
@@ -377,7 +380,6 @@ APPLIANCE_TENANCY = 'ocid1.tenancy.oc1..installation'
 def slots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """`.credentials/` outside this checkout, with no ambient override in force."""
     monkeypatch.delenv('OCI_CLI_CONFIG_FILE', raising=False)
-    monkeypatch.setattr(provision, 'LEGACY_CONFIG_FILE', tmp_path / 'legacy' / 'config')
     directory = tmp_path / '.credentials'
     monkeypatch.setattr(workstation, 'directory', lambda: directory)
     return directory
@@ -531,34 +533,110 @@ def test_the_appliance_s_own_compartment_is_the_held_one(slots: Path, recorded: 
     assert provision.OciClients.load('ocid1.compartment.oc1..elsewhere').held is False
 
 
-def test_the_superseded_configuration_is_read_once_and_loudly(
-    slots: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, recorded: str
+def test_a_configuration_the_run_is_pointed_at_wins_with_its_compartment(
+    slots: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recorded: str
 ) -> None:
-    # A workstation that predates the mint keeps provisioning: what is at the
-    # old path is a complete answer, and the warning names its replacement.
-    # Moving the file out of the slot is what makes it the old one -- it names
-    # its key absolutely, so it goes on working from anywhere.
-    superseded = tmp_path / 'legacy' / 'config'
-    superseded.parent.mkdir()
-    _mint().rename(superseded)
-    # A hand-written configuration carried the compartment in the same file,
-    # and that value still wins over the one `conventions` records.
-    with superseded.open('a') as handle:
+    # A configuration for another tenancy carries the compartment in the same
+    # file, and pointing the run at it outranks both the slot and the
+    # compartment `conventions` records: the credential half of the drill
+    # escape, as `--compartment` is the compartment half.
+    pointed = tmp_path / 'elsewhere' / 'config'
+    pointed.parent.mkdir()
+    _ = shutil.copyfile(_mint(), pointed)
+    with pointed.open('a') as handle:
         _ = handle.write(f'compartment-id={COMPARTMENT}\n')
-    monkeypatch.setattr(provision, 'LEGACY_CONFIG_FILE', superseded)
+    monkeypatch.setenv('OCI_CLI_CONFIG_FILE', str(pointed))
 
-    with caplog.at_level(logging.WARNING):
-        client = provision.OciClients.load()
+    client = provision.OciClients.load()
 
     assert client.compartment_id == COMPARTMENT
-    assert 'credentials derived oci-state-backend mint' in caplog.text
+    assert client.held is False
 
 
-def test_a_machine_with_no_credential_is_told_what_mints_one(slots: Path) -> None:
+def test_a_configuration_the_run_is_pointed_at_is_told_it_can_name_the_compartment(
+    slots: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Unlike the slot, a configuration the run is pointed at is read whole, so
+    # a `compartment-id` written into it is honored: the refusal names that
+    # file as one of the repairs.
+    _ = with_unrecorded_compartment(monkeypatch, conventions.STATE_BACKEND)
+    pointed = tmp_path / 'elsewhere' / 'config'
+    pointed.parent.mkdir()
+    _ = shutil.copyfile(_mint(), pointed)
+    monkeypatch.setenv('OCI_CLI_CONFIG_FILE', str(pointed))
+
+    with pytest.raises(conventions.CompartmentMissing) as refused:
+        _ = provision.OciClients.load()
+
+    assert f'set compartment-id in {pointed}' in str(refused.value)
+    assert '--compartment' in str(refused.value)
+
+
+def _place_elsewhere(minted: Path, configuration: Path) -> None:
+    """A complete configuration for the minted key, at a path that is not the slot."""
+    configuration.parent.mkdir(parents=True)
+    key = configuration.parent / oci_slot.KEY
+    _ = shutil.copyfile(minted.parent / oci_slot.KEY, key)
+    _ = configuration.write_text(minted.read_text().replace(str(minted.parent / oci_slot.KEY), str(key)))
+
+
+def _home_with_no_slot(slots: Path, tmp_path: Path) -> Path:
+    """A home holding complete configurations for a minted key, on a machine whose slot is gone."""
+    home = tmp_path / 'home'
+    minted = _mint()
+    _place_elsewhere(minted, home / '.config' / 'oci' / 'config')
+    _place_elsewhere(minted, home / '.oci' / 'config')
+    shutil.rmtree(slots)
+    return home
+
+
+def test_a_machine_with_no_slot_is_told_what_mints_one(
+    slots: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recorded: str
+) -> None:
     # The SDK's own answer is a missing file; this one names the command that
-    # creates it, which is the whole difference between a stop and a step.
+    # creates it, which is the whole difference between a stop and a step. A
+    # configuration elsewhere on the machine -- the SDK's default location, or
+    # the XDG one -- is not the appliance's credential, so it is not read in
+    # the slot's place: a key there signs as whatever it happens to be.
+    monkeypatch.setenv('HOME', str(_home_with_no_slot(slots, tmp_path)))
+
     with pytest.raises(oci_slot.SlotUnusable, match='credentials derived oci-state-backend mint'):
         _ = provision.OciClients.load()
+
+
+def test_a_machine_with_no_slot_is_refused_from_the_first_import(slots: Path, tmp_path: Path) -> None:
+    """The same refusal, in an interpreter whose home is the planted one from its first line.
+
+    A path computed from the home directory at import time -- a module
+    constant, which is the form a fallback here would take -- is fixed before
+    any test can move `HOME`, so in this process it names the real home, and
+    only a machine that has a configuration there would catch it. A fresh
+    interpreter is the only place such a constant sees the planted files.
+    The child points `workstation.directory` at the removed slot itself:
+    left alone, it would resolve the checkout's own `.credentials/`, which on
+    a workstation holds the real slot.
+    """
+    home = _home_with_no_slot(slots, tmp_path)
+    probe = (
+        'import pathlib, sys\n'
+        'from kluster.scripts.credentials import oci_slot, workstation\n'
+        'from kluster.scripts.state_backend import provision\n'
+        'workstation.directory = lambda: pathlib.Path(sys.argv[1])\n'
+        'try:\n'
+        '    provision.OciClients.load()\n'
+        'except oci_slot.SlotUnusable as refused:\n'
+        '    print(refused)\n'
+    )
+    environment = {name: value for name, value in os.environ.items() if name != 'OCI_CLI_CONFIG_FILE'}
+
+    run = subprocess.run(
+        [sys.executable, '-c', probe, str(slots)],
+        env={**environment, 'HOME': str(home)},
+        capture_output=True,
+        text=True,
+    )
+
+    assert 'credentials derived oci-state-backend mint' in run.stdout, run.stderr
 
 
 class _Recorder:

@@ -1670,15 +1670,13 @@ another path provisions with no edit and no re-mint. Only a tool
 pointed at the copied file directly — the `oci` CLI — still follows the
 entry back to the minting checkout.
 
-Every slot is read where it is now and nowhere else, with one
-exception: the appliance's OCI configuration, whose predecessor is a
-hand-made configuration under `~/.config` rather than a minted credential
-at all. `state-backend` still reads that one when the slot is empty, with
-a warning naming the command that replaces it, and the fallback is marked
-in the code for deletion once every workstation has run that command. A
-copy of any other slot at an older location — a client bundle under
-`~/.config/kluster/`, a `.pulumi.secret` or `.github.token` at the
-checkout's root — is inert,
+Every slot is read where it is now and nowhere else. The appliance's
+OCI key is no exception: `state-backend` reads a configuration
+`OCI_CLI_CONFIG_FILE` points one run at, and otherwise its slot; with
+neither it refuses by naming the mint rather than reading an SDK
+configuration kept anywhere else on the machine. A copy of a slot at an older
+location — a client bundle under `~/.config/kluster/`, a
+`.pulumi.secret` or `.github.token` at the checkout's root — is inert,
 and deleting it is the last step of moving that machine onto
 `.credentials/`. Both root-level names stay in `.gitignore` all the same,
 so that no `jj` command ever records a copy left there in a change.
