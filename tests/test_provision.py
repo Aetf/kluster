@@ -7,6 +7,14 @@ credential comes from; what a converge decides about a running box, and what
 it refuses to do to one without being asked.
 """
 
+# The SDK ships no stubs; the same waiver `provision.py` itself carries. The
+# fakes below build the network's answers -- the VCN, gateway, subnet and
+# security group, their rules and their route tables -- from the SDK's own
+# models, so a field the code reads there is one the real answer has, and a
+# read of one it lacks raises. The instance, the reservation and the image are
+# plain stand-ins carrying the fields their cases name.
+# pyright: reportMissingTypeStubs=false
+
 from __future__ import annotations
 
 import argparse
@@ -21,6 +29,7 @@ import importlib.util
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -31,6 +40,7 @@ from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any, cast
 
+import oci
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -44,6 +54,78 @@ from kluster.scripts.credentials.delivery import Delivery
 from kluster.scripts.credentials.masters import CredentialRejected
 from kluster.scripts.state_backend import cli, config, provision, settings, state
 from kluster.scripts.state_backend.state import StateError
+
+#: The SDK's models, which the network's fake answers below are built from.
+MODELS: Any = oci.core.models
+
+
+#: The route table the appliance's subnet routes through. A table of its own
+#: rather than the VCN's default, which a subnet created without one is given,
+#: so that a read of the wrong table is a read of a different answer.
+ROUTE_TABLE = 'ocid1.routetable.subnet'
+
+#: The VCN's default route table, which routes nothing: the table a subnet
+#: that routes through `ROUTE_TABLE` does not use.
+DEFAULT_TABLE = 'ocid1.routetable.default'
+
+
+#: The appliance's gateway, as `_resource` names it.
+GATEWAY = 'ocid1.internet_gateways.one'
+
+
+def _rule(
+    direction: str,
+    *,
+    protocol: str = '6',
+    peer: str = provision.ANYWHERE,
+    port: int | None = None,
+    tag: str = '',
+) -> Any:
+    """A security rule as OCI lists one, confined to one TCP destination port when `port` is given."""
+    ingress = direction == 'INGRESS'
+    return MODELS.SecurityRule(
+        id=f'ocid1.securityrule.{direction.lower()}{port or ""}{tag}',
+        direction=direction,
+        protocol=protocol,
+        source=peer if ingress else None,
+        source_type='CIDR_BLOCK' if ingress else None,
+        destination=None if ingress else peer,
+        destination_type=None if ingress else 'CIDR_BLOCK',
+        tcp_options=None
+        if port is None
+        else MODELS.TcpOptions(destination_port_range=MODELS.PortRange(min=port, max=port)),
+        is_stateless=False,
+    )
+
+
+def _routes(*targets: str, table: str = ROUTE_TABLE) -> Any:
+    """`table`, sending everything to each of `targets`."""
+    return MODELS.RouteTable(
+        id=table,
+        route_rules=[
+            MODELS.RouteRule(destination=provision.ANYWHERE, destination_type='CIDR_BLOCK', network_entity_id=target)
+            for target in targets
+        ],
+    )
+
+
+def _declared_rules() -> list[Any]:
+    """The rules the appliance's security group holds: 5432 and 22 in from anywhere, everything out."""
+    return [_rule('INGRESS', port=settings.PORT), _rule('INGRESS', port=22), _rule('EGRESS', protocol='all')]
+
+
+def _network() -> dict[str, list[Any]]:
+    """The appliance's network, every piece of it as the converge creates it."""
+    kinds = {listing: [_resource(listing)] for listing in MODELLED}
+    return kinds | _inside_the_network()
+
+
+def _inside_the_network() -> dict[str, list[Any]]:
+    """What the network's resources hold: both route tables, and the security group's rules."""
+    return {
+        'route_tables': [_routes(GATEWAY), _routes(table=DEFAULT_TABLE)],
+        'network_security_group_security_rules': _declared_rules(),
+    }
 
 
 class _Page:
@@ -111,6 +193,19 @@ class _Service:
             return _Page(items[start:following], next_page=str(following) if following < len(items) else None)
 
         return call
+
+    def get_route_table(self, table_id: str) -> Any:
+        """The table `route_tables` holds under `table_id`, or one holding no route."""
+        self.calls.append('get_route_table')
+        held = [table for table in self.kinds.get('route_tables', []) if table.id == table_id]
+        table = held[0] if held else MODELS.RouteTable(id=table_id, route_rules=[])
+        return type('Response', (), {'data': table})()
+
+    def get_subnet(self, subnet_id: str) -> Any:
+        """The subnet `subnets` holds under `subnet_id`, in whatever state it is listed in."""
+        self.calls.append('get_subnet')
+        (subnet,) = [subnet for subnet in self.kinds.get('subnets', []) if subnet.id == subnet_id]
+        return type('Response', (), {'data': subnet})()
 
     def create_public_ip(self, *_args: object, **_kwargs: object) -> Any:
         self.calls.append('create_public_ip')
@@ -261,9 +356,9 @@ ARTIFACT = provision.FcosArtifact(
 def _surveyed(**fields: Any) -> provision.Survey:
     """A snapshot that found nothing but `fields`."""
     blank: dict[str, Any] = dict.fromkeys(
-        ('instance', 'vcn', 'gateway', 'subnet', 'security_group', 'public_ip', 'image')
+        ('instance', 'vcn', 'gateway', 'subnet', 'security_group', 'route_table', 'public_ip', 'image')
     )
-    return provision.Survey(fcos=ARTIFACT, **{**blank, **fields})
+    return provision.Survey(fcos=ARTIFACT, security_rules=(), **{**blank, **fields})
 
 
 def _ensure_reserved_ip(client: Any) -> provision.ReservedAddress:
@@ -755,18 +850,31 @@ def _built_from(
     }
 
 
-def _b2_reads(_session: b2.Session, api: str, _body: dict[str, Any]) -> object:
-    """B2 over a bucket that exists with no retention rule, for a run that must only read it.
+def _b2_holding(*rules: b2.LifecycleRule) -> Callable[[b2.Session, str, dict[str, Any]], object]:
+    """B2 over a bucket that exists carrying `rules`, for a run that must only read it.
 
     The one call answered is the bucket listing. Every other call a converge
     makes to B2 goes through a step the fixture below replaces -- the mint,
     the bucket converge, the dump key's check -- so any other call reaching
     here fails at the call, naming it.
     """
-    if api == 'b2_list_buckets':
-        rules: list[object] = []
-        return {'buckets': [{'bucketId': 'bucket-id', 'lifecycleRules': rules}]}
-    raise AssertionError(f'{api} was called by a run that must only read B2')
+
+    def post(_session: b2.Session, api: str, _body: dict[str, Any]) -> object:
+        if api == 'b2_list_buckets':
+            return {'buckets': [{'bucketId': 'bucket-id', 'lifecycleRules': [rule.body() for rule in rules]}]}
+        raise AssertionError(f'{api} was called by a run that must only read B2')
+
+    return post
+
+
+#: The dump prefix's retention as a hand could leave it: a week rather than
+#: a month.
+A_WEEK = b2.LifecycleRule(
+    file_name_prefix=f'{settings.B2_PREFIX}/', days_from_uploading_to_hiding=7, days_from_hiding_to_deleting=1
+)
+
+#: B2 over a bucket carrying the declared retention and nothing else.
+_b2_reads = _b2_holding(cli.RETENTION)
 
 
 @pytest.fixture
@@ -848,7 +956,7 @@ def converge(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
         monkeypatch.setattr(b2, 'ensure_bucket', ensure_bucket)
         monkeypatch.setattr(b2, 'mint_dump_key', mint)
         monkeypatch.setattr(b2, 'dump_key_is_current', _returning(recorder.dump_key_current))
-        clients = _Client([_ip(f'{settings.NAME}-ip', recorder.address)])
+        clients = _Client([_ip(f'{settings.NAME}-ip', recorder.address)], kinds=_network())
         monkeypatch.setattr(provision.OciClients, 'load', classmethod(_returning(clients)))
         monkeypatch.setattr(provision, 'fcos_artifact', _returning(ARTIFACT))
         monkeypatch.setattr(
@@ -2076,10 +2184,8 @@ class _Unwritable(_Service):
     """`_Service` for a run that must only read: a write fails at the call, naming it.
 
     What a listing holds is `kinds`, as for `_Service`; a `get_` is answered
-    as `_Service` answers it, except the route table, which is answered with
-    no rules -- the state a converge would write into -- and the reservation,
-    which points at `points_at`. The box has one VNIC whose primary private IP
-    is `PRIMARY`. A write named in `allowed` is recorded rather than refused,
+    as `_Service` answers it, except the reservation, which points at
+    `points_at`. The box has one VNIC whose primary private IP is `PRIMARY`. A write named in `allowed` is recorded rather than refused,
     and a repointed reservation is recorded with where it was pointed:
     `updated` holds each as the reservation's id and the private IP it now
     names.
@@ -2112,10 +2218,6 @@ class _Unwritable(_Service):
         self.calls.append('update_public_ip')
         self.updated.append((public_ip_id, str(details.private_ip_id)))
         return _Page([])
-
-    def get_route_table(self, *_args: object, **_kwargs: object) -> Any:
-        self.calls.append('get_route_table')
-        return type('Response', (), {'data': type('RouteTable', (), {'route_rules': []})()})()
 
     def list_vnic_attachments(self, *_args: object, **_kwargs: object) -> _Page:
         self.calls.append('list_vnic_attachments')
@@ -2198,11 +2300,11 @@ def test_a_plain_provision_writes_nothing_to_either_provider(
     """A report is a read: without a flag, the run compares and leaves everything as it found it.
 
     Everything the appliance adopts by name is there, bar what a case leaves
-    out, and the box is running with the reservation pointed at it. Nothing
-    around it is as a converge would leave it -- no retention rule on the
-    bucket, no route, no security rules -- so a run that converged before it
-    judged would write here. A box whose reservation or bucket is missing is
-    reported rather than given one.
+    out, and the box is running with the reservation pointed at it; the
+    network and the bucket are as a converge leaves them, so what a case
+    reports is the box alone. A box whose reservation or bucket is missing is
+    reported rather than given one. A run over a network a hand edited is
+    `test_a_plain_provision_names_every_hand_edit_to_what_the_box_stands_on`.
     """
     caplog.set_level(logging.INFO)
     recorder = _Recorder(instance_exists=True, metadata=_built_from(digests))
@@ -2238,6 +2340,583 @@ def test_a_plain_provision_points_a_loose_reservation_back_at_a_matching_box(
     # And the write is the repair rather than a call: the reservation now
     # names the box's primary private IP, not wherever it pointed before.
     assert cast('_Unwritable', clients.network).updated == [(reservation.id, PRIMARY)]
+
+
+# -- what the box stands on is compared like the box ---------------------------
+# A plain run reads the network and the dump bucket and names every way either
+# differs from what a launching run creates; a launching run puts each back.
+
+#: An address range narrower than anywhere, for a rule a hand narrowed.
+NARROW = '203.0.113.0/24'
+
+#: What the subnet's range could be edited to: inside the VCN, not the declared one.
+SHRUNK = '10.10.0.0/25'
+
+#: Something other than the appliance's gateway for a route to send traffic to.
+ELSEWHERE_GATEWAY = 'ocid1.natgateway.elsewhere'
+
+Edit = Callable[[dict[str, list[Any]]], None]
+
+
+def _set_rule(index: int, rule: Any) -> Edit:
+    def edit(kinds: dict[str, list[Any]]) -> None:
+        kinds['network_security_group_security_rules'][index] = rule
+
+    return edit
+
+
+def _add_rule(rule: Any) -> Edit:
+    def edit(kinds: dict[str, list[Any]]) -> None:
+        kinds['network_security_group_security_rules'].append(rule)
+
+    return edit
+
+
+def _set(listing: str, **attributes: object) -> Edit:
+    def edit(kinds: dict[str, list[Any]]) -> None:
+        for name, value in attributes.items():
+            setattr(kinds[listing][0], name, value)
+
+    return edit
+
+
+def _replace(listing: str, items: list[Any]) -> Edit:
+    def edit(kinds: dict[str, list[Any]]) -> None:
+        kinds[listing] = items
+
+    return edit
+
+
+def _untouched(_kinds: dict[str, list[Any]]) -> None:
+    return None
+
+
+def _missing(kind: str) -> str:
+    return f'a {kind} declared and missing: '
+
+
+def _undeclared(kind: str) -> str:
+    return f'a {kind} nobody declared: '
+
+
+#: Each hand edit a console allows to what the box stands on: the edit to the
+#: compartment, the rules the dump bucket carries, and every line the report
+#: has to say about it, word for word.
+HAND_EDITS: list[tuple[str, Edit, tuple[b2.LifecycleRule, ...], list[str]]] = [
+    (
+        '5432 narrowed',
+        _set_rule(0, _rule('INGRESS', port=settings.PORT, peer=NARROW)),
+        (cli.RETENTION,),
+        [
+            f'{_undeclared("security rule")}INGRESS tcp from {NARROW} port {settings.PORT}',
+            f'{_missing("security rule")}INGRESS tcp from 0.0.0.0/0 port {settings.PORT}',
+        ],
+    ),
+    (
+        '22 moved',
+        _set_rule(1, _rule('INGRESS', port=2222)),
+        (cli.RETENTION,),
+        [
+            f'{_undeclared("security rule")}INGRESS tcp from 0.0.0.0/0 port 2222',
+            f'{_missing("security rule")}INGRESS tcp from 0.0.0.0/0 port 22',
+        ],
+    ),
+    (
+        'an ingress rule nobody declared',
+        _add_rule(_rule('INGRESS', port=8080)),
+        (cli.RETENTION,),
+        [f'{_undeclared("security rule")}INGRESS tcp from 0.0.0.0/0 port 8080'],
+    ),
+    (
+        'egress confined',
+        _set_rule(2, _rule('EGRESS', port=443)),
+        (cli.RETENTION,),
+        [
+            f'{_undeclared("security rule")}EGRESS tcp to 0.0.0.0/0 port 443',
+            f'{_missing("security rule")}EGRESS all protocols to 0.0.0.0/0',
+        ],
+    ),
+    (
+        'the security group gone',
+        _replace('network_security_groups', []),
+        (cli.RETENTION,),
+        [f'no security group carries the name {settings.NAME}-nsg'],
+    ),
+    (
+        'the subnet range changed',
+        _set('subnets', cidr_block=SHRUNK),
+        (cli.RETENTION,),
+        [f'the subnet {settings.NAME}-subnet spans {SHRUNK}, not {settings.SUBNET_CIDR}'],
+    ),
+    (
+        'the route sent elsewhere',
+        _replace('route_tables', [_routes(ELSEWHERE_GATEWAY)]),
+        (cli.RETENTION,),
+        [
+            f'{_undeclared("route")}0.0.0.0/0 to {ELSEWHERE_GATEWAY}',
+            f'{_missing("route")}0.0.0.0/0 to {GATEWAY}',
+        ],
+    ),
+    (
+        'the subnet table sent elsewhere beside a default table that is right',
+        _replace('route_tables', [_routes(ELSEWHERE_GATEWAY), _routes(GATEWAY, table=DEFAULT_TABLE)]),
+        (cli.RETENTION,),
+        [
+            f'{_undeclared("route")}0.0.0.0/0 to {ELSEWHERE_GATEWAY}',
+            f'{_missing("route")}0.0.0.0/0 to {GATEWAY}',
+        ],
+    ),
+    (
+        'the route removed',
+        _replace('route_tables', [_routes()]),
+        (cli.RETENTION,),
+        [f'{_missing("route")}0.0.0.0/0 to {GATEWAY}'],
+    ),
+    (
+        'the gateway disabled',
+        _set('internet_gateways', is_enabled=False),
+        (cli.RETENTION,),
+        [f'the internet gateway {settings.NAME}-igw is disabled'],
+    ),
+    (
+        'the retention shortened',
+        _untouched,
+        (A_WEEK,),
+        [
+            f'the dump bucket {settings.B2_BUCKET} carries {settings.B2_PREFIX}/ hidden after 7 days, deleted after '
+            f'1 day more, not {settings.B2_PREFIX}/ hidden after {settings.B2_RETENTION_DAYS} days, deleted after '
+            '1 day more'
+        ],
+    ),
+    (
+        'the retention removed',
+        _untouched,
+        (),
+        [
+            f'the dump bucket {settings.B2_BUCKET} carries no lifecycle rule, not {settings.B2_PREFIX}/ hidden '
+            f'after {settings.B2_RETENTION_DAYS} days, deleted after 1 day more'
+        ],
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ('edit', 'retention', 'said'), [case[1:] for case in HAND_EDITS], ids=[c[0] for c in HAND_EDITS]
+)
+def test_a_plain_provision_names_every_hand_edit_to_what_the_box_stands_on(
+    converge: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    edit: Edit,
+    retention: tuple[b2.LifecycleRule, ...],
+    said: list[str],
+) -> None:
+    """A security rule or a retention rule changed by hand is drift, named, and nothing more.
+
+    The box itself matches, so these are the whole of the report: the run
+    exits as a drifted box's does, names each difference as its own line, and
+    writes nothing to either provider -- the network's converge would, here,
+    so this is also the proof that the report does not run it.
+    """
+    caplog.set_level(logging.WARNING)
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(CURRENT))
+    converge(recorder)
+    clients = _unwritable(monkeypatch)
+    edit(clients.network.kinds)
+    monkeypatch.setattr(b2.Session, 'post', _b2_holding(*retention))
+
+    assert _run() == 1
+
+    # The report is these lines and no others: the box matches, so a line
+    # the edit did not cause is a false report.
+    assert [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING] == said
+    assert [call for call in clients.calls if not call.startswith(('list_', 'get_'))] == []
+    assert (recorder.terminated, recorder.minted, recorder.launched, recorder.attached) == (0, 0, 0, [])
+
+
+def test_a_hand_edit_to_the_network_is_what_force_replaces_for(converge: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The one apply path is the replacement, for what the box stands on as for the box.
+
+    Its groundwork converges the network while the old box still serves, so
+    the rule is back before the dump is taken over it.
+    """
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(CURRENT))
+    converge(recorder)
+    clients = cast('_Client', provision.OciClients.load())
+    _set_rule(0, _rule('INGRESS', port=settings.PORT, peer=NARROW))(clients.network.kinds)
+
+    def converge_rules(*_args: object, **_kwargs: object) -> str:
+        recorder.order.append('rules')
+        return 'nsg'
+
+    monkeypatch.setattr(provision, 'ensure_security_group', converge_rules)
+
+    assert _run(force=True) == PENDING
+
+    assert recorder.terminated == 1
+    assert recorder.order.index('rules') < recorder.order.index('dump')
+
+
+def _subnet_answers(clients: Any, monkeypatch: pytest.MonkeyPatch, *states: str) -> None:
+    """`get_subnet` answers each of `states` in turn, and the last one from then on."""
+    remaining = list(states)
+
+    def get_subnet(_subnet_id: str) -> Any:
+        clients.calls.append('get_subnet')
+        state = remaining.pop(0) if len(remaining) > 1 else remaining[0]
+        return type('Response', (), {'data': MODELS.Subnet(id='ocid1.subnets.one', lifecycle_state=state)})()
+
+    monkeypatch.setattr(clients.network, 'get_subnet', get_subnet, raising=False)
+
+
+#: The writes a `--force` over a narrowed subnet and a narrowed 5432 rule
+#: makes to the network, and nothing else.
+SUBNET_AND_RULES = frozenset(
+    {'update_subnet', 'add_network_security_group_security_rules', 'remove_network_security_group_security_rules'}
+)
+
+
+@pytest.mark.usefixtures('clock')
+def test_the_security_rules_wait_for_the_subnet_to_take_its_range(
+    converge: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A range edit is finished before anything after it runs, and so before the dump."""
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(CURRENT))
+    converge(recorder)
+    clients = _unwritable(monkeypatch, allowed=SUBNET_AND_RULES)
+    _set('subnets', cidr_block=SHRUNK)(clients.network.kinds)
+    _set_rule(0, _rule('INGRESS', port=settings.PORT, peer=NARROW))(clients.network.kinds)
+    _subnet_answers(clients, monkeypatch, 'UPDATING', 'UPDATING', 'AVAILABLE')
+
+    assert _run(force=True) == PENDING
+
+    calls = clients.calls
+    last_poll = len(calls) - 1 - calls[::-1].index('get_subnet')
+    assert calls.index('update_subnet') < calls.index('get_subnet')
+    assert last_poll < calls.index('add_network_security_group_security_rules')
+    assert recorder.dumped
+
+
+@pytest.mark.usefixtures('clock')
+@pytest.mark.parametrize('states', [('UPDATING',), ('UPDATING', 'FAILED')], ids=['never finishes', 'fails'])
+def test_a_range_edit_that_does_not_finish_stops_the_run_with_the_box_serving(
+    converge: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, states: tuple[str, ...]
+) -> None:
+    """The launch is the next thing to need the subnet, and it comes after the terminate.
+
+    So an edit still running, or one that failed after the call returned, is
+    found here, where the run can stop with nothing destroyed, rather than
+    at the launch, in the stretch with no backend.
+    """
+    caplog.set_level(logging.WARNING)
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(CURRENT))
+    converge(recorder)
+    clients = _unwritable(monkeypatch, allowed=SUBNET_AND_RULES)
+    _set('subnets', cidr_block=SHRUNK)(clients.network.kinds)
+    _subnet_answers(clients, monkeypatch, *states)
+
+    with pytest.raises((RuntimeError, TimeoutError), match=re.escape('subnet ocid1.subnets.one')):
+        _ = _run(force=True)
+
+    assert (recorder.terminated, recorder.dumped, recorder.minted, recorder.launched) == (0, [], 0, 0)
+    assert recorder.instance_exists
+    assert not any('state-backend restore' in message for message in caplog.messages)
+
+
+def _ports(low: int, high: int | None = None, *, source: tuple[int, int] | None = None) -> Any:
+    """TCP options confined to `low`-`high`, from `source` ports when given; `source_port_range` null otherwise."""
+    return MODELS.TcpOptions(
+        destination_port_range=MODELS.PortRange(min=low, max=low if high is None else high),
+        source_port_range=None if source is None else MODELS.PortRange(min=source[0], max=source[1]),
+    )
+
+
+def _ingress(**fields: object) -> Any:
+    """An ingress rule on 5432 from anywhere as OCI answers it, with `fields` answered instead."""
+    answered: dict[str, object] = {
+        'id': 'ocid1.securityrule.read',
+        'direction': 'INGRESS',
+        'protocol': '6',
+        'source': provision.ANYWHERE,
+        'source_type': 'CIDR_BLOCK',
+        'tcp_options': _ports(settings.PORT),
+        'is_stateless': False,
+        'is_valid': True,
+    }
+    return MODELS.SecurityRule(**(answered | fields))
+
+
+#: The declared 5432 rule, as the comparison holds it.
+POSTGRES = provision.SecurityRule(
+    'INGRESS', '6', provision.ANYWHERE, 'CIDR_BLOCK', ports=(settings.PORT, settings.PORT)
+)
+
+#: Each shape a listed rule can come back in, what it reads as, and whether
+#: that is a declared rule. The first rows are shapes of a rule as created,
+#: which must read as the declared one; the rest each differ from it in one
+#: field the comparison holds, which must read as a rule nobody declared.
+RULE_READS: list[tuple[str, Any, provision.SecurityRule, bool]] = [
+    ('as created', _ingress(), POSTGRES, True),
+    ('statelessness answered null', _ingress(is_stateless=None), POSTGRES, True),
+    ('with a description', _ingress(description='postgres', is_valid=False), POSTGRES, True),
+    (
+        'egress answered with a source',
+        MODELS.SecurityRule(
+            direction='EGRESS',
+            protocol='all',
+            source=provision.ANYWHERE,
+            source_type='CIDR_BLOCK',
+            destination=provision.ANYWHERE,
+            destination_type='CIDR_BLOCK',
+            is_stateless=None,
+        ),
+        provision.SecurityRule('EGRESS', 'all', provision.ANYWHERE, 'CIDR_BLOCK'),
+        True,
+    ),
+    (
+        'ports widened',
+        _ingress(tcp_options=_ports(settings.PORT, 5500)),
+        provision.SecurityRule('INGRESS', '6', provision.ANYWHERE, 'CIDR_BLOCK', ports=(settings.PORT, 5500)),
+        False,
+    ),
+    (
+        'stateless',
+        _ingress(is_stateless=True),
+        provision.SecurityRule(
+            'INGRESS', '6', provision.ANYWHERE, 'CIDR_BLOCK', ports=(settings.PORT, settings.PORT), stateless=True
+        ),
+        False,
+    ),
+    (
+        'source ports confined',
+        _ingress(tcp_options=_ports(settings.PORT, source=(1024, 65535))),
+        provision.SecurityRule(
+            'INGRESS',
+            '6',
+            provision.ANYWHERE,
+            'CIDR_BLOCK',
+            ports=(settings.PORT, settings.PORT),
+            source_ports=(1024, 65535),
+        ),
+        False,
+    ),
+    (
+        'from another security group',
+        _ingress(source='ocid1.networksecuritygroup.other', source_type='NETWORK_SECURITY_GROUP'),
+        provision.SecurityRule(
+            'INGRESS',
+            '6',
+            'ocid1.networksecuritygroup.other',
+            'NETWORK_SECURITY_GROUP',
+            ports=(settings.PORT, settings.PORT),
+        ),
+        False,
+    ),
+    (
+        'icmp',
+        _ingress(protocol='1', tcp_options=None, icmp_options=MODELS.IcmpOptions(type=3, code=4)),
+        provision.SecurityRule('INGRESS', '1', provision.ANYWHERE, 'CIDR_BLOCK', icmp=(3, 4)),
+        False,
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ('listed', 'reads', 'declared'), [row[1:] for row in RULE_READS], ids=[row[0] for row in RULE_READS]
+)
+def test_a_listed_rule_reads_as_every_field_that_decides_what_it_lets_through(
+    listed: Any, reads: provision.SecurityRule, declared: bool
+) -> None:
+    """Both directions: a rule as created is the declared one, and one field off is not."""
+    read = provision.security_rule(listed)
+
+    assert read == reads
+    assert (read in provision.SECURITY_RULES) is declared
+
+
+#: The declared route, as the comparison holds it.
+OUT = provision.Route(provision.ANYWHERE, 'CIDR_BLOCK', GATEWAY)
+
+#: Each shape a listed route rule can come back in, the same way as `RULE_READS`.
+ROUTE_READS: list[tuple[str, Any, provision.Route, bool]] = [
+    (
+        'as created',
+        MODELS.RouteRule(destination=provision.ANYWHERE, destination_type='CIDR_BLOCK', network_entity_id=GATEWAY),
+        OUT,
+        True,
+    ),
+    (
+        'with the range echoed and a type',
+        MODELS.RouteRule(
+            destination=provision.ANYWHERE,
+            cidr_block=provision.ANYWHERE,
+            destination_type='CIDR_BLOCK',
+            network_entity_id=GATEWAY,
+            route_type='STATIC',
+            description='out',
+        ),
+        OUT,
+        True,
+    ),
+    (
+        'with the deprecated range alone',
+        MODELS.RouteRule(
+            destination=None, cidr_block=provision.ANYWHERE, destination_type='CIDR_BLOCK', network_entity_id=GATEWAY
+        ),
+        OUT,
+        True,
+    ),
+    (
+        'to another target',
+        MODELS.RouteRule(
+            destination=provision.ANYWHERE, destination_type='CIDR_BLOCK', network_entity_id=ELSEWHERE_GATEWAY
+        ),
+        provision.Route(provision.ANYWHERE, 'CIDR_BLOCK', ELSEWHERE_GATEWAY),
+        False,
+    ),
+    (
+        'narrower',
+        MODELS.RouteRule(destination='10.0.0.0/8', destination_type='CIDR_BLOCK', network_entity_id=GATEWAY),
+        provision.Route('10.0.0.0/8', 'CIDR_BLOCK', GATEWAY),
+        False,
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ('listed', 'reads', 'declared'), [row[1:] for row in ROUTE_READS], ids=[row[0] for row in ROUTE_READS]
+)
+def test_a_listed_route_reads_as_where_it_sends_what(listed: Any, reads: provision.Route, declared: bool) -> None:
+    read = provision.route(listed)
+
+    assert read == reads
+    assert (read in provision.declared_routes(GATEWAY)) is declared
+
+
+class _Writes(_Service):
+    """`_Service` that keeps every write it is sent, with its arguments, in `written`."""
+
+    def __init__(self, calls: list[str], kinds: dict[str, list[Any]]) -> None:
+        super().__init__(calls, kinds)
+        self.written: list[tuple[str, tuple[Any, ...]]] = []
+
+    def __getattr__(self, method: str) -> Callable[..., Any]:
+        if method.startswith(('list_', 'get_', '_')):
+            return super().__getattr__(method)
+
+        def write(*args: Any, **_kwargs: object) -> Any:
+            self.calls.append(method)
+            self.written.append((method, args))
+            return type('Response', (), {'data': None})()
+
+        return write
+
+
+def _written(edit: Edit) -> tuple[Any, _Writes, provision.Survey]:
+    """The appliance's compartment after `edit`, surveyed, with its network client keeping what it is sent."""
+    clients = _compartment()
+    edit(clients.network.kinds)
+    network = _Writes(clients.calls, clients.network.kinds)
+    clients.network = network
+    return clients, network, provision.survey(clients)
+
+
+@pytest.mark.usefixtures('stream')
+def test_a_matching_network_is_converged_by_writing_nothing() -> None:
+    clients, network, found = _written(_untouched)
+
+    assert provision.network_drift(found) == []
+    _ = provision.ensure_network(clients, found)
+    _ = provision.ensure_security_group(clients, 'vcn', found)
+
+    assert network.written == []
+
+
+@pytest.mark.usefixtures('stream')
+def test_the_security_group_converge_leaves_the_declared_rules_and_nothing_else() -> None:
+    """The narrowed rule and the stranger go, the declared rule comes back -- added first.
+
+    Adding before removing is what keeps a port the old box is still serving
+    on from spending a moment with no rule at all.
+    """
+    narrowed = _rule('INGRESS', port=settings.PORT, peer=NARROW, tag='narrowed')
+    stranger = _rule('INGRESS', port=8080)
+    clients, network, found = _written(
+        lambda kinds: kinds.update(
+            network_security_group_security_rules=[
+                narrowed,
+                _rule('INGRESS', port=22),
+                _rule('EGRESS', protocol='all'),
+                stranger,
+            ]
+        )
+    )
+
+    assert provision.ensure_security_group(clients, 'vcn', found) == 'ocid1.network_security_groups.one'
+
+    (add, (group, added)), (remove, (_, removed)) = network.written
+    assert (add, remove) == (
+        'add_network_security_group_security_rules',
+        'remove_network_security_group_security_rules',
+    )
+    assert group == 'ocid1.network_security_groups.one'
+    assert [provision.security_rule(rule) for rule in added.security_rules] == [
+        provision.SecurityRule('INGRESS', '6', '0.0.0.0/0', 'CIDR_BLOCK', ports=(settings.PORT, settings.PORT))
+    ]
+    assert removed.security_rule_ids == [narrowed.id, stranger.id]
+
+
+@pytest.mark.usefixtures('stream')
+def test_the_network_converge_puts_back_the_route_the_range_and_the_gateway() -> None:
+    def edit(kinds: dict[str, list[Any]]) -> None:
+        _replace('route_tables', [_routes(ELSEWHERE_GATEWAY)])(kinds)
+        _set('subnets', cidr_block=SHRUNK)(kinds)
+        _set('internet_gateways', is_enabled=False)(kinds)
+
+    clients, network, found = _written(edit)
+
+    placement = provision.ensure_network(clients, found)
+
+    assert placement == provision.Placement(vcn_id='ocid1.vcns.one', subnet_id='ocid1.subnets.one')
+    written = dict(network.written)
+    gateway, enabled = written.pop('update_internet_gateway')
+    assert (gateway, enabled.is_enabled) == (GATEWAY, True)
+    table, routes = written.pop('update_route_table')
+    assert table == ROUTE_TABLE
+    assert [provision.route(rule) for rule in routes.route_rules] == [
+        provision.Route('0.0.0.0/0', 'CIDR_BLOCK', GATEWAY)
+    ]
+    subnet, spans = written.pop('update_subnet')
+    assert (subnet, spans.cidr_block) == ('ocid1.subnets.one', settings.SUBNET_CIDR)
+    assert written == {}
+
+
+@pytest.mark.parametrize(('carried', 'writes'), [((cli.RETENTION,), False), ((A_WEEK,), True), ((), True)])
+def test_the_bucket_converge_writes_the_retention_the_report_compares_against(
+    carried: tuple[b2.LifecycleRule, ...], writes: bool
+) -> None:
+    """`cli.RETENTION` and what `b2.ensure_bucket` writes are one rule.
+
+    The report compares against the first and a launching run writes the
+    second, so if they came apart a run would report a rule its own repair
+    wrote, or leave alone one it should report. The bucket converge is called
+    as `cli._groundwork` calls it.
+    """
+    posted: list[tuple[str, dict[str, Any]]] = []
+
+    def post(_session: b2.Session, api: str, body: dict[str, Any]) -> object:
+        posted.append((api, body))
+        return {'buckets': [{'bucketId': 'bucket-id', 'lifecycleRules': [rule.body() for rule in carried]}]}
+
+    session = b2.Session(account_id=ACCOUNT_ID, api_url='https://api.example', token='unused')
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(b2.Session, 'post', post)
+        _ = b2.ensure_bucket(
+            session, settings.B2_BUCKET, prefix=settings.B2_PREFIX, retention_days=settings.B2_RETENTION_DAYS
+        )
+
+    updates = [body['lifecycleRules'] for api, body in posted if api == 'b2_update_bucket']
+    assert updates == ([[cli.RETENTION.body()]] if writes else [])
 
 
 def _returning_raise(message: str) -> Callable[..., Any]:
@@ -2667,24 +3346,38 @@ NAMED = {
     'images': ('image', f'fcos-{ARTIFACT.release}'),
 }
 
+#: The network's kinds, each as the SDK's model and the fields the appliance
+#: creates it with.
+MODELLED: dict[str, tuple[str, dict[str, object]]] = {
+    'vcns': ('Vcn', {'cidr_block': settings.VCN_CIDR, 'default_route_table_id': DEFAULT_TABLE}),
+    'internet_gateways': ('InternetGateway', {'is_enabled': True}),
+    'subnets': ('Subnet', {'cidr_block': settings.SUBNET_CIDR, 'route_table_id': ROUTE_TABLE}),
+    'network_security_groups': ('NetworkSecurityGroup', {}),
+}
+
 #: What a listing says of a resource that is gone: an image says `DELETED`
 #: where every other kind says `TERMINATED`.
 GONE = {listing: 'DELETED' if listing == 'images' else 'TERMINATED' for listing in NAMED}
 
 
 def _resource(listing: str, *, name: str | None = None, state: str = 'AVAILABLE', tag: str = 'one') -> Any:
-    """One listed resource of the kind `listing` answers, under the appliance's name unless told otherwise."""
+    """One listed resource of the kind `listing` answers, under the appliance's name unless told otherwise.
+
+    A network kind is the SDK's model of it (`MODELLED`), carrying what the
+    appliance creates it with: the VCN's range and its default route table,
+    an enabled gateway, a subnet spanning `settings.SUBNET_CIDR` and routing
+    through `ROUTE_TABLE`. The rest are stand-ins with an address.
+    """
     _, suffix = NAMED[listing]
-    return type(
-        'Resource',
-        (),
-        {
-            'id': f'ocid1.{listing}.{tag}',
-            'display_name': f'{settings.NAME}-{suffix}' if name is None else name,
-            'lifecycle_state': state,
-            'ip_address': settings.ADDRESS,
-        },
-    )()
+    common = {
+        'id': f'ocid1.{listing}.{tag}',
+        'display_name': f'{settings.NAME}-{suffix}' if name is None else name,
+        'lifecycle_state': state,
+    }
+    if listing in MODELLED:
+        model, fields = MODELLED[listing]
+        return getattr(MODELS, model)(**common, **fields)
+    return type('Resource', (), {**common, 'ip_address': settings.ADDRESS})()
 
 
 def _clients(kinds: dict[str, list[Any]], *, page_size: int = 100) -> Any:
@@ -2693,9 +3386,13 @@ def _clients(kinds: dict[str, list[Any]], *, page_size: int = 100) -> Any:
 
 
 def _compartment(ahead: dict[str, list[Any]] | None = None, *, page_size: int = 100) -> Any:
-    """One live resource of every kind under the appliance's name, each listed behind what `ahead` puts before it."""
+    """One live resource of every kind under the appliance's name, each listed behind what `ahead` puts before it.
+
+    The network among them is the one the converge creates (`_network`).
+    """
     ahead = ahead or {}
-    return _clients({listing: [*ahead.get(listing, []), _resource(listing)] for listing in NAMED}, page_size=page_size)
+    kinds = {listing: [*ahead.get(listing, []), _resource(listing)] for listing in NAMED}
+    return _clients(kinds | _inside_the_network(), page_size=page_size)
 
 
 @pytest.fixture
@@ -2719,6 +3416,9 @@ def test_the_survey_reads_every_page_of_every_listing() -> None:
 
     for listing, (field, _) in NAMED.items():
         assert getattr(found, field) is not None, f'{listing}: the second page was not read'
+    # And the security group's rules, a page each: the one past the first
+    # page is the rule a comparison of one page would call missing.
+    assert len(found.security_rules) == len(_declared_rules())
 
 
 @pytest.mark.usefixtures('stream')
@@ -2753,11 +3453,11 @@ def test_a_holder_of_the_name_that_is_gone_is_not_adopted(listing: str) -> None:
 @pytest.mark.usefixtures('stream')
 @pytest.mark.parametrize('clients', [_clients({}), _compartment()], ids=['nothing exists', 'everything exists'])
 def test_the_survey_writes_nothing(clients: Any) -> None:
-    """Every call the survey makes is a listing, whether it finds everything or nothing."""
+    """Every call the survey makes is a read, whether it finds everything or nothing."""
     _ = provision.survey(clients)
 
     assert clients.calls, 'the survey read nothing'
-    assert [call for call in clients.calls if not call.startswith('list_')] == []
+    assert [call for call in clients.calls if not call.startswith(('list_', 'get_'))] == []
 
 
 # -- what the launch actually puts on the box --------------------------------

@@ -49,11 +49,16 @@ operator's client bundle to
 
 **It applies the current commit.** A run compares the box to the repository —
 the Butane file, the operator keys, the age recipients, the pins, the
-certificate identities, the B2 dump key's scope — and one thing to the clock:
-how much life the box's server certificate has left, which is drift once it is
-inside the renewal margin — so a coming expiry is something a run reports
-rather than something anyone has to watch a calendar for. Acting on it is still `--force`, like any
-other replacement. A matching box is left untouched, including its dump key,
+certificate identities, the B2 dump key's scope — and what the box stands on
+to what a launching run creates: the appliance's security rules, whole, its
+route, its subnet's range, its gateway, and the dump bucket's retention rule.
+One thing it compares to the clock: how much life the box's server certificate
+has left, which is drift once it is inside the renewal margin — so a coming
+expiry is something a run reports rather than something anyone has to watch a
+calendar for. Any of these differences makes a plain run say what it would
+replace and exit 1, and acting on it is still `--force`, like any other
+replacement: a hand edit to a security rule, the route or the retention rule
+is repaired by that same replacement, so undoing one costs one. A matching box is left untouched, including its dump key,
 whose secret exists only in the Ignition it booted with. `--replace` forces the rebuild when there is no diff
 to find (rotating the dump key or the server key, or discarding a box that is
 broken in a way its metadata cannot show).

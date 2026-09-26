@@ -313,6 +313,46 @@ def _rebuild_reasons(
     return reasons
 
 
+#: The dump prefix's lifecycle rule, as `b2.ensure_bucket` writes it from the
+#: same two settings: hidden once `B2_RETENTION_DAYS` old, deleted a day after
+#: that. The dump bucket carries this rule and no other. A test holds
+#: `ensure_bucket` to writing exactly this and to leaving a bucket that already
+#: carries it alone, so the report and the repair cannot come apart.
+RETENTION = b2.LifecycleRule(
+    file_name_prefix=f'{settings.B2_PREFIX}/',
+    days_from_uploading_to_hiding=settings.B2_RETENTION_DAYS,
+    days_from_hiding_to_deleting=1,
+)
+
+
+def _lifecycle(rules: Sequence[b2.LifecycleRule]) -> str:
+    def days(count: int | None) -> str:
+        return 'never' if count is None else f'after {count} day{"" if count == 1 else "s"}'
+
+    def one(rule: b2.LifecycleRule) -> str:
+        return (
+            f'{rule.file_name_prefix} hidden {days(rule.days_from_uploading_to_hiding)}, '
+            f'deleted {days(rule.days_from_hiding_to_deleting)} more'
+        )
+
+    return '; '.join(one(rule) for rule in rules) or 'no lifecycle rule'
+
+
+def _retention_drift(bucket: b2.Bucket) -> list[str]:
+    """Why the dump bucket's retention is not the one this commit declares, if it is not.
+
+    The rule bounds how far back the state's backups reach, and it is enforced
+    by B2 rather than by anything on the box, so the bucket is the one place
+    it can be read.
+    """
+    if bucket.lifecycle_rules == (RETENTION,):
+        return []
+    return [
+        f'the dump bucket {settings.B2_BUCKET} carries {_lifecycle(bucket.lifecycle_rules)}, '
+        f'not {_lifecycle((RETENTION,))}'
+    ]
+
+
 def _missing_inputs(reserved: provision.ReservedAddress | None, bucket: b2.Bucket | None) -> list[str]:
     """Why a running box cannot be compared at all: what the comparison reads is missing.
 
@@ -499,13 +539,21 @@ def _provision(
     # Up to here the run has written to neither provider, and a run that leaves
     # the box standing -- because it matches, or because its drift was not
     # asked to be acted on -- writes nothing to either but the one repair below.
-    log.info('[4/6] comparing the running box against this commit')
+    log.info('[4/6] comparing the running box, its network and its bucket against this commit')
     if existing is not None:
+        # What the box stands on is part of what it is: a security rule or a
+        # retention rule changed by hand is drift the way a changed pin is,
+        # reported by the same plain run and put back by the same replacement,
+        # whose groundwork converges both before anything is destroyed.
+        scaffolding = provision.network_drift(found) + ([] if bucket is None else _retention_drift(bucket))
         if reserved is None or bucket is None:
-            reasons = _missing_inputs(reserved, bucket)
+            reasons = _missing_inputs(reserved, bucket) + scaffolding
         else:
-            reasons = _rebuild_reasons(
-                roots, session, existing, address=reserved.address, bucket_id=bucket.bucket_id, replace=replace
+            reasons = (
+                _rebuild_reasons(
+                    roots, session, existing, address=reserved.address, bucket_id=bucket.bucket_id, replace=replace
+                )
+                + scaffolding
             )
             if not reasons:
                 log.info('appliance %s matches the repository; nothing to change', existing.id)

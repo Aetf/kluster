@@ -280,10 +280,15 @@ CENSUS: dict[type, Census] = {
     provision.OciClients: Census('compartment_id config held', secret='config'),
     provision.Placement: Census('vcn_id subnet_id'),
     provision.ReservedAddress: Census('id address'),
+    provision.Route: Census('destination destination_type target'),
+    provision.SecurityRule: Census('direction protocol peer peer_type ports source_ports icmp stateless'),
     # The listed instance, which the SDK prints with its launch metadata whole:
     # `user_data` there is the Ignition the box booted with, and that carries
     # the server's TLS key, its SSH host key and the dump's B2 key.
-    provision.Survey: Census('instance vcn gateway subnet security_group public_ip fcos image', secret='instance'),
+    provision.Survey: Census(
+        'instance vcn gateway subnet security_group route_table security_rules public_ip fcos image',
+        secret='instance',
+    ),
     ssh.CommandResult: Census('exit_status stdout stderr'),
     ssh.Device: Census('host username private_key host_key port', secret='private_key'),
     ssh.FileStat: Census('owner group mode size kind'),

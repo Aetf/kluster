@@ -10,9 +10,11 @@
 Every step that creates is an `ensure_*`: re-running converges rather than
 duplicating, so "re-provision" (the box's only apply path) and "provision" are
 the same command. `survey` and `found_reserved_ip` create nothing; each
-`ensure_*` may, and which run calls which is `cli._provision`'s decision. The
-one thing this module deliberately does not do is mutate a running box — a
-changed Butane file means a new instance.
+`ensure_*` may, and which run calls which is `cli._provision`'s decision.
+`network_drift` holds what the survey read against what the network's
+`ensure_*` create, so a run that writes nothing can still name how the network
+differs. The one thing this module deliberately does not do is mutate a
+running box — a changed Butane file means a new instance.
 
 Ordering is dictated by the certificate: the server certificate is issued for
 the reserved public IP, so the address must exist before the Ignition that
@@ -296,6 +298,12 @@ class Survey:
     the image is named after it, so the read is a precondition of the image
     lookup rather than of the pipeline that imports one.
 
+    `route_table` and `security_rules` are what the network's comparison
+    reads beside the named resources (`network_drift`): the route table the
+    subnet routes through -- the VCN's default one while no subnet stands --
+    and every rule the security group holds. They are None and empty whenever
+    the VCN, respectively the security group, is.
+
     `instance` is out of the repr and out of comparison: the SDK prints an
     instance with its launch metadata whole, and the `user_data` there is the
     Ignition the box booted with, which carries its TLS and SSH keys and the
@@ -307,6 +315,8 @@ class Survey:
     gateway: Any | None
     subnet: Any | None
     security_group: Any | None
+    route_table: Any | None
+    security_rules: tuple[Any, ...]
     public_ip: Any | None
     fcos: FcosArtifact
     image: Any | None
@@ -317,7 +327,8 @@ def survey(clients: OciClients) -> Survey:
     network = clients.network
     instance = find_instance(clients)
     vcn = _lookup(network.list_vcns, clients.compartment_id, kind='VCN', name=_name('vcn'))
-    gateway = subnet = security_group = None
+    gateway = subnet = security_group = route_table = None
+    security_rules: tuple[Any, ...] = ()
     if vcn is not None:
         gateway = _lookup(
             network.list_internet_gateways,
@@ -336,6 +347,14 @@ def survey(clients: OciClients) -> Survey:
             kind='security group',
             name=_name('nsg'),
         )
+        table_id = (subnet.route_table_id if subnet is not None else None) or vcn.default_route_table_id
+        route_table = _data(network.get_route_table(table_id))
+        if security_group is not None:
+            security_rules = tuple(
+                oci.pagination.list_call_get_all_results(
+                    network.list_network_security_group_security_rules, security_group.id
+                ).data
+            )
     public_ip = find_reserved_ip(clients)
     fcos = fcos_artifact()
     image_name = _name(f'fcos-{fcos.release}')
@@ -349,6 +368,8 @@ def survey(clients: OciClients) -> Survey:
         gateway=gateway,
         subnet=subnet,
         security_group=security_group,
+        route_table=route_table,
+        security_rules=security_rules,
         public_ip=public_ip,
         fcos=fcos,
         image=image,
@@ -368,10 +389,197 @@ class Placement:
     subnet_id: str
 
 
+#: The one address range the appliance's routes and rules name: everything.
+ANYWHERE = '0.0.0.0/0'
+
+#: How a rule reads for each protocol number OCI answers with.
+_PROTOCOLS = {'all': 'all protocols', '1': 'icmp', '6': 'tcp', '17': 'udp'}
+
+
+def _span(ports: tuple[int, int]) -> str:
+    low, high = ports
+    return f'port {low}' if low == high else f'ports {low}-{high}'
+
+
+@dataclass(frozen=True)
+class SecurityRule:
+    """One security rule, by every field that decides what it lets through.
+
+    The comparison is between whole records, so a rule whose source was
+    narrowed, whose ports were moved, or whose direction was flipped is a rule
+    nobody declared -- and the declared one it replaced is missing -- rather
+    than the same rule under another description.
+    """
+
+    direction: str
+    #: OCI's protocol number as a string, or `all`.
+    protocol: str
+    #: The far end: the source of an ingress rule, the destination of an
+    #: egress one.
+    peer: str
+    #: What kind of thing `peer` names: a CIDR block, a service, another
+    #: security group.
+    peer_type: str
+    #: The TCP or UDP destination ports, `None` where the rule names none.
+    ports: tuple[int, int] | None = None
+    #: The TCP or UDP source ports, the same way.
+    source_ports: tuple[int, int] | None = None
+    #: The ICMP type and code, `None` where the rule names none.
+    icmp: tuple[int, int | None] | None = None
+    stateless: bool = False
+
+    def __str__(self) -> str:
+        ingress = self.direction == 'INGRESS'
+        words = [self.direction, _PROTOCOLS.get(self.protocol, f'protocol {self.protocol}')]
+        words.append(f'{"from" if ingress else "to"} {self.peer}')
+        if self.peer_type != 'CIDR_BLOCK':
+            words.append(f'({self.peer_type})')
+        if self.ports is not None:
+            words.append(_span(self.ports))
+        if self.source_ports is not None:
+            words.append(f'from source {_span(self.source_ports)}')
+        if self.icmp is not None:
+            words.append(f'icmp type {self.icmp[0]} code {self.icmp[1]}')
+        if self.stateless:
+            words.append('stateless')
+        return ' '.join(words)
+
+    def details(self) -> Any:
+        """The rule as `add_network_security_group_security_rules` takes it.
+
+        For the shapes `SECURITY_RULES` declares, which is TCP to one port
+        range or every protocol at once.
+        """
+        ingress = self.direction == 'INGRESS'
+        return oci.core.models.AddSecurityRuleDetails(
+            direction=self.direction,
+            protocol=self.protocol,
+            is_stateless=self.stateless,
+            source=self.peer if ingress else None,
+            source_type=self.peer_type if ingress else None,
+            destination=None if ingress else self.peer,
+            destination_type=None if ingress else self.peer_type,
+            tcp_options=None
+            if self.ports is None
+            else oci.core.models.TcpOptions(
+                destination_port_range=oci.core.models.PortRange(min=self.ports[0], max=self.ports[1])
+            ),
+        )
+
+
+def _range(options: Any, which: str) -> tuple[int, int] | None:
+    found = getattr(options, which, None) if options is not None else None
+    return None if found is None else (int(found.min), int(found.max))
+
+
+def security_rule(listed: Any) -> SecurityRule:
+    """A rule as OCI lists it, read into the record the comparison holds."""
+    ingress = listed.direction == 'INGRESS'
+    ports = listed.tcp_options if listed.tcp_options is not None else listed.udp_options
+    icmp = listed.icmp_options
+    return SecurityRule(
+        direction=str(listed.direction),
+        protocol=str(listed.protocol),
+        peer=str(listed.source if ingress else listed.destination),
+        peer_type=str(listed.source_type if ingress else listed.destination_type),
+        ports=_range(ports, 'destination_port_range'),
+        source_ports=_range(ports, 'source_port_range'),
+        icmp=None if icmp is None else (int(icmp.type), None if icmp.code is None else int(icmp.code)),
+        stateless=bool(listed.is_stateless),
+    )
+
+
+#: Every rule the security group holds, and nothing else: 5432 and 22 from
+#: anywhere, and egress to anywhere. The client certificate is the wall
+#: (state-backend.md §4): an allowlist of GitHub's ranges exceeds the rule
+#: quota by an order of magnitude, and a home-only rule would simply break CI.
+SECURITY_RULES = frozenset(
+    {
+        SecurityRule('INGRESS', '6', ANYWHERE, 'CIDR_BLOCK', ports=(settings.PORT, settings.PORT)),
+        SecurityRule('INGRESS', '6', ANYWHERE, 'CIDR_BLOCK', ports=(22, 22)),
+        SecurityRule('EGRESS', 'all', ANYWHERE, 'CIDR_BLOCK'),
+    }
+)
+
+
+@dataclass(frozen=True)
+class Route:
+    """One route rule, by where it sends what."""
+
+    destination: str
+    destination_type: str
+    #: The OCID of what the traffic is handed to.
+    target: str
+
+    def __str__(self) -> str:
+        return f'{self.destination} to {self.target}'
+
+    def details(self) -> Any:
+        return oci.core.models.RouteRule(
+            destination=self.destination, destination_type=self.destination_type, network_entity_id=self.target
+        )
+
+
+def route(listed: Any) -> Route:
+    """A route rule as OCI lists it, read into the record the comparison holds."""
+    return Route(
+        destination=str(listed.destination or listed.cidr_block),
+        destination_type=str(listed.destination_type),
+        target=str(listed.network_entity_id),
+    )
+
+
+def declared_routes(gateway_id: str) -> frozenset[Route]:
+    """Every route the subnet's table holds, and nothing else: everything, out through the gateway."""
+    return frozenset({Route(ANYWHERE, 'CIDR_BLOCK', gateway_id)})
+
+
+def _differences(kind: str, present: frozenset[Any], declared: frozenset[Any]) -> list[str]:
+    """One reason per record on either side alone, each named."""
+    return [f'{kind} nobody declared: {item}' for item in sorted(map(str, present - declared))] + [
+        f'{kind} declared and missing: {item}' for item in sorted(map(str, declared - present))
+    ]
+
+
+def network_drift(found: Survey) -> list[str]:
+    """Every way the network the box stands in differs from what this module creates. Reads nothing.
+
+    What is compared is what decides who reaches the box and whether its
+    traffic leaves: each resource the appliance names, the gateway being
+    enabled, the subnet's range, every route in the table the subnet routes
+    through, and every rule in the security group -- whole rules, so a
+    narrowed or widened one, and one nobody declared, are each named.
+    `ensure_network` and `ensure_security_group` put every one of them back,
+    on a run that launches a box.
+    """
+    if found.vcn is None:
+        return [f'no VCN carries the name {_name("vcn")}']
+    reasons: list[str] = []
+    gateway = found.gateway
+    if gateway is None:
+        reasons.append(f'no internet gateway carries the name {_name("igw")}')
+    elif not gateway.is_enabled:
+        reasons.append(f'the internet gateway {_name("igw")} is disabled')
+    subnet = found.subnet
+    if subnet is None:
+        reasons.append(f'no subnet carries the name {_name("subnet")}')
+    elif str(subnet.cidr_block) != settings.SUBNET_CIDR:
+        reasons.append(f'the subnet {_name("subnet")} spans {subnet.cidr_block}, not {settings.SUBNET_CIDR}')
+    if gateway is not None and found.route_table is not None:
+        present = frozenset(route(rule) for rule in found.route_table.route_rules or ())
+        reasons += _differences('a route', present, declared_routes(str(gateway.id)))
+    if found.security_group is None:
+        reasons.append(f'no security group carries the name {_name("nsg")}')
+    else:
+        present = frozenset(security_rule(rule) for rule in found.security_rules)
+        reasons += _differences('a security rule', present, SECURITY_RULES)
+    return reasons
+
+
 def ensure_network(clients: OciClients, found: Survey) -> Placement:
-    """The appliance's VCN, gateway, default route and subnet."""
+    """The appliance's VCN, gateway, routes and subnet, as `network_drift` compares them."""
     network = clients.network
-    log.info('converging the VCN, internet gateway, default route and subnet')
+    log.info('converging the VCN, internet gateway, routes and subnet')
 
     vcn = found.vcn
     if vcn is None:
@@ -400,22 +608,19 @@ def ensure_network(clients: OciClients, found: Survey) -> Placement:
             )
         )
         log.info('created internet gateway %s', gateway.id)
+    elif not gateway.is_enabled:
+        _ = network.update_internet_gateway(gateway.id, oci.core.models.UpdateInternetGatewayDetails(is_enabled=True))
+        log.info('enabled internet gateway %s', gateway.id)
 
-    route_table = _data(network.get_route_table(vcn.default_route_table_id))
-    if not route_table.route_rules:
+    routes = declared_routes(str(gateway.id))
+    table = found.route_table
+    if table is None or frozenset(route(rule) for rule in table.route_rules or ()) != routes:
+        table_id = vcn.default_route_table_id if table is None else table.id
         _ = network.update_route_table(
-            vcn.default_route_table_id,
-            oci.core.models.UpdateRouteTableDetails(
-                route_rules=[
-                    oci.core.models.RouteRule(
-                        destination='0.0.0.0/0',
-                        destination_type='CIDR_BLOCK',
-                        network_entity_id=gateway.id,
-                    )
-                ]
-            ),
+            table_id,
+            oci.core.models.UpdateRouteTableDetails(route_rules=[rule.details() for rule in routes]),
         )
-        log.info('default route now points at the gateway')
+        log.info('route table %s now holds the declared routes and nothing else', table_id)
 
     subnet = found.subnet
     if subnet is None:
@@ -432,16 +637,27 @@ def ensure_network(clients: OciClients, found: Survey) -> Placement:
             )
         )
         log.info('created subnet %s', subnet.id)
+    elif str(subnet.cidr_block) != settings.SUBNET_CIDR:
+        subnet_id = str(subnet.id)
+        _ = network.update_subnet(subnet_id, oci.core.models.UpdateSubnetDetails(cidr_block=settings.SUBNET_CIDR))
+        # A range edit goes on after the call returns, and the subnet takes
+        # no new VNIC until it is done. The next VNIC is the launch's, after
+        # the terminate, so the edit is waited out here: one that fails or
+        # never finishes stops the run while the old box still serves.
+        log.info('setting subnet %s to %s', subnet_id, settings.SUBNET_CIDR)
+        subnet = _await_state(
+            lambda: network.get_subnet(subnet_id), 'AVAILABLE', what=f'subnet {subnet_id}', timeout=600
+        )
 
     return Placement(vcn_id=str(vcn.id), subnet_id=str(subnet.id))
 
 
 def ensure_security_group(clients: OciClients, vcn_id: str, found: Survey) -> str:
-    """5432 and 22 from anywhere.
+    """The security group, holding `SECURITY_RULES` and nothing else.
 
-    The client certificate is the wall (state-backend.md §4): an allowlist of
-    GitHub's ranges exceeds the rule quota by an order of magnitude, and a
-    home-only rule would simply break CI.
+    The declared rules missing from it are added before the rules nobody
+    declared are removed, so a narrowed rule on a port the old box is still
+    serving on is widened without a moment where the port has no rule at all.
     """
     network = clients.network
     log.info('converging the security group and its rules')
@@ -458,51 +674,26 @@ def ensure_security_group(clients: OciClients, vcn_id: str, found: Survey) -> st
         )
         log.info('created security group %s', group.id)
 
-    wanted = {(settings.PORT, settings.PORT), (22, 22)}
-    present = set()
-    for rule in _data(network.list_network_security_group_security_rules(group.id)):
-        if rule.direction == 'INGRESS' and rule.tcp_options is not None:
-            options = rule.tcp_options.destination_port_range
-            if options is not None:
-                present.add((options.min, options.max))
-
-    missing = wanted - present
+    listed = found.security_rules
+    missing = SECURITY_RULES - {security_rule(rule) for rule in listed}
     if missing:
         _ = network.add_network_security_group_security_rules(
             group.id,
             oci.core.models.AddNetworkSecurityGroupSecurityRulesDetails(
-                security_rules=[
-                    oci.core.models.AddSecurityRuleDetails(
-                        direction='INGRESS',
-                        protocol='6',
-                        source='0.0.0.0/0',
-                        source_type='CIDR_BLOCK',
-                        tcp_options=oci.core.models.TcpOptions(
-                            destination_port_range=oci.core.models.PortRange(min=low, max=high)
-                        ),
-                    )
-                    for low, high in sorted(missing)
-                ]
+                security_rules=[rule.details() for rule in sorted(missing, key=str)]
             ),
         )
-        log.info('opened %s', sorted(missing))
+        log.info('added %s', ', '.join(sorted(map(str, missing))))
 
-    egress = [r for r in _data(network.list_network_security_group_security_rules(group.id)) if r.direction == 'EGRESS']
-    if not egress:
-        _ = network.add_network_security_group_security_rules(
+    stray = [rule for rule in listed if security_rule(rule) not in SECURITY_RULES]
+    if stray:
+        _ = network.remove_network_security_group_security_rules(
             group.id,
-            oci.core.models.AddNetworkSecurityGroupSecurityRulesDetails(
-                security_rules=[
-                    oci.core.models.AddSecurityRuleDetails(
-                        direction='EGRESS',
-                        protocol='all',
-                        destination='0.0.0.0/0',
-                        destination_type='CIDR_BLOCK',
-                    )
-                ]
+            oci.core.models.RemoveNetworkSecurityGroupSecurityRulesDetails(
+                security_rule_ids=[str(rule.id) for rule in stray]
             ),
         )
-        log.info('allowed egress')
+        log.info('removed %s', ', '.join(sorted(str(security_rule(rule)) for rule in stray)))
 
     return str(group.id)
 
