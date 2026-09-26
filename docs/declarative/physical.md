@@ -158,10 +158,36 @@ machine_secrets
     changing) into machine config, accepting the cross-stack cost
     only in that world; kube-apiserver `anonymous-auth=false` pinned and audit
     logging on (a public 6443 warrants both, defaults notwithstanding);
-    the dedicated-VIP node's secondary private IP on its interface;
+    the dedicated-VIP node's secondary private IP on its physical link;
     the **local-path backing mount** (`/var/mnt/storage`, storage.md
     §2 — the StorageClass's provisioner is k8s-base's, but the disk
     path under it is machine config).
+-   **Document kinds.** A patch is either a strategic merge into the
+    `v1alpha1` document or a configuration document of its own kind,
+    which the provider appends beside it. Whatever the pinned Talos
+    release deprecates in `v1alpha1` travels as its own document
+    instead; at v1.13 that is every field of `machine.network`. The
+    documents the component emits:
+    -   `KubeSpanConfig`, on every node: KubeSpan on, every other
+        setting Talos' default.
+    -   `LinkAliasConfig`, naming the node's one physical link
+        `uplink`, and a `LinkConfig` on that alias — on the two nodes
+        whose machine configuration states an address. The
+        dedicated-VIP node's carries the secondary private IP as a /32,
+        beside a `DHCPv4Config` that keeps the node's lease, since
+        configuring a link switches off Talos' default DHCP. The homelab
+        worker's carries its static address with the VLAN's prefix and
+        a default route via the gateway, and no lease.
+    -   `NetworkDefaultActionConfig` and `NetworkRuleConfig`, the
+        ingress firewall above.
+
+    The local-path mount stays in `v1alpha1` as
+    `machine.kubelet.extraMounts`: v1.13 has no document to carry it.
+    v1.14 deprecates it with no replacement — its `KubeletConfig`
+    carries no extra mounts and refuses any `machine.kubelet` beside
+    it, so the kubelet section moves whole or not at all — and where
+    the mount lives after that minor is a design decision rather than
+    part of the bump (Aetf/kluster-ops#463).
 -   **Two renderings, one configuration.** What a machine boots with is
     delivered before that machine exists (`user_data`, seed image), so
     it cannot name anything the cloud assigns to the finished instance:

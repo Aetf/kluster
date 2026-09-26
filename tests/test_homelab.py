@@ -216,6 +216,10 @@ async def test_the_worker_joins_the_second_bridge() -> None:
     host = build()
     interfaces = await host.domain.network_interfaces.future()
     assert interfaces is not None
+    # One NIC, and only one: the worker's machine configuration names its one
+    # physical link by an alias that a second link would leave unassigned,
+    # and the node would boot with no address (`talos.uplink_alias_document`).
+    assert len(interfaces) == 1
 
     interface = interfaces[0]
     assert interface.bridge == BRIDGE

@@ -355,12 +355,9 @@ async def test_a_bundle_without_a_secretbox_key_is_an_error(fake: Talos, caplog:
     assert 'ERROR' in caplog.text
 
 
-def interfaces(patches: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [
-        interface
-        for patch in patches
-        for interface in patch.get('machine', {}).get('network', {}).get('interfaces', [])
-    ]
+def links(patches: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The `LinkConfig` documents among a node's patches: what it states about its own link."""
+    return [patch for patch in patches if patch.get('kind') == 'LinkConfig']
 
 
 @pytest.mark.asyncio
@@ -370,8 +367,8 @@ async def test_the_second_address_is_applied_and_never_booted_with(fake: Talos) 
     # wait on an address that waits on the instance, so it arrives on day 1.
     cluster = build_cluster()
     day1 = build(cluster=cluster)
-    assert interfaces(await patches_of(day1, 'cp1'))[0]['addresses'] == [f'{SECONDARY}/32']
-    assert not interfaces(await patches_of(cluster, 'cp1'))
+    assert links(await patches_of(day1, 'cp1'))[0]['addresses'] == [{'address': f'{SECONDARY}/32'}]
+    assert not links(await patches_of(cluster, 'cp1'))
 
 
 @pytest.mark.asyncio
@@ -384,17 +381,19 @@ async def test_the_worker_boots_with_the_address_the_gateway_was_told_about(fake
     # that came up on a lease. Day 1 could not apply it in any case — it
     # reaches the worker at that very address.
     cluster = build_cluster(worker_nodes=(conventions.HOMELAB_NODE,), bgp_peers={})
-    interface = interfaces(await patches_of(cluster, conventions.HOMELAB_NODE))[0]
-    assert interface['addresses'] == [str(STATIC_ADDRESSES[conventions.HOMELAB_NODE].address)]
+    link = links(await patches_of(cluster, conventions.HOMELAB_NODE))[0]
+    assert link['addresses'] == [{'address': str(STATIC_ADDRESSES[conventions.HOMELAB_NODE].address)}]
     # The very constant the gateway's neighbor statement reads, not merely
     # some address: the two sides agreeing is the whole point.
-    assert IPv4Interface(interface['addresses'][0]).ip == conventions.HOMELAB_NODE_IPV4
-    assert interface['dhcp'] is False
+    assert IPv4Interface(link['addresses'][0]['address']).ip == conventions.HOMELAB_NODE_IPV4
+    assert not [
+        patch for patch in await patches_of(cluster, conventions.HOMELAB_NODE) if patch.get('kind') == 'DHCPv4Config'
+    ]
     # Only that node. The cloud nodes are addressed by the platform they boot
     # on, and a worker under some other name is not this one.
     for node in ('cp1', 'cp2', 'cp3'):
-        assert not interfaces(await patches_of(cluster, node))
-    assert not interfaces(await patches_of(build_cluster('kluster-other-worker'), 'homelab'))
+        assert not links(await patches_of(cluster, node))
+    assert not links(await patches_of(build_cluster('kluster-other-worker'), 'homelab'))
 
 
 @pytest.mark.asyncio
@@ -405,7 +404,7 @@ async def test_only_the_node_holding_the_dedicated_vip_is_configured_twice(fake:
     day1 = build(cluster=cluster)
     for node in ('cp2', 'cp3', 'homelab'):
         assert day1.configurations[node] is cluster.configurations[node]
-        assert not interfaces(await patches_of(day1, node))
+        assert not links(await patches_of(day1, node))
 
 
 @pytest.mark.asyncio

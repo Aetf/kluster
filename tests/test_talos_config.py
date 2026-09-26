@@ -9,6 +9,8 @@ import json
 from ipaddress import IPv4Interface
 from typing import Any, cast
 
+import pytest
+
 from kluster import conventions
 from kluster.components import talos
 
@@ -47,9 +49,69 @@ def firewall(**kwargs: Any) -> list[dict[str, Any]]:
     return [document for document in documents(**kwargs) if str(document.get('kind', '')).startswith('Network')]
 
 
+def of_kind(kind: str, **kwargs: Any) -> list[dict[str, Any]]:
+    """Every document of one kind a node's patches carry."""
+    return [document for document in documents(**kwargs) if document.get('kind') == kind]
+
+
+def uplink(**kwargs: Any) -> dict[str, Any]:
+    """The one `LinkConfig` a node's patches carry, and the alias it names."""
+    (link,) = of_kind('LinkConfig', **kwargs)
+    (alias,) = of_kind('LinkAliasConfig', **kwargs)
+    assert link['name'] == alias['name'] == talos.UPLINK
+    return link
+
+
+#: The node shapes the component renders: a plain control plane, the control
+#: plane holding the dedicated VIP, and the homelab worker with its own
+#: address and its BGP peer.
+SHAPES: dict[str, dict[str, Any]] = {
+    'control-plane': {},
+    'dedicated-vip': {'secondary_address': '10.20.0.42'},
+    'homelab-worker': {
+        'role': 'worker',
+        'static_address': talos.STATIC_ADDRESSES[conventions.HOMELAB_NODE],
+        'bgp_peer': PEER,
+    },
+}
+
+#: What the pinned Talos release (`versions:talos` in Pulumi.yaml, v1.13)
+#: deprecates among the fields this component has used, by path into the
+#: `v1alpha1` document. Every field of `machine.network` is deprecated there
+#: for the multi-document network configuration, so the section itself is
+#: refused as well as the two fields named. A pin that moves to a later
+#: minor adds what that release deprecates here. v1.14 deprecates much of
+#: `machine` and `cluster`, `machine.kubelet` as a whole among it, and
+#: `extraMounts` with no replacement, so that move is a design decision
+#: (Aetf/kluster-ops#463) rather than a rename.
+DEPRECATED = [
+    ('machine', 'network'),
+    ('machine', 'network', 'kubespan'),
+    ('machine', 'network', 'interfaces'),
+]
+
+
+def holds(document: dict[str, Any], path: tuple[str, ...]) -> bool:
+    node: Any = document
+    for key in path:
+        if not isinstance(node, dict) or key not in node:
+            return False
+        node = cast('dict[str, Any]', node)[key]
+    return True
+
+
+@pytest.mark.parametrize('path', DEPRECATED, ids=['.'.join(path) for path in DEPRECATED])
+@pytest.mark.parametrize('shape', list(SHAPES))
+def test_no_patch_carries_a_field_the_pinned_release_deprecates(shape: str, path: tuple[str, ...]) -> None:
+    assert [document for document in documents(**SHAPES[shape]) if holds(document, path)] == []
+
+
 def test_kubespan_and_kubeprism_are_on() -> None:
+    # KubeSpan in its own document, with nothing but `enabled` stated: every
+    # other setting is Talos' default, and the document's defaults are the
+    # ones `machine.network.kubespan` has.
+    assert of_kind('KubeSpanConfig') == [{'apiVersion': 'v1alpha1', 'kind': 'KubeSpanConfig', 'enabled': True}]
     machine = merged('machine')
-    assert machine['network']['kubespan']['enabled'] is True
     # No kube-proxy exists to fall back on.
     assert machine['features']['kubePrism']['enabled'] is True
     assert machine['features']['kubePrism']['port'] == conventions.KUBEPRISM_PORT
@@ -116,15 +178,28 @@ def test_local_path_has_a_directory_to_hand_out() -> None:
 def test_the_node_holding_the_dedicated_vip_answers_for_its_second_address() -> None:
     # OCI assigns the secondary private IP to the VNIC and leaves the guest
     # alone; unconfigured, the dedicated VIP reaches nothing.
-    interfaces = merged('machine', secondary_address='10.20.0.42')['network']['interfaces']
-    assert interfaces[0]['addresses'] == ['10.20.0.42/32']
-    assert interfaces[0]['dhcp'] is True
+    link = uplink(secondary_address='10.20.0.42')
+    assert link['addresses'] == [{'address': '10.20.0.42/32'}]
+    # The address is all the link document says: no route and no MTU of its
+    # own, so the lease's routes and the link's MTU stand.
+    assert set(link) == {'apiVersion', 'kind', 'name', 'addresses'}
+
+
+def test_the_node_holding_the_dedicated_vip_keeps_its_lease() -> None:
+    # Configuring the link switches off Talos' default DHCP, so the lease is
+    # stated: IPv4 on the same link, with no client identifier, which is the
+    # request a `dhcp: true` interface makes.
+    assert of_kind('DHCPv4Config', secondary_address='10.20.0.42') == [
+        {'apiVersion': 'v1alpha1', 'kind': 'DHCPv4Config', 'name': talos.UPLINK, 'clientIdentifier': 'none'}
+    ]
+    assert not of_kind('DHCPv6Config', secondary_address='10.20.0.42')
 
 
 def test_a_node_nothing_addresses_is_left_to_its_lease() -> None:
     # Every cloud node: the platform gives it an address, and the machine
-    # configuration says nothing about interfaces at all.
-    assert 'interfaces' not in merged('machine').get('network', {})
+    # configuration says nothing about links at all.
+    for kind in ('LinkAliasConfig', 'LinkConfig', 'DHCPv4Config', 'DHCPv6Config'):
+        assert not of_kind(kind)
 
 
 def test_the_worker_states_its_own_address_instead_of_leasing_one() -> None:
@@ -133,33 +208,43 @@ def test_the_worker_states_its_own_address_instead_of_leasing_one() -> None:
     # make each of them a guess — and the cluster VLAN runs no DHCP server to
     # offer one in any case (physical/homelab-host.md §2).
     static = talos.STATIC_ADDRESSES[conventions.HOMELAB_NODE]
-    interface = merged('machine', role='worker', static_address=static)['network']['interfaces'][0]
-    assert interface['addresses'] == [f'{conventions.HOMELAB_NODE_IPV4}/{conventions.CLUSTER_VLAN.v4.prefixlen}']
-    assert interface['dhcp'] is False
+    link = uplink(role='worker', static_address=static)
+    assert link['addresses'] == [
+        {'address': f'{conventions.HOMELAB_NODE_IPV4}/{conventions.CLUSTER_VLAN.v4.prefixlen}'}
+    ]
+    # No lease on the link, and none anywhere else: the VLAN has no server.
+    assert not of_kind('DHCPv4Config', role='worker', static_address=static)
+    assert not of_kind('DHCPv6Config', role='worker', static_address=static)
 
 
 def test_the_static_address_brings_the_routes_the_lease_used_to() -> None:
     static = talos.STATIC_ADDRESSES[conventions.HOMELAB_NODE]
-    interface = merged('machine', role='worker', static_address=static)['network']['interfaces'][0]
+    link = uplink(role='worker', static_address=static)
     # The subnet route comes from the address carrying the VLAN's prefix
     # rather than /32 — with DHCP off there is no leased subnet route to
     # conflict with, and without one the node cannot reach its own subnet.
-    assert IPv4Interface(interface['addresses'][0]).network == conventions.CLUSTER_VLAN.v4
+    assert IPv4Interface(link['addresses'][0]['address']).network == conventions.CLUSTER_VLAN.v4
     # Everything else was the lease's other job, and now has to be said. The
     # next hop is the gateway's own leg on the same VLAN, which is what makes
     # it reachable without a route to reach it by.
     gateway = conventions.CLUSTER_VLAN.require_gateway()
-    assert interface['routes'] == [{'network': talos.DEFAULT_ROUTE_V4, 'gateway': str(gateway)}]
+    # A route with no destination is the default route for its gateway's
+    # family.
+    assert link['routes'] == [{'gateway': str(gateway)}]
     assert gateway in conventions.CLUSTER_VLAN.v4
+    # Nothing else on the link: its MTU is the platform's.
+    assert set(link) == {'apiVersion', 'kind', 'name', 'addresses', 'routes'}
 
 
-def test_the_interface_is_selected_rather_than_named() -> None:
-    # `eth0`/`ens3`/`enp1s0` is a property of the PCI topology QEMU builds and
-    # of the kernel's naming policy; neither is this program's to decide.
-    static = talos.STATIC_ADDRESSES[conventions.HOMELAB_NODE]
-    interface = merged('machine', role='worker', static_address=static)['network']['interfaces'][0]
-    assert interface['deviceSelector'] == {'physical': True}
-    assert 'interface' not in interface
+@pytest.mark.parametrize('shape', ['dedicated-vip', 'homelab-worker'])
+def test_the_link_is_selected_rather_than_named(shape: str) -> None:
+    # `eth0`/`ens3`/`enp1s0` is a property of the PCI topology the platform
+    # builds and of the kernel's naming policy; neither is this program's to
+    # decide. The alias's selector is shown physical links only, so `true`
+    # is "the physical link".
+    (alias,) = of_kind('LinkAliasConfig', **SHAPES[shape])
+    assert alias['selector'] == {'match': 'true'}
+    assert uplink(**SHAPES[shape])['name'] == talos.UPLINK
 
 
 def test_a_worker_carries_no_control_plane_configuration() -> None:
@@ -172,7 +257,7 @@ def test_a_worker_carries_no_control_plane_configuration() -> None:
     assert 'allowSchedulingOnControlPlanes' not in cluster
     # What it does share: the mesh, the subnets, and the kubelet's reservation.
     assert cluster['network']['podSubnets'][0] == str(conventions.POD_CIDR_V4)
-    assert merged('machine', role='worker')['network']['kubespan']['enabled'] is True
+    assert of_kind('KubeSpanConfig', role='worker')[0]['enabled'] is True
 
 
 def test_ingress_defaults_to_block_and_enumerates_host_ports_only() -> None:

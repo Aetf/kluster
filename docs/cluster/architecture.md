@@ -97,8 +97,8 @@ The cluster will operate in Dual-Stack mode, prioritizing IPv4.
 -   **Why not IPv6-only?** Many legacy apps hardcode 0.0.0.0, and crucial
     container registries like ghcr.io do not support IPv6.
 -   **Talos Configuration Rule**: You must define the IPv4 CIDRs first in the
-    machine.network arrays to establish IPv4 as the primary family,
-    preventing subtle ecosystem bugs.
+    `cluster.network` arrays (`podSubnets`, `serviceSubnets`) to establish
+    IPv4 as the primary family, preventing subtle ecosystem bugs.
 -   **LAN IPv6 uses ULA**: the home GUA prefix is not stable, so the LAN LB
     pool's v6 addresses come from a dedicated ULA range (exact range chosen
     at implementation; avoid the UDM `::` anycast trap — always `::1`-style
