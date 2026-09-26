@@ -138,7 +138,9 @@ What that buys, and what it costs:
     required check (github.md §3).
 -   Residual, accepted: a *deploy* job that is waiting on a stack's
     group can be superseded the same way, and a canceled job is neither success
-    nor failure, so that layer would silently not apply. The window is
+    nor failure, so that layer would silently not apply — and for
+    `plan-physical` or `up-physical`, neither would the layers the
+    chain runs after them (§3). The window is
     small — drift fires weekly, previews last minutes — and the next
     merge applies the same code again. Making it impossible would mean
     a second identity per stack, which is credential surface bought to
@@ -241,9 +243,11 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     routes to `up-physical` in the gated `physical` environment, and
     the whole chain waits for the approval (correct: downstream layers
     may depend on the physical change). Workflow mechanics on record:
-    downstream jobs need skip-tolerant conditions
-    (`if: always() && needs.up-physical.result != 'failure'` shape) —
-    a skipped gate job must not cascade-skip the chain.
+    downstream jobs need skip-tolerant conditions — `always()`, and
+    `up-physical`'s result either `success` or `skipped` — because a
+    skipped gate job must not cascade-skip the chain, while a cancelled
+    one (timed out, or superseded in its group) stands for a physical
+    apply that did not finish and stops it.
 -   **PR previews run in parallel** (previews don't mutate state). When
     an upstream layer has a diff, downstream previews are computed
     against the *current* StackReference outputs and may be off — accepted
@@ -294,6 +298,63 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     reads as a patch and is suppressed, a new month reads as a minor
     and opens a pull request, and a new year reads as a major and waits
     on the dependency dashboard.
+-   **The runner image is pinned the same way.** Every job that runs
+    steps names its runner by release — `ubuntu-24.04`, and
+    `ubuntu-24.04-arm` for the arm leg of the image builds (§4) — and
+    never by a `-latest` label. The image is the largest thing CI runs
+    on without installing it: every tool a step does not install
+    itself, and the preinstalled Java that the prose step in
+    `checks.yml` has to step around. GitHub moves a `-latest` label to a
+    new release on its own schedule, so a floating label is the breaking
+    upgrade `mise.toml` pins every tool against: one that lands without
+    a pull request, a preview, or a way to bisect it. Renovate's
+    `github-actions` manager reads a label written in a `runs-on:` as a
+    dependency of the `github-runners` data source and moves it to the
+    next release. It skips a label a matrix feeds to `runs-on:`, as
+    `images.yml`'s `runner:` values are, because an expression is not a
+    label, so a custom manager in `renovate.json5` reads the `runner:`
+    key, and a package rule matching the data source puts both halves in
+    one group, so every job and both architectures move in one pull
+    request. Docker versioning, which that data source uses, reads
+    `24.04` to `26.04` as a major, so the bump waits on the dependency
+    dashboard: it replaces the machine every job runs on. A job that
+    calls a reusable workflow names no runner; the called workflow's
+    jobs do, and are held instead. A test in `checks` holds every job
+    that runs steps to a label that names a release, resolving a
+    matrix-fed label through the matrix, and holds every matrix-fed
+    label to the custom manager's pattern.
+-   **Every job that runs steps has a time bound, an order of magnitude
+    above its normal duration.** GitHub's default is six hours, and a
+    job holds its runner for as long as it runs — and a job that joins
+    ZeroTier holds its job-level `zt-<stack>` group (§2) too, so one
+    hung `dns` preview would block every deploy, proof, drift check and
+    preview of that stack behind it. `timeout-minutes` is what bounds
+    how long a hung job holds that group. The bound follows the rule
+    [testing.md](testing.md) §1 sets for tests: a hang guard an order of
+    magnitude above the job's normal duration, not a budget a healthy
+    run approaches. It is read off the job's recent green runs, or, for
+    a job that has not run green yet, derived from what it does. Where a
+    step carries a bound of its own — the `timeout` around `pytest`, the
+    prose step's per-file bound — the job's bound sits above the
+    longest healthy run those allow, so a hang they can catch is
+    reported by them and by name. A job of a few seconds gets a floor
+    of minutes instead, since at that scale a runner's own start-up
+    varies by more than the job takes. Exceeding the bound ends a job **`cancelled`,
+    not `failed`**, and every alert condition here reads `failure` —
+    the alert-producer bullet and `notify-failure`, both below — so a
+    timed-out job raises no alert: it is a cancelled run in the Actions
+    tab and nothing more. A test in `checks` holds every job that runs
+    steps to a bound, and first asserts that it found jobs to hold.
+-   **An `up` job's bound is the widest, because the costs are not
+    symmetric.** Killing `pulumi up` mid-run leaves the operations it
+    had started pending in the state, and can leave the stack's lock
+    behind; undoing that is a hand procedure (§3.3). A long bound costs
+    only the time a genuinely hung apply holds its runner and its group.
+    So every `up` job in `deploy.yml` is bounded far above a slow but
+    healthy apply, one that waits on workloads to become ready or
+    creates a node. A plan or a preview writes nothing, and
+    cancelling one leaves nothing to repair, so those take the ordinary
+    rule.
 -   **A bridged-SDK bump is finished on its branch by a workflow, and
     nobody clicks.** The three SDKs under `sdks/` are generated from the
     `packages:` block of `Pulumi.yaml`, and a test in `checks` holds
@@ -503,6 +564,91 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     state still holds what the last deploy wrote, and only the device
     resources, whose `diff` reads the device (architecture.md §5.2),
     are put back without it.
+-   **§3.3 An `up` job that timed out.** Its annotation, on the run
+    summary above the job's steps, reads `The job has exceeded the
+    maximum execution time`; the log itself ends in `The operation was
+    canceled.`, as a manual cancellation's log does. The job is
+    cancelled rather than failed, so no alert fires for it (the
+    time-bound bullet above). GitHub stops a timed-out job the way it cancels one: it
+    signals the step's process, and seconds later it kills that process
+    and every child. The apply stops wherever it was, so the resource
+    operations in flight at that moment stay pending in the state, and
+    the stack's lock can stay behind. First find what the apply was
+    waiting on — the last resource its log names — because re-running
+    into the same hang repeats it. Then, from the checkout that holds `.credentials/`
+    (the workstation form README.md gives for a preview), for the stack
+    the job names:
+
+    1.  Confirm that nothing is applying that stack: no deploy run past
+        its plan, and no `up`, `refresh`, `import` or `state` command
+        from a workstation. On this repository's backend `pulumi cancel`
+        deletes every lock the stack holds, a live run's included.
+        Previews, proofs and drift checks take no lock, so they neither
+        need ruling out nor notice a stale one: the next deploy's `up`
+        is what refuses on it.
+    2.  `mise x -- pulumi cancel --stack <stack> --yes` removes the lock
+        the killed run left, without which every later `up`, `refresh`,
+        `import` or state edit on the stack refuses with `the stack is
+        currently locked`. It removes the lock and nothing else: it
+        rolls nothing back, and the pending operations stay where they
+        are.
+    3.  `mise x -- pulumi stack export --stack <stack> --file <path>`
+        writes the state to a file, where `pending_operations` lists
+        what is still pending. It goes to a file first because clearing
+        a pending create deletes its record from the state, and the
+        adoption below reads that record. A refresh settles every kind
+        of pending operation except a create; for each create, look the
+        resource up in its provider.
+        -   **The create never happened**: `mise x -- pulumi refresh
+            --stack <stack> --clear-pending-creates` drops it. Run from
+            a terminal, the refresh first asks about each pending
+            create, and `clear` is the same answer; `--clear-pending-creates`
+            clears every one the prompt leaves.
+        -   **The create happened, and the resource's type starts with
+            `pulumi-python:dynamic`**: clear it the same way, and the
+            deploy's create takes it over. A dynamic provider travels
+            pickled in its resource's inputs, which an import does not
+            have, so `pulumi import` cannot adopt one — it fails on
+            `'__provider'`. Nor does one need adopting: every dynamic
+            provider in `src/kluster/providers/` creates by converging
+            on what is already there, the way its update does, so a
+            create run over the resource a killed create left behind
+            takes it over rather than making a second one.
+        -   **Any other create that happened**: the refresh cannot keep
+            it. With the pinned Pulumi, its `import` answer — at the
+            prompt, or as `--import-pending-creates <urn>
+            --import-pending-creates <id>`, the flag once for the URN
+            and again for its ID — turns the pending create into a
+            pending import that the refresh then drops without adding
+            the resource, which is what `clear` does, and the next `up`
+            then tries to create the resource a second time. So clear
+            it as above, then adopt the existing resource:
+            `mise x -- pulumi import --stack <stack> <type> <name> <id>
+            --parent 'parent=<urn>' --provider 'provider=<urn>'
+            --protect=false --generate-code=false`, with the type, the
+            name (the last segment of the URN) and both URNs read off
+            the pending create's record in the exported file.
+            `--parent` takes the record's `parent` as it stands, and is
+            left out where that parent is the stack itself. `--provider`
+            takes the record's `provider` up to its last `::` — what
+            follows is the provider's ID, and a value that keeps it
+            names a provider that does not exist, which `pulumi import`
+            creates with no configuration and reads the resource
+            through — and
+            is left out where that provider is a default one, named
+            `default` or `default_…`. `mise x -- pulumi preview --stack
+            <stack>` proposing neither a create nor a replace for it is
+            the check that the adoption took. An update is the program
+            writing back an input the import could not read; a replace
+            means the deploy would swap the adopted resource for a new
+            one.
+    4.  Dispatch `deploy.yml` from `main`, and the chain applies what is
+        left. Do not re-run the run that timed out: a re-run replays
+        that run's own commit, which is older than `main` once another
+        merge has deployed — and the `deploy` group starts the run
+        queued behind the timed-out one the moment it ends — so it
+        would apply the older code over stacks a newer run already
+        brought forward.
 -   **Enforceable because the repo is public** (2026-08-25). Branch
     protection and rulesets return `403` on a private repository
     under this account's plan, and an Environment's reviewer gate is

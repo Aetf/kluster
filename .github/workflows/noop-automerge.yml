@@ -145,7 +145,8 @@ env:
 
 jobs:
   classify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     outputs:
       noop: ${{ steps.classify.outputs.noop }}
       # Whether this PR may merge without the proof, which is the path
@@ -275,7 +276,8 @@ jobs:
     # job and the merge with it. An admitted bump is a candidate that is not
     # inert, so it arrives here rather than skipping past.
     if: needs.classify.outputs.noop == 'true' && needs.classify.outputs.unproven != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     strategy:
       fail-fast: true
       matrix:
@@ -334,7 +336,7 @@ jobs:
       && (needs.prove.result == 'success'
           || (needs.prove.result == 'skipped'
               && needs.classify.outputs.unproven == 'true'))
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # A required check that never arrives ends the job rather than holding a
     # runner for GitHub's six-hour default.
     timeout-minutes: 60

@@ -96,6 +96,23 @@
       groupSlug: 'actions',
     },
     {
+      // The runner images the workflows name (framework/ci.md §3), out of the
+      // actions group and into one of their own. Two managers read them: the
+      // github-actions one reads a label written in a `runs-on:`, and the
+      // custom manager below reads one a matrix feeds to `runs-on:`, which
+      // that manager skips. Matched by data source, which both halves share,
+      // so the two architectures' labels move in one pull request.
+      //
+      // Position is load-bearing, as for the `jdx/mise-action` rule below:
+      // this sits after the rule grouping the whole manager, so its group
+      // wins. A test holds the order.
+      matchDatasources: [
+        'github-runners',
+      ],
+      groupName: 'runner images',
+      groupSlug: 'runners',
+    },
+    {
       // The toolchain CI installs from. A pulumi or uv bump changes how every
       // other check runs, so it travels alone and is read.
       matchManagers: [
@@ -108,8 +125,8 @@
       // The toolchain again, by dependency rather than by manager: mise is
       // pinned where the workflows call its action, so the pin belongs to the
       // `github-actions` manager and would otherwise ride in the `github
-      // actions` group two rules above. It is the program that installs every
-      // other pinned tool, so its bump changes how every other check runs —
+      // actions` group above. It is the program that installs every other
+      // pinned tool, so its bump changes how every other check runs —
       // exactly the reason the toolchain travels alone, and exactly what a
       // batch of unrelated action bumps would bury.
       //
@@ -321,6 +338,22 @@
     },
   ],
   customManagers: [
+    {
+      // A runner label a matrix feeds to `runs-on:` -- the `runner:` key of
+      // `images.yml`'s platforms. The github-actions manager reads only a
+      // label written in `runs-on:` itself and skips an expression, so without
+      // this the arm and amd64 legs would stay behind when every other job
+      // moves. A test holds every such label to this pattern.
+      customType: 'regex',
+      managerFilePatterns: [
+        '/^\\.github/workflows/[^/]+\\.ya?ml$/',
+      ],
+      matchStrings: [
+        '\\brunner: (?<depName>[a-z]+)-(?<currentValue>\\d[\\w.-]*)',
+      ],
+      datasourceTemplate: 'github-runners',
+      versioningTemplate: 'docker',
+    },
     {
       // The build-arg pins in `docker/*.conf`, each announced by a
       // `# renovate:` comment on the line above it, the same shape the

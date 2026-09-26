@@ -25,7 +25,8 @@ permissions:
 
 jobs:
   changes:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     outputs:
       # The filter's own JSON array of matching names, which is the shape the
       # matrix below needs: a job-level `if` cannot read the `matrix` context
@@ -66,7 +67,8 @@ jobs:
     # built from an empty array would be one -- so the whole job stands down
     # when nothing matched.
     if: needs.changes.outputs.stacks != '[]'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:

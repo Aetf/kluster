@@ -26,7 +26,8 @@ permissions:
 
 jobs:
   plan-physical:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     # Ungated on purpose: reading the diff is the approval moment, so the
     # reading itself must not need approval.
     environment: physical-plan
@@ -72,7 +73,11 @@ jobs:
   up-physical:
     needs: plan-physical
     if: needs.plan-physical.outputs.diff == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    # Killing an apply leaves its operations pending in the state, so the
+    # bound sits far above a slow healthy apply; framework/ci.md §3.3 is what
+    # follows one that fires.
+    timeout-minutes: 120
     # Reviewer-gated: this is the layer that can root the gateway.
     environment: physical
     concurrency:
@@ -105,9 +110,17 @@ jobs:
 
   up-dns:
     needs: [plan-physical, up-physical]
-    # A skipped gate job must not cascade-skip the chain.
-    if: always() && needs.up-physical.result != 'failure' && needs.plan-physical.result == 'success'
-    runs-on: ubuntu-latest
+    # A skipped gate job must not cascade-skip the chain, and a cancelled one
+    # -- timed out, or superseded in its group -- is not a skipped one: the
+    # physical apply it stood for did not finish.
+    if: >-
+      always() && needs.plan-physical.result == 'success'
+      && (needs.up-physical.result == 'success' || needs.up-physical.result == 'skipped')
+    runs-on: ubuntu-24.04
+    # Killing an apply leaves its operations pending in the state, so the
+    # bound sits far above a slow healthy apply; framework/ci.md §3.3 is what
+    # follows one that fires.
+    timeout-minutes: 120
     environment: dns
     # Shared with every other job that joins on the dns environment's identity:
     # a preview, a noop-automerge proof, a drift check.
@@ -143,8 +156,14 @@ jobs:
 
   up-k8s-base:
     needs: [plan-physical, up-physical]
-    if: always() && needs.up-physical.result != 'failure' && needs.plan-physical.result == 'success'
-    runs-on: ubuntu-latest
+    if: >-
+      always() && needs.plan-physical.result == 'success'
+      && (needs.up-physical.result == 'success' || needs.up-physical.result == 'skipped')
+    runs-on: ubuntu-24.04
+    # Killing an apply leaves its operations pending in the state, so the
+    # bound sits far above a slow healthy apply; framework/ci.md §3.3 is what
+    # follows one that fires.
+    timeout-minutes: 120
     environment: k8s-base
     steps:
       - uses: actions/checkout@v5
@@ -170,7 +189,11 @@ jobs:
   up-apps:
     needs: up-k8s-base
     if: always() && needs.up-k8s-base.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    # Killing an apply leaves its operations pending in the state, so the
+    # bound sits far above a slow healthy apply; framework/ci.md §3.3 is what
+    # follows one that fires.
+    timeout-minutes: 120
     environment: apps
     steps:
       - uses: actions/checkout@v5
@@ -208,7 +231,8 @@ jobs:
     # directly, exactly as the legacy repository did.
     needs: [plan-physical, up-physical, up-dns, up-k8s-base, up-apps]
     if: always() && contains(needs.*.result, 'failure')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - name: Push a Home Assistant notification
         env:

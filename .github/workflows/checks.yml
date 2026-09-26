@@ -21,7 +21,10 @@ permissions:
 
 jobs:
   checks:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    # Above the tests' own outer bound plus a whole-tree prose pass, the
+    # longest a healthy run of this job gets (framework/ci.md §3).
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
         with:
