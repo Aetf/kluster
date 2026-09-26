@@ -58,7 +58,8 @@ jobs:
   # this job `changes` too would fill that one required context with a
   # second run on the pull requests that touch `docker/**` alone.
   select-images:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     outputs:
       # A JSON array of docker/*.Containerfile basenames, which is the shape
       # the matrices below need: a job-level `if` cannot read the `matrix`
@@ -127,6 +128,7 @@ jobs:
     # when nothing matched.
     if: needs.select-images.outputs.images != '[]'
     runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -197,7 +199,8 @@ jobs:
     # PR builds publish nothing, and only `main` publishes (the Publish step
     # above), so there is nothing to stitch anywhere else.
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     strategy:
       fail-fast: false
       matrix:
