@@ -13,6 +13,7 @@ boots with, and what is only applied to it afterwards.
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 from ipaddress import IPv4Interface
 from typing import Any, cast
@@ -240,7 +241,7 @@ async def test_nodes_are_applied_one_after_another(fake: Talos) -> None:
     order = list(day1.applies)
     # Registration is asynchronous; the graph is only complete once it is.
     await asyncio.gather(*(applied.urn.future() for applied in day1.applies.values()))
-    for earlier, later in zip(order, order[1:]):
+    for earlier, later in itertools.pairwise(order):
         waits_for = fake.depends_on(f'kluster-{later}-config')
         assert await day1.applies[earlier].urn.future() in waits_for, f'{later} does not wait for {earlier}'
 

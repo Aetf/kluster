@@ -32,13 +32,12 @@ import asyncssh
 import pulumi.dynamic as dynamic
 import pytest
 import pytest_asyncio
-from mock_monitor import Recorder, declaring, run_with
-from shimmed_serialization import serialized
 from asyncssh.known_hosts import match_known_hosts
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-
+from mock_monitor import Recorder, declaring, run_with
 from pulumi.runtime import rpc
+from shimmed_serialization import serialized
 
 from kluster.providers.configured import FINGERPRINT_LENGTH, PROVIDER_VERSION, SESSION
 from kluster.providers.device_files import paths, provider, ssh
@@ -1333,8 +1332,8 @@ def test_every_resource_of_this_module_carries_the_one_version(monkeypatch: pyte
 
 def sh(script: str) -> int:
     """Run one of the scripts the way the device's shell runs it, and report the status."""
-    completed = subprocess.run(  # noqa: S603 -- a rendered script of this repository's own
-        ['/bin/sh', '-c', script],  # noqa: S607 -- the shell the device's own scripts name
+    completed = subprocess.run(
+        ['/bin/sh', '-c', script],
         capture_output=True,
         check=False,
     )
@@ -1457,8 +1456,8 @@ class Shell:
         assert encoding is None
         assert check is False
         assert timeout > 0
-        completed = subprocess.run(  # noqa: S603 -- a rendered script of this repository's own
-            ['/bin/sh', '-c', command],  # noqa: S607 -- the shell the device's own scripts name
+        completed = subprocess.run(
+            ['/bin/sh', '-c', command],
             input=input,
             capture_output=True,
             check=False,

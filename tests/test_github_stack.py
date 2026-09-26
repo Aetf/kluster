@@ -28,10 +28,9 @@ import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_under_backstop
 
 from kluster import conventions
-from kluster.scripts.credentials import devices
 from kluster.components.forge import LABEL_COLOR, ManagedRepository
+from kluster.scripts.credentials import devices
 from kluster.stacks import github as program
-
 
 REPOSITORY = 'github:index/repository:Repository'
 BRANCH_PROTECTION = 'github:index/branchProtection:BranchProtection'

@@ -12,7 +12,7 @@ from __future__ import annotations
 import contextvars
 import weakref
 from dataclasses import dataclass
-from typing import Any, ClassVar, Optional
+from typing import Any, ClassVar
 
 import pulumi
 import pulumi.runtime
@@ -61,7 +61,7 @@ class UnparentedChildError(Exception):
 
 def _refuse_unparented(
     args: pulumi.ResourceTransformationArgs,
-) -> Optional[pulumi.ResourceTransformationResult]:
+) -> pulumi.ResourceTransformationResult | None:
     """Refuse a resource registered inside a component with no parent set.
 
     A stack transformation cannot repair this — the SDK raises
@@ -111,7 +111,7 @@ def install_parent_backstop() -> None:
     pulumi.runtime.register_stack_transformation(_refuse_unparented)
 
 
-def own_provider_opts(opts: Optional[pulumi.ResourceOptions]) -> pulumi.ResourceOptions:
+def own_provider_opts(opts: pulumi.ResourceOptions | None) -> pulumi.ResourceOptions:
     """Options for the provider a component builds for itself.
 
     A component that owns a connection builds its provider *before* its own
@@ -128,7 +128,7 @@ def own_provider_opts(opts: Optional[pulumi.ResourceOptions]) -> pulumi.Resource
     return pulumi.ResourceOptions(parent=opts.parent if opts is not None else None)
 
 
-def with_provider(opts: Optional[pulumi.ResourceOptions], provider: pulumi.ProviderResource) -> pulumi.ResourceOptions:
+def with_provider(opts: pulumi.ResourceOptions | None, provider: pulumi.ProviderResource) -> pulumi.ResourceOptions:
     """A component's own options, carrying `provider` for its whole subtree.
 
     This is how a provider reaches the resources under a component without any
@@ -185,14 +185,14 @@ class Component(pulumi.ComponentResource):
     _putils_frame: _Frame
 
     @classmethod
-    def __init_subclass__(cls, *, pulumi_type: Optional[str] = None, **kwargs: object):
+    def __init_subclass__(cls, *, pulumi_type: str | None = None, **kwargs: object):
         super().__init_subclass__(**kwargs)
         if pulumi_type is not None:
             cls.__pulumi_type__ = pulumi_type
         elif not hasattr(cls, '__pulumi_type__'):
             cls.__pulumi_type__ = f'{cls.__module__}:{cls.__qualname__}'.replace('.', ':')
 
-    def __init__(self, name: str, opts: Optional[pulumi.ResourceOptions] = None):
+    def __init__(self, name: str, opts: pulumi.ResourceOptions | None = None):
         """
         :param str name: The name of this resource.
         :param Optional[ResourceOptions] opts: Optional set of :class:`pulumi.ResourceOptions` to use for this
@@ -227,7 +227,7 @@ class Component(pulumi.ComponentResource):
                 break
         super().register_outputs(outputs)
 
-    def child_opts(self, *, opts: Optional[pulumi.ResourceOptions] = None, **kwargs: Any) -> pulumi.ResourceOptions:
+    def child_opts(self, *, opts: pulumi.ResourceOptions | None = None, **kwargs: Any) -> pulumi.ResourceOptions:
         """
         ResourceOptions for a sub-resource: ``parent=self`` plus any extra
         options, merged with `opts` (which wins on conflicts).

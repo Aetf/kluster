@@ -28,9 +28,9 @@ import pytest
 import pytest_asyncio
 from device_places import DEVICE_TYPE_PREFIX, PLACES
 from mock_monitor import Recorder, declaring, run_under_backstop
+from oci_conventions import with_compartment, with_tenancy_ocid
 from unifi_controller import Controller, zone_id
 
-from oci_conventions import with_compartment, with_tenancy_ocid
 from kluster import conventions
 from kluster.components import homelab
 from kluster.components.backup import BackupBucket

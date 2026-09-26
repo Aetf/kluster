@@ -65,7 +65,7 @@ def _at(now: dt.datetime | None) -> dt.datetime:
     Every `issue_*` takes an optional clock so a test can pin validity; the
     default belongs in one place rather than beside each of them.
     """
-    return now or dt.datetime.now(dt.timezone.utc)
+    return now or dt.datetime.now(dt.UTC)
 
 
 def _name(common_name: str) -> x509.Name:

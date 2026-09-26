@@ -194,7 +194,7 @@ def certificate(
             CERTIFICATE, f'{address}:{port} completed a handshake and served no certificate', REBUILD_PLAYBOOK
         )
 
-    moment = now or dt.datetime.now(dt.timezone.utc)
+    moment = now or dt.datetime.now(dt.UTC)
     expiry = leaf.not_valid_after_utc
     remaining = expiry - moment
     if moment < leaf.not_valid_before_utc:
@@ -232,7 +232,7 @@ def dumped_at(name: str) -> dt.datetime | None:
     match = DUMP_NAME.match(name)
     if match is None:
         return None
-    return dt.datetime.strptime(match.group('stamp'), STAMP).replace(tzinfo=dt.timezone.utc)
+    return dt.datetime.strptime(match.group('stamp'), STAMP).replace(tzinfo=dt.UTC)
 
 
 def hours(span: dt.timedelta) -> str:
@@ -307,7 +307,7 @@ def dumps(
             REBUILD_PLAYBOOK,
         )
     newest = max(taken_at, key=taken_at.__getitem__)
-    age = (now or dt.datetime.now(dt.timezone.utc)) - taken_at[newest]
+    age = (now or dt.datetime.now(dt.UTC)) - taken_at[newest]
     if age > max_age:
         return Verdict(
             DUMPS,

@@ -119,7 +119,7 @@ def test_the_package_does_not_shadow_this_module_with_the_function_it_holds() ->
     package = importlib.import_module('kluster.components.dns')
     module = importlib.import_module('kluster.components.dns.rewrites')
 
-    assert getattr(package, 'rewrites') is module
+    assert package.rewrites is module
     assert 'rewrites' not in package.__all__
 
 

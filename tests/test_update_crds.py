@@ -105,7 +105,7 @@ spec:
   group: example.com
 """
 
-    with pytest.raises(sources.SourceError, match='no metadata.name'):
+    with pytest.raises(sources.SourceError, match=re.escape('no metadata.name')):
         _ = sources.select_crds([nameless])
 
 
@@ -117,7 +117,7 @@ metadata:
   name: widgets.example.com
 """
 
-    with pytest.raises(sources.SourceError, match='widgets.example.com has no spec.group'):
+    with pytest.raises(sources.SourceError, match=re.escape('widgets.example.com has no spec.group')):
         _ = sources.select_crds([groupless])
 
 
@@ -152,7 +152,7 @@ def test_yaml_file_urls_skips_the_entries_that_are_not_files() -> None:
 
 def test_yaml_file_urls_names_the_yaml_entry_that_has_no_download_url() -> None:
     """Demanded of the files that survive the filter, and of nothing else."""
-    with pytest.raises(sources.SourceError, match='the entry widget.yaml carries no download_url'):
+    with pytest.raises(sources.SourceError, match=re.escape('the entry widget.yaml carries no download_url')):
         _ = sources.yaml_file_urls([{'name': 'widget.yaml', 'download_url': None}], what='example/repo@v1:crds')
 
 

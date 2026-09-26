@@ -27,12 +27,12 @@ from typing import Any
 
 import pytest
 import requests
+from b2_api import FakeApi as B2Api
 from fake_gh import RecordedGh
 from memory_kit import MemoryKit
-from b2_api import FakeApi as B2Api
+from oci_conventions import with_recorded_compartment, with_tenancy_ocid, with_unrecorded_compartment
 from oci_tenancy import ROOT_USER, TENANCY, Tenancy
 
-from oci_conventions import with_recorded_compartment, with_tenancy_ocid, with_unrecorded_compartment
 from kluster import conventions
 from kluster.scripts.credentials import b2, derived, masters, oci_iam
 from kluster.scripts.credentials.github_secrets import Forge, Slot

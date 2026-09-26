@@ -37,7 +37,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeVar, cast
+from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 
 from pykeepass import PyKeePass, create_database
@@ -131,15 +131,12 @@ def default_path() -> Path:
     return Path(raw).expanduser() if raw else workstation.kit_path()
 
 
-_T = TypeVar('_T')
-
-
 def _path(entry: str) -> list[str]:
     """An entry path as pykeepass addresses it: `'seeds/B2 seed key'` -> `['seeds', 'B2 seed key']`."""
     return [part for part in entry.strip('/').split('/') if part]
 
 
-def _first(found: _T | list[_T] | None) -> _T | None:
+def _first[T](found: T | list[T] | None) -> T | None:
     """The one thing a path lookup found, whichever shape the library returned.
 
     `find_entries(path=...)` and `find_groups(path=...)` match at most one, but

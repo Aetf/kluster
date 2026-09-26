@@ -13,6 +13,7 @@ import gzip
 import json
 import logging
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -355,7 +356,7 @@ def test_a_drill_recipient_with_no_tool_to_ask_says_where_the_tool_is_pinned(
     monkeypatch.setattr(age, 'BINARY', 'age-that-is-not-installed')
     _ = drill_recipient_file.write_text(f'{DRILL_RECIPIENT}\n')
 
-    with pytest.raises(age.AgeMissing, match='mise.toml'):
+    with pytest.raises(age.AgeMissing, match=re.escape('mise.toml')):
         _ = config.drill_recipient(drill_recipient_file)
 
 

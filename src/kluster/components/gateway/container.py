@@ -143,7 +143,7 @@ CADDY_CONFIG = f'{CADDY_CONFIG_HOME}/caddy/Caddyfile'
 
 #: Where caddy reads the zone-scoped token it answers DNS-01 challenges with.
 #: A device secret of its own, read by nothing else on the box.
-CADDY_TOKEN_PATH = '/etc/caddy/cloudflare.token'  # noqa: S105 -- a path, not a credential
+CADDY_TOKEN_PATH = '/etc/caddy/cloudflare.token'
 
 #: Where the image's resolver library reads which resolver to ask. Which one is
 #: offered is a site fact rather than an image fact, so it is delivered

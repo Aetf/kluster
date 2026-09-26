@@ -11,6 +11,7 @@ CLI is not installed, which is neither CI nor a workstation with `mise`.
 
 from __future__ import annotations
 
+import re
 import shutil
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -121,14 +122,14 @@ def test_a_checkout_that_cannot_be_found_is_refused_as_a_slot(monkeypatch: pytes
 
     monkeypatch.setattr(workstation, 'repo_root', nowhere)
 
-    with pytest.raises(pulumi_config.SlotRefused, match='no mise.toml above'):
+    with pytest.raises(pulumi_config.SlotRefused, match=re.escape('no mise.toml above')):
         _ = pulumi_config.project_dir()
 
 
 def test_a_checkout_without_pulumi_yaml_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(workstation, 'repo_root', lambda: tmp_path)
 
-    with pytest.raises(pulumi_config.SlotRefused, match='no Pulumi.yaml'):
+    with pytest.raises(pulumi_config.SlotRefused, match=re.escape('no Pulumi.yaml')):
         _ = pulumi_config.project_dir()
 
 

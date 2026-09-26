@@ -582,8 +582,8 @@ def _install(device: _Packages, *, online: bool, refresh_fails: bool = False) ->
     for flag, raised in ((device.offline, not online), (device.refresh_fails, refresh_fails)):
         if raised:
             _ = flag.write_text('')
-    completed = subprocess.run(  # noqa: S603 -- a rendered script of this repository's own
-        ['/bin/bash', str(device.script)],  # noqa: S607 -- the shell the device's own scripts name
+    completed = subprocess.run(
+        ['/bin/bash', str(device.script)],
         env={'PATH': f'{device.tools}:/usr/bin:/bin'},
         capture_output=True,
         check=False,
@@ -898,8 +898,8 @@ def _device(tmp_path: Path) -> _Device:
 def _converge(device: _Device) -> tuple[int, list[str]]:
     """Run the converger once, and read back what it asked of systemd."""
     _ = device.systemd.take_calls()
-    completed = subprocess.run(  # noqa: S603 -- a rendered script of this repository's own
-        ['/bin/bash', str(device.script)],  # noqa: S607 -- the shell the device's own scripts name
+    completed = subprocess.run(
+        ['/bin/bash', str(device.script)],
         env={'PATH': f'{device.systemd.tools}:/usr/bin:/bin'},
         capture_output=True,
         check=False,

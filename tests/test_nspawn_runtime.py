@@ -491,8 +491,8 @@ def converge(device: _Device, *, environment: dict[str, str] | None = None) -> t
     on this device the log is the whole of what an unattended boot reports.
     """
     _ = device.systemd.take_calls()
-    completed = subprocess.run(  # noqa: S603 -- a rendered script of this repository's own
-        ['/bin/bash', str(device.script)],  # noqa: S607 -- the shell the device's own scripts name
+    completed = subprocess.run(
+        ['/bin/bash', str(device.script)],
         env={'PATH': f'{device.systemd.tools}:/usr/bin:/bin', **(environment or {})},
         capture_output=True,
         check=False,
@@ -1060,8 +1060,8 @@ def installed_as(mirror: _Mirror, machine: str) -> Path:
 
 def mirror_once(mirror: _Mirror) -> tuple[int, str]:
     """Run the mirror once, bounded the way `converge` is: hanging is the failure."""
-    completed = subprocess.run(  # noqa: S603 -- a rendered script of this repository's own
-        ['/bin/bash', str(mirror.script)],  # noqa: S607 -- the shell the device's own scripts name
+    completed = subprocess.run(
+        ['/bin/bash', str(mirror.script)],
         env={'PATH': '/usr/bin:/bin'},
         capture_output=True,
         check=False,

@@ -161,7 +161,7 @@ def test_the_gateway_declares_one_machine_per_service_and_nothing_else(monitor: 
     it is a machine the converger would find and start.
     """
     root = f'{nspawn.MACHINES}/'
-    trees = {str(image.inputs['root']) for image in monitor.of_type('pulumi-python:dynamic/device:Artifact')}  # noqa: S105 -- a type, not a credential
+    trees = {str(image.inputs['root']) for image in monitor.of_type('pulumi-python:dynamic/device:Artifact')}
     written = {
         str(declaration.inputs['path']).removeprefix(root).split('/')[0]
         for declaration in monitor.of_type('pulumi-python:dynamic/device:File')

@@ -56,9 +56,12 @@ def _module_for(member: str) -> types.ModuleType | None:
     """
     wanted = member.replace('-', '_')
     for value in vars(cli).values():
-        if isinstance(value, types.ModuleType) and value.__name__.rsplit('.', 1)[-1].startswith(wanted):
-            if hasattr(value, 'rotate_seed'):
-                return value
+        if (
+            isinstance(value, types.ModuleType)
+            and value.__name__.rsplit('.', 1)[-1].startswith(wanted)
+            and hasattr(value, 'rotate_seed')
+        ):
+            return value
     return None
 
 

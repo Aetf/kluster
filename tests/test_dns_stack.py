@@ -97,9 +97,7 @@ def test_every_zone_is_declared_once(stack: AppliedPhysical) -> None:
     logical name, the second declaration merely overwriting the first. Only the
     declarations themselves carry it.
     """
-    assert Counter(declaration.name for declaration in stack.of_type(ZONE)) == {
-        zone: 1 for zone in conventions.ALL_ZONES
-    }
+    assert Counter(declaration.name for declaration in stack.of_type(ZONE)) == dict.fromkeys(conventions.ALL_ZONES, 1)
     account = conventions.CLOUDFLARE_ACCOUNT.account_id
     assert all(inputs['account'] == {'id': account} for inputs in stack.by_name(ZONE).values())
 

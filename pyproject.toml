@@ -126,20 +126,47 @@ timeout_method = "signal"
 ##
 [tool.ruff]
 line-length = 120
-# In addition to the standard set of exclusions: vendored libraries, and the
-# two directories of generated bindings -- `packages/` (the CRD types) and
-# `sdks/` (the bridged provider SDKs). The leading slash anchors the first one
-# to the repository root — a bare `lib` is matched against every path segment,
-# and would silently take `src/kluster/lib/` with it.
-extend-exclude = ["/lib", "packages", "sdks"]
+# In addition to the standard set of exclusions: the two directories of
+# generated bindings -- `packages/` (the CRD types) and `sdks/` (the bridged
+# provider SDKs).
+extend-exclude = ["packages", "sdks"]
 
 [tool.ruff.format]
 quote-style = "single"
 docstring-code-format = true
 
-# Ignore `E402` (import violations) in all `__init__.py` files, and in select subdirectories.
+[tool.ruff.lint]
+# Every family is selected whole, so a rule ruff adds to one runs here on the
+# upgrade that brings it.
+select = [
+    "E4", "E7", "E9", "F",  # ruff's defaults: pyflakes, and the pycodestyle checks formatting cannot settle
+    "I",    # import order, which docs/style/python.md leaves to ruff
+    "UP",   # the syntax Python 3.12, the floor `requires-python` sets, makes available
+    "B",    # bugbear: constructs that are likely bugs
+    "BLE",  # `except Exception` is an exception to the rule, and carries its reason
+    "A",    # a builtin shadowed by a name of ours
+    "C4",   # comprehensions and constructors that say the same thing more plainly
+    "SIM",  # branches and context managers that say the same thing more plainly
+    "RUF",  # ruff's own rules; RUF100 fails a `noqa` that suppresses nothing
+]
+# Deliberately not selected: `S` (bandit). What it reports here is the test
+# suite's asserts and fixtures, names and arguments that look like credentials,
+# the subprocess and URL-open calls the scripts exist to make, templates that
+# render configuration rather than HTML (so autoescape stays off), a fixed
+# cache directory under /var/tmp, and strings it takes for SQL -- none of them
+# a security defect.
+# The en dash is typography this tree uses on purpose (`§1–2`, `M0–M4`); the
+# confusable-character rules (RUF001-RUF003) still catch every other lookalike.
+allowed-confusables = ["–"]
+
 [tool.ruff.lint.per-file-ignores]
-"__init__.py" = ["E402"]
+# A Yoda condition is decided by the name's case, and in a test a module
+# constant is often the subject under test: `assert image.IMAGE_CACHE ==
+# Path(...)` would be turned around to put the expected value first.
+"tests/**" = ["SIM300"]
+# A command line is written as `+`-joined lists to keep each flag beside its
+# value; one list is what the formatter spreads one element per line.
+"tests/test_state_roles.py" = ["RUF005"]
 
 ##
 ## Type checker
