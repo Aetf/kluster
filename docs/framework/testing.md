@@ -494,7 +494,11 @@ command needs:
 
 ```bash
 mkdir -p .claude/mutation
-cp <file> .claude/mutation/orig      # then mutate <file> in place and run the suite
+cp <file> .claude/mutation/orig
+# every run in the round, the baseline, each mutation, and the run after the restore:
+rm -rf "$(dirname <file>)/__pycache__" && PYTHONDONTWRITEBYTECODE=1 \
+    timeout 1200 mise x uv -- uv run pytest -p no:cacheprovider <cases>
+# mutate <file> in place and run as above; restore, then run as above once more:
 cp .claude/mutation/orig .claude/mutation/back
 mv .claude/mutation/back <file>      # restore: a rename, not a write through <file>
 ```
@@ -503,6 +507,68 @@ Mutating a copy beside the original and running the suite against *that*
 does not work: the suite imports the package from the import path, so
 the run is against unmutated code and passes — which in a mutation round
 is the alarming answer, and reads as "the new test does not bite".
+
+**Every run in a round compiles the mutated file from its source,
+because the interpreter's cache of compiled modules cannot see an edit
+made within the second it records.** Python reuses a module's cached
+`.pyc` whenever the source's modification time, truncated to whole
+seconds, and its size both match the values in the cache's header — the
+default timestamp invalidation of
+[PEP 552](https://peps.python.org/pep-0552/) and the
+[`py_compile` documentation](https://docs.python.org/3/library/py_compile.html#py_compile.PycInvalidationMode),
+checked on import by `_validate_timestamp_pyc` in
+`importlib._bootstrap_external`. A one-character mutation keeps the
+size, so any write that lands in the second the cache was compiled from
+is invisible to the next run, and a restore is such a write as much as a
+mutation is. The cache `pytest` keeps of rewritten test modules follows
+the same rule, so mutating a test is exposed the same way. Both ends of
+the round are open:
+
+- **A false green.** A mutation that lands in the second recorded in the
+  cached `.pyc` runs the pristine code, and the test that should go red
+  passes — the round reports that the test does not bite.
+- **A false restore.** A restore written in the same second as the
+  mutation it undoes leaves the mutated code cached, and every later
+  run, the gate included, executes the mutation while the pristine
+  source sits on disk: a red suite over a tree that `jj diff --stat`
+  and a read-back both call clean.
+
+Neither is rare in a scripted round. A narrow selection runs in a second
+or two, so a driver that mutates, runs and restores back to back puts
+consecutive writes into one second routinely.
+
+Each part of the run line closes one path. The purge removes whatever
+`.pyc` an earlier run left beside the file, because
+`PYTHONDONTWRITEBYTECODE` stops writes and not reads, and a `.pyc` a
+plain run wrote is still served. The variable keeps the round's own runs
+from writing any, so no compiled mutation outlives the round, and a
+plain gate run after it compiles the restored source whatever second it
+lands in. `-p no:cacheprovider` keeps out of the round the state
+`pytest` itself carries from run to run, the last-failed set that `--lf`
+and `--ff` read and the position `--sw` resumes from: on the suite's
+default command line it changes nothing, and it is there so that a run
+given one of those options does not choose its cases from another run's
+result. `mise x` and `uv run` both hand the environment to the
+interpreter unchanged, so the variable in front of the command reaches
+it. The purge names every directory holding a file the round mutates, a
+test file included.
+
+A fresh `PYTHONPYCACHEPREFIX` per run is equally immune — the
+interpreter then reads and writes compiled modules only under that
+directory — but it moves every module's cache, the standard library's
+and every dependency's included, so each run recompiles all of them and
+leaves a tree of `.pyc` files behind that is one more thing to clean up.
+The purge touches the one directory the round changed and writes
+nothing, which is why it is the form.
+
+**A stale answer is keyed to the file's modification time, not to the
+clock**, so it does not go away on a re-run: a stale green stays green
+and a stale red stays red however often the suite runs. What flips it
+leaves the code as it was — the file touched or rewritten a second
+later, or the cache purged. A surprise in a round — a mutation that does
+not bite, a restored tree that will not go green — is re-run once in the
+form above before it is believed, and an answer that changes when only
+the cache changed was never about the code.
 
 **A second tree measures only what it imports, so its environment is
 built there and never linked in.** The same proof run against the old
