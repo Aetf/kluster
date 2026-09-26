@@ -174,9 +174,25 @@
       // §3.2), which the chart and image pins share — and
       // an in-cluster chart bump must not inherit a gate that exists because
       // `physical` cannot be previewed.
+      //
+      // Two dependencies, one release. `siderolabs/talos` is the custom
+      // manager's name for `versions:talos`; `talosctl` is the mise manager's
+      // for `mise.toml`'s pin of the tool the suite validates the rendered
+      // machine configuration with, which a test holds equal to the fleet's
+      // release. Apart, each half fails that test on its own, so both move in
+      // this one pull request under this one approval, and both are read from
+      // releases -- the mise manager would read tags, and a tag pushed before
+      // its release would put one half into the pull request ahead of the
+      // other.
+      //
+      // Position is load-bearing, as for the `jdx/mise-action` rule: this sits
+      // *after* the rule grouping the whole mise manager as the toolchain, so
+      // its group wins for `talosctl`. A test holds the order.
       matchDepNames: [
         'siderolabs/talos',
+        'talosctl',
       ],
+      overrideDatasource: 'github-releases',
       groupName: 'talos and the node fleet',
       groupSlug: 'physical',
       dependencyDashboardApproval: true,
