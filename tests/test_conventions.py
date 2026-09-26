@@ -1012,6 +1012,19 @@ NOT_YET_CALLING = {
     ),
 }
 
+#: The condition `deploy.yml`'s `notify-failure` is written with while that
+#: workflow is excused above: after every other job, whatever its result, and
+#: only when one of them failed. It is the path a timed-out apply alerts
+#: through, so it reads `failure` alone, as `ALERT_CONDITION` does -- a
+#: condition that also read `cancelled` would page on every job superseded in
+#: its group. Compared whole, whitespace folded, for the same reason.
+NOTIFY_FAILURE_CONDITION = "always() && contains(needs.*.result, 'failure')"
+
+#: What a job's own bound holds beyond its steps' bounds: the runner's *Set up
+#: job* and *Complete job*, which run under no step's bound (framework/ci.md
+#: §3).
+RUNNER_PHASES_MINUTES = 5
+
 #: How the producer names the event it posts, and how it names the target of
 #: the post: `event_type:` inside the payload `jq` builds, and the
 #: `repos/<owner>/<name>/dispatches` endpoint.
@@ -1156,6 +1169,176 @@ def test_every_workflow_that_runs_on_main_ends_in_the_alert_job() -> None:
             findings.append(f'{name}: `alert` is conditioned {condition!r}, not {ALERT_CONDITION!r}')
 
     assert findings == [], findings
+
+
+def _alerting_job(jobs: dict[str, dict[str, object]]) -> str | None:
+    """The job of a workflow that alerts: the one that needs every other job of it.
+
+    `alert` wherever the workflow calls the producer, and `notify-failure` in
+    `deploy.yml` while it is excused. A job that needs nothing is not one,
+    or the one job of a single-job workflow would be.
+    """
+    found = [name for name, job in jobs.items() if _needs(job) and _needs(job) == set(jobs) - {name}]
+    return found[0] if len(found) == 1 else None
+
+
+#: A `uses:` that names a path in this repository, in either spelling GitHub
+#: accepts, as the path from the repository root; anything else names another
+#: repository, whose file this suite cannot read.
+LOCAL_USES = re.compile(r'^(?:\./|\$/)(.+)$')
+
+
+def _local_path(uses: object) -> Path | None:
+    """The file or directory a `uses:` names in this repository, or `None` for another repository's."""
+    local = LOCAL_USES.match(str(uses))
+    return ROOT / local.group(1) if local else None
+
+
+def _jobs_an_alert_reads(findings: list[str]) -> dict[str, dict[str, object]]:
+    """Every job that runs steps and whose result an alert reads, labeled by the path that reaches it.
+
+    In a workflow that runs on `main`, that is every job but the one that
+    alerts; a job there that calls a reusable workflow of this repository
+    stands for that file's jobs, whose results are its own, so they are read
+    in its place, through any call they make in turn and labeled
+    `<caller>: <job> -> <file>: <job>`. A job that calls another repository's
+    workflow cannot be read here, and is a finding by name. The alerting job
+    is not followed: it is the alert, and the producer it calls is no job an
+    alert reads.
+    """
+    jobs: dict[str, dict[str, object]] = {}
+
+    def read(prefix: str, workflow_jobs_by_name: dict[str, dict[str, object]], alerting: str | None) -> None:
+        for job_name, job in workflow_jobs_by_name.items():
+            if job_name == alerting:
+                continue
+            where = f'{prefix}{job_name}'
+            if 'uses' not in job:
+                jobs[where] = job
+                continue
+            called = _local_path(job['uses'])
+            if called is None or not called.is_file():
+                findings.append(f'{where} calls {job["uses"]}, which is no workflow file of this repository')
+                continue
+            read(f'{where} -> {called.name}: ', workflow_jobs(read_workflow(called), called.name), None)
+
+    for name, workflow in sorted(_workflows_running_on_main().items()):
+        workflow_job_map = workflow_jobs(workflow, name)
+        alerting = _alerting_job(workflow_job_map)
+        assert alerting is not None, f'{name}: no single job needs every other job, so none alerts'
+        read(f'{name}: ', workflow_job_map, alerting)
+    return jobs
+
+
+def _continue_on_error_inside(uses: object, label: str) -> list[str]:
+    """Every step of the local composite action `uses` names, nested ones included, that sets `continue-on-error`.
+
+    An inner step that times out is failed, and `continue-on-error` on it
+    turns that into a pass the composite then reports, so the step that uses
+    the action passes with its bound spent. An action of another repository
+    cannot be read here; a local path that holds no action file is a finding.
+    """
+    directory = _local_path(uses)
+    if directory is None:
+        return []
+    files = [path for path in (directory / 'action.yml', directory / 'action.yaml') if path.is_file()]
+    if not files:
+        return [f'{label}: {uses} holds no action file']
+    action = read_workflow(files[0])
+    runs = mapping(action.get('runs'), f'{github_name(files[0])} runs:')
+    findings: list[str] = []
+    for index, entry in enumerate(cast('list[object]', runs.get('steps', []))):
+        step = mapping(entry, f'{github_name(files[0])} step {index}')
+        inner = f'{label} -> {github_name(files[0])} step {step.get("name", step.get("uses", index))!r}'
+        if 'continue-on-error' in step:
+            findings.append(f'{inner} sets continue-on-error')
+        if 'uses' in step:
+            findings.extend(_continue_on_error_inside(step['uses'], inner))
+    return findings
+
+
+def test_every_step_of_a_job_an_alert_reads_is_bounded_inside_its_job() -> None:
+    """A hung step fails by name, so the alert that reads `failure` fires for it.
+
+    A job that exceeds its own `timeout-minutes` ends `cancelled`, and no alert
+    condition reads `cancelled`, because a job superseded in its concurrency
+    group ends the same way and must stay silent. A step that exceeds its own
+    bound ends `failure` instead, and fails its job, so the alert fires
+    (framework/ci.md §3). That holds only when every step of the job carries a
+    bound and the step's bound fires before the job's: the job's bound is at
+    least the sum of its steps' bounds, a `uses:` step counted twice because
+    an action's `post` phase runs under the same bound, plus the runner's own
+    phases. `continue-on-error` would turn a timed-out step into a pass, so no
+    job an alert reads carries one -- on the job, on a step, or on a step of a
+    local composite action a step uses.
+
+    Written as a definition -- every job that runs steps, in every workflow
+    that runs on `main`, other than the one that alerts, with a call to a
+    reusable workflow of this repository read through to that file's jobs
+    (`_jobs_an_alert_reads`) -- so a job added later is held without anyone
+    listing it. No step bound is checked against GitHub's six-hour ceiling
+    here: a step's bound is at most its job's, which `test_workflow_shape`
+    holds to that ceiling.
+    """
+    findings: list[str] = []
+    jobs = _jobs_an_alert_reads(findings)
+
+    # A read that stopped finding jobs or steps would pass the loop below on
+    # nothing. The apply whose hang this is for is found by name.
+    assert jobs, 'no job an alert reads was found'
+    assert 'deploy.yml: up-physical' in jobs
+    up_steps = [mapping(step, 'a step') for step in cast('list[object]', jobs['deploy.yml: up-physical']['steps'])]
+    assert [step for step in up_steps if step.get('name') == 'Up'], 'deploy.yml: up-physical has no `Up` step'
+    # The alerting job is the alert, not a job it reads, and the producer it
+    # calls is not followed.
+    assert not [where for where in jobs if 'alert.yml' in where], 'the producer was read as a job an alert reads'
+
+    counted = 0
+    for where, job in sorted(jobs.items()):
+        if 'continue-on-error' in job:
+            findings.append(f'{where} sets continue-on-error')
+        room = 0
+        for index, entry in enumerate(cast('list[object]', job.get('steps', []))):
+            step = mapping(entry, f'{where} step {index}')
+            counted += 1
+            label = f'{where} step {step.get("name", step.get("uses", index))!r}'
+            if 'continue-on-error' in step:
+                findings.append(f'{label} sets continue-on-error')
+            if 'uses' in step:
+                findings.extend(_continue_on_error_inside(step['uses'], label))
+            bound = step.get('timeout-minutes')
+            if bound is None:
+                findings.append(f'{label} has no timeout-minutes')
+            elif not isinstance(bound, int) or isinstance(bound, bool) or bound < 1:
+                findings.append(f'{label}: timeout-minutes is {bound!r}, not a number of minutes')
+            else:
+                room += bound * (2 if 'uses' in step else 1)
+        room += RUNNER_PHASES_MINUTES
+        job_bound = job.get('timeout-minutes')
+        if not isinstance(job_bound, int) or isinstance(job_bound, bool) or job_bound < room:
+            findings.append(f'{where}: timeout-minutes is {job_bound!r}, below the {room} its steps need')
+
+    assert counted, 'no step of a job an alert reads was found'
+    assert findings == [], findings
+
+
+def test_the_excused_deploy_alert_fires_on_a_failure_and_on_nothing_else() -> None:
+    """`notify-failure` needs every other job of `deploy.yml` and reads `failure` alone.
+
+    It is the one alert `ALERT_CONDITION` does not hold, being excused from the
+    producer, and it is the path a timed-out apply alerts through: the `Up`
+    step's bound fails the step and the job, and this condition reads that
+    failure. A job it does not need is one whose failure it cannot see. The
+    case retires with the excuse.
+    """
+    assert 'deploy.yml' in NOT_YET_CALLING, 'deploy.yml calls the producer; retire this case'
+    jobs = workflow_jobs(_workflows_running_on_main()['deploy.yml'], 'deploy.yml')
+    notify = jobs['notify-failure']
+
+    others = set(jobs) - {'notify-failure'}
+    assert _needs(notify) == others, f'notify-failure needs {sorted(_needs(notify))}, not {sorted(others)}'
+    condition = ' '.join(str(notify.get('if', '')).split())
+    assert condition == NOTIFY_FAILURE_CONDITION, f'notify-failure is conditioned {condition!r}'
 
 
 def test_the_event_type_is_spelled_once() -> None:

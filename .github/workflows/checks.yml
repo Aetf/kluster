@@ -22,17 +22,21 @@ permissions:
 jobs:
   checks:
     runs-on: ubuntu-24.04
-    # Above the tests' own outer bound plus a whole-tree prose pass, the
-    # longest a healthy run of this job gets (framework/ci.md §3).
-    timeout-minutes: 60
+    # Every step carries a bound of its own, so a hung step fails by name and
+    # the alert below fires for it. This one is the sum of theirs, a `uses:`
+    # step twice for its `post` phase, plus five minutes for the runner's own
+    # phases -- a backstop for what no step bound reaches (framework/ci.md §3).
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v5
+        timeout-minutes: 5
         with:
           # The prose step diffs against the base commit, which a shallow
           # clone does not have.
           fetch-depth: 0
 
       - uses: jdx/mise-action@v3
+        timeout-minutes: 5
         with:
           # Pinned like every tool `mise.toml` manages, and for the same
           # reason (framework/ci.md §3). This is the action's own input, and
@@ -41,33 +45,42 @@ jobs:
           experimental: true
 
       - name: Install dependencies
+        timeout-minutes: 5
         run: mise x uv -- uv sync --locked
 
       - name: Format
+        timeout-minutes: 5
         run: mise x uv -- uv run ruff format --check .
 
       - name: Lint
+        timeout-minutes: 5
         run: mise x uv -- uv run ruff check .
 
       - name: Types
+        timeout-minutes: 10
         run: mise x uv -- uv run basedpyright
 
       # The source layout is a set of layers, and nothing else notices when
       # one of them reaches upwards: a wrong import type-checks and passes
       # its tests. The contract is in `pyproject.toml`.
       - name: Imports
+        timeout-minutes: 5
         run: mise x uv -- uv run lint-imports
 
       # A hung case fails by name under the per-case bound `pyproject.toml`
       # configures; the outer `timeout` is the hang guard for what that
       # cannot reach, an order of magnitude above the run so that the
-      # ordinary run never meets it (framework/testing.md §1).
+      # ordinary run never meets it (framework/testing.md §1). The step's own
+      # bound sits above that outer one, so the hang that one can catch is
+      # reported by it.
       - name: Tests
+        timeout-minutes: 30
         run: timeout 1200 mise x -- uv run pytest -q
 
       # Renovate can bump a pinned version but cannot recompute its digest;
       # this is what stops a stale hash from reaching the appliance.
       - name: Pinned artifacts
+        timeout-minutes: 5
         run: mise x uv -- uv run state-backend pins
 
       # The prose gate AGENTS.md describes, run the way it says: the two word
@@ -85,7 +98,12 @@ jobs:
       # A step inside this job rather than a job of its own: branch protection
       # requires the context `checks` by name (`REQUIRED_CHECKS` in the
       # `github` stack), so a separate job would report and never block.
+      #
+      # The step's own bound sits above a whole-tree pass, the longest a
+      # healthy run of it gets, with room for files that stall and are
+      # killed at the per-file bound below.
       - name: Prose
+        timeout-minutes: 60
         env:
           # push: the commit `main` moved from. PR: the checkout is GitHub's
           # merge of the head into `main`, so its first parent is the `main`
@@ -127,9 +145,10 @@ jobs:
           fi
           [ -n "$files" ] || { echo 'no markdown changed'; exit 0; }
 
-          # A checker that hangs must fail the step rather than hold the
-          # required check pending for the job's six-hour default; a file
-          # takes seconds.
+          # A checker that hangs on one file is killed at this bound and
+          # named, rather than holding the required check pending until the
+          # step's own bound fails it without saying which file; a file takes
+          # seconds.
           #
           # What the kill costs the reader is the file's name: findings carry
           # their path, a kill carries nothing, and the fold it happened
