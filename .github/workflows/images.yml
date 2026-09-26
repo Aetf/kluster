@@ -59,7 +59,10 @@ jobs:
   # second run on the pull requests that touch `docker/**` alone.
   select-images:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    # The sum of its steps' bounds, a `uses:` step twice, plus five minutes
+    # for the runner's own phases: a backstop for what no step bound reaches
+    # (framework/ci.md §3).
+    timeout-minutes: 20
     outputs:
       # A JSON array of docker/*.Containerfile basenames, which is the shape
       # the matrices below need: a job-level `if` cannot read the `matrix`
@@ -68,6 +71,7 @@ jobs:
       images: ${{ steps.select.outputs.images }}
     steps:
       - uses: actions/checkout@v5
+        timeout-minutes: 5
         with:
           # A pull request's selection diffs against the merge commit's first
           # parent, which a shallow clone does not have.
@@ -85,6 +89,7 @@ jobs:
       # and a newer push cancels it, so an image changed only by the cancelled
       # run would never be selected by anyone, and nothing would say so.
       - name: Select the images to build
+        timeout-minutes: 5
         id: select
         env:
           EVENT: ${{ github.event_name }}
@@ -128,7 +133,10 @@ jobs:
     # when nothing matched.
     if: needs.select-images.outputs.images != '[]'
     runs-on: ${{ matrix.platform.runner }}
-    timeout-minutes: 15
+    # The sum of its steps' bounds, a `uses:` step twice, plus five minutes
+    # for the runner's own phases: a backstop for what no step bound reaches
+    # (framework/ci.md §3).
+    timeout-minutes: 50
     strategy:
       fail-fast: false
       matrix:
@@ -140,17 +148,20 @@ jobs:
             runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v5
+        timeout-minutes: 5
 
       # Before the conf step, which reads the registry: through the environment
       # and stdin, never on the command line, because a public repository's
       # process table is not the place for the token.
       - name: Log in to ghcr
+        timeout-minutes: 5
         env:
           REGISTRY_USER: ${{ github.actor }}
           REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: printf '%s' "$REGISTRY_TOKEN" | buildah login -u "$REGISTRY_USER" --password-stdin ghcr.io
 
       - uses: ./.github/actions/image-conf
+        timeout-minutes: 5
         id: conf
         with:
           image: ${{ matrix.image }}
@@ -160,6 +171,7 @@ jobs:
       # machinery is what its run is for; a push builds only what it will
       # publish.
       - name: Build
+        timeout-minutes: 15
         if: github.event_name == 'pull_request' || steps.conf.outputs.published != 'true'
         env:
           REF: ${{ steps.conf.outputs.ref }}
@@ -188,6 +200,7 @@ jobs:
       # race `main`'s own run from another concurrency group and stitch the
       # same tag twice.
       - name: Publish the ${{ matrix.platform.arch }} image
+        timeout-minutes: 5
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && steps.conf.outputs.published != 'true'
         env:
           REF: ${{ steps.conf.outputs.ref }}
@@ -200,21 +213,27 @@ jobs:
     # above), so there is nothing to stitch anywhere else.
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    # The sum of its steps' bounds, a `uses:` step twice, plus five minutes
+    # for the runner's own phases: a backstop for what no step bound reaches
+    # (framework/ci.md §3).
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
         image: ${{ fromJSON(needs.select-images.outputs.images) }}
     steps:
       - uses: actions/checkout@v5
+        timeout-minutes: 5
 
       - name: Log in to ghcr
+        timeout-minutes: 5
         env:
           REGISTRY_USER: ${{ github.actor }}
           REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: printf '%s' "$REGISTRY_TOKEN" | buildah login -u "$REGISTRY_USER" --password-stdin ghcr.io
 
       - uses: ./.github/actions/image-conf
+        timeout-minutes: 5
         id: conf
         with:
           image: ${{ matrix.image }}
@@ -222,6 +241,7 @@ jobs:
       # The tag the cluster pins is this manifest, never one of the
       # per-architecture tags it lists.
       - name: Stitch the manifest
+        timeout-minutes: 5
         if: steps.conf.outputs.published != 'true'
         env:
           REF: ${{ steps.conf.outputs.ref }}

@@ -245,9 +245,10 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     may depend on the physical change). Workflow mechanics on record:
     downstream jobs need skip-tolerant conditions — `always()`, and
     `up-physical`'s result either `success` or `skipped` — because a
-    skipped gate job must not cascade-skip the chain, while a cancelled
-    one (timed out, or superseded in its group) stands for a physical
-    apply that did not finish and stops it.
+    skipped gate job must not cascade-skip the chain, while any other
+    result — failed, a timed-out apply included, or cancelled for
+    whatever reason — stands for a physical apply that did not finish
+    and stops it.
 -   **PR previews run in parallel** (previews don't mutate state). When
     an upstream layer has a diff, downstream previews are computed
     against the *current* StackReference outputs and may be off — accepted
@@ -333,26 +334,64 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     [testing.md](testing.md) §1 sets for tests: a hang guard an order of
     magnitude above the job's normal duration, not a budget a healthy
     run approaches. It is read off the job's recent green runs, or, for
-    a job that has not run green yet, derived from what it does. Where a
-    step carries a bound of its own — the `timeout` around `pytest`, the
-    prose step's per-file bound — the job's bound sits above the
+    a job that has not run green yet, derived from what it does. A job
+    of a few seconds gets a floor of minutes instead, since at that
+    scale a runner's own start-up varies by more than the job takes.
+    In a job an alert reads, the sum of its steps' bounds (the next
+    bullet) is the floor instead, and it sits higher. A test in
+    `checks` holds every job that runs steps to a bound, and first
+    asserts that it found jobs to hold.
+-   **In a job an alert reads, every step has a bound of its own, and
+    the job's bound holds them all.** A job that exceeds its own
+    `timeout-minutes` ends **`cancelled`, not `failed`** — the state a
+    job superseded in its group ends in, which must stay silent: a
+    `zt-<stack>` job while it waits (§2, accepted), or a `checks` run
+    on `main` that a newer push replaces — while a step that exceeds its own ends `failed`, names itself in
+    the annotation (`The action '<step>' has timed out after N
+    minutes.`), and fails its job, which is what the alert conditions
+    read. So every step of such a job carries a `timeout-minutes` set
+    by the rule above — an order of magnitude above the step's healthy
+    duration, read off green runs, a floor of minutes for a step of
+    seconds — and the job's own bound is at least the sum of its steps'
+    bounds, a `uses:` step counted twice because an action's `post`
+    phase runs under the same bound, plus five minutes for the runner's
+    own phases. A hang in any step is then a failed job and an alert.
+    Where a step wraps a bound of its own — the `timeout` around
+    `pytest`, the prose step's per-file bound — that sets the step's
+    bound instead of the order-of-magnitude rule: it sits above the
     longest healthy run those allow, so a hang they can catch is
-    reported by them and by name. A job of a few seconds gets a floor
-    of minutes instead, since at that scale a runner's own start-up
-    varies by more than the job takes. Exceeding the bound ends a job **`cancelled`,
-    not `failed`**, and every alert condition here reads `failure` —
-    the alert-producer bullet and `notify-failure`, both below — so a
-    timed-out job raises no alert: it is a cancelled run in the Actions
-    tab and nothing more. A test in `checks` holds every job that runs
-    steps to a bound, and first asserts that it found jobs to hold.
--   **An `up` job's bound is the widest, because the costs are not
+    reported by them and by name. A composite action's inner steps run
+    under the bound of the step that uses it. One that exceeds it fails
+    that step and the job, and its annotation reads `The action has
+    timed out.`, naming neither the step nor the minutes. The jobs an
+    alert reads are a definition, not a list: in a workflow that runs
+    on `main` (the alert-producer bullet below), every job that runs
+    steps other than the one that alerts — the job that `needs` every
+    other job, `alert`, or `deploy.yml`'s `notify-failure` while it is
+    excused. A job there that calls a reusable workflow of this
+    repository runs no steps of its own; its result is that of the jobs
+    it calls, so those are jobs an alert reads, and a call they make is
+    read through the same way. A call to another repository's workflow
+    cannot be read here, and the test refuses one. The alerting job is
+    not followed: it is the alert, not a job one reads, so `alert.yml`'s
+    own job keeps its job bound alone, as do the pull-request-only
+    workflows. **Residual, accepted:** a hang outside every step — in
+    the runner's own `Set up job` or `Complete job` — is stopped by the
+    job's bound, ends `cancelled`, and raises no alert. At those two
+    points no step has started, or every step has finished, so no apply is left half done, and the job's bound still
+    frees its runner and its `zt-<stack>` group. A test in `checks`
+    holds every step of every job an alert reads to a bound, and every
+    such job to the sum, and first asserts that it found `deploy.yml`'s
+    `up-physical` and its `Up` step.
+-   **The `Up` step's bound is the widest, because the costs are not
     symmetric.** Killing `pulumi up` mid-run leaves the operations it
     had started pending in the state, and can leave the stack's lock
     behind; undoing that is a hand procedure (§3.3). A long bound costs
     only the time a genuinely hung apply holds its runner and its group.
-    So every `up` job in `deploy.yml` is bounded far above a slow but
-    healthy apply, one that waits on workloads to become ready or
-    creates a node. A plan or a preview writes nothing, and
+    So the `Up` step of every `up` job in `deploy.yml` is bounded far
+    above a slow but healthy apply, one that waits on workloads to
+    become ready or creates a node, and its job's bound sits above that
+    and the rest of its steps. A plan or a preview writes nothing, and
     cancelling one leaves nothing to repair, so those take the ordinary
     rule.
 -   **A bridged-SDK bump is finished on its branch by a workflow, and
@@ -484,7 +523,23 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     with `deploy.yml` the one exception
     (the bullet above); a test in `checks` holds every workflow the
     definition reaches to it and names that exception, so a workflow
-    added later that runs on `main` is red until it alerts. The
+    added later that runs on `main` is red until it alerts, and a case
+    beside the exception holds `notify-failure` to `needs:` on every
+    other job of `deploy.yml` and the condition `always() &&
+    contains(needs.*.result, 'failure')`, until the exception retires.
+    **No alert condition reads `cancelled`.** A `cancelled` job on
+    `main` is then one of three things, none of which pages: superseded
+    in its group — a `zt-<stack>` job while it waits (§2, accepted), or
+    a `checks` run on `main` that a newer push replaces — cancelled by
+    an actor, who already knows, or stopped by its job's own bound outside every step (the
+    residual the step-bound bullet above accepts). A hang inside a step
+    is a failure instead, and pages. **No job an alert reads sets
+    `continue-on-error`.** On a step, the runner applies it after a
+    timeout has set the step's result, so it would turn a hung step
+    back into a pass. A composite action passes on the same terms when
+    an inner step sets it, so the step-bound test refuses one on such a
+    job, on any of its steps, and on any step of a local composite
+    action one of them uses, nested ones included. The
     producer mints an installation token of the dispatch App for the
     ops repository alone — `contents: write`, which is what a
     `repository_dispatch` costs and the whole of what the App carries —
@@ -564,20 +619,21 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     state still holds what the last deploy wrote, and only the device
     resources, whose `diff` reads the device (architecture.md §5.2),
     are put back without it.
--   **§3.3 An `up` job that timed out.** Its annotation, on the run
-    summary above the job's steps, reads `The job has exceeded the
-    maximum execution time`; the log itself ends in `The operation was
-    canceled.`, as a manual cancellation's log does. The job is
-    cancelled rather than failed, so no alert fires for it (the
-    time-bound bullet above). GitHub stops a timed-out job the way it cancels one: it
-    signals the step's process, and seconds later it kills that process
-    and every child. The apply stops wherever it was, so the resource
-    operations in flight at that moment stay pending in the state, and
-    the stack's lock can stay behind. First find what the apply was
-    waiting on — the last resource its log names — because re-running
-    into the same hang repeats it. Then, from the checkout that holds `.credentials/`
-    (the workstation form README.md gives for a preview), for the stack
-    the job names:
+-   **§3.3 An apply that timed out or was cancelled.** A timed-out
+    apply is its `Up` step exceeding its own bound: the annotation, on
+    the run summary above the job's steps, reads `The action 'Up' has
+    timed out after N minutes.`, the step and the job are failed, and
+    `notify-failure` fires (the step-bound bullet above). A deploy an
+    actor cancels mid-apply ends `cancelled` and raises no alert, and
+    needs the same procedure. GitHub stops a timed-out step the way it
+    cancels a job: it signals the step's process, and seconds later it
+    kills that process and every child. The apply stops wherever it
+    was, so the resource operations in flight at that moment stay
+    pending in the state, and the stack's lock can stay behind. First
+    find what the apply was waiting on — the last resource its log
+    names — because re-running into the same hang repeats it. Then,
+    from the checkout that holds `.credentials/` (the workstation form
+    README.md gives for a preview), for the stack the job names:
 
     1.  Confirm that nothing is applying that stack: no deploy run past
         its plan, and no `up`, `refresh`, `import` or `state` command
@@ -643,10 +699,10 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
             means the deploy would swap the adopted resource for a new
             one.
     4.  Dispatch `deploy.yml` from `main`, and the chain applies what is
-        left. Do not re-run the run that timed out: a re-run replays
+        left. Do not re-run the run that was stopped: a re-run replays
         that run's own commit, which is older than `main` once another
         merge has deployed — and the `deploy` group starts the run
-        queued behind the timed-out one the moment it ends — so it
+        queued behind the stopped one the moment it ends — so it
         would apply the older code over stacks a newer run already
         brought forward.
 -   **Enforceable because the repo is public** (2026-08-25). Branch
