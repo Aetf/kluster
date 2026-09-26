@@ -33,9 +33,9 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from memory_kit import MemoryKit
+from oci_conventions import with_recorded_compartment, with_unrecorded_compartment
 from state_dump_box import CHECKPOINT, LISTING, OPENED, SERVING, UNOPENED
 
-from oci_conventions import with_recorded_compartment, with_unrecorded_compartment
 from kluster import conventions
 from kluster.scripts.credentials import b2, escrow, oci_iam, oci_slot, pki, workstation
 from kluster.scripts.credentials.delivery import Delivery
@@ -643,7 +643,7 @@ ACCOUNT_ID = 'account-fbb1a7'
 #: against the second the test runs in (`config.renewal_due` takes `now` for
 #: exactly this). Every expiry below is written against it, and every converge
 #: reads them against it too.
-NOW = dt.datetime(2026, 9, 5, 12, 0, tzinfo=dt.timezone.utc)
+NOW = dt.datetime(2026, 9, 5, 12, 0, tzinfo=dt.UTC)
 
 
 def _expiry(days: int) -> str:

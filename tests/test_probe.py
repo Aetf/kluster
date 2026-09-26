@@ -38,7 +38,7 @@ from kluster.scripts.credentials.masters import CredentialRejected
 from kluster.scripts.credentials.pulumi_config import SlotRefused
 from kluster.scripts.state_backend import cli, config, probe, settings, state
 
-UTC = dt.timezone.utc
+UTC = dt.UTC
 NOW = dt.datetime(2026, 9, 16, 6, 23, tzinfo=UTC)
 SEED_ENTRY = entries.SEEDS['b2'].entry
 PREFIX = b2.DUMP_PREFIX

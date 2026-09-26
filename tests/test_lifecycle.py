@@ -24,9 +24,8 @@ import requests
 from b2_api import ACCOUNT_ID as B2_ACCOUNT
 from b2_api import FakeApi as B2Api
 from cloudflare_api import ACCOUNT_ID as CLOUDFLARE_ACCOUNT
-from cloudflare_api import MINTING_POLICY
+from cloudflare_api import MINTING_POLICY, console_seed
 from cloudflare_api import FakeApi as CloudflareApi
-from cloudflare_api import console_seed
 from oci_conventions import with_tenancy_ocid
 from oci_tenancy import ROOT_USER, TENANCY, Tenancy
 
@@ -787,7 +786,7 @@ def test_a_self_reproducing_family_with_no_account_check_is_refused_before_the_w
         console='the provider console → API tokens → New token.',
     )
 
-    with pytest.raises(KdbxError, match='example.*not in the pre-flight'):
+    with pytest.raises(KdbxError, match=r'example.*not in the pre-flight'):
         lifecycle.prove_account(kit, minting)
     lifecycle.prove_account(kit, console_made)
 

@@ -33,11 +33,11 @@ from memory_kit import MemoryKit
 
 from kluster import conventions
 from kluster.scripts.credentials import b2, cli, derived, entries, masters, payload
+from kluster.scripts.credentials.delivery import Delivery
 from kluster.scripts.credentials.github_secrets import Forge
 from kluster.scripts.credentials.kdbx import KdbxStore
 from kluster.scripts.credentials.masters import CredentialRejected
 from kluster.scripts.credentials.pulumi_config import SlotRefused
-from kluster.scripts.credentials.delivery import Delivery
 from kluster.scripts.state_backend import settings as appliance_settings
 
 PASSWORD = 'kit-password'
@@ -158,7 +158,7 @@ def test_the_seed_carries_bucket_administration_and_no_file_capability(api: Fake
 def test_a_rejected_credential_names_the_key_id_it_was_given(api: FakeApi) -> None:
     # The likely mistake is an account e-mail in the username field, and the
     # API's own 401 says nothing about which half was wrong.
-    with pytest.raises(CredentialRejected, match='someone@example.com'):
+    with pytest.raises(CredentialRejected, match=re.escape('someone@example.com')):
         _ = b2.Session.authorize('someone@example.com', 'master-key')
 
 
@@ -1120,7 +1120,7 @@ def test_an_account_larger_than_one_page_is_listed_whole(api: FakeApi, kit: Kdbx
     # B2 pages `b2_list_keys` at a size it chooses, so a caller that reads the
     # first page only would call a live key gone — and rebuild a box that was
     # fine, while leaving every key it failed to see behind.
-    assert {listed.key_id for listed in session.keys()} == set(api.keys)
+    assert {listed.key_id for listed in session.keys()} == set(api.keys)  # noqa: SIM118 -- an API call that pages b2_list_keys; a Session is not iterable
     assert _current(session, key_id, bucket_id)
 
 

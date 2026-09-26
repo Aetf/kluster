@@ -39,6 +39,11 @@ import pulumi
 import pulumi_oci as oci
 
 from kluster import conventions
+from kluster.components.backup import BackupBucket, Scope, etcd_scope
+from kluster.components.cloud import CloudNetwork
+from kluster.components.cloud.guardrails import AlertRule, Guardrails
+from kluster.components.cloud.nodes import CloudNodes, NodeLoadBalancer
+from kluster.components.cloud.storage import NodeVolume
 from kluster.components.gateway import (
     CaddyService,
     Gateway,
@@ -48,18 +53,14 @@ from kluster.components.gateway import (
     Rootfs,
     RoutingSession,
 )
-from kluster.components.backup import BackupBucket, Scope, etcd_scope
-from kluster.components.cloud import CloudNetwork
-from kluster.components.cloud.guardrails import AlertRule, Guardrails
-from kluster.components.cloud.nodes import CloudNodes, NodeLoadBalancer
-from kluster.components.cloud.storage import NodeVolume
 from kluster.components.homelab import HomelabHost
 from kluster.components.overlay import Overlay
 from kluster.components.overlay.flow_rules import flow_rules
 from kluster.components.talos import TalosCluster, TalosDay1
 from kluster.components.talos.image import TalosImage, TalosNocloudImage
 from kluster.lib import config as lib_config
-from kluster.lib.versions import NAMESPACE as VERSIONS, versions
+from kluster.lib.versions import NAMESPACE as VERSIONS
+from kluster.lib.versions import versions
 
 #: What the cloud provider is built from. The account's own identifiers — its
 #: region and its tenancy OCID — are facts and live in `conventions`; these

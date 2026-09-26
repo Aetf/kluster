@@ -71,5 +71,5 @@ def test_lines_refuses_a_file_that_holds_only_comments(tmp_path: Path) -> None:
     keys = tmp_path / 'operator-keys.txt'
     _ = keys.write_text('# nobody yet\n\n')
 
-    with pytest.raises(ValueError, match='the operator keys: .* holds no values'):
+    with pytest.raises(ValueError, match=r'the operator keys: .* holds no values'):
         _ = config.lines(keys, 'the operator keys')

@@ -580,7 +580,7 @@ def retire_others(session: Session, role: Role, *, keep: str) -> None:
     durable: the seed rows once it is in the kit, and each mint once the
     caller's push has returned (`delivery.py`).
     """
-    for existing in session.keys():
+    for existing in session.keys():  # noqa: SIM118 -- an API call that pages b2_list_keys; a Session is not iterable
         if existing.name == role.name and existing.key_id != keep:
             log.info('deleting superseded %s %s', role.name, existing.key_id)
             session.delete_key(existing.key_id)
@@ -818,7 +818,7 @@ def dump_key_is_current(session: Session, key_id: str, *, bucket_id: str) -> boo
     if not key_id:
         return False
     role = dumps(bucket_id)
-    return any(role.describes(existing) for existing in session.keys() if existing.key_id == key_id)
+    return any(role.describes(existing) for existing in session.keys() if existing.key_id == key_id)  # noqa: SIM118 -- an API call that pages b2_list_keys; a Session is not iterable
 
 
 def mint_dump_key(session: Session, *, bucket_id: str) -> Delivery[AppKey]:

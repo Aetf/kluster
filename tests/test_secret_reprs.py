@@ -354,7 +354,7 @@ def _field_names(cls: type) -> tuple[str, ...]:
             annotations: dict[str, object] = dict(cls.__annotations__)
             return tuple(annotations)
         case 'NamedTuple':
-            return cast('tuple[str, ...]', getattr(cls, '_fields'))
+            return cast('tuple[str, ...]', cls._fields)
         case _:
             return tuple(spec.name for spec in dataclasses.fields(cls))  # pyright: ignore[reportArgumentType]
 

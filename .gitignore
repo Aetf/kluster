@@ -4,7 +4,6 @@ __pycache__/
 .ruff_cache/
 .import_linter_cache/
 *.egg-info/
-lib/crds/build
 # Agent workspaces (docs/framework/dispatch.md §1.2) and the scratch an agent
 # leaves beside them. `jj` skips other workspaces' roots but snapshots
 # everything else on every command, so unignored scratch here is committed

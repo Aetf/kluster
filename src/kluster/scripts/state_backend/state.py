@@ -99,7 +99,7 @@ def dump_name(now: dt.datetime | None = None) -> str:
     sort and read the same way, and prefixes the appliance's name because
     this one lands in whatever directory the operator is standing in.
     """
-    stamp = (now or dt.datetime.now(dt.timezone.utc)).strftime('%Y%m%dT%H%M%SZ')
+    stamp = (now or dt.datetime.now(dt.UTC)).strftime('%Y%m%dT%H%M%SZ')
     return f'{settings.NAME}-{stamp}.dump.age'
 
 

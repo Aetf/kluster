@@ -348,13 +348,13 @@ def test_a_truncated_archive_is_refused_by_its_rows_not_its_listing(
     tools = double(archive=ARCHIVE[: len(ARCHIVE) // 2])
     output = tmp_path / 'taken.dump.age'
 
-    with pytest.raises(state.StateError, match='--data-only.*end of file'):
+    with pytest.raises(state.StateError, match=r'--data-only.*end of file'):
         _ = _dump(kit, registry, bundle, output)
 
     assert not output.exists()
     cut = tmp_path / 'cut.dump'
     _ = cut.write_bytes(ARCHIVE[: len(ARCHIVE) // 2])
-    with pytest.raises(state.StateError, match='--data-only.*end of file'):
+    with pytest.raises(state.StateError, match=r'--data-only.*end of file'):
         _ = _restore(None, registry, bundle, cut, force=True)
     assert tools.restored is None
 
@@ -813,7 +813,7 @@ def test_every_slow_step_announces_itself_before_it_starts(
 def test_the_default_name_is_the_one_the_appliance_uses() -> None:
     import datetime as dt
 
-    name = state.dump_name(dt.datetime(2026, 8, 26, 2, 30, tzinfo=dt.timezone.utc))
+    name = state.dump_name(dt.datetime(2026, 8, 26, 2, 30, tzinfo=dt.UTC))
 
     assert name == f'{settings.NAME}-20260826T023000Z.dump.age'
 

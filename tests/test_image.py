@@ -25,7 +25,7 @@ import pulumi.dynamic as dynamic
 import pytest
 import pytest_asyncio
 import requests
-from mock_monitor import Recorder, decline_every_invoke, declaring, run_with
+from mock_monitor import Recorder, declaring, decline_every_invoke, run_with
 from pulumi.runtime import rpc
 
 from kluster.components.talos import image

@@ -166,29 +166,28 @@ def main(argv: list[str] | None = None) -> int:
     bundle: Path | None = args.bundle
     from_bundle: Path | None = args.from_bundle
 
-    with logging_redirect_tqdm():
-        with TemporaryDirectory(prefix='update_crds-') as name:
-            workdir = Path(name)
-            log.info(f'Working directory: {workdir}')
+    with logging_redirect_tqdm(), TemporaryDirectory(prefix='update_crds-') as name:
+        workdir = Path(name)
+        log.info(f'Working directory: {workdir}')
 
-            if from_bundle is not None:
-                log.info(f'Reading the rendered bundle from {from_bundle}')
-                documents = [from_bundle.read_text()]
-            else:
-                documents = collect_documents(workdir)
+        if from_bundle is not None:
+            log.info(f'Reading the rendered bundle from {from_bundle}')
+            documents = [from_bundle.read_text()]
+        else:
+            documents = collect_documents(workdir)
 
-            crds = sources.select_crds(documents)
-            groups = sorted({crd.group for crd in crds})
-            log.info(f'Selected {len(crds)} CRDs in {len(groups)} groups: {", ".join(groups)}')
+        crds = sources.select_crds(documents)
+        groups = sorted({crd.group for crd in crds})
+        log.info(f'Selected {len(crds)} CRDs in {len(groups)} groups: {", ".join(groups)}')
 
-            if bundle is not None:
-                _ = bundle.write_text(sources.dump_bundle(crds))
-                log.info(f'Wrote the bundle to {bundle}')
-                return 0
+        if bundle is not None:
+            _ = bundle.write_text(sources.dump_bundle(crds))
+            log.info(f'Wrote the bundle to {bundle}')
+            return 0
 
-            crd_files = sources.write_crd_files(crds, workdir)
-            generate(crd_files, output.resolve(), sources.fetch_crd2pulumi(workdir))
-            log.info(f'Regenerated {output}')
+        crd_files = sources.write_crd_files(crds, workdir)
+        generate(crd_files, output.resolve(), sources.fetch_crd2pulumi(workdir))
+        log.info(f'Regenerated {output}')
     return 0
 
 

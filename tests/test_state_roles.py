@@ -36,6 +36,7 @@ import gzip
 import io
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess as sp
@@ -172,7 +173,7 @@ def _unit_command(ignition: dict[str, Any]) -> list[str]:
 def _unit_env(ignition: dict[str, Any]) -> dict[str, str]:
     argv = _unit_command(ignition)
     pairs = (argv[at + 1].split('=', 1) for at, arg in enumerate(argv) if arg == '--env')
-    return {key: value for key, value in pairs}
+    return dict(pairs)
 
 
 def _unit_container(ignition: dict[str, Any]) -> tuple[list[str], list[File]]:
@@ -425,7 +426,7 @@ def test_a_certificate_naming_the_superuser_is_refused(
     monkeypatch.setattr(pki, 'CLIENT_NAMES', (*pki.CLIENT_NAMES, box.superuser))
     target = _bundle(roots, box, clients, box.superuser)
 
-    with pytest.raises(state.StateError, match='no pg_hba.conf entry'):
+    with pytest.raises(state.StateError, match=re.escape('no pg_hba.conf entry')):
         _ = _psql(clients, target, 'SELECT 1')
 
 

@@ -25,10 +25,10 @@ from typing import cast, get_args
 
 import pytest
 import yaml
+from credentials_command_tree import commands as cli_commands
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from fake_gh import RecordedGh
-from credentials_command_tree import commands as cli_commands
 
 from kluster import conventions
 from kluster.scripts.credentials import derived, devices, escrow, pki, pulumi_config, slots

@@ -95,10 +95,10 @@ from kluster.providers.device_files.ssh import STAGING_SUFFIX
 from putils import Component
 
 __all__ = (
+    'INITIAL_STATE',
     'LIVE_MACHINES_DIR',
     'LIVE_NSPAWN_DIR',
     'MACHINES',
-    'INITIAL_STATE',
     'MACHINES_SCRIPT',
     'MACHINE_DROPIN',
     'MARKER_SUFFIX',

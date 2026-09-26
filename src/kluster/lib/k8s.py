@@ -18,7 +18,7 @@ import fnmatch
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, TypeVar, cast
+from typing import Any, cast
 
 import pulumi
 import pulumi_crds as crds
@@ -36,8 +36,6 @@ __all__ = (
     'pick_resource',
     'sealed_secret',
 )
-
-_Resource = TypeVar('_Resource', bound=pulumi.Resource)
 
 #: An OCI-registry chart carries its registry in the reference itself, so it
 #: takes no repository options.
@@ -87,11 +85,11 @@ def helm_chart(
     )
 
 
-def find_rendered(
+def find_rendered[R: pulumi.Resource](
     rendered: pulumi.Input[Sequence[Any]],
-    kind: type[_Resource],
+    kind: type[R],
     name_pattern: str = '*',
-) -> pulumi.Output[_Resource]:
+) -> pulumi.Output[R]:
     """The one resource of `kind` a chart rendered whose name matches.
 
     Takes the chart's `resources` rather than the chart, so the search can be
@@ -99,21 +97,23 @@ def find_rendered(
     produced. `pick_resource` says what the search will and will not do.
     """
 
-    def search(rendered: Sequence[Any]) -> pulumi.Output[_Resource]:
+    def search(rendered: Sequence[Any]) -> pulumi.Output[R]:
         candidates = [resource for resource in rendered if isinstance(resource, pulumi.Resource)]
         urns = pulumi.Output.all(*[candidate.urn for candidate in candidates])
         return urns.apply(
-            lambda urns: pick_resource(list(zip(candidates, cast('Sequence[str]', urns))), kind, name_pattern)
+            lambda urns: pick_resource(
+                list(zip(candidates, cast('Sequence[str]', urns), strict=True)), kind, name_pattern
+            )
         )
 
     return pulumi.Output.from_input(rendered).apply(search)
 
 
-def pick_resource(
+def pick_resource[R: pulumi.Resource](
     named: Sequence[tuple[pulumi.Resource, str]],
-    kind: type[_Resource],
+    kind: type[R],
     name_pattern: str = '*',
-) -> _Resource:
+) -> R:
     """The single resource of `kind` whose name matches, out of `(resource, urn)` pairs.
 
     Deliberately strict: no match and more than one match are both errors,

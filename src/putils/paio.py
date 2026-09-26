@@ -14,23 +14,19 @@ import contextvars
 import functools
 import inspect
 import traceback
-from typing import Any, Awaitable, Callable, ParamSpec, TypeAlias, TypeVar, cast, overload
+from collections.abc import Awaitable, Callable
+from typing import Any, cast, overload
 
 import pulumi
 from pulumi.output import contains_unknowns
 
-__all__ = 'task', 'background', 'async_output', 'resolve'
+__all__ = 'async_output', 'background', 'resolve', 'task'
 
 
-T = TypeVar('T')
-T1 = TypeVar('T1')
-T2 = TypeVar('T2')
-T3 = TypeVar('T3')
-
-Nested: TypeAlias = T | Awaitable['Nested[T]']
+type Nested[T] = T | Awaitable[Nested[T]]
 
 
-async def unwrap(value: Nested[T]) -> T:
+async def unwrap[T](value: Nested[T]) -> T:
     """
     Resolve all the awaitables, returing a simple value.
 
@@ -56,10 +52,7 @@ def _log_error(what: object) -> None:
     pulumi.error(f'Error in {what}')
 
 
-Param = ParamSpec('Param')
-
-
-def task(func: Callable[Param, Awaitable[T]]) -> Callable[Param, 'asyncio.Task[T]']:
+def task[**Param, T](func: Callable[Param, Awaitable[T]]) -> Callable[Param, 'asyncio.Task[T]']:
     """
     Decorator to turn coroutines into tasks.
 
@@ -80,7 +73,7 @@ def task(func: Callable[Param, Awaitable[T]]) -> Callable[Param, 'asyncio.Task[T
     return wrapper
 
 
-def background(func: Callable[Param, T]) -> Callable[Param, Awaitable[T]]:
+def background[**Param, T](func: Callable[Param, T]) -> Callable[Param, Awaitable[T]]:
     """
     Turns a synchronous function into an async one by running it in a
     background thread.
@@ -125,11 +118,11 @@ _async_output_ctx: contextvars.ContextVar[_AsyncOutputCtx | None] = contextvars.
 
 
 @overload
-def resolve(output: 'pulumi.Input[T1]', /) -> Awaitable[T1]: ...
+def resolve[T1](output: 'pulumi.Input[T1]', /) -> Awaitable[T1]: ...
 @overload
-def resolve(output1: 'pulumi.Input[T1]', output2: 'pulumi.Input[T2]', /) -> Awaitable[tuple[T1, T2]]: ...
+def resolve[T1, T2](output1: 'pulumi.Input[T1]', output2: 'pulumi.Input[T2]', /) -> Awaitable[tuple[T1, T2]]: ...
 @overload
-def resolve(
+def resolve[T1, T2, T3](
     output1: 'pulumi.Input[T1]', output2: 'pulumi.Input[T2]', output3: 'pulumi.Input[T3]', /
 ) -> Awaitable[tuple[T1, T2, T3]]: ...
 @overload
@@ -198,7 +191,7 @@ async def _resolve(outputs: tuple[Any, ...]) -> Any:
     return values[0] if len(outputs) == 1 else tuple(values)
 
 
-def async_output(fn: Callable[[], Awaitable[T]] | Awaitable[T]) -> pulumi.Output[T]:
+def async_output[T](fn: Callable[[], Awaitable[T]] | Awaitable[T]) -> pulumi.Output[T]:
     """
     Run a coroutine and expose its result as a `pulumi.Output`, usable
     directly as a resource input.

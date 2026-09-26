@@ -33,9 +33,9 @@ import pytest
 from cloudflare_api import ACCOUNT_ID, FakeApi, console_seed
 from fake_pulumi import RecordedPulumi
 from memory_kit import MemoryKit
+from oci_conventions import with_recorded_compartment, with_tenancy_ocid, with_unrecorded_compartment
 from oci_tenancy import KEY_LISTINGS, ROOT_USER, TENANCY, Tenancy
 
-from oci_conventions import with_recorded_compartment, with_tenancy_ocid, with_unrecorded_compartment
 from kluster import conventions
 from kluster.scripts.credentials import (
     b2,
@@ -161,7 +161,7 @@ def test_a_stack_no_program_declares_is_refused_naming_the_census(api: FakeApi, 
     runner = RecordedPulumi()
     slot = pulumi_config.Stack(name='dsn', directory=pulumi_config.project_dir(), run=runner)
 
-    with pytest.raises(pulumi_config.SlotRefused, match='dsn.*k8s-base') as refusal:
+    with pytest.raises(pulumi_config.SlotRefused, match=r'dsn.*k8s-base') as refusal:
         derived.cloudflare_zones(kit, stack=slot)
 
     # A misspelled `--stack` would otherwise be created in the backend and

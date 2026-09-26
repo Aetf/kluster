@@ -138,7 +138,7 @@ def test_a_real_subprocess_receives_the_value_and_the_token(tmp_path: Path, monk
 def test_a_refusal_says_where_an_operator_would_fix_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _plant(tmp_path, REFUSING_GH, monkeypatch)
 
-    with pytest.raises(SlotRefused, match='no such repository or Environment.*not given this repository'):
+    with pytest.raises(SlotRefused, match=r'no such repository or Environment.*not given this repository'):
         _ = github_secrets.run_gh(['secret', 'list', '--repo', REPOSITORY], token='the-admin-token', stdin=None)
 
 

@@ -300,7 +300,7 @@ class FakeSystemd:
     """
 
     def __init__(self, root: os.PathLike[str], *, unit_path: tuple[os.PathLike[str], ...] = ()) -> None:
-        import shlex  # noqa: PLC0415 -- the executable imports this module once per call and never needs it
+        import shlex  # the executable imports this module once per call and never needs it
 
         self._root = os.fspath(root)
         self._state = os.path.join(self._root, 'state')

@@ -19,6 +19,7 @@ every reader of the checkout finds the same one.
 from __future__ import annotations
 
 import os
+import re
 import stat
 import tempfile
 from collections.abc import Iterator
@@ -241,7 +242,7 @@ def test_a_module_outside_any_checkout_is_refused(tmp_path: Path) -> None:
     module.parent.mkdir(parents=True)
     _ = module.write_text('')
 
-    with pytest.raises(workstation.WorkstationError, match='no mise.toml above'):
+    with pytest.raises(workstation.WorkstationError, match=re.escape('no mise.toml above')):
         _ = workstation.repo_root(module)
 
 

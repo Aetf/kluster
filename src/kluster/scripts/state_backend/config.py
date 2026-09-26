@@ -569,8 +569,8 @@ def renewal_due(recorded: str, *, now: dt.datetime | None = None) -> str | None:
     # writer of this field means, and a naive value compared against an aware
     # `now` raises rather than answering.
     if expiry.tzinfo is None:
-        expiry = expiry.replace(tzinfo=dt.timezone.utc)
-    remaining = expiry - (now or dt.datetime.now(dt.timezone.utc))
+        expiry = expiry.replace(tzinfo=dt.UTC)
+    remaining = expiry - (now or dt.datetime.now(dt.UTC))
     if remaining > RENEWAL_MARGIN:
         return None
     if remaining.days < 0:

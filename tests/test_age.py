@@ -8,6 +8,7 @@ that the pin the appliance downloads is the pin this suite exercises.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -106,7 +107,7 @@ def test_a_missing_tool_names_where_it_is_pinned(monkeypatch: pytest.MonkeyPatch
     # FileNotFoundError from three frames down.
     monkeypatch.setattr(age, 'BINARY', 'age-that-is-not-installed')
 
-    with pytest.raises(age.AgeError, match='mise.toml'):
+    with pytest.raises(age.AgeError, match=re.escape('mise.toml')):
         _ = age.decrypt(Path('irrelevant'), ['AGE-SECRET-KEY-1'])
 
 
@@ -279,10 +280,8 @@ def test_no_line_reaches_the_tools_argv(tmp_path: Path, monkeypatch: pytest.Monk
     lines = [public, *_not_recipients(), *_identities()]
 
     for value in lines:
-        try:
+        with contextlib.suppress(age.AgeError):
             age.check_recipient(value, name='line 1')
-        except age.AgeError:
-            pass
 
     recorded = log.read_text()
     assert len(recorded.splitlines()) == 1 + len(_not_recipients())
@@ -296,7 +295,7 @@ def test_a_missing_tool_is_not_a_refused_recipient(monkeypatch: pytest.MonkeyPat
     # file instead of to the PATH.
     monkeypatch.setattr(age, 'BINARY', 'age-that-is-not-installed')
 
-    with pytest.raises(age.AgeMissing, match='mise.toml'):
+    with pytest.raises(age.AgeMissing, match=re.escape('mise.toml')):
         age.check_recipient('age1anything', name='line 1')
 
 

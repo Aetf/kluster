@@ -871,7 +871,7 @@ def test_a_root_filesystem_travels_as_a_pin_and_never_as_bytes(monitor: Recorder
     them against megabytes, and would put a container's whole filesystem into
     the deployment history.
     """
-    images = monitor.of_type('pulumi-python:dynamic/device:Artifact')  # noqa: S105 -- a type, not a credential
+    images = monitor.of_type('pulumi-python:dynamic/device:Artifact')
 
     assert sorted(image.name for image in images) == sorted(f'{NAME}-{service}-image' for service in SERVICES)
     for image in images:

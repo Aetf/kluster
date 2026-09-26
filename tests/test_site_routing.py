@@ -179,8 +179,8 @@ def _converge(device: _Device, *, daemon_answers: bool = True, syntax_accepted: 
     _ = device.systemd.take_calls()
     device.checks.unlink(missing_ok=True)
 
-    completed = subprocess.run(  # noqa: S603 -- a rendered script of this repository's own
-        ['/bin/sh', str(device.script)],  # noqa: S607 -- the shell the device's own scripts name
+    completed = subprocess.run(
+        ['/bin/sh', str(device.script)],
         env={'PATH': f'{device.systemd.tools}:{device.tools}:/usr/bin:/bin'},
         capture_output=True,
         check=False,
@@ -201,8 +201,8 @@ def _converge(device: _Device, *, daemon_answers: bool = True, syntax_accepted: 
 def _checksum(path: Path) -> str:
     """What `cksum` prints for a file read on its standard input, as the converger reads the source."""
     with path.open('rb') as content:
-        completed = subprocess.run(  # noqa: S603 -- a fixed command over a file of this suite's own
-            ['cksum'],  # noqa: S607 -- found on PATH as the converger finds it
+        completed = subprocess.run(
+            ['cksum'],
             stdin=content,
             capture_output=True,
             check=True,

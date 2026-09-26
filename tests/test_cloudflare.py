@@ -25,9 +25,9 @@ from memory_kit import MemoryKit
 
 from kluster import conventions
 from kluster.scripts.credentials import cloudflare, entries, lifecycle, payload
+from kluster.scripts.credentials.delivery import Delivery
 from kluster.scripts.credentials.kdbx import KdbxStore
 from kluster.scripts.credentials.masters import CredentialRejected
-from kluster.scripts.credentials.delivery import Delivery
 
 PASSWORD = 'kit-password'
 SEED_ENTRY = entries.SEEDS['cloudflare'].entry
@@ -553,8 +553,8 @@ class Faulty:
         return self._guard(self.api.request, method, url, headers=headers, timeout=timeout, json=json)
 
     def attach(self) -> None:
-        setattr(cloudflare.requests, 'get', self.get)  # noqa: B010
-        setattr(cloudflare.requests, 'request', self.request)  # noqa: B010
+        cloudflare.requests.get = self.get
+        cloudflare.requests.request = self.request
 
 
 def _named(api: FakeApi, name: str) -> list[str]:
@@ -586,8 +586,8 @@ def _calls_made(operation: Callable[[FakeApi, KdbxStore], None]) -> int:
             operation(api, MemoryKit())
         return faulty.counted
     finally:
-        setattr(cloudflare.requests, 'get', original[0])  # noqa: B010
-        setattr(cloudflare.requests, 'request', original[1])  # noqa: B010
+        cloudflare.requests.get = original[0]
+        cloudflare.requests.request = original[1]
 
 
 def _adopt(api: FakeApi, kit: KdbxStore) -> None:
