@@ -33,6 +33,15 @@ Machine configuration is composed from typed Python dicts and handed to the
 provider as patches. JSON is emitted rather than YAML because it *is* YAML,
 and the program then needs no serializer dependency to state its own
 configuration.
+
+A patch is either a strategic merge into the `v1alpha1` document or a
+document of its own kind, which the provider's patch loader appends to the
+configuration beside `v1alpha1`. Whatever the pinned Talos release has moved
+out of `v1alpha1` is stated in its own document: at v1.13 that is every field
+of `machine.network`, so KubeSpan and the node's link addressing travel as
+network documents (`KubeSpanConfig`, `LinkAliasConfig`, `LinkConfig`,
+`DHCPv4Config`) the way the ingress firewall always has
+(`NetworkDefaultActionConfig`, `NetworkRuleConfig`).
 """
 
 from __future__ import annotations
@@ -80,10 +89,13 @@ BGP_PORT = 179
 #: node is exposed to whether or not it is written down.
 ANYWHERE: tuple[str, ...] = ('0.0.0.0/0', '::/0')
 
-#: A default route's destination, as Talos spells a route network. The same
-#: characters as the firewall subnet above and a different thing entirely:
-#: there it is who may come in, here it is where everything goes out.
-DEFAULT_ROUTE_V4 = '0.0.0.0/0'
+#: The name this program gives a node's one physical link. Talos' network
+#: documents address a link by name, and the name the kernel gives it
+#: (`eth0`, `ens3`, `enp1s0`) is a property of the PCI topology the platform
+#: builds and of the kernel's naming policy, neither of which this program
+#: decides — so `uplink_alias_document` attaches this alias to whichever link
+#: is physical, and every document that configures the link names the alias.
+UPLINK = 'uplink'
 
 
 @dataclass(frozen=True)
@@ -117,16 +129,13 @@ def node_patch() -> dict[str, Any]:
                 # apiserver front is mandatory rather than an optimization.
                 'kubePrism': {'enabled': True, 'port': conventions.KUBEPRISM_PORT},
             },
-            'network': {
-                'kubespan': {'enabled': True},
-            },
             'kubelet': {
                 'extraConfig': {'systemReserved': SYSTEM_RESERVED},
             },
         },
         'cluster': {
             # KubeSpan peers find each other through discovery; without it the
-            # mesh has no membership.
+            # mesh `kubespan_document` turns on has no membership.
             'discovery': {'enabled': True},
             'network': {
                 # IPv4 first: the cluster is dual-stack with v4 primary
@@ -136,6 +145,22 @@ def node_patch() -> dict[str, Any]:
             },
         },
     }
+
+
+def kubespan_document() -> dict[str, Any]:
+    """KubeSpan on, which every machine in the cluster carries.
+
+    Only `enabled` is stated. Every other field keeps the default Talos gives
+    it: pod networks are not advertised over the mesh (the CNI carries pod
+    traffic), traffic to a peer that is down does not bypass the mesh, no
+    extra endpoints are harvested, and the link MTU is Talos' own.
+
+    It is a document of its own because the pinned release deprecates
+    `machine.network.kubespan` for it, and a configuration carrying both is
+    refused: the document's own validation rejects a `v1alpha1` that also
+    configures KubeSpan.
+    """
+    return {'apiVersion': 'v1alpha1', 'kind': 'KubeSpanConfig', 'enabled': True}
 
 
 def control_plane_patch(*, cert_sans: Sequence[str], secretbox_secret: str | None = None) -> dict[str, Any]:
@@ -193,28 +218,46 @@ def local_path_patch() -> dict[str, Any]:
     }
 
 
-def secondary_address_patch(address: str) -> dict[str, Any]:
-    """Put an extra address on the node's physical interface.
+def uplink_alias_document() -> dict[str, Any]:
+    """Name the node's physical link `UPLINK`, whatever the kernel called it.
+
+    A `LinkAliasConfig` selector is only ever shown physical links — an
+    Ethernet link of no logical kind, not a bond, bridge, VLAN or tunnel — so
+    a selector that is simply `true` matches the physical link, the same test
+    `deviceSelector: {physical: true}` makes. An alias with a fixed name must
+    match exactly one link, so a machine with two physical links gets no
+    alias, and every document that names `UPLINK` names nothing. Because a
+    link document also switches off Talos' default DHCP, such a machine boots
+    with no address on any link, reachable only on its console. That is why
+    each node this program configures has exactly one physical link, and why
+    the tests hold both kinds of node to it: one VNIC per cloud instance, one
+    interface on the homelab worker's domain.
+    """
+    return {'apiVersion': 'v1alpha1', 'kind': 'LinkAliasConfig', 'name': UPLINK, 'selector': {'match': 'true'}}
+
+
+def secondary_address_documents(address: str) -> list[dict[str, Any]]:
+    """Put an extra address on the node's physical link.
 
     OCI hands the node a secondary private IP on its VNIC but does
     not configure the guest, so without this the dedicated VIP is an address
     the machine never answers for (architecture.md §3.2). It is added as a
     host route (/32) on purpose: the subnet route already arrives over DHCP,
     and a second one for the same prefix is a conflict, not a redundancy.
+
+    The lease is stated alongside the address, because configuring any link
+    in a network document switches off the DHCP Talos otherwise runs on every
+    physical link by default. The request sends no client identifier
+    (`clientIdentifier: none`), which is what a `machine.network.interfaces`
+    entry with `dhcp: true` sends; the document's own default would be the
+    MAC, and moving off the deprecated field is meant to change nothing the
+    node does.
     """
-    return {
-        'machine': {
-            'network': {
-                'interfaces': [
-                    {
-                        'deviceSelector': {'physical': True},
-                        'dhcp': True,
-                        'addresses': [f'{address}/32'],
-                    }
-                ]
-            }
-        }
-    }
+    return [
+        uplink_alias_document(),
+        {'apiVersion': 'v1alpha1', 'kind': 'LinkConfig', 'name': UPLINK, 'addresses': [{'address': f'{address}/32'}]},
+        {'apiVersion': 'v1alpha1', 'kind': 'DHCPv4Config', 'name': UPLINK, 'clientIdentifier': 'none'},
+    ]
 
 
 @dataclass(frozen=True)
@@ -251,42 +294,42 @@ STATIC_ADDRESSES: Mapping[str, StaticAddress] = {
 }
 
 
-def static_address_patch(static: StaticAddress) -> dict[str, Any]:
-    """Configure the node's interface itself: address, subnet, default route.
+def static_address_documents(static: StaticAddress) -> list[dict[str, Any]]:
+    """Configure the node's link itself: address, subnet, default route.
 
-    The counterpart of `secondary_address_patch` for a machine no platform
-    configures on its behalf. Two differences from that one, which are the
-    same decision twice: DHCP is off, and the address carries the subnet's prefix
-    instead of /32. With no lease there is no subnet route to conflict with,
-    and with no subnet route the address has to bring one. The default route
-    is then explicit, because carrying it was the lease's other job.
+    The counterpart of `secondary_address_documents` for a machine no
+    platform configures on its behalf. Two differences from that one, which
+    are the same decision twice: there is no DHCP document, and the address
+    carries the subnet's prefix instead of /32. With no lease there is no
+    subnet route to conflict with, and with no subnet route the address has
+    to bring one. The default route is then explicit, because carrying it
+    was the lease's other job. Talos' default DHCP stays off without being
+    told to: configuring any link in a network document is what switches it
+    off.
 
     Whatever else the lease carried goes with it. Resolvers fall back to
     Talos' own defaults, which is what the cloud nodes effectively use too;
     IPv6 is untouched, because the GUA this design expects is SLAAC and SLAAC
     is the kernel's, not DHCP's.
 
-    The interface is selected the way `secondary_address_patch` selects it —
-    `physical: true`, not a name. A name (`eth0`, `ens3`, `enp1s0`) is a
-    property of the PCI topology QEMU happens to build and of the kernel's
-    naming policy, neither of which this program decides; `physical: true`
-    matches an ordinary Ethernet link, which is what a virtio NIC presents as
-    and which the worker has exactly one of.
+    The link is found the way `secondary_address_documents` finds it — as
+    the one physical link, through `uplink_alias_document`, not by a name. A
+    virtio NIC presents as an ordinary Ethernet link, and the worker has
+    exactly one.
     """
-    return {
-        'machine': {
-            'network': {
-                'interfaces': [
-                    {
-                        'deviceSelector': {'physical': True},
-                        'dhcp': False,
-                        'addresses': [str(static.address)],
-                        'routes': [{'network': DEFAULT_ROUTE_V4, 'gateway': str(static.gateway)}],
-                    }
-                ]
-            }
-        }
-    }
+    return [
+        uplink_alias_document(),
+        {
+            'apiVersion': 'v1alpha1',
+            'kind': 'LinkConfig',
+            'name': UPLINK,
+            'addresses': [{'address': str(static.address)}],
+            # No destination is how a `LinkConfig` route spells the default
+            # route: one for the gateway's address family. Spelled out as
+            # `0.0.0.0/0`, the document refuses it as an unspecified prefix.
+            'routes': [{'gateway': str(static.gateway)}],
+        },
+    ]
 
 
 def ingress_firewall_documents(extra: Sequence[Opening] = ()) -> list[dict[str, Any]]:
@@ -320,13 +363,13 @@ def patches(
     and `secondary_address` an extra address on top of whichever it already
     has; no node has both, and a node with neither is configured by its lease.
     """
-    documents: list[Mapping[str, Any]] = [node_patch(), local_path_patch()]
+    documents: list[Mapping[str, Any]] = [node_patch(), kubespan_document(), local_path_patch()]
     if role == 'controlplane':
         documents.append(control_plane_patch(cert_sans=cert_sans, secretbox_secret=secretbox_secret))
     if static_address is not None:
-        documents.append(static_address_patch(static_address))
+        documents += static_address_documents(static_address)
     if secondary_address is not None:
-        documents.append(secondary_address_patch(secondary_address))
+        documents += secondary_address_documents(secondary_address)
     extra = [Opening(BGP_PORT, (bgp_peer,))] if bgp_peer is not None else []
     documents += ingress_firewall_documents(extra)
     return [json.dumps(document) for document in documents]
@@ -422,7 +465,7 @@ class TalosCluster(Component, pulumi_type='kluster:physical:TalosCluster'):
         Without `secondary_address` this is what the machine boots with,
         rendered once. With one it is a second rendering of the same
         configuration that additionally puts that address on the node's
-        interface — a configuration that only exists to be applied over apid,
+        physical link — a configuration that only exists to be applied over apid,
         because the address it names is assigned to an instance that the first
         rendering is an input to.
         """
@@ -520,7 +563,7 @@ class TalosDay1(Component, pulumi_type='kluster:physical:TalosDay1'):
         for the nodes where that differs from the address above. A node with
         no entry is dialed at its own address.
     :param secondary_addresses: node name to an extra address to put on its
-        interface (the node's dedicated VIP).
+        physical link (the node's dedicated VIP).
     """
 
     def __init__(
