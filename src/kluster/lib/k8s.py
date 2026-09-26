@@ -25,7 +25,7 @@ import pulumi_crds as crds
 import pulumi_kubernetes as k8s
 
 from kluster import conventions
-from kluster.lib.versions import versions
+from kluster.lib.versions import ChartVersion
 
 __all__ = (
     'SealingScope',
@@ -46,39 +46,38 @@ def helm_chart(
     name: str,
     *,
     chart: str,
+    version: ChartVersion,
     namespace: pulumi.Input[str],
-    pin: str | None = None,
     values: Mapping[str, Any] | None = None,
     skip_crds: bool = False,
     opts: pulumi.ResourceOptions | None = None,
 ) -> k8s.helm.v4.Chart:
-    """An upstream chart, pinned by project configuration rather than by code.
+    """An upstream chart, installed at the version its caller resolved.
 
-    The repository and the version come from the `versions:chart-<key>`
-    configuration entry, as `<repository>:<version>` -- committed in
-    `Pulumi.yaml`'s project-level block, which a stack's own file overrides
-    only where it deliberately differs -- and `versions.chart` refuses a
-    missing or malformed one by naming its key. Every pin a stack program reads
-    lives in that one `versions:` namespace with its kind in the key
-    (docs/framework/pulumi.md §3.2), so a chart pin sits beside the others
-    rather than in code.
+    The pin is configuration, and this helper reads none: the stack program
+    installing the chart reads it with `versions.chart[<name>]`
+    (`lib/versions.py`) and passes the result down, as it does every other pin
+    (docs/style/pulumi.md, "Layering"). Where the pin lives is the
+    `versions:chart-<name>` key in `Pulumi.yaml`'s project-level `config:`
+    block, shared by every stack and overridden by a stack's own file only
+    where that stack deliberately runs a different version
+    (docs/framework/pulumi.md §3.2). A pin moves by a hand edit to that key.
 
     :param chart: The chart reference — a name within the pinned repository,
         or a full ``oci://`` reference.
-    :param pin: The `<key>` after `versions:chart-` holding the pin, when it
-        differs from the chart reference (an OCI reference is not a usable
-        key).
+    :param version: The pinned repository and version. The repository is
+        passed to Helm only for a named chart: an ``oci://`` reference carries
+        its registry itself.
     :param skip_crds: Leave the chart's bundled CRDs uninstalled. Helm never
         upgrades a CRD it installed that way, so a component whose CRDs are
         declared separately sets this and keeps them upgradable.
     """
-    pinned = versions.chart[pin if pin is not None else chart]
     return k8s.helm.v4.Chart(
         name,
         chart=chart,
-        version=pinned.version,
+        version=version.version,
         namespace=namespace,
-        repository_opts=None if chart.startswith(_OCI_SCHEME) else k8s.helm.v4.RepositoryOptsArgs(repo=pinned.repo),
+        repository_opts=None if chart.startswith(_OCI_SCHEME) else k8s.helm.v4.RepositoryOptsArgs(repo=version.repo),
         values=dict(values) if values is not None else None,
         skip_crds=skip_crds,
         opts=opts,

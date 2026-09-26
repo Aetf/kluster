@@ -1,9 +1,9 @@
 """The shared Kubernetes helpers, declared against mocks.
 
 What these check is the part a chart or a controller would otherwise only tell
-us at apply time: that a pin comes from configuration rather than code, that a
-search through a chart's rendered set refuses to guess, and that a SealedSecret
-carries its scope where the controller looks for it.
+us at apply time: that a chart is installed at the version its caller resolved
+and at no other, that a search through a chart's rendered set refuses to guess,
+and that a SealedSecret carries its scope where the controller looks for it.
 """
 
 from __future__ import annotations
@@ -17,14 +17,21 @@ import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
+from kluster.lib.versions import ChartVersion, versions
 
 #: Chart pins, in the namespace every pin a stack program reads shares: the kind
 #: is the key's prefix rather than a namespace of its own (framework/pulumi.md
-#: §3.2).
+#: §3.2). The fixture below resolves them the way a stack program does and
+#: passes them down; the helper itself reads none of them.
 CHART_CONFIG = {
     'versions:chart-cilium': 'https://helm.cilium.io/:1.20.0',
     'versions:chart-registry-only': 'oci://example.invalid/charts/thing:0.4.0',
 }
+
+#: A version handed to the helper that no pin above holds, for the same chart
+#: the `cilium` pin names — so a helper that consulted configuration would
+#: install `CHART_CONFIG`'s version instead of this one.
+EXPLICIT = ChartVersion('https://mirror.example.invalid/', '1.19.4')
 
 
 @pytest_asyncio.fixture(scope='module', autouse=True)
@@ -35,13 +42,20 @@ async def declarations() -> Recorder:
     pulumi.runtime.set_all_config(CHART_CONFIG)
     monitor = await run_with(Recorder(), stack='k8s-base')
     async with declaring():
-        helm_chart('cilium', chart='cilium', namespace='kube-system', values={'kubeProxyReplacement': True})
+        helm_chart(
+            'cilium',
+            chart='cilium',
+            version=versions.chart['cilium'],
+            namespace='kube-system',
+            values={'kubeProxyReplacement': True},
+        )
         helm_chart(
             'registry-only',
             chart='oci://example.invalid/charts/thing',
+            version=versions.chart['registry-only'],
             namespace='things',
-            pin='registry-only',
         )
+        helm_chart('explicit', chart='cilium', version=EXPLICIT, namespace='kube-system')
         sealed_secret(
             'cloudflare-dns01',
             namespace='cert-manager',
@@ -82,7 +96,7 @@ CHART = 'kubernetes:helm.sh/v4:Chart'
 SEALED_SECRET = 'kubernetes:bitnami.com/v1alpha1:SealedSecret'
 
 
-def test_a_chart_takes_its_repository_and_version_from_config(declarations: Recorder) -> None:
+def test_a_chart_installs_the_pin_its_caller_resolved(declarations: Recorder) -> None:
     chart = declarations.inputs_of('cilium', CHART)
     assert chart['chart'] == 'cilium'
     assert chart['version'] == '1.20.0'
@@ -91,18 +105,22 @@ def test_a_chart_takes_its_repository_and_version_from_config(declarations: Reco
 
 
 def test_a_registry_chart_carries_no_repository(declarations: Recorder) -> None:
-    """An `oci://` reference is self-locating, and needs a pin key of its own
-    because the reference itself is not a usable config key."""
+    """An `oci://` reference is self-locating, so the repository its pin
+    carries is not passed to Helm as one."""
     chart = declarations.inputs_of('registry-only', CHART)
     assert chart['version'] == '0.4.0'
     assert 'repositoryOpts' not in chart
 
 
-def test_an_unpinned_chart_is_refused_by_name() -> None:
-    from kluster.lib.k8s import helm_chart
-
-    with pytest.raises(KeyError, match='nowhere'):
-        helm_chart('nowhere', chart='nowhere', namespace='default')
+def test_a_chart_installs_the_version_it_is_given_whatever_is_pinned(declarations: Recorder) -> None:
+    """The helper reads no pin: the chart's version and repository are the
+    ones passed in, although configuration pins the same chart differently.
+    Which pin applies is the stack program's decision (style/pulumi.md,
+    "Layering"), so a helper that looked it up would override its caller."""
+    chart = declarations.inputs_of('explicit', CHART)
+    assert chart['chart'] == 'cilium'
+    assert chart['version'] == EXPLICIT.version
+    assert chart['repositoryOpts'] == {'repo': EXPLICIT.repo}
 
 
 def test_picking_a_rendered_resource_refuses_to_guess() -> None:
