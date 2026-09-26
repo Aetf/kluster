@@ -12,8 +12,8 @@ redactions = ["PULUMI_CONFIG_PASSPHRASE", "KLUSTER_GITHUB_PASSPHRASE", "PULUMI_B
 # Renovate maintains these -- it cannot bump `latest`, which is why they are
 # written out.
 [tools]
-pulumi = "3.257.0"
-uv = "0.11.26"
+pulumi = "3.265.0"
+uv = "0.12.19"
 # age is the tool this repository escrows with rather than a format it
 # reimplements: `age`/`age-keygen` write and open every ciphertext under
 # `escrow/`, and the box's dumps are age-encrypted too; butane renders the
