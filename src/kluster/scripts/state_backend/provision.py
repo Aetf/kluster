@@ -63,15 +63,6 @@ log = logging.getLogger(__name__)
 
 IMAGE_BUCKET = f'{settings.NAME}-images'
 
-#: Where the appliance's key lived before it became a workstation slot: the
-#: XDG path the containerized `oci` CLI reads too. Still read, once and
-#: loudly, so a workstation that predates the mint keeps provisioning. It
-#: lives here rather than beside the writer because this is the only thing
-#: that reads it, and the two have to be deleted together.
-#: TODO(kluster-ops#41): delete this and its probe below once every
-#: workstation has run `credentials derived oci-state-backend mint`.
-LEGACY_CONFIG_FILE = Path.home() / '.config' / 'oci' / 'config'
-
 
 def _name(suffix: str) -> str:
     return f'{settings.NAME}-{suffix}'
@@ -110,27 +101,28 @@ class OciClients:
 
         The slot signs with the key beside its configuration, not the one its
         `key_file` entry names, so a `.credentials/` copied to a checkout at
-        another path works as it is (`oci_slot.read`). A configuration from
-        anywhere else is the SDK's to read, entry and all.
+        another path works as it is (`oci_slot.read`). A configuration the run
+        is pointed at instead is the SDK's to read, entry and all.
 
         `OCI_CLI_CONFIG_FILE` still wins, because pointing one run at another
         tenancy is a thing an operator does and a slot is not where that
         belongs.
 
-        A machine that still has a hand-written configuration where the slot
-        used to be keeps provisioning, once and loudly: what is there is a
-        complete answer, and the warning names the command that replaces it.
+        Nothing else is read. A machine with neither is refused with the
+        command that mints the slot: a configuration the run was not pointed
+        at is not one this command can know is the appliance's, and falling
+        through to it would sign as whatever key it happens to hold.
 
         The compartment is not part of that answer. It is a boundary this
         program decides (`conventions.OCI_TENANCY.compartments`), so the minted slot
         carries the credential alone and the mapping says where it acts;
-        `--compartment` overrides both, and a configuration file that names a
-        `compartment-id` of its own — the hand-written one above, or one an
-        operator points this run at — is honored ahead of the mapping,
-        because a file naming another tenancy's compartment means it. Which
-        of those the answer came from is not remembered; whether it *is* the
-        mapping's compartment is (`held`), because that is what decides
-        whether the site's recorded address applies.
+        `--compartment` overrides both, and a configuration file an operator
+        points this run at that names a `compartment-id` of its own is
+        honored ahead of the mapping, because a file naming another
+        tenancy's compartment means it. Which of those the answer came from
+        is not remembered; whether it *is* the mapping's compartment is
+        (`held`), because that is what decides whether the site's recorded
+        address applies.
         """
         config: dict[str, Any]
         slot = oci_slot.config_path()
@@ -139,15 +131,6 @@ class OciClients:
         elif slot.is_file():
             location = str(slot)
             config = oci_slot.read()
-        elif LEGACY_CONFIG_FILE.is_file():
-            log.warning(
-                'using the OCI configuration in %s: the appliance has a minted key of its own now, '
-                'which `credentials derived oci-state-backend mint` writes to %s',
-                LEGACY_CONFIG_FILE,
-                slot,
-            )
-            location = str(LEGACY_CONFIG_FILE)
-            config = oci.config.from_file(location)
         else:
             raise oci_slot.SlotUnusable(
                 'the appliance has no OCI credential on this machine: run `credentials derived '
