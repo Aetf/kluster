@@ -1326,7 +1326,7 @@ wheels = [
 
 [[package]]
 name = "pulumi-b2"
-version = "0.13.2"
+version = "0.14.0"
 source = { editable = "sdks/b2" }
 dependencies = [
     { name = "parver" },
