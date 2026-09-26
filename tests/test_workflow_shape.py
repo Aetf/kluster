@@ -10,22 +10,18 @@ step and names no runner of its own; the called workflow's jobs are read here
 too, which is what makes that job exempt.
 
 The workflow files are read the way the other seams read them, through the
-loaders `test_conventions` keeps.
+loaders in `workflow_files`.
 """
 
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import cast
 
-from test_conventions import (
-    ROOT,
-    _jobs,  # pyright: ignore[reportPrivateUsage]
-    _mapping,  # pyright: ignore[reportPrivateUsage]
-    _name,  # pyright: ignore[reportPrivateUsage]
-    _workflow,  # pyright: ignore[reportPrivateUsage]
-    _workflows_and_actions,  # pyright: ignore[reportPrivateUsage]
-)
+from workflow_files import GITHUB, github_name, mapping, read_workflow, workflow_jobs, workflows_and_actions
+
+ROOT = Path(__file__).parent.parent
 
 #: A runner label that names a release: an image name and a version that starts
 #: with a digit, with any suffix after it (`ubuntu-24.04`, `ubuntu-24.04-arm`).
@@ -50,10 +46,10 @@ RUNNER_RULE = re.compile(r"matchDatasources: \[\s*'github-runners',\s*\]")
 def _step_running_jobs() -> dict[str, dict[str, object]]:
     """Every job of every workflow that runs steps, as `<file>: <job>`."""
     return {
-        f'{_name(path)}: {name}': job
-        for path in _workflows_and_actions()
+        f'{github_name(path)}: {name}': job
+        for path in workflows_and_actions()
         if path.parent.name == 'workflows'
-        for name, job in _jobs(_workflow(path), _name(path)).items()
+        for name, job in workflow_jobs(read_workflow(path), github_name(path)).items()
         if 'uses' not in job
     }
 
@@ -65,7 +61,7 @@ def _matrix_values(job: dict[str, object], where: str, reference: str) -> list[o
     here, and neither has a reference that no entry carries; both fail, since
     a label nothing can read is not one anyone has pinned.
     """
-    strategy = _mapping(job.get('strategy'), f'{where} strategy:')
+    strategy = mapping(job.get('strategy'), f'{where} strategy:')
     matrix = strategy.get('matrix')
     assert isinstance(matrix, dict), f'{where}: runs-on reads a matrix that is not written out'
     matrix = cast('dict[str, object]', matrix)
@@ -74,13 +70,13 @@ def _matrix_values(job: dict[str, object], where: str, reference: str) -> list[o
     if isinstance(values := matrix.get(axis), list):
         rows.extend(cast('list[object]', values))
     for entry in cast('list[object]', matrix.get('include', [])):
-        included = _mapping(entry, f'{where} include entry')
+        included = mapping(entry, f'{where} include entry')
         if axis in included:
             rows.append(included[axis])
     found: list[object] = []
     for row in rows:
         for key in path:
-            row = _mapping(row, f'{where} matrix.{axis}').get(key)
+            row = mapping(row, f'{where} matrix.{axis}').get(key)
         found.append(row)
     assert found, f'{where}: no matrix entry carries matrix.{reference}'
     return found
@@ -169,7 +165,7 @@ def test_renovate_reads_every_runner_label_a_matrix_names() -> None:
 
     missed: list[str] = []
     for name, labels in sorted(fed.items()):
-        text = (ROOT / '.github' / name).read_text()
+        text = (GITHUB / name).read_text()
         captured = {f'{found["depName"]}-{found["currentValue"]}' for found in pattern.finditer(text)}
         missed.extend(f'{name}: {label}' for label in labels if label not in captured)
     assert missed == [], f'renovate reads no matrix-fed label here: {missed}'
