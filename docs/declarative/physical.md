@@ -188,6 +188,21 @@ machine_secrets
     it, so the kubelet section moves whole or not at all — and where
     the mount lives after that minor is a design decision rather than
     part of the bump (Aetf/kluster-ops#463).
+-   **Talos validates what the component renders, in `checks`.**
+    `tests/test_talos_validate.py` renders every node shape the
+    component produces the way the provider does — the base
+    configuration `talosctl gen config` generates for the pinned
+    release, with the component's patches applied — and runs
+    `talosctl validate --strict` over each in `cloud` mode, which is
+    the mode both the `oracle` and the `nocloud` platform run in. The
+    `talosctl` is `mise.toml`'s, pinned to the release `versions:talos`
+    names and moved with it by one renovate rule, so a document that
+    the fleet's release does not validate fails the pull request
+    rather than the first `up`. The gate is stricter than a node on
+    warnings, which a node returns from an apply while accepting the
+    document, and it does not see what a node checks against its own
+    running state on top of the document — at v1.13, the install disk
+    in `metal` mode and the kubelet and control-plane image tags.
 -   **Two renderings, one configuration.** What a machine boots with is
     delivered before that machine exists (`user_data`, seed image), so
     it cannot name anything the cloud assigns to the finished instance:
