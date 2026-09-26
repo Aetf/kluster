@@ -328,7 +328,7 @@ def get_version():
 async def get_package() -> str:
 	return await pulumi.runtime.register_package(
 		base_provider_name="terraform-provider",
-		base_provider_version="1.3.0",
+		base_provider_version="1.4.0",
 		base_provider_download_url=get_plugin_download_url() or "",
 		package_name="zerotier",
 		package_version=get_version(),
