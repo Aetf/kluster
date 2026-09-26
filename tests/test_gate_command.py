@@ -38,9 +38,9 @@ from typing import NamedTuple, cast
 import fences
 import pytest
 import yaml
+from workflow_files import GITHUB, workflows_and_actions
 
 ROOT = Path(__file__).parent.parent
-GITHUB = ROOT / '.github'
 
 #: The documents that write the gate's command out (testing.md §1).
 PROSE = ('AGENTS.md', 'README.md', 'docs/framework/testing.md')
@@ -113,13 +113,8 @@ def _scripts(document: object) -> Iterator[str]:
             yield _fold(line)
 
 
-def _workflows_and_actions() -> list[Path]:
-    patterns = ('workflows/*.yml', 'workflows/*.yaml', 'actions/*/action.yml', 'actions/*/action.yaml')
-    return sorted(path for pattern in patterns for path in GITHUB.glob(pattern))
-
-
 def _executed() -> Iterator[Launch]:
-    for path in _workflows_and_actions():
+    for path in workflows_and_actions():
         for line in _scripts(yaml.safe_load(path.read_text())):
             if launch := classify(str(path.relative_to(ROOT)), line, executed=True):
                 yield launch
@@ -244,7 +239,7 @@ def test_a_workflow_runs_its_run_lines_and_its_with_strings() -> None:
 
 
 def test_the_local_actions_are_read_beside_the_workflows() -> None:
-    assert any(path.parent.parent == GITHUB / 'actions' for path in _workflows_and_actions())
+    assert any(path.parent.parent == GITHUB / 'actions' for path in workflows_and_actions())
 
 
 QUOTING = """\

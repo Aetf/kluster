@@ -40,6 +40,7 @@ import pytest
 import yaml
 from fences import prose
 from section_numbers import sections
+from workflow_files import GITHUB, github_name, mapping, read_workflow, workflow_jobs, workflows_and_actions
 
 from kluster import conventions
 from kluster.components.dns.base import overlay_records
@@ -537,32 +538,6 @@ def test_a_row_states_what_it_publishes_beside_its_name() -> None:
 # the cases below are that seam and nothing else.
 
 ROOT = Path(__file__).parent.parent
-GITHUB = ROOT / '.github'
-
-
-def _workflows_and_actions() -> list[Path]:
-    """The workflow files and the composite actions at `.github/actions/*/`.
-
-    A step inside a composite action carries an `if:` and a `run:` GitHub
-    evaluates exactly as it does a step written in the workflow, so a login or
-    a label compared there is one the workflow branches on, and a census that
-    read the workflows alone would be blind to it. Workflows can live nowhere
-    but `.github/workflows/`, so that half of the set is closed by GitHub. A
-    local action can live in any directory of the repository, and an action's
-    step can `uses:` another, so that half is closed by a case instead: every
-    local `uses:` in a file here resolves to a file here
-    (`test_every_local_action_a_step_uses_is_one_the_censuses_read`), which is
-    what makes reading this set the same as reading every step a workflow runs
-    out of this repository.
-
-    Both spellings of the suffix, because GitHub reads `.yml` and `.yaml`
-    identically, and a file named the other way would be invisible the same way.
-    """
-    return sorted(
-        path
-        for pattern in ('workflows/*.yml', 'workflows/*.yaml', 'actions/*/action.yml', 'actions/*/action.yaml')
-        for path in GITHUB.glob(pattern)
-    )
 
 
 #: How a step names an action in this repository rather than one on the
@@ -576,9 +551,9 @@ LOCAL_ACTION_IN_A_STEP = re.compile(r'^[ \t-]*uses:[ \t]*[\'"]?(?:\./|\$/)([^\s\
 
 
 def test_every_local_action_a_step_uses_is_one_the_censuses_read() -> None:
-    """What closes the set above under `uses:`, and the only thing that does.
+    """What closes the set the censuses read under `uses:`, and the only thing that does.
 
-    `_workflows_and_actions` globs one directory of actions, and nothing in
+    `workflows_and_actions` globs one directory of actions, and nothing in
     GitHub holds actions to that directory: a step may name any directory in
     the repository, and a composite action's own steps may name another. A
     condition in an action outside the glob would pass every census here
@@ -590,7 +565,7 @@ def test_every_local_action_a_step_uses_is_one_the_censuses_read() -> None:
     way; GitHub already holds those to `.github/workflows/`, so that half
     closes nothing and only checks the glob's spelling reached the file.
     """
-    read = set(_workflows_and_actions())
+    read = set(workflows_and_actions())
     reached: set[Path] = set()
     unread: list[str] = []
     for path in sorted(read):
@@ -603,9 +578,9 @@ def test_every_local_action_a_step_uses_is_one_the_censuses_read() -> None:
                 absent = 'where no action file exists'
             found = [candidate for candidate in candidates if candidate.is_file()]
             if not found:
-                unread.append(f'{_name(path)} uses {target}, {absent}')
+                unread.append(f'{github_name(path)} uses {target}, {absent}')
             elif found[0] not in read:
-                unread.append(f'{_name(path)} uses {found[0].relative_to(ROOT)}, which no census reads')
+                unread.append(f'{github_name(path)} uses {found[0].relative_to(ROOT)}, which no census reads')
             else:
                 reached.add(found[0])
 
@@ -614,11 +589,6 @@ def test_every_local_action_a_step_uses_is_one_the_censuses_read() -> None:
     # silent about the one every apply runs.
     assert GITHUB / 'actions' / 'zerotier' / 'action.yml' in reached
     assert not unread, f'a `uses:` reaches a file the censuses do not read: {unread}'
-
-
-def _name(path: Path) -> str:
-    """How a failure names a file: relative to `.github/`, since every action file is `action.yml`."""
-    return str(path.relative_to(GITHUB))
 
 
 #: How a workflow condition names a label on the pull request it is running
@@ -677,7 +647,7 @@ def test_every_environment_a_workflow_deploys_into_is_one_the_census_carries() -
     declared = {
         environment.name for repository in conventions.forge.REPOSITORIES for environment in repository.environments
     }
-    read = {name for path in _workflows_and_actions() for name in ENVIRONMENT_IN_A_JOB.findall(path.read_text())}
+    read = {name for path in workflows_and_actions() for name in ENVIRONMENT_IN_A_JOB.findall(path.read_text())}
 
     # The gated apply is the Environment whose credentials can root the gateway
     # (ci.md §3), so a scan that stopped reaching the chain would be silent
@@ -695,7 +665,7 @@ def test_every_label_a_workflow_branches_on_is_one_the_census_carries() -> None:
     keeps the census from being shorter than what they depend on.
     """
     declared = {label.name for repository in conventions.forge.REPOSITORIES for label in repository.labels}
-    read = {label for path in _workflows_and_actions() for label in LABEL_IN_A_CONDITION.findall(path.read_text())}
+    read = {label for path in workflows_and_actions() for label in LABEL_IN_A_CONDITION.findall(path.read_text())}
 
     # `expect-changes` stands noop-automerge down altogether (ci.md §3). A
     # census that lost it would leave a live condition pointing at a label no
@@ -725,8 +695,8 @@ def test_every_variable_a_workflow_reads_is_one_the_census_declares_for_this_rep
     """
     declared = {variable.name for variable in conventions.forge.DEPLOYMENT.variables}
     read = {
-        (_name(path), name)
-        for path in _workflows_and_actions()
+        (github_name(path), name)
+        for path in workflows_and_actions()
         for match in VARIABLE_IN_A_WORKFLOW.findall(path.read_text())
         for name in match
         if name
@@ -787,7 +757,7 @@ def test_every_login_a_workflow_compares_against_is_one_the_census_names() -> No
     named = {author.login for repository in conventions.forge.REPOSITORIES for author in repository.authors}
     read = {
         login
-        for path in _workflows_and_actions()
+        for path in workflows_and_actions()
         for match in AUTHOR_IN_A_CONDITION.findall(path.read_text())
         for login in match
         if login
@@ -824,8 +794,8 @@ def test_every_author_a_workflow_commits_as_is_one_renovate_ignores() -> None:
     assert found is not None, 'renovate.json5 names no gitIgnoredAuthors'
     ignored = set(re.findall(r"'([^']+)'", found.group(1)))
     committing = {
-        (_name(path), email)
-        for path in _workflows_and_actions()
+        (github_name(path), email)
+        for path in workflows_and_actions()
         for email in COMMIT_EMAIL_IN_A_STEP.findall(path.read_text())
     }
 
@@ -846,7 +816,7 @@ def test_no_workflow_identifies_an_account_by_id() -> None:
     check with a reason on it, instead of a census that silently stopped
     covering the condition it exists for.
     """
-    reached = {_name(path) for path in _workflows_and_actions() if AUTHOR_BY_ID.search(path.read_text())}
+    reached = {github_name(path) for path in workflows_and_actions() if AUTHOR_BY_ID.search(path.read_text())}
 
     assert not reached, f'identifies an account by id, which conventions.forge.Author does not carry: {sorted(reached)}'
 
@@ -990,8 +960,8 @@ def test_no_workflow_points_a_pulumi_command_at_the_stack_encrypted_apart() -> N
     apart = set(pulumi_config.APART)
     tasks = _tasks_run_against(apart)
     named = [
-        f'{_name(path)}: {spelling}'
-        for path in _workflows_and_actions()
+        f'{github_name(path)}: {spelling}'
+        for path in workflows_and_actions()
         for spelling in _apart_stack_named(path.read_text(), apart, tasks)
     ]
 
@@ -1073,15 +1043,6 @@ PLAYBOOK_REFERENCE = re.compile(r'^(docs/[\w./-]+\.md) §(\d+(?:\.\d+)*)$')
 PERMISSION_INPUT = 'permission-'
 
 
-def _mapping(value: object, what: str) -> dict[str, object]:
-    assert isinstance(value, dict), f'{what} is not a mapping'
-    return cast('dict[str, object]', value)
-
-
-def _workflow(path: Path) -> dict[str, object]:
-    return _mapping(yaml.safe_load(path.read_text()), _name(path))
-
-
 def _on(workflow: dict[str, object]) -> object:
     keyed = cast('dict[object, object]', workflow)
     return keyed.get('on', keyed.get(True))
@@ -1099,12 +1060,7 @@ def _triggers(workflow: dict[str, object]) -> set[str]:
         return {on}
     if isinstance(on, list):
         return {str(event) for event in cast('list[object]', on)}
-    return {str(event) for event in _mapping(on, 'on:')}
-
-
-def _jobs(workflow: dict[str, object], what: str) -> dict[str, dict[str, object]]:
-    jobs = _mapping(workflow.get('jobs'), f'{what} jobs:')
-    return {name: _mapping(job, f'{what} job {name}') for name, job in jobs.items()}
+    return {str(event) for event in mapping(on, 'on:')}
 
 
 def _needs(job: dict[str, object]) -> set[str]:
@@ -1115,8 +1071,8 @@ def _needs(job: dict[str, object]) -> set[str]:
 def _workflows_running_on_main() -> dict[str, dict[str, object]]:
     return {
         path.name: workflow
-        for path in _workflows_and_actions()
-        if path.parent.name == 'workflows' and _triggers(workflow := _workflow(path)) - NOT_ON_MAIN
+        for path in workflows_and_actions()
+        if path.parent.name == 'workflows' and _triggers(workflow := read_workflow(path)) - NOT_ON_MAIN
     }
 
 
@@ -1124,9 +1080,9 @@ def _producer_callers() -> dict[str, dict[str, object]]:
     """Every job in every workflow that calls the producer, as `<file>: <job>`."""
     return {
         f'{path.name}: {name}': job
-        for path in _workflows_and_actions()
+        for path in workflows_and_actions()
         if path.parent.name == 'workflows'
-        for name, job in _jobs(_workflow(path), path.name).items()
+        for name, job in workflow_jobs(read_workflow(path), path.name).items()
         if job.get('uses') == PRODUCER_USES
     }
 
@@ -1134,8 +1090,8 @@ def _producer_callers() -> dict[str, dict[str, object]]:
 def _producer_step(uses: str | None) -> dict[str, object]:
     """The producer's one step whose `uses:` starts with `uses`, or its one `run:` step for `None`."""
     steps = [
-        _mapping(step, 'a step')
-        for step in cast('list[object]', _jobs(_workflow(PRODUCER), 'alert.yml')['dispatch'].get('steps'))
+        mapping(step, 'a step')
+        for step in cast('list[object]', workflow_jobs(read_workflow(PRODUCER), 'alert.yml')['dispatch'].get('steps'))
     ]
     found = [
         step
@@ -1148,7 +1104,7 @@ def _producer_step(uses: str | None) -> dict[str, object]:
 
 def _producer_call() -> dict[str, object]:
     """The producer's `on.workflow_call`: the inputs and the secrets it declares."""
-    return _mapping(_mapping(_on(_workflow(PRODUCER)), 'on:').get('workflow_call'), 'workflow_call')
+    return mapping(mapping(_on(read_workflow(PRODUCER)), 'on:').get('workflow_call'), 'workflow_call')
 
 
 def test_every_workflow_that_runs_on_main_ends_in_the_alert_job() -> None:
@@ -1175,14 +1131,16 @@ def test_every_workflow_that_runs_on_main_ends_in_the_alert_job() -> None:
     assert 'drift.yml' in running_on_main
     for name, reason in NOT_YET_CALLING.items():
         assert name in running_on_main, f'{name} is excused from the alert job but does not run on main: {reason}'
-        calling = [job for job in _jobs(running_on_main[name], name).values() if job.get('uses') == PRODUCER_USES]
+        calling = [
+            job for job in workflow_jobs(running_on_main[name], name).values() if job.get('uses') == PRODUCER_USES
+        ]
         assert not calling, f'{name} calls the producer; drop its excuse'
 
     findings: list[str] = []
     for name, workflow in sorted(running_on_main.items()):
         if name in NOT_YET_CALLING:
             continue
-        jobs = _jobs(workflow, name)
+        jobs = workflow_jobs(workflow, name)
         alert = jobs.get('alert')
         if alert is None:
             findings.append(f'{name} has no `alert` job')
@@ -1236,7 +1194,7 @@ def test_the_producer_takes_every_field_but_the_computed_ones_and_sends_them_all
 
     assert set(alert.COMPUTED) <= set(alert.FIELDS)
     assert len(alert.FIELDS) <= CLIENT_PAYLOAD_PROPERTIES_LIMIT
-    inputs = _mapping(_producer_call().get('inputs'), 'workflow_call inputs')
+    inputs = mapping(_producer_call().get('inputs'), 'workflow_call inputs')
     assert set(inputs) == set(alert.FIELDS) - set(alert.COMPUTED)
 
     step = _producer_step(None)
@@ -1249,7 +1207,7 @@ def test_the_producer_takes_every_field_but_the_computed_ones_and_sends_them_all
     assert crossed == [], f"a payload entry takes another field's value: {crossed}"
 
     arguments = dict(JQ_ARGUMENT.findall(script))
-    env = _mapping(step.get('env'), 'the step env:')
+    env = mapping(step.get('env'), 'the step env:')
     unbound: list[str] = []
     for field in sorted(inputs):
         shell = arguments.get(field)
@@ -1271,7 +1229,7 @@ def test_every_tier_a_caller_passes_is_one_the_census_names() -> None:
     callers = _producer_callers()
 
     assert 'drift.yml: alert' in callers
-    passed = {name: _mapping(job.get('with'), f'{name} with:').get('tier') for name, job in callers.items()}
+    passed = {name: mapping(job.get('with'), f'{name} with:').get('tier') for name, job in callers.items()}
     unknown = sorted(f'{name} passes {tier!r}' for name, tier in passed.items() if tier not in set(alert.Tier))
     assert unknown == [], unknown
 
@@ -1289,7 +1247,7 @@ def test_every_playbook_a_caller_passes_is_a_section_that_exists() -> None:
     assert 'drift.yml: alert' in callers
     dangling: list[str] = []
     for name, job in sorted(callers.items()):
-        playbook = str(_mapping(job.get('with'), f'{name} with:').get('playbook'))
+        playbook = str(mapping(job.get('with'), f'{name} with:').get('playbook'))
         reference = PLAYBOOK_REFERENCE.match(playbook)
         if reference is None:
             dangling.append(f'{name}: {playbook!r} is not `docs/<file>.md §N`')
@@ -1313,7 +1271,7 @@ def test_the_secret_the_producer_is_handed_is_the_one_the_map_fills() -> None:
     from kluster.scripts.credentials import slots
     from kluster.scripts.credentials.github_secrets import Slot
 
-    declared = set(_mapping(_producer_call().get('secrets'), 'workflow_call secrets'))
+    declared = set(mapping(_producer_call().get('secrets'), 'workflow_call secrets'))
     assert declared, 'the producer declares no secret'
     assert set(SECRET_IN_AN_EXPRESSION.findall(PRODUCER.read_text())) == declared
 
@@ -1321,7 +1279,7 @@ def test_the_secret_the_producer_is_handed_is_the_one_the_map_fills() -> None:
     assert 'drift.yml: alert' in callers
     handed: set[str] = set()
     for name, job in callers.items():
-        secrets = _mapping(job.get('secrets'), f'{name} secrets:')
+        secrets = mapping(job.get('secrets'), f'{name} secrets:')
         assert set(secrets) == declared, f'{name} hands {sorted(secrets)}, the producer declares {sorted(declared)}'
         handed |= {found for value in secrets.values() for found in SECRET_IN_AN_EXPRESSION.findall(str(value))}
     assert handed == {slots.DISPATCH_APP_KEY}
@@ -1348,7 +1306,7 @@ def test_the_producer_mints_for_the_ops_repository_with_an_app_installed_there()
     which holds one row. The endpoint the dispatch goes to is the same
     repository, spelled in the workflow, and held to the forge too.
     """
-    mint = _mapping(_producer_step('actions/create-github-app-token@').get('with'), 'the mint')
+    mint = mapping(_producer_step('actions/create-github-app-token@').get('with'), 'the mint')
 
     variable = CLIENT_ID_VARIABLE.match(str(mint.get('client-id')))
     assert variable is not None, 'the client id is not read from a repository variable'
@@ -1385,9 +1343,9 @@ def test_every_caller_is_named_for_its_file() -> None:
 
     assert 'drift.yml' in callers
     misnamed = sorted(
-        f'{file} is named {_workflow(GITHUB / "workflows" / file).get("name")!r}'
+        f'{file} is named {read_workflow(GITHUB / "workflows" / file).get("name")!r}'
         for file in callers
-        if _workflow(GITHUB / 'workflows' / file).get('name') != Path(file).stem
+        if read_workflow(GITHUB / 'workflows' / file).get('name') != Path(file).stem
     )
     assert misnamed == [], misnamed
 
