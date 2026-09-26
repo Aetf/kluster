@@ -5,7 +5,7 @@
 # Hub image is stale, so this builds from a pinned commit. The Vue UI is built
 # first and embedded into the Go binary (go:embed), which leaves the final
 # image a single static binary on scratch.
-FROM docker.io/library/alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8 AS src
+FROM docker.io/library/alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS src
 ARG GOLINKS_COMMIT
 ADD https://github.com/kellegous/go/archive/${GOLINKS_COMMIT}.tar.gz /tmp/src.tar.gz
 RUN mkdir /src && tar -xzf /tmp/src.tar.gz -C /src --strip-components=1
