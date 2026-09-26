@@ -47,6 +47,22 @@ therefore says the constant lives in the `providers` module of
 `conventions`; whether a caller writes it qualified or flat is answered
 by `conventions/__init__.py` and by nothing else.
 
+**A lint rule that is wrong at a line is silenced at that line.** Where
+`ruff`'s rewrite reads as well as the line it flags, the line takes the
+rewrite. Where it does not, the line carries
+`# noqa: <code> -- <reason>`, and the reason is true of that line: what
+about this line the rule misreads, not what the rule gets wrong in
+general. RUF100 fails a `noqa` that suppresses nothing, so the
+exception cannot outlive the hit it excuses. A rule's selection is never
+narrowed for a path, or for the project, on account of a few lines: an
+ignore by path turns the rule off for every line that will ever be
+written there, and the next real hit passes unseen. A project-wide or
+per-file ignore is reserved for a rule that is systematically wrong for
+a class of files, and the reason written beside it says why the class,
+not a few lines, is the unit. `allowed-confusables` is none of these:
+it tells the confusable-character rules which character this tree uses
+on purpose, and every one of those rules still runs everywhere.
+
 **Long literals are not code.** Another program's configuration
 language (a config file, a rules program) lives in a file beside the
 module, loaded by the shared mechanism — string literals in Python are

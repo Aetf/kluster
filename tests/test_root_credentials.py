@@ -104,7 +104,7 @@ def test_the_variables_left_unmasked_carry_paths_rather_than_values() -> None:
     So the two sets may not overlap, and the exempt ones are the ones the
     suites redirect rather than blank.
     """
-    assert root_credentials.MASKED & root_credentials.UNMASKED_PATHS == frozenset()
+    assert root_credentials.MASKED & root_credentials.UNMASKED_PATHS == frozenset()  # noqa: SIM300 -- the overlap is the subject
 
 
 def test_a_fake_credential_names_the_variable_it_stands_in_for() -> None:

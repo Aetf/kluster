@@ -122,7 +122,7 @@ def test_the_framework_reaches_the_device_only_through_the_mechanism(monitor: Re
         assert monitor.options_of(name).parent.endswith(f'::{NAME}'), name
 
     assert monitor.inputs_of(f'{NAME}-skeleton-{nspawn.SKELETON}')['path'] == nspawn.MACHINES
-    assert nspawn.MACHINES == f'{conventions.gateway.CUSTOM_ROOT}/machines'
+    assert f'{conventions.gateway.CUSTOM_ROOT}/machines' == nspawn.MACHINES
 
 
 def test_the_device_is_asked_for_the_tooling_the_push_needs_as_well() -> None:
@@ -1309,5 +1309,5 @@ async def test_the_runtime_is_not_a_second_place_the_layout_is_decided(
     script = str(monitor.inputs_of(f'{NAME}-on-boot-{nspawn.MACHINES_SCRIPT}')['content'])
 
     assert f'MACHINES={nspawn.MACHINES}' in script
-    assert nspawn.MACHINES == persistence.skeleton_path(nspawn.SKELETON)
+    assert nspawn.MACHINES == persistence.skeleton_path(nspawn.SKELETON)  # noqa: SIM300 -- the runtime's path left, the layout's right, as on the next line
     assert str(await runtime.machines.path.future()) == persistence.on_boot_path(nspawn.MACHINES_SCRIPT)

@@ -29,7 +29,7 @@ def test_no_seed_leaves_its_identifier_empty() -> None:
 
 
 def test_the_recovery_key_entry_has_one_definition() -> None:
-    assert escrow.RECOVERY_ENTRY == entries.SEEDS['recovery'].entry
+    assert entries.SEEDS['recovery'].entry == escrow.RECOVERY_ENTRY
 
 
 def test_console_only_seeds_are_the_manual_surface() -> None:

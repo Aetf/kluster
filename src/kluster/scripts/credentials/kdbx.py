@@ -88,7 +88,7 @@ def remembered(account: str) -> str | None:
         import keyring
 
         return keyring.get_password(KEYRING_SERVICE, account)
-    except Exception as exc:  # noqa: BLE001 - any backend failure is a miss
+    except Exception as exc:  # noqa: BLE001 -- any backend failure is a miss
         log.debug('no secret store for %s: %s', account, exc)
         return None
 
