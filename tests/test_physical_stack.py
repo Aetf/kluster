@@ -293,11 +293,11 @@ async def test_the_overlay_carries_rules_composed_from_the_roster_and_the_resolv
         await physical.main()
 
     rendered = cast('str', setup.inputs_of(f'{conventions.CLUSTER_NAME}-network')['flowRules'])
-    assert f'accept tseq role {ci} and ipdest {homelab_address}/32 and dport {flow_rules.SSH_PORT};' in rendered
-    assert f'accept tseq role {ci} and ipdest {conventions.overlay.UDM}/32 and dport {flow_rules.SSH_PORT};' in rendered
+    assert f'accept tseq role {ci} and ipdest {homelab_address}/32 and dport {flow_rules.SSH_PORT}' in rendered
+    assert f'accept tseq role {ci} and ipdest {conventions.overlay.UDM}/32 and dport {flow_rules.SSH_PORT}' in rendered
     for resolver in conventions.gateway.RESOLVERS:
         port = conventions.gateway.ADGUARD_API_PORT
-        assert f'accept tseq role {ci} and ipdest {resolver.address}/32 and dport {port};' in rendered
+        assert f'accept tseq role {ci} and ipdest {resolver.address}/32 and dport {port}' in rendered
 
 
 @pytest.mark.asyncio

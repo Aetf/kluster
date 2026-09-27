@@ -15,6 +15,31 @@ absent address family inverts missing information rather than the intended
 condition (ZeroTierOne #2200). The stock base filter is the one exception; it
 predates the quirk and is left as the engine ships it.
 
+**Wherever a run is at either end, a member speaks only for the addresses
+assigned to it.** A run carries a credential the gateway accepts, so a member
+that could claim the gateway's overlay address to a run — answer its ARP, or
+reply from that address — would receive what the run sends there, the
+controller's API key among it (`components/gateway/unifi.py`'s
+`ALLOW_INSECURE`). The engine's `chr ipauth` is that check: it holds when the
+packet's sender address — an IPv4 source, or an ARP sender — is covered by the
+certificate of ownership the network controller issues each member for the
+addresses assigned to it, and at the receiving end it is judged against the
+sender's certificate rather than the sender's word. A missing certificate
+drops where a missing tag does not: a run drops the gateway's ARP until the
+gateway's certificate has arrived. The gateway pushes it, with its tags, ahead
+of its first frame to the run, so the gap is bounded and the run's next ARP
+retry recovers. Routed traffic is the reason the check is
+scoped rather than network-wide: a reply the gateway forwards from a LAN host
+carries an address assigned to no member, so the check goes wherever the sender
+speaks from an address of its own — ARP, a run's outbound legs, and the return
+legs from the gateway and the homelab host — and never on a routed reply.
+Traffic with no run at either end keeps the fallthrough's LAN parity, spoofing
+included, as a LAN has it — at ZeroTier 1.14 or later on every member, where a
+sender that does not yet know its receiver's tag skips a drop keyed on that tag
+rather than applying it. A broadcast ARP is filtered at its sender with no
+receiver at all, so an older sender would drop every broadcast ARP whose sender
+address is not its own.
+
 The whole program text lives here, the parts that belong to ZeroTier itself
 included: the tag declaration, the stock base filter, the final accept.
 Splitting one program in one language across two modules would cost more than
@@ -58,6 +83,11 @@ class _Target:
     destination: str
     port: int
     why: str
+    #: Whether the destination is a member's own overlay address, so that its
+    #: reply can be required to come from the member the address is assigned
+    #: to. A routed destination is answered through the gateway from an address
+    #: assigned to no member, and is not.
+    member: bool
 
 
 @final
@@ -87,8 +117,10 @@ def flow_rules(
     their packets carry (§6.1).
 
     The final `accept` is what leaves personal devices with the reachability
-    they would have sitting on the LAN, local discovery included: every rule
-    above it matches a tagged continuous-integration endpoint and nothing else.
+    they would have sitting on the LAN, local discovery included: every drop
+    above it names a tagged continuous-integration endpoint, and the one accept
+    that names none passes only ARP whose sender holds its address; other ARP
+    reaches `accept ethertype arp`.
     """
     return templates.render(
         _TEMPLATE_PACKAGE,
@@ -104,17 +136,20 @@ def flow_rules(
                     f'{gateway_overlay_address}/32',
                     SSH_PORT,
                     'the gateway, for the desired-state push',
+                    member=True,
                 ),
                 _Target(
                     f'{gateway_overlay_address}/32',
                     UNIFI_API_PORT,
                     'the controller API on the gateway, for the firewall resources',
+                    member=True,
                 ),
                 *(
                     _Target(
                         f'{address}/32',
                         conventions.gateway.ADGUARD_API_PORT,
                         'a resolver, for the split-horizon rewrites',
+                        member=False,
                     )
                     for address in resolver_site_addresses
                 ),
@@ -122,6 +157,7 @@ def flow_rules(
                     f'{homelab_overlay_address}/32',
                     SSH_PORT,
                     'the homelab host, for the libvirt session',
+                    member=True,
                 ),
             ),
         ),

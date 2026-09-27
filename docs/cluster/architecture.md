@@ -432,6 +432,23 @@ belongs to — this section holds the cluster-level statements).
 -   **Backup plane**: backups are the actual HA mechanism (storage.md
     §5), so backup *deletability* is a first-class threat — scoped
     keys + bucket version retention per storage.md §4.
+-   **Controller door, unverified (residual, accepted 2026-09-27)**:
+    the `physical` stack sends the UniFi controller's API key — enough
+    to rewrite the site's firewall — to whatever completes a TLS
+    handshake at the literal address it dials, because the controller's
+    certificate cannot be verified there (§5.1). Continuous-integration
+    runs are out of reach: wherever a run is at either end, the
+    overlay's flow rules pass ARP, and a reply from a member's address,
+    only from the member the address is assigned to (ZeroTier's
+    `chr ipauth`, `components/overlay/flow_rules.py`), so nothing but
+    the gateway answers a run at the gateway's address. The residual is
+    every other run: one dialing the bootstrap address, which any host
+    on the dialing workstation's segment can answer, and one made from
+    a personal overlay member, which any member without the `ci` role
+    can, since traffic with no run at either end keeps the LAN's
+    posture. A certificate pin in the provider would retire it, and
+    filipowm/unifi has none at the pinned release; the key's rotation
+    is credentials.md §3.
 
 ### 4.2 L7 Observability (Hubble)
 
@@ -725,9 +742,15 @@ The entire stack is deployed via Pulumi using multiple providers:
     has shipped `firewall_zone_policy` (+ zone / group / policy-order
     resources, API-key auth) since v1.0.0 (2025-03; v1.1.0 2026-07,
     active), consumed through the same any-Terraform-provider bridge
-    as zerotier (§5.3). The resource is marked experimental and
-    targets UniFi OS ≥9 — round-tripped against the UDM's current
-    Network release by a probe on scratch objects before the cutover
+    as zerotier (§5.3). **The controller's certificate is not
+    verified**: the device presents a self-signed certificate naming
+    none of the addresses the stack dials, and the provider's one TLS
+    input is `allow_insecure` — no CA bundle, fingerprint or server
+    name — so the stack sets it explicitly rather than leaving it to
+    `UNIFI_INSECURE` in the environment of whoever runs the program,
+    and the exposure is a residual in §4.1. The resource is marked
+    experimental and targets UniFi OS ≥9 — round-tripped against the
+    UDM's current Network release by a probe on scratch objects before the cutover
     window (physical/gateway-cutover.md §3, physical.md §6); fallback
     if it or the
     bridge misbehaves: a `UnifiFirewallPolicy` resource on the

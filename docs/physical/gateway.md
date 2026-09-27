@@ -997,8 +997,32 @@ Facts about the rules engine that shape the draft (docs.zerotier.com
     matchers inverts missing-information zeros and misfires across
     address families — **the draft uses positive matches only** (the
     stock ethertype base filter is the sole exception, it predates and
-    survives the quirk); ARP is accepted early so it never reaches the
-    IP/tag matchers.
+    survives the quirk). ARP whose sender holds the address it claims
+    is accepted ahead of every IP and tag matcher; only ARP that fails
+    that check reaches a tag matcher, the two ARP drops below.
+-   **`chr ipauth` is the engine's address-ownership check**: it holds
+    when the packet's sender address — the IPv4 source, or an ARP
+    packet's sender address — is covered by the certificate of ownership
+    the network controller issues each member for the addresses
+    assigned to it. The receiver judges it against the sender's
+    certificate, not the sender's word. A missing certificate drops
+    where a missing tag does not: a run drops the UDM's ARP until the
+    UDM's certificate has arrived. The UDM pushes it, with its tags and
+    its membership certificate, ahead of its first frame to the run, so
+    the gap is bounded and the run's next ARP retry recovers (§2.4
+    item 4). A reply the UDM
+    forwards from a LAN host carries an address no member holds, so a
+    network-wide check (the documentation's `not chr ipauth` example)
+    would cut every routed reply; the draft scopes it instead.
+-   **The draft needs ZeroTier 1.14 or later on every member.** From
+    1.14.0 a sender that does not yet know its receiver's tag skips a
+    drop that matched only for that reason (`skipDrop`) rather than
+    applying it. A broadcast ARP is filtered at its sender with no
+    receiver at all, so before 1.14 `drop ethertype arp and treq role 2`
+    dropped, at any sender, every broadcast ARP whose sender address was
+    not its own, and `drop treq role 2` every personal multicast. The
+    UDM's image and the homelab host run 1.16, and CI installs the
+    current release.
 
 Draft (`flow_rules` string on the `zerotier_network` resource; IP and
 port literals come from `conventions`):
@@ -1018,21 +1042,30 @@ drop
   and not ethertype arp
   and not ethertype ipv6
 ;
+
+# ARP: a sender that holds the address it claims passes; any other
+# ARP is dropped where a CI member sends or receives it.
+accept ethertype arp and chr ipauth;
+drop ethertype arp and tseq role 2;
+drop ethertype arp and treq role 2;
 accept ethertype arp;
 
 # CI confinement: four targets, each flow as outbound leg + return leg.
 # Targets: UDM SSH (the device-files push), the UDM's UniFi Network API
 # (443, the UniFi OS proxy — the unifi provider's controller calls,
 # declarative/physical.md §4), the AdGuard APIs (alice/bob),
-# the homelab host's libvirt SSH.
-accept tseq role 2 and ipdest <udm-zt-ip>/32      and dport 22;
-accept treq role 2 and ipsrc <udm-zt-ip>/32      and sport 22;
-accept tseq role 2 and ipdest <udm-zt-ip>/32      and dport <unifi-api>;
-accept treq role 2 and ipsrc <udm-zt-ip>/32      and sport <unifi-api>;
-accept tseq role 2 and ipdest <adguard-addrs>    and dport <adguard-api>;
+# the homelab host's libvirt SSH. A run sends only from its own
+# address; a reply from a member's address passes only from that
+# member. The AdGuard replies are routed, from addresses no member
+# holds, so their return leg carries no ownership check.
+accept tseq role 2 and ipdest <udm-zt-ip>/32      and dport 22            and chr ipauth;
+accept treq role 2 and ipsrc <udm-zt-ip>/32      and sport 22            and chr ipauth;
+accept tseq role 2 and ipdest <udm-zt-ip>/32      and dport <unifi-api>   and chr ipauth;
+accept treq role 2 and ipsrc <udm-zt-ip>/32      and sport <unifi-api>   and chr ipauth;
+accept tseq role 2 and ipdest <adguard-addrs>    and dport <adguard-api> and chr ipauth;
 accept treq role 2 and ipsrc <adguard-addrs>     and sport <adguard-api>;
-accept tseq role 2 and ipdest <homelab-host>/32  and dport 22;
-accept treq role 2 and ipsrc <homelab-host>/32   and sport 22;
+accept tseq role 2 and ipdest <homelab-host>/32  and dport 22            and chr ipauth;
+accept treq role 2 and ipsrc <homelab-host>/32   and sport 22            and chr ipauth;
 drop tseq role 2;
 drop treq role 2;
 
@@ -1041,7 +1074,19 @@ accept;
 ```
 
 The `drop treq role 2` line also means nothing may *initiate* toward a
-CI member — it is a client only. The permissive `default 0` is why the
+CI member — it is a client only.
+
+**Where a run is involved, a member speaks only for its own
+addresses.** The unifi provider does not verify the controller's
+certificate (`ALLOW_INSECURE` in `components/gateway/unifi.py`,
+architecture.md §4.1), so whatever completes a handshake at the UDM's
+overlay address receives the controller's API key. The ownership
+checks are what keep that the UDM: another member can neither answer a
+run's ARP for `<udm-zt-ip>` — which would also put it on the path of
+the routed AdGuard calls, whose replies no ownership check can cover —
+nor reply to a run from that address. Traffic with no run at either end
+keeps the LAN's posture, spoofing included, as the final `accept`
+gives it. The permissive `default 0` is why the
 roster discipline in §2.1 exists: an undeclared member would default to
 `personal`, but membership itself is Pulumi-gated (a member the roster
 doesn't authorize never joins), so the default is unreachable in
@@ -1049,9 +1094,11 @@ practice.
 
 **Personal traffic and local discovery are untouched.** The overlay is also
 the personal devices' network segment, so the rules must not break
-LAN-style behavior between them — and they don't: every rule above
-matches only `ci`-tagged endpoints; all other traffic falls through
-to the final `accept`. Multicast discovery (mDNS to `224.0.0.251` /
+LAN-style behavior between them — and they don't: every drop above
+names a `ci`-tagged endpoint, and the one accept that names none passes
+only ARP whose sender holds its address; all other ARP reaches
+`accept ethertype arp`, and all other traffic falls through to the
+final `accept`. Multicast discovery (mDNS to `224.0.0.251` /
 `ff02::fb`, SSDP) and IPv4 broadcast ride ethertype ipv4/ipv6, pass
 the base filter, and reach the final accept like any unicast. What
 discovery *does* depend on, declared rather than assumed:
@@ -1102,6 +1149,35 @@ Run against a scratch ZeroTier network with the same rules and a throwaway
 7.  **Join latency**: measure a fresh `ci`-tagged member's
     join→SSH-reachable time against the UDM (expectation and why it
     should beat the legacy 1–2 min: §2.6).
+8.  **Address ownership and the controller door.** Items 1 and 4
+    passing with the draft's `chr ipauth` matches in place is itself
+    the first reading: it holds only if Central issues each member a
+    certificate of ownership for its assigned address, which the
+    controller source does. Then, from the `ci`-tagged member:
+    -   `curl -sk -o /dev/null -w '%{http_code}\n' https://<udm-zt-ip>/`
+        prints an HTTP status: the controller's API answers over a
+        handshake that does not verify its certificate, which is the
+        connection `controller_provider` builds. The provider's own
+        first call through that construction is the pre-window probe
+        of gateway-cutover.md §3.
+    -   On the UDM, `ip neigh del <ci-member-ip> dev <zt-iface>`, then
+        `tcpdump -ni <zt-iface> 'arp and host <ci-member-ip>'` while the
+        `ci` member calls an AdGuard API. Every request reads
+        `who-has <ci-member-ip> tell <udm-zt-ip>`. The capture is on the
+        UDM because the kernel writes the frame to the tap before
+        ZeroTier's outbound filter sees it, so a request naming one of
+        the UDM's LAN addresses shows here if one is sent; on the `ci`
+        member the draft would already have dropped it, and the capture
+        there sees only what passed. Such a request is what the draft
+        drops at the run, and the AdGuard calls would fail with it.
+    -   A scratch `personal` member holds `<udm-zt-ip>` as a second
+        address on its interface, so it joins that address's ARP group
+        and its kernel answers requests for it. On the `ci` member,
+        `ip neigh flush dev <zt-iface>`, then
+        `arping -c 3 -I <zt-iface> <udm-zt-ip>`: only the UDM's MAC
+        answers, where a program without the ARP drops shows both.
+        `ip neigh` then shows the UDM's MAC, and the `curl` above still
+        reaches the UDM.
 
 ### 2.5 First bring-up
 

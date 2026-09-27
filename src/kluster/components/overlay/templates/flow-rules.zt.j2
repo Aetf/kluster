@@ -14,15 +14,26 @@ drop
   and not ethertype arp
   and not ethertype ipv6
 ;
+
+# ARP whose sender address is assigned to its sender passes. Anything
+# else is dropped where a run is at either end, so no other member can
+# claim one of a run's destinations to it, or a run claim anyone's.
+accept ethertype arp and chr ipauth;
+drop ethertype arp and tseq role {{ role_ci }};
+drop ethertype arp and treq role {{ role_ci }};
 accept ethertype arp;
 
 # Continuous integration reaches four destinations and no others.
 # Every flow is declared twice: evaluation is stateless, so the
-# return leg is a rule of its own rather than a consequence.
+# return leg is a rule of its own rather than a consequence. A run
+# sends only from its own address, and a reply from a member's
+# address passes only from that member. A resolver is no member: its
+# reply comes through the gateway from an address assigned to no one,
+# and the ARP rules above are what keep another member off that path.
 {%- for target in targets %}
 # {{ target.why }}
-accept tseq role {{ role_ci }} and ipdest {{ target.destination }} and dport {{ target.port }};
-accept treq role {{ role_ci }} and ipsrc {{ target.destination }} and sport {{ target.port }};
+accept tseq role {{ role_ci }} and ipdest {{ target.destination }} and dport {{ target.port }} and chr ipauth;
+accept treq role {{ role_ci }} and ipsrc {{ target.destination }} and sport {{ target.port }}{% if target.member %} and chr ipauth{% endif %};
 {%- endfor %}
 
 # Nothing may open a connection towards a run, either: it is a

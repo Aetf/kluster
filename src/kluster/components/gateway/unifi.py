@@ -78,7 +78,9 @@ carried by a provider instance that exists only for these resources. It is
 never the SSH credential the device's own desired state travels on, and it
 never reaches the environment that deploys applications — that separation is
 the reason these resources live in the `physical` stack rather than beside
-the applications whose traffic they admit.
+the applications whose traffic they admit. The connection is told not to
+verify the controller's certificate, and `ALLOW_INSECURE` is why and what
+that costs.
 """
 
 from __future__ import annotations
@@ -92,7 +94,7 @@ import pulumi_unifi as unifi
 from kluster import conventions
 from putils import Component, own_provider_opts, with_provider
 
-__all__ = ('SiteFirewall',)
+__all__ = ('SiteFirewall', 'controller_provider')
 
 #: The predefined zones of a UniFi OS 9 controller, looked up by name rather
 #: than by id: an id is per-site state, a name is stock. `Internal` holds
@@ -131,6 +133,60 @@ HTTP_MAX_RETRIES = 2
 #: line that uses it.
 API_KEY = 'unifiApiKey'
 
+#: Whether the provider skips verifying the controller's certificate, passed
+#: explicitly because the provider reads `UNIFI_INSECURE` from the environment
+#: of whoever runs the program whenever the input is omitted.
+#:
+#: It skips it because nothing narrower exists. The controller presents a
+#: self-signed certificate of the device's own, naming `unifi.local`,
+#: `localhost`, and loopback and link-local addresses — none of the literal
+#: addresses this program dials, the bootstrap address during the ceremony and
+#: the gateway's overlay address otherwise. And
+#: at the pinned filipowm/unifi release the provider's one TLS input is this
+#: flag: it takes no CA bundle, no fingerprint, no server name and no resolver,
+#: so it can neither pin that certificate nor verify it under another name.
+#:
+#: What it trades is the API key, sent as a header on every request to
+#: whatever completes the handshake at the dialed address; the key is the
+#: dedicated administrator's, enough to rewrite the site's firewall. A
+#: continuous-integration run is out of reach: the overlay's flow rules let no
+#: member but the gateway answer a run at the gateway's address
+#: (`components/overlay/flow_rules.py`). Every other run is the residual — one
+#: dialing the bootstrap address, which any host on the dialing workstation's
+#: segment can answer, and one made from a personal overlay member, which any
+#: member without the `ci` role can. architecture.md §4.1 records it, and a
+#: certificate pin in the provider is what would retire it.
+ALLOW_INSECURE = True
+
+
+def controller_provider(
+    name: str,
+    *,
+    api_url: str,
+    site: str,
+    opts: pulumi.ResourceOptions | None = None,
+) -> unifi.Provider:
+    """The provider every call to the controller is made through.
+
+    One function because the construction is a security posture, not a list of
+    arguments: `SiteFirewall` builds its provider here, and so does the
+    pre-window probe (physical/gateway-cutover.md §3), so what the probe proves
+    is the construction the window will use.
+
+    The key is read here, at the line that builds the provider (rfc-002 §8.1):
+    a provider and the secret that opens it are one thing, and no caller
+    handles the key.
+    """
+    return unifi.Provider(
+        name,
+        api_url=api_url,
+        api_key=pulumi.Config().require_secret(API_KEY),
+        site=site,
+        http_max_retries=HTTP_MAX_RETRIES,
+        allow_insecure=ALLOW_INSECURE,
+        opts=opts,
+    )
+
 
 class SiteFirewall(Component):
     """The cluster's network and zone, its address groups, its policies, and the peer's port forward.
@@ -160,21 +216,12 @@ class SiteFirewall(Component):
         static_hosts: Mapping[str, IPv4Address | IPv6Address],
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
-        # A provider of its own, rather than ambient configuration: this key
+        # A provider of its own, rather than ambient configuration: its key
         # authorizes changes to the home's firewall, and the resources it may
-        # reach are exactly the ones below. The key is read here, at the line
-        # that builds the provider (rfc-002 §8.1) — a provider and the secret
-        # that opens it are one thing — and it is built before the component
+        # reach are exactly the ones below. It is built before the component
         # registers, because a provider reaches a subtree through the options
         # the component is registered with.
-        provider = unifi.Provider(
-            f'{name}-unifi',
-            api_url=api_url,
-            api_key=pulumi.Config().require_secret(API_KEY),
-            site=site,
-            http_max_retries=HTTP_MAX_RETRIES,
-            opts=own_provider_opts(opts),
-        )
+        provider = controller_provider(f'{name}-unifi', api_url=api_url, site=site, opts=own_provider_opts(opts))
         super().__init__(name, opts=with_provider(opts, provider))
         self.provider = provider
         self.site = site
