@@ -13,8 +13,10 @@ owns it:
     manual copy of a file it already holds (physical/gateway.md §1.2).
 -   **`10-packages.sh`**, which reinstalls the packages a firmware update took
     away, in one transaction, and keeps an offline deb cache for the boot where
-    apt is unreachable. Which packages is data (`packages=`); everything else
-    about how they are installed is mechanism and stays in the template.
+    apt is unreachable, resolved against the firmware's own dpkg database,
+    which it saves, with the firmware's release, on the boot after an update. Which packages is data
+    (`packages=`); everything else about how they are installed is mechanism
+    and stays in the template.
 -   **`20-units.sh`**, which converges the unit sources under the custom root
     into `/etc/systemd/system`, enables them, and restarts the ones whose file
     changed. It converges their drop-in directories too, where a statement lives
@@ -51,8 +53,10 @@ way.
 old directory aside and the new one into place, so any file Pulumi wrote in it
 would be deleted by the next refresh and reported as drift forever. This layer
 declares that the directory exists and never what is in it, and declares
-nothing about the `dpkg.*` directories beside it, which the script makes and
-removes as it runs.
+nothing about the `dpkg.*` directories beside it: the ones the script makes and
+removes as it runs, and `dpkg.base`, the saved firmware database it rewrites
+on the boot after every firmware update. Declaring any of them would make the
+script's own writes drift.
 
 **A directory is a resource, not a file that stands for one.** `skeleton_dir`
 declares a `DeviceDirectory`, whose existence, mode and ownership are compared
@@ -96,10 +100,13 @@ __all__ = (
     'BIN_DIR',
     'DIRECTORY_MODE',
     'DPKG',
+    'DPKG_BASE_DIR',
     'DPKG_DIR',
+    'DPKG_STATUS',
     'DROPIN_DIR_SUFFIX',
     'DROPIN_SUFFIX',
     'FILE_MODE',
+    'FIRMWARE_RELEASE',
     'LIVE_UNIT_DIR',
     'PACKAGES_SCRIPT',
     'SCRIPT_MODE',
@@ -139,8 +146,9 @@ TEMPLATE_PACKAGE = 'kluster.components.gateway'
 #: The custom root's skeleton: executables, the offline deb cache, and the unit
 #: sources `20-units.sh` converges. Every other directory under the custom root
 #: belongs to a layer above and arrives through `skeleton_dir`, except the
-#: `dpkg.*` siblings `10-packages.sh` works through while it runs — the directory
-#: apt downloads the set into, and the two halves of the cache's swap.
+#: `dpkg.*` siblings `10-packages.sh` writes itself — the directory apt
+#: downloads the set into, the two halves of the cache's swap, and
+#: `DPKG_BASE_DIR`.
 #:
 #: The names and the three paths are unpacked from that same tuple rather than
 #: spelled again, so a directory added to the skeleton without a name to reach
@@ -150,6 +158,26 @@ TEMPLATE_PACKAGE = 'kluster.components.gateway'
 SKELETON = ('bin', 'dpkg', 'units')
 BIN, DPKG, UNITS = SKELETON
 BIN_DIR, DPKG_DIR, UNIT_SOURCE_DIR = (f'{conventions.gateway.CUSTOM_ROOT}/{name}' for name in SKELETON)
+
+#: Where `10-packages.sh` keeps the firmware base: the dpkg database the running
+#: firmware shipped, saved as `status` in it — beside `release`, a copy of
+#: `FIRMWARE_RELEASE` naming the firmware it came from — on the boot that finds
+#: none of the set installed on another release, and what every refresh of the
+#: cache is resolved against. It is a directory rather than a file because apt
+#: takes its locks beside the status file it is pointed at. It sits on `/data`
+#: because it outlives the firmware update that wipes the live copy.
+DPKG_BASE_DIR = f'{DPKG_DIR}.base'
+
+#: dpkg's database on the running system, which the base is saved from. The
+#: path is dpkg's, not this program's.
+DPKG_STATUS = '/var/lib/dpkg/status'
+
+#: The firmware's release string, one line in the read-only image, of the form
+#: `UDMPROSE.al324.v5.1.33.44ce47b.260909.0025`. It is part of the image, so it
+#: changes with every firmware update and with nothing else, which is what the
+#: layers that key a record to the firmware read it for: `10-packages.sh`'s
+#: base, and the routing converger's stamp (`routing.FRR_APPLIED`).
+FIRMWARE_RELEASE = '/usr/lib/version'
 
 #: Where systemd reads the units `20-units.sh` installs, which is off `/data`
 #: and therefore nothing a firmware update promises to keep.
@@ -291,11 +319,14 @@ def dropin_hook(unit: str, name: str) -> str:
 @final
 @dataclass(frozen=True)
 class _PackagesParams:
-    """What `10-packages.sh.j2` reads: the set, and where the cache lives."""
+    """What `10-packages.sh.j2` reads: the set, where the cache lives, the two databases, and the release."""
 
     cluster: str
     packages: tuple[str, ...]
     cache: str
+    base: str
+    status: str
+    release: str
 
 
 @final
@@ -316,13 +347,21 @@ class _UnitsParams:
     dropin_suffix: str
 
 
-def packages_script(packages: Sequence[str], *, cache: str = DPKG_DIR) -> str:
+def packages_script(
+    packages: Sequence[str],
+    *,
+    cache: str = DPKG_DIR,
+    base: str = DPKG_BASE_DIR,
+    status: str = DPKG_STATUS,
+    release: str = FIRMWARE_RELEASE,
+) -> str:
     """The boot-chain script that reinstalls what a firmware update wiped.
 
     The set is data and everything else is mechanism: one transaction so that
-    version-locked packages resolve together, an offline cache refreshed from
-    what apt downloaded for the set on the boot it succeeded, and that cache as
-    the fallback for the boot where apt is unreachable.
+    version-locked packages resolve together, an offline cache refreshed on the
+    boot apt succeeded from what apt downloads for the set against the saved
+    firmware base, and that cache as the fallback for the boot where apt is
+    unreachable.
 
     The set is sorted and deduplicated here, so the file the device holds is a
     function of what the installation requires rather than of the order the
@@ -333,8 +372,12 @@ def packages_script(packages: Sequence[str], *, cache: str = DPKG_DIR) -> str:
     `cache` is the offline cache, and the directory apt downloads the set into
     sits beside it, so what the cache can ever hold is what apt fetched for the
     set: never apt's shared archives, where any other apt run leaves its debs.
-    It defaults to the device's own, and is a parameter so the script can be
-    run against a tree that is not a device.
+    `base` is the directory the firmware base is saved in (`DPKG_BASE_DIR`),
+    `status` the live database it is saved from (`DPKG_STATUS`), and
+    `release` the running firmware's release it is saved under
+    (`FIRMWARE_RELEASE`). Each
+    defaults to the device's own, and is a parameter so the script can be run
+    against a tree that is not a device.
     """
     return templates.render(
         TEMPLATE_PACKAGE,
@@ -343,6 +386,9 @@ def packages_script(packages: Sequence[str], *, cache: str = DPKG_DIR) -> str:
             cluster=conventions.CLUSTER_NAME,
             packages=tuple(shlex.quote(package) for package in sorted(set(packages))),
             cache=cache,
+            base=base,
+            status=status,
+            release=release,
         ),
     )
 
