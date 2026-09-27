@@ -188,7 +188,10 @@ def flow_rules(
     nothing the other one does: `physical` pushes the gateway's desired state
     over its shell, configures the firewall through the controller API, and
     reaches the libvirt session over the homelab host's shell; `dns` writes the
-    split-horizon rewrites to each resolver's API.
+    split-horizon rewrites to each resolver's API. Neither reaches a Talos
+    node: `physical` dials the worker's machine API at the balancer, and a
+    control plane proxies the call on (`stacks/physical.py`), so no leg names
+    an address on the cluster VLAN.
 
     The final `accept` is what leaves personal devices with the reachability
     they would have sitting on the LAN, local discovery included: every drop

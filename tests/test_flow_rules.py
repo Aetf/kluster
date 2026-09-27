@@ -45,6 +45,7 @@ from overlay_flow_rules import (
 )
 
 from kluster import conventions
+from kluster.components import talos
 from kluster.components.overlay import flow_rules as rules_module
 
 CI_PHYSICAL = conventions.overlay.CI_PHYSICAL
@@ -153,6 +154,36 @@ def test_a_run_may_reach_nothing_else_and_nothing_may_reach_a_run() -> None:
         assert verdict(rendered, inbound) == 'drop'
     # And the fallthrough is last of all, or it would answer for everyone.
     assert lines[-1] == 'accept;'
+
+
+def test_no_run_reaches_the_worker_and_a_personal_member_does() -> None:
+    """The worker's machine API is reached through a control plane, so no leg names the worker.
+
+    The `physical` stack dials the worker's configuration apply at the balancer
+    and names the worker only as the node a control plane proxies the call to
+    (`stacks/physical.py`); nothing a run does opens a connection into the
+    cluster VLAN. So every port the worker's firewall opens is closed to both
+    identities, in both directions. The cluster VLAN's managed route is for a
+    person off-site, whose traffic to the worker's machine API falls through to
+    the final accept.
+    """
+    rendered = rules()
+    worker = conventions.HOMELAB_NODE_IPV4
+    ports = sorted({*talos.HOST_PORTS, talos.BGP_PORT})
+
+    assert conventions.MANAGEMENT_PORTS.talos in ports
+    for node, (source, _) in REACHES.items():
+        for port in ports:
+            outbound = Packet(node, GATEWAY_NODE, source, worker, sport=EPHEMERAL, dport=port)
+            reply = Packet(GATEWAY_NODE, node, worker, source, sport=port, dport=EPHEMERAL)
+            assert verdict(rendered, outbound) == 'drop', (node, port)
+            assert verdict(rendered, reply) == 'drop', (node, port)
+    personal = IPv4Address('10.144.175.24')
+    machine_api = conventions.MANAGEMENT_PORTS.talos
+    outbound = Packet(PERSONAL_NODE, GATEWAY_NODE, personal, worker, sport=EPHEMERAL, dport=machine_api)
+    reply = Packet(GATEWAY_NODE, PERSONAL_NODE, worker, personal, sport=machine_api, dport=EPHEMERAL, ipauth=False)
+    assert verdict(rendered, outbound) == 'accept'
+    assert verdict(rendered, reply) == 'accept'
 
 
 def test_no_rule_rests_on_a_tag_the_member_would_have_to_present() -> None:

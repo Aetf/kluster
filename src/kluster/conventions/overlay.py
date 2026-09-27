@@ -286,10 +286,16 @@ LEGACY_POD_SUBNET = IPv4Network('10.42.0.0/24')
 #: adopted with its routes declared in full, so what is absent here is deleted
 #: at Central. First the overlay's own subnet, with no `via`, which is what
 #: keeps every member addressed; then the home subnets the gateway forwards
-#: for -- the cluster VLAN because a run reaches the worker's machine API over
-#: the overlay, the pool because that is how a person off-site reaches a
-#: cluster service; then the legacy route, via the retiring member's own
-#: address so that the entry and the route leave in one commit.
+#: for -- the container VLAN because the resolvers are there, which a run of
+#: `dns` calls and the managed DNS names, the pool because that is how a person off-site
+#: reaches a cluster service, and the rest because a person off-site reaches
+#: the home as a machine on the LAN does. The cluster VLAN is one of the rest:
+#: it gives such a person the worker's own machine API, the one way to it that
+#: passes through no control plane. No run dials it: the `physical` stack's
+#: Talos calls go to the control planes' public addresses and to the balancer
+#: (`stacks/physical.py`), and the flow rules admit a run to no address on it.
+#: Then the legacy route, via the retiring member's own address so that the
+#: entry and the route leave in one commit.
 MANAGED_ROUTES: tuple[ManagedRoute, ...] = (
     ManagedRoute(SUBNET, None),
     ManagedRoute(SERVER_LAN.v4, UDM),

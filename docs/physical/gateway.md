@@ -916,7 +916,7 @@ first converge deletes at Central. Each row is `{target, via}`:
 | Route | Target | Via |
 | --- | --- | --- |
 | The overlay's own subnet | `10.144.0.0/16` | None. This is the route ZeroTier installs on every member's own interface, and **it is what gives a member its address at all**: the controller pushes a member's static assignment only when some route's target contains it, with that route's prefix length, so a table without it hands every member no address at its next configuration refresh. |
-| The cluster VLAN | `192.168.70.0/24` | `10.144.1.1`, the UDM member — where a run reaches the worker's machine API. |
+| The cluster VLAN | `192.168.70.0/24` | `10.144.1.1`, the UDM member — how a person off-site reaches the worker's own machine API, the one way to it that passes through no control plane. No run dials this VLAN (§2.3). |
 | The server LAN | `192.168.80.0/24` | `10.144.1.1` |
 | The IoT VLAN | `192.168.90.0/24` | `10.144.1.1` |
 | The container VLAN | `10.0.5.0/24` | `10.144.1.1` — the resolvers' addresses, which the managed DNS (§2.7) names. |
@@ -981,6 +981,18 @@ provider's controller calls, declarative/physical.md §4) and the
 homelab host's SSH (the libvirt session); `ci-dns` the two AdGuard
 APIs (the rewrites, `components/dns/rewrites.py`). One leaking buys
 neither the LAN nor the other's reach.
+
+**No leg names a Talos node**, the worker included, because no run
+dials one over the overlay. The `physical` stack's Talos calls go to
+the control planes' public addresses and to the balancer
+(`stacks/physical.py`, `TalosDay1`). The worker's configuration apply
+names the worker's cluster-VLAN address as its node and dials the
+balancer, and whichever control plane answers proxies the call over
+KubeSpan. Bootstrap and the kubeconfig read dial the first control
+plane. The health check dials the control planes, names the worker as
+a node, and reads Kubernetes at the balancer. So a run needs nothing
+on the cluster VLAN, and that VLAN's route (§2.2) is there for
+personal members.
 
 Facts about the rules engine that shape the draft (docs.zerotier.com
 /rules; ZeroTierOne 1.16 `node/Network.cpp`; quirks from ZeroTierOne
