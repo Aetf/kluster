@@ -177,7 +177,7 @@ def test_the_run_asks_the_account_nothing(stack: Forge) -> None:
     # nothing has to be resolved before it can declare. An invoke is also the
     # one call that needs a parent named for it before it can inherit a
     # provider at all.
-    assert stack.call_providers == {}
+    assert stack.called == []
 
 
 def test_merges_are_rebases_only(stack: Forge) -> None:

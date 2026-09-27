@@ -656,4 +656,4 @@ async def test_every_controller_resource_and_lookup_is_signed_by_it(mocks: Contr
     assert controller, 'the build declared no controller resources at all'
     for declaration in controller:
         assert f'{NAME}-unifi' in declaration.provider, f'{declaration.name} is not signed by the provider'
-    assert f'{NAME}-unifi' in mocks.call_providers[ZONE_LOOKUP]
+    assert f'{NAME}-unifi' in mocks.called_through(ZONE_LOOKUP)

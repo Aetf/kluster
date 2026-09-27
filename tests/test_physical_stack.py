@@ -1267,7 +1267,7 @@ async def test_the_placement_lookups_name_the_provider_they_sign_with(setup: Ins
         'oci:Identity/getAvailabilityDomains:getAvailabilityDomains',
         'oci:Identity/getFaultDomains:getFaultDomains',
     ):
-        assert f'{conventions.CLUSTER_NAME}-oci' in setup.call_providers[token], f'{token} signed as nobody'
+        assert f'{conventions.CLUSTER_NAME}-oci' in setup.called_through(token), f'{token} signed as nobody'
 
 
 @pytest.mark.asyncio
@@ -1284,7 +1284,7 @@ async def test_every_talos_call_is_signed_by_the_stack_programs_provider(setup: 
     async with declaring():
         await physical.main()
 
-    calls = [(token, provider) for token, provider in setup.calls if token.startswith('talos:')]
+    calls = [(token, provider) for token, provider in setup.called if token.startswith('talos:')]
     assert calls, 'the Talos chain made no call at all'
     for token, provider in calls:
         assert f'{conventions.CLUSTER_NAME}-talos' in provider, f'{token} signed as nobody'
@@ -1317,7 +1317,7 @@ async def test_every_package_the_program_uses_has_its_default_disabled(setup: In
     async with declaring():
         await physical.main()
 
-    used = {typ.partition(':')[0] for typ in setup.types} | {token.partition(':')[0] for token, _ in setup.calls}
+    used = {typ.partition(':')[0] for typ in setup.types} | {token.partition(':')[0] for token, _ in setup.called}
     # The checkout this file sits in, not `workstation.repo_root()`: the
     # installation points that at a scratch directory.
     committed = Path(__file__).resolve().parents[1] / f'Pulumi.{conventions.PHYSICAL}.yaml'
