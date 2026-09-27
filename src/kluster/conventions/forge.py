@@ -261,8 +261,9 @@ EXPECT_CHANGES = Label('expect-changes', 'Opts a PR out of the noop-automerge ze
 #: Renovate as the API reports it: the hosted app's own login is what arrives
 #: as the author of a pull request it opened, and a self-hosted instance, a
 #: different app slug or a personal-access-token user would arrive as something
-#: else. What branching on it buys is the proof-skipping route of
-#: `noop-automerge.yml` (ci.md §3) and nothing else. The literal is recorded
+#: else. What branching on it buys is `noop-automerge.yml`'s admission of a
+#: `Pulumi.yaml` bump to its allow-list (ci.md §3), and `sdk-regenerate.yml`'s
+#: regeneration onto the branch that bump opened. The literal is recorded
 #: here rather than left in the workflow alone because a workflow cannot notice
 #: that it guessed wrong: the comparison is simply never true, and the route it
 #: guards is never taken.

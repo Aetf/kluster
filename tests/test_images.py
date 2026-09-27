@@ -410,7 +410,7 @@ def test_per_architecture_pins_name_one_release(image: str, tmp_path: Path) -> N
 
     Upstream has published releases for one architecture only, so a grouped
     renovate pull request can move one line and not the other, and a bump
-    under `docker/` previews as a zero diff, which is merged unattended: the
+    under `docker/` previews as a zero diff, so no preview would show it: the
     image would ship each architecture a different release under one tag.
     """
     arches = _architectures()

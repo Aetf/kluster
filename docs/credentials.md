@@ -779,8 +779,12 @@ Environment's because none of those jobs belongs to a stack, and its
 exposure is the fence's: any same-repo branch can read it, previews
 included, which buys a token that can push non-workflow files onto
 `kluster`'s unprotected branches and onto any branch of `kluster-ops`,
-and post alerts to the latter, and nothing else (cluster/architecture.md
-§4.3, ci.md §3). Rotating one
+and post alerts to the latter, and nothing else directly. What such a
+push carries on to `kluster`'s `main` unread is a pull request that
+changes nothing but paths on noop-automerge's allow-list — `uv.lock`,
+`sdks/`, and renovate's bump of `Pulumi.yaml`'s `packages:` block —
+and only behind a zero-diff preview; every other path waits for a
+human (cluster/architecture.md §4.3, ci.md §3). Rotating one
 is another key on that page, recorded here as the label's next
 generation, `sync --only` for that row, and the superseded key deleted
 on the page in the same visit. The client id the JWT is issued under

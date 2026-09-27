@@ -1787,18 +1787,19 @@ REFUSAL_IN_CLASSIFY = 'echo \'noop=false\' >> "$GITHUB_OUTPUT"'
 def test_the_candidacy_test_reads_every_changed_path_or_refuses() -> None:
     """A path the verdict never saw is the one that merges a deploy unattended.
 
-    `classify` decides candidacy by grepping a pull request's changed paths for
-    the ones a stack program reads, so the verdict is worth exactly what that
-    list is. Read from the API's first page it covers at most a hundred paths
-    and says nothing about the rest -- a pull request with a hundred
-    early-sorting paths can then carry a `src/` file the grep never sees, and
-    be admitted as a no-op by the job whose whole purpose is the fence.
+    `classify` decides candidacy by holding every changed path of a pull request
+    to the workflow's allow-list, so the verdict is worth exactly what that list
+    of paths is. Read from the API's first page it covers at most a hundred
+    paths and says nothing about the rest -- a pull request with a hundred
+    allow-listed paths can then carry a `src/` file the test never sees, and be
+    admitted as a no-op by the job whose whole purpose is the fence.
 
     Three things keep the list honest, and each is silent on its own: the read
     pages, what arrived is counted against the number the pull request itself
     reports, and every way out of the step short of the verdict refuses. The
-    last is what the count is for -- a short list still greps clean, so
-    noticing it only helps if noticing it stands the merge down.
+    last is what the count is for -- a short list still passes the allow-list,
+    so noticing it only helps if noticing it stands the merge down. What the
+    step decides, run as the runner runs it, is `test_noop_automerge`.
     """
     workflow = NOOP_AUTOMERGE.read_text()
     classify = cast('dict[str, object]', yaml.safe_load(workflow)['jobs']['classify'])

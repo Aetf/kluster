@@ -598,7 +598,21 @@ Costs and facts on record:
     rather than a style preference, and it binds every workflow ever
     added to the ops repo. On this repo the fence is `main`'s own
     protection, which applies to Apps: a token holder pushes to
-    unprotected branches and to nothing else. Permissions are
+    unprotected branches and not to `main`. A push starts the pushed
+    head's runs, so what reaches `main` from such a branch with
+    nobody reading it is what noop-automerge admits: a pull request
+    that changes nothing but paths on its **allow-list** — `uv.lock`,
+    `sdks/`, and renovate's bump of `Pulumi.yaml`'s `packages:`
+    block — and only behind a zero-diff preview (framework/ci.md
+    §3). Every other path waits for a human, the trust anchors no
+    stack reads among them: the escrow recipients, the appliance's
+    key files, the composite actions, `mise.toml`. That allow-list
+    is the residual on this side: a pushed `uv.lock` change that
+    renders identically merges unread, and so does any pushed change
+    under `sdks/` — the bridged SDKs render only in `physical`, which
+    no pull request previews, and `checks` holds them to the block
+    only through each SDK's `pulumi-plugin.json` — which then runs in
+    `plan-physical` on the next run of the chain. Permissions are
     per-App, not per-installation, which is why the drift-trigger
     credential is a **second** App (ci.md §3) rather than another
     permission on this one: the trigger App carries actions:write

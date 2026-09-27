@@ -84,19 +84,20 @@ that can root the gateway is not the frictionless-apps layer). PRs get
 no physical preview at all. Previews run only for same-repo branches
 (`pull_request`, never `pull_request_target`; fork PRs get no
 secrets). noop-automerge merges unattended only a pull request that
-touches neither `src/` nor `Pulumi.*`, with one admission: a renovate
-bump of `Pulumi.yaml`'s `packages:` block, which is the bridged-SDK
-generator's recipe rather than stack configuration and no stack
-program's input. That one tests the author as well as the path — it
-asks for `renovate[bot]` and for a document that is equal at base and
-head once `packages` is removed — and ci.md §3 is where it is stated.
-A candidate merges either way only behind a zero-diff preview on every
+changes nothing but paths on its allow-list: `uv.lock`, `sdks/`, and a
+renovate bump of `Pulumi.yaml`'s `packages:` block, which is the
+bridged-SDK generator's recipe rather than stack configuration and no
+stack program's input. That last entry tests the author as well as the
+path — it asks for `renovate[bot]` and for a document that is equal at
+base and head once `packages` is removed. Every other path waits for a
+human, and the paths no stack program reads above all — the escrow
+recipients, the appliance's key files, the composite actions,
+`mise.toml`, documentation — because such a path previews empty however
+it changed, so no preview can hold it. ci.md §3 is where the rule is
+stated. A candidate merges only behind a zero-diff preview on every
 stack a pull request previews (`dns`, `k8s-base`, `apps`); `physical`
 is proven only after the merge, in `plan-physical` (Residual below).
-The one class that skips that proof is a change no
-stack program reads (documentation, `.vscode/`, `.gitignore`) opened by
-renovate itself, which has no rendering for a preview to compare, and a
-fork's pull request is refused by name. Secret scanning + push
+A fork's pull request is refused by name. Secret scanning + push
 protection on. **Residual, accepted 2026-08-24**:
 merged main code — noop-automerged dependency bumps included —
 executes with physical credentials in the ungated plan job; the gate
