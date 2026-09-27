@@ -205,11 +205,12 @@ def test_the_gateway_check_refuses_an_entry_at_another_address_or_in_another_rol
 
 
 def test_the_two_continuous_integration_identities_are_generated_and_confined() -> None:
-    """One identity per stack that joins, and each of them tagged for confinement.
+    """One identity per stack that joins, each carrying the `ci` role.
 
     Sharing one identity between two jobs would flap it, since a node maps to
-    one endpoint at a time; sharing a tag with anything else would hand that
-    thing the same four destinations.
+    one endpoint at a time. The role says what the member is; the flow rules
+    confine each identity by its node address rather than by the tag, so the
+    tag grants and withholds nothing.
     """
     generated = [
         entry for entry in conventions.overlay.ROSTER if isinstance(entry, conventions.overlay.GeneratedMember)
@@ -327,9 +328,9 @@ def test_every_via_is_a_member_and_only_the_gateway_forwards_for_the_home() -> N
 def test_the_census_carries_the_cluster_vlan_and_the_pool_by_name() -> None:
     """Both halves of the cluster's home addressing are reachable off-site.
 
-    They are two subnets and two reasons: the VLAN is where a run reaches the
-    worker's machine API, and the pool is where a person off-site reaches a
-    service the cluster publishes on the LAN. Named rather than numbered: the
+    They are two subnets and two reasons: the VLAN is where a person off-site
+    reaches the worker's own machine API, which no run dials, and the pool is
+    where a person off-site reaches a service the cluster publishes on the LAN. Named rather than numbered: the
     route table and the two subnets are one census, so what is assertable here
     is which subnets the table carries and not what either one is numbered.
     """

@@ -20,6 +20,7 @@ import inspect
 import json
 import traceback
 from collections import Counter
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import parse_qs, urlsplit
@@ -782,7 +783,7 @@ async def test_the_worker_is_configured_through_the_cluster_endpoint(setup: Inst
     balancer, which forwards the machine API port to whichever control plane it
     likes; that control plane proxies the call the rest of the way over the
     mesh. Nothing outside the site therefore needs a path to the worker, which
-    is why a continuous-integration run confined to the overlay's four targets
+    is why a continuous-integration run whose flow rules name no Talos node
     can still carry a worker configuration change.
     """
     async with declaring():
@@ -794,6 +795,50 @@ async def test_the_worker_is_configured_through_the_cluster_endpoint(setup: Inst
     # And the balancer forwards the machine API, or the endpoint above is a
     # closed door: the port is one of the two it declared a listener on.
     assert conventions.MANAGEMENT_PORTS.talos in listener_ports(setup)
+
+
+@pytest.mark.asyncio
+async def test_no_talos_call_is_dialed_into_the_cluster_vlan(
+    setup: Installation, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A run names the worker's address, and dials none on its VLAN.
+
+    The overlay routes the cluster VLAN via the gateway for a person off-site,
+    and the flow rules give a run no leg into it (physical/gateway.md §2.2,
+    §2.3), so a Talos call the run dialed at an address there would fail from
+    continuous integration while passing from a workstation. Every address one
+    is dialed at is read here: each resource's `endpoint`, and the `endpoints`
+    of the health check and of the client configuration. The cloud nodes'
+    public addresses are unknown under mocks and read as `None`; the ones that
+    are addresses must lie outside the VLAN, and the worker's apply is among
+    them.
+    """
+    invoked: list[tuple[str, dict[str, Any]]] = []
+    answer = setup.answer
+
+    def recording(args: pulumi.runtime.MockCallArgs) -> dict[str, Any]:
+        invoked.append((args.token, dict(cast('dict[str, Any]', args.args))))
+        return answer(args)
+
+    monkeypatch.setattr(setup, 'answer', recording)
+    async with declaring():
+        await physical.main()
+
+    dialed = [
+        str(declaration.inputs['endpoint'])
+        for declaration in setup.declared
+        if declaration.typ.startswith('talos:') and 'endpoint' in declaration.inputs
+    ]
+    dialed += [
+        str(endpoint) for token, args in invoked if token.startswith('talos:') for endpoint in args.get('endpoints', ())
+    ]
+    addresses = [ip_address(value) for value in dialed if value != 'None']
+    assert LB_ADDRESS in dialed
+    assert {token for token, args in invoked if 'endpoints' in args} == {
+        'talos:cluster/getHealth:getHealth',
+        'talos:client/getConfiguration:getConfiguration',
+    }
+    assert not [address for address in addresses if address in conventions.CLUSTER_VLAN.v4], dialed
 
 
 def listener_ports(setup: Installation) -> set[int]:
