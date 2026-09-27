@@ -234,6 +234,16 @@
       // Read from releases, as the settings pin is: the aqua backend would
       // read tags, and a tag pushed before its release would put this half
       // into the pull request ahead of the other.
+      //
+      // Patch releases stay off for both age pins, unlike the self-built
+      // images below, which take them back: the global
+      // `patch: enabled: false` holds, so an age patch arrives folded into
+      // the next minor release, and an advisory is handled by hand. age is
+      // in no service's active path, since it encrypts the state-backend
+      // dumps at rest, and the safety of what it has encrypted rests on the
+      // algorithm rather than on the release that ran it. Every age bump
+      // costs the appliance a replacement and a restore from a dump, a
+      // patch as much as a minor.
       matchManagers: [
         'mise',
       ],
