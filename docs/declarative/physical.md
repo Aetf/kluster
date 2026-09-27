@@ -404,7 +404,8 @@ the qbittorrent v6 pinhole — declared only once `workerGua` carries
 the worker's SLAAC address, which no apply before the worker's first
 boot can supply (physical/gateway.md §4.2) — and its v4 peer-port
 forward to `192.168.70.10` (**the only port forward**; no management
-inbound exists), and any static LAN host entries (dns.md §4). The
+inbound exists), declared only once `qbittorrentOnWorker` says
+qbittorrent runs on the worker, and any static LAN host entries (dns.md §4). The
 **`lan` pool is not in this census as an object at all**: it is
 deliberately no network object and therefore in no zone, so the rules
 naming it are address-group rules on the internal→external pair, not
@@ -471,18 +472,21 @@ backends, which nothing depends on. The fallback is
 is that the apiserver's audit log records the balancer's address for
 every request through the IPv6 front.
 
-Two verifications come **before** the first `pulumi up` rather than in
-the gate, because that run's first half — the targeted apply of the
-gateway cutover — is what exercises them, and it runs with the LAN's
-resolvers down and the machines' state already moved: the bridged
-filipowm/unifi provider round-tripping a scratch
+The zone-policy verification comes **before** the first `pulumi up`
+rather than in the gate, because that run's first half — the targeted
+apply of the gateway cutover — is what exercises it, and it runs with
+the LAN's resolvers down and the machines' state already moved: the
+bridged filipowm/unifi provider round-tripping a scratch
 `firewall_zone_policy` (create → clean diff → delete) against the
 UDM's current Network release — the resource is experimental and
 targets UniFi OS ≥9, and a failure here flips the rules to the
 device-files provider's `UnifiFirewallPolicy` fallback
-(architecture.md §5.1) — plus the legacy port-forward endpoint still
-accepting writes on a zone-firewall controller. Both are one probe on
-scratch objects, run on any day before the window
+(architecture.md §5.1). The same probe checks the legacy port-forward
+endpoint still accepting writes on a zone-firewall controller, which
+the window itself never exercises: the one declared forward is first
+written in Wave D, once qbittorrent runs on the worker
+([physical/gateway.md](../physical/gateway.md) §4.2). The probe runs
+on scratch objects, on any day before the window
 ([physical/gateway-cutover.md](../physical/gateway-cutover.md) §3).
 
 Security verifications (from the 2026-08-23 audit,

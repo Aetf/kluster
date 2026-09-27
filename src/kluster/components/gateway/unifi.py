@@ -41,15 +41,19 @@ the controller that is not declared here is drift.
     subpopulation is carved out.
 5.  **The inbound IPv6 pinhole** for the bulk-transfer application's peer
     port, to the worker VM's global address, in the cluster zone because the
-    worker sits on the cluster VLAN. The one rule of the census that is
-    conditional: the address is a SLAAC address the worker forms from what the
-    VLAN declared here advertises, so it does not exist until the worker has
-    booted on that VLAN. With no address to name, the rule is not declared and
-    v6 is outbound-only — the same degraded stage a stale rule leaves behind,
-    and an accepted one.
+    worker sits on the cluster VLAN. Conditional on the address: it is a SLAAC
+    address the worker forms from what the VLAN declared here advertises, so it
+    does not exist until the worker has booted on that VLAN. With no address to
+    name, the rule is not declared and v6 is outbound-only — the same degraded
+    stage a stale rule leaves behind, and an accepted one.
 6.  **The IPv4 peer-port forward** — the only port forward on the device.
     Nothing else is published inbound: cluster and node management arrive
     over the cloud load balancer, home-side management over ZeroTier.
+    Conditional on the application: the WAN port is one the legacy host's
+    copy of the application holds until it moves onto the worker, so the
+    forward is declared only once it runs there. Declared earlier, it would
+    either collide with whatever holds the port today or take the legacy
+    host's inbound IPv4 away with nothing reporting it.
 
 Every zone pair that carries a policy also carries a
 `FirewallZonePolicyOrder`: a policy declared without one takes whatever
@@ -193,7 +197,10 @@ class SiteFirewall(Component):
 
     The pinhole for the worker's global IPv6 address is the one conditional
     policy: it names an address nothing here declares, so it exists only while
-    `worker_gua` does. Every other policy is unconditional. Each policy is a
+    `worker_gua` does. Every other policy is unconditional. The peer's IPv4
+    forward is conditional too, on `peer_on_worker`: it takes a WAN port the
+    legacy host's copy of the application holds until the application runs on
+    the worker, so it exists only once that is so. Each policy is a
     `unifi.FirewallZonePolicy` below, and each zone pair's policies are
     followed by the one `unifi.FirewallZonePolicyOrder` that ranks them.
 
@@ -213,6 +220,7 @@ class SiteFirewall(Component):
         api_url: str,
         site: str,
         worker_gua: pulumi.Input[str] | None,
+        peer_on_worker: bool = False,
         static_hosts: Mapping[str, IPv4Address | IPv6Address],
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
@@ -543,21 +551,32 @@ class SiteFirewall(Component):
         # it — because that is the address the application's outbound peer
         # traffic already wears: the cluster masquerades it to the node, so
         # inbound has to arrive there for a peer to see one endpoint rather
-        # than two. Unconditional where the v6 half is not, for that same
-        # reason: this address is stated by the address plan rather than
-        # observed off a booted machine.
-        self.peer_v4 = unifi.PortForward(
-            f'{name}-peer-v4',
-            name=f'{conventions.CLUSTER_NAME} inbound peer port (v4)',
-            port_forward_interface='wan',
-            protocol='tcp_udp',
-            src_ip='any',
-            dst_port=str(conventions.QBITTORRENT_PEER_PORT),
-            fwd_ip=str(conventions.HOMELAB_NODE_IPV4),
-            fwd_port=str(conventions.QBITTORRENT_PEER_PORT),
-            site=site,
-            opts=child,
-        )
+        # than two. The address is stated by the address plan rather than
+        # observed off a booted machine, so it never waits for the worker.
+        #
+        # What it waits for is the application. A WAN port forwards to one
+        # host at a time, and until the application moves onto the worker its
+        # legacy copy on the host holds this one by whatever mechanism it uses
+        # today, a UPnP lease or a rule kept by hand. A
+        # forward declared then either collides with that rule or wins over
+        # the lease and takes the legacy copy's inbound IPv4 away, and nothing
+        # reports either. So the forward is declared only once the stack says
+        # the application runs on the worker, and moving the port is a step of
+        # the application's own migration (cluster/migration.md, Wave D).
+        self.peer_v4: unifi.PortForward | None = None
+        if peer_on_worker:
+            self.peer_v4 = unifi.PortForward(
+                f'{name}-peer-v4',
+                name=f'{conventions.CLUSTER_NAME} inbound peer port (v4)',
+                port_forward_interface='wan',
+                protocol='tcp_udp',
+                src_ip='any',
+                dst_port=str(conventions.QBITTORRENT_PEER_PORT),
+                fwd_ip=str(conventions.HOMELAB_NODE_IPV4),
+                fwd_port=str(conventions.QBITTORRENT_PEER_PORT),
+                site=site,
+                opts=child,
+            )
 
         self.static_hosts = {
             host: unifi.DnsRecord(

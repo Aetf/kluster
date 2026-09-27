@@ -1708,7 +1708,7 @@ on a pair holding both a drop and an allow the position *is* the rule.
     urgent.
 
     **The address is configuration, and `workerGua` is optional** —
-    the one conditional rule of the census. The GUA is a SLAAC
+    the one conditional *policy* of the census. The GUA is a SLAAC
     address the worker forms from what the VLAN declared here
     advertises, so it comes into being one boot *after* the apply
     that declares the VLAN, and no first apply can be given it. With
@@ -1716,12 +1716,26 @@ on a pair holding both a drop and an allow the position *is* the rule.
     outbound-only-v6 stage a stale rule leaves behind, reached from
     the other side and with nothing wrong pointed at. Step 3 of the
     bring-up ceremony (§2.5) is where it gets set. The v4 peer-port
-    forward below is unconditional either way: it names an address the
+    forward below does not wait for it: it names an address the
     address plan states rather than one a booted machine reports.
 6.  **qbittorrent v4 peer-port forward** — target the worker at
     `192.168.70.10`, and **the only port forward on the device**. No
     management inbound exists: cluster and Talos management ride the
     NLB, home-side management rides the overlay.
+
+    **Declared only once qbittorrent runs on the worker**, which the
+    optional `qbittorrentOnWorker` key says. Until qbittorrent's own
+    migration wave the legacy qbittorrent on the homelab host holds
+    the peer port's WAN side, by whatever holds it today — a UPnP
+    lease or a hand-kept forward. A forward declared beside that
+    either collides with the hand-kept rule, a failed resource inside
+    whichever apply declares it, or wins over the lease and takes the
+    legacy host's inbound v4 away with nothing reporting it. So with
+    the key unset — every apply before that wave, the gateway cutover
+    window's included — no forward is declared, and the port is left
+    to its holder. Moving it is a step of Wave D
+    (cluster/migration.md §2): read the console for what holds the
+    port, clear it, set the key, apply.
 
 Nothing else. A controller rule not on this census is drift.
 

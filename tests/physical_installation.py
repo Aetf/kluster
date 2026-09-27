@@ -53,15 +53,18 @@ DIGEST = f'sha256:{"f" * 64}'
 ROOTFS_TAG = '7'
 
 #: What the gateway reads out of stack configuration: two secrets a file's
-#: content is rendered from, the controller's key, and one measurement. Every
-#: value here is invented; what the test is for is that the keys line up and the
-#: values reach the right resource.
+#: content is rendered from, the controller's key, one measurement, and the
+#: flag that says qbittorrent has moved onto the worker. Every value here is
+#: invented; what the test is for is that the keys line up and the values reach
+#: the right resource. The two optional keys are both set, so the run declares
+#: the whole census; the cases about either one's absence remove it.
 GATEWAY_CONFIG = {
     'kluster:gatewayPrivateKey': '-----BEGIN OPENSSH PRIVATE KEY-----\nexample\n',
     'kluster:gatewayBgpPassword': 'a-session-password',
     'kluster:gatewayAcmeToken': 'a-zone-scoped-token',
     'kluster:unifiApiKey': 'a-controller-key',
     'kluster:workerGua': WORKER_GUA,
+    'kluster:qbittorrentOnWorker': 'true',
     'kluster:zerotierApiToken': 'a-central-token',
 }
 

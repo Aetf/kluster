@@ -79,10 +79,12 @@ owns sequencing, data movement, and teardown.
     under the declared paths — procedure, verification and rollback:
     physical/gateway-cutover.md. **The controller-side verifications
     come before that window, not after `k8s-base`**: the zone-policy
-    round trip and the port-forward write (declarative/physical.md §6)
-    are first exercised by the window's own apply, so they run as a
-    probe on scratch objects on some day before it, beside the probe of
-    the device's image pull (physical/gateway-cutover.md §3). `dns` up:
+    round trip (declarative/physical.md §6) is first exercised by the
+    window's own apply, so it runs as a probe on scratch objects on some
+    day before it, beside the probe of the device's image pull
+    (physical/gateway-cutover.md §3). The same probe writes a scratch
+    port forward, whose real counterpart is first written in Wave D
+    rather than in the window (physical/gateway.md §4.2). `dns` up:
     zones + base records imported wholesale (records still pointing at
     `archvps.hosts`; the import census also drops dead weight —
     `abacus.hosts`, its overlay entry, jupyter/mc records).
@@ -138,7 +140,16 @@ the VPS empties progressively):
 -   **Wave D — host-native onboarding**: qbittorrent-nox
     (`/var/lib/qBittorrent` profile copy; verify seedwatch category
     paths and hardlink counts survive; outbound-v6 via masquerade
-    first, inbound pinhole later) + seedwatch together.
+    first, inbound pinhole later) + seedwatch together. **The v4 peer
+    port moves with it.** Until this wave the legacy qbittorrent holds
+    the port's WAN side and `physical` declares no forward for it
+    (physical/gateway.md §4.2), so the move is: read the console for
+    what holds the port (the port-forward list, and the UPnP lease
+    table); stop the legacy qbittorrent and delete a hand-kept forward
+    if one exists; turn UPnP off in the copied profile, since the
+    declared forward is the mechanism from here on; then
+    `pulumi config set qbittorrentOnWorker true --stack physical` and
+    apply `physical`, whose plan creates the forward to the worker.
 -   **Wave E — hath, deliberately last of the apps**: hath is the
     highest-stakes workload (global-archive data, IP re-registration,
     strict downtime cap), so it moves only after the cluster has run

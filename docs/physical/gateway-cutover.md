@@ -223,9 +223,12 @@ not moved.
 -   **The controller round-trips the firewall's resource shapes.**
     Step 3 is otherwise the first time the bridged filipowm/unifi
     provider writes to this controller: the targeted apply creates the
-    cluster zone, the zone policies and their orders, and the port
-    forward (gateway.md §4.2). The zone-policy resource is marked
-    experimental upstream, and whether it round-trips — create, a clean
+    cluster zone and the zone policies and their orders (gateway.md
+    §4.2). It creates no port forward: the census's one forward waits
+    for qbittorrent to move onto the worker, and the legacy host's
+    hold on that port is untouched by the window. The zone-policy
+    resource is marked experimental upstream, and whether it
+    round-trips — create, a clean
     preview, delete — decides which provider declares the rules
     (declarative/physical.md §6). A window that finds out has already
     moved the machines' state, so the answer comes from scratch objects
@@ -402,14 +405,16 @@ not moved.
     -   **The forward refused.** A refusal of the request itself is the
         port-forward endpoint not taking writes on this release, and
         the fallback above is for zone policies only: nothing in the
-        design answers it, so it is filed for a ruling before the
-        window. A refusal that names the destination as outside every
-        network is the controller wanting the cluster VLAN in place
-        first, which the window's run does not arrange — the component
-        gives the forward no dependency on the network — so the
-        component changes before the window. A refusal naming a
-        conflict with an existing forward is the probe's port choice,
-        not the endpoint.
+        design answers it, so it is filed for a ruling before Wave D,
+        the first apply that writes the forward — the window's run
+        declares none. A refusal that names the destination as outside
+        every network is the controller wanting the cluster VLAN in
+        place first. The forward's first apply comes waves after the
+        window has made the network, so this one blocks nothing; it is
+        still filed, because the component gives the forward no
+        dependency on the network, and an apply that declares both at
+        once would meet it. A refusal naming a conflict with an
+        existing forward is the probe's port choice, not the endpoint.
     -   **The program fails before any row is planned.** That is the
         probe's own setup — the `.venv`, the configuration — and
         says nothing about the controller.
