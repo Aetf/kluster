@@ -28,11 +28,9 @@ runs:
     # did not sign. Neither the release nor the key changes without a pull
     # request (framework/ci.md §3).
     #
-    # The release stays at 1.14 or later: the flow rules that confine the CI
-    # member (physical/gateway.md §2.3) rely on rule-engine behavior ZeroTier
-    # has from 1.14 on, and a test holds the floor. A custom manager in
-    # `renovate.json5` reads the release off ZeroTier's apt repository, for
-    # the suite named here, and a test holds the two suites equal.
+    # A custom manager in `renovate.json5` reads the release off ZeroTier's
+    # apt repository, for the suite named here, and a test holds the two
+    # suites equal.
     - name: Install ZeroTier
       shell: bash
       env:
@@ -77,9 +75,10 @@ runs:
         sudo systemctl start zerotier-one
         sudo zerotier-cli join ${{ inputs.network_id }}
 
-    # The flow rules drop the first packets while tag credentials are still
-    # being exchanged, and a fresh runner needs a moment to find a path, so
-    # readiness is asserted against the actual dependency rather than assumed.
+    # The flow rules drop a run's first packets until the peer's certificate
+    # of ownership has arrived (`chr ipauth`, physical/gateway.md §2.3), and a
+    # fresh runner needs a moment to find a path, so readiness is asserted
+    # against the actual dependency rather than assumed.
     - name: Wait for the target
       if: inputs.wait_for != ''
       shell: bash

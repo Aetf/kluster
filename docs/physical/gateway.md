@@ -866,8 +866,8 @@ the overlay leaves both together.
 a census rather than a list. A node id is minted by the device and
 never changes, so it is an identity rather than a setting, and it is
 recorded here beside the address; there is no configured mapping to
-cross-check the roster against, and no way for the tag's permissive
-default (§2.3) to reach anything undeclared. Two shapes carry that:
+cross-check the roster against, and nothing undeclared joins to reach
+the final `accept` (§2.3). Two shapes carry that:
 `EnrolledMember` for a device that arrived with an identity,
 `GeneratedMember` for the two whose key material this program creates
 in state — so a generated member with a node id written down is a
@@ -903,7 +903,7 @@ device being renamed in Central.
 | `Aetf-Arch-VPS` | `infra` | The legacy deployment. Retires in Wave F together with its `10.42.0.0/24` route. |
 | `haos` | `infra` | Home automation, reachable while the cluster is not. |
 | `ci-physical` | `ci` | The `physical` stack's identity: `plan-physical`, `up-physical`, and the drift matrix's `physical` entry join with it. Identity generated in state (`zerotier_identity`), private key an Environment secret; `zt-physical` keeps it live in one job at a time (§2.6). IPv4-only (§2.3). |
-| `ci-dns` | `ci` | The `dns` stack's identity: `up-dns`, a pull request's `preview (dns)` and `prove (dns)`, and the drift matrix's `dns` entry join with it — the LAN-touching work is the AdGuard rewrites (declarative/dns.md §3). Same generation and confinement, serialized by `zt-dns` (§2.6). IPv4-only (§2.3). |
+| `ci-dns` | `ci` | The `dns` stack's identity: `up-dns`, a pull request's `preview (dns)` and `prove (dns)`, and the drift matrix's `dns` entry join with it — the LAN-touching work is the AdGuard rewrites (declarative/dns.md §3). Same generation, its own confinement (§2.3), serialized by `zt-dns` (§2.6). IPv4-only (§2.3). |
 | Personal devices | `personal` | Phones and laptops, each named in the roster. Full access — parity with sitting on the LAN. Whether a device applies the network's managed DNS (§2.7) is its own `allowDNS` setting, decided on the device: not a roster field, because the controller can neither read nor set it. |
 
 ### 2.2 Managed routes
@@ -972,60 +972,73 @@ its own ICMPv6 neighbor discovery. Nothing on the overlay is reachable
 over v6 that is not reachable over v4, so the single-family overlay
 costs nothing and is what makes the confinement complete.
 
-### 2.3 Flow rules — confining the CI member
+### 2.3 Flow rules — confining the CI members
+
+Each continuous-integration identity reaches what its own stack calls
+and nothing else: `ci-physical` the UDM's SSH (the device-files push),
+the UDM's UniFi Network API (443, the UniFi OS proxy — the unifi
+provider's controller calls, declarative/physical.md §4) and the
+homelab host's SSH (the libvirt session); `ci-dns` the two AdGuard
+APIs (the rewrites, `components/dns/rewrites.py`). One leaking buys
+neither the LAN nor the other's reach.
 
 Facts about the rules engine that shape the draft (docs.zerotier.com
-/rules; quirks from ZeroTierOne #2200):
+/rules; ZeroTierOne 1.16 `node/Network.cpp`; quirks from ZeroTierOne
+#2200):
 
 -   **Evaluation is distributed and stateless**: every packet is
     evaluated independently at both sender and receiver; there is no
     connection tracking, so each allowed flow needs its **return-leg
     mirror rule** (dport on the outbound leg becomes sport on the
     reply).
--   **`tseq`/`treq`** match the *sender's* / *receiver's* tag value
-    alone — the primitive for "this member is CI", with no dependence
-    on the other end's tag (the bitwise matchers `tand`/`tor`/`txor`
-    combine both ends' values and are wrong for this).
+-   **`ztsrc`/`ztdest` match the node address of the packet's two
+    ends**, and the draft names each confined identity by them. At a
+    receiver, `ztsrc` is the peer the packet is authenticated as and
+    `ztdest` the receiver itself. At a sender, `ztsrc` is the sender and
+    `ztdest` comes from the frame's destination: a multicast is
+    filtered once with no receiver, where `ztdest` matches nothing, and
+    then once per recipient. Nothing a member sends or withholds
+    changes either.
+-   **A tag cannot confine a member that does not cooperate.** A tag is
+    a credential the member pushes to its peers, and a peer admits a
+    member on its certificate of membership alone, so a member that
+    never pushes its tag is judged with that tag unknown: a `tseq`
+    rule fails at the receiver, and from ZeroTier 1.14 a sender skips a
+    drop that matched only on an unknown `treq` (`skipDrop`). A holder of a leaked CI
+    identity who withholds the tag would pass every tag-keyed drop and
+    reach the final `accept`. The draft therefore has no tag matcher at
+    all; the `role` tag says what a member is, for Central's display
+    and the roster, and decides nothing.
 -   **Routed traffic keeps its pre-forward destination**: a packet for
     a LAN host rides the overlay with ethernet dst = the UDM member but
     IP dst = the LAN address, so `ipdest` matches LAN CIDRs directly.
     (Confirmed by the engine model; still on the §2.4 checklist.)
--   **#2200 quirks, designed around**: when one end's tags are not yet
-    known the evaluator force-matches tag rules (first packets may hit
-    the CI drop until the credential exchange lands — a transient,
-    retried by TCP; accepted); `not` combined with tag or IP/port
+-   **#2200, designed around**: `not` combined with tag or IP/port
     matchers inverts missing-information zeros and misfires across
     address families — **the draft uses positive matches only** (the
     stock ethertype base filter is the sole exception, it predates and
     survives the quirk). ARP whose sender holds the address it claims
-    is accepted ahead of every IP and tag matcher; only ARP that fails
-    that check reaches a tag matcher, the two ARP drops below.
+    is accepted ahead of every IP and node-address matcher; only ARP
+    that fails that check reaches the ARP drops below.
 -   **`chr ipauth` is the engine's address-ownership check**: it holds
     when the packet's sender address — the IPv4 source, or an ARP
     packet's sender address — is covered by the certificate of ownership
     the network controller issues each member for the addresses
     assigned to it. The receiver judges it against the sender's
-    certificate, not the sender's word. A missing certificate drops
-    where a missing tag does not: a run drops the UDM's ARP until the
-    UDM's certificate has arrived. The UDM pushes it, with its tags and
+    certificate, not the sender's word. A missing certificate drops:
+    a run drops the UDM's ARP until the UDM's certificate has arrived. The UDM pushes it, with its tags and
     its membership certificate, ahead of its first frame to the run, so
     the gap is bounded and the run's next ARP retry recovers (§2.4
     item 4). A reply the UDM
     forwards from a LAN host carries an address no member holds, so a
     network-wide check (the documentation's `not chr ipauth` example)
     would cut every routed reply; the draft scopes it instead.
--   **The draft needs ZeroTier 1.14 or later on every member.** From
-    1.14.0 a sender that does not yet know its receiver's tag skips a
-    drop that matched only for that reason (`skipDrop`) rather than
-    applying it. A broadcast ARP is filtered at its sender with no
-    receiver at all, so before 1.14 `drop ethertype arp and treq role 2`
-    dropped, at any sender, every broadcast ARP whose sender address was
-    not its own, and `drop treq role 2` every personal multicast. The
-    UDM's image and the homelab host run 1.16, and CI installs the
-    current release.
 
 Draft (`flow_rules` string on the `zerotier_network` resource; IP and
-port literals come from `conventions`):
+port literals come from `conventions`, and the two node addresses are
+the ones `Overlay` mints for the CI identities, rendered into the
+program by the component — `test_flow_rules` holds this block equal to
+the rendered program):
 
 ```text
 tag role
@@ -1044,37 +1057,47 @@ drop
 ;
 
 # ARP: a sender that holds the address it claims passes; any other
-# ARP is dropped where a CI member sends or receives it.
+# ARP is dropped where a CI identity sends or receives it.
 accept ethertype arp and chr ipauth;
-drop ethertype arp and tseq role 2;
-drop ethertype arp and treq role 2;
+drop ethertype arp and ztsrc  <ci-physical-node>;
+drop ethertype arp and ztdest <ci-physical-node>;
+drop ethertype arp and ztsrc  <ci-dns-node>;
+drop ethertype arp and ztdest <ci-dns-node>;
 accept ethertype arp;
 
-# CI confinement: four targets, each flow as outbound leg + return leg.
-# Targets: UDM SSH (the device-files push), the UDM's UniFi Network API
-# (443, the UniFi OS proxy — the unifi provider's controller calls,
-# declarative/physical.md §4), the AdGuard APIs (alice/bob),
-# the homelab host's libvirt SSH. A run sends only from its own
-# address; a reply from a member's address passes only from that
-# member. The AdGuard replies are routed, from addresses no member
-# holds, so their return leg carries no ownership check.
-accept tseq role 2 and ipdest <udm-zt-ip>/32      and dport 22            and chr ipauth;
-accept treq role 2 and ipsrc <udm-zt-ip>/32      and sport 22            and chr ipauth;
-accept tseq role 2 and ipdest <udm-zt-ip>/32      and dport <unifi-api>   and chr ipauth;
-accept treq role 2 and ipsrc <udm-zt-ip>/32      and sport <unifi-api>   and chr ipauth;
-accept tseq role 2 and ipdest <adguard-addrs>    and dport <adguard-api> and chr ipauth;
-accept treq role 2 and ipsrc <adguard-addrs>     and sport <adguard-api>;
-accept tseq role 2 and ipdest <homelab-host>/32  and dport 22            and chr ipauth;
-accept treq role 2 and ipsrc <homelab-host>/32   and sport 22            and chr ipauth;
-drop tseq role 2;
-drop treq role 2;
+# CI confinement: each identity, by node address, reaches its own
+# stack's targets, each flow as outbound leg + return leg. A run sends
+# only from its own address; a reply from a member's address passes
+# only from that member. The AdGuard replies are routed, from
+# addresses no member holds, so their return leg carries no ownership
+# check.
+
+# ci-physical: UDM SSH, the UDM's UniFi Network API, the homelab host's SSH
+accept ztsrc  <ci-physical-node> and ipdest <udm-zt-ip>/32     and dport 22          and chr ipauth;
+accept ztdest <ci-physical-node> and ipsrc  <udm-zt-ip>/32     and sport 22          and chr ipauth;
+accept ztsrc  <ci-physical-node> and ipdest <udm-zt-ip>/32     and dport <unifi-api> and chr ipauth;
+accept ztdest <ci-physical-node> and ipsrc  <udm-zt-ip>/32     and sport <unifi-api> and chr ipauth;
+accept ztsrc  <ci-physical-node> and ipdest <homelab-host>/32  and dport 22          and chr ipauth;
+accept ztdest <ci-physical-node> and ipsrc  <homelab-host>/32  and sport 22          and chr ipauth;
+
+# ci-dns: the AdGuard APIs (alice, bob)
+accept ztsrc  <ci-dns-node> and ipdest <adguard-alice>/32 and dport <adguard-api> and chr ipauth;
+accept ztdest <ci-dns-node> and ipsrc  <adguard-alice>/32 and sport <adguard-api>;
+accept ztsrc  <ci-dns-node> and ipdest <adguard-bob>/32   and dport <adguard-api> and chr ipauth;
+accept ztdest <ci-dns-node> and ipsrc  <adguard-bob>/32   and sport <adguard-api>;
+
+# nothing else from a CI identity, and nothing towards one
+drop ztsrc  <ci-physical-node>;
+drop ztdest <ci-physical-node>;
+drop ztsrc  <ci-dns-node>;
+drop ztdest <ci-dns-node>;
 
 # personal + infra: unrestricted (LAN-posture parity)
 accept;
 ```
 
-The `drop treq role 2` line also means nothing may *initiate* toward a
-CI member — it is a client only.
+The `drop ztdest` lines also mean nothing may *initiate* toward a CI
+identity — it is a client only.
 
 **Where a run is involved, a member speaks only for its own
 addresses.** The unifi provider does not verify the controller's
@@ -1086,16 +1109,20 @@ run's ARP for `<udm-zt-ip>` — which would also put it on the path of
 the routed AdGuard calls, whose replies no ownership check can cover —
 nor reply to a run from that address. Traffic with no run at either end
 keeps the LAN's posture, spoofing included, as the final `accept`
-gives it. The permissive `default 0` is why the
-roster discipline in §2.1 exists: an undeclared member would default to
-`personal`, but membership itself is Pulumi-gated (a member the roster
-doesn't authorize never joins), so the default is unreachable in
-practice.
+gives it. A member the rules do not name has the final `accept`'s
+reach, which is why the roster discipline in §2.1 exists: membership is
+Pulumi-gated (a member the roster doesn't authorize never joins), and
+the program names every CI identity the roster carries, which the
+suite holds. A rotated CI identity's old member record is deleted
+before its successor is created (the member's `replace_on_changes` and
+`delete_before_replace`), because the rules name only the node
+addresses they are rendered over, and an old record left authorized
+would be a member no rule confines.
 
 **Personal traffic and local discovery are untouched.** The overlay is also
 the personal devices' network segment, so the rules must not break
 LAN-style behavior between them — and they don't: every drop above
-names a `ci`-tagged endpoint, and the one accept that names none passes
+names a CI identity's node address, and the one accept that names none passes
 only ARP whose sender holds its address; all other ARP reaches
 `accept ethertype arp`, and all other traffic falls through to the
 final `accept`. Multicast discovery (mDNS to `224.0.0.251` /
@@ -1108,13 +1135,10 @@ discovery *does* depend on, declared rather than assumed:
     `multicast_limit` ≥ the roster size (the default 32 is ample
     today; the constraint is recorded, so roster growth cannot
     silently break discovery).
--   **The CI member stays IPv4-only**: its `drop` pair would eat its
-    own ICMPv6 neighbor discovery if it ever received a v6
+-   **The CI members stay IPv4-only**: each one's `drop` pair would eat
+    its own ICMPv6 neighbor discovery if it ever received a v6
     assignment — a constraint on the roster entry, not a rule
     change.
--   The #2200 first-packet transient (above) applies to any member
-    pair until tags are exchanged, multicast included; mDNS/SSDP
-    re-announce periodically, so discovery self-heals.
 
 **Boundary fact**: discovery across the overlay↔LAN boundary does not
 work and never did — link-local multicast does not cross a routed
@@ -1129,18 +1153,22 @@ forwards them on default ACCEPT (architecture.md §5.3).
 
 ### 2.4 Verification (test network, before cutover)
 
-Run against a scratch ZeroTier network with the same rules and a throwaway
-`ci`-tagged member:
+Run against a scratch ZeroTier network with the same rules, rendered
+over the node addresses of two throwaway `ci`-tagged members — one
+standing for each CI identity:
 
-1.  CI member reaches exactly its four targets (SSH banner / API
-    response), including the **return leg** (rules are stateless — a
-    working handshake proves both directions).
-2.  CI member cannot ping or reach any other LAN address through the
-    routes, and cannot reach a `personal` member directly.
+1.  Each CI member reaches exactly its own identity's targets (SSH
+    banner / API response) — the `ci-physical` stand-in the UDM's SSH
+    and UniFi API and the homelab host's SSH, the `ci-dns` stand-in
+    both AdGuard APIs — including the **return leg** (rules are
+    stateless — a working handshake proves both directions).
+2.  No CI member can ping or reach any other LAN address through the
+    routes, or reach a `personal` member directly.
 3.  `ipdest` LAN-CIDR matching on routed (pre-forward) destinations
     behaves as modeled.
-4.  First-packet behavior after a fresh join (the #2200 transient):
-    connection succeeds on retry within normal client timeouts.
+4.  First-packet behavior after a fresh join (a run's first ARP can
+    meet the UDM's before the UDM's certificate of ownership arrives,
+    §2.3): connection succeeds on retry within normal client timeouts.
 5.  Personal members are unaffected: full reachability, ARP/ND intact.
 6.  Local discovery between two personal members over the overlay (an mDNS
     query/response round trip) works with the rules applied —
@@ -1178,6 +1206,24 @@ Run against a scratch ZeroTier network with the same rules and a throwaway
         answers, where a program without the ARP drops shows both.
         `ip neigh` then shows the UDM's MAC, and the `curl` above still
         reaches the UDM.
+9.  **Each identity is confined by its node address, whatever its
+    tag says.**
+    -   From the `ci-dns` stand-in, `nc -vz -w 5 <udm-zt-ip> 22` and
+        `nc -vz -w 5 <homelab-host> 22` both time out, while the same
+        commands from the `ci-physical` stand-in connect; the `ci-dns`
+        stand-in's `curl -s http://<adguard-alice>/` still answers.
+    -   Then set the `ci-dns` stand-in's `role` tag to `personal` in
+        the scratch network's member settings and repeat the reads.
+        The tag it pushes now says `personal`, which leaves every
+        tag-keyed rule where a withheld tag would: `tseq role 2` fails
+        at the receiver, and `treq role 2` does not match at the
+        sender. So no modified client is needed to stand in for a
+        member that withholds its tag. The results are unchanged: the
+        stand-in still cannot open either shell and still reaches the
+        AdGuard APIs. Against a program with `drop tseq role 2` and
+        `drop treq role 2` in place of the node-address drops, the
+        same member opens the UDM's SSH, which is what makes the
+        reading able to fail.
 
 ### 2.5 First bring-up
 
@@ -1458,8 +1504,8 @@ containers on the gateway, not members, and a member reaches them
 through the managed route for the container VLAN via the gateway
 (§2.2), the reply returning because the gateway is that VLAN's
 default gateway. The flow rules do not stand in the way: they confine
-`ci`-tagged members only (§2.3), and those are Linux runners, on which
-the push is a no-op (below).
+the two continuous-integration identities only (§2.3), and those are
+Linux runners, on which the push is a no-op (below).
 
 **The push reaches every member and is inert on each until that member
 opts in.** The controller hands the block to every joined device the

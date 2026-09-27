@@ -257,9 +257,6 @@ def test_every_action_from_outside_this_repository_is_pinned_by_commit() -> None
 
 
 ZEROTIER = GITHUB / 'actions' / 'zerotier' / 'action.yml'
-#: The oldest ZeroTier release whose rule engine the flow rules confining the
-#: CI member are written for (physical/gateway.md §2.3).
-ZEROTIER_FLOOR = (1, 14)
 #: The custom manager's pattern for the release, as renovate.json5 holds it:
 #: renovate's regex engine spells a named group `(?<...>`.
 ZEROTIER_MATCH_STRING = "ZEROTIER_VERSION: '(?<currentValue>[^']+)'"
@@ -280,14 +277,12 @@ def test_zerotier_is_a_pinned_release_signed_by_a_pinned_key() -> None:
     The release is the package apt installs, and the fingerprint is the key
     apt is told to trust for the repository: the script exports only the key
     with that fingerprint into the keyring the source names, and refuses when
-    what it exported is not that key. A release below the floor would install
-    and join, and then the flow rules would not do what they say.
+    what it exported is not that key.
     """
     env, run = _zerotier_install()
 
     version = env['ZEROTIER_VERSION']
     assert re.fullmatch(r'\d+\.\d+\.\d+(?:-\d+)?', version), f'ZeroTier is not pinned to a release: {version!r}'
-    assert tuple(int(part) for part in version.split('.')[:2]) >= ZEROTIER_FLOOR
     assert '"zerotier-one=${ZEROTIER_VERSION}"' in run
 
     assert re.fullmatch(r'[0-9A-F]{40}', env.get('ZEROTIER_KEY_FINGERPRINT', '')), (

@@ -35,7 +35,11 @@ Four things are declared here, and each answers a different question
 -   **The flow rules** — what a member may do once admitted. They arrive as a
     parameter, because what confines a run is a fact about how continuous
     integration reaches this site rather than about the network, and this
-    component declares no policy (`flow_rules.py`).
+    component declares no policy (`flow_rules.py`). What arrives is a program
+    less the node addresses of the members it confines, because the rules name
+    a confined member by its node address and the generated identities' are
+    minted here; the component renders the program over the addresses of the
+    members it declares, and adds nothing else to it.
 -   **The managed DNS** — the one domain the network asks its members to
     resolve at home, and the resolvers that answer for it. It arrives as a
     parameter, from `conventions.overlay.MANAGED_DNS`, because the `dns` stack
@@ -46,8 +50,8 @@ Four things are declared here, and each answers a different question
 
 **The roster is the whole of admission.** A member is authorized because it has
 an entry, and the entry carries the node id that says which device it is — so
-there is nothing to cross-check and no way for the role tag's permissive default
-to reach anything undeclared. The gateway is the one member the roster can be
+there is nothing to cross-check, and nothing undeclared joins to reach the rules'
+final `accept`. The gateway is the one member the roster can be
 missing, because a ZeroTier identity is minted by the daemon's first run and
 that daemon is a container the gateway delivers; while the entry is absent no
 member is declared for it, and the ceremony that reads the minted id adds the
@@ -70,7 +74,8 @@ over v6 that it cannot reach over v4.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from typing import Protocol
 
 import pulumi
 import pulumi_zerotier as zerotier
@@ -78,7 +83,7 @@ import pulumi_zerotier as zerotier
 from kluster import conventions
 from putils import Component, own_provider_opts, with_provider
 
-__all__ = ('API_TOKEN', 'MULTICAST_LIMIT', 'Overlay')
+__all__ = ('API_TOKEN', 'MULTICAST_LIMIT', 'Overlay', 'RuleProgram')
 
 #: The largest number of recipients a multicast or broadcast reaches. It has to
 #: be at least the size of the roster or local discovery quietly stops finding
@@ -91,6 +96,24 @@ MULTICAST_LIMIT = 32
 API_TOKEN = 'zerotierApiToken'
 
 
+class RuleProgram(Protocol):
+    """A rule program whose only open parameter is the node address of each member it names.
+
+    The caller decides everything the program says; the component supplies the
+    one fact it alone holds, the node address of each member it declares.
+    `flow_rules.FlowRules` is the program the stack hands in.
+    """
+
+    @property
+    def members(self) -> Sequence[str]:
+        """The roster names whose node addresses the program is rendered over."""
+        ...
+
+    def render(self, node_ids: Mapping[str, str]) -> str:
+        """The program text, given the node address of each member it names."""
+        ...
+
+
 class Overlay(Component):
     """The overlay's configuration and its whole membership.
 
@@ -98,7 +121,9 @@ class Overlay(Component):
     network is adopted by, and an adoption cannot wait on a computation.
     `flow_rules` is the rule program the network carries, composed by the
     caller: what a member may do once admitted is not this component's
-    decision (rfc-002 §6).
+    decision (rfc-002 §6). The component renders it over the node address of
+    each member it names, which for a generated identity is an output of the
+    identity minted here, and that substitution is all it does to it.
 
     `roster` and `managed_routes` are the censuses this component turns into
     resources, and both arrive from the caller: a component receives the census
@@ -115,12 +140,19 @@ class Overlay(Component):
         name: str,
         *,
         network_id: str,
-        flow_rules: str,
+        flow_rules: RuleProgram,
         roster: Sequence[conventions.overlay.RosterEntry],
         managed_routes: Sequence[conventions.overlay.ManagedRoute],
         dns: conventions.overlay.ManagedDns,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
+        # A member the program names and the roster does not carry would have
+        # no node address to render, so it is refused by name before anything
+        # is declared rather than rendered as a member with no rules.
+        unknown = [member for member in flow_rules.members if member not in {entry.name for entry in roster}]
+        if unknown:
+            raise ValueError(f'the flow rules name {unknown}, which the overlay roster does not carry')
+
         # A provider of its own: this token administers the whole ZeroTier
         # account, Central minting nothing smaller, so the resources it may
         # reach are exactly the ones below — and it is read here, at the line
@@ -140,6 +172,20 @@ class Overlay(Component):
         self.provider = provider
 
         child = self.child_opts()
+
+        # Generated identities first: neither a member nor a rule naming one
+        # can be declared before the node it names has an identifier.
+        self.identities = {
+            entry.name: zerotier.Identity(f'{name}-identity-{entry.name}', opts=child)
+            for entry in roster
+            if isinstance(entry, conventions.overlay.GeneratedMember)
+        }
+
+        # The program, rendered over the node address of each member it names.
+        node_ids = {entry.name: self._node_id(entry) for entry in roster}
+        rules = pulumi.Output.all(**{member: node_ids[member] for member in flow_rules.members}).apply(
+            flow_rules.render
+        )
 
         # The network predates this program and is addressed by id, so the
         # first deployment adopts it rather than creating a second one that
@@ -174,7 +220,7 @@ class Overlay(Component):
                 zerotier.NetworkRouteArgs(target=str(route.target), via=None if route.via is None else str(route.via))
                 for route in managed_routes
             ],
-            flow_rules=flow_rules,
+            flow_rules=rules,
             # One element, declared as one object: the provider folds every
             # element of this list into the network's single DNS setting, so a
             # second element would overwrite the first rather than add a
@@ -184,14 +230,6 @@ class Overlay(Component):
             opts=pulumi.ResourceOptions.merge(child, pulumi.ResourceOptions(import_=network_id, protect=True)),
         )
 
-        # Generated identities first: a member cannot be declared before the
-        # node it authorizes has an identifier.
-        self.identities = {
-            entry.name: zerotier.Identity(f'{name}-identity-{entry.name}', opts=child)
-            for entry in roster
-            if isinstance(entry, conventions.overlay.GeneratedMember)
-        }
-
         # One member per entry, and no entry is skipped: a device with no
         # identity to authorize has no entry either, which is the state the
         # gateway is in until the ceremony records the id its daemon minted.
@@ -199,17 +237,19 @@ class Overlay(Component):
 
         self.register_outputs({})
 
+    def _node_id(self, entry: conventions.overlay.RosterEntry) -> pulumi.Input[str]:
+        """The node address a roster entry stands for: minted here, or recorded on the entry."""
+        if isinstance(entry, conventions.overlay.GeneratedMember):
+            return self.identities[entry.name].identity_id
+        return entry.node_id
+
     def _declare(
         self,
         name: str,
         entry: conventions.overlay.RosterEntry,
         opts: pulumi.ResourceOptions,
     ) -> zerotier.Member:
-        node_id: pulumi.Input[str] = (
-            self.identities[entry.name].identity_id
-            if isinstance(entry, conventions.overlay.GeneratedMember)
-            else entry.node_id
-        )
+        node_id = self._node_id(entry)
         return zerotier.Member(
             f'{name}-member-{entry.name}',
             network_id=self.network.network_id,
@@ -224,5 +264,14 @@ class Overlay(Component):
             no_auto_assign_ips=True,
             ip_assignments=[str(entry.address)],
             tags=[[conventions.overlay.TAG_ROLE_ID, entry.role]],
-            opts=opts,
+            # A new node id is a new member, and the old one's record goes
+            # first. The provider updates `member_id` in place, which would
+            # authorize the new node and leave the old one's record authorized
+            # and out of state; and the flow rules name only the node ids they
+            # are rendered over, so a rotated-out CI identity's record would be
+            # an authorized member no rule confines. Deleting before creating
+            # is what makes rotating a leaked identity remove it.
+            opts=pulumi.ResourceOptions.merge(
+                opts, pulumi.ResourceOptions(replace_on_changes=['memberId'], delete_before_replace=True)
+            ),
         )

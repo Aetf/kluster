@@ -16,12 +16,13 @@ from __future__ import annotations
 
 import inspect
 import re
-from collections.abc import Iterable
-from dataclasses import replace
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from ipaddress import IPv4Address
-from typing import Any
+from typing import Any, final
 
 import pulumi
+import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
 
@@ -35,11 +36,25 @@ API_TOKEN = 'a-central-token'
 NETWORK = 'zerotier:index/network:Network'
 MEMBER = 'zerotier:index/member:Member'
 
+
+@final
+@dataclass(frozen=True)
+class Program:
+    """A rule program that says nothing but which node address it was rendered over, for whom."""
+
+    members: Sequence[str]
+
+    def render(self, node_ids: Mapping[str, str]) -> str:
+        return ''.join(f'# {name}\naccept ztsrc {node_ids[name]};\n' for name in self.members) + 'accept;\n'
+
+
 #: The rule program the fixture hands the component. It is a sentinel rather
 #: than the real thing: what these cases are about is that the component
-#: carries what it is given and composes nothing, and the program's own content
-#: is `test_flow_rules.py`'s subject.
-RULES = '# handed in, not composed\naccept;\n'
+#: carries what it is given, filled in with the node addresses of the members
+#: it names and composed no further, and the program's own content is
+#: `test_flow_rules.py`'s subject. It names a generated member, whose address
+#: the component mints, and an enrolled one, whose address the roster records.
+RULES = Program(members=(conventions.overlay.MEMBER_CI_DNS, conventions.overlay.MEMBER_HOMELAB))
 
 #: The managed DNS the fixture hands the component, a sentinel for the same
 #: reason as `RULES`: the case is that the network carries the object it was
@@ -333,8 +348,40 @@ def test_the_network_carries_the_rules_it_was_handed_and_composes_none(stack: Ce
     site, not about ZeroTier, so it is composed where those facts live and
     passed in whole (rfc-002 §6). A component that reached for the roster or
     the resolver census itself would be a second place the policy is decided.
+    What the component adds is the one thing only it holds, the node address of
+    each member the program names: the one its identity resource minted for a
+    generated member, and the one the roster records for an enrolled one.
     """
-    assert stack.inputs_of(f'{NAME}-network')['flowRules'] == RULES
+    minted = f'{NAME}-identity-{conventions.overlay.MEMBER_CI_DNS}-node'
+    enrolled = conventions.overlay.member(conventions.overlay.MEMBER_HOMELAB)
+    assert isinstance(enrolled, conventions.overlay.EnrolledMember)
+
+    assert stack.inputs_of(f'{NAME}-network')['flowRules'] == RULES.render(
+        {conventions.overlay.MEMBER_CI_DNS: minted, conventions.overlay.MEMBER_HOMELAB: enrolled.node_id}
+    )
+
+
+def test_a_program_naming_a_member_the_roster_lacks_is_refused_before_anything_is_declared(
+    stack: Central,
+) -> None:
+    """A member with no node address would render as a member with no rules.
+
+    For a confined identity that is the fallthrough's reach, so the component
+    refuses the program by the name it could not place, and does so before its
+    first resource: a refused network leaves nothing half-declared behind.
+    """
+    declared = len(stack.names_declared)
+
+    with pytest.raises(ValueError, match='nobody-at-all'):
+        _ = overlay_module.Overlay(
+            'refused',
+            network_id=NETWORK_ID,
+            flow_rules=Program(members=('nobody-at-all',)),
+            roster=conventions.overlay.ROSTER,
+            managed_routes=conventions.overlay.MANAGED_ROUTES,
+            dns=DNS,
+        )
+    assert len(stack.names_declared) == declared
 
 
 def test_the_network_carries_the_managed_dns_it_was_handed_and_composes_none(stack: Central) -> None:
@@ -448,3 +495,26 @@ def test_every_resource_is_signed_by_the_overlays_own_provider(stack: Central) -
     assert overlay_resources, 'the fixture declared no overlay resources at all'
     for declaration in overlay_resources:
         assert f'{NAME}-zerotier' in declaration.provider, f'{declaration.name} is not signed by the provider'
+
+
+def test_a_member_whose_node_id_changes_is_deleted_before_its_successor_is_created(stack: Central) -> None:
+    """Rotating an identity removes the old member from Central rather than leaving it authorized.
+
+    The provider updates a member's node id in place, which would authorize the
+    new node and leave the old one's record authorized and out of state. The
+    flow rules name only the node ids they are rendered over, so for a
+    continuous-integration identity that old record would be an authorized
+    member no rule confines — what rotating a leaked identity is meant to end.
+    A new node id therefore replaces the member, and the old record is deleted
+    first: the enrolled members the same way, a new node id being a new device.
+    """
+    for member in (
+        conventions.overlay.MEMBER_CI_DNS,
+        conventions.overlay.MEMBER_CI_PHYSICAL,
+        conventions.overlay.MEMBER_HOMELAB,
+    ):
+        request = stack.options_of(f'{NAME}-member-{member}', MEMBER)
+
+        assert list(request.replaceOnChanges) == ['memberId'], member
+        assert request.deleteBeforeReplace is True, member
+        assert request.deleteBeforeReplaceDefined is True, member

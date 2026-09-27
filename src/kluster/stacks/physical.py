@@ -368,7 +368,10 @@ async def main() -> None:
         dns=conventions.overlay.MANAGED_DNS,
         # Composed here rather than inside the component, because what a run
         # may reach is a fact about how continuous integration gets to this
-        # site rather than one about the network (rfc-002 §6).
+        # site rather than one about the network (rfc-002 §6). The program
+        # names each continuous-integration identity by its node address,
+        # which the component mints, so it arrives less those addresses and
+        # the component renders it over them.
         #
         # A run reaches the two resolvers at their LAN addresses on the
         # container VLAN, not at overlay addresses, because they have none:
