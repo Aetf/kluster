@@ -9,10 +9,13 @@ it refuses to do to one without being asked.
 
 # The SDK ships no stubs; the same waiver `provision.py` itself carries. The
 # fakes below build the network's answers -- the VCN, gateway, subnet and
-# security group, their rules and their route tables -- from the SDK's own
-# models, so a field the code reads there is one the real answer has, and a
-# read of one it lacks raises. The instance, the reservation and the image are
-# plain stand-ins carrying the fields their cases name.
+# security group, their rules and their route tables, the security lists, and
+# the box's interfaces and their attachments -- from the SDK's own models, so a
+# field the code reads there is one the real answer has, and a read of one it
+# lacks raises. The security lists and the interfaces are written as the API
+# answers them and deserialized by the pinned SDK (`_answered`), so a field the
+# answer leaves out arrives the way it does live. The instance, the reservation
+# and the image are plain stand-ins carrying the fields their cases name.
 # pyright: reportMissingTypeStubs=false
 
 from __future__ import annotations
@@ -72,6 +75,131 @@ DEFAULT_TABLE = 'ocid1.routetable.default'
 #: The appliance's gateway, as `_resource` names it.
 GATEWAY = 'ocid1.internet_gateways.one'
 
+#: The appliance's security group, as `_resource` names it.
+GROUP = 'ocid1.network_security_groups.one'
+
+#: The VCN's default security list, the one the subnet is created carrying.
+DEFAULT_LIST = 'ocid1.securitylist.default'
+
+#: The box's one network interface, the one its launch creates.
+VNIC = 'ocid1.vnic.box'
+
+#: A client of the pinned SDK, for its deserializer alone: it signs nothing
+#: and sends nothing, so the configuration only has to pass the SDK's checks.
+_WIRE: Any = oci.core.VirtualNetworkClient(
+    {
+        'user': 'ocid1.user.oc1..unused',
+        'tenancy': 'ocid1.tenancy.oc1..unused',
+        'fingerprint': ':'.join(['00'] * 16),
+        'key_file': 'unused',
+        'region': 'us-phoenix-1',
+    },
+    signer=object(),
+).base_client
+
+
+def _answered(model: str, body: dict[str, object]) -> Any:
+    """`body`, written as the API answers it, deserialized into `model` by the pinned SDK.
+
+    Written this way rather than through a model's constructor because the
+    constructor takes whatever it is given: a field the API leaves out
+    arrives as the deserializer leaves it, and a key the model does not have
+    is dropped rather than read.
+    """
+    return _WIRE.deserialize_response_data(json.dumps(body).encode(), model)
+
+
+#: The ingress rules OCI gives a VCN's default security list, as the API
+#: answers them: SSH from anywhere, "fragmentation needed" from anywhere, and
+#: every "destination unreachable" from inside the VCN.
+SSH_IN: dict[str, object] = {
+    'protocol': '6',
+    'source': provision.ANYWHERE,
+    'sourceType': 'CIDR_BLOCK',
+    'isStateless': False,
+    'tcpOptions': {'destinationPortRange': {'min': 22, 'max': 22}},
+}
+FRAGMENTATION_IN: dict[str, object] = {
+    'protocol': '1',
+    'source': provision.ANYWHERE,
+    'sourceType': 'CIDR_BLOCK',
+    'isStateless': False,
+    'icmpOptions': {'type': 3, 'code': 4},
+}
+UNREACHABLE_IN: dict[str, object] = {
+    'protocol': '1',
+    'source': settings.VCN_CIDR,
+    'sourceType': 'CIDR_BLOCK',
+    'isStateless': False,
+    'icmpOptions': {'type': 3},
+}
+
+
+#: The egress rule OCI gives a VCN's default security list, as the API
+#: answers it: everything out, stateful.
+EVERYTHING_OUT: dict[str, object] = {
+    'protocol': 'all',
+    'destination': provision.ANYWHERE,
+    'destinationType': 'CIDR_BLOCK',
+    'isStateless': False,
+}
+
+
+def _security_list(
+    *ingress: dict[str, object],
+    egress: Sequence[dict[str, object]] = (EVERYTHING_OUT,),
+    list_id: str = DEFAULT_LIST,
+    name: str = f'Default Security List for {settings.NAME}-vcn',
+) -> Any:
+    """A security list holding `ingress` and `egress`, everything out unless told otherwise, as the API answers one."""
+    return _answered(
+        'SecurityList',
+        {
+            'id': list_id,
+            'displayName': name,
+            'lifecycleState': 'AVAILABLE',
+            'ingressSecurityRules': list(ingress),
+            'egressSecurityRules': list(egress),
+        },
+    )
+
+
+def _default_list() -> Any:
+    """The VCN's default security list as OCI creates it."""
+    return _security_list(SSH_IN, FRAGMENTATION_IN, UNREACHABLE_IN)
+
+
+def _vnic(*groups: str, vnic_id: str = VNIC, name: str = f'{settings.NAME}-vnic', primary: bool = True) -> Any:
+    """A network interface in `groups`, as the API answers one."""
+    return _answered(
+        'Vnic',
+        {
+            'id': vnic_id,
+            'displayName': name,
+            'isPrimary': primary,
+            'nsgIds': list(groups),
+            'subnetId': 'ocid1.subnets.one',
+            'lifecycleState': 'AVAILABLE',
+        },
+    )
+
+
+#: The running box a converge case starts with (`_Recorder`), which the
+#: network's fake attachments name unless a case says otherwise.
+BOX = 'ocid1.instance.existing'
+
+
+def _attachment(state: str = 'ATTACHED', *, vnic_id: str | None = VNIC, tag: str = 'box', instance: str = BOX) -> Any:
+    """An interface's attachment to `instance`, as the API answers one: no VNIC named until it is attached."""
+    body: dict[str, object] = {
+        'id': f'ocid1.vnicattachment.{tag}',
+        'instanceId': instance,
+        'lifecycleState': state,
+    }
+    if vnic_id is not None:
+        body['vnicId'] = vnic_id
+    return _answered('VnicAttachment', body)
+
 
 def _rule(
     direction: str,
@@ -121,10 +249,17 @@ def _network() -> dict[str, list[Any]]:
 
 
 def _inside_the_network() -> dict[str, list[Any]]:
-    """What the network's resources hold: both route tables, and the security group's rules."""
+    """What the network's resources hold, and the box's interface in it, as the converge and the launch leave them.
+
+    Both route tables, the security group's rules, the VCN's default
+    security list, and the box's one interface in the appliance's group.
+    """
     return {
         'route_tables': [_routes(GATEWAY), _routes(table=DEFAULT_TABLE)],
         'network_security_group_security_rules': _declared_rules(),
+        'security_lists': [_default_list()],
+        'vnic_attachments': [_attachment()],
+        'vnics': [_vnic(GROUP)],
     }
 
 
@@ -188,6 +323,10 @@ class _Service:
             if not method.startswith('list_'):
                 return _Page([])
             items = self.kinds.get(method.removeprefix('list_'), [])
+            if (instance := kwargs.get('instance_id')) is not None:
+                # What OCI filters on server side, so a read that leaves the
+                # filter out gets every instance's answer, as it would live.
+                items = [item for item in items if item.instance_id == instance]
             start = int(cast('str | None', kwargs.get('page')) or 0)
             following = start + self.page_size
             return _Page(items[start:following], next_page=str(following) if following < len(items) else None)
@@ -200,6 +339,19 @@ class _Service:
         held = [table for table in self.kinds.get('route_tables', []) if table.id == table_id]
         table = held[0] if held else MODELS.RouteTable(id=table_id, route_rules=[])
         return type('Response', (), {'data': table})()
+
+    def get_security_list(self, list_id: str) -> Any:
+        """The list `security_lists` holds under `list_id`, or one admitting nothing."""
+        self.calls.append('get_security_list')
+        held = [listed for listed in self.kinds.get('security_lists', []) if listed.id == list_id]
+        listed = held[0] if held else _security_list(list_id=list_id)
+        return type('Response', (), {'data': listed})()
+
+    def get_vnic(self, vnic_id: str) -> Any:
+        """The interface `vnics` holds under `vnic_id`; one it does not hold is a read nothing should make."""
+        self.calls.append('get_vnic')
+        (vnic,) = [vnic for vnic in self.kinds.get('vnics', []) if vnic.id == vnic_id]
+        return type('Response', (), {'data': vnic})()
 
     def get_subnet(self, subnet_id: str) -> Any:
         """The subnet `subnets` holds under `subnet_id`, in whatever state it is listed in."""
@@ -356,9 +508,20 @@ ARTIFACT = provision.FcosArtifact(
 def _surveyed(**fields: Any) -> provision.Survey:
     """A snapshot that found nothing but `fields`."""
     blank: dict[str, Any] = dict.fromkeys(
-        ('instance', 'vcn', 'gateway', 'subnet', 'security_group', 'route_table', 'public_ip', 'image')
+        (
+            'instance',
+            'vcn',
+            'gateway',
+            'subnet',
+            'security_group',
+            'route_table',
+            'default_security_list',
+            'public_ip',
+            'image',
+        )
     )
-    return provision.Survey(fcos=ARTIFACT, security_rules=(), **{**blank, **fields})
+    listed: dict[str, Any] = dict.fromkeys(('security_rules', 'groups', 'security_lists', 'interfaces'), ())
+    return provision.Survey(fcos=ARTIFACT, **{**blank, **listed, **fields})
 
 
 def _ensure_reserved_ip(client: Any) -> provision.ReservedAddress:
@@ -766,7 +929,7 @@ class _Recorder:
         self.retire_fails: bool = retire_fails
         #: The running box the compartment lists: the one a case starts with,
         #: then whichever a launch put there.
-        self.instance_id: str = 'ocid1.instance.existing'
+        self.instance_id: str = BOX
         #: Every instance the run pointed the reserved address at, in order.
         self.attached: list[str] = []
         self.minted: int = 0
@@ -962,7 +1125,10 @@ def converge(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
         monkeypatch.setattr(
             provision, 'ensure_network', _returning(provision.Placement(vcn_id='vcn', subnet_id='subnet'))
         )
-        monkeypatch.setattr(provision, 'ensure_security_group', _returning('nsg'))
+        # The group the box's interface is in, as a converge of it answers:
+        # the run narrows the lists before the dump only over a box in it.
+        monkeypatch.setattr(provision, 'ensure_security_group', _returning(GROUP))
+        monkeypatch.setattr(provision, 'ensure_security_lists', _returning(None))
         monkeypatch.setattr(provision, 'ensure_image', ensure_image)
         monkeypatch.setattr(provision, 'shape_availability_domain', _returning('phx-ad-1'))
         monkeypatch.setattr(provision, 'find_instance', find)
@@ -1535,11 +1701,18 @@ def _refuse_the_retirement(_monkeypatch: pytest.MonkeyPatch, recorder: _Recorder
     recorder.retire_fails = True
 
 
+def _refuse_the_deferred_lists(monkeypatch: pytest.MonkeyPatch, _recorder: _Recorder) -> None:
+    """The box is outside the group just converged, so the lists wait for the terminate; converging them raises."""
+    monkeypatch.setattr(provision, 'ensure_security_group', _returning('ocid1.networksecuritygroup.other'))
+    monkeypatch.setattr(provision, 'ensure_security_lists', _returning_raise('ensure_security_lists refused'))
+
+
 #: Every way a run fails past the terminate without having seen a new box
 #: running. Each leaves the state in one file, and none can say whether a box
 #: will come up: a launch OCI accepted may yet.
 BEFORE_A_NEW_BOX: dict[str, Breakage] = {
     'terminate_instance': _refuse('provision', 'terminate_instance'),
+    'ensure_security_lists after the terminate': _refuse_the_deferred_lists,
     'mint_dump_key': _refuse('b2', 'mint_dump_key'),
     'machine': _refuse('config', 'machine'),
     'ensure_instance': _refuse('provision', 'ensure_instance'),
@@ -1577,9 +1750,40 @@ def test_a_failure_before_a_new_box_is_seen_says_to_provision_first(
     # re-run that finds no box launches one and retires it; one that finds
     # the box a lost launch left launches nothing, so the words say both.
     # Before the mint there is no successor, and nothing to say.
-    past_the_mint = breakage not in (BEFORE_A_NEW_BOX['terminate_instance'], BEFORE_A_NEW_BOX['mint_dump_key'])
+    past_the_mint = breakage not in (
+        BEFORE_A_NEW_BOX['terminate_instance'],
+        BEFORE_A_NEW_BOX['ensure_security_lists after the terminate'],
+        BEFORE_A_NEW_BOX['mint_dump_key'],
+    )
     assert any(FOUND_KEY in message for message in caplog.messages) == past_the_mint
     assert not any(LIVE_KEY in message for message in caplog.messages)
+
+
+def test_a_re_run_after_the_deferred_lists_failed_converges_them_and_launches(
+    converge: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The lists that waited for the terminate and then failed leave no box: a re-run is the way back.
+
+    It finds no box, so nothing is served and its groundwork converges the
+    lists before its launch; the restore the first run owed is still owed.
+    """
+    stale = dict(CURRENT) | {'butane': 'zzzz'}
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(stale))
+    converge(recorder)
+    _refuse_the_deferred_lists(monkeypatch, recorder)
+    with pytest.raises(RuntimeError, match='ensure_security_lists refused'):
+        _ = _run(force=True)
+    assert (recorder.terminated, recorder.launched, recorder.instance_exists) == (1, 0, False)
+
+    def lists(*_args: object, **_kwargs: object) -> None:
+        recorder.order.append('lists')
+
+    monkeypatch.setattr(provision, 'ensure_security_lists', lists)
+
+    assert _run() == PENDING
+
+    assert recorder.launched == 1
+    assert recorder.order.index('lists') < recorder.order.index('launch')
 
 
 #: Every way a run ends with a new box running that it has not heard answer.
@@ -1818,9 +2022,7 @@ def test_a_re_run_over_a_box_still_provisioning_is_told_to_re_run(
     # still attaching, the state a launch shows before the box is running.
     monkeypatch.setattr(provision, 'attach_reserved_ip', WRITERS['attach_reserved_ip'])
     clients = cast('_Client', provision.OciClients.load())
-    clients.compute.kinds['vnic_attachments'] = [
-        type('Attachment', (), {'vnic_id': 'ocid1.vnic.new', 'lifecycle_state': 'ATTACHING'})()
-    ]
+    clients.compute.kinds['vnic_attachments'] = [_attachment('ATTACHING', vnic_id=None, instance='ocid1.instance.new')]
 
     with pytest.raises(RuntimeError, match='still provisioning') as refused:
         _ = _run()
@@ -1834,6 +2036,7 @@ def test_a_box_that_has_no_interface_listed_at_all_is_refused_the_same_way(conve
     recorder = _Recorder(instance_exists=True, metadata=_built_from(CURRENT))
     converge(recorder)
     clients = provision.OciClients.load()
+    cast('_Client', clients).compute.kinds['vnic_attachments'] = []
 
     with pytest.raises(RuntimeError, match='still provisioning'):
         WRITERS['attach_reserved_ip'](clients, instance_id=recorder.instance_id, public_ip_id='ocid1.publicip.box')
@@ -2132,6 +2335,7 @@ GROUNDWORK = [
     ('b2', 'ensure_bucket'),
     ('provision', 'ensure_network'),
     ('provision', 'ensure_security_group'),
+    ('provision', 'ensure_security_lists'),
     ('provision', 'ensure_reserved_ip'),
     ('provision', 'ensure_image'),
     ('provision', 'shape_availability_domain'),
@@ -2219,10 +2423,6 @@ class _Unwritable(_Service):
         self.updated.append((public_ip_id, str(details.private_ip_id)))
         return _Page([])
 
-    def list_vnic_attachments(self, *_args: object, **_kwargs: object) -> _Page:
-        self.calls.append('list_vnic_attachments')
-        return _Page([type('Attachment', (), {'vnic_id': 'ocid1.vnic.box', 'lifecycle_state': 'ATTACHED'})()])
-
     def list_private_ips(self, *_args: object, **_kwargs: object) -> _Page:
         self.calls.append('list_private_ips')
         return _Page([type('PrivateIp', (), {'id': PRIMARY, 'is_primary': True})()])
@@ -2246,6 +2446,9 @@ def _unwritable(
     """
     clients = _compartment()
     kinds = clients.network.kinds
+    # The box the converge fixture finds, rather than the one `_compartment`
+    # lists, and the one a launch leaves, whose interface the attach reads.
+    kinds['vnic_attachments'] = [_attachment(), _attachment(tag='new', instance='ocid1.instance.new')]
     if not reserved:
         kinds['public_ips'] = []
     clients.network = _Unwritable(clients.calls, kinds, points_at=points_at, allowed=allowed)
@@ -2270,7 +2473,14 @@ def _b2_without_the_bucket(_session: b2.Session, api: str, _body: dict[str, Any]
 #: run them over their fakes rather than trusting the stand-ins not to write.
 WRITERS: dict[str, Callable[..., Any]] = {
     name: getattr(provision, name)
-    for name in ('ensure_network', 'ensure_security_group', 'ensure_reserved_ip', 'ensure_image', 'attach_reserved_ip')
+    for name in (
+        'ensure_network',
+        'ensure_security_group',
+        'ensure_security_lists',
+        'ensure_reserved_ip',
+        'ensure_image',
+        'attach_reserved_ip',
+    )
 }
 BUCKET_CONVERGE = b2.ensure_bucket
 
@@ -2391,6 +2601,73 @@ def _untouched(_kinds: dict[str, list[Any]]) -> None:
     return None
 
 
+def _both(*edits: Edit) -> Edit:
+    def edit(kinds: dict[str, list[Any]]) -> None:
+        for each in edits:
+            each(kinds)
+
+    return edit
+
+
+def _append(listing: str, *items: Any) -> Edit:
+    def edit(kinds: dict[str, list[Any]]) -> None:
+        kinds[listing] = [*kinds[listing], *items]
+
+    return edit
+
+
+def _list_rule(*ingress: dict[str, object]) -> Edit:
+    """The default security list, holding `ingress` beside what OCI creates it with; any other list as it was."""
+
+    def edit(kinds: dict[str, list[Any]]) -> None:
+        loosened = _security_list(SSH_IN, FRAGMENTATION_IN, UNREACHABLE_IN, *ingress)
+        kinds['security_lists'] = [
+            loosened if listed.id == DEFAULT_LIST else listed for listed in kinds['security_lists']
+        ]
+
+    return edit
+
+
+#: A security group in the appliance's VCN and compartment that is not the
+#: appliance's: the one a hand could put the box's interface in.
+WIDE_OPEN = 'ocid1.network_security_groups.wide'
+
+#: A security group the survey's listing does not hold: one in another
+#: compartment, which OCI allows an interface to be in.
+FOREIGN_GROUP = 'ocid1.networksecuritygroup.oc1.phx.elsewhere'
+
+#: A security list in the appliance's VCN that is not its default one.
+OPEN_LIST = 'ocid1.securitylist.open'
+
+#: An ingress rule nobody declared, as the API answers it: WireGuard's UDP port from anywhere.
+UDP_IN: dict[str, object] = {
+    'protocol': '17',
+    'source': provision.ANYWHERE,
+    'sourceType': 'CIDR_BLOCK',
+    'isStateless': False,
+    'udpOptions': {'destinationPortRange': {'min': 51820, 'max': 51820}},
+}
+
+
+def _in_groups(*groups: str) -> Edit:
+    """The box's interface put in `groups` and no other, the appliance's named in it only if among them."""
+    return _set('vnics', nsg_ids=list(groups))
+
+
+def _listed_group() -> Edit:
+    """`WIDE_OPEN` listed in the appliance's VCN beside the appliance's own group."""
+
+    def edit(kinds: dict[str, list[Any]]) -> None:
+        kinds['network_security_groups'].append(_resource('network_security_groups', name='wide-open', tag='wide'))
+
+    return edit
+
+
+def _carrying(*list_ids: str) -> Edit:
+    """The subnet carrying `list_ids`, in that order, in place of the default list alone."""
+    return _set('subnets', security_list_ids=list(list_ids))
+
+
 def _missing(kind: str) -> str:
     return f'a {kind} declared and missing: '
 
@@ -2438,7 +2715,9 @@ HAND_EDITS: list[tuple[str, Edit, tuple[b2.LifecycleRule, ...], list[str]]] = [
     ),
     (
         'the security group gone',
-        _replace('network_security_groups', []),
+        # OCI deletes no group an interface is still in, so the box's
+        # interface was taken out of it first.
+        _both(_replace('network_security_groups', []), _in_groups()),
         (cli.RETENTION,),
         [f'no security group carries the name {settings.NAME}-nsg'],
     ),
@@ -2479,6 +2758,122 @@ HAND_EDITS: list[tuple[str, Edit, tuple[b2.LifecycleRule, ...], list[str]]] = [
         [f'the internet gateway {settings.NAME}-igw is disabled'],
     ),
     (
+        'the interface put in a second group',
+        _both(_listed_group(), _in_groups(GROUP, WIDE_OPEN)),
+        (cli.RETENTION,),
+        [f"the box's network interface is in a security group nobody declared: wide-open ({WIDE_OPEN})"],
+    ),
+    (
+        'the interface put in a group of another compartment',
+        _in_groups(GROUP, FOREIGN_GROUP),
+        (cli.RETENTION,),
+        [f"the box's network interface is in a security group nobody declared: {FOREIGN_GROUP}"],
+    ),
+    (
+        'the interface taken out of its group',
+        _in_groups(),
+        (cli.RETENTION,),
+        [f"the box's network interface is not in the security group {settings.NAME}-nsg"],
+    ),
+    (
+        'the interface moved to another group',
+        _both(_listed_group(), _in_groups(WIDE_OPEN)),
+        (cli.RETENTION,),
+        [
+            f"the box's network interface is in a security group nobody declared: wide-open ({WIDE_OPEN})",
+            f"the box's network interface is not in the security group {settings.NAME}-nsg",
+        ],
+    ),
+    (
+        'a second interface attached',
+        _both(
+            _append('vnic_attachments', _attachment(vnic_id='ocid1.vnic.second', tag='second')),
+            _append('vnics', _vnic(FOREIGN_GROUP, vnic_id='ocid1.vnic.second', name='side-door', primary=False)),
+        ),
+        (cli.RETENTION,),
+        [
+            'a network interface nobody declared is attached to the box: side-door (ocid1.vnic.second)',
+            'the network interface side-door (ocid1.vnic.second) is in a security group nobody declared: '
+            f'{FOREIGN_GROUP}',
+        ],
+    ),
+    (
+        'a rule added to the default security list',
+        _list_rule(UDP_IN),
+        (cli.RETENTION,),
+        [f'{_undeclared("security list rule")}INGRESS udp from 0.0.0.0/0 port 51820'],
+    ),
+    (
+        'the default list opened to every port',
+        _replace(
+            'security_lists',
+            [
+                _security_list(
+                    SSH_IN | {'tcpOptions': {'destinationPortRange': {'min': 1, 'max': 65535}}},
+                    FRAGMENTATION_IN,
+                    UNREACHABLE_IN,
+                )
+            ],
+        ),
+        (cli.RETENTION,),
+        [
+            f'{_undeclared("security list rule")}INGRESS tcp from 0.0.0.0/0 ports 1-65535',
+            f'{_missing("security list rule")}INGRESS tcp from 0.0.0.0/0 port 22',
+        ],
+    ),
+    (
+        'the path MTU rule removed from the default list',
+        _replace('security_lists', [_security_list(SSH_IN, UNREACHABLE_IN)]),
+        (cli.RETENTION,),
+        [f'{_missing("security list rule")}INGRESS icmp from 0.0.0.0/0 icmp type 3 code 4'],
+    ),
+    (
+        "the default list's egress made stateless",
+        _replace(
+            'security_lists',
+            [_security_list(SSH_IN, FRAGMENTATION_IN, UNREACHABLE_IN, egress=[EVERYTHING_OUT | {'isStateless': True}])],
+        ),
+        (cli.RETENTION,),
+        [
+            f'{_undeclared("security list rule")}EGRESS all protocols to 0.0.0.0/0 stateless',
+            f'{_missing("security list rule")}EGRESS all protocols to 0.0.0.0/0',
+        ],
+    ),
+    (
+        "the default list's egress removed",
+        _replace('security_lists', [_security_list(SSH_IN, FRAGMENTATION_IN, UNREACHABLE_IN, egress=[])]),
+        (cli.RETENTION,),
+        [f'{_missing("security list rule")}EGRESS all protocols to 0.0.0.0/0'],
+    ),
+    (
+        'a second security list attached',
+        _both(
+            _append('security_lists', _security_list(UDP_IN, list_id=OPEN_LIST, name='open')),
+            _carrying(DEFAULT_LIST, OPEN_LIST),
+        ),
+        (cli.RETENTION,),
+        [
+            f'the subnet {settings.NAME}-subnet carries a security list nobody declared: open ({OPEN_LIST})',
+            f'{_undeclared("security list rule")}INGRESS udp from 0.0.0.0/0 port 51820',
+        ],
+    ),
+    (
+        'the default list swapped for another',
+        _both(
+            _append('security_lists', _security_list(list_id=OPEN_LIST, name='open')),
+            _carrying(OPEN_LIST),
+        ),
+        (cli.RETENTION,),
+        [
+            f"the subnet {settings.NAME}-subnet does not carry the VCN's default security list "
+            f'Default Security List for {settings.NAME}-vcn',
+            f'the subnet {settings.NAME}-subnet carries a security list nobody declared: open ({OPEN_LIST})',
+            f'{_missing("security list rule")}INGRESS icmp from 0.0.0.0/0 icmp type 3 code 4',
+            f'{_missing("security list rule")}INGRESS icmp from {settings.VCN_CIDR} icmp type 3',
+            f'{_missing("security list rule")}INGRESS tcp from 0.0.0.0/0 port 22',
+        ],
+    ),
+    (
         'the retention shortened',
         _untouched,
         (A_WEEK,),
@@ -2511,7 +2906,7 @@ def test_a_plain_provision_names_every_hand_edit_to_what_the_box_stands_on(
     retention: tuple[b2.LifecycleRule, ...],
     said: list[str],
 ) -> None:
-    """A security rule or a retention rule changed by hand is drift, named, and nothing more.
+    """A hand edit to the network, the box's interfaces or the bucket's retention is drift, named, and nothing more.
 
     The box itself matches, so these are the whole of the report: the run
     exits as a drifted box's does, names each difference as its own line, and
@@ -2555,6 +2950,21 @@ def test_a_hand_edit_to_the_network_is_what_force_replaces_for(converge: Any, mo
 
     assert recorder.terminated == 1
     assert recorder.order.index('rules') < recorder.order.index('dump')
+
+
+def test_a_hand_edit_to_the_box_s_interface_is_what_force_replaces_for(converge: Any) -> None:
+    """Nothing but the interface differs, and `--force` acts on it by replacing the box."""
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(CURRENT))
+    converge(recorder)
+    clients = cast('_Client', provision.OciClients.load())
+    _in_groups(GROUP, FOREIGN_GROUP)(clients.network.kinds)
+
+    assert _run() == 1
+    assert (recorder.terminated, recorder.launched) == (0, 0)
+
+    assert _run(force=True) == PENDING
+
+    assert (recorder.terminated, recorder.launched) == (1, 1)
 
 
 def _subnet_answers(clients: Any, monkeypatch: pytest.MonkeyPatch, *states: str) -> None:
@@ -2734,6 +3144,183 @@ def test_a_listed_rule_reads_as_every_field_that_decides_what_it_lets_through(
     assert (read in provision.SECURITY_RULES) is declared
 
 
+def _ssh(**fields: object) -> dict[str, object]:
+    """The default list's SSH rule as the API answers it, with `fields` answered instead, or left out as None."""
+    return {key: value for key, value in (SSH_IN | fields).items() if value is not None}
+
+
+#: The declared SSH rule of the default list, as the comparison holds it.
+LIST_SSH = provision.SecurityRule('INGRESS', '6', provision.ANYWHERE, 'CIDR_BLOCK', ports=(22, 22))
+
+#: Each shape a security list's ingress rule can come back in, the same way
+#: as `RULE_READS`, written as the API answers it: the first rows are the
+#: default list's rules as OCI creates them, and the shapes an answer may
+#: leave a field out in, which must read as declared; the rest are each one
+#: field off, which must not.
+LIST_READS: list[tuple[str, dict[str, object], provision.SecurityRule, bool]] = [
+    ('ssh as created', SSH_IN, LIST_SSH, True),
+    ('source type left out', _ssh(sourceType=None), LIST_SSH, True),
+    ('statelessness left out', _ssh(isStateless=None), LIST_SSH, True),
+    ('with a description', _ssh(description='ssh'), LIST_SSH, True),
+    (
+        'source ports answered null',
+        _ssh(tcpOptions={'destinationPortRange': {'min': 22, 'max': 22}, 'sourcePortRange': None}),
+        LIST_SSH,
+        True,
+    ),
+    (
+        'fragmentation needed as created',
+        FRAGMENTATION_IN,
+        provision.SecurityRule('INGRESS', '1', provision.ANYWHERE, 'CIDR_BLOCK', icmp=(3, 4)),
+        True,
+    ),
+    (
+        'destination unreachable as created',
+        UNREACHABLE_IN,
+        provision.SecurityRule('INGRESS', '1', settings.VCN_CIDR, 'CIDR_BLOCK', icmp=(3, None)),
+        True,
+    ),
+    (
+        'source narrowed',
+        _ssh(source=NARROW),
+        provision.SecurityRule('INGRESS', '6', NARROW, 'CIDR_BLOCK', ports=(22, 22)),
+        False,
+    ),
+    (
+        'ports widened',
+        _ssh(tcpOptions={'destinationPortRange': {'min': 22, 'max': 23}}),
+        provision.SecurityRule('INGRESS', '6', provision.ANYWHERE, 'CIDR_BLOCK', ports=(22, 23)),
+        False,
+    ),
+    (
+        'every port',
+        _ssh(tcpOptions=None),
+        provision.SecurityRule('INGRESS', '6', provision.ANYWHERE, 'CIDR_BLOCK'),
+        False,
+    ),
+    (
+        'source ports confined',
+        _ssh(tcpOptions={'destinationPortRange': {'min': 22, 'max': 22}, 'sourcePortRange': {'min': 1, 'max': 2}}),
+        provision.SecurityRule('INGRESS', '6', provision.ANYWHERE, 'CIDR_BLOCK', ports=(22, 22), source_ports=(1, 2)),
+        False,
+    ),
+    (
+        'stateless',
+        _ssh(isStateless=True),
+        provision.SecurityRule('INGRESS', '6', provision.ANYWHERE, 'CIDR_BLOCK', ports=(22, 22), stateless=True),
+        False,
+    ),
+    (
+        'every unreachable message from anywhere',
+        UNREACHABLE_IN | {'source': provision.ANYWHERE},
+        provision.SecurityRule('INGRESS', '1', provision.ANYWHERE, 'CIDR_BLOCK', icmp=(3, None)),
+        False,
+    ),
+    (
+        'another icmp code',
+        FRAGMENTATION_IN | {'icmpOptions': {'type': 3, 'code': 1}},
+        provision.SecurityRule('INGRESS', '1', provision.ANYWHERE, 'CIDR_BLOCK', icmp=(3, 1)),
+        False,
+    ),
+    (
+        'from a service',
+        _ssh(source='all-phx-services-in-oracle-services-network', sourceType='SERVICE_CIDR_BLOCK'),
+        provision.SecurityRule(
+            'INGRESS',
+            '6',
+            'all-phx-services-in-oracle-services-network',
+            'SERVICE_CIDR_BLOCK',
+            ports=(22, 22),
+        ),
+        False,
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ('answered', 'reads', 'declared'), [row[1:] for row in LIST_READS], ids=[row[0] for row in LIST_READS]
+)
+def test_a_security_list_rule_reads_as_every_field_that_decides_what_it_lets_through(
+    answered: dict[str, object], reads: provision.SecurityRule, declared: bool
+) -> None:
+    """Both directions, over what the SDK makes of the API's answer: as created is declared, one field off is not."""
+    read = provision.list_ingress_rule(_answered('IngressSecurityRule', answered))
+
+    assert read == reads
+    assert (read in provision.SECURITY_LIST_RULES) is declared
+
+
+#: Each shape a security list's egress rule can come back in, the same way as `LIST_READS`.
+EGRESS_READS: list[tuple[str, dict[str, object], provision.SecurityRule, bool]] = [
+    ('as created', EVERYTHING_OUT, provision.SecurityRule('EGRESS', 'all', provision.ANYWHERE, 'CIDR_BLOCK'), True),
+    (
+        'destination type and statelessness left out',
+        {'protocol': 'all', 'destination': provision.ANYWHERE},
+        provision.SecurityRule('EGRESS', 'all', provision.ANYWHERE, 'CIDR_BLOCK'),
+        True,
+    ),
+    (
+        'stateless',
+        EVERYTHING_OUT | {'isStateless': True},
+        provision.SecurityRule('EGRESS', 'all', provision.ANYWHERE, 'CIDR_BLOCK', stateless=True),
+        False,
+    ),
+    (
+        'confined to one port',
+        EVERYTHING_OUT | {'protocol': '6', 'tcpOptions': {'destinationPortRange': {'min': 443, 'max': 443}}},
+        provision.SecurityRule('EGRESS', '6', provision.ANYWHERE, 'CIDR_BLOCK', ports=(443, 443)),
+        False,
+    ),
+    (
+        'to a narrower range',
+        EVERYTHING_OUT | {'destination': NARROW},
+        provision.SecurityRule('EGRESS', 'all', NARROW, 'CIDR_BLOCK'),
+        False,
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ('answered', 'reads', 'declared'), [row[1:] for row in EGRESS_READS], ids=[row[0] for row in EGRESS_READS]
+)
+def test_a_security_list_egress_rule_reads_as_every_field_that_decides_what_it_lets_through(
+    answered: dict[str, object], reads: provision.SecurityRule, declared: bool
+) -> None:
+    read = provision.list_egress_rule(_answered('EgressSecurityRule', answered))
+
+    assert read == reads
+    assert (read in provision.SECURITY_LIST_RULES) is declared
+
+
+def test_the_security_lists_admit_no_port_the_security_group_does_not() -> None:
+    """The lists are unioned with the group, so a port the group narrows is not reopened by a list.
+
+    The ICMP rules are the one thing the lists declare beyond the group.
+    """
+    assert {rule for rule in provision.SECURITY_LIST_RULES if rule.icmp is None} <= provision.SECURITY_RULES
+
+
+def test_the_declared_list_rules_are_written_the_way_they_read_back() -> None:
+    """What the repair writes into the default list reads back, through the SDK, as `SECURITY_LIST_RULES`.
+
+    So a repaired list is not reported again by the next run.
+    """
+    written = {
+        direction: [
+            _WIRE.sanitize_for_serialization(rule.list_details())
+            for rule in provision.SECURITY_LIST_RULES
+            if rule.direction == direction
+        ]
+        for direction in ('INGRESS', 'EGRESS')
+    }
+
+    read = _answered(
+        'SecurityList', {'ingressSecurityRules': written['INGRESS'], 'egressSecurityRules': written['EGRESS']}
+    )
+
+    assert provision.list_rules(read) == provision.SECURITY_LIST_RULES
+
+
 #: The declared route, as the comparison holds it.
 OUT = provision.Route(provision.ANYWHERE, 'CIDR_BLOCK', GATEWAY)
 
@@ -2828,6 +3415,7 @@ def test_a_matching_network_is_converged_by_writing_nothing() -> None:
     assert provision.network_drift(found) == []
     _ = provision.ensure_network(clients, found)
     _ = provision.ensure_security_group(clients, 'vcn', found)
+    provision.ensure_security_lists(clients, found)
 
     assert network.written == []
 
@@ -2889,6 +3477,204 @@ def test_the_network_converge_puts_back_the_route_the_range_and_the_gateway() ->
     subnet, spans = written.pop('update_subnet')
     assert (subnet, spans.cidr_block) == ('ocid1.subnets.one', settings.SUBNET_CIDR)
     assert written == {}
+
+
+@pytest.mark.usefixtures('stream')
+def test_the_security_list_converge_leaves_the_default_list_alone_on_the_subnet() -> None:
+    """A rule added to the default list goes, and a list attached beside it is detached.
+
+    The default list's rules, ingress and egress, are rewritten to the
+    declared ones whole, and the subnet is left carrying that list alone.
+    """
+
+    def edit(kinds: dict[str, list[Any]]) -> None:
+        _list_rule(UDP_IN)(kinds)
+        _append('security_lists', _security_list(UDP_IN, list_id=OPEN_LIST, name='open'))(kinds)
+        _carrying(DEFAULT_LIST, OPEN_LIST)(kinds)
+
+    clients, network, found = _written(edit)
+
+    provision.ensure_security_lists(clients, found)
+
+    (update, (listed, rules)), (subnet_update, (subnet, carried)) = network.written
+    assert (update, listed) == ('update_security_list', DEFAULT_LIST)
+    assert provision.list_rules(rules) == provision.SECURITY_LIST_RULES
+    assert (subnet_update, subnet, carried.security_list_ids) == ('update_subnet', 'ocid1.subnets.one', [DEFAULT_LIST])
+    assert 'get_subnet' in clients.calls[clients.calls.index('update_subnet') :]
+
+
+@pytest.mark.usefixtures('stream', 'clock')
+def test_a_subnet_still_taking_an_earlier_edit_is_waited_out_though_its_lists_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A run that lost its wait on the lists leaves the subnet carrying them and still updating.
+
+    The re-run has nothing to write, and still waits until the subnet is
+    `AVAILABLE`, since its launch is the next thing to need it.
+    """
+    clients, network, found = _written(_set('subnets', lifecycle_state='UPDATING'))
+    _subnet_answers(clients, monkeypatch, 'UPDATING', 'AVAILABLE')
+
+    provision.ensure_security_lists(clients, found)
+
+    assert network.written == []
+    assert clients.calls.count('get_subnet') == 2
+
+
+#: The writes a `--force` over a narrowed 5432 rule and a loosened security
+#: list makes to the network, and nothing else.
+RULES_AND_LISTS = frozenset(
+    {
+        'add_network_security_group_security_rules',
+        'remove_network_security_group_security_rules',
+        'update_security_list',
+        'update_subnet',
+    }
+)
+
+
+def test_the_security_lists_lose_nothing_until_the_group_has_every_declared_rule(
+    converge: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The lists are narrowed after the group's missing rules are back, and both before the dump.
+
+    A hand could have moved 5432 out of the group and into a list of its
+    own: detaching that list first would leave the port the dump is taken
+    over with no rule at all.
+    """
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(CURRENT))
+    converge(recorder)
+    clients = _unwritable(monkeypatch, allowed=RULES_AND_LISTS)
+    postgres_in = _ssh(tcpOptions={'destinationPortRange': {'min': settings.PORT, 'max': settings.PORT}})
+    _both(
+        _set_rule(0, _rule('INGRESS', port=settings.PORT, peer=NARROW)),
+        _append('security_lists', _security_list(postgres_in, list_id=OPEN_LIST, name='open')),
+        _carrying(DEFAULT_LIST, OPEN_LIST),
+        _list_rule(UDP_IN),
+    )(clients.network.kinds)
+    assert [listed.id for listed in clients.network.kinds['security_lists']] == [DEFAULT_LIST, OPEN_LIST]
+    dumped: list[int] = []
+    write_dump = cli._write_dump  # pyright: ignore[reportPrivateUsage]
+
+    def dump(*args: Any, **kwargs: Any) -> None:
+        dumped.append(len(clients.calls))
+        write_dump(*args, **kwargs)
+
+    monkeypatch.setattr(cli, '_write_dump', dump)
+
+    assert _run(force=True) == PENDING
+
+    calls = clients.calls
+    added = calls.index('add_network_security_group_security_rules')
+    assert added < calls.index('update_security_list')
+    assert added < calls.index('update_subnet')
+    assert dumped and dumped[0] > max(calls.index('update_security_list'), calls.index('update_subnet'))
+
+
+def _marked(monkeypatch: pytest.MonkeyPatch, module: Any, name: str, calls: list[str], marks: dict[str, int]) -> None:
+    """`module.name`, noting under `name` how many OCI calls the run had made when it was first called."""
+    wrapped = getattr(module, name)
+
+    def mark(*args: Any, **kwargs: Any) -> Any:
+        marks.setdefault(name, len(calls))
+        return wrapped(*args, **kwargs)
+
+    monkeypatch.setattr(module, name, mark)
+
+
+@pytest.mark.usefixtures('clock')
+def test_the_security_lists_wait_for_the_old_box_when_it_is_outside_the_group(
+    converge: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A box outside the appliance's group may be reached on 5432 through a list alone.
+
+    The hand edit the report names as two lines -- the interface taken out
+    of the group, a list admitting 5432 attached -- leaves that list as the
+    only rule the dump is taken through. So the lists are left as they are
+    until the box is terminated, and narrowed before the launch.
+    """
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(CURRENT))
+    converge(recorder)
+    clients = _unwritable(monkeypatch, allowed=RULES_AND_LISTS)
+    postgres_in = _ssh(tcpOptions={'destinationPortRange': {'min': settings.PORT, 'max': settings.PORT}})
+    _both(
+        _in_groups(),
+        _append('security_lists', _security_list(postgres_in, list_id=OPEN_LIST, name='open')),
+        _carrying(DEFAULT_LIST, OPEN_LIST),
+        _list_rule(UDP_IN),
+    )(clients.network.kinds)
+    marks: dict[str, int] = {}
+    _marked(monkeypatch, cli, '_write_dump', clients.calls, marks)
+    _marked(monkeypatch, provision, 'terminate_instance', clients.calls, marks)
+    _marked(monkeypatch, provision, 'ensure_instance', clients.calls, marks)
+
+    assert _run(force=True) == PENDING
+
+    calls = clients.calls
+    narrowing = [calls.index('update_security_list'), calls.index('update_subnet')]
+    # Nothing narrows the lists while the old box is serving through them.
+    assert marks['_write_dump'] <= marks['terminate_instance'] <= min(narrowing)
+    assert max(narrowing) < marks['ensure_instance']
+    assert recorder.dumped
+
+
+@pytest.mark.parametrize(
+    ('instance', 'interfaces', 'served'),
+    [
+        (None, (), True),
+        (object(), (), False),
+        (object(), (_vnic(GROUP),), True),
+        (object(), (_vnic(),), False),
+    ],
+    ids=['no box', 'a box with no interface attached', 'a box in the group', 'a box outside it'],
+)
+def test_the_group_serves_the_box_only_when_it_reaches_every_interface(
+    instance: object, interfaces: tuple[Any, ...], served: bool
+) -> None:
+    """No box is served by nothing, and a box with no interface to ask about is not known to be served."""
+    assert provision.served_by_group(_surveyed(instance=instance, interfaces=interfaces), GROUP) is served
+
+
+#: Two interfaces on the box, one of them outside the appliance's group: the
+#: states where which interface `served_by_group` asks about decides whether
+#: a list admitting 5432 is detached before the dump.
+MIXED_INTERFACES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    'primary outside, second inside': ((), (GROUP,)),
+    'primary inside, second outside': ((GROUP,), ()),
+}
+
+
+@pytest.mark.usefixtures('clock')
+@pytest.mark.parametrize(('primary', 'second'), list(MIXED_INTERFACES.values()), ids=list(MIXED_INTERFACES))
+def test_the_security_lists_wait_for_the_old_box_unless_every_interface_is_in_the_group(
+    converge: Any, monkeypatch: pytest.MonkeyPatch, primary: tuple[str, ...], second: tuple[str, ...]
+) -> None:
+    """Any interface outside the group may be the one 5432 reaches the old box through, by a list alone.
+
+    The reserved address points at one interface's private IP, and a hand
+    can move it, so the lists wait for the terminate unless the group's rules
+    reach every interface the box has.
+    """
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(CURRENT))
+    converge(recorder)
+    clients = _unwritable(monkeypatch, allowed=RULES_AND_LISTS)
+    postgres_in = _ssh(tcpOptions={'destinationPortRange': {'min': settings.PORT, 'max': settings.PORT}})
+    _both(
+        _in_groups(*primary),
+        _append('vnic_attachments', _attachment(vnic_id='ocid1.vnic.second', tag='second')),
+        _append('vnics', _vnic(*second, vnic_id='ocid1.vnic.second', name='side-door', primary=False)),
+        _append('security_lists', _security_list(postgres_in, list_id=OPEN_LIST, name='open')),
+        _carrying(DEFAULT_LIST, OPEN_LIST),
+    )(clients.network.kinds)
+    marks: dict[str, int] = {}
+    _marked(monkeypatch, cli, '_write_dump', clients.calls, marks)
+    _marked(monkeypatch, provision, 'ensure_instance', clients.calls, marks)
+
+    assert _run(force=True) == PENDING
+
+    detached = clients.calls.index('update_subnet')
+    assert marks['_write_dump'] <= detached < marks['ensure_instance']
+    assert recorder.dumped
 
 
 @pytest.mark.parametrize(('carried', 'writes'), [((cli.RETENTION,), False), ((A_WEEK,), True), ((), True)])
@@ -3349,9 +4135,19 @@ NAMED = {
 #: The network's kinds, each as the SDK's model and the fields the appliance
 #: creates it with.
 MODELLED: dict[str, tuple[str, dict[str, object]]] = {
-    'vcns': ('Vcn', {'cidr_block': settings.VCN_CIDR, 'default_route_table_id': DEFAULT_TABLE}),
+    'vcns': (
+        'Vcn',
+        {
+            'cidr_block': settings.VCN_CIDR,
+            'default_route_table_id': DEFAULT_TABLE,
+            'default_security_list_id': DEFAULT_LIST,
+        },
+    ),
     'internet_gateways': ('InternetGateway', {'is_enabled': True}),
-    'subnets': ('Subnet', {'cidr_block': settings.SUBNET_CIDR, 'route_table_id': ROUTE_TABLE}),
+    'subnets': (
+        'Subnet',
+        {'cidr_block': settings.SUBNET_CIDR, 'route_table_id': ROUTE_TABLE, 'security_list_ids': [DEFAULT_LIST]},
+    ),
     'network_security_groups': ('NetworkSecurityGroup', {}),
 }
 
@@ -3364,9 +4160,10 @@ def _resource(listing: str, *, name: str | None = None, state: str = 'AVAILABLE'
     """One listed resource of the kind `listing` answers, under the appliance's name unless told otherwise.
 
     A network kind is the SDK's model of it (`MODELLED`), carrying what the
-    appliance creates it with: the VCN's range and its default route table,
-    an enabled gateway, a subnet spanning `settings.SUBNET_CIDR` and routing
-    through `ROUTE_TABLE`. The rest are stand-ins with an address.
+    appliance creates it with: the VCN's range, its default route table and
+    its default security list, an enabled gateway, a subnet spanning
+    `settings.SUBNET_CIDR`, routing through `ROUTE_TABLE` and carrying the
+    default list alone. The rest are stand-ins with an address.
     """
     _, suffix = NAMED[listing]
     common = {
@@ -3388,11 +4185,13 @@ def _clients(kinds: dict[str, list[Any]], *, page_size: int = 100) -> Any:
 def _compartment(ahead: dict[str, list[Any]] | None = None, *, page_size: int = 100) -> Any:
     """One live resource of every kind under the appliance's name, each listed behind what `ahead` puts before it.
 
-    The network among them is the one the converge creates (`_network`).
+    The network among them is the one the converge creates (`_network`), its
+    interface attached to the instance listed here.
     """
     ahead = ahead or {}
     kinds = {listing: [*ahead.get(listing, []), _resource(listing)] for listing in NAMED}
-    return _clients(kinds | _inside_the_network(), page_size=page_size)
+    inside = _inside_the_network() | {'vnic_attachments': [_attachment(instance=kinds['instances'][-1].id)]}
+    return _clients(kinds | inside, page_size=page_size)
 
 
 @pytest.fixture
@@ -3419,6 +4218,33 @@ def test_the_survey_reads_every_page_of_every_listing() -> None:
     # And the security group's rules, a page each: the one past the first
     # page is the rule a comparison of one page would call missing.
     assert len(found.security_rules) == len(_declared_rules())
+
+
+@pytest.mark.usefixtures('stream')
+def test_the_survey_reads_the_box_s_interfaces_behind_a_page_of_detached_ones() -> None:
+    """The attachments are read on every page, and only an attached one's interface is read.
+
+    An interface detached from the box admits nothing to it, and one still
+    attaching names no interface yet; the box's own attachment is on the
+    last page, where a read of one page answers "no interface" and the
+    comparison finds nothing to compare.
+    """
+    clients = _compartment(page_size=1)
+    box = clients.compute.kinds['instances'][-1].id
+    clients.compute.kinds['vnic_attachments'] = [
+        # Another instance's interface, which the fake has no VNIC for: read
+        # without the instance filter, it fails the survey.
+        _attachment(vnic_id='ocid1.vnic.elsewhere', tag='elsewhere', instance='ocid1.instance.other'),
+        _attachment('DETACHED', vnic_id='ocid1.vnic.gone', tag='gone', instance=box),
+        _attachment('ATTACHING', vnic_id=None, tag='coming', instance=box),
+        _attachment(instance=box),
+    ]
+
+    found = provision.survey(clients)
+
+    assert [vnic.id for vnic in found.interfaces] == [VNIC]
+    assert [listed.id for listed in found.security_lists] == [DEFAULT_LIST]
+    assert found.default_security_list is found.security_lists[0]
 
 
 @pytest.mark.usefixtures('stream')
@@ -3537,6 +4363,19 @@ def test_a_launch_gives_the_box_no_address_but_the_reserved_one() -> None:
     _ = _launch(compute)
 
     assert compute.launched.create_vnic_details.assign_public_ip is False
+
+
+def test_a_launch_puts_the_box_in_the_appliance_s_group_and_no_other() -> None:
+    """The launch is the repair for the box's interfaces: the new box has one, in the declared group alone.
+
+    A hand edit to the old box's interface, or a second interface attached to
+    it, goes with the old box when the replacement terminates it.
+    """
+    compute = _Compute()
+
+    _ = _launch(compute)
+
+    assert compute.launched.create_vnic_details.nsg_ids == ['nsg']
 
 
 def test_a_launch_turns_off_the_unauthenticated_metadata_endpoint() -> None:
@@ -3896,6 +4735,7 @@ def test_the_pin_the_launch_records_is_the_key_the_ignition_delivered() -> None:
             bucket_id='bucket-id',
             placement=provision.Placement(vcn_id='vcn', subnet_id='subnet'),
             nsg_id='nsg',
+            lists_narrowed=True,
             reserved=provision.ReservedAddress(id='ip-id', address=PINNED_ADDRESS),
             image_id='image',
             # Which availability domain offers the shape is a question for OCI.

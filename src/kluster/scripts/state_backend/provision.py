@@ -12,9 +12,9 @@ duplicating, so "re-provision" (the box's only apply path) and "provision" are
 the same command. `survey` and `found_reserved_ip` create nothing; each
 `ensure_*` may, and which run calls which is `cli._provision`'s decision.
 `network_drift` holds what the survey read against what the network's
-`ensure_*` create, so a run that writes nothing can still name how the network
-differs. The one thing this module deliberately does not do is mutate a
-running box — a changed Butane file means a new instance.
+`ensure_*` and the launch create, so a run that writes nothing can still name
+how the network differs. The one thing this module deliberately does not do
+is mutate a running box — a changed Butane file means a new instance.
 
 Ordering is dictated by the certificate: the server certificate is issued for
 the reserved public IP, so the address must exist before the Ignition that
@@ -233,7 +233,16 @@ def _lookup(list_call: Callable[..., Any], *args: Any, kind: str, name: str, **k
         the other might be serving as. Which one to keep is a decision, so
         the run stops here rather than making it.
     """
-    listed = oci.pagination.list_call_get_all_results(list_call, *args, **kwargs).data
+    return _pick(_listed(list_call, *args, **kwargs), kind=kind, name=name)
+
+
+def _listed(list_call: Callable[..., Any], *args: Any, **kwargs: Any) -> list[Any]:
+    """Every page of a listing, as one list."""
+    return list(oci.pagination.list_call_get_all_results(list_call, *args, **kwargs).data)
+
+
+def _pick(listed: Sequence[Any], *, kind: str, name: str) -> Any | None:
+    """`_lookup` over a listing already read whole, for a caller that reads the rest of it too."""
     live = [item for item in listed if item.display_name == name and item.lifecycle_state not in GONE]
     if len(live) > 1:
         raise RuntimeError(
@@ -304,6 +313,15 @@ class Survey:
     and every rule the security group holds. They are None and empty whenever
     the VCN, respectively the security group, is.
 
+    The rest is what decides who else reaches the box, read for the same
+    comparison. `groups` is every security group the VCN holds in the
+    compartment, the appliance's among them, which is what names a group the
+    box's interface is in. `default_security_list` is the VCN's default
+    list, None whenever the VCN is, and `security_lists` each list the subnet
+    carries, in its order, empty whenever the subnet is None. `interfaces` is
+    the VNIC of each interface attached to the box, every page of its
+    attachments read, empty when no box stands.
+
     `instance` is out of the repr and out of comparison: the SDK prints an
     instance with its launch metadata whole, and the `user_data` there is the
     Ignition the box booted with, which carries its TLS and SSH keys and the
@@ -317,6 +335,10 @@ class Survey:
     security_group: Any | None
     route_table: Any | None
     security_rules: tuple[Any, ...]
+    groups: tuple[Any, ...]
+    default_security_list: Any | None
+    security_lists: tuple[Any, ...]
+    interfaces: tuple[Any, ...]
     public_ip: Any | None
     fcos: FcosArtifact
     image: Any | None
@@ -327,8 +349,11 @@ def survey(clients: OciClients) -> Survey:
     network = clients.network
     instance = find_instance(clients)
     vcn = _lookup(network.list_vcns, clients.compartment_id, kind='VCN', name=_name('vcn'))
-    gateway = subnet = security_group = route_table = None
+    gateway = subnet = security_group = route_table = default_security_list = None
     security_rules: tuple[Any, ...] = ()
+    groups: tuple[Any, ...] = ()
+    security_lists: tuple[Any, ...] = ()
+    interfaces: tuple[Any, ...] = ()
     if vcn is not None:
         gateway = _lookup(
             network.list_internet_gateways,
@@ -340,13 +365,18 @@ def survey(clients: OciClients) -> Survey:
         subnet = _lookup(
             network.list_subnets, clients.compartment_id, vcn_id=vcn.id, kind='subnet', name=_name('subnet')
         )
-        security_group = _lookup(
-            network.list_network_security_groups,
-            compartment_id=clients.compartment_id,
-            vcn_id=vcn.id,
-            kind='security group',
-            name=_name('nsg'),
+        groups = tuple(
+            _listed(network.list_network_security_groups, compartment_id=clients.compartment_id, vcn_id=vcn.id)
         )
+        security_group = _pick(groups, kind='security group', name=_name('nsg'))
+        default_security_list = _data(network.get_security_list(vcn.default_security_list_id))
+        if subnet is not None:
+            security_lists = tuple(
+                default_security_list
+                if list_id == default_security_list.id
+                else _data(network.get_security_list(list_id))
+                for list_id in subnet.security_list_ids or ()
+            )
         table_id = (subnet.route_table_id if subnet is not None else None) or vcn.default_route_table_id
         route_table = _data(network.get_route_table(table_id))
         if security_group is not None:
@@ -355,6 +385,15 @@ def survey(clients: OciClients) -> Survey:
                     network.list_network_security_group_security_rules, security_group.id
                 ).data
             )
+    if instance is not None:
+        attachments = _listed(clients.compute.list_vnic_attachments, clients.compartment_id, instance_id=instance.id)
+        # An attachment still attaching names no VNIC yet, and one detaching
+        # or detached no longer admits anything to the box.
+        interfaces = tuple(
+            _data(network.get_vnic(attachment.vnic_id))
+            for attachment in attachments
+            if attachment.lifecycle_state == 'ATTACHED'
+        )
     public_ip = find_reserved_ip(clients)
     fcos = fcos_artifact()
     image_name = _name(f'fcos-{fcos.release}')
@@ -370,6 +409,10 @@ def survey(clients: OciClients) -> Survey:
         security_group=security_group,
         route_table=route_table,
         security_rules=security_rules,
+        groups=groups,
+        default_security_list=default_security_list,
+        security_lists=security_lists,
+        interfaces=interfaces,
         public_ip=public_ip,
         fcos=fcos,
         image=image,
@@ -439,7 +482,8 @@ class SecurityRule:
         if self.source_ports is not None:
             words.append(f'from source {_span(self.source_ports)}')
         if self.icmp is not None:
-            words.append(f'icmp type {self.icmp[0]} code {self.icmp[1]}')
+            kind, code = self.icmp
+            words.append(f'icmp type {kind}' if code is None else f'icmp type {kind} code {code}')
         if self.stateless:
             words.append('stateless')
         return ' '.join(words)
@@ -466,26 +510,87 @@ class SecurityRule:
             ),
         )
 
+    def list_details(self) -> Any:
+        """The rule as a security list's `ingress_security_rules` or `egress_security_rules` takes it.
+
+        For the shapes `SECURITY_LIST_RULES` declares, which is TCP to one
+        port range, one ICMP type with or without its code, or every
+        protocol at once.
+        """
+        ingress = self.direction == 'INGRESS'
+        side = 'source' if ingress else 'destination'
+        peer = {side: self.peer, f'{side}_type': self.peer_type}
+        model = oci.core.models.IngressSecurityRule if ingress else oci.core.models.EgressSecurityRule
+        return model(
+            protocol=self.protocol,
+            **peer,
+            is_stateless=self.stateless,
+            tcp_options=None
+            if self.ports is None
+            else oci.core.models.TcpOptions(
+                destination_port_range=oci.core.models.PortRange(min=self.ports[0], max=self.ports[1])
+            ),
+            icmp_options=None
+            if self.icmp is None
+            else oci.core.models.IcmpOptions(type=self.icmp[0], code=self.icmp[1]),
+        )
+
 
 def _range(options: Any, which: str) -> tuple[int, int] | None:
     found = getattr(options, which, None) if options is not None else None
     return None if found is None else (int(found.min), int(found.max))
 
 
-def security_rule(listed: Any) -> SecurityRule:
-    """A rule as OCI lists it, read into the record the comparison holds."""
-    ingress = listed.direction == 'INGRESS'
+def _read_rule(listed: Any, *, direction: str, peer: Any, peer_type: Any) -> SecurityRule:
+    """The fields a security group's rule and a security list's share, read the one way."""
     ports = listed.tcp_options if listed.tcp_options is not None else listed.udp_options
     icmp = listed.icmp_options
     return SecurityRule(
-        direction=str(listed.direction),
+        direction=direction,
         protocol=str(listed.protocol),
-        peer=str(listed.source if ingress else listed.destination),
-        peer_type=str(listed.source_type if ingress else listed.destination_type),
+        peer=str(peer),
+        peer_type=str(peer_type),
         ports=_range(ports, 'destination_port_range'),
         source_ports=_range(ports, 'source_port_range'),
         icmp=None if icmp is None else (int(icmp.type), None if icmp.code is None else int(icmp.code)),
         stateless=bool(listed.is_stateless),
+    )
+
+
+def security_rule(listed: Any) -> SecurityRule:
+    """A rule as OCI lists it, read into the record the comparison holds."""
+    ingress = listed.direction == 'INGRESS'
+    return _read_rule(
+        listed,
+        direction=str(listed.direction),
+        peer=listed.source if ingress else listed.destination,
+        peer_type=listed.source_type if ingress else listed.destination_type,
+    )
+
+
+def list_ingress_rule(listed: Any) -> SecurityRule:
+    """An ingress rule as a security list holds it, read into the same record.
+
+    A list keeps its ingress rules apart from its egress ones, so the rule
+    carries no direction of its own. `source_type` is optional in the API,
+    whose documented default is `CIDR_BLOCK`, so an answer without one reads
+    as that rather than as a type nobody declared.
+    """
+    return _read_rule(listed, direction='INGRESS', peer=listed.source, peer_type=listed.source_type or 'CIDR_BLOCK')
+
+
+def list_egress_rule(listed: Any) -> SecurityRule:
+    """An egress rule as a security list holds it, read the way `list_ingress_rule` reads an ingress one."""
+    return _read_rule(
+        listed, direction='EGRESS', peer=listed.destination, peer_type=listed.destination_type or 'CIDR_BLOCK'
+    )
+
+
+def list_rules(listed: Any) -> frozenset[SecurityRule]:
+    """Every rule one security list holds, ingress and egress, as the comparison reads them."""
+    return frozenset(
+        [list_ingress_rule(rule) for rule in listed.ingress_security_rules or ()]
+        + [list_egress_rule(rule) for rule in listed.egress_security_rules or ()]
     )
 
 
@@ -497,6 +602,29 @@ SECURITY_RULES = frozenset(
     {
         SecurityRule('INGRESS', '6', ANYWHERE, 'CIDR_BLOCK', ports=(settings.PORT, settings.PORT)),
         SecurityRule('INGRESS', '6', ANYWHERE, 'CIDR_BLOCK', ports=(22, 22)),
+        SecurityRule('EGRESS', 'all', ANYWHERE, 'CIDR_BLOCK'),
+    }
+)
+
+
+#: The rules the subnet's security lists hold between them, and nothing else:
+#: the ones OCI gives a VCN's default list when it creates the VCN, stateful
+#: and from any source port -- in, SSH from anywhere, the ICMP "fragmentation
+#: needed" message from anywhere, and every ICMP "destination unreachable"
+#: message from inside the VCN; out, everything. The declaration is those rules
+#: rather than none, because the list is OCI's creation, not this program's,
+#: and a comparison against "none" would name each of them as drift on a box
+#: nobody touched. They admit nothing to the box that the security group does
+#: not -- 22 is in `SECURITY_RULES` -- bar ICMP "destination unreachable"
+#: messages: "fragmentation needed" from anywhere, which path MTU discovery
+#: needs, and every code from inside the VCN.
+#: The subnet is created carrying that list alone (`ensure_network`), and
+#: `ensure_security_lists` puts both back.
+SECURITY_LIST_RULES = frozenset(
+    {
+        SecurityRule('INGRESS', '6', ANYWHERE, 'CIDR_BLOCK', ports=(22, 22)),
+        SecurityRule('INGRESS', '1', ANYWHERE, 'CIDR_BLOCK', icmp=(3, 4)),
+        SecurityRule('INGRESS', '1', settings.VCN_CIDR, 'CIDR_BLOCK', icmp=(3, None)),
         SecurityRule('EGRESS', 'all', ANYWHERE, 'CIDR_BLOCK'),
     }
 )
@@ -547,10 +675,15 @@ def network_drift(found: Survey) -> list[str]:
     What is compared is what decides who reaches the box and whether its
     traffic leaves: each resource the appliance names, the gateway being
     enabled, the subnet's range, every route in the table the subnet routes
-    through, and every rule in the security group -- whole rules, so a
-    narrowed or widened one, and one nobody declared, are each named.
-    `ensure_network` and `ensure_security_group` put every one of them back,
-    on a run that launches a box.
+    through, every rule in the security group -- whole rules, so a
+    narrowed or widened one, and one nobody declared, are each named -- the
+    security lists the subnet carries and the rules in them, ingress and egress
+    (`_security_list_drift`), and the box's network interfaces with the
+    security groups each is in (`_interface_drift`). On a run that launches
+    a box, `ensure_network`, `ensure_security_group` and
+    `ensure_security_lists` put the network back, and the interfaces are
+    put back by the replacement itself: they go with the old box, and the
+    launch gives the new one its single interface in the declared group.
     """
     if found.vcn is None:
         return [f'no VCN carries the name {_name("vcn")}']
@@ -573,6 +706,71 @@ def network_drift(found: Survey) -> list[str]:
     else:
         present = frozenset(security_rule(rule) for rule in found.security_rules)
         reasons += _differences('a security rule', present, SECURITY_RULES)
+    return reasons + _security_list_drift(found) + _interface_drift(found)
+
+
+def _security_list_drift(found: Survey) -> list[str]:
+    """How what the subnet's security lists admit differs from `SECURITY_LIST_RULES`.
+
+    A list the subnet carries admits what it holds to every interface in
+    the subnet, beside whatever the security group admits, so a list
+    attached by hand and a rule added to the default one each widen who
+    reaches the box without touching the group. The rules are compared as
+    the union over every list the subnet carries, which is what reaches the
+    box; which lists those are is compared as well, because the repair is
+    different -- a list is detached, a rule in the default list rewritten.
+    Egress is compared too. No list can widen what the group already lets
+    out, but OCI gives a stateless rule precedence over a stateful one for
+    the same traffic and stops tracking the connection, so a stateless
+    egress rule drops the replies to the box's own connections -- B2's to
+    the nightly upload among them.
+    """
+    subnet, default = found.subnet, found.default_security_list
+    if subnet is None or default is None:
+        return []
+    reasons: list[str] = []
+    if default.id not in (subnet.security_list_ids or ()):
+        reasons.append(
+            f"the subnet {_name('subnet')} does not carry the VCN's default security list {default.display_name}"
+        )
+    reasons += [
+        f'the subnet {_name("subnet")} carries a security list nobody declared: {listed.display_name} ({listed.id})'
+        for listed in found.security_lists
+        if listed.id != default.id
+    ]
+    present = frozenset(rule for listed in found.security_lists for rule in list_rules(listed))
+    return reasons + _differences('a security list rule', present, SECURITY_LIST_RULES)
+
+
+def _interface_drift(found: Survey) -> list[str]:
+    """How the box's network interfaces differ from the one its launch creates.
+
+    The launch gives the box one interface, in the appliance's security
+    group and in no other (`ensure_instance`). Another group the interface
+    is in admits whatever its rules do, and a second interface is a way in
+    through a subnet and groups of its own, so each is named. A group is
+    named by its display name where the survey's listing holds it, and by
+    its OCID alone where it does not -- one in another compartment.
+    """
+    declared = None if found.security_group is None else found.security_group.id
+    names = {group.id: f'{group.display_name} ({group.id})' for group in found.groups}
+    reasons: list[str] = []
+    for vnic in found.interfaces:
+        if vnic.is_primary:
+            which = "the box's network interface"
+        else:
+            which = f'the network interface {vnic.display_name} ({vnic.id})'
+            reasons.append(
+                f'a network interface nobody declared is attached to the box: {vnic.display_name} ({vnic.id})'
+            )
+        carried = list(vnic.nsg_ids or ())
+        reasons += [
+            f'{which} is in a security group nobody declared: {names.get(group, group)}'
+            for group in carried
+            if group != declared
+        ]
+        if vnic.is_primary and declared is not None and declared not in carried:
+            reasons.append(f'{which} is not in the security group {_name("nsg")}')
     return reasons
 
 
@@ -650,6 +848,76 @@ def ensure_network(clients: OciClients, found: Survey) -> Placement:
         )
 
     return Placement(vcn_id=str(vcn.id), subnet_id=str(subnet.id))
+
+
+def served_by_group(found: Survey, group_id: str) -> bool:
+    """Whether the rules of the security group `group_id` reach the box the survey found.
+
+    OCI admits to an interface whatever its groups or its subnet's security
+    lists admit, so once the appliance's group holds every declared rule,
+    narrowing the lists costs the box nothing -- but only when the interface
+    the dump and every client reach it through is in that group. Which one
+    that is rests on where the reserved address points, which a hand can
+    move and which no run over a drifted box reads, so every attached
+    interface is asked about rather than the primary alone: a second
+    interface is drift already, and deferring over one costs a call. A box
+    with no attached interface to ask about answers False. True when no box
+    stands: nothing is being served then.
+    """
+    if found.instance is None:
+        return True
+    return bool(found.interfaces) and all(group_id in (vnic.nsg_ids or ()) for vnic in found.interfaces)
+
+
+def ensure_security_lists(clients: OciClients, found: Survey) -> None:
+    """The subnet carrying the VCN's default security list alone, admitting `SECURITY_LIST_RULES`.
+
+    What this removes -- a rule in the default list, or a list detached --
+    can be the one thing admitting 5432, 22 or the box's egress, so the
+    caller runs it while a box is serving only after `ensure_security_group`
+    has added every declared rule, and only when every interface of that
+    box is in the group (`served_by_group`); otherwise after the box is
+    gone.
+
+    A VCN this run created has its default list as OCI creates it, so
+    nothing here is written; a subnet this run created carries that list
+    alone, so only the list's own rules are held to the declaration. A
+    subnet the survey found anything but `AVAILABLE` is waited out even
+    when it already carries the default list alone: a run that lost the
+    wait on its own edit leaves exactly that, and the re-run would
+    otherwise launch into a subnet still taking it.
+    """
+    default = found.default_security_list
+    if default is None:
+        return
+    network = clients.network
+    log.info('converging the security lists the subnet carries')
+    if list_rules(default) != SECURITY_LIST_RULES:
+        declared = sorted(SECURITY_LIST_RULES, key=str)
+        _ = network.update_security_list(
+            default.id,
+            oci.core.models.UpdateSecurityListDetails(
+                ingress_security_rules=[rule.list_details() for rule in declared if rule.direction == 'INGRESS'],
+                egress_security_rules=[rule.list_details() for rule in declared if rule.direction == 'EGRESS'],
+            ),
+        )
+        log.info('security list %s now admits the declared rules and nothing else', default.id)
+    subnet = found.subnet
+    if subnet is None:
+        return
+    subnet_id = str(subnet.id)
+    if list(subnet.security_list_ids or ()) != [default.id]:
+        _ = network.update_subnet(subnet_id, oci.core.models.UpdateSubnetDetails(security_list_ids=[default.id]))
+        log.info('setting subnet %s to carry the security list %s alone', subnet_id, default.id)
+    elif subnet.lifecycle_state == 'AVAILABLE':
+        return
+    else:
+        # An edit an earlier run made and lost the wait for: the lists match,
+        # and the subnet has not finished taking them.
+        log.info('subnet %s is %s from an earlier edit', subnet_id, subnet.lifecycle_state)
+    # Waited out for the reason a range edit is (`ensure_network`): the
+    # launch is the next thing to need the subnet, after the terminate.
+    _ = _await_state(lambda: network.get_subnet(subnet_id), 'AVAILABLE', what=f'subnet {subnet_id}', timeout=600)
 
 
 def ensure_security_group(clients: OciClients, vcn_id: str, found: Survey) -> str:

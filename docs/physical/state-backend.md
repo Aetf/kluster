@@ -193,34 +193,70 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     gateway; a subnet whose range is not `settings.SUBNET_CIDR`; a route
     in the table the subnet routes through other than the one sending
     everything to the gateway, or that one missing; a security rule
-    nobody declared, or a declared one missing; and a dump bucket whose
-    lifecycle rules are not the retention of §5. A security rule is
-    compared whole — direction, protocol, source or destination, ports,
-    statelessness — so a rule narrowed to one address or moved to
-    another port is named as a rule nobody declared beside the declared
-    one it replaced, and an egress rule confined to one port does not
-    stand in for egress to everything. Each difference is one line of
-    the report and exits the way any other drift does: the plain run
-    writes nothing and stops, and the replacement `--force` asks for is
-    also the repair. A run that launches a box converges all of it —
-    a replacement does so before the dump, while the old box still
-    serves: it puts the retention rule back, enables the gateway,
-    rewrites the route table and sets the subnet's range — waiting until
-    the subnet has taken it, since the launch needs the subnet to accept
-    a new interface — and then adds
-    the declared security rules before it removes the others, so a port
-    that box serves on is never left with no rule. A run stopped part
-    way leaves the repairs before the stop in place, with the old box
-    serving, and the next plain run names what is left. So a
+    nobody declared, or a declared one missing; a security list the
+    subnet carries other than the VCN's default one, or the default one
+    not carried; a rule in those lists, ingress or egress, nobody
+    declared, or a declared one missing; a security group the box's network interface
+    is in other than the appliance's, or the appliance's missing from
+    it; a second network interface attached to the box; and a dump
+    bucket whose lifecycle rules are not the retention of §5. A security
+    rule is compared whole — direction, protocol, source or destination,
+    ports, ICMP type and code, statelessness — so a rule narrowed to one
+    address or moved to another port is named as a rule nobody declared
+    beside the declared one it replaced, and an egress rule confined to
+    one port does not stand in for egress to everything. A security
+    list's rules are compared the same way, as the union over
+    every list the subnet carries, since OCI admits to the box whatever
+    any of them or its security group admits. The declared rules there
+    are the ones OCI creates a VCN's default list with — in, SSH from
+    anywhere, the ICMP "fragmentation needed" message from anywhere, and
+    every ICMP "destination unreachable" message from inside the VCN;
+    out, everything, stateful — rather than none: the list is OCI's creation, and a declaration of
+    none would name each of those as drift on a box nobody touched,
+    while they admit nothing the security group does not except ICMP
+    "destination unreachable" messages: "fragmentation needed" from
+    anywhere, which path MTU discovery needs, and every code from inside
+    the VCN. A list's egress is compared too, although no list can widen
+    what the security group already lets out: OCI gives a stateless
+    rule precedence over a stateful one covering the same traffic and
+    stops tracking the connection, so a stateless egress rule on a list
+    drops the replies to the box's own connections, the nightly upload
+    to B2 among them.
+    Each difference is one line of the report and exits the way any
+    other drift does: the plain run writes nothing and stops, and the
+    replacement `--force` asks for is also the repair. A run that
+    launches a box converges all of it — a replacement does so before
+    the dump, while the old box still serves: it puts the retention rule
+    back, enables the gateway, rewrites the route table and sets the
+    subnet's range — waiting until the subnet has taken it, since the
+    launch needs the subnet to accept a new interface — then adds the
+    declared security rules before it removes the others, so a port
+    that box serves on is never left with no rule, and only then
+    rewrites the default list's rules to the declared ones and
+    detaches every other list, waiting for the subnet again. OCI admits
+    to an interface whatever its groups or its subnet's lists admit, so
+    once the group holds every declared rule nothing the lists lose is
+    the only rule a port the old box serves on rides — provided every
+    interface that box has is in the group, since the reserved address
+    points at one of them and a hand can move it. When one is not, the
+    lists may be
+    all that admits 5432 for the dump, so they are left as they are
+    until the old box is terminated and converged then, before the
+    launch; one that fails there leaves no box, which the run's closing
+    words name, and a re-run finds none and converges the lists before
+    its own launch. The box's interfaces are the one thing the run does
+    not rewrite: they go with the old box, and the launch gives the new
+    one a single interface in the appliance's group alone. A run stopped
+    before the terminate leaves the repairs before the stop in place,
+    with the old box serving, and the next plain run names what is left.
+    So a
     hand-narrowed rule costs a replacement to undo; repairing it on a
     standing box would be a second write path on the one run that is
     otherwise read-only. Everything not named above is outside the
-    comparison. Among what bears on who reaches the box or its dumps: the
-    security lists the subnet carries and the rules in them — as
-    created, the VCN's default list alone, which OCI attaches and unions
-    with the security group, and in which this program declares nothing;
-    which security groups the box's network interface is in, which the
-    launch sets (both `kluster-ops#461`); and the bucket's type.
+    comparison. Among what bears on who reaches the box or its dumps:
+    the security lists of a second interface's subnet, which
+    the second interface is named for rather than read through; and the
+    bucket's type.
 -   **A replacement is asked for before it happens, and dumped before
     it happens.** Drift is a reason to replace the box, not permission
     to: a plain `state-backend provision` reports what differs and
@@ -228,9 +264,10 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     (`--replace` is the same request for a box with no drift to find.)
     **A run that leaves the box standing writes nothing to OCI or B2,
     but one repair.** What the comparison needs — what OCI holds under
-    the appliance's names with the routes and security rules inside it,
-    the reserved address, the dump bucket and its rules, whether B2
-    still has the dump key — is looked up, and nothing is
+    the appliance's names with the routes, security rules and security
+    lists inside it, the box's network interfaces, the reserved address,
+    the dump bucket and its rules, whether B2 still has the dump key —
+    is looked up, and nothing is
     created or converged unless the run is going to launch a box: a
     run that finds no box, which destroys nothing and so has nothing to
     approve, or a replacement asked for. The report on a
@@ -247,23 +284,28 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     when the desktop secret store does not hold one, which is the one
     place a `provision` waits for a human.) Once asked for, the run
     first converges everything the new box stands on that does not need
-    the old one gone — the bucket, the network, the reserved address and
-    the custom image — and looks up the availability domain that offers
+    the old one gone — the bucket, the network (its security lists aside
+    when the box being replaced has an interface outside the appliance's
+    group, above),
+    the reserved address and the custom image — and looks up the
+    availability domain that offers
     the shape, so a failure in any of them, a failed image import among
     them, stops the run with the box still serving. Then it dumps the box
     it is about to destroy and verifies the dump before terminating
     anything, which closes the window back to the last nightly one. That
     makes the replacement depend on the dump, deliberately: a dump that
     fails stops the run with the box still standing. After the terminate
-    comes what needs the old box gone or the new one up — the launch,
+    comes what needs the old box gone or the new one up — those security
+    lists, when they waited for it, then the launch,
     which would otherwise adopt the old box by its name, then the
     retirement of the dump key's predecessor, the reserved address
     pointed at the new box and the wait for it to answer — and two steps
     that need neither: the mint, on the branch that launches because B2
     discloses a key's secret once (below), and the render that carries
     the key. Those two follow the terminate so that a run whose dump
-    fails has minted no key that nothing holds, and they are the
-    fallible steps left in the stretch with no backend. An image release not imported yet
+    fails has minted no key that nothing holds; they and the lists that
+    waited are the fallible steps left before the launch in the stretch
+    with no backend. An image release not imported yet
     is imported ahead of the terminate rather than in the stretch with no
     backend. `--no-dump` is how an operator says the box cannot be
     dumped at all — unreachable, or a Postgres that will not start,
@@ -558,6 +600,13 @@ second half of the first provision.
 Public 5432 with TLS + **mandatory client certificates** — the
 client cert is the wall, and **the only wall** (decided 2026-08-24):
 the NSG permits 5432 (and SSH, key-auth only) from anywhere. The
+subnet carries the VCN's default security list alone, holding the
+ingress rules OCI creates it with — SSH again, and ICMP "destination
+unreachable" messages: "fragmentation needed" from anywhere, which path
+MTU discovery needs, and every code from inside the VCN — and the box's
+one interface is in the NSG alone,
+so those rules and the NSG's are all that admit anything to the box
+(§1 says how a run holds both). The
 earlier GitHub-Actions-ranges allowlist died on arithmetic —
 `api.github.com/meta` lists thousands of CIDRs against an NSG rule
 quota in the hundreds, so the "coarse pre-filter" cannot be

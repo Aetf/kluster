@@ -51,7 +51,9 @@ operator's client bundle to
 the Butane file, the operator keys, the age recipients, the pins, the
 certificate identities, the B2 dump key's scope — and what the box stands on
 to what a launching run creates: the appliance's security rules, whole, its
-route, its subnet's range, its gateway, and the dump bucket's retention rule.
+route, its subnet's range, its gateway, the security lists the subnet carries
+and the rules in them, the security groups the box's network interface
+is in and the interfaces themselves, and the dump bucket's retention rule.
 One thing it compares to the clock: how much life the box's server certificate
 has left, which is drift once it is inside the renewal margin — so a coming
 expiry is something a run reports rather than something anyone has to watch a
