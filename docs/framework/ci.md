@@ -214,8 +214,8 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     is where the cost sits: a file is five to eight seconds on a
     workstation and longer on a runner, nearly all of it the checker's
     startup rather than the document's length, which puts a tree of this
-    size at minutes — and a checker that stalls adds its whole bound on
-    top of that. **Batching is the obvious remedy, and it does not
+    size at minutes — and a checker that stalls adds its whole bound, and
+    a retry, on top of that. **Batching is the obvious remedy, and it does not
     hold.** Four files per invocation runs the tree in a third of the
     time; eight at once is where the checker stops. Handed the eight
     that include this repository's two longest documents it makes no
@@ -228,7 +228,15 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     says so: the step tells `timeout`'s exit 124 from the checker's own
     exit 3 for findings, and prints the stalled file and the elapsed
     seconds as an annotation, so a kill names its file the way a finding
-    does.
+    does. A kill is then retried once, on that file alone and under the
+    same bound, because the checker has been seen past the bound on a
+    file it checks in under twenty seconds, with nothing changed
+    (kluster-ops#465). A retry that passes prints its own duration as a
+    notice, the number that tells a slow file from a stalled checker; a
+    second kill fails the step naming the file, and any other exit is
+    the checker's verdict and is not retried. `tests/test_prose_step.py`
+    runs the step against a stand-in checker and holds each annotation
+    whole.
 
 -   **Merge side runs `up` only — except `physical`, which gets a plan
     job** (2026-08-24, superseding the pure-up shape): for

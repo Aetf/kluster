@@ -157,16 +157,34 @@ jobs:
           # the file and the elapsed seconds on one line outside the fold,
           # as an annotation so it also reaches the run summary. `limit` is
           # read by the bound and by the message, so the two cannot drift.
+          #
+          # A kill is retried once, on that file alone and under the same
+          # bound: the checker has been seen past the bound on a file it checks
+          # in under 20 seconds, with nothing changed (kluster-ops#465). A
+          # retry that passes prints its own duration, which is what tells a
+          # slow file from a stalled checker. A second kill fails the step
+          # naming the file; any other exit, a finding or the checker failing,
+          # is its verdict and is not retried.
           limit=120
           status=0
-          while IFS= read -r file; do
-            echo "::group::$file"
+          check() {
+            echo "::group::$1$2"
             started=$SECONDS
             rc=0
-            timeout "$limit" mise x -- ltex-cli-plus --client-configuration="$config" "$file" || rc=$?
+            timeout "$limit" mise x -- ltex-cli-plus --client-configuration="$config" "$1" || rc=$?
             echo '::endgroup::'
+            elapsed=$((SECONDS - started))
+          }
+          while IFS= read -r file; do
+            check "$file" ''
             if [ "$rc" -eq 124 ]; then
-              echo "::error file=$file::ltex-cli-plus timed out on $file after $((SECONDS - started))s (bound ${limit}s)"
+              echo "::warning file=$file::ltex-cli-plus timed out on $file after ${elapsed}s (bound ${limit}s); retrying it once"
+              check "$file" ' (retry)'
+              if [ "$rc" -eq 124 ]; then
+                echo "::error file=$file::ltex-cli-plus timed out on $file again after ${elapsed}s (bound ${limit}s)"
+              elif [ "$rc" -eq 0 ]; then
+                echo "::notice file=$file::ltex-cli-plus passed $file on retry after ${elapsed}s"
+              fi
             fi
             [ "$rc" -eq 0 ] || status=$rc
           done <<<"$files"
