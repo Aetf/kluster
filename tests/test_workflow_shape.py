@@ -9,16 +9,23 @@ anyone remembering to list it. A job that calls a reusable workflow runs no
 step and names no runner of its own; the called workflow's jobs are read here
 too, which is what makes that job exempt.
 
+The same section pins what the jobs run besides the runner: every action from
+outside this repository by commit, and ZeroTier, which the composite action
+installs from its apt repository, by release and by signing key.
+
 The workflow files are read the way the other seams read them, through the
 loaders in `workflow_files`.
 """
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import cast
+from urllib.parse import parse_qs, urlsplit
 
+from renovate_text import as_python_spells_it
 from workflow_files import GITHUB, github_name, mapping, read_workflow, workflow_jobs, workflows_and_actions
 
 ROOT = Path(__file__).parent.parent
@@ -188,3 +195,141 @@ def test_the_runner_images_rule_outranks_the_github_actions_group() -> None:
     assert config.count("'github-actions'") == 1
     (rule,) = RUNNER_RULE.finditer(config)
     assert rule.start() > config.index("'github-actions'"), 'the runner-images rule must follow the github-actions rule'
+
+
+#: How an action from outside this repository is referenced (framework/ci.md
+#: §3): by the commit, with the release it resolves to as a trailing comment.
+#: The comment is where renovate's pin-digest preset reads the release from,
+#: and it rewrites the two together.
+PINNED_ACTION = re.compile(r'[\w.-]+/[\w.-]+(?:/[\w./-]+)?@[0-9a-f]{40} # v\S+')
+#: A `uses:` naming a path in this repository, which is pinned by being here.
+LOCAL_ACTION = re.compile(r'[\'"]?(?:\./|\$/)')
+#: Every line that sets a `uses:` key, with what follows it; a comment line
+#: starts with `#` and is not one.
+USES_LINE = re.compile(r'^[ \t-]*uses:[ \t]*(.*?)[ \t]*$', re.MULTILINE)
+
+
+def _parsed_uses(path: Path) -> list[object]:
+    """Every `uses:` value a workflow's jobs and steps, or an action's steps, set."""
+    where = github_name(path)
+    document = read_workflow(path)
+    if path.parent.name == 'workflows':
+        jobs = list(workflow_jobs(document, where).values())
+    else:
+        jobs = [mapping(document.get('runs'), f'{where} runs:')]
+    found: list[object] = []
+    for job in jobs:
+        if 'uses' in job:
+            found.append(job['uses'])
+        steps = cast('list[object]', job.get('steps', []))
+        found.extend(step['uses'] for step in (mapping(s, f'{where} step') for s in steps) if 'uses' in step)
+    return found
+
+
+def test_every_action_from_outside_this_repository_is_pinned_by_commit() -> None:
+    """A tag is a pointer its publisher can move, and a moved tag runs in a job holding secrets.
+
+    A step owns the runner for every step after it, so a pin only on the step
+    that touches a key is the wrong shape: the rule is every `uses:` that is
+    not a path in this repository, in the workflows and in the composite
+    actions alike. The comment has to be read off the file's text, which the
+    YAML read drops, so the two reads are held to the same count: a `uses:`
+    written in a form the line read misses fails that count instead of
+    escaping it.
+    """
+    findings: list[str] = []
+    external = 0
+    for path in workflows_and_actions():
+        written = [found.group(1) for found in USES_LINE.finditer(path.read_text())]
+        parsed = _parsed_uses(path)
+        if len(written) != len(parsed):
+            findings.append(f'{github_name(path)}: {len(parsed)} uses: keys, {len(written)} read off its lines')
+        for value in written:
+            if LOCAL_ACTION.match(value):
+                continue
+            external += 1
+            if not PINNED_ACTION.fullmatch(value):
+                findings.append(f'{github_name(path)}: uses: {value}')
+
+    # A read that stopped finding them would pass the loop above on nothing.
+    assert external, 'no action from outside this repository was found'
+    assert findings == [], f'not pinned as `<action>@<commit> # v<release>`: {findings}'
+
+
+ZEROTIER = GITHUB / 'actions' / 'zerotier' / 'action.yml'
+#: The oldest ZeroTier release whose rule engine the flow rules confining the
+#: CI member are written for (physical/gateway.md §2.3).
+ZEROTIER_FLOOR = (1, 14)
+#: The custom manager's pattern for the release, as renovate.json5 holds it:
+#: renovate's regex engine spells a named group `(?<...>`.
+ZEROTIER_MATCH_STRING = "ZEROTIER_VERSION: '(?<currentValue>[^']+)'"
+
+
+def _zerotier_install() -> tuple[dict[str, str], str]:
+    """The composite action's install step: its environment and its script."""
+    runs = mapping(read_workflow(ZEROTIER).get('runs'), 'zerotier runs:')
+    steps = [mapping(step, 'zerotier step') for step in cast('list[object]', runs.get('steps'))]
+    (install,) = (step for step in steps if step.get('name') == 'Install ZeroTier')
+    env = mapping(install.get('env'), 'the ZeroTier install env:')
+    return {key: str(value) for key, value in env.items()}, str(install.get('run'))
+
+
+def test_zerotier_is_a_pinned_release_signed_by_a_pinned_key() -> None:
+    """What the CI member runs moves only by a pull request, whatever happens on ZeroTier's host.
+
+    The release is the package apt installs, and the fingerprint is the key
+    apt is told to trust for the repository: the script exports only the key
+    with that fingerprint into the keyring the source names, and refuses when
+    what it exported is not that key. A release below the floor would install
+    and join, and then the flow rules would not do what they say.
+    """
+    env, run = _zerotier_install()
+
+    version = env['ZEROTIER_VERSION']
+    assert re.fullmatch(r'\d+\.\d+\.\d+(?:-\d+)?', version), f'ZeroTier is not pinned to a release: {version!r}'
+    assert tuple(int(part) for part in version.split('.')[:2]) >= ZEROTIER_FLOOR
+    assert '"zerotier-one=${ZEROTIER_VERSION}"' in run
+
+    assert re.fullmatch(r'[0-9A-F]{40}', env.get('ZEROTIER_KEY_FINGERPRINT', '')), (
+        'no signing-key fingerprint is pinned'
+    )
+    assert 'gpg --batch --export "$ZEROTIER_KEY_FINGERPRINT" >"$GNUPGHOME/zerotier.gpg"' in run
+    assert '[ "$found" != "$ZEROTIER_KEY_FINGERPRINT" ]' in run
+    assert '"$GNUPGHOME/zerotier.gpg" /usr/share/keyrings/zerotier.gpg' in run
+    assert 'deb [signed-by=/usr/share/keyrings/zerotier.gpg] ' in run
+
+
+def test_renovate_reads_the_zerotier_release_for_the_suite_the_action_installs_from() -> None:
+    """Renovate reads the release off the package index of the suite apt installs it from.
+
+    Its registry URL is written in `renovate.json5` and the suite in the
+    action, two spellings of one repository: apart, renovate would offer a
+    release the runner's source does not carry. Renovate reads its
+    configuration from the default branch, so nothing on a pull request would
+    go red for a pattern that stopped matching.
+    """
+    env, run = _zerotier_install()
+    config = (ROOT / 'renovate.json5').read_text()
+    pattern = json.dumps(ZEROTIER_MATCH_STRING)
+
+    assert config.count(pattern) == 1
+    at = config.index(pattern)
+    entry = config[config.rindex('{', 0, at) : config.index('}', at)]
+    assert "datasourceTemplate: 'deb'" in entry
+
+    files = re.findall(r"managerFilePatterns: \[\s*'/((?:[^'\\]|\\.)*)/',\s*\]", entry)
+    assert len(files) == 1
+    assert re.fullmatch(files[0].replace('\\\\', '\\'), str(ZEROTIER.relative_to(ROOT)))
+    found = as_python_spells_it(ZEROTIER_MATCH_STRING).search(ZEROTIER.read_text())
+    assert found is not None
+    assert found['currentValue'] == env['ZEROTIER_VERSION']
+
+    registry = re.search(r"registryUrlTemplate: '([^']*)'", entry)
+    assert registry is not None
+    url = urlsplit(registry[1])
+    suite = env['ZEROTIER_SUITE']
+    assert parse_qs(url.query)['suite'] == [suite]
+    # The apt source the script writes: the repository, then its suite.
+    source = re.search(r'\] (\S+) \$\{ZEROTIER_SUITE\} main', run)
+    assert source is not None, 'the install writes no apt source for the suite the action names'
+    assert source[1].replace('${ZEROTIER_SUITE}', suite) == f'{url.scheme}://{url.netloc}{url.path}'

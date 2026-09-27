@@ -319,6 +319,35 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     One version matters beyond reproducibility there, because the
     `ltex-ls-plus` install stays off the GitHub API only from a floor
     release on, which `mise.toml` names beside that pin.
+-   **Every action from outside this repository is pinned by commit.**
+    Every `uses:` that does not name a path in this repository, in a
+    workflow or in a composite action under `.github/actions/`, is
+    written `<owner>/<repo>[/<path>]@<commit> # v<X.Y.Z>`: the full
+    forty-character commit, then the release it resolves to as a
+    trailing comment. A tag is a pointer its publisher can move, and a
+    step owns the runner for every step after it in its job, so pinning
+    only the step that is handed a key is the wrong shape: a job's
+    secrets are exactly as safe as its least pinned step. What a
+    composite action installs is held the same way. ZeroTier comes from
+    ZeroTier's apt repository at a release the action names, and apt
+    trusts that repository's signing key only when its fingerprint is
+    the one written beside the release, so neither moves by a change on
+    ZeroTier's host alone. Renovate is what moves them: its
+    `helpers:pinGitHubActionDigestsToSemver` preset rewrites commit and
+    comment together, reading only a full `vX.Y.Z` tag as a release so
+    that the comment never names a major tag that moves, and a custom
+    manager reads the ZeroTier release off the repository's package
+    index. **A new action release waits seven days**
+    (`minimumReleaseAge`) before renovate proposes it, because a
+    poisoned release, a publisher's account or pipeline taken over, is
+    usually found and yanked within days. The age renovate reads is the
+    tag's date, which whoever pushes the tag writes, so the wait holds
+    back the ordinary case and not a release made to look old. The pull
+    request that does open waits for a person, since a workflow file and
+    a composite action are both off noop-automerge's allow-list. A test
+    in `checks` holds every such `uses:` to that shape and the ZeroTier
+    install to a pinned release, at least the 1.14 the CI member's flow
+    rules are written for, and a pinned key fingerprint.
 -   **The runner image is pinned the same way.** Every job that runs
     steps names its runner by release — `ubuntu-24.04`, and
     `ubuntu-24.04-arm` for the arm leg of the image builds (§4) — and

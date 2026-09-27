@@ -43,9 +43,9 @@ jobs:
     outputs:
       diff: ${{ steps.plan.outputs.diff }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         timeout-minutes: 5
-      - uses: jdx/mise-action@v3
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         timeout-minutes: 5
         with:
           # Pinned like every tool `mise.toml` manages, and for the same
@@ -93,9 +93,9 @@ jobs:
       group: zt-physical
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         timeout-minutes: 5
-      - uses: jdx/mise-action@v3
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         timeout-minutes: 5
         with:
           # Pinned like every tool `mise.toml` manages, and for the same
@@ -147,9 +147,9 @@ jobs:
       group: zt-dns
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         timeout-minutes: 5
-      - uses: jdx/mise-action@v3
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         timeout-minutes: 5
         with:
           # Pinned like every tool `mise.toml` manages, and for the same
@@ -195,9 +195,9 @@ jobs:
     timeout-minutes: 160
     environment: k8s-base
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         timeout-minutes: 5
-      - uses: jdx/mise-action@v3
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         timeout-minutes: 5
         with:
           # Pinned like every tool `mise.toml` manages, and for the same
@@ -234,9 +234,9 @@ jobs:
     timeout-minutes: 160
     environment: apps
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         timeout-minutes: 5
-      - uses: jdx/mise-action@v3
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         timeout-minutes: 5
         with:
           # Pinned like every tool `mise.toml` manages, and for the same

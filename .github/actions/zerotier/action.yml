@@ -20,9 +20,48 @@ inputs:
 runs:
   using: composite
   steps:
+    # ZeroTier from its own apt repository, pinned twice over: the package at
+    # a release written here, and the repository's signing key trusted only
+    # when it is the key with the fingerprint written here. The key is
+    # fetched from the same host as the packages, so the fingerprint is what
+    # a change on that host cannot move; apt then refuses any index that key
+    # did not sign. Neither the release nor the key changes without a pull
+    # request (framework/ci.md §3).
+    #
+    # The release stays at 1.14 or later: the flow rules that confine the CI
+    # member (physical/gateway.md §2.3) rely on rule-engine behavior ZeroTier
+    # has from 1.14 on, and a test holds the floor. A custom manager in
+    # `renovate.json5` reads the release off ZeroTier's apt repository, for
+    # the suite named here, and a test holds the two suites equal.
     - name: Install ZeroTier
       shell: bash
-      run: curl -fsSL https://install.zerotier.com | sudo bash
+      env:
+        ZEROTIER_VERSION: '1.16.2'
+        ZEROTIER_SUITE: noble
+        ZEROTIER_KEY_FINGERPRINT: 74A5E9C458E1A431F1DA57A71657198823E52A61
+      run: |
+        set -euo pipefail
+        GNUPGHOME="$(mktemp -d)"
+        export GNUPGHOME
+        curl -fsSL https://download.zerotier.com/contact%40zerotier.com.gpg -o "$GNUPGHOME/published"
+        gpg --batch --quiet --import "$GNUPGHOME/published"
+        # Only the pinned key leaves the scratch keyring, and what left it is
+        # read back, so a file holding another key, or none, fails here.
+        gpg --batch --export "$ZEROTIER_KEY_FINGERPRINT" >"$GNUPGHOME/zerotier.gpg"
+        found="$(gpg --batch --show-keys --with-colons "$GNUPGHOME/zerotier.gpg" 2>/dev/null \
+          | awk -F: '$1 == "pub" { primary = 1; next } $1 == "fpr" && primary { print $10; primary = 0 }')" || true
+        if [ "$found" != "$ZEROTIER_KEY_FINGERPRINT" ]; then
+          echo "::error::ZeroTier's published signing key is not ${ZEROTIER_KEY_FINGERPRINT} (found: ${found:-none})"
+          exit 1
+        fi
+        sudo install -m 0644 "$GNUPGHOME/zerotier.gpg" /usr/share/keyrings/zerotier.gpg
+        echo "deb [signed-by=/usr/share/keyrings/zerotier.gpg] https://download.zerotier.com/debian/${ZEROTIER_SUITE} ${ZEROTIER_SUITE} main" \
+          | sudo tee /etc/apt/sources.list.d/zerotier.list >/dev/null
+        sudo apt-get update \
+          -o Dir::Etc::sourcelist=sources.list.d/zerotier.list \
+          -o Dir::Etc::sourceparts=- \
+          -o APT::Get::List-Cleanup=0
+        sudo apt-get install -y --no-install-recommends "zerotier-one=${ZEROTIER_VERSION}"
 
     - name: Install the member identity
       shell: bash

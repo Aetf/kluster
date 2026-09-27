@@ -34,14 +34,14 @@ jobs:
       # by building the matrix rather than by filtering it afterwards.
       stacks: ${{ steps.filter.outputs.changes }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       # Path filtering saves job setup, nothing more, so it is a deny-list:
       # a preview that should have run and did not is invisible (the job is
       # skipped, and a skipped job is green), while a preview that runs
       # needlessly costs a minute and no-ops internally. An allow-list gets
       # this backwards -- every new file defaults to being missed, which is
       # how `config.py` and the stack dispatch came to match nothing.
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.4
         id: filter
         with:
           # A deny-list is only a deny-list under `every`. The action's
@@ -87,9 +87,9 @@ jobs:
       group: ${{ matrix.stack == 'dns' && 'zt-dns' || format('preview-{0}-{1}', github.ref, matrix.stack) }}
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: jdx/mise-action@v3
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         with:
           # Pinned like every tool `mise.toml` manages, and for the same
           # reason (framework/ci.md §3). This is the action's own input, and
