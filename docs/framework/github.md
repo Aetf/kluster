@@ -290,9 +290,11 @@ in the component. It is the same shape, and the same name, as the
     its verdict a condition of merging, and a pull request whose two
     required contexts are green is mergeable while the rest of the
     matrix is red (ci.md §5). That a change no stack program reads does
-    not run the matrix at all is a second reason, and the one that lets
-    `noop-automerge` merge such a change on the required checks alone
-    (ci.md §3). Force pushes and deletion are off; history is linear.
+    not run the matrix at all is a second reason. It is not what lets
+    `noop-automerge` merge anything: that workflow's allow-list admits
+    no documentation outside `sdks/`, and every candidate runs the
+    proof (ci.md §3). Force pushes and deletion are off; history is
+    linear.
 
 ### 3.1 What is adopted rather than created
 

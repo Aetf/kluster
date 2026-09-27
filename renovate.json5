@@ -48,9 +48,11 @@
   gitIgnoredAuthors: [
     'github-actions[bot]@users.noreply.github.com',
   ],
-  // Merging is the CI's job, not renovate's: the deploy workflow merges a PR
-  // once it has proven the preview is empty (framework/ci.md §3) — a zero-diff
-  // proof renovate cannot produce. Two mechanisms racing would also mean
+  // Merging is the CI's job, not renovate's: noop-automerge merges a PR whose
+  // every changed path is on its allow-list — `uv.lock`, `sdks/`, and a bump
+  // of `Pulumi.yaml`'s `packages:` block — once it has proven the preview is
+  // empty (framework/ci.md §3), a zero-diff proof renovate cannot produce, and
+  // every other PR waits for a reader. Two mechanisms racing would also mean
   // whichever wins picks the merge strategy, and renovate's squash rewrites
   // the committer.
   packageRules: [
@@ -59,10 +61,11 @@
     // that reimages three nodes in the same PR as a typing-stub bump, and the
     // reviewer would have to take them or leave them together.
     {
-      // Library upgrades that should change no resource at all. This is the
-      // one group the zero-diff proof can wave through unattended
-      // (framework/ci.md §3), which is exactly why it must not carry anything
-      // that legitimately produces a diff.
+      // Library upgrades that should change no resource at all. A bump that
+      // rewrites only `uv.lock` can merge behind the zero-diff proof, and one
+      // that edits `pyproject.toml` waits for a reader (framework/ci.md §3).
+      // Either way it must not carry anything that legitimately produces a
+      // diff.
       matchManagers: [
         'pep621',
         'pip_requirements',
@@ -114,7 +117,9 @@
     },
     {
       // The toolchain CI installs from. A pulumi or uv bump changes how every
-      // other check runs, so it travels alone and is read.
+      // other check runs, so it travels alone and is read: `mise.toml` is off
+      // noop-automerge's allow-list (framework/ci.md §3), so a person merges
+      // it.
       matchManagers: [
         'mise',
       ],

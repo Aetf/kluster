@@ -172,10 +172,9 @@ PR      preview.yml:        changes ─→ preview (dns | k8s-base | apps)
                                are main-only, see partitioning below)
 
         noop-automerge.yml: classify ─→ prove (dns | k8s-base | apps) ─→ merge
-                                     │                                     ↑
-                                     └──── unproven: nothing to prove ─────┘
                               (its own workflow, not a reader of
-                               preview's verdict)
+                               preview's verdict; a pull request off
+                               its allow-list stops at classify)
 
         sdk-regenerate.yml: regenerate ─→ gate ─→ push onto the branch
                               (renovate's branches touching Pulumi.yaml
@@ -284,13 +283,19 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
 -   **The unattended merge waits for the required checks rather than
     racing them.** `main` requires `checks` and `changes` on an
     up-to-date branch (§5), and the merge API refuses while either is
-    outstanding — a race a skipped proof is fast enough to lose, since
-    `classify` is finished while `checks` is still installing its
-    tools. The merge job therefore blocks on
+    outstanding — and nothing orders `prove` after `checks`, which are
+    two workflows started by the same event, so the merge has no reason
+    to find them finished. The merge job therefore blocks on
     `gh pr checks --required --watch` before it merges, and a required
     check that goes red takes that job down with it. It also stands
     down on a draft, which `pull_request` fires for and `gh pr merge`
-    refuses — a red job where the point was a merge.
+    refuses — a red job where the point was a merge. **The merge is of
+    the head the run was started for**: `classify` refuses a pull
+    request whose head has moved since the event, and the merge passes
+    that head as `--match-head-commit`. A re-run of a run's failed jobs
+    reuses the finished jobs' verdicts and the original event, so
+    without the pin it would merge whatever head the branch carries by
+    then, which nothing classified or proved.
 -   **The installer that fetches every other tool is pinned too.**
     Every job that runs a `mise` command installs mise through
     `jdx/mise-action`'s `version` input rather than the action's
@@ -440,7 +445,8 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     nothing, which is the property the unattended merge relies on to
     start no deploy. From the push on, nobody is needed: `checks`,
     `changes` and `classify` start on the regenerated head, and
-    `classify` admits `Pulumi.yaml` when the author is `renovate[bot]`
+    `classify` admits `Pulumi.yaml` onto its allow-list (below) when the
+    author is `renovate[bot]`
     and the document with `packages` removed is equal at base and head —
     compared **parsed**, not by hunk, so a comment and a reordering of
     keys do not count while an edit to any other key does, `versions:`
@@ -450,12 +456,13 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     `checks` rather than on a second judgment of its own: `checks`
     already holds each `sdks/<name>` to the block and `uv.lock` to the
     tree, so "regenerated cleanly" is a required check. The bump then
-    takes the proven route like any other — `checks`, `changes`,
+    takes the same route as any other candidate — `checks`, `changes`,
     `classify`, `prove`, `merge` — because what it actually changes,
-    `sdks/` and `uv.lock`, is code. What `prove` can say about such a
-    bump is nothing in any case: the three SDKs render only in
-    `physical`, which has no pull-request preview, so `prove` cannot see
-    a bump's diff, and it surfaces where every provider-SDK bump does —
+    `sdks/` and `uv.lock`, is on the allow-list in its own right. What
+    `prove` can say about such a bump is nothing in any case: the three
+    SDKs render only in `physical`, which has no pull-request preview,
+    so `prove` cannot see a bump's diff, and it surfaces where every
+    provider-SDK bump does —
     as a diff in `plan-physical` on `main` (the residual accepted under
     H3 below).
     **A rebase heals itself.** Renovate's `rebaseWhen: auto` resolves
@@ -758,28 +765,31 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     (`pull_request`; fork PRs get no secrets, `pull_request_target` is
     never used): a preview **executes the PR's Python with provider
     credentials**, so who can trigger one is a security boundary, not
-    a convenience setting. **noop-automerge's *candidacy* is by path,
-    with one admission that asks who as well**: any pull request
-    touching neither `src/` nor `Pulumi.*` is a candidate, which is
-    renovate's lockfile and pin traffic in practice but is not
-    restricted to it — and so is a renovate bump of `Pulumi.yaml`'s
-    `packages:` block, which is the generator's recipe rather than
-    stack configuration (the bridged-SDK bullet above). The gate that
-    matters is the zero-diff proof either way, and an `expect-changes`
-    label opts a pull request out of the whole path. A candidate that touches
-    nothing but documentation, `.vscode/` or `.gitignore` — the same
-    deny-list the preview filter uses — **may skip the proof and merge
-    on the required checks alone**: no stack program reads those paths,
-    so an empty preview of them is a ceremony rather than evidence. That
-    reasoning does not retire, because which files a stack program
-    reads is not a phase. **That route tests the author for a
-    reason of its own**: skipping the proof skips the last thing
-    holding a
-    documentation change until somebody read it, and dispatch.md §3
-    says no pull request merges reviewed by nobody but its author — a
-    rule aimed at `AGENTS.md` and `docs/` above all. So it is open to
-    renovate's own pull requests and to nothing else, and every other
-    documentation change takes the proven route. **An operator opt-in
+    a convenience setting. **noop-automerge's *candidacy* is an
+    allow-list of paths, with one entry that asks who as well**: a pull
+    request is a candidate only when every path it changes is `uv.lock`,
+    under `sdks/`, or `Pulumi.yaml` on renovate's bump of its
+    `packages:` block, which is the generator's recipe rather than stack
+    configuration (the bridged-SDK bullet above). The list is written
+    once, in the workflow's `classify` step. A candidate merges only
+    behind the zero-diff proof, and an `expect-changes` label opts a
+    pull request out of the whole path. **Every other path waits for a
+    human, and the list is short because of what a deny-list misses**:
+    the proof measures what the stack programs render, so a path no
+    stack program reads previews empty however it changed. Those paths
+    include the trust anchors — `escrow/RECIPIENTS`, the appliance's
+    `deploy/state-backend/*.txt` key files, the composite actions under
+    `.github/actions/` that `plan-physical` runs with `physical-plan`
+    secrets, `mise.toml`'s templates that read the kit's slots on the
+    workstation — and documentation, which nothing but a reader
+    measures: dispatch.md §3 says no pull request merges reviewed by
+    nobody but its author, a rule aimed at `AGENTS.md` and `docs/`
+    above all. A list of what to refuse admits each of those on an
+    empty preview until somebody thinks to add it. So a renovate bump
+    that edits any path off the list is reviewed like any other pull
+    request — today that is a `pyproject.toml` range, an action pin,
+    `mise.toml`, an image `.conf`, beside the stack configuration that
+    never took this route. **An operator opt-in
     by label is ruled out rather than pending** (kluster-ops#244,
     #247): a label carries no record of who applied it, and on a later
     `synchronize` the actor is the author regardless, so a label that
@@ -793,9 +803,10 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     the census does not name is silently dead: the comparison is never
     true, and the route it guards is never taken. A fork's pull request
     is refused by name in `classify`, and by name rather than by
-    consequence because the proof-skipping route reaches the merge
-    without running any job that a missing Environment secret would
-    fail. Repo secret scanning and push protection are on.
+    consequence — the proof needs Environment secrets a fork never
+    receives — because a refusal that rests on a later job failing is
+    one that a change to that job removes without anybody deciding to.
+    Repo secret scanning and push protection are on.
     A dedicated **`drill` Environment — in the ops repo, where the
     drill workflows are to run** — is where the unattended drills'
     credentials (drill-compartment OCI user, dump-read B2 key, drill
@@ -918,8 +929,9 @@ vchord/pgvecto-rs), emailproxy, golinks — stay **in the kluster repo**
 homelab-containers: ownership follows the consumer (the same
 co-location principle as DNS records and firewall rules), and the
 proven single-repo loop is kept intact — a `.conf` version file per
-image, renovate's comment-driven regex managers bumping it,
-noop-automerge merging on green, the workflow publishing the ghcr tag,
+image, renovate's comment-driven regex managers bumping it, a person
+merging the bump (a `.conf` is not on noop-automerge's allow-list,
+§3), the workflow publishing the ghcr tag,
 and a consumer's renovate then opening the *deploy* PR against the
 image pin for human eyes, under the versioning the end of this section
 names. homelab-containers keeps its host/UDM scope (nspawn
@@ -1121,9 +1133,11 @@ two: which names are reported failed and which canceled varies
 between runs and carries no information. A pull request that touches
 only documentation, `.vscode/` or `.gitignore` runs no `preview` at
 all — `changes` selects an empty set and the matrix job stands down.
-Whether it also skips `prove` turns on who opened it: renovate's own
-pull requests merge unattended, and every other documentation change
-still proves against the missing stacks and is merged by hand (§3).
+It runs no `prove` either, unless all of it lies under `sdks/`:
+documentation is not on noop-automerge's allow-list anywhere else, so
+such a pull request is merged by hand (§3). A candidate the list does
+admit runs `prove` against the missing stacks, which errors, and is
+merged by hand as well.
 **Retires with the M2 stacks** (`kluster-ops#77`), which create both
 and make the matrices honest.
 

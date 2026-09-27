@@ -32,11 +32,14 @@ their stacks, and the deploy-failure alert the images row names as its
 safety valve, which is built and is the interim Home Assistant webhook
 (ci.md §3), fires on every merge alike, so it singles out nothing. The
 dependency bumps wait one step further back. The noop-automerge
-workflow is built, but a bump touches `uv.lock`, `pyproject.toml` or a
-workflow file, which puts it on the route that proves itself with a
-preview of `k8s-base` and `apps` among others, and no stack of either
-name exists in the state backend for that preview to resolve — so the
-proof errors rather than passing. The whole account, the other facts
+workflow is built, and it merges a bump only when every path the bump
+changes is on its allow-list — `uv.lock`, `sdks/`, and renovate's bump
+of `Pulumi.yaml`'s `packages:` block (ci.md §3). A bump that also edits
+`pyproject.toml`, a workflow file, `mise.toml` or an image's `.conf`
+waits for a human outright. One that stays on the list proves itself
+with a preview of `k8s-base` and `apps` among others, and no stack of
+either name exists in the state backend for that preview to resolve —
+so the proof errors rather than passing. The whole account, the other facts
 behind that error included, is ci.md §5. Every bump therefore merges
 the way the waiting rows do: as a reviewed pull request.
 
@@ -50,7 +53,7 @@ the way the waiting rows do: as a reviewed pull request.
 | blog image / built branch | blog repo CI | git-sync | Automatic — content, not code |
 | nspawn rootfs (caddy, AdGuard, ZeroTier) | renovate here — docker datasource, reading whole references off the `versions:image-gateway-…` pins | `physical` stack: the device pulls the pinned manifest itself and unpacks it beside the tree it is running, then the boot chain's machine script restarts what changed | Reviewed; the run-number tag reads as a major bump, so every one waits on dashboard approval |
 | State-backend pins: the FCOS stream; the Postgres major line (`settings.POSTGRES_IMAGE`, rendered into the Butane file); the age release (`settings.AGE_VERSION`) | Zincati (periodic window) for the OS; renovate for the two settings, one custom manager each on `state_backend/settings.py` | Zincati, and `podman-auto-update.timer` for the Postgres minor stream: auto. A settings bump: a manual replace-and-restore, `state-backend provision --force` and then `state-backend restore` of the dump that run names (state-backend.md §7.2) | Reviewed, grouped apart from everything else because each bump replaces the box. An age bump is one pull request moving `settings.AGE_VERSION` and the `age` pin in `mise.toml` together: renovate's mise manager reads that pin too, and a rule takes it out of the `toolchain` group into this one, because `tests/test_age.py` holds the two pins equal. The pull request is finished by hand: `AGE_SHA256` beside `settings.AGE_VERSION` is a digest renovate cannot recompute, and the `checks` workflow's `state-backend pins` refuses it stale. state-backend.md §1–2, and §7 for the age pin |
-| Pulumi SDK + providers, Python deps, Actions versions | renovate | **noop-automerge workflow** — merges once the preview is proven empty (the zero-diff rule, ci.md); that proof previews stacks that do not exist yet, so nothing takes this path today (paragraph above) | Automerged when diff-free; a bump that produces a real diff falls out of the noop path to human review; major behind dashboard approval |
+| Pulumi SDK + providers, Python deps, Actions versions | renovate | **noop-automerge workflow** — merges a bump that changes nothing but paths on its allow-list (`uv.lock`, `sdks/`, the `packages:` block) once the preview is proven empty (the zero-diff rule, ci.md); that proof previews stacks that do not exist yet, so nothing takes this path today (paragraph above) | Automerged when on the list and diff-free; a bump that edits any other path — `pyproject.toml`, an action pin in a workflow — or that produces a real diff is human review; major behind dashboard approval |
 | UDM firmware | **vendor-controlled** (auto-update schedule; outage history on record) | — | Not ours to pin; the device's services self-heal via on_boot.d, overlay recovery runbook gateway.md §3 |
 
 ## 2. Upgrade runbooks (census)

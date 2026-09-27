@@ -1,75 +1,93 @@
 name: noop-automerge
 
-# A PR that touches neither the program (`src/`) nor its stack config
-# (`Pulumi.*`) cannot legitimately change what gets deployed — lockfile
-# maintenance, dependency bumps, docs. This workflow merges such a PR
-# unattended — and one `Pulumi.yaml` change besides, which is the **admission**
-# below.
+# Merges a pull request with nobody reading it, and only one of a single
+# shape: every path it changes is on the **allow-list** in `classify`, and a
+# preview of every stack a pull request can preview comes back empty. Every
+# other pull request waits for a human -- a path the list does not name, a
+# fork's, one labeled `expect-changes`.
 #
 # Its own workflow rather than a step in preview.yml, which runs for every PR
 # and only reports: "this may merge without a human" deserves its own trigger,
 # its own log and its own red X.
 #
-# Two routes reach the merge. The path classification decides candidacy for
-# both, and it is most of what tells them apart:
+# **The route is an allow-list, because what a deny-list misses is what
+# matters.** The zero-diff preview below measures what the stack programs
+# render, and a path no stack program reads previews empty however it
+# changed. Those paths are not inert. `escrow/RECIPIENTS` names who every new
+# escrow generation is encrypted to; `deploy/state-backend/*.txt` holds the
+# appliance's operator keys and the drill recipient; `.github/actions/` is
+# code `deploy.yml` runs with `physical-plan` secrets; `mise.toml`'s templates
+# read the kit's slots on the workstation that holds it. A list of what to
+# refuse admits each of those until somebody thinks to add it, and a pull
+# request touching one merges on an empty preview in the meantime. So the list
+# names what is admitted, and it is short on purpose:
 #
-#   * **Proven.** A change that can still reach a stack — a lockfile, a
-#     dependency, a workflow — merges only behind a **zero-diff preview** of
-#     the stacks a pull request can preview at all: `dns`, `k8s-base` and
-#     `apps`, which is `prove`'s matrix below. That proof is the gate, and it
-#     is what catches a bump which silently changes rendering. It covers
-#     neither `physical` nor `github`, and each is read somewhere else
-#     instead. `physical`'s credentials are main-only, so no pull request
-#     previews it (ci.md §3): a bump that moves physical rendering surfaces as
-#     a diff in deploy.yml's `plan-physical` and stalls the chain in front of
-#     `up-physical`'s reviewer gate — after this merge rather than before it,
-#     and on the next run of the chain rather than on this one, because the
-#     merge below starts no workflow at all (last paragraph). `github` is
-#     previewed and applied by no workflow: the forge is declared here and
-#     applied by hand from a workstation (ci.md §3), so its diff is read by
-#     whoever runs that apply.
-#   * **Unproven.** A change to documentation, editor configuration or
-#     `.gitignore` reaches no stack at all: no `pulumi` program reads those
-#     paths, so there is no rendering for a preview to compare and the proof
-#     would be a ceremony over an empty diff. Such a PR skips the matrix and
-#     merges on the required checks alone.
+#   * `uv.lock` -- the resolved dependency set, which lockfile maintenance
+#     rewrites;
+#   * `sdks/**` -- the bridged provider SDKs, which sdk-regenerate.yml
+#     generates from `Pulumi.yaml`'s `packages:` block;
+#   * `Pulumi.yaml` itself, on renovate's pull request and when nothing but
+#     that block changed -- the **admission** below.
+#
+# What those have in common is that they are code a stack program runs and
+# nothing else reads as trust. What the preview measures of them differs.
+# `uv.lock` is resolved by every previewed stack, so a change to what those
+# render shows as a diff. `sdks/` is not measured at all: the bridged SDKs
+# render only in `physical`, which no pull request previews, and `checks`
+# holds them to the block only through each SDK's `pulumi-plugin.json`. So a
+# change under `sdks/` merges unread whatever it does, and runs in
+# `plan-physical` on the next run of the chain.
+# The code a dependency carries also runs with the credentials of every job
+# that installs it, `deploy.yml`'s ungated `plan-physical` included; that is
+# the residual ci.md §3 records under credential partitioning, and a bump
+# that moves physical rendering stalls in front of `up-physical`'s reviewer
+# gate rather than applying. Documentation is off the list for a reason of its
+# own: no preview measures it, so a reader is the only thing that stands
+# between a documentation change and `main`, and dispatch.md §3 says no pull
+# request here merges reviewed by nobody but its author.
+#
+# **The proof** is a zero-diff preview of the stacks a pull request can
+# preview at all: `dns`, `k8s-base` and `apps`, which is `prove`'s matrix
+# below. It covers neither `physical` nor `github`, and each is read somewhere
+# else instead. `physical`'s credentials are main-only, so no pull request
+# previews it (ci.md §3): a bump that moves physical rendering surfaces as a
+# diff in deploy.yml's `plan-physical` and stalls the chain in front of
+# `up-physical`'s reviewer gate -- after this merge rather than before it, and
+# on the next run of the chain rather than on this one, because the merge
+# below starts no workflow at all (last paragraph). `github` is previewed and
+# applied by no workflow: the forge is declared here and applied by hand from
+# a workstation (ci.md §3), so its diff is read by whoever runs that apply.
 #
 # **The classification is only as good as the path list, so the list is
 # complete or the verdict is a refusal.** GitHub pages a pull request's changed
 # files, and a reader that takes the first page alone -- `gh pr view --json
 # files` -- answers with at most a hundred paths and nothing to say that there
-# were more, so a pull request carrying a hundred early-sorting paths could
-# hold a `src/` file the test never saw and merge unattended. `classify` pages
-# the list instead and counts what it got against the number the pull request
-# reports; a read that failed, an empty list and a count that falls short each
-# refuse candidacy rather than decide on what arrived.
+# were more, so a pull request carrying a hundred allow-listed paths could
+# hold a path off the list the test never saw and merge unattended. `classify`
+# pages the list instead and counts what it got against the number the pull
+# request reports; a read that failed, an empty list and a count that falls
+# short each refuse candidacy rather than decide on what arrived.
 #
-# **The unproven route asks who as well as the path; the proven one asks the
-# path, and asks who only for the admission above. Both are refused outright
-# by a fork or an `expect-changes` label first.** Skipping the
-# proof also skips the only thing that was holding a documentation change until
-# somebody read it, and dispatch.md §3 says no PR here merges reviewed by
-# nobody but its author — a rule whose subject is `AGENTS.md` and `docs/` more
-# than anything else. So the unproven route is open to renovate's own pull
-# requests and to nothing else.
+# **The route asks who only for the admission, and refuses a fork or an
+# `expect-changes` label before it asks anything.** `uv.lock` and `sdks/`
+# merge on the proof whoever opened the pull request; `Pulumi.yaml` is on the
+# list for renovate's pull request alone.
 #
-# **One `Pulumi.*` path is admitted even so**: `Pulumi.yaml`'s `packages:`
-# block, on renovate's own pull request. That block is not stack
-# configuration — no stack program reads it. It is the recipe `pulumi install`
-# generates the three SDKs under `sdks/` from, and a bump of it reaches a
-# stack only through the regenerated SDK, which `checks` already holds to the
-# block (ci.md §3). So `classify` admits a pull request whose only
-# `src/`-or-`Pulumi.*` path is `Pulumi.yaml`, when the author is renovate and
-# the document with `packages` removed is equal at base and head. What the
-# bump actually changes — `sdks/`, `uv.lock` — is code, so such a pull request
-# stays on the proven route and merges behind the same zero-diff preview as
-# any other bump.
+# **Why `Pulumi.yaml` is admitted at all**: its `packages:` block is not
+# stack configuration -- no stack program reads it. It is the recipe
+# `pulumi install` generates the three SDKs under `sdks/` from, and a bump of
+# it reaches a stack only through the regenerated SDK, which `checks` already
+# holds to the block (ci.md §3). So `classify` counts `Pulumi.yaml` as on the
+# list when the author is renovate and the document with `packages` removed is
+# equal at base and head. What the bump actually changes -- `sdks/`, `uv.lock`
+# -- is on the list in its own right, and the pull request merges behind the
+# same zero-diff preview as any other.
 #
 # **That equality is of parsed documents, not of the diff**, and the step
 # below decides it from three inputs and nothing else: the author, the base
 # SHA and the head SHA. A hunk test would answer for the lines around the
 # block as readily as for the block. So both revisions are read through the
-# API — `classify` has no checkout — parsed, stripped of `packages`, and
+# API -- `classify` has no checkout -- parsed, stripped of `packages`, and
 # compared with their keys sorted. A comment does not count, and neither does
 # a reordering of keys; an edit to any other key does. `versions:` is the key
 # that matters: a pin there is what a stack program reads, so a bump that
@@ -81,8 +99,8 @@ name: noop-automerge
 # only one `sdk-regenerate.yml` finishes on its branch.
 #
 # **Base is the base branch's tip**, which is what the event carries. Where
-# that is not also the merge base — a branch behind a `main` that has since
-# moved `Pulumi.yaml` — the two documents differ and the verdict is "not a
+# that is not also the merge base -- a branch behind a `main` that has since
+# moved `Pulumi.yaml` -- the two documents differ and the verdict is "not a
 # candidate". That is the safe direction, and a temporary one: `main` requires
 # an up-to-date branch (ci.md §5), so a branch that can merge at all has been
 # rebased onto that tip, and renovate rebases its own.
@@ -93,27 +111,37 @@ name: noop-automerge
 # So a label that *removes* a gate is one an author can apply to their own pull
 # request and merge behind, which is the case dispatch.md §3 forbids by name.
 # `expect-changes` is safe against the same hole only because it runs the other
-# way — it can stand the merge down and can never let one through.
+# way -- it can stand the merge down and can never let one through.
 #
 # **The login is in the census `conventions/forge.py` carries, and a test holds
 # this file to it.** A login a workflow branches on and nothing declares makes
 # the condition silently dead: the comparison is never true, the route is never
 # taken, and nothing anywhere reports that. The same census carries every label
-# a workflow reads, for the same reason. Both routes test the same login, and
-# it is written once — in `env` below — because two spellings are two things
-# to get wrong, and the same test holds it to that one place.
+# a workflow reads, for the same reason. The literal is written once -- in
+# `env` below -- because two spellings are two things to get wrong, and the
+# same test holds it to that one place.
 #
-# A fork's pull request is refused outright, by name in `classify`. Until the
-# unproven route existed the refusal was implicit — the proof needs Environment
-# secrets, which a fork never receives, so it errored — and an implicit refusal
-# does not survive a route that runs no job needing a secret.
+# **The verdict is about one head, and the merge is of that head.** The run
+# was started for the event's head, `prove` checks out that event's merge
+# commit, and `classify` refuses unless the head the pull request reports
+# when it is read is still that one. The merge names it too, with
+# `--match-head-commit`, so GitHub refuses it if the branch has moved since.
+# A newer push ordinarily cancels this run (`concurrency` below), but a
+# re-run of a run's failed jobs reuses its finished jobs' outputs and its
+# original event: without the pin, a re-run of an old head's run would merge
+# whatever head the branch carries by then, which nothing classified or
+# proved.
 #
-# The merge does not start deploy.yml — pushes made with GITHUB_TOKEN start no
-# workflow runs. That is correct by construction for what the proof covers: a
-# proven PR merged because the previewable stacks rendered identically, and an
-# unproven one changes nothing an apply reads. For `physical` it defers rather
-# than settles, which is the reading `plan-physical` does on the next run of
-# the chain (see **Proven** above).
+# A fork's pull request is refused outright, by name in `classify`, rather than
+# left to the proof, which needs Environment secrets a fork never receives: a
+# refusal that rests on a later job failing is one that a change to that job
+# removes without anybody deciding to.
+#
+# The merge does not start deploy.yml -- pushes made with GITHUB_TOKEN start no
+# workflow runs. That is correct by construction for what the proof covers: the
+# pull request merged because the previewable stacks rendered identically. For
+# `physical` it defers rather than settles, which is the reading
+# `plan-physical` does on the next run of the chain (see **The proof** above).
 
 on:
   pull_request:
@@ -137,11 +165,14 @@ env:
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   GH_REPO: ${{ github.repository }}
   PR: ${{ github.event.pull_request.number }}
-  # Who opened the pull request, and the one login either route admits. The
+  # Who opened the pull request, and the one login the admission admits. The
   # literal is written here and nowhere else in this file (see the header);
   # `conventions.forge.RENOVATE` is the census that holds it.
   AUTHOR: ${{ github.event.pull_request.user.login }}
   RENOVATE: renovate[bot]
+  # The head this run was started for: what `classify` holds the pull request
+  # to, and the only head the merge may land (see the header).
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
 
 jobs:
   classify:
@@ -149,24 +180,11 @@ jobs:
     timeout-minutes: 5
     outputs:
       noop: ${{ steps.classify.outputs.noop }}
-      # Whether this PR may merge without the proof, which is the path
-      # classification and the author test together.
-      unproven: ${{ steps.classify.outputs.unproven }}
     steps:
-      # No checkout. On a `pull_request` event paths-filter reads the file list
-      # from the API rather than from a working tree, and a job whose entire
-      # output is a verdict has no reason to put an untrusted head on disk.
-      - uses: dorny/paths-filter@v3
-        id: paths
-        with:
-          predicate-quantifier: every
-          filters: |
-            code:
-              - '!docs/**'
-              - '!**/*.md'
-              - '!.vscode/**'
-              - '!.gitignore'
-
+      # No checkout: every input is read through the API, and a job whose
+      # entire output is a verdict has no reason to put an untrusted head on
+      # disk.
+      #
       # The admission the header describes, decided from the author and the two
       # revisions and nothing else -- which is what lets the same script be run
       # against a pair of real commits from a workstation. `yq` is on the
@@ -185,7 +203,6 @@ jobs:
         id: recipe
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           recipe() {
@@ -212,18 +229,17 @@ jobs:
           # to move resources. Such a PR wants human eyes on the diff.
           OVERRIDE: ${{ contains(github.event.pull_request.labels.*.name, 'expect-changes') }}
           FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
-          # `code: false` means every file in the PR is documentation, editor
-          # configuration or `.gitignore`. The filter above is preview.yml's
-          # own, pattern for pattern and under the same `every` quantifier, so
-          # a file that stops being inert stops being inert in both at once.
-          INERT: ${{ steps.paths.outputs.code == 'false' }}
           ADMIT: ${{ steps.recipe.outputs.admit }}
+          # The allow-list, and the only place it is written (the header says
+          # why each entry is here and why nothing else is). One bash pattern
+          # per line, matched against the whole path, where `*` crosses `/`:
+          # `sdks/**` is every file under `sdks/`. `Pulumi.yaml` joins the list
+          # when the step above admitted it, and not otherwise.
+          ALLOWED: |
+            uv.lock
+            sdks/**
         run: |
           set -euo pipefail
-          trusted=false
-          if [ "$AUTHOR" = "$RENOVATE" ]; then
-            trusted=true
-          fi
           if [ "$FORK" = 'true' ] || [ "$OVERRIDE" = 'true' ]; then
             echo 'noop=false' >> "$GITHUB_OUTPUT"
             exit 0
@@ -233,49 +249,84 @@ jobs:
           # says nothing about the rest, so a pull request carrying a hundred
           # early-sorting paths hides every path after them from the test
           # below. `--paginate` walks the pages, and the `--jq` filter runs on
-          # each of them, so the output is one path per line however many pages
-          # there were; `per_page` decides only how many requests that is.
+          # each of them, so the output is one line per entry however many
+          # pages there were; `per_page` decides only how many requests that
+          # is.
+          #
+          # **An entry is a change, and a rename is one entry with two paths.**
+          # The API reports a rename once, with the new path in `filename` and
+          # the old one in `previous_filename`, and `changedFiles` counts it
+          # once. A test that read `filename` alone would never see the old
+          # path, so a rename from anywhere into `sdks/` would delete a file
+          # off the list unread. So each line carries both paths, tab-separated
+          # -- `@tsv` escapes a tab or a newline inside a name, which keeps an
+          # entry on one line and the count a count of entries -- and each is
+          # held to the list below.
           #
           # Each read lands in a variable of its own and the list is counted,
           # because every way this can go wrong goes wrong the same way: a
-          # short list still greps clean. So a read that failed refuses, an
-          # empty list refuses, and a count that does not match the number the
-          # pull request itself reports refuses -- naming both numbers, a log
-          # being the only reader there is.
-          if ! files=$(gh api --paginate "repos/$GH_REPO/pulls/$PR/files?per_page=100" --jq '.[].filename') \
-            || ! changed=$(gh pr view "$PR" --json changedFiles --jq '.changedFiles'); then
+          # short list still passes the test below. So a read that failed
+          # refuses, an empty list refuses, and a count that does not match the
+          # number the pull request itself reports refuses -- naming both
+          # numbers, a log being the only reader there is.
+          if ! files=$(gh api --paginate "repos/$GH_REPO/pulls/$PR/files?per_page=100" \
+              --jq '.[] | [.filename, (.previous_filename // "")] | @tsv') \
+            || ! reported=$(gh pr view "$PR" --json changedFiles,headRefOid --jq '.changedFiles, .headRefOid'); then
             echo 'The changed paths could not be read; not a candidate.'
             echo 'noop=false' >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          changed=
+          head=
+          { read -r changed; read -r head; } <<<"$reported" || true
+          # Read after the list, so a head that still matches is the head the
+          # list describes.
+          if [ "$head" != "$HEAD_SHA" ]; then
+            echo "The pull request's head is '$head', not $HEAD_SHA, which this run is for; not a candidate."
+            echo 'noop=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Compared as strings: `-ne` on a count that is not a number is a
+          # test error, which an `if` reads as false and walks past, where a
+          # string that differs refuses by construction.
           seen=$(grep -c . <<<"$files" || true)
-          if [ "$seen" -eq 0 ] || [ "$seen" -ne "$changed" ]; then
+          if [ "$seen" = 0 ] || [ "$seen" != "$changed" ]; then
             echo "Read $seen of the $changed changed paths; not a candidate."
             echo 'noop=false' >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # Every path that can reach a stack. `Pulumi.yaml` alone, admitted by
-          # the step above, is the one such list that is still a candidate: any
-          # other member, and a second member beside it, is the human route.
-          reaching=$(grep -E '^(src/|Pulumi\.)' <<<"$files" || true)
-          if [ -n "$reaching" ] && { [ "$reaching" != 'Pulumi.yaml' ] || [ "$ADMIT" != 'true' ]; }; then
-            echo 'noop=false' >> "$GITHUB_OUTPUT"
-            exit 0
+          allowed=$ALLOWED
+          if [ "$ADMIT" = 'true' ]; then
+            allowed+=$'\nPulumi.yaml'
           fi
-          if [ "$INERT" = 'true' ] && [ "$trusted" = 'true' ]; then
-            echo 'unproven=true' >> "$GITHUB_OUTPUT"
-          fi
+          # Every path is on the list -- both of a rename's -- or the pull
+          # request is the human route. The pattern is unquoted on purpose:
+          # quoted, `[[ == ]]` compares it as a literal string and `sdks/**`
+          # matches nothing.
+          while IFS=$'\t' read -r path previous; do
+            for candidate in "$path" ${previous:+"$previous"}; do
+              listed=false
+              while IFS= read -r pattern; do
+                if [ -n "$pattern" ] && [[ $candidate == $pattern ]]; then
+                  listed=true
+                fi
+              done <<<"$allowed"
+              if [ "$listed" != 'true' ]; then
+                echo "$candidate is not on the allow-list; not a candidate."
+                echo 'noop=false' >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            done
+          done <<<"$files"
           # Last, and the only line that writes it: see the merge job's `if`.
           echo 'noop=true' >> "$GITHUB_OUTPUT"
 
   prove:
     needs: classify
-    # The proof is for every candidate that is not on the unproven route: a
-    # fork, an `expect-changes` label, and a `src/`-or-`Pulumi.*` touch the
-    # admission above does not cover, all leave `noop` false, which skips this
-    # job and the merge with it. An admitted bump is a candidate that is not
-    # inert, so it arrives here rather than skipping past.
-    if: needs.classify.outputs.noop == 'true' && needs.classify.outputs.unproven != 'true'
+    # The proof is for every candidate: a fork, an `expect-changes` label and a
+    # path off the allow-list all leave `noop` false, which skips this job and
+    # the merge with it.
+    if: needs.classify.outputs.noop == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
@@ -319,23 +370,17 @@ jobs:
 
   merge:
     needs: [classify, prove]
-    # `prove` is skipped on the unproven route, and a skipped dependency would
-    # cascade-skip an ordinary `needs`, so this reads results instead of
-    # depending on success. Both ways through are checkable rather than
-    # inferred from how a failed job behaves: `classify` writes `noop=true` as
-    # the last line of a `set -euo pipefail` script, so no path through it that
-    # ends early writes that value; and a `classify` that failed outright
-    # cascade-skips `prove`, which leaves only the `skipped` branch, which
-    # needs an `unproven` that was never written either. A draft is excluded
-    # because `pull_request`/`opened` fires for one while `gh pr merge` refuses
-    # it — without this the route would produce a red job rather than a merge.
+    # `prove` ran, and every entry of its matrix proved an empty preview.
+    # `classify` writes `noop=true` as the last line of a `set -euo pipefail`
+    # script, so no path through it that ends early writes that value; a
+    # `classify` that failed outright skips `prove`, and a skipped `prove` is
+    # not a success. A draft is excluded because `pull_request`/`opened` fires
+    # for one while `gh pr merge` refuses it -- without this the route would
+    # produce a red job rather than a merge.
     if: >-
-      !cancelled()
-      && github.event.pull_request.draft == false
+      github.event.pull_request.draft == false
       && needs.classify.outputs.noop == 'true'
-      && (needs.prove.result == 'success'
-          || (needs.prove.result == 'skipped'
-              && needs.classify.outputs.unproven == 'true'))
+      && needs.prove.result == 'success'
     runs-on: ubuntu-24.04
     # A required check that never arrives ends the job rather than holding a
     # runner for GitHub's six-hour default.
@@ -343,9 +388,9 @@ jobs:
     steps:
       # `main` requires `checks` and `changes` on an up-to-date branch
       # (framework/ci.md §5), and the merge API refuses while either is
-      # outstanding. On the unproven route `classify` is done in under a minute
-      # while `checks` is still installing its tools, so the merge would
-      # otherwise race a precondition it cannot win. This is not a delay
+      # outstanding. Nothing orders `prove` after `checks` -- they are two
+      # workflows started by the same event -- so the merge would otherwise
+      # race a precondition it has no reason to win. This is not a delay
       # standing in for a condition: `--required` names exactly the contexts
       # branch protection names, `--watch` returns when they reach a terminal
       # state, and a failure exits non-zero so the merge below never runs.
@@ -353,6 +398,8 @@ jobs:
         run: gh pr checks "$PR" --required --watch --fail-fast --interval 15
 
       # Rebase, never squash: squashing rewrites the committer to
-      # noreply@github.com.
+      # noreply@github.com. Of the head this run classified and proved, and no
+      # other: GitHub refuses the merge if the branch has moved (see the
+      # header).
       - name: Merge
-        run: gh pr merge "$PR" --rebase --delete-branch
+        run: gh pr merge "$PR" --rebase --delete-branch --match-head-commit "$HEAD_SHA"

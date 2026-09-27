@@ -3,12 +3,12 @@ name: images
 # Builds (PRs) and publishes (main) the self-built images in docker/ — the CNPG
 # operands, emailproxy, golinks (framework/ci.md §4). The loop around it: a
 # `.conf` per image holds its build args and its tag, renovate bumps the
-# version in that file, noop-automerge merges the bump once the preview proves
-# a zero diff, this workflow publishes the ghcr tag, and a consumer's renovate
-# then opens the *deploy* PR against its pin — under a versioning that ignores
-# the tag's fingerprint (framework/ci.md §4); a rebuild under an unchanged
-# version is moved to by hand. Publishing is where this workflow stops — it
-# never deploys.
+# version in that file, a person merges the bump (a `.conf` is not on
+# noop-automerge's allow-list), this workflow publishes the ghcr tag, and a
+# consumer's renovate then opens the *deploy* PR against its pin — under a
+# versioning that ignores the tag's fingerprint (framework/ci.md §4); a
+# rebuild under an unchanged version is moved to by hand. Publishing is where
+# this workflow stops — it never deploys.
 #
 # A published tag is never pushed again. The tag carries a fingerprint of what
 # the image is built from (the image-conf action), so a change to that moves
