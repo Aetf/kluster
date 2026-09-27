@@ -320,9 +320,11 @@ nothing from any workstation: what it knows of this repository is
 clone. A builder there is the
 builder of §1.3, and §1 holds except where this list says otherwise:
 
--   **The clone is the workspace.** It holds this one piece of work and
-    dies with the session, so no `jj` workspace is added and none is
-    removed. Scratch goes under the clone's `.claude/`, as in §1.2.
+-   **The clone is the workspace.** It holds one piece of work at a
+    time — the only one, unless the session takes its work from the
+    queue below — and dies with the session, so no `jj` workspace is
+    added and none is removed. Scratch goes under the clone's
+    `.claude/`, as in §1.2.
 -   **git is the version control, and `gh` is not on the image.** The
     work is committed with `git add <path>` on each path it touched —
     never `git commit -a`, whose scope is the whole tree rather than the
@@ -352,14 +354,53 @@ builder of §1.3, and §1 holds except where this list says otherwise:
     sends to one — a path outside the brief, a finding, the finished
     report — goes there, and to the ops issue only when the operator has
     attached the ops repository. Before a pull request exists, the
-    report is the session's own last message, which the operator reads
-    on claude.ai and relays. A gate that cannot run is such a report,
-    not a reason to install tools another way.
+    report goes on the ops issue the session took from the queue below,
+    and is otherwise the session's own last message, which the operator
+    reads on claude.ai and relays. A gate that cannot run is such a
+    report, not a reason to install tools another way.
 -   **It never merges and never changes repository settings**, and it
     needs no live credential. Every operation that needs one stays with
     the checkout that holds `.credentials/` (kluster-ops#387): the
     clone holds none, so provider-facing work ships with the "unproven
     live" note of §1.1 item 3.
+
+**A session the operator reuses takes its work from the `cloud/ready`
+queue**, one item at a time, instead of from a brief pasted into it:
+
+-   **The queue is the ops issues labeled `cloud/ready`.** An issue's
+    brief is its latest comment that starts with `## Brief`, a brief in
+    §1.1's sense. Only a dispatcher writes that comment and applies the
+    label, and applying it is how the dispatcher selects the work, so
+    the session selects nothing (§1). The label goes on only where §2
+    would let that dispatcher claim the issue, and claims it until the
+    session takes it (§2 rule 1).
+-   **Taking an item** means taking the oldest open `cloud/ready` issue
+    not labeled `in-flight` and adding `in-flight`: the claim, placed in
+    the name of the dispatcher that queued the issue, which reviews and
+    merges the work. The session works it to a pull request and stops.
+    It pushes only its own branch, so while that pull request is open
+    it starts nothing else, and a fix cycle is the dispatcher's message
+    pointing at the review, answered in that same pull request.
+-   **The next item starts on the dispatcher's word**, given once it
+    has merged or closed the pull request. The session then takes
+    `cloud/ready` and `in-flight` off the finished issue, open or
+    closed, runs `git fetch --prune`, resets its branch to
+    `origin/main`, and takes the next item. That item's first push is
+    `git push --force-with-lease origin HEAD`, since it rewrites the
+    branch; the prune is what lets the lease pass where the merge
+    deleted the branch from the forge. A dispatcher re-queues an issue
+    whose pull request it closed only after the session has cleared
+    that issue's labels, or the session strips the fresh label too.
+-   **One session takes from the queue at a time.** Adding a label is
+    not a compare-and-set, so two sessions that read the queue together
+    both take its oldest item. A second session is started, or given
+    the word, only when no other session can be taking an item.
+-   **A fresh session takes over after a few items**, or sooner when a
+    fix cycle shows the session losing track, because a session's
+    context grows with every item. The dispatcher starts it for the
+    next item; nothing in the queue depends on which session takes it.
+-   **The session needs `Aetf/kluster-ops` attached**, to read the
+    queue and move its labels.
 
 **`deploy/cloud-session/toolchain.sh` installs the session's tools**:
 mise, from `npm`, at CI's version; everything `mise.toml` pins; and the
@@ -410,15 +451,20 @@ Any number of dispatcher sessions may run at a time (typically: one
 driving a milestone's serial pipeline, others draining the `Parallel`
 milestone). The rules that keep them out of each other's way:
 
-1.  **The `in-flight` label is the claim.** A dispatcher labels an
-    issue before dispatching it and never dispatches, edits, or merges
-    work for an issue another dispatcher has labeled. First label
-    wins; everything else follows from ownership of the claim. Because
-    the label is the claim and nothing else is, a `decision/*` label
-    beside it does not release it (§4.1) — an issue parked on a ruling
-    with no claim is one a second dispatcher would pick up.
+1.  **A label is the claim: `in-flight`, or `cloud/ready` on an issue
+    queued for a cloud session.** A dispatcher labels an issue before
+    dispatching it and never dispatches, edits, or merges work for an
+    issue another dispatcher has labeled. First label wins; everything
+    else follows from ownership of the claim. A queued issue carries
+    `cloud/ready` and not `in-flight`, which the session adds in the
+    queuing dispatcher's name when it takes the issue (§1.4), so a
+    dispatcher that already holds `in-flight` on an issue it queues
+    takes it off. Because those labels are the claim and nothing else is, a
+    `decision/*` label beside it does not release it (§4.1) — an issue
+    parked on a ruling with no claim is one a second dispatcher would
+    pick up.
 2.  **Claims must not overlap in paths.** Before claiming, a
-    dispatcher lists every other in-flight issue and open pull
+    dispatcher lists every other claimed issue and open pull
     request; if the owned paths would intersect, it does not claim.
     While a structural campaign runs, the parallel dispatcher prefers
     work that cannot collide: other repositories, `scripts/`-only,
@@ -566,7 +612,9 @@ merge can report once:
     dispatched, and who holds the ball — so an issue may carry both,
     and an issue waiting on the operator is still claimed: neither the
     merge nor the abandonment that takes `in-flight` off has happened
-    while the operator reads.
+    while the operator reads. `cloud/ready` marks an issue queued for a
+    cloud session, and one not yet taken where `in-flight` is absent
+    (§1.4).
 -   **The pull request closes the issue**: its description carries
     `Closes Aetf/kluster-ops#N` (cross-repository closing works and is
     the one mechanism that cannot forget), so the merge itself moves
