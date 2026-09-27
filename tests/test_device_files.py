@@ -35,6 +35,7 @@ import pytest_asyncio
 from asyncssh.known_hosts import match_known_hosts
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from device_places import DEVICE_ARTIFACT, DEVICE_DIRECTORY, DEVICE_FILE
 from mock_monitor import Recorder, declaring, run_with
 from pulumi.runtime import rpc
 from shimmed_serialization import serialized
@@ -2266,7 +2267,7 @@ def test_a_declared_file_carries_the_connection_and_the_file_into_one_property_b
     declaration = stack.one('frr')
     typ, inputs = declaration.typ, declaration.inputs
 
-    assert typ == 'pulumi-python:dynamic/device:File'
+    assert typ == DEVICE_FILE
     assert inputs['host'] == HOST
     assert inputs['host_key'] == HOST_KEY
     assert inputs['path'] == CONFIG_PATH
@@ -2288,7 +2289,7 @@ def test_a_declared_directory_carries_a_shape_and_nothing_about_its_contents(sta
     declaration = stack.one('machines')
     typ, inputs = declaration.typ, declaration.inputs
 
-    assert typ == 'pulumi-python:dynamic/device:Directory'
+    assert typ == DEVICE_DIRECTORY
     assert inputs['path'] == DIRECTORY_PATH
     assert inputs['mode'] == '0755'
     assert 'content' not in inputs
@@ -2298,7 +2299,7 @@ def test_a_declared_artifact_carries_its_pin_and_never_its_bytes(stack: Recorder
     declaration = stack.one('adguard-rootfs')
     typ, inputs = declaration.typ, declaration.inputs
 
-    assert typ == 'pulumi-python:dynamic/device:Artifact'
+    assert typ == DEVICE_ARTIFACT
     assert inputs['repository'] == ROOTFS_REPOSITORY
     assert inputs['tag'] == ROOTFS_TAG
     assert inputs['digest'] == ROOTFS_DIGEST

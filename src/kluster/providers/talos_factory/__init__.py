@@ -153,13 +153,8 @@ class FactoryImageProvider(dynamic.ResourceProvider):
 
 
 @final
-class FactoryImage(dynamic.Resource, module='physical', name='FactoryImage'):
-    """A factory artifact, fetched and decompressed at `path`.
-
-    The `module` half of the type token names the stack that declares this
-    resource rather than the package it lives in: the token is part of every
-    URN, so it is a name of the resource and not of the source tree.
-    """
+class FactoryImage(dynamic.Resource, module='talos_factory', name='FactoryImage'):
+    """A factory artifact, fetched and decompressed at `path`."""
 
     url: pulumi.Output[str]
     path: pulumi.Output[str]

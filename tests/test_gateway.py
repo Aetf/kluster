@@ -18,6 +18,7 @@ from pathlib import Path
 import pulumi
 import pytest
 import pytest_asyncio
+from device_places import DEVICE_ARTIFACT, DEVICE_FILE
 from mock_monitor import declaring, run_under_backstop
 from unifi_controller import Controller
 
@@ -166,10 +167,10 @@ def test_the_gateway_declares_one_machine_per_service_and_nothing_else(monitor: 
     it is a machine the converger would find and start.
     """
     root = f'{nspawn.MACHINES}/'
-    trees = {str(image.inputs['root']) for image in monitor.of_type('pulumi-python:dynamic/device:Artifact')}
+    trees = {str(image.inputs['root']) for image in monitor.of_type(DEVICE_ARTIFACT)}
     written = {
         str(declaration.inputs['path']).removeprefix(root).split('/')[0]
-        for declaration in monitor.of_type('pulumi-python:dynamic/device:File')
+        for declaration in monitor.of_type(DEVICE_FILE)
         if str(declaration.inputs.get('path', '')).startswith(root)
     }
 

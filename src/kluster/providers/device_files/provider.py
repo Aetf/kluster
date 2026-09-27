@@ -1121,7 +1121,7 @@ class DeviceDirectoryProvider(DeviceProvider):
 
 
 @final
-class DeviceFile(dynamic.Resource, module='device', name='File'):
+class DeviceFile(dynamic.Resource, module='device_files', name='DeviceFile'):
     """A file the device must have, and what to run once it has it."""
 
     path: pulumi.Output[str]
@@ -1175,7 +1175,7 @@ class DeviceFile(dynamic.Resource, module='device', name='File'):
 
 
 @final
-class DeviceDirectory(dynamic.Resource, module='device', name='Directory'):
+class DeviceDirectory(dynamic.Resource, module='device_files', name='DeviceDirectory'):
     """A directory the device must have, whose contents are somebody else's."""
 
     path: pulumi.Output[str]
@@ -1233,7 +1233,7 @@ class DeviceDirectory(dynamic.Resource, module='device', name='Directory'):
 
 
 @final
-class DeviceArtifact(dynamic.Resource, module='device', name='Artifact'):
+class DeviceArtifact(dynamic.Resource, module='device_files', name='DeviceArtifact'):
     """A digest-pinned container image, unpacked on the device as a tree."""
 
     repository: pulumi.Output[str]

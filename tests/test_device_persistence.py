@@ -29,7 +29,7 @@ from typing import final
 import pulumi
 import pytest
 import pytest_asyncio
-from device_places import PLACES
+from device_places import DEVICE_DIRECTORY, DEVICE_FILE, PLACES
 from fake_systemd import INSTALLABLE, FakeSystemd
 from mock_monitor import Recorder, declaring, run_with
 
@@ -39,10 +39,6 @@ from kluster.components.gateway.persistence import DevicePersistence
 from kluster.lib import templates
 from kluster.providers.device_files.provider import Connection, DeviceDirectory, DeviceFile
 from putils import Component
-
-#: The two dynamic resource types this suite is about.
-DEVICE_FILE = 'pulumi-python:dynamic/device:File'
-DEVICE_DIRECTORY = 'pulumi-python:dynamic/device:Directory'
 
 NAME = 'mechanism'
 CONSUMER = 'consumer'

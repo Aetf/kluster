@@ -201,7 +201,7 @@ class AdGuardRewriteProvider(ConfiguredProvider):
 
 
 @final
-class AdGuardRewrite(dynamic.Resource):
+class AdGuardRewrite(dynamic.Resource, module='adguard_rewrites', name='AdGuardRewrite'):
     """One rewrite on one instance."""
 
     instance: pulumi.Output[str]

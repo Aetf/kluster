@@ -255,6 +255,32 @@ on the component, which the engine carries down to every resource
 beneath it, and the alias is dropped in a later change once every
 stack's state carries the new type.
 
+**A dynamic resource's token is chosen the same way, in the form its
+SDK allows.** The token is part of the URN of the resource, so it too
+names a kind of this installation and stays put once a stack holds
+state under it. The SDK registers every dynamic resource as
+`pulumi-python:dynamic/<module>:<name>` — the package half is what
+routes the resource to the dynamic provider, so it cannot be `kluster` —
+and the class statement gives the rest:
+`class DeviceFile(dynamic.Resource, module='device_files', name='DeviceFile')`.
+Its form is `pulumi-python:dynamic/<area>:<Type>`. The area is the
+package of `kluster.providers` that defines the kind, spelled as that
+package was named when the token was chosen, underscores and all; the
+type is the class's name. It is the provider's package and not the area
+of a component that declares the resource, for three reasons: a provider
+is shared by whichever components declare its resources, so naming one
+of them would become false when a second one does; a provider sits below
+the components in the layering and knows none of them; and the URN
+already carries the declaring component, whose type heads the
+resource's type chain. A class that gives neither `module` nor `name`
+is registered under `pulumi-python:dynamic:Resource`, which every such
+class shares. Nothing refuses one at construction, so
+`tests/test_component_tokens.py` holds every dynamic resource class in
+the tree to the form. A change of token that state already holds is an
+alias on the resource itself, `aliases=[pulumi.Alias(type_=<old>)]`,
+since a component's alias moves the type chain its children inherit and
+not a child's own type.
+
 **A child's logical name carries its component's `name`.** A URN
 qualifies a logical name by the chain of parent *types*, never by a
 parent's name, so two components of one type that each declare a child
@@ -312,6 +338,7 @@ The architecture reviewer's standing questions, for the review stage
 -   Does every child's logical name carry the `name` of the component
     the URN places it under?
 -   Does every new component state a type token of the form
-    `kluster:<area>:<Type>`, and does every changed token carry an
-    alias to the type a stack's state holds?
+    `kluster:<area>:<Type>`, every new dynamic resource one of the form
+    `pulumi-python:dynamic/<area>:<Type>`, and does every changed token
+    carry an alias to the type a stack's state holds?
 -   Do the comments say anything the code already says?
