@@ -5,6 +5,7 @@ from __future__ import annotations
 from ipaddress import IPv4Network, IPv6Network
 from typing import NamedTuple
 
+from kluster.conventions.cloud import USER_VOLUME_ROOT
 from kluster.conventions.identity import LABEL_DOMAIN
 
 #: Talos/Cilium pod and service ranges, IPv4 first (architecture.md §1.3).
@@ -97,6 +98,14 @@ SC_LOCAL_PATH = 'local-path'
 SC_NAS = 'nas'
 SC_CLOUD_BLOCK = 'cloud-block'
 
-#: Backing directory for local-path on every node; a Talos machine-config
-#: mount (physical.md §2), the StorageClass above is k8s-base's.
-LOCAL_PATH_ROOT = '/var/mnt/storage'
+#: The Talos user volume `local-path` hands directories out of, on every
+#: node: a `directory` volume, which has no disk of its own and lives on the
+#: system disk's EPHEMERAL partition (physical.md §2; storage.md §2 says what
+#: that makes its lifetime). It shares Talos' one namespace of user-volume
+#: names with the node volumes (`cloud.NODE_VOLUMES`), so no row may take it.
+LOCAL_PATH_VOLUME = 'storage'
+
+#: Where that volume is mounted, and so the directory the provisioner is
+#: pointed at: Talos mounts a user volume at its root under the volume's
+#: name. The StorageClass above is k8s-base's.
+LOCAL_PATH_ROOT = f'{USER_VOLUME_ROOT}/{LOCAL_PATH_VOLUME}'

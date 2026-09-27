@@ -41,9 +41,12 @@ out of `v1alpha1` is stated in its own document: at v1.13 that is every field
 of `machine.network`, so KubeSpan and the node's link addressing travel as
 network documents (`KubeSpanConfig`, `LinkAliasConfig`, `LinkConfig`,
 `DHCPv4Config`) the way the ingress firewall always has
-(`NetworkDefaultActionConfig`, `NetworkRuleConfig`), and a node volume
+(`NetworkDefaultActionConfig`, `NetworkRuleConfig`). A node volume
 travels as a `UserVolumeConfig`, the document v1.13 names in place of the
-deprecated partitions of `machine.disks`.
+deprecated partitions of `machine.disks`, and so does the directory
+`local-path` hands out, a `UserVolumeConfig` of its own on every node in
+place of a kubelet mount: a host path a pod reaches is a user volume, and
+the configuration carries no `machine.kubelet.extraMounts`.
 """
 
 from __future__ import annotations
@@ -196,27 +199,30 @@ def control_plane_patch(*, cert_sans: Sequence[str], secretbox_secret: str | Non
     return config
 
 
-def local_path_patch() -> dict[str, Any]:
+def local_path_volume_document() -> dict[str, Any]:
     """The directory the `local-path` StorageClass hands out (storage.md §2).
 
     The provisioner is `k8s-base`'s; the path underneath it is machine
-    configuration, because the kubelet cannot serve a hostPath it has not
-    been given a mount for. `rshared` propagation is what lets a volume
-    mounted inside the directory afterwards still reach a pod.
+    configuration, because the kubelet sees `/var/mnt` bound read-only and
+    so can create nothing inside a plain directory there. A user volume is a
+    mount of its own at `/var/mnt/<name>`, and a mount made under `/var/mnt`
+    reaches the kubelet writable — the mechanism a node volume uses, and the
+    one Talos names as the replacement for a kubelet mount.
+
+    A `directory` volume has no disk: Talos creates the directory on the
+    system disk's EPHEMERAL partition and bind-mounts it onto itself, and a
+    directory already at that path keeps its contents. So the document
+    states nothing but its type, and carries no `provisioning`,
+    `filesystem`, `encryption` or `mount` block, each of which Talos refuses
+    for this type. Nor is it a node volume: with no disk to select, it is
+    outside the rule of one node volume per node, which exists for
+    `DATA_DISK_SELECTOR`'s sake.
     """
     return {
-        'machine': {
-            'kubelet': {
-                'extraMounts': [
-                    {
-                        'destination': conventions.LOCAL_PATH_ROOT,
-                        'type': 'bind',
-                        'source': conventions.LOCAL_PATH_ROOT,
-                        'options': ['bind', 'rshared', 'rw'],
-                    }
-                ]
-            }
-        }
+        'apiVersion': 'v1alpha1',
+        'kind': 'UserVolumeConfig',
+        'name': conventions.LOCAL_PATH_VOLUME,
+        'volumeType': 'directory',
     }
 
 
@@ -429,7 +435,7 @@ def patches(
     and `secondary_address` an extra address on top of whichever it already
     has; no node has both, and a node with neither is configured by its lease.
     """
-    documents: list[Mapping[str, Any]] = [node_patch(), kubespan_document(), local_path_patch()]
+    documents: list[Mapping[str, Any]] = [node_patch(), kubespan_document(), local_path_volume_document()]
     if volume is not None:
         documents.append(node_volume_label_patch(volume))
     if role == 'controlplane':

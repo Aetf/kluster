@@ -92,7 +92,8 @@ empty cluster:
     (nodes.md §4.4 counted them as "kept as-is" but this list never
     named them — explicit now so the closed list is honest):
     **local-path-provisioner** (Talos ships no default StorageClass;
-    its backing directory is a machine-config mount, physical.md §2),
+    its backing directory is a Talos user volume on every node,
+    physical.md §2),
     **metrics-server**, **reloader**. Monitoring internals
     (kube-state-metrics, the node-exporter DaemonSet) count as part of
     the VictoriaMetrics entry. None has an ordering constraint beyond
