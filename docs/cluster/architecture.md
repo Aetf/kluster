@@ -445,8 +445,8 @@ belongs to — this section holds the cluster-level statements).
     the gateway answers a run at the gateway's address. The residual is
     every other run: one dialing the bootstrap address, which any host
     on the dialing workstation's segment can answer, and one made from
-    a personal overlay member, which any member without the `ci` role
-    can, since traffic with no run at either end keeps the LAN's
+    a personal overlay member, which any member but the two CI
+    identities can, since traffic with no run at either end keeps the LAN's
     posture. A certificate pin in the provider would retire it, and
     filipowm/unifi has none at the pinned release; the key's rotation
     is credentials.md §3.
@@ -915,13 +915,18 @@ already lives:
 -   **ZeroTier Central config joins Pulumi**: network managed routes, the
     managed DNS block (gateway.md §2.7), member authorizations
     (including the CI ephemeral-member pre-auth), and
-    **tag-based flow rules confining CI members** to exactly their
-    four targets — UDM SSH, the UDM's UniFi Network API on 443 (the
-    UniFi OS proxy the bridged unifi provider calls,
-    declarative/physical.md §4), the AdGuard APIs, the homelab host's
-    libvirt SSH — so a leaked CI join credential does not buy general LAN
-    access (necessary because overlay-forwarded traffic rides the UDM's
+    **flow rules confining each CI identity** to its own stack's
+    targets — `ci-physical` to UDM SSH, the UDM's UniFi Network API on
+    443 (the UniFi OS proxy the bridged unifi provider calls,
+    declarative/physical.md §4) and the homelab host's libvirt SSH,
+    `ci-dns` to the AdGuard APIs — so a leaked CI join credential buys
+    neither general LAN access nor the other identity's reach
+    (necessary because overlay-forwarded traffic rides the UDM's
     default ACCEPT, above: Central rules are the only policing layer).
+    The rules name each identity by its node address rather than its
+    role tag, because a tag is a credential the member itself presents
+    and a holder of a leaked identity could withhold it (gateway.md
+    §2.3).
     All via the official `zerotier/zerotier` Terraform provider through
     Pulumi's any-Terraform-provider bridge, in the `physical` stack.
     Resource coverage verified (2026-08-24, v1.6.0 docs; repo active

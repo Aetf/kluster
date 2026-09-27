@@ -89,11 +89,15 @@ same plain-data declaration (dns.md §3). A typical app image bump
 stays entirely public-endpoint, and ZeroTier's availability is not a
 dependency of it. The AdGuard rewrite resources tolerate an
 unreachable UDM by failing only their own resources, not the whole
-up. CI's overlay members are **tag-confined by
-Central flow rules** (managed with the rest of the Central config,
-architecture.md §5.3) to exactly the four targets in the table
-(UDM SSH, UDM UniFi API, AdGuard APIs, homelab libvirt SSH) — a
-leaked join credential does not buy general LAN access. Residual on
+up. Each CI overlay identity is **confined by Central flow rules**
+(managed with the rest of the Central config, architecture.md §5.3)
+to the targets its own stack calls — today `ci-physical` to UDM SSH,
+the UDM UniFi API and homelab libvirt SSH, and `ci-dns` to the AdGuard
+APIs — so a leaked join credential buys neither general LAN access nor
+the other identity's reach. The rules name each identity by its node
+address rather than its role tag, because a tag is a credential the
+member itself presents and a holder of a leaked identity could
+withhold it (gateway.md §2.3). Residual on
 record (audit M6): the AdGuard credential is full-admin (AdGuard has
 no scoped API), so LAN-DNS control rides the `dns` tier — the tier
 that already holds the Cloudflare token, and therefore the whole of
@@ -346,8 +350,7 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     request that does open waits for a person, since a workflow file and
     a composite action are both off noop-automerge's allow-list. A test
     in `checks` holds every such `uses:` to that shape and the ZeroTier
-    install to a pinned release, at least the 1.14 the CI member's flow
-    rules are written for, and a pinned key fingerprint.
+    install to a pinned release and a pinned key fingerprint.
 -   **The runner image is pinned the same way.** Every job that runs
     steps names its runner by release — `ubuntu-24.04`, and
     `ubuntu-24.04-arm` for the arm leg of the image builds (§4) — and

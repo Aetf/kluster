@@ -19,27 +19,37 @@ drop
 # else is dropped where a run is at either end, so no other member can
 # claim one of a run's destinations to it, or a run claim anyone's.
 accept ethertype arp and chr ipauth;
-drop ethertype arp and tseq role {{ role_ci }};
-drop ethertype arp and treq role {{ role_ci }};
+{%- for member in confined %}
+drop ethertype arp and ztsrc {{ member.node_id }};
+drop ethertype arp and ztdest {{ member.node_id }};
+{%- endfor %}
 accept ethertype arp;
 
-# Continuous integration reaches four destinations and no others.
-# Every flow is declared twice: evaluation is stateless, so the
-# return leg is a rule of its own rather than a consequence. A run
-# sends only from its own address, and a reply from a member's
-# address passes only from that member. A resolver is no member: its
-# reply comes through the gateway from an address assigned to no one,
-# and the ARP rules above are what keep another member off that path.
-{%- for target in targets %}
+# Each continuous-integration identity, named by its node address,
+# reaches what its own stack needs and no more. Every flow is declared
+# twice: evaluation is stateless, so the return leg is a rule of its
+# own rather than a consequence. A run sends only from its own address,
+# and a reply from a member's address passes only from that member. A
+# resolver is no member: its reply comes through the gateway from an
+# address assigned to no one, and the ARP rules above are what keep
+# another member off that path.
+{%- for member in confined %}
+
+# {{ member.name }}
+{%- for target in member.targets %}
 # {{ target.why }}
-accept tseq role {{ role_ci }} and ipdest {{ target.destination }} and dport {{ target.port }} and chr ipauth;
-accept treq role {{ role_ci }} and ipsrc {{ target.destination }} and sport {{ target.port }}{% if target.member %} and chr ipauth{% endif %};
+accept ztsrc {{ member.node_id }} and ipdest {{ target.destination }} and dport {{ target.port }} and chr ipauth;
+accept ztdest {{ member.node_id }} and ipsrc {{ target.destination }} and sport {{ target.port }}{% if target.member %} and chr ipauth{% endif %};
+{%- endfor %}
 {%- endfor %}
 
-# Nothing may open a connection towards a run, either: it is a
-# client on this network and never a service.
-drop tseq role {{ role_ci }};
-drop treq role {{ role_ci }};
+# Nothing else, in either direction: a run reaches its own legs and
+# nothing more, and nothing may open a connection towards a run, which
+# is a client on this network and never a service.
+{%- for member in confined %}
+drop ztsrc {{ member.node_id }};
+drop ztdest {{ member.node_id }};
+{%- endfor %}
 
 # Everyone else: parity with sitting on the LAN.
 accept;

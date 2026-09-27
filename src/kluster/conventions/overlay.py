@@ -30,11 +30,14 @@ NETWORK_ID = '83048a0632b6ba9b'
 SUBNET = IPv4Network('10.144.0.0/16')
 
 #: Static managed overlay addresses. The UDM is the nexthop of every route to
-#: the home (`MANAGED_ROUTES`); the two CI identities are confined by the
-#: tag-based flow rules to exactly the four targets they need. There is one
-#: identity per *stack* that joins, not one per kind of run: ZeroTier maps a
-#: node to one endpoint at a time, so two jobs sharing an identity would flap
-#: it (physical/gateway.md §2.6).
+#: the home (`MANAGED_ROUTES`); each CI identity is confined by the flow rules
+#: to the destinations its own stack needs, named by its node address rather
+#: than by its role tag, because a tag is a credential the member pushes and a
+#: member holding a leaked identity could withhold it
+#: (`components/overlay/flow_rules.py`). There is one identity per *stack* that
+#: joins, not one per kind of run: ZeroTier maps a node to one endpoint at a
+#: time, so two jobs sharing an identity would flap it (physical/gateway.md
+#: §2.6).
 UDM = IPv4Address('10.144.1.1')
 CI_PHYSICAL = IPv4Address('10.144.2.1')
 CI_DNS = IPv4Address('10.144.2.2')
@@ -47,8 +50,11 @@ TAG_ROLE_ID = 1000
 class Role(IntEnum):
     """What a member is on the network, as the value of its role tag.
 
-    `PERSONAL` is the tag's own default, which is why it is the permissive one:
-    the flow rules confine the roles they name and leave the default alone.
+    The role says what a member is here as, and Central shows it; the flow
+    rules do not read it. A tag is a credential the member itself pushes to
+    its peers, so a rule on it confines only a member that cooperates, and the
+    rules name each member they confine by its node address instead
+    (`components/overlay/flow_rules.py`). `PERSONAL` is the tag's own default.
     Nothing rides on that default, because membership is declared from the
     roster and an undeclared member never joins to receive it.
     """
@@ -58,9 +64,15 @@ class Role(IntEnum):
     CI = 2
 
 
+#: The identity the `physical` stack's runs join with, as the roster names it.
+MEMBER_CI_PHYSICAL = 'ci-physical'
+
+#: The identity the `dns` stack's runs join with, as the roster names it.
+MEMBER_CI_DNS = 'ci-dns'
+
 #: The two identities that exist only for continuous integration, one per
 #: stack that joins the overlay during a run (physical/gateway.md §2.6).
-CI_MEMBERS = ('ci-physical', 'ci-dns')
+CI_MEMBERS = (MEMBER_CI_PHYSICAL, MEMBER_CI_DNS)
 
 
 @final
@@ -175,10 +187,10 @@ RosterEntry = EnrolledMember | GeneratedMember
 #: with no record is not a state either stack can be in; a device that leaves
 #: the overlay leaves this tuple, and both go with it.
 #:
-#: It is a census by construction. The role tag's default value is the
-#: permissive one, so a member that arrived without a declared role would be
-#: treated as a personal device — safe only because admission is gated by this
-#: same table, so an undeclared member never reaches the default.
+#: It is a census by construction. A member the flow rules do not name by its
+#: node address falls through to their final `accept`, a personal device's
+#: reach. That is safe only because admission is gated by this same table, so
+#: an undeclared member never joins to receive it.
 #:
 #: The gateway is absent, and absence is the whole of what says so: no member
 #: is declared for it and no `udm.zt` record is published until the ceremony
@@ -206,13 +218,13 @@ ROSTER: tuple[RosterEntry, ...] = (
         note='home automation, reachable while the cluster is not',
     ),
     GeneratedMember(
-        name='ci-physical',
+        name=MEMBER_CI_PHYSICAL,
         address=CI_PHYSICAL,
         role=Role.CI,
         note='the physical stack: plan, apply, and its drift check',
     ),
     GeneratedMember(
-        name='ci-dns',
+        name=MEMBER_CI_DNS,
         address=CI_DNS,
         role=Role.CI,
         note="the dns stack: previews, proofs, and the resolvers' rewrites",

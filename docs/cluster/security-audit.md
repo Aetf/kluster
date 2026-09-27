@@ -253,9 +253,9 @@ bump into `prove`.
 **Fix.** None at the credential: an admin login is the whole of what the
 appliance offers, and the rewrites are what makes LAN clients resolve
 split-horizon apps to their `lan` VIPs at all. The containment is
-positional — Central flow rules confine a `ci`-tagged member to the AdGuard
-APIs and three other targets (L5), so the login is usable only from a
-joined member, and previews run for same-repo branches only, never a
+positional — Central flow rules confine the `dns` stack's CI identity to
+the AdGuard APIs alone (L5), so the login is usable only from a joined
+member, and previews run for same-repo branches only, never a
 fork's. Accepted residual, and its detection gap is part of what is
 accepted: a refresh reads back the rewrites the stack declares, so one
 added beside them is not something the weekly drift run compares.
@@ -326,12 +326,17 @@ state-backend appliance does, minting the key in the same render that
 writes the Ignition delivering it. *Lives in* physical/state-backend.md
 §1.
 
-### L5 — Confine CI ZeroTier members by tag
+### L5 — Confine each CI ZeroTier identity by its node address
 
 A leaked CI join credential otherwise joins the home network with
 unpoliced forwarding (`zt*` rides the UDM's default ACCEPT). ZeroTier
-Central tag-based flow rules limit CI members to UDM SSH, the UDM's UniFi
-Network API, the AdGuard APIs, and libvirt SSH. *Lives in* architecture.md §5.3, ci.md §2.
+Central flow rules limit each CI identity to its own stack's targets:
+`ci-physical` to UDM SSH, the UDM's UniFi Network API and libvirt SSH,
+`ci-dns` to the AdGuard APIs. The rules name each identity by its node
+address, not its role tag: a tag is a credential the member itself
+presents, so a holder of a leaked identity could withhold it and pass
+every tag-keyed drop. *Lives in* architecture.md §5.3, ci.md §2,
+physical/gateway.md §2.3.
 
 ### L6 — libvirt SSH identity is root-equivalent
 
