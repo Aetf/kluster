@@ -151,11 +151,7 @@ class TalosArtifact(Component, abc.ABC):
         return urls.urls.disk_image
 
 
-# Both type tokens are stated rather than derived. `Component` only computes one
-# for a class that does not already have it, and a subclass inherits its base's —
-# so leaving them out would file every artifact in the state under
-# `TalosArtifact` and rename resources the day the hierarchy changes.
-class TalosImage(TalosArtifact, pulumi_type='kluster:physical:image:TalosImage'):
+class TalosImage(TalosArtifact, pulumi_type='kluster:talos:TalosImage'):
     """One schematic and the OCI custom image built from it.
 
     The extension set, platform and architecture are stated here rather than
@@ -205,7 +201,7 @@ class TalosImage(TalosArtifact, pulumi_type='kluster:physical:image:TalosImage')
         return f'talos-{self.talos_version}-{self.architecture}-{str(schematic_id)[:12]}'
 
 
-class TalosNocloudImage(TalosArtifact, pulumi_type='kluster:physical:image:TalosNocloudImage'):
+class TalosNocloudImage(TalosArtifact, pulumi_type='kluster:talos:TalosNocloudImage'):
     """The worker's schematic, and its disk image on the machine that runs the program.
 
     The extension set, platform and architecture are stated here rather than

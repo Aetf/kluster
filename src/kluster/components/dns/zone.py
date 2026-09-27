@@ -23,7 +23,7 @@ from putils import Component
 __all__ = ('ManagedZone',)
 
 
-class ManagedZone(Component):
+class ManagedZone(Component, pulumi_type='kluster:dns:ManagedZone'):
     """One Cloudflare zone, its DNSSEC state, and its records."""
 
     def __init__(
@@ -35,7 +35,13 @@ class ManagedZone(Component):
         records: Iterable[Record],
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
-        super().__init__(name, opts=opts)
+        # The `dns` stack's state holds every zone, imported, under the type
+        # below rather than this class's own: the alias moves each onto this
+        # one at the next `up` with nothing replaced, and the engine carries it
+        # down to every resource beneath (style/pulumi.md, a type token is
+        # chosen). It goes once that state carries this class's type.
+        aliases = pulumi.ResourceOptions(aliases=[pulumi.Alias(type_='kluster:dns:zone:ManagedZone')])
+        super().__init__(name, opts=pulumi.ResourceOptions.merge(opts, aliases))
         self.zone_name = zone
 
         self.zone = cloudflare.Zone(

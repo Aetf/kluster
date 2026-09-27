@@ -28,7 +28,7 @@ from kluster import conventions
 from putils import Component, async_output, resolve
 
 
-class CloudNetwork(Component):
+class CloudNetwork(Component, pulumi_type='kluster:cloud:CloudNetwork'):
     """The VCN, its gateways, its route table and its one public subnet."""
 
     def __init__(

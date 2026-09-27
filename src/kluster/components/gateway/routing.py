@@ -398,7 +398,7 @@ def converger_hook() -> str:
     return executable_hook(CONVERGER)
 
 
-class SiteRouting(Component):
+class SiteRouting(Component, pulumi_type='kluster:gateway:SiteRouting'):
     """The routing configuration on the device, and the converger that applies it."""
 
     def __init__(

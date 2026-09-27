@@ -169,15 +169,6 @@ async def test_a_factory_lookup_the_engine_declines_leaves_the_source_unknown_ra
     assert not isinstance(details.get('sourceUri'), str)
 
 
-def test_each_artifact_keeps_its_own_type_token() -> None:
-    # A subclass inherits its base's token unless it states one, and a token is
-    # part of every URN: sharing one would file both artifacts in the state
-    # under the same type and rename resources whenever the hierarchy moved.
-    assert image.TalosImage.__pulumi_type__ == 'kluster:physical:image:TalosImage'
-    assert image.TalosNocloudImage.__pulumi_type__ == 'kluster:physical:image:TalosNocloudImage'
-    assert image.TalosImage.__pulumi_type__ != image.TalosArtifact.__pulumi_type__
-
-
 def test_each_artifact_states_its_platform_and_architecture_rather_than_taking_them() -> None:
     """The subclass is the artifact, so the artifact's shape is not a parameter.
 

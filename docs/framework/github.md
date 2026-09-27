@@ -350,7 +350,7 @@ is owed only while nothing has.
 
 ```sh
 mise run github import github:index/issueLabel:IssueLabel kluster-expect-changes kluster:expect-changes \
-    --parent 'repository=urn:pulumi:github::kluster-py::kluster:components:forge:ManagedRepository$github:index/repository:Repository::kluster' \
+    --parent 'repository=urn:pulumi:github::kluster-py::kluster:forge:ManagedRepository$github:index/repository:Repository::kluster' \
     --protect=false
 ```
 
@@ -359,8 +359,12 @@ the two repositories, the label carries no `protect` in the program.
 `--parent` is what keeps it out of the trap above, because the program
 declares every label under its repository, and the URN that flag names
 is the repository's as state holds it: under the component, so the type
-chain runs `ManagedRepository$Repository`. `mise run github stack
---show-urns` prints it, and that print rather than this page is what the
+chain runs `ManagedRepository$Repository`. The component's type there is
+the one its class states once an `up` has applied the alias that moves
+both repositories onto it from `kluster:components:forge:ManagedRepository`
+([style/pulumi.md](../style/pulumi.md), a type token is chosen), and the
+aliased one until then. `mise run github stack --show-urns` prints
+whichever state holds, and that print rather than this page is what the
 flag is copied from.
 
 **The import lands under the default provider, and nothing refuses

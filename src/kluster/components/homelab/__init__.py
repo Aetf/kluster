@@ -256,7 +256,7 @@ def seed_metadata(hostname: str) -> str:
     return json.dumps({'instance-id': hostname, 'local-hostname': hostname})
 
 
-class HomelabHost(Component, pulumi_type='kluster:physical:HomelabHost'):
+class HomelabHost(Component, pulumi_type='kluster:homelab:HomelabHost'):
     """The worker VM on the homelab host, and the storage it boots from.
 
     The home-automation domain beside it is **not declared** — this component

@@ -26,7 +26,7 @@ import pulumi_oci as oci
 from putils import Component
 
 
-class NodeVolume(Component):
+class NodeVolume(Component, pulumi_type='kluster:cloud:NodeVolume'):
     """One block volume, attached to the node that mounts it."""
 
     def __init__(

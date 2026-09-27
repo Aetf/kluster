@@ -88,7 +88,7 @@ class AlertRule:
         return 'FORECAST' if self.forecast else 'ACTUAL'
 
 
-class Guardrails(Component):
+class Guardrails(Component, pulumi_type='kluster:cloud:Guardrails'):
     """The compartment's quota policy, its budget, and the budget's alerts.
 
     Both resources are declared in the tenancy's root compartment because OCI

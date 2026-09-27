@@ -12,6 +12,9 @@ rather than in `pulumi preview`.
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import pulumi
 import pytest
 import pytest_asyncio
@@ -31,6 +34,8 @@ ACME_TOKEN = 'a-zone-scoped-token'
 #: shape of an `authorized_keys` line is all this suite needs of it.
 CI_KEY = access.PublicKey(name='kluster-physical', key='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIci kluster-physical@gw')
 DIGEST = f'sha256:{"e" * 64}'
+#: The cutover runbook, which targets this component's subtree by URN.
+RUNBOOK = Path(__file__).parent.parent / 'docs' / 'physical' / 'gateway-cutover.md'
 
 
 def pin(service: conventions.gateway.ContainerService) -> container.Rootfs:
@@ -196,8 +201,11 @@ def test_the_type_token_the_cutover_targets_by_is_the_one_the_runbook_spells() -
     # preview` before the window and the `pulumi up` inside it, each targeting
     # the gateway alone by URN and by a `$**::**` glob below it. The operator
     # cannot derive those mid-window: `pulumi stack --show-urns` reads state,
-    # and the stack has none at the moment they are needed. A module or class
-    # rename moves the token, and the glob would then select nothing without
-    # erroring at all — so the rename fails here instead, and whoever makes it
-    # is pointed at the runbook sections that have to move with it.
-    assert Gateway.__pulumi_type__ == 'kluster:components:gateway:Gateway'
+    # and the stack has none at the moment they are needed. A glob naming a
+    # type the program does not declare selects nothing without erroring at
+    # all, so the runbook is read here, as the side of the seam this program
+    # does not write, and held to the token the class states.
+    targets = re.findall(r"-t '(urn:pulumi:[^']*)'", RUNBOOK.read_text())
+    types = {target.split('::')[2] for target in targets}
+
+    assert types == {Gateway.__pulumi_type__, f'{Gateway.__pulumi_type__}$**'}, targets

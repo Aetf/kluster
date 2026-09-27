@@ -254,8 +254,9 @@ The framework is implemented in the library `src/putils` (stable; the async
 half is verified by `tests/test_async_properties.py` and the parent backstop
 by `tests/test_parenting.py`):
 
--   `component.py`: Provides the base `Component` class (auto `pulumi_type`,
-    `child_opts()`), the parent backstop (`install_parent_backstop`, §1.3),
+-   `component.py`: Provides the base `Component` class (the type token
+    each subclass states, `child_opts()`), the parent backstop
+    (`install_parent_backstop`, §1.3),
     and the two helpers for a provider a component builds for itself
     (`own_provider_opts` and `with_provider`, §1.3).
 -   `paio.py`: Handles bridging `asyncio` with Pulumi, including `async_output`

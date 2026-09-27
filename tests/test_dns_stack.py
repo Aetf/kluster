@@ -22,7 +22,8 @@ from mock_monitor import Recorder, declaring, run_under_backstop
 
 from kluster import conventions
 from kluster.components.dns.base import overlay_label
-from kluster.components.dns.rewrites import rewrites
+from kluster.components.dns.rewrites import ResolverRewrites, rewrites
+from kluster.components.dns.zone import ManagedZone
 
 LB_ADDRESS = '203.0.113.10'
 LB_ADDRESS_V6 = '2001:db8::10'
@@ -32,7 +33,8 @@ API_TOKEN = 'a-zones-token'
 ZONE = 'cloudflare:index/zone:Zone'
 DNSSEC = 'cloudflare:index/zoneDnssec:ZoneDnssec'
 RECORD = 'cloudflare:index/dnsRecord:DnsRecord'
-RESOLVER_REWRITES = 'kluster:components:dns:rewrites:ResolverRewrites'
+RESOLVER_REWRITES = ResolverRewrites.__pulumi_type__
+MANAGED_ZONE = ManagedZone.__pulumi_type__
 REWRITE = 'pulumi-python:dynamic:Resource'
 
 #: The one row the routed run declares: a name answered on both sides,
@@ -112,6 +114,21 @@ def test_every_zone_is_protected(stack: AppliedPhysical) -> None:
     """
     for zone in conventions.ALL_ZONES:
         assert stack.options_of(zone, ZONE).protect is True, zone
+
+
+def test_every_zone_moves_from_the_type_state_holds_it_under(stack: AppliedPhysical) -> None:
+    """The component carries one alias, to the type the `dns` stack's state holds.
+
+    The zones and their records are imported into state under
+    `kluster:dns:zone:ManagedZone`, which is not the type the component states
+    (style/pulumi.md, a type token is chosen). A type is part of the URN of
+    the component and of every resource beneath it, so without this alias the
+    first `up` plans a delete and a create of every zone and record. The
+    literal is what state holds, which no edit to this program moves.
+    """
+    for zone in conventions.ALL_ZONES:
+        aliases = stack.options_of(zone, MANAGED_ZONE).aliases
+        assert [alias.spec.type for alias in aliases] == ['kluster:dns:zone:ManagedZone'], zone
 
 
 def test_every_zone_is_signed(stack: AppliedPhysical) -> None:

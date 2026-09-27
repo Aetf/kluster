@@ -192,7 +192,7 @@ def controller_provider(
     )
 
 
-class SiteFirewall(Component):
+class SiteFirewall(Component, pulumi_type='kluster:gateway:SiteFirewall'):
     """The cluster's network and zone, its address groups, its policies, and the peer's port forward.
 
     The pinhole for the worker's global IPv6 address is the one conditional

@@ -582,7 +582,7 @@ def watchdog_worker() -> str:
     return templates.load(persistence.TEMPLATE_PACKAGE, f'templates/{WATCHDOG_WORKER}')
 
 
-class NspawnRuntime(Component):
+class NspawnRuntime(Component, pulumi_type='kluster:gateway:NspawnRuntime'):
     """The framework the machines run on: the boot chain's half of it, and the watchdog."""
 
     #: What this layer requires of the device's package set, as one constant the

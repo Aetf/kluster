@@ -114,7 +114,7 @@ class RuleProgram(Protocol):
         ...
 
 
-class Overlay(Component):
+class Overlay(Component, pulumi_type='kluster:overlay:Overlay'):
     """The overlay's configuration and its whole membership.
 
     `network_id` is a plain value rather than an input because it is what the

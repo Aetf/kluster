@@ -451,7 +451,7 @@ def patches(
     return [json.dumps(document) for document in documents]
 
 
-class TalosCluster(Component, pulumi_type='kluster:physical:TalosCluster'):
+class TalosCluster(Component, pulumi_type='kluster:talos:TalosCluster'):
     """The cluster PKI and the configuration each machine boots with.
 
     The secrets land in Pulumi state — the provider's ephemeral resources do
@@ -622,7 +622,7 @@ class TalosCluster(Component, pulumi_type='kluster:physical:TalosCluster'):
         return {node: configuration.machine_configuration for node, configuration in self.configurations.items()}
 
 
-class TalosDay1(Component, pulumi_type='kluster:physical:TalosDay1'):
+class TalosDay1(Component, pulumi_type='kluster:talos:TalosDay1'):
     """Apply, bootstrap, health, and the credentials the rest of the world reads.
 
     Everything here talks to machines that already run, over apid on port
