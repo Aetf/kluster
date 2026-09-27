@@ -447,8 +447,9 @@ class's provider. Three more limits come with the choice:
 Python and TypeScript only; `pulumi import` and `get` unavailable; and
 the package half of the type token always `pulumi-python`, so a policy
 pack cannot tell one dynamic resource kind from another by package (the
-`module`/`name` halves are the program's —
-`pulumi-python:dynamic/device:File`).
+`module`/`name` halves are the program's, chosen as
+[style/pulumi.md](../style/pulumi.md) says —
+`pulumi-python:dynamic/device_files:DeviceFile`).
 
 **So a provider here carries no connection state**, and that is a
 design rather than an accident of the mechanism: instance attributes

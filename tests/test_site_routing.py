@@ -24,6 +24,7 @@ from typing import final
 
 import pytest
 import pytest_asyncio
+from device_places import DEVICE_DIRECTORY
 from fake_systemd import FakeSystemd
 from mock_monitor import Recorder, declaring, run_with
 
@@ -286,7 +287,7 @@ def test_only_the_declared_configuration_is_promised_to_survive_a_firmware_updat
     assert routing.FRR_LIVE_CONFIG.startswith('/etc/')
     directory = monitor.one(f'{NAME}-skeleton-{routing.FRR_DIRECTORY}')
 
-    assert directory.typ == 'pulumi-python:dynamic/device:Directory'
+    assert directory.typ == DEVICE_DIRECTORY
     assert directory.inputs['path'] == persistence.skeleton_path(routing.FRR_DIRECTORY)
 
 

@@ -20,12 +20,27 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from pulumi import dynamic
+
+from kluster.providers.device_files.provider import DeviceArtifact, DeviceDirectory, DeviceFile
+
+
+def stated_type(cls: type[dynamic.Resource]) -> str:
+    """The type token `cls` registers under: the SDK's `pulumi-python:dynamic`, then the `module`/`name` it states."""
+    # The SDK keeps the stated half on this attribute and nowhere public.
+    return f'pulumi-python:{cls._resource_type_name}'  # pyright: ignore[reportPrivateUsage]
+
+
+DEVICE_FILE = stated_type(DeviceFile)
+DEVICE_DIRECTORY = stated_type(DeviceDirectory)
+DEVICE_ARTIFACT = stated_type(DeviceArtifact)
+
 #: The prefix every type token of the device_files provider carries.
-DEVICE_TYPE_PREFIX = 'pulumi-python:dynamic/device:'
+DEVICE_TYPE_PREFIX = DEVICE_FILE.rpartition(':')[0] + ':'
 
 #: Type token to the input that is the resource's id, and its place on the device.
 PLACES: Mapping[str, str] = {
-    f'{DEVICE_TYPE_PREFIX}File': 'path',
-    f'{DEVICE_TYPE_PREFIX}Directory': 'path',
-    f'{DEVICE_TYPE_PREFIX}Artifact': 'root',
+    DEVICE_FILE: 'path',
+    DEVICE_DIRECTORY: 'path',
+    DEVICE_ARTIFACT: 'root',
 }

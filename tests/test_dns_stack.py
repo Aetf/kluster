@@ -24,6 +24,7 @@ from kluster import conventions
 from kluster.components.dns.base import overlay_label
 from kluster.components.dns.rewrites import ResolverRewrites, rewrites
 from kluster.components.dns.zone import ManagedZone
+from kluster.providers.adguard_rewrites import AdGuardRewrite
 
 LB_ADDRESS = '203.0.113.10'
 LB_ADDRESS_V6 = '2001:db8::10'
@@ -35,7 +36,9 @@ DNSSEC = 'cloudflare:index/zoneDnssec:ZoneDnssec'
 RECORD = 'cloudflare:index/dnsRecord:DnsRecord'
 RESOLVER_REWRITES = ResolverRewrites.__pulumi_type__
 MANAGED_ZONE = ManagedZone.__pulumi_type__
-REWRITE = 'pulumi-python:dynamic:Resource'
+# The type a rewrite is declared under, as `AdGuardRewrite` states it; the SDK
+# keeps the stated half on this attribute and nowhere public.
+REWRITE = f'pulumi-python:{AdGuardRewrite._resource_type_name}'  # pyright: ignore[reportPrivateUsage]
 
 #: The one row the routed run declares: a name answered on both sides,
 #: published in the primary zone alone.

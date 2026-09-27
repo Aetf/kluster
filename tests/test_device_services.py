@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
+from device_places import DEVICE_ARTIFACT, DEVICE_FILE
 from gateway_services import ACME_TOKEN, DIGEST, TAG, caddy, pin, served
 from mock_monitor import Recorder, declaring, run_with
 
@@ -568,7 +569,7 @@ def machine_files(monitor: Recorder, service: str) -> set[str]:
     directory = f'{nspawn.machine_path(service)}/'
     return {
         str(declaration.inputs['path'])
-        for declaration in monitor.of_type('pulumi-python:dynamic/device:File')
+        for declaration in monitor.of_type(DEVICE_FILE)
         if str(declaration.inputs.get('path', '')).startswith(directory)
     }
 
@@ -871,7 +872,7 @@ def test_a_root_filesystem_travels_as_a_pin_and_never_as_bytes(monitor: Recorder
     them against megabytes, and would put a container's whole filesystem into
     the deployment history.
     """
-    images = monitor.of_type('pulumi-python:dynamic/device:Artifact')
+    images = monitor.of_type(DEVICE_ARTIFACT)
 
     assert sorted(image.name for image in images) == sorted(f'{NAME}-{service}-image' for service in SERVICES)
     for image in images:
