@@ -667,10 +667,12 @@ above are what make its views mean something. Where a card sits
 follows the work and the labels, and only the dispatcher that claimed
 the issue moves it (§2):
 
--   The builder opening the pull request moves the card to *In
-    review*; the merge moves it to *Done* through the built-in
-    workflow. A card in *In review* with no open pull request is a
-    dispatch that died and should be re-driven or returned to *Ready*.
+-   The builder's report names the pull request it opened, and the
+    dispatcher that claimed the issue moves the card to *In review*
+    when that report reaches it; the merge moves it to *Done* through
+    the built-in workflow. A card in *In review* with no open pull
+    request is a dispatch that died and should be re-driven or returned
+    to *Ready*.
 -   `decision/pending` puts the card in *In review*.
     `decision/responded` and `decision/lgtm` return it to *Backlog*,
     *Ready* or *In progress* by whether the work is merely known,
