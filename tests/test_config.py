@@ -49,9 +49,37 @@ def test_strings_names_the_value_that_is_not_a_list() -> None:
         _ = config.strings('alice', 'the alert recipients')
 
 
-def test_strings_names_the_value_that_holds_an_empty_entry() -> None:
-    with pytest.raises(TypeError, match='the alert recipients must be a list of non-empty strings'):
+def test_strings_names_the_entry_that_is_empty_by_its_position() -> None:
+    with pytest.raises(
+        TypeError, match='the alert recipients must be a list of non-empty strings, and entry 2 is empty'
+    ):
         _ = config.strings(['alice', ''], 'the alert recipients')
+
+
+def test_strings_names_the_entry_of_the_wrong_type_by_its_position() -> None:
+    with pytest.raises(TypeError, match='the alert recipients must be a list of non-empty strings, and entry 2 is int'):
+        _ = config.strings(['alice', 7], 'the alert recipients')
+
+
+@pytest.mark.parametrize(
+    'value',
+    [
+        # Beside the entry refused, and inside it: a refusal that quoted the
+        # entry it objects to would leak exactly when that entry holds
+        # addresses, as a nested list or a mapping written by mistake does.
+        ['A-PRIVATE-ADDRESS', ''],
+        ['A-PRIVATE-ADDRESS', 7],
+        [['A-PRIVATE-ADDRESS']],
+        [{'to': 'A-PRIVATE-ADDRESS'}],
+        {'to': 'A-PRIVATE-ADDRESS'},
+    ],
+)
+def test_strings_never_prints_a_value(value: object) -> None:
+    # The list may be private -- the budget alerts' recipients are -- and
+    # whoever reads the configuration logs what this raises.
+    with pytest.raises(TypeError) as refused:
+        _ = config.strings(value, 'the alert recipients')
+    assert 'A-PRIVATE-ADDRESS' not in str(refused.value)
 
 
 def test_lines_drops_blanks_and_comments(tmp_path: Path) -> None:

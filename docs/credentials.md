@@ -44,7 +44,7 @@ facts about them.
 6.  **Storage channels are a closed set.** Offline store (the kit's
     own rows, §2) · **escrow** (§2.2 — a committed ciphertext of a
     generated secret, opened only from the kit) · Pulumi config
-    secret (provider-credential channel,
+    secret (an input a program needs before it runs, defined below;
     cluster-infra.md §1.1) · **Pulumi state** · SealedSecret
     (in-cluster consumption) · CI Environment secret (the per-stack
     GitHub Environments and the `drill` Environment, ci.md §3) ·
@@ -87,10 +87,14 @@ facts about them.
     is opposite. **Config secret** lives in `Pulumi.<stack>.yaml` and
     is committed: its ciphertext is public the moment the repo is, so
     it carries only what a program needs *before* it can run, never
-    what a program generates — the credentials its providers
-    authenticate with, and the secrets it writes onto a device it
-    manages, the gateway's ACME token and BGP session password among
-    them. **State** lives in the state backend's
+    what a program generates. A value is a config secret when it is
+    that kind of input and must not be read by whoever reads the
+    repository. Today's include the credentials a stack's providers
+    authenticate with; the secrets a stack writes onto a device it
+    manages, such as the gateway's ACME token and BGP session
+    password; and private values that open nothing, such as the
+    mailboxes the budget alerts go to.
+    **State** lives in the state backend's
     Postgres and never enters git, which makes it the stronger of the
     two and the right home for what a program *generates* (Talos
     machine secrets, ZeroTier identities, restic repository
@@ -1554,7 +1558,7 @@ deleted in that console; the BGP password by a fresh draw, its `record`
 and both ends re-applied; the SSH identities by a new pair (§3). A
 `secure:` value that is no §3 row is its owner's to replace, or, where
 it is private rather than a credential, disclosed for good
-(`budgetAlertRecipients` today, whose class `kluster-ops#405` settles).
+(`budgetAlertRecipients` today).
 A credential retired before the leak costs nothing, being dead at its
 platform. The same passphrase encrypts the stack's state (rule 6),
 which is not in git: a state secret is exposed only to whoever also

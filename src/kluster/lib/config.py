@@ -9,9 +9,10 @@ configuration, from a stack's configuration object or from a file beside the
 code that reads it.
 
 Either way it arrives untyped — `require_object` hands back whatever the YAML
-held, and a file is bytes — so it crosses into the program through here, at one
-narrow place that turns it into something the type checker can see and reports
-a shape mistake by name instead of by traceback (rfc-002 §10.4).
+held, `require_secret_object` the same inside a secret output, and a file is
+bytes — so it crosses into the program through here, at one narrow place that
+turns it into something the type checker can see and reports a shape mistake
+by name instead of by traceback (rfc-002 §10.4).
 """
 
 from __future__ import annotations
@@ -45,20 +46,24 @@ def text(value: object, what: str) -> str:
 
 
 def strings(value: object, what: str) -> tuple[str, ...]:
-    """`value` as a list of non-empty strings, or a `TypeError` saying what it is.
+    """`value` as a list of non-empty strings, or a `TypeError` saying what shape it is.
 
-    The whole list is described in the refusal rather than the offending entry
-    alone: a configured list is short, an operator reads it as one value, and
-    what they have to correct is the line they wrote. That it prints the value
-    where `text` prints only the type is deliberate: the lists that arrive this
-    way are public by construction — alert recipients, the public keys that may
-    log in to an appliance — and none of them reaches a secret.
+    **The refusal names the shape and never the value**, for `text`'s reason:
+    what this raises is logged, and a list that arrives this way may be
+    private — the budget alerts' recipients are personal mailboxes. What the
+    operator has to correct is the line they wrote, so the refusal says which
+    entry is wrong by its position and what it is instead: a type, or empty.
     """
     if not isinstance(value, list):
         raise TypeError(f'{what} must be a list, not {type(value).__name__}')
     entries = cast('list[object]', value)
-    if not all(isinstance(entry, str) and entry for entry in entries):
-        raise TypeError(f'{what} must be a list of non-empty strings, and is {entries!r}')
+    for position, entry in enumerate(entries, start=1):
+        if not isinstance(entry, str):
+            raise TypeError(
+                f'{what} must be a list of non-empty strings, and entry {position} is {type(entry).__name__}'
+            )
+        if not entry:
+            raise TypeError(f'{what} must be a list of non-empty strings, and entry {position} is empty')
     return tuple(cast('list[str]', entries))
 
 

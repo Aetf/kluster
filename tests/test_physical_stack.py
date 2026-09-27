@@ -18,6 +18,7 @@ the run here rather than in `pulumi preview`.
 
 import inspect
 import json
+import traceback
 from collections import Counter
 from pathlib import Path
 from typing import Any, cast
@@ -961,7 +962,9 @@ async def test_the_budget_alerts_reach_the_addresses_configuration_names(setup: 
     """The only signal this stack raises that does not go through the cluster.
 
     The addresses are the one thing about the guardrails an operator supplies,
-    so what this holds is the path from the configuration key to the rule.
+    so what this holds is the path from the configuration key to the rule. They
+    are private mailboxes, so the path is a secret one: each rule receives them
+    marked, and `_unwrapped` refuses a plaintext value.
     """
     async with declaring():
         await physical.main()
@@ -973,18 +976,46 @@ async def test_the_budget_alerts_reach_the_addresses_configuration_names(setup: 
     ]
     assert alerts
     for alert in alerts:
-        assert alert['recipients'] == ','.join(BUDGET_RECIPIENTS)
+        assert _unwrapped(alert['recipients']) == ','.join(BUDGET_RECIPIENTS)
 
 
 @pytest.mark.asyncio
 async def test_a_recipient_list_that_is_not_a_list_of_addresses_is_refused() -> None:
-    """Named at the boundary, so the operator is told which key to fix."""
+    """Named at the boundary, so the operator is told which key to fix, and by its shape alone.
+
+    The value is read as a secret, so its shape is checked inside the secret and
+    the refusal arrives when the rules consume it rather than at the read. What
+    it says is the key and the shape: the addresses are private, and a refusal
+    is logged.
+    """
     pulumi.runtime.set_all_config(
         dict(STACK_CONFIG) | {'kluster:budgetAlertRecipients': json.dumps('one@example.invalid')}
     )
 
-    with pytest.raises(TypeError, match='budgetAlertRecipients must be a list'):
+    with pytest.raises(TypeError, match='budgetAlertRecipients must be a list') as refused:
+        async with declaring():
+            await physical.main()
+    assert 'one@example.invalid' not in str(refused.value)
+
+
+@pytest.mark.asyncio
+async def test_a_recipient_list_that_is_not_json_is_refused_without_its_value() -> None:
+    """The value an operator types at `pulumi config set` for two addresses, refused by the key's name.
+
+    The SDK's own refusal of a value that is not JSON quotes the value, and a
+    run's error lands in a public log. So the whole traceback is read, the
+    exception's chain included: a refusal raised while the SDK's is still
+    being handled carries that one along beneath it.
+    """
+    pulumi.runtime.set_all_config(
+        dict(STACK_CONFIG) | {'kluster:budgetAlertRecipients': 'one@example.invalid,two@example.invalid'}
+    )
+
+    with pytest.raises(TypeError, match='budgetAlertRecipients must be a JSON list') as refused:
         await physical.main()
+    printed = ''.join(traceback.format_exception(refused.value))
+    assert 'one@example.invalid' not in printed
+    assert 'two@example.invalid' not in printed
 
 
 def test_the_signing_configuration_is_read_from_the_keys_the_mint_writes() -> None:

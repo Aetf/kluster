@@ -8,6 +8,9 @@ spelled in. The budget's own assertion is smaller and blunter — that it points
 at the compartment and that somebody receives its alerts.
 """
 
+from collections.abc import Sequence
+
+import pulumi
 import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, run_with
@@ -41,13 +44,13 @@ async def monitor() -> Recorder:
     return await run_with(Recorder(), stack='physical')
 
 
-def build() -> Guardrails:
+def build(recipients: pulumi.Input[Sequence[str]] = RECIPIENTS, name: str = 'kluster') -> Guardrails:
     return Guardrails(
-        'kluster',
+        name,
         tenancy_id=TENANCY_ID,
         compartment_id=COMPARTMENT_ID,
         compartment_name=COMPARTMENT_NAME,
-        recipients=RECIPIENTS,
+        recipients=recipients,
         alert_rules=ALERT_RULES,
     )
 
@@ -136,13 +139,20 @@ async def test_every_alert_has_an_audience() -> None:
         assert await rule.threshold_type.future() == 'PERCENTAGE'
 
 
-def test_a_budget_nobody_hears_is_refused() -> None:
-    with pytest.raises(ValueError, match='notifies nobody'):
-        Guardrails(
-            'kluster-silent',
-            tenancy_id=TENANCY_ID,
-            compartment_id=COMPARTMENT_ID,
-            compartment_name=COMPARTMENT_NAME,
-            recipients=(),
-            alert_rules=ALERT_RULES,
-        )
+@pytest.mark.asyncio
+async def test_secret_addresses_reach_every_alert_as_a_secret() -> None:
+    """The addresses are private, so a caller holding them as a secret gets a secret on every rule."""
+    guardrails = build(pulumi.Output.secret(RECIPIENTS))
+    for rule in guardrails.alerts.values():
+        assert await rule.recipients.is_secret()
+        assert await rule.recipients.future() == ','.join(RECIPIENTS)
+
+
+@pytest.mark.asyncio
+async def test_a_budget_nobody_hears_is_refused() -> None:
+    # The list is in hand only once the input resolves, so that is where the
+    # refusal is: in the audience every rule receives.
+    guardrails = build((), name='kluster-silent')
+    for rule in guardrails.alerts.values():
+        with pytest.raises(ValueError, match='notifies nobody'):
+            await rule.recipients.future()
