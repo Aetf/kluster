@@ -21,6 +21,8 @@ anywhere.
 
 from __future__ import annotations
 
+import re
+
 from gateway_services import caddy, served
 from overlay_flow_rules import RESOLVERS, rules
 
@@ -45,7 +47,7 @@ def test_every_declaration_of_the_resolvers_interface_names_the_port_the_applian
     # case is about is the port beside them.
     rendered = rules()
     for site_address in RESOLVERS:
-        assert f'ipdest {site_address}/32 and dport {port};' in rendered
+        assert re.search(rf'ipdest {re.escape(str(site_address))}/32 and dport {port}(?=[ ;])', rendered)
 
     # Where the `dns` stack writes a rewrite. Assembled here rather than
     # compared against the accessor's own output, which would agree with any

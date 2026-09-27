@@ -235,10 +235,14 @@ not moved.
     own, in the form framework/testing.md §5.1 gives a scratch probe,
     run in the stack's own `.venv` so that the SDK — and with it the
     provider release the engine resolves — is the one the stack pins.
-    Its provider is built with the arguments `SiteFirewall` builds its
-    own with (`components/gateway/unifi.py`), from the same key in the
-    `physical` stack's configuration, at the same `ADDR`; a change to
-    that construction is a change here. It declares a zone of its own
+    Its provider is built by `controller_provider`
+    (`components/gateway/unifi.py`), the function `SiteFirewall` builds
+    its own with, from the same key in the `physical` stack's
+    configuration, at the same `ADDR`. That includes the connection's
+    posture: the controller's certificate is not verified, because it
+    names none of the addresses the program dials and the provider can
+    pin nothing, and what that exposes is recorded in architecture.md
+    §4.1. It declares a zone of its own
     with no network in it; an address group of each family, as the
     census's pool groups are; policies out of that zone in the shapes the
     census uses — zone to zone in both families, and per family a
@@ -279,20 +283,16 @@ not moved.
 
     from kluster import conventions
     from kluster.components.gateway import url_host
-    from kluster.components.gateway.unifi import API_KEY, HTTP_MAX_RETRIES, ZONE_EXTERNAL
+    from kluster.components.gateway.unifi import ZONE_EXTERNAL, controller_provider
 
     NAME = 'kluster-probe'
     PORT = '49999'  # a WAN port no forward on the controller uses
     site = conventions.gateway.UNIFI_SITE
     config = pulumi.Config()
 
-    # The arguments SiteFirewall builds its own provider with.
-    provider = unifi.Provider(
-        f'{NAME}-unifi',
-        api_url=f'https://{url_host(config.require("gatewayHost"))}',
-        api_key=config.require_secret(API_KEY),
-        site=site,
-        http_max_retries=HTTP_MAX_RETRIES,
+    # The construction SiteFirewall builds its own provider with.
+    provider = controller_provider(
+        f'{NAME}-unifi', api_url=f'https://{url_host(config.require("gatewayHost"))}', site=site
     )
     opts = pulumi.ResourceOptions(provider=provider)
     external = unifi.get_firewall_zone_output(
@@ -380,21 +380,6 @@ not moved.
 
     What a failure means depends on where it lands:
 
-    -   **`tls: failed to verify certificate` on the first call.** The
-        controller serves a self-signed certificate of its own that
-        names none of the addresses this program dials, and the
-        provider verifies it unless `allow_insecure`, or `UNIFI_INSECURE`
-        in the environment of whoever runs it, says otherwise.
-        `SiteFirewall` passes no `allow_insecure`, so the window's run
-        would fail the same way on its first controller call. What
-        makes the provider accept this controller is
-        Aetf/kluster-ops#411's to decide, and until it has, verification
-        stays on everywhere: neither this probe nor step 3 runs with
-        `UNIFI_INSECURE` in its environment, and `allow_insecure` is not
-        set by hand. A green run obtained that way sends the
-        controller's key, unverified, to whatever answers at `ADDR` —
-        the exposure that issue exists to rule on — and the window does
-        not open until it has closed.
     -   **401 or 403, on the lookup of `External` or on the first
         create.** The key, not the resources: it is not the dedicated
         administrator's, or that administrator cannot manage the

@@ -590,6 +590,26 @@ async def test_the_controller_key_is_read_where_the_provider_is_built() -> None:
     firewall = build()
     assert await firewall.provider.api_key.future() == API_KEY
     assert 'api_key' not in inspect.signature(unifi.SiteFirewall.__init__).parameters
+    assert 'api_key' not in inspect.signature(unifi.controller_provider).parameters
+
+
+@pytest.mark.asyncio
+async def test_whether_the_controller_is_verified_is_the_programs_decision(mocks: Controller) -> None:
+    """The certificate check is an input the provider is always given.
+
+    Omitted, the provider takes it from `UNIFI_INSECURE` in the environment of
+    whoever runs the program, so one run would verify and the next would not,
+    and no preview would show which. What the input is set to is the ruling
+    `unifi.ALLOW_INSECURE` records, with why; this holds that the ruling, and
+    not the runner, is what reaches the provider.
+    """
+    async with declaring():
+        build()
+
+    settings = mocks.inputs_of(f'{NAME}-unifi')
+
+    assert 'allowInsecure' in settings, "omitted, the runner's environment decides"
+    assert settings['allowInsecure'] == str(unifi.ALLOW_INSECURE).lower()
 
 
 @pytest.mark.asyncio
