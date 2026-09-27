@@ -145,7 +145,9 @@
       // one renovate reads as a dependency of its own, named `jdx/mise`. That
       // half is the one carrying mise's own releases, so dropping it would
       // send exactly the bump this rule exists for back into the `github
-      // actions` group.
+      // actions` group. The cloud session's pin in
+      // `deploy/cloud-session/toolchain.sh` carries the same name (the custom
+      // manager below), so it moves in the same pull request.
       matchDepNames: [
         'jdx/mise-action',
         'jdx/mise',
@@ -393,6 +395,22 @@
         '# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: versioning=(?<versioning>\\S+))?(?: extractVersion=(?<extractVersion>\\S+))?\\s+[A-Za-z_][A-Za-z0-9_]*=(?<currentValue>\\d[\\w.+-]*)(?:\\s+[A-Za-z_][A-Za-z0-9_]*_DIGEST=(?<currentDigest>sha256:[0-9a-f]{64}))?',
         '# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: versioning=(?<versioning>\\S+))?\\s+[A-Za-z_][A-Za-z0-9_]*=(?<currentValue>[A-Za-z][\\w.-]*)@(?<currentDigest>sha256:[0-9a-f]{64})',
       ],
+    },
+    {
+      // The mise a cloud session installs (framework/dispatch.md §1.4), which
+      // is CI's: named `jdx/mise` here as the workflows' `mise-action`
+      // `version:` inputs are, so the toolchain rule above puts both in one
+      // pull request. A test holds the two equal.
+      customType: 'regex',
+      managerFilePatterns: [
+        '/^deploy/cloud-session/toolchain\\.sh$/',
+      ],
+      matchStrings: [
+        "mise_version=(?<currentValue>\\d[\\d.]*)",
+      ],
+      depNameTemplate: 'jdx/mise',
+      datasourceTemplate: 'github-releases',
+      extractVersionTemplate: '^v(?<version>.+)$',
     },
     {
       // The appliance's Postgres line and age release. AGE_SHA256 is not

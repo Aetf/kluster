@@ -1,0 +1,19 @@
+{
+  "claudeMdExcludes": [
+    "**/.claude/workspaces/**",
+    "**/.claude/worktrees/**"
+  ],
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ \"$CLAUDE_CODE_REMOTE\" != true ] || bash \"$CLAUDE_PROJECT_DIR\"/deploy/cloud-session/toolchain.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

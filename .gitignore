@@ -8,7 +8,14 @@ __pycache__/
 # leaves beside them. `jj` skips other workspaces' roots but snapshots
 # everything else on every command, so unignored scratch here is committed
 # rather than merely untracked; `git` skips nothing and sees the workspaces too.
-/.claude/
+# Two paths under it are the repository's own and tracked: the role
+# definitions and the project settings Claude Code reads from a clone
+# (AGENTS.md). The pattern names the directory's children rather than the
+# directory, because a directory that is ignored is never entered, and a `!`
+# inside it could not bring anything back.
+/.claude/*
+!/.claude/agents/
+!/.claude/settings.json
 # Every workstation slot: the seed kit, the cached Pulumi passphrase, the
 # account roots' token files, the state backend's client bundle
 # (docs/credentials.md §1 rule 6). One directory, one line, one thing on this

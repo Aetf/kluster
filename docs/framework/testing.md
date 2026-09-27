@@ -488,9 +488,9 @@ discipline below is about getting rid of it again without taking the
 real change with it.
 
 **Keep a pristine copy and mutate in place.** The throwaway artifact is
-the copy, not the mutation, and it lives under the workspace's own
-ignored `.claude/` — on the same filesystem as the file, which the last
-command needs:
+the copy, not the mutation, and it lives in the workspace's own
+`.claude/mutation/`, which `.gitignore` ignores — on the same filesystem
+as the file, which the last command needs:
 
 ```bash
 mkdir -p .claude/mutation

@@ -12,7 +12,8 @@ document is the protocol behind it.
 `checks` and `changes` are green on an up-to-date branch, the account
 owner included ([github.md](github.md) §3). Work that can run in
 parallel therefore runs as **one agent per issue, each in its own `jj`
-workspace, each opening its own pull request**. The dispatcher
+workspace — or its own clone, in a cloud session (§1.4) — each opening
+its own pull request**. The dispatcher
 commissions the review (§3) and merges; it does not also implement the
 work it dispatched (§1.3).
 
@@ -74,8 +75,8 @@ Work happens in a **`jj` workspace** of its own under
 
 `add` takes the workspace's name from the last element of the path and
 starts it on an empty change on top of `main`. It errors on a missing
-parent rather than creating one, and `.claude/` is ignored rather than
-tracked, so the `mkdir` is not optional in a fresh clone.
+parent rather than creating one, and `.claude/workspaces/` is ignored
+rather than tracked, so the `mkdir` is not optional in a fresh clone.
 
 `mise trust` is not optional either, and skipping it is what the first
 gate command in a new workspace fails on. mise keys trust by absolute
@@ -111,11 +112,13 @@ workspace is untrusted, what trusting grants — lives here alone.
 
 **Scratch belongs under the workspace's own `.claude/`.** A workspace
 root is a checkout, so a file written there is a repository path and
-the next `jj` command snapshots it into the change; `.gitignore`'s
-`/.claude/` is anchored at whatever root is being evaluated, so
+the next `jj` command snapshots it into the change. `.gitignore`'s
+`.claude/` patterns are anchored at whatever root is being evaluated, so
 `<workspace>/.claude/` is ignored inside the workspace exactly as
-`.claude/` is in the primary, and a tool's config or a dump written
-there never enters the change at all.
+`.claude/` is in the primary — everything in it but the paths the
+repository tracks there, which the workspace checks out like any other
+tracked file — and a tool's config or a dump written there never enters
+the change at all.
 
 No workspace outlives the dispatch that created it:
 
@@ -287,8 +290,8 @@ what is still here, never about what landed.
 ### 1.3 The three roles
 
 Who may do what is protocol rather than habit. Which model a role runs
-on is deliberately absent: that lives in the agent definitions, outside
-this repository, and changes far more often than this document.
+on is deliberately absent: that lives in the agent definitions under
+`.claude/agents/`, and changes far more often than this document.
 
 -   **Dispatcher** — the session the operator starts. It commissions
     the work, commissions the review (§3), merges, absorbs its own
@@ -307,6 +310,99 @@ this repository, and changes far more often than this document.
     request, an explicit brief, and only the paths that brief names.
 
 A dispatcher that finds itself designing has skipped a dispatch.
+
+### 1.4 A builder in a cloud session
+
+A cloud session — Claude Code on claude.ai/code — starts from a fresh
+clone of this repository on a `claude/…` branch of its own, and carries
+nothing from any workstation: what it knows of this repository is
+`CLAUDE.md`, and `AGENTS.md` through it, and `.claude/`, read from the
+clone. A builder there is the
+builder of §1.3, and §1 holds except where this list says otherwise:
+
+-   **The clone is the workspace.** It holds this one piece of work and
+    dies with the session, so no `jj` workspace is added and none is
+    removed. Scratch goes under the clone's `.claude/`, as in §1.2.
+-   **git is the version control, and `gh` is not on the image.** The
+    work is committed with `git add <path>` on each path it touched —
+    never `git commit -a`, whose scope is the whole tree rather than the
+    work — and pushed with `git push origin HEAD` to the session's
+    branch, the only one it may push to. The `jj` push form and its
+    failure modes (§1.2) do not arise, and in a plain clone git answers
+    about the clone itself, so `git rev-parse HEAD` after the push is the
+    head SHA the report names (§4). The pull request is opened and read
+    with the session's GitHub tools, which reach this repository and no
+    other unless the operator attaches it.
+-   **A fix cycle goes back to the session that opened the pull
+    request.** A session started on claude.ai gets a branch of its own
+    and pushes only that one, so a fix cycle (§3), and the conflicting
+    rebase §2 rule 4 sends back, are sent to that session, resumed.
+    Reopening a session that has expired provisions a fresh VM with the
+    conversation restored and nothing else, so the builder pushes before
+    it ends a turn: a commit that never reached the branch is lost with
+    the old VM.
+-   **It fetches for itself.** A builder never fetches (§1.2) because
+    workspaces share one store; a clone shares none. So a round that
+    starts from the forge — a fix cycle on a branch the dispatcher
+    rebased, or the conflicting rebase §2 rule 4 sends back — starts
+    with `git fetch`, and a rewritten branch goes back with
+    `git push --force-with-lease`.
+-   **Stop and report is a comment on the pull request**, written with
+    those GitHub tools: no dispatcher shares the session, so what §1
+    sends to one — a path outside the brief, a finding, the finished
+    report — goes there, and to the ops issue only when the operator has
+    attached the ops repository. Before a pull request exists, the
+    report is the session's own last message, which the operator reads
+    on claude.ai and relays. A gate that cannot run is such a report,
+    not a reason to install tools another way.
+-   **It never merges and never changes repository settings**, and it
+    needs no live credential. Every operation that needs one stays with
+    the checkout that holds `.credentials/` (kluster-ops#387): the
+    clone holds none, so provider-facing work ships with the "unproven
+    live" note of §1.1 item 3.
+
+**`deploy/cloud-session/toolchain.sh` installs the session's tools**:
+mise, from `npm`, at CI's version; everything `mise.toml` pins; and the
+locked Python environment. It prints nothing when it succeeds and one
+line naming this section when it fails, skips each step whose work is
+already done, and finishes well inside the roughly five minutes a setup
+script has for the environment to be cached. It runs from two places:
+
+-   **The setup script of a cloud environment kept for this
+    repository**, set on claude.ai. Environments belong to the account,
+    and each session runs in the one it is started with, so a line in an
+    environment other repositories use runs in their sessions too, and
+    so does the Full network access below. The line, naming the path a
+    session's clone has, is
+
+        bash /home/user/kluster/deploy/cloud-session/toolchain.sh || true
+
+    It runs after the clone and before Claude Code starts, and the
+    environment keeps what it installed for later sessions. A setup
+    script that fails keeps the session from starting, which is what the
+    `|| true` is for: a failed or skipped setup leaves the install to the
+    hook, whose failure line shows in the running session.
+-   **The `SessionStart` hook in `.claude/settings.json`**, at every
+    start and resume of a session where `CLAUDE_CODE_REMOTE` is `true`,
+    which only a cloud session sets. Where the setup script has run, it
+    finds everything in place and only checks; in an environment without
+    one, it is the whole install. It is also what puts mise on the session's
+    `PATH`. A failure shows as the hook's error, and the session starts
+    regardless.
+
+**The environment's network access is Full**, set on claude.ai. The
+default, Trusted, refuses hosts the script downloads from — mise's
+own, and the one uv fetches its Python from — and a refused download is
+the failure the script's line names. Full does not open the GitHub API:
+the session's GitHub proxy answers `api.github.com` only for
+repositories attached to the session, whatever the network access. So no
+tool `mise.toml` pins may need the API to install; the `ltex-ls-plus`
+pin's comment there says how that one stays off it. Release downloads
+from `github.com`, which every pinned tool installs from, pass at Full
+as measured in a cloud session, although the Claude Code documentation
+says the proxy serves release assets only from repositories attached to
+the session. If the proxy comes to enforce that, the install fails for
+every pinned tool, not for the prose checker alone.
 
 ## 2. Concurrent dispatchers
 
@@ -479,7 +575,8 @@ merge can report once:
     open with a comment saying what remains.
 -   **A builder's report names the head SHA** of the branch it opened,
     read after the push with
-    `jj log -r <branch> --no-graph -T commit_id` and never abbreviated
+    `jj log -r <branch> --no-graph -T commit_id` — in a cloud session's
+    clone, with `git rev-parse HEAD` (§1.4) — and never abbreviated
     or extended by hand. That is what the dispatcher compares the pull
     request's head against before merging and before its own rebase (§2
     rule 8), and it is why `git rev-parse HEAD` is not used inside a
