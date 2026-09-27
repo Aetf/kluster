@@ -142,10 +142,9 @@ class TalosArtifact(Component, abc.ABC):
                 schematic_id=schematic_id,
                 platform=self.platform,
                 architecture=self.architecture,
-                # Parented like every other invoke here. The factory is not an
-                # account this program authenticates to, so what it inherits is
-                # the image factory's own default provider — the parent carries
-                # none for that package.
+                # Parented like every other invoke here: an invoke inherits a
+                # provider only through its parent, and the Talos provider is
+                # one this component carries.
                 opts=pulumi.InvokeOptions(parent=self),
             )
         )

@@ -89,7 +89,11 @@ a provider and is read by nothing else. Everything else still arrives as
 a parameter, and no such credential reaches any component's signature.
 A program that follows this rule disables default providers for the
 packages it builds providers for, which turns a forgotten one into an
-error rather than a silent fallback. See
+error rather than a silent fallback. A provider with no credential is no
+exception: the `physical` stack's Talos provider authenticates to no
+account and is built from no argument at all, yet it is explicit, with
+its package's default disabled, because the fallback is what the rule
+removes, and a package with nothing to authenticate still has one. See
 [rfc-002](../rfc/rfc-002-src-layout-and-the-gateway.md) §8.
 
 **Stack configuration is where a provider credential lives**, and it is

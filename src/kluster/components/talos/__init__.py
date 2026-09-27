@@ -572,6 +572,7 @@ class TalosCluster(Component, pulumi_type='kluster:physical:TalosCluster'):
             # once that resource does — so the patches are computed inside an
             # async_output rather than at declaration time.
             config_patches=async_output(partial(self._patches, node, role, secondary_address)),
+            opts=pulumi.InvokeOutputOptions(parent=self),
         )
 
     async def _patches(self, node: str, role: Role, secondary_address: pulumi.Input[str] | None) -> list[str]:

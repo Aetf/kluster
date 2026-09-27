@@ -26,6 +26,7 @@ from urllib.parse import parse_qs, urlsplit
 import pulumi
 import pytest
 import pytest_asyncio
+import yaml
 from device_places import DEVICE_TYPE_PREFIX, PLACES
 from mock_monitor import Recorder, declaring, run_under_backstop
 from oci_conventions import with_compartment
@@ -1087,10 +1088,10 @@ def _unwrapped(value: Any) -> Any:
 #: by the prefix of the type token the family carries. The device-file
 #: resources are the one family with no entry: their provider carries nothing
 #: and travels as an object rather than through resource options (rfc-002
-#: §8.3), and the Talos chain is the other -- it authenticates to no account,
-#: so it keeps the package's own default provider.
+#: §8.3).
 SIGNED_BY = {
     'oci:': f'{conventions.CLUSTER_NAME}-oci',
+    'talos:': f'{conventions.CLUSTER_NAME}-talos',
     'b2:': f'{conventions.CLUSTER_NAME}-b2',
     'unifi:': f'{conventions.CLUSTER_NAME}-firewall-unifi',
     'zerotier:': f'{conventions.CLUSTER_NAME}-zerotier',
@@ -1177,3 +1178,59 @@ async def test_the_placement_lookups_name_the_provider_they_sign_with(setup: Ins
         'oci:Identity/getFaultDomains:getFaultDomains',
     ):
         assert f'{conventions.CLUSTER_NAME}-oci' in setup.call_providers[token], f'{token} signed as nobody'
+
+
+@pytest.mark.asyncio
+async def test_every_talos_call_is_signed_by_the_stack_programs_provider(setup: Installation) -> None:
+    """The Talos chain's invokes inherit its provider through their parents.
+
+    The images, the machine configurations and day 1 each carry the provider
+    the stack program built, and an invoke takes a provider only from the
+    parent it names -- so an invoke that names none goes through the
+    package's default instead, which the committed configuration disables.
+    Every call is checked rather than every token: a token is called once per
+    node or per artifact, and one call that lost its parent is the mistake.
+    """
+    async with declaring():
+        await physical.main()
+
+    calls = [(token, provider) for token, provider in setup.calls if token.startswith('talos:')]
+    assert calls, 'the Talos chain made no call at all'
+    for token, provider in calls:
+        assert f'{conventions.CLUSTER_NAME}-talos' in provider, f'{token} signed as nobody'
+
+
+#: The type-token namespaces a run declares under that are no provider
+#: package: the engine's own (`pulumi:`, the stack and every provider
+#: resource), the dynamic resources' (`pulumi-python:`, whose default provider
+#: is the one this program must keep -- rfc-002 §8.1), and this repository's
+#: components (`kluster:`), which no provider serves.
+NOT_PACKAGES = frozenset({'pulumi', 'pulumi-python', 'kluster'})
+
+
+@pytest.mark.asyncio
+async def test_every_package_the_program_uses_has_its_default_disabled(setup: Installation) -> None:
+    """The committed configuration turns a missed provider into an error.
+
+    A resource or invoke that misses its explicit provider falls back to the
+    package's default, which configures itself from ambient namespaces and
+    signs as whatever it finds there. Disabling the default is what makes that
+    fallback fail instead, and it is decided per package, so the list has to
+    name every package the program uses -- which the run says, as the packages
+    it declared a resource of or called through. Derived from that rather than
+    from the providers the program built, because a package used entirely
+    through its default has no provider resource at all, and it is exactly the
+    one the list must not miss. The equality runs the other way too: a package
+    the program no longer uses is a stale entry, and nothing else would notice
+    it.
+    """
+    async with declaring():
+        await physical.main()
+
+    used = {typ.partition(':')[0] for typ in setup.types} | {token.partition(':')[0] for token, _ in setup.calls}
+    # The checkout this file sits in, not `workstation.repo_root()`: the
+    # installation points that at a scratch directory.
+    committed = Path(__file__).resolve().parents[1] / f'Pulumi.{conventions.PHYSICAL}.yaml'
+    config = yaml.safe_load(committed.read_text())['config']
+
+    assert set(config['pulumi:disable-default-providers']) == used - NOT_PACKAGES
