@@ -56,10 +56,10 @@ if TYPE_CHECKING:
 ROOT_VARIABLES = frozenset(field.env for root in masters.ROOTS.values() for field in root.fields)
 
 #: The variables `mise.toml` lists under `redactions` that are not account-root
-#: fields: the passphrase that decrypts the estate's config and state, the one
-#: that decrypts the `github` stack's config, and the backend URL, which names a
-#: client key. The register above does not carry them, and they are secrets on
-#: exactly the same terms.
+#: fields: the stack passphrase, which decrypts the state and every other
+#: stack's config, the one that decrypts the `github` stack's config, and the
+#: backend URL, which names a client key. The register above does not carry
+#: them, and they are secrets on exactly the same terms.
 BACKEND_VARIABLES = frozenset(
     {
         'PULUMI_CONFIG_PASSPHRASE',

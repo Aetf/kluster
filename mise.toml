@@ -1,10 +1,10 @@
 # mise does not echo these back in `mise env` or a task's command line. The
-# passphrases are secrets -- one decrypts the estate's config and state, the
-# other the `github` stack's config. The URL carries no credential -- the
-# client key is a file `PGSSLKEY` names -- and is redacted with them all the
-# same: it names the state backend's address and role. This list is
-# variable names; the files they are read from are covered by .gitignore
-# instead.
+# passphrases are secrets -- the Pulumi stack passphrase decrypts the state and
+# every stack's config but `github`'s, which the other decrypts. The URL
+# carries no credential -- the client key is a file `PGSSLKEY` names -- and is
+# redacted with them all the same: it names the state backend's address and
+# role. This list is variable names; the files they are read from are covered
+# by .gitignore instead.
 redactions = ["PULUMI_CONFIG_PASSPHRASE", "KLUSTER_GITHUB_PASSPHRASE", "PULUMI_BACKEND_URL"]
 
 # Pinned, not `latest`: CI installs from this file, so a floating version is a
@@ -57,8 +57,8 @@ node = "24.21.0"
 # `version` moved.
 "github:ltex-plus/ltex-ls-plus" = { version = "18.7.0", version_prefix = "" }
 
-# What a `pulumi` run needs that no template can compute: the state
-# passphrase, recovered from its escrow ciphertext (docs/credentials.md
+# What a `pulumi` run needs that no template can compute: the Pulumi
+# stack passphrase, recovered from its escrow ciphertext (docs/credentials.md
 # §2.2), and the backend URL and the three files of the client bundle it
 # connects with. Each is read from its **workstation slot** -- a git-ignored
 # file under `.credentials/`, written by a `credentials` or `state-backend`
@@ -73,7 +73,7 @@ node = "24.21.0"
 # the `github` one below is exported under a name of its own rather than as
 # `PULUMI_CONFIG_PASSPHRASE`. That variable is process-global -- `pulumi` reads
 # one value per invocation -- while the `github` stack's config is encrypted
-# apart from the estate's, so the right value depends on the `-s` a command
+# apart from the other stacks', so the right value depends on the `-s` a command
 # carries, and a template never sees the command line. Every `credentials`
 # command resolves it from the stack it is acting on (`pulumi_config.Stack`);
 # a `pulumi` an operator runs against that stack goes through the `github`
@@ -83,7 +83,7 @@ node = "24.21.0"
 #
 #     mise run github preview
 #
-# A bare `pulumi ... -s github` meets the estate passphrase, and that is not
+# A bare `pulumi ... -s github` meets the stack passphrase, and that is not
 # silent: `encryptionsalt` is a verifier, so `pulumi` answers `error: incorrect
 # passphrase` and exits non-zero having written nothing. Note that
 # `PULUMI_CONFIG_PASSPHRASE_FILE` is no use here -- `pulumi` prefers

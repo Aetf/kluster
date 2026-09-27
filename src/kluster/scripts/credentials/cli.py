@@ -126,7 +126,7 @@ _ORDER = """when to run what:
          separate from it for the one reason the row exists: this value goes
          to no CI Environment, so the stack holding the forge's admin token is
          unreadable by anything CI can start. A machine without it does not
-         fall back to the estate passphrase -- every command that would touch
+         fall back to the stack passphrase -- every command that would touch
          that stack refuses by name.
     8. credentials derived unifi record
        credentials derived adguard record
@@ -158,7 +158,7 @@ _ORDER = """when to run what:
          of those values moves; a row it cannot fill yet says which slot is
          waiting on what. It authenticates as the admin token stage 8
          recorded, read back out of the github stack's config -- which needs
-         stage 7's passphrase. It pushes the estate passphrase into every
+         stage 7's passphrase. It pushes the stack passphrase into every
          Environment and the github one into none.
 
   on a workstation that develops without the kit

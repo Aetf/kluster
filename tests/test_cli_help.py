@@ -185,3 +185,21 @@ def test_a_mention_in_the_middle_of_a_help_text_is_caught(monkeypatch: pytest.Mo
 
     assert caught
     assert not all(line.strip().startswith(SEE_ALSO) for line in caught)
+
+
+def test_the_help_names_the_shared_passphrase_by_the_registers_term(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The passphrase every stack but `github` is encrypted under is the stack
+    # passphrase, the term its register row carries. The bring-up order names
+    # it where it says what reaches every Environment, and the row's own help
+    # names it where it says what the row holds; neither says "estate", a word
+    # that means the operator's personal holdings and nothing in this tree.
+    def flat(name: str) -> str:
+        return ' '.join(' '.join(_rendered(name, monkeypatch)).split())
+
+    order = flat('credentials')
+    row = flat(f'credentials derived {escrow.row_name(escrow.PASSPHRASE)}')
+
+    assert 'pushes the stack passphrase into every Environment' in order
+    assert 'the Pulumi stack passphrase' in row
+    assert 'estate' not in order
+    assert 'estate' not in row

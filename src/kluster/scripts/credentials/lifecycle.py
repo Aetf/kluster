@@ -250,7 +250,7 @@ def environment(
 
 
 def _apart(vault: escrow.Vault) -> dict[str, str]:
-    """The passphrase of every stack that is not on the estate's, by stack name.
+    """The passphrase of every stack that is not on the stack passphrase, by stack name.
 
     **Walked from `pulumi_config.APART`, not from a list beside it.** That
     census already answers "which stacks are encrypted apart, and from which
@@ -258,7 +258,7 @@ def _apart(vault: escrow.Vault) -> dict[str, str]:
     into the labels this recovers — so the two cannot disagree about which
     stacks there are. A second list here would fail *closed* rather than open,
     since a stack it forgot would refuse by name rather than fall back to the
-    estate passphrase, but it would refuse telling an operator to run a
+    stack passphrase, but it would refuse telling an operator to run a
     `generate` they have already run, which is a bad half hour.
 
     An escrow with no generation yet is left out rather than raised on, which
@@ -310,7 +310,7 @@ def bootstrap(
 
     It fills the kit and stops there. The escrow's own labels are minted one
     command at a time (`credentials derived <row> generate`), because
-    generating the state passphrase is a decision with consequences for every
+    generating the stack passphrase is a decision with consequences for every
     stack, not a step a fill-everything command should take on its own.
     """
     require_member(only)
@@ -427,7 +427,7 @@ def require_successor_of(kit: KdbxStore, into: KdbxStore) -> None:
 
     The successor's lineage marker names the predecessor it was written from,
     and that is what is checked -- not the rows, which cannot tell an older
-    retired kit of this estate from a successor that died before its first
+    retired kit of this installation from a successor that died before its first
     row, and not the path, which cannot see a copy. What fails here: the kit
     itself or a copy of it (one database identity), a kit `bootstrap` wrote
     (no marker), and a successor of some other kit -- an older retired kit
@@ -450,8 +450,8 @@ def require_successor_of(kit: KdbxStore, into: KdbxStore) -> None:
     if predecessor != kit.uuid:
         raise KdbxError(
             f'{into.path} is the successor of another kit ({predecessor}), not of {kit.path} ({kit.uuid}): a '
-            'retired kit of this estate, or a successor written from a different one; a rotation resumes only '
-            'into the successor it was writing'
+            'retired kit of this installation, or a successor written from a different one; a rotation resumes '
+            'only into the successor it was writing'
         )
 
 

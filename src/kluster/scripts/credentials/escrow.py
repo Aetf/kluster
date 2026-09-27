@@ -1,8 +1,8 @@
 """The escrow: every secret no provider mints, with its ciphertext in git.
 
-Some secrets are not minted by any provider — a state passphrase, a CA key, a
-backup identity, a GitHub App's private key. The kit holds **one recovery
-keypair** for them (credentials.md §2.2): the public recipient is committed in
+Some secrets are not minted by any provider — the Pulumi stack passphrase, a
+CA key, a backup identity, a GitHub App's private key. The kit holds **one
+recovery keypair** for them (credentials.md §2.2): the public recipient is committed in
 `escrow/RECIPIENTS` and the private half exists only in the offline kit. Every
 such secret goes to its consumer exactly as before, and leaves behind an age
 ciphertext committed as `escrow/<label>/<generation>.age`.
@@ -78,8 +78,8 @@ PASSPHRASE = 'pulumi/passphrase'
 
 #: The `github` stack's own passphrase, which decrypts that stack's committed
 #: configuration and nothing else. Filed under the stack it belongs to rather
-#: than beside the estate's passphrase, because what makes it a separate row is
-#: exactly that it is not the estate's: it reaches no CI Environment, which is
+#: than beside the stack passphrase, because what makes it a separate row is
+#: exactly that it is not that one: it reaches no CI Environment, which is
 #: what confines the admin token in that stack's config to the workstation
 #: (framework/github.md §1).
 GITHUB_PASSPHRASE = 'github/passphrase'
@@ -425,7 +425,7 @@ def register() -> dict[str, Label]:
     rows = [
         Label(
             PASSPHRASE,
-            'the Pulumi state passphrase, for every stack',
+            'the Pulumi stack passphrase, for every stack not encrypted apart',
             Generated(_token),
             # Read on every `pulumi` run by a `mise.toml` template that can
             # neither prompt nor open a kit (credentials.md §4.4).
@@ -809,7 +809,7 @@ def adopt(vault: Vault, label: str, secret: str) -> Path:
 
     The one way a secret enters the registry without being minted here, and it
     exists for adoption (credentials.md §4.2): a credential already in
-    production — the state passphrase, the CA key, an age identity — is
+    production — the stack passphrase, the CA key, an age identity — is
     escrowed exactly as it stands, so taking on this model rotates nothing.
 
     The *next* generation rather than a fixed first one, so importing can

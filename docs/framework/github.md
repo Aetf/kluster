@@ -65,9 +65,10 @@ carries `pulumi:disable-default-providers: [github]`, which is the same
 conversion for a resource that misses the explicit provider: an error
 rather than a silent fallback.
 
-**This stack's configuration is encrypted apart from the rest of the
-estate, and that is what keeps CI away from the token.** The estate
-passphrase is an Environment secret in *every* Environment, because
+**This stack's configuration is encrypted apart from the other stacks,
+and that is what keeps CI away from the token.** The Pulumi stack
+passphrase, which every other stack is encrypted under, is an
+Environment secret in *every* Environment, because
 every job runs a `pulumi` command — so a config secret under that
 passphrase is readable by anything CI can start. That is a wider set
 than it sounds: `dns`, `k8s-base` and `apps` are `ANY_BRANCH` and
@@ -76,14 +77,14 @@ branches, and on a `pull_request` event the workflow definitions come
 from the pull request's own branch. **Anybody who can push a branch to
 this repository could therefore write a workflow that claims one of
 those Environments and prints whatever that passphrase opens** — no
-merge, no review, no automerge. Under the estate passphrase, that would
+merge, no review, no automerge. Under the stack passphrase, that would
 include a token which can delete the branch protection guarding `main`,
 and ci.md §3's partition — that no workflow may hold the credential
 which writes its own Environment's secrets — would be a statement about
 nothing.
 
 So the `github` stack has a **passphrase of its own**
-(credentials.md §3): generated, escrowed to the kit like the estate's,
+(credentials.md §3): generated, escrowed to the kit like the stack passphrase,
 written to a workstation slot, and pushed to no Environment at all.
 `Pulumi.github.yaml` is as public as any other stack file and its
 ciphertext is committed; what is not public is the key, and no job has
@@ -122,7 +123,7 @@ is never the caller's to choose. `mise.toml` carries the rest of its
 contract.
 
 Getting it wrong is not silent. A bare `pulumi … -s github` meets the
-estate passphrase, and `encryptionsalt` is a verifier, so `pulumi`
+stack passphrase, and `encryptionsalt` is a verifier, so `pulumi`
 answers `error: incorrect passphrase`, exits non-zero and writes
 nothing — for a read and for a write alike. (What would re-key a stack
 quietly is any `pulumi` command against a file with *no* salt, a

@@ -29,7 +29,7 @@ MISE = Path(__file__).parent.parent / 'mise.toml'
 def test_this_process_environment_holds_none_of_the_operators_credentials() -> None:
     """The property the whole mechanism exists for, asserted where it matters.
 
-    `mise.toml` materializes the state passphrase and the backend URL for every
+    `mise.toml` materializes the stack passphrase and the backend URL for every
     process it starts, and an operator shell may export an account root
     besides, so on a workstation this fails the moment `conftest` stops
     stripping -- and it fails here, naming the variable, rather than in

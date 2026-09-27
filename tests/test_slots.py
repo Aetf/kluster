@@ -1366,7 +1366,7 @@ def test_the_listing_prints_every_row_with_its_source_and_its_slots() -> None:
 def test_a_stack_encrypted_apart_has_a_row_that_generates_its_passphrase() -> None:
     """The census in `pulumi_config` cannot name a stack the register does not serve.
 
-    A stack taken off the estate passphrase needs somewhere for its own to come
+    A stack taken off the stack passphrase needs somewhere for its own to come
     from and somewhere for it to be recovered from; naming one in `APART` with
     no such row would make every command against that stack refuse forever.
     """
@@ -1380,17 +1380,17 @@ def test_a_stack_encrypted_apart_has_a_row_that_generates_its_passphrase() -> No
 def test_the_passphrase_of_a_stack_encrypted_apart_reaches_no_github_secret() -> None:
     """The property the second passphrase exists for, held rather than merely true.
 
-    The estate passphrase is in every Environment because every job runs a
+    The stack passphrase is in every Environment because every job runs a
     `pulumi` command. This one is in none, which is what keeps the `github`
     stack's config -- the admin token that can unguard `main` -- unreadable by
     anything CI can start. A sink added to that row would undo it silently, so
     the emptiness is the assertion.
     """
-    assert pulumi_config.APART, 'nothing to check: no stack is encrypted apart from the estate'
+    assert pulumi_config.APART, 'nothing to check: no stack is encrypted apart from the others'
     for name in pulumi_config.APART.values():
         row = slots.ROWS[name]
 
-        assert row.sinks == (), 'a stack passphrase that reaches a GitHub secret is the estate passphrase again'
+        assert row.sinks == (), "a stack's own passphrase that reaches a GitHub secret is the stack passphrase again"
         assert row.pending == {}, 'no channel is waiting: reaching no CI secret is the design, not a gap'
 
     # The contrast, so this cannot pass by the map having lost its GitHub

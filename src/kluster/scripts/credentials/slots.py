@@ -347,7 +347,7 @@ class Context:
     forge: Forge
     #: The kit's escrow, for a derived row. Called at most once.
     open_vault: Callable[[], escrow.Vault]
-    #: The backend URL and the state passphrase, for a state read.
+    #: The backend URL and the stack passphrase, for a state read.
     open_environment: Callable[[], pulumi_config.BackendEnvironment] = _no_environment
     #: The checkout holding `Pulumi.yaml`; a state read runs `pulumi` there.
     project: Path = field(default_factory=pulumi_config.project_dir)
@@ -381,7 +381,7 @@ class Context:
     def stack(self, name: str) -> pulumi_config.Stack:
         # The environment goes in whole and the stack picks its own passphrase
         # out of it by name (`pulumi_config.Stack`), so a row delivered to a
-        # stack encrypted apart from the estate cannot be run under the wrong
+        # stack encrypted apart from the others cannot be run under the wrong
         # one from here.
         return pulumi_config.Stack(name=name, directory=self.project, environment=self.environment, run=self.runner)
 
@@ -972,7 +972,7 @@ ROWS: dict[str, Row] = {
         targets=_github('ZEROTIER_NETWORK_ID', ZEROTIER_PHYSICAL + ZEROTIER_DNS),
     ),
     'pulumi-passphrase': Row(
-        register='Pulumi state passphrase',
+        register='Pulumi stack passphrase',
         source=Derived(escrow.PASSPHRASE),
         # Every Environment, because every job runs a `pulumi` command and both
         # Pulumi channels are encrypted under this one value.
@@ -986,7 +986,7 @@ ROWS: dict[str, Row] = {
         register='`github` stack passphrase',
         source=Derived(escrow.GITHUB_PASSPHRASE),
         # **No GitHub secret, and that absence is the row.** Every Environment
-        # holds the estate passphrase because every job runs a `pulumi`
+        # holds the stack passphrase because every job runs a `pulumi`
         # command; this one exists so that the `github` stack's config -- the
         # admin token that can unguard `main` -- is readable by nothing CI can
         # start. A sink added here would undo the whole row, so a test holds it
