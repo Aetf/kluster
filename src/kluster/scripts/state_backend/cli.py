@@ -374,12 +374,20 @@ class Groundwork:
 
     Converged before the dump and the terminate, because every piece of it can
     fail and none of it needs the old box gone: a failure here stops the run
-    with the old box still serving. The image import is the long piece.
+    with the old box still serving. The image import is the long piece. The
+    security lists are the one piece that can wait for the old box to go
+    (`lists_narrowed`).
     """
 
     bucket_id: str
     placement: provision.Placement
     nsg_id: str
+    #: Whether the security lists were narrowed here. They are not when the
+    #: box being replaced has an interface outside the group just converged,
+    #: since then the lists may be what admits 5432 for the dump; the run
+    #: narrows them once
+    #: that box is gone, before the launch.
+    lists_narrowed: bool
     reserved: provision.ReservedAddress
     image_id: str
     availability_domain: str
@@ -394,9 +402,21 @@ def _groundwork(clients: provision.OciClients, session: b2.Session, found: provi
         prefix=settings.B2_PREFIX,
         retention_days=settings.B2_RETENTION_DAYS,
     )
-    log.info('converging the OCI network: VCN, subnet, gateway, security group, reserved address')
+    log.info('converging the OCI network: VCN, subnet, gateway, security group and lists, reserved address')
     placement = provision.ensure_network(clients, found)
     nsg_id = provision.ensure_security_group(clients, placement.vcn_id, found)
+    # After the group, which has every declared rule by then, and only if
+    # every interface of the box being replaced is in it: then what the lists
+    # lose is never the one rule a port that box serves on still rides.
+    lists_narrowed = provision.served_by_group(found, nsg_id)
+    if lists_narrowed:
+        provision.ensure_security_lists(clients, found)
+    else:
+        log.info(
+            'the running box has an interface outside the security group %s, so the security lists may be what '
+            'admits 5432 for the dump; they are converged once the box is terminated, before the launch',
+            nsg_id,
+        )
     reserved = provision.ensure_reserved_ip(clients, found)
     log.info('converging the custom image — a release not imported yet takes ten minutes and more')
     image_id = provision.ensure_image(clients, found)
@@ -404,6 +424,7 @@ def _groundwork(clients: provision.OciClients, session: b2.Session, found: provi
         bucket_id=bucket_id,
         placement=placement,
         nsg_id=nsg_id,
+        lists_narrowed=lists_narrowed,
         reserved=reserved,
         image_id=image_id,
         availability_domain=provision.shape_availability_domain(clients, image_id),
@@ -617,15 +638,22 @@ def _provision(
             _owe(owed)
             destroyed = True
             provision.terminate_instance(clients, str(existing.id))
+            if not ground.lists_narrowed:
+                # A failure here leaves no box and no launch, which the
+                # closing instruction below names; a re-run finds no box and
+                # converges the lists in its groundwork, before its launch.
+                provision.ensure_security_lists(clients, found)
         # After the terminate comes what needs the old box gone or the new one
-        # up -- the launch, which would otherwise adopt the old box by its
-        # name, then the retirement of the dump key's predecessor, the
-        # address pointed at the new box and the wait for it to answer -- and
-        # two steps that need neither: the mint, on the branch that launches
-        # because B2 discloses a key's secret once, and the render that
-        # carries the key. Those two follow the terminate so that a run whose
-        # dump fails has minted no key that nothing holds, and they are the
-        # fallible steps left in the stretch with no backend.
+        # up -- the security lists above, when they waited for it, then the
+        # launch, which would otherwise adopt the old box by its name, then
+        # the retirement of the dump key's predecessor, the address pointed
+        # at the new box and the wait for it to answer -- and two steps that
+        # need neither: the mint, on the branch that launches because B2
+        # discloses a key's secret once, and the render that carries the key.
+        # Those two follow the terminate so that a run whose dump fails has
+        # minted no key that nothing holds; they and the lists that waited
+        # are the fallible steps left before the launch in the stretch with
+        # no backend.
         log.info('[6/6] minting the dump key the new box will hold, and launching it')
         pending = b2.mint_dump_key(session, bucket_id=ground.bucket_id)
         minted = True

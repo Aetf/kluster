@@ -286,7 +286,8 @@ CENSUS: dict[type, Census] = {
     # `user_data` there is the Ignition the box booted with, and that carries
     # the server's TLS key, its SSH host key and the dump's B2 key.
     provision.Survey: Census(
-        'instance vcn gateway subnet security_group route_table security_rules public_ip fcos image',
+        'instance vcn gateway subnet security_group route_table security_rules groups default_security_list '
+        'security_lists interfaces public_ip fcos image',
         secret='instance',
     ),
     ssh.CommandResult: Census('exit_status stdout stderr'),
