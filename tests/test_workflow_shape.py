@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import re
+import tomllib
 from pathlib import Path
 from typing import cast
 from urllib.parse import parse_qs, urlsplit
@@ -292,6 +293,28 @@ def test_zerotier_is_a_pinned_release_signed_by_a_pinned_key() -> None:
     assert '[ "$found" != "$ZEROTIER_KEY_FINGERPRINT" ]' in run
     assert '"$GNUPGHOME/zerotier.gpg" /usr/share/keyrings/zerotier.gpg' in run
     assert 'deb [signed-by=/usr/share/keyrings/zerotier.gpg] ' in run
+
+
+#: The record of the vendored ZeroTier rule compiler `test_flow_rules_compile`
+#: runs over the overlay's flow rules.
+RULE_COMPILER = Path(__file__).parent / 'vendor' / 'zerotier-rule-compiler' / 'source.toml'
+
+
+def test_the_rule_compiler_is_the_release_the_ci_member_runs() -> None:
+    """The flow rules are compiled by the release this installation runs, and move with it.
+
+    Renovate moves the action's release and nothing else; the vendored
+    compiler is taken again by hand, as `source.toml` says. So the pull request
+    that moves the release is red here until the compiler it vendors is the
+    same release's.
+    """
+    env, _ = _zerotier_install()
+    vendored = tomllib.loads(RULE_COMPILER.read_text())['version']
+
+    assert vendored == env['ZEROTIER_VERSION'], (
+        f'the vendored rule compiler is {vendored} and the CI member installs {env["ZEROTIER_VERSION"]}; '
+        f'take it again from the new tag as {RULE_COMPILER.relative_to(ROOT)} says'
+    )
 
 
 def test_renovate_reads_the_zerotier_release_for_the_suite_the_action_installs_from() -> None:

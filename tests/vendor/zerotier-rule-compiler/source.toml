@@ -1,0 +1,38 @@
+# ZeroTier's rule compiler: the program ZeroTier Central compiles a network's
+# `rulesSource` with, as the ZeroTierOne repository ships it under
+# `rule-compiler/`. `tests/test_flow_rules_compile.py` runs `cli.js` over the
+# overlay's rendered flow rules under the `node` `mise.toml` pins, so a program
+# Central would refuse fails the gate rather than a live `up`.
+#
+# The release is the one the CI member installs
+# (`.github/actions/zerotier/action.yml`'s `ZEROTIER_VERSION`), and
+# `tests/test_workflow_shape.py` holds the two equal. So a pull request that
+# moves that release goes red until this copy is taken again from the new tag:
+#
+#     v=<release>
+#     cd tests/vendor/zerotier-rule-compiler
+#     for f in rule-compiler.js cli.js; do
+#       curl -fsSL -o "$f" "https://raw.githubusercontent.com/zerotier/ZeroTierOne/$v/rule-compiler/$f"
+#     done
+#     curl -fsSL -o LICENSE-MPL.txt "https://raw.githubusercontent.com/zerotier/ZeroTierOne/$v/LICENSE-MPL.txt"
+#     git ls-remote https://github.com/zerotier/ZeroTierOne "refs/tags/$v^{}"   # the commit, not the tag object
+#     sha256sum rule-compiler.js cli.js LICENSE-MPL.txt
+#
+# and `version`, `commit` and `sha256` below rewritten from what those print.
+# The digests are what the gate holds the files to, so a copy edited by hand
+# or taken from another tag without its record fails by name.
+#
+# The code is ZeroTier's, under the Mozilla Public License 2.0, whose text is
+# `LICENSE-MPL.txt` beside it (ZeroTierOne's `LICENSE.txt` puts everything
+# outside `ext/` and `nonfree/` under it).
+
+version = "1.16.2"
+repository = "https://github.com/zerotier/ZeroTierOne"
+commit = "fc5c3ec22090b5b2a0f274e863651fe9ca489bf4"
+path = "rule-compiler"
+license = "MPL-2.0"
+
+[sha256]
+"rule-compiler.js" = "4e356ae0331a1461f1dffd4d30908bdc2844fd9926f11b3a7bb6d0d89035c619"
+"cli.js" = "0f643f8a91a8ea0c2351aaa83aa57279b5d9e9fb28c2bc54448bf7f8522cbf2c"
+"LICENSE-MPL.txt" = "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5"
