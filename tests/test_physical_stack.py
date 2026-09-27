@@ -891,7 +891,11 @@ async def test_every_volume_the_program_attaches_is_mounted_by_a_machine_configu
     mounted: set[str] = set()
     for configuration in setup.configurations:
         documents = [json.loads(str(patch)) for patch in cast('list[Any]', configuration['configPatches'])]
-        names = [str(document['name']) for document in documents if document.get('kind') == 'UserVolumeConfig']
+        names = [
+            str(document['name'])
+            for document in documents
+            if document.get('kind') == 'UserVolumeConfig' and document['volumeType'] == 'partition'
+        ]
         labels = [
             label
             for document in documents

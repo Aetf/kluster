@@ -57,6 +57,11 @@ def of_kind(kind: str, **kwargs: Any) -> list[dict[str, Any]]:
     return [document for document in documents(**kwargs) if document.get('kind') == kind]
 
 
+def node_volumes(**kwargs: Any) -> list[dict[str, Any]]:
+    """The node volumes a node's patches mount: its `partition` user volumes."""
+    return [volume for volume in of_kind('UserVolumeConfig', **kwargs) if volume['volumeType'] == 'partition']
+
+
 def uplink(**kwargs: Any) -> dict[str, Any]:
     """The one `LinkConfig` a node's patches carry, and the alias it names."""
     (link,) = of_kind('LinkConfig', **kwargs)
@@ -85,15 +90,18 @@ SHAPES: dict[str, dict[str, Any]] = {
 #: for the multi-document network configuration, so the section itself is
 #: refused as well as the two fields named. A pin that moves to a later
 #: minor adds what that release deprecates here. v1.14 deprecates much of
-#: `machine` and `cluster`, `machine.kubelet` as a whole among it,
-#: `machine.nodeLabels` for a `KubeNodeConfig` document v1.13 does not have,
-#: and `extraMounts` with no replacement, so that move is a design decision
-#: (Aetf/kluster-ops#463) rather than a rename.
+#: `machine` and `cluster`, `machine.kubelet` as a whole among it and
+#: `machine.nodeLabels` for a `KubeNodeConfig` document v1.13 does not have;
+#: that move waits on a provider built on v1.14's machinery
+#: (Aetf/kluster-ops#475).
 DEPRECATED = [
     ('machine', 'network'),
     ('machine', 'network', 'kubespan'),
     ('machine', 'network', 'interfaces'),
 ]
+
+#: Where a kubelet mount would sit in `v1alpha1`.
+KUBELET_MOUNTS = ('machine', 'kubelet', 'extraMounts')
 
 
 def holds(document: dict[str, Any], path: tuple[str, ...]) -> bool:
@@ -168,16 +176,25 @@ def test_a_control_plane_without_a_key_says_nothing_about_encryption() -> None:
     assert 'secretboxEncryptionSecret' not in talos.control_plane_patch(cert_sans=SANS)['cluster']
 
 
-def test_local_path_has_a_directory_to_hand_out() -> None:
-    # The StorageClass is k8s-base's; the kubelet mount underneath it is
-    # machine configuration (storage.md §2).
-    mounts = merged('machine')['kubelet']['extraMounts']
-    assert [mount['destination'] for mount in mounts] == [conventions.LOCAL_PATH_ROOT]
-    assert mounts[0]['source'] == conventions.LOCAL_PATH_ROOT
-    assert mounts[0]['type'] == 'bind'
-    # Without shared propagation a volume mounted into the directory later is
-    # invisible to pods that already have it.
-    assert 'rshared' in mounts[0]['options']
+@pytest.mark.parametrize('shape', list(SHAPES))
+def test_local_path_hands_out_a_user_volume_and_no_kubelet_mount(shape: str) -> None:
+    # The StorageClass is k8s-base's; the directory underneath it is machine
+    # configuration (storage.md §2). The kubelet sees `/var/mnt` read-only, so
+    # the directory has to be a mount of its own there: a `directory` user
+    # volume, which Talos mounts at its root under the volume's name. Exactly
+    # one, on every node, and nothing but its type stated, since Talos refuses
+    # a disk, a filesystem, encryption or mount options for that type.
+    directories = [
+        volume for volume in of_kind('UserVolumeConfig', **SHAPES[shape]) if volume['volumeType'] == 'directory'
+    ]
+    assert [f'{conventions.USER_VOLUME_ROOT}/{volume["name"]}' for volume in directories] == [
+        conventions.LOCAL_PATH_ROOT
+    ]
+    assert set(directories[0]) == {'apiVersion', 'kind', 'name', 'volumeType'}
+    # A host path a pod reaches is a user volume, and never a kubelet mount
+    # (physical.md §2): a base generated for Talos v1.14 carries a
+    # `KubeletConfig`, beside which any `machine.kubelet` is refused.
+    assert [document for document in documents(**SHAPES[shape]) if holds(document, KUBELET_MOUNTS)] == []
 
 
 def test_the_node_holding_the_dedicated_vip_answers_for_its_second_address() -> None:
@@ -301,7 +318,7 @@ def test_nobody_else_speaks_bgp() -> None:
 
 
 def test_a_node_volume_is_one_partition_filling_the_disk_that_is_not_the_boot_disk() -> None:
-    (volume,) = of_kind('UserVolumeConfig', volume=VOLUME)
+    (volume,) = node_volumes(volume=VOLUME)
     # Named for the volume: Talos mounts it at `/var/mnt/<name>` and finds it
     # again on every boot by the partition label `u-<name>` it wrote.
     assert volume['name'] == VOLUME
@@ -330,8 +347,8 @@ def test_a_node_volume_labels_its_node() -> None:
 
 
 @pytest.mark.parametrize('shape', [shape for shape, arguments in SHAPES.items() if 'volume' not in arguments])
-def test_a_node_without_a_volume_mounts_nothing_and_carries_no_label(shape: str) -> None:
-    assert not of_kind('UserVolumeConfig', **SHAPES[shape])
+def test_a_node_without_a_volume_mounts_no_node_volume_and_carries_no_label(shape: str) -> None:
+    assert not node_volumes(**SHAPES[shape])
     assert 'nodeLabels' not in merged('machine', **SHAPES[shape])
 
 

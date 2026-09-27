@@ -225,11 +225,12 @@ def test_every_volume_is_named_as_talos_and_a_node_label_accept() -> None:
         assert VOLUME_NAME.fullmatch(name), name
 
 
-def test_no_volume_is_mounted_over_the_local_path_root() -> None:
-    """Both sit under Talos' user-volume root, and a volume sharing the local-path directory's name would hide it."""
+def test_no_volume_takes_the_local_path_volumes_name() -> None:
+    """The local-path root is a user volume too, and Talos refuses two user volumes of one name."""
     assert conventions.NODE_VOLUMES
-    for name in conventions.NODE_VOLUMES:
-        assert conventions.node_volume_mount(name) != conventions.LOCAL_PATH_ROOT, name
+    assert conventions.LOCAL_PATH_VOLUME not in conventions.NODE_VOLUMES
+    # And its name is held to the rules a row's is: Talos reads it as one.
+    assert VOLUME_NAME.fullmatch(conventions.LOCAL_PATH_VOLUME)
 
 
 def test_a_volume_is_mounted_under_its_own_name() -> None:

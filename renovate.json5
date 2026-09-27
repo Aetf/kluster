@@ -220,6 +220,12 @@
       // its release would put one half into the pull request ahead of the
       // other.
       //
+      // A minor bump waits on Aetf/kluster-ops#475. A base generated for the
+      // v1.14 contract carries a `KubeletConfig` document and refuses every
+      // `machine.kubelet` field the component still renders, and the pinned
+      // provider has no v1.14 documents to render instead. Approval is where
+      // that gate is kept.
+      //
       // Position is load-bearing, as for the `jdx/mise-action` rule: this sits
       // *after* the rule grouping the whole mise manager as the toolchain, so
       // its group wins for `talosctl`. A test holds the order.

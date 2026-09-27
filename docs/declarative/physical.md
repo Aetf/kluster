@@ -160,9 +160,9 @@ machine_secrets
     only in that world; kube-apiserver `anonymous-auth=false` pinned and audit
     logging on (a public 6443 warrants both, defaults notwithstanding);
     the dedicated-VIP node's secondary private IP on its physical link;
-    the **local-path backing mount** (`/var/mnt/storage`, storage.md
-    §2 — the StorageClass's provisioner is k8s-base's, but the disk
-    path under it is machine config); and on a node a block volume
+    the **local-path volume** (`/var/mnt/storage`, storage.md §2 — the
+    StorageClass's provisioner is k8s-base's, but the directory under
+    it is machine config); and on a node a block volume
     attaches to (§1), the **node volume** and a **node label** naming
     it (`conventions.NODE_VOLUME_LABEL`), in the configuration the node
     boots with.
@@ -197,17 +197,40 @@ machine_secrets
         that already runs the document. `TalosCluster` refuses a volume
         on a node outside the cluster and two volumes on one node, since
         the selector cannot tell two data disks apart.
+    -   `UserVolumeConfig` named `storage` (`conventions.LOCAL_PATH_VOLUME`),
+        on every node: the directory `local-path` hands out. A
+        `directory` volume, which has no disk: Talos creates
+        `/var/mnt/storage` on the system disk's EPHEMERAL partition and
+        bind-mounts it onto itself, and a directory already at that path
+        keeps its contents. The document states its type and nothing
+        else, because Talos refuses a provisioning, filesystem,
+        encryption or mount block for that type. It is not a node volume
+        and does not count against one per node, which exists for the
+        disk selector's sake; it does share Talos' one namespace of
+        user-volume names with them, so no row of
+        `conventions.NODE_VOLUMES` may be named `storage`.
 
-    The node label stays in `v1alpha1` as `machine.nodeLabels`, which
-    v1.13 does not deprecate; v1.14 moves it to a `KubeNodeConfig`
-    document v1.13 does not have, part of the same move below.
-    The local-path mount stays in `v1alpha1` as
-    `machine.kubelet.extraMounts`: v1.13 has no document to carry it.
-    v1.14 deprecates it with no replacement — its `KubeletConfig`
-    carries no extra mounts and refuses any `machine.kubelet` beside
-    it, so the kubelet section moves whole or not at all — and where
-    the mount lives after that minor is a design decision rather than
-    part of the bump (Aetf/kluster-ops#463).
+    **A host path a pod reaches is a Talos user volume under
+    `/var/mnt`, and the machine configuration carries no kubelet
+    mount.** The kubelet runs in a container that gets `/var/mnt` bound
+    read-only with slave propagation, so it can create nothing inside a
+    plain directory there, while a mount made under `/var/mnt` reaches
+    it writable. A user volume is such a mount, and it is what Talos
+    names in place of `machine.kubelet.extraMounts`. The kubelet mount
+    has no future besides: v1.14 deprecates it, the multi-document
+    `KubeletConfig` has no mounts field, and a configuration carrying
+    that document refuses any `machine.kubelet` beside it.
+    `tests/test_talos_config.py` holds the rule for every node shape.
+
+    Everything else stays in `v1alpha1`, because v1.13 has no document
+    for it: the node label as `machine.nodeLabels` and the kubelet's
+    reservations as `machine.kubelet.extraConfig` among it. v1.14
+    deprecates much of that for documents of their own — the two named
+    for a `KubeNodeConfig` and a `KubeletConfig` — and a base generated
+    for its contract already carries those documents, so the move comes
+    with the configuration contract rather than after it. It waits on a
+    pulumiverse-talos release built on v1.14's machinery, which the
+    pinned one is not (Aetf/kluster-ops#475).
 -   **Talos validates what the component renders, in `checks`.**
     `tests/test_talos_validate.py` renders every node shape the
     component produces the way the provider does — the base
@@ -460,6 +483,13 @@ same gate confirms them:
     `/var/mnt`.
 -   With the volume unmounted, that pod stays pending (storage.md §6).
 -   The node label appears on the Node object.
+
+The local-path volume (§2) is first exercised there as well:
+
+-   `talosctl get volumestatus u-storage` reports it ready on every
+    node.
+-   Once `k8s-base` runs the provisioner, a `local-path` claim binds
+    and a pod writes through it.
 
 One part of the NLB item is answered earlier, by the first
 `pulumi up` that creates the balancer's IPv6 backends: each names a

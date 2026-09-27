@@ -438,8 +438,12 @@ async def test_a_stranger_cannot_be_named_by_either_component(fake: Talos) -> No
 
 
 def volumes_in(patches: list[dict[str, Any]]) -> list[str]:
-    """The node volumes a node's patches mount, by name."""
-    return [patch['name'] for patch in patches if patch.get('kind') == 'UserVolumeConfig']
+    """The node volumes a node's patches mount, by name: its `partition` user volumes."""
+    return [
+        patch['name']
+        for patch in patches
+        if patch.get('kind') == 'UserVolumeConfig' and patch['volumeType'] == 'partition'
+    ]
 
 
 def labels_in(patches: list[dict[str, Any]]) -> dict[str, str]:

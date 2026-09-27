@@ -53,13 +53,28 @@ resort, object storage used directly where an app supports it.
 
 | Class | Backing | Access | Use for | Not for |
 | --- | --- | --- | --- | --- |
-| `local-path` (default) | Talos hostPath under `/var/mnt/storage` on each node | RWO, node-pinned | Databases (CNPG), caches, anything an app replicates itself | anything that may need to change nodes |
+| `local-path` (default) | directories under `/var/mnt/storage`, a Talos user volume on each node's system disk | RWO, node-pinned | Databases (CNPG), caches, anything an app replicates itself | anything that may need to change nodes |
 | `local-path` + VolSync | same local-path, plus a per-PVC restic schedule to the backup bucket | RWO, node-pinned; **movable via restore** | stateful apps without built-in replication; any volume that plausibly moves | bulk media (NAS's job) |
 | ~~`longhorn`~~ (deferred, §3.2) | Longhorn v1 engine | RWO | — not in the initial build — | — |
 | NAS (NFS PV / NodePV) | Existing NAS exports | RWO/RWX, homelab pool only | bulk media, large read-mostly sets | cloud-pool workloads; databases |
 | Cloud block volume | OCI block volume on a cloud node, one per node (`conventions.NODE_VOLUMES`), mounted at `/var/mnt/<name>` | RWO, node-pinned | preserved cloud-pool datasets: the hath cache, the syncthing replica | homelab-pool workloads; anything a node may have to lose |
 | Object storage (direct) | S3-compatible bucket (§4) | app-native | apps with first-class S3 support; all backups | POSIX pretenders |
 | JuiceFS (quarantined, no CSI — §6) | object storage + per-app metadata, mounted in-pod | RWX | last resort only, one app at a time | everything else; it is not selectable by `storageClassName` |
+
+**What local-path data outlives.** `/var/mnt/storage` is a Talos
+user volume of the `directory` type (physical.md §2), which has no
+disk of its own: it lives on the system disk's EPHEMERAL partition,
+the one Talos mounts at `/var`, and shares that partition's capacity
+with everything else under `/var`, the node's container images and logs
+among it. EPHEMERAL is a partition name rather
+than a lifetime, and nothing clears it on its own. The data survives
+a reboot and a `talosctl upgrade`, which keeps `/var`. It is lost on
+`talosctl reset`, whose default wipe takes the whole system disk; when
+the node is reinstalled, or replaced by a new cloud instance or a
+rebuilt worker VM; and with the system disk itself. Nothing on
+it outlives its node, which is why the class holds data an application
+replicates (CNPG), data VolSync backs up (§3.1), and data that can be
+derived again.
 
 Per-workload selection is a two-axis decision — (1) does the data need
 to persist at all, (2) what performance does it need — then the data's
