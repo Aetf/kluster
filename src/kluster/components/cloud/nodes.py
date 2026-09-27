@@ -90,7 +90,7 @@ def named(field: str, family: str) -> str:
     return field if family == ENDPOINT_FAMILY else f'{field}-{family.lower()}'
 
 
-class NodeLoadBalancer(Component):
+class NodeLoadBalancer(Component, pulumi_type='kluster:cloud:NodeLoadBalancer'):
     """The NLB and its management backend sets, on each family it holds — the cluster's endpoint."""
 
     def __init__(
@@ -199,7 +199,7 @@ class NodeLoadBalancer(Component):
         return self.load_balancer.ip_addresses.apply(public)
 
 
-class CloudNodes(Component):
+class CloudNodes(Component, pulumi_type='kluster:cloud:CloudNodes'):
     """The A1 nodes, the backends that put them behind the balancer, and the dedicated VIP one of them holds."""
 
     def __init__(

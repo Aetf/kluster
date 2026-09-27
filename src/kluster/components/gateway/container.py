@@ -771,7 +771,7 @@ def adguard_initial_state(address: IPv4Address) -> str:
     )
 
 
-class Container(Component):
+class Container(Component, pulumi_type='kluster:gateway:Container'):
     """One container service on the device, and every file that defines it.
 
     It owns its root filesystem artifact, its settings file, the files it mounts

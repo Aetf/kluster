@@ -20,6 +20,7 @@ import pulumi.runtime
 __all__ = (
     'Component',
     'UnparentedChildError',
+    'UnstatedTypeError',
     'install_parent_backstop',
     'own_provider_opts',
     'with_provider',
@@ -57,6 +58,10 @@ _installed_on: weakref.WeakSet[pulumi.Resource] = weakref.WeakSet()
 
 class UnparentedChildError(Exception):
     """A resource was registered inside a component without naming a parent."""
+
+
+class UnstatedTypeError(TypeError):
+    """A component class was constructed without stating its own type token."""
 
 
 def _refuse_unparented(
@@ -146,14 +151,23 @@ class Component(pulumi.ComponentResource):
     """
     A ComponentResource with opinioned initialization approach and much less boilerplate.
 
-    If no pulumi_type is given, uses the module and class names.
+    Every class that is constructed states its own type token in its class
+    statement, ``class Gateway(Component, pulumi_type='…')``, and none is
+    computed for it: the token is part of the URN of the component and of
+    everything beneath it, so it is a name of the resources and is chosen like
+    one. A class that states none is refused when it is constructed rather
+    than when it is defined, because the one class that legitimately states
+    none — an abstract base, which is never registered — is not yet known to be
+    abstract while its class statement runs: ``abc.ABCMeta`` computes that
+    after ``__init_subclass__`` returns. A subclass does not inherit its base's
+    token either, since two kinds under one token are one type to the engine.
 
     Subclasses override ``__init__``, call ``super().__init__`` first, then
     create sub-resources synchronously. Async input preparation is wrapped
     in `putils.async_output`:
 
     ```
-    class MyComponent(Component):
+    class MyComponent(Component, pulumi_type='example:network:MyComponent'):
         def __init__(self, name: str, opts: pulumi.ResourceOptions | None = None):
             super().__init__(name, opts=opts)
             self.vpc = Network(f'{name}-vpc', opts=self.child_opts())
@@ -176,8 +190,8 @@ class Component(pulumi.ComponentResource):
     `install_parent_backstop`.
     """
 
-    #: Pulumi's type token for the component, defaulted from module and class
-    #: name and overridable through the class keyword.
+    #: Pulumi's type token for the component, as the class keyword states it.
+    #: Read off the class that is constructed and never off a base (`__init__`).
     __pulumi_type__: ClassVar[str]
 
     #: This component's entry in the under-construction scope, held so that
@@ -189,8 +203,6 @@ class Component(pulumi.ComponentResource):
         super().__init_subclass__(**kwargs)
         if pulumi_type is not None:
             cls.__pulumi_type__ = pulumi_type
-        elif not hasattr(cls, '__pulumi_type__'):
-            cls.__pulumi_type__ = f'{cls.__module__}:{cls.__qualname__}'.replace('.', ':')
 
     def __init__(self, name: str, opts: pulumi.ResourceOptions | None = None):
         """
@@ -198,13 +210,24 @@ class Component(pulumi.ComponentResource):
         :param Optional[ResourceOptions] opts: Optional set of :class:`pulumi.ResourceOptions` to use for this
                resource.
         """
-        super().__init__(self.__pulumi_type__, name=name, props=None, opts=opts)
+        cls = type(self)
+        # The class's own statement only: an attribute lookup would hand a
+        # subclass that states nothing the token of whichever base does.
+        token = vars(cls).get('__pulumi_type__')
+        if not isinstance(token, str):
+            raise UnstatedTypeError(
+                f'{cls.__module__}.{cls.__qualname__} states no type token of its own. State one in its class '
+                f"statement, `class {cls.__name__}(..., pulumi_type='...')`: the token is part of the URN of "
+                'this component and of every resource beneath it, so it is chosen rather than computed, and '
+                'a subclass does not inherit the token of its base.'
+            )
+        super().__init__(token, name=name, props=None, opts=opts)
         # After the registration above, deliberately: a component is not its
         # own child, so its own `parent=` is judged against whatever component
         # encloses *it*. A top-level component built by a stack program is
         # enclosed by nothing and needs no parent; one built inside another
         # component does, exactly like any other resource there.
-        self._putils_frame = _Frame(name, self.__pulumi_type__)
+        self._putils_frame = _Frame(name, token)
         _under_construction.set((*_under_construction.get(), self._putils_frame))
 
     def register_outputs(self, outputs: pulumi.Inputs) -> None:

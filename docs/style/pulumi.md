@@ -229,6 +229,32 @@ not the address it currently answers on. The same holds for anything
 else a name is spliced from — a value that is configuration is a value
 someone may edit.
 
+**A type token is chosen too, and it names a kind of this installation.**
+A component's type token is the other half of its URN, and every
+resource beneath the component carries it in the type chain of its own
+URN, so changing a token is a delete and a create of the whole subtree.
+The token therefore names what the component *is* in this installation:
+not the module that implements it, which moves whenever the source tree
+is reorganized, and not a stack that declares it, which a reusable
+component does not belong to. Its form is `kluster:<area>:<Type>`. The
+area is the part of the design the kind belongs to, one of the packages
+of `kluster.components` (Layering, above), spelled as that package was
+named when the token was chosen; the type is the kind's own name, the
+class's, in upper camel case; nothing sits between them, neither a
+submodule nor a stack. `putils.Component` computes no token. Each class
+that is constructed states its own in its class statement —
+`class Gateway(Component, pulumi_type='kluster:gateway:Gateway')` — a
+subclass included, because one that took its base's would file two
+kinds under one type; a class that states none is refused when it is
+constructed, and an abstract base, never registered, states none.
+`tests/test_component_tokens.py` holds every component class in the
+tree to the form. Once a stack holds state under a token, the token
+does not follow its package or its class when either is renamed. A
+change that has to happen anyway is `aliases=[pulumi.Alias(type_=<old>)]`
+on the component, which the engine carries down to every resource
+beneath it, and the alias is dropped in a later change once every
+stack's state carries the new type.
+
 **A child's logical name carries its component's `name`.** A URN
 qualifies a logical name by the chain of parent *types*, never by a
 parent's name, so two components of one type that each declare a child
@@ -285,4 +311,7 @@ The architecture reviewer's standing questions, for the review stage
     that cannot move?
 -   Does every child's logical name carry the `name` of the component
     the URN places it under?
+-   Does every new component state a type token of the form
+    `kluster:<area>:<Type>`, and does every changed token carry an
+    alias to the type a stack's state holds?
 -   Do the comments say anything the code already says?

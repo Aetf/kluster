@@ -404,7 +404,7 @@ def _asker(opts: pulumi.ResourceOptions) -> str:
     return parent.pulumi_resource_name
 
 
-class DevicePersistence(Component):
+class DevicePersistence(Component, pulumi_type='kluster:gateway:DevicePersistence'):
     """The boot chain, the custom root's skeleton, and the way in for the layers above."""
 
     def __init__(

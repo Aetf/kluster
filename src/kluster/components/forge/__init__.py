@@ -43,7 +43,7 @@ __all__ = ('LABEL_COLOR', 'ManagedRepository')
 LABEL_COLOR = 'BFD4F2'
 
 
-class ManagedRepository(Component):
+class ManagedRepository(Component, pulumi_type='kluster:forge:ManagedRepository'):
     """One repository of this installation, with everything that hangs off it."""
 
     def __init__(
@@ -73,7 +73,13 @@ class ManagedRepository(Component):
             "must be up to date" without a human. A repository whose pull
             requests are all merged by hand asks for neither.
         """
-        super().__init__(name, opts=opts)
+        # The `github` stack's state holds every repository under the type
+        # below rather than this class's own: the alias moves each onto this
+        # one at the next `up` with nothing replaced, and the engine carries it
+        # down to every resource beneath (style/pulumi.md, a type token is
+        # chosen). It goes once that state carries this class's type.
+        aliases = pulumi.ResourceOptions(aliases=[pulumi.Alias(type_='kluster:components:forge:ManagedRepository')])
+        super().__init__(name, opts=pulumi.ResourceOptions.merge(opts, aliases))
         self.entry = entry
 
         if required_checks and not entry.plan_offers_public_features:

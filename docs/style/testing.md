@@ -36,8 +36,9 @@ visible in the constant's own diff; the same hand updates both copies
 in the same change; a right new value and a wrong one pass equally. It
 detects edits rather than defects, and charges a fix cycle for every
 legitimate change. The mechanical test is **whether the check can fail
-for anybody other than the person editing the value**. A class rename
-moves a type token its author never types — a literal catches that. A
+for anybody other than the person editing the value**. No edit to the
+program moves the type a stack's state holds a component under, so a
+literal of that type catches a token changed without its alias. A
 table row's field is edited at the field, under that field's own
 documentation — a literal beside it only says the same thing twice.
 A census row's **state** is a value like any other: recorded or not

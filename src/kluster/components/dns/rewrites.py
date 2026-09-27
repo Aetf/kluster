@@ -81,7 +81,7 @@ def rewrites(routes: Iterable[conventions.routes.Route]) -> tuple[Rewrite, ...]:
     return tuple(emitted)
 
 
-class ResolverRewrites(Component):
+class ResolverRewrites(Component, pulumi_type='kluster:dns:ResolverRewrites'):
     """Every rewrite one AdGuard instance answers, written directly to it.
 
     One component per instance rather than one over the pair: their

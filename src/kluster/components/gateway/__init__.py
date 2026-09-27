@@ -74,7 +74,7 @@ def url_host(host: str) -> str:
     return f'[{host}]' if isinstance(literal, IPv6Address) else host
 
 
-class Gateway(Component):
+class Gateway(Component, pulumi_type='kluster:gateway:Gateway'):
     """The device and its controller: the two doors, and what is behind each."""
 
     def __init__(

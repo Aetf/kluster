@@ -38,7 +38,7 @@ ENVIRONMENT = 'github:index/repositoryEnvironment:RepositoryEnvironment'
 VULNERABILITY_ALERTS = 'github:index/repositoryVulnerabilityAlerts:RepositoryVulnerabilityAlerts'
 LABEL = 'github:index/issueLabel:IssueLabel'
 VARIABLE = 'github:index/actionsVariable:ActionsVariable'
-MANAGED_REPOSITORY = 'kluster:components:forge:ManagedRepository'
+MANAGED_REPOSITORY = ManagedRepository.__pulumi_type__
 PROVIDER = 'pulumi:providers:github'
 
 #: Not the operator's: the token this stack opens with is a secret in its own
@@ -325,16 +325,34 @@ async def test_a_run_without_the_token_refuses_by_name_and_names_what_fills_it()
         pulumi.runtime.set_all_config({f'kluster:{program.ADMIN_TOKEN}': TOKEN})
 
 
+def test_each_repository_moves_from_the_type_state_holds_it_under(stack: Forge) -> None:
+    """The component carries one alias, to the type the `github` stack's state holds.
+
+    State holds both repositories, and everything beneath them, under
+    `kluster:components:forge:ManagedRepository`, which is not the type the
+    component states (style/pulumi.md, a type token is chosen). A type is part
+    of the URN of the component and of every resource beneath it, so without
+    this alias the next `up` deletes and creates the whole subtree, the
+    repositories included. The literal is what state holds, which no edit to
+    this program moves.
+    """
+    for entry in conventions.forge.REPOSITORIES:
+        aliases = stack.options_of(entry.name, MANAGED_REPOSITORY).aliases
+        assert [alias.spec.type for alias in aliases] == ['kluster:components:forge:ManagedRepository'], entry.name
+
+
 def test_nothing_below_a_repository_moved(stack: Forge) -> None:
-    """Every resource of a repository's subtree sits on the URN state holds it under, and none carries an alias.
+    """Every resource of a repository's subtree sits under its component, and none carries an alias of its own.
 
     Each resource under a repository names the repository as its parent, which
     is both what it is -- a property of that repository -- and what puts it
     under the component's type chain in its URN. State holds the repository
     under the component and its children under names carrying the
-    repository's, so an alias here would name a URN nothing is on: one
-    reappearing is a move that has not been applied, and the preview that
-    reads it is a rename, or a create beside a delete.
+    repository's, so the one move this subtree takes is the component's type,
+    which the engine carries down from the component's own alias (the case
+    above): an alias here would name a URN nothing is on, one reappearing is a
+    move that has not been applied, and the preview that reads it is a rename,
+    or a create beside a delete.
     """
     for entry in conventions.forge.REPOSITORIES:
         assert stack.options_of(entry.name, REPOSITORY).parent.endswith(f'{MANAGED_REPOSITORY}::{entry.name}')

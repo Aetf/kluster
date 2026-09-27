@@ -180,7 +180,7 @@ def converger_hook() -> str:
     return executable_hook(CONVERGER)
 
 
-class AuthorizedKeys(Component):
+class AuthorizedKeys(Component, pulumi_type='kluster:gateway:AuthorizedKeys'):
     """The keys that open the device, and the converger that keeps them installed."""
 
     def __init__(

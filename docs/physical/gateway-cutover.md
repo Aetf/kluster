@@ -534,8 +534,8 @@ not moved.
     ```sh
     pulumi stack select physical
     pulumi preview \
-        -t 'urn:pulumi:physical::kluster-py::kluster:components:gateway:Gateway::kluster' \
-        -t 'urn:pulumi:physical::kluster-py::kluster:components:gateway:Gateway$**::**'
+        -t 'urn:pulumi:physical::kluster-py::kluster:gateway:Gateway::kluster' \
+        -t 'urn:pulumi:physical::kluster-py::kluster:gateway:Gateway$**::**'
     ```
 
     What it must show is the gateway's own resources and nothing else:
@@ -639,8 +639,8 @@ workstation, over the LAN:
 ```sh
 pulumi stack select physical
 pulumi up \
-    -t 'urn:pulumi:physical::kluster-py::kluster:components:gateway:Gateway::kluster' \
-    -t 'urn:pulumi:physical::kluster-py::kluster:components:gateway:Gateway$**::**'
+    -t 'urn:pulumi:physical::kluster-py::kluster:gateway:Gateway::kluster' \
+    -t 'urn:pulumi:physical::kluster-py::kluster:gateway:Gateway$**::**'
 ```
 
 It delivers the boot chain, the unit sources, the executables, the

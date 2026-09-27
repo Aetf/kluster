@@ -112,7 +112,7 @@ def barman_scope(namespace: str) -> Scope:
     return Scope(name=f'cnpg-{namespace}', prefix=conventions.barman_repo_path(namespace, ''))
 
 
-class BackupBucket(Component):
+class BackupBucket(Component, pulumi_type='kluster:backup:BackupBucket'):
     """The backup bucket, its version-retention rule, and one key per consumer.
 
     `scopes` is the roll of consumers, and it arrives from the caller: which
