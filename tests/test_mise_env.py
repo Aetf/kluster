@@ -18,7 +18,7 @@ here as it stands on a workstation.
 The `github` task is what a `pulumi` run against that stack goes through: it
 fixes the stack and hands `pulumi` the stack's own passphrase, which `[env]`
 exports under a name of its own (kluster-ops#388). It is held here to that
-pair -- the `github` stack and `KLUSTER_GITHUB_PASSPHRASE`, never the estate
+pair -- the `github` stack and `KLUSTER_GITHUB_PASSPHRASE`, never the stack
 passphrase or a stack the caller names -- by running it against a stub
 `pulumi` that records what it was given, so no run reaches a backend.
 
@@ -294,7 +294,7 @@ def _run_github(
 def test_the_github_task_pairs_the_github_stack_with_its_own_passphrase(
     tmp_path: Path, args: list[str], expected: list[str]
 ) -> None:
-    # A checkout holding every slot, the estate passphrase among them: the
+    # A checkout holding every slot, the stack passphrase among them: the
     # one `pulumi` receives is the `github` stack's, and the stack is
     # `github`.
     checkout = _checkout(tmp_path / 'kluster')
@@ -310,7 +310,7 @@ def test_the_github_task_pairs_the_github_stack_with_its_own_passphrase(
 @needs_mise
 def test_without_slots_the_github_task_takes_the_callers_github_passphrase(tmp_path: Path) -> None:
     # The caller's value comes through the template's fallback, and it is the
-    # caller's `github` passphrase that answers, not its estate one.
+    # caller's `github` passphrase that answers, not its stack passphrase.
     checkout = _checkout(tmp_path / 'kluster')
 
     result, argv, passphrase = _run_github(checkout, tmp_path, ['preview'], exported=EXPORTED)
@@ -365,10 +365,10 @@ WITHOUT_GITHUB = {name: value for name, value in EXPORTED.items() if name != 'KL
 @pytest.mark.parametrize('where', ['no github slot', 'workspace'])
 def test_an_empty_github_passphrase_is_refused(tmp_path: Path, where: str) -> None:
     # The two places `KLUSTER_GITHUB_PASSPHRASE` resolves empty while the
-    # estate passphrase does not: a checkout holding every slot but the
+    # stack passphrase does not: a checkout holding every slot but the
     # `github` one, and a workspace under a checkout that holds them all.
     # Either way `pulumi` never starts, so neither the empty value nor the
-    # estate passphrase reaches it.
+    # stack passphrase reaches it.
     primary = _checkout(tmp_path / 'kluster')
     _ = _fill_slots(primary)
     if where == 'workspace':

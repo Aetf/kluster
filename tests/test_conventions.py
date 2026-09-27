@@ -978,7 +978,7 @@ def test_no_workflow_points_a_pulumi_command_at_the_stack_encrypted_apart() -> N
     many times over through `${{ github.* }}`, so a census over the word would
     be noise. What catches that spelling is the other half of the pair, and it
     catches it at run time rather than at review time: the job's Environment
-    holds the estate passphrase alone, so the run dies `error: incorrect
+    holds the stack passphrase alone, so the run dies `error: incorrect
     passphrase` with nothing of that stack's config in reach. This case is the
     cheap, early half of a guard whose expensive half cannot be evaded.
     """
@@ -990,7 +990,7 @@ def test_no_workflow_points_a_pulumi_command_at_the_stack_encrypted_apart() -> N
         for spelling in _apart_stack_named(path.read_text(), apart, tasks)
     ]
 
-    assert named == [], f'a workflow runs `pulumi` against a stack encrypted apart from the estate: {named}'
+    assert named == [], f'a workflow runs `pulumi` against a stack encrypted apart from the others: {named}'
 
 
 # --------------------------------------------------------------------------

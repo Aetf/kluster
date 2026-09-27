@@ -873,14 +873,15 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     "every Environment" reach as far as "anybody who can push a
     branch" (github.md §1).
     The partition above is therefore also the map's shape —
-    the estate `PULUMI_CONFIG_PASSPHRASE` and the state-backend bundle in every
-    Environment because every job runs a `pulumi` command,
+    the Pulumi stack passphrase (`PULUMI_CONFIG_PASSPHRASE`) and the
+    state-backend bundle in every Environment because every job runs a
+    `pulumi` command,
     `ZEROTIER_IDENTITY` only in the Environments of the stack it
     belongs to (physical/gateway.md §2.6).
 -   **Two ways a row fills, and which one applies is a property of the
     credential.** *Synced* rows are copies of a value whose truth lives
     elsewhere, and `credentials derived sync` re-reads and re-pushes
-    them: the state passphrase out of the escrow, `ZEROTIER_IDENTITY`
+    them: the stack passphrase out of the escrow, `ZEROTIER_IDENTITY`
     out of the `physical` stack's state, `ZEROTIER_NETWORK_ID` out of
     the constant `conventions.overlay.NETWORK_ID`, and the Home
     Assistant webhook URL from whoever types it — `HA_WEBHOOK_URL` in

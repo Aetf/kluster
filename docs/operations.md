@@ -139,7 +139,7 @@ while the escrowed offline generations keep the retention role and
 survive the loss of GitHub itself. Its *exposure* is every dump
 written since it became a recipient and still in retention, at most
 the retention window and none before; the payload underneath is Pulumi
-state whose secrets sit under the state passphrase, which lives in the
+state whose secrets sit under the Pulumi stack passphrase, which lives in the
 *kluster* Environments and never in the ops repository, so what an
 exposed key reads in the clear is the resource graph and the
 non-secret configuration. With the key held there, the state-backend

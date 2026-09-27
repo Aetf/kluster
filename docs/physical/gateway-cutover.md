@@ -370,7 +370,7 @@ not moved.
     `probe` is the scratch form rather than a convenience: the binary
     `mise which` names, with the backend, the plugin home and a
     passphrase of the probe's own set in the same command, so no run of
-    it can land in the estate's backend. Its first run downloads, into
+    it can land in the live backend. Its first run downloads, into
     that home, the plugins the SDKs in `.venv` name.
 
     It passes on three readings. `probe up` plans the stack, its

@@ -62,8 +62,8 @@ suite, such as a drill's (§5), is not the gate and carries its own number.
 
 ### 1.1 A test process holds no credentials in its environment
 
-`mise.toml` materializes the state passphrase into
-`PULUMI_CONFIG_PASSPHRASE` and the backend URL into `PULUMI_BACKEND_URL`, out
+The Pulumi stack passphrase and the backend URL are materialized by
+`mise.toml`, into `PULUMI_CONFIG_PASSPHRASE` and `PULUMI_BACKEND_URL`, out
 of files rather than out of the caller — so each wins over anything set on the
 command line — and an operator's shell may export an account root besides,
 which is the third layer of the chain that finds one (credentials.md §2). A
@@ -477,7 +477,7 @@ rather than an orphan the sweep missed.
 
 ### 5.1 A scratch probe names its own backend
 
-A drill is meant to reach the live estate; a **scratch probe** is not — a
+A drill is meant to reach the live installation; a **scratch probe** is not — a
 throwaway project or `stack init` run to see what the CLI does, against a
 `file://` backend of its own. The one way a probe goes wrong is by landing
 in the live backend, and the route there is `mise x`: `mise.toml` resolves
@@ -505,9 +505,9 @@ workspace's own `.claude/`:
 writes the operator's `~/.pulumi`, which records a logged-in backend of
 its own. **Read `pulumi stack ls --all` back before any `stack init`**, in
 the same command form: it names what the backend in hand holds, and a list
-naming this repository's stacks means the probe is pointed at the estate.
-`--all` is what makes that read mean anything — a bare `stack ls` lists the
-current project's stacks only, so a scratch project reads back empty even
+naming this repository's stacks means the probe is pointed at the live
+backend. `--all` is what makes that read mean anything — a bare `stack ls`
+lists the current project's stacks only, so a scratch project reads back empty even
 against the live backend.
 
 ## 6. Proving a Test Fails Without the Change

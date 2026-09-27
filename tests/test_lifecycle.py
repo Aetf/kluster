@@ -699,9 +699,9 @@ def test_an_existing_into_that_is_not_this_kits_successor_is_refused_before_anyt
     """The successor file names its predecessor, and `--into` is refused where it names another (§4.2).
 
     The kit itself and a copy of it share one database identity; a kit
-    `bootstrap` wrote carries no marker; a retired kit of this estate, or a
-    successor written from some other kit, carries a marker naming a kit that
-    is not this one. Each is refused by name, before any key is retired or
+    `bootstrap` wrote carries no marker; a retired kit of this installation,
+    or a successor written from some other kit, carries a marker naming a kit
+    that is not this one. Each is refused by name, before any key is retired or
     any console visit asked for, and the file is left byte for byte.
     """
     whole = whole_kit(kit, registry, monkeypatch)
@@ -712,6 +712,9 @@ def test_an_existing_into_that_is_not_this_kits_successor_is_refused_before_anyt
         _ = lifecycle.rotate(kit, _successor(path), prompt=_refuse, registry=registry)
 
     assert 'resumes only into the' in str(refused.value) or 'is not the successor of' in str(refused.value)
+    if which == 'another-kits-successor':
+        # The one refusal that names what such a file is likely to be.
+        assert 'a retired kit of this installation' in str(refused.value)
     assert path.read_bytes() == before
     assert whole.tenancy.identity.keys[whole.user_id] == [whole.oci_key]
     assert whole.b2_api.named(b2.SEED.name) == [whole.b2_key]
@@ -829,11 +832,11 @@ def test_the_environment_carries_a_passphrase_for_every_stack_encrypted_apart(
 ) -> None:
     """The joint between the census and the recovery, exercised end to end.
 
-    `pulumi_config.APART` says which stacks are off the estate passphrase and
+    `pulumi_config.APART` says which stacks are off the stack passphrase and
     which register row each one's own comes from; this is what turns that into
     values a `pulumi` run can be started with. A version that walked its own
     list instead would fail *closed* -- the stack it forgot refuses rather than
-    running under the estate passphrase -- but it would refuse telling an
+    running under the stack passphrase -- but it would refuse telling an
     operator to run a `generate` they have already run, and nothing else in the
     suite reaches `apart` through this function at all.
     """
@@ -843,13 +846,13 @@ def test_the_environment_carries_a_passphrase_for_every_stack_encrypted_apart(
         stack: escrow.generate(escrow.Vault.open(kit, registry), escrow.rows()[row].name)
         for stack, row in pulumi_config.APART.items()
     }
-    assert generated, 'nothing to exercise: no stack is encrypted apart from the estate'
+    assert generated, 'nothing to exercise: no stack is encrypted apart from the others'
 
     found = lifecycle.environment(kit, tmp_path / 'absent', registry)
 
     assert found.apart == generated
-    # And each reaches the stack it belongs to rather than the estate's, which
-    # is the whole of what a caller gets out of this.
+    # And each reaches the stack it belongs to rather than the stack
+    # passphrase, which is the whole of what a caller gets out of this.
     for stack, passphrase in generated.items():
         assert found.variables(stack)[pulumi_config.PASSPHRASE_ENV] == passphrase
     assert found.passphrase is not None and found.passphrase not in generated.values()

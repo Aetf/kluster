@@ -36,11 +36,11 @@ def refuses(prompt: str) -> str:
 
 
 #: What a machine that holds every passphrase can tell a `pulumi` run. The
-#: `github` stack is encrypted apart from the estate (`pulumi_config.APART`),
+#: `github` stack is encrypted apart from the others (`pulumi_config.APART`),
 #: so a helper that left it out would have every case about that stack failing
 #: on the passphrase instead of on its subject.
 FULLY_EQUIPPED = pulumi_config.BackendEnvironment(
-    passphrase='an-estate-passphrase',
+    passphrase='the-stack-passphrase',
     apart={stack: f'a-{stack}-passphrase' for stack in pulumi_config.APART},
 )
 
@@ -376,7 +376,7 @@ def test_a_row_of_several_secrets_has_no_single_value_to_authenticate_with() -> 
 
 
 def test_a_stack_encrypted_apart_refuses_on_a_machine_that_holds_no_passphrase_for_it() -> None:
-    """The trap the per-stack passphrase creates, closed where it is created.
+    """The trap a stack's own passphrase creates, closed where it is created.
 
     `PULUMI_CONFIG_PASSPHRASE` is process-global, so "a different passphrase
     for one stack" is a property of how that stack is invoked. Left to
@@ -388,7 +388,7 @@ def test_a_stack_encrypted_apart_refuses_on_a_machine_that_holds_no_passphrase_f
     bare = pulumi_config.Stack(
         name=GITHUB_ADMIN.stack,
         directory=pulumi_config.project_dir(),
-        environment=pulumi_config.BackendEnvironment(passphrase='an-estate-passphrase'),
+        environment=pulumi_config.BackendEnvironment(passphrase='the-stack-passphrase'),
         run=runner,
     )
 
@@ -396,12 +396,14 @@ def test_a_stack_encrypted_apart_refuses_on_a_machine_that_holds_no_passphrase_f
     # rename moves both, where a literal would go on matching a message that
     # had stopped naming a command that exists (`docs/style/testing.md`).
     fills = pulumi_config.APART[GITHUB_ADMIN.stack]
-    with pytest.raises(pulumi_config.PassphraseMissing, match=f'credentials derived {fills} generate'):
+    with pytest.raises(pulumi_config.PassphraseMissing, match=f'credentials derived {fills} generate') as refusal:
         _ = devices.borrow(GITHUB_ADMIN, stack=bare)
 
-    # And the estate passphrase is not quietly used instead, which is the whole
-    # point: that value is in every CI Environment.
+    # And the stack passphrase is not quietly used instead, which is the whole
+    # point: that value is in every CI Environment. The refusal says so by the
+    # name credentials.md gives that passphrase.
     assert runner.invocations == []
+    assert 'The stack passphrase the other stacks share is deliberately not used' in str(refusal.value)
 
 
 def test_a_machine_that_cannot_decrypt_the_stack_is_not_told_the_credential_is_missing() -> None:
@@ -414,7 +416,7 @@ def test_a_machine_that_cannot_decrypt_the_stack_is_not_told_the_credential_is_m
     bare = pulumi_config.Stack(
         name=GITHUB_ADMIN.stack,
         directory=pulumi_config.project_dir(),
-        environment=pulumi_config.BackendEnvironment(passphrase='an-estate-passphrase'),
+        environment=pulumi_config.BackendEnvironment(passphrase='the-stack-passphrase'),
         run=RecordedPulumi(),
     )
 
@@ -424,7 +426,7 @@ def test_a_machine_that_cannot_decrypt_the_stack_is_not_told_the_credential_is_m
     assert f'credentials derived {GITHUB_ADMIN.member} record' not in str(refusal.value)
 
 
-def test_a_stack_on_the_estate_passphrase_is_handed_that_one() -> None:
+def test_a_stack_on_the_stack_passphrase_is_handed_that_one() -> None:
     """The other half: only the stacks the census names are apart."""
     equipped = pulumi_config.Stack(
         name=devices.DNS_STACK, directory=pulumi_config.project_dir(), environment=FULLY_EQUIPPED
@@ -434,5 +436,5 @@ def test_a_stack_on_the_estate_passphrase_is_handed_that_one() -> None:
     )
 
     assert devices.DNS_STACK not in pulumi_config.APART
-    assert equipped.env[pulumi_config.PASSPHRASE_ENV] == 'an-estate-passphrase'
+    assert equipped.env[pulumi_config.PASSPHRASE_ENV] == 'the-stack-passphrase'
     assert apart.env[pulumi_config.PASSPHRASE_ENV] == f'a-{GITHUB_ADMIN.stack}-passphrase'

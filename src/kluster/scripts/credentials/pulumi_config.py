@@ -4,8 +4,8 @@ One of the register's storage channels (docs/credentials.md §1 rule 6), and the
 narrower of the two Pulumi ones: `Pulumi.<stack>.yaml` is committed, so its
 ciphertext is public the moment the repository is, and only credentials a
 program needs *before* it can run belong here. What lands is ciphertext under
-the state passphrase, which is itself recovered with the kit (§2.2) — so a slot
-written here opens from the kit and from nothing else.
+the Pulumi stack passphrase, which is itself recovered with the kit (§2.2) —
+so a slot written here opens from the kit and from nothing else.
 
 Driven through the `pulumi` CLI rather than the automation API because that is
 what writes the file the operator then commits, and because the CLI is already
@@ -40,7 +40,7 @@ class SlotRefused(RuntimeError):
 
 
 class PassphraseMissing(SlotRefused):
-    """A stack encrypted apart from the estate, on a machine holding no passphrase for it.
+    """A stack encrypted apart from the other stacks, on a machine holding no passphrase for it.
 
     Its own type because it is the one refusal here that is about the *machine*
     rather than about the stack's contents, and a caller that dresses a refusal
@@ -102,17 +102,17 @@ def project_dir() -> Path:
 BACKEND_URL_ENV = 'PULUMI_BACKEND_URL'
 PASSPHRASE_ENV = 'PULUMI_CONFIG_PASSPHRASE'
 
-#: Every stack that is **not** on the estate passphrase, and the register row
+#: Every stack that is **not** on the stack passphrase, and the register row
 #: (§3) the one it *is* on comes from. A census rather than a consequence of
 #: whatever a run happened to recover: a stack named here and handed no
 #: passphrase of its own is refused *here*, by name, instead of being run under
-#: the estate's — which `pulumi` would answer with `error: incorrect
+#: the stack passphrase — which `pulumi` would answer with `error: incorrect
 #: passphrase`, a refusal that names neither the stack nor the fix and arrives
 #: at the far end of whatever command was in progress.
 #:
 #: The value is the row rather than a sentence about it, so the refusal below
 #: composes the command and a test can follow the row into the slot map. That
-#: is what holds this honest: a stack cannot be taken off the estate passphrase
+#: is what holds this honest: a stack cannot be taken off the stack passphrase
 #: without a register row that generates and escrows one.
 #:
 #: Keyed by the stack census (`conventions.STACK_NAMES.github`), the name the
@@ -143,15 +143,15 @@ class BackendEnvironment:
     stack with another's passphrase.
     """
 
-    #: The estate passphrase. Neither it nor the mapping below prints: both
+    #: The stack passphrase. Neither it nor the mapping below prints: both
     #: hold passphrases, and the URL is what a repr is read for.
     passphrase: str | None = field(default=None, repr=False, compare=False)
     url: str | None = None
     #: Stacks whose config is encrypted under a passphrase of their own, by
-    #: stack name. A stack absent from here takes the estate's. A mapping and
+    #: stack name. A stack absent from here takes the stack passphrase. A mapping and
     #: not a second field, so adding another such stack is a row rather than a
     #: branch — and so `apart` is the whole answer to "which stacks are not on
-    #: the estate passphrase", which a test can read.
+    #: the stack passphrase", which a test can read.
     apart: Mapping[str, str] = field(default_factory=dict[str, str], repr=False, compare=False)
 
     def variables(self, stack: str) -> dict[str, str]:
@@ -160,9 +160,9 @@ class BackendEnvironment:
             raise PassphraseMissing(
                 f"the {stack} stack's configuration is encrypted under a passphrase of its own and this "
                 f'machine holds none: run `credentials derived {row} generate`, or `credentials derived '
-                f'{row} recover` on a machine that already holds the kit. The estate passphrase is '
-                f'deliberately not used here — every CI Environment holds that one, and this stack is the '
-                f'one nothing in CI may read (framework/github.md §1).'
+                f'{row} recover` on a machine that already holds the kit. The stack passphrase the '
+                f'other stacks share is deliberately not used here — every CI Environment holds that one, '
+                f'and this stack is the one nothing in CI may read (framework/github.md §1).'
             )
         values: dict[str, str] = {}
         if (chosen := passphrase or self.passphrase) is not None:

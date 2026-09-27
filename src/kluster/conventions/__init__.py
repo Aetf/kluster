@@ -43,7 +43,8 @@ overlay
     (`conventions.overlay`; rfc-002 §3.2). The adjective for what is on it —
     an overlay address, an overlay member, an overlay route — and never
     "network" unqualified. The wire label `zt` is a value (`dns.OVERLAY_LABEL`),
-    not a word.
+    not a word, and so are the CI concurrency groups that serialize each CI
+    member's identity, `zt-physical` and `zt-dns` (physical/gateway.md §2.6).
     Not: zt.
 
 site

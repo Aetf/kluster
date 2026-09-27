@@ -2325,8 +2325,8 @@ def test_a_run_that_destroyed_nothing_says_nothing_about_a_dump(
 
 
 # -- what runs before the barrier --------------------------------------------
-# The dump and the terminate are the barrier: past them the estate has no
-# backend. Everything that can fail and does not need the old box gone runs
+# The dump and the terminate are the barrier: past them the installation has
+# no backend. Everything that can fail and does not need the old box gone runs
 # ahead of them, so that its failure leaves the old box serving.
 
 #: Every step of the groundwork a launch stands on, as the module that owns it
@@ -2346,7 +2346,7 @@ def test_the_image_is_converged_before_anything_is_destroyed(converge: Any) -> N
     """A release not imported yet is a download, an upload and an import.
 
     None of it needs the old box gone, so none of it runs in the window where
-    the estate has no backend.
+    the installation has no backend.
     """
     stale = dict(CURRENT) | {'butane': 'zzzz'}
     recorder = _Recorder(instance_exists=True, metadata=_built_from(stale))

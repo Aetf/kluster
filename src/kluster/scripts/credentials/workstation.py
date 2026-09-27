@@ -49,7 +49,7 @@ __all__ = (
 #: is how a kit kept on removable media or shared between checkouts is used.
 KIT = 'kit.kdbx'
 
-#: The Pulumi state passphrase, recovered from the escrow (§2.2) and cached
+#: The Pulumi stack passphrase, recovered from the escrow (§2.2) and cached
 #: here so a local `pulumi preview` needs neither the kit nor an eval.
 PASSPHRASE = 'pulumi.passphrase'
 
