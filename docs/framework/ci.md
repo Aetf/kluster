@@ -298,7 +298,14 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     monthly: mise numbers releases by date, so `2026.9.1` to `2026.9.2`
     reads as a patch and is suppressed, a new month reads as a minor
     and opens a pull request, and a new year reads as a major and waits
-    on the dependency dashboard.
+    on the dependency dashboard. A cloud session installs the same
+    version ([dispatch.md](dispatch.md) §1.4): the pin in
+    `deploy/cloud-session/toolchain.sh` is read by a custom manager under
+    the same name, `jdx/mise`, so it moves in the same pull request and
+    on the same cadence, and a test holds it equal to every workflow's.
+    One version matters beyond reproducibility there, because the
+    `ltex-ls-plus` install stays off the GitHub API only from a floor
+    release on, which `mise.toml` names beside that pin.
 -   **The runner image is pinned the same way.** Every job that runs
     steps names its runner by release — `ubuntu-24.04`, and
     `ubuntu-24.04-arm` for the arm leg of the image builds (§4) — and

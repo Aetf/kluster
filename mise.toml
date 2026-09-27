@@ -36,7 +36,20 @@ talosctl = "1.13.9"
 # release, whose `linux-x64` archive bundles the Java it runs on, so a runner
 # needs no JDK beside it. Both `ltex-cli-plus` and the `ltex-ls-plus` server
 # the editors speak to come from this one archive.
-"github:ltex-plus/ltex-ls-plus" = "18.7.0"
+#
+# The empty `version_prefix` is what keeps the install off the GitHub API,
+# which a Claude Code cloud session's GitHub proxy refuses for every repository
+# not attached to the session (framework/dispatch.md §1.4). This project tags
+# its releases without a `v`, and without the option mise looks for a
+# `v`-prefixed tag first. With it, and from mise 2026.9.14 on, the release and
+# its attestation come from mise's versions host and the archive from the
+# release download, and `api.github.com` is asked only if that host fails; an
+# earlier mise asks the API whatever the prefix. That floor is why CI and the
+# cloud session install one mise, pinned in the workflows and in
+# `deploy/cloud-session/toolchain.sh` (framework/ci.md §3). Renovate reads the
+# table form as it read the bare string: same dependency, same datasource, the
+# `version` moved.
+"github:ltex-plus/ltex-ls-plus" = { version = "18.7.0", version_prefix = "" }
 
 # What a `pulumi` run needs that no template can compute: the state
 # passphrase, recovered from its escrow ciphertext (docs/credentials.md

@@ -173,13 +173,22 @@ here, because it is silent and looks exactly like a clean sweep.
 against paths relative to the tree being swept.** A sweep run inside a
 workspace stands under the primary checkout's `.claude/`
 ([framework/dispatch.md](../framework/dispatch.md) §1.2), so a skip set
-written to keep scratch out — anything matching `.claude` — excludes
-every file when it is tested against absolute paths, and the sweep
-visits nothing and reports clean. A relative walk from the tree's root
-contains no `.claude` unless the file is scratch. The file count is the
-control that catches it, the way the positive match above catches a
-pattern that cannot fire: a sweep that read no files has found nothing
-about the repository.
+written to keep scratch out excludes every file when it is tested
+against absolute paths, and the sweep visits nothing and reports clean.
+The file count is the control that catches it, the way the positive
+match above catches a pattern that cannot fire: a sweep that read no
+files has found nothing about the repository.
+
+**Scratch is what `.gitignore` ignores, not everything under
+`.claude/`.** The role definitions in `.claude/agents/` and the project
+settings in `.claude/settings.json` are tracked, and a sweep reads them
+like any other file; everything else under `.claude/` — workspaces,
+worktrees, tool configuration, dumps — is ignored scratch. So a skip set
+never names `.claude` itself: it names the ignored paths, which are
+`/.claude/*` less the paths `.gitignore` re-includes after it. The walk
+that needs no skip set at all is the tracked files — `jj file list`
+inside a workspace, `git ls-files` in a checkout — which hold no scratch
+to begin with.
 
 **Docs layer like the code.** `docs/framework/` documents mechanisms
 (how this repo does Pulumi, CI, testing, and how work is dispatched)

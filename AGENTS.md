@@ -4,6 +4,18 @@ What an agent needs before touching anything here. The protocol around
 the work — how it is dispatched, reviewed, and reported — is
 [docs/framework/dispatch.md](docs/framework/dispatch.md).
 
+Claude Code reaches this file through the root `CLAUDE.md`, which
+imports it, so every session reads it, local or cloud. The rest of what
+a session needs is in the repository's `.claude/`: the role definitions
+in `agents/` and, in `settings.json`, the hook that installs a cloud
+session's tools and the exclusion that keeps a workspace's own copy of
+these instructions from loading as a second set. Those are the only
+tracked paths under `.claude/`, each named in `.gitignore`; everything
+else there is ignored, and a setting or permission rule of one's own
+goes in the ignored `.claude/settings.local.json` — saved to
+`settings.json`, it is an edit to a tracked file, which `jj` snapshots
+into the working copy.
+
 ## Environment
 
 * ALWAYS use `mise x uv -- uv` to manage python environment of the project
@@ -128,8 +140,9 @@ documentation the change makes true ships with it rather than after it.
     same exit code, and a run indistinguishable from one configured with
     `{}`. So the words go into the configuration whole, and the
     configuration goes where it will still be there when the checker runs
-    and will not be committed: `.claude/` inside the workspace, which
-    `.gitignore` covers and which the recipe above creates.
+    and will not be committed: `.claude/ltex.json` inside the workspace,
+    which `.gitignore` covers and whose directory the recipe above
+    creates.
   - **Confirm the configuration loaded before believing any finding.**
     The control is one file checked under two configurations: the built
     `.claude/ltex.json`, and a second file holding only `{}`. On a file
@@ -208,9 +221,12 @@ documentation the change makes true ships with it rather than after it.
   with no pull request, the merging dispatcher removes it after the
   merge.
   **Scratch goes under the workspace's own `.claude/`**, which
-  `.gitignore` covers: a workspace root is a checkout, so a file written
+  `.gitignore` covers apart from the tracked `agents/` and
+  `settings.json`: a workspace root is a checkout, so a file written
   anywhere else in it is a repository path that the next `jj` command
   snapshots into the change.
+  A cloud session's clone is its workspace instead, and works with git:
+  [dispatch.md](docs/framework/dispatch.md) §1.4.
 * **At the moment of a push, `@` is empty and `@-` is the work.**
   That invariant is the rule, and `jj new` is how it is restored once a
   piece of work is done rather than a command to run unconditionally:
@@ -235,12 +251,14 @@ documentation the change makes true ships with it rather than after it.
   to the current directory. The failure modes, the rest of that rule and
   the rest of the protocol are
   [dispatch.md](docs/framework/dispatch.md) §1.2.
-* **A builder never fetches; the dispatcher fetches and rebases.** A
-  branch that opens behind `main` is the expected case, because bringing
-  it up to date is a step of the merge rather than of the work. The one
-  exception is a rebase that conflicts: that one comes back to the
-  builder, onto the `main` the dispatcher's fetch has already brought
-  in, still without fetching.
+* **A builder in a `jj` workspace never fetches; the dispatcher fetches
+  and rebases.** A branch that opens behind `main` is the expected case,
+  because bringing it up to date is a step of the merge rather than of
+  the work. The one exception is a rebase that conflicts: that one comes
+  back to the builder, onto the `main` the dispatcher's fetch has
+  already brought in, still without fetching. A cloud builder's clone
+  shares no store, and it fetches for itself
+  ([dispatch.md](docs/framework/dispatch.md) §1.4).
 * Implementation-period issues live in the `kluster-ops` repo, not in this
   one and not in a checked-in list. What is unimplemented *here* announces
   itself: an unwritten stack raises from its entrypoint; a seed whose mint

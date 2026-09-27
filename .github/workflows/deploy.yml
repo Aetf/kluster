@@ -51,7 +51,7 @@ jobs:
           # Pinned like every tool `mise.toml` manages, and for the same
           # reason (framework/ci.md §3). This is the action's own input, and
           # the one renovate bumps.
-          version: 2026.9.1
+          version: 2026.9.14
           experimental: true
       - run: mise x uv -- uv sync --locked
         timeout-minutes: 5
@@ -101,7 +101,7 @@ jobs:
           # Pinned like every tool `mise.toml` manages, and for the same
           # reason (framework/ci.md §3). This is the action's own input, and
           # the one renovate bumps.
-          version: 2026.9.1
+          version: 2026.9.14
           experimental: true
       - run: mise x uv -- uv sync --locked
         timeout-minutes: 5
@@ -155,7 +155,7 @@ jobs:
           # Pinned like every tool `mise.toml` manages, and for the same
           # reason (framework/ci.md §3). This is the action's own input, and
           # the one renovate bumps.
-          version: 2026.9.1
+          version: 2026.9.14
           experimental: true
       - run: mise x uv -- uv sync --locked
         timeout-minutes: 5
@@ -203,7 +203,7 @@ jobs:
           # Pinned like every tool `mise.toml` manages, and for the same
           # reason (framework/ci.md §3). This is the action's own input, and
           # the one renovate bumps.
-          version: 2026.9.1
+          version: 2026.9.14
           experimental: true
       - run: mise x uv -- uv sync --locked
         timeout-minutes: 5
@@ -242,7 +242,7 @@ jobs:
           # Pinned like every tool `mise.toml` manages, and for the same
           # reason (framework/ci.md §3). This is the action's own input, and
           # the one renovate bumps.
-          version: 2026.9.1
+          version: 2026.9.14
           experimental: true
       - run: mise x uv -- uv sync --locked
         timeout-minutes: 5
