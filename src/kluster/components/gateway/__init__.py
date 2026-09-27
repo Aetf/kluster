@@ -89,6 +89,7 @@ class Gateway(Component):
         keys: Sequence[PublicKey],
         site: str,
         worker_gua: pulumi.Input[str] | None,
+        peer_on_worker: bool = False,
         static_hosts: Mapping[str, IPv4Address | IPv6Address],
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
@@ -120,6 +121,12 @@ class Gateway(Component):
         address is formed by SLAAC off the very network the firewall census
         declares — and it means the pinhole is not declared at all, leaving the
         worker's IPv6 outbound-only.
+
+        `peer_on_worker` says the bulk-transfer application runs on the worker,
+        and it is what declares the IPv4 forward of the application's peer
+        port. `False`, the default, is the state before the application moves:
+        its legacy copy on the host holds that WAN port, and no forward is
+        declared to take it away.
 
         `static_hosts` is the site's roll of literal name-to-address entries on
         the device's own resolver, passed through to the firewall component
@@ -187,6 +194,7 @@ class Gateway(Component):
             api_url=f'https://{url_host(host)}',
             site=site,
             worker_gua=worker_gua,
+            peer_on_worker=peer_on_worker,
             static_hosts=static_hosts,
             opts=self.child_opts(),
         )

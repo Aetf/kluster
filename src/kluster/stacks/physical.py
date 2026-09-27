@@ -73,17 +73,19 @@ OCI_PRIVATE_KEY = 'ociPrivateKey'
 
 #: Further stack configuration this program reads: the audience for the
 #: budget's alerts, the certificate account the gateway buys its own TLS with,
-#: the password on its BGP session, and the worker's global IPv6 address once
-#: the advertisement it is formed from has been seen.
+#: the password on its BGP session, the worker's global IPv6 address once
+#: the advertisement it is formed from has been seen, and whether qbittorrent
+#: has moved onto the worker.
 BUDGET_ALERT_RECIPIENTS = 'budgetAlertRecipients'
 GATEWAY_ACME_TOKEN = 'gatewayAcmeToken'
 GATEWAY_BGP_PASSWORD = 'gatewayBgpPassword'
 WORKER_GUA = 'workerGua'
+QBITTORRENT_ON_WORKER = 'qbittorrentOnWorker'
 
 #: The first-bring-up knob: a LAN address for the gateway, set only while the
 #: gateway is not yet on the overlay. Absent — the steady state — every client
-#: of the gateway derives its address from `conventions.overlay.UDM`. One of two
-#: optional keys, and the other is its mirror image: this one is set only
+#: of the gateway derives its address from `conventions.overlay.UDM`. One of the
+#: optional keys, and `workerGua` is its mirror image: this one is set only
 #: during the ceremony, `workerGua` only after it.
 GATEWAY_BOOTSTRAP_HOST = 'gatewayBootstrapHost'
 
@@ -526,6 +528,14 @@ def _gateway(config: pulumi.Config) -> Gateway:
         # bring-up ceremony sets the key once the address can be read off the
         # advertisement (physical/gateway.md §2.5).
         worker_gua=config.get(WORKER_GUA),
+        # Optional, and absent until qbittorrent's own migration wave: the
+        # legacy qbittorrent on the homelab host holds the peer port's WAN
+        # side until then, by a UPnP lease or a rule kept by hand, and the
+        # IPv4 forward that would take it is not declared. The wave reads the
+        # device for what holds the port, clears it, and sets the key
+        # (cluster/migration.md, Wave D; physical/gateway.md §4.2). A value
+        # that is not a boolean refuses the run rather than reading as absent.
+        peer_on_worker=config.get_bool(QBITTORRENT_ON_WORKER) or False,
     )
 
 

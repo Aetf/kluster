@@ -19,7 +19,9 @@ visible in a rendered resource. So the suite asserts them directly:
     zone at large, which is what keeps the rest of the internal side's own
     access to the cluster intact;
 -   the cluster VLAN is a network object with no DHCP server, alone in a zone
-    of its own, and everything that names the worker names that zone.
+    of its own, and everything that names the worker names that zone;
+-   the peer's IPv4 forward exists only once the application runs on the
+    worker, because until then the port is the legacy host's.
 
 No controller is contacted: the boundary is Pulumi's mock monitor, which
 answers the zone lookups and hands back the inputs each resource was given.
@@ -51,12 +53,18 @@ async def mocks() -> Controller:
     return await run_with(Controller(site=SITE), stack='physical')
 
 
-def build(static_hosts: Mapping[str, IPv4Address | IPv6Address] | None = None) -> unifi.SiteFirewall:
+def build(
+    static_hosts: Mapping[str, IPv4Address | IPv6Address] | None = None,
+    *,
+    peer_on_worker: bool = True,
+) -> unifi.SiteFirewall:
+    """The whole census: the worker's address known and the application on it."""
     return unifi.SiteFirewall(
         NAME,
         api_url=API_URL,
         site=SITE,
         worker_gua=WORKER_GUA,
+        peer_on_worker=peer_on_worker,
         static_hosts={} if static_hosts is None else static_hosts,
     )
 
@@ -487,6 +495,7 @@ async def test_both_halves_of_the_peer_flow_name_the_same_port_and_host() -> Non
     firewall = build()
 
     assert firewall.peer_v6 is not None
+    assert firewall.peer_v4 is not None
     pinhole = await firewall.peer_v6.destination.future()
     assert pinhole is not None
 
@@ -504,6 +513,24 @@ async def test_both_halves_of_the_peer_flow_name_the_same_port_and_host() -> Non
     assert await firewall.peer_v6.ip_version.future() == 'IPV6'
     assert await firewall.peer_v4.fwd_ip.future() == str(conventions.HOMELAB_NODE_IPV4)
     assert await firewall.peer_v4.src_ip.future() == 'any'
+
+
+@pytest.mark.asyncio
+async def test_no_port_forward_exists_until_the_application_runs_on_the_worker(mocks: Controller) -> None:
+    """Before its move, the application's legacy copy holds the WAN port.
+
+    Whatever holds it — a UPnP lease or a rule kept by hand — a forward declared
+    beside it either collides with it or takes the legacy copy's inbound IPv4
+    away, so the component declares none and leaves the port to its holder.
+    The pinhole is untouched by the flag: it names the worker's own address,
+    which nothing else holds.
+    """
+    async with declaring():
+        firewall = build(peer_on_worker=False)
+
+    assert firewall.peer_v4 is None
+    assert 'unifi:index/portForward:PortForward' not in mocks.types
+    assert firewall.peer_v6 is not None
 
 
 @pytest.mark.asyncio

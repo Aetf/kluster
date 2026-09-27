@@ -353,8 +353,9 @@ to the homelab VM (the node owning their `lan` VIPs), likewise
     prefix-relative v6 rule — so the pinhole embeds the current GUA and
     must be re-declared when the (dynamic) home prefix rotates.
     "Outbound-only v6" is the accepted first stage (peers are mostly
-    reachable outbound; inbound v4 continues via the existing port
-    forward).
+    reachable outbound; inbound v4 arrives via the v4 port forward
+    that qbittorrent's own migration wave declares — physical/gateway.md
+    §4.2).
 -   **Stable-IP workloads (hath)**: served by the dedicated-VIP pattern
     (§3.2) — reserved public IP in, Egress Gateway `egressIP` out, same
     address both ways, independent of any node's lifecycle. The pattern
@@ -731,9 +732,13 @@ The entire stack is deployed via Pulumi using multiple providers:
 3.  **UniFi (filipowm/unifi, bridged; decided 2026-08-23)**: firewall
     rules and the one surviving port-forward — the `lan` pool
     address-group policy (§3.4), the qbittorrent v6 pinhole (§3.5),
-    and **qbittorrent's pre-existing v4 peer-port forward**
-    (workloads.md §4 — an app-traffic inheritance, now declared
-    instead of hand-kept). Provider selection: the UDM runs the
+    and **qbittorrent's v4 peer-port forward** (workloads.md §4 — an
+    app-traffic inheritance). The forward is declared only once
+    qbittorrent runs on the worker (`qbittorrentOnWorker`,
+    physical/gateway.md §4.2): until its migration wave the legacy
+    qbittorrent on the homelab host holds the port by whatever holds it
+    today, UPnP or a hand-kept rule, and moving it is a step of that
+    wave (migration.md §2, Wave D). Provider selection: the UDM runs the
     **zone-based firewall** (measured, §3.4), whose v2 API the
     pulumiverse/unifi provider cannot drive — it bridges the stalled
     paultyng/ubiquiti-community lineage, whose `firewall_rule` targets

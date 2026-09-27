@@ -499,12 +499,71 @@ async def test_the_pinhole_waits_for_an_address_the_worker_has_not_formed_yet(se
 
     declared = setup.names_declared
     # Nothing else waits with it. The v4 half names the node address the
-    # address plan states rather than one a booted machine reports, and the
-    # rest of the census never named the worker at all.
+    # address plan states rather than one a booted machine reports — what it
+    # waits for is the application, and that key is set here — and the rest of
+    # the census never named the worker at all.
     assert f'{conventions.CLUSTER_NAME}-firewall-peer-v6' not in declared
     assert f'{conventions.CLUSTER_NAME}-firewall-peer-v4' in declared
     assert f'{conventions.CLUSTER_NAME}-firewall-cluster-egress' in declared
     assert f'{conventions.CLUSTER_NAME}-firewall-network' in declared
+
+
+@pytest.mark.asyncio
+async def test_the_peer_forward_waits_for_qbittorrent_to_run_on_the_worker(setup: Installation) -> None:
+    """Until its own wave, the legacy qbittorrent holds the peer port's WAN side.
+
+    The window that brings the gateway under this program applies the whole
+    firewall component, and qbittorrent moves onto the worker waves later. A
+    forward declared in between either collides with whatever holds the port
+    today, a rule kept by hand, or wins over a UPnP lease and takes the legacy
+    host's inbound IPv4 away with nothing reporting it. So with
+    `qbittorrentOnWorker` absent — the state of every apply before that wave —
+    the forward is not declared, and nothing else goes with it: the pinhole
+    names the worker's own address and waits for that instead.
+    """
+    pulumi.runtime.set_all_config(
+        {key: value for key, value in STACK_CONFIG.items() if key != f'kluster:{physical.QBITTORRENT_ON_WORKER}'}
+    )
+
+    async with declaring():
+        await physical.main()
+
+    declared = setup.names_declared
+    assert f'{conventions.CLUSTER_NAME}-firewall-peer-v4' not in declared
+    assert 'unifi:index/portForward:PortForward' not in setup.types
+    assert f'{conventions.CLUSTER_NAME}-firewall-peer-v6' in declared
+    assert f'{conventions.CLUSTER_NAME}-firewall-network' in declared
+
+
+@pytest.mark.asyncio
+async def test_the_peer_forward_lands_on_the_worker_once_qbittorrent_runs_there(setup: Installation) -> None:
+    """With the key set, the forward is back and sends the peer port to the worker.
+
+    The destination is the worker's node address, which the cluster masquerades
+    the application's outbound peer traffic to, on the port the census holds at
+    both ends.
+    """
+    async with declaring():
+        await physical.main()
+
+    forward = setup.inputs_of(f'{conventions.CLUSTER_NAME}-firewall-peer-v4')
+    assert forward['fwdIp'] == str(conventions.HOMELAB_NODE_IPV4)
+    assert forward['dstPort'] == str(conventions.QBITTORRENT_PEER_PORT)
+    assert forward['fwdPort'] == str(conventions.QBITTORRENT_PEER_PORT)
+
+
+@pytest.mark.asyncio
+async def test_a_flag_that_is_not_a_boolean_refuses_the_run() -> None:
+    """A misspelled value is not read as absent.
+
+    Read as absent, a misspelled value would leave the forward undeclared after
+    the wave that set it: qbittorrent on the worker with no inbound IPv4, and
+    nothing reporting it.
+    """
+    pulumi.runtime.set_all_config({**STACK_CONFIG, f'kluster:{physical.QBITTORRENT_ON_WORKER}': 'yes'})
+
+    with pytest.raises(pulumi.ConfigTypeError, match=physical.QBITTORRENT_ON_WORKER):
+        await physical.main()
 
 
 @pytest.mark.asyncio
