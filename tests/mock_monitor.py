@@ -7,8 +7,9 @@ What lives here is what every suite that declares resources against Pulumi's
 mocks was re-growing:
 
 -   `Recorder`, a monitor that invents nothing and remembers every
-    declaration, so a case can ask what the program handed a provider rather
-    than only that it made something;
+    declaration and every function call, so a case can ask what the program
+    handed a provider, and through which provider, rather than only that it
+    made something;
 -   `run_with`, which points the runtime at a monitor and primes the one thing
     a bridged provider needs before it may register anything;
 -   `run_under_backstop`, which is `run_with` for a run that also refuses an
@@ -39,7 +40,7 @@ import contextvars
 from collections import Counter
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 import pulumi
 import pulumi.runtime.mocks
@@ -63,10 +64,10 @@ _ROOT_TYPE = 'pulumi:pulumi:Stack'
 def _the_one[EntryT](name: str, typ: str | None, run: list[tuple[str, str, EntryT]], verb: str) -> EntryT:
     """The single entry of `run` under this name, or a refusal saying what to do about it.
 
-    One lookup for both records the recorder keeps -- the declarations and the
-    raw registration requests -- because whether a name is ambiguous is a
-    property of the run rather than of which record answers. `verb` names the
-    record, and is the only thing the two messages differ by.
+    One lookup for both records the recorder keeps of registrations -- the
+    declarations and the raw registration requests -- because whether a name
+    is ambiguous is a property of the run rather than of which record answers.
+    `verb` names the record, and is the only thing the two messages differ by.
 
     The three ways this goes wrong want three different things said, which is
     why they are not one message with a count in it:
@@ -114,8 +115,18 @@ class Declaration:
     provider: str
 
 
+class Call(NamedTuple):
+    """One function call, as the engine received it."""
+
+    token: str
+    #: The provider instance it went through, as the engine's reference to it,
+    #: or the empty string for the ambient one -- the same reading
+    #: `Declaration.provider` has.
+    provider: str
+
+
 class Recorder(pulumi.runtime.Mocks):
-    """A monitor that invents nothing and remembers every declaration.
+    """A monitor that invents nothing and remembers every declaration and every call.
 
     Every registration is answered with its own inputs and an id built from the
     logical name, which is what a provider that only defines things would do --
@@ -132,8 +143,15 @@ class Recorder(pulumi.runtime.Mocks):
     def __init__(self) -> None:
         #: Every resource the run registered, in registration order.
         self.declared: list[Declaration] = []
-        #: Which provider instance each function call went through, by token.
-        self.call_providers: dict[str, str] = {}
+        #: Every function call the run made, in the order the monitor received
+        #: them -- which is not the program's order where one call waits on a
+        #: provider's registration and another does not. A list rather than
+        #: an index by token, because a token does not identify a call: one
+        #: lookup is made once per node or per artifact, and a record keeping
+        #: one provider per token would let the call that lost its provider
+        #: hide behind a sibling that kept it. `called_through` is the reader
+        #: that asks about a token.
+        self.called: list[Call] = []
         #: Every registration request the run made, in registration order --
         #: the only place the resource *options* survive. A list rather than an
         #: index, because a logical name does not identify a registration: a
@@ -167,7 +185,7 @@ class Recorder(pulumi.runtime.Mocks):
         return args.name + '_id', inputs | self.computed(args)
 
     def call(self, args: pulumi.runtime.MockCallArgs) -> tuple[dict[str, Any], list[tuple[str, str]]]:
-        self.call_providers[args.token] = args.provider or ''
+        self.called.append(Call(args.token, args.provider or ''))
         return self.answer(args), []
 
     # -- reading the run back -----------------------------------------------
@@ -241,6 +259,25 @@ class Recorder(pulumi.runtime.Mocks):
     def provider_of(self, name: str, typ: str | None = None) -> str:
         """The provider instance this resource was registered against."""
         return self.one(name, typ).provider
+
+    def called_through(self, token: str) -> str:
+        """The provider instance every call to this token went through, which must be one.
+
+        A token called through two providers -- one of its calls having lost
+        the provider its siblings carry -- is refused rather than answered,
+        because either answer would describe one call and stand for both. A
+        token never called is refused too, naming the tokens the run did call.
+        """
+        providers = sorted({call.provider for call in self.called if call.token == token})
+        if len(providers) == 1:
+            return providers[0]
+        if providers:
+            raise AssertionError(
+                f'{token} was called through {len(providers)} providers, not one: {providers}; '
+                'read `called` to find the call that differs'
+            )
+        called = sorted({call.token for call in self.called})
+        raise AssertionError(f'{token} was never called; the run called {called}')
 
     def options_of(self, name: str, typ: str | None = None) -> Any:
         """The registration request of this resource, which is where its options are.
