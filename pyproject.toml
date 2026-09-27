@@ -63,6 +63,13 @@ dev = [
 [tool.uv]
 managed = true
 default-groups = ["dev"]
+# Resolve only files uploaded at least this long ago: the release age a
+# renovate route CI executes waits out, held here for what uv resolves on its
+# own -- renovate's lock file maintenance and the libraries a bump pulls in.
+# Which routes wait, and why a week, is `renovate.json5`'s
+# `minimumReleaseAge`, and a test holds the two equal. A relative value, so
+# `uv.lock` records the span, not a date.
+exclude-newer = "7 days"
 
 # Pin the package index so locking doesn't pick up ambient registry settings
 # (e.g. UV_INDEX_URL pointing at a private mirror). Note CLI flags and env

@@ -43,6 +43,26 @@ so the proof errors rather than passing. The whole account, the other facts
 behind that error included, is ci.md §5. Every bump therefore merges
 the way the waiting rows do: as a reviewed pull request.
 
+**A release CI executes waits out a week; one the cluster only pulls
+does not.** Renovate proposes a release on a route whose release CI
+executes with credentials in reach only once it is seven days old, and
+proposes one on a route whose artifact the cluster only pulls as soon
+as it is published. Today the first class is the GitHub Actions and
+their runner images, the Python dependencies, the tools `mise.toml`
+pins, the ZeroTier release the CI member installs, the Pulumi
+providers and the bridged providers with their bridge, and the packages
+a self-built image's recipe fetches while CI builds it. The Talos row
+and the state-backend age move with a tool CI runs, so they wait as
+well. The second class is the container images and the Helm charts.
+uv resolves under the same age whatever it picks itself: renovate's
+lock file maintenance, and the libraries a bump pulls in. The criterion
+and its reason are `renovate.json5`'s top-level `minimumReleaseAge`.
+`pyproject.toml`'s `exclude-newer` repeats the age for uv, and a test
+holds both. A data source that reports no publication time cannot be
+aged, so renovate holds its releases on the dependency dashboard until
+a person ticks them there. Two such sources feed waiting rows: the
+ZeroTier `deb` index and the runner labels.
+
 | Surface | PR opened by | Applied by | Policy |
 | --- | --- | --- | --- |
 | Talos version (machine-config pin + Image Factory schematic + `mise.toml`'s `talosctl`) | renovate (GitHub-releases datasource) | `physical` stack for the pin and the schematic; `talosctl upgrade` by hand, serial, staged (declarative/physical.md §2) | Reviewed; one pull request moves `versions:talos` and the `talosctl` pin together, because `tests/test_talos_validate.py` holds the two equal; §2.1 runbook |

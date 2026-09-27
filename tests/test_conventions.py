@@ -39,7 +39,7 @@ from typing import NamedTuple, cast
 import pytest
 import yaml
 from fences import prose
-from renovate_text import as_python_spells_it, as_renovate_spells_it
+from renovate_text import as_python_spells_it, as_renovate_spells_it, listed, package_rules
 from section_numbers import sections
 from workflow_files import GITHUB, github_name, mapping, read_workflow, workflow_jobs, workflows_and_actions
 
@@ -830,6 +830,90 @@ def test_every_author_a_workflow_commits_as_is_one_renovate_ignores() -> None:
     assert any(name == 'workflows/sdk-regenerate.yml' for name, _ in committing)
     stranded = sorted(f'{name} commits as {email}' for name, email in committing if email not in ignored)
     assert stranded == [], f'commits as an author renovate does not ignore: {stranded}'
+
+
+#: The release age as `renovate.json5` sets it at the top level, where it
+#: reaches every route, and any key that sets an age or how an unaged release
+#: is treated, wherever it sits.
+RELEASE_AGE_IN_RENOVATE = re.compile(r"^  minimumReleaseAge: '([^']*)',$", re.MULTILINE)
+ANY_RELEASE_AGE_KEY_IN_RENOVATE = re.compile(r'^\s*minimumReleaseAge\w*:', re.MULTILINE)
+RULE_KEY = re.compile(r'^\s*(\w+):', re.MULTILINE)
+
+#: The data sources of the routes whose artifact the cluster only pulls:
+#: container images, by tag and by digest, and Helm charts. Every other route
+#: is one CI executes with credentials in reach, or travels in one pull
+#: request with one that is, and waits out the age.
+PULLED_BY_THE_CLUSTER = frozenset({'docker', 'helm'})
+
+#: Where a route names its data source: a custom manager's template or a
+#: rule's override in `renovate.json5`, and a `# renovate:` hint above a
+#: build-arg pin in `docker/*.conf`. The built-in managers name none; the two
+#: whose data source is fixed are added by name, `pep621`'s `pypi` and the
+#: actions' `github-tags`.
+DATASOURCE_IN_RENOVATE = re.compile(r"^\s*(?:datasourceTemplate|overrideDatasource): '([\w-]+)',$", re.MULTILINE)
+DATASOURCE_IN_A_CONF = re.compile(r'^# renovate: datasource=(\S+)', re.MULTILINE)
+DATASOURCES_OF_BUILT_IN_MANAGERS = frozenset({'pypi', 'github-tags'})
+
+
+def test_every_route_ci_executes_waits_out_one_release_age_and_no_image_does() -> None:
+    """A route waits out the release age when CI executes its release; one the cluster only pulls does not.
+
+    The age is set once, at the top level, so a route waits unless a rule
+    says otherwise, and exactly one rule does: it takes the age off the
+    images and charts, by data source, and names nothing else. A second rule
+    touching the age -- a shorter wait, `null` on a route CI runs, or unaged
+    releases let through by `minimumReleaseAgeBehaviour` -- would exempt a
+    CI-executed route with nothing to show for it: renovate reads its
+    configuration from the default branch, so the first sign would be a
+    release a day old running in a job that holds the stack secrets. Lock
+    file maintenance is not renovate's to age, since uv resolves it, so uv's
+    own `exclude-newer` is held to the same duration.
+    """
+    config = (ROOT / 'renovate.json5').read_text()
+    code = '\n'.join(line for line in config.splitlines() if not line.lstrip().startswith('//'))
+    uv = cast('dict[str, dict[str, object]]', tomllib.loads((ROOT / 'pyproject.toml').read_text())['tool'])['uv']
+
+    ages = RELEASE_AGE_IN_RENOVATE.findall(code)
+    assert len(ages) == 1, (
+        f'renovate.json5 sets {len(ages)} top-level release ages; every route CI executes waits out one'
+    )
+    exempting = [rule for rule in package_rules(config) if ANY_RELEASE_AGE_KEY_IN_RENOVATE.search(rule)]
+    assert len(exempting) == 1, f'{len(exempting)} rules set a release age; one takes it off the images, and no other'
+    (rule,) = exempting
+    assert len(ANY_RELEASE_AGE_KEY_IN_RENOVATE.findall(code)) == 2, (
+        'a release-age key sits outside the top level and the one rule'
+    )
+    assert re.search(r'^\s*minimumReleaseAge: null,$', rule, re.MULTILINE), (
+        'the rule sets an age rather than taking it off'
+    )
+    assert set(RULE_KEY.findall(rule)) == {'matchDatasources', 'minimumReleaseAge'}, (
+        'the exemption narrows or widens by something other than data source'
+    )
+    exempt = set(listed(rule, 'matchDatasources'))
+
+    routes = (
+        set(DATASOURCE_IN_RENOVATE.findall(code))
+        | {
+            found
+            for path in sorted((ROOT / 'docker').glob('*.conf'))
+            for found in DATASOURCE_IN_A_CONF.findall(path.read_text())
+        }
+        | DATASOURCES_OF_BUILT_IN_MANAGERS
+    )
+    # Not vacuous: routes of both classes are read today.
+    assert routes & PULLED_BY_THE_CLUSTER
+    assert routes - PULLED_BY_THE_CLUSTER
+    unaged = sorted(source for source in routes - PULLED_BY_THE_CLUSTER if source in exempt)
+    assert unaged == [], f'routes CI executes with the release age taken off: {unaged}'
+    aged = sorted(source for source in PULLED_BY_THE_CLUSTER if source not in exempt)
+    assert aged == [], f'routes the cluster only pulls that wait out the release age: {aged}'
+    assert exempt <= PULLED_BY_THE_CLUSTER, (
+        f'the exemption names a data source no image or chart is read from: {sorted(exempt - PULLED_BY_THE_CLUSTER)}'
+    )
+
+    assert uv.get('exclude-newer') == ages[0], (
+        "pyproject.toml's [tool.uv] exclude-newer is not renovate's minimumReleaseAge"
+    )
 
 
 def test_no_workflow_identifies_an_account_by_id() -> None:
