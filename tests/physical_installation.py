@@ -107,6 +107,11 @@ class Installation(Controller):
         #: back: the cluster endpoint, the one place the Kubernetes API port is
         #: written as a URL, and the patches carrying the firewall's openings.
         self.configurations: list[dict[str, Any]] = []
+        #: Every function call the run made, as its token and the provider it
+        #: went through, in call order. The recorder keeps one provider per
+        #: token, and a token is called once per node or per artifact, so a
+        #: single call that lost its provider is visible only here.
+        self.calls: list[tuple[str, str]] = []
 
     def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
         match args.typ:
@@ -142,6 +147,7 @@ class Installation(Controller):
                 return {}
 
     def answer(self, args: pulumi.runtime.MockCallArgs) -> dict[str, Any]:
+        self.calls.append((args.token, args.provider or ''))
         match args.token:
             case 'oci:Core/getServices:getServices':
                 return {'services': [{'id': 'ocid1.service.os', 'name': 'Object Storage', 'cidrBlock': 'oci-os'}]}

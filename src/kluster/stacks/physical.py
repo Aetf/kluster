@@ -37,6 +37,7 @@ from ipaddress import IPv4Address, IPv6Address, ip_address
 
 import pulumi
 import pulumi_oci as oci
+import pulumiverse_talos
 
 from kluster import conventions
 from kluster.components.backup import BackupBucket, Scope, etcd_scope
@@ -134,13 +135,13 @@ async def main() -> None:
     # the worker's own disk image — and they are one version by construction.
     talos_version = versions.talos
 
-    # The one provider this program shares, and therefore the one the stack
-    # program builds (rfc-002 §8.1): six components declare against this
-    # account — the network, the balancer, the nodes, the guardrails, the block
-    # volumes and the image import — and a provider built inside any of them
-    # would be reached into by the rest. Its region and its tenancy come from
-    # `conventions` because both are permanent properties of the account, so
-    # what is read here is exactly the secrets.
+    # The two providers this program shares, and therefore the two the stack
+    # program builds (rfc-002 §8.1). The first is the cloud account's: six
+    # components declare against it — the network, the balancer, the nodes,
+    # the guardrails, the block volumes and the image import — and a provider
+    # built inside any of them would be reached into by the rest. Its region
+    # and its tenancy come from `conventions` because both are permanent
+    # properties of the account, so what is read here is exactly the secrets.
     cloud = oci.Provider(
         f'{conventions.CLUSTER_NAME}-oci',
         region=conventions.OCI_TENANCY.region,
@@ -153,13 +154,24 @@ async def main() -> None:
     # inherited from there by everything below it: nothing under these names
     # the provider, and no component takes it as an argument.
     on_cloud = pulumi.ResourceOptions(providers=[cloud])
+    # The Talos chain's provider, shared the same way: the two images, the
+    # machine configurations and day 1 all declare through it. It authenticates
+    # to no account and is built from nothing — every call over apid carries
+    # its client configuration as an input, and the image factory is the
+    # public one — yet it is explicit like the rest, with the package's default
+    # disabled, so a Talos call that misses it fails instead of reaching for a
+    # provider nothing in the program names.
+    talos = pulumiverse_talos.Provider(f'{conventions.CLUSTER_NAME}-talos')
+    on_talos = pulumi.ResourceOptions(providers=[talos])
 
     network = CloudNetwork(conventions.CLUSTER_NAME, compartment_id=compartment_id, opts=on_cloud)
+    # The one component on both: its schematic is the factory's, and the image
+    # imported from it is the account's.
     image = TalosImage(
         conventions.CLUSTER_NAME,
         compartment_id=compartment_id,
         talos_version=talos_version,
-        opts=on_cloud,
+        opts=pulumi.ResourceOptions(providers=[cloud, talos]),
     )
     load_balancer = NodeLoadBalancer(
         conventions.CLUSTER_NAME,
@@ -193,6 +205,7 @@ async def main() -> None:
         # It is the table rather than the attachments because those need the
         # instances, and the instances boot this configuration.
         volumes=conventions.NODE_VOLUMES,
+        opts=on_talos,
     )
 
     nodes = CloudNodes(
@@ -247,6 +260,7 @@ async def main() -> None:
         # answer for: OCI assigns the address to the VNIC and leaves the guest
         # alone.
         secondary_addresses={conventions.DEDICATED_VIP_NODE: nodes.secondary_ip.ip_address},
+        opts=on_talos,
     )
 
     # §1: one volume per entry of the census, attached to the node that entry
@@ -290,9 +304,9 @@ async def main() -> None:
     # The image is the worker's own artifact: the fleet's Talos version, a
     # schematic of its own (x86, and the i915 firmware the GPU cutover wants
     # present from day 0), and a file on this machine rather than an entry in a
-    # cloud catalog. No cloud provider on it: nothing it declares reaches the
-    # account.
-    worker_image = TalosNocloudImage(f'{conventions.CLUSTER_NAME}-worker', talos_version=talos_version)
+    # cloud catalog. No cloud provider on it, only the chain's: nothing it
+    # declares reaches the account.
+    worker_image = TalosNocloudImage(f'{conventions.CLUSTER_NAME}-worker', talos_version=talos_version, opts=on_talos)
     # No endpoint and no credential among the VM's arguments: the libvirt
     # session is the component's own, so it builds its provider and reads the
     # key that opens it (rfc-002 §8.1). The home-automation domain on the same
