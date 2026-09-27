@@ -27,9 +27,9 @@ installs every tool `mise.toml` pins.
 
 The shapes are built here, from the inputs the physical stack passes, and
 rendered through `talos.patches`, the component's public function;
-`test_talos_config.py` keeps a table of its own. Whether test modules share
-such tables by importing one another is an open question
-(Aetf/kluster-ops#438).
+`test_talos_config.py` keeps a table of its own. A table the two shared
+would live in a named module under `tests/`, since no test module imports
+another (framework/testing.md §2).
 """
 
 from __future__ import annotations
@@ -47,6 +47,7 @@ from typing import Any, Literal, cast
 
 import pytest
 import yaml
+from renovate_text import listed, package_rules, scalar
 
 from kluster import conventions
 from kluster.components import talos
@@ -297,30 +298,6 @@ def test_talosctl_is_the_fleets_release() -> None:
     """
     tools = tomllib.loads((ROOT / 'mise.toml').read_text())['tools']
     assert f'v{tools[TOOL]}' == pinned_release()
-
-
-def package_rules(config: str) -> list[str]:
-    """Each `packageRules` entry of `renovate.json5`, with its comment lines dropped.
-
-    An entry is a brace-delimited object; none nests an object and no comment
-    inside one carries a brace, which is what lets a text scan find them.
-    """
-    start = config.index('packageRules: [')
-    block = config[start : config.index('customManagers: [', start)]
-    lines = (line for line in block.splitlines() if not line.lstrip().startswith('//'))
-    return re.findall(r'\{[^{}]*\}', '\n'.join(lines))
-
-
-def listed(rule: str, key: str) -> list[str]:
-    """The strings a rule lists under `key`, or none when it has no such key."""
-    found = re.search(rf'^\s*{key}: \[([^\]]*)\],$', rule, re.MULTILINE)
-    return re.findall(r"'([^']*)'", found[1]) if found else []
-
-
-def scalar(rule: str, key: str) -> str | None:
-    """The string a rule sets `key` to, or `None` when it does not set it."""
-    found = re.search(rf"^\s*{key}: '([^']*)',$", rule, re.MULTILINE)
-    return found[1] if found else None
 
 
 def matches(pattern: str, value: str) -> bool:

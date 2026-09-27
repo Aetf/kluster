@@ -154,6 +154,38 @@ What a suite writes for itself is only the part that is its subject: an output
 the provider computes that the inputs do not carry, and the answer to an
 invoke.
 
+**What two test modules share lives in a named module, and no test module
+imports another.** A test module is a file `pytest` collects, a `test_*.py` or
+a `*_test.py` (its default `python_files`). A helper, a fixture's body, a fake
+or a table that two of them share by import goes into a module under `tests/`
+named for what it holds, which `pytest` does not collect, and each of them
+imports that: `mock_monitor`, `workflow_files` and `section_numbers` are the
+form. A fixture `pytest` hands a case without any import may live in a
+`conftest.py` instead. The rule is about the import, not what it fetches, so
+any module that imports a test module breaks it, a helper module included.
+Two things make such an import wrong even where it works:
+
+-   **It reaches the module `pytest` collected by an accident of layout.** A
+    test module is `pytest`'s to import, under the name its import mode gives
+    it. In the default `prepend` mode, which `pyproject.toml` leaves in place,
+    that is the file's bare name: neither `tests/` nor `tests/live/` is a
+    package, and `pytest` puts each directory it collects from on
+    `sys.path`. So `from test_x import …` binds the module `pytest`
+    collected only because the two names coincide. Under
+    `--import-mode=importlib` the name is `tests.test_x`, and the same
+    statement loads a second copy, its module-level code and state
+    included. A helper module is imported by the suites alone, under the one
+    name they spell, so there is one copy of it in any mode. Both
+    directories put their modules at the top level, which is also why no
+    two helper modules across them share a name.
+-   **It brings the whole module for one name.** Importing a test module
+    runs all of its module-level code, its imports and its tables, for the
+    one name the importer wanted, and a `test_` function the import names
+    is collected in the importer and runs a second time there.
+
+`tests/test_suite_imports.py` holds the rule, and the unique names, over every
+module under `tests/`.
+
 ### 2.1 Example Test
 
 Create a file named `test_*.py` (e.g., `test_network.py`) in the `tests`
