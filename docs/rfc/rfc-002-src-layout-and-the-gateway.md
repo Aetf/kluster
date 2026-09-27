@@ -17,8 +17,8 @@
     and [physical/gateway.md](../physical/gateway.md). Where this text and a
     design document disagree, the design document is right. **Decisions that
     moved during construction: the endpoint, §4.3's bridge dependency, the
-    rendered machine list of §4.2 and §5, and the container set's name of §3.1
-    and §5.**
+    rendered machine list of §4.2 and §5, the container set's name of §3.1
+    and §5, and the node volume's mount of §10.5.**
     The endpoint: §7.4 composes the session from values `configure` put on the
     provider, and §11 routes `gatewayBootstrapHost` there beside the credential;
     what was built keeps the address a declared resource input, because a
@@ -76,7 +76,19 @@
     machines is `NspawnRuntime`'s and reads them off the device rather than
     from a rendered list (the entry above). The vocabulary is "container
     service", recorded in the
-    `conventions` glossary (`src/kluster/conventions/__init__.py`).
+    `conventions` glossary (`src/kluster/conventions/__init__.py`). **The
+    node volume's mount, 2026-09-26:** §10.5 sketches `mount` as a field
+    each row stores, and counts a unique `mount` among the table's
+    invariants. What is built stores no path: Talos mounts a user volume
+    at `/var/mnt/<name>` and nowhere else, so the path is derived from
+    the row's name (`conventions.node_volume_mount`), and a path claimed
+    twice is a name written twice, which the table cannot hold. The name
+    is then the dataset's identity everywhere it appears — the OCI
+    volume's logical name, the partition label Talos writes, the mount
+    path and the node label — and a renamed row is a protected volume
+    deleted, which Pulumi refuses. The mechanism is
+    [cluster/storage.md](../cluster/storage.md) §6 and
+    [declarative/physical.md](../declarative/physical.md) §2.
 *   **Created:** 2026-08-28
 *   **Authority:** the style rules (`docs/style/`) are what this document
     obeys; where they are silent, a rule proposed here is marked **new rule**.

@@ -284,6 +284,7 @@ CENSUS_PARAMETERS = (
     (TalosCluster, 'control_plane_nodes'),
     (TalosCluster, 'worker_nodes'),
     (TalosCluster, 'bgp_peers'),
+    (TalosCluster, 'volumes'),
     # Handed down by the two artifact subclasses rather than by this program:
     # each states the schematic it is, and the base that renders it takes the
     # roll with no default to fall back on.
@@ -965,6 +966,36 @@ async def test_every_volume_is_attached_to_the_node_the_table_names(setup: Insta
 
     following = setup.inputs_of(f'{conventions.CLUSTER_NAME}-hath-cache-attachment')
     assert following['instanceId'] == INSTANCE_IDS[conventions.DEDICATED_VIP_NODE]
+
+
+@pytest.mark.asyncio
+async def test_every_volume_the_program_attaches_is_mounted_by_a_machine_configuration(setup: Installation) -> None:
+    """One table, two readers: the attachments above, and the configurations the nodes boot.
+
+    A volume attached and mounted nowhere leaves the workload that expects the
+    preserved dataset writing to the node's own disk instead, and nothing
+    fails at apply. Read off every configuration the run rendered, the second
+    rendering day 1 applies to the dedicated-VIP node included, and each one
+    mounts at most one volume and labels its node with that one.
+    """
+    async with declaring():
+        await physical.main()
+
+    assert conventions.NODE_VOLUMES
+    mounted: set[str] = set()
+    for configuration in setup.configurations:
+        documents = [json.loads(str(patch)) for patch in cast('list[Any]', configuration['configPatches'])]
+        names = [str(document['name']) for document in documents if document.get('kind') == 'UserVolumeConfig']
+        labels = [
+            label
+            for document in documents
+            if 'kind' not in document
+            for label in cast('dict[str, str]', document.get('machine', {}).get('nodeLabels', {})).items()
+        ]
+        assert len(names) <= 1, names
+        assert labels == [(conventions.NODE_VOLUME_LABEL, name) for name in names]
+        mounted |= set(names)
+    assert mounted == set(conventions.NODE_VOLUMES)
 
 
 @pytest.mark.asyncio

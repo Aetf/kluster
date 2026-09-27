@@ -11,7 +11,11 @@ and node replacement is already an explicit, reviewed procedure (physical.md
 
 A volume is not given a device path. OCI's consistent-device-path feature is
 gated on the image advertising support for it, which a Talos custom image does
-not; the disk is selected by its properties in machine configuration instead.
+not, and nothing else the attachment offers is documented to identify the
+disk inside the guest. The node's machine configuration finds it without one
+(`talos.node_volume_document`): the first time as the disk that is not the
+boot disk, and on every boot after that by the partition label Talos wrote to
+it, `u-` and the volume's name in `conventions.NODE_VOLUMES`.
 """
 
 from __future__ import annotations

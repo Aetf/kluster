@@ -92,13 +92,36 @@ class Shape:
         return PLATFORM_MODES[self.platform]
 
 
+def volume_on(*, dedicated_vip: bool) -> str:
+    """The name of a census volume on the dedicated-VIP node, or on some other node.
+
+    Read from `conventions.NODE_VOLUMES` so that the names validated are the
+    ones the fleet renders; a census with no such row fails here by name.
+    """
+    names = [
+        name
+        for name, entry in sorted(conventions.NODE_VOLUMES.items())
+        if (entry.attached_node == conventions.DEDICATED_VIP_NODE) == dedicated_vip
+    ]
+    assert names, f'no node volume is {"on" if dedicated_vip else "off"} the dedicated-VIP node'
+    return names[0]
+
+
 #: Every node shape the component renders, with the inputs the physical stack
-#: gives it. A plain control plane is every cloud node but one; the dedicated-VIP
-#: control plane carries the secondary private IP the cloud assigns in the VCN;
+#: gives it. A plain control plane is a cloud node with nothing of its own; a
+#: control plane can carry a node volume; the dedicated-VIP control plane
+#: carries the secondary private IP the cloud assigns in the VCN, and, in the
+#: day-1 rendering it is applied, the volume that follows the VIP as well;
 #: the homelab worker states its own address and takes BGP from its gateway.
 SHAPES: dict[str, Shape] = {
     'control-plane': Shape('controlplane', image.CLOUD_PLATFORM),
+    'control-plane-volume': Shape('controlplane', image.CLOUD_PLATFORM, {'volume': volume_on(dedicated_vip=False)}),
     'dedicated-vip': Shape('controlplane', image.CLOUD_PLATFORM, {'secondary_address': str(conventions.VCN_CIDR[42])}),
+    'dedicated-vip-volume': Shape(
+        'controlplane',
+        image.CLOUD_PLATFORM,
+        {'secondary_address': str(conventions.VCN_CIDR[42]), 'volume': volume_on(dedicated_vip=True)},
+    ),
     'homelab-worker': Shape(
         'worker',
         image.HOMELAB_PLATFORM,

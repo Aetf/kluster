@@ -23,6 +23,7 @@ import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, run_with
 
+from kluster import conventions
 from kluster.components.talos import TalosCluster, TalosDay1
 
 #: The balancer in front of the control planes, in the two spellings the two
@@ -101,6 +102,7 @@ def build_cluster(name: str = 'kluster', **kwargs: Any) -> TalosCluster:
     kwargs.setdefault('control_plane_nodes', ('cp1', 'cp2', 'cp3'))
     kwargs.setdefault('worker_nodes', ('homelab',))
     kwargs.setdefault('bgp_peers', {'homelab': '192.168.70.1/32'})
+    kwargs.setdefault('volumes', {})
     return TalosCluster(
         name,
         cluster_name='kluster',
@@ -433,3 +435,79 @@ async def test_a_stranger_cannot_be_named_by_either_component(fake: Talos) -> No
         build(secondary_addresses={'nowhere': SECONDARY})
     with pytest.raises(ValueError, match='endpoints name nodes that are not in the cluster'):
         build(endpoints={'nowhere': BALANCER})
+
+
+def volumes_in(patches: list[dict[str, Any]]) -> list[str]:
+    """The node volumes a node's patches mount, by name."""
+    return [patch['name'] for patch in patches if patch.get('kind') == 'UserVolumeConfig']
+
+
+def labels_in(patches: list[dict[str, Any]]) -> dict[str, str]:
+    """The node labels a node's patches set."""
+    return {
+        key: value
+        for patch in patches
+        if 'kind' not in patch
+        for key, value in cast('dict[str, str]', patch.get('machine', {}).get('nodeLabels', {})).items()
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_volume_is_booted_with_by_the_node_it_attaches_to_and_by_no_other(fake: Talos) -> None:
+    # Day 0: the census is known before any instance exists, while the
+    # attachment waits on the instance, so the disk arrives on a machine that
+    # already runs this configuration.
+    cluster = build_cluster(volumes={'data': conventions.NodeVolumeEntry(node='cp2', size_gb=1)})
+    patches = await patches_of(cluster, 'cp2')
+    assert volumes_in(patches) == ['data']
+    assert labels_in(patches) == {conventions.NODE_VOLUME_LABEL: 'data'}
+    for node in ('cp1', 'cp3', 'homelab'):
+        assert not volumes_in(await patches_of(cluster, node))
+        assert not labels_in(await patches_of(cluster, node))
+
+
+@pytest.mark.asyncio
+async def test_a_volume_that_follows_the_dedicated_vip_is_mounted_where_the_vip_is(fake: Talos) -> None:
+    # Grouped by the node the volume resolves to, not by what its row says:
+    # the row says "whichever node holds the VIP", and that is a node only
+    # once the sentinel is resolved.
+    following = conventions.NodeVolumeEntry(node=conventions.FOLLOWS_DEDICATED_VIP, size_gb=1)
+    cluster = build_cluster(volumes={'cache': following})
+    day1 = build(cluster=cluster)
+    assert volumes_in(await patches_of(cluster, conventions.DEDICATED_VIP_NODE)) == ['cache']
+    # And only there: a second node carrying the label would let a `local`
+    # PersistentVolume's pod schedule onto a node without the path.
+    for node in sorted(set(cluster.roles) - {conventions.DEDICATED_VIP_NODE}):
+        assert not volumes_in(await patches_of(cluster, node)), node
+        assert not labels_in(await patches_of(cluster, node)), node
+    # And the second rendering, which day 1 applies to that node with its
+    # extra address: applying it without the volume would unmount the disk.
+    assert volumes_in(await patches_of(day1, conventions.DEDICATED_VIP_NODE)) == ['cache']
+
+
+@pytest.mark.asyncio
+async def test_a_volume_on_a_node_outside_the_cluster_is_refused(fake: Talos) -> None:
+    with pytest.raises(ValueError, match=r'volumes attach to nodes that are not in the cluster.*stray'):
+        build_cluster(volumes={'stray': conventions.NodeVolumeEntry(node='nowhere', size_gb=1)})
+
+
+@pytest.mark.asyncio
+async def test_two_volumes_on_one_node_are_refused(fake: Talos) -> None:
+    # The disk selector finds the data disk as the one that is not the boot
+    # disk, which cannot tell two data disks apart.
+    with pytest.raises(ValueError, match=r'at most one volume.*cp2'):
+        build_cluster(
+            volumes={
+                'one': conventions.NodeVolumeEntry(node='cp2', size_gb=1),
+                'two': conventions.NodeVolumeEntry(node='cp2', size_gb=1),
+            }
+        )
+    # A following volume collides the same way, once it has resolved.
+    with pytest.raises(ValueError, match=rf'at most one volume.*{conventions.DEDICATED_VIP_NODE}'):
+        build_cluster(
+            'kluster-following',
+            volumes={
+                'one': conventions.NodeVolumeEntry(node=conventions.DEDICATED_VIP_NODE, size_gb=1),
+                'two': conventions.NodeVolumeEntry(node=conventions.FOLLOWS_DEDICATED_VIP, size_gb=1),
+            },
+        )

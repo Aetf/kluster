@@ -77,8 +77,9 @@ credential (`ci_zerotier_identity_physical`,
     public IP** assigned to it (architecture.md §3.2) — belongs to
     exactly one node, named by `conventions.DEDICATED_VIP_NODE`.
     **Block volumes** are a list any node may draw from:
-    `conventions.NODE_VOLUMES` gives each one a size, a mount path and
-    the node it attaches to, one volume per node so that the machine
+    `conventions.NODE_VOLUMES` gives each one a size and the node it
+    attaches to, and its name is its mount — the node mounts it at
+    `/var/mnt/<name>` (§2). One volume per node, so that the machine
     configuration's disk selection stays "the disk that is not the boot
     disk" and one node's loss takes one dataset rather than two. A
     volume whose workload must also hold the VIP says so in its own
@@ -161,7 +162,10 @@ machine_secrets
     the dedicated-VIP node's secondary private IP on its physical link;
     the **local-path backing mount** (`/var/mnt/storage`, storage.md
     §2 — the StorageClass's provisioner is k8s-base's, but the disk
-    path under it is machine config).
+    path under it is machine config); and on a node a block volume
+    attaches to (§1), the **node volume** and a **node label** naming
+    it (`conventions.NODE_VOLUME_LABEL`), in the configuration the node
+    boots with.
 -   **Document kinds.** A patch is either a strategic merge into the
     `v1alpha1` document or a configuration document of its own kind,
     which the provider appends beside it. Whatever the pinned Talos
@@ -180,7 +184,23 @@ machine_secrets
         a default route via the gateway, and no lease.
     -   `NetworkDefaultActionConfig` and `NetworkRuleConfig`, the
         ingress firewall above.
+    -   `UserVolumeConfig`, on each node a block volume attaches to,
+        named for the volume's row: a `partition` volume selecting the
+        disk that is not the boot disk (`!system_disk`), `maxSize: 100%`
+        with `grow` on, XFS stated, no encryption. Talos mounts it at
+        `/var/mnt/<name>` and finds it on every later boot by the
+        partition label `u-<name>` it wrote; what it will and will not
+        format, and the rule a PersistentVolume over it follows, are
+        storage.md §6. The volume is part of the configuration the node
+        boots with because the table is known at day 0, while the
+        attachment waits on the instance: the disk arrives on a node
+        that already runs the document. `TalosCluster` refuses a volume
+        on a node outside the cluster and two volumes on one node, since
+        the selector cannot tell two data disks apart.
 
+    The node label stays in `v1alpha1` as `machine.nodeLabels`, which
+    v1.13 does not deprecate; v1.14 moves it to a `KubeNodeConfig`
+    document v1.13 does not have, part of the same move below.
     The local-path mount stays in `v1alpha1` as
     `machine.kubelet.extraMounts`: v1.13 has no document to carry it.
     v1.14 deprecates it with no replacement — its `KubeletConfig`
@@ -423,6 +443,22 @@ A1 capacity at creation; Egress Gateway under the chosen routing mode +
 reserved-IP↔secondary-private-IP NAT; Cilium MTU over the KubeSpan
 underlay; talosctl reaching the homelab node via cloud endpoints (apid
 proxy); VFIO iGPU passthrough capability on a scratch VM.
+
+The node volumes (§1, §2) are first exercised at bring-up too, and the
+same gate confirms them:
+
+-   Talos provisions the disk when OCI attaches it to a node that is
+    already running, without a reboot.
+-   A user volume still waiting for its disk holds up neither the boot
+    nor the health gate.
+-   A sentinel file written to the empty volume survives a detach, a
+    re-attach and a reboot — the rebuild path, drilled while the volume
+    holds nothing.
+-   A pod writes through a `local` PersistentVolume at
+    `/var/mnt/<name>/<dir>`, despite the kubelet's read-only view of
+    `/var/mnt`.
+-   With the volume unmounted, that pod stays pending (storage.md §6).
+-   The node label appears on the Node object.
 
 One part of the NLB item is answered earlier, by the first
 `pulumi up` that creates the balancer's IPv6 backends: each names a

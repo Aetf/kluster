@@ -7,7 +7,7 @@ declaration, and goes green again the moment the copy is moved to match
 (style/testing.md).
 
 An **invariant** is a relation between the *entries* of a table -- a node that
-exists, a mount claimed once, an address inside the subnet it belongs to. A
+exists, a node holding one volume, an address inside the subnet it belongs to. A
 dataclass makes a pair that must agree impossible to write apart inside one
 row; across rows nothing can. They are checked here because the tables are
 static code: nothing can break one at runtime that this suite did not already
@@ -204,14 +204,36 @@ def test_every_service_names_a_build_the_registry_publishes() -> None:
 
 def test_every_volume_is_attached_to_a_node_the_fleet_declares() -> None:
     """A volume attached to a node that does not exist is an apply that half works."""
+    assert conventions.NODE_VOLUMES
     for name, volume in conventions.NODE_VOLUMES.items():
         assert volume.attached_node in conventions.CLOUD_NODES, name
 
 
-def test_no_two_volumes_claim_the_same_mount() -> None:
-    """Two volumes at one path is one dataset the node quietly hides."""
-    mounts = [volume.mount for volume in conventions.NODE_VOLUMES.values()]
-    assert sorted(mounts) == sorted(set(mounts))
+#: What a node volume's name has to be, because it is two things with rules of
+#: their own. Talos takes a user volume's name as letters, digits and hyphens,
+#: at most as long as a partition label (36) less the `u-` Talos puts before
+#: it; a Kubernetes label value, which the name is on the node carrying the
+#: volume, has to begin and end with a letter or a digit.
+VOLUME_NAME = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,32}[A-Za-z0-9])?')
+
+
+def test_every_volume_is_named_as_talos_and_a_node_label_accept() -> None:
+    """A name Talos refuses is a machine configuration the node rejects at boot."""
+    assert conventions.NODE_VOLUMES
+    for name in conventions.NODE_VOLUMES:
+        assert VOLUME_NAME.fullmatch(name), name
+
+
+def test_no_volume_is_mounted_over_the_local_path_root() -> None:
+    """Both sit under Talos' user-volume root, and a volume sharing the local-path directory's name would hide it."""
+    assert conventions.NODE_VOLUMES
+    for name in conventions.NODE_VOLUMES:
+        assert conventions.node_volume_mount(name) != conventions.LOCAL_PATH_ROOT, name
+
+
+def test_a_volume_is_mounted_under_its_own_name() -> None:
+    """The derivation, against a literal: the path is Talos' root joined with the name."""
+    assert conventions.node_volume_mount('example') == '/var/mnt/example'
 
 
 def test_no_node_carries_two_volumes() -> None:
@@ -223,6 +245,7 @@ def test_no_node_carries_two_volumes() -> None:
     a node another volume already holds is exactly the state the table can
     reach by an edit somewhere else — `DEDICATED_VIP_NODE`.
     """
+    assert conventions.NODE_VOLUMES
     nodes = [volume.attached_node for volume in conventions.NODE_VOLUMES.values()]
     assert sorted(nodes) == sorted(set(nodes))
 
@@ -245,7 +268,7 @@ def test_the_following_volume_is_wherever_the_dedicated_vip_is() -> None:
 
     assert hath.node is conventions.FOLLOWS_DEDICATED_VIP
     assert hath.attached_node == conventions.DEDICATED_VIP_NODE
-    assert conventions.NodeVolumeEntry(node='cp3', size_gb=1, mount='/var/mnt/elsewhere').attached_node == 'cp3'
+    assert conventions.NodeVolumeEntry(node='cp3', size_gb=1).attached_node == 'cp3'
 
 
 def test_the_block_quota_admits_the_largest_volume_and_a_restore_beside_it() -> None:

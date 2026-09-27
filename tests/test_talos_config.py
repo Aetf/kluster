@@ -18,6 +18,9 @@ SANS = ['203.0.113.10', 'api.example.test']
 SECRETBOX = 'c2VjcmV0Ym94LWtleS1tYXRlcmlhbC0zMi1ieXRlcw=='
 #: The gateway's LAN address, as the only party allowed to speak BGP.
 PEER = '192.0.2.1/32'
+#: A node volume's name. Not a census row: what is held here is how any name
+#: renders, and which rows exist is `conventions`' to say.
+VOLUME = 'example-data'
 
 
 def documents(**kwargs: Any) -> list[dict[str, Any]]:
@@ -63,11 +66,12 @@ def uplink(**kwargs: Any) -> dict[str, Any]:
 
 
 #: The node shapes the component renders: a plain control plane, the control
-#: plane holding the dedicated VIP, and the homelab worker with its own
-#: address and its BGP peer.
+#: plane holding the dedicated VIP, a control plane carrying a node volume, and
+#: the homelab worker with its own address and its BGP peer.
 SHAPES: dict[str, dict[str, Any]] = {
     'control-plane': {},
     'dedicated-vip': {'secondary_address': '10.20.0.42'},
+    'node-volume': {'volume': VOLUME},
     'homelab-worker': {
         'role': 'worker',
         'static_address': talos.STATIC_ADDRESSES[conventions.HOMELAB_NODE],
@@ -81,8 +85,9 @@ SHAPES: dict[str, dict[str, Any]] = {
 #: for the multi-document network configuration, so the section itself is
 #: refused as well as the two fields named. A pin that moves to a later
 #: minor adds what that release deprecates here. v1.14 deprecates much of
-#: `machine` and `cluster`, `machine.kubelet` as a whole among it, and
-#: `extraMounts` with no replacement, so that move is a design decision
+#: `machine` and `cluster`, `machine.kubelet` as a whole among it,
+#: `machine.nodeLabels` for a `KubeNodeConfig` document v1.13 does not have,
+#: and `extraMounts` with no replacement, so that move is a design decision
 #: (Aetf/kluster-ops#463) rather than a rename.
 DEPRECATED = [
     ('machine', 'network'),
@@ -293,3 +298,46 @@ def test_the_homelab_worker_takes_bgp_from_the_gateway_alone() -> None:
 
 def test_nobody_else_speaks_bgp() -> None:
     assert not bgp_rules()
+
+
+def test_a_node_volume_is_one_partition_filling_the_disk_that_is_not_the_boot_disk() -> None:
+    (volume,) = of_kind('UserVolumeConfig', volume=VOLUME)
+    # Named for the volume: Talos mounts it at `/var/mnt/<name>` and finds it
+    # again on every boot by the partition label `u-<name>` it wrote.
+    assert volume['name'] == VOLUME
+    # A partition, stated: a `disk` volume is located by its selector with
+    # `system_disk` unbound, so it could never find the disk by exclusion.
+    assert volume['volumeType'] == 'partition'
+    # The one disk that is not the boot disk, which is one disk because a node
+    # carries at most one volume.
+    assert volume['provisioning']['diskSelector'] == {'match': '!system_disk'}
+    # The whole of it, and the whole of it again after a resize.
+    assert volume['provisioning']['maxSize'] == '100%'
+    assert volume['provisioning']['grow'] is True
+    # Stated, because a volume found carrying another filesystem is refused
+    # rather than mounted: a default that moved would strand every volume.
+    assert volume['filesystem'] == {'type': 'xfs'}
+    # No encryption, and no mount options beyond Talos' own: every key source
+    # binds the dataset to a machine a rebuild replaces or to the instance's
+    # own metadata (storage.md §6).
+    assert set(volume) == {'apiVersion', 'kind', 'name', 'volumeType', 'provisioning', 'filesystem'}
+
+
+def test_a_node_volume_labels_its_node() -> None:
+    # What a `local` PersistentVolume's node affinity selects on, so that no
+    # workload names the node itself (rfc-002 §10.5).
+    assert merged('machine', volume=VOLUME)['nodeLabels'] == {conventions.NODE_VOLUME_LABEL: VOLUME}
+
+
+@pytest.mark.parametrize('shape', [shape for shape, arguments in SHAPES.items() if 'volume' not in arguments])
+def test_a_node_without_a_volume_mounts_nothing_and_carries_no_label(shape: str) -> None:
+    assert not of_kind('UserVolumeConfig', **SHAPES[shape])
+    assert 'nodeLabels' not in merged('machine', **SHAPES[shape])
+
+
+def test_a_node_volume_is_mounted_where_conventions_says_it_is() -> None:
+    # The seam between Talos and the path every consumer is written against.
+    # Talos mounts a user volume at `constants.UserVolumeMountPoint` joined
+    # with its name, and nothing in the document can move it; the suite cannot
+    # import Talos' constant, so this literal is it.
+    assert conventions.node_volume_mount(VOLUME) == '/var/mnt/' + VOLUME
