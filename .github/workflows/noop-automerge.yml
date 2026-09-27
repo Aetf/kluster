@@ -340,8 +340,8 @@ jobs:
       group: ${{ matrix.stack == 'dns' && 'zt-dns' || format('noop-{0}-{1}', github.ref, matrix.stack) }}
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v5
-      - uses: jdx/mise-action@v3
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         with:
           # Pinned like every tool `mise.toml` manages, and for the same
           # reason (framework/ci.md §3). This is the action's own input, and

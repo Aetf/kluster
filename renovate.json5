@@ -3,6 +3,13 @@
   extends: [
     'config:recommended',
     'group:pulumi',
+    // Every action from outside this repository is referenced by commit, with
+    // the release the commit resolves to beside it (framework/ci.md §3). The
+    // preset pins a reference written by tag and moves the commit and the
+    // comment together on a bump. It reads only a full `vX.Y.Z` tag as a
+    // release, so the comment it writes names one release, never a major tag
+    // such as `v5` that its publisher moves along the line.
+    'helpers:pinGitHubActionDigestsToSemver',
   ],
   major: {
     // Major bumps are decisions, not chores.
@@ -97,6 +104,27 @@
       ],
       groupName: 'github actions',
       groupSlug: 'actions',
+    },
+    {
+      // A new action release waits a week before renovate proposes it: a
+      // poisoned release -- a publisher's account or pipeline taken over -- is
+      // usually found and yanked within days, and one yanked inside the week
+      // never reaches a pull request here. The age renovate reads is the
+      // tag's date, the tagger's or the tagged commit's, which whoever pushes
+      // the tag writes, so a release made to look old is not held back; the
+      // pull request that does open still waits for a person, since a
+      // workflow file is off noop-automerge's allow-list (framework/ci.md §3).
+      //
+      // Matched by dependency type rather than by manager: these are the
+      // types the github-actions manager gives a `uses:` reference, and the
+      // runner labels and the `version:` inputs it also reads are not
+      // actions. The mise program the `version:` input names moves in step
+      // with the cloud session's pin, which no age holds back.
+      matchDepTypes: [
+        'action',
+        'workflow',
+      ],
+      minimumReleaseAge: '7 days',
     },
     {
       // The runner images the workflows name (framework/ci.md §3), out of the
@@ -371,6 +399,25 @@
     },
   ],
   customManagers: [
+    {
+      // The ZeroTier release the CI member installs from ZeroTier's own apt
+      // repository (`.github/actions/zerotier/action.yml`), read off that
+      // repository's package index for the suite the action names; a test
+      // holds the two suites equal. A bump is a pull request a person merges:
+      // the composite actions are off noop-automerge's allow-list. The global
+      // `patch: enabled: false` holds here too, so a patch release arrives
+      // with the next minor one.
+      customType: 'regex',
+      managerFilePatterns: [
+        '/^\\.github/actions/zerotier/action\\.yml$/',
+      ],
+      matchStrings: [
+        "ZEROTIER_VERSION: '(?<currentValue>[^']+)'",
+      ],
+      depNameTemplate: 'zerotier-one',
+      datasourceTemplate: 'deb',
+      registryUrlTemplate: 'https://download.zerotier.com/debian/noble?suite=noble&components=main&binaryArch=amd64',
+    },
     {
       // A runner label a matrix feeds to `runs-on:` -- the `runner:` key of
       // `images.yml`'s platforms. The github-actions manager reads only a
