@@ -441,8 +441,9 @@ by hand. It occupies two roots:
     directory in numeric order.
 -   **`/data/custom`**, which is this program's: `bin/` for
     executables, `units/` for unit-file sources, `dpkg/` for the
-    offline package cache, plus whatever directory a layer of the
-    gateway asks for.
+    offline package cache and `dpkg.base/` for the firmware base it is
+    resolved against, plus whatever directory a layer of the gateway
+    asks for.
 
 **Only `/data` is promised across a firmware update.** An update
 wipes `/usr` and `/var` — every apt-installed package and the dpkg
@@ -478,26 +479,85 @@ transaction, because packages version-locked to one another cannot be
 resolved a package at a time. *Which* packages is data — the union of
 what the layers above require, rendered into the script — and
 everything else about it is mechanism. When apt succeeds, the script
-downloads the whole set again, and only when that download succeeds do
-the debs become the offline cache in `dpkg/`, which is the fallback for
-the post-update boot where apt is unreachable; a refresh whose download
-fails says so and keeps the old cache whole. **apt downloads into a
+refreshes the offline cache in `dpkg/`, the fallback for the
+post-update boot where apt is unreachable. **The cache is what the
+firmware base lacks for the set**: the set's closure as apt resolves it,
+alternatives chosen as apt chooses them, against the dpkg database the
+running firmware shipped. That database is saved as `dpkg.base/status`,
+beside the firmware's release (`/usr/lib/version`) as `dpkg.base/release`,
+on the boot that finds none of the set installed on a release the saved
+base is not from, and before anything is installed: on the boot after a
+firmware update, the live database is the firmware's own. Both halves of
+that condition are needed. A boot cut short while dpkg unpacks the
+install leaves the set's dependencies unpacked and none of the set
+installed, and the boot after it, on the same release, must not take
+that database for the firmware's; the release is written after the
+database, so a boot cut short while recording records again. The base is
+a directory rather than a file because apt takes its locks beside the
+status file it is given. Every
+refresh has apt download the set against that base
+(`Dir::State::status`), so what survived on the live system changes
+nothing about what is cached — and a push that grows the set is exactly
+a boot on which the rest of the set survived. **apt downloads into a
 directory of the script's own** — `dpkg.download` beside the cache,
-emptied before the install and removed when the script exits — and never
+emptied before each use and removed when the script exits — and never
 into its shared `/var/cache/apt/archives`, where any other apt run on the
-device leaves its debs. So the cache holds what apt fetched for the set
-and nothing else, and a deb a vendor's tooling or a hand-run apt left
-behind is neither cached nor installed from the cache. On a post-update
-boot every package of the set is missing, and what apt fetches is the
-set's whole closure missing from the firmware base. On a boot where part
-of the set survived, it is the whole set but only the dependencies
-fetched by that boot's install, because a reinstall fetches the packages
-it names and not what they depend on; an offline boot from such a cache
-fails at `dpkg` for want of the rest, and the script reports it. The
-cache is refreshed by moving the old directory aside and the new one
-into place, so **`dpkg/` is that script's alone**: a file this program
-wrote there would be deleted by the next refresh and reported as drift
-forever after.
+device leaves its debs. So a deb a vendor's tooling or a hand-run apt
+left behind is neither cached nor installed from the cache. The download
+replaces the cache whole, and only when apt fetched everything it
+planned and the download holds a deb of every package of the set: a
+failed download, or a base that lists part of the set as installed,
+keeps the old cache and says so. The cache therefore holds what the
+latest resolution named and never accumulates.
+
+**Until a firmware update's boot records a base, the cache is a
+superset.** A device that has held the set since its last update has had
+no such boot, and without a base what the firmware lacks is not known.
+The refresh then downloads the set by name (`--reinstall`), keeps what
+the install fetched, and carries over every package of the old cache the
+download did not carry, so it never shrinks: a push that grows the set
+keeps the dependencies of the packages that survived. A package is
+carried at the version installed on the live system: an old deb of
+another version — a package some apt run upgraded since it was cached —
+is replaced by the installed version, downloaded with `apt-get download`,
+because the set's debs arrive at the new version and would not configure
+beside a dependency at the old one. A package the live system does not
+run is carried as it is. A download that fails keeps the old cache, the
+same rule as the refresh's, and fails the same way on every refresh
+after it — typically because the archive no longer serves the installed
+version — until the live package moves to a version the archive serves
+or the next firmware update's online boot records the base. Until then
+the cache stays as it was and does not follow a set that grows. The superset also keeps whatever else the
+old cache held, which is what repairing it by hand once is for
+([gateway-cutover.md](gateway-cutover.md) §5). The next firmware
+update's boot records the base, and from then on the cache is exact.
+
+The offline boot installs the whole cache in one `dpkg -i` and succeeds
+only when that succeeds and the set is installed afterward: a cache from
+before the set last grew installs cleanly and still lacks a package of
+it.
+
+**The base is the firmware that ran the last refresh**, and that is
+what the closure means once an update changes the firmware. A
+networkless boot after an update installs a cache resolved against the
+previous firmware. Where the new firmware ships a package of that cache
+at a newer version — `systemd`, whenever installing the set upgraded it,
+since `systemd-container` pins it exactly — `dpkg -i` downgrades it and
+the boot succeeds; where the new firmware no longer ships something the
+cache relied on, the boot fails and says so. The first online boot after
+the update saves the new
+firmware's database and resolves the cache against it. A firmware that
+shipped a package of the set itself would give no boot that finds none
+of the set installed, and the base would stay the older firmware's
+until one did.
+
+The cache is refreshed by moving the old directory aside and the new
+one into place — two renames, and a run stopped between them leaves the
+new cache beside a missing one, which the next run puts in place before
+reading the cache — so **`dpkg/` is that script's alone**: a file this
+program wrote there would be deleted by the next refresh and reported as
+drift forever after. The program declares nothing about `dpkg.base/`
+either, which the script rewrites on every post-update boot.
 
 **Nothing orders this script against `frr-config.service`** (§1.3).
 Where a firmware update carried `/etc` across, that unit starts at boot

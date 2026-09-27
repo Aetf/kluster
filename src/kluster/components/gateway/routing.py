@@ -59,6 +59,7 @@ import pulumi
 
 from kluster import conventions
 from kluster.components.gateway.persistence import (
+    FIRMWARE_RELEASE,
     TEMPLATE_PACKAGE,
     DevicePersistence,
     executable_hook,
@@ -73,7 +74,6 @@ __all__ = (
     'BGP_DAEMON',
     'CONVERGER',
     'CONVERGER_UNIT',
-    'FIRMWARE_RELEASE',
     'FRR_APPLIED',
     'FRR_CONFIG',
     'FRR_DAEMON_LIST',
@@ -121,20 +121,20 @@ FRR_LIVE_CONFIG = '/etc/frr/frr.conf'
 #: neither — is stale.
 FRR_APPLIED = f'{FRR_LIVE_CONFIG}.{conventions.CLUSTER_NAME}-applied'
 
-#: The firmware's release string, one line in the read-only image, of the form
-#: `UDMPROSE.al324.v5.1.33.44ce47b.260909.0025`. The daemon suite is a package
-#: of the image rather than one this program installs, so a new release is how
-#: a new parser ordinarily arrives — the command matcher in the suite's shared
-#: library as well as the command definitions in `FRR_PARSER`. The suite's own
-#: version is narrower and not enough. This firmware's `vtysh` takes no
-#: `--version`, and its `--help` reports the upstream release, which a vendor
-#: rebuild carrying patches leaves unchanged. The package version that would
-#: name the rebuild is read from the package database, which moves into the
-#: writable layer the first time a package is installed; what an update does to
-#: that layer is observed rather than promised, and a copy carried across would
-#: name the previous firmware's build. A release that changed nothing of the
-#: parser costs one restart, at the boot that already started the daemon.
-FIRMWARE_RELEASE = '/usr/lib/version'
+# The stamp names the firmware release (`FIRMWARE_RELEASE`, stated with the
+# persistence layer, which keys its own record to it too) because the daemon
+# suite is a package of the image rather than one this program installs, so a
+# new release is how a new parser ordinarily arrives — the command matcher in
+# the suite's shared library as well as the command definitions in
+# `FRR_PARSER`. The suite's own version is narrower and not enough. This
+# firmware's `vtysh` takes no `--version`, and its `--help` reports the
+# upstream release, which a vendor rebuild carrying patches leaves unchanged.
+# The package version that would name the rebuild is read from the package
+# database, which moves into the writable layer the first time a package is
+# installed; what an update does to that layer is observed rather than
+# promised, and a copy carried across would name the previous firmware's build.
+# A release that changed nothing of the parser costs one restart, at the boot
+# that already started the daemon.
 
 #: The session password is in it, so it is not world-readable.
 FRR_MODE = '0640'

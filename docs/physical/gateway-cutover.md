@@ -698,6 +698,96 @@ root whose machine has no settings file behind it. The failed unit is a runtime
 object with no file behind it and goes at the next boot, or to
 `systemctl reset-failed`.
 
+-   **The offline package cache takes in §3's install of the four
+    packages and gives up every deb no part of the set reaches.** The
+    cache the old script left in `/data/custom/dpkg` was copied from apt's
+    shared archives on some earlier boot. So it can hold debs that belong
+    to no part of the set — an `frr` deb above all, which an offline
+    post-update boot would install — and it lacks what §3's install
+    fetched, which is still in the shared archives. It can also hold a
+    package of that install at the version from before it upgraded it.
+    Until a firmware update's boot records the firmware base, the new
+    `10-packages.sh` keeps every package of the old cache its own download
+    does not carry and never reads the shared archives (gateway.md §1.2),
+    so none of that is repaired by anything else. Repair it by hand, once,
+    now:
+
+        set='systemd-container libnss-mymachines skopeo umoci'
+        took=$(awk -v RS= -v set="$set" '
+            { n = split($0, l, "\n"); c = ""
+              for (i = 1; i <= n; i++)
+                  if (l[i] ~ /^Commandline: apt(-get)? / && (l[i] " ") ~ / install /) c = l[i] " "
+              m = split(set, w, " ")
+              for (i = 1; i <= m; i++) if (c != "" && index(c, " " w[i] " ")) { print; print ""; next } }
+            ' /var/log/apt/history.log 2>/dev/null |
+            awk '/^(Install|Upgrade): / {
+                sub(/^[A-Za-z]+: /, ""); n = split($0, e, /\), /)
+                for (i = 1; i <= n; i++) {
+                    sub(/\)$/, "", e[i]); sub(/, automatic$/, "", e[i]); split(e[i], f, / \(/)
+                    sub(/:.*/, "", f[1]); sub(/.*, /, "", f[2]); print f[1], f[2]
+                } }')
+        [ -n "$took" ] || echo "history.log holds no apt install of any of $set: nothing copied in"
+        printf '%s\n' "$took" | while read -r pkg version; do
+            [ -n "$pkg" ] || continue
+            [ "$(dpkg-query -W -f '${Version}' "$pkg" 2>/dev/null)" = "$version" ] || continue
+            for deb in /var/cache/apt/archives/"$pkg"_*.deb; do
+                [ -f "$deb" ] && [ "$(dpkg-deb -f "$deb" Version)" = "$version" ] || continue
+                for old in /data/custom/dpkg/"$pkg"_*.deb; do
+                    [ -f "$old" ] && [ "${old##*/}" != "${deb##*/}" ] && rm -v "$old"
+                done
+                [ -f /data/custom/dpkg/"${deb##*/}" ] || cp -v "$deb" /data/custom/dpkg/
+            done
+        done
+        closure=$(apt-cache depends --recurse --no-suggests --no-conflicts \
+            --no-breaks --no-replaces --no-enhances $set | grep -v '^ ')
+        for deb in /data/custom/dpkg/*.deb; do
+            name=${deb##*/}
+            printf '%s\n' "$closure" | grep -qxF "${name%%_*}" || rm -v "$deb"
+        done
+
+    **What is copied in is what the installs of the set installed**, as
+    apt recorded them in `/var/log/apt/history.log`: the `Install:` and
+    `Upgrade:` lines of every entry whose `Commandline:` runs `apt` or
+    `apt-get` with the word `install` anywhere on it and names at least one
+    of the four packages. §3's install matches whatever its options and
+    their place (`apt-get -y install …`), and so does the set installed a
+    few packages at a time. Each package is copied in at the version its
+    entry installed, and only while that is still the version installed, so
+    a version a later entry superseded is skipped. Any other version of
+    that package in the cache is removed, so the cache does not keep an old
+    deb of the set beside dependencies at the new version. A firmware
+    package that some other apt run upgraded is not in those entries, so it
+    is not copied in; one an install of the set upgraded on the way is, and
+    so is anything else a command that named the set installed, which the
+    removal below drops unless the set reaches it. **The removal** takes every deb whose package
+    `apt-cache depends --recurse` does not reach from the set through what
+    apt installs by default, recommendations included. That reaches far
+    into the firmware, so it removes only what no part of the set needs,
+    FRR's debs among them. It reads apt's lists, which §3's install
+    fetched; after a firmware update since then, run `apt-get update`
+    first.
+
+    The copy-in needs the log entries and the debs. apt writes an entry
+    only for a run that changed something, so re-running §3's install once
+    the set is in place adds none, and the entries that count are those of
+    the runs that installed it. When the log no longer holds any of them (it
+    was rotated), the step says so and only removes.
+    When the debs are gone from the shared archives (an `apt-get clean`
+    or a firmware update since §3), nothing is copied. Either way the cache
+    lacks what §3's install fetched until the next online post-update
+    boot, and an offline post-update boot before then fails and says so.
+
+    Until the next firmware update's boot, the cache is a superset: it
+    never shrinks, and it holds whatever of the set's closure this step
+    left in it. **What confirms the new mechanism is the script's own
+    line** on the first boot that installs anything. On a boot that finds
+    part of the set, such as a push that grows it, the line is
+    `packages: no firmware base in /data/custom/dpkg.base/status yet:
+    downloading …`. On the first boot after a firmware update, it is
+    `packages: none of … is installed on a firmware release the saved base
+    is not from … recording it as the base`, then `packages: downloading
+    what the firmware base … lacks`. From that update on, the cache is
+    exactly what the firmware lacks for the set.
 -   **The resolvers kept their configuration**: each interface shows the
     filters, clients and rewrites it had before the window. A resolver
     that came up on factory settings means its state did not move.
