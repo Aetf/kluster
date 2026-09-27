@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from renovate_text import group, listed, package_rule
 
 from kluster.scripts.credentials import age
 
@@ -322,28 +323,6 @@ def test_local_age_matches_the_appliance_pin() -> None:
 
     tools = tomllib.loads((Path(__file__).parent.parent / 'mise.toml').read_text())['tools']
     assert f'v{tools["age"]}' == settings.AGE_VERSION
-
-
-def package_rule(config: str, at: int) -> tuple[int, str]:
-    """The `packageRules` entry around offset `at`: where it starts, and its lines bar comments.
-
-    An entry is the braces around the offset, which holds because no entry
-    nests an object and no comment inside one carries a brace.
-    """
-    start = config.rindex('{', 0, at)
-    lines = config[start : config.index('}', at)].splitlines()
-    return start, '\n'.join(line for line in lines if not line.lstrip().startswith('//'))
-
-
-def listed(rule: str, key: str) -> list[str]:
-    """The strings a rule lists under `key`, or none when it has no such key."""
-    found = re.search(rf'^\s*{key}: \[([^\]]*)\],$', rule, re.MULTILINE)
-    return re.findall(r"'([^']*)'", found[1]) if found else []
-
-
-def group(rule: str) -> list[str]:
-    """The group name and slug a rule sets, in the order it writes them."""
-    return re.findall(r"^\s*group(?:Name|Slug): '([^']*)',$", rule, re.MULTILINE)
 
 
 def test_renovate_bumps_both_pins_in_one_pull_request() -> None:

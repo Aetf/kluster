@@ -10,19 +10,24 @@ worker's half is `test_homelab.py`'s, on its domain's interfaces.
 
 from __future__ import annotations
 
-import pytest
-from mock_monitor import declaring
+from pathlib import Path
 
-# The physical program's installation stand-in and the fixture that runs it;
-# importing the fixture is what makes it this module's too.
-from test_physical_stack import Installation, setup  # noqa: F401  # pyright: ignore[reportUnusedImport]
+import pytest
+import pytest_asyncio
+from mock_monitor import declaring
+from physical_installation import Installation, install
 
 from kluster import conventions
 from kluster.stacks import physical
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def setup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Installation:
+    return await install(monkeypatch, tmp_path)
+
+
 @pytest.mark.asyncio
-async def test_every_cloud_node_has_exactly_one_vnic(setup: Installation) -> None:  # noqa: F811
+async def test_every_cloud_node_has_exactly_one_vnic(setup: Installation) -> None:
     async with declaring():
         await physical.main()
 
