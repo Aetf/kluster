@@ -188,6 +188,11 @@ async def main() -> None:
         # (`conventions`), and a second place to state it is a second place
         # for it to be wrong.
         bgp_peers={conventions.HOMELAB_NODE: f'{conventions.CLUSTER_VLAN.require_gateway()}/32'},
+        # The same table the attachments below are declared from: the machine
+        # mounts each volume its node will be handed, and is labelled with it.
+        # It is the table rather than the attachments because those need the
+        # instances, and the instances boot this configuration.
+        volumes=conventions.NODE_VOLUMES,
     )
 
     nodes = CloudNodes(
@@ -246,6 +251,7 @@ async def main() -> None:
 
     # §1: one volume per entry of the census, attached to the node that entry
     # names — for the following volume, whichever node holds the dedicated VIP.
+    # The census's other reader is the cluster above, which mounts each one.
     # Both facts about placement are read off the instance rather than
     # restated: a volume attaches only within its own availability domain, and
     # the node's domain is itself a regional fact chosen at apply time

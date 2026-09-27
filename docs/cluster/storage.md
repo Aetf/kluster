@@ -57,7 +57,7 @@ resort, object storage used directly where an app supports it.
 | `local-path` + VolSync | same local-path, plus a per-PVC restic schedule to the backup bucket | RWO, node-pinned; **movable via restore** | stateful apps without built-in replication; any volume that plausibly moves | bulk media (NAS's job) |
 | ~~`longhorn`~~ (deferred, §3.2) | Longhorn v1 engine | RWO | — not in the initial build — | — |
 | NAS (NFS PV / NodePV) | Existing NAS exports | RWO/RWX, homelab pool only | bulk media, large read-mostly sets | cloud-pool workloads; databases |
-| Cloud block volume | OCI block volume on a cloud node, one per node (`conventions.NODE_VOLUMES`) | RWO, node-pinned | preserved cloud-pool datasets: the hath cache, the syncthing replica | homelab-pool workloads; anything a node may have to lose |
+| Cloud block volume | OCI block volume on a cloud node, one per node (`conventions.NODE_VOLUMES`), mounted at `/var/mnt/<name>` | RWO, node-pinned | preserved cloud-pool datasets: the hath cache, the syncthing replica | homelab-pool workloads; anything a node may have to lose |
 | Object storage (direct) | S3-compatible bucket (§4) | app-native | apps with first-class S3 support; all backups | POSIX pretenders |
 | JuiceFS (quarantined, no CSI — §6) | object storage + per-app metadata, mounted in-pod | RWX | last resort only, one app at a time | everything else; it is not selectable by `storageClassName` |
 
@@ -318,10 +318,62 @@ is its backing store, because ~110 GB does not fit a boot disk:
     subset and the homelab `syncthing-nas` instance holds the full set,
     so recovery is a reseed over the syncthing protocol.
 -   **The volume reaches the cluster without a vendor component in it.**
-    The `physical` stack attaches it (`conventions.NODE_VOLUMES`), the
-    machine configuration mounts it, and the cluster sees a `local`
-    PersistentVolume with node affinity — the same path the hath cache
-    takes. No OCI CSI driver, no cloud controller.
+    The `physical` stack attaches it (`conventions.NODE_VOLUMES`), and
+    the machine configuration of the node it attaches to mounts it: a
+    Talos `UserVolumeConfig` named for the row, one XFS partition
+    filling the disk that is not the boot disk, mounted at
+    `/var/mnt/<name>` and found again on every boot by the partition
+    label `u-<name>` that Talos wrote to it
+    ([declarative/physical.md](../declarative/physical.md) §2). The same
+    configuration labels the node with the volume's name, and the
+    cluster sees a `local` PersistentVolume with node affinity on that
+    label — the same path the hath cache takes. No OCI CSI driver, no
+    cloud controller.
+-   **The row's name is the dataset's identity**, in every place it
+    appears: the OCI volume's logical name, the partition label, the
+    mount path and the node label. A renamed row is therefore a
+    protected volume deleted, which Pulumi refuses; moving a dataset to
+    a new name is a migration, never an edit.
+-   **Talos formats a volume only where its disk probe finds nothing.**
+    Provisioning happens only while no partition labelled `u-<name>` is
+    found. It takes the disk the selector matches when Talos' disk probe
+    recognizes nothing on it, or free GPT space of 100 mebibytes or
+    more. The probe knows GPT and a fixed set of filesystems, and no other
+    partition table. So a disk holding one of those filesystems on the
+    bare device is refused, while an MBR-partitioned disk, or one
+    holding any other filesystem, reads as empty: Talos writes a GPT
+    over it and formats it. **New rule:** a dataset is seeded only
+    through its volume's mount on the node, never on a disk prepared
+    elsewhere, and no disk holding other data is attached to a node
+    that a volume row names. Once located, a partition carrying XFS is
+    mounted as it is, and one carrying another filesystem is refused
+    rather than mounted. A located partition on which the probe finds
+    no filesystem at all is formatted. For the fleet's datasets both
+    formatting paths cost a reseed, which is accepted because each is
+    preserved rather than backed up and is recovered by reseeding
+    (§3.3); the rule above is what keeps any other data off those
+    paths. The dataset's own disk has free space only between an OCI
+    resize and the node's next boot, when `grow` extends the partition
+    into it. A disk re-attached in that window can gain a second, empty
+    `u-<name>` partition, if Talos looks for the volume before the
+    existing partition has been discovered, and every boot after that
+    mounts whichever of the two it locates first. That sequence is read
+    from Talos' source and has not been observed. **New rule:** a
+    resized volume's node is rebooted before any detach of the volume
+    and before any rebuild of the node. Nothing is encrypted: every key source Talos offers either
+    binds the dataset to a machine that a rebuild replaces or puts the
+    key in the instance's own metadata.
+-   **A `local` PersistentVolume over a node volume names a directory
+    inside the volume, never its mount point.** The path is
+    `/var/mnt/<name>/<dir>`, and `<dir>` is created by the seeding step,
+    which works at the volume's root on the node rather than through the
+    PersistentVolume, whose path has to exist already. Talos leaves the mount point behind on the node's own disk
+    once it has mounted a volume there, so on a boot where the volume
+    fails to mount, a PersistentVolume at `/var/mnt/<name>` hands the
+    workload an empty directory on the node's disk and the workload
+    writes its dataset there. A path inside the volume is a missing path
+    instead, the kubelet refuses a `local` volume whose path does not
+    exist, and the pod stays pending until the volume is back.
 -   **If it ever outgrows one volume**, JuiceFS reopens as a question,
     and on B2 rather than OCI: B2 is ~3.7× cheaper per GB stored and
     free on every API class, which is the dimension chunk traffic

@@ -122,7 +122,8 @@ per-app number:
 
 -   **Dedicated-VIP workload (hath)**: LB Service requesting the
     dedicated VIP + a `CiliumEgressGatewayPolicy` with `egressIP` = the
-    secondary private IP + a claim on its cache volume + strict CPU
+    secondary private IP + a claim on its cache volume (a `local`
+    PersistentVolume inside the node volume, storage.md §6) + strict CPU
     limits. All four pieces in the one component (architecture.md
     §3.2), and none of them names a node: the volume's entry declares
     that it follows the dedicated VIP, so the volume's node label and
@@ -150,7 +151,11 @@ per-app number:
 -   **Block-volume app (cloud-side syncthing + dav)**: a `local`
     PersistentVolume over the node volume the `physical` stack attached
     (`conventions.NODE_VOLUMES`), with node affinity on that volume's
-    node label, claimed by an ordinary PVC. `backup=None` on record —
+    node label, claimed by an ordinary PVC. The PersistentVolume's path
+    is a directory inside the volume, `/var/mnt/<name>/<dir>`, created
+    by the seeding step at the volume's root — never the mount point, so a volume that
+    failed to mount is a missing path and the pod stays pending
+    (storage.md §6). `backup=None` on record —
     every client holds a subset and `syncthing-nas` holds the full set,
     so a reseed over the syncthing protocol is the recovery
     (storage.md §6). No sidecar, no privileged namespace, and no

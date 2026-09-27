@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from ipaddress import IPv4Network
 
 from kluster.conventions.homelab import HOMELAB_NODE
+from kluster.conventions.identity import LABEL_DOMAIN
 
 #: Three combined control-plane/ingress nodes (architecture.md §1.1).
 CLOUD_NODES = ('cp1', 'cp2', 'cp3')
@@ -43,7 +44,7 @@ FOLLOWS_DEDICATED_VIP = FollowsDedicatedVip()
 
 @dataclass(frozen=True)
 class NodeVolumeEntry:
-    """A block volume attached to one node, and where that node mounts it.
+    """A block volume attached to one node, keyed in `NODE_VOLUMES` by its name.
 
     `node` names a node of the fleet, or `FOLLOWS_DEDICATED_VIP` where the
     dataset belongs on whichever node carries the VIP — a workload whose
@@ -53,20 +54,17 @@ class NodeVolumeEntry:
     attachment, and the attachment is protected, so the volume migration that
     implies surfaces as a refusal rather than as a silent break at cutover.
 
-    `mount` is the path the dataset lives at on the node, and the machine
-    configuration that is to mount these volumes (storage.md §6) takes its
-    mount point from this field; nothing in the tree reads it yet. Once it
-    does, a changed value does not carry the dataset along: the volume mounts
-    empty at the new path and the preserved dataset stays at the old one.
-    Changing it is therefore a migration — move the data, then the row — and
-    not an edit. No test holds the value: the party that could contradict it
-    is the node's disk, which the suite cannot reach (docs/style/testing.md),
-    so this sentence is the guard.
+    The entry carries no path, because the name is the dataset's identity in
+    every layer it passes through: the OCI volume's logical name, the Talos
+    user volume and the partition label Talos writes for it (`u-<name>`),
+    the path Talos mounts it at (`node_volume_mount`), and the value of the
+    node's `NODE_VOLUME_LABEL`. Renaming a row therefore renames the OCI
+    volume, which is a delete of a protected resource that Pulumi refuses; a
+    rename is a migration — move the data, then the row — and never an edit.
     """
 
     node: str | FollowsDedicatedVip
     size_gb: int
-    mount: str
 
     @property
     def attached_node(self) -> str:
@@ -74,23 +72,45 @@ class NodeVolumeEntry:
         return DEDICATED_VIP_NODE if isinstance(self.node, FollowsDedicatedVip) else self.node
 
 
-#: Every block volume on the fleet, by the name its mount and its node label
-#: carry. Volumes are spread one per node: the disk selection in machine
-#: configuration stays "the disk that is not the boot disk" rather than a
-#: discrimination by size or serial, and losing one node stops taking two
-#: preserved datasets with it.
+#: Every block volume on the fleet, by the name that identifies its dataset
+#: (`NodeVolumeEntry`). Volumes are spread one per node: the disk selection in
+#: machine configuration stays "the disk that is not the boot disk" rather
+#: than a discrimination by size or serial, and losing one node stops taking
+#: two preserved datasets with it.
 #:
 #: Both are preserved rather than backed up (storage.md §3.3): one holds a
 #: slice of a distributed archive whose redundancy is the network it came from,
 #: the other a replica whose full copy is on the NAS and in every client that
 #: syncs it. The invariants the type cannot carry — a node the fleet declares,
-#: a mount claimed once, at most one volume per node — are held by tests, after
-#: the sentinel resolves. A row's `mount` is where its dataset already is, and
-#: editing it strands that dataset (`NodeVolumeEntry`); no test can say so.
+#: at most one volume per node, a name Talos accepts — are held by tests, after
+#: the sentinel resolves.
 NODE_VOLUMES: Mapping[str, NodeVolumeEntry] = {
-    'hath-cache': NodeVolumeEntry(node=FOLLOWS_DEDICATED_VIP, size_gb=50, mount='/var/mnt/hath-cache'),
-    'syncthing-replica': NodeVolumeEntry(node='cp2', size_gb=110, mount='/var/mnt/syncthing-replica'),
+    'hath-cache': NodeVolumeEntry(node=FOLLOWS_DEDICATED_VIP, size_gb=50),
+    'syncthing-replica': NodeVolumeEntry(node='cp2', size_gb=110),
 }
+
+#: Where Talos mounts every user volume: its `constants.UserVolumeMountPoint`.
+#: A fact about Talos rather than a decision of this program — a user volume
+#: is mounted at `<root>/<name>` and nowhere else, and the machine
+#: configuration has no field that could move it.
+USER_VOLUME_ROOT = '/var/mnt'
+
+
+def node_volume_mount(name: str) -> str:
+    """The path a node volume is mounted at on its node, from the row's name.
+
+    What a `local` PersistentVolume over the volume is written against — a
+    directory *inside* this path, never the path itself (storage.md §6).
+    """
+    return f'{USER_VOLUME_ROOT}/{name}'
+
+
+#: The node label naming the volume a node carries, with the row's name as its
+#: value: what a `local` PersistentVolume's node affinity selects on, so that
+#: placement is a fact about the node rather than a string a workload repeats
+#: (rfc-002 §10.5). One key is enough because a node carries at most one
+#: volume.
+NODE_VOLUME_LABEL = f'{LABEL_DOMAIN}/node-volume'
 
 #: Lower Cost (0 VPUs/GB) is the tier the storage budget is written against:
 #: neither dataset is a database, and the balanced tier's surcharge buys

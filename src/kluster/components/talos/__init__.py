@@ -41,7 +41,9 @@ out of `v1alpha1` is stated in its own document: at v1.13 that is every field
 of `machine.network`, so KubeSpan and the node's link addressing travel as
 network documents (`KubeSpanConfig`, `LinkAliasConfig`, `LinkConfig`,
 `DHCPv4Config`) the way the ingress firewall always has
-(`NetworkDefaultActionConfig`, `NetworkRuleConfig`).
+(`NetworkDefaultActionConfig`, `NetworkRuleConfig`), and a node volume
+travels as a `UserVolumeConfig`, the document v1.13 names in place of the
+deprecated partitions of `machine.disks`.
 """
 
 from __future__ import annotations
@@ -218,6 +220,67 @@ def local_path_patch() -> dict[str, Any]:
     }
 
 
+#: How a node volume's disk is found the first time, before Talos has written
+#: anything to it: by exclusion, as the disk that is not the one Talos booted
+#: from. It matches exactly one disk because a node carries at most one volume,
+#: and on every later boot Talos finds the volume by the partition label it
+#: wrote (`u-<name>`) instead, so attachment order, device path and serial
+#: never enter into it.
+DATA_DISK_SELECTOR = '!system_disk'
+
+
+def node_volume_document(name: str) -> dict[str, Any]:
+    """Mount the node volume `name` at `conventions.node_volume_mount(name)`.
+
+    A `UserVolumeConfig` of type `partition`: one partition filling the
+    disk the selector finds, formatted XFS and mounted at Talos' user-volume
+    root under the volume's name. The type is stated rather than defaulted,
+    because a `disk` volume is located by its selector alone, with
+    `system_disk` unbound, so it could never select by exclusion. XFS is
+    stated for the same kind of reason: a volume found carrying another
+    filesystem is refused as a mismatch rather than mounted, so a default
+    Talos changed would strand every existing volume.
+
+    Talos provisions only while it finds no partition labelled `u-<name>`,
+    and then onto the selected disk when its prober recognizes nothing on
+    it, or onto free GPT space. The prober knows no partition table but
+    GPT, so an MBR-partitioned disk, or one holding a filesystem the
+    prober does not know, reads as empty and is repartitioned and
+    formatted; a located partition on which it finds no filesystem is
+    formatted too. The rule that keeps other data off both paths is
+    storage.md §6.
+
+    There is no encryption block: every key source Talos offers either binds
+    the dataset to a machine that a rebuild replaces or puts the key in the
+    instance's own metadata. Mount options stay Talos' defaults,
+    `nosuid,nodev` among them.
+    """
+    return {
+        'apiVersion': 'v1alpha1',
+        'kind': 'UserVolumeConfig',
+        'name': name,
+        'volumeType': 'partition',
+        'provisioning': {
+            'diskSelector': {'match': DATA_DISK_SELECTOR},
+            # A partition volume must be bounded; this bound is the whole
+            # disk, and `grow` takes a resized disk at the node's next boot.
+            'maxSize': '100%',
+            'grow': True,
+        },
+        'filesystem': {'type': 'xfs'},
+    }
+
+
+def node_volume_label_patch(name: str) -> dict[str, Any]:
+    """Label the node carrying the node volume `name` with it.
+
+    The node-side half of `node_volume_document`, and what a `local`
+    PersistentVolume's node affinity selects on (rfc-002 §10.5). A strategic
+    merge into `v1alpha1`, because v1.13 has no document for node labels.
+    """
+    return {'machine': {'nodeLabels': {conventions.NODE_VOLUME_LABEL: name}}}
+
+
 def uplink_alias_document() -> dict[str, Any]:
     """Name the node's physical link `UPLINK`, whatever the kernel called it.
 
@@ -353,8 +416,11 @@ def patches(
     static_address: StaticAddress | None = None,
     secondary_address: str | None = None,
     bgp_peer: str | None = None,
+    volume: str | None = None,
 ) -> list[str]:
     """The patch list for one node, as the provider wants it.
+
+    `volume` is the name of the node volume attached to this node, if one is.
 
     `bgp_peer` is a subnet, not a host: it is who may open a BGP session with
     this node, and the answer for the homelab worker is the gateway alone.
@@ -364,12 +430,16 @@ def patches(
     has; no node has both, and a node with neither is configured by its lease.
     """
     documents: list[Mapping[str, Any]] = [node_patch(), kubespan_document(), local_path_patch()]
+    if volume is not None:
+        documents.append(node_volume_label_patch(volume))
     if role == 'controlplane':
         documents.append(control_plane_patch(cert_sans=cert_sans, secretbox_secret=secretbox_secret))
     if static_address is not None:
         documents += static_address_documents(static_address)
     if secondary_address is not None:
         documents += secondary_address_documents(secondary_address)
+    if volume is not None:
+        documents.append(node_volume_document(volume))
     extra = [Opening(BGP_PORT, (bgp_peer,))] if bgp_peer is not None else []
     documents += ingress_firewall_documents(extra)
     return [json.dumps(document) for document in documents]
@@ -401,6 +471,14 @@ class TalosCluster(Component, pulumi_type='kluster:physical:TalosCluster'):
         Required like the node rolls above, and the one roll nothing else
         would catch: a call site that lost it would boot a worker that
         refuses its gateway's session, and no check or test would object.
+    :param volumes: the node volumes, by name (`conventions.NODE_VOLUMES`).
+        Each is mounted, and its node labelled, in the configuration of the
+        node it attaches to, so the volume is part of what that machine boots
+        with: the census is known at day 0, while the attachment itself can
+        only be declared once the instance exists. A volume on a node outside
+        the cluster, or two volumes on one node, are refused — the disk
+        selector finds a node's data disk as the one disk that is not the
+        boot disk, so it cannot tell two data disks apart.
 
     A node named in `STATIC_ADDRESSES` also boots with its own address, its
     subnet's prefix and a default route, rather than with whatever a DHCP
@@ -418,6 +496,7 @@ class TalosCluster(Component, pulumi_type='kluster:physical:TalosCluster'):
         worker_nodes: Sequence[str],
         talos_version: str,
         bgp_peers: Mapping[str, pulumi.Input[str]],
+        volumes: Mapping[str, conventions.NodeVolumeEntry],
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         super().__init__(name, opts=opts)
@@ -440,6 +519,7 @@ class TalosCluster(Component, pulumi_type='kluster:physical:TalosCluster'):
         unknown = sorted(set(self._bgp_peers) - set(self.roles))
         if unknown:
             raise ValueError(f'BGP peers name nodes that are not in the cluster: {unknown}')
+        self._volumes = _volumes_by_node(volumes, self.roles)
 
         self.secrets = machine.Secrets(
             f'{name}-secrets',
@@ -502,6 +582,7 @@ class TalosCluster(Component, pulumi_type='kluster:physical:TalosCluster'):
             static_address=STATIC_ADDRESSES.get(node),
             secondary_address=await _resolved_one(secondary_address),
             bgp_peer=await _resolved_one(self._bgp_peers.get(node)),
+            volume=self._volumes.get(node),
         )
 
     async def _secretbox_secret(self) -> str | None:
@@ -703,6 +784,22 @@ class TalosDay1(Component, pulumi_type='kluster:physical:TalosDay1'):
     def talosconfig(self) -> pulumi.Output[str]:
         """The talosctl client configuration: the same PKI, for the machine API."""
         return pulumi.Output.secret(self._client_configuration.apply(lambda config: config.talos_config))
+
+
+def _volumes_by_node(volumes: Mapping[str, conventions.NodeVolumeEntry], nodes: Mapping[str, Role]) -> dict[str, str]:
+    """Node name to the name of the one volume attached to it, sentinels resolved."""
+    unknown = sorted(name for name, entry in volumes.items() if entry.attached_node not in nodes)
+    if unknown:
+        raise ValueError(f'volumes attach to nodes that are not in the cluster: {unknown}')
+    by_node: dict[str, list[str]] = {}
+    for name, entry in sorted(volumes.items()):
+        by_node.setdefault(entry.attached_node, []).append(name)
+    crowded = {node: names for node, names in by_node.items() if len(names) > 1}
+    if crowded:
+        raise ValueError(
+            f'a node carries at most one volume, because its disk selector cannot tell two data disks apart: {crowded}'
+        )
+    return {node: names[0] for node, names in by_node.items()}
 
 
 async def _resolved(inputs: Sequence[pulumi.Input[str]]) -> list[str]:

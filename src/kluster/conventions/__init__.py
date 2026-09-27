@@ -149,7 +149,9 @@ dedicated VIP node
 node volume
     A block volume attached to a node (`cloud.NODE_VOLUMES`,
     `cloud.NodeVolumeEntry`; rfc-002 §3.1). What it is for belongs to whatever
-    claims it, so an entry is named after its claimant and the type is not.
+    claims it, so an entry is named after its claimant and the type is not;
+    that name is also its dataset's identity on the node, its mount path and
+    its node label (`cloud.node_volume_mount`, `cloud.NODE_VOLUME_LABEL`).
 
 CI
     This repository's own GitHub Actions, the deployment pipeline
@@ -182,12 +184,15 @@ from kluster.conventions.cloud import (
     NODE_BOOT_VOLUME_GB,
     NODE_MEMORY_GB,
     NODE_OCPUS,
+    NODE_VOLUME_LABEL,
     NODE_VOLUME_VPUS,
     NODE_VOLUMES,
+    USER_VOLUME_ROOT,
     VCN_CIDR,
     VCN_SUBNET_CIDR,
     FollowsDedicatedVip,
     NodeVolumeEntry,
+    node_volume_mount,
 )
 from kluster.conventions.cluster import (
     CLUSTER_ASN,
@@ -314,6 +319,7 @@ __all__ = (
     'NODE_MEMORY_GB',
     'NODE_OCPUS',
     'NODE_VOLUMES',
+    'NODE_VOLUME_LABEL',
     'NODE_VOLUME_VPUS',
     'OCI_SEED_USER_EMAIL',
     'OCI_TENANCY',
@@ -343,6 +349,7 @@ __all__ = (
     'STATE_BACKEND',
     'STATE_DUMP_PREFIX',
     'UDM_ASN',
+    'USER_VOLUME_ROOT',
     'VCN_CIDR',
     'VCN_SUBNET_CIDR',
     'WEB_ZONES',
@@ -367,6 +374,7 @@ __all__ = (
     'barman_repo_path',
     'forge',
     'gateway',
+    'node_volume_mount',
     'overlay',
     'routes',
     'ula_subnet',

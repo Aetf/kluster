@@ -110,6 +110,7 @@ def build_cluster(worker_nodes: tuple[str, ...] = (WORKER,)) -> Any:
         control_plane_nodes=('cp1',),
         worker_nodes=worker_nodes,
         bgp_peers={},
+        volumes={},
         talos_version='v1.11.0',
     )
 
