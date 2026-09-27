@@ -39,6 +39,7 @@ from typing import NamedTuple, cast
 import pytest
 import yaml
 from fences import prose
+from renovate_text import as_python_spells_it, as_renovate_spells_it
 from section_numbers import sections
 from workflow_files import GITHUB, github_name, mapping, read_workflow, workflow_jobs, workflows_and_actions
 
@@ -1695,16 +1696,6 @@ PROVIDER_MATCH_STRING = (
 )
 
 
-def _as_renovate_spells_it(pattern: str) -> str:
-    """The JSON5 single-quoted string `renovate.json5` holds a pattern in."""
-    return "'" + pattern.replace('\\', '\\\\') + "'"
-
-
-def _as_python_spells_it(pattern: str) -> re.Pattern[str]:
-    """Python spells a named group `(?P<...>`, renovate's regex engine `(?<...>`."""
-    return re.compile(pattern.replace('(?<', '(?P<'))
-
-
 def test_renovate_reads_every_entry_of_the_packages_block() -> None:
     """The two managers reach every pin the block holds, and the pins they read are the block's.
 
@@ -1718,13 +1709,13 @@ def test_renovate_reads_every_entry_of_the_packages_block() -> None:
     text = PULUMI_YAML.read_text()
     declared = _declared_packages()
 
-    assert _as_renovate_spells_it(BRIDGE_MATCH_STRING) in config
-    assert _as_renovate_spells_it(PROVIDER_MATCH_STRING) in config
+    assert as_renovate_spells_it(BRIDGE_MATCH_STRING) in config
+    assert as_renovate_spells_it(PROVIDER_MATCH_STRING) in config
 
-    bridges = [found.group('currentValue') for found in _as_python_spells_it(BRIDGE_MATCH_STRING).finditer(text)]
+    bridges = [found.group('currentValue') for found in as_python_spells_it(BRIDGE_MATCH_STRING).finditer(text)]
     providers = {
         (found.group('depName'), found.group('currentValue'))
-        for found in _as_python_spells_it(PROVIDER_MATCH_STRING).finditer(text)
+        for found in as_python_spells_it(PROVIDER_MATCH_STRING).finditer(text)
     }
 
     assert bridges == [entry.bridge for entry in declared.values()]

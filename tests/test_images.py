@@ -32,6 +32,7 @@ from typing import Any, cast
 
 import pytest
 import yaml
+from renovate_text import as_python_spells_it, as_renovate_spells_it
 
 ROOT = Path(__file__).parent.parent
 DOCKER = ROOT / 'docker'
@@ -625,16 +626,6 @@ CONF_REFERENCE_MATCH_STRING = (
 )
 
 
-def _as_renovate_spells_it(pattern: str) -> str:
-    """The JSON5 single-quoted string `renovate.json5` holds a pattern in."""
-    return "'" + pattern.replace('\\', '\\\\') + "'"
-
-
-def _as_python_spells_it(pattern: str) -> re.Pattern[str]:
-    """Python spells a named group `(?P<...>`, renovate's regex engine `(?<...>`."""
-    return re.compile(pattern.replace('(?<', '(?P<'))
-
-
 @pytest.mark.parametrize('image', _images())
 def test_renovate_reads_every_digest_a_conf_pins(image: str) -> None:
     """Every digest in a conf is one renovate captures, beside the tag it belongs to.
@@ -646,14 +637,14 @@ def test_renovate_reads_every_digest_a_conf_pins(image: str) -> None:
     version's name.
     """
     config = (ROOT / 'renovate.json5').read_text()
-    assert _as_renovate_spells_it(CONF_VERSION_MATCH_STRING) in config
-    assert _as_renovate_spells_it(CONF_REFERENCE_MATCH_STRING) in config
+    assert as_renovate_spells_it(CONF_VERSION_MATCH_STRING) in config
+    assert as_renovate_spells_it(CONF_REFERENCE_MATCH_STRING) in config
 
     text = (DOCKER / f'{image}.conf').read_text()
     pinned = set(re.findall(r'sha256:[0-9a-f]{64}', text))
     captured: set[str] = set()
     for pattern in (CONF_VERSION_MATCH_STRING, CONF_REFERENCE_MATCH_STRING):
-        for found in _as_python_spells_it(pattern).finditer(text):
+        for found in as_python_spells_it(pattern).finditer(text):
             if found.group('currentDigest'):
                 assert found.group('datasource') == 'docker', found.group(0)
                 assert found.group('currentValue'), found.group(0)
@@ -672,9 +663,7 @@ def test_a_reference_pin_names_a_versioning_its_tag_reads_under(image: str) -> N
     above.
     """
     text = (DOCKER / f'{image}.conf').read_text()
-    for found in _as_python_spells_it(CONF_REFERENCE_MATCH_STRING).finditer(text):
+    for found in as_python_spells_it(CONF_REFERENCE_MATCH_STRING).finditer(text):
         versioning = found.group('versioning') or ''
         assert versioning.startswith('regex:'), f'{found.group("currentValue")} names no regex versioning'
-        assert _as_python_spells_it(versioning.removeprefix('regex:')).fullmatch(found.group('currentValue')), (
-            versioning
-        )
+        assert as_python_spells_it(versioning.removeprefix('regex:')).fullmatch(found.group('currentValue')), versioning

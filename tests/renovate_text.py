@@ -5,6 +5,12 @@ the rule's entry in the file's text and reads its keys one line at a time.
 The shape that makes that sound is the file's own: no `packageRules` entry
 nests an object, no comment inside one carries a brace, and each key a rule
 sets sits on a line of its own.
+
+A custom manager's `matchStrings` are regular expressions, which a suite
+holds by writing each one out in Python and checking it two ways: that
+`renovate.json5` holds exactly that pattern, and that the pattern matches
+the file it is meant to read. `as_renovate_spells_it` and
+`as_python_spells_it` are the two spellings those checks need.
 """
 
 from __future__ import annotations
@@ -50,3 +56,13 @@ def scalar(rule: str, key: str) -> str | None:
 def group(rule: str) -> list[str]:
     """The group name and slug a rule sets, in the order it writes them."""
     return re.findall(r"^\s*group(?:Name|Slug): '([^']*)',$", rule, re.MULTILINE)
+
+
+def as_renovate_spells_it(pattern: str) -> str:
+    """`pattern` as `renovate.json5` holds it: a JSON5 single-quoted string, each backslash doubled."""
+    return "'" + pattern.replace('\\', '\\\\') + "'"
+
+
+def as_python_spells_it(pattern: str) -> re.Pattern[str]:
+    """`pattern` compiled as Python spells it: a named group is `(?P<...>`, renovate's regex engine writes `(?<...>`."""
+    return re.compile(pattern.replace('(?<', '(?P<'))
