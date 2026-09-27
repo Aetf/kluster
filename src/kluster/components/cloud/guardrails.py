@@ -36,7 +36,7 @@ from dataclasses import dataclass
 import pulumi
 import pulumi_oci as oci
 
-from putils import Component
+from putils import Component, async_output, resolve
 
 #: Per AD. One node is 1 OCPU / 8 GB; the second core is the recorded headroom
 #: for the node carrying the cache workload if it runs hot (nodes.md §3.2).
@@ -100,6 +100,13 @@ class Guardrails(Component):
     `alert_rules` is the roll of alerts the budget carries, and it arrives from
     the caller: what is worth being told about spending is a decision of the
     installation rather than of the mechanism that reports it.
+
+    `recipients` is an input, which may be an output, rather than a sequence
+    alone, because the addresses are private: a caller that holds them as a
+    secret output passes that output, and the one string every alert rule
+    receives is joined from it through `resolve`, which keeps the secret flag.
+    A list with nobody on it is refused when that string is built, which is
+    when the addresses are first in hand.
     """
 
     def __init__(
@@ -109,13 +116,12 @@ class Guardrails(Component):
         tenancy_id: pulumi.Input[str],
         compartment_id: pulumi.Input[str],
         compartment_name: str,
-        recipients: Sequence[str],
+        recipients: pulumi.Input[Sequence[str]],
         alert_rules: Sequence[AlertRule],
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         super().__init__(name, opts=opts)
-        if not recipients:
-            raise ValueError('a budget alert with no recipient notifies nobody')
+        self._recipients = recipients
 
         self.statements = quota_statements(compartment_name)
 
@@ -140,6 +146,9 @@ class Guardrails(Component):
             opts=self.child_opts(),
         )
 
+        # OCI takes the audience as one comma-separated string, and every rule
+        # takes the same one.
+        audience = async_output(self._audience)
         self.alerts = {
             rule.name: oci.budget.Rule(
                 f'{name}-budget-{rule.name}',
@@ -150,14 +159,19 @@ class Guardrails(Component):
                 threshold=rule.threshold,
                 threshold_type='PERCENTAGE',
                 type=rule.type,
-                # OCI takes the audience as one comma-separated string.
-                recipients=','.join(recipients),
+                recipients=audience,
                 opts=self.child_opts(),
             )
             for rule in alert_rules
         }
 
         self.register_outputs({})
+
+    async def _audience(self) -> str:
+        recipients = await resolve(self._recipients)
+        if not recipients:
+            raise ValueError('a budget alert with no recipient notifies nobody')
+        return ','.join(recipients)
 
 
 def quota_statements(

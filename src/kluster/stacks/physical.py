@@ -291,12 +291,22 @@ async def main() -> None:
     # while quota statements have no OCID form at all and name it by name —
     # which is why the name is a convention this program decides rather than
     # something read back from the tenancy.
+    #
+    # The addresses are private mailboxes, so they stay a secret from the key
+    # to every alert rule, and their shape is checked inside the secret. A
+    # value that is not JSON at all is refused here, by the key's name alone:
+    # the SDK's own refusal quotes the value, and a run's error is logged.
+    # `from None` keeps that refusal out of the traceback as well.
+    try:
+        recipients = config.require_secret_object(BUDGET_ALERT_RECIPIENTS)
+    except pulumi.ConfigTypeError:
+        raise TypeError(f'{BUDGET_ALERT_RECIPIENTS} must be a JSON list of addresses, and is not JSON') from None
     _ = Guardrails(
         conventions.CLUSTER_NAME,
         tenancy_id=tenancy_id,
         compartment_id=compartment_id,
         compartment_name=compartment.name,
-        recipients=lib_config.strings(config.require_object(BUDGET_ALERT_RECIPIENTS), BUDGET_ALERT_RECIPIENTS),
+        recipients=recipients.apply(lambda value: lib_config.strings(value, BUDGET_ALERT_RECIPIENTS)),
         alert_rules=BUDGET_ALERT_RULES,
         opts=on_cloud,
     )
