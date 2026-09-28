@@ -63,10 +63,11 @@ def rewrites(routes: Iterable[conventions.routes.Route]) -> tuple[Rewrite, ...]:
 
     A rewrite is emitted for every zone a LAN-side route is published in --
     including LAN-only names, which have no public record but still resolve
-    for LAN clients. Both address families are emitted: AdGuard answers a
-    rewrite only for the family its answer is in, and a LAN client that
-    prefers IPv6 (RFC 6724) would otherwise fall through to the public
-    answer and take the cloud path.
+    for LAN clients. Both address families are emitted. AdGuard answers the
+    other family of a rewritten name with an empty response, not with the
+    public one, so a v4-only row would leave the name with no IPv6 address
+    on the LAN at all; the v6 row gives it the VIP's ULA (architecture.md
+    §1.3 on how rarely a client picks it).
 
     The only answers this can produce are the two LAN VIPs, so the addresses
     are the site's own and the gateway resolves them without help.

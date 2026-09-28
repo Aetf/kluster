@@ -144,10 +144,11 @@ def test_a_split_route_is_rewritten_in_every_zone_it_is_published_in() -> None:
 
 
 def test_both_families_are_rewritten() -> None:
-    """A LAN client that prefers IPv6 must not fall through to the public answer.
+    """A LAN client asking for AAAA gets the VIP's ULA, not an empty answer.
 
-    AdGuard answers a rewrite only for the family of its answer, so a v4-only
-    rewrite leaves AAAA resolving to the cloud path (RFC 6724).
+    AdGuard answers the other family of a rewritten name with an empty
+    response rather than forwarding it, so a v4-only rewrite leaves the name
+    with no IPv6 address on the LAN.
     """
     entries = rewrites(
         [conventions.routes.Route(host='tube', exposure=conventions.routes.Exposure.SPLIT, zones=('ucw.phd',))]
