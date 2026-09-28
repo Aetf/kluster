@@ -205,7 +205,7 @@ CENSUS: dict[type, Census] = {
     escrow.Registry: Census('root'),
     escrow.Shape: Census('looks_like matches'),
     escrow.Vault: Census('registry identity', secret='identity'),
-    escrow.WorkstationSlot: Census('path read_by'),
+    escrow.WorkstationSlot: Census('path read_by store'),
     github_secrets.Forge: Census('token run', secret='token'),
     github_secrets.Slot: Census('repository name environment'),
     # The unlocked database, which holds the master password as `.password`.
@@ -234,8 +234,9 @@ CENSUS: dict[type, Census] = {
     # print (`pki.Authority`).
     pki.Authority: Census('key', secret='key'),
     pki.Credential: Census('key_pem cert_pem', secret='key_pem'),
-    # `apart` maps a stack name to that stack's own passphrase.
-    pulumi_config.BackendEnvironment: Census('passphrase url apart', secret='passphrase apart'),
+    # `operator` is where the operator passphrase is found, a function, which
+    # holds no value to print.
+    pulumi_config.BackendEnvironment: Census('passphrase url operator', secret='passphrase'),
     pulumi_config.Stack: Census('name directory environment run'),
     # The two caches hold an opened escrow and the backend environment, each a
     # record with a secret of its own, and are out of the repr and out of
@@ -257,6 +258,7 @@ CENSUS: dict[type, Census] = {
     slots.Row: Census('register source targets pending'),
     slots.SealedSecret: Census('what'),
     slots.StateRead: Census('stack output'),
+    slots.SecretStore: Census('key'),
     slots.WorkstationSlot: Census('name'),
     routing.RoutingSession: Census('neighbor password', secret='password'),
     routing._ConvergerParams: Census(  # pyright: ignore[reportPrivateUsage]
@@ -668,7 +670,7 @@ def test_a_context_prints_neither_the_token_nor_the_passphrase_it_reaches() -> N
     show first.
     """
     environment = pulumi_config.BackendEnvironment(
-        passphrase=SECRET, url='https://backend.example', apart={'github': SECRET}
+        passphrase=SECRET, url='https://backend.example', operator=lambda: SECRET
     )
     context = slots.Context(
         forge=github_secrets.Forge(token=SECRET),

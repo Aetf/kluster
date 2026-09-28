@@ -31,7 +31,7 @@ from cryptography.hazmat.primitives import serialization
 from fake_gh import RecordedGh
 
 from kluster import conventions
-from kluster.lib import pulumi_cli
+from kluster.lib import pulumi_cli, stack_environment
 from kluster.scripts.credentials import derived, devices, escrow, pki, pulumi_config, slots
 from kluster.scripts.credentials.github_secrets import Forge, Slot
 from kluster.scripts.credentials.pulumi_config import SlotRefused
@@ -231,6 +231,7 @@ def channels_of_every_kind() -> tuple[slots.Channel, ...]:
         slots.EscrowCopy('a-label'),
         slots.SealedSecret('a manifest'),
         slots.OnBox('a file'),
+        slots.SecretStore('a-key'),
         slots.WorkstationSlot('a-file'),
         slots.DeviceSecret('a value'),
     )
@@ -1379,21 +1380,43 @@ def test_a_stack_encrypted_apart_has_a_row_that_generates_its_passphrase() -> No
 
 
 def test_the_passphrase_of_a_stack_encrypted_apart_reaches_no_github_secret() -> None:
-    """The property the second passphrase exists for, held rather than merely true.
+    """The property the operator passphrase exists for, held rather than merely true.
 
     The stack passphrase is in every Environment because every job runs a
-    `pulumi` command. This one is in none, which is what keeps the `github`
-    stack's config -- the admin token that can unguard `main` -- unreadable by
-    anything CI can start. A sink added to that row would undo it silently, so
-    the emptiness is the assertion.
+    `pulumi` command. This one is in none, which is what keeps the operator
+    stacks' config -- the `github` stack's admin token that can unguard `main`
+    among it -- unreadable by anything CI can start. A sink added to that row
+    would undo it silently, so the emptiness is the assertion.
     """
     assert pulumi_config.APART, 'nothing to check: no stack is encrypted apart from the others'
     for name in pulumi_config.APART.values():
         row = slots.ROWS[name]
 
-        assert row.sinks == (), "a stack's own passphrase that reaches a GitHub secret is the stack passphrase again"
+        assert row.sinks == (), 'an operator passphrase that reaches a GitHub secret is the stack passphrase again'
         assert row.pending == {}, 'no channel is waiting: reaching no CI secret is the design, not a gap'
 
     # The contrast, so this cannot pass by the map having lost its GitHub
     # secrets altogether.
     assert slots.ROWS['pulumi-passphrase'].sinks != ()
+
+
+def test_the_operator_passphrase_lands_where_its_chain_reads_it() -> None:
+    """The store first and the slot beside it, under the names the driver's chain reads and `recover` writes.
+
+    The map names the channels and the escrow row carries the addresses
+    `recover` writes to; both are held to the names `stack_environment` finds
+    the passphrase under, so none of the three can move alone.
+    """
+    row = slots.ROWS[stack_environment.OPERATOR_PASSPHRASE_ROW]
+    written = escrow.slot(escrow.OPERATOR_PASSPHRASE)
+
+    assert slots.SecretStore(stack_environment.OPERATOR_PASSPHRASE_ACCOUNT) in row.targets
+    assert slots.WorkstationSlot(stack_environment.OPERATOR_PASSPHRASE_SLOT) in row.targets
+    assert written is not None
+    assert written.store == stack_environment.OPERATOR_PASSPHRASE_ACCOUNT
+    assert written.path().name == stack_environment.OPERATOR_PASSPHRASE_SLOT
+    # And the stack passphrase, which a `mise.toml` template reads, has a file
+    # and no store.
+    stack = escrow.slot(escrow.PASSPHRASE)
+    assert stack is not None
+    assert stack.store is None

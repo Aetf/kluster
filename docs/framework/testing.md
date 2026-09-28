@@ -110,26 +110,41 @@ above that one.
     which a suite supplies with `pulumi.runtime.set_all_config` and which this
     mechanism has no part in.
 
-**The environment is one of three channels, and only it is closed.** An
-account root is looked up in the desktop secret store, then in a file under
-the checkout's own `.credentials/`, and only then in the variable
-(`masters._find`) — and `workstation` resolves that directory from its own
-`__file__`, so on an operator workstation the file layer answers with live
-material without the environment being consulted at all. A suite that reaches
-`masters`, `workstation` or `kdbx` therefore still has to redirect the file
-layer itself, by pointing `workstation.directory` at a `tmp_path`, the way
-`tests/test_masters.py::local` does. Until that too is closed by
-construction, this remains a discipline rather than a property, and a suite
-that forgets it can print an account root that never went near a variable.
+**The environment is one of three channels, and the desktop secret store is
+the second one closed.** An account root and the operator passphrase are
+looked up in the desktop secret store, then in a file under the checkout's
+own `.credentials/`, and only then in the variable (`kluster.lib.acquisition`,
+credentials.md §2), and a `credentials` command writes the store as well as
+reading it: `generate` and `recover` of the operator passphrase, `root
+remember`, `kit password remember`.
 
-The asymmetry is the reason the two are not fixed the same way. A variable can
-be read while a module is being *imported*, which is before any fixture has
-run, so nothing short of stripping at import reaches it. The file layer is
-only ever read from inside a test, so a fixture is early enough — closing it
-is ordinary work rather than a place where the mechanism has to be unusual.
+-   **The store is closed for every case.** `tests/conftest.py` installs, as
+    a fixture every case gets without asking, a `keyring` backend that
+    refuses every call — what a machine with no store looks like, which
+    every caller already handles. A case run on a workstation can therefore
+    neither read the operator's store nor replace a value in it with a
+    placeholder. A case that needs a store installs the in-memory one from
+    `tests/memory_keyring.py` over it, for its own length.
+-   **The file layer is still each suite's to redirect.** `workstation`
+    resolves `.credentials/` from its own `__file__`, so on an operator
+    workstation the file layer answers with live material without the
+    environment being consulted at all. A suite that reaches `masters`,
+    `workstation`, `kdbx` or the operator passphrase redirects it itself, by
+    pointing `workstation.directory` at a `tmp_path` the way
+    `tests/test_masters.py::local` does, or by handing the chain a checkout
+    under `tmp_path`. Until that too is closed by construction, this remains a
+    discipline rather than a property, and a suite that forgets it can print
+    a credential that never went near a variable.
 
-The masking covers the live tier too (§5). A drill reads its credentials from
-the kit, never from the ambient environment.
+The asymmetry is the reason the three are not fixed the same way. A variable
+can be read while a module is being *imported*, which is before any fixture
+has run, so nothing short of stripping at import reaches it. The store and
+the file layer are only ever reached from inside a test, so a fixture is early
+enough — closing them is ordinary work rather than a place where the mechanism
+has to be unusual.
+
+The masking and the closed store cover the live tier too (§5). A drill reads
+its credentials from the kit, never from the ambient environment.
 
 ## 2. Writing Tests
 
@@ -445,11 +460,11 @@ executes a drill nor reports one as skipped. There is no marker and no
 `addopts` entry to keep in sync.
 
 A drill reads its credentials from the same store the command-line entry point
-uses — for the credential drills, `KdbxStore.from_env` on `$KLUSTER_KDBX`,
-unlocked from the desktop secret store. It cannot read them from the ambient
-environment: §1.1 masks those for the whole process, the live tier included.
-Run `credentials kit password remember` first, or pass `-s`, so the prompt
-reaches a terminal.
+uses — for the credential drills, `KdbxStore.from_env` on `$KLUSTER_KDBX`. It
+cannot read them from the ambient environment, nor take the kit's master
+password from the desktop secret store: §1.1 masks the one and closes the
+other for the whole process, the live tier included. Pass `-s`, so the
+password prompt reaches a terminal.
 `--log-cli-level=INFO` is what makes the run a transcript worth pasting.
 
 Two properties are required of every drill, because an operator has to be

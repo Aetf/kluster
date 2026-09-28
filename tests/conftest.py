@@ -1,8 +1,11 @@
 """What every suite in this process shares: an empty environment, and a cheap KDF.
 
 The first is `root_credentials.strip`, called below rather than offered as a
-fixture, so that no suite can be the one that forgot to ask. What it takes,
-and the two channels it leaves open, is that module.
+fixture, so that no suite can be the one that forgot to ask. What it takes is
+that module. Of the two channels it leaves open, the desktop secret store is
+closed here instead, for every case (`secret_store_closed`): the store is read
+and written at test time, never at import, so a fixture reaches it. The file
+layer stays each suite's own to redirect.
 
 The kit several suites share is `memory_kit.MemoryKit`, a kit that is not a
 file; it lives in its own module because test modules import the class
@@ -31,9 +34,11 @@ import os
 import pickle
 from typing import TYPE_CHECKING, Any
 
+import keyring.backends.fail
 import pykeepass.pykeepass as pykeepass_module
 import pytest
 import root_credentials
+from memory_keyring import installed
 from memory_kit import MemoryKit
 from pykeepass import PyKeePass
 
@@ -66,6 +71,24 @@ FLOOR = {'I': 1, 'M': 8192, 'P': 1}
 @pytest.fixture
 def memory_kit() -> KdbxStore:
     return MemoryKit()
+
+
+@pytest.fixture(autouse=True)
+def secret_store_closed() -> Iterator[None]:
+    """A desktop secret store that refuses every call, for every case.
+
+    `keyring` resolves the operator's own store unless told otherwise, and a
+    `credentials` command writes it (`generate` and `recover` of a row the
+    acquisition chain reads, `root remember`, `kit password remember`), so a
+    case that reaches one of those would replace a live value with a
+    placeholder -- and a case that reads the chain would take whatever the
+    operator keeps there. Refusing every call is what a machine with no store
+    does, which every caller already handles. A case that needs a store
+    installs the in-memory one from `memory_keyring` for its own length, over
+    this one.
+    """
+    with installed(keyring.backends.fail.Keyring()):
+        yield
 
 
 def _parameters(database: PyKeePass) -> Any:

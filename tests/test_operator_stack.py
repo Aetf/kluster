@@ -25,6 +25,7 @@ need one add `probe` to it for their own duration.
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import shutil
@@ -39,9 +40,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from memory_keyring import MemoryKeyring, installed
 
 from kluster.conventions import identity
-from kluster.lib import bundle, stack_environment
+from kluster.lib import acquisition, bundle, stack_environment
 from kluster.scripts.credentials import escrow
 from kluster.scripts.credentials import workstation as credential_slots
 from kluster.scripts.operator_stack import checkpoint, cli, driver
@@ -94,6 +96,21 @@ GIT_ENV = {
 # --------------------------------------------------------------------------
 # Fixtures.
 # --------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def secret_store(monkeypatch: pytest.MonkeyPatch) -> Iterator[MemoryKeyring]:
+    """An empty secret store in place of the operator's, and nobody at a terminal.
+
+    The driver finds the operator passphrase through the acquisition chain,
+    whose first layer is the desktop secret store and whose last is a prompt
+    where standard input is a terminal: without this a case would read the
+    operator's store, and one run with `-s` would wait at a prompt.
+    """
+    monkeypatch.setattr('sys.stdin', io.StringIO())
+    backend = MemoryKeyring()
+    with installed(backend):
+        yield backend
 
 
 @dataclass
@@ -192,7 +209,7 @@ def _fill_slots(checkout: Path) -> None:
     (slots / 'state-backend').mkdir(parents=True)
     _ = (slots / 'state-backend' / 'backend-url').write_text(SLOT_URL + '\n')
     _ = (slots / 'pulumi.passphrase').write_text('a-slot-stack-passphrase\n')
-    _ = (slots / 'github.passphrase').write_text(OPERATOR_PASSPHRASE + '\n')
+    _ = (slots / stack_environment.OPERATOR_PASSPHRASE_SLOT).write_text(OPERATOR_PASSPHRASE + '\n')
 
 
 @pytest.fixture
@@ -269,19 +286,135 @@ def test_the_committed_stack_runs_against_the_checkouts_checkpoints(repository: 
     assert not [value for value in env.values() if 'stack-passphrase' in value or '/ambient/' in value]
 
 
-def test_a_checkout_without_the_operator_passphrase_is_refused_naming_the_command(tmp_path: Path) -> None:
+def test_a_machine_without_the_operator_passphrase_is_refused_naming_the_command(tmp_path: Path) -> None:
+    """No layer of the chain holds it and nobody is at a terminal: the refusal names the command that fills it."""
     checkout = tmp_path / 'kluster'
     _fill_slots(checkout)
-    (checkout / '.credentials' / 'github.passphrase').unlink()
+    (checkout / '.credentials' / stack_environment.OPERATOR_PASSPHRASE_SLOT).unlink()
 
-    with pytest.raises(stack_environment.EnvironmentRefused, match='credentials derived github-passphrase recover'):
+    with pytest.raises(
+        stack_environment.EnvironmentRefused, match='credentials derived operator-passphrase recover'
+    ) as refusal:
         _ = driver.Run.open('github', checkout, pulumi=FakePulumi(), base=AMBIENT)
+
+    assert 'no operator passphrase on this machine' in str(refusal.value)
+    assert stack_environment.OPERATOR_PASSPHRASE_ENV in str(refusal.value)
+
+
+#: Each layer of the chain holding a value of its own, in the chain's order;
+#: the prompt is the last, standing for a terminal that answers.
+LAYERS = ('store', 'slot', 'variable', 'prompt')
+
+
+@pytest.mark.parametrize('first', LAYERS)
+def test_the_operator_passphrase_is_found_by_the_chain_in_its_order(
+    first: str, secret_store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every layer from `first` on holds a different value, and the first of them is the one a run is given.
+
+    Walked from each layer in turn, so each is shown both answering and being
+    passed over for the layer before it: the store over the slot, the slot
+    over the variable, the variable over the prompt, and the prompt asked only
+    when nothing above it holds a value.
+    """
+    checkout = tmp_path / 'kluster'
+    _fill_slots(checkout)
+    slot = checkout / '.credentials' / stack_environment.OPERATOR_PASSPHRASE_SLOT
+    slot.unlink()
+    held = LAYERS[LAYERS.index(first) :]
+    if 'store' in held:
+        secret_store.items[(acquisition.KEYRING_SERVICE, stack_environment.OPERATOR_PASSPHRASE_ACCOUNT)] = 'from-store'
+    if 'slot' in held:
+        _ = slot.write_text('from-slot\n')
+    if 'variable' in held:
+        monkeypatch.setenv(stack_environment.OPERATOR_PASSPHRASE_ENV, 'from-variable')
+    asked: list[str] = []
+
+    def ask(question: str) -> str:
+        asked.append(question)
+        return 'from-prompt'
+
+    found = stack_environment.operator_passphrase(checkout, ask)
+
+    assert found == f'from-{first}'
+    assert (asked != []) == (first == 'prompt')
+
+
+def test_an_empty_layer_is_passed_over_rather_than_handed_to_pulumi(
+    secret_store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A blank store entry and a blank slot are absent layers, not an empty passphrase."""
+    checkout = tmp_path / 'kluster'
+    _fill_slots(checkout)
+    secret_store.items[(acquisition.KEYRING_SERVICE, stack_environment.OPERATOR_PASSPHRASE_ACCOUNT)] = '  '
+    _ = (checkout / '.credentials' / stack_environment.OPERATOR_PASSPHRASE_SLOT).write_text('\n')
+    monkeypatch.setenv(stack_environment.OPERATOR_PASSPHRASE_ENV, 'from-variable')
+
+    assert stack_environment.operator_passphrase(checkout, lambda _question: None) == 'from-variable'
+
+
+def test_an_empty_answer_at_the_prompt_is_refused(tmp_path: Path) -> None:
+    checkout = tmp_path / 'kluster'
+    _fill_slots(checkout)
+    (checkout / '.credentials' / stack_environment.OPERATOR_PASSPHRASE_SLOT).unlink()
+
+    with pytest.raises(stack_environment.EnvironmentRefused, match='operator-passphrase recover'):
+        _ = stack_environment.operator_passphrase(checkout, lambda _question: '  ')
+
+
+class _Terminal(io.StringIO):
+    """Standard input that answers as a terminal does."""
+
+    def isatty(self) -> bool:
+        return True
+
+
+def test_a_run_at_a_terminal_is_asked_for_the_operator_passphrase_the_chain_does_not_hold(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The chain's last layer as a run meets it: a prompt where standard input is a terminal, and its answer used."""
+    checkout = tmp_path / 'kluster'
+    _fill_slots(checkout)
+    (checkout / '.credentials' / stack_environment.OPERATOR_PASSPHRASE_SLOT).unlink()
+    monkeypatch.setattr('sys.stdin', _Terminal())
+    asked: list[str] = []
+
+    def typed(question: str) -> str:
+        asked.append(question)
+        return 'typed-at-the-terminal'
+
+    monkeypatch.setattr('getpass.getpass', typed)
+    fake = FakePulumi()
+
+    assert driver.Run.open('github', checkout, pulumi=fake, base=AMBIENT).plan() == driver.NOTHING_PLANNED
+
+    assert len(asked) == 1
+    assert fake.envs, 'the driver started no pulumi, so the passphrase was never handed on'
+    assert {env['PULUMI_CONFIG_PASSPHRASE'] for env in fake.envs} == {'typed-at-the-terminal'}
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason='root reads a file whatever its mode')
+def test_an_unreadable_slot_is_refused_naming_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A slot that is there and cannot be read is the operator's to repair, not a layer to skip or a traceback."""
+    checkout = tmp_path / 'kluster'
+    _fill_slots(checkout)
+    slot = checkout / '.credentials' / stack_environment.OPERATOR_PASSPHRASE_SLOT
+    slot.chmod(0)
+    monkeypatch.setenv(stack_environment.OPERATOR_PASSPHRASE_ENV, 'from-variable')
+
+    try:
+        with pytest.raises(stack_environment.EnvironmentRefused, match='cannot be read') as refusal:
+            _ = driver.Run.open('github', checkout, pulumi=FakePulumi(), base=AMBIENT)
+    finally:
+        slot.chmod(0o600)
+
+    assert str(slot) in str(refusal.value)
 
 
 def test_the_slots_the_driver_reads_are_the_ones_the_credentials_commands_write() -> None:
-    assert stack_environment.OPERATOR_PASSPHRASE_SLOT == credential_slots.GITHUB_PASSPHRASE
+    """The bundle's slot and the passphrase's row, each spelled on both sides; the passphrase's slot is spelled once."""
     assert stack_environment.BUNDLE_SLOT == credential_slots.BUNDLE
-    assert escrow.row_name(escrow.GITHUB_PASSPHRASE) == stack_environment.OPERATOR_PASSPHRASE_ROW
+    assert escrow.row_name(escrow.OPERATOR_PASSPHRASE) == stack_environment.OPERATOR_PASSPHRASE_ROW
 
 
 # --------------------------------------------------------------------------

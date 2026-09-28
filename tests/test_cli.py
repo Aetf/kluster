@@ -29,14 +29,17 @@ import inspect
 import io
 import shutil
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
+import keyring.backends.fail
 import pytest
 from credentials_command_tree import commands
+from memory_keyring import MemoryKeyring, installed
 from memory_kit import MemoryKit
 
+from kluster.lib import acquisition, stack_environment
 from kluster.lib import workstation as lib_workstation
 from kluster.scripts.credentials import age, cli, devices, entries, escrow, masters
 from kluster.scripts.credentials.kdbx import PATH_ENV, KdbxStore
@@ -149,6 +152,8 @@ class Dispatch:
     """
 
     def __init__(self) -> None:
+        #: The secret store a leaf keeps a value in, installed for the case.
+        self.store = MemoryKeyring()
         self.reached: list[str] = []
         self.calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
         #: The real signature of each handler, taken before it is replaced, so
@@ -267,11 +272,19 @@ class Dispatch:
 
 
 @pytest.fixture
-def dispatch(kit: KdbxStore, monkeypatch: pytest.MonkeyPatch) -> Dispatch:
+def dispatch(kit: KdbxStore, monkeypatch: pytest.MonkeyPatch) -> Iterator[Dispatch]:
+    """Every handler stubbed, and a secret store of the case's own for what a leaf keeps there.
+
+    The store is the in-memory one rather than the closed one `conftest`
+    installs, so a leaf that keeps a value there -- `generate` and `recover`
+    of the operator passphrase -- is seen doing so, as the stubbed
+    `workstation.write` is seen writing a file.
+    """
     monkeypatch.setenv(PATH_ENV, str(kit.path))
     recorder = Dispatch()
     recorder.install(monkeypatch, kit)
-    return recorder
+    with installed(recorder.store):
+        yield recorder
 
 
 def test_the_walk_finds_every_register_row() -> None:
@@ -605,6 +618,19 @@ def test_generating_the_passphrase_also_fills_its_slot(dispatch: Dispatch) -> No
     assert args[1] == 'a-secret'
 
 
+@pytest.mark.parametrize('verb', ['generate', 'recover'])
+def test_the_operator_passphrase_is_kept_in_the_secret_store_rather_than_a_file(verb: str, dispatch: Dispatch) -> None:
+    # The acquisition chain reads the store first, so a machine that has one
+    # keeps the value there and nowhere else; the file is the fallback for a
+    # machine that has none, which the store installed here is not.
+    assert cli.main(['derived', escrow.row_name(escrow.OPERATOR_PASSPHRASE), verb]) == 0
+
+    assert dispatch.store.items == {
+        (acquisition.KEYRING_SERVICE, stack_environment.OPERATOR_PASSPHRASE_ACCOUNT): 'a-secret'
+    }
+    assert 'workstation.write' not in dispatch.reached
+
+
 def test_generating_a_label_with_no_slot_writes_no_file(dispatch: Dispatch) -> None:
     assert cli.main(['derived', 'state-backend-ca', 'generate']) == 0
 
@@ -857,3 +883,67 @@ def test_every_command_that_opens_an_escrow_opens_the_one_it_was_pointed_at(
     # still passing, which is the one way this stops being a property.
     assert opened
     assert opened == [(command, name, pointed_at) for command, name, _ in opened]
+
+
+#: The real `lifecycle.environment`, taken at import, before any case's
+#: dispatch replaces it: the cases below need the operator passphrase found
+#: the way a run finds it.
+ENVIRONMENT = cli.lifecycle.environment
+
+
+@pytest.fixture
+def chain(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+    """The acquisition chain moved off the operator's: no store, slots under `tmp_path`, nobody at a terminal."""
+    directory = tmp_path / 'checkout' / '.credentials'
+    monkeypatch.setattr(cli.workstation, 'directory', lambda: directory)
+    monkeypatch.setattr('sys.stdin', io.StringIO())
+    with installed(keyring.backends.fail.Keyring()):
+        yield directory
+
+
+def _sync_reading_the_forge_token(
+    dispatch: Dispatch, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> tuple[int, list[str]]:
+    """`derived sync`, with the environment built for real and the admin token's read standing in for `pulumi`.
+
+    The read takes the `github` stack's environment the way `devices.borrow`
+    does, so what it records is the passphrase a `pulumi` run against that
+    stack would have been started with.
+    """
+    monkeypatch.setattr(cli.lifecycle, 'environment', ENVIRONMENT)
+    seen: list[str] = []
+
+    def borrow(_device: devices.Device, *, stack: cli.pulumi_config.Stack) -> str:
+        seen.append(stack.env[cli.pulumi_config.PASSPHRASE_ENV])
+        return 'a-token'
+
+    monkeypatch.setattr(cli.devices, 'borrow', borrow)
+    code = cli.main(['derived', 'sync', '--bundle-dir', str(tmp_path / 'bundle')])
+    assert dispatch.reached, 'the dispatch recorded nothing, so the stubs it installs were never in place'
+    return code, seen
+
+
+def test_sync_reads_the_github_stack_with_the_passphrase_the_chain_finds(
+    dispatch: Dispatch, chain: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The escrow stand-in answers every recovery with `a-secret`; the chain
+    # holds another value, and that one is what the `github` stack is given.
+    chain.mkdir(parents=True)
+    _ = (chain / stack_environment.OPERATOR_PASSPHRASE_SLOT).write_text('from-the-slot\n')
+
+    code, seen = _sync_reading_the_forge_token(dispatch, monkeypatch, tmp_path)
+
+    assert code == 0
+    assert seen == ['from-the-slot']
+
+
+def test_sync_on_a_machine_the_chain_does_not_answer_on_is_refused_naming_recover(
+    dispatch: Dispatch, chain: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    assert not chain.exists()
+
+    code, seen = _sync_reading_the_forge_token(dispatch, monkeypatch, tmp_path)
+
+    assert code != 0
+    assert seen == []
+    assert f'credentials derived {stack_environment.OPERATOR_PASSPHRASE_ROW} recover' in caplog.text

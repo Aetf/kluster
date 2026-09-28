@@ -39,9 +39,11 @@ Three properties decide the shape:
     its own, so a half-remembered root asks for the half that is missing and
     nothing else.
 
-The secret-store layer is the same door as `credentials kit password remember`,
-in the other direction, and it goes through the same `kdbx` plumbing so there
-is one secret-store mechanism rather than two.
+The chain itself is `kluster.lib.acquisition`, which the operator passphrase
+is found through as well (`kluster.lib.stack_environment`), and its store
+layer is the same door as `credentials kit password remember`, so there is one
+secret-store mechanism rather than two. What is here is the roots' half: which
+fields each root has, and the file and variable each field is found in.
 
 The register below is machine-readable for the same reason `entries.py` is: a
 root with no fields recorded here is a root the scripts cannot ask for, and a
@@ -54,11 +56,12 @@ from __future__ import annotations
 import dataclasses
 import getpass
 import logging
-import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
+
+from kluster.lib import acquisition
 
 from . import kdbx, workstation
 from .kdbx import KdbxError
@@ -74,11 +77,10 @@ Prompt = Callable[[str], str]
 ACCOUNT_PREFIX = 'account-root'
 
 #: The chain's layers, as they are reported by `stored` and printed by
-#: `credentials root ls`. Names rather than an enum because their only job
-#: is to be read by an operator.
-STORE = 'the secret store'
-FILE = 'a token file'
-ENVIRONMENT = 'the environment'
+#: `credentials root ls`: the chain's own names (`acquisition`).
+STORE = acquisition.STORE
+FILE = acquisition.FILE
+ENVIRONMENT = acquisition.ENVIRONMENT
 
 
 class CredentialRejected(RuntimeError):
@@ -270,18 +272,17 @@ def _find(root: Root, field: Field) -> tuple[str, str] | None:
 
     The order is the chain (module docstring): store, file, variable. The
     prompt is not here because it is not a lookup — `load` asks, `stored`
-    reports, and only one of them may talk to the operator.
+    reports, and only one of them may talk to the operator. The store is read
+    through `kdbx.remembered`, the name the kit's own password is read by, so
+    one stand-in for the store covers the kit and the roots alike.
     """
-    remembered = kdbx.remembered(_account(root, field))
-    if remembered is not None and (value := _clean(field, remembered)) is not None:
-        return value, STORE
-    path = workstation.root_path(field.file)
-    if path.is_file() and (value := _clean(field, path.read_text())) is not None:
-        return value, FILE
-    handed = os.environ.get(field.env)
-    if handed is not None and (value := _clean(field, handed)) is not None:
-        return value, ENVIRONMENT
-    return None
+    return acquisition.find(
+        _account(root, field),
+        workstation.root_path(field.file),
+        field.env,
+        lambda raw: _clean(field, raw),
+        recall=kdbx.remembered,
+    )
 
 
 def stored(root: Root) -> dict[str, str | None]:
@@ -327,7 +328,7 @@ def _keep(root: Root, field: Field, value: str) -> None:
     headless box too.
     """
     try:
-        kdbx.store(_account(root, field), value)
+        acquisition.store(_account(root, field), value)
     except Exception as exc:  # noqa: BLE001 -- any backend failure is "no store here"
         log.warning('no desktop secret store (%s); keeping %s in its token file instead', exc, field.name)
         _ = workstation.write(workstation.root_path(field.file), value)
@@ -359,11 +360,7 @@ def forget(root: Root) -> None:
     """
     removed = 0
     for field in root.fields:
-        try:
-            kdbx.unstore(_account(root, field))
-        except KdbxError:
-            pass
-        else:
+        if acquisition.unstore(_account(root, field)):
             removed += 1
         path = workstation.root_path(field.file)
         if path.is_file():

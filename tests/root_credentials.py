@@ -3,7 +3,8 @@
 `mise.toml` materializes the passphrases that decrypt this installation's
 committed configuration and its state, and the backend URL that names a client
 key, into every process it starts, and it does so from a file rather than from
-the caller, so each wins over anything set on the command line. An account root arrives the same way where an operator's
+the caller, so each wins over anything set on the command line. An account
+root, and the operator passphrase, arrive the same way where an operator's
 shell exports one, which is the third layer of the chain that finds them. A
 `pytest` run started the way AGENTS.md requires therefore carries live
 credentials whether the suite wants them or not.
@@ -22,15 +23,16 @@ not ask gets whatever the code under test raises for an unset variable, which
 names the variable it wanted.
 
 **The environment is one of three channels, and this module closes only it.**
-`masters._find` consults the desktop secret store, then a file under the
-checkout's own `.credentials/`, and only then the variable; `workstation`
-resolves that directory from `__file__`, so on an operator workstation the
-file layer answers with live material without the environment being involved
-at all. Closing those two is not the same problem: they are read at *test*
-time and never at import, so a fixture reaches them where it could not reach
-this, and until one exists a suite that touches `masters`, `workstation` or
-`kdbx` redirects `workstation.directory` at a `tmp_path` itself, as
-`tests/test_masters.py::local` does. `docs/framework/testing.md` §1.1 is where
+The acquisition chain (`kluster.lib.acquisition.find`) consults the desktop
+secret store, then a file under the checkout's own `.credentials/`, and only
+then the variable; `workstation` resolves that directory from `__file__`, so
+on an operator workstation the file layer answers with live material without
+the environment being involved at all. Closing those two is not the same
+problem: they are reached at *test* time and never at import, so a fixture
+reaches them where it could not reach this. The store is closed that way, for
+every case, in `tests/conftest.py`; the file layer is not yet, so a suite that
+touches `masters`, `workstation`, `kdbx` or the operator passphrase redirects
+it itself, as `tests/test_masters.py` does with a `tmp_path`. `docs/framework/testing.md` §1.1 is where
 that discipline is written down.
 
 This module is a named module rather than part of `conftest`, because test
@@ -44,6 +46,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from kluster.lib import stack_environment
 from kluster.scripts.credentials import masters
 
 if TYPE_CHECKING:
@@ -55,15 +58,17 @@ if TYPE_CHECKING:
 #: cannot be forgotten by the next person to declare a provider.
 ROOT_VARIABLES = frozenset(field.env for root in masters.ROOTS.values() for field in root.fields)
 
-#: The variables `mise.toml` lists under `redactions` that are not account-root
-#: fields: the stack passphrase, which decrypts the state and every other
-#: stack's config, the one that decrypts the `github` stack's config, and the
-#: backend URL, which names a client key. The register above does not carry
+#: The variables that carry a passphrase or a backend rather than an
+#: account-root field: the stack passphrase, which decrypts the state and every
+#: other stack's config, and the backend URL, which names a client key -- the
+#: two `mise.toml` lists under `redactions` -- and the operator passphrase,
+#: which decrypts the operator stacks' config and is the variable layer of its
+#: chain, named where the driver reads it. The register above does not carry
 #: them, and they are secrets on exactly the same terms.
 BACKEND_VARIABLES = frozenset(
     {
         'PULUMI_CONFIG_PASSPHRASE',
-        'KLUSTER_GITHUB_PASSPHRASE',
+        stack_environment.OPERATOR_PASSPHRASE_ENV,
         'PULUMI_BACKEND_URL',
     }
 )

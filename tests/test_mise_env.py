@@ -84,9 +84,9 @@ def _fill_slots(checkout: Path) -> dict[str, str]:
     bundle.mkdir(parents=True)
     _ = (bundle / 'backend-url').write_text(SLOT_URL + '\n')
     _ = (slots / 'pulumi.passphrase').write_text('slot-passphrase\n')
-    # The operator stacks' passphrase is here as on a workstation, and
-    # nothing below may resolve it.
-    _ = (slots / 'github.passphrase').write_text('slot-github-passphrase\n')
+    # The operator passphrase is here as on a workstation with no secret
+    # store, and nothing below may resolve it.
+    _ = (slots / stack_environment.OPERATOR_PASSPHRASE_SLOT).write_text('slot-operator-passphrase\n')
     return {
         'PULUMI_BACKEND_URL': SLOT_URL,
         'PULUMI_CONFIG_PASSPHRASE': 'slot-passphrase',
@@ -221,7 +221,7 @@ def test_a_sibling_whose_name_extends_the_checkouts_is_not_under_it(tmp_path: Pa
 
 
 def test_nothing_in_mise_toml_reaches_an_operator_stack() -> None:
-    """No template reads the operator stacks' passphrase, and no task runs `pulumi` against one.
+    """No template reads the operator passphrase, and no task runs `pulumi` against one.
 
     Either would be a second way to an operator stack beside the driver, and
     one that sets neither the stack's own backend nor its checks: the
@@ -241,5 +241,5 @@ def test_nothing_in_mise_toml_reaches_an_operator_stack() -> None:
         )
     ]
 
-    assert reading == [], f"[env] templates reading the operator stacks' passphrase: {reading}"
+    assert reading == [], f'[env] templates reading the operator passphrase: {reading}'
     assert running == [], f'mise tasks running an operator stack: {running}'
