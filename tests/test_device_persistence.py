@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import itertools
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import final
@@ -459,20 +460,109 @@ put() {{
 }}
 """
 
+#: Debian's version order, as dpkg's `verrevcmp` defines it: an epoch first,
+#: then the upstream version and the revision, each compared as alternating
+#: runs of non-digits — where `~` sorts before everything, even the end of the
+#: string, and letters before other characters — and of digits, compared as
+#: numbers. Run as `<a> <op> <b>` with dpkg's operators; the exit status is
+#: the answer.
+COMPARE_VERSIONS = """
+import sys
+
+
+def order(c):
+    if c == '' or c.isdigit():
+        return 0
+    if c.isalpha():
+        return ord(c)
+    if c == '~':
+        return -1
+    return ord(c) + 256
+
+
+def verrevcmp(a, b):
+    i = j = 0
+    while i < len(a) or j < len(b):
+        while (i < len(a) and not a[i].isdigit()) or (j < len(b) and not b[j].isdigit()):
+            ac = order(a[i] if i < len(a) else '')
+            bc = order(b[j] if j < len(b) else '')
+            if ac != bc:
+                return ac - bc
+            i += 1
+            j += 1
+        while i < len(a) and a[i] == '0':
+            i += 1
+        while j < len(b) and b[j] == '0':
+            j += 1
+        first = 0
+        while i < len(a) and a[i].isdigit() and j < len(b) and b[j].isdigit():
+            first = first or ord(a[i]) - ord(b[j])
+            i += 1
+            j += 1
+        if i < len(a) and a[i].isdigit():
+            return 1
+        if j < len(b) and b[j].isdigit():
+            return -1
+        if first:
+            return first
+    return 0
+
+
+def parse(version):
+    epoch, _, rest = version.partition(':') if ':' in version else ('0', '', version)
+    upstream, _, revision = rest.rpartition('-') if '-' in rest else (rest, '', '')
+    return int(epoch), upstream, revision
+
+
+def compare(a, b):
+    (ea, ua, ra), (eb, ub, rb) = parse(a), parse(b)
+    return (ea > eb) - (ea < eb) or verrevcmp(ua, ub) or verrevcmp(ra, rb)
+
+
+a, op, b = sys.argv[1:]
+result = compare(a, b)
+holds = {'lt': result < 0, 'le': result <= 0, 'eq': result == 0, 'ne': result != 0, 'ge': result >= 0, 'gt': result > 0}
+sys.exit(0 if holds[op] else 1)
+"""
+
 #: `dpkg` as the package converger asks it. `-s` prints the record of a package
 #: and exits 0 whenever there is one, whatever its status — as `dpkg` does,
 #: so a converger that trusted the exit status would take a removed package for
-#: an installed one — and refuses a package it holds no record of. `-i`
-#: installs every deb it is handed, named for its package the way a deb's file
-#: is, refusing an archive that is not there. Every call is recorded, beside
-#: `apt-get`'s.
+#: an installed one — and refuses a package it holds no record of.
+#:
+#: `--compare-versions <a> <op> <b>` compares two versions in Debian's order
+#: (`COMPARE_VERSIONS`).
+#:
+#: `-i` unpacks every deb it is handed, named for its package the way a deb's
+#: file is, refusing an archive that is not there, and then configures what it
+#: unpacked, in dpkg 1.20's words throughout. A deb older than a package dpkg
+#: holds installed, unpacked or half-configured downgrades it, or, under
+#: `--refuse-downgrade`, is skipped and leaves the exit status alone. Under
+#: `--skip-same-version`, a deb at the version of such a package is skipped and
+#: not configured.
+#: Two dependencies of `DEPENDENT` are checked when it is configured: `PINNED`
+#: at `DEPENDENT`'s own version, wherever the database holds `PINNED` —
+#: `systemd-container` pins `systemd` exactly — and `DEPENDENCY` installed. A
+#: failed check leaves `DEPENDENT` unpacked and dpkg exiting 1, with the reason
+#: dpkg gives. `postinst-fails` names a package and a version at which its
+#: maintainer script fails when it is configured, which leaves it
+#: half-configured. Every call is recorded, beside `apt-get`'s.
 DPKG = (
     """#!/bin/sh
 echo "dpkg $*" >>{calls}
 """
     + DATABASE_SH
     + """
+held() {{
+    awk -v p="Package: $1" 'BEGIN {{ RS = "" }} {{ split($0, l, "\\n") }} l[1] == p {{ sub(/^Version: /, "", l[3]); print l[3] }}' "$2"
+}}
+newer() {{
+    {python} {compare} "$1" gt "$2"
+}}
 case "$1" in
+    --compare-versions)
+        exec {python} {compare} "$2" "$3" "$4"
+        ;;
     -s)
         if [ -n "$(state "$2" {status})" ]; then
             awk -v p="Package: $2" 'BEGIN {{ RS = "" }} {{ split($0, l, "\\n") }} l[1] == p' {status}
@@ -483,13 +573,82 @@ case "$1" in
         ;;
     -i)
         shift
+        refuse=0
+        skip=0
+        while :; do
+            case "$1" in
+                --refuse-downgrade) refuse=1 ;;
+                --skip-same-version) skip=1 ;;
+                *) break ;;
+            esac
+            shift
+        done
+        unpacked=
         for deb in "$@"; do
             [ -f "$deb" ] || {{ echo "dpkg: error: cannot access archive '$deb': No such file or directory" >&2; exit 1; }}
             name=${{deb##*/}}
+            package=${{name%%_*}}
             version=${{name#*_}}
-            put "${{name%%_*}}" 'install ok installed' {status} "${{version%_*}}"
+            version=${{version%_*}}
+            s=$(state "$package" {status})
+            installed=$(held "$package" {status})
+            case "$s" in
+                'install ok installed' | 'install ok unpacked' | 'install ok half-configured') ;;
+                *) installed= ;;
+            esac
+            if [ -n "$installed" ] && newer "$installed" "$version"; then
+                if [ "$refuse" -eq 1 ]; then
+                    echo "dpkg: will not downgrade $package from $installed to $version, skipping" >&2
+                    continue
+                fi
+                echo "dpkg: warning: downgrading $package from $installed to $version" >&2
+            fi
+            case "$s" in
+                'install ok installed' | 'install ok unpacked' | 'install ok half-configured')
+                    if [ "$skip" -eq 1 ] && [ "$installed" = "$version" ]; then
+                        echo "dpkg: version $version of $package already installed, skipping" >&2
+                        continue
+                    fi
+                    ;;
+            esac
+            put "$package" 'install ok unpacked' {status} "$version"
+            unpacked="$unpacked $package"
         done
-        exit 0
+        failed=0
+        for package in $unpacked; do
+            [ "$package" != {dependent} ] || continue
+            if [ "$package $(held "$package" {status})" = "$(cat {postinst_fails} 2>/dev/null)" ]; then
+                put "$package" 'install ok half-configured' {status} "$(held "$package" {status})"
+                printf 'dpkg: error processing package %s (--install):\\n installed %s package post-installation script subprocess returned error exit status 1\\n' \\
+                    "$package" "$package" >&2
+                failed=1
+                continue
+            fi
+            put "$package" 'install ok installed' {status} "$(held "$package" {status})"
+        done
+        for package in $unpacked; do
+            [ "$package" = {dependent} ] || continue
+            version=$(held "$package" {status})
+            pinned=$(held {pinned} {status})
+            dependency=$(state {dependency} {status})
+            reasons=
+            if [ -n "$pinned" ] && [ "$pinned" != "$version" ]; then
+                reasons="$reasons $package depends on {pinned} (= $version); however:\\n  Version of {pinned} on system is $pinned.\\n"
+            fi
+            if [ -z "$dependency" ]; then
+                reasons="$reasons $package depends on {dependency}; however:\\n  Package {dependency} is not installed.\\n"
+            elif [ "$dependency" != 'install ok installed' ]; then
+                reasons="$reasons $package depends on {dependency}; however:\\n  Package {dependency} is not configured yet.\\n"
+            fi
+            if [ -z "$reasons" ]; then
+                put "$package" 'install ok installed' {status} "$version"
+                continue
+            fi
+            printf "dpkg: dependency problems prevent configuration of %s:\\n$reasons\\n" "$package" >&2
+            printf 'dpkg: error processing package %s (--install):\\n dependency problems - leaving unconfigured\\n' "$package" >&2
+            failed=1
+        done
+        exit $failed
         ;;
 esac
 echo "fake dpkg: $1 is not modeled" >&2
@@ -508,7 +667,8 @@ exit 2
 #: with `--reinstall` it downloads the packages it is named even where they are
 #: installed, and not what they depend on (`TryToInstall::operator()`).
 #: Offline — the boot after a firmware update with no network, its lists empty
-#: and unfetchable — nothing it is asked for can be found. `refresh-fails` is a
+#: and unfetchable — nothing it is asked for can be found, and `update` warns
+#: and exits 0, as apt 2.2.4 does. `refresh-fails` is a
 #: download-only run failing part-way on a boot the install itself worked: it
 #: fetches the packages it was named and none of what they depend on, and exits
 #: the way apt does when some of its downloads failed. `power-loss` is the power
@@ -518,6 +678,10 @@ exit 2
 #: named into the current directory, as apt does, whatever the archive's
 #: candidate, unless its own flag makes it fail. `candidate`, when present,
 #: holds the version the archive offers, which `install` fetches and records.
+#: When `postinst-fails` names a package it installed at that version, the
+#: install's configuration of it fails: it is left half-configured — and
+#: `DEPENDENT` unpacked, when it is `DEPENDENCY` — and apt exits the way it does
+#: when dpkg returned an error.
 #:
 #: apt's own terms hold, as apt 2.2.4 states them: the archives directory is
 #: its shared one unless `-o Dir::Cache::archives=` names another, it makes
@@ -555,7 +719,10 @@ for word in "$@"; do
     esac
 done
 if [ -e {offline} ]; then
-    [ "$command" = update ] && exit 100
+    if [ "$command" = update ]; then
+        echo "W: Failed to fetch the archive's indexes" >&2
+        exit 0
+    fi
     for package in $packages; do
         echo "E: Unable to locate package $package" >&2
     done
@@ -612,6 +779,17 @@ if [ "$power_loss" -eq 1 ]; then
     kill -KILL "$PPID"
     exit 137
 fi
+if [ "$download_only" -eq 0 ] && [ -s {postinst_fails} ]; then
+    read -r broken broken_version <{postinst_fails}
+    if [ "$broken_version" = "$candidate" ] && [ "$(state "$broken" "$database")" = 'install ok installed' ]; then
+        put "$broken" 'install ok half-configured' "$database" "$candidate"
+        if [ "$broken" = {dependency} ] && [ -n "$(state {dependent} "$database")" ]; then
+            put {dependent} 'install ok unpacked' "$database" "$candidate"
+        fi
+        echo "E: Sub-process /usr/bin/dpkg returned an error code (1)" >&2
+        exit 100
+    fi
+fi
 if [ "$failing" -eq 1 ]; then
     echo "E: Some files failed to download" >&2
     exit 100
@@ -627,6 +805,10 @@ exit 0
 DEPENDENT = 'systemd-container'
 DEPENDENCY = 'libcurl3-gnutls'
 FIRMWARE = 'libc6'
+
+#: The package `DEPENDENT` pins to its own version, which a firmware can ship
+#: at a newer one than the cache holds.
+PINNED = 'systemd'
 
 #: The statuses a record can carry that are not an installation, in dpkg's words.
 UNPACKED = 'install ok unpacked'
@@ -657,11 +839,13 @@ class _Packages:
     release: Path
     calls: Path
     #: The flags that make apt unreachable, make a download-only run fail, make
-    #: `apt-get download` fail, and cut the power during an install.
+    #: `apt-get download` fail, cut the power during an install, and name the
+    #: package and version whose maintainer script fails.
     offline: Path
     refresh_fails: Path
     download_fails: Path
     power_loss: Path
+    postinst_fails: Path
     #: The version the archive offers, 1.0 while the file is absent.
     candidate: Path
     tools: Path
@@ -701,6 +885,7 @@ def _packages(
     cached: tuple[str, ...],
     base: tuple[str, ...] | None = None,
     records: dict[str, str] | None = None,
+    versions: dict[str, str] | None = None,
 ) -> _Packages:
     """The package converger, rendered by the production function against a temporary tree.
 
@@ -708,7 +893,8 @@ def _packages(
     device runs; only the cache — and so the download directory beside it — the
     saved base, the live database and the release file are this tree's. The
     live database holds the firmware's package beside `installed`, and
-    `records` in the statuses they name; `base`, when given, is a firmware base
+    `records` in the statuses they name, each at 1.0 unless `versions` names
+    another version; `base`, when given, is a firmware base
     already saved, holding exactly the packages it names, from a release other
     than the running one.
     """
@@ -727,12 +913,13 @@ def _packages(
         refresh_fails=tmp_path / 'refresh-fails',
         download_fails=tmp_path / 'download-fails',
         power_loss=tmp_path / 'power-loss',
+        postinst_fails=tmp_path / 'postinst-fails',
         candidate=tmp_path / 'candidate',
         tools=tmp_path / 'tools',
     )
     for directory in (device.cache, device.archives, device.tools):
         directory.mkdir()
-    _ = device.status.write_text(_database(FIRMWARE, *installed, records=records))
+    _ = device.status.write_text(_database(FIRMWARE, *installed, records=records, versions=versions))
     _ = device.release.write_text('fw-1\n')
     if base is not None:
         device.base.mkdir()
@@ -740,6 +927,8 @@ def _packages(
         _ = device.base_release.write_text('fw-0\n')
     for package in cached:
         _ = deb(device.cache, package).write_text('')
+    compare = device.tools / 'compare-versions.py'
+    _ = compare.write_text(COMPARE_VERSIONS)
     for name, stub in (('dpkg', DPKG), ('apt-get', APT_GET)):
         tool = device.tools / name
         _ = tool.write_text(
@@ -751,9 +940,14 @@ def _packages(
                 refresh_fails=device.refresh_fails,
                 download_fails=device.download_fails,
                 power_loss=device.power_loss,
+                postinst_fails=device.postinst_fails,
                 candidate=device.candidate,
                 dependent=DEPENDENT,
+                dependency=DEPENDENCY,
+                pinned=PINNED,
                 dependencies=f'{DEPENDENCY} {FIRMWARE}',
+                python=sys.executable,
+                compare=compare,
             )
         )
         tool.chmod(0o755)
@@ -769,9 +963,12 @@ def _packages(
     return device
 
 
-def _update_firmware(device: _Packages) -> None:
-    """A firmware update: a new release, and a live database of the firmware's package with nothing of the set."""
-    _ = device.status.write_text(_database(FIRMWARE))
+def _update_firmware(device: _Packages, shipping: dict[str, str] | None = None) -> None:
+    """A firmware update: a new release, and a live database of the firmware's package with nothing of the set.
+
+    `shipping` names further packages the new firmware ships, each at the version it names.
+    """
+    _ = device.status.write_text(_database(FIRMWARE, *(shipping or {}), versions=shipping))
     _ = device.release.write_text(f'{device.release.read_text().strip()}+1\n')
 
 
@@ -792,6 +989,7 @@ def _install(
     refresh_fails: bool = False,
     download_fails: bool = False,
     power_loss: bool = False,
+    postinst_fails: tuple[str, str] | None = None,
 ) -> _Run:
     """Run the package converger once, and read back what it asked of apt and dpkg."""
     for flag, raised in (
@@ -804,6 +1002,10 @@ def _install(
             _ = flag.write_text('')
         else:
             flag.unlink(missing_ok=True)
+    if postinst_fails is None:
+        device.postinst_fails.unlink(missing_ok=True)
+    else:
+        _ = device.postinst_fails.write_text(' '.join(postinst_fails))
     device.calls.unlink(missing_ok=True)
     completed = subprocess.run(
         ['/bin/bash', str(device.script)],
@@ -815,7 +1017,7 @@ def _install(
     calls = device.calls.read_text().splitlines() if device.calls.exists() else []
     return _Run(
         status=completed.returncode,
-        calls=[call for call in calls if not call.startswith('dpkg -s ')],
+        calls=[call for call in calls if not call.startswith(('dpkg -s ', 'dpkg --compare-versions '))],
         output=completed.stdout + completed.stderr,
     )
 
@@ -889,7 +1091,7 @@ def test_one_package_missing_is_the_whole_set_installed_in_one_transaction(tmp_p
     one `dpkg` call for the same reason, and the device ends up with the set.
     """
     kept, lost = sorted(PACKAGES)
-    device = _packages(tmp_path, installed=(kept,), cached=PACKAGES)
+    device = _packages(tmp_path, installed=(kept, DEPENDENCY), cached=PACKAGES)
 
     run = _install(device, online=False)
 
@@ -899,7 +1101,7 @@ def test_one_package_missing_is_the_whole_set_installed_in_one_transaction(tmp_p
         _apt(device, 'install', '-y', *sorted(PACKAGES)),
         _offline_install(device, *PACKAGES),
     ]
-    assert _listed(device.status) == {FIRMWARE, kept, lost}
+    assert _listed(device.status) == {FIRMWARE, kept, lost, DEPENDENCY}
 
 
 def test_a_boot_with_neither_apt_nor_a_cache_fails_rather_than_reporting_the_set_installed(tmp_path: Path) -> None:
@@ -959,7 +1161,7 @@ def test_a_post_update_boot_records_the_firmware_base_before_installing_anything
 
 def test_a_post_update_boot_with_no_network_still_records_the_base(tmp_path: Path) -> None:
     """The database is the firmware's whether or not apt is reachable on that boot."""
-    device = _packages(tmp_path, installed=(), cached=PACKAGES)
+    device = _packages(tmp_path, installed=(), cached=(*PACKAGES, DEPENDENCY))
 
     run = _install(device, online=False)
 
@@ -1027,6 +1229,288 @@ def test_a_post_update_boot_cut_short_leaves_the_base_it_recorded_for_the_boot_a
     assert run.status == 0
     assert _dpkg_installs(run) == [_offline_install(device, *PACKAGES, DEPENDENCY)]
     assert _listed(device.status) == {FIRMWARE, *PACKAGES, DEPENDENCY}
+
+
+def test_a_networkless_boot_after_an_install_cut_short_configures_what_it_left_unpacked(tmp_path: Path) -> None:
+    """dpkg configures a package it holds unpacked only when it is handed the deb again and unpacks it.
+
+    The power going during an install leaves the set's dependencies unpacked at
+    the version the cache holds, and a networkless boot on the same firmware
+    installs from the cache. Told to skip a deb at the version it already holds
+    — `--skip-same-version` — dpkg skips the unpacked ones too, and they stay
+    unconfigured with everything that depends on them.
+    """
+    device = _packages(tmp_path, installed=(), cached=())
+    assert _install(device, online=True).status == 0
+    _update_firmware(device)
+    assert _install(device, online=True, power_loss=True).status != 0
+    assert f'Package: {DEPENDENCY}\nStatus: {UNPACKED}\n' in device.status.read_text()
+
+    run = _install(device, online=False)
+
+    assert run.status == 0
+    assert _dpkg_installs(run) == [_offline_install(device, *PACKAGES, DEPENDENCY)]
+    assert _listed(device.status) == {FIRMWARE, *PACKAGES, DEPENDENCY}
+
+
+def test_a_networkless_boot_after_an_install_cut_short_at_a_newer_version_repairs_it_from_the_cache(
+    tmp_path: Path,
+) -> None:
+    """A package an interrupted run left unpacked is not the firmware's, at whatever version.
+
+    The archive moves on between firmware updates, so the install a boot cut
+    short had unpacked a dependency at a newer version than the cache holds.
+    dpkg refuses to downgrade an unpacked package under `--refuse-downgrade` as
+    it does an installed one, which would keep that leftover unpacked and the
+    set unconfigured beside it. Nothing holds it back: dpkg replaces it from the
+    cache and configures it, and the set comes up.
+    """
+    device = _packages(
+        tmp_path,
+        installed=(),
+        cached=(*PACKAGES, DEPENDENCY),
+        records={DEPENDENCY: UNPACKED},
+        versions={DEPENDENCY: '1.1'},
+    )
+
+    run = _install(device, online=False)
+
+    assert run.status == 0
+    assert _dpkg_installs(run) == [_offline_install(device, *PACKAGES, DEPENDENCY)]
+    assert _listed(device.status) == {FIRMWARE, *PACKAGES, DEPENDENCY}
+    assert _record(device.status, DEPENDENCY) == ('install ok installed', '1.0')
+    assert not _held_back(run)
+
+
+#: The cache a refresh on an older firmware leaves: the set, the dependency that
+#: firmware lacks, and `PINNED` at the version the set's install upgraded that
+#: firmware's to, which is the version `DEPENDENT` pins.
+OLDER_FIRMWARES_CACHE = (*PACKAGES, DEPENDENCY, PINNED)
+
+#: What a firmware update after that refresh ships of the cache: `PINNED`, at a
+#: newer version than the cache holds.
+NEWER_FIRMWARE = {PINNED: '2.0'}
+
+
+def _record(database: Path, package: str) -> tuple[str, str] | None:
+    """The status and version of the record a dpkg database holds of `package`, or None when it holds none."""
+    for stanza in database.read_text().split('\n\n'):
+        lines = stanza.splitlines()
+        if lines and lines[0] == f'Package: {package}':
+            return lines[1].removeprefix('Status: '), lines[2].removeprefix('Version: ')
+    return None
+
+
+def _held_back(run: _Run) -> list[str]:
+    """The lines in which a run says it held a deb of the cache back."""
+    return [line for line in run.output.splitlines() if line.startswith("packages: holding back the offline cache's ")]
+
+
+def _holding_back(package: str, cached: str, shipped: str) -> str:
+    return f"packages: holding back the offline cache's {package} {cached}: the firmware ships {shipped}"
+
+
+def _not_installed(*packages: str) -> str:
+    """The line in which a run names the members of the set it leaves not installed."""
+    return (
+        f'packages: FAILED -- {" ".join(packages)} not installed: neither apt nor the offline cache could install them'
+    )
+
+
+def test_a_networkless_boot_after_an_update_keeps_the_firmwares_newer_package_and_fails(tmp_path: Path) -> None:
+    """The cache is resolved against the firmware that ran its last refresh (Aetf/kluster-ops#480).
+
+    A refresh on the older firmware cached `systemd` at the version the set's
+    install upgraded it to, since `systemd-container` pins it exactly. An
+    update since ships a newer `systemd`, and a networkless boot on it installs
+    from that cache: handed to dpkg, the cache would replace the firmware's own
+    `systemd` with the older build. Its deb is held back and named with both
+    versions, so `systemd-container`, pinned to the cache's version, stays
+    unconfigured, and the boot fails and names it.
+    """
+    device = _packages(tmp_path, installed=(), cached=OLDER_FIRMWARES_CACHE)
+    _update_firmware(device, shipping=NEWER_FIRMWARE)
+
+    run = _install(device, online=False)
+
+    assert run.status == 1
+    assert _record(device.status, PINNED) == ('install ok installed', NEWER_FIRMWARE[PINNED])
+    assert _held_back(run) == [_holding_back(PINNED, '1.0', NEWER_FIRMWARE[PINNED])]
+    assert _not_installed(DEPENDENT) in run.output.splitlines()
+
+
+def test_a_held_back_package_leaves_the_rest_of_the_cache_installed_and_the_next_online_boot_completes_the_set(
+    tmp_path: Path,
+) -> None:
+    """dpkg installs every deb of the cache but the one held back.
+
+    Every member of the set that does not depend on the held-back version is
+    installed offline, and `systemd-container`, which pins the cache's
+    `systemd`, is left unpacked. The next boot that reaches apt installs the
+    set against the new firmware and succeeds, and the cache it refreshes is
+    resolved against that firmware, so it no longer holds `systemd`.
+    """
+    rest = set(PACKAGES) - {DEPENDENT}
+    device = _packages(tmp_path, installed=(), cached=OLDER_FIRMWARES_CACHE)
+    _update_firmware(device, shipping=NEWER_FIRMWARE)
+
+    run = _install(device, online=False)
+
+    assert run.status == 1
+    assert _dpkg_installs(run) == [_offline_install(device, *PACKAGES, DEPENDENCY)]
+    assert _listed(device.status) == {FIRMWARE, PINNED, DEPENDENCY, *rest}
+    assert _record(device.status, DEPENDENT) == (UNPACKED, '1.0')
+
+    run = _install(device, online=True)
+
+    assert run.status == 0
+    assert _listed(device.status) == {FIRMWARE, PINNED, DEPENDENCY, *PACKAGES}
+    assert _record(device.status, PINNED) == ('install ok installed', NEWER_FIRMWARE[PINNED])
+    assert _names_in(device.cache) == _debs(device.cache, *PACKAGES, DEPENDENCY)
+
+
+def test_an_install_whose_newer_dependency_failed_its_maintainer_script_is_repaired_from_the_cache(
+    tmp_path: Path,
+) -> None:
+    """A package apt's own failed run left half-configured is not the firmware's.
+
+    The archive's dependency, newer than the cache's, fails its maintainer
+    script: apt leaves it half-configured, the package of the set that depends
+    on it unpacked, and the rest of the set installed at the archive's version.
+    None of that is the firmware's, so nothing is held back: the fallback
+    replaces all of it from the cache, the set comes up as on `main`, and the
+    boot succeeds.
+    """
+    device = _packages(tmp_path, installed=(), cached=(*PACKAGES, DEPENDENCY))
+    _ = device.candidate.write_text('1.1')
+
+    run = _install(device, online=True, postinst_fails=(DEPENDENCY, '1.1'))
+
+    assert run.status == 0
+    assert not _held_back(run)
+    assert _listed(device.status) == {FIRMWARE, *PACKAGES, DEPENDENCY}
+    assert all(
+        _record(device.status, package) == ('install ok installed', '1.0') for package in (*PACKAGES, DEPENDENCY)
+    )
+
+    run = _install(device, online=True, postinst_fails=(DEPENDENCY, '1.1'))
+
+    assert run.status == 0
+    assert run.calls == []
+
+
+def test_a_failed_install_beside_a_held_back_firmware_package_fails_the_boot(tmp_path: Path) -> None:
+    """A boot fails when the set is not up, whatever apt could reach.
+
+    The firmware ships a newer `systemd` than the cache, and the archive's
+    `systemd-container`, pinned to it, fails its maintainer script. The
+    fallback holds the firmware's `systemd` back and leaves the cache's
+    `systemd-container` unconfigured against it, and the boot fails, on this
+    boot and on every one like it.
+    """
+    device = _packages(tmp_path, installed=(), cached=OLDER_FIRMWARES_CACHE)
+    _update_firmware(device, shipping=NEWER_FIRMWARE)
+    _ = device.candidate.write_text('2.0')
+
+    for _ in range(2):
+        run = _install(device, online=True, postinst_fails=(DEPENDENT, '2.0'))
+
+        assert run.status == 1
+        assert _held_back(run) == [_holding_back(PINNED, '1.0', NEWER_FIRMWARE[PINNED])]
+        assert _record(device.status, PINNED) == ('install ok installed', NEWER_FIRMWARE[PINNED])
+        assert _not_installed(DEPENDENT) in run.output.splitlines()
+
+
+def _base_is_this_firmwares(device: _Packages) -> None:
+    """The base as the update's first boot recorded it: the firmware's package alone, under the running release."""
+    device.base.mkdir(exist_ok=True)
+    _ = device.base_status.write_text(_database(FIRMWARE))
+    _ = device.base_release.write_text(device.release.read_text())
+
+
+def test_a_pin_target_an_apt_run_installed_newer_is_replaced_from_the_cache(tmp_path: Path) -> None:
+    """A package installed at a newer version than the cache's is the firmware's only when the base lists it.
+
+    An apt run installed the package `DEPENDENT` pins at a newer version than
+    the cache holds, and its own install of the set failed a maintainer
+    script. The base does not list that package, so it is not held back: dpkg
+    replaces it from the cache, the cache's `DEPENDENT` configures against it,
+    and the set comes up, as on `main`.
+    """
+    device = _packages(tmp_path, installed=(PINNED,), cached=(*PACKAGES, DEPENDENCY, PINNED), versions={PINNED: '1.1'})
+    _base_is_this_firmwares(device)
+    _ = device.candidate.write_text('1.1')
+
+    run = _install(device, online=True, postinst_fails=(DEPENDENT, '1.1'))
+
+    assert run.status == 0
+    assert not _held_back(run)
+    assert _listed(device.status) == {FIRMWARE, PINNED, DEPENDENCY, *PACKAGES}
+    assert _record(device.status, PINNED) == ('install ok installed', '1.0')
+
+
+def test_an_install_cut_short_in_its_configure_phase_is_repaired_from_the_cache(tmp_path: Path) -> None:
+    """A networkless boot repairs an install whose pin target configured and whose dependent did not.
+
+    The power went after the online install configured the package
+    `DEPENDENT` pins, at the archive's newer version, and before it configured
+    `DEPENDENT`. The base does not list that package, so nothing is held back:
+    dpkg replaces both from the cache, and the set comes up offline, as on
+    `main`.
+    """
+    device = _packages(
+        tmp_path,
+        installed=(PINNED, DEPENDENCY, *(set(PACKAGES) - {DEPENDENT})),
+        cached=(*PACKAGES, DEPENDENCY, PINNED),
+        records={DEPENDENT: UNPACKED},
+        versions={PINNED: '1.1', DEPENDENT: '1.1'},
+    )
+    _base_is_this_firmwares(device)
+
+    run = _install(device, online=False)
+
+    assert run.status == 0
+    assert not _held_back(run)
+    assert _listed(device.status) == {FIRMWARE, PINNED, DEPENDENCY, *PACKAGES}
+    assert _record(device.status, DEPENDENT) == ('install ok installed', '1.0')
+
+
+def test_an_epoch_makes_the_firmwares_version_the_newer_one(tmp_path: Path) -> None:
+    """Versions are compared in Debian's order, where the epoch decides first.
+
+    The firmware ships `systemd` at `1:1.0`, after an epoch bump, and the cache
+    holds `2.0`, which is older in Debian's order however its digits read.
+    """
+    device = _packages(tmp_path, installed=(), cached=(*PACKAGES, DEPENDENCY))
+    _ = deb(device.cache, PINNED, '2.0').write_text('')
+    _update_firmware(device, shipping={PINNED: '1:1.0'})
+
+    run = _install(device, online=False)
+
+    assert _held_back(run) == [_holding_back(PINNED, '2.0', '1:1.0')]
+    assert _record(device.status, PINNED) == ('install ok installed', '1:1.0')
+
+
+def test_a_firmware_package_an_interrupted_upgrade_left_unpacked_is_still_held_back(tmp_path: Path) -> None:
+    """The firmware base says which version is the firmware's when the live system cannot.
+
+    An interrupted upgrade left the firmware's `systemd` unpacked at the
+    archive's version, so it is not installed, and the cache holds it only at a
+    version older than the firmware's. Handed to dpkg, that deb would downgrade
+    the firmware's package; it is held back, `systemd` stays as it is, and with
+    the set not up the boot fails.
+    """
+    device = _packages(tmp_path, installed=(), cached=OLDER_FIRMWARES_CACHE)
+    _update_firmware(device, shipping=NEWER_FIRMWARE)
+    _ = _install(device, online=False)
+    _ = device.base_status.write_text(_database(FIRMWARE, PINNED, versions=NEWER_FIRMWARE))
+    _ = device.status.write_text(_database(FIRMWARE, records={PINNED: UNPACKED}, versions={PINNED: '2.1'}))
+
+    run = _install(device, online=False)
+
+    assert run.status == 1
+    assert _held_back(run) == [_holding_back(PINNED, '1.0', NEWER_FIRMWARE[PINNED])]
+    assert _record(device.status, PINNED) == (UNPACKED, '2.1')
 
 
 def test_a_boot_that_finds_part_of_the_set_and_a_networkless_boot_after_it_install_the_whole_set(

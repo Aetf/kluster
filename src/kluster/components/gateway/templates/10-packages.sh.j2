@@ -43,7 +43,18 @@
 # packages that survived; the next firmware update's boot records the base,
 # and from then on the cache is exact.
 #
-# The cache is consumed only when apt is unreachable on a post-update boot.
+# The cache is consumed when the install through apt fails, which on a
+# post-update boot is above all when apt cannot reach the archive. It never
+# downgrades a package the firmware ships: a deb whose package the saved base
+# lists at a newer version is held back. So after a firmware update that ships
+# such a package, an offline boot leaves the members of the set that pin it
+# unpacked and fails, naming them, and the next boot that reaches apt installs
+# the set against the firmware's version. The script exits 0 only when every
+# member of the set is installed. A failure here stops nothing after it:
+# udm-boot.service hands each file of on_boot.d to `xargs -n 1`, which runs
+# every one whatever an earlier one exited with, unless it exited 255 -- and
+# this script exits 0 or 1.
+#
 # {{ cache }} is this script's alone -- the swap below replaces it whole, so
 # nothing else may keep a file in it.
 
@@ -118,6 +129,33 @@ installed_version() {
         END { if (ok) print version }'
 }
 
+# The version the saved firmware base lists package $1 installed at, or nothing
+# when it lists no installation of it.
+base_version() {
+    [ -f "$BASE_STATUS" ] || return 0
+    awk -v p="Package: $1" '
+        BEGIN { RS = "" }
+        {
+            n = split($0, l, "\n")
+            if (l[1] != p) next
+            ok = 0
+            for (i = 2; i <= n; i++) {
+                if (l[i] == "Status: install ok installed") ok = 1
+                if (l[i] ~ /^Version: /) version = substr(l[i], 10)
+            }
+            if (ok) { print version; exit }
+        }' "$BASE_STATUS"
+}
+
+# The version of the deb at $1. apt names a deb <package>_<version>_<arch>.deb,
+# with an epoch's colon written %3a.
+deb_version() {
+    local version=${1##*/}
+    version=${version#*_}
+    version=${version%_*}
+    echo "${version//%3a/:}"
+}
+
 refresh() {
     local p deb name cached version wanted=()
     if [ -f "$BASE_STATUS" ]; then
@@ -150,11 +188,7 @@ refresh() {
             name=${deb##*/}
             p=${name%%_*}
             carried "$p" && continue
-            # apt names a deb <package>_<version>_<arch>.deb, with an epoch's
-            # colon written %3a.
-            cached=${name#*_}
-            cached=${cached%_*}
-            cached=${cached//%3a/:}
+            cached=$(deb_version "$deb")
             version=$(installed_version "$p")
             if [ -z "$version" ] || [ "$version" = "$cached" ]; then
                 cp "$deb" "$DOWNLOAD/"
@@ -210,11 +244,72 @@ if "${APT[@]}" install -y "${PACKAGES[@]}"; then
 fi
 
 echo "packages: apt failed, falling back to the offline cache $CACHE"
-# One dpkg -i invocation with every cached deb: dpkg orders the closure itself.
-# dpkg's exit status is not enough: a cache from before the set last grew
-# installs cleanly and still lacks a package of it.
-if compgen -G "$CACHE/*.deb" >/dev/null && yes | dpkg -i "$CACHE"/*.deb && installed; then
+if ! compgen -G "$CACHE/*.deb" >/dev/null; then
+    echo "packages: FAILED -- neither apt nor the offline cache could install ${PACKAGES[*]}" >&2
+    exit 1
+fi
+
+# The cache was resolved against the firmware that ran its last refresh, and an
+# update since can ship a package of it at a newer version -- systemd, whenever
+# the set's install upgraded it, since systemd-container pins it exactly. Such
+# a deb is held back, and the firmware's package stays. What makes a package
+# the firmware's is the saved base, recorded from the firmware's own database
+# on the update's first boot, before anything is installed: a deb is held back
+# when the base lists its package at a newer version than the cache's. A
+# package installed at a newer version that the base does not list came from
+# an apt run, not the firmware, and is replaced from the cache like any other.
+#
+# Every deb not held back goes to dpkg, which unpacks and configures it -- a
+# package an install cut short left unpacked, or a failed maintainer script
+# left half-configured, is replaced from the cache at whichever version, and
+# configured.
+#
+# The script decides, not dpkg: --refuse-downgrade refuses against a package
+# dpkg holds unpacked or half-configured as much as against an installed one, so
+# it would keep exactly the leftovers the cache is there to repair, and
+# --skip-same-version skips a package unpacked at the cache's version without
+# configuring it.
+debs=()
+held=()
+for deb in "$CACHE"/*.deb; do
+    name=${deb##*/}
+    p=${name%%_*}
+    cached=$(deb_version "$deb")
+    version=$(base_version "$p")
+    if [ -n "$version" ] && dpkg --compare-versions "$version" gt "$cached"; then
+        echo "packages: holding back the offline cache's $p $cached: the firmware ships $version"
+        held+=("$p")
+        continue
+    fi
+    debs+=("$deb")
+done
+
+# One dpkg -i invocation with every deb not held back: dpkg orders the closure
+# itself. What depends on a held-back version -- systemd-container, and
+# libnss-mymachines, which pins systemd-container in turn -- is unpacked and
+# left unconfigured, and dpkg exits non-zero.
+dpkg_status=0
+if [ -n "${debs[*]}" ]; then
+    yes | LC_ALL=C dpkg -i "${debs[@]}"
+    dpkg_status=${PIPESTATUS[1]}
+fi
+
+# The boot succeeds when the set is up, and on nothing else: dpkg's exit status
+# is not enough, since a cache from before the set last grew installs cleanly
+# and still lacks a package of it.
+missing=()
+for p in "${PACKAGES[@]}"; do
+    is_installed "$p" || missing+=("$p")
+done
+if [ "$dpkg_status" -eq 0 ] && [ -z "${missing[*]}" ]; then
     exit 0
 fi
-echo "packages: FAILED -- neither apt nor the offline cache could install ${PACKAGES[*]}" >&2
+if [ -n "${missing[*]}" ]; then
+    echo "packages: FAILED -- ${missing[*]} not installed: neither apt nor the offline cache could install them" >&2
+else
+    echo "packages: FAILED -- dpkg failed installing the offline cache $CACHE, though ${PACKAGES[*]} are installed" >&2
+fi
+if [ -n "${held[*]}" ]; then
+    echo "packages: the firmware's ${held[*]} stay at the versions it ships (held back above), so what the offline cache holds pinned to their older versions stays unconfigured until a boot whose apt install succeeds installs the set against this firmware" >&2
+fi
 exit 1
