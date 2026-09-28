@@ -24,10 +24,11 @@ name: noop-automerge
 #
 #   * `uv.lock` -- the resolved dependency set, which lockfile maintenance
 #     rewrites;
-#   * `sdks/**` -- the bridged provider SDKs, which sdk-regenerate.yml
-#     generates from `Pulumi.yaml`'s `packages:` block;
 #   * `Pulumi.yaml` itself, on renovate's pull request and when nothing but
-#     that block changed -- the **admission** below.
+#     its `packages:` block changed -- the **admission** below;
+#   * `sdks/**` -- the bridged provider SDKs, which sdk-regenerate.yml
+#     generates from that block -- only beside that admitted bump, in the
+#     same pull request.
 #
 # What those have in common is that they are code a stack program runs and
 # nothing else reads as trust. What the preview measures of them differs.
@@ -35,8 +36,11 @@ name: noop-automerge
 # render shows as a diff. `sdks/` is not measured at all: the bridged SDKs
 # render only in `physical`, which no pull request previews, and `checks`
 # holds them to the block only through each SDK's `pulumi-plugin.json`. So a
-# change under `sdks/` merges unread whatever it does, and runs in
-# `plan-physical` on the next run of the chain.
+# change under `sdks/` merges unread, and runs in `plan-physical` on the next
+# run of the chain -- which is why it is admitted only as what it is for: the
+# regeneration sdk-regenerate.yml commits onto renovate's bump of the block,
+# the one way anything writes there. A change under `sdks/` on any other pull
+# request, renovate's lockfile maintenance included, waits for a reader.
 # The code a dependency carries also runs with the credentials of every job
 # that installs it, `deploy.yml`'s ungated `plan-physical` included; that is
 # the residual ci.md §3 records under credential partitioning, and a bump
@@ -69,9 +73,9 @@ name: noop-automerge
 # short each refuse candidacy rather than decide on what arrived.
 #
 # **The route asks who only for the admission, and refuses a fork or an
-# `expect-changes` label before it asks anything.** `uv.lock` and `sdks/`
-# merge on the proof whoever opened the pull request; `Pulumi.yaml` is on the
-# list for renovate's pull request alone.
+# `expect-changes` label before it asks anything.** `uv.lock` merges on the
+# proof whoever opened the pull request; `Pulumi.yaml`, and `sdks/` beside it,
+# are on the list for renovate's pull request alone.
 #
 # **Why `Pulumi.yaml` is admitted at all**: its `packages:` block is not
 # stack configuration -- no stack program reads it. It is the recipe
@@ -79,9 +83,12 @@ name: noop-automerge
 # it reaches a stack only through the regenerated SDK, which `checks` already
 # holds to the block (ci.md §3). So `classify` counts `Pulumi.yaml` as on the
 # list when the author is renovate and the document with `packages` removed is
-# equal at base and head. What the bump actually changes -- `sdks/`, `uv.lock`
-# -- is on the list in its own right, and the pull request merges behind the
-# same zero-diff preview as any other.
+# equal at base and head. What the bump regenerates -- `sdks/` -- joins the
+# list with it, and only when the pull request itself changes `Pulumi.yaml`:
+# the admission compares documents, so it also holds for a renovate pull
+# request that never touched the file, and `sdks/` on one of those is not a
+# regeneration of anything. `uv.lock` is on the list in its own right, and the
+# pull request merges behind the same zero-diff preview as any other.
 #
 # **That equality is of parsed documents, not of the diff**, and the step
 # below decides it from three inputs and nothing else: the author, the base
@@ -233,10 +240,15 @@ jobs:
           # The allow-list, and the only place it is written (the header says
           # why each entry is here and why nothing else is). One bash pattern
           # per line, matched against the whole path, where `*` crosses `/`:
-          # `sdks/**` is every file under `sdks/`. `Pulumi.yaml` joins the list
-          # when the step above admitted it, and not otherwise.
+          # `sdks/**` is every file under `sdks/`. `ALLOWED` is the list for
+          # every pull request; `WITH_THE_BUMP` joins it only when the step
+          # above admitted the pull request and `Pulumi.yaml` is among the
+          # paths it changes -- renovate's packages-only bump, beside the
+          # regeneration it carries.
           ALLOWED: |
             uv.lock
+          WITH_THE_BUMP: |
+            Pulumi.yaml
             sdks/**
         run: |
           set -euo pipefail
@@ -295,27 +307,39 @@ jobs:
             echo 'noop=false' >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # Whether a path matches a pattern of a list. The pattern is unquoted
+          # on purpose: quoted, `[[ == ]]` compares it as a literal string and
+          # `sdks/**` matches nothing.
+          matches() {
+            local pattern
+            while IFS= read -r pattern; do
+              if [ -n "$pattern" ] && [[ $1 == $pattern ]]; then
+                return 0
+              fi
+            done <<<"$2"
+            return 1
+          }
+          # The pull request is renovate's packages-only bump when the step
+          # above admitted it and it changes `Pulumi.yaml` itself. `@tsv`
+          # writes a path that has no previous one as the path and a tab.
           allowed=$ALLOWED
-          if [ "$ADMIT" = 'true' ]; then
-            allowed+=$'\nPulumi.yaml'
+          if [ "$ADMIT" = 'true' ] && grep -q $'^Pulumi\\.yaml\t' <<<"$files"; then
+            allowed+=$'\n'$WITH_THE_BUMP
           fi
           # Every path is on the list -- both of a rename's -- or the pull
-          # request is the human route. The pattern is unquoted on purpose:
-          # quoted, `[[ == ]]` compares it as a literal string and `sdks/**`
-          # matches nothing.
+          # request is the human route, and the log says which path and why.
           while IFS=$'\t' read -r path previous; do
             for candidate in "$path" ${previous:+"$previous"}; do
-              listed=false
-              while IFS= read -r pattern; do
-                if [ -n "$pattern" ] && [[ $candidate == $pattern ]]; then
-                  listed=true
-                fi
-              done <<<"$allowed"
-              if [ "$listed" != 'true' ]; then
-                echo "$candidate is not on the allow-list; not a candidate."
-                echo 'noop=false' >> "$GITHUB_OUTPUT"
-                exit 0
+              if matches "$candidate" "$allowed"; then
+                continue
               fi
+              if matches "$candidate" "$WITH_THE_BUMP"; then
+                echo "$candidate is on the allow-list only in renovate's packages-only bump of Pulumi.yaml, which this pull request is not; not a candidate."
+              else
+                echo "$candidate is not on the allow-list; not a candidate."
+              fi
+              echo 'noop=false' >> "$GITHUB_OUTPUT"
+              exit 0
             done
           done <<<"$files"
           # Last, and the only line that writes it: see the merge job's `if`.
