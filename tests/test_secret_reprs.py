@@ -96,6 +96,7 @@ import pytest
 
 from kluster.components.gateway import container, routing
 from kluster.lib import k8s
+from kluster.lib.state_backend import render
 from kluster.providers.device_files import ssh
 from kluster.scripts.credentials import (
     age,
@@ -167,6 +168,7 @@ MODULES: tuple[ModuleType, ...] = (
     pulumi_config,
     slots,
     config,
+    render,
     provision,
     ssh,
     routing,
@@ -266,10 +268,18 @@ CENSUS: dict[type, Census] = {
     ),
     routing._UnitParams: Census('cluster daemon_unit executable'),  # pyright: ignore[reportPrivateUsage]
     config.ClientBundle: Census('name address ca_cert cert key', secret='key'),
-    config.Machine: Census(
+    render.Machine: Census(
         'operator_keys postgres_uid postgres_image database ci_role operator_role ca_cert server_cert '
         'server_key ssh_host_key age_recipients age_url age_sha256 b2_dump_key_id b2_dump_key b2_bucket_id '
         'b2_prefix dump_script dump_schedule reboot_day reboot_time reboot_window_minutes',
+        secret='server_key ssh_host_key b2_dump_key',
+    ),
+    # The machine as the Butane template reads it: every field of the one
+    # above, and the host key's public half.
+    render._Parameters: Census(  # pyright: ignore[reportPrivateUsage]
+        'operator_keys postgres_uid postgres_image database ci_role operator_role ca_cert server_cert '
+        'server_key ssh_host_key age_recipients age_url age_sha256 b2_dump_key_id b2_dump_key b2_bucket_id '
+        'b2_prefix dump_script dump_schedule reboot_day reboot_time reboot_window_minutes ssh_host_key_pub',
         secret='server_key ssh_host_key b2_dump_key',
     ),
     config.Roots: Census('ca age_recipients'),

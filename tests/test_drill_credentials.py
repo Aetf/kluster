@@ -34,12 +34,12 @@ from oci_conventions import with_recorded_compartment, with_tenancy_ocid, with_u
 from oci_tenancy import ROOT_USER, TENANCY, Tenancy
 
 from kluster import conventions
+from kluster.lib.state_backend import settings as appliance_settings
 from kluster.scripts.credentials import b2, derived, masters, oci_iam
 from kluster.scripts.credentials.github_secrets import Forge, Slot
 from kluster.scripts.credentials.kdbx import KdbxStore
 from kluster.scripts.credentials.masters import CredentialRejected
 from kluster.scripts.credentials.pulumi_config import SlotRefused
-from kluster.scripts.state_backend import settings as appliance_settings
 
 OPS_REPOSITORY = conventions.forge.OPS.full_name
 DRILL_ENVIRONMENT = conventions.forge.DRILL.name

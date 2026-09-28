@@ -313,8 +313,8 @@ def test_a_path_a_stack_or_a_workflow_reads_is_the_human_route(path: str, tmp_pa
     'path',
     [
         'escrow/RECIPIENTS',
-        'deploy/state-backend/operator-keys.txt',
-        'deploy/state-backend/drill-recipient.txt',
+        'src/kluster/lib/state_backend/machine/operator-keys.txt',
+        'src/kluster/lib/state_backend/machine/drill-recipient.txt',
         '.github/actions/zerotier/action.yml',
         '.github/actions/state-backend/action.yml',
         'mise.toml',
@@ -333,7 +333,7 @@ def test_a_trust_anchor_no_stack_reads_is_the_human_route(path: str, tmp_path: P
     [
         Renamed('.gitignore', 'sdks/.gitignore'),
         Renamed('escrow/RECIPIENTS', 'sdks/y'),
-        Renamed('deploy/state-backend/drill-recipient.txt', 'sdks/z'),
+        Renamed('src/kluster/lib/state_backend/machine/drill-recipient.txt', 'sdks/z'),
     ],
     ids=lambda rename: rename.previous,
 )

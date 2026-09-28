@@ -1,6 +1,6 @@
 """The drill recipient file, pointed away from the checkout's own.
 
-`config.DRILL_RECIPIENT_FILE` is the committed file under `deploy/state-backend/`,
+`config.DRILL_RECIPIENT_FILE` is the committed file beside the Butane template,
 and what it holds decides the recipient list a render writes and a dump
 encrypts to. A suite about what the code does with that file cannot let the
 repository's state decide its cases, so it moves the file into a directory of

@@ -13,13 +13,14 @@ from __future__ import annotations
 
 import re
 import shutil
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 from fake_pulumi import RecordedPulumi
 
-from kluster.lib import workstation
+from kluster.lib import pulumi_cli, workstation
 from kluster.scripts.credentials import pulumi_config
 
 STACK = 'dns'
@@ -113,24 +114,50 @@ def test_the_project_directory_is_the_checkout_holding_pulumi_yaml() -> None:
     assert (pulumi_config.project_dir() / 'Pulumi.yaml').is_file()
 
 
-def test_a_checkout_that_cannot_be_found_is_refused_as_a_slot(monkeypatch: pytest.MonkeyPatch) -> None:
-    # `state_backend.state` translates this module's refusal into its own and
-    # passes anything else through untranslated, so the checkout's own error
-    # is handed over as one.
+@dataclass(frozen=True)
+class Side:
+    """One side of the runner's boundary, and the refusal it raises."""
+
+    project_dir: Callable[[], Path]
+    run_pulumi: pulumi_cli.Runner
+    refusal: type[Exception]
+
+
+#: The runner `kluster.lib` holds for every caller refuses as `PulumiRefused`,
+#: which `state_backend.state` translates into its own refusal; this package's
+#: entry points refuse as `SlotRefused`, which every `credentials` caller
+#: catches.
+SIDES = pytest.mark.parametrize(
+    'side',
+    [
+        Side(pulumi_cli.project_dir, pulumi_cli.run_pulumi, pulumi_cli.PulumiRefused),
+        Side(pulumi_config.project_dir, pulumi_config.run_pulumi, pulumi_config.SlotRefused),
+    ],
+    ids=['runner', 'credentials'],
+)
+
+
+@SIDES
+def test_a_checkout_that_cannot_be_found_is_refused_as_that_side_refuses(
+    side: Side, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The checkout's own error is handed over as the refusal each side
+    # translates, rather than passing through untranslated.
     def nowhere() -> Path:
         raise workstation.WorkstationError('no mise.toml above this package')
 
     monkeypatch.setattr(workstation, 'repo_root', nowhere)
 
-    with pytest.raises(pulumi_config.SlotRefused, match=re.escape('no mise.toml above')):
-        _ = pulumi_config.project_dir()
+    with pytest.raises(side.refusal, match=re.escape('no mise.toml above')):
+        _ = side.project_dir()
 
 
-def test_a_checkout_without_pulumi_yaml_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@SIDES
+def test_a_checkout_without_pulumi_yaml_is_refused(side: Side, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(workstation, 'repo_root', lambda: tmp_path)
 
-    with pytest.raises(pulumi_config.SlotRefused, match=re.escape('no Pulumi.yaml')):
-        _ = pulumi_config.project_dir()
+    with pytest.raises(side.refusal, match=re.escape('no Pulumi.yaml')):
+        _ = side.project_dir()
 
 
 @pytest.fixture
@@ -177,14 +204,15 @@ def test_the_real_cli_takes_a_secret_on_standard_input(live_stack: pulumi_config
     assert live_stack.get(QUALIFIED_KEY) == SECRET
 
 
-def test_a_failing_invocation_names_the_command(tmp_path: Path) -> None:
+@SIDES
+def test_a_failing_invocation_names_the_command(side: Side, tmp_path: Path) -> None:
     if shutil.which('pulumi') is None:
         pytest.skip('the pinned pulumi CLI is not on PATH')
 
     # No Pulumi.yaml here, so the CLI refuses: a push that fails must say so
     # rather than report a slot nobody filled.
-    with pytest.raises(pulumi_config.SlotRefused, match='stack ls'):
-        _ = pulumi_config.run_pulumi(
+    with pytest.raises(side.refusal, match='stack ls'):
+        _ = side.run_pulumi(
             ['stack', 'ls', '--json'],
             cwd=tmp_path,
             env={'PULUMI_HOME': str(tmp_path / 'home'), 'PULUMI_BACKEND_URL': (tmp_path / 'state').as_uri()},

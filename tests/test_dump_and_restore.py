@@ -28,9 +28,11 @@ import pytest
 from memory_kit import MemoryKit
 from state_dump_box import CHECKPOINT, CHECKPOINT_BAK, META, OPENED, SERVING, UNOPENED, rows
 
+from kluster.lib.bundle import CA_FILE, CERT_FILE, KEY_FILE, URL_FILE
+from kluster.lib.state_backend import settings, state
 from kluster.scripts.credentials import age, escrow
 from kluster.scripts.credentials.kdbx import PATH_ENV, KdbxStore
-from kluster.scripts.state_backend import cli, config, settings, state
+from kluster.scripts.state_backend import cli
 
 age_binary = shutil.which(age.BINARY)
 needs_age = pytest.mark.skipif(age_binary is None, reason='age is not on PATH (mise x -- ...)')
@@ -489,7 +491,7 @@ def _printing(printed: str, monkeypatch: pytest.MonkeyPatch) -> state.Connection
     def run_pulumi(*_args: object, **_kwargs: object) -> str:
         return printed
 
-    monkeypatch.setattr(state.pulumi_config, 'run_pulumi', run_pulumi)
+    monkeypatch.setattr(state.pulumi_cli, 'run_pulumi', run_pulumi)
     return state.Connection(url=URL, env={})
 
 
@@ -848,9 +850,9 @@ def test_the_connection_is_the_url_plus_the_bundle_beside_it(bundle: Path) -> No
 
     assert target.url == URL
     assert target.env == {
-        'PGSSLROOTCERT': str(bundle / config.CA_FILE),
-        'PGSSLCERT': str(bundle / config.CERT_FILE),
-        'PGSSLKEY': str(bundle / config.KEY_FILE),
+        'PGSSLROOTCERT': str(bundle / CA_FILE),
+        'PGSSLCERT': str(bundle / CERT_FILE),
+        'PGSSLKEY': str(bundle / KEY_FILE),
     }
 
 
@@ -892,7 +894,7 @@ def test_a_url_that_still_carries_its_paths_works_and_says_what_to_re_run(
     moved checkout invalidates, and which command rewrites it.
     """
     tools = double()
-    _ = (bundle / config.URL_FILE).write_text(f'{LEGACY_URL}\n')
+    _ = (bundle / URL_FILE).write_text(f'{LEGACY_URL}\n')
 
     with caplog.at_level(logging.WARNING):
         assert _dump(kit, registry, bundle, tmp_path / 'taken.dump.age') == 0

@@ -27,9 +27,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from kluster.scripts.state_backend import config, settings
+from kluster.lib.state_backend import render, settings
 
-SCRIPT = config.DEPLOY_DIR / config.DUMP_SCRIPT
+SCRIPT = Path(render.__file__).with_name(render.MACHINE) / render.DUMP_SCRIPT
 
 #: A `pg_restore --list` output, header and all, of a box the backend has
 #: opened: its one table, the table's rows, and the key's constraint and

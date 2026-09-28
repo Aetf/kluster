@@ -28,11 +28,12 @@ the instance moves from the homelab host to an **OCI VM.Standard.E2.1.Micro**
     Python SDK the micro instance and the network, reserved address and
     boot image it needs, and the bucket that image is imported through,
     and through B2's API its dump bucket. What the
-    box runs is the machine definition in `deploy/state-backend/`; the
-    design is physical/state-backend.md.
+    box runs is the machine definition in
+    `src/kluster/lib/state_backend/machine/`, rendered by the code beside
+    it; the design is physical/state-backend.md.
 -   **The box itself is a designed appliance, not a pet** — Fedora
     CoreOS provisioned entirely at create time from
-    `deploy/state-backend/`, re-provision as the only apply path,
+    `src/kluster/lib/state_backend/`, re-provision as the only apply path,
     auto-updating OS and Postgres, externally monitored, every alert
     backed by a playbook. The full design — OS & config management,
     Postgres lifecycle, PKI, network exposure, backup, monitoring,
@@ -810,10 +811,10 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     the proof measures what the stack programs render, so a path no
     stack program reads previews empty however it changed. Those paths
     include the trust anchors — `escrow/RECIPIENTS`, the appliance's
-    `deploy/state-backend/*.txt` key files, the composite actions under
-    `.github/actions/` that `plan-physical` runs with `physical-plan`
-    secrets, `mise.toml`'s templates that read the kit's slots on the
-    workstation — and documentation, which nothing but a reader
+    key files (`src/kluster/lib/state_backend/machine/*.txt`), the
+    composite actions under `.github/actions/` that `plan-physical` runs
+    with `physical-plan` secrets, `mise.toml`'s templates that read the
+    kit's slots on the workstation — and documentation, which nothing but a reader
     measures: dispatch.md §3 says no pull request merges reviewed by
     nobody but its author, a rule aimed at `AGENTS.md` and `docs/`
     above all. A list of what to refuse admits each of those on an

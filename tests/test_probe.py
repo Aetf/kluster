@@ -32,11 +32,12 @@ from state_dump_box import Box
 
 from kluster import conventions
 from kluster.conventions import backup
+from kluster.lib.state_backend import settings, state
 from kluster.scripts.credentials import b2, entries, masters, pki
 from kluster.scripts.credentials.kdbx import KdbxStore
 from kluster.scripts.credentials.masters import CredentialRejected
 from kluster.scripts.credentials.pulumi_config import SlotRefused
-from kluster.scripts.state_backend import cli, config, probe, settings, state
+from kluster.scripts.state_backend import cli, config, probe
 
 UTC = dt.UTC
 NOW = dt.datetime(2026, 9, 16, 6, 23, tzinfo=UTC)

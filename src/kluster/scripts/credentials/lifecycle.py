@@ -33,16 +33,13 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from kluster.lib import bundle
+
 from . import b2, cloudflare, entries, escrow, masters, oci_iam, pulumi_config
 from .kdbx import KdbxError, KdbxStore
 from .masters import CredentialRejected, Prompt
 
 log = logging.getLogger(__name__)
-
-#: The file inside a client bundle that names the backend. Duplicated from
-#: `state_backend.config` rather than imported: that package depends on this
-#: one, and one string is a cheaper price than the cycle.
-URL_FILE = 'backend-url'
 
 
 def root(member: str, prompt: Prompt) -> masters.Credential:
@@ -211,17 +208,6 @@ def create_seed(
             raise KdbxError(f'minting {seed.member} is in the register (§2) but not yet implemented')
 
 
-def backend_url_file(bundle_dir: Path) -> Path | None:
-    """The bundle's URL file, or None when `bundle_dir` holds no bundle.
-
-    The directory given is the only one looked in: the default is the
-    workstation slot (`workstation.py`), and no location outside the checkout
-    stands in for it.
-    """
-    current = bundle_dir / URL_FILE
-    return current if current.is_file() else None
-
-
 def environment(
     kit: KdbxStore, bundle_dir: Path, registry: escrow.Registry | None = None
 ) -> pulumi_config.BackendEnvironment:
@@ -236,11 +222,11 @@ def environment(
     subprocess.
     """
     vault = escrow.Vault.open(kit, registry)
-    url = backend_url_file(bundle_dir)
+    url = bundle.backend_url_file(bundle_dir)
     if url is None:
         log.warning(
             'no %s; run `state-backend provision` (or `state-backend bundle operator`) first',
-            bundle_dir / URL_FILE,
+            bundle_dir / bundle.URL_FILE,
         )
     return pulumi_config.BackendEnvironment(
         passphrase=vault.recover(escrow.PASSPHRASE),

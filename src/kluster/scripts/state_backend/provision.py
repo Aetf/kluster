@@ -45,7 +45,6 @@ import logging
 import lzma
 import os
 import shutil
-import subprocess as sp
 import tempfile
 import time
 import urllib.error
@@ -57,9 +56,11 @@ from typing import Any, NoReturn, cast
 
 import oci
 
+from kluster.lib.state_backend import readiness, settings
+
 from ... import conventions
 from ..credentials import oci_slot, workstation
-from . import config, settings
+from . import config
 
 log = logging.getLogger(__name__)
 
@@ -193,18 +194,6 @@ class OciClients:
         return oci.object_storage.ObjectStorageClient(self.config, retry_strategy=self._retry)
 
 
-def _first_line(text: str) -> str:
-    for line in text.splitlines():
-        if line.strip():
-            return line.strip()
-    return ''
-
-
-def _duration(seconds: float) -> str:
-    minutes, secs = divmod(int(seconds), 60)
-    return f'{minutes}m{secs:02d}s' if minutes else f'{secs}s'
-
-
 #: Lifecycle states a listing still carries that are not a resource anyone can
 #: adopt: what the network and compute resources call `TERMINATED`, an image
 #: calls `DELETED`.
@@ -262,7 +251,7 @@ def _await_state(fetch: Callable[[], Any], target: str, *, what: str, timeout: i
     deadline = started + timeout
     last = ''
     announced = 0.0
-    log.info('waiting for %s to reach %s, polling every 15s (up to %s)', what, target, _duration(timeout))
+    log.info('waiting for %s to reach %s, polling every 15s (up to %s)', what, target, readiness.duration(timeout))
     while time.monotonic() < deadline:
         try:
             resource = _data(fetch())
@@ -274,20 +263,20 @@ def _await_state(fetch: Callable[[], Any], target: str, *, what: str, timeout: i
         state = str(resource.lifecycle_state)
         elapsed = time.monotonic() - started
         if state != last:
-            log.info('%s: %s (%s)', what, state, _duration(elapsed))
+            log.info('%s: %s (%s)', what, state, readiness.duration(elapsed))
             last = state
             announced = elapsed
         elif elapsed - announced >= 60:
             # An import runs for ten minutes and more; silence for that long
             # is indistinguishable from a hang.
-            log.info('%s: still %s after %s', what, state, _duration(elapsed))
+            log.info('%s: still %s after %s', what, state, readiness.duration(elapsed))
             announced = elapsed
         if state == target:
             return resource
         if state in ('FAILED', 'TERMINATED', 'DELETED'):
             raise RuntimeError(f'{what} ended in {state}')
         time.sleep(15)
-    raise TimeoutError(f'{what} never reached {target} within {_duration(timeout)}')
+    raise TimeoutError(f'{what} never reached {target} within {readiness.duration(timeout)}')
 
 
 @dataclass(frozen=True)
@@ -1547,64 +1536,6 @@ def attach_reserved_ip(clients: OciClients, *, instance_id: str, public_ip_id: s
         return
     _ = network.update_public_ip(public_ip_id, oci.core.models.UpdatePublicIpDetails(private_ip_id=primary.id))
     log.info('attached the reserved address to the instance')
-
-
-def wait_for_backend(address: str, *, timeout: int = 900) -> bool:
-    """The box is up when it answers a TLS handshake on 5432.
-
-    First boot pulls the Postgres image and fetches age, so this is minutes,
-    not seconds.
-    """
-    deadline = time.monotonic() + timeout
-    started = time.monotonic()
-    announced = 0.0
-    log.info(
-        'waiting for a TLS handshake on %s:%d, probing every 15s — first boot pulls the Postgres image '
-        'and fetches age, so this is minutes (up to %s)',
-        address,
-        settings.PORT,
-        _duration(timeout),
-    )
-    reason = 'not tried yet'
-    while time.monotonic() < deadline:
-        try:
-            probe = sp.run(
-                ['openssl', 's_client', '-connect', f'{address}:{settings.PORT}', '-starttls', 'postgres', '-brief'],
-                # s_client keeps the connection open reading stdin after the
-                # handshake, so an inherited terminal makes a *successful*
-                # probe hang until the timeout below and report itself as no
-                # answer -- the wait could never finish once the port opened.
-                stdin=sp.DEVNULL,
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            answered = probe.returncode == 0
-            reason = _first_line(probe.stderr) or f'openssl exited {probe.returncode}'
-        except sp.TimeoutExpired:
-            # Two very different things look like this, which is why the
-            # reason is reported rather than swallowed: Postgres binds 5432
-            # before initdb finishes and then says nothing, and a firewall on
-            # the path drops the packets instead of refusing them. Treating
-            # either as fatal ends the wait at the moment the box comes up.
-            answered = False
-            reason = 'no answer within 30s — either still starting, or the packets are being dropped'
-        if answered:
-            return True
-        elapsed = time.monotonic() - started
-        if elapsed - announced >= 60:
-            log.info('still waiting after %s: %s', _duration(elapsed), reason)
-            announced = elapsed
-        time.sleep(15)
-    log.error('last attempt said: %s', reason)
-    log.error(
-        'the appliance may be healthy and this path blocked: `state-backend ssh` reaches it over 22, '
-        'and `openssl s_client -connect %s:%d -starttls postgres -brief </dev/null` from another host '
-        'separates a broken box from a broken route',
-        address,
-        settings.PORT,
-    )
-    return False
 
 
 #: What a registry names a manifest by, and the whole of what this reads off

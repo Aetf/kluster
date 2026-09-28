@@ -51,8 +51,10 @@ from typing import Any
 import pytest
 from root_credentials import fake
 
+from kluster.lib.bundle import CA_ENV, CERT_ENV, KEY_ENV, ssl_env
+from kluster.lib.state_backend import render, settings, state
 from kluster.scripts.credentials import pki, pulumi_config
-from kluster.scripts.state_backend import config, settings, state
+from kluster.scripts.state_backend import config
 
 ADDRESS = '127.0.0.1'
 IMAGE = settings.POSTGRES_IMAGE
@@ -74,7 +76,7 @@ BACKEND_STACKS = '.pulumi/stacks/'
 
 #: The environment the dump unit runs its script under, and the script.
 DUMP_ENV = PurePosixPath('/etc/kluster/state-dump.env')
-DUMP_SCRIPT = config.DEPLOY_DIR / config.DUMP_SCRIPT
+DUMP_SCRIPT = Path(render.__file__).with_name(render.MACHINE) / render.DUMP_SCRIPT
 
 #: What the image's entrypoint prints once initialization is over, and what
 #: the serving Postgres prints once it is up. The second alone is not enough:
@@ -292,7 +294,7 @@ def roots() -> config.Roots:
 @pytest.fixture(scope='module')
 def ignition(roots: config.Roots) -> dict[str, Any]:
     built = config.machine(roots, address=ADDRESS, dump_key_id='key-id', dump_key='secret', bucket_id='bucket')
-    return json.loads(config.render_ignition(built))
+    return json.loads(render.render_ignition(built))
 
 
 def _appliance(start: Start, ignition: dict[str, Any]) -> Box:
@@ -353,7 +355,7 @@ def clients(tools: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Pat
     monkeypatch.setattr(state, 'PG_RESTORE', str(tools / state.PG_RESTORE))
     monkeypatch.setenv('PULUMI_HOME', str(tmp_path / 'pulumi-home'))
     monkeypatch.setenv('PULUMI_SKIP_UPDATE_CHECK', 'true')
-    for variable in (config.CA_ENV, config.CERT_ENV, config.KEY_ENV):
+    for variable in (CA_ENV, CERT_ENV, KEY_ENV):
         monkeypatch.delenv(variable, raising=False)
     return tools
 
@@ -364,7 +366,7 @@ def _bundle(roots: config.Roots, box: Box, clients: Path, role: str) -> state.Co
     directory = clients / role
     config.write_client_bundle(bundle, directory)
     url = bundle.url().replace(f'@{ADDRESS}:{settings.PORT}/', f'@{ADDRESS}:{box.port}/')
-    return state.Connection(url=url, env=config.ssl_env(directory))
+    return state.Connection(url=url, env=ssl_env(directory))
 
 
 def _psql(clients: Path, target: state.Connection, sql: str) -> str:

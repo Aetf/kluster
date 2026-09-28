@@ -130,10 +130,10 @@ recipient — an **ops-repo-held drill key** (credentials.md §3), living
 in that repository's `drill` Environment. The key is drawn by
 `credentials derived drill-age-identity generate`, which pushes the
 private half into that Environment and writes the public half to
-`deploy/state-backend/drill-recipient.txt`; the appliance encrypts to
-it from the converge that adopts the committed file (state-backend.md
-§5), and a dump written before that converge carries the escrowed
-generations alone. As of 2026-09-25 nothing reads the key: of the ops
+`src/kluster/lib/state_backend/machine/drill-recipient.txt`; the
+appliance encrypts to it from the converge that adopts the committed
+file (state-backend.md §5), and a dump written before that converge
+carries the escrowed generations alone. As of 2026-09-25 nothing reads the key: of the ops
 repository's workflows, `lint.yml` checks the workflow files
 themselves and `probes.yml` runs `state-backend probe`, and neither
 opens a dump, while the rebuild drill's workflow is not written

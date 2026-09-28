@@ -349,10 +349,21 @@ A pin no stack program reads lives with the tool that reads it: Python
 dependencies in `pyproject.toml` and `uv.lock`, the command-line tools
 in `mise.toml`, the bridged provider SDKs in `Pulumi.yaml`'s own
 `packages:` block, a script's pins in that script's modules
-(`update_crds/pins.py`, `state_backend/settings.py`), the container
-builds' pins beside their build files under `docker/`, and the actions
-and mise's own release in the workflows that call them
-(`.github/workflows/`).
+(`update_crds/pins.py`), the container builds' pins beside their build
+files under `docker/`, and the actions and mise's own release in the
+workflows that call them (`.github/workflows/`).
+
+**A pin that a stack program and a script both read lives in the
+`kluster.lib` module they share, not in project configuration.**
+`lib/versions.py` reads the `versions:` block through the Pulumi SDK,
+which answers only inside a program, so a pin kept there would leave a
+script that runs outside one without it. The state-backend appliance's
+pins are that case: the Fedora CoreOS stream, the Postgres image and
+`age`'s release and digest are read outside any program by
+`state-backend` — its render, its pin check, its probe — so they live
+in `kluster.lib.state_backend.settings`, beside the render that a
+program declaring the appliance shares with that script
+([style/pulumi.md](../style/pulumi.md), "Layering").
 
 ## 4. CRD Types Handling
 

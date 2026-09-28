@@ -899,7 +899,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Draw a fresh age identity, push its private half into the ops repository's `drill` Environment as "
             f'`{derived.DRILL_AGE_IDENTITY_SLOT.name}` -- authenticating as the GitHub admin token, read back out '
             "of the github stack's config -- and, once the listing shows the push landed, write the public half "
-            f'to `deploy/state-backend/{appliance_config.DRILL_RECIPIENT}`, which is a '
+            f'to `src/kluster/lib/state_backend/machine/{appliance_config.DRILL_RECIPIENT}`, which is a '
             'file to commit. The private half exists in this process, on `gh` standard input and in the '
             'Environment; nothing on disk ever holds it. A recipient already on file refuses a second run: the '
             'file is the one durable trace of a key in service, and `--rotate` is how its successor is drawn. '
@@ -1470,11 +1470,10 @@ def main(argv: list[str] | None = None) -> int:
             # nowhere. The public half is written to the appliance's
             # definition, for the operator to commit.
             case ('derived', derived.DRILL_AGE_IDENTITY_ROW, 'generate'):
-                _ = derived.drill_age_identity(
-                    _forge(args, store, registry),
-                    recipient_file=appliance_config.DRILL_RECIPIENT_FILE,
-                    rotate=args.rotate,
-                )
+                # The target first: the generator pushes before it writes,
+                # and a file no commit picks up must stop it before the push.
+                target = appliance_config.drill_recipient_target()
+                _ = derived.drill_age_identity(_forge(args, store, registry), recipient_file=target, rotate=args.rotate)
             # The drill's provider keys: two seeds out of the kit, every
             # carrier through the same sink as the admin token. The
             # compartment is not an argument -- the mint is held to the one

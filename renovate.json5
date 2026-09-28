@@ -276,8 +276,8 @@
       // upgrades: each one means terminating and relaunching the box, so they
       // travel alone and get read.
       matchFileNames: [
-        'src/kluster/scripts/state_backend/settings.py',
-        'deploy/state-backend/**',
+        'src/kluster/lib/state_backend/settings.py',
+        'src/kluster/lib/state_backend/machine/**',
       ],
       groupName: 'state-backend appliance',
       groupSlug: 'state-backend',
@@ -519,7 +519,7 @@
       // the PR if the two disagree, so a bump cannot land unverified.
       customType: 'regex',
       managerFilePatterns: [
-        '/^src/kluster/scripts/state_backend/settings\\.py$/',
+        '/^src/kluster/lib/state_backend/settings\\.py$/',
       ],
       matchStrings: [
         "POSTGRES_IMAGE = '(?<depName>[\\w./-]+):(?<currentValue>[\\w.-]+)'",
@@ -530,7 +530,7 @@
     {
       customType: 'regex',
       managerFilePatterns: [
-        '/^src/kluster/scripts/state_backend/settings\\.py$/',
+        '/^src/kluster/lib/state_backend/settings\\.py$/',
       ],
       matchStrings: [
         "AGE_VERSION = '(?<currentValue>v[\\d.]+)'",
