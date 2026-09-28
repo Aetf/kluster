@@ -1,13 +1,13 @@
-# This stack's configuration is encrypted under a passphrase of its own rather
-# than the stack passphrase (docs/credentials.md §1 rule 6). The
-# `encryptionsalt` below is a verifier for that passphrase: `mise.toml` exports
-# it as `KLUSTER_GITHUB_PASSPHRASE`, `mise run github` hands it to `pulumi` as
-# `PULUMI_CONFIG_PASSPHRASE` (docs/framework/github.md §1), and under any other
-# value `pulumi` refuses with `incorrect passphrase` and writes nothing. The
-# salt is never deleted by hand: a stack file without one is keyed to whatever
-# passphrase the next `pulumi` command finds in its environment (§4.2). The one
-# secret here, the forge's admin token, is written by
-# `credentials derived github-admin record`.
+# This stack is an operator stack, one no CI job runs, and its configuration is
+# encrypted under the operator stacks' passphrase rather than the stack
+# passphrase every CI Environment holds (docs/credentials.md §1 rule 6). The
+# `encryptionsalt` below is a verifier for that passphrase: the
+# `operator-stack` driver hands it to `pulumi` (docs/framework/pulumi.md §3.3),
+# and under any other value `pulumi` refuses with `incorrect passphrase` and
+# writes nothing. The salt is never deleted by hand: a stack file without one
+# is keyed to whatever passphrase the next `pulumi` command finds in its
+# environment (docs/credentials.md §4.2). The one secret here, the forge's
+# admin token, is written by `credentials derived github-admin record`.
 config:
   pulumi:disable-default-providers:
     - github

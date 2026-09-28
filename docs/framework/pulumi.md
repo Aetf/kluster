@@ -365,6 +365,207 @@ in `kluster.lib.state_backend.settings`, beside the render that a
 program declaring the appliance shares with that script
 ([style/pulumi.md](../style/pulumi.md), "Layering").
 
+### 3.3 Operator stacks
+
+**An operator stack is a stack no CI job runs.** Its configuration is
+encrypted under a passphrase no CI Environment holds, apart from the
+stack passphrase every other stack is under, and a run of it starts from
+the workstation that holds that passphrase. The census of them is
+`OPERATOR_STACKS` in `conventions.identity`, beside the stack names,
+recording for each where its state lives: the appliance's backend, with
+every stack CI deploys, or a checkpoint committed to this repository.
+Today it holds `github`, whose state is in the backend; no stack keeps
+its state committed yet. Everything that has to know which stacks are
+held away from CI reads that census: the passphrase that encrypts them
+apart covers exactly these ([credentials.md](../credentials.md) §3),
+the census over the workflows keeps every command naming one out of CI
+(`tests/test_conventions.py`), and the driver below runs these and
+nothing else.
+
+**An operator stack runs only through the one driver**, the
+`operator-stack` console script, which sets the stack's backend and its
+passphrase on the process it starts. Neither reaches an operator stack
+through `mise.toml`'s `[env]`, and no `mise` task runs one
+(`tests/test_mise_env.py`):
+
+    operator-stack github plan
+    operator-stack github up
+    operator-stack github pulumi config get githubAdminToken
+
+-   **The environment is the driver's.** `kluster.lib.stack_environment`
+    maps a stack to it, and the `credentials` commands that write a
+    stack's configuration reach every stack through the same mapping: the
+    operator stacks' passphrase, read from its workstation slot, and the
+    backend the census names. That is the estate's backend, with the
+    `operator` client bundle's connection string and its three files, or
+    `file://<checkout>/checkpoints?metadata=skip` with
+    `PULUMI_DIY_BACKEND_DISABLE_CHECKPOINT_BACKUPS` set. The process
+    starts with none of the caller's variables that can steer `pulumi`
+    or its backend: nothing under `PULUMI_`, libpq's `PG`, or the
+    cloud-bucket backends' credentials (`AWS_`, `AZURE_STORAGE_`,
+    `GOOGLE_APPLICATION_CREDENTIALS`), but `PULUMI_HOME` and
+    `PULUMI_SKIP_UPDATE_CHECK`, which hold nothing of the stack's. So the
+    stack passphrase `mise.toml` exports never reaches it, a backend a
+    shell exported does not either, and neither does a switch that would
+    compress the checkpoint or keep copies of it where the checks do not
+    look — including one a later CLI release adds.
+-   **The stack is the driver's first argument, never a flag it passes
+    through.** A `--stack`, an `-s`, or a single-dash cluster holding an
+    `s` ahead of a `--` is refused rather than overridden, since a caller
+    who wrote one meant some other stack. A run refuses inside a `jj`
+    workspace under `.claude/`, where the slots do not answer
+    ([dispatch.md](dispatch.md) §1.2).
+-   **`plan` is a refreshed preview**, exiting 0 when nothing is planned
+    and 1 when something is. That is also how drift in an operator stack
+    is read, since no scheduled job reads it ([ci.md](ci.md) §3). The
+    preview is `pulumi preview --refresh --json` with its engine events
+    streamed (`PULUMI_ENABLE_STREAMING_JSON_PREVIEW`, which the flag's own
+    help names), and the driver prints the steps, the changed outputs and
+    the count it read from them. What is planned is counted the way the
+    engine's own `HasChanges` counts it, with two more kinds of change
+    counted too, since the engine counts no step for either and an `up`
+    writes both: a plain stack output, and a resource's `protect`,
+    `retainOnDelete`, `provider` or `parent`, which the step's events
+    carry before and after. **Two changes alone are neither planned nor
+    applied**: one to a secret stack output, which the events show as
+    the same placeholder before and after, and one to an option they do
+    not carry at all — `dependsOn`, `deleteBeforeReplace`,
+    `ignoreChanges`, `replaceOnChanges`, `additionalSecretOutputs`,
+    `aliases`, `customTimeouts`. `operator-stack <stack> pulumi up`
+    applies either. The reading fails closed: events that are not events, no
+    summary, a summary that counts no step at all, or one that counts no
+    change while a step names one are each a refusal rather than an empty
+    plan. A test over the pinned CLI plans a real resource's change, so a
+    release that moves the summary fails there.
+-   **`up` refreshes, previews, asks, and applies**, and `--yes` skips
+    the question. With nothing planned it runs no `up` at all and exits
+    as `plan` does.
+-   **A ^C is `pulumi`'s to answer.** The terminal sends it to `pulumi` as
+    well as to the driver, and `pulumi` answers the first one by
+    cancelling gracefully: it finishes the steps in flight and releases
+    its lock. So the driver ignores SIGINT while `pulumi` runs and waits
+    for it, rather than killing it partway through that cancel.
+-   **Anything else is passed to `pulumi`**, as
+    `operator-stack <stack> pulumi <arguments>`, with the stack added
+    ahead of any `--`. An `up` passed through this way skips the
+    driver's question, not the engine's own refusals. A `config cp` with
+    a `--dest` or `-d` is refused like a `--stack`, since it names the
+    stack it writes. An `import` or a `stack import` passed through for a
+    stack whose state is committed is refused, for the reason below.
+    These refusals read every word ahead of a `--` that is not a flag,
+    wherever it stands, since `pulumi` takes a flag between a command's
+    words: `stack --color=never import` is a `stack import`.
+-   Exit 2 is a refusal, a failed preview, or a committed checkpoint that
+    failed its checks.
+
+**A stack whose state is committed** has its backend in `checkpoints/`
+at the checkout's root, which the driver creates when it is missing,
+since a `file://` backend refuses a root that does not exist. Of what
+Pulumi writes there, the checkpoint,
+`checkpoints/.pulumi/stacks/<project>/<stack>.json`, and
+`checkpoints/.pulumi/meta.yaml` are what travels: a backend holding only
+those two serves every operation and writes the rest back. The
+checkpoint's `.bak` and the `history/` and `locks/` directories never
+leave the machine; `metadata=skip` keeps the storage library from
+writing an `.attrs` file beside every file, and the variable above turns
+the `backups/` copies off. Why the appliance's state is kept this way,
+and against which alternatives, is
+[rfc-006](../rfc/rfc-006-state-backend-stack.md) §3.
+
+**A stack whose state is committed keeps its checkpoint as a tracked
+file, a run of it starts from a working copy that holds the forge's
+current `main`, and a run that wrote the checkpoint leaves it for the
+operator to land like any change.** The run leaves the file changed in
+the primary checkout's `@`, since that is the checkout holding
+`.credentials/`; the operator describes the change and pushes it as a
+pull request, and [dispatch.md](dispatch.md) §2, rule 5 is what keeps
+that `@` across a fetch.
+
+**The publication is the push.** This repository is public, so a branch
+carrying a checkpoint is public from the moment it reaches the forge,
+before any review. What stands between a run and the public is what the
+driver checks on the workstation, around every command it runs against
+such a stack:
+
+1.  **Before the command, a working copy behind the forge's `main` is
+    refused.** The driver reads the forge's `main` with
+    `git ls-remote origin refs/heads/main`, which writes no ref, and runs
+    `git merge-base --is-ancestor` of it against the working copy: `jj`'s
+    `@`, or git's `HEAD` in a plain clone. An answer of 1, the forge's
+    `main` fetched but `@` not on it, names the rebase; any other, the
+    commit never fetched, names `jj git fetch` first. `jj` is asked with
+    the snapshot every `jj` command takes, so a working copy another
+    workspace made stale — its `@` rebased from there, while the files on
+    disk are still the older ones `pulumi` would read — is refused by
+    `jj` itself.
+2.  **Then a conflicted checkpoint is refused**, naming the reconcile:
+    keep `main`'s side (`jj restore --from main <path>`), run a refreshed
+    `plan`, and bring in through the program's `import_` what the other
+    run created, or delete it by hand. Two runs from one base meet as a
+    conflict in the file because each rewrites the manifest's timestamp.
+    The ancestry comes first because of this remedy: after a checkpoint
+    lands, the fetch that abandons the landed change can leave a second,
+    unlanded run's checkpoint conflicted until the rebase resolves it,
+    and the conflict's remedy would throw that run away.
+3.  **A command that changed no part of the deployment leaves the file's
+    bytes as they were.** Every write moves the manifest's timestamp and
+    encrypts every secret again under a fresh nonce, and the engine does
+    not keep the order of resources that register concurrently, so a run
+    that changed nothing would otherwise still be a change and a pull
+    request. The deployment is read from
+    `pulumi stack export --show-secrets` before and after, compared
+    without `manifest.time` and with the resources in one canonical
+    order, and where it is the one the command started from the previous
+    bytes are put back. That export carries each secret's envelope
+    beside its plaintext, so a property that became secret is a change
+    and keeps its new bytes.
+4.  **After the command, the stack has no file under
+    `checkpoints/.pulumi/stacks/` but its checkpoint and that one's
+    `.bak`.** Any other file named for it is its state in a form the
+    checks do not read — compressed, or a retained copy — and each is
+    named.
+5.  **Then two checks on the file**, each naming the property it found
+    and never the value, one line per place:
+    *   **No secret value is in the clear.** The stack's configuration
+        secrets and its state's secrets, read in the clear before the
+        command and after it, appear nowhere in the file outside a
+        ciphertext envelope, whole or line by line for a multi-line value
+        such as a key. Before as well as after, because a value whose
+        only marking the command removed — a provider release that stops
+        marking a field, a `stack import` of an edited export — is plain
+        after it. A line of PEM armor, and any string shorter than eight
+        characters, is not searched for on its own: neither identifies a
+        secret. **The search is literal**: a value encoded before it was
+        written — in base64, as OCI's `user_data` is, in hex, or escaped
+        inside a string that is itself a JSON document — is not found.
+    *   **Every property the program declares secret is ciphertext**,
+        which needs no value to check: every key a resource's recorded
+        options name in `additionalSecretOutputs`, and every output whose
+        input of the same name the file holds as ciphertext.
+
+**Every command that can write is recorded as unchecked before it
+starts**, in `checkpoints/<stack>.failed-check`, and the record comes off
+only when the checks pass. A failed check fails the run and replaces the
+record with what was found; a run stopped between the write and the
+checks — a ^C, a query that fails — leaves it standing, and `plan` names
+a record that stands. The file then holds the value in the working copy
+and in `jj`'s local snapshots, and nowhere public. The fix is a program
+change that marks the property secret, or the stray file removed, and
+`operator-stack <stack> up`: while the record stands, `up` runs even
+with nothing planned, since marking an output secret on a resource
+already in the state rewrites it as ciphertext at the next write, and it
+checks the file again. The fix is squashed into the change that carries
+the leak, so no commit that reaches the forge holds it.
+
+**Every import into a stack whose state is committed goes through the
+program**, with the `import_` option on the resource it declares, which
+carries the program's secret markings into the imported state. A
+`pulumi import` runs no program: it records no secret output names and
+takes the provider's read as the inputs, so what it imports would carry
+its secrets in the clear past both checks. A `pulumi stack import`
+writes a whole deployment the same way, with no program at all. The
+driver refuses either, passed through, for such a stack.
+
 ## 4. CRD Types Handling
 
 Custom resources are written against generated Python types, so

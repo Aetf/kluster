@@ -42,8 +42,8 @@ timeout 1200 mise x uv -- uv run pytest   # the outer hang guard; the per-case
                                           # bound is pyproject.toml's
 mise x uv -- uv run ruff check .
 mise x uv -- uv run basedpyright
-mise x -- pulumi preview --stack <stack>   # any stack but github
-mise run github preview                    # the github stack
+mise x -- pulumi preview --stack <stack>   # any stack but an operator stack
+mise x uv -- uv run operator-stack github plan   # an operator stack
 ```
 
 A `pulumi` run needs two things that cannot be looked up: `PULUMI_BACKEND_URL`,
@@ -58,8 +58,10 @@ a git-ignored directory in the checkout holding everything local this
 repository needs — the seed kit, the cached passphrases (`pulumi.passphrase`
 and `github.passphrase`), the state backend's client bundle, the appliance
 provisioner's OCI key, the account roots' token files (docs/credentials.md
-§4.4). `mise.toml` reads the passphrases and the bundle from there, so a
-workstation is set up by copying that directory from one that already has it:
+§4.4). `mise.toml` reads the stack passphrase and the bundle from there, and
+the `operator-stack` driver the `github` stack's passphrase and the bundle, so
+a workstation is set up by copying that directory from one that already has
+it:
 
 ```sh
 # on the workstation that holds the kit; leave kit.kdbx behind unless the
@@ -78,11 +80,13 @@ themselves, and `state-backend bundle operator --address <ip>` writes the
 bundle.
 
 `pulumi` reads one passphrase per process, so which one a run needs depends on
-the stack it names, and `mise.toml` cannot see the command line. A run against
-the `github` stack therefore goes through `mise run github <pulumi arguments>`,
-which fixes the stack and hands `pulumi` that stack's passphrase; a bare
-`pulumi … --stack github` meets the other one and stops at `error: incorrect
-passphrase`, having written nothing.
+the stack it names, and `mise.toml` cannot see the command line. A stack no CI
+job runs -- an operator stack, `github` today -- therefore goes through the
+`operator-stack` driver: `operator-stack github plan`, `operator-stack github
+up`, or `operator-stack github pulumi <pulumi arguments>`, which fixes the stack
+and hands `pulumi` that stack's backend and passphrase (docs/framework/pulumi.md
+§3.3). A bare `pulumi … --stack github` meets the other passphrase and stops at
+`error: incorrect passphrase`, having written nothing.
 
 One provider credential is in that directory: the OCI key the state-backend
 appliance is provisioned with, which `credentials derived oci-state-backend

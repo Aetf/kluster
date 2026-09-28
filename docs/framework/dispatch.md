@@ -481,13 +481,26 @@ milestone). The rules that keep them out of each other's way:
     rebase that conflicts goes back to the builder** as a fix cycle
     (§3) naming the conflict: resolving it inside the builder's change
     is implementation, which is not the dispatcher's (§1.3).
-5.  **The primary workspace holds no work.** Its `@` is an empty change
-    on top of `main`, restored with `jj new main` after each fetch.
-    That is what "stays on `main`" means where there is no current
+5.  **The primary workspace's `@` is the operator's, and a fetch
+    carries it onto `main` rather than replacing it.** After every
+    fetch it is rebased, `jj rebase -b @ -d main`, whatever it holds,
+    and it is never replaced with `jj new main`. What it holds is most
+    often nothing, and otherwise most often a checkpoint a run of a
+    stack whose state is committed left there for the operator to land
+    ([pulumi.md](pulumi.md) §3.3): the primary checkout is the one that
+    holds `.credentials/`, so it is where such a run starts, and `jj`
+    snapshots the file into `@` like any edit. An `@` that holds nothing
+    rebases the same way, so there is nothing to check first. The
+    rebase is also how "on `main`" is kept where there is no current
     branch to be on: the working copy is a commit, and a bookmark moves
-    only when someone moves it (§1.2). Builders work in workspaces of
-    their own already, and a dispatcher's direct edits go through a
-    workspace of its own too.
+    only when someone moves it (§1.2). When the forge deletes a merged
+    branch before the fetch, which the merge does by default, the fetch
+    itself abandons the landed change; when the fetch runs first, or
+    the branch is kept, the rebase leaves the landed change behind as an
+    empty described commit between `main` and `@`, which is abandoned by
+    hand before it rides into the next pushed branch. Builders work in
+    workspaces of their own already, and a dispatcher's direct edits go
+    through a workspace of its own too.
 6.  **Cards follow claims**: a dispatcher moves only the board cards
     of issues it has claimed.
 7.  **Sessions talk.** Local sessions can message each other; a

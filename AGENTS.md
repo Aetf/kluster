@@ -76,8 +76,9 @@ documentation the change makes true ships with it rather than after it.
   `kluster.lib` → `kluster.conventions` → `putils`: a layer imports what is
   below it and nothing above it, and further edges are forbidden
   outright, each named in the contract (a script reaches no
-  declaration; a custom provider knows no `conventions`; `putils` knows
-  no installation; only `kluster.main` imports a stack program).
+  declaration; nothing a program runs imports a script; a custom
+  provider knows no `conventions`; `putils` knows no installation; only
+  `kluster.main` imports a stack program).
   `import-linter` enforces it. The contract in `pyproject.toml` is the
   canon for the layers and the forbidden edges; what each layer is for,
   and why each edge is forbidden, is
@@ -85,9 +86,9 @@ documentation the change makes true ships with it rather than after it.
 * **Scripts are Python**, not shell — a shell script needs a reason (a
   handful of lines with no logic, or a context with no interpreter). They
   live under `src/kluster/scripts/` and are exposed as console scripts in
-  `pyproject.toml` (`update_crds`, `credentials`, `state-backend`), the
-  same way for every script; `just` recipes or symlinks are for
-  convenience on top, never the home of the logic.
+  `pyproject.toml` (`update_crds`, `credentials`, `state-backend`,
+  `operator-stack`), the same way for every script; `just` recipes or
+  symlinks are for convenience on top, never the home of the logic.
 * How code and prose are written — naming, comments, component and
   provider architecture — is `docs/style/`, and a reviewer holds every
   change to it.

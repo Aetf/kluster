@@ -31,6 +31,7 @@ from cryptography.hazmat.primitives import serialization
 from fake_gh import RecordedGh
 
 from kluster import conventions
+from kluster.lib import pulumi_cli
 from kluster.scripts.credentials import derived, devices, escrow, pki, pulumi_config, slots
 from kluster.scripts.credentials.github_secrets import Forge, Slot
 from kluster.scripts.credentials.pulumi_config import SlotRefused
@@ -883,7 +884,7 @@ def context(
     gh: RecordedGh,
     *,
     open_vault: Callable[[], escrow.Vault] = unopened,
-    runner: pulumi_config.Runner | None = None,
+    runner: pulumi_cli.Runner | None = None,
     ask: Callable[[str], str] | None = None,
     backend_url: str | None = None,
 ) -> slots.Context:

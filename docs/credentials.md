@@ -60,7 +60,9 @@ facts about them.
     under the checkout's git-ignored `.credentials/` (§4.4), written by
     a `credentials` or `state-backend` command and read
     non-interactively afterward — by `mise.toml` building a `pulumi`
-    run's environment, or by a script that must not stop to ask. It
+    run's environment, by the `operator-stack` driver building an
+    operator stack's (framework/pulumi.md §3.3), or by a script that must
+    not stop to ask. It
     holds what a workstation reads that way: the Pulumi passphrases —
     the stack passphrase and each one a stack is encrypted apart under —
     the state backend's
@@ -68,8 +70,8 @@ facts about them.
     desktop secret store, which is where account roots go (§2) — a root
     is interactive and rare, so a store that asks a session to unlock
     suits it, while the passphrases and the bundle are read on *every*
-    `pulumi` run by a template that can neither prompt nor unlock a
-    keyring; a root lands in a slot, its token file, only on a machine
+    `pulumi` run, by a template or by the driver, neither of which
+    prompts or unlocks a keyring; a root lands in a slot, its token file, only on a machine
     that has no such store. **A provider credential is a slot here only
     where a command rather than a stack consumes it** — the appliance
     provisioner's OCI key, whose consumer `state-backend provision`
@@ -738,7 +740,7 @@ verifies that a credential opens something, and for most of these rows
 that is the whole question. For the GitHub row it is not: no endpoint a
 fine-grained token can call lists its own permissions, and a read
 proves only the read half of one, so no cheap check exists for `record`
-to run. What stands in is `mise run github preview --refresh`, which
+to run. What stands in is `operator-stack github plan`, which
 reads every declared resource as the token, and then the first `up`
 that writes each kind of resource — both steps the operator takes
 anyway. That the platforms mint nothing is also why none of them is a
@@ -800,7 +802,7 @@ App exists, so it is a public fact of the installation recorded in the
 clear in `conventions/forge.py` (`DISPATCH_APP`), the way the tenancy
 OCID and the Cloudflare account id are. The forge declares it as the
 `kluster` repository variable `DISPATCH_APP_CLIENT_ID` from that record
-(framework/github.md §3), landed by `mise run github up` like every
+(framework/github.md §3), landed by `operator-stack github up` like every
 other resource of that stack, and `sdk-regenerate.yml` and `alert.yml`
 each hand it to the minting action beside the key.
 
@@ -1608,7 +1610,7 @@ never a hunt for per-machine environment wiring:
 | --- | --- | --- |
 | `kit.kdbx` | The seed kit (§2.1), on the workstation that holds one. Not a slot — the offline store, whose canonical copies are the two envelopes. `$KLUSTER_KDBX` overrides the path, for a kit on removable media. | `credentials kit bootstrap` |
 | `pulumi.passphrase` | The stack passphrase (§2.2), kept here because `mise.toml` reads it from a file on every `pulumi` run: a template can neither prompt nor open a kit. | `credentials derived pulumi-passphrase generate`, `credentials derived pulumi-passphrase recover` |
-| `github.passphrase` | The `github` stack's own passphrase (§2.2), which opens that stack's config and nothing else. Here for the same reason and read the same way, under its own variable: `PULUMI_CONFIG_PASSPHRASE` is process-global, so which passphrase is right depends on the `-s` a command carries. | `credentials derived github-passphrase generate`, `credentials derived github-passphrase recover` |
+| `github.passphrase` | The `github` stack's own passphrase (§2.2), which opens the config of that stack, the one operator stack (framework/pulumi.md §3.3), and nothing else. Read by the `operator-stack` driver, which hands it to `pulumi` for every run of an operator stack, and by no `mise.toml` template: `PULUMI_CONFIG_PASSPHRASE` is process-global, so which passphrase is right depends on the stack a command names, which a template never sees. | `credentials derived github-passphrase generate`, `credentials derived github-passphrase recover` |
 | `roots/<root>.<field>` | An account root's token file — the second layer of §2's chain, written only on a machine with no desktop secret store. No tool reads one on its own; a `credentials` run does, when a mint asks for the root. | `credentials root <name> remember` |
 | `state-backend/` | What a workstation knows about the appliance. The `operator` client bundle: CA, certificate, key, and the connection string for the appliance they authenticate against — which names the appliance and none of the files; the key is `0600`, which libpq insists on. Every run that leaves a box to reach writes it, and so does `bundle operator`, each time over the last. `known_hosts`, the box's SSH host-key pin (physical/state-backend.md §1): written by a `provision` that launched a box and by every `ssh` before it connects, rewritten whole rather than ever cleared. `restore-owed`, the restore a replacement left owed: written as a replacement starts destroying the box, and removed by a `restore` over this bundle once Pulumi lists what came back; while it stands, `provision` does not exit 0. | `state-backend provision`, `state-backend bundle operator`, `state-backend ssh`, `state-backend restore` (which removes `restore-owed`) |
 | `oci/state-backend/` | The appliance provisioner's own OCI key (§3): an SDK configuration file plus the `0600` PEM beside it, which is the key `state-backend` signs with whatever its `key_file` entry names. An SDK configuration rather than a shape of this repository's own, because the SDK is what signs with it. The compartment it acts in is not here — that is a convention its reader shares (§3). | `credentials derived oci-state-backend mint` |
@@ -1629,7 +1631,7 @@ here; every other entry is recovered, re-issued or re-pasted by the
 command in the right-hand column, so a lost `.credentials/` costs a few
 commands and no credential.
 
-`mise.toml` reads this directory — the passphrase slots, the backend
+`mise.toml` reads this directory — the stack passphrase's slot, the backend
 URL and the three `PGSSL*` variables naming the bundle beside it —
 falling back to whatever the environment already holds, and a slot that
 exists outranks the environment. The slots answer for the checkout that
@@ -1638,7 +1640,11 @@ sits, so a workspace's `mise x` hands on the caller's values and a
 `pulumi` run that needs this directory runs from the checkout that holds
 it (`kluster-ops#387`); a scratch probe runs `pulumi` as
 [framework/testing.md](framework/testing.md) §5.1 says. It reads no
-provider credential at all. Of those this directory holds, the
+provider credential at all. The `operator-stack` driver reads the
+operator stacks' passphrase slot and the bundle from here too, for the
+stacks `mise.toml` leaves alone, and under `.claude/` it refuses to run
+rather than fall back to the caller's values (framework/pulumi.md
+§3.3). Of those this directory holds, the
 appliance's OCI key is read by `state-backend` alone and the libvirt
 identity is `physical`'s working copy of its own config secret; each
 credential a stack authenticates with is a config secret in that stack,

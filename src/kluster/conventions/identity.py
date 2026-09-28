@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import Enum
+from types import MappingProxyType
 
 CLUSTER_NAME = 'kluster'
 
@@ -49,6 +52,29 @@ class StackNames:
 
 
 STACK_NAMES = StackNames(physical=PHYSICAL, dns='dns', k8s_base='k8s-base', apps='apps', github='github')
+
+
+class StateHome(Enum):
+    """Where an operator stack keeps its state (framework/pulumi.md §3.3)."""
+
+    #: The appliance's Postgres, where every stack CI deploys keeps its state
+    #: too (framework/ci.md §1). A run reaches it with the `operator` client
+    #: bundle.
+    BACKEND = 'backend'
+    #: A checkpoint committed to this repository under `checkpoints/`, for a
+    #: stack whose state cannot live in the backend it creates. A run of one
+    #: is checked before it starts and before it can be pushed.
+    COMMITTED = 'committed'
+
+
+#: Every **operator stack** -- a stack no CI job runs -- and where its state
+#: lives. The census the rest reads: the passphrase that encrypts these
+#: stacks apart from the others covers exactly these
+#: (`scripts.credentials.pulumi_config.APART`), the census over the workflows
+#: keeps every one of them out of CI (`test_conventions`), and the
+#: `operator-stack` driver runs these and nothing else, with a backend chosen
+#: by the home recorded here (`kluster.lib.stack_environment`).
+OPERATOR_STACKS: Mapping[str, StateHome] = MappingProxyType({STACK_NAMES.github: StateHome.BACKEND})
 
 #: The unattended rebuild drill (physical/state-backend.md §7.3), which is
 #: one name in four places: the ops repository's Environment its credentials
