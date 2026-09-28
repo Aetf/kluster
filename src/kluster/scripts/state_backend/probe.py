@@ -37,10 +37,12 @@ from dataclasses import dataclass
 import requests
 from cryptography import x509
 
+from kluster.lib.state_backend import settings
+
 from ..credentials import b2
 from ..credentials.masters import CredentialRejected
 from ..credentials.pulumi_config import SlotRefused
-from . import config, settings
+from . import config
 
 log = logging.getLogger(__name__)
 
@@ -89,7 +91,7 @@ HANDSHAKE_TIMEOUT = 30
 #: printed leaf first, so the first block is the server's own certificate.
 PEM_CERTIFICATE = re.compile(r'-----BEGIN CERTIFICATE-----\n.*?-----END CERTIFICATE-----', re.S)
 
-#: How the appliance names a dump (`deploy/state-backend/state-dump.sh`): the
+#: How the appliance names a dump (`src/kluster/lib/state_backend/machine/state-dump.sh`): the
 #: prefix, a UTC stamp, and the two suffixes. The stamp is the moment the dump
 #: was taken, and it is what the age is read off -- names sort the way they
 #: were written, so the newest object is the last name.
@@ -129,7 +131,7 @@ class Verdict:
 def s_client(argv: Sequence[str]) -> sp.CompletedProcess[str]:
     """One `openssl s_client` run, its stdin closed.
 
-    Closed for the reason `provision.wait_for_backend` closes it: `s_client`
+    Closed for the reason `readiness.wait_for_backend` closes it: `s_client`
     keeps the connection open reading stdin once the handshake is done, and an
     inherited terminal would make a successful probe hang until the timeout.
     """

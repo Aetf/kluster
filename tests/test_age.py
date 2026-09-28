@@ -303,7 +303,7 @@ def test_a_missing_tool_is_not_a_refused_recipient(monkeypatch: pytest.MonkeyPat
 def test_age_url_matches_the_pinned_version() -> None:
     """A version bumped without its URL would fetch the old binary and pass
     its own digest check."""
-    from kluster.scripts.state_backend import settings
+    from kluster.lib.state_backend import settings
 
     assert settings.AGE_VERSION in settings.AGE_URL
     assert settings.AGE_URL.endswith('linux-amd64.tar.gz')
@@ -319,7 +319,7 @@ def test_local_age_matches_the_appliance_pin() -> None:
     """
     import tomllib
 
-    from kluster.scripts.state_backend import settings
+    from kluster.lib.state_backend import settings
 
     tools = tomllib.loads((Path(__file__).parent.parent / 'mise.toml').read_text())['tools']
     assert f'v{tools["age"]}' == settings.AGE_VERSION
@@ -341,11 +341,11 @@ def test_renovate_bumps_both_pins_in_one_pull_request() -> None:
     """
     import tomllib
 
-    from kluster.scripts.state_backend import settings
+    from kluster.lib.state_backend import settings
 
     root = Path(__file__).parent.parent
     config = (root / 'renovate.json5').read_text()
-    appliance = "'src/kluster/scripts/state_backend/settings.py'"
+    appliance = "'src/kluster/lib/state_backend/settings.py'"
     assert config.count(appliance) == 1
     _, appliance_rule = package_rule(config, config.index(appliance))
 

@@ -1,15 +1,16 @@
 """Taking the Pulumi state out of the appliance, and putting it back.
 
-The box dumps itself nightly (`deploy/state-backend/state-dump.sh`, §5); this
-module is the operator's side of the same artifact — an on-demand dump, and
-the only thing that reads one back. Both halves of every playbook that
-rebuilds the box are built out of it: a Postgres major upgrade is a dump, a
-re-provision and a restore (§7.2), and the quarterly drill is the same
-sequence against a scratch box (§7.3).
+The box dumps itself nightly (`machine/state-dump.sh`, §5); this module is
+the other side of the same artifact — an on-demand dump, and the only thing
+that reads one back. Both halves of every playbook that rebuilds the box are
+built out of it: a Postgres major upgrade is a dump, a re-provision and a
+restore (§7.2), and the quarterly drill is the same sequence against a
+scratch box (§7.3).
 
 **The artifact is the same artifact.** A dump written here is `pg_dump -Fc`
 under `age`, encrypted to the recipients the escrow names — the ones the
-appliance itself encrypts to, taken from the same function (`config`). A
+appliance itself encrypts to, which the caller recovers with the same function
+the render's recipients come from (`kluster.scripts.state_backend.config`). A
 restore therefore does not care which of the two produced its input, and an
 operator's dump is exactly as recoverable as a nightly one.
 
@@ -22,10 +23,11 @@ same rule (physical/state-backend.md §5). A restore ends by asking the
 `pulumi` CLI what the restored backend serves, because a database that is
 full of rows but cannot be logged in to has restored nothing anyone needs.
 
-**Bytes, which is why this is not `credentials.age`.** That wrapper is text
-in, text out, and a custom-format archive is neither. The invocations here
-keep its discipline — the pinned binary, identities on standard input,
-recipients on argv — and add the file-to-file form the archive needs.
+**Bytes, which is why this is not the escrow's `age` wrapper**
+(`kluster.scripts.credentials.age`). That wrapper is text in, text out, and a
+custom-format archive is neither. The invocations here keep its discipline —
+the pinned binary, identities on standard input, recipients on argv — and add
+the file-to-file form the archive needs.
 """
 
 from __future__ import annotations
@@ -36,15 +38,16 @@ import logging
 import os
 import re
 import subprocess as sp
+import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from kluster.lib import age, bundle, pulumi_cli
 from kluster.lib import config as lib_config
-from kluster.scripts.credentials import age, lifecycle, pulumi_config
 
-from . import config, settings
+from . import settings
 
 log = logging.getLogger(__name__)
 
@@ -69,7 +72,7 @@ ARMOR_MAGIC = age.ARMOR_BEGIN.encode()
 ARCHIVE_MAGIC = b'PGDMP'
 
 #: Where the state is: the table Pulumi's Postgres backend keeps it in -- the
-#: backend's default name, since `config.ClientBundle.url` names no `table=`
+#: backend's default name, since a client bundle's URL names no `table=`
 #: -- and the directory, under the database's own prefix, that holds one
 #: checkpoint key per stack. The appliance's dump script carries the same
 #: two (`STATE_TABLE`, `STACKS`), and the suite holds them equal.
@@ -108,7 +111,7 @@ class Connection:
     """What it takes to reach the backend: a string, and where the bundle is.
 
     Two halves because the connection string is machine-independent by
-    design (`config.ClientBundle.url`) — the certificate, its key and the CA
+    design (`bundle.ssl_env`) — the certificate, its key and the CA
     are named by the `PGSSL*` variables, which libpq and the driver behind
     Pulumi's Postgres backend both read. Carried together so that no caller
     can pass one without the other: a URL on its own authenticates as nobody
@@ -136,10 +139,10 @@ def connection(bundle_dir: Path) -> Connection:
     file sits in, which is the bundle directory the caller passed, so the URL
     and the certificates always come from the one bundle.
     """
-    path = lifecycle.backend_url_file(bundle_dir)
+    path = bundle.backend_url_file(bundle_dir)
     if path is None:
         raise StateError(
-            f'no {bundle_dir / config.URL_FILE}: `state-backend bundle operator --address <ip>` writes one'
+            f'no {bundle_dir / bundle.URL_FILE}: `state-backend bundle operator --address <ip>` writes one'
         )
     url = path.read_text().strip()
     if not url:
@@ -150,7 +153,7 @@ def connection(bundle_dir: Path) -> Connection:
             'rewriting it: `state-backend bundle operator --address <ip>` writes the portable form',
             path,
         )
-    return Connection(url=url, env=config.ssl_env(path.parent))
+    return Connection(url=url, env=bundle.ssl_env(path.parent))
 
 
 def endpoint(url: str) -> str:
@@ -369,13 +372,13 @@ def stacks(target: Connection) -> list[str]:
     """
     log.info('asking pulumi which stacks %s serves', endpoint(target.url))
     try:
-        printed = pulumi_config.run_pulumi(
+        printed = pulumi_cli.run_pulumi(
             ['stack', 'ls', '--all', '--json'],
-            cwd=pulumi_config.project_dir(),
+            cwd=pulumi_cli.project_dir(),
             env={'PULUMI_BACKEND_URL': target.url, **target.env},
             stdin=None,
         )
-    except pulumi_config.SlotRefused as exc:
+    except pulumi_cli.PulumiRefused as exc:
         raise StateError(str(exc)) from exc
     return sorted(_stack_names(printed))
 
@@ -478,3 +481,59 @@ def identity_file(path: Path) -> tuple[str, ...]:
         raise StateError(f'{path} cannot be read: {exc}') from exc
     except ValueError as exc:
         raise StateError(f'{path} holds no age identity') from exc
+
+
+def refuse_to_overwrite(destination: Path) -> None:
+    """A dump never lands on top of one.
+
+    Asked twice: by the `dump` command before it opens the escrow, so a name
+    clash costs no kit password, and by the writer itself, which has a second
+    caller.
+    """
+    if destination.exists():
+        raise StateError(f'{destination} already exists; a dump never overwrites one')
+
+
+def write_dump(destination: Path, *, bundle_dir: Path, recipients: Sequence[str]) -> None:
+    """`pg_dump -Fc` under age, verified before the file is called a dump.
+
+    The single writer of the operator-side artifact, behind both commands that
+    produce one — `state-backend dump`, and the converge dumping a box it is
+    about to destroy — so the two cannot drift into producing different files.
+    """
+    refuse_to_overwrite(destination)
+    target = connection(bundle_dir)
+    # The plaintext archive never lands beside the encrypted one: it is the
+    # whole state in the clear, and it exists only for as long as the two
+    # steps that read it. `TemporaryDirectory` makes it 0700.
+    with tempfile.TemporaryDirectory(prefix=f'{settings.NAME}-') as tmp:
+        archive = Path(tmp) / 'state.dump'
+        log.info('dumping the live state over the client bundle in %s', bundle_dir)
+        pg_dump(target, archive)
+        log.info('verifying the archive before calling it a dump')
+        _ = verify_dump(archive)
+        log.info('encrypting the dump')
+        encrypt(archive, destination, recipients)
+    log.info(
+        '%s holds %.1f MiB, readable by the %d recipient(s) the appliance encrypts to',
+        destination,
+        destination.stat().st_size / 2**20,
+        len(recipients),
+    )
+
+
+def served(target: Connection) -> list[str]:
+    """The stacks the backend serves, or nothing if it cannot answer at all.
+
+    Used before a restore, into a box that ordinarily serves nothing. A box
+    provisioned minutes ago answers with no stack rather than refusing: the
+    question opens the backend, which creates its table and writes its meta
+    row on the way. A backend that does not answer at all is read as
+    serving nothing too, because the caller's guard is there to stop a
+    restore over live state, and only a positive answer shows it.
+    """
+    try:
+        return stacks(target)
+    except StateError as exc:
+        log.info('the backend did not answer `pulumi stack ls` (%s); reading it as serving no stack', exc)
+        return []

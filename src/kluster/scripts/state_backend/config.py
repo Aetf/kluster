@@ -1,72 +1,50 @@
-"""Rendering the appliance's Ignition, and the client bundle that talks to it.
+"""What the appliance is built from that only the escrow can produce, and the files a workstation writes for it.
 
-The Butane template is the box; this module supplies the values that only
-exist at provision time — the reserved IP the server certificate is issued
-for, the write-only B2 credential, the certificates the escrowed CA signs and
-the age recipients whose identities the escrow holds — and hands the result to
-`butane` for validation and conversion.
+The machine itself -- the values, the Butane template they are rendered into,
+the digest a running box is compared on -- is `kluster.lib.state_backend.render`,
+which takes every key and recipient as an argument. This module is what mints
+and recovers them: the server certificate the escrowed CA signs and the box's
+SSH identity, minted per render; the age recipients whose identities the
+escrow holds, and the drill recipient committed beside the template. It also
+writes what a workstation keeps for the box -- the client bundle and the
+host-key pin -- and reads the one time-dependent fact about a running box, its
+certificate's expiry.
 """
 
 from __future__ import annotations
 
 import datetime as dt
-import enum
-import hashlib
-import json
 import logging
-import subprocess as sp
 from collections.abc import Mapping
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
-from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 from kluster.lib import config as lib_config
-from kluster.scripts.credentials import age, escrow, pki, workstation
-
-from . import settings
+from kluster.lib import workstation
+from kluster.lib.bundle import CA_FILE, CERT_FILE, KEY_FILE, URL_FILE
+from kluster.lib.state_backend import render, settings
+from kluster.scripts.credentials import age, escrow, pki
 
 log = logging.getLogger(__name__)
 
-#: `deploy/` sits outside the package: it is deployment material, not library
-#: code, and the appliance's definition is meant to be readable on its own. So
-#: it is found in the checkout this package runs from (`workstation.repo_root`),
-#: and a copy of the package outside any checkout refuses by name on import
-#: rather than reading whatever directory a fixed depth lands on.
-DEPLOY_DIR = workstation.repo_root() / 'deploy' / 'state-backend'
-
-TEMPLATE = 'butane.yaml.j2'
-DUMP_SCRIPT = 'state-dump.sh'
-OPERATOR_KEYS = 'operator-keys.txt'
 #: The public half of the drill age identity (credentials.md §3), one line,
 #: `#` comments allowed. Written by `credentials derived drill-age-identity
 #: generate` and committed; the private half is in the ops repository's
 #: `drill` Environment and nowhere on disk. Absent until that generator has
 #: run: the appliance then encrypts to the escrowed generations alone.
 DRILL_RECIPIENT = 'drill-recipient.txt'
-DRILL_RECIPIENT_FILE = DEPLOY_DIR / DRILL_RECIPIENT
+#: Where the drill recipient is read: beside the Butane template, in the
+#: package this runs from. In a checkout that is the committed file; its
+#: writer holds it to that (`drill_recipient_target`).
+DRILL_RECIPIENT_FILE = Path(render.__file__).with_name(render.MACHINE) / DRILL_RECIPIENT
 
-#: The bundle's file names, shared by the writer and the environment that
-#: names them.
-CA_FILE = 'ca.crt'
-CERT_FILE = 'client.crt'
-KEY_FILE = 'client.key'
-URL_FILE = 'backend-url'
 #: The tool's own host-key pin, beside the bundle for the same box. Its own
 #: file rather than the operator's `~/.ssh/known_hosts`: nothing but
 #: `state-backend ssh` reads it, and nothing else may write it.
 KNOWN_HOSTS_FILE = 'known_hosts'
-
-#: The libpq variables that carry a bundle's three files. Standard names, read
-#: by libpq itself and by the driver Pulumi's Postgres backend uses, which is
-#: what lets the connection string stay free of paths.
-CA_ENV = 'PGSSLROOTCERT'
-CERT_ENV = 'PGSSLCERT'
-KEY_ENV = 'PGSSLKEY'
 
 #: How much life the server certificate must have left for a converge to leave
 #: a box alone, and the only home of that number: the documents name the
@@ -141,19 +119,41 @@ def drill_recipient(path: Path) -> str | None:
     return value
 
 
+def drill_recipient_target() -> Path:
+    """Where the drill recipient's writer puts it: `DRILL_RECIPIENT_FILE`, refused outside a checkout.
+
+    The file is one to commit, and the converge encrypts to the committed
+    recipient alone. A package running from anywhere but the checkout it
+    belongs to -- installed rather than editable -- resolves the path inside
+    that installation, where no commit picks the file up. Its writer pushes
+    the private half before it writes the public one, so a run there would
+    replace the key the drill holds and leave the appliance encrypting to the
+    old recipient. So the target is checked against the checkout this package
+    runs from (`workstation.repo_root`), before anything is pushed, and
+    refused by name when it is not in it.
+    """
+    root = workstation.repo_root()
+    if not DRILL_RECIPIENT_FILE.resolve().is_relative_to(root.resolve()):
+        raise workstation.WorkstationError(
+            f'{DRILL_RECIPIENT_FILE} is not in the checkout at {root}: the drill recipient is a file to commit, '
+            'so it is written only by a package running from the checkout it belongs to'
+        )
+    return DRILL_RECIPIENT_FILE
+
+
 def age_recipients(vault: escrow.Vault) -> tuple[str, ...]:
     """The public halves of every identity the appliance encrypts dumps to.
 
     One function behind two callers, which is the point: the box's recipient
     list is rendered from this, and so is the encryption of a dump an
-    operator takes by hand (`state.py`). A dump written to a different set
+    operator takes by hand (`cli._dump`). A dump written to a different set
     than the box's would be a file the drill and the escrow disagree about.
 
     The escrowed generations first, then the drill recipient where one is on
     file (`DRILL_RECIPIENT_FILE`). The drill key is not a root the escrow
     holds -- it opens nothing an escrowed generation does not also open -- so
     it is read from the committed file rather than recovered, and the field
-    it lands in is digested (`Machine.age_recipients`): committing the file
+    it lands in is digested (`render.Machine.age_recipients`): committing the file
     is drift the plain converge names.
     """
     generations = tuple(age.recipient(vault.recover(label)) for label in escrow.backup_labels())
@@ -256,7 +256,7 @@ class ClientBundle:
         """The connection string: everything about the backend, nothing about this machine.
 
         The three certificate files travel beside it as `PGSSLROOTCERT`,
-        `PGSSLCERT` and `PGSSLKEY` (`ssl_env`) rather than inside it. libpq
+        `PGSSLCERT` and `PGSSLKEY` (`kluster.lib.bundle.ssl_env`) rather than inside it. libpq
         expands no variable inside a connection string, and neither does the
         driver Pulumi's Postgres backend uses — but both read those variables,
         so the channel that carries a path is the environment. A string with
@@ -270,143 +270,6 @@ class ClientBundle:
         return f'postgres://{self.name}@{self.address}:{settings.PORT}/{settings.DATABASE}?sslmode=verify-full'
 
 
-def ssl_env(directory: Path) -> dict[str, str]:
-    """The libpq variables naming the bundle in `directory`.
-
-    The other half of `ClientBundle.url`, and the half that varies by machine:
-    a client bundle is reachable from anywhere its files are, so where they
-    are is said once, in the environment, by whoever knows — `mise.toml` for a
-    workstation slot, a workflow step for the `ci` bundle it materializes, and
-    this function for the commands that drive `pg_dump`, `pg_restore` and
-    `pulumi` themselves.
-
-    Absolute, because the tools are run with a working directory of their own.
-    """
-    directory = directory.resolve()
-    return {
-        CA_ENV: str(directory / CA_FILE),
-        CERT_ENV: str(directory / CERT_FILE),
-        KEY_ENV: str(directory / KEY_FILE),
-    }
-
-
-def operator_keys() -> tuple[str, ...]:
-    """The public keys that may log in to the appliance.
-
-    Refused by name when the file is missing or holds nothing: an empty list
-    renders a Butane document that `butane --strict` accepts and that boots an
-    appliance nobody can reach, which is a failure discovered an hour later
-    after an image import and a launch.
-    """
-    return lib_config.lines(DEPLOY_DIR / OPERATOR_KEYS, 'the appliance operator keys')
-
-
-class Digested(enum.Enum):
-    """How one field of the machine enters the digest map the box carries.
-
-    The converge compares a running box to this commit component by component
-    (`digests`), and some fields cannot be compared as their value: the
-    certificates are re-issued on every render, and the secrets must not be
-    digested at all. `NEVER` is therefore the enum's name for "this field is a
-    secret", which is why it decides the repr and the record's equality as
-    well as the digest.
-    """
-
-    #: The value itself, JSON-encoded. The default, and the safe one.
-    VALUE = 'value'
-    #: A certificate, by subject, SANs and public key — "which CA is this".
-    AUTHORITY = 'authority'
-    #: A certificate, by subject and SANs only — "what does this box answer as".
-    LEAF = 'leaf'
-    #: Not compared at all, because the value is a secret: its digest would
-    #: travel in cloud metadata and its repr would travel in a transcript.
-    NEVER = 'never'
-
-
-def _digested(how: Digested = Digested.VALUE) -> Any:
-    """Declare a `Machine` field's digest treatment beside the field itself.
-
-    The rule travels with the name it applies to, so renaming a field cannot
-    leave a rule pointing at nothing — which for a `NEVER` field would mean
-    putting a secret's digest into cloud metadata.
-
-    A `NEVER` field is kept out of the repr and out of comparison by the same
-    declaration, so a secret added to this record later is covered by saying
-    the one thing its author has to say anyway rather than by remembering two
-    more annotations. Comparison is the half a failed assertion reads: pytest
-    prints every compared field that differs, repr or no repr.
-    """
-    secret = how is Digested.NEVER
-    return field(metadata={'digest': how}, repr=not secret, compare=not secret)
-
-
-@dataclass(frozen=True)
-class Machine:
-    """Everything the Butane template needs: the machine, as values.
-
-    A record rather than a mapping because two things read it — the renderer,
-    and the digest that decides whether a running box still matches the
-    repository (`digests`). A field the template uses but this does not carry
-    would be a change the converge cannot see, and the type checker is what
-    holds the two lists together.
-    """
-
-    operator_keys: tuple[str, ...] = _digested()
-    postgres_uid: int = _digested()
-    postgres_image: str = _digested()
-    database: str = _digested()
-    ci_role: str = _digested()
-    operator_role: str = _digested()
-    #: The CA's private half comes from the escrow and outlives every render,
-    #: so "which CA does this box chain to" is a fact about the box and a
-    #: change to it is a rebuild.
-    ca_cert: str = _digested(Digested.AUTHORITY)
-    #: The leaf, compared by what it asserts and not by whose key it carries:
-    #: a re-render legitimately issues a new key for the same machine.
-    #: Rotating the server key therefore takes `provision --replace`.
-    server_cert: str = _digested(Digested.LEAF)
-    #: Random at every issuance (pki.py), so it describes this render rather
-    #: than this machine.
-    server_key: str = _digested(Digested.NEVER)
-    #: The box's SSH identity, in OpenSSH's own private-key format, minted
-    #: fresh by every render like the server key above and delivered the same
-    #: way. `NEVER` for the same two reasons, and for one more: its public
-    #: half is what `ssh` pins the connection against, and a digest of the
-    #: private one in cloud metadata would buy nothing toward that.
-    #: Rotating it is `provision --replace`.
-    ssh_host_key: str = _digested(Digested.NEVER)
-    age_recipients: tuple[str, ...] = _digested()
-    age_url: str = _digested()
-    age_sha256: str = _digested()
-    b2_dump_key_id: str = _digested()
-    #: A credential. Its *identity* is what the converge compares, and that is
-    #: `b2_dump_key_id`; hashing the secret into cloud metadata buys nothing.
-    b2_dump_key: str = _digested(Digested.NEVER)
-    b2_bucket_id: str = _digested()
-    b2_prefix: str = _digested()
-    dump_script: str = _digested()
-    dump_schedule: str = _digested()
-    reboot_day: str = _digested()
-    reboot_time: str = _digested()
-    reboot_window_minutes: int = _digested()
-
-    def parameters(self) -> dict[str, Any]:
-        """The names the Butane template's expressions use.
-
-        The fields, plus the one value the template needs that is *derived*
-        from a field rather than stored beside it: the host key's public half,
-        which the box carries as `ssh_host_key_pub` so that its fingerprint
-        reaches the console banner. Derived rather than carried, because a
-        second field could hold the public half of a different key than the
-        private one beside it -- and because it is minted per render, so a
-        field would have to be excluded from the digest map by hand
-        (`digests`).
-        """
-        values = {spec.name: getattr(self, spec.name) for spec in fields(self)}
-        values['ssh_host_key_pub'] = host_public_key(self)
-        return values
-
-
 def machine(
     roots: Roots,
     *,
@@ -415,12 +278,14 @@ def machine(
     dump_key: str,
     bucket_id: str,
     now: dt.datetime | None = None,
-) -> Machine:
+) -> render.Machine:
     """The machine this commit describes, at this address, with this dump key.
 
-    `now` is the instant the server certificate is issued at, and it goes to
-    `pki` untouched: the default is `pki`'s, in one place, so a test can pin
-    the certificate's validity the way it pins `renewal_due`'s reading of it.
+    The keys it carries are minted here and handed to the render: a server
+    certificate issued for `address`, and a fresh SSH host key. `now` is the
+    instant the server certificate is issued at, and it goes to `pki`
+    untouched: the default is `pki`'s, in one place, so a test can pin the
+    certificate's validity the way it pins `renewal_due`'s reading of it.
     """
     # One issuance, both halves. A leaf key is random at issuance (pki.py), so
     # asking the CA twice would hand the box a certificate its key does not
@@ -429,16 +294,10 @@ def machine(
     # The box's SSH identity is minted here rather than generated on the box,
     # which is what lets the launch record a pin for it before it boots. It is
     # this render's alone: every caller that needs the public half derives it
-    # from this value (`host_public_key`), so a pin can never describe a key
-    # the box was not given.
+    # from the machine (`render.host_public_key`), so a pin can never describe
+    # a key the box was not given.
     host_key = Ed25519PrivateKey.generate()
-    return Machine(
-        operator_keys=operator_keys(),
-        postgres_uid=settings.POSTGRES_UID,
-        postgres_image=settings.POSTGRES_IMAGE,
-        database=settings.DATABASE,
-        ci_role=settings.CI_ROLE,
-        operator_role=settings.OPERATOR_ROLE,
+    return render.machine(
         ca_cert=roots.ca.certificate().cert_pem.decode().strip(),
         server_cert=server.cert_pem.decode().strip(),
         server_key=server.key_pem.decode().strip(),
@@ -450,96 +309,10 @@ def machine(
         .decode()
         .strip(),
         age_recipients=roots.age_recipients,
-        age_url=settings.AGE_URL,
-        age_sha256=settings.AGE_SHA256,
-        b2_dump_key_id=dump_key_id,
-        b2_dump_key=dump_key,
-        b2_bucket_id=bucket_id,
-        b2_prefix=settings.B2_PREFIX,
-        dump_script=(DEPLOY_DIR / DUMP_SCRIPT).read_text().strip(),
-        dump_schedule=settings.DUMP_SCHEDULE,
-        reboot_day=settings.REBOOT_DAY,
-        reboot_time=settings.REBOOT_TIME,
-        reboot_window_minutes=settings.REBOOT_WINDOW_MINUTES,
+        dump_key_id=dump_key_id,
+        dump_key=dump_key,
+        bucket_id=bucket_id,
     )
-
-
-def render_ignition(values: Machine) -> str:
-    """Butane in, validated Ignition out.
-
-    Takes the machine rather than building one, because every fact recorded
-    beside the box has to come from the same render as the Ignition it boots
-    with: when the server certificate inside that Ignition expires
-    (`expires_at`), and the public half of the SSH host key it delivers
-    (`host_public_key`). A second `machine` call would issue a second
-    certificate and mint a second host key, so the box would record an expiry
-    belonging to a certificate it never held and be pinned to a key it was
-    never given.
-
-    Rendered through an environment of its own rather than through
-    `kluster.lib.templates`: that mechanism resolves a template relative to
-    the package that owns it, and this one lives in `deploy/`, which is
-    deployment material a reader is meant to be able to open on its own. The
-    settings are the repository's (`StrictUndefined`, trailing newline kept),
-    so a forgotten parameter is still an error at render time.
-    """
-    environment = Environment(
-        loader=FileSystemLoader(DEPLOY_DIR),
-        undefined=StrictUndefined,
-        keep_trailing_newline=True,
-        autoescape=False,
-    )
-    butane = environment.get_template(TEMPLATE).render(values.parameters())
-    log.info('handing %s to butane for validation and conversion to Ignition', TEMPLATE)
-    proc = sp.run(
-        ['butane', '--strict', '--pretty'],
-        input=butane,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(f'butane rejected the config:\n{proc.stderr}')
-    return proc.stdout
-
-
-def host_public_key(values: Machine) -> str:
-    """The `ssh-ed25519 AAAA...` line for the host key this machine carries.
-
-    What the launch records as the box's pin and what a `known_hosts` entry
-    holds, derived from the private half rather than stored beside it: there
-    is one value, so the pin cannot be the public half of a key the box was
-    never given. A render is the only place both exist at once, which is why
-    this takes the machine rather than building one -- a second `machine`
-    call would mint a second key, and pin the box to the one it did not get.
-
-    The type is checked rather than assumed: `load_ssh_private_key` answers
-    for every algorithm OpenSSH has, and only this one is what the client is
-    told to accept (`provision.ssh`).
-    """
-    key = serialization.load_ssh_private_key(values.ssh_host_key.encode(), password=None)
-    if not isinstance(key, Ed25519PrivateKey):
-        raise TypeError(f'the machine carries a {type(key).__name__} host key, and ed25519 is what is pinned')
-    return (
-        key.public_key()
-        .public_bytes(
-            encoding=serialization.Encoding.OpenSSH,
-            format=serialization.PublicFormat.OpenSSH,
-        )
-        .decode()
-    )
-
-
-def expires_at(values: Machine) -> str:
-    """When the server certificate this machine carries stops being valid.
-
-    Recorded on the box beside its digest map, because the bill of materials
-    cannot see an expiry coming on its own: every component of it is
-    re-derived from the repository, and the repository issues a fresh
-    certificate on every render, so the intended side is always young. Only
-    the box knows how old its own certificate is.
-    """
-    return x509.load_pem_x509_certificate(values.server_cert.encode()).not_valid_after_utc.isoformat()
 
 
 def renewal_due(recorded: str, *, now: dt.datetime | None = None) -> str | None:
@@ -581,56 +354,13 @@ def renewal_due(recorded: str, *, now: dt.datetime | None = None) -> str | None:
     )
 
 
-def _identity(pem: str, *, with_key: bool) -> str:
-    """A certificate reduced to what it *is*.
-
-    Validity dates, serial numbers and signature bytes move on every issuance;
-    the subject and the SANs do not. Digesting the latter is what lets a
-    re-render be recognized as the same machine.
-    """
-    cert = x509.load_pem_x509_certificate(pem.encode())
-    try:
-        names = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
-        san = sorted(str(name.value) for name in names)
-    except x509.ExtensionNotFound:
-        san = []
-    spki = ''
-    if with_key:
-        spki = hashlib.sha256(
-            cert.public_key().public_bytes(
-                encoding=serialization.Encoding.DER,
-                format=serialization.PublicFormat.SubjectPublicKeyInfo,
-            )
-        ).hexdigest()
-    return json.dumps([cert.subject.rfc4514_string(), san, spki])
-
-
 def digests(roots: Roots, *, address: str, dump_key_id: str, bucket_id: str) -> dict[str, str]:
-    """A digest per component of the machine, for comparing a box to the repo.
+    """The digest map (`render.digests`) of the machine this commit describes at `address`.
 
-    Per component rather than one number so that a drifted box can say *what*
-    drifted -- `butane`, `operator_keys`, `postgres_image` -- which is the
-    difference between "re-provision, trust me" and a converge whose reason is
-    readable. The map is small enough to travel in the instance's metadata,
-    which is where the answer for a running box comes from.
-
-    The template itself is a component: it is the machine's definition, and a
-    change to it must be visible without every value it interpolates changing.
+    The dump key's secret is left out: it is never digested, and a comparison
+    has no business holding one.
     """
-    values = machine(roots, address=address, dump_key_id=dump_key_id, dump_key='', bucket_id=bucket_id)
-    parts = {'butane': (DEPLOY_DIR / TEMPLATE).read_text()}
-    for spec in fields(values):
-        value = getattr(values, spec.name)
-        match spec.metadata.get('digest', Digested.VALUE):
-            case Digested.NEVER:
-                continue
-            case Digested.AUTHORITY:
-                parts[spec.name] = _identity(value, with_key=True)
-            case Digested.LEAF:
-                parts[spec.name] = _identity(value, with_key=False)
-            case _:
-                parts[spec.name] = json.dumps(value, sort_keys=True, default=str)
-    return {key: hashlib.sha256(value.encode()).hexdigest()[:16] for key, value in sorted(parts.items())}
+    return render.digests(machine(roots, address=address, dump_key_id=dump_key_id, dump_key='', bucket_id=bucket_id))
 
 
 def drift(intended: Mapping[str, str], actual: Mapping[str, str]) -> list[str]:

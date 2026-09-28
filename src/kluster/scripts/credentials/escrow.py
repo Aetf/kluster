@@ -50,6 +50,7 @@ from pathlib import Path
 
 from kluster import conventions
 from kluster.lib import config
+from kluster.lib.state_backend import settings as appliance_settings
 
 from . import age, entries, pki, workstation
 from .kdbx import KdbxStore
@@ -319,22 +320,17 @@ def backup_labels() -> tuple[str, ...]:
     for its lifetime** (credentials.md §2.2; `Label.single`). The
     appliance's recipient list and the identities a restore opens a dump with
     are both the latest escrow generation of each window label
-    (`state_backend.config`), so a second generation under one label would
+    (`kluster.scripts.state_backend.config`), so a second generation under one label would
     have the next provision run encrypt every dump to a key that no dump
     already in retention was written to, while `derived check` -- which reads
     density, not count -- stays green. Rotating the backup key is bumping the
     pin below and generating the label that names the new generation.
 
-    Read from the appliance's own pin rather than repeated here: the Butane
-    file names exactly these recipients, so bumping the generation is one
-    edit in one place. `state_backend.settings` is constants over
-    `kluster.conventions` and imports nothing from this package, so naming it
-    here is not the cycle the rest of that package would be — hence the local
-    import.
+    Read from the appliance's own pin (`kluster.lib.state_backend.settings`)
+    rather than repeated here: the Butane file names exactly these recipients,
+    so bumping the generation is one edit in one place.
     """
-    from kluster.scripts.state_backend import settings
-
-    current = settings.AGE_GENERATION
+    current = appliance_settings.AGE_GENERATION
     window = (current, current - 1)
     return tuple(f'{BACKUP}/{number}' for number in window if number >= FIRST)
 

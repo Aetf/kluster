@@ -29,8 +29,9 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from memory_kit import MemoryKit
 
+from kluster.lib.state_backend import render, settings
 from kluster.scripts.credentials import age, escrow, pki
-from kluster.scripts.state_backend import config, settings
+from kluster.scripts.state_backend import config
 
 needs_age = pytest.mark.skipif(shutil.which(age.BINARY) is None, reason='age is not on PATH (mise x -- ...)')
 needs_butane = pytest.mark.skipif(shutil.which('butane') is None, reason='butane is not on PATH (mise x -- ...)')
@@ -111,7 +112,7 @@ def test_every_field_but_the_secrets_is_compared(roots: config.Roots) -> None:
     compared = set(_digests(roots)) - {'butane'}
 
     secrets = {'server_key', 'b2_dump_key', 'ssh_host_key'}
-    assert compared == {spec.name for spec in fields(config.Machine)} - secrets
+    assert compared == {spec.name for spec in fields(render.Machine)} - secrets
 
 
 def test_the_ssh_host_key_is_outside_the_bill_of_materials(roots: config.Roots) -> None:
@@ -428,7 +429,7 @@ def test_the_ignition_carries_every_recipient_the_roots_name_one_per_line() -> N
     )
     built = config.machine(roots, address=ADDRESS, dump_key_id='key-id', dump_key='secret', bucket_id='bucket')
 
-    ignition = config.render_ignition(built)
+    ignition = render.render_ignition(built)
 
     assert _delivered(ignition, RECIPIENTS_FILE).split() == [RECIPIENT, 'age1second', DRILL_RECIPIENT]
 
@@ -458,7 +459,7 @@ def _statements(sql: str) -> list[str]:
 @pytest.fixture
 def ignition(roots: config.Roots) -> str:
     built = config.machine(roots, address=ADDRESS, dump_key_id='key-id', dump_key='secret', bucket_id='bucket')
-    return config.render_ignition(built)
+    return render.render_ignition(built)
 
 
 @needs_butane
@@ -520,3 +521,101 @@ def test_the_client_roles_hold_the_state_and_nothing_more(ignition: str) -> None
         f'GRANT CONNECT ON DATABASE {settings.DATABASE} TO {owner}',
         f'GRANT USAGE, CREATE ON SCHEMA public TO {owner}',
     }
+
+
+# -- the render, from the package alone ----------------------------------------
+
+#: What the installed copy is asked to do: build the machine from the
+#: arguments it is handed, render and digest it, and say where its code came
+#: from and whether a checkout was there to be found. The arguments arrive on
+#: standard input and the answer leaves on standard output, both as JSON.
+INSTALLED_RENDER = """
+import json, sys
+from dataclasses import fields
+from kluster.lib import workstation
+from kluster.lib.state_backend import render
+
+arguments = json.load(sys.stdin)
+arguments['age_recipients'] = tuple(arguments['age_recipients'])
+machine = render.machine(**arguments)
+try:
+    checkout = str(workstation.repo_root())
+except workstation.WorkstationError:
+    checkout = None
+json.dump(
+    {
+        'module': render.__file__,
+        'checkout': checkout,
+        'machine': {spec.name: getattr(machine, spec.name) for spec in fields(machine)},
+        'butane': render.butane(machine),
+        'digests': render.digests(machine),
+    },
+    sys.stdout,
+)
+"""
+
+
+def test_the_package_renders_from_an_installed_copy_with_no_checkout_around_it(
+    roots: config.Roots, tmp_path: Path
+) -> None:
+    """The machine's files travel inside the package, so a render needs no checkout.
+
+    The wheel is built from this tree and unpacked where no `mise.toml` sits
+    above it, and a process whose import path starts there builds the machine
+    from the keys and recipients the render takes as arguments -- reading the
+    operator keys and the dump script out of the package -- and renders and
+    digests it. The machine, the Butane document and the digest map all equal
+    the checkout's. A render that reached for the checkout -- a path found
+    from `repo_root`, a file read from outside the package -- fails here,
+    because there is none to find.
+    """
+    if any((level / 'mise.toml').is_file() for level in tmp_path.parents):
+        pytest.skip('the temporary directory is itself inside a checkout')
+    uv = os.environ.get('UV') or shutil.which('uv')
+    assert uv is not None, 'uv builds the wheel, and it is not on PATH (mise x uv -- ...)'
+    root = Path(__file__).parent.parent
+    dist = tmp_path / 'dist'
+    built = subprocess.run(
+        [uv, 'build', '--wheel', '--out-dir', str(dist), str(root)],
+        capture_output=True,
+        text=True,
+        timeout=50,
+        check=False,
+    )
+    assert built.returncode == 0, built.stderr
+    (wheel,) = dist.glob('*.whl')
+    site = tmp_path / 'site'
+    shutil.unpack_archive(wheel, site, format='zip')
+
+    # What the script mints and recovers, and passes in.
+    minted = config.machine(roots, address=ADDRESS, dump_key_id='key-id', dump_key='secret', bucket_id='bucket')
+    arguments: dict[str, Any] = {
+        'ca_cert': minted.ca_cert,
+        'server_cert': minted.server_cert,
+        'server_key': minted.server_key,
+        'ssh_host_key': minted.ssh_host_key,
+        'age_recipients': minted.age_recipients,
+        'dump_key_id': minted.b2_dump_key_id,
+        'dump_key': minted.b2_dump_key,
+        'bucket_id': minted.b2_bucket_id,
+    }
+    machine = render.machine(**arguments)
+    rendered = subprocess.run(
+        [sys.executable, '-c', INSTALLED_RENDER],
+        input=json.dumps(arguments),
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        env={**os.environ, 'PYTHONPATH': str(site)},
+        timeout=50,
+        check=False,
+    )
+    assert rendered.returncode == 0, rendered.stderr
+    answer = json.loads(rendered.stdout)
+
+    assert Path(answer['module']).is_relative_to(site)
+    assert answer['checkout'] is None
+    expected = {spec.name: getattr(machine, spec.name) for spec in fields(machine)}
+    assert answer['machine'] == json.loads(json.dumps(expected))
+    assert answer['butane'] == render.butane(machine)
+    assert answer['digests'] == render.digests(machine)

@@ -52,11 +52,12 @@ from oci_conventions import with_recorded_compartment, with_unrecorded_compartme
 from state_dump_box import CHECKPOINT, LISTING, OPENED, SERVING, UNOPENED
 
 from kluster import conventions
+from kluster.lib.state_backend import readiness, render, settings, state
+from kluster.lib.state_backend.state import StateError
 from kluster.scripts.credentials import b2, escrow, oci_iam, oci_slot, pki, workstation
 from kluster.scripts.credentials.delivery import Delivery
 from kluster.scripts.credentials.masters import CredentialRejected
-from kluster.scripts.state_backend import cli, config, provision, settings, state
-from kluster.scripts.state_backend.state import StateError
+from kluster.scripts.state_backend import cli, config, provision
 
 #: The SDK's models, which the network's fake answers below are built from.
 MODELS: Any = oci.core.models
@@ -1135,8 +1136,8 @@ def converge(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
         monkeypatch.setattr(provision, 'terminate_instance', terminate)
         monkeypatch.setattr(provision, 'ensure_instance', launch)
         monkeypatch.setattr(provision, 'attach_reserved_ip', attach)
-        monkeypatch.setattr(provision, 'wait_for_backend', _returning(True))
-        monkeypatch.setattr(cli, '_write_dump', write_dump)
+        monkeypatch.setattr(readiness, 'wait_for_backend', _returning(True))
+        monkeypatch.setattr(state, 'write_dump', write_dump)
         run_tool = state._run  # pyright: ignore[reportPrivateUsage]
 
         def read_archive(argv: Sequence[str], **kwargs: Any) -> str:
@@ -1147,10 +1148,10 @@ def converge(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
 
         monkeypatch.setattr(state, '_run', read_archive)
         monkeypatch.setattr(config, 'machine', _returning(object()))
-        monkeypatch.setattr(config, 'render_ignition', _returning('ignition'))
-        monkeypatch.setattr(config, 'host_public_key', _returning(PIN))
+        monkeypatch.setattr(render, 'render_ignition', _returning('ignition'))
+        monkeypatch.setattr(render, 'host_public_key', _returning(PIN))
         monkeypatch.setattr(config, 'write_known_hosts', write_known_hosts)
-        monkeypatch.setattr(config, 'expires_at', _returning(FRESH))
+        monkeypatch.setattr(render, 'expires_at', _returning(FRESH))
         monkeypatch.setattr(config, 'renewal_due', functools.partial(config.renewal_due, now=NOW))
         monkeypatch.setattr(config, 'digests', _returning(dict(CURRENT)))
         monkeypatch.setattr(config, 'client_bundle', _returning(object()))
@@ -1215,7 +1216,7 @@ def test_the_replaced_status_is_neither_success_nor_failure() -> None:
     and which it was is in the run's last words rather than in the status. So
     a replacement needs a status of its own, one that always carries the same
     meaning. A wrapper reads this, so it is published in `provision --help`
-    and in the appliance's README.
+    and in physical/state-backend.md §7.5.
     """
     assert cli.RESTORE_PENDING == PENDING
     assert cli.RESTORE_PENDING not in (0, 1)
@@ -1635,7 +1636,7 @@ def test_a_box_that_never_answers_still_names_the_dump(
     stale = dict(CURRENT) | {'butane': 'zzzz'}
     recorder = _Recorder(instance_exists=True, metadata=_built_from(stale))
     converge(recorder)
-    monkeypatch.setattr(provision, 'wait_for_backend', _returning(False))
+    monkeypatch.setattr(readiness, 'wait_for_backend', _returning(False))
 
     assert _run(force=True) == 1
 
@@ -1693,7 +1694,7 @@ def _lose_the_launch(monkeypatch: pytest.MonkeyPatch, _recorder: _Recorder) -> N
 
 def _silence_the_box(monkeypatch: pytest.MonkeyPatch, _recorder: _Recorder) -> None:
     """The new box runs and never answers the readiness probe."""
-    monkeypatch.setattr(provision, 'wait_for_backend', _returning(False))
+    monkeypatch.setattr(readiness, 'wait_for_backend', _returning(False))
 
 
 def _refuse_the_retirement(_monkeypatch: pytest.MonkeyPatch, recorder: _Recorder) -> None:
@@ -3554,13 +3555,13 @@ def test_the_security_lists_lose_nothing_until_the_group_has_every_declared_rule
     )(clients.network.kinds)
     assert [listed.id for listed in clients.network.kinds['security_lists']] == [DEFAULT_LIST, OPEN_LIST]
     dumped: list[int] = []
-    write_dump = cli._write_dump  # pyright: ignore[reportPrivateUsage]
+    write_dump = state.write_dump
 
     def dump(*args: Any, **kwargs: Any) -> None:
         dumped.append(len(clients.calls))
         write_dump(*args, **kwargs)
 
-    monkeypatch.setattr(cli, '_write_dump', dump)
+    monkeypatch.setattr(state, 'write_dump', dump)
 
     assert _run(force=True) == PENDING
 
@@ -3604,7 +3605,7 @@ def test_the_security_lists_wait_for_the_old_box_when_it_is_outside_the_group(
         _list_rule(UDP_IN),
     )(clients.network.kinds)
     marks: dict[str, int] = {}
-    _marked(monkeypatch, cli, '_write_dump', clients.calls, marks)
+    _marked(monkeypatch, state, 'write_dump', clients.calls, marks)
     _marked(monkeypatch, provision, 'terminate_instance', clients.calls, marks)
     _marked(monkeypatch, provision, 'ensure_instance', clients.calls, marks)
 
@@ -3613,7 +3614,7 @@ def test_the_security_lists_wait_for_the_old_box_when_it_is_outside_the_group(
     calls = clients.calls
     narrowing = [calls.index('update_security_list'), calls.index('update_subnet')]
     # Nothing narrows the lists while the old box is serving through them.
-    assert marks['_write_dump'] <= marks['terminate_instance'] <= min(narrowing)
+    assert marks['write_dump'] <= marks['terminate_instance'] <= min(narrowing)
     assert max(narrowing) < marks['ensure_instance']
     assert recorder.dumped
 
@@ -3667,13 +3668,13 @@ def test_the_security_lists_wait_for_the_old_box_unless_every_interface_is_in_th
         _carrying(DEFAULT_LIST, OPEN_LIST),
     )(clients.network.kinds)
     marks: dict[str, int] = {}
-    _marked(monkeypatch, cli, '_write_dump', clients.calls, marks)
+    _marked(monkeypatch, state, 'write_dump', clients.calls, marks)
     _marked(monkeypatch, provision, 'ensure_instance', clients.calls, marks)
 
     assert _run(force=True) == PENDING
 
     detached = clients.calls.index('update_subnet')
-    assert marks['_write_dump'] <= detached < marks['ensure_instance']
+    assert marks['write_dump'] <= detached < marks['ensure_instance']
     assert recorder.dumped
 
 
@@ -3765,12 +3766,12 @@ def test_the_readiness_probe_closes_its_stdin(monkeypatch: pytest.MonkeyPatch) -
     def nap(seconds: float) -> None:
         clock[0] += seconds
 
-    monkeypatch.setattr(provision.sp, 'run', fake_run)
-    monkeypatch.setattr(provision.time, 'monotonic', lambda: clock[0])
-    monkeypatch.setattr(provision.time, 'sleep', nap)
+    monkeypatch.setattr(readiness.sp, 'run', fake_run)
+    monkeypatch.setattr(readiness.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(readiness.time, 'sleep', nap)
 
-    assert provision.wait_for_backend('192.0.2.10', timeout=1) is True
-    assert seen['stdin'] is provision.sp.DEVNULL
+    assert readiness.wait_for_backend('192.0.2.10', timeout=1) is True
+    assert seen['stdin'] is readiness.sp.DEVNULL
 
 
 #: The provision stages that outlast an operator's patience, and a word that
@@ -3834,11 +3835,11 @@ def test_the_readiness_wait_states_its_condition_before_probing(
     def nap(seconds: float) -> None:
         clock[0] += seconds
 
-    monkeypatch.setattr(provision.sp, 'run', fake_run)
-    monkeypatch.setattr(provision.time, 'monotonic', lambda: clock[0])
-    monkeypatch.setattr(provision.time, 'sleep', nap)
+    monkeypatch.setattr(readiness.sp, 'run', fake_run)
+    monkeypatch.setattr(readiness.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(readiness.time, 'sleep', nap)
 
-    assert provision.wait_for_backend('192.0.2.10', timeout=900) is True, f'gave up after {len(probes)} probes'
+    assert readiness.wait_for_backend('192.0.2.10', timeout=900) is True, f'gave up after {len(probes)} probes'
     announcement = next(message for message in said if 'waiting' in message)
     # The condition, the retry cadence, why it is slow, and the ceiling.
     assert '192.0.2.10' in announcement
@@ -3873,11 +3874,11 @@ def test_the_readiness_wait_that_gives_up_says_what_it_last_saw_and_where_to_loo
     def nap(seconds: float) -> None:
         clock[0] += seconds
 
-    monkeypatch.setattr(provision.sp, 'run', fake_run)
-    monkeypatch.setattr(provision.time, 'monotonic', lambda: clock[0])
-    monkeypatch.setattr(provision.time, 'sleep', nap)
+    monkeypatch.setattr(readiness.sp, 'run', fake_run)
+    monkeypatch.setattr(readiness.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(readiness.time, 'sleep', nap)
 
-    assert provision.wait_for_backend('192.0.2.10', timeout=60) is False
+    assert readiness.wait_for_backend('192.0.2.10', timeout=60) is False
 
     assert 'last attempt said: connect: Connection refused' in caplog.messages
     separating = next(message for message in caplog.messages if 'broken box from a broken route' in message)
@@ -4059,7 +4060,7 @@ def _provision_help() -> str:
 
 def test_the_replaced_status_is_published_in_help(monkeypatch: pytest.MonkeyPatch) -> None:
     # A number a wrapper branches on has to be readable without opening the
-    # source. `deploy/state-backend/README.md` carries the same statement for
+    # source. physical/state-backend.md §7.5 carries the same statement for
     # a reader who is not at a terminal. argparse wraps at the width
     # `shutil.get_terminal_size` reports and breaks inside `state-backend`; a
     # width nothing wraps at keeps the phrase whole on every terminal.
@@ -4552,13 +4553,13 @@ def test_the_recorded_expiry_is_the_certificate_s_death_not_its_birth() -> None:
         roots, address='192.0.2.10', dump_key_id='key-id', dump_key='secret', bucket_id='bucket', now=NOW
     )
 
-    recorded = dt.datetime.fromisoformat(config.expires_at(built))
+    recorded = dt.datetime.fromisoformat(render.expires_at(built))
 
     # Exact: x509 keeps whole seconds and `NOW` carries none.
     assert recorded - NOW == pki.LEAF_VALIDITY
     # Which is what makes a freshly built box no reason to touch anything --
     # the other end of the same value, read at the same instant.
-    assert config.renewal_due(config.expires_at(built), now=NOW) is None
+    assert config.renewal_due(render.expires_at(built), now=NOW) is None
 
 
 def test_a_certificate_with_life_left_is_no_reason_to_do_anything() -> None:
@@ -4642,7 +4643,7 @@ class _Execed(Exception):
     """What stands in for `os.execvp` never returning."""
 
 
-def _machine() -> config.Machine:
+def _machine() -> render.Machine:
     roots = config.Roots(ca=pki.Authority.from_pem(pki.generate_ca_key()), age_recipients=('age1example',))
     return config.machine(roots, address=PINNED_ADDRESS, dump_key_id='key-id', dump_key='secret', bucket_id='bucket')
 
@@ -4704,14 +4705,14 @@ def test_the_ignition_delivers_the_host_key_the_machine_carries() -> None:
     """
     built = _machine()
 
-    ignition = config.render_ignition(built)
+    ignition = render.render_ignition(built)
 
     private_key, mode = _delivered(ignition, HOST_KEY_FILE)
     # The file, not the value: an OpenSSH private key file ends in a newline.
     assert private_key == built.ssh_host_key + '\n'
     assert mode == 0o600
     public_key, public_mode = _delivered(ignition, f'{HOST_KEY_FILE}.pub')
-    assert public_key.strip() == config.host_public_key(built)
+    assert public_key.strip() == render.host_public_key(built)
     assert public_mode == 0o644
 
 

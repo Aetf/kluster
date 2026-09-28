@@ -22,7 +22,13 @@ The layers, from the top, and what each is for:
     §5).
 -   `kluster.lib` holds the helpers no area owns: typed configuration
     reading, the rendered-configuration mechanism, the workstation slot
-    mechanics, the Kubernetes helpers and the version pins.
+    mechanics, the Kubernetes helpers, the version pins and the `pulumi`
+    CLI runner. It also holds, in `kluster.lib.<area>`, the code that an
+    area's component and a script both run, with the files that code
+    reads beside it (below). `kluster.lib.state_backend` is that code for
+    the state-backend appliance — its machine, its dump and restore and
+    its readiness wait — which the `state-backend` script runs today and
+    the appliance's component will run as well.
 -   `kluster.conventions` holds the decisions and identities that no
     layer owns, one module per domain (the next section); every layer
     above it may read them except `kluster.providers` (below).
@@ -36,13 +42,31 @@ points — imports no stack program, component or provider: it is a
 program of its own, so a command someone runs by hand never drags a
 stack's resource graph in. A provider imports no `conventions`: it is
 generic code for a class of system, and which host, which name and which
-credential are its callers' decisions. `putils` imports nothing from
+credential are its callers' decisions. Nothing in `kluster.stacks`,
+`kluster.components`, `kluster.providers`, `kluster.lib` or
+`kluster.conventions` imports `kluster.scripts`: `kluster.scripts` is
+no layer, so the layers alone would let a `lib` module import a
+script's module — its kit, its escrow, its command line — and a
+component calling that module would carry all of it into the program
+with every other check green. `putils` imports nothing from
 `kluster`. And nothing outside `kluster.stacks` but the entrypoint,
 `kluster.main`, imports a stack program: something another module
 imports for its contents is a component, whatever directory it sits in.
 The contract in `pyproject.toml` is the canon for the layers and the
 forbidden edges, and `import-linter` enforces it; where this section and
 the contract disagree, the contract is right.
+
+**Code that an area's component and a script both run lives in
+`kluster.lib.<area>`, with the files it reads beside it.** A script
+imports no component, and a component imports no script, so what both
+run can live in neither. The files it reads — a template, a script the
+machine installs, a list of keys — are found relative to that package,
+through `importlib.resources` (`kluster.lib.templates` for a file read
+as text or rendered), so the package works with no checkout around it.
+A command that writes such a file writes it in the checkout, and
+refuses where the package is not running from one. What the code needs that only a script can do — open the
+kit, recover from the escrow, mint a key — stays in the script, and the
+shared code takes the result as an argument.
 
 **Every reusable unit of resources is a component, and the tree is the
 architecture.** A stack program (`stacks/*.py`) is wiring: it reads

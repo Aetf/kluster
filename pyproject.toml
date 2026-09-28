@@ -234,6 +234,24 @@ type = "forbidden"
 source_modules = ["kluster.scripts"]
 forbidden_modules = ["kluster.stacks", "kluster.components", "kluster.providers"]
 
+# A script is a command line, and nothing a program runs reaches one:
+# `kluster.scripts` sits beside the layers rather than in them, so the layers
+# contract alone would let a `lib` module import it, and a component calling
+# that module would pull the command line -- its kit and its escrow -- into
+# the program with every other check green. Code a script and a program both
+# run lives in `kluster.lib` instead.
+[[tool.importlinter.contracts]]
+name = "Nothing a program runs imports a script"
+type = "forbidden"
+source_modules = [
+    "kluster.stacks",
+    "kluster.components",
+    "kluster.providers",
+    "kluster.lib",
+    "kluster.conventions",
+]
+forbidden_modules = ["kluster.scripts"]
+
 # A custom provider is generic code for a class of system; which host, which
 # name and which credential are the installation's decisions, and they belong
 # to the provider's callers.

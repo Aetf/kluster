@@ -49,7 +49,7 @@ from state_dump_box import (
     rows,
 )
 
-from kluster.scripts.state_backend import config, settings, state
+from kluster.lib.state_backend import readiness, render, settings, state
 
 AUTHORIZE_URL = 'https://api.backblazeb2.com/b2api/v3/b2_authorize_account'
 
@@ -459,8 +459,6 @@ def test_the_backend_wait_survives_a_hanging_probe(monkeypatch: pytest.MonkeyPat
     stalled between computing the deadline and checking it -- swap, a
     contended machine -- moves nothing the wait reads.
     """
-    from kluster.scripts.state_backend import provision
-
     calls: list[int] = []
     clock = [0.0]
 
@@ -473,17 +471,17 @@ def test_the_backend_wait_survives_a_hanging_probe(monkeypatch: pytest.MonkeyPat
     def nap(seconds: float) -> None:
         clock[0] += seconds
 
-    monkeypatch.setattr(provision.sp, 'run', probe)
-    monkeypatch.setattr(provision.time, 'monotonic', lambda: clock[0])
-    monkeypatch.setattr(provision.time, 'sleep', nap)
+    monkeypatch.setattr(readiness.sp, 'run', probe)
+    monkeypatch.setattr(readiness.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(readiness.time, 'sleep', nap)
 
-    assert provision.wait_for_backend('192.0.2.10', timeout=600) is True, f'gave up after {len(calls)} probes'
+    assert readiness.wait_for_backend('192.0.2.10', timeout=600) is True, f'gave up after {len(calls)} probes'
     assert len(calls) == 3
 
 
 # -- the unit that runs it ----------------------------------------------------
 
-BUTANE = (config.DEPLOY_DIR / config.TEMPLATE).read_text()
+BUTANE = render.machine_file(render.TEMPLATE)
 
 #: The notice a failed run leaves, and a good one removes.
 MOTD = '/etc/motd.d/10-state-dump.motd'
@@ -594,10 +592,10 @@ def test_the_dump_unit_spools_to_the_hosts_var_tmp() -> None:
 EXECUTABLES = frozenset({'/usr/bin/bash', '/usr/bin/podman', '/usr/bin/rm', '/opt/bin/age'})
 
 #: The template variables that stand for a file the template writes
-#: executable, and the file in `deploy/state-backend/` each is read from
-#: (`config.machine`). A variable this table does not name fails the case
+#: executable, and the file beside the template each is read from
+#: (`render.machine`). A variable this table does not name fails the case
 #: below, so a new executable file is held to the rule from its first commit.
-EXECUTABLE_SOURCES = {'dump_script': config.DUMP_SCRIPT}
+EXECUTABLE_SOURCES = {'dump_script': render.DUMP_SCRIPT}
 
 EXEC_HEAD = re.compile(r'^\s*Exec\w*=[-+@!:]*(\S+)', re.M)
 
@@ -622,7 +620,7 @@ def _written_files(template: str) -> dict[str, tuple[int, str]]:
             assert variable.group(1) in EXECUTABLE_SOURCES, (
                 f'{path} is rendered from {first}, which names no known file'
             )
-            first = (config.DEPLOY_DIR / EXECUTABLE_SOURCES[variable.group(1)]).read_text().split('\n', 1)[0]
+            first = render.machine_file(EXECUTABLE_SOURCES[variable.group(1)]).split('\n', 1)[0]
         written[path] = (mode, first)
     return written
 

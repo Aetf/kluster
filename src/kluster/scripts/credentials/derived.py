@@ -54,10 +54,11 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from kluster.lib.state_backend import settings as appliance_settings
+
 from ... import conventions
 from ..state_backend import config as appliance
 from ..state_backend import probe
-from ..state_backend import settings as appliance_settings
 from . import age, b2, cloudflare, entries, oci_iam, oci_slot, pulumi_config
 from .github_secrets import Forge, Slot
 from .kdbx import KdbxStore

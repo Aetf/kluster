@@ -18,21 +18,16 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import subprocess as sp
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, cast
 
 from kluster import conventions
-from kluster.lib import workstation
+from kluster.lib import pulumi_cli
+from kluster.lib.pulumi_cli import Runner
 
 log = logging.getLogger(__name__)
-
-#: How long any one `pulumi` invocation may take. Config commands talk to the
-#: state backend, so this is a network timeout rather than a formality.
-TIMEOUT = 120
 
 
 class SlotRefused(RuntimeError):
@@ -50,51 +45,26 @@ class PassphraseMissing(SlotRefused):
     """
 
 
-class Runner(Protocol):
-    """How a `pulumi` invocation is made. Substituted in tests."""
-
-    def __call__(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdin: str | None) -> str: ...
-
-
 def run_pulumi(args: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdin: str | None) -> str:
-    """Run one `pulumi` command, returning its standard output.
+    """Run one `pulumi` command (`pulumi_cli.run_pulumi`), a refusal refused as a slot.
 
-    `env` is overlaid on the caller's environment rather than replacing it:
-    `pulumi` needs a home directory and a PATH like any other tool, and what
-    the caller adds is the backend URL and the passphrase that open the state.
+    The boundary between the runner, which `kluster.lib` holds for every
+    caller, and this package: a `pulumi` run that failed here is a slot that
+    would not take the value, which is what every caller in this package
+    catches.
     """
-    completed = sp.run(
-        ['pulumi', *args, '--non-interactive'],
-        cwd=cwd,
-        env={**os.environ, **env},
-        input=stdin,
-        capture_output=True,
-        text=True,
-        timeout=TIMEOUT,
-        check=False,
-    )
-    if completed.returncode != 0:
-        detail = (completed.stderr or completed.stdout).strip().splitlines()
-        raise SlotRefused(f'`pulumi {" ".join(args)}` failed: {detail[-1] if detail else completed.returncode}')
-    return completed.stdout
+    try:
+        return pulumi_cli.run_pulumi(args, cwd=cwd, env=env, stdin=stdin)
+    except pulumi_cli.PulumiRefused as exc:
+        raise SlotRefused(str(exc)) from exc
 
 
 def project_dir() -> Path:
-    """The checkout holding `Pulumi.yaml` — where a stack's configuration lives.
-
-    The checkout this package runs from (`workstation.repo_root`), so the
-    command works from any working directory: the file it writes is a file in
-    *this* repository, not in whatever tree the operator happens to stand in.
-    Refused as `SlotRefused` whichever way it fails, because that is what a
-    caller of this module translates into its own refusal (`state_backend.state`).
-    """
+    """The checkout holding `Pulumi.yaml` (`pulumi_cli.project_dir`), a refusal refused as a slot."""
     try:
-        root = workstation.repo_root()
-    except workstation.WorkstationError as exc:
-        raise SlotRefused(f'the config slots live in a checkout of this repository, and none was found: {exc}') from exc
-    if not (root / 'Pulumi.yaml').is_file():
-        raise SlotRefused(f'no Pulumi.yaml in the checkout at {root}; the config slots live beside it')
-    return root
+        return pulumi_cli.project_dir()
+    except pulumi_cli.PulumiRefused as exc:
+        raise SlotRefused(str(exc)) from exc
 
 
 #: The two variables a `pulumi` run in this repository is given. Named,

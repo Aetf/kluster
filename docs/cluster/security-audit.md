@@ -143,7 +143,7 @@ brute-force + Postgres-CVE surface, and the OS was left unspecified.
 **Fix.** The client certificate is the authentication: the server
 admits a remote connection only over TLS with a certificate it verifies in
 full, and offers no password method at all (the appliance's
-`pg_hba.conf`, in `deploy/state-backend/butane.yaml.j2`).
+`pg_hba.conf`, in `src/kluster/lib/state_backend/machine/butane.yaml.j2`).
 That verification is **mandatory** (not "available hardening") —
 *amended 2026-08-24*: the NSG-allowlist half
 of the fix was dropped as unimplementable (`api.github.com/meta` lists

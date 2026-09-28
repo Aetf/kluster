@@ -30,6 +30,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from kluster.conventions import CompartmentMissing
+from kluster.lib.pulumi_cli import PulumiRefused
+from kluster.lib.state_backend import readiness, render, settings, state
+from kluster.lib.state_backend.state import StateError
 from kluster.scripts.credentials import b2, entries, escrow, pki, workstation
 from kluster.scripts.credentials.age import AgeError
 from kluster.scripts.credentials.escrow import EscrowError
@@ -39,8 +42,7 @@ from kluster.scripts.credentials.oci_slot import SlotUnusable
 from kluster.scripts.credentials.pulumi_config import SlotRefused
 from kluster.scripts.credentials.workstation import WorkstationError
 
-from . import config, probe, provision, settings, state
-from .state import StateError
+from . import config, probe, provision
 
 log = logging.getLogger(__name__)
 
@@ -54,7 +56,7 @@ log = logging.getLogger(__name__)
 #: last words rather than in its status. This one means the same thing however
 #: far the run got, which is what a caller can branch on. A wrapper reads it, so it is
 #: published rather than internal: `provision --help` and
-#: deploy/state-backend/README.md both name it.
+#: physical/state-backend.md §7.5 both name it.
 RESTORE_PENDING = 3
 
 #: The file in the workstation slot (`workstation.bundle_dir`) that records a
@@ -79,16 +81,18 @@ RESTORE_OWED = 'restore-owed'
 #: repair in its message, and an operator reads a traceback as a crash instead,
 #: with that repair buried under the stack. The census is the import closure
 #: rather than today's call paths, because that is the boundary a test can
-#: hold (`test_provision.py` walks it in both directions); the member no
-#: current call reaches — `SlotRefused`, which `state.stacks` translates into a
-#: `StateError` — is here so that a call that reaches it tomorrow gets the line
-#: rather than the traceback.
+#: hold (`test_provision.py` walks it in both directions); the members no
+#: current call reaches — `PulumiRefused`, which `state.stacks` translates into
+#: a `StateError`, and `SlotRefused`, what the `credentials` package makes of
+#: the same refusal — are here so that a call that reaches one tomorrow gets
+#: the line rather than the traceback.
 REFUSALS = (
     AgeError,
     CompartmentMissing,
     CredentialRejected,
     EscrowError,
     KdbxError,
+    PulumiRefused,
     SlotRefused,
     SlotUnusable,
     StateError,
@@ -472,8 +476,8 @@ def _launch_box(
         dump_key=dump_key.key,
         bucket_id=ground.bucket_id,
     )
-    ignition = config.render_ignition(built)
-    host_public_key = config.host_public_key(built)
+    ignition = render.render_ignition(built)
+    host_public_key = render.host_public_key(built)
     log.info('launching the instance')
     instance_id = provision.ensure_instance(
         clients,
@@ -484,7 +488,7 @@ def _launch_box(
         ignition=ignition,
         digests=config.digests(roots, address=address, dump_key_id=dump_key.key_id, bucket_id=ground.bucket_id),
         dump_key_id=dump_key.key_id,
-        server_cert_expiry=config.expires_at(built),
+        server_cert_expiry=render.expires_at(built),
         ssh_host_key_pub=host_public_key,
     )
     return LaunchedBox(instance_id=instance_id, host_public_key=host_public_key)
@@ -507,7 +511,7 @@ def _hand_over(roots: config.Roots, *, address: str, launched: LaunchedBox | Non
         known_hosts = config.write_known_hosts(slot, address=address, public_key=launched.host_public_key)
         log.info('host key pin for %s written to %s', address, known_hosts)
 
-    if not provision.wait_for_backend(address):
+    if not readiness.wait_for_backend(address):
         log.error('the backend did not answer on %s:%d — ssh core@%s to look', address, settings.PORT, address)
         return False
     log.info('backend answering on %s:%d', address, settings.PORT)
@@ -615,8 +619,8 @@ def _provision(
     # Set the moment the old box starts going away, not when the decision is
     # made: everything after that point owes the operator the closing
     # instruction, including the paths that raise. The `finally` below is what
-    # makes that true of every exit, which is what lets the README promise
-    # that silence means the old box is still serving.
+    # makes that true of every exit, which is what lets physical/state-backend.md
+    # §7.5 promise that silence means the old box is still serving.
     destroyed = False
     try:
         if existing is not None:
@@ -847,7 +851,7 @@ def _dump_before_replacing(
     destination = (output if output is not None else Path(state.dump_name())).resolve()
     log.info('dumping the running box before it is replaced, into %s', destination)
     try:
-        _write_dump(destination, bundle_dir=bundle_dir, recipients=roots.age_recipients)
+        state.write_dump(destination, bundle_dir=bundle_dir, recipients=roots.age_recipients)
     except StateError as exc:
         log.error('the dump of the running box failed: %s', exc)
         log.error('nothing has been destroyed; the box is still serving')
@@ -868,44 +872,6 @@ def _dump_before_replacing(
     return destination
 
 
-def _refuse_to_overwrite(destination: Path) -> None:
-    """A dump never lands on top of one.
-
-    Asked twice: by `_dump` before it opens the escrow, so a name clash costs
-    no kit password, and by the writer itself, which has a second caller.
-    """
-    if destination.exists():
-        raise StateError(f'{destination} already exists; a dump never overwrites one')
-
-
-def _write_dump(destination: Path, *, bundle_dir: Path, recipients: Sequence[str]) -> None:
-    """`pg_dump -Fc` under age, verified before the file is called a dump.
-
-    The single writer of the operator-side artifact, behind both commands that
-    produce one — `state-backend dump`, and the converge dumping a box it is
-    about to destroy — so the two cannot drift into producing different files.
-    """
-    _refuse_to_overwrite(destination)
-    target = state.connection(bundle_dir)
-    # The plaintext archive never lands beside the encrypted one: it is the
-    # whole state in the clear, and it exists only for as long as the two
-    # steps that read it. `TemporaryDirectory` makes it 0700.
-    with tempfile.TemporaryDirectory(prefix=f'{settings.NAME}-') as tmp:
-        archive = Path(tmp) / 'state.dump'
-        log.info('dumping the live state over the client bundle in %s', bundle_dir)
-        state.pg_dump(target, archive)
-        log.info('verifying the archive before calling it a dump')
-        _ = state.verify_dump(archive)
-        log.info('encrypting the dump')
-        state.encrypt(archive, destination, recipients)
-    log.info(
-        '%s holds %.1f MiB, readable by the %d recipient(s) the appliance encrypts to',
-        destination,
-        destination.stat().st_size / 2**20,
-        len(recipients),
-    )
-
-
 def _dump(store: KdbxStore, *, registry: escrow.Registry, bundle_dir: Path, output: Path | None) -> int:
     """A dump on demand, in the form the appliance's own timer writes.
 
@@ -917,30 +883,13 @@ def _dump(store: KdbxStore, *, registry: escrow.Registry, bundle_dir: Path, outp
     from (§7.2).
     """
     destination = (output if output is not None else Path(state.dump_name())).resolve()
-    _refuse_to_overwrite(destination)
+    state.refuse_to_overwrite(destination)
 
     log.info('[1/2] opening the escrow with the kit, for the recipients the appliance encrypts its dumps to')
     recipients = config.age_recipients(escrow.Vault.open(store, registry))
     log.info('[2/2] taking the dump')
-    _write_dump(destination, bundle_dir=bundle_dir, recipients=recipients)
+    state.write_dump(destination, bundle_dir=bundle_dir, recipients=recipients)
     return 0
-
-
-def _served(target: state.Connection) -> list[str]:
-    """The stacks the backend serves, or nothing if it cannot answer at all.
-
-    Used before a restore, into a box that ordinarily serves nothing. A box
-    provisioned minutes ago answers with no stack rather than refusing: the
-    question opens the backend, which creates its table and writes its meta
-    row on the way. A backend that does not answer at all is read as
-    serving nothing too, because the caller's guard is there to stop a
-    restore over live state, and only a positive answer shows it.
-    """
-    try:
-        return state.stacks(target)
-    except StateError as exc:
-        log.info('the backend did not answer `pulumi stack ls` (%s); reading it as serving no stack', exc)
-        return []
 
 
 def _restore(
@@ -961,7 +910,7 @@ def _restore(
     """
     target = state.connection(bundle_dir)
     log.info('[1/5] asking the target backend what it already holds')
-    occupied = _served(target)
+    occupied = state.served(target)
     if occupied and not force:
         log.error('%s already serves %d stack(s): %s', state.endpoint(target.url), len(occupied), ', '.join(occupied))
         log.error('restoring over live state is `--force`; a rebuild restores into a box that has none')
@@ -1047,7 +996,7 @@ def main(argv: list[str] | None = None) -> int:
             case 'render':
                 store = kit()
                 print(
-                    config.render_ignition(
+                    render.render_ignition(
                         config.machine(
                             config.Roots.recover(escrow.Vault.open(store, registry())),
                             address=args.address,

@@ -37,6 +37,7 @@ import pytest
 from credentials_command_tree import commands
 from memory_kit import MemoryKit
 
+from kluster.lib import workstation as lib_workstation
 from kluster.scripts.credentials import age, cli, devices, entries, escrow, masters
 from kluster.scripts.credentials.kdbx import PATH_ENV, KdbxStore
 
@@ -427,6 +428,34 @@ def test_the_drill_identity_is_aimed_at_the_committed_recipient_file_as_the_admi
     assert [kwargs['rotate'] for _, kwargs in calls] == [False, True]
     assert {kwargs['recipient_file'] for _, kwargs in calls} == {cli.appliance_config.DRILL_RECIPIENT_FILE}
     assert {args[0].token for args, _ in calls} == {'a-token'}
+
+
+@pytest.mark.parametrize('inside', [True, False], ids=['in-the-checkout', 'outside-it'])
+def test_the_drill_identity_is_drawn_only_where_its_recipient_file_is_in_the_checkout(
+    inside: bool, dispatch: Dispatch, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The generator pushes the private half before it writes the public one,
+    # so a recipient file no commit picks up -- a package installed outside
+    # the checkout -- is refused before the forge is reached at all.
+    checkout = tmp_path / 'checkout'
+    checkout.mkdir()
+    # The `github` stack is opened from the checkout, for the admin token.
+    _ = (checkout / 'Pulumi.yaml').write_text('name: kluster\n')
+    recipient = (checkout if inside else tmp_path / 'site-packages') / 'machine' / 'drill-recipient.txt'
+    monkeypatch.setattr(lib_workstation, 'repo_root', lambda: checkout)
+    monkeypatch.setattr(cli.appliance_config, 'DRILL_RECIPIENT_FILE', recipient)
+
+    status = cli.main(['derived', 'drill-age-identity', 'generate'])
+
+    pushed = [kwargs for name, _, kwargs in dispatch.calls if name == 'derived.drill_age_identity']
+    borrowed = [name for name, _, _ in dispatch.calls if name == 'devices.borrow']
+    if inside:
+        assert status == 0
+        assert [kwargs['recipient_file'] for kwargs in pushed] == [recipient]
+    else:
+        assert status == 1
+        assert pushed == []
+        assert borrowed == []
 
 
 def test_the_drill_credentials_mint_takes_no_compartment(capsys: pytest.CaptureFixture[str]) -> None:

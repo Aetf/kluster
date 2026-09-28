@@ -279,9 +279,10 @@ class FilePage:
     """One page of `b2_list_file_names`, and where the page after it starts.
 
     Names alone: what a dump is called carries its timestamp
-    (`deploy/state-backend/state-dump.sh`), so the newest object and how old
-    it is are both read off the name. `next_file_name` -- absent on the last
-    page -- is the only thing that says a listing is complete.
+    (`src/kluster/lib/state_backend/machine/state-dump.sh`), so the newest
+    object and how old it is are both read off the name. `next_file_name` --
+    absent on the last page -- is the only thing that says a listing is
+    complete.
     """
 
     names: tuple[str, ...]

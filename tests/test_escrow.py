@@ -896,7 +896,7 @@ def test_the_first_generation_has_no_predecessor(monkeypatch: pytest.MonkeyPatch
     # `backup/age/0` would have a bring-up mint a key for a generation that
     # never existed, encrypt every dump to it, and leave `check` demanding
     # its ciphertext forever.
-    from kluster.scripts.state_backend import settings
+    from kluster.lib.state_backend import settings
 
     monkeypatch.setattr(settings, 'AGE_GENERATION', escrow.FIRST)
 
@@ -907,7 +907,7 @@ def test_the_first_generation_has_no_predecessor(monkeypatch: pytest.MonkeyPatch
 def test_a_rotated_pin_names_the_generation_before_it(monkeypatch: pytest.MonkeyPatch) -> None:
     # From the second generation on, both are recipients: any object in
     # retention opens with the current key or the previous one.
-    from kluster.scripts.state_backend import settings
+    from kluster.lib.state_backend import settings
 
     monkeypatch.setattr(settings, 'AGE_GENERATION', 3)
 
@@ -918,7 +918,7 @@ def test_a_rotated_pin_names_the_generation_before_it(monkeypatch: pytest.Monkey
 def test_the_backup_labels_follow_the_appliance_pin() -> None:
     # The Butane file names exactly these recipients, so the register and the
     # box cannot disagree about which generations exist.
-    from kluster.scripts.state_backend import settings
+    from kluster.lib.state_backend import settings
 
     assert escrow.backup_labels()[0] == f'{escrow.BACKUP}/{settings.AGE_GENERATION}'
     for label in escrow.backup_labels():

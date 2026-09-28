@@ -93,10 +93,12 @@ from urllib.parse import urlsplit
 
 from pulumi.runtime import rpc
 
+from kluster.lib.pulumi_cli import Runner
+from kluster.lib.state_backend import settings as appliance_settings
+
 from ... import conventions
 from ...lib import config
 from ..state_backend import config as appliance
-from ..state_backend import settings as appliance_settings
 from . import derived, devices, escrow, pki, pulumi_config, workstation
 from .github_secrets import Forge, Slot
 from .pulumi_config import SlotRefused
@@ -353,7 +355,7 @@ class Context:
     project: Path = field(default_factory=pulumi_config.project_dir)
     #: How that `pulumi` is invoked. A seam, so a state read is testable
     #: without a backend, exactly as the config slot's is.
-    runner: pulumi_config.Runner = pulumi_config.run_pulumi
+    runner: Runner = pulumi_config.run_pulumi
     #: How a manual row asks. `getpass`, so a typed value never echoes.
     ask: Callable[[str], str] = getpass.getpass
     _vault: escrow.Vault | None = field(default=None, init=False, repr=False, compare=False)

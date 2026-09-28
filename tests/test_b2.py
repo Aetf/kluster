@@ -32,13 +32,13 @@ from fake_gh import RecordedGh
 from memory_kit import MemoryKit
 
 from kluster import conventions
+from kluster.lib.state_backend import settings as appliance_settings
 from kluster.scripts.credentials import b2, cli, derived, entries, masters, payload
 from kluster.scripts.credentials.delivery import Delivery
 from kluster.scripts.credentials.github_secrets import Forge
 from kluster.scripts.credentials.kdbx import KdbxStore
 from kluster.scripts.credentials.masters import CredentialRejected
 from kluster.scripts.credentials.pulumi_config import SlotRefused
-from kluster.scripts.state_backend import settings as appliance_settings
 
 PASSWORD = 'kit-password'
 SEED_ENTRY = entries.SEEDS['b2'].entry

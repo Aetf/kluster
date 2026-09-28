@@ -28,6 +28,7 @@ from pathlib import Path
 import pytest
 
 from kluster.lib import workstation
+from kluster.lib.state_backend import render
 from kluster.scripts.credentials import pulumi_config
 from kluster.scripts.state_backend import config as appliance
 
@@ -254,5 +255,5 @@ def test_every_reader_of_the_checkout_finds_the_one_this_package_runs_from() -> 
 
     assert (root / 'src' / 'kluster' / 'lib' / 'workstation.py').samefile(workstation.__file__)
     assert pulumi_config.project_dir() == root
-    assert appliance.DEPLOY_DIR.is_relative_to(root)
-    assert (appliance.DEPLOY_DIR / appliance.TEMPLATE).is_file()
+    assert appliance.DRILL_RECIPIENT_FILE.is_relative_to(root)
+    assert (appliance.DRILL_RECIPIENT_FILE.parent / render.TEMPLATE).is_file()

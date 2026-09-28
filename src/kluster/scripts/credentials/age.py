@@ -37,9 +37,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-#: The pinned binaries. Named rather than inlined so a failure can say which
-#: tool was missing and where it is pinned.
-BINARY = 'age'
+from kluster.lib.age import ARMOR_BEGIN, ARMOR_END, BINARY
+
+#: The pinned key generator. Named rather than inlined so a failure can say
+#: which tool was missing and where it is pinned; `age` itself is `BINARY`,
+#: which `kluster.lib.age` holds for the appliance's dump and restore as well.
 KEYGEN = 'age-keygen'
 
 #: Long enough for a cold start, short enough that a hung tool fails the run
@@ -53,10 +55,6 @@ SECRET_PREFIX = 'AGE-SECRET-KEY-1'
 #: `AGE-SECRET-KEY-PQ-1…` of `age-keygen -pq`.
 SECRET_STEM = 'AGE-SECRET-KEY-'
 PUBLIC_PREFIX = 'age1'
-
-#: ASCII armor, because a ciphertext in the escrow is a file git carries.
-ARMOR_BEGIN = '-----BEGIN AGE ENCRYPTED FILE-----'
-ARMOR_END = '-----END AGE ENCRYPTED FILE-----'
 
 
 class AgeError(RuntimeError):

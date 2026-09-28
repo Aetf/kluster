@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
+from kluster.lib.bundle import KEY_FILE, URL_FILE, ssl_env
 from kluster.scripts.credentials import pki
 from kluster.scripts.state_backend import config
 
@@ -38,7 +39,7 @@ def test_the_url_carries_nothing_about_the_machine_it_was_written_on(authority: 
     bundle = config.client_bundle(authority, name='operator', address='192.0.2.10')
     config.write_client_bundle(bundle, tmp_path)
 
-    url = (tmp_path / config.URL_FILE).read_text().strip()
+    url = (tmp_path / URL_FILE).read_text().strip()
     assert '$' not in url
     assert str(tmp_path) not in url
     assert set(_query(url)) == {'sslmode'}
@@ -50,7 +51,7 @@ def test_the_environment_names_the_three_files_and_they_are_there(authority: pki
     # expanded by nobody.
     config.write_client_bundle(config.client_bundle(authority, name='operator', address='192.0.2.10'), tmp_path)
 
-    variables = config.ssl_env(tmp_path)
+    variables = ssl_env(tmp_path)
 
     assert set(variables) == {'PGSSLROOTCERT', 'PGSSLCERT', 'PGSSLKEY'}
     for name, value in variables.items():
@@ -63,7 +64,7 @@ def test_the_url_pins_the_server_by_address(authority: pki.Authority, tmp_path: 
     # depend on DNS, which is itself something this backend deploys.
     config.write_client_bundle(config.client_bundle(authority, name='ci', address='192.0.2.10'), tmp_path)
 
-    url = (tmp_path / config.URL_FILE).read_text().strip()
+    url = (tmp_path / URL_FILE).read_text().strip()
     assert url.startswith('postgres://ci@192.0.2.10:5432/')
     assert _query(url)['sslmode'] == 'verify-full'
 
@@ -72,7 +73,7 @@ def test_the_private_key_is_not_world_readable(authority: pki.Authority, tmp_pat
     # libpq refuses a key with group or world permissions.
     config.write_client_bundle(config.client_bundle(authority, name='operator', address='192.0.2.10'), tmp_path)
 
-    assert (tmp_path / config.KEY_FILE).stat().st_mode & 0o077 == 0
+    assert (tmp_path / KEY_FILE).stat().st_mode & 0o077 == 0
 
 
 @pytest.fixture
@@ -100,7 +101,7 @@ def test_the_private_key_is_created_0600_rather_than_narrowed_afterwards(
 
     config.write_client_bundle(config.client_bundle(authority, name='operator', address='192.0.2.10'), tmp_path)
 
-    assert stat.S_IMODE((tmp_path / config.KEY_FILE).stat().st_mode) == 0o600
+    assert stat.S_IMODE((tmp_path / KEY_FILE).stat().st_mode) == 0o600
 
 
 def test_the_directory_it_lands_in_is_the_operators_alone(authority: pki.Authority, tmp_path: Path) -> None:

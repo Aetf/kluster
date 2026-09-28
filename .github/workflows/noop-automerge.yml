@@ -14,13 +14,14 @@ name: noop-automerge
 # matters.** The zero-diff preview below measures what the stack programs
 # render, and a path no stack program reads previews empty however it
 # changed. Those paths are not inert. `escrow/RECIPIENTS` names who every new
-# escrow generation is encrypted to; `deploy/state-backend/*.txt` holds the
-# appliance's operator keys and the drill recipient; `.github/actions/` is
-# code `deploy.yml` runs with `physical-plan` secrets; `mise.toml`'s templates
-# read the kit's slots on the workstation that holds it. A list of what to
-# refuse admits each of those until somebody thinks to add it, and a pull
-# request touching one merges on an empty preview in the meantime. So the list
-# names what is admitted, and it is short on purpose:
+# escrow generation is encrypted to; the `*.txt` files in
+# `src/kluster/lib/state_backend/machine/` hold the appliance's operator keys
+# and the drill recipient; `.github/actions/` is code `deploy.yml` runs with
+# `physical-plan` secrets; `mise.toml`'s templates read the kit's slots on the
+# workstation that holds it. A list of what to refuse admits each of those
+# until somebody thinks to add it, and a pull request touching one merges on
+# an empty preview in the meantime. So the list names what is admitted, and
+# it is short on purpose:
 #
 #   * `uv.lock` -- the resolved dependency set, which lockfile maintenance
 #     rewrites;
