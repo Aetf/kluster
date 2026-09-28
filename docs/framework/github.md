@@ -293,7 +293,8 @@ in the component. It is the same shape, and the same name, as the
     matrix is red (ci.md §5). That a change no stack program reads does
     not run the matrix at all is a second reason. It is not what lets
     `noop-automerge` merge anything: that workflow's allow-list admits
-    no documentation outside `sdks/`, and every candidate runs the
+    no documentation beyond what a bridged-SDK regeneration writes
+    under `sdks/`, and every candidate runs the
     proof (ci.md §3). Force pushes and deletion are off; history is
     linear.
 

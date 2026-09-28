@@ -787,7 +787,8 @@ included, which buys a token that can push non-workflow files onto
 and post alerts to the latter, and nothing else directly. What such a
 push carries on to `kluster`'s `main` unread is a pull request that
 changes nothing but paths on noop-automerge's allow-list — `uv.lock`,
-`sdks/`, and renovate's bump of `Pulumi.yaml`'s `packages:` block —
+and renovate's bump of `Pulumi.yaml`'s `packages:` block with the
+`sdks/` it regenerates —
 and only behind a zero-diff preview; every other path waits for a
 human (cluster/architecture.md §4.3, ci.md §3). Rotating one
 is another key on that page, recorded here as the label's next

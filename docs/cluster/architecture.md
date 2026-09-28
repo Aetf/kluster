@@ -620,14 +620,14 @@ Costs and facts on record:
     head's runs, so what reaches `main` from such a branch with
     nobody reading it is what noop-automerge admits: a pull request
     that changes nothing but paths on its **allow-list** — `uv.lock`,
-    `sdks/`, and renovate's bump of `Pulumi.yaml`'s `packages:`
-    block — and only behind a zero-diff preview (framework/ci.md
+    and renovate's bump of `Pulumi.yaml`'s `packages:` block with the
+    `sdks/` it regenerates — and only behind a zero-diff preview (framework/ci.md
     §3). Every other path waits for a human, the trust anchors no
     stack reads among them: the escrow recipients, the appliance's
     key files, the composite actions, `mise.toml`. That allow-list
     is the residual on this side: a pushed `uv.lock` change that
-    renders identically merges unread, and so does any pushed change
-    under `sdks/` — the bridged SDKs render only in `physical`, which
+    renders identically merges unread, and so does a change under
+    `sdks/` pushed onto renovate's bump of the block — the bridged SDKs render only in `physical`, which
     no pull request previews, and `checks` holds them to the block
     only through each SDK's `pulumi-plugin.json` — which then runs in
     `plan-physical` on the next run of the chain. Permissions are

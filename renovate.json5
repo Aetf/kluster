@@ -95,8 +95,8 @@
     'github-actions[bot]@users.noreply.github.com',
   ],
   // Merging is the CI's job, not renovate's: noop-automerge merges a PR whose
-  // every changed path is on its allow-list — `uv.lock`, `sdks/`, and a bump
-  // of `Pulumi.yaml`'s `packages:` block — once it has proven the preview is
+  // every changed path is on its allow-list — `uv.lock`, and a bump of
+  // `Pulumi.yaml`'s `packages:` block with the `sdks/` it regenerates — once it has proven the preview is
   // empty (framework/ci.md §3), a zero-diff proof renovate cannot produce, and
   // every other PR waits for a reader. Two mechanisms racing would also mean
   // whichever wins picks the merge strategy, and renovate's squash rewrites
