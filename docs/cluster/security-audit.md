@@ -84,10 +84,11 @@ that can root the gateway is not the frictionless-apps layer). PRs get
 no physical preview at all. Previews run only for same-repo branches
 (`pull_request`, never `pull_request_target`; fork PRs get no
 secrets). noop-automerge merges unattended only a pull request that
-changes nothing but paths on its allow-list: `uv.lock`, `sdks/`, and a
-renovate bump of `Pulumi.yaml`'s `packages:` block, which is the
-bridged-SDK generator's recipe rather than stack configuration and no
-stack program's input. That last entry tests the author as well as the
+changes nothing but paths on its allow-list: `uv.lock`, and a renovate
+bump of `Pulumi.yaml`'s `packages:` block, which is the bridged-SDK
+generator's recipe rather than stack configuration and no stack
+program's input, with the `sdks/` that bump regenerates. That entry
+tests the author as well as the
 path — it asks for `renovate[bot]` and for a document that is equal at
 base and head once `packages` is removed. Every other path waits for a
 human, and the paths no stack program reads above all — the escrow

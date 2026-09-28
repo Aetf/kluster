@@ -490,8 +490,10 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     already holds each `sdks/<name>` to the block and `uv.lock` to the
     tree, so "regenerated cleanly" is a required check. The bump then
     takes the same route as any other candidate — `checks`, `changes`,
-    `classify`, `prove`, `merge` — because what it actually changes,
-    `sdks/` and `uv.lock`, is on the allow-list in its own right. What
+    `classify`, `prove`, `merge` — because what it actually changes is
+    on the allow-list: `uv.lock` in its own right, and `sdks/` beside
+    the admitted `Pulumi.yaml` and on no other pull request, since the
+    regeneration is the one way anything writes there. What
     `prove` can say about such a bump is nothing in any case: the three
     SDKs render only in `physical`, which has no pull-request preview,
     so `prove` cannot see a bump's diff, and it surfaces where every
@@ -801,9 +803,10 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     a convenience setting. **noop-automerge's *candidacy* is an
     allow-list of paths, with one entry that asks who as well**: a pull
     request is a candidate only when every path it changes is `uv.lock`,
-    under `sdks/`, or `Pulumi.yaml` on renovate's bump of its
-    `packages:` block, which is the generator's recipe rather than stack
-    configuration (the bridged-SDK bullet above). The list is written
+    or `Pulumi.yaml` on renovate's bump of its `packages:` block, which
+    is the generator's recipe rather than stack configuration (the
+    bridged-SDK bullet above), together with the `sdks/` that bump
+    regenerates. The list is written
     once, in the workflow's `classify` step. A candidate merges only
     behind the zero-diff proof, and an `expect-changes` label opts a
     pull request out of the whole path. **Every other path waits for a
@@ -1167,9 +1170,9 @@ two: which names are reported failed and which canceled varies
 between runs and carries no information. A pull request that touches
 only documentation, `.vscode/` or `.gitignore` runs no `preview` at
 all — `changes` selects an empty set and the matrix job stands down.
-It runs no `prove` either, unless all of it lies under `sdks/`:
-documentation is not on noop-automerge's allow-list anywhere else, so
-such a pull request is merged by hand (§3). A candidate the list does
+It runs no `prove` either: documentation is not on noop-automerge's
+allow-list, and `sdks/` is on it only beside renovate's bump of
+`Pulumi.yaml`, so such a pull request is merged by hand (§3). A candidate the list does
 admit runs `prove` against the missing stacks, which errors, and is
 merged by hand as well.
 **Retires with the M2 stacks** (`kluster-ops#77`), which create both
