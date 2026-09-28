@@ -532,24 +532,63 @@ old cache held, which is what repairing it by hand once is for
 ([gateway-cutover.md](gateway-cutover.md) §5). The next firmware
 update's boot records the base, and from then on the cache is exact.
 
-The offline boot installs the whole cache in one `dpkg -i` and succeeds
-only when that succeeds and the set is installed afterward: a cache from
+The offline boot installs the cache in one `dpkg -i`, less the debs it
+holds back (below). **A run succeeds when the set is up, and on nothing
+else**: it exits 0 only when apt installed the set, or when dpkg
+succeeded over the cache and every member of the set is installed
+afterward. Otherwise, it names the members that are not installed and
+exits 1. dpkg's exit status alone is not enough, since a cache from
 before the set last grew installs cleanly and still lacks a package of
-it.
+it. A package an install cut short left unpacked, or a failed maintainer
+script left half-configured, is handed to dpkg like any other and
+replaced from the cache at whatever version it was left at, so the
+offline install repairs what an interrupted or failed run left behind.
 
-**The base is the firmware that ran the last refresh**, and that is
-what the closure means once an update changes the firmware. A
-networkless boot after an update installs a cache resolved against the
-previous firmware. Where the new firmware ships a package of that cache
-at a newer version — `systemd`, whenever installing the set upgraded it,
-since `systemd-container` pins it exactly — `dpkg -i` downgrades it and
-the boot succeeds; where the new firmware no longer ships something the
-cache relied on, the boot fails and says so. The first online boot after
-the update saves the new
-firmware's database and resolves the cache against it. A firmware that
-shipped a package of the set itself would give no boot that finds none
-of the set installed, and the base would stay the older firmware's
-until one did.
+**The base is the firmware that ran the last refresh**, and that is what
+the closure means once an update changes the firmware. A networkless
+boot after an update installs a cache resolved against the previous
+firmware. **Where the new firmware ships a package of that cache at a
+newer version, the firmware's stays.** That is `systemd` whenever
+installing the set upgraded it, since `systemd-container` pins it
+exactly, and any other firmware package that install upgraded. What
+makes a package the firmware's is the saved base, recorded from the
+firmware's own database on the update's first boot before anything is
+installed: the script, not a dpkg flag, holds back a deb whose package
+the base lists at a newer version than the cache's (`dpkg
+--compare-versions`). A package installed at a newer version that the
+base does not list came from an apt run, and is replaced from the cache
+like any other. `--refuse-downgrade` and `--skip-same-version` are left
+out on purpose. Under the first, dpkg refuses a downgrade of a package
+it holds unpacked or half-configured as readily as of an installed one;
+under the second, it skips an unpacked package at the cache's version
+without configuring it. Either flag would keep exactly the leftovers the
+cache is there to repair. The script names each deb it holds back with
+both versions.
+
+**So after a firmware update that ships a package of the cache at a
+newer version, an offline boot fails.** What depends on the held-back
+version is unpacked and not configured — `systemd-container`, and
+`libnss-mymachines`, which pins `systemd-container` in turn — and the
+run names those members, and the held-back packages, and exits 1. That
+is the report ruling (a) of Aetf/kluster-ops#480 asks for, in place of a
+boot that succeeds on a downgraded `systemd`. The next boot that reaches
+apt installs the set against the firmware's version. A held-back package
+the live system does not have installed — a firmware package an
+interrupted upgrade left unpacked — stays as it is too.
+
+A failing `10-packages.sh` does not stop the rest of the chain.
+`udm-boot.service` runs the files of `/data/on_boot.d` through `xargs -n
+1` (`templates/udm-boot.service`), and GNU xargs runs every file
+whatever an earlier one exits with, unless one exits 255. It exits 123
+at the end, so the unit is marked failed. The script exits 1, never 255,
+so `20-units.sh` and every script after it still run on that boot, and
+the failure shows on the unit.
+
+The update's first boot saves the new firmware's database, reaching apt
+or not, and the first boot that reaches apt resolves the cache against
+it. A firmware that shipped a package of the set itself would give no
+boot that finds none of the set installed, and the base would stay the
+older firmware's until one did.
 
 The cache is refreshed by moving the old directory aside and the new
 one into place — two renames, and a run stopped between them leaves the
