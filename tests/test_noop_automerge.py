@@ -190,6 +190,7 @@ def test_the_step_the_cases_run_is_filled_the_way_the_runner_fills_it() -> None:
 
     assert expressions <= EVENT, f'filled from the event and by no case: {sorted(expressions - EVENT)}'
     assert '${{' not in step_env['ALLOWED']
+    assert '${{' not in step_env['WITH_THE_BUMP']
     assert '${{' not in script
 
 
@@ -203,21 +204,31 @@ def test_a_lockfile_refresh_is_a_candidate(tmp_path: Path) -> None:
     assert verdict.noop
 
 
-def test_a_regeneration_of_the_bridged_sdks_is_a_candidate(tmp_path: Path) -> None:
-    verdict = _run(tmp_path, ['sdks/b2/pulumi_b2/provider.py', 'sdks/b2/pyproject.toml', 'uv.lock'])
+def test_a_regeneration_of_the_bridged_sdks_in_renovates_bump_is_a_candidate(tmp_path: Path) -> None:
+    """`sdks/` joins the list beside renovate's packages-only bump of `Pulumi.yaml`, which it regenerates."""
+    verdict = _run(
+        tmp_path, ['Pulumi.yaml', 'sdks/b2/pulumi_b2/provider.py', 'sdks/b2/pyproject.toml', 'uv.lock'], admit=True
+    )
     assert verdict.returncode == 0, verdict.stderr
     assert verdict.noop
 
 
 def test_a_rename_inside_the_list_is_a_candidate(tmp_path: Path) -> None:
-    verdict = _run(tmp_path, [Renamed('sdks/a/provider.py', 'sdks/b/provider.py'), 'uv.lock'])
+    verdict = _run(
+        tmp_path, ['Pulumi.yaml', Renamed('sdks/a/provider.py', 'sdks/b/provider.py'), 'uv.lock'], admit=True
+    )
     assert verdict.returncode == 0, verdict.stderr
     assert verdict.noop
 
 
 def test_a_list_longer_than_a_page_is_read_whole(tmp_path: Path) -> None:
-    """Every page is read and counted, so a long list of admitted paths is still a candidate."""
-    verdict = _run(tmp_path, [f'sdks/b2/pulumi_b2/module_{index}.py' for index in range(PER_PAGE + 50)])
+    """Every page is read and counted, so a long list of admitted paths is still a candidate.
+
+    `Pulumi.yaml` sorts last, on the second page, so the bump is found only
+    when that page is read.
+    """
+    regenerated: list[str | Renamed] = [f'sdks/b2/pulumi_b2/module_{index}.py' for index in range(PER_PAGE + 50)]
+    verdict = _run(tmp_path, [*regenerated, 'Pulumi.yaml'], admit=True)
     assert verdict.returncode == 0, verdict.stderr
     assert verdict.noop
 
@@ -242,7 +253,43 @@ def test_pulumi_yaml_the_admission_did_not_admit_is_the_human_route(tmp_path: Pa
     verdict = _run(tmp_path, ['Pulumi.yaml', 'uv.lock'], admit=False)
     assert verdict.returncode == 0, verdict.stderr
     assert not verdict.noop
-    assert 'Pulumi.yaml is not on the allow-list' in verdict.stdout
+    assert "Pulumi.yaml is on the allow-list only in renovate's packages-only bump" in verdict.stdout
+
+
+def test_the_bridged_sdks_without_renovates_bump_are_the_human_route(tmp_path: Path) -> None:
+    """A change under `sdks/` on a pull request that does not bump the block is no regeneration, and waits.
+
+    Nothing measures `sdks/`: the preview never renders it and `checks` reads
+    only each SDK's `pulumi-plugin.json`. So it is admitted only as what
+    sdk-regenerate.yml writes there, and anybody's other change to it --
+    renovate's included -- is the human route, and the log says why.
+    """
+    verdict = _run(tmp_path, ['sdks/b2/pulumi_b2/provider.py', 'uv.lock'])
+    assert verdict.returncode == 0, verdict.stderr
+    assert not verdict.noop
+    assert "sdks/b2/pulumi_b2/provider.py is on the allow-list only in renovate's packages-only bump" in verdict.stdout
+
+
+def test_the_bridged_sdks_in_renovates_pull_request_that_leaves_the_block_are_the_human_route(tmp_path: Path) -> None:
+    """The admission compares documents, so it holds for a renovate pull request that never touched `Pulumi.yaml`.
+
+    Lockfile maintenance is one: the block is equal at base and head because
+    the file did not change, and `sdks/` beside it regenerated nothing.
+    """
+    verdict = _run(tmp_path, ['sdks/b2/pulumi_b2/provider.py', 'uv.lock'], admit=True)
+    assert verdict.returncode == 0, verdict.stderr
+    assert not verdict.noop
+    assert "sdks/b2/pulumi_b2/provider.py is on the allow-list only in renovate's packages-only bump" in verdict.stdout
+
+
+def test_the_bridged_sdks_beside_a_change_to_pulumi_yaml_that_is_not_packages_only_are_the_human_route(
+    tmp_path: Path,
+) -> None:
+    """A `Pulumi.yaml` change the admission refused carries no `sdks/` with it."""
+    verdict = _run(tmp_path, ['sdks/b2/pulumi_b2/provider.py', 'Pulumi.yaml', 'uv.lock'], admit=False)
+    assert verdict.returncode == 0, verdict.stderr
+    assert not verdict.noop
+    assert "sdks/b2/pulumi_b2/provider.py is on the allow-list only in renovate's packages-only bump" in verdict.stdout
 
 
 @pytest.mark.parametrize(
@@ -294,9 +341,11 @@ def test_a_rename_from_off_the_list_is_the_human_route(rename: Renamed, tmp_path
     """A rename deletes its old path, which no preview measures when no stack reads it.
 
     The API lists a rename once, under its new path, and counts it once, so
-    the old path is held to the list only if the step reads it at all.
+    the old path is held to the list only if the step reads it at all. The
+    rename lands in `sdks/` beside renovate's bump, so its new path is on the
+    list and the old one is what the step refuses.
     """
-    verdict = _run(tmp_path, ['uv.lock', rename])
+    verdict = _run(tmp_path, ['Pulumi.yaml', 'uv.lock', rename], admit=True)
     assert verdict.returncode == 0, verdict.stderr
     assert not verdict.noop
     assert f'{rename.previous} is not on the allow-list' in verdict.stdout
