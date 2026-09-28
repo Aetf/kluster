@@ -171,8 +171,8 @@ class Forge:
 
     The token is the `github` stack's config secret (`githubAdminToken`,
     docs/framework/github.md §1): a provider credential like every other, held
-    apart from the other stacks under its own passphrase so that nothing CI
-    can start reads it, and read back out of that stack for a push
+    apart from the other stacks under the operator passphrase so that nothing
+    CI can start reads it, and read back out of that stack for a push
     (`devices.borrow`). Not an account root -- the root is the GitHub login
     behind the page that makes the token, which nothing here opens.
 

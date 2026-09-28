@@ -31,6 +31,8 @@ import logging
 import sys
 from pathlib import Path
 
+from kluster.lib import acquisition
+
 from ... import conventions
 from ..state_backend import config as appliance_config
 from ..state_backend import probe
@@ -120,14 +122,16 @@ _ORDER = """when to run what:
          like the one above. The first also
          creates that stack's compartment where it does not exist yet, and
          prints the OCID to record in conventions and commit.
-    7. credentials derived github-passphrase generate
-         The github stack's own config passphrase, before anything reads or
-         writes that stack's config. Stage 4's command on a second row, and
-         separate from it for the one reason the row exists: this value goes
-         to no CI Environment, so the stack holding the forge's admin token is
-         unreadable by anything CI can start. A machine without it does not
-         fall back to the stack passphrase -- every command that would touch
-         that stack refuses by name.
+    7. credentials derived operator-passphrase generate
+         The operator passphrase, which encrypts the operator stacks (github
+         today), before anything reads or writes their config. Stage 4's
+         command on a second row, and separate from it for the one reason the
+         row exists: this value goes to no CI Environment, so the stack
+         holding the forge's admin token is unreadable by anything CI can
+         start. It is kept in the desktop secret store, or in its slot on a
+         machine with no store. A machine without it does not fall back to
+         the stack passphrase -- every command that would touch those stacks
+         refuses by name.
     8. credentials derived unifi record
        credentials derived adguard record
        credentials derived zerotier record
@@ -159,13 +163,17 @@ _ORDER = """when to run what:
          waiting on what. It authenticates as the admin token stage 8
          recorded, read back out of the github stack's config -- which needs
          stage 7's passphrase. It pushes the stack passphrase into every
-         Environment and the github one into none.
+         Environment and the operator passphrase into none.
 
   on a workstation that develops without the kit
     Copy the .credentials directory from a machine that has one: the
     passphrase slot and the client bundle come with it. On a machine that
     does hold the kit, `credentials derived pulumi-passphrase recover`
-    writes that slot once, and mise.toml reads it on every pulumi run.
+    writes that slot once, and mise.toml reads it on every pulumi run. The
+    operator passphrase comes with the copy only where it was kept in its
+    slot; elsewhere operator-stack asks for it at a terminal, and
+    `credentials derived operator-passphrase recover` keeps it on a machine
+    that holds the kit.
 
   day to day
     Nothing. No runtime credential is in the kit: a pulumi run, a CI job
@@ -250,8 +258,9 @@ def _add_bundle_dir(command: argparse.ArgumentParser) -> None:
 
     Every row delivered into a Pulumi config secret needs it: the stack's
     configuration lives in the state backend, so pushing into it means
-    reaching the backend, which is this bundle plus the passphrase the kit
-    recovers.
+    reaching the backend, which is this bundle plus the stack's passphrase:
+    the stack passphrase the kit recovers, or, for an operator stack, the
+    operator passphrase the acquisition chain finds.
     """
     _ = command.add_argument(
         '--bundle-dir',
@@ -1126,7 +1135,8 @@ def build_parser() -> argparse.ArgumentParser:
             help='open the escrowed secret with the kit',
             description=(
                 "Decrypt one generation of this row with the kit's recovery key. A row that has a "
-                'workstation slot is written straight into it, as a `0600` file this command owns rather '
+                'workstation slot is written straight into it -- the desktop secret store first for a '
+                'row read through the acquisition chain, else a `0600` file this command owns -- rather '
                 'than whatever a shell redirect would have created. Anything else is printed -- and '
                 'printing is refused when the terminal is the destination, because a secret in the '
                 'scrollback is a secret in the next screen share.'
@@ -1189,10 +1199,11 @@ def _kit(args: argparse.Namespace) -> KdbxStore:
 def _stack(args: argparse.Namespace, store: KdbxStore, name: str, registry: escrow.Registry) -> pulumi_config.Stack:
     """The config slot a derived row is pushed into.
 
-    Opened with the same two variables a `pulumi` run needs, recovered with the
-    kit that is already open rather than expected in the environment: one
-    command is one credential delivered, not a shell that has to be prepared
-    first.
+    Opened with the same two variables a `pulumi` run needs, found here rather
+    than expected in the environment (`lifecycle.environment`): the stack
+    passphrase recovered with the kit that is already open, the operator
+    passphrase through the acquisition chain. One command is one credential
+    delivered, not a shell that has to be prepared first.
 
     The stack is named by the caller rather than read off `args`, because only
     one row has a stack to choose: the zones token is scoped to zones and can
@@ -1313,30 +1324,49 @@ def _recorded(args: argparse.Namespace, store: KdbxStore) -> str:
     return escrow.from_kit(store, args.label) if args.from_kit else _piped_in(args.label)
 
 
+def _keep(slot: escrow.WorkstationSlot, value: str) -> None:
+    """Put a secret where its row's reader finds it: the secret store where the row has a key there, else the file.
+
+    One place, not two. A row read through the acquisition chain goes to the
+    store, the layer the chain reads first, and to the file only on a machine
+    that has no store, which is what the file layer is for; a row read by a
+    `mise.toml` template goes to the file, the one place a template can read.
+    """
+    if slot.store is not None:
+        try:
+            acquisition.store(slot.store, value)
+        except Exception as exc:  # noqa: BLE001 -- any backend failure is "no store here"
+            log.warning('no desktop secret store (%s); keeping it in %s instead', exc, slot.path())
+        else:
+            return
+    _ = workstation.write(slot.path(), value)
+
+
 def _write_slot(label: str, value: str) -> None:
-    """Put a freshly generated secret in the workstation slot its row names.
+    """Put a freshly generated secret where its row's slot says (`_keep`).
 
     A label with no slot is not an error — it is the ordinary case, since
     most rows reach their consumers through a provisioning run or a seal.
     """
     slot = escrow.slot(label)
     if slot is not None:
-        _ = workstation.write(slot.path(), value)
+        _keep(slot, value)
 
 
 def _recover(args: argparse.Namespace, vault: escrow.Vault) -> int:
     """Put one recovered secret where the operator asked for it.
 
-    A label with a workstation slot goes there, so the ordinary path writes a
-    `0600` file the command owns rather than something a shell redirect
-    created with whatever umask was in force. Everything else is printed, and
+    A label with a workstation slot goes where that slot says (`_keep`), so
+    the ordinary path writes the secret store or a `0600` file the command
+    owns rather than something a shell redirect created with whatever umask
+    was in force. Everything else is printed, and
     printing is refused when stdout is the terminal: a secret in the
     scrollback is a secret in the next screen-share.
     """
     value = vault.recover(args.label, args.generation)
     slot = escrow.slot(args.label)
     if slot is not None and not args.stdout:
-        _ = workstation.write(slot.path(), value)
+        _keep(slot, value)
         log.info('%s', slot.read_by)
         return 0
     if sys.stdout.isatty():

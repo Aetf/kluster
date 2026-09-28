@@ -11,14 +11,16 @@ the run with instructions rather than being invented.
 from __future__ import annotations
 
 import functools
+import io
 import re
 import shutil
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+import keyring.backends.fail
 import pytest
 import requests
 from b2_api import ACCOUNT_ID as B2_ACCOUNT
@@ -26,10 +28,12 @@ from b2_api import FakeApi as B2Api
 from cloudflare_api import ACCOUNT_ID as CLOUDFLARE_ACCOUNT
 from cloudflare_api import MINTING_POLICY, console_seed
 from cloudflare_api import FakeApi as CloudflareApi
+from memory_keyring import installed
 from oci_conventions import with_tenancy_ocid
 from oci_tenancy import ROOT_USER, TENANCY, Tenancy
 
 from kluster import conventions
+from kluster.lib import stack_environment
 from kluster.scripts.credentials import (
     age,
     b2,
@@ -40,6 +44,7 @@ from kluster.scripts.credentials import (
     masters,
     oci_iam,
     pulumi_config,
+    workstation,
 )
 from kluster.scripts.credentials.kdbx import KdbxError, KdbxStore
 from kluster.scripts.credentials.masters import CredentialRejected
@@ -826,54 +831,103 @@ def test_a_missing_bundle_still_yields_the_passphrase(
     assert found.url is None
 
 
-@needs_age
-def test_the_environment_carries_a_passphrase_for_every_stack_encrypted_apart(
-    kit: KdbxStore, registry: escrow.Registry, tmp_path: Path
-) -> None:
-    """The joint between the census and the recovery, exercised end to end.
+@pytest.fixture
+def slots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+    """The chain's store and file layers, moved off the operator's: no store, and slots under `tmp_path`.
 
-    `pulumi_config.APART` says which stacks are off the stack passphrase and
-    which register row each one's own comes from; this is what turns that into
-    values a `pulumi` run can be started with. A version that walked its own
-    list instead would fail *closed* -- the stack it forgot refuses rather than
-    running under the stack passphrase -- but it would refuse telling an
-    operator to run a `generate` they have already run, and nothing else in the
-    suite reaches `apart` through this function at all.
+    Nobody is at a terminal either, so a run the chain does not answer is
+    refused rather than left at a prompt.
     """
-    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
-    _ = escrow.generate(escrow.Vault.open(kit, registry), escrow.PASSPHRASE)
-    generated = {
-        stack: escrow.generate(escrow.Vault.open(kit, registry), escrow.rows()[row].name)
-        for stack, row in pulumi_config.APART.items()
-    }
-    assert generated, 'nothing to exercise: no stack is encrypted apart from the others'
-
-    found = lifecycle.environment(kit, tmp_path / 'absent', registry)
-
-    assert found.apart == generated
-    # And each reaches the stack it belongs to rather than the stack
-    # passphrase, which is the whole of what a caller gets out of this.
-    for stack, passphrase in generated.items():
-        assert found.variables(stack)[pulumi_config.PASSPHRASE_ENV] == passphrase
-    assert found.passphrase is not None and found.passphrase not in generated.values()
+    directory = tmp_path / 'checkout' / '.credentials'
+    monkeypatch.setattr(workstation, 'directory', lambda: directory)
+    monkeypatch.setattr('sys.stdin', io.StringIO())
+    with installed(keyring.backends.fail.Keyring()):
+        yield directory
 
 
 @needs_age
-def test_a_stack_encrypted_apart_whose_escrow_is_empty_is_left_for_the_refusal(
-    kit: KdbxStore, registry: escrow.Registry, tmp_path: Path
+def test_an_operator_stack_is_given_the_passphrase_the_chain_finds(
+    kit: KdbxStore, registry: escrow.Registry, tmp_path: Path, slots: Path
 ) -> None:
-    """The state a machine is in between the row being declared and its `generate`.
+    """The `credentials` commands find the operator passphrase as the driver does, not by opening the escrow.
 
-    Raising here would name a label while building an environment most commands
-    never point at that stack anyway; leaving it out lets the refusal come from
-    the place that knows which stack was asked for and names the row to run.
+    The escrow holds a generation of its own here, different from the slot's,
+    so a run that recovered it instead of asking the chain is told apart by
+    the value.
     """
     _ = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
-    _ = escrow.generate(escrow.Vault.open(kit, registry), escrow.PASSPHRASE)
+    stack_passphrase = escrow.generate(escrow.Vault.open(kit, registry), escrow.PASSPHRASE)
+    escrowed = escrow.generate(escrow.Vault.open(kit, registry), escrow.OPERATOR_PASSPHRASE)
+    slots.mkdir(parents=True)
+    _ = (slots / stack_environment.OPERATOR_PASSPHRASE_SLOT).write_text('from-the-slot\n')
+    assert pulumi_config.APART, 'nothing to exercise: no stack is encrypted apart from the others'
 
     found = lifecycle.environment(kit, tmp_path / 'absent', registry)
 
-    assert found.apart == {}
+    for stack in pulumi_config.APART:
+        passphrase = found.variables(stack)[pulumi_config.PASSPHRASE_ENV]
+        assert passphrase == 'from-the-slot'
+        assert passphrase != escrowed
+    # And every other stack is still on the stack passphrase.
+    assert found.variables(conventions.STACK_NAMES.dns)[pulumi_config.PASSPHRASE_ENV] == stack_passphrase
+
+
+@needs_age
+def test_an_operator_stack_the_chain_does_not_answer_for_is_refused_naming_recover(
+    kit: KdbxStore, registry: escrow.Registry, tmp_path: Path, slots: Path
+) -> None:
+    """The escrow is the recovery path the refusal names, not a place a run reads from on its own.
+
+    The escrow holds a generation, which is the state of every machine that
+    holds the kit; the chain holds nothing, so the run is refused and told
+    what fills it.
+    """
+    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
+    _ = escrow.generate(escrow.Vault.open(kit, registry), escrow.PASSPHRASE)
+    _ = escrow.generate(escrow.Vault.open(kit, registry), escrow.OPERATOR_PASSPHRASE)
+    assert not slots.exists()
+
+    found = lifecycle.environment(kit, tmp_path / 'absent', registry)
+
+    assert pulumi_config.APART, 'nothing to exercise: no stack is encrypted apart from the others'
     for stack, row in pulumi_config.APART.items():
-        with pytest.raises(pulumi_config.PassphraseMissing, match=f'credentials derived {row} generate'):
+        with pytest.raises(pulumi_config.PassphraseMissing, match=f'credentials derived {row} recover'):
             _ = found.variables(stack)
+
+
+class _Terminal(io.StringIO):
+    """Standard input that answers as a terminal does, so the chain's last layer asks."""
+
+    def isatty(self) -> bool:
+        return True
+
+
+@needs_age
+def test_a_command_asks_for_the_operator_passphrase_at_most_once(
+    kit: KdbxStore, registry: escrow.Registry, tmp_path: Path, slots: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every `pulumi` call a command makes builds its environment again; the chain is walked for the first alone.
+
+    `Stack.env` is read once per `pulumi` call -- a `fill` makes three -- so a
+    chain that ends at a prompt would otherwise ask on each of them, and each
+    call would run under whatever was typed for it.
+    """
+    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
+    _ = escrow.generate(escrow.Vault.open(kit, registry), escrow.PASSPHRASE)
+    assert not slots.exists()
+    monkeypatch.setattr('sys.stdin', _Terminal())
+    asked: list[str] = []
+
+    def typed(question: str) -> str:
+        asked.append(question)
+        return 'typed-at-the-terminal'
+
+    monkeypatch.setattr('getpass.getpass', typed)
+    assert pulumi_config.APART, 'nothing to exercise: no stack is encrypted apart from the others'
+    stack = next(iter(pulumi_config.APART))
+
+    found = lifecycle.environment(kit, tmp_path / 'absent', registry)
+    given = [found.variables(stack)[pulumi_config.PASSPHRASE_ENV] for _ in range(3)]
+
+    assert given == ['typed-at-the-terminal'] * 3
+    assert len(asked) == 1

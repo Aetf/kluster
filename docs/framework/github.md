@@ -33,7 +33,7 @@ So **no workflow touches this stack at all**, drift detection
 included: the weekly `drift` matrix carries the four stacks CI
 deploys and not this one (ci.md §3). Drift in the forge is read the
 way an apply is prepared — an `operator-stack github plan` on
-the machine that holds this stack's passphrase, which no job does —
+the machine that holds the operator passphrase, which no job does —
 which is why leaving the stack out of CI costs no freshness check, only
 the schedule of one.
 
@@ -83,9 +83,11 @@ and ci.md §3's partition — that no workflow may hold the credential
 which writes its own Environment's secrets — would be a statement about
 nothing.
 
-So the `github` stack has a **passphrase of its own**
-(credentials.md §3): generated, escrowed to the kit like the stack passphrase,
-written to a workstation slot, and pushed to no Environment at all.
+So the `github` stack is encrypted under the **operator passphrase**
+(credentials.md §3), which covers every operator stack and no other:
+generated, escrowed to the kit like the stack passphrase, kept in the
+operator's desktop secret store or a workstation slot, and pushed to no
+Environment at all.
 `Pulumi.github.yaml` is as public as any other stack file and its
 ciphertext is committed; what is not public is the key, and no job has
 it.
@@ -94,7 +96,7 @@ Two mechanisms hold that, because either alone is one accident from
 gone, and each has a test: no workflow points a `pulumi` command at this
 stack (a census over `.github/workflows/` and `.github/actions/`, the
 same idiom the label and author censuses use), and the register row for
-this passphrase reaches no GitHub secret (a case over the slot map). A
+the operator passphrase reaches no GitHub secret (a case over the slot map). A
 `preview` would be as bad as an `up`: reading this stack's config at all
 means holding the passphrase, and a workflow that held it would have it
 in an Environment.
@@ -106,7 +108,7 @@ command resolves it from the stack it is acting on, in one place — a
 can pair one stack with another's passphrase. A `pulumi` run by hand
 gets the same property from the driver. This stack is an operator stack
 ([pulumi.md](pulumi.md) §3.3), and `operator-stack` sets its backend and
-this passphrase on the process it starts, with the stack named once, as
+the operator passphrase on the process it starts, with the stack named once, as
 the driver's first argument:
 
     operator-stack github plan
@@ -128,11 +130,13 @@ quietly is any `pulumi` command against a file with *no* salt, a
 against, `pulumi` mints a salt from the ambient passphrase and writes it
 in, which is why credentials.md §4.2 forbids deleting that line.) A
 machine holding no passphrase for this stack is refused one step earlier
-still. The driver will not start `pulumi` without this passphrase's
-slot, which is what such a machine lacks, and will not run inside a
-`jj` workspace at all, where the slots do not answer; a `credentials`
-run names the stack and the command that fills it. Neither lets `pulumi` refuse at the
-far end of whatever was in progress.
+still. The driver finds the operator passphrase through the acquisition
+chain of credentials.md §2 — the desktop secret store, its slot, its
+variable, a prompt at a terminal — and without one of them it refuses,
+naming the command that recovers it. It will not run inside a `jj`
+workspace at all, where the slots do not answer, and a `credentials` run
+names the stack and the command that fills it. Neither lets `pulumi`
+refuse at the far end of whatever was in progress.
 
 ## 2. What the plan permits today
 

@@ -15,49 +15,12 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
-import keyring
-import keyring.backend
 import keyring.backends.fail
-import keyring.errors
 import pytest
+from memory_keyring import MemoryKeyring, installed
 
 from kluster.scripts.credentials import devices, kdbx, masters, workstation
 from kluster.scripts.credentials.kdbx import KdbxError
-
-
-class MemoryKeyring(keyring.backend.KeyringBackend):
-    """A Secret Service that lives for the length of one test."""
-
-    # `keyring`'s own backends declare this the same way; the base class makes
-    # it a class property, which a plain value cannot match by type.
-    priority: float = 1  # pyright: ignore[reportIncompatibleVariableOverride]
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.items: dict[tuple[str, str], str] = {}
-
-    def get_password(self, service: str, username: str) -> str | None:
-        return self.items.get((service, username))
-
-    def set_password(self, service: str, username: str, password: str) -> None:
-        self.items[(service, username)] = password
-
-    def delete_password(self, service: str, username: str) -> None:
-        if (service, username) not in self.items:
-            raise keyring.errors.PasswordDeleteError(username)
-        del self.items[(service, username)]
-
-
-def _current() -> keyring.backend.KeyringBackend:
-    """Whatever backend this machine resolves to, or none at all.
-
-    Resolution itself raises where a Secret Service is configured but not
-    running, which is the state a test runner is usually in.
-    """
-    try:
-        return keyring.get_keyring()
-    except Exception:  # noqa: BLE001 -- an unresolvable backend is "no backend"
-        return keyring.backends.fail.Keyring()
 
 
 @pytest.fixture(autouse=True)
@@ -77,20 +40,16 @@ def local(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.fixture
 def store() -> Iterator[MemoryKeyring]:
-    previous = _current()
     backend = MemoryKeyring()
-    keyring.set_keyring(backend)
-    yield backend
-    keyring.set_keyring(previous)
+    with installed(backend):
+        yield backend
 
 
 @pytest.fixture
 def headless() -> Iterator[None]:
     """A machine with no secret store at all — CI, or a server over SSH."""
-    previous = _current()
-    keyring.set_keyring(keyring.backends.fail.Keyring())
-    yield
-    keyring.set_keyring(previous)
+    with installed(keyring.backends.fail.Keyring()):
+        yield
 
 
 def _answers(*values: str) -> Callable[[str], str]:

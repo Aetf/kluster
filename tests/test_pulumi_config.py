@@ -231,9 +231,7 @@ def test_a_stack_whose_state_is_committed_is_pointed_at_the_checkouts_checkpoint
     monkeypatch.setattr(
         identity, 'OPERATOR_STACKS', {**identity.OPERATOR_STACKS, 'probe': identity.StateHome.COMMITTED}
     )
-    environment = pulumi_config.BackendEnvironment(
-        url='postgres://operator@192.0.2.10/pulumi_state', apart={'probe': 'p'}
-    )
+    environment = pulumi_config.BackendEnvironment(url='postgres://operator@192.0.2.10/pulumi_state')
 
     committed = pulumi_config.Stack(name='probe', directory=tmp_path, environment=environment).env
     estate = pulumi_config.Stack(name=STACK, directory=tmp_path, environment=environment).env
@@ -247,3 +245,30 @@ def test_a_stack_whose_state_is_committed_is_pointed_at_the_checkouts_checkpoint
 def test_every_operator_stack_is_encrypted_apart() -> None:
     # The passphrase no CI Environment holds covers every stack no CI job runs.
     assert set(pulumi_config.APART) == set(identity.OPERATOR_STACKS)
+
+
+def test_only_the_operator_stacks_are_given_the_operator_passphrase() -> None:
+    """The operator passphrase goes to the stacks in `APART` and to no other, and is not looked for otherwise.
+
+    A stack outside that census is handed the stack passphrase without the
+    finder being called at all, so a command that never points at an operator
+    stack never reaches the chain; an operator stack is handed what the finder
+    answers, never the stack passphrase.
+    """
+    asked: list[str] = []
+
+    def find() -> str:
+        asked.append('asked')
+        return 'the-operator-passphrase'
+
+    environment = pulumi_config.BackendEnvironment(passphrase='the-stack-passphrase', operator=find)
+    assert pulumi_config.APART, 'nothing to exercise: no stack is encrypted apart from the others'
+    operator_stack = next(iter(pulumi_config.APART))
+
+    estate = environment.variables(STACK)
+
+    assert STACK not in pulumi_config.APART
+    assert estate[pulumi_config.PASSPHRASE_ENV] == 'the-stack-passphrase'
+    assert asked == []
+    assert environment.variables(operator_stack)[pulumi_config.PASSPHRASE_ENV] == 'the-operator-passphrase'
+    assert asked == ['asked']

@@ -3,7 +3,7 @@
 What every run shares (framework/pulumi.md §3.3):
 
 -   **The environment is the driver's**, set on the process it starts: the
-    stack's backend and the operator stacks' passphrase, and none of the
+    stack's backend and the operator passphrase, and none of the
     caller's variables that could steer `pulumi` or its backend
     (`kluster.lib.stack_environment`).
 -   **The stack is the driver's argument**, never a flag it passes through,

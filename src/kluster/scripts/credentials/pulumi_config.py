@@ -4,8 +4,9 @@ One of the register's storage channels (docs/credentials.md §1 rule 6), and the
 narrower of the two Pulumi ones: `Pulumi.<stack>.yaml` is committed, so its
 ciphertext is public the moment the repository is, and only credentials a
 program needs *before* it can run belong here. What lands is ciphertext under
-the Pulumi stack passphrase, which is itself recovered with the kit (§2.2) —
-so a slot written here opens from the kit and from nothing else.
+the Pulumi stack passphrase, or, for an operator stack, the operator
+passphrase, each escrowed to the kit (§2.2) — so a slot written here opens
+from the kit, or from a copy of the passphrase recovered from it.
 
 Driven through the `pulumi` CLI rather than the automation API because that is
 what writes the file the operator then commits, and because the CLI is already
@@ -18,7 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
@@ -35,7 +36,7 @@ class SlotRefused(RuntimeError):
 
 
 class PassphraseMissing(SlotRefused):
-    """A stack encrypted apart from the other stacks, on a machine holding no passphrase for it.
+    """An operator stack, on a machine holding no operator passphrase to open it with.
 
     Its own type because it is the one refusal here that is about the *machine*
     rather than about the stack's contents, and a caller that dresses a refusal
@@ -74,10 +75,10 @@ BACKEND_URL_ENV = stack_environment.BACKEND_URL_ENV
 PASSPHRASE_ENV = stack_environment.PASSPHRASE_ENV
 
 #: Every stack that is **not** on the stack passphrase, and the register row
-#: (§3) the one it *is* on comes from. A census rather than a consequence of
-#: whatever a run happened to recover: a stack named here and handed no
-#: passphrase of its own is refused *here*, by name, instead of being run under
-#: the stack passphrase — which `pulumi` would answer with `error: incorrect
+#: (§3) the one it *is* on -- the operator passphrase -- comes from. A census
+#: rather than a consequence of whatever a run happened to find: a stack named
+#: here on a machine holding no operator passphrase is refused *here*, by
+#: name, instead of being run under the stack passphrase — which `pulumi` would answer with `error: incorrect
 #: passphrase`, a refusal that names neither the stack nor the fix and arrives
 #: at the far end of whatever command was in progress.
 #:
@@ -88,8 +89,8 @@ PASSPHRASE_ENV = stack_environment.PASSPHRASE_ENV
 #:
 #: Read off the operator-stack census (`conventions.identity.OPERATOR_STACKS`)
 #: rather than written beside it: what sets a stack apart is that no CI job
-#: runs it, and every stack of that kind is under the one passphrase no CI
-#: Environment holds (framework/pulumi.md §3.3).
+#: runs it, and every stack of that kind is under the operator passphrase, the
+#: one no CI Environment holds (framework/pulumi.md §3.3).
 APART: Mapping[str, str] = dict.fromkeys(identity.OPERATOR_STACKS, stack_environment.OPERATOR_PASSPHRASE_ROW)
 
 
@@ -106,24 +107,25 @@ class BackendEnvironment:
 
     **`variables` takes the stack it is building an environment for**, because
     `PULUMI_CONFIG_PASSPHRASE` is process-global while this installation has
-    more than one: the `github` stack's configuration is encrypted under a
-    passphrase of its own, which reaches no CI Environment and is what confines
-    that stack to the workstation (credentials.md §2.2). A caller therefore
+    more than one: the operator stacks' configuration is encrypted under the
+    operator passphrase, which reaches no CI Environment and is what confines
+    those stacks to the workstation (credentials.md §2.2). A caller therefore
     cannot build "the environment" — only the environment for a named stack —
     and `Stack` derives it from its own name so that no call site can pair one
     stack with another's passphrase.
     """
 
-    #: The stack passphrase. Neither it nor the mapping below prints: both
-    #: hold passphrases, and the URL is what a repr is read for.
+    #: The stack passphrase, which every stack but the operator stacks is
+    #: given. It does not print; the URL is what a repr is read for.
     passphrase: str | None = field(default=None, repr=False, compare=False)
     url: str | None = None
-    #: Stacks whose config is encrypted under a passphrase of their own, by
-    #: stack name. A stack absent from here takes the stack passphrase. A mapping and
-    #: not a second field, so adding another such stack is a row rather than a
-    #: branch — and so `apart` is the whole answer to "which stacks are not on
-    #: the stack passphrase", which a test can read.
-    apart: Mapping[str, str] = field(default_factory=dict[str, str], repr=False, compare=False)
+    #: Where the operator passphrase is found, for the stacks in `APART` and
+    #: no other: the acquisition chain (`stack_environment.operator_passphrase`)
+    #: for a run on a workstation. A function rather than a value, so it is
+    #: called only when such a stack is asked for and a command that never
+    #: points at one never looks, let alone prompts; the caller makes it answer
+    #: once per command. None looks nowhere, and such a stack is refused.
+    operator: Callable[[], str] | None = field(default=None, compare=False)
 
     def variables(self, stack: str, *, checkout: Path | None = None) -> dict[str, str]:
         """The variables a `pulumi` run against `stack` is started with.
@@ -133,21 +135,38 @@ class BackendEnvironment:
         `checkpoints/` directory of `checkout` — the checkout holding
         `Pulumi.yaml` unless one is named.
         """
-        passphrase = self.apart.get(stack)
-        if passphrase is None and (row := APART.get(stack)) is not None:
-            raise PassphraseMissing(
-                f"the {stack} stack's configuration is encrypted under a passphrase of its own and this "
-                f'machine holds none: run `credentials derived {row} generate`, or `credentials derived '
-                f'{row} recover` on a machine that already holds the kit. The stack passphrase the '
-                f'other stacks share is deliberately not used here — every CI Environment holds that one, '
-                f'and this stack is the one nothing in CI may read (framework/github.md §1).'
-            )
+        row = APART.get(stack)
+        chosen = self._operator(stack, row) if row is not None else self.passphrase
         values: dict[str, str] = {}
-        if (chosen := passphrase or self.passphrase) is not None:
+        if chosen is not None:
             values[PASSPHRASE_ENV] = chosen
         if checkout is None and stack_environment.home(stack) is identity.StateHome.COMMITTED:
             checkout = project_dir()
         return values | stack_environment.backend_variables(stack, checkout=checkout, estate_url=self.url)
+
+    def _operator(self, stack: str, row: str) -> str:
+        """The operator passphrase for `stack`, from `operator`; `PassphraseMissing` where it finds none.
+
+        The refusal carries the chain's own, which says where it looked and
+        names the escrow as the recovery path, since that is what fills the
+        chain on a machine that holds the kit.
+        """
+        reason = (
+            f'nothing here looks for it; `credentials derived {row} recover` puts it where the acquisition '
+            'chain finds it, on a machine that holds the kit'
+        )
+        if self.operator is not None:
+            try:
+                return self.operator()
+            except stack_environment.EnvironmentRefused as exc:
+                reason = str(exc)
+        raise PassphraseMissing(
+            f"the {stack} stack's configuration is encrypted under the operator passphrase, and this "
+            f'machine cannot give it: {reason}. `credentials derived {row} generate` makes the first one. '
+            f'The stack passphrase the other stacks share is deliberately not used here — every CI '
+            f'Environment holds that one, and the operator stacks are the ones nothing in CI may read '
+            f'(framework/github.md §1).'
+        )
 
 
 @dataclass(frozen=True)

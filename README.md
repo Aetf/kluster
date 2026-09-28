@@ -49,19 +49,23 @@ mise x uv -- uv run operator-stack github plan   # an operator stack
 A `pulumi` run needs two things that cannot be looked up: `PULUMI_BACKEND_URL`,
 written by `state-backend provision` into the same slot as the client bundle it
 authenticates with, and the passphrase that opens the stack's configuration.
-That is `PULUMI_CONFIG_PASSPHRASE` for every stack but `github`, whose
-configuration is encrypted under a passphrase of its own that no CI environment
-carries. Each passphrase is a random secret whose only recoverable copy is a
-ciphertext committed under `escrow/`, which the offline kit's recovery key
-alone opens (docs/credentials.md §2.2). All of it is read from `.credentials/`,
-a git-ignored directory in the checkout holding everything local this
-repository needs — the seed kit, the cached passphrases (`pulumi.passphrase`
-and `github.passphrase`), the state backend's client bundle, the appliance
-provisioner's OCI key, the account roots' token files (docs/credentials.md
-§4.4). `mise.toml` reads the stack passphrase and the bundle from there, and
-the `operator-stack` driver the `github` stack's passphrase and the bundle, so
-a workstation is set up by copying that directory from one that already has
-it:
+That is the stack passphrase in `PULUMI_CONFIG_PASSPHRASE` for every stack
+but the operator stacks — the stacks no CI job runs, `github` today — whose
+configuration is encrypted under the operator passphrase, which no CI
+environment carries. Each passphrase is a random secret whose only recoverable
+copy is a ciphertext committed under `escrow/`, which the offline kit's recovery
+key alone opens (docs/credentials.md §2.2). The rest is read from
+`.credentials/`, a git-ignored directory in the checkout holding everything
+local this repository needs — the seed kit, the cached stack passphrase
+(`pulumi.passphrase`), the state backend's client bundle, the appliance
+provisioner's OCI key, the operator passphrase (`operator.passphrase`) on a
+machine whose desktop secret store does not hold it, and the account roots'
+token files on one with no store (docs/credentials.md §4.4). `mise.toml` reads the stack passphrase and the
+bundle from there, and the `operator-stack` driver the bundle; the driver finds
+the operator passphrase in the desktop secret store, then that slot, then
+`KLUSTER_OPERATOR_PASSPHRASE`, and otherwise asks at the terminal
+(docs/credentials.md §2). A workstation is set up by copying that directory
+from one that already has it:
 
 ```sh
 # on the workstation that holds the kit; leave kit.kdbx behind unless the
@@ -75,9 +79,10 @@ file, and the bundle's three certificates travel beside it as `PGSSLROOTCERT`,
 checkout it runs in (docs/physical/state-backend.md §3).
 
 On a machine that holds the kit, `credentials derived pulumi-passphrase recover`
-and `credentials derived github-passphrase recover` write the passphrase slots
-themselves, and `state-backend bundle operator --address <ip>` writes the
-bundle.
+writes the stack passphrase's slot, `credentials derived operator-passphrase
+recover` keeps the operator passphrase in the desktop secret store (in its slot
+where there is no store), and `state-backend bundle operator --address <ip>`
+writes the bundle.
 
 `pulumi` reads one passphrase per process, so which one a run needs depends on
 the stack it names, and `mise.toml` cannot see the command line. A stack no CI
@@ -85,7 +90,7 @@ job runs -- an operator stack, `github` today -- therefore goes through the
 `operator-stack` driver: `operator-stack github plan`, `operator-stack github
 up`, or `operator-stack github pulumi <pulumi arguments>`, which fixes the stack
 and hands `pulumi` that stack's backend and passphrase (docs/framework/pulumi.md
-§3.3). A bare `pulumi … --stack github` meets the other passphrase and stops at
+§3.3). A bare `pulumi … --stack github` meets the stack passphrase and stops at
 `error: incorrect passphrase`, having written nothing.
 
 One provider credential is in that directory: the OCI key the state-backend

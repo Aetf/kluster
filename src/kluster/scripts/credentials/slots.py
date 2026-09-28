@@ -97,7 +97,7 @@ from kluster.lib.pulumi_cli import Runner
 from kluster.lib.state_backend import settings as appliance_settings
 
 from ... import conventions
-from ...lib import config
+from ...lib import config, stack_environment
 from ..state_backend import config as appliance
 from . import derived, devices, escrow, pki, pulumi_config, workstation
 from .github_secrets import Forge, Slot
@@ -248,6 +248,23 @@ class WorkstationSlot:
 
 
 @dataclass(frozen=True)
+class SecretStore:
+    """The desktop secret store, under one key (§1 rule 6).
+
+    The channel of a value the operator hands a run through the acquisition
+    chain (`kluster.lib.acquisition`, credentials.md §2) rather than one a
+    `mise.toml` template reads, since a template can open no store. A row that
+    names it names the workstation slot beside it, the chain's file layer,
+    which is where the value goes on a machine with no store.
+    """
+
+    key: str
+
+    def __str__(self) -> str:
+        return f'desktop secret store: {self.key}'
+
+
+@dataclass(frozen=True)
 class DeviceSecret:
     """A secret delivered to the gateway device as a file, beside its nspawn units (physical/gateway.md §1).
 
@@ -267,7 +284,9 @@ class DeviceSecret:
 
 #: Everything a row may be delivered into. `Slot` is the GitHub one, and the
 #: only kind this module can fill.
-Channel = Slot | PulumiConfig | PulumiState | EscrowCopy | SealedSecret | OnBox | WorkstationSlot | DeviceSecret
+Channel = (
+    Slot | PulumiConfig | PulumiState | EscrowCopy | SealedSecret | OnBox | SecretStore | WorkstationSlot | DeviceSecret
+)
 
 
 #: How §3's "Slot" column names each channel: the fixed term an entry in that
@@ -281,6 +300,7 @@ _TERMS: Mapping[type[Channel], str] = {
     EscrowCopy: 'escrow',
     SealedSecret: 'SealedSecret',
     OnBox: 'on-box',
+    SecretStore: 'desktop secret store',
     WorkstationSlot: 'workstation slot',
     DeviceSecret: 'device secret',
 }
@@ -984,16 +1004,20 @@ ROWS: dict[str, Row] = {
             *_every_environment('PULUMI_CONFIG_PASSPHRASE'),
         ),
     ),
-    escrow.row_name(escrow.GITHUB_PASSPHRASE): Row(
-        register='`github` stack passphrase',
-        source=Derived(escrow.GITHUB_PASSPHRASE),
+    escrow.row_name(escrow.OPERATOR_PASSPHRASE): Row(
+        register='Operator passphrase',
+        source=Derived(escrow.OPERATOR_PASSPHRASE),
         # **No GitHub secret, and that absence is the row.** Every Environment
         # holds the stack passphrase because every job runs a `pulumi`
-        # command; this one exists so that the `github` stack's config -- the
-        # admin token that can unguard `main` -- is readable by nothing CI can
-        # start. A sink added here would undo the whole row, so a test holds it
-        # empty (ci.md §3).
-        targets=(EscrowCopy(escrow.GITHUB_PASSPHRASE), WorkstationSlot(workstation.GITHUB_PASSPHRASE)),
+        # command; this one exists so that the operator stacks' config -- the
+        # `github` stack's admin token that can unguard `main` among it -- is
+        # readable by nothing CI can start. A sink added here would undo the
+        # whole row, so a test holds it empty (ci.md §3).
+        targets=(
+            EscrowCopy(escrow.OPERATOR_PASSPHRASE),
+            SecretStore(stack_environment.OPERATOR_PASSPHRASE_ACCOUNT),
+            WorkstationSlot(workstation.OPERATOR_PASSPHRASE),
+        ),
     ),
     'state-backend-ca': Row(
         register='State-backend CA',

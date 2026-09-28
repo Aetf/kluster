@@ -4,32 +4,35 @@
 each per process, while this installation has more than one of each: every
 stack CI deploys keeps its state in the appliance's backend under the stack
 passphrase, and an **operator stack** (`conventions.identity.OPERATOR_STACKS`)
-is encrypted under a passphrase of its own and keeps its state where the
-census says — the same backend, or a checkpoint committed to this repository
-(framework/pulumi.md §3.3). So the environment is a function of the stack, and
-this module is that function, for the two kinds of caller that start `pulumi`
-against a stack: the `operator-stack` driver, and the `credentials` commands
-that write a stack's configuration, which need a committed stack's backend as
-much as an `up` does.
+is encrypted under the operator passphrase, which no CI job holds, and keeps
+its state where the census says — the same backend, or a checkpoint committed
+to this repository (framework/pulumi.md §3.3). So the environment is a
+function of the stack, and this module is that function, for the two kinds of
+caller that start `pulumi` against a stack: the `operator-stack` driver, and
+the `credentials` commands that write a stack's configuration, which need a
+committed stack's backend as much as an `up` does.
 
 **An operator stack's run takes these variables from here or not at all.**
-`operator_variables` reads them from the checkout's slots, and `process`
-builds the environment a run starts with: the caller's own, less every
-variable that can steer `pulumi` or its backend (`steers`), plus the
-stack's. The ambient `PULUMI_CONFIG_PASSPHRASE` that `mise.toml` exports is
-the stack passphrase, a `PULUMI_BACKEND_URL` a shell exported names some other
-backend, and a `PULUMI_DIY_BACKEND_GZIP` would move a committed checkpoint to
-a file the checks never read; none of them may reach an operator stack's run,
-and none can once it is removed rather than overridden.
+`operator_variables` finds the passphrase through the acquisition chain and
+reads the backend from the checkout's slots, and `process` builds the
+environment a run starts with: the caller's own, less every variable that can
+steer `pulumi` or its backend (`steers`), plus the stack's. The ambient
+`PULUMI_CONFIG_PASSPHRASE` that `mise.toml` exports is the stack passphrase, a
+`PULUMI_BACKEND_URL` a shell exported names some other backend, and a
+`PULUMI_DIY_BACKEND_GZIP` would move a committed checkpoint to a file the
+checks never read; none of them may reach an operator stack's run, and none
+can once it is removed rather than overridden.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import getpass
+import sys
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from kluster.conventions import identity
-from kluster.lib import bundle, pulumi_cli
+from kluster.lib import acquisition, bundle, pulumi_cli
 from kluster.lib.workstation import DIRECTORY
 
 BACKEND_URL_ENV = 'PULUMI_BACKEND_URL'
@@ -62,13 +65,18 @@ def steers(name: str) -> bool:
     return name.startswith(STEERING) and name not in ALLOWED
 
 
-#: The workstation slot holding the passphrase every operator stack is
-#: encrypted under (credentials.md §4.4), and the register row that writes it.
-#: The slot is named in `kluster.scripts.credentials.workstation` as well,
-#: which writes it; a case in `tests/test_operator_stack.py` holds the two to
-#: one file.
-OPERATOR_PASSPHRASE_SLOT = 'github.passphrase'
-OPERATOR_PASSPHRASE_ROW = 'github-passphrase'
+#: The **operator passphrase**, which every operator stack is encrypted under
+#: and no CI job holds (credentials.md §2.2), is found through the acquisition
+#: chain (`acquisition`), under these three names: its key in the desktop
+#: secret store, its workstation slot (credentials.md §4.4), which
+#: `kluster.scripts.credentials.workstation` takes from here, and the variable
+#: a one-off shell hands it in. The register row whose `generate` and
+#: `recover` put it in the store or the slot is named last; a case in
+#: `tests/test_operator_stack.py` holds it to the escrow's own spelling.
+OPERATOR_PASSPHRASE_ACCOUNT = 'operator-passphrase'
+OPERATOR_PASSPHRASE_SLOT = 'operator.passphrase'
+OPERATOR_PASSPHRASE_ENV = 'KLUSTER_OPERATOR_PASSPHRASE'
+OPERATOR_PASSPHRASE_ROW = 'operator-passphrase'
 #: The slot holding the `operator` client bundle, named likewise in
 #: `kluster.scripts.credentials.workstation`.
 BUNDLE_SLOT = 'state-backend'
@@ -134,29 +142,60 @@ def backend_variables(stack: str, *, checkout: Path | None, estate_url: str | No
     return {} if estate_url is None else {BACKEND_URL_ENV: estate_url}
 
 
-def operator_passphrase(checkout: Path) -> str:
-    """The operator stacks' passphrase, from the slot in `checkout`.
+#: How the chain's last layer asks: the question in, the answer out, or None
+#: where there is nobody to ask.
+Ask = Callable[[str], str | None]
 
-    Refused by name where the slot is absent or empty: an empty passphrase
-    handed to `pulumi` is refused by the stack file's salt, or, in a file that
-    has lost its salt, adopted as the new key (credentials.md §4.2).
+
+def ask_on_a_terminal(question: str) -> str | None:
+    """`getpass` where standard input is a terminal; None where it is not.
+
+    A run with nobody at a terminal -- a pipe, a job, a test -- is refused by
+    name instead of waiting on a prompt nobody can answer.
+    """
+    return getpass.getpass(question) if sys.stdin.isatty() else None
+
+
+def operator_passphrase(checkout: Path, ask: Ask = ask_on_a_terminal) -> str:
+    """The operator passphrase: the first the chain finds for `checkout`, else asked for.
+
+    The chain is credentials.md §2's, the account roots' own: the desktop
+    secret store, then the slot in `checkout`, then the variable. A slot that
+    is there and cannot be read is refused naming it, rather than passed over:
+    it holds what the operator put there. Nothing found and nobody to ask is
+    refused by name, and so is an empty answer: an
+    empty passphrase handed to `pulumi` is refused by the stack file's salt,
+    or, in a file that has lost its salt, adopted as the new key
+    (credentials.md §4.2).
     """
     slot = checkout / DIRECTORY / OPERATOR_PASSPHRASE_SLOT
-    value = slot.read_text().strip() if slot.is_file() else ''
-    if not value:
+    try:
+        found = acquisition.find(OPERATOR_PASSPHRASE_ACCOUNT, slot, OPERATOR_PASSPHRASE_ENV)
+    except OSError as exc:
         raise EnvironmentRefused(
-            f'no passphrase for the operator stacks in {slot}: `credentials derived '
-            f'{OPERATOR_PASSPHRASE_ROW} recover` writes it on a machine that holds the kit'
-        )
-    return value
+            f'the operator passphrase slot {slot} cannot be read ({exc.strerror}): restore its mode '
+            f'with `chmod 600 {slot}`, or remove it and let the rest of the chain answer'
+        ) from exc
+    if found is not None:
+        return found[0]
+    answer = ask('the operator passphrase, which no layer of the chain holds on this machine: ')
+    if answer is not None and answer.strip():
+        return answer.strip()
+    raise EnvironmentRefused(
+        f'no operator passphrase on this machine: not in the desktop secret store, not in {slot}, not in '
+        f'{OPERATOR_PASSPHRASE_ENV}, and nobody answered the prompt. `credentials derived '
+        f'{OPERATOR_PASSPHRASE_ROW} recover` puts it in the store, or in the slot where there is no store, '
+        'on a machine that holds the kit'
+    )
 
 
 def operator_variables(stack: str, checkout: Path) -> dict[str, str]:
-    """Every variable a run of operator stack `stack` is given, read from the slots in `checkout`.
+    """Every variable a run of operator stack `stack` is given, for `checkout`.
 
-    The passphrase is the operator stacks' own. The backend is the stack's
-    home: the estate's, reached with the `operator` client bundle whose URL
-    and three files are all read from its one slot, or the committed one.
+    The passphrase is the operator passphrase (`operator_passphrase`). The
+    backend is the stack's home: the estate's, reached with the `operator`
+    client bundle whose URL and three files are all read from its one slot, or
+    the committed one.
     """
     where = home(stack)
     if where is None:

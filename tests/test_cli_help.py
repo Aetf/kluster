@@ -203,3 +203,22 @@ def test_the_help_names_the_shared_passphrase_by_the_registers_term(monkeypatch:
     assert 'the Pulumi stack passphrase' in row
     assert 'estate' not in order
     assert 'estate' not in row
+
+
+def test_the_help_names_the_operator_passphrase_by_the_registers_term(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The passphrase the operator stacks are encrypted under is the operator
+    # passphrase, and its row is named after it: the bring-up order runs that
+    # row and says what it holds in that term, and the row's own help says the
+    # same. No help text still names the row after the one stack it covered
+    # first.
+    def flat(name: str) -> str:
+        return ' '.join(' '.join(_rendered(name, monkeypatch)).split())
+
+    row = escrow.row_name(escrow.OPERATOR_PASSPHRASE)
+    order = flat('credentials')
+    own = flat(f'credentials derived {row}')
+
+    assert f'credentials derived {row} generate' in order
+    assert 'The operator passphrase, which encrypts the operator stacks' in order
+    assert 'the operator passphrase, which encrypts the operator stacks' in own
+    assert 'github-passphrase' not in order

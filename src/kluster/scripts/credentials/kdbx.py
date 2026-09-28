@@ -20,11 +20,13 @@ A master password is taken from the desktop secret store (the freedesktop
 Secret Service, or the platform equivalent) before anyone is prompted for it,
 so a `bootstrap` that opens the kit and then runs for minutes is not guarded
 by a password typed into a process nobody is watching. The store is reached
-through three module functions rather than through the database class alone,
-because the account roots (`masters.py`) live in the same store under their
-own keys and there is to be one mechanism, not two. Nothing is ever written
-implicitly: a `remember` command is the only thing that puts a value there, so
-a machine that has not opted in behaves exactly as before.
+through `kluster.lib.acquisition`, because the account roots (`masters.py`)
+and the operator passphrase live in the same store under their own keys and
+there is to be one mechanism, not two. Nothing is written to the store as a
+side effect of a run: each write is a command the operator ran by name --
+`credentials kit password remember`, `credentials root <name> remember`, and
+`credentials derived operator-passphrase generate` and `recover` -- so a
+machine where none of them has run behaves as if it had no store.
 """
 
 # pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false
@@ -43,6 +45,9 @@ from uuid import uuid4
 from pykeepass import PyKeePass, create_database
 from pykeepass.exceptions import CredentialsError
 
+from kluster.lib import acquisition
+from kluster.lib.acquisition import remembered
+
 if TYPE_CHECKING:
     from pykeepass.entry import Entry
     from pykeepass.group import Group
@@ -55,12 +60,13 @@ log = logging.getLogger(__name__)
 #: media or shared between checkouts is used.
 PATH_ENV = 'KLUSTER_KDBX'
 
-#: Secret Service collection entries are keyed by (service, account); the
+#: Secret Service collection entries are keyed by (service, account), under
+#: the one service `kluster.lib.acquisition` keeps every stored value in; the
 #: database's path is the account, so the kit and the personal estate never
 #: collide and a database moved to a new path simply stops matching. The path
 #: is resolved first (`KdbxStore.account`), so the several ways of naming one
 #: file are one account rather than several.
-KEYRING_SERVICE = 'kluster-credentials'
+KEYRING_SERVICE = acquisition.KEYRING_SERVICE
 
 #: The attributes an entry carries natively; anything else is a custom
 #: property, which is how a seed records what it is without spending a field.
@@ -77,45 +83,19 @@ class KdbxError(RuntimeError):
     pass
 
 
-def remembered(account: str) -> str | None:
-    """A secret from the desktop store, or None if there is none to have.
-
-    A machine with no Secret Service is not an error -- it is the case every
-    caller falls back from, so a backend that is absent, locked or broken is
-    reported the same way as a key that was never stored.
-    """
-    try:
-        import keyring
-
-        return keyring.get_password(KEYRING_SERVICE, account)
-    except Exception as exc:  # noqa: BLE001 -- any backend failure is a miss
-        log.debug('no secret store for %s: %s', account, exc)
-        return None
-
-
 def store(account: str, secret: str) -> None:
-    """Put a secret in the desktop store under `account`.
+    """Put a secret in the desktop store under `account` (`acquisition.store`).
 
-    Every write to the store is one of these, and every one of them is
-    something the operator asked for by name (`kit password remember`, `root
-    remember`): nothing lands there as a side effect of a run.
+    The kit's master password goes there through this, as the command the
+    operator ran by name, `credentials kit password remember`.
     """
-    import keyring
-
-    keyring.set_password(KEYRING_SERVICE, account, secret)
-    log.info('stored %s in %s', account, keyring.get_keyring().name)
+    acquisition.store(account, secret)
 
 
 def unstore(account: str) -> None:
-    """Remove it again."""
-    import keyring
-    import keyring.errors
-
-    try:
-        keyring.delete_password(KEYRING_SERVICE, account)
-    except keyring.errors.PasswordDeleteError as exc:
-        raise KdbxError(f'nothing stored for {account}') from exc
-    log.info('removed %s from the secret store', account)
+    """Remove it again, refused where there is nothing to remove."""
+    if not acquisition.unstore(account):
+        raise KdbxError(f'nothing stored for {account}')
 
 
 def default_path() -> Path:

@@ -28,7 +28,8 @@ plaintexts, with nothing in production touched. The second costs no downtime
 precisely because it changes no plaintext.
 
 **Labels are API.** A label names a secret across generations; renaming one
-orphans the ciphertexts filed under the old name. Add labels, never edit them.
+orphans the ciphertexts filed under the old name unless the same change moves
+its directory to the new one. Add labels; a rename is that move or nothing.
 
 The registry is a directory of files rather than one file, for three reasons:
 git shows a new generation as an added file rather than as a diff nobody can
@@ -49,7 +50,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from kluster import conventions
-from kluster.lib import config
+from kluster.lib import config, stack_environment
 from kluster.lib.state_backend import settings as appliance_settings
 
 from . import age, entries, pki, workstation
@@ -77,13 +78,12 @@ FIRST = 1
 
 PASSPHRASE = 'pulumi/passphrase'
 
-#: The `github` stack's own passphrase, which decrypts that stack's committed
-#: configuration and nothing else. Filed under the stack it belongs to rather
-#: than beside the stack passphrase, because what makes it a separate row is
-#: exactly that it is not that one: it reaches no CI Environment, which is
-#: what confines the admin token in that stack's config to the workstation
-#: (framework/github.md §1).
-GITHUB_PASSPHRASE = 'github/passphrase'
+#: The operator passphrase, which decrypts the operator stacks and nothing
+#: else. Filed under its own name rather than beside the stack passphrase,
+#: because what makes it a separate row is exactly that it is not that one: it
+#: reaches no CI Environment, which is what confines the admin token in the
+#: `github` stack's config to the workstation (framework/github.md §1).
+OPERATOR_PASSPHRASE = 'operator/passphrase'
 
 CA = 'state-backend/ca'
 ALERTMANAGER = 'alertmanager/read'
@@ -228,13 +228,20 @@ class WorkstationSlot:
     """Where a recovered secret is written on this machine, and who reads it there.
 
     Distinct from `slots.Slot`, which addresses a delivery channel: this one
-    is a local file under `.credentials/` (`workstation.py`). Both halves are
-    the row's own facts — the second is what `recover` says once the value has
-    landed, and it is true of the credential rather than of the command.
+    is a local file under `.credentials/` (`workstation.py`), or the desktop
+    secret store ahead of it. Every field is the row's own fact — `read_by` is
+    what `recover` says once the value has landed, and it is true of the
+    credential rather than of the command.
     """
 
     path: Callable[[], Path]
     read_by: str
+    #: The key the value is kept under in the desktop secret store, for a row
+    #: whose reader finds it through the acquisition chain
+    #: (`kluster.lib.acquisition`); the file is then where it goes on a machine
+    #: with no store. None for a row read by a `mise.toml` template, which
+    #: opens no store, so the file is its only home.
+    store: str | None = None
 
 
 @dataclass(frozen=True)
@@ -250,12 +257,13 @@ class Label:
     #: What a value has to look like to be this label's secret.
     shape: Shape = TEXT
     #: Where `recover` puts the value when nobody asked for it on stdout, so
-    #: the ordinary path writes a `0600` file instead of printing a secret.
-    #: The config passphrases have one, being read by a `mise.toml` template
-    #: or by the `operator-stack` driver, neither of which opens a kit; the
-    #: rest reach their consumers through a provisioning run, a seal or
-    #: `credentials derived sync`. A property of the row rather than a second
-    #: table keyed by label, which could name a label the register does not.
+    #: the ordinary path writes a `0600` file, or the secret store, instead of
+    #: printing a secret. The config passphrases have one, being read by a
+    #: `mise.toml` template or by the `operator-stack` driver, neither of
+    #: which opens a kit; the rest reach their consumers through a
+    #: provisioning run, a seal or `credentials derived sync`. A property of
+    #: the row rather than a second table keyed by label, which could name a
+    #: label the register does not.
     slot: WorkstationSlot | None = None
 
     @property
@@ -431,15 +439,16 @@ def register() -> dict[str, Label]:
             ),
         ),
         Label(
-            GITHUB_PASSPHRASE,
-            "the `github` stack's own config passphrase, held by no CI job",
+            OPERATOR_PASSPHRASE,
+            'the operator passphrase, which encrypts the operator stacks and which no CI job holds',
             Generated(_token),
-            # Read by the `operator-stack` driver for every run of an
-            # operator stack, and never by a `mise.toml` template
-            # (credentials.md §4.4).
+            # Found by the `operator-stack` driver through the acquisition
+            # chain for every run of an operator stack, and never by a
+            # `mise.toml` template (credentials.md §4.4).
             slot=WorkstationSlot(
-                path=workstation.github_passphrase_path,
-                read_by='`operator-stack` reads it from there for every run of an operator stack',
+                path=workstation.operator_passphrase_path,
+                read_by='`operator-stack` finds it there for every run of an operator stack',
+                store=stack_environment.OPERATOR_PASSPHRASE_ACCOUNT,
             ),
         ),
         Label(CA, "the state-backend CA's private key", Generated(pki.generate_ca_key), shape=PRIVATE_KEY),

@@ -6,11 +6,14 @@ slot** is a repo-relative file under `.credentials/`, git-ignored, written by a
 when it builds a `pulumi` run's environment, or by a script that needs the
 value without asking anybody for it.
 
-It is deliberately not the desktop secret store. Roots are interactive and
-rare, so a store that asks a session to unlock is right for them; the
-passphrase and the state-backend client bundle are read on *every* `pulumi`
-run by a template that cannot prompt, cannot unlock a keyring and cannot fail
-gracefully. A file is the shape that fits.
+The stack passphrase and the state-backend client bundle are deliberately not
+in the desktop secret store: they are read on *every* `pulumi` run by a
+template that cannot prompt, cannot unlock a keyring and cannot fail
+gracefully, so a file is the shape that fits. The operator passphrase is read
+by the `operator-stack` driver instead, through the acquisition chain
+(`kluster.lib.acquisition`), so its slot is the chain's file layer, below the
+store in the chain's order: where it lives on a machine whose store does not
+hold it.
 
 The names below are this package's; the directory they sit in and the modes
 they are written with are `kluster.lib.workstation`, which the `physical`
@@ -24,20 +27,21 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from kluster.lib.stack_environment import OPERATOR_PASSPHRASE_SLOT
 from kluster.lib.workstation import DIRECTORY, WorkstationError, directory, repo_root, secret_dir, write
 
 __all__ = (
     'BUNDLE',
     'DIRECTORY',
-    'GITHUB_PASSPHRASE',
     'KIT',
+    'OPERATOR_PASSPHRASE',
     'PASSPHRASE',
     'ROOTS',
     'WorkstationError',
     'bundle_dir',
     'directory',
-    'github_passphrase_path',
     'kit_path',
+    'operator_passphrase_path',
     'passphrase_path',
     'repo_root',
     'root_path',
@@ -53,12 +57,12 @@ KIT = 'kit.kdbx'
 #: here so a local `pulumi preview` needs neither the kit nor an eval.
 PASSPHRASE = 'pulumi.passphrase'
 
-#: The `github` stack's own passphrase (§2.2), which encrypts that one stack's
-#: committed configuration and nothing else. A second file rather than a second
-#: value in the first, because the property it exists for is that it reaches no
-#: CI Environment: a value nobody can push is easier to keep unpushed than a
-#: field of a value everybody gets.
-GITHUB_PASSPHRASE = 'github.passphrase'
+#: The operator passphrase (§2.2), which encrypts the operator stacks and
+#: nothing else. A second file rather than a second value in the first, because
+#: the property it exists for is that it reaches no CI Environment: a value
+#: nobody can push is easier to keep unpushed than a field of a value everybody
+#: gets. Named where the driver that reads it names it.
+OPERATOR_PASSPHRASE = OPERATOR_PASSPHRASE_SLOT
 
 #: The account roots' file layer (`masters.py`), one file per field.
 ROOTS = 'roots'
@@ -75,8 +79,8 @@ def passphrase_path() -> Path:
     return directory() / PASSPHRASE
 
 
-def github_passphrase_path() -> Path:
-    return directory() / GITHUB_PASSPHRASE
+def operator_passphrase_path() -> Path:
+    return directory() / OPERATOR_PASSPHRASE
 
 
 def root_path(name: str) -> Path:

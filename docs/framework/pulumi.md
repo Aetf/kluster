@@ -368,16 +368,16 @@ program declaring the appliance shares with that script
 ### 3.3 Operator stacks
 
 **An operator stack is a stack no CI job runs.** Its configuration is
-encrypted under a passphrase no CI Environment holds, apart from the
-stack passphrase every other stack is under, and a run of it starts from
-the workstation that holds that passphrase. The census of them is
+encrypted under the operator passphrase, which no CI Environment holds,
+apart from the stack passphrase every other stack is under, and a run of
+it starts from the workstation that holds the operator passphrase. The census of them is
 `OPERATOR_STACKS` in `conventions.identity`, beside the stack names,
 recording for each where its state lives: the appliance's backend, with
 every stack CI deploys, or a checkpoint committed to this repository.
 Today it holds `github`, whose state is in the backend; no stack keeps
 its state committed yet. Everything that has to know which stacks are
-held away from CI reads that census: the passphrase that encrypts them
-apart covers exactly these ([credentials.md](../credentials.md) §3),
+held away from CI reads that census: the operator passphrase covers
+exactly these ([credentials.md](../credentials.md) §3),
 the census over the workflows keeps every command naming one out of CI
 (`tests/test_conventions.py`), and the driver below runs these and
 nothing else.
@@ -395,8 +395,10 @@ through `mise.toml`'s `[env]`, and no `mise` task runs one
 -   **The environment is the driver's.** `kluster.lib.stack_environment`
     maps a stack to it, and the `credentials` commands that write a
     stack's configuration reach every stack through the same mapping: the
-    operator stacks' passphrase, read from its workstation slot, and the
-    backend the census names. That is the estate's backend, with the
+    operator passphrase, found through the acquisition chain of
+    [credentials.md](../credentials.md) §2 — the desktop secret store,
+    its workstation slot, `KLUSTER_OPERATOR_PASSPHRASE`, a prompt at a
+    terminal — and the backend the census names. That is the estate's backend, with the
     `operator` client bundle's connection string and its three files, or
     `file://<checkout>/checkpoints?metadata=skip` with
     `PULUMI_DIY_BACKEND_DISABLE_CHECKPOINT_BACKUPS` set. The process

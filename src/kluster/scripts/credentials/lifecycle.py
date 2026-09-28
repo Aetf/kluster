@@ -27,15 +27,16 @@ Two properties are the point:
 
 from __future__ import annotations
 
+import functools
 import getpass
 import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from kluster.lib import bundle
+from kluster.lib import bundle, stack_environment
 
-from . import b2, cloudflare, entries, escrow, masters, oci_iam, pulumi_config
+from . import b2, cloudflare, entries, escrow, masters, oci_iam, pulumi_config, workstation
 from .kdbx import KdbxError, KdbxStore
 from .masters import CredentialRejected, Prompt
 
@@ -213,13 +214,17 @@ def environment(
 ) -> pulumi_config.BackendEnvironment:
     """What a Pulumi run needs here, recovered and read rather than stored.
 
-    The passphrase is recovered from the escrow with the kit's recovery key
-    (§2.2), so the one place it exists outside its consumers is a committed
-    ciphertext nobody can open without the kit. The URL is read from the bundle
-    the appliance's provisioner writes, so the two halves of "log in to the
-    backend" come from one command — and a machine with no bundle yet answers
-    with no URL, which its caller can see rather than discover inside a
-    subprocess.
+    The stack passphrase is recovered from the escrow with the kit's recovery
+    key (§2.2), so the one place it exists outside its consumers is a committed
+    ciphertext nobody can open without the kit. The operator passphrase is
+    found the way the `operator-stack` driver finds it, through the
+    acquisition chain (`stack_environment.operator_passphrase`), only when an
+    operator stack is asked for, and at most once for this environment; the
+    escrow is its recovery path, which `credentials derived
+    operator-passphrase recover` walks and a refusal names. The URL is read from the bundle the appliance's provisioner writes,
+    so the two halves of "log in to the backend" come from one command — and a
+    machine with no bundle yet answers with no URL, which its caller can see
+    rather than discover inside a subprocess.
     """
     vault = escrow.Vault.open(kit, registry)
     url = bundle.backend_url_file(bundle_dir)
@@ -231,42 +236,16 @@ def environment(
     return pulumi_config.BackendEnvironment(
         passphrase=vault.recover(escrow.PASSPHRASE),
         url=url.read_text().strip() if url is not None else None,
-        apart=_apart(vault),
+        # Once per command: every `pulumi` call a command makes against an
+        # operator stack builds its environment again, and a chain that ends
+        # at a prompt would ask on each of them.
+        operator=functools.cache(_operator_passphrase),
     )
 
 
-def _apart(vault: escrow.Vault) -> dict[str, str]:
-    """The passphrase of every stack that is not on the stack passphrase, by stack name.
-
-    **Walked from `pulumi_config.APART`, not from a list beside it.** That
-    census already answers "which stacks are encrypted apart, and from which
-    register row", and its values are row names, which `escrow.rows()` turns
-    into the labels this recovers — so the two cannot disagree about which
-    stacks there are. A second list here would fail *closed* rather than open,
-    since a stack it forgot would refuse by name rather than fall back to the
-    stack passphrase, but it would refuse telling an operator to run a
-    `generate` they have already run, which is a bad half hour.
-
-    An escrow with no generation yet is left out rather than raised on, which
-    is the state a machine is in between the row being declared and the
-    operator running its `generate`. Leaving it out is what makes the refusal
-    the one `BackendEnvironment.variables` gives — which names the stack and
-    the command — instead of an escrow error naming a label, raised here while
-    building an environment most commands never point at that stack anyway.
-
-    A row the escrow register does not carry is the one thing raised on: that
-    is not a machine missing a value, it is `APART` naming a row that does not
-    exist, and it would otherwise read as the absent-generation case forever.
-    """
-    labels = escrow.rows()
-    found: dict[str, str] = {}
-    for stack, row in pulumi_config.APART.items():
-        label = labels[row].name
-        try:
-            found[stack] = vault.recover(label)
-        except escrow.EscrowError as exc:
-            log.debug('no %s in the escrow yet (%s); the %s stack will refuse by name', label, exc, stack)
-    return found
+def _operator_passphrase() -> str:
+    """The operator passphrase, found through the chain for the checkout whose slots this package writes."""
+    return stack_environment.operator_passphrase(workstation.directory().parent)
 
 
 def require_member(only: str | None) -> None:

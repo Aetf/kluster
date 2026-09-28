@@ -27,8 +27,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog='operator-stack',
         description=(
-            "Run a stack no CI job runs, under its own backend and the operator stacks' passphrase "
-            '(docs/framework/pulumi.md §3.3).'
+            'Run a stack no CI job runs, under its own backend and the operator passphrase, found in '
+            'the desktop secret store, its slot or KLUSTER_OPERATOR_PASSPHRASE, or asked for at the '
+            'terminal (docs/framework/pulumi.md §3.3).'
         ),
     )
     _ = parser.add_argument('stack', choices=sorted(identity.OPERATOR_STACKS), help='the operator stack to run')

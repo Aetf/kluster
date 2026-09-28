@@ -36,12 +36,13 @@ def refuses(prompt: str) -> str:
 
 
 #: What a machine that holds every passphrase can tell a `pulumi` run. The
-#: `github` stack is encrypted apart from the others (`pulumi_config.APART`),
-#: so a helper that left it out would have every case about that stack failing
-#: on the passphrase instead of on its subject.
+#: operator stacks, `github` among them, are encrypted under the operator
+#: passphrase rather than the stack passphrase (`pulumi_config.APART`), so a
+#: helper that left it out would have every case about that stack failing on
+#: the passphrase instead of on its subject.
 FULLY_EQUIPPED = pulumi_config.BackendEnvironment(
     passphrase='the-stack-passphrase',
-    apart={stack: f'a-{stack}-passphrase' for stack in pulumi_config.APART},
+    operator=lambda: 'the-operator-passphrase',
 )
 
 
@@ -376,7 +377,7 @@ def test_a_row_of_several_secrets_has_no_single_value_to_authenticate_with() -> 
 
 
 def test_a_stack_encrypted_apart_refuses_on_a_machine_that_holds_no_passphrase_for_it() -> None:
-    """The trap a stack's own passphrase creates, closed where it is created.
+    """The trap the operator passphrase creates, closed where it is created.
 
     `PULUMI_CONFIG_PASSPHRASE` is process-global, so "a different passphrase
     for one stack" is a property of how that stack is invoked. Left to
@@ -404,6 +405,8 @@ def test_a_stack_encrypted_apart_refuses_on_a_machine_that_holds_no_passphrase_f
     # name credentials.md gives that passphrase.
     assert runner.invocations == []
     assert 'The stack passphrase the other stacks share is deliberately not used' in str(refusal.value)
+    # And the passphrase it does need is named by its own term.
+    assert 'encrypted under the operator passphrase' in str(refusal.value)
 
 
 def test_a_machine_that_cannot_decrypt_the_stack_is_not_told_the_credential_is_missing() -> None:
@@ -437,4 +440,4 @@ def test_a_stack_on_the_stack_passphrase_is_handed_that_one() -> None:
 
     assert devices.DNS_STACK not in pulumi_config.APART
     assert equipped.env[pulumi_config.PASSPHRASE_ENV] == 'the-stack-passphrase'
-    assert apart.env[pulumi_config.PASSPHRASE_ENV] == f'a-{GITHUB_ADMIN.stack}-passphrase'
+    assert apart.env[pulumi_config.PASSPHRASE_ENV] == 'the-operator-passphrase'
