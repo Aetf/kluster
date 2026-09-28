@@ -251,11 +251,11 @@ class Label:
     shape: Shape = TEXT
     #: Where `recover` puts the value when nobody asked for it on stdout, so
     #: the ordinary path writes a `0600` file instead of printing a secret.
-    #: The config passphrases have one, being read by `mise.toml` templates
-    #: that cannot open a kit; the rest reach their consumers through a
-    #: provisioning run, a seal or `credentials derived sync`. A property of
-    #: the row rather than a second table keyed by label, which could name a
-    #: label the register does not.
+    #: The config passphrases have one, being read by a `mise.toml` template
+    #: or by the `operator-stack` driver, neither of which opens a kit; the
+    #: rest reach their consumers through a provisioning run, a seal or
+    #: `credentials derived sync`. A property of the row rather than a second
+    #: table keyed by label, which could name a label the register does not.
     slot: WorkstationSlot | None = None
 
     @property
@@ -377,7 +377,7 @@ _DISPATCH_CLIENT_ID = (
     'It is recorded in the clear on `conventions.forge.DISPATCH_APP` (its `client_id`), and the `github` stack declares it as '
     f'the {_declared_on(conventions.forge.DISPATCH_APP_CLIENT_ID)} repository variable '
     f'`{conventions.forge.DISPATCH_APP_CLIENT_ID.name}` the workflows minting from it read, so nothing about it is typed into '
-    'a console. A newly created App has a new one: record it there and land it with `mise run github up`.'
+    'a console. A newly created App has a new one: record it there and land it with `operator-stack github up`.'
 )
 
 #: The trigger App has no row in the census (`conventions.forge`) and no
@@ -434,12 +434,12 @@ def register() -> dict[str, Label]:
             GITHUB_PASSPHRASE,
             "the `github` stack's own config passphrase, held by no CI job",
             Generated(_token),
-            # Read by the `github` task in `mise.toml` (`mise run github
-            # <pulumi args>`), and by the `credentials` commands that reach
-            # that stack's config (credentials.md §4.4).
+            # Read by the `operator-stack` driver for every run of an
+            # operator stack, and never by a `mise.toml` template
+            # (credentials.md §4.4).
             slot=WorkstationSlot(
                 path=workstation.github_passphrase_path,
-                read_by='mise.toml exports it as KLUSTER_GITHUB_PASSPHRASE, for `mise run github <pulumi args>`',
+                read_by='`operator-stack` reads it from there for every run of an operator stack',
             ),
         ),
         Label(CA, "the state-backend CA's private key", Generated(pki.generate_ca_key), shape=PRIVATE_KEY),

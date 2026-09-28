@@ -20,7 +20,8 @@ from pathlib import Path
 import pytest
 from fake_pulumi import RecordedPulumi
 
-from kluster.lib import pulumi_cli, workstation
+from kluster.conventions import identity
+from kluster.lib import pulumi_cli, stack_environment, workstation
 from kluster.scripts.credentials import pulumi_config
 
 STACK = 'dns'
@@ -218,3 +219,31 @@ def test_a_failing_invocation_names_the_command(side: Side, tmp_path: Path) -> N
             env={'PULUMI_HOME': str(tmp_path / 'home'), 'PULUMI_BACKEND_URL': (tmp_path / 'state').as_uri()},
             stdin=None,
         )
+
+
+def test_a_stack_whose_state_is_committed_is_pointed_at_the_checkouts_checkpoints(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `pulumi config set` against such a stack needs its backend as much as an
+    # `up` does, so a `credentials` push reaches it through the same mapping
+    # the `operator-stack` driver uses, whatever URL this machine holds for the
+    # estate's backend.
+    monkeypatch.setattr(
+        identity, 'OPERATOR_STACKS', {**identity.OPERATOR_STACKS, 'probe': identity.StateHome.COMMITTED}
+    )
+    environment = pulumi_config.BackendEnvironment(
+        url='postgres://operator@192.0.2.10/pulumi_state', apart={'probe': 'p'}
+    )
+
+    committed = pulumi_config.Stack(name='probe', directory=tmp_path, environment=environment).env
+    estate = pulumi_config.Stack(name=STACK, directory=tmp_path, environment=environment).env
+
+    assert committed[pulumi_config.BACKEND_URL_ENV] == f'{(tmp_path / "checkpoints").as_uri()}?metadata=skip'
+    assert committed[stack_environment.DISABLE_BACKUPS_ENV] == 'true'
+    assert estate[pulumi_config.BACKEND_URL_ENV] == 'postgres://operator@192.0.2.10/pulumi_state'
+    assert stack_environment.DISABLE_BACKUPS_ENV not in estate
+
+
+def test_every_operator_stack_is_encrypted_apart() -> None:
+    # The passphrase no CI Environment holds covers every stack no CI job runs.
+    assert set(pulumi_config.APART) == set(identity.OPERATOR_STACKS)

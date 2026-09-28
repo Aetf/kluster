@@ -23,8 +23,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
-from kluster import conventions
-from kluster.lib import pulumi_cli
+from kluster.conventions import identity
+from kluster.lib import pulumi_cli, stack_environment
 from kluster.lib.pulumi_cli import Runner
 
 log = logging.getLogger(__name__)
@@ -68,9 +68,10 @@ def project_dir() -> Path:
 
 
 #: The two variables a `pulumi` run in this repository is given. Named,
-#: because both the record below and the slot map spell them.
-BACKEND_URL_ENV = 'PULUMI_BACKEND_URL'
-PASSPHRASE_ENV = 'PULUMI_CONFIG_PASSPHRASE'
+#: because both the record below and the slot map spell them; the mapping from
+#: a stack to their values is `kluster.lib.stack_environment`'s.
+BACKEND_URL_ENV = stack_environment.BACKEND_URL_ENV
+PASSPHRASE_ENV = stack_environment.PASSPHRASE_ENV
 
 #: Every stack that is **not** on the stack passphrase, and the register row
 #: (§3) the one it *is* on comes from. A census rather than a consequence of
@@ -85,11 +86,11 @@ PASSPHRASE_ENV = 'PULUMI_CONFIG_PASSPHRASE'
 #: is what holds this honest: a stack cannot be taken off the stack passphrase
 #: without a register row that generates and escrows one.
 #:
-#: Keyed by the stack census (`conventions.STACK_NAMES.github`), the name the
-#: dispatch table runs the forge's program under, so the stack held apart is
-#: the forge's by construction rather than by spelling; the workflow census
-#: that keeps CI away from it (`test_conventions`) reads this mapping.
-APART: Mapping[str, str] = {conventions.STACK_NAMES.github: 'github-passphrase'}
+#: Read off the operator-stack census (`conventions.identity.OPERATOR_STACKS`)
+#: rather than written beside it: what sets a stack apart is that no CI job
+#: runs it, and every stack of that kind is under the one passphrase no CI
+#: Environment holds (framework/pulumi.md §3.3).
+APART: Mapping[str, str] = dict.fromkeys(identity.OPERATOR_STACKS, stack_environment.OPERATOR_PASSPHRASE_ROW)
 
 
 @dataclass(frozen=True)
@@ -124,7 +125,14 @@ class BackendEnvironment:
     #: the stack passphrase", which a test can read.
     apart: Mapping[str, str] = field(default_factory=dict[str, str], repr=False, compare=False)
 
-    def variables(self, stack: str) -> dict[str, str]:
+    def variables(self, stack: str, *, checkout: Path | None = None) -> dict[str, str]:
+        """The variables a `pulumi` run against `stack` is started with.
+
+        The backend is the stack's own (`stack_environment.backend_variables`):
+        the URL held here, or, for a stack whose state is committed, the
+        `checkpoints/` directory of `checkout` — the checkout holding
+        `Pulumi.yaml` unless one is named.
+        """
         passphrase = self.apart.get(stack)
         if passphrase is None and (row := APART.get(stack)) is not None:
             raise PassphraseMissing(
@@ -137,9 +145,9 @@ class BackendEnvironment:
         values: dict[str, str] = {}
         if (chosen := passphrase or self.passphrase) is not None:
             values[PASSPHRASE_ENV] = chosen
-        if self.url is not None:
-            values[BACKEND_URL_ENV] = self.url
-        return values
+        if checkout is None and stack_environment.home(stack) is identity.StateHome.COMMITTED:
+            checkout = project_dir()
+        return values | stack_environment.backend_variables(stack, checkout=checkout, estate_url=self.url)
 
 
 @dataclass(frozen=True)
@@ -170,7 +178,7 @@ class Stack:
     @property
     def env(self) -> Mapping[str, str]:
         """The variables a `pulumi` run against *this* stack is started with."""
-        return self.environment.variables(self.name)
+        return self.environment.variables(self.name, checkout=self.directory)
 
     def _pulumi(self, *args: str, stdin: str | None = None) -> str:
         return self.run([*args], cwd=self.directory, env=self.env, stdin=stdin)

@@ -45,7 +45,7 @@ from workflow_files import GITHUB, github_name, mapping, read_workflow, workflow
 
 from kluster import conventions
 from kluster.components.dns.base import overlay_records
-from kluster.conventions import backup
+from kluster.conventions import backup, identity
 from kluster.scripts.credentials import pulumi_config
 
 # --------------------------------------------------------------------------
@@ -942,47 +942,30 @@ PULUMI_STACK_NAMED = re.compile(
     r"""(?:--stack(?:=|\s+)|(?<![\w-])-[A-Za-z]*s(?:=|\s*)|\bstack\s+select\s+(?:--?[\w-]+\s+)*)['"]?(?:[\w.-]+/)*([\w.-]+)"""
 )
 
-#: How a step runs a mise task: `mise run`, its alias `mise r`, the long
-#: `mise tasks run`, or the bare `mise <task>` mise accepts for a task no
-#: command of its own shadows -- each with mise's own flags allowed ahead of it.
-MISE_TASK_RUN = re.compile(
-    r"""\bmise\s+(?:--?[\w-]+\s+)*(?:(?:tasks\s+)?(?:run|r)\s+)?(?:--?[\w-]+\s+)*['"]?([\w:.-]+)"""
-)
+#: How a step runs the `operator-stack` driver, however it is started (`uv run
+#: operator-stack`, `mise x uv -- uv run operator-stack`, the entry point
+#: bare): the driver's first argument is the stack, so the word after its name
+#: is what it points at.
+OPERATOR_STACK_RUN = re.compile(r"""\boperator-stack\s+['"]?([\w.-]+)""")
 
 
-def _tasks_run_against(stacks: set[str]) -> set[str]:
-    """The mise tasks whose script points `pulumi` at one of `stacks`.
-
-    Read off `mise.toml` rather than named here: a task is a second way to
-    reach a stack, and one that wraps the stack's own passphrase is the easiest
-    way there is. What this does not see: a file task (under `mise-tasks/` or
-    `.mise/tasks/`), and a task whose script reaches the stack through another
-    task -- one that runs `mise run github` -- rather than through `pulumi`.
-    """
-    tasks = cast('dict[str, dict[str, object]]', tomllib.loads((ROOT / 'mise.toml').read_text()).get('tasks', {}))
-    return {
-        name
-        for name, task in tasks.items()
-        if any(match.group(1) in stacks for match in PULUMI_STACK_NAMED.finditer(str(task.get('run', ''))))
-    }
-
-
-def _apart_stack_named(text: str, apart: set[str], tasks: set[str]) -> list[str]:
-    """Every place `text` points a command at a stack in `apart`, as `text` spells it.
+def _operator_stack_named(text: str, operator: set[str]) -> list[str]:
+    """Every place `text` points a command at a stack in `operator`, as `text` spells it.
 
     The flag and `stack select` are read only in a file that runs `pulumi` at
     all, because `-s` means something else to half the tools a workflow calls.
-    A task is read everywhere: its name is the whole of what points it at the
-    stack.
+    The driver is read everywhere: its first argument is the whole of what
+    points it at the stack. A `mise` task that reaches one is not a spelling
+    this has to know, because no task may (`tests/test_mise_env.py`).
     """
-    named = [match.group(0) for match in MISE_TASK_RUN.finditer(text) if match.group(1) in tasks]
+    named = [match.group(0) for match in OPERATOR_STACK_RUN.finditer(text) if match.group(1) in operator]
     if 'pulumi' in text:
-        named += [match.group(0) for match in PULUMI_STACK_NAMED.finditer(text) if match.group(1) in apart]
+        named += [match.group(0) for match in PULUMI_STACK_NAMED.finditer(text) if match.group(1) in operator]
     return named
 
 
-#: Every spelling the census has to catch, with `{stack}` for a stack encrypted
-#: apart and `{task}` for a task that runs against one.
+#: Every spelling the census has to catch, with `{stack}` for an operator
+#: stack.
 POINTED_AT = (
     'pulumi preview --stack {stack}',
     'pulumi preview --stack={stack}',
@@ -996,20 +979,19 @@ POINTED_AT = (
     'pulumi up -s={stack}',
     'pulumi up -ys {stack}',
     'pulumi preview --stack organization/kluster/{stack}',
-    'mise run {task} up --yes',
-    'mise r {task} preview',
-    'mise {task} preview',
-    'mise -q run {task} up',
-    'mise tasks run {task} up',
+    'operator-stack {stack} plan',
+    'uv run operator-stack {stack} up --yes',
+    "mise x uv -- uv run operator-stack '{stack}' pulumi config get key",
 )
 
-#: What the census must stay silent on: other stacks, other tasks, an
-#: expression, and the word itself where it is not a stack.
+#: What the census must stay silent on: other stacks, the driver's own command
+#: words, an expression, and the word itself where it is not a stack.
 NOT_POINTED_AT = (
     'pulumi preview --stack physical --diff',
     'mise x -- pulumi up --stack apps --yes',
     'pulumi stack select dns',
     'mise run lint',
+    'operator-stack --help',
     'mise x -- pulumi preview --stack ${{{{ matrix.stack }}}}',
     'git push https://x-access-token@{stack}.com/${{{{ {stack}.repository }}}}',
     'curl -s https://api.{stack}.com/repos',
@@ -1022,29 +1004,27 @@ def test_the_census_of_stacks_named_catches_every_spelling_and_nothing_else() ->
 
     A census that reads a workflow and finds nothing is only evidence if it
     would have found the thing it looks for, so each spelling a step could
-    point a command at the apart stack with is shown to it, and so is each
+    point a command at an operator stack with is shown to it, and so is each
     near miss it must let pass. The expression is among the near misses on
     purpose: the census does not catch it, and the case below says what does.
     """
-    apart = set(pulumi_config.APART)
-    tasks = _tasks_run_against(apart)
-    # The task set is discovered, so it is held to have found something before
-    # the spellings that need a task are walked.
-    assert tasks, 'no mise task runs against a stack encrypted apart, so the task spellings test nothing'
+    operator = set(identity.OPERATOR_STACKS)
+    assert operator, 'no operator stack in the census, so the spellings test nothing'
 
-    for stack in sorted(apart):
-        for task in sorted(tasks):
-            for spelling in POINTED_AT:
-                line = spelling.format(stack=stack, task=task)
-                assert _apart_stack_named(line, apart, tasks), f'the census misses {line!r}'
+    for stack in sorted(operator):
+        for spelling in POINTED_AT:
+            line = spelling.format(stack=stack)
+            assert _operator_stack_named(line, operator), f'the census misses {line!r}'
         for spelling in NOT_POINTED_AT:
             line = spelling.format(stack=stack)
-            assert not _apart_stack_named(line, apart, tasks), f'the census fires on {line!r}'
+            assert not _operator_stack_named(line, operator), f'the census fires on {line!r}'
 
 
-def test_no_workflow_points_a_pulumi_command_at_the_stack_encrypted_apart() -> None:
-    """The stack CI may not run, held against what CI actually contains.
+def test_no_workflow_points_a_command_at_an_operator_stack() -> None:
+    """The stacks CI may not run, held against what CI actually contains.
 
+    Which stacks those are is the operator-stack census
+    (`conventions.identity.OPERATOR_STACKS`), read rather than restated here.
     What keeps the forge's admin token out of CI is not that the token is hard
     to reach -- it is a config secret in a committed file like any other -- but
     that its stack is encrypted under a passphrase no Environment holds *and*
@@ -1066,15 +1046,14 @@ def test_no_workflow_points_a_pulumi_command_at_the_stack_encrypted_apart() -> N
     passphrase` with nothing of that stack's config in reach. This case is the
     cheap, early half of a guard whose expensive half cannot be evaded.
     """
-    apart = set(pulumi_config.APART)
-    tasks = _tasks_run_against(apart)
+    operator = set(identity.OPERATOR_STACKS)
     named = [
         f'{github_name(path)}: {spelling}'
         for path in workflows_and_actions()
-        for spelling in _apart_stack_named(path.read_text(), apart, tasks)
+        for spelling in _operator_stack_named(path.read_text(), operator)
     ]
 
-    assert named == [], f'a workflow runs `pulumi` against a stack encrypted apart from the others: {named}'
+    assert named == [], f'a workflow runs a command against an operator stack: {named}'
 
 
 # --------------------------------------------------------------------------
@@ -1952,10 +1931,18 @@ def test_no_two_stacks_share_a_name() -> None:
     assert len(names) == len(set(names)), names
 
 
-def test_every_stack_encrypted_apart_is_a_stack_of_the_census() -> None:
-    # A key outside the census is a passphrase the `credentials` command
-    # generates and escrows for a stack nothing declares.
-    assert set(pulumi_config.APART) <= set(conventions.STACK_NAMES.names())
+def test_every_operator_stack_is_a_stack_of_the_census() -> None:
+    # A name outside the census is a stack the driver runs, and a passphrase
+    # the `credentials` command generates and escrows, for a stack nothing
+    # declares.
+    assert set(identity.OPERATOR_STACKS) <= set(conventions.STACK_NAMES.names())
+
+
+def test_the_stacks_encrypted_apart_are_the_operator_stacks() -> None:
+    # What sets a stack apart is that no CI job runs it, so the passphrase
+    # no Environment holds covers exactly the stacks the census says CI does
+    # not run.
+    assert set(pulumi_config.APART) == set(identity.OPERATOR_STACKS)
 
 
 # --------------------------------------------------------------------------
