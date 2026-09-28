@@ -6,7 +6,8 @@ come up or comes up quietly insecure.
 """
 
 import json
-from ipaddress import IPv4Interface
+from collections.abc import Sequence
+from ipaddress import IPv4Interface, IPv4Network, IPv6Network, ip_network
 from typing import Any, cast
 
 import pytest
@@ -287,14 +288,131 @@ def test_ingress_defaults_to_block_and_enumerates_host_ports_only() -> None:
     assert rules[0] == {'apiVersion': 'v1alpha1', 'kind': 'NetworkDefaultActionConfig', 'ingress': 'block'}
 
     opened = {port for rule in rules[1:] for port in rule['portSelector']['ports']}
-    assert opened == set(talos.HOST_PORTS)
+    assert opened == {opening.port for opening in talos.HOST_OPENINGS}
     # Among them the two the balancer forwards, from the same structure: an
     # opening the firewall lost would leave a listener forwarding to a port
     # the nodes drop.
     assert set(conventions.MANAGEMENT_PORTS) <= opened
-    # Service ports are answered by the BPF datapath before nftables sees
-    # them, so an app port here would be a cross-stack leak.
+    # No public census port is opened by this list: a raw Service's port is
+    # answered by the BPF datapath before nftables sees it, and a Gateway
+    # listener's opening is k8s-base's design to add (physical.md §2).
     assert not opened & {port for port, _ in conventions.PUBLIC_PORT_CENSUS}
+
+
+#: The whole internet, one source per family.
+INTERNET = {'0.0.0.0/0', '::/0'}
+
+#: KubeSpan's WireGuard listen port. Talos fixes it and offers no knob, and
+#: WireGuard runs over UDP; both are facts about the software, so the test
+#: states them rather than reading them back out of the module under test.
+KUBESPAN = (51820, 'udp')
+
+#: The kubelet's API port, Kubernetes' own default.
+KUBELET_PORT = 10250
+
+#: The DHCPv6 client's port (RFC 8415 §7.2), and where its server answers
+#: from: the link, which no packet from beyond it can claim to come from.
+DHCPV6_CLIENT = (546, 'udp')
+LINK_LOCAL = ip_network('fe80::/10')
+
+#: The cluster's own ranges, as the design names them (physical.md §2).
+CLUSTER: list[IPv4Network | IPv6Network] = [
+    conventions.VCN_CIDR,
+    conventions.CLUSTER_VLAN.v4,
+    conventions.POD_CIDR_V4,
+    conventions.POD_CIDR_V6,
+]
+
+
+def inside(network: IPv4Network | IPv6Network, ranges: Sequence[IPv4Network | IPv6Network]) -> bool:
+    """Whether `network` falls within one of `ranges` of its own family."""
+    if isinstance(network, IPv4Network):
+        return any(isinstance(ranged, IPv4Network) and network.subnet_of(ranged) for ranged in ranges)
+    return any(isinstance(ranged, IPv6Network) and network.subnet_of(ranged) for ranged in ranges)
+
+
+def openings(**kwargs: Any) -> list[tuple[int, str, set[str]]]:
+    """Each port a node's firewall opens, with its protocol and its sources."""
+    return [
+        (port, rule['portSelector']['protocol'], {entry['subnet'] for entry in rule['ingress']})
+        for rule in firewall(**kwargs)
+        if rule['kind'] == 'NetworkRuleConfig'
+        for port in rule['portSelector']['ports']
+    ]
+
+
+@pytest.mark.parametrize('shape', list(SHAPES))
+def test_the_internet_reaches_the_host_on_the_management_ports_and_kubespan_alone(shape: str) -> None:
+    """The node firewall is the only filter in front of a public node (physical.md §2).
+
+    The subnet admits everything, so a port this firewall opens to the
+    internet is open to it, and one it leaves closed is closed only here. The
+    default-deny document is what makes every other port closed: without it
+    Talos builds no chain for the ports no rule names.
+    """
+    assert of_kind('NetworkDefaultActionConfig', **SHAPES[shape]) == [
+        {'apiVersion': 'v1alpha1', 'kind': 'NetworkDefaultActionConfig', 'ingress': 'block'}
+    ]
+    # Public is anything not confined to the cluster, the link, or the
+    # shape's BGP peer: a source outside them reaches the node from the
+    # internet however it is spelled.
+    confined = [*CLUSTER, LINK_LOCAL, *(ip_network(peer) for peer in [SHAPES[shape].get('bgp_peer')] if peer)]
+    public = [
+        (port, protocol, sources)
+        for port, protocol, sources in openings(**SHAPES[shape])
+        if not all(inside(ip_network(source), confined) for source in sources)
+    ]
+
+    assert {(port, protocol) for port, protocol, _ in public} == {
+        *((port, 'tcp') for port in conventions.MANAGEMENT_PORTS),
+        KUBESPAN,
+    }
+    # Both families: a node is dual-stack, and a client or a peer may come at
+    # it over either.
+    assert all(sources >= INTERNET for _, _, sources in public)
+
+
+@pytest.mark.parametrize('shape', list(SHAPES))
+def test_the_kubelet_answers_the_cluster_alone(shape: str) -> None:
+    """Its callers are the apiserver and pods; nothing outside the cluster needs it (physical.md §2).
+
+    A caller whose traffic rides KubeSpan arrives on `kubespan`, which the
+    ingress chain accepts ahead of every rule. What reaches the rule is a pod's
+    call, carrying a pod-range source, and a node's call over a path that is
+    not tunnelled, carrying a node-network source.
+    """
+    (sources,) = [sources for port, _, sources in openings(**SHAPES[shape]) if port == KUBELET_PORT]
+
+    assert not sources & INTERNET
+    assert all(inside(ip_network(source), CLUSTER) for source in sources), sources
+    assert {str(conventions.POD_CIDR_V4), str(conventions.POD_CIDR_V6)} <= sources
+
+
+@pytest.mark.parametrize('shape', list(SHAPES))
+def test_the_dhcpv6_client_hears_its_server_on_the_link(shape: str) -> None:
+    """A cloud node's IPv6 address is leased over DHCPv6, renewed and re-leased at every boot.
+
+    The client solicits the multicast group and the server replies from its
+    own address, so the Reply matches no connection-tracking entry and arrives
+    as new traffic, which default-deny drops without an opening. Every shape
+    carries it: the machine configuration does not know which platform leases
+    an address, and the opening admits nothing from beyond the link.
+    """
+    assert [(port, protocol, sources) for port, protocol, sources in openings(**SHAPES[shape]) if port == 546] == [
+        (*DHCPV6_CLIENT, {str(LINK_LOCAL)})
+    ]
+
+
+def test_every_rule_names_itself_uniquely_even_on_a_shared_port() -> None:
+    """Talos refuses two network rule documents of one name.
+
+    The recorded fallback puts the public port census into the firewall, and
+    the census opens 22000 over both protocols.
+    """
+    extra = [talos.Opening(22000, 'tcp', talos.ANYWHERE), talos.Opening(22000, 'udp', talos.ANYWHERE)]
+    names = [rule['name'] for rule in talos.ingress_firewall_documents(extra) if rule['kind'] == 'NetworkRuleConfig']
+
+    assert len(names) == len(set(names)), names
 
 
 def bgp_rules(**kwargs: Any) -> list[dict[str, Any]]:

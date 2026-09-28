@@ -51,12 +51,21 @@ credential (`ci_zerotier_identity_physical`,
 -   **VCN**: dual-stack (IPv4 + the assigned /56 GUA), one public
     subnet, internet gateway, and a **service gateway** (2026-08-24 —
     node ↔ Object Storage/OCIR traffic rides the in-region $0 path
-    instead of the IGW). Security rules are **derived, not
-    enumerated**: the platform baseline (KubeSpan, Talos/kube
-    management, intra-VCN) is declared here, while per-service ingress
-    rules are emitted beside the services that need them (same
-    co-location principle as DNS) — a hand-kept port list in a design
-    doc would only ever be stale.
+    instead of the IGW). **The subnet admits everything**: it carries
+    one security list of this stack's own, which admits every protocol
+    from `0.0.0.0/0` and `::/0` and lets every protocol out to both, all
+    four rules stateless. A subnet naming no list would carry the VCN's
+    default one, whose rules are OCI's choice rather than this
+    program's, so the list is declared and is the subnet's only one.
+    Stateless because a rule that admits every packet both ways has
+    nothing to decide by a connection's state, while tracking it costs a
+    table on each VNIC that drops new connections when it fills. The
+    list applies to the NLB's VNIC too, which answers only on its
+    listeners. **The filter is the node's**: the Talos ingress firewall
+    decides every port in the host network namespace (§2), and what
+    Cilium's datapath answers ahead of it is the declared raw TCP/UDP
+    Services, while no Service allocates a `NodePort`
+    (cluster-infra.md §2).
 -   **Image**: no official Talos OCI image — an `image_factory_schematic`
     (talos provider) pins the schematic (platform `oracle`, arm64, no
     extensions initially), and a custom-image import brings the
@@ -101,8 +110,8 @@ credential (`ci_zerotier_identity_physical`,
     for the primary private IPv4. Declared here; **listeners are not a
     fixed list** — the management listeners (6443/50000) live here,
     while service listeners are declared beside the services that need
-    them, exactly like security rules and DNS records, and a service
-    listener is one per family as well.
+    them, like DNS records, and a service listener is one per family as
+    well.
 -   **Buckets**: none on this provider. The installation's
     cluster-data bucket is the backup bucket, which lives on B2
     precisely because it must not share a provider with what it
@@ -137,27 +146,8 @@ machine_secrets
     (secretbox — the architecture.md §6.5 residual-risk mitigation for
     cluster secrets in a $0-trust tenancy); kubelet system-reserved so
     eviction actually works (the legacy CP-starvation lesson,
-    architecture.md §6.5); the **Talos ingress firewall**
-    (`NetworkRuleConfig`, default-deny) as the node-local layer beneath
-    the derived OCI rules (architecture.md §4.1) — enumeration rule
-    (2026-08-24): **only ports that terminate in the host netns** —
-    KubeSpan 51820, apid 50000, kube-apiserver 6443 (a hostNetwork static
-    pod, so host-side despite also being an NLB listener), kubelet
-    intra-cluster, intra-VCN platform traffic; the homelab worker
-    additionally BGP 179 from the UDM. **Service ports are
-    deliberately absent**: LoadBalancer VIP traffic — NLB health
-    checks on backend ports included — is intercepted by Cilium's
-    BPF datapath at tc ingress *before* nftables, so declared
-    frontends serve without firewall entries while undeclared ports
-    fall through to the host stack and hit the default-deny; the
-    two layers compose, per-service admission control *is* the KPR
-    datapath, and machine config never carries an app port (the
-    co-location principle survives). Verified both ways at
-    bootstrap (§6); recorded fallback if BPF precedence fails on
-    the chosen datapath mode: copy the small public-port census (a
-    `conventions` constant — 80/443/22000×2/8443/hath, rarely
-    changing) into machine config, accepting the cross-stack cost
-    only in that world; kube-apiserver `anonymous-auth=false` pinned and audit
+    architecture.md §6.5); the **Talos ingress firewall** (the next
+    item); kube-apiserver `anonymous-auth=false` pinned and audit
     logging on (a public 6443 warrants both, defaults notwithstanding);
     the dedicated-VIP node's secondary private IP on its physical link;
     the **local-path volume** (`/var/mnt/storage`, storage.md §2 — the
@@ -166,6 +156,55 @@ machine_secrets
     attaches to (§1), the **node volume** and a **node label** naming
     it (`conventions.NODE_VOLUME_LABEL`), in the configuration the node
     boots with.
+-   **The Talos ingress firewall is the only filter.** It is a
+    `NetworkDefaultActionConfig` of `block` plus a `NetworkRuleConfig`
+    per opening, and the subnet in front of it admits everything (§1;
+    architecture.md §4.1). Its enumeration rule (2026-08-24) is **only
+    ports that terminate in the host netns**, each opening stating its
+    protocol and its sources. apid 50000/tcp and kube-apiserver
+    6443/tcp (a hostNetwork static pod, so host-side despite also being
+    an NLB listener) are open to anywhere. So is KubeSpan
+    51820/**udp**: one of its peers, the homelab worker, comes from a
+    home address that is dynamic, and WireGuard answers no packet not
+    keyed to a peer. The kubelet 10250/tcp is open to the cluster's own
+    ranges alone (the VCN, the cluster VLAN and both pod ranges). The
+    DHCPv6 client 546/udp is open to link-local sources alone: a cloud
+    node's IPv6 address is leased over DHCPv6, and the server's Reply
+    comes from its own address rather than the multicast group the
+    Solicit went to, so it matches no connection-tracking entry. The
+    homelab worker additionally takes BGP 179/tcp from the UDM. The
+    default-action document is on every node because without it Talos
+    keeps the openings and accepts every other port.
+-   **Only node-to-node traffic rides KubeSpan.** etcd, `trustd` and
+    the apiserver's calls to a remote kubelet go between node
+    addresses, which KubeSpan routes into the `kubespan` interface, and
+    the ingress chain accepts that interface ahead of every rule, so no
+    opening names them. Traffic from a pod to a listener in the host netns
+    does not: on its own node it arrives on the pod's device with a
+    pod-range source. So a host port a pod calls needs an opening
+    from the pod ranges, as the kubelet's has. Which ports those are —
+    Cilium's and Hubble's metrics among them — is `k8s-base`'s design
+    (rfc-007, Aetf/kluster#406), and this configuration does not carry
+    them yet.
+-   **Service ports.** A raw TCP/UDP LoadBalancer Service's traffic —
+    NLB health checks on backend ports included — is intercepted by
+    Cilium's BPF datapath at tc ingress *before* nftables and sent to a
+    backend, so it serves with no firewall entry, while an undeclared
+    port falls through to the host stack and hits the default-deny. For
+    those Services per-service admission control *is* the KPR datapath,
+    and machine config carries none of their ports. **A Gateway
+    listener is different**: the datapath marks its packets for the
+    node's Envoy and hands them up the host stack, where they cross the
+    ingress chain like any traffic to the host netns, and no rule
+    admits them.
+    Each Gateway listener port therefore needs an opening, which
+    `k8s-base`'s design adds from the public port census (rfc-007,
+    Aetf/kluster#406) and this configuration does not carry yet. The
+    raw-Service half is verified both ways at bootstrap (§6); recorded
+    fallback if BPF precedence fails on the chosen datapath mode: copy
+    the small public-port census (a `conventions` constant —
+    80/443/22000×2/8443/hath, rarely changing) into machine config,
+    accepting the cross-stack cost only in that world.
 -   **Document kinds.** A patch is either a strategic merge into the
     `v1alpha1` document or a configuration document of its own kind,
     which the provider appends beside it. Whatever the pinned Talos
@@ -527,6 +566,11 @@ advertisement from the worker (bogus-prefix test, cluster-infra.md
 (storage.md §4); the ExternalAuth filter fails closed with Authelia
 down *and* the standing auth canary alerts (cluster-infra.md §2);
 the Talos ingress firewall drops an undeclared port on a node
-primary IP, **and** a declared LoadBalancer service port serves
-with no firewall entry (the BPF-precedence check — failure flips
-the recorded public-port-census fallback, §2).
+primary IP, **and** a declared raw TCP/UDP LoadBalancer service port
+serves with no firewall entry (the BPF-precedence check — failure
+flips the recorded public-port-census fallback, §2); the kubelet
+answers the cluster and nothing else — once `k8s-base` is up,
+`kubectl top nodes` lists every node, while 10250 at a node's public
+address gets no answer from outside the VCN; and no `NodePort` is allocated — once `k8s-base` is up,
+`kubectl get svc -A -o jsonpath='{..nodePort}'` prints nothing
+(cluster-infra.md §2).

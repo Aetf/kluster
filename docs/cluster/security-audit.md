@@ -184,12 +184,30 @@ reopening the pool (physical/gateway.md §4.2).
 (physical.md §4); full firewall target state in
 physical/gateway.md §4.
 
-### M3 — No node-local firewall beneath the derived OCI rules
+### M3 — No node-local firewall on the public nodes
 
 **Attack.** The cloud nodes' primary IPs are public VIPs; the host
 netstack runs kubelet, apid and KubeSpan. OCI security rules are "derived,
 not enumerated" (physical.md §1) — a mis-derived service rule silently
-widens exposure with no second layer.
+widens exposure with no second layer. *Amended 2026-09-28*: by decision
+(Aetf/kluster-ops#397) the subnet's security list admits everything and
+the node-local firewall is the only layer (physical.md §1–2), so there
+are no derived OCI rules to get wrong. The attack is now a machine
+configuration that ships without its default-deny document or with an
+opening wider than the design — the kubelet, etcd and `trustd` would face
+the internet with nothing beneath — or a frontend Cilium's datapath
+answers on a node's own address that nobody meant to publish, which the
+firewall never sees. A `NodePort` is that frontend by default: Kubernetes
+allocates one to every LoadBalancer Service, and a `lan`-pool raw TCP/UDP
+Service, whose traffic policy is `Cluster`, would answer it at a cloud
+node's public address. The residual this leaves is ICMPv6: the list
+admits every ICMPv6 packet, and Talos's default-deny chain admits
+ICMPv6 through one allowance of 5 packets a second shared by every
+source, which neighbor discovery also needs. An ICMPv6 flood above
+5 packets a second at a cloud node's public IPv6 address therefore cuts that node's
+IPv6, its route to OCI's virtual router included. IPv4 is unaffected,
+since ARP never reaches the firewall. Whether the list narrows ICMPv6
+is a decision of its own.
 
 **Fix.** A Talos `NetworkRuleConfig` ingress firewall (default-deny,
 platform ports enumerated) in machine config, plus explicit
@@ -199,8 +217,23 @@ the enumeration covers **host-netns-terminated ports only** — Service
 VIP traffic is answered by the BPF datapath ahead of nftables
 (verified at bootstrap), so per-service ports never enter machine
 config and the co-location principle survives (physical.md §2).
+*Amended 2026-09-28*: each opening states its protocol and its sources —
+KubeSpan on UDP, the kubelet from the cluster's own ranges alone, the
+DHCPv6 client from the link alone, etcd and `trustd` with no opening
+because their peers arrive over KubeSpan. The 2026-08-24 amendment holds
+for raw TCP/UDP Services only: a Gateway listener's packets go up the
+host stack to the node's Envoy and cross the firewall, so each listener
+port needs an opening (physical.md §2). `tests/test_talos_config.py`
+holds every node shape to the default-deny document, and holds the
+openings whose sources reach beyond the cluster's ranges, the link and
+the worker's BGP peer to exactly the management ports over TCP and
+KubeSpan over UDP, each from both families. What the datapath answers
+is bounded by a rule of its own:
+**no Service allocates a `NodePort`** (cluster-infra.md §2, workloads.md
+§1), checked at bootstrap (physical.md §6).
 
-**Lives in.** physical.md §2, §6 (verification), architecture.md §4.1.
+**Lives in.** physical.md §1, §2, §6 (verification), architecture.md
+§4.1, cluster-infra.md §2.
 
 ### M4 — hath (closed-source binary) co-located with etcd
 
