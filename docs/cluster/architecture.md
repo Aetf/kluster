@@ -419,13 +419,24 @@ belongs to — this section holds the cluster-level statements).
     three-node pool affordable); contained by the restricted-PSS
     default (workloads.md §1), strict limits, and per-app network
     policy.
--   **Node surface**: the cloud nodes' primary IPs are public VIPs, and
-    OCI security rules are derived per-service (physical.md §1) — a
-    mis-derived rule must fail closed, so the Talos ingress firewall
-    (default-deny in machine config, physical.md §2) sits beneath them
-    as the node-local layer — policing the host netstack only:
-    Service VIP traffic is answered by the BPF datapath in front of
-    it, so app ports never enter machine config (physical.md §2).
+-   **Node surface**: the cloud nodes' primary IPs are public VIPs,
+    and the subnet's security list admits everything (physical.md §1),
+    so **the Talos ingress firewall is the only filter** (default-deny
+    in machine config, physical.md §2). It polices the host netstack
+    alone: the management ports and KubeSpan are open to the internet,
+    the kubelet to the cluster's own ranges, the DHCPv6 client to the
+    link, and nothing else. A raw TCP/UDP Service's traffic is answered
+    by the BPF datapath in front of it, so those ports never enter
+    machine config, while a Gateway listener's traffic goes up the host
+    stack to Envoy and crosses the firewall, so each listener port
+    needs an opening (physical.md §2). What the datapath answers on a
+    node's own address is internet-facing on a cloud node. That set is
+    the declared `internet`-pool frontends and nothing else, which is
+    why **no Service allocates a `NodePort`**
+    (cluster-infra.md §2, workloads.md §1): Kubernetes gives every
+    LoadBalancer Service one by default, and on a cloud node's address
+    it would put a `lan`-pool raw TCP/UDP Service, whose traffic policy
+    is `Cluster` (§3.1, §3.6), on the internet.
 -   **Routing plane**: the UDM↔worker BGP session is authenticated and
     prefix-filtered (cluster-infra.md §2) — a compromised worker VM
     (the design's most exposed node) must not be able to hijack LAN
@@ -721,11 +732,11 @@ The entire stack is deployed via Pulumi using multiple providers:
 2.  **OCI (pulumi-oci)**: Provisions the dual-stack VCN (v4 + /56 GUA
     v6), the three A1 instances (Talos via custom image import), their
     primary IPs, the NLB (listeners + backend sets, §3.2), block
-    volumes, and security lists.
-    -   Security rules and NLB listeners are derived from declarations,
-        not hand-listed: the platform baseline (KubeSpan, management,
-        intra-VCN) lives in the physical stack; per-service ports are
-        emitted beside the services that use them
+    volumes, and a security list that admits everything — the Talos
+    ingress firewall is the filter (§4.1, declarative/physical.md §1).
+    -   NLB listeners are derived from declarations, not hand-listed:
+        the management listeners live in the physical stack; per-service
+        listeners are emitted beside the services that use them
         (declarative/physical.md §1).
     -   Guardrails (nodes.md §3.2): compartment quotas pinning creatable
         shapes to the free envelope + budget alerts.

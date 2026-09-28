@@ -2,8 +2,10 @@
 
 What matters here is what cannot be seen by reading a diff later: that the
 subnet's IPv6 block is derived from the prefix OCI assigns rather than
-declared, and that Object Storage traffic is routed at the service gateway
-instead of out through the internet gateway.
+declared, that Object Storage traffic is routed at the service gateway
+instead of out through the internet gateway, and that the subnet carries a
+list of this program's own that admits everything rather than the one OCI
+would attach in its absence.
 """
 
 from typing import Any
@@ -97,3 +99,43 @@ async def test_object_storage_is_routed_at_the_service_gateway(network: CloudNet
     assert by_destination[OBJECT_STORAGE_CIDR] == ('SERVICE_CIDR_BLOCK', service_gateway)
     assert by_destination['0.0.0.0/0'] == ('CIDR_BLOCK', internet_gateway)
     assert by_destination['::/0'] == ('CIDR_BLOCK', internet_gateway)
+
+
+#: The whole internet in each family, the two sources and destinations the
+#: subnet's list names (physical.md §1).
+ANYWHERE = {'0.0.0.0/0', '::/0'}
+
+
+@pytest.mark.asyncio
+async def test_the_subnet_carries_the_declared_list_and_no_other(network: CloudNetwork) -> None:
+    """A subnet that names no list carries the VCN's default one, whose rules OCI chose.
+
+    That list admits SSH and drops everything else the nodes serve, so the
+    subnet's posture would be the platform's rather than this program's.
+    """
+    assert await network.subnet.security_list_ids.future() == [await network.security_list.id.future()]
+
+
+@pytest.mark.asyncio
+async def test_the_list_admits_everything_both_ways_without_tracking_state(network: CloudNetwork) -> None:
+    """Every protocol, both families, both directions, and no connection tracking.
+
+    The node's own firewall is the only filter (physical.md §2), so the list
+    decides nothing, and a stateful rule would spend a connection-tracking
+    table on every VNIC in the subnet to decide it.
+    """
+    ingress = await network.security_list.ingress_security_rules.future()
+    egress = await network.security_list.egress_security_rules.future()
+
+    assert ingress is not None
+    assert egress is not None
+    admitted = [
+        (rule.protocol, rule.source, rule.source_type, rule.stateless, rule.tcp_options, rule.udp_options)
+        for rule in ingress
+    ]
+    released = [
+        (rule.protocol, rule.destination, rule.destination_type, rule.stateless, rule.tcp_options, rule.udp_options)
+        for rule in egress
+    ]
+    assert sorted(admitted) == sorted(('all', cidr, 'CIDR_BLOCK', True, None, None) for cidr in ANYWHERE)
+    assert sorted(released) == sorted(('all', cidr, 'CIDR_BLOCK', True, None, None) for cidr in ANYWHERE)

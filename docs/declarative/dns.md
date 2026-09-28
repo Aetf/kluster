@@ -531,9 +531,8 @@ helper has no say in it (cluster-infra.md §2, physical/gateway.md
 `public_port(…)` is the raw TCP/UDP analog, and it stays a helper of
 its own because it emits something no HTTP route does: it is the
 **only** helper that emits NLB listeners — one per family the
-balancer holds — and their security rule
-(physical.md §1's derived-not-enumerated principle) — an HTTP route
-rides listeners the cluster already has.
+balancer holds; an HTTP route rides listeners the cluster already
+has.
 
 ## 6. Migration shape
 

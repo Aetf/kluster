@@ -224,6 +224,32 @@ All decided behavior from architecture.md §3, expressed as config:
     outbound v6 is SNAT'd to the node's GUA; this *is* qbittorrent's
     outbound-v6 mechanism (architecture.md §3.5); MTU sized for the
     KubeSpan underlay (WireGuard overhead — verify, don't assume).
+-   **No `NodePort`** (Aetf/kluster-ops#397): whatever the datapath
+    answers on a node's own address is internet-facing on a cloud
+    node, because the subnet admits everything and the datapath
+    answers a raw Service's frontend in BPF before the Talos ingress
+    firewall sees the packet (physical.md §1–2). That set must be the
+    declared `internet`-pool
+    frontends and nothing else. hostPort and `externalIPs` are already
+    forbidden (workloads.md §1), so the only frontends outside it are
+    node ports, and **no Service allocates one**. Kubernetes allocates
+    them to every LoadBalancer Service unless the Service sets
+    `allocateLoadBalancerNodePorts: false`, and the kube-proxy
+    replacement serves them on every node by default; a `lan`-pool raw
+    TCP/UDP Service, whose traffic policy is `Cluster` (architecture.md
+    §3.1), would then answer at a cloud node's public address. The
+    Gateways' Services opt out through their `CiliumGatewayClassConfig`
+    (below), `public_port` sets the field on its Service
+    (workloads.md §1), and `type: NodePort` is on workloads.md §1's
+    list of what a component may not do. Bootstrap verification: no
+    Service carries a `nodePort` (physical.md §6). A `Local` Service
+    still carries a `healthCheckNodePort`, which Kubernetes allocates
+    whatever `allocateLoadBalancerNodePorts` says. Cilium answers it
+    from a listener in the host network namespace, which the Talos
+    firewall filters, so **`enable-health-check-loadbalancer-ip` stays
+    off**: turned on, it adds a BPF frontend for that port on the
+    Service's load-balancer address, which for the `internet` pool is a
+    node's own address, ahead of the firewall.
 -   **LB IPAM**: two `CiliumLoadBalancerIPPool`s — `internet` (the
     on-the-wire node addresses: the three primary **private** IPv4s +
     the v6 GUAs + the dedicated-VIP node's secondary private IP — OCI
@@ -267,6 +293,10 @@ All decided behavior from architecture.md §3, expressed as config:
     row records it as `Exposure.IOT` (conventions/routes.py), so the
     choice is on the row a reviewer reads rather than an argument at a
     call site. Apps attach `HTTPRoute`s (architecture.md §3.6 matrix).
+    The Gateways' Services allocate no `NodePort`: the `GatewayClass`
+    names, in its `parametersRef`, a `CiliumGatewayClassConfig`
+    (`cilium.io/v2alpha1`)
+    setting `spec.service.allocateLoadBalancerNodePorts: false`.
 -   **Egress Gateway**: enabled (the dedicated-VIP pattern's outbound
     half, architecture.md §3.2); the `CiliumEgressGatewayPolicy`
     instances themselves belong to the workloads that need them
@@ -309,9 +339,8 @@ All decided behavior from architecture.md §3, expressed as config:
 
 ## 3. What this stack deliberately does not do
 
--   No ingress of its own — gateways are wiring; routes/listeners/
-    security-rules arrive with apps (the derived-not-enumerated
-    principle, physical.md §1).
+-   No ingress of its own — gateways are wiring; routes and listeners
+    arrive with apps.
 -   No app namespaces, quotas, or per-app policy.
 -   No backup schedules — VolSync `ReplicationSource`s are declared
     beside their PVCs in `apps` via the `backed_pvc` helper and

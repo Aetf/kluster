@@ -13,9 +13,14 @@ Two gateways hang off it — the internet gateway, and a **service gateway** so
 node ↔ Object Storage traffic takes the in-region path that costs nothing
 instead of leaving through the IGW.
 
-Security rules are derived, not enumerated: what lives here is the platform
-baseline, while per-service ingress is emitted beside the service that needs
-it. A hand-kept port list in a design doc would only ever be stale.
+The subnet admits everything, on purpose. A subnet that names no security
+list carries the VCN's default one, whose rules are OCI's choice, so the
+subnet names one list of its own that admits every protocol in both
+directions and both families, statelessly. The filter is on the node: Talos'
+ingress firewall decides every host-network port (physical.md §1–2), and
+what Cilium's datapath answers ahead of it is the raw TCP/UDP Services
+the cluster declares, while no Service allocates a `NodePort`
+(cluster-infra.md §2).
 """
 
 from __future__ import annotations
@@ -27,9 +32,12 @@ from pulumi_oci.core.outputs import GetServicesServiceResult
 from kluster import conventions
 from putils import Component, async_output, resolve
 
+#: The whole internet, one block per family.
+ANYWHERE = ('0.0.0.0/0', '::/0')
+
 
 class CloudNetwork(Component, pulumi_type='kluster:cloud:CloudNetwork'):
-    """The VCN, its gateways, its route table and its one public subnet."""
+    """The VCN, its gateways, its route table, and its one public subnet with its one security list."""
 
     def __init__(
         self,
@@ -97,6 +105,30 @@ class CloudNetwork(Component, pulumi_type='kluster:cloud:CloudNetwork'):
             opts=self.child_opts(),
         )
 
+        # Stateless, because a rule that admits every packet both ways has
+        # nothing to decide by a connection's state, and tracking it costs a
+        # table on every VNIC in the subnet that drops new connections when
+        # full.
+        self.security_list = oci.core.SecurityList(
+            f'{name}-security',
+            compartment_id=compartment_id,
+            vcn_id=self.vcn.id,
+            display_name=f'{name}-security',
+            ingress_security_rules=[
+                oci.core.SecurityListIngressSecurityRuleArgs(
+                    protocol='all', source=cidr, source_type='CIDR_BLOCK', stateless=True
+                )
+                for cidr in ANYWHERE
+            ],
+            egress_security_rules=[
+                oci.core.SecurityListEgressSecurityRuleArgs(
+                    protocol='all', destination=cidr, destination_type='CIDR_BLOCK', stateless=True
+                )
+                for cidr in ANYWHERE
+            ],
+            opts=self.child_opts(),
+        )
+
         self.subnet = oci.core.Subnet(
             f'{name}-subnet',
             compartment_id=compartment_id,
@@ -104,6 +136,8 @@ class CloudNetwork(Component, pulumi_type='kluster:cloud:CloudNetwork'):
             cidr_block=str(conventions.VCN_SUBNET_CIDR),
             ipv6cidr_block=async_output(self._subnet_ipv6_cidr),
             route_table_id=self.route_table.id,
+            # This list alone: the default one is not in it.
+            security_list_ids=[self.security_list.id],
             display_name=f'{name}-subnet',
             dns_label='nodes',
             prohibit_public_ip_on_vnic=False,

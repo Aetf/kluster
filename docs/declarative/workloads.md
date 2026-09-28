@@ -18,7 +18,7 @@ Every app is a `Component` subclass (putils, RFC-001) that owns:
 | Workload | Deployment/StatefulSet with **honest requests/limits** — CPU limits are mandatory on anything scheduled to the cloud pool (etcd shares those cores, nodes.md §1); memory requests sized from evidence, not idle numbers (the JuiceFS-sidecar lesson, storage.md §6) | nodes.md §§1, 4.4 |
 | Storage | by the two-axis selection in §2 (performance × persistence; fixed assets → NAS/object) | §2, storage.md §2 |
 | Backup | declared through the `backed_pvc` helper with a **retention class** — never ad-hoc schedules (§3) | §3, storage.md §3.1 |
-| Exposure | pool label + route kind per the routing matrix, via the helpers (`route`/`public_port`); one `route(row)` for every HTTP exposure, the row's `Exposure` deciding gateways and public record (dns.md §5); `public_port` alone also emits the NLB listener + security rule for its port; `auth=True` adds the ExternalAuth filter → Authelia for apps without native auth (cluster-infra.md §2); `Exposure.IOT` on the census row attaches `media-gw` — the explicit "IoT may reach this" decision, recorded on the row rather than at a call site (jellyfin; physical/gateway.md §4.2) | architecture.md §3.6, dns.md §3 |
+| Exposure | pool label + route kind per the routing matrix, via the helpers (`route`/`public_port`); one `route(row)` for every HTTP exposure, the row's `Exposure` deciding gateways and public record (dns.md §5); `public_port` alone also emits the NLB listener for its port, and sets `allocateLoadBalancerNodePorts: false` on its Service; `auth=True` adds the ExternalAuth filter → Authelia for apps without native auth (cluster-infra.md §2); `Exposure.IOT` on the census row attaches `media-gw` — the explicit "IoT may reach this" decision, recorded on the row rather than at a call site (jellyfin; physical/gateway.md §4.2) | architecture.md §3.6, dns.md §3 |
 | DNS | emitted by the same helpers (CNAME to anchor); the split-horizon rewrite the route implies is applied by the `dns` stack from the same declaration, not by this one (dns.md §3) | dns.md |
 | Secrets | SealedSecret first choice, `template.data` pattern | cluster-infra.md §1.1 |
 | Placement | scheduling constraints only: site pool (cloud/homelab), a node label for a volume or the dedicated VIP, GPU resource requests | architecture.md §3.6 |
@@ -26,7 +26,11 @@ Every app is a `Component` subclass (putils, RFC-001) that owns:
 | Monitoring | scrape/dashboard labels per the legacy conventions (`release`, `grafana_dashboard`) so VictoriaMetrics/grafana pick them up | cluster-infra.md §1 |
 
 What a component may **not** do: hostPort, hostNetwork, `externalIPs`
-(architecture.md §6.6); cross-namespace reach-ins; unbudgeted sidecars;
+(architecture.md §6.6); `type: NodePort`, or a LoadBalancer Service
+that allocates node ports — on a cloud node a raw Service's `NodePort` is
+answered at the node's public address, ahead of its firewall
+(cluster-infra.md §2);
+cross-namespace reach-ins; unbudgeted sidecars;
 cluster-scoped resources (those belong to `k8s-base` and go through its
 closed-list rule).
 

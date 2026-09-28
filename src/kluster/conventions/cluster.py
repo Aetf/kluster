@@ -73,10 +73,13 @@ GATEWAY_LAN = 'lan-gw'
 GATEWAY_MEDIA = 'media-gw'
 
 #: Public port census — the ports the internet gateway and NLB terminate.
-#: Listeners and security rules are derived beside the services that need
-#: them (physical.md §1); this constant exists for the recorded fallback in
-#: which the Talos ingress firewall must enumerate service ports, and as the
-#: firewall-audit reference.
+#: Listeners are derived beside the services that need them, and no security
+#: rule names a port: the cloud subnet admits everything and the node's
+#: firewall is the filter (physical.md §1–2). The Gateway listeners among
+#: these ports cross that firewall to reach Envoy, so each needs an opening
+#: there, which k8s-base's design adds from this census; the recorded fallback,
+#: in which the firewall enumerates every service port, reads it too, and it
+#: is the firewall-audit reference.
 PUBLIC_PORT_CENSUS: tuple[tuple[int, str], ...] = (
     (80, 'tcp'),  # HTTP, redirect only
     (443, 'tcp'),  # HTTPS

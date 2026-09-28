@@ -73,26 +73,47 @@ Role = Literal['controlplane', 'worker']
 #: unreserved node starves its own control plane before the kubelet notices.
 SYSTEM_RESERVED = {'cpu': '200m', 'memory': '512Mi', 'ephemeral-storage': '1Gi'}
 
-#: Ports that terminate in the host network namespace: the management APIs
-#: (`conventions.MANAGEMENT_PORTS`), which the balancer forwards from the same
-#: structure, and the two the cluster speaks to itself on. Service ports are deliberately absent:
-#: LoadBalancer traffic is answered by Cilium's BPF datapath at tc ingress,
-#: ahead of nftables, so declared frontends serve without a firewall entry
-#: while undeclared ports fall through to default-deny
-#: (declarative/physical.md §2).
-HOST_PORTS: tuple[int, ...] = (
-    *conventions.MANAGEMENT_PORTS,
-    51820,  # KubeSpan
-    10250,  # kubelet, intra-cluster
-)
+#: KubeSpan's WireGuard listen port. Talos fixes it (`KubeSpanDefaultPort`)
+#: and `KubeSpanConfig` has no field to move it; WireGuard runs over UDP.
+KUBESPAN_PORT = 51820
+
+#: The kubelet's API, which the apiserver and metrics-server call.
+KUBELET_PORT = 10250
+
+#: The DHCPv6 client's port (RFC 8415 §7.2). A cloud node's IPv6 address is
+#: leased over DHCPv6, and the server's Reply comes from its own address rather
+#: than the multicast the Solicit went to, so it matches no connection-tracking
+#: entry and needs an opening of its own.
+DHCPV6_CLIENT_PORT = 546
+
+#: IPv6 link-local addresses, which never leave the link. The DHCPv6 client
+#: sends from its link-local address, and a server answering a link-local
+#: destination answers from a link-local source (RFC 6724 §5, rule 2).
+LINK_LOCAL = 'fe80::/10'
 
 #: BGP. Only the homelab worker speaks it, and only with the gateway
-#: (cluster-infra.md §2), so it is never part of the host-port census above.
+#: (cluster-infra.md §2), so it is never one of the host openings below.
 BGP_PORT = 179
 
 #: The whole internet, both families — what a management port on a public
 #: node is exposed to whether or not it is written down.
 ANYWHERE: tuple[str, ...] = ('0.0.0.0/0', '::/0')
+
+#: The cluster's own ranges: the cloud nodes' network, the homelab worker's
+#: VLAN, and both pod ranges. A pod's call to a node's host network carries a
+#: pod-range source; a node's call over a path that is not tunnelled carries a
+#: node-network source. Traffic that rides KubeSpan needs none of them, since
+#: it enters on the `kubespan` interface, which the ingress chain accepts ahead
+#: of every rule.
+CLUSTER_RANGES: tuple[str, ...] = tuple(
+    str(network)
+    for network in (
+        conventions.VCN_CIDR,
+        conventions.CLUSTER_VLAN.v4,
+        conventions.POD_CIDR_V4,
+        conventions.POD_CIDR_V6,
+    )
+)
 
 #: The name this program gives a node's one physical link. Talos' network
 #: documents address a link by name, and the name the kernel gives it
@@ -105,24 +126,58 @@ UPLINK = 'uplink'
 
 @dataclass(frozen=True)
 class Opening:
-    """One hole in the node-local firewall: a port, and who may come through.
+    """One hole in the node-local firewall: a port, its protocol, and who may come through.
 
     Talos' ingress firewall is default-deny, so an `Opening` is the only way
-    traffic reaches a listener in the host network namespace.
+    traffic reaches a listener in the host network namespace. Neither the
+    protocol nor the sources has a default: each opening states both, because
+    a default is a guess about the listener, and on a public node the guess is
+    the whole of what stands between the port and the internet.
     """
 
     port: int
-    subnets: tuple[str, ...] = ANYWHERE
-    protocol: str = 'tcp'
+    protocol: Literal['tcp', 'udp']
+    subnets: tuple[str, ...]
 
     def document(self) -> dict[str, Any]:
         return {
             'apiVersion': 'v1alpha1',
             'kind': 'NetworkRuleConfig',
-            'name': f'port-{self.port}',
+            # One port can be opened on both protocols, and Talos requires
+            # each rule's name to be unique.
+            'name': f'port-{self.port}-{self.protocol}',
             'portSelector': {'ports': [self.port], 'protocol': self.protocol},
             'ingress': [{'subnet': subnet} for subnet in self.subnets],
         }
+
+
+#: What terminates in the host network namespace, and who may reach it. The
+#: firewall is the only filter in front of a public node: the cloud subnet
+#: admits everything (declarative/physical.md §1–2).
+#:
+#: The management APIs (`conventions.MANAGEMENT_PORTS`), which the balancer
+#: forwards from the same structure, are open to the internet; so is KubeSpan,
+#: whose peers include the homelab worker at a home address nothing declares.
+#: The kubelet is open to the cluster alone, and the DHCPv6 client to the
+#: link alone. etcd and trustd have no opening: their peers reach them over
+#: KubeSpan, which enters on `kubespan`.
+#:
+#: Service ports are absent. A raw TCP/UDP LoadBalancer Service is answered by
+#: Cilium's BPF datapath at tc ingress, ahead of nftables, so it serves
+#: without a firewall entry. A Gateway listener is not: the datapath hands its
+#: packets up the host stack to the node's Envoy, through this firewall, so
+#: each listener port needs an opening, which this list does not carry yet:
+#: k8s-base's design adds them from the public port census
+#: (declarative/physical.md §2).
+HOST_OPENINGS: tuple[Opening, ...] = (
+    *(Opening(port, 'tcp', ANYWHERE) for port in conventions.MANAGEMENT_PORTS),
+    Opening(KUBESPAN_PORT, 'udp', ANYWHERE),
+    Opening(KUBELET_PORT, 'tcp', CLUSTER_RANGES),
+    Opening(DHCPV6_CLIENT_PORT, 'udp', (LINK_LOCAL,)),
+)
+
+#: The ports `HOST_OPENINGS` opens, whatever the protocol or the sources.
+HOST_PORTS: tuple[int, ...] = tuple(opening.port for opening in HOST_OPENINGS)
 
 
 def node_patch() -> dict[str, Any]:
@@ -407,7 +462,7 @@ def ingress_firewall_documents(extra: Sequence[Opening] = ()) -> list[dict[str, 
     Talos expresses this as separate configuration documents rather than as
     v1alpha1 fields, so they travel as their own patches.
     """
-    openings = [*(Opening(port) for port in HOST_PORTS), *extra]
+    openings = [*HOST_OPENINGS, *extra]
     return [
         {'apiVersion': 'v1alpha1', 'kind': 'NetworkDefaultActionConfig', 'ingress': 'block'},
         *(opening.document() for opening in openings),
@@ -446,7 +501,7 @@ def patches(
         documents += secondary_address_documents(secondary_address)
     if volume is not None:
         documents.append(node_volume_document(volume))
-    extra = [Opening(BGP_PORT, (bgp_peer,))] if bgp_peer is not None else []
+    extra = [Opening(BGP_PORT, 'tcp', (bgp_peer,))] if bgp_peer is not None else []
     documents += ingress_firewall_documents(extra)
     return [json.dumps(document) for document in documents]
 
