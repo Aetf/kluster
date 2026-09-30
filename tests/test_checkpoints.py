@@ -6,13 +6,13 @@ stands between the file and the public. This suite is the second look, over
 every checkpoint the tree carries: it cannot stop a publication, since the
 branch is public before CI runs, but it makes one loud enough to rotate after.
 
-Only the check that needs no value runs here (`checkpoint.undeclared`): each
-output a resource's `additionalSecretOutputs` names, and each output whose
-input of the same name is wholly ciphertext, is ciphertext. It reads one
-level: a marking lost inside an object, or an input that
-`additionalSecretOutputs` names, passes it (Aetf/kluster-ops#483). The other
-check, no secret value in the clear, needs the stack's secrets in the clear,
-which CI does not hold.
+Only the check that needs no value runs here (`checkpoint.undeclared`): every
+property the engine marks secret is ciphertext, in each resource the file
+records and in each operation it holds pending — a key a resource's
+`additionalSecretOutputs` names, as an output and as an input, and an output
+whose input of the same name holds ciphertext anywhere, read down through
+objects as the engine reads them. The other check, no secret value in the
+clear, needs the stack's secrets in the clear, which CI does not hold.
 
 And `.gitignore` is held to the layout: what a `file://` backend writes beside
 a checkpoint and keeps on the machine stays out of every change, and the two
@@ -46,7 +46,7 @@ def committed_checkpoints(root: Path) -> list[Path]:
 
 
 def findings(root: Path) -> list[str]:
-    """Every declared-secret property a checkpoint of `root` holds in the clear, by file and property."""
+    """Every place a checkpoint of `root` holds in the clear a property the engine marks secret, by file."""
     return [
         f'{path.relative_to(root)}: {finding}'
         for path in committed_checkpoints(root)
@@ -64,14 +64,14 @@ def _ciphertext() -> dict[str, str]:
     return {checkpoint.SECRET_SIG: checkpoint.SECRET_MARK, 'ciphertext': 'v1:c2VjcmV0'}
 
 
-def _lay_out(root: Path, resources: list[dict[str, Any]]) -> Path:
-    """A checkpoint of `probe` in `root`, as `pulumi` lays one out."""
+def _lay_out(root: Path, resources: list[dict[str, Any]], pending: list[dict[str, Any]] | None = None) -> Path:
+    """A checkpoint of `probe` in `root`, as `pulumi` lays one out, with `pending` as operations under way."""
     path = root / stack_environment.CHECKPOINTS / '.pulumi' / 'stacks' / PROJECT / f'{STACK}.json'
     path.parent.mkdir(parents=True, exist_ok=True)
-    document: dict[str, Any] = {
-        'version': 3,
-        'checkpoint': {'stack': STACK, 'latest': {'manifest': {}, 'resources': resources}},
-    }
+    latest: dict[str, Any] = {'manifest': {}, 'resources': resources}
+    if pending:
+        latest['pending_operations'] = [{'resource': resource, 'type': 'creating'} for resource in pending]
+    document: dict[str, Any] = {'version': 3, 'checkpoint': {'stack': STACK, 'latest': latest}}
     _ = path.write_text(json.dumps(document))
     return path
 
@@ -87,8 +87,62 @@ def _lay_out(root: Path, resources: list[dict[str, Any]]) -> Path:
             {'urn': 'urn:box', 'inputs': {'metadata': _ciphertext()}, 'outputs': {'metadata': 'ignition'}},
             'urn:box outputs.metadata',
         ),
+        (
+            {'urn': 'urn:key', 'additionalSecretOutputs': ['keyId'], 'inputs': {'keyId': 'k'}, 'outputs': {}},
+            'urn:key inputs.keyId',
+        ),
+        (
+            {'urn': 'urn:box', 'inputs': {'spec': _ciphertext()}, 'outputs': {'spec': {'user': 'u'}}},
+            'urn:box outputs.spec',
+        ),
+        (
+            # Both rules find the one place, and it is named once.
+            {
+                'urn': 'urn:key',
+                'additionalSecretOutputs': ['keyId'],
+                'inputs': {'keyId': _ciphertext()},
+                'outputs': {'keyId': 'k'},
+            },
+            'urn:key outputs.keyId: is named in additionalSecretOutputs',
+        ),
+        (
+            # The form `stack export --show-secrets` writes, which the engine
+            # loads from a checkpoint too.
+            {
+                'urn': 'urn:key',
+                'inputs': {},
+                'outputs': {'key': {checkpoint.SECRET_SIG: checkpoint.SECRET_MARK, 'plaintext': '"k"'}},
+            },
+            'urn:key outputs.key: is a secret envelope holding its plaintext',
+        ),
+        (
+            {
+                'urn': 'urn:box',
+                'inputs': {'deep': {'a': _ciphertext(), 'b': 'plain'}},
+                'outputs': {'deep': {'a': 'secret', 'b': 'plain'}},
+            },
+            'urn:box outputs.deep.a',
+        ),
+        (
+            {'urn': 'urn:box', 'inputs': {'box': {'keys': _ciphertext()}}, 'outputs': {'box': {'keys': ['k1', 'k2']}}},
+            'urn:box outputs.box.keys',
+        ),
+        (
+            {'urn': 'urn:box', 'inputs': {'deep': {'a': _ciphertext()}}, 'outputs': {'deep': '{"a": "secret"}'}},
+            'urn:box outputs.deep',
+        ),
     ],
-    ids=['additional-secret-output', 'secret-input-echoed'],
+    ids=[
+        'additional-secret-output',
+        'secret-input-echoed',
+        'additional-secret-output-input',
+        'secret-object-input-echoed',
+        'both-rules-at-one-place',
+        'envelope-holding-its-plaintext',
+        'inside-an-object',
+        'array-inside-an-object',
+        'object-returned-as-a-string',
+    ],
 )
 def test_a_checkpoint_with_a_declared_secret_in_the_clear_is_named(
     tmp_path: Path, resource: dict[str, Any], named: str
@@ -106,6 +160,20 @@ def test_a_checkpoint_with_a_declared_secret_in_the_clear_is_named(
     assert found[0].startswith(f'{path.relative_to(tmp_path)}: {named}')
 
 
+def test_an_operation_left_pending_is_read_like_a_resource(tmp_path: Path) -> None:
+    path = _lay_out(
+        tmp_path,
+        [],
+        pending=[{'urn': 'urn:box', 'inputs': {'metadata': _ciphertext()}, 'outputs': {'metadata': 'ignition'}}],
+    )
+
+    assert findings(tmp_path) == [
+        f'{path.relative_to(tmp_path)}: pending_operations[0] urn:box outputs.metadata: '
+        'holds ciphertext as an input and is not ciphertext as an output; '
+        'pass the input `metadata` whole as `pulumi.Output.secret(...)`'
+    ]
+
+
 def test_a_checkpoint_holding_its_secrets_as_ciphertext_passes(tmp_path: Path) -> None:
     _ = _lay_out(
         tmp_path,
@@ -113,8 +181,20 @@ def test_a_checkpoint_holding_its_secrets_as_ciphertext_passes(tmp_path: Path) -
             {
                 'urn': 'urn:box',
                 'additionalSecretOutputs': ['keyId'],
-                'inputs': {'metadata': _ciphertext()},
-                'outputs': {'metadata': _ciphertext(), 'keyId': _ciphertext(), 'address': '192.0.2.1'},
+                'inputs': {
+                    'metadata': _ciphertext(),
+                    'keyId': _ciphertext(),
+                    'deep': {'a': _ciphertext(), 'b': 'plain'},
+                    'unset': _ciphertext(),
+                },
+                'outputs': {
+                    'metadata': _ciphertext(),
+                    'keyId': _ciphertext(),
+                    'deep': {'a': _ciphertext(), 'b': 'plain'},
+                    'address': '192.0.2.1',
+                    # A null holds no value to publish.
+                    'unset': None,
+                },
             }
         ],
     )

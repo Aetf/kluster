@@ -15,9 +15,10 @@ Three levels, because they answer different questions:
     holds against what the pinned CLI actually writes: that the preview's
     plan is read from its streamed events, that no `up` runs over nothing
     planned, that a write over an unchanged deployment keeps the file's
-    bytes, and that no switch of the caller's moves the state out of the
-    file the checks read. Skipped where the pinned CLI or `uv` is not
-    installed.
+    bytes, that no switch of the caller's moves the state out of the file
+    the checks read, and that the check needing no value finds a secret in
+    the clear at each place the engine marks one. Skipped where the pinned
+    CLI or `uv` is not installed.
 
 The cases that need a committed stack add `probe` to the census for their own
 duration, so they run no program of the census's own and hold no stack's real
@@ -38,7 +39,7 @@ import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from memory_keyring import MemoryKeyring, installed
@@ -896,7 +897,7 @@ def test_a_secret_value_from_the_state_is_searched_for_too(repository: Repositor
         ),
         (
             {'urn': 'urn:box', 'inputs': {'metadata': _ciphertext('m')}, 'outputs': {'metadata': 'm'}},
-            'urn:box outputs.metadata: is ciphertext as an input',
+            'urn:box outputs.metadata: holds ciphertext as an input',
         ),
     ],
 )
@@ -1160,8 +1161,8 @@ class Scratch:
         return {path.name for path in self.path.parent.iterdir()}
 
 
-@pytest.fixture
-def scratch(repository: Repository, committed: str, tmp_path: Path) -> Iterator[Scratch]:
+def _initialized(repository: Repository, stack: str, tmp_path: Path, program: str) -> Scratch:
+    """`program` as `probe`'s, with its stack initialized and nothing applied."""
     if shutil.which('pulumi') is None or shutil.which('uv') is None:
         pytest.skip('the pinned pulumi CLI or uv is not on PATH')
     venv = tmp_path / 'venv'
@@ -1169,7 +1170,7 @@ def scratch(repository: Repository, committed: str, tmp_path: Path) -> Iterator[
     (site_packages,) = venv.glob('lib/python*/site-packages')
     _ = (site_packages / 'test_run.pth').write_text('\n'.join(site.getsitepackages()) + '\n')
     checkout = repository.checkout
-    _ = (checkout / '__main__.py').write_text(PROGRAM)
+    _ = (checkout / '__main__.py').write_text(program)
     _ = (checkout / 'Pulumi.yaml').write_text(PROJECT.format(venv=venv))
     _ = (checkout / 'pyproject.toml').write_text(
         PYPROJECT.format(major=sys.version_info.major, minor=sys.version_info.minor)
@@ -1180,9 +1181,15 @@ def scratch(repository: Repository, committed: str, tmp_path: Path) -> Iterator[
         'PULUMI_SKIP_UPDATE_CHECK': 'true',
         'UV_OFFLINE': '1',
     }
-    made = Scratch(run=driver.Run.open(committed, checkout, base=base), checkout=checkout, base=base)
-    made.settings()
+    made = Scratch(run=driver.Run.open(stack, checkout, base=base), checkout=checkout, base=base)
     assert made.run.passthrough(['stack', 'init']) == 0
+    return made
+
+
+@pytest.fixture
+def scratch(repository: Repository, committed: str, tmp_path: Path) -> Iterator[Scratch]:
+    made = _initialized(repository, committed, tmp_path, PROGRAM)
+    made.settings()
     assert made.run.passthrough(['up', '--yes', '--skip-preview']) == 0
     yield made
 
@@ -1245,7 +1252,7 @@ def test_a_real_write_over_an_unchanged_deployment_keeps_the_files_bytes(scratch
 @needs_pulumi
 def test_a_real_up_over_nothing_planned_runs_while_a_failed_check_is_recorded_and_clears_it(scratch: Scratch) -> None:
     record = checkpoint.record(scratch.checkout, PROBE)
-    _ = record.write_text('urn:box outputs.metadata: is ciphertext as an input and not as an output\n')
+    _ = record.write_text('urn:box outputs.metadata: holds ciphertext as an input and is not ciphertext as an output\n')
     history = scratch.history()
 
     assert scratch.run.up(yes=True) == 0
@@ -1275,3 +1282,178 @@ def test_a_real_run_under_a_callers_state_switch_writes_the_checkpoint_the_check
     assert run.passthrough(['up', '--yes', '--skip-preview']) == 0
 
     assert scratch.files() == {'probe.json', 'probe.json.bak'}
+
+
+#: A program whose one resource echoes its inputs as its outputs, with a
+#: secret placed where `settings.json`'s `shape` says: inside an object; as
+#: an array inside an object; inside an object the provider hands back as a
+#: string; or as the input of a property `additional_secret_outputs` names,
+#: plain or, as `marked`, secret. Where `hold` names a FIFO, the create waits
+#: on it, so the operation stays pending until the case opens the FIFO's
+#: other end.
+ECHO = """\
+import json
+import pathlib
+
+import pulumi
+from pulumi.dynamic import CreateResult, Resource, ResourceProvider
+
+
+class Echo(ResourceProvider):
+    def create(self, props):
+        if props.get('hold'):
+            pathlib.Path(props['hold']).read_text()
+        outs = dict(props)
+        if props.get('reshape'):
+            outs['deep'] = json.dumps(props['deep'], sort_keys=True)
+        return CreateResult(id_='echo', outs=outs)
+
+
+class EchoResource(Resource):
+    def __init__(self, name, props, opts):
+        super().__init__(Echo(), name, props, opts)
+
+
+settings = json.loads(pathlib.Path('settings.json').read_text())
+secret = pulumi.Output.secret(settings['secret'])
+names = []
+if settings['shape'] in ('object', 'reshaped'):
+    props = {'deep': {'a': secret, 'b': 'plain'}, 'reshape': settings['shape'] == 'reshaped'}
+elif settings['shape'] == 'array':
+    props = {'box': {'keys': ['k1', secret]}}
+elif settings['shape'] == 'additional':
+    props, names = {'x': settings['secret']}, ['x']
+else:
+    props, names = {'x': secret}, ['x']
+props['hold'] = settings['hold']
+EchoResource('echo', props, pulumi.ResourceOptions(additional_secret_outputs=names))
+"""
+ECHOED = 'a-secret-the-echo-carries'
+
+
+@pytest.fixture
+def echo(repository: Repository, committed: str, tmp_path: Path) -> Scratch:
+    return _initialized(repository, committed, tmp_path, ECHO)
+
+
+def _echo_settings(scratch: Scratch, shape: str, hold: Path | None = None) -> None:
+    _ = (scratch.checkout / 'settings.json').write_text(
+        json.dumps({'shape': shape, 'secret': ECHOED, 'hold': str(hold) if hold else None})
+    )
+
+
+#: `pulumi up` of `probe`, run outside the driver, whose own checks would
+#: refuse some of these files: what is read is what the engine wrote.
+UP = ('pulumi', 'up', '--yes', '--skip-preview', '--non-interactive', '--stack', PROBE)
+
+
+def _echo_up(scratch: Scratch, shape: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The checkpoint the engine writes for `shape`, and the echo resource in it."""
+    _echo_settings(scratch, shape)
+    up = sp.run(UP, cwd=scratch.checkout, env=scratch.run.env, capture_output=True, text=True, timeout=50)
+    assert up.returncode == 0, up.stdout + up.stderr
+    document = json.loads(scratch.path.read_text())
+    (resource,) = [r for r in checkpoint.resources(document) if r['urn'].endswith('::echo')]
+    return document, resource
+
+
+def _at(values: dict[str, Any], path: str) -> Any:
+    for key in path.split('.'):
+        values = values[key]
+    return values
+
+
+@needs_pulumi
+@pytest.mark.parametrize(
+    ('shape', 'place', 'input_whole', 'value'),
+    [
+        ('object', 'outputs.deep.a', True, ECHOED),
+        ('array', 'outputs.box.keys', True, ['k1', ECHOED]),
+        ('reshaped', 'outputs.deep', False, json.dumps({'a': ECHOED, 'b': 'plain'}, sort_keys=True)),
+    ],
+    ids=['inside-an-object', 'array-inside-an-object', 'object-returned-as-a-string'],
+)
+def test_a_marking_the_real_engine_makes_below_the_top_is_found_once_lost(
+    echo: Scratch, shape: str, place: str, input_whole: bool, value: object
+) -> None:
+    document, resource = _echo_up(echo, shape)
+    parent, _, key = place.rpartition('.')
+
+    # The engine marks the place and nothing above it, and the check passes
+    # the file it wrote. Where the provider handed the object back
+    # as a string, the input of that name is an object with a secret inside
+    # it rather than an envelope: the output is marked for a secret anywhere
+    # under the input.
+    assert checkpoint.envelope(_at(resource, place))
+    assert not checkpoint.envelope(_at(resource, parent))
+    assert checkpoint.envelope(_at(resource, place.replace('outputs', 'inputs', 1))) is input_whole
+    assert checkpoint.undeclared(document) == []
+
+    _at(resource, parent)[key] = value
+
+    # The remedy names the resource's input the place is under.
+    top = place.split('.')[1]
+    assert [str(finding) for finding in checkpoint.undeclared(document)] == [
+        f'{resource["urn"]} {place}: holds ciphertext as an input and is not ciphertext as an output; '
+        f'pass the input `{top}` whole as `pulumi.Output.secret(...)`'
+    ]
+
+
+@needs_pulumi
+def test_the_real_engine_leaves_an_additional_secret_outputs_input_in_the_clear_and_it_is_found(
+    echo: Scratch,
+) -> None:
+    document, resource = _echo_up(echo, 'additional')
+
+    # What the pinned engine writes for an ordinary program: the output
+    # marked, the input of the same name as the program passed it.
+    assert checkpoint.envelope(resource['outputs']['x'])
+    assert resource['inputs']['x'] == ECHOED
+    assert [str(finding) for finding in checkpoint.undeclared(document)] == [
+        f'{resource["urn"]} inputs.x: is named in additionalSecretOutputs and is not ciphertext; '
+        'pass the input `x` whole as `pulumi.Output.secret(...)`'
+    ]
+
+    # The way on: the program marks the input secret as well, and the next
+    # write holds it as ciphertext.
+    document, resource = _echo_up(echo, 'marked')
+
+    assert checkpoint.envelope(resource['inputs']['x'])
+    assert checkpoint.undeclared(document) == []
+
+
+@needs_pulumi
+def test_a_real_operation_left_pending_is_checked_like_a_resource(echo: Scratch) -> None:
+    hold = echo.checkout.parent / 'hold'
+    os.mkfifo(hold)
+    _echo_settings(echo, 'additional', hold)
+    pending: dict[str, Any] | None = None
+    with sp.Popen(UP, cwd=echo.checkout, env=echo.run.env, stdout=sp.DEVNULL, stderr=sp.DEVNULL) as up:
+        try:
+            # The engine records the operation before it starts it, and the
+            # create does not end until the FIFO opens: the file read here is
+            # the one a run killed at this moment would leave. The deadline
+            # is a bound on a hang, under the case's own.
+            deadline = time.monotonic() + 40
+            while pending is None and up.poll() is None and time.monotonic() < deadline:
+                document = cast('dict[str, Any]', json.loads(echo.path.read_text()))
+                if document['checkpoint']['latest'].get('pending_operations'):
+                    pending = document
+                else:
+                    time.sleep(0.1)
+        finally:
+            try:
+                _ = os.write(release := os.open(hold, os.O_WRONLY | os.O_NONBLOCK), b'go')
+                os.close(release)
+            except OSError:
+                pass  # no create is waiting on it
+            _ = up.wait(timeout=50)
+
+    assert pending is not None
+    assert not [r for r in checkpoint.resources(pending) if r['urn'].endswith('::echo')]
+    (operation,) = pending['checkpoint']['latest']['pending_operations']
+    assert [str(finding) for finding in checkpoint.undeclared(pending)] == [
+        f'pending_operations[0] {operation["resource"]["urn"]} inputs.x: '
+        'is named in additionalSecretOutputs and is not ciphertext; '
+        'pass the input `x` whole as `pulumi.Output.secret(...)`'
+    ]

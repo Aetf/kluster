@@ -542,10 +542,37 @@ such a stack:
         secret. **The search is literal**: a value encoded before it was
         written — in base64, as OCI's `user_data` is, in hex, or escaped
         inside a string that is itself a JSON document — is not found.
-    *   **Every property the program declares secret is ciphertext**,
-        which needs no value to check: every key a resource's recorded
-        options name in `additionalSecretOutputs`, and every output whose
-        input of the same name the file holds as ciphertext.
+    *   **Every property the engine marks secret is ciphertext**, which
+        needs no value to check. The rules are the engine's own at the
+        pinned CLI. A key a resource's recorded options name in
+        `additionalSecretOutputs` is ciphertext as an output, which the
+        engine wraps whole, and as an input too, which the engine leaves
+        as the program passed it
+        ([`step_executor.go` at 3.257.0](https://github.com/pulumi/pulumi/blob/v3.257.0/pkg/resource/deploy/step_executor.go#L512-L565)).
+        An output whose input of the same name holds ciphertext anywhere
+        in it is ciphertext; where both are objects the rule is read
+        again one level down
+        ([`annotateSecrets` at 3.257.0](https://github.com/pulumi/pulumi/blob/v3.257.0/pkg/resource/plugin/provider_plugin.go#L900-L929)).
+        The engine applies that second rule only for a provider that does
+        not accept secrets, as the dynamic provider does not, and the file
+        does not record which provider did, so every resource is held to
+        it. Either input rule is cleared the same way: the program passes
+        that input whole as a secret (`pulumi.Output.secret`), which the
+        next write records as one envelope, and the engine then wraps the
+        output of that name too. The refusal names that input. Ciphertext
+        is one envelope, or a null, which holds nothing, since what the
+        engine marks it wraps whole. A structure carrying envelopes inside
+        it where one belongs is refused whether the engine's marking was
+        lost at its top or a provider that accepts secrets marked only
+        inside it. An envelope holding its `plaintext` rather than a
+        `ciphertext` is refused wherever it is: that is the form
+        `pulumi stack export --show-secrets` writes, and the engine loads
+        it from a checkpoint as readily as the encrypted one. Every
+        resource the file records is read so, and the resource of every
+        operation it holds pending, which the engine writes before the
+        operation starts and a killed run leaves behind
+        ([`snapshot.go` at 3.257.0](https://github.com/pulumi/pulumi/blob/v3.257.0/pkg/backend/snapshot.go#L426-L436)).
+        A place both rules find is named once.
 
 **Every command that can write is recorded as unchecked before it
 starts**, in `checkpoints/<stack>.failed-check`, and the record comes off
@@ -556,9 +583,9 @@ a record that stands. The file then holds the value in the working copy
 and in `jj`'s local snapshots, and nowhere public. The fix is a program
 change that marks the property secret, or the stray file removed, and
 `operator-stack <stack> up`: while the record stands, `up` runs even
-with nothing planned, since marking an output secret on a resource
-already in the state rewrites it as ciphertext at the next write, and it
-checks the file again. The fix is squashed into the change that carries
+with nothing planned, since marking an output or an input secret on a
+resource already in the state rewrites it as ciphertext at the next
+write, and it checks the file again. The fix is squashed into the change that carries
 the leak, so no commit that reaches the forge holds it.
 
 **Every import into a stack whose state is committed goes through the
