@@ -81,6 +81,11 @@ def generate_ca_key() -> str:
     return _pem_key(ec.generate_private_key(CURVE)).decode()
 
 
+def not_valid_after(cert_pem: bytes) -> dt.datetime:
+    """When a PEM certificate stops being valid, in UTC."""
+    return x509.load_pem_x509_certificate(cert_pem).not_valid_after_utc
+
+
 @dataclass(frozen=True, eq=False)
 class Authority:
     """The CA, in hand: the recovered private key and what it will sign.

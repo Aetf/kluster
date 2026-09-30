@@ -13,10 +13,10 @@ pushes and only then retires, and which keeps the credential behind that call �
 so reaching for the value directly is a type error rather than a shortcut. What
 that buys, and what a failed push costs instead, is the register's to say.
 
-A row appears here when its consumer exists. The one Cloudflare row that is
-still absent — the DNS-01 token for cert-manager — has nowhere to be delivered
-yet, and a mint with no slot would be exactly the parked secret the register
-rules out.
+A row appears here when it has a slot to be delivered into. The one
+Cloudflare row that is still absent — the DNS-01 token for cert-manager — has
+nowhere to be delivered yet, and a mint with no slot would be exactly the
+parked secret the register rules out.
 
 Which slot a row is pushed into follows from what consumes it. A stack's
 credential goes into that stack's committed configuration, where the program
@@ -25,8 +25,9 @@ row whose consumer is not a stack — `state-backend provision` builds the
 backend the config secrets are stored behind — so it goes into a workstation
 slot instead (`oci_slot.py`).
 
-One row is drawn here rather than minted anywhere: the drill age identity,
-whose consumer is the ops repository's rebuild drill. It is `generate` in the
+The drill age identity is drawn here rather than minted anywhere, as the
+appliance's SSH host key below is; its consumer is the ops repository's
+rebuild drill. It is `generate` in the
 command tree because no provider issues it, and it is not an escrow label
 because every dump it opens is also encrypted to an escrowed generation
 (credentials.md §2.2) — so its private half goes to the ops-repo Environment
@@ -41,6 +42,19 @@ keys map rows by the command that produces them; two mints, because the two
 platforms' seeds are two kit entries and a failure on one must leave the
 other's predecessor live.
 
+**The `state-backend` stack's rows fill a configuration no program reads
+yet.** The stack keeps its state committed (framework/pulumi.md §3.3) and its
+program is rfc-006 §4's, so its rows are the stable keys that program renders
+the box from: its own B2 management key, minted like `physical`'s under a
+role of its own; the server key and certificate, issued from the escrowed CA;
+and the SSH host key, drawn here, whose public half is committed beside the
+Butane template. Each refuses before anything is minted while the stack has
+no checkpoint, since the stack's first `stack init` goes through the
+`operator-stack` driver and nothing here creates it. Beside them, a backup
+generation's `generate` writes that generation's public half into the
+committed recipients file, which is how the box's recipients stop needing the
+kit (`backup_age_recipient`).
+
 The freshness probe's row is the B2 half of that on its own, narrowed to a
 listing and delivered as a **repository** secret of the ops repository rather
 than into its `drill` Environment: the job that reads it belongs to no
@@ -51,15 +65,24 @@ so the slot the mint fills and the variable the probe reads cannot drift.
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
+import re
 from pathlib import Path
 
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+from kluster.lib import config as lib_config
+from kluster.lib import stack_environment
+from kluster.lib import workstation as lib_workstation
+from kluster.lib.state_backend import render
 from kluster.lib.state_backend import settings as appliance_settings
 
 from ... import conventions
 from ..state_backend import config as appliance
 from ..state_backend import probe
-from . import age, b2, cloudflare, entries, oci_iam, oci_slot, pulumi_config
+from . import age, b2, cloudflare, entries, escrow, oci_iam, oci_slot, pki, pulumi_config
 from .github_secrets import Forge, Slot
 from .kdbx import KdbxStore
 
@@ -155,6 +178,31 @@ OCI_PRIVATE_KEY_KEY = 'ociPrivateKey'
 B2_KEY_ID_KEY = 'b2ApplicationKeyId'
 B2_KEY_KEY = 'b2ApplicationKey'
 
+#: The operator stack that declares the state-backend appliance, and therefore
+#: the slot its own B2 management key, its server key and certificate and its
+#: SSH host key are delivered into. Fixed, for the reason `PHYSICAL_STACK` is.
+STATE_BACKEND_STACK = conventions.STACK_NAMES.state_backend
+
+#: Where the `state-backend` stack reads the server's TLS key, its certificate
+#: and the CA's certificate, and the box's SSH host key. Bare, in this
+#: project's namespace, for the reason the zones token's key is. The key and
+#: the host key are secrets; the two certificates are public, and sit in the
+#: clear so that a reviewer reads what a reissue changed (rfc-006 §5).
+SERVER_KEY_KEY = 'serverKey'
+SERVER_CERT_KEY = 'serverCertificate'
+CA_CERT_KEY = 'caCertificate'
+HOST_KEY_KEY = 'sshHostKey'
+
+#: The directory the Butane template sits in, where the committed files the
+#: box is rendered from are kept (rfc-006 §8).
+MACHINE_DIRECTORY = Path(render.__file__).with_name(render.MACHINE)
+#: The box's SSH host key, public half: what `state-backend ssh` pins, and
+#: what a reader compares a fingerprint against without the passphrase.
+HOST_KEY_FILE = MACHINE_DIRECTORY / 'host-key.txt'
+#: The backup generations' public halves, one line per generation the box
+#: encrypts its dumps to: the escrow label, then the recipient.
+BACKUP_RECIPIENTS_FILE = MACHINE_DIRECTORY / 'backup-recipients.txt'
+
 #: The names these rows carry on the command line and in the slot map. One
 #: string per row, defined here because this is where the mint lives: the map
 #: imports them (`slots.py`), so a row cannot be spelled one way in the tree
@@ -169,6 +217,9 @@ B2_MANAGEMENT_ROW = 'b2-management'
 DRILL_AGE_IDENTITY_ROW = f'{conventions.DRILL}-age-identity'
 DRILL_CREDENTIALS_ROW = f'{conventions.DRILL}-credentials'
 B2_FRESHNESS_DUMPS_ROW = 'b2-freshness-dumps'
+B2_STATE_BACKEND_MANAGEMENT_ROW = f'b2-{conventions.STATE_BACKEND}-management'
+STATE_BACKEND_SERVER_ROW = f'{conventions.STATE_BACKEND}-server'
+STATE_BACKEND_HOST_KEY_ROW = f'{conventions.STATE_BACKEND}-host-key'
 
 
 def _drill_slot(name: str) -> Slot:
@@ -451,6 +502,287 @@ def b2_management(kit: KdbxStore, *, stack: pulumi_config.Stack, seed_entry: str
         )
     )
     return delivered.key_id
+
+
+# --------------------------------------------------------------------------
+# The `state-backend` stack's configuration, and the files committed beside
+# the Butane template.
+# --------------------------------------------------------------------------
+
+
+def _require_initialized(stack: pulumi_config.Stack) -> None:
+    """Refuse a delivery into the `state-backend` stack before its first checkpoint exists.
+
+    The stack keeps its state committed, so its existence is a file of the
+    checkout rather than an answer from a backend, and it is created by a
+    `stack init` through the driver, which checks the working copy first and
+    leaves the checkpoint for the operator to land (framework/pulumi.md
+    §3.3). A `pulumi config set` here would otherwise meet no stack, or,
+    through `Stack.fill`, create one past the driver's checks. Before anything
+    is minted, so a refusal leaves nothing live at a provider.
+    """
+    if stack_environment.checkpoint(stack.directory, stack.name) is None:
+        raise pulumi_config.SlotRefused(
+            f'the {stack.name} stack has no checkpoint in {stack.directory / stack_environment.CHECKPOINTS}, so '
+            f'there is no stack to fill: `operator-stack {stack.name} pulumi stack init` creates it, and its '
+            'checkpoint is landed like any change before its configuration is'
+        )
+
+
+def _fill_state_backend(
+    stack: pulumi_config.Stack, *, secret: dict[str, str], plain: dict[str, str], holds: str
+) -> None:
+    """`Stack.fill` for the `state-backend` stack, refused before its first checkpoint (`_require_initialized`)."""
+    _require_initialized(stack)
+    stack.fill(secret=secret, plain=plain, holds=holds)
+
+
+def b2_state_backend_management(kit: KdbxStore, *, stack: pulumi_config.Stack, seed_entry: str = B2_SEED_ENTRY) -> str:
+    """Mint the `state-backend` stack's own B2 management key into its config. Returns its key id.
+
+    The shape `b2_management` delivers to `physical`, under a role of its own
+    (`b2.STATE_BACKEND_MANAGEMENT`): retirement matches a role's name, so one
+    name for both would have each mint revoke the other stack's key. The
+    stack declares the dump bucket and the dump key with it (rfc-006 §4.1).
+    """
+    _require_initialized(stack)
+    log.info('opening the B2 seed from the kit')
+    pending = b2.mint_management(kit, seed_entry=seed_entry, role=b2.STATE_BACKEND_MANAGEMENT)
+
+    delivered, _ = pending.deliver(
+        lambda key: _fill_state_backend(
+            stack,
+            secret={B2_KEY_ID_KEY: key.key_id, B2_KEY_KEY: key.key},
+            plain={},
+            holds=f'{b2.STATE_BACKEND_MANAGEMENT.name} ({key.key_id})',
+        )
+    )
+    return delivered.key_id
+
+
+def state_backend_server(
+    vault: escrow.Vault, *, stack: pulumi_config.Stack, now: dt.datetime | None = None
+) -> pki.Credential:
+    """Issue the appliance's server key and certificate into the `state-backend` stack's config. Returns them.
+
+    For the address the box is reached at (`settings.ADDRESS`), which is the
+    certificate's name and its only one (`pki.issue_server`). The key is a
+    secret; the certificate and the CA's certificate, which the box hands its
+    clients, are public and written in the clear. One issuance, both halves:
+    a second call would mint a second key.
+
+    The CA stays in the escrow, which is why issuing needs the kit and nothing
+    else does (rfc-006 §5). Nothing is retired: the box authenticates to
+    clients by the CA, and the certificate it serves stays valid until the
+    replacement that carries this one.
+    """
+    _require_initialized(stack)
+    log.info('recovering the state-backend CA from the escrow')
+    authority = pki.Authority.from_pem(vault.recover(escrow.CA))
+    server = authority.issue_server(appliance_settings.ADDRESS, now=now)
+    ca = authority.certificate(now=now)
+    expires = pki.not_valid_after(server.cert_pem)
+    _fill_state_backend(
+        stack,
+        secret={SERVER_KEY_KEY: server.key_pem.decode().strip()},
+        plain={SERVER_CERT_KEY: server.cert_pem.decode().strip(), CA_CERT_KEY: ca.cert_pem.decode().strip()},
+        holds=f'a server certificate for {appliance_settings.ADDRESS}, valid until {expires.date().isoformat()}',
+    )
+    log.info('the box serves it from the replacement that carries it')
+    return server
+
+
+def committed_target(path: Path) -> Path:
+    """`path`, refused unless it is in the checkout this package runs from.
+
+    A file a command writes for the operator to commit is written only by a
+    package running from the checkout it belongs to: an installed one
+    resolves the path inside that installation, where no commit picks the
+    file up, while the value it wrote beside the file lands for real.
+    """
+    root = lib_workstation.repo_root()
+    if not path.resolve().is_relative_to(root.resolve()):
+        raise lib_workstation.WorkstationError(
+            f'{path} is not in the checkout at {root}: it is a file to commit, so it is written only by a '
+            'package running from the checkout it belongs to'
+        )
+    return path
+
+
+def public_host_key(private: str) -> str:
+    """The `ssh-ed25519 AAAA…` line of an OpenSSH private key, refused unless it is ed25519."""
+    key = serialization.load_ssh_private_key(private.encode(), password=None)
+    if not isinstance(key, Ed25519PrivateKey):
+        raise pulumi_config.SlotRefused(f'the host key is a {type(key).__name__}, and ed25519 is what is pinned')
+    return key.public_key().public_bytes(serialization.Encoding.OpenSSH, serialization.PublicFormat.OpenSSH).decode()
+
+
+def state_backend_host_key(*, stack: pulumi_config.Stack, public_file: Path) -> str:
+    """Draw the box's SSH host key: the private half into the stack's config, the public half into `public_file`.
+
+    Returns the public line. Ed25519, which is the one algorithm the client
+    is told to accept (`provision.ssh`). Drawn here rather than on the box, so
+    the key is stable across replacements and the pin is known before a box
+    boots with it; no provider issues it and nothing escrows it, since a lost
+    one costs a fresh draw and a replacement (rfc-006 §5).
+
+    **Config before file.** The configuration is written and read back
+    first, and the public half is derived from what was written: a file that
+    named a key the configuration does not hold would pin a box nobody can
+    reach, where a configuration whose file was not written yet is repaired
+    by running this again. Re-running is the rotation, which the box adopts at
+    its next replacement.
+    """
+    _require_initialized(stack)
+    private = (
+        Ed25519PrivateKey.generate()
+        .private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.OpenSSH, serialization.NoEncryption())
+        .decode()
+        .strip()
+    )
+    public = public_host_key(private)
+    _fill_state_backend(stack, secret={HOST_KEY_KEY: private}, plain={}, holds='an ed25519 SSH host key')
+    _ = public_file.write_text(
+        "# The state-backend appliance's SSH host key, public half (docs/credentials.md §3). The\n"
+        f'# private half is `{HOST_KEY_KEY}` in Pulumi.{stack.name}.yaml, under the operator passphrase.\n'
+        f'# Written by `credentials derived {STATE_BACKEND_HOST_KEY_ROW} generate`; replaced by running it again.\n'
+        f'{public}\n'
+    )
+    log.info(
+        'commit %s and Pulumi.%s.yaml together; the box carries the key from its next replacement',
+        public_file,
+        stack.name,
+    )
+    return public
+
+
+#: A backup label, as the recipients file names it: the escrow's own.
+_BACKUP_LABEL = re.compile(rf'{re.escape(escrow.BACKUP)}/[1-9][0-9]*\Z')
+
+
+def backup_recipients(path: Path) -> dict[str, str]:
+    """The recipients file as label → recipient; empty while no file exists.
+
+    Each line is an escrow label under `backup/age/` and the recipient of the
+    identity it holds, `#` comments and blank lines aside. A line is refused
+    by its number and never quoted: the likeliest wrong line is a private
+    half pasted where the public one goes, and `check` prints what this
+    raises. Every recipient is one the pinned `age` parses
+    (`age.check_recipient`), and a native one (`age.is_native`), since that
+    is what `age-keygen` draws and what a dump can be encrypted to beside
+    the others.
+    """
+    if not path.is_file():
+        return {}
+    found: dict[str, str] = {}
+    for number, line in enumerate(path.read_text().splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith(lib_config.COMMENT):
+            continue
+        fields = stripped.split()
+        if len(fields) != 2 or not _BACKUP_LABEL.match(fields[0]):
+            raise age.AgeError(
+                f'line {number} of {path} is not a backup label under {escrow.BACKUP}/ followed by its recipient'
+            )
+        label, value = fields
+        if label in found:
+            raise age.AgeError(f'line {number} of {path} names {label} a second time')
+        age.check_recipient(value, name=f'the recipient on line {number} of {path}')
+        if not age.is_native(value):
+            raise age.AgeError(f'the recipient on line {number} of {path} is not a native `{age.PUBLIC_PREFIX}…` one')
+        found[label] = value
+    return found
+
+
+def _write_backup_recipients(path: Path, recipients: dict[str, str]) -> None:
+    lines = ''.join(
+        f'{label} {recipients[label]}\n' for label in sorted(recipients, key=lambda label: int(label.rsplit('/', 1)[1]))
+    )
+    _ = path.write_text(
+        "# The age backup identities' public halves (docs/credentials.md §3): one line per\n"
+        '# escrowed generation the appliance encrypts its dumps to, the escrow label and then\n'
+        '# the recipient. Written by `credentials derived backup-age-<N> generate`;\n'
+        '# `credentials derived check` holds the labels to the escrow.\n'
+        f'{lines}'
+    )
+
+
+def backup_age_recipient(vault: escrow.Vault, label: str, *, recipients_file: Path) -> str:
+    """Put one backup generation's public half in the recipients file, escrowing the generation first where it is not. Returns the recipient.
+
+    A generation the escrow does not hold yet is drawn and escrowed
+    (`escrow.generate`); one it holds is recovered, which is how the file is
+    written once for the generations escrowed before it existed: a backup
+    label holds one identity for its lifetime (`escrow.Label.single`), so
+    there is nothing to draw. Either way the recipient is computed from the
+    escrowed identity by the tool, so the file cannot name a key the escrow
+    does not hold.
+
+    The file keeps the generations the box encrypts to (`escrow.backup_labels`)
+    and no other: a generation the window has left is dropped, and a line
+    that disagrees with the escrow is replaced, with a warning, since the
+    escrow is what every dump is opened with.
+    """
+    window = escrow.backup_labels()
+    if label not in window:
+        raise escrow.EscrowError(
+            f'{label} is not a generation the appliance encrypts to; the window is {", ".join(window)}'
+        )
+    # The file is read before anything is drawn, so a line that refuses
+    # stops the run with the escrow as it was.
+    on_file = backup_recipients(recipients_file)
+    if vault.registry.generations(label):
+        log.info('%s is escrowed already; recovering it for its public half', label)
+        secret = vault.recover(label)
+    else:
+        secret = escrow.generate(vault, label)
+    public = age.recipient(secret)
+
+    kept = {held: value for held, value in on_file.items() if held in window}
+    for dropped in sorted(set(on_file) - set(kept)):
+        log.info('%s has left the window; dropping its line from %s', dropped, recipients_file)
+    if kept.get(label) == public and kept == on_file:
+        log.info('%s already names %s for %s', recipients_file, public, label)
+        return public
+    if label in kept and kept[label] != public:
+        log.warning('%s named another recipient for %s than the escrow holds; replacing it', recipients_file, label)
+    kept[label] = public
+    _write_backup_recipients(recipients_file, kept)
+    log.info('%s names %s for %s; commit it', recipients_file, public, label)
+    return public
+
+
+def backup_recipients_problems(registry: escrow.Registry, path: Path) -> list[str]:
+    """What is wrong with the recipients file, held to the escrow. No kit, no key.
+
+    The file names exactly the generations of the box's window the escrow
+    holds, each once, each a native recipient. Whether each recipient is the
+    public half of the identity escrowed under its label is what only the kit
+    can answer; `backup_age_recipient` computes it from that identity when it
+    writes. An absent file is no problem here: the box is still built from
+    the escrow itself (`state-backend provision`), and nothing reads the file
+    yet.
+    """
+    if not path.is_file():
+        return []
+    try:
+        on_file = backup_recipients(path)
+    except age.AgeMissing:
+        raise
+    except age.AgeError as exc:
+        return [str(exc)]
+    escrowed = [label for label in escrow.backup_labels() if registry.generations(label)]
+    problems = [
+        f'{path}: names no recipient for {label}, which the escrow holds; '
+        f'`credentials derived {escrow.row_name(label)} generate` writes it'
+        for label in escrowed
+        if label not in on_file
+    ]
+    problems.extend(
+        f'{path}: names a recipient for {label}, which the escrow does not hold in the window the box encrypts to'
+        for label in sorted(set(on_file) - set(escrowed))
+    )
+    return problems
 
 
 def _push(forge: Forge, slot: Slot, value: str) -> None:

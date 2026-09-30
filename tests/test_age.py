@@ -370,3 +370,13 @@ def test_renovate_bumps_both_pins_in_one_pull_request() -> None:
 
     assert len(group(appliance_rule)) == 2
     assert group(age_rule) == group(appliance_rule)
+
+
+@needs_age
+def test_a_drawn_recipient_is_native_and_a_plugin_or_post_quantum_one_is_not() -> None:
+    # What `age-keygen` draws is the one kind a dump can be encrypted to beside
+    # the escrowed generations: a plugin's needs the plugin on the box, and a
+    # post-quantum one cannot be mixed with classic recipients.
+    assert age.is_native(age.generate().public)
+    assert not age.is_native('age1yubikey1qwt50d05nh5vutpdzmlg5wn80xq5negm4uj9ghv0snvdd3yysf5yw3rhl3t')
+    assert not age.is_native('age1pq1' + 'q' * 40)

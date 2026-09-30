@@ -24,6 +24,7 @@ a mint for somebody else's user is served by the legacy shim.
 
 from __future__ import annotations
 
+import ipaddress
 import shutil
 from pathlib import Path
 
@@ -31,20 +32,30 @@ import b2_api
 import oci
 import pytest
 from cloudflare_api import ACCOUNT_ID, FakeApi, console_seed
+from cryptography import x509
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fake_pulumi import RecordedPulumi
 from memory_kit import MemoryKit
 from oci_conventions import with_recorded_compartment, with_tenancy_ocid, with_unrecorded_compartment
 from oci_tenancy import KEY_LISTINGS, ROOT_USER, TENANCY, Tenancy
 
 from kluster import conventions
+from kluster.lib import config as lib_config
+from kluster.lib import stack_environment
+from kluster.lib import workstation as lib_workstation
+from kluster.lib.state_backend import settings as appliance_settings
 from kluster.scripts.credentials import (
+    age,
     b2,
     cloudflare,
     derived,
     entries,
+    escrow,
     masters,
     oci_iam,
     oci_slot,
+    pki,
     pulumi_config,
     workstation,
 )
@@ -53,6 +64,8 @@ from kluster.scripts.credentials import (
 # `.credentials/` directory, and the map is a different thing entirely.
 from kluster.scripts.credentials import slots as slot_map
 from kluster.scripts.credentials.kdbx import KdbxStore
+
+needs_age = pytest.mark.skipif(shutil.which(age.BINARY) is None, reason='age is not on PATH (mise x -- ...)')
 
 STACK = derived.ZONES_STACK
 COMPARTMENT = 'ocid1.compartment.oc1..physical'
@@ -1001,3 +1014,313 @@ def test_a_re_run_rotates_the_management_key(
     assert second != first
     assert b2_api_fake.named(b2.MANAGEMENT.name) == [second]
     assert runner.config[derived.B2_KEY_ID_KEY] == second
+
+
+# -- the `state-backend` stack's configuration -------------------------------
+
+
+def _state_backend_stack(checkout: Path, *, initialized: bool = True) -> tuple[pulumi_config.Stack, RecordedPulumi]:
+    """The `state-backend` stack over `checkout`, with its first checkpoint laid out unless `initialized` is false."""
+    if initialized:
+        path = checkout / stack_environment.CHECKPOINTS / '.pulumi' / 'stacks' / 'kluster-py'
+        path.mkdir(parents=True)
+        _ = (path / f'{derived.STATE_BACKEND_STACK}.json').write_text('{}')
+    runner = RecordedPulumi(stacks=[derived.STATE_BACKEND_STACK])
+    environment = pulumi_config.BackendEnvironment(operator=lambda: 'an-operator-passphrase')
+    return pulumi_config.Stack(
+        name=derived.STATE_BACKEND_STACK, directory=checkout, environment=environment, run=runner
+    ), runner
+
+
+@pytest.fixture
+def state_backend_stack(tmp_path: Path) -> tuple[pulumi_config.Stack, RecordedPulumi]:
+    return _state_backend_stack(tmp_path)
+
+
+def test_the_appliance_management_key_lands_in_its_stack_under_a_role_of_its_own(
+    b2_api_fake: b2_api.FakeApi,
+    b2_kit: KdbxStore,
+    physical_stack: tuple[pulumi_config.Stack, RecordedPulumi],
+    state_backend_stack: tuple[pulumi_config.Stack, RecordedPulumi],
+) -> None:
+    physical, _ = physical_stack
+    slot, runner = state_backend_stack
+    physicals = derived.b2_management(b2_kit, stack=physical)
+
+    key_id = derived.b2_state_backend_management(b2_kit, stack=slot)
+
+    assert runner.config[derived.B2_KEY_ID_KEY] == key_id
+    assert b2_api_fake.keys[key_id].secret == runner.config[derived.B2_KEY_KEY]
+    assert b2_api_fake.keys[key_id].capabilities == b2.CAPABILITIES
+    # A name of its own, so this mint's retirement leaves the key the
+    # `physical` stack holds live, and that stack's re-run leaves this one.
+    assert b2_api_fake.named(b2.STATE_BACKEND_MANAGEMENT.name) == [key_id]
+    assert b2_api_fake.named(b2.MANAGEMENT.name) == [physicals]
+    _ = derived.b2_management(b2_kit, stack=physical)
+    assert b2_api_fake.named(b2.STATE_BACKEND_MANAGEMENT.name) == [key_id]
+
+
+def test_a_re_run_rotates_the_appliance_management_key(
+    b2_api_fake: b2_api.FakeApi, b2_kit: KdbxStore, state_backend_stack: tuple[pulumi_config.Stack, RecordedPulumi]
+) -> None:
+    slot, runner = state_backend_stack
+    first = derived.b2_state_backend_management(b2_kit, stack=slot)
+
+    second = derived.b2_state_backend_management(b2_kit, stack=slot)
+
+    assert second != first
+    assert b2_api_fake.named(b2.STATE_BACKEND_MANAGEMENT.name) == [second]
+    assert runner.config[derived.B2_KEY_ID_KEY] == second
+
+
+@needs_age
+def test_the_state_backend_rows_refuse_a_stack_with_no_checkpoint_before_anything_is_minted(
+    b2_api_fake: b2_api.FakeApi, b2_kit: KdbxStore, vault_in_hand: escrow.Vault, tmp_path: Path
+) -> None:
+    # The stack's first `stack init` is the driver's, which checks the working
+    # copy and leaves the checkpoint for the operator to land; a delivery that
+    # created it would skip both.
+    slot, runner = _state_backend_stack(tmp_path, initialized=False)
+    _ = escrow.generate(vault_in_hand, escrow.CA)
+    public_file = tmp_path / 'host-key.txt'
+
+    for deliver in (
+        lambda: derived.b2_state_backend_management(b2_kit, stack=slot),
+        lambda: derived.state_backend_server(vault_in_hand, stack=slot),
+        lambda: derived.state_backend_host_key(stack=slot, public_file=public_file),
+    ):
+        with pytest.raises(
+            pulumi_config.SlotRefused, match=f'operator-stack {derived.STATE_BACKEND_STACK} pulumi stack init'
+        ):
+            deliver()
+
+    assert b2_api_fake.named(b2.STATE_BACKEND_MANAGEMENT.name) == []
+    assert runner.invocations == []
+    assert not public_file.exists()
+
+
+def test_a_value_in_the_clear_that_opens_with_dashes_reaches_the_config(
+    state_backend_stack: tuple[pulumi_config.Stack, RecordedPulumi],
+) -> None:
+    # A certificate opens with `-----BEGIN`, which the CLI reads as a flag
+    # when it is an argument; standard input is the one way it lands.
+    slot, runner = state_backend_stack
+    certificate = '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----'
+
+    slot.set(derived.CA_CERT_KEY, certificate)
+
+    assert runner.config[derived.CA_CERT_KEY] == certificate
+
+
+@needs_age
+def test_the_server_certificate_chains_to_the_escrowed_ca_and_names_the_address(
+    state_backend_stack: tuple[pulumi_config.Stack, RecordedPulumi], vault_in_hand: escrow.Vault
+) -> None:
+    slot, runner = state_backend_stack
+    authority = pki.Authority.from_pem(escrow.generate(vault_in_hand, escrow.CA))
+
+    issued = derived.state_backend_server(vault_in_hand, stack=slot)
+
+    # The key a secret, the two certificates in the clear, and the three one
+    # issuance: the key opens the certificate the config holds.
+    secret_keys = {args[2] for args in runner.invocations if args[:2] == ['config', 'set'] and '--secret' in args}
+    assert secret_keys == {derived.SERVER_KEY_KEY}
+    assert runner.config[derived.SERVER_KEY_KEY] == issued.key_pem.decode().strip()
+    certificate = x509.load_pem_x509_certificate(runner.config[derived.SERVER_CERT_KEY].encode())
+    ca = x509.load_pem_x509_certificate(runner.config[derived.CA_CERT_KEY].encode())
+    key = serialization.load_pem_private_key(runner.config[derived.SERVER_KEY_KEY].encode(), password=None)
+    assert key.public_key().public_bytes(
+        serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+    ) == certificate.public_key().public_bytes(
+        serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+    certificate.verify_directly_issued_by(ca)
+    assert ca.public_key() == authority.key.public_key()
+    names = certificate.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    assert names.get_values_for_type(x509.IPAddress) == [ipaddress.ip_address(appliance_settings.ADDRESS)]
+
+
+def test_the_committed_public_half_is_the_configured_host_key(
+    state_backend_stack: tuple[pulumi_config.Stack, RecordedPulumi], tmp_path: Path
+) -> None:
+    slot, runner = state_backend_stack
+    public_file = tmp_path / 'host-key.txt'
+
+    public = derived.state_backend_host_key(stack=slot, public_file=public_file)
+
+    configured = serialization.load_ssh_private_key(runner.config[derived.HOST_KEY_KEY].encode(), password=None)
+    assert isinstance(configured, Ed25519PrivateKey)
+    derived_public = (
+        configured.public_key()
+        .public_bytes(serialization.Encoding.OpenSSH, serialization.PublicFormat.OpenSSH)
+        .decode()
+    )
+    (on_file,) = lib_config.lines(public_file, 'the host key')
+    assert on_file == derived_public == public
+    assert public.startswith('ssh-ed25519 ')
+
+
+def test_a_host_key_the_config_refused_leaves_no_public_half(
+    state_backend_stack: tuple[pulumi_config.Stack, RecordedPulumi], tmp_path: Path
+) -> None:
+    # Config before file: a file naming a key the configuration does not hold
+    # would pin a box nobody can reach.
+    slot, runner = state_backend_stack
+    runner.corrupts = True
+    public_file = tmp_path / 'host-key.txt'
+
+    with pytest.raises(pulumi_config.SlotRefused):
+        _ = derived.state_backend_host_key(stack=slot, public_file=public_file)
+
+    assert not public_file.exists()
+
+
+# -- the backup recipients file ---------------------------------------------
+
+
+@pytest.fixture
+def vault_in_hand(tmp_path: Path) -> escrow.Vault:
+    kit = MemoryKit()
+    registry = escrow.Registry.open(tmp_path / 'escrow')
+    _ = escrow.init(kit, registry)
+    return escrow.Vault.open(kit, registry)
+
+
+@needs_age
+def test_generate_writes_the_recipient_of_the_escrowed_identity(vault_in_hand: escrow.Vault, tmp_path: Path) -> None:
+    (label, *_) = escrow.backup_labels()
+    recipients_file = tmp_path / 'backup-recipients.txt'
+
+    drawn = derived.backup_age_recipient(vault_in_hand, label, recipients_file=recipients_file)
+
+    assert vault_in_hand.registry.generations(label) == [1]
+    assert drawn == age.recipient(vault_in_hand.recover(label))
+    assert derived.backup_recipients(recipients_file) == {label: drawn}
+    assert derived.backup_recipients_problems(vault_in_hand.registry, recipients_file) == []
+
+
+@needs_age
+def test_generate_over_an_escrowed_generation_writes_its_recipient_and_draws_nothing(
+    vault_in_hand: escrow.Vault, tmp_path: Path
+) -> None:
+    # The generations escrowed before the file existed: the label holds one
+    # identity for its lifetime, so the recipient is recovered, not drawn.
+    (label, *_) = escrow.backup_labels()
+    escrowed = escrow.generate(vault_in_hand, label)
+    recipients_file = tmp_path / 'backup-recipients.txt'
+
+    written = derived.backup_age_recipient(vault_in_hand, label, recipients_file=recipients_file)
+
+    assert vault_in_hand.registry.generations(label) == [1]
+    assert written == age.recipient(escrowed)
+    assert derived.backup_recipients(recipients_file) == {label: written}
+
+
+@needs_age
+def test_generate_replaces_a_line_that_disagrees_with_the_escrow(vault_in_hand: escrow.Vault, tmp_path: Path) -> None:
+    (label, *_) = escrow.backup_labels()
+    recipients_file = tmp_path / 'backup-recipients.txt'
+    _ = recipients_file.write_text(f'{label} {age.generate().public}\n')
+
+    written = derived.backup_age_recipient(vault_in_hand, label, recipients_file=recipients_file)
+
+    assert derived.backup_recipients(recipients_file) == {label: written}
+    assert written == age.recipient(vault_in_hand.recover(label))
+
+
+#: Recipients files that differ from an escrow holding the window's first
+#: generation, as templates: `{label}` is that generation, `{other}` one the
+#: escrow does not hold, `{a}` and `{b}` two recipients.
+DIFFERING = {
+    'missing-generation': ('{other} {a}\n', 'names no recipient for'),
+    'generation-not-escrowed': ('{label} {a}\n{other} {b}\n', 'which the escrow does not hold'),
+    'duplicate': ('{label} {a}\n{label} {b}\n', 'a second time'),
+    'no-recipient': ('{label}\n', 'line 1 of'),
+    'not-a-recipient': ('{label} age1notarecipient\n', 'is not an age recipient'),
+}
+
+
+@needs_age
+@pytest.mark.parametrize(('template', 'named'), DIFFERING.values(), ids=DIFFERING.keys())
+def test_check_refuses_a_recipients_file_that_differs_from_the_escrow(
+    vault_in_hand: escrow.Vault, tmp_path: Path, template: str, named: str
+) -> None:
+    (label, *_) = escrow.backup_labels()
+    _ = escrow.generate(vault_in_hand, label)
+    other = f'{escrow.BACKUP}/{appliance_settings.AGE_GENERATION + 1}'
+    recipients_file = tmp_path / 'backup-recipients.txt'
+    _ = recipients_file.write_text(
+        template.format(label=label, other=other, a=age.generate().public, b=age.generate().public)
+    )
+
+    problems = derived.backup_recipients_problems(vault_in_hand.registry, recipients_file)
+
+    assert problems
+    assert any(named in problem for problem in problems), problems
+
+
+@needs_age
+def test_check_never_prints_a_private_key_pasted_into_the_recipients_file(
+    vault_in_hand: escrow.Vault, tmp_path: Path
+) -> None:
+    (label, *_) = escrow.backup_labels()
+    secret = age.generate().secret
+    recipients_file = tmp_path / 'backup-recipients.txt'
+    _ = recipients_file.write_text(f'{label} {secret}\n')
+
+    problems = derived.backup_recipients_problems(vault_in_hand.registry, recipients_file)
+
+    assert problems
+    assert all(secret.removeprefix(age.SECRET_PREFIX) not in problem for problem in problems)
+
+
+def test_check_has_no_complaint_while_no_recipients_file_exists(vault_in_hand: escrow.Vault, tmp_path: Path) -> None:
+    assert derived.backup_recipients_problems(vault_in_hand.registry, tmp_path / 'backup-recipients.txt') == []
+
+
+def test_a_value_in_the_clear_that_does_not_read_back_is_refused(tmp_path: Path) -> None:
+    # The read-back is the whole proof a plain value landed, as it is for a
+    # secret: the file changes either way.
+    slot, runner = _state_backend_stack(tmp_path)
+    runner.corrupts = True
+
+    with pytest.raises(pulumi_config.SlotRefused, match='does not read back'):
+        slot.set(derived.CA_CERT_KEY, '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----')
+
+
+def test_a_file_to_commit_outside_the_checkout_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # An installed package resolves the target inside that installation,
+    # where no commit picks the file up.
+    monkeypatch.setattr(lib_workstation, 'repo_root', lambda: tmp_path / 'checkout')
+
+    with pytest.raises(lib_workstation.WorkstationError, match='is not in the checkout'):
+        _ = derived.committed_target(tmp_path / 'installed' / 'host-key.txt')
+
+    inside = tmp_path / 'checkout' / 'host-key.txt'
+    assert derived.committed_target(inside) == inside
+
+
+@needs_age
+def test_generate_drops_a_generation_outside_the_window(vault_in_hand: escrow.Vault, tmp_path: Path) -> None:
+    (label, *_) = escrow.backup_labels()
+    outside = f'{escrow.BACKUP}/{appliance_settings.AGE_GENERATION + 1}'
+    recipients_file = tmp_path / 'backup-recipients.txt'
+    _ = recipients_file.write_text(f'{outside} {age.generate().public}\n')
+
+    written = derived.backup_age_recipient(vault_in_hand, label, recipients_file=recipients_file)
+
+    assert derived.backup_recipients(recipients_file) == {label: written}
+
+
+@needs_age
+def test_a_recipients_file_that_refuses_stops_generate_before_anything_is_drawn(
+    vault_in_hand: escrow.Vault, tmp_path: Path
+) -> None:
+    (label, *_) = escrow.backup_labels()
+    recipients_file = tmp_path / 'backup-recipients.txt'
+    _ = recipients_file.write_text(f'{label}\n')
+
+    with pytest.raises(age.AgeError, match='line 1 of'):
+        _ = derived.backup_age_recipient(vault_in_hand, label, recipients_file=recipients_file)
+
+    assert vault_in_hand.registry.generations(label) == []

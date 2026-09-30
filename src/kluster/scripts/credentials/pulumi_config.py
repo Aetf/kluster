@@ -268,9 +268,17 @@ class Stack:
         return cast('dict[str, Any]', parsed)
 
     def set(self, key: str, value: str) -> None:
-        """Write a non-secret key, in plain text in the committed file."""
+        """Write a non-secret key, in plain text in the committed file, and read it back.
+
+        On standard input, as a secret is, though this value is public: the
+        CLI reads an argument that opens with a dash as a flag (`bad flag
+        syntax`), and a PEM certificate opens with five. The read-back is the
+        proof `set_secret` makes.
+        """
         log.info('setting %s on the %s stack', key, self.name)
-        _ = self._pulumi('config', 'set', key, value, '--stack', self.name)
+        _ = self._pulumi('config', 'set', key, '--stack', self.name, stdin=value)
+        if self.get(key) != value:
+            raise SlotRefused(f'{key} on the {self.name} stack does not read back as what was just written')
 
     def set_secret(self, key: str, value: str) -> None:
         """Write a secret key, and read it back to prove the slot holds it.

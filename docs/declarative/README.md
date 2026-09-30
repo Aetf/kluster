@@ -19,9 +19,11 @@ them.
 > per site: the two sites change at the same rate and reference each
 > other, so a split by site would buy nothing and cost a boundary.
 
-Five stacks in one project, one environment: the four CI deploys, plus
-`github`, which declares the forge those four are deployed by and is
-applied by hand.
+One project and one environment for every stack: the four CI deploys,
+plus the operator stacks it does not apply
+([framework/pulumi.md](../framework/pulumi.md) §3.3) — `github`, which
+declares the forge those four are deployed by, and `state-backend`,
+whose program is unwritten.
 
 | Stack | What it owns | Change cadence |
 | --- | --- | --- |
@@ -29,7 +31,7 @@ applied by hand.
 | `dns` | zones, the anchors, and the base records no app owns | low, and independent of the cluster |
 | `k8s-base` | everything cluster-scoped that speaks the Kubernetes API | medium, mostly chart bumps |
 | `apps` | every application, its namespace, storage, exposure and records | high — the daily driver |
-| `github` | the repositories, their Environments and gates, branch protection | lowest, and the only stack CI does not apply |
+| `github` | the repositories, their Environments and gates, branch protection | lowest, and an operator stack, which CI does not apply |
 
 Boundary rules:
 

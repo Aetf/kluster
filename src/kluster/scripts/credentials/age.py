@@ -116,6 +116,18 @@ def recipient(secret: str) -> str:
     return public
 
 
+def is_native(value: str) -> bool:
+    """Whether `value`, a recipient `check_recipient` took, is a native X25519 one: what `age-keygen` draws.
+
+    `age1` and no second `1`, since neither `age` nor bech32's data alphabet
+    holds one. Every other kind parses and breaks a dump: a plugin recipient
+    (`age1<plugin>1…`) needs its plugin on the box, which installs `age`
+    alone, and a post-quantum one (`age1pq1…`) cannot be mixed with the
+    classic recipients every dump is encrypted to beside it.
+    """
+    return value.startswith(PUBLIC_PREFIX) and value.count('1') == 1
+
+
 def check_recipient(value: str, *, name: str) -> None:
     """Raise unless the pinned `age` takes `value` as a recipient.
 

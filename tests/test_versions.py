@@ -35,8 +35,8 @@ def test_every_kind_shares_one_namespace_and_differs_by_key_prefix() -> None:
     """Which is what lets one renovate manager per kind match its own entries.
 
     Three kinds and one `versions:` namespace, read the same way from any stack
-    because the keys are project-level configuration rather than five stacks'
-    copies of the same value. The gateway's root filesystems are in the `image`
+    because the keys are project-level configuration rather than one copy of
+    the same value per stack. The gateway's root filesystems are in the `image`
     kind and not one of their own: they are registry images, so an image
     reference is what pins them.
     """

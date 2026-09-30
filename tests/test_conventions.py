@@ -938,8 +938,12 @@ def test_no_workflow_identifies_an_account_by_id() -> None:
 #: step there, with any flags it carries ahead of the name. The name is bare or
 #: quoted, and read as its last segment, so a fully qualified
 #: `<organization>/<project>/<stack>` is the stack it ends in.
+#:
+#: The cluster ends at its **first** `s`, as the CLI's flag parser reads it:
+#: `-sstate-backend` is `-s state-backend`. A greedy cluster would end at the
+#: last `s` it could and read the stack as `tate-backend`.
 PULUMI_STACK_NAMED = re.compile(
-    r"""(?:--stack(?:=|\s+)|(?<![\w-])-[A-Za-z]*s(?:=|\s*)|\bstack\s+select\s+(?:--?[\w-]+\s+)*)['"]?(?:[\w.-]+/)*([\w.-]+)"""
+    r"""(?:--stack(?:=|\s+)|(?<![\w-])-[A-Za-z]*?s(?:=|\s*)|\bstack\s+select\s+(?:--?[\w-]+\s+)*)['"]?(?:[\w.-]+/)*([\w.-]+)"""
 )
 
 #: How a step runs the `operator-stack` driver, however it is started (`uv run
@@ -1922,6 +1926,26 @@ def test_every_stack_in_the_census_has_a_program_and_nothing_else_does() -> None
     from kluster import stacks
 
     assert set(stacks.STACKS) == set(conventions.STACK_NAMES.names())
+
+
+@pytest.mark.asyncio
+async def test_the_state_backend_stack_raises_from_its_entrypoint() -> None:
+    # An unwritten stack announces itself where it would run (AGENTS.md): the
+    # census names it so the driver and the `credentials` commands reach its
+    # configuration and its committed checkpoint, and its program refuses
+    # rather than declaring nothing -- an `up` over an empty program would
+    # plan the deletion of everything its state holds.
+    from kluster import stacks
+
+    with pytest.raises(NotImplementedError, match='state-backend'):
+        await stacks.STACKS[conventions.STACK_NAMES.state_backend]()
+
+
+def test_the_state_backend_stack_keeps_its_state_committed() -> None:
+    # rfc-006 §4 declares the appliance in it, the backend every other stack
+    # keeps its state in, which must exist before Pulumi can act
+    # (framework/ci.md §1), so that backend cannot hold its own.
+    assert identity.OPERATOR_STACKS[conventions.STACK_NAMES.state_backend] is identity.StateHome.COMMITTED
 
 
 def test_no_two_stacks_share_a_name() -> None:

@@ -194,7 +194,7 @@ SEEDS: dict[str, Seed] = {
             member=B2,
             title='B2 seed key',
             identifier='the application key id',
-            mints='the management key and every prefix-scoped writer key',
+            mints='the management keys and every prefix-scoped writer key',
             mints_own_successor=True,
         ),
     )

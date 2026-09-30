@@ -50,7 +50,11 @@ jobs:
           # there is: `docs/framework/ci.md` fails `!docs/**` and `!**/*.md`
           # but clears `!.vscode/**`, which is one match and therefore a hit.
           # `every` asks the question the list is written to ask: is this
-          # file none of the four inert kinds?
+          # file none of the inert kinds?
+          #
+          # `checkpoints/` is the committed state of the operator stacks whose
+          # state lives in this repository (framework/pulumi.md §3.3). No stack
+          # this matrix previews reads it, and no CI job runs the stacks that do.
           predicate-quantifier: every
           filters: |
             dns: &code
@@ -58,6 +62,7 @@ jobs:
               - '!**/*.md'
               - '!.vscode/**'
               - '!.gitignore'
+              - '!checkpoints/**'
             k8s-base: *code
             apps: *code
 

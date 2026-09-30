@@ -37,7 +37,15 @@ class RecordedPulumi:
                 assert stdin is not None, 'a secret was passed as an argument rather than on standard input'
                 self.config[key] = stdin
                 return ''
+            case ['config', 'set', key, '--stack', _]:
+                assert stdin is not None, 'a value named no argument and came on no standard input'
+                self.config[key] = stdin
+                return ''
             case ['config', 'set', key, value, '--stack', _]:
+                if value.startswith('-'):
+                    # What the pinned CLI does with an argument that opens
+                    # with a dash: its flag parser takes it for a flag.
+                    raise SlotRefused(f'`pulumi config set` failed: bad flag syntax: {value}')
                 self.config[key] = value
                 return ''
             case ['config', 'get', key, '--stack', name]:
