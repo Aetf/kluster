@@ -11,6 +11,14 @@
     (§8), and one way of driving the two stacks an operator runs by hand
     (§9).
 *   **Created:** 2026-09-27
+*   **Updated:** 2026-09-30. §3.3's second check reads the engine's own
+    secret-marking rules at the pin rather than one level of them: a key
+    `additionalSecretOutputs` names is held to ciphertext as an input as
+    well as an output; an output whose input of the same name holds
+    ciphertext anywhere in it is one envelope, read down through objects
+    where both are objects; a null passes, holding nothing; an envelope
+    holding its plaintext is refused; and the resources of pending
+    operations are read as well as the resources.
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
@@ -281,13 +289,26 @@ public: review comes after the push.
     `pulumi stack export --show-secrets` — and fails the run if any of
     those strings appears in the file outside a ciphertext envelope,
     whole or line by line for a multi-line value such as a key.
-*   **Every property the program declares secret is ciphertext**, which
-    needs no value to check. For each resource in the file, every key
-    its recorded options name in `additionalSecretOutputs`, and every
-    output whose input of the same name the file holds as ciphertext, is
-    itself a ciphertext envelope. It holds only what the program
-    recorded. A resource that reached the file by a path the program
-    did not run carries neither trigger: `pulumi import --file` records
+*   **Every property the engine marks secret is ciphertext**, which
+    needs no value to check. It reads the engine's own rules at the pin.
+    A key a resource's recorded options name in `additionalSecretOutputs`
+    is ciphertext as an output, which the engine wraps whole, and as an
+    input too, which the engine leaves as the program passed it
+    ([`step_executor.go` at 3.257.0](https://github.com/pulumi/pulumi/blob/v3.257.0/pkg/resource/deploy/step_executor.go#L512-L565)).
+    An output whose input of the same name holds ciphertext anywhere in
+    it is ciphertext, and where both are objects the rule is read again
+    one level down
+    ([`annotateSecrets` at 3.257.0](https://github.com/pulumi/pulumi/blob/v3.257.0/pkg/resource/plugin/provider_plugin.go#L900-L929)).
+    Ciphertext is one envelope, since what the engine marks it wraps
+    whole, or a null, which holds nothing; an envelope holding its
+    `plaintext`, the form `pulumi stack export --show-secrets` writes, is
+    refused wherever it is. Every resource in the file is held to this,
+    and so is the resource of every operation the file holds pending,
+    which the engine writes before the operation starts and which a
+    killed run leaves behind
+    ([`snapshot.go` at 3.257.0](https://github.com/pulumi/pulumi/blob/v3.257.0/pkg/backend/snapshot.go#L426-L436)).
+    It holds only what the program recorded. A resource that reached the
+    file by a path the program did not run carries neither trigger: `pulumi import --file` records
     no secret output names and takes the provider's read as its inputs
     ([`import.go` at 3.257.0](https://github.com/pulumi/pulumi/blob/v3.257.0/pkg/resource/deploy/import.go#L744-L762)),
     so a box imported that way would carry its Ignition's keys in the

@@ -9,10 +9,11 @@ file is still private:
     (`require_current`), and that the checkpoint is not conflicted. A run from
     an older checkpoint plans against a state that is not the latest one.
 -   **After a run**, that the file holds no secret value in the clear
-    (`cleartext`), and that every property the program declares secret is
-    ciphertext (`undeclared`). Both name the property they found and never
-    the value. A run that can write is recorded as unchecked before it
-    starts (`record`), and the record comes off only when the checks pass.
+    (`cleartext`), and that every property the engine marks secret is
+    ciphertext wherever the file records it (`undeclared`). Both name the
+    property they found and never the value. A run that can write is
+    recorded as unchecked before it starts (`record`), and the record comes
+    off only when the checks pass.
 -   **After a run**, too, that the stack has no file in the backend's
     directory but its checkpoint and that checkpoint's `.bak` (`strays`): a
     compressed or retained copy is a file the checks never read.
@@ -277,28 +278,130 @@ def cleartext(document: Mapping[str, Any], secrets: Mapping[str, str]) -> list[F
 
 
 def undeclared(document: Mapping[str, Any]) -> list[Finding]:
-    """Every property the program declared secret that `document` records in the clear.
+    """Every place `document` records in the clear a property the engine marks secret.
 
-    Declared means one of two things the file itself records: a key the
-    resource's options name in `additionalSecretOutputs`, and an output whose
-    input of the same name the file holds as ciphertext, which the engine
-    carries into the output of that name on every write. Neither needs a
-    value to check.
+    Read from the file alone, so it needs no value to check. The engine marks
+    a property secret by two rules at the pinned CLI (framework/pulumi.md
+    §3.3 cites the source), and every resource state the file records
+    (`recorded`) is held to both:
+
+    -   **A key the resource's options name in `additionalSecretOutputs`.**
+        The engine wraps that output whole. It leaves the input of the same
+        name as the program passed it, which is the program's to mark, and
+        the check holds it to ciphertext too.
+    -   **An output whose input of the same name holds ciphertext anywhere
+        in it.** Where both are objects the engine recurses into them;
+        otherwise it wraps the whole output (`_carried`). The engine applies
+        the recursion only for a provider that does not accept secrets, and
+        the file does not record which provider did, so a provider that
+        accepts them is held to it as well.
+
+    In the clear means anything but one envelope or a null: what the engine
+    marks it wraps whole, so a structure with envelopes inside it is refused,
+    whether the engine's marking was lost at its top or a provider that
+    accepts secrets marked only inside it. Either input rule is cleared the
+    same way, by the program passing that input whole as a secret, and the
+    refusal says which input.
+
+    An envelope that holds its `plaintext` rather than a `ciphertext` is the
+    value in the clear: the form `pulumi stack export --show-secrets` writes,
+    which the engine loads from a checkpoint as readily as the encrypted one.
+
+    A place is named once, by the first rule that finds it.
     """
-    findings: list[Finding] = []
-    for resource in resources(document):
-        urn = str(resource.get('urn', '?'))
+    findings: dict[str, Finding] = {}
+    for owner, resource in recorded(document):
         inputs = cast('dict[str, object]', resource.get('inputs') or {})
         outputs = cast('dict[str, object]', resource.get('outputs') or {})
+        found: list[Finding] = []
         for key in cast('list[str]', resource.get('additionalSecretOutputs') or []):
-            if key in outputs and not envelope(outputs[key]):
-                findings.append(
-                    Finding(f'{urn} outputs.{key}', 'is named in additionalSecretOutputs and is not ciphertext')
+            if key in inputs and _clear(inputs[key]):
+                found.append(
+                    Finding(
+                        f'{owner} inputs.{key}',
+                        f'is named in additionalSecretOutputs and is not ciphertext; {_REMEDY.format(key=key)}',
+                    )
                 )
-        for key, value in inputs.items():
-            if envelope(value) and key in outputs and not envelope(outputs[key]):
-                findings.append(Finding(f'{urn} outputs.{key}', 'is ciphertext as an input and not as an output'))
-    return findings
+            if key in outputs and _clear(outputs[key]):
+                found.append(
+                    Finding(f'{owner} outputs.{key}', 'is named in additionalSecretOutputs and is not ciphertext')
+                )
+        found.extend(_carried(inputs, outputs, f'{owner} outputs', None))
+        found.extend(
+            Finding(where, 'is a secret envelope holding its plaintext')
+            for where, value in _envelopes(resource, owner, '')
+            if 'plaintext' in cast('dict[str, object]', value)
+        )
+        for finding in found:
+            _ = findings.setdefault(finding.where, finding)
+    return list(findings.values())
+
+
+#: How an input refusal is cleared: the input passed whole as a secret is one
+#: envelope at the next write, and the engine then wraps the output of that
+#: name too (framework/pulumi.md §3.3).
+_REMEDY = 'pass the input `{key}` whole as `pulumi.Output.secret(...)`'
+
+
+def recorded(document: Mapping[str, Any]) -> Iterator[tuple[str, dict[str, Any]]]:
+    """Every resource state a checkpoint file records, with the name a finding gives it.
+
+    Each of `latest.resources`, by its URN, and the resource of each of
+    `latest.pending_operations`, by its place in that list and its URN: the
+    state the engine began an operation from, which the file holds from
+    before the operation runs until it ends, and for good where a run was
+    killed partway.
+    """
+    for resource in resources(document):
+        yield str(resource.get('urn', '?')), resource
+    operations = cast('list[object]', _member(document, 'checkpoint', 'latest', 'pending_operations') or [])
+    for index, operation in enumerate(operations):
+        resource = _member(cast('dict[str, Any]', operation), 'resource') if isinstance(operation, dict) else None
+        if isinstance(resource, dict):
+            resource = cast('dict[str, Any]', resource)
+            yield f'pending_operations[{index}] {resource.get("urn", "?")}', resource
+
+
+def _carried(
+    inputs: Mapping[str, object], outputs: Mapping[str, object], where: str, top: str | None
+) -> Iterator[Finding]:
+    """The engine's `annotateSecrets`, read against the file rather than applied to it.
+
+    For each input with an output of the same name: where both are objects,
+    the same again one level down; otherwise, where the input holds
+    ciphertext anywhere — an array one element of which is secret, an
+    object one member of which is — the whole output is ciphertext. `top`
+    is the resource's input the walk is under, which the remedy names: the
+    engine wraps an output whole for an input of its name that is wholly
+    secret, at the top of the resource, whichever provider wrote it.
+    """
+    for key, given in inputs.items():
+        if key not in outputs:
+            continue
+        held = outputs[key]
+        if _object(given) and _object(held):
+            yield from _carried(
+                cast('dict[str, object]', given), cast('dict[str, object]', held), f'{where}.{key}', top or key
+            )
+        elif _clear(held) and next(_envelopes(given, '', ''), None) is not None:
+            yield Finding(
+                f'{where}.{key}',
+                'holds ciphertext as an input and is not ciphertext as an output; ' + _REMEDY.format(key=top or key),
+            )
+
+
+def _object(value: object) -> bool:
+    """Whether the engine reads `value` as an object: a map, and not one carrying the signature key.
+
+    A signed map is a secret, an asset, an archive or a resource reference,
+    each a value of its own kind rather than an object to recurse into.
+    """
+    return isinstance(value, dict) and SECRET_SIG not in cast('dict[str, object]', value)
+
+
+def _clear(value: object) -> bool:
+    """Whether `value`, where the engine marks it secret, is anything but an envelope or a null."""
+    return value is not None and not envelope(value)
 
 
 def record(checkout: Path, stack: str) -> Path:
