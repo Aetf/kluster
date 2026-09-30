@@ -4,7 +4,7 @@
   "version": "1.3.0",
   "parameterization": {
     "name": "b2",
-    "version": "0.13.2",
-    "value": "eyJyZW1vdGUiOnsidXJsIjoicmVnaXN0cnkub3BlbnRvZnUub3JnL2JhY2tibGF6ZS9iMiIsInZlcnNpb24iOiIwLjEzLjIifX0="
+    "version": "0.14.0",
+    "value": "eyJyZW1vdGUiOnsidXJsIjoicmVnaXN0cnkub3BlbnRvZnUub3JnL2JhY2tibGF6ZS9iMiIsInZlcnNpb24iOiIwLjE0LjAifX0="
   }
 }
