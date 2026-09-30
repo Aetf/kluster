@@ -50,9 +50,9 @@ A `pulumi` run needs two things that cannot be looked up: `PULUMI_BACKEND_URL`,
 written by `state-backend provision` into the same slot as the client bundle it
 authenticates with, and the passphrase that opens the stack's configuration.
 That is the stack passphrase in `PULUMI_CONFIG_PASSPHRASE` for every stack
-but the operator stacks — the stacks no CI job runs, `github` today — whose
-configuration is encrypted under the operator passphrase, which no CI
-environment carries. Each passphrase is a random secret whose only recoverable
+but the operator stacks — the stacks no CI job runs, `github` and
+`state-backend` today — whose configuration is encrypted under the
+operator passphrase, which no CI environment carries. Each passphrase is a random secret whose only recoverable
 copy is a ciphertext committed under `escrow/`, which the offline kit's recovery
 key alone opens (docs/credentials.md §2.2). The rest is read from
 `.credentials/`, a git-ignored directory in the checkout holding everything
@@ -86,11 +86,11 @@ writes the bundle.
 
 `pulumi` reads one passphrase per process, so which one a run needs depends on
 the stack it names, and `mise.toml` cannot see the command line. A stack no CI
-job runs -- an operator stack, `github` today -- therefore goes through the
-`operator-stack` driver: `operator-stack github plan`, `operator-stack github
-up`, or `operator-stack github pulumi <pulumi arguments>`, which fixes the stack
-and hands `pulumi` that stack's backend and passphrase (docs/framework/pulumi.md
-§3.3). A bare `pulumi … --stack github` meets the stack passphrase and stops at
+job runs -- an operator stack, `github` or `state-backend` today --
+therefore goes through the `operator-stack` driver: `operator-stack github
+plan`, `operator-stack github up`, or `operator-stack github pulumi <pulumi
+arguments>`, which fixes the stack and hands `pulumi` that stack's backend and
+passphrase (docs/framework/pulumi.md §3.3). A bare `pulumi … --stack github` meets the stack passphrase and stops at
 `error: incorrect passphrase`, having written nothing.
 
 One provider credential is in that directory: the OCI key the state-backend

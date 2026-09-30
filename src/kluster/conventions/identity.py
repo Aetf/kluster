@@ -10,11 +10,13 @@ from types import MappingProxyType
 CLUSTER_NAME = 'kluster'
 
 #: The state-backend appliance (physical/state-backend.md), which is one name
-#: in four places: the prefix on every cloud resource the box owns, the IAM
-#: principal its provisioner signs as, the workstation slot that key lands in,
-#: and the `credentials derived oci-state-backend` subcommand that mints it. A
-#: name three packages have to agree on is a convention, not a setting of any
-#: one of them.
+#: wherever the appliance is named: the operator stack that declares it
+#: (`STACK_NAMES.state_backend`), the prefix on every cloud resource the box
+#: owns, the IAM principal its provisioner signs as, the workstation slot that
+#: key lands in, and the `credentials derived` rows that mint or draw what the
+#: box runs on (`oci-state-backend`, `state-backend-server`, ...). A name
+#: several packages have to agree on is a convention, not a setting of any one
+#: of them.
 STATE_BACKEND = 'state-backend'
 
 #: The stack that owns the cloud installation (declarative/physical.md), which
@@ -45,13 +47,16 @@ class StackNames:
     k8s_base: str
     apps: str
     github: str
+    state_backend: str
 
     def names(self) -> tuple[str, ...]:
         """Every stack name, in declaration order."""
         return tuple(value for value in vars(self).values() if isinstance(value, str))
 
 
-STACK_NAMES = StackNames(physical=PHYSICAL, dns='dns', k8s_base='k8s-base', apps='apps', github='github')
+STACK_NAMES = StackNames(
+    physical=PHYSICAL, dns='dns', k8s_base='k8s-base', apps='apps', github='github', state_backend=STATE_BACKEND
+)
 
 
 class StateHome(Enum):
@@ -74,7 +79,14 @@ class StateHome(Enum):
 #: keeps every one of them out of CI (`test_conventions`), and the
 #: `operator-stack` driver runs these and nothing else, with a backend chosen
 #: by the home recorded here (`kluster.lib.stack_environment`).
-OPERATOR_STACKS: Mapping[str, StateHome] = MappingProxyType({STACK_NAMES.github: StateHome.BACKEND})
+#:
+#: `state-backend` is the one whose state is committed: rfc-006 §4 declares the
+#: appliance in it, the backend every other stack keeps its state in, which
+#: must exist before Pulumi can act (framework/ci.md §1), so its own state
+#: cannot live there. Its program raises until that declaration is written.
+OPERATOR_STACKS: Mapping[str, StateHome] = MappingProxyType(
+    {STACK_NAMES.github: StateHome.BACKEND, STACK_NAMES.state_backend: StateHome.COMMITTED}
+)
 
 #: The unattended rebuild drill (physical/state-backend.md §7.3), which is
 #: one name in four places: the ops repository's Environment its credentials

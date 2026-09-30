@@ -279,9 +279,12 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     which layer reads it.
 -   **The list is a deny-list, and only reads as one under
     `predicate-quantifier: every`.** A file is code unless it is under
-    `docs/`, is a markdown file, is under `.vscode/` or is
-    `.gitignore` — so a path nobody thought of defaults to running the
-    job rather than to being missed. The action's default quantifier
+    `docs/`, is a markdown file, is under `.vscode/`, is `.gitignore`
+    or is under `checkpoints/` — so a path nobody thought of defaults to
+    running the job rather than to being missed. `checkpoints/` holds the
+    committed state of the operator stacks whose state is in this
+    repository ([pulumi.md](pulumi.md) §3.3), which no stack CI previews
+    reads and no CI job runs. The action's default quantifier
     asks whether *any* pattern matches, and each negation matches every
     file the other negations are there to exclude, so an all-negation
     list under the default selects every file there has ever been.
@@ -1168,9 +1171,9 @@ Every pull request that touches code runs both entries. `prove` is
 `fail-fast: true`, so an entry that fails first can cancel the other
 two: which names are reported failed and which canceled varies
 between runs and carries no information. A pull request that touches
-only documentation, `.vscode/` or `.gitignore` runs no `preview` at
-all — `changes` selects an empty set and the matrix job stands down.
-It runs no `prove` either: documentation is not on noop-automerge's
+only documentation, `.vscode/`, `.gitignore` or `checkpoints/` runs no
+`preview` at all — `changes` selects an empty set and the matrix job stands down.
+It runs no `prove` either: none of those paths is on noop-automerge's
 allow-list, and `sdks/` is on it only beside renovate's bump of
 `Pulumi.yaml`, so such a pull request is merged by hand (§3). A candidate the list does
 admit runs `prove` against the missing stacks, which errors, and is

@@ -323,7 +323,8 @@ Which values take which route here is a design decision:
 ### 3.2 Version pins, and where a value shared by every stack lives
 
 Pulumi has no include between stack configuration files, so a value
-five stacks agree on would otherwise be five copies drifting apart.
+every stack agrees on would otherwise be one copy per stack, drifting
+apart.
 What it does have is **project-level configuration**: a `config:` block
 in `Pulumi.yaml` whose values apply to every stack, which a stack's own
 file overrides only where it deliberately differs. Two limits come with
@@ -374,8 +375,9 @@ it starts from the workstation that holds the operator passphrase. The census of
 `OPERATOR_STACKS` in `conventions.identity`, beside the stack names,
 recording for each where its state lives: the appliance's backend, with
 every stack CI deploys, or a checkpoint committed to this repository.
-Today it holds `github`, whose state is in the backend; no stack keeps
-its state committed yet. Everything that has to know which stacks are
+Today it holds `github`, whose state is in the backend, and
+`state-backend`, whose state is committed and whose program is
+unwritten. Everything that has to know which stacks are
 held away from CI reads that census: the operator passphrase covers
 exactly these ([credentials.md](../credentials.md) §3),
 the census over the workflows keeps every command naming one out of CI

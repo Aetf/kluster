@@ -124,7 +124,7 @@ _ORDER = """when to run what:
          prints the OCID to record in conventions and commit.
     7. credentials derived operator-passphrase generate
          The operator passphrase, which encrypts the operator stacks (github
-         today), before anything reads or writes their config. Stage 4's
+         and state-backend), before anything reads or writes their config. Stage 4's
          command on a second row, and separate from it for the one reason the
          row exists: this value goes to no CI Environment, so the stack
          holding the forge's admin token is unreadable by anything CI can
@@ -164,6 +164,25 @@ _ORDER = """when to run what:
          recorded, read back out of the github stack's config -- which needs
          stage 7's passphrase. It pushes the stack passphrase into every
          Environment and the operator passphrase into none.
+
+  the state-backend stack's configuration, outside the bring-up
+    operator-stack state-backend pulumi stack init
+    credentials derived b2-state-backend-management mint
+    credentials derived state-backend-server issue
+    credentials derived state-backend-host-key generate
+    credentials derived backup-age-<N> generate
+         The keys the state-backend stack's box is rendered from. A
+         bring-up does not need them: stage 3 builds the box, and reads
+         none of this. The stack's state is committed, so its first
+         checkpoint, and the stack file holding its encryptionsalt, come
+         from the driver and are landed like any change; each command
+         after it refuses until they are. Then its own B2 management key,
+         the server key and certificate issued from the escrowed CA, and
+         the SSH host key, whose public half is a file to commit beside
+         the config; all need stage 7's passphrase. The last writes each
+         escrowed backup generation's public half into the committed
+         recipients file, once per generation the box encrypts to,
+         recovering one the escrow already holds.
 
   on a workstation that develops without the kit
     Copy the .credentials directory from a machine that has one: the
@@ -658,9 +677,9 @@ def build_parser() -> argparse.ArgumentParser:
     # person makes -- delivered into the stack that authenticates with it, or
     # escrowed where nothing reads it yet.
     #
-    # A row joins the tree when its consumer exists -- a mint with nowhere to
-    # deliver would park a secret, which is the one thing the register forbids
-    # outright.
+    # A row joins the tree when it has a slot to be delivered into -- a mint
+    # with nowhere to deliver would park a secret, which is the one thing the
+    # register forbids outright.
     derived_subject = subjects.add_parser(
         'derived',
         help='the credentials each consumer runs on, one row each, and the map of them',
@@ -699,7 +718,9 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             'Hold the escrow/ directory against the rows that are expected to be in it: a ciphertext for '
             'every escrowed row, each one really an age file, generations numbered densely from the '
-            'first, and every line of escrow/RECIPIENTS one the pinned `age` accepts as a recipient. Every '
+            'first, every line of escrow/RECIPIENTS one the pinned `age` accepts as a recipient, and the '
+            "appliance's backup recipients file, where there is one, naming exactly the escrowed generations "
+            'its dumps are encrypted to. Every '
             'problem is reported rather than the first, because a registry is checked to learn what is '
             'wrong with it. Nothing is decrypted, so this needs no kit -- it is the one command a stranger '
             'to the system can run, with `age` on PATH.'
@@ -886,9 +907,88 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_bundle_dir(management_mint)
 
-    # The one row drawn here and escrowed nowhere: its private half lands in
-    # the ops repository's Environment through the GitHub sink, its public half
-    # in a committed file the appliance's recipient list appends (`derived.py`).
+    # The `state-backend` stack's rows: the stable keys its program renders
+    # the box from, each into that stack's committed configuration, which
+    # the operator passphrase encrypts. None creates the stack: its first
+    # `stack init` is the driver's, and each refuses until the checkpoint
+    # it writes is there (`derived.py`).
+    appliance_management = rows.add_parser(
+        derived.B2_STATE_BACKEND_MANAGEMENT_ROW,
+        help="the state-backend stack's own B2 bucket and key admin key",
+        description=(
+            'The B2 key the state-backend stack declares the dump bucket and the dump key with. The same '
+            "capabilities as the physical stack's management key, and no file capability at all, under a "
+            'name of its own: a mint retires every other key of its name, so one name for both would have '
+            "each stack's mint revoke the other's key."
+        ),
+    )
+    appliance_management_verbs = appliance_management.add_subparsers(dest='action', required=True, metavar='<verb>')
+    appliance_management_mint = appliance_management_verbs.add_parser(
+        'mint',
+        help="mint it from the seed into the state-backend stack's config secret",
+        description=(
+            'Sign as the B2 seed to create a fresh management key for the state-backend stack, and write both '
+            'halves into its config as encrypted values. The key of that name that was live before is retired '
+            'once the successor is verified and the config has taken it, so re-running this is the rotation. '
+            'Refused before anything is minted while the stack has no checkpoint: `operator-stack '
+            'state-backend pulumi stack init` creates it. Commit the config afterwards.'
+        ),
+    )
+    _ = appliance_management_mint.add_argument(
+        '--entry',
+        default=derived.B2_SEED_ENTRY,
+        help=f'the kit entry the seed is read from (default: {derived.B2_SEED_ENTRY})',
+    )
+    _add_bundle_dir(appliance_management_mint)
+
+    appliance_server = rows.add_parser(
+        derived.STATE_BACKEND_SERVER_ROW,
+        help="the state-backend appliance's TLS server key and certificate",
+        description=(
+            "The key and certificate the appliance's Postgres serves TLS with, issued from the escrowed "
+            'state-backend CA for the address clients dial, and the CA certificate beside them.'
+        ),
+    )
+    appliance_server_verbs = appliance_server.add_subparsers(dest='action', required=True, metavar='<verb>')
+    appliance_server_issue = appliance_server_verbs.add_parser(
+        'issue',
+        help="issue them from the escrowed CA into the state-backend stack's config",
+        description=(
+            "Recover the CA with the kit, issue a server key and certificate for the appliance's address, "
+            "and write the key into the state-backend stack's config as an encrypted value and the "
+            'certificate and the CA certificate beside it in the clear. The box serves them from the '
+            'replacement that carries them, and the one it serves now stays valid until then; re-running this '
+            'is the reissue. Refused while the stack has no checkpoint. Commit the config afterwards.'
+        ),
+    )
+    _add_bundle_dir(appliance_server_issue)
+
+    appliance_host_key = rows.add_parser(
+        derived.STATE_BACKEND_HOST_KEY_ROW,
+        help="the state-backend appliance's SSH host key",
+        description=(
+            "The ed25519 key the appliance's sshd identifies itself with. Drawn here rather than on the box, "
+            'so it is the same across replacements and its pin is known before a box boots with it.'
+        ),
+    )
+    appliance_host_key_verbs = appliance_host_key.add_subparsers(dest='action', required=True, metavar='<verb>')
+    appliance_host_key_generate = appliance_host_key_verbs.add_parser(
+        'generate',
+        help="draw it: the private half into the stack's config, the public half into a committed file",
+        description=(
+            "Draw a fresh ed25519 key, write its private half into the state-backend stack's config as an "
+            'encrypted value and read it back, and then write its public half to '
+            f'`src/kluster/lib/state_backend/machine/{derived.HOST_KEY_FILE.name}`, a file to commit with the '
+            'config. The box carries it from its next replacement; re-running this is the rotation. Refused '
+            'while the stack has no checkpoint.'
+        ),
+    )
+    _add_bundle_dir(appliance_host_key_generate)
+
+    # The drill's age key, drawn here and escrowed nowhere, as the host key
+    # above is: its private half lands in the ops repository's Environment
+    # through the GitHub sink, its public half in a committed file the
+    # appliance's recipient list appends (`derived.py`).
     drill_identity = rows.add_parser(
         derived.DRILL_AGE_IDENTITY_ROW,
         help='the age key the unattended rebuild drill opens the newest dump with',
@@ -1262,7 +1362,9 @@ def _check(registry: escrow.Registry) -> int:
     to learn what is wrong with it, and stopping at the first missing label
     would turn one look into several.
     """
-    problems = escrow.check(registry)
+    problems = [*escrow.check(registry), *derived.backup_recipients_problems(registry, derived.BACKUP_RECIPIENTS_FILE)]
+    if not derived.BACKUP_RECIPIENTS_FILE.is_file():
+        log.info('no backup recipients on file at %s; nothing reads one yet', derived.BACKUP_RECIPIENTS_FILE)
     for problem in problems:
         log.error('%s', problem)
     if not problems:
@@ -1494,6 +1596,24 @@ def main(argv: list[str] | None = None) -> int:
                 _ = derived.b2_management(
                     store, stack=_stack(args, store, derived.PHYSICAL_STACK, registry), seed_entry=args.entry
                 )
+            # The `state-backend` stack's rows, into its committed
+            # configuration. The server's issuance recovers the CA with the
+            # kit; the host key's public half goes to a file to commit, whose
+            # target is checked before anything is drawn.
+            case ('derived', derived.B2_STATE_BACKEND_MANAGEMENT_ROW, 'mint'):
+                _ = derived.b2_state_backend_management(
+                    store, stack=_stack(args, store, derived.STATE_BACKEND_STACK, registry), seed_entry=args.entry
+                )
+            case ('derived', derived.STATE_BACKEND_SERVER_ROW, 'issue'):
+                _ = derived.state_backend_server(
+                    escrow.Vault.open(store, registry),
+                    stack=_stack(args, store, derived.STATE_BACKEND_STACK, registry),
+                )
+            case ('derived', derived.STATE_BACKEND_HOST_KEY_ROW, 'generate'):
+                target = derived.committed_target(derived.HOST_KEY_FILE)
+                _ = derived.state_backend_host_key(
+                    stack=_stack(args, store, derived.STATE_BACKEND_STACK, registry), public_file=target
+                )
             # The drill age identity: drawn here, pushed through the GitHub
             # sink as the admin token -- read out of the `github` stack's
             # config, which is why this opens that stack -- and escrowed
@@ -1540,6 +1660,13 @@ def main(argv: list[str] | None = None) -> int:
             # Guarded like the arms above: `args.label` exists because the
             # escrowed row's parser put it there, so an arm reached by a row
             # that has no label would fail on an attribute rather than by name.
+            # A backup generation holds one identity for its lifetime, and
+            # its public half is a line of the committed recipients file:
+            # `generate` draws the generation where the escrow has none, and
+            # recovers it where it has, and writes that line either way.
+            case ('derived', row, 'generate') if row in escrow.rows() and escrow.rows()[row].single:
+                target = derived.committed_target(derived.BACKUP_RECIPIENTS_FILE)
+                _ = derived.backup_age_recipient(escrow.Vault.open(store, registry), args.label, recipients_file=target)
             case ('derived', row, 'generate') if row in escrow.rows():
                 _write_slot(args.label, escrow.generate(escrow.Vault.open(store, registry), args.label))
             case ('derived', row, 'import') if row in escrow.rows():

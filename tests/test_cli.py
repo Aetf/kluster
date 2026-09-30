@@ -98,10 +98,19 @@ def expected(path: list[str]) -> str | None:
             # The row name is the function's identifier with `-` for `_`, which
             # is the whole of the convention tying the tree to `derived.py`.
             return f'derived.{row}'.replace('-', '_')
-        case ['derived', cli.derived.DRILL_AGE_IDENTITY_ROW as row, 'generate']:
-            # The one `generate` that escrows nothing: drawn and delivered by
-            # its own function in `derived.py`, under the mint rows' convention.
+        case [
+            'derived',
+            cli.derived.DRILL_AGE_IDENTITY_ROW | cli.derived.STATE_BACKEND_HOST_KEY_ROW as row,
+            'generate',
+        ] | ['derived', cli.derived.STATE_BACKEND_SERVER_ROW as row, 'issue']:
+            # The `generate` rows that escrow nothing, and the `issue` of a
+            # key under the escrowed CA: each drawn and delivered by its own
+            # function in `derived.py`, under the mint rows' convention.
             return f'derived.{row}'.replace('-', '_')
+        case ['derived', row, 'generate'] if escrow.rows()[row].single:
+            # A backup generation: escrowed where the escrow has none, and its
+            # public half written into the committed recipients file.
+            return 'derived.backup_age_recipient'
         case ['derived', row, 'record'] if row in devices.DEVICES:
             # One handler for every device row: what differs between them is
             # the table in `devices.py`, not the code that reads it.
@@ -226,6 +235,10 @@ class Dispatch:
             (cli.derived, 'drill_age_identity', 'age1recipient'),
             (cli.derived, 'drill_credentials', {}),
             (cli.derived, 'b2_freshness_dumps', 'key-id'),
+            (cli.derived, 'b2_state_backend_management', 'key-id'),
+            (cli.derived, 'state_backend_server', None),
+            (cli.derived, 'state_backend_host_key', 'ssh-ed25519 AAAA'),
+            (cli.derived, 'backup_age_recipient', 'age1recipient'),
             (cli.devices, 'deliver', ()),
             # Slots are files in the checkout this test is running from, so
             # the writer is stubbed: a dispatch test must not leave a

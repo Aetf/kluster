@@ -70,7 +70,7 @@ GATEWAY_CONFIG = {
 
 #: The version pins a stack program reads, in the namespace they share
 #: (framework/pulumi.md §3.2). They are project-level configuration in the
-#: committed tree — one copy for five stacks — and the runtime cannot tell that
+#: committed tree — one copy for every stack — and the runtime cannot tell that
 #: from a stack's own key, which is exactly why one namespace works.
 VERSIONS_CONFIG = {
     'versions:talos': 'v1.11.0',

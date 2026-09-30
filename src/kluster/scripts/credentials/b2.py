@@ -1,16 +1,17 @@
 """The B2 credential family (docs/credentials.md §2–§3).
 
-Three account-wide credentials, three lifetimes:
+The account-wide credentials, in three lifetimes:
 
 -   the **account master key** — an account root (`masters.py`), held outside
     the kit and used only to create the seed if it is ever lost;
 -   the **seed key** — offline, and the only B2 credential that ever gets
-    stored: it mints the management key and, because `b2_create_key` needs
+    stored: it mints the management keys and, because `b2_create_key` needs
     nothing but `writeKeys`, its own successor, which is what makes B2
     rotation a script rather than a console visit;
--   the **management key** — what the `physical` stack actually runs on,
-    minted at bring-up straight into its slots and never written to the
-    offline store.
+-   the **management keys** — what a stack that declares B2 resources runs
+    on, one per such stack (`physical`'s, and `state-backend`'s for the
+    appliance's dump bucket and dump key), each minted straight into its
+    stack's slots and never written to the offline store.
 
 Seed and management carry the same capabilities: what separates them is
 lifetime and reach, not permission. Neither carries file capabilities at
@@ -149,15 +150,20 @@ class Role:
         )
 
 
-#: The two account-wide roles. Seed and management carry the same
-#: capabilities -- what separates them is lifetime and reach, not permission
-#: (module docstring) -- so they differ in name alone, and saying that here is
-#: what keeps a mint from having to know it.
+#: The account-wide roles. Seed and management carry the same capabilities --
+#: what separates them is lifetime and reach, not permission (module
+#: docstring) -- so they differ in name alone, and saying that here is what
+#: keeps a mint from having to know it.
 #:
 #: The names are stable, because they are what retirement matches on: one live
-#: key per role is the invariant a re-run restores.
+#: key per role is the invariant a re-run restores. That is also why each stack
+#: that manages B2 has a management role of its own: under one name, minting
+#: the `state-backend` stack's key would retire the one `physical` holds.
 SEED = Role(name='kluster-seed', capabilities=CAPABILITIES)
 MANAGEMENT = Role(name='kluster-management', capabilities=CAPABILITIES)
+STATE_BACKEND_MANAGEMENT = Role(
+    name=f'{conventions.CLUSTER_NAME}-{conventions.STATE_BACKEND}-management', capabilities=CAPABILITIES
+)
 
 #: What the uploader is called, on the same terms as the two names above.
 DUMPS_NAME = 'kluster-state-dump'
@@ -729,8 +735,12 @@ def rotate_seed(store: KdbxStore, *, seed_entry: str, into: KdbxStore | None = N
     return minted.app_key.key_id
 
 
-def mint_management(store: KdbxStore, *, seed_entry: str) -> Delivery[AppKey]:
-    """Mint the management key for the bring-up pipeline to place in its slots.
+def mint_management(store: KdbxStore, *, seed_entry: str, role: Role = MANAGEMENT) -> Delivery[AppKey]:
+    """Mint a management key in `role` for the bring-up pipeline to place in its slots.
+
+    `role` is `MANAGEMENT`, `physical`'s, unless the caller names the
+    `state-backend` stack's (`STATE_BACKEND_MANAGEMENT`); the retirement
+    matches that role's name alone, so minting one leaves the other live.
 
     Deliberately returns the credential instead of storing it: the offline
     store holds seeds, never the credentials automation consumes
@@ -748,8 +758,8 @@ def mint_management(store: KdbxStore, *, seed_entry: str) -> Delivery[AppKey]:
     """
     session = Session.from_entry(store, seed_entry)
     verify_account(session.account_id)
-    minted = _mint_verified(session, MANAGEMENT)
-    return Delivery.of(minted.app_key, lambda: retire_others(session, MANAGEMENT, keep=minted.app_key.key_id))
+    minted = _mint_verified(session, role)
+    return Delivery.of(minted.app_key, lambda: retire_others(session, role, keep=minted.app_key.key_id))
 
 
 def _retention(prefix: str, retention_days: int) -> LifecycleRule:

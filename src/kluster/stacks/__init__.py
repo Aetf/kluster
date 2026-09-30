@@ -3,10 +3,12 @@
 `physical` exists before the Kubernetes API does; `dns` owns zones, the base
 records that belong to no app, and the split-horizon rewrites; `k8s-base` owns
 everything cluster-scoped; `apps` owns the applications and their namespaces.
-`github` owns the forge the other four are deployed by, and is the one stack
-CI does not apply (github.md). Which one a program run declares is decided by
-the selected stack, not by configuration — a run of `pulumi up -s apps` cannot
-touch a node.
+`github` owns the forge the others are deployed by; `state-backend` is where
+rfc-006 §4 declares the appliance whose Postgres keeps their state, and its
+program raises until that is written. Each is an operator stack, which CI does
+not apply (framework/pulumi.md §3.3). Which one a program run
+declares is decided by the selected stack, not by configuration — a run of
+`pulumi up -s apps` cannot touch a node.
 
 Conventions travel as code (`kluster.conventions`); a StackReference carries
 only machine facts.
@@ -20,7 +22,7 @@ import pulumi
 
 from kluster import conventions
 
-from . import apps, dns, github, k8s_base, physical
+from . import apps, dns, github, k8s_base, physical, state_backend
 
 __all__ = ('STACKS', 'run_selected')
 
@@ -34,6 +36,7 @@ STACKS: dict[str, Callable[[], Awaitable[None]]] = {
     conventions.STACK_NAMES.k8s_base: k8s_base.main,
     conventions.STACK_NAMES.apps: apps.main,
     conventions.STACK_NAMES.github: github.main,
+    conventions.STACK_NAMES.state_backend: state_backend.main,
 }
 
 

@@ -19,8 +19,9 @@ Three levels, because they answer different questions:
     file the checks read. Skipped where the pinned CLI or `uv` is not
     installed.
 
-A stack whose state is committed is not in the census yet, so the cases that
-need one add `probe` to it for their own duration.
+The cases that need a committed stack add `probe` to the census for their own
+duration, so they run no program of the census's own and hold no stack's real
+configuration.
 """
 
 from __future__ import annotations

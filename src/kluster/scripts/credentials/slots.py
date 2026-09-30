@@ -27,11 +27,13 @@ business of that command:
     -- so a re-fill there hands CI a certificate it did not have before.
 -   **minted** -- created by the run that delivers it: a provider mint by the
     row's own `credentials derived <row> mint`, a key the row's own `generate`
-    draws and delivers without escrowing (the drill age identity), or a
-    secret a program generates for its own resource. The value is disclosed
-    once, to the code that made it, so this map cannot re-push one --
-    obtaining it again means minting again, which is a rotation. Such a row
-    names its producer instead of pretending it can be filled from here.
+    draws and delivers without escrowing (the drill age identity, the
+    appliance's SSH host key), a key the row's own `issue` issues under the
+    escrowed CA (the appliance's server key), or a secret a program generates
+    for its own resource. The value is disclosed once, to the code that made
+    it, so this map cannot re-push one -- obtaining it again means minting
+    again, which is a rotation. Such a row names its producer instead of
+    pretending it can be filled from here.
 -   **state-read** -- generated inside a Pulumi program, and read back out of
     the stack it belongs to. Not derivable and not re-mintable: the value
     exists because a stack ran. What separates this from *minted* is whether
@@ -125,6 +127,7 @@ BACKEND_KEY = 'PULUMI_BACKEND_KEY'
 
 PHYSICAL_STACK = derived.PHYSICAL_STACK
 DNS_STACK = derived.ZONES_STACK
+STATE_BACKEND_STACK = derived.STATE_BACKEND_STACK
 
 #: The secret the ops repository's weekly drift trigger reads the trigger App's
 #: private key from (ci.md §3) -- a workflow designed and not built
@@ -915,6 +918,14 @@ ROWS: dict[str, Row] = {
             PulumiConfig(PHYSICAL_STACK, derived.B2_KEY_KEY),
         ),
     ),
+    derived.B2_STATE_BACKEND_MANAGEMENT_ROW: Row(
+        register='B2 management key (state backend)',
+        source=Minted(f'credentials derived {derived.B2_STATE_BACKEND_MANAGEMENT_ROW} mint'),
+        targets=(
+            PulumiConfig(STATE_BACKEND_STACK, derived.B2_KEY_ID_KEY),
+            PulumiConfig(STATE_BACKEND_STACK, derived.B2_KEY_KEY),
+        ),
+    ),
     'b2-writer': Row(
         register='B2 writer keys',
         source=Minted('the `physical` stack, from the B2 seed', unbuilt='the prefix-scoped keys are not declared'),
@@ -1038,6 +1049,23 @@ ROWS: dict[str, Row] = {
             *_every_environment(BACKEND_CERT),
             *_every_environment(BACKEND_KEY),
         ),
+    ),
+    derived.STATE_BACKEND_SERVER_ROW: Row(
+        register='State-backend server key (`state-backend` stack)',
+        # The key alone: the certificate and the CA's certificate sit beside
+        # it in the clear, and a value the file carries in the clear is not a
+        # delivery this map records (`PulumiConfig`).
+        source=Minted(f'credentials derived {derived.STATE_BACKEND_SERVER_ROW} issue'),
+        targets=(PulumiConfig(STATE_BACKEND_STACK, derived.SERVER_KEY_KEY),),
+    ),
+    derived.STATE_BACKEND_HOST_KEY_ROW: Row(
+        register='State-backend SSH host key',
+        # Drawn by its own command and escrowed nowhere, like the drill age
+        # identity: a lost one costs a fresh draw and a replacement. The
+        # public half is committed beside the Butane template, and a public
+        # half is no delivery.
+        source=Minted(f'credentials derived {derived.STATE_BACKEND_HOST_KEY_ROW} generate'),
+        targets=(PulumiConfig(STATE_BACKEND_STACK, derived.HOST_KEY_KEY),),
     ),
     'backup-age-identity': Row(
         register='age backup identity',

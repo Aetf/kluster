@@ -31,3 +31,15 @@ __pycache__/
 # it terminates anything -- both are usually run from the repository root, and
 # both hold every stack's state under `age`. This repository is public.
 *.dump.age
+# What a `file://` backend writes beside a committed checkpoint and keeps on
+# the machine that ran it (framework/pulumi.md §3.3): the copy of the previous
+# checkpoint every save leaves, the update history, the backup copies, and the
+# lock a run holds. Only `meta.yaml` and each stack's `<stack>.json` travel.
+# The `operator-stack` driver's record of a check that failed or never
+# finished is the workstation's too: it names what a run found, for that run's
+# operator to act on.
+/checkpoints/.pulumi/stacks/**/*.bak
+/checkpoints/.pulumi/history/
+/checkpoints/.pulumi/backups/
+/checkpoints/.pulumi/locks/
+/checkpoints/*.failed-check
