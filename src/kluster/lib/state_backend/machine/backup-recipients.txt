@@ -1,0 +1,5 @@
+# The age backup identities' public halves (docs/credentials.md §3): one line per
+# escrowed generation the appliance encrypts its dumps to, the escrow label and then
+# the recipient. Written by `credentials derived backup-age-<N> generate`;
+# `credentials derived check` holds the labels to the escrow.
+backup/age/1 age1kxp23czacvjvx7mmcqeh6luut3f357pquzk77wuwc2rzx425aunsp8sf5g

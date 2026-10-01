@@ -1,0 +1,4 @@
+# The state-backend appliance's SSH host key, public half (docs/credentials.md §3). The
+# private half is `sshHostKey` in Pulumi.state-backend.yaml, under the operator passphrase.
+# Written by `credentials derived state-backend-host-key generate`; replaced by running it again.
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFoKSuJ0QH01s+B/mGIIydEsEzyWGlPIMvK/DHWSeTDz
