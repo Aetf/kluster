@@ -25,8 +25,13 @@ supplies is three addresses.
 
 from __future__ import annotations
 
+import ipaddress
+from collections.abc import Mapping
+from typing import Literal
+
 import pulumi
 import pulumi_cloudflare as cloudflare
+from pulumi.output import Unknown
 
 from kluster import conventions
 from kluster.components.dns import base
@@ -44,6 +49,10 @@ from kluster.components.dns.zone import ManagedZone
 #: credential here is a `kluster-py:` key read at the line that builds its
 #: provider, and this one is no different.
 CLOUDFLARE_API_TOKEN = 'cloudflareApiToken'
+
+
+class UnusableAnchorAddress(ValueError):
+    """An output of the `physical` stack that an anchor reads and that is not an address of the anchor's family."""
 
 
 async def main() -> None:
@@ -100,18 +109,72 @@ def _anchor_addresses(physical: pulumi.StackReference) -> base.AnchorAddresses:
     place in the stack that reaches across a StackReference. The names asked
     for are `conventions.PHYSICAL_OUTPUTS`, the same structure `physical`
     exports under, so an output renamed there is renamed here in the same
-    edit. Nothing here awaits: an address the `physical` stack has not published yet travels into
-    the record as an unresolved output rather than raising, so this program
-    declares the same records whether or not `physical` has been applied.
+    edit.
     """
     outputs = conventions.PHYSICAL_OUTPUTS
     return base.AnchorAddresses(
-        cluster_v4=_address(physical, outputs.cluster_endpoint),
-        cluster_v6=_address(physical, outputs.cluster_endpoint_v6),
-        vip1_v4=_address(physical, outputs.vip1),
+        cluster_v4=_address(physical, outputs.cluster_endpoint, 4),
+        cluster_v6=_address(physical, outputs.cluster_endpoint_v6, 6),
+        vip1_v4=_address(physical, outputs.vip1, 4),
     )
 
 
-def _address(physical: pulumi.StackReference, output: str) -> pulumi.Output[str]:
-    """One address output of the physical stack, as a record's content."""
-    return physical.get_output(output).apply(str)
+def _address(physical: pulumi.StackReference, output: str, version: Literal[4, 6]) -> pulumi.Output[str]:
+    """One address output of the physical stack, as a record's content, refused unless it is one.
+
+    The record's content is whatever this hands on, so the read is where a
+    value that is not an address has to stop: carried on, an absent output is
+    `None` and becomes the record content `"None"`. What a StackReference
+    reads back in place of an address, measured at the pinned SDK
+    (framework/pulumi.md §1.4, §3.1):
+
+    -   `None`, for an output `physical` has not published -- the state of a
+        stack that has never been applied -- and, in an update, for one a
+        targeted apply of it wrote as Pulumi's unknown sentinel;
+    -   an unknown, in a preview, for every output of a `physical` that holds
+        that sentinel in any of them;
+    -   `{}`, for a secret this stack cannot decrypt.
+
+    So the value is checked unknowns included (`run_with_unknowns`), in a
+    preview as in an update, and anything but an address of the record's
+    family stops the run naming the output and what it found.
+    """
+    return physical.get_output(output).apply(
+        lambda value: _usable_address(output, version, value), run_with_unknowns=True
+    )
+
+
+def _usable_address(output: str, version: Literal[4, 6], value: object) -> str:
+    """`value` if it is an IPv`version` address, else a refusal saying what it is -- never the value itself."""
+    if isinstance(value, str):
+        try:
+            parsed = ipaddress.ip_address(value)
+        except ValueError:
+            found = 'a string that is not an address' if value else 'an empty string'
+        else:
+            if parsed.version == version:
+                return value
+            found = f'an IPv{parsed.version} address'
+    elif value is None:
+        found = (
+            'absent: `physical` has not published it, or a targeted apply of `physical` wrote it as '
+            "Pulumi's unknown sentinel, which an update reads back as nothing (framework/pulumi.md §1.4), "
+            'and the rest of `physical` has to be applied first'
+        )
+    elif isinstance(value, Unknown):
+        found = (
+            "unknown, which is how a preview reads every output of a `physical` holding Pulumi's unknown "
+            'sentinel in any of them: a targeted apply of `physical` wrote it (framework/pulumi.md §1.4), '
+            'and the rest of `physical` has to be applied first'
+        )
+    elif isinstance(value, Mapping):
+        found = (
+            'a mapping, which is how a StackReference reads back a secret it could not decrypt: this '
+            "stack cannot open `physical`'s secrets"
+        )
+    else:
+        found = f'a {type(value).__name__}'
+    raise UnusableAnchorAddress(
+        f"the physical stack's {output!r} output is {found}; an anchor takes an IPv{version} address from it, "
+        'and no record is declared with what it holds'
+    )

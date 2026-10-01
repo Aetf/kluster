@@ -242,11 +242,20 @@ records before it aborts.
 A third case is neither skipped nor refused. The stack's own resource is
 never outside a target set, so an unknown that reaches a `pulumi.export` is
 accepted and written to state as Pulumi's unknown sentinel — the literal
-string `04da6b54-80e4-46f7-96ec-b56ff0331ba9`. `pulumi stack output` returns
-it, and a `StackReference` reader receives it as a known value rather than as
-an absence. So a targeted apply leaves every export that depends on a
-resource the run skips creating poisoned until the rest of the stack is
-applied, and nothing between the two runs may read one (§3.1).
+string `04da6b54-80e4-46f7-96ec-b56ff0331ba9`, in plain text even where the
+export is a secret. `pulumi stack output` returns that string. A
+`StackReference` reader never receives it as one:
+
+-   **Previewing**, the reader gets an unknown, and not only for that
+    output: one sentinel anywhere in the stack's outputs makes every
+    output of the reference unknown, its well-formed ones included.
+-   **Updating**, the reader gets an absence — `get_output` answers
+    `None` and `require_output` raises `KeyError` — and a secret whose
+    plaintext is the sentinel reads back as `None` from either.
+
+So a targeted apply leaves every export that depends on a resource the
+run skips creating poisoned until the rest of the stack is applied, and
+nothing between the two runs may read one (§3.1).
 
 ## 2. Integration with `putils`
 
@@ -297,9 +306,15 @@ different things:
     credential a resource mints. The cost is that a reader sees
     whatever the producer published last, so a preview taken before the
     producer applies previews stale values. Staleness is the milder
-    hazard: an output the producer last published from a targeted apply
-    can be present, well-typed and meaningless, because Pulumi's unknown
-    sentinel reaches a reader as an ordinary known string — the
+    hazard. An output that holds nothing usable reaches a reader with
+    no error and nothing to mark it: `get_output` answers an absent
+    output with `None`, an update reads one a targeted apply of the
+    producer wrote as Pulumi's unknown sentinel the same way, and a
+    preview reads every output of such a producer as unknown. Carried
+    on unchecked, an absence becomes text — `str(None)` is `"None"` —
+    so a reader that hands an output to a resource checks it at the read
+    and refuses anything but a usable value by name, unknowns included
+    (the `dns` stack's anchors, `_address` in `stacks/dns.py`). The
     mechanism, and the rule that nothing may read such an output until
     the rest of the producer is applied, are §1.4's "When an awaited
     value is unknown".

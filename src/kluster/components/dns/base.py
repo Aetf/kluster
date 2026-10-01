@@ -217,10 +217,11 @@ def caa_blocks(zone_issuers: Mapping[str, tuple[str, ...]]) -> tuple[Block, ...]
 class AnchorAddresses:
     """The three addresses the cluster anchors carry.
 
-    They are the `physical` stack's, so they arrive as inputs that may still
-    be unresolved: an address that stack has not published yet travels into
-    the record rather than raising, and the same records are declared before
-    and after it is applied.
+    They are the `physical` stack's, so they arrive as outputs the `dns`
+    program has already checked: each resolves to an address of its record's
+    family, or the run stops at the read naming the output it came from. An
+    address `physical` has not published is therefore never a record's
+    content, as `None`, as the string `"None"`, or as anything else.
     """
 
     cluster_v4: pulumi.Input[str]
