@@ -23,7 +23,7 @@ One project and one environment for every stack: the four CI deploys,
 plus the operator stacks it does not apply
 ([framework/pulumi.md](../framework/pulumi.md) §3.3) — `github`, which
 declares the forge those four are deployed by, and `state-backend`,
-whose program is unwritten.
+which declares the state-backend appliance.
 
 | Stack | What it owns | Change cadence |
 | --- | --- | --- |

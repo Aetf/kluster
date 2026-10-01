@@ -32,8 +32,9 @@ from kluster.providers.talos_factory import FactoryImage
 from putils import Component, UnstatedTypeError
 
 #: The form style/pulumi.md gives a token: `kluster`, the area of the design
-#: the kind belongs to, and the kind's own name.
-FORM = re.compile(r'kluster:[a-z]+:[A-Z][A-Za-z0-9]*')
+#: the kind belongs to, spelled as its package is, underscores and all, and
+#: the kind's own name.
+FORM = re.compile(r'kluster:[a-z][a-z_]*:[A-Z][A-Za-z0-9]*')
 
 #: The form style/pulumi.md gives a dynamic resource's token: the package and
 #: module the SDK fixes, the `kluster.providers` package the kind belongs to,
@@ -106,6 +107,19 @@ def test_every_component_class_states_its_own_token_in_the_installations_form() 
     ]
 
     assert unstated == [], unstated
+
+
+@pytest.mark.parametrize(
+    'token',
+    ['kluster:state-backend:StateBackend', 'kluster:StateBackend:StateBackend', 'kluster:_state:StateBackend'],
+    ids=['dashed', 'uppercase', 'leading-underscore'],
+)
+def test_an_area_no_package_can_be_named_is_off_the_form(token: str) -> None:
+    assert not FORM.fullmatch(token)
+
+
+def test_an_area_named_with_an_underscore_is_on_the_form() -> None:
+    assert FORM.fullmatch('kluster:state_backend:StateBackend')
 
 
 def test_no_two_component_classes_share_a_token() -> None:

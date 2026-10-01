@@ -42,8 +42,8 @@ keys map rows by the command that produces them; two mints, because the two
 platforms' seeds are two kit entries and a failure on one must leave the
 other's predecessor live.
 
-**The `state-backend` stack's rows fill a configuration no program reads
-yet.** The stack keeps its state committed (framework/pulumi.md §3.3) and its
+**The `state-backend` stack's rows fill the configuration its program reads.**
+The stack keeps its state committed (framework/pulumi.md §3.3) and its
 program is rfc-006 §4's, so its rows are the stable keys that program renders
 the box from: its own B2 management key, minted like `physical`'s under a
 role of its own; the server key and certificate, issued from the escrowed CA;
@@ -67,16 +67,14 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
-import re
 from pathlib import Path
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from kluster.lib import config as lib_config
 from kluster.lib import stack_environment
 from kluster.lib import workstation as lib_workstation
-from kluster.lib.state_backend import render
+from kluster.lib.state_backend import committed
 from kluster.lib.state_backend import settings as appliance_settings
 
 from ... import conventions
@@ -193,15 +191,15 @@ SERVER_CERT_KEY = 'serverCertificate'
 CA_CERT_KEY = 'caCertificate'
 HOST_KEY_KEY = 'sshHostKey'
 
-#: The directory the Butane template sits in, where the committed files the
-#: box is rendered from are kept (rfc-006 §8).
-MACHINE_DIRECTORY = Path(render.__file__).with_name(render.MACHINE)
-#: The box's SSH host key, public half: what `state-backend ssh` pins, and
-#: what a reader compares a fingerprint against without the passphrase.
-HOST_KEY_FILE = MACHINE_DIRECTORY / 'host-key.txt'
+#: The files committed beside the Butane template that the rows below write,
+#: where the stack reads them (`kluster.lib.state_backend.committed`, which
+#: holds their readers). The box's SSH host key, public half: what
+#: `state-backend ssh` pins, and what a reader compares a fingerprint against
+#: without the passphrase.
+HOST_KEY_FILE = committed.HOST_KEY
 #: The backup generations' public halves, one line per generation the box
 #: encrypts its dumps to: the escrow label, then the recipient.
-BACKUP_RECIPIENTS_FILE = MACHINE_DIRECTORY / 'backup-recipients.txt'
+BACKUP_RECIPIENTS_FILE = committed.BACKUP_RECIPIENTS
 
 #: The names these rows carry on the command line and in the slot map. One
 #: string per row, defined here because this is where the mint lives: the map
@@ -609,14 +607,6 @@ def committed_target(path: Path) -> Path:
     return path
 
 
-def public_host_key(private: str) -> str:
-    """The `ssh-ed25519 AAAA…` line of an OpenSSH private key, refused unless it is ed25519."""
-    key = serialization.load_ssh_private_key(private.encode(), password=None)
-    if not isinstance(key, Ed25519PrivateKey):
-        raise pulumi_config.SlotRefused(f'the host key is a {type(key).__name__}, and ed25519 is what is pinned')
-    return key.public_key().public_bytes(serialization.Encoding.OpenSSH, serialization.PublicFormat.OpenSSH).decode()
-
-
 def state_backend_host_key(*, stack: pulumi_config.Stack, public_file: Path) -> str:
     """Draw the box's SSH host key: the private half into the stack's config, the public half into `public_file`.
 
@@ -640,7 +630,7 @@ def state_backend_host_key(*, stack: pulumi_config.Stack, public_file: Path) -> 
         .decode()
         .strip()
     )
-    public = public_host_key(private)
+    public = committed.public_host_key(private)
     _fill_state_backend(stack, secret={HOST_KEY_KEY: private}, plain={}, holds='an ed25519 SSH host key')
     _ = public_file.write_text(
         "# The state-backend appliance's SSH host key, public half (docs/credentials.md §3). The\n"
@@ -656,42 +646,27 @@ def state_backend_host_key(*, stack: pulumi_config.Stack, public_file: Path) -> 
     return public
 
 
-#: A backup label, as the recipients file names it: the escrow's own.
-_BACKUP_LABEL = re.compile(rf'{re.escape(escrow.BACKUP)}/[1-9][0-9]*\Z')
+def _tool_check(value: str, name: str) -> None:
+    """The pinned `age`'s parse of one recipient (`age.check_recipient`), refusing as an `AgeError`."""
+    age.check_recipient(value, name=name)
 
 
 def backup_recipients(path: Path) -> dict[str, str]:
-    """The recipients file as label → recipient; empty while no file exists.
+    """The recipients file as label → recipient, each recipient one the pinned `age` parses; empty while no file exists.
 
-    Each line is an escrow label under `backup/age/` and the recipient of the
-    identity it holds, `#` comments and blank lines aside. A line is refused
-    by its number and never quoted: the likeliest wrong line is a private
-    half pasted where the public one goes, and `check` prints what this
-    raises. Every recipient is one the pinned `age` parses
-    (`age.check_recipient`), and a native one (`age.is_native`), since that
-    is what `age-keygen` draws and what a dump can be encrypted to beside
-    the others.
+    The grammar is the file's reader (`committed.backup_recipients`); what
+    this adds is the tool's own parse of every recipient, which a script can
+    ask and the stack does not (`age.check_recipient`), and the writer's
+    reading of an absent file as nothing on file yet. A refusal is an
+    `age.AgeError`, which is what `check` prints, and it names a line by its
+    number and never quotes it.
     """
     if not path.is_file():
         return {}
-    found: dict[str, str] = {}
-    for number, line in enumerate(path.read_text().splitlines(), start=1):
-        stripped = line.strip()
-        if not stripped or stripped.startswith(lib_config.COMMENT):
-            continue
-        fields = stripped.split()
-        if len(fields) != 2 or not _BACKUP_LABEL.match(fields[0]):
-            raise age.AgeError(
-                f'line {number} of {path} is not a backup label under {escrow.BACKUP}/ followed by its recipient'
-            )
-        label, value = fields
-        if label in found:
-            raise age.AgeError(f'line {number} of {path} names {label} a second time')
-        age.check_recipient(value, name=f'the recipient on line {number} of {path}')
-        if not age.is_native(value):
-            raise age.AgeError(f'the recipient on line {number} of {path} is not a native `{age.PUBLIC_PREFIX}…` one')
-        found[label] = value
-    return found
+    try:
+        return committed.backup_recipients(path, check=_tool_check)
+    except committed.Refused as exc:
+        raise age.AgeError(str(exc)) from None
 
 
 def _write_backup_recipients(path: Path, recipients: dict[str, str]) -> None:
@@ -759,9 +734,10 @@ def backup_recipients_problems(registry: escrow.Registry, path: Path) -> list[st
     holds, each once, each a native recipient. Whether each recipient is the
     public half of the identity escrowed under its label is what only the kit
     can answer; `backup_age_recipient` computes it from that identity when it
-    writes. An absent file is no problem here: the box is still built from
-    the escrow itself (`state-backend provision`), and nothing reads the file
-    yet.
+    writes. An absent file is no problem here: `state-backend provision`
+    builds the box from the escrow itself, and the stack's component, which
+    renders the box from the file, refuses to plan without it
+    (`committed.age_recipients`).
     """
     if not path.is_file():
         return []

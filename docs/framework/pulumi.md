@@ -376,8 +376,7 @@ it starts from the workstation that holds the operator passphrase. The census of
 recording for each where its state lives: the appliance's backend, with
 every stack CI deploys, or a checkpoint committed to this repository.
 Today it holds `github`, whose state is in the backend, and
-`state-backend`, whose state is committed and whose program is
-unwritten. Everything that has to know which stacks are
+`state-backend`, whose state is committed. Everything that has to know which stacks are
 held away from CI reads that census: the operator passphrase covers
 exactly these ([credentials.md](../credentials.md) §3),
 the census over the workflows keeps every command naming one out of CI
@@ -597,6 +596,17 @@ its secrets in the clear past both checks. A `pulumi stack import`
 writes a whole deployment the same way, with no program at all. The
 driver refuses either, passed through, for such a stack.
 
+**A value that belongs to one invocation reaches the program as an
+environment variable the driver sets on the process it starts**, and is read
+where it is acted on — never stack configuration, which is committed and
+would hand the value to every later run. The permission a destructive step
+needs is such a value. The `state-backend` stack's is
+`KLUSTER_STATE_BACKEND_REPLACE`, which the hooks on its instance read
+(`kluster.lib.state_backend.permission`, rfc-006 §4.3): without it, a step
+that would create, replace or delete the box fails at its hook with the box
+untouched, however the run was started. The driver does not set it yet, so
+every such step is refused.
+
 ## 4. CRD Types Handling
 
 Custom resources are written against generated Python types, so
@@ -631,11 +641,14 @@ every other library bump red with it.
 
 ## 5. Talking to a System With No Provider
 
-Three systems here are driven by code of this repository's own: the
-desired-state files on the gateway device, the Talos image factory's
-artifacts, and the rewrites on an AdGuard instance
-(`src/kluster/providers/`). All three are **dynamic providers**, and
-this section is what that costs and how one is written. *Which* of them
+Every system here that Pulumi has no provider for is driven by code of
+this repository's own, one package per system under
+`src/kluster/providers/`: today the desired-state files on the gateway
+device, the Talos image factory's artifacts, the rewrites on an AdGuard
+instance, the objects the state-backend appliance's image is imported
+from, and the appliance's TLS handshake waited for. Every one of them is
+a **dynamic provider**, and this section is what that costs and how one
+is written. *Which* of them
 should be one is a design decision, argued where each is designed
 ([cluster/architecture.md](../cluster/architecture.md) §5.2,
 [rfc-002](../rfc/rfc-002-src-layout-and-the-gateway.md) §7.2–7.3).

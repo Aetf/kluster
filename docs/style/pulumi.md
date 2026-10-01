@@ -26,9 +26,9 @@ The layers, from the top, and what each is for:
     CLI runner. It also holds, in `kluster.lib.<area>`, the code that an
     area's component and a script both run, with the files that code
     reads beside it (below). `kluster.lib.state_backend` is that code for
-    the state-backend appliance — its machine, its dump and restore and
-    its readiness wait — which the `state-backend` script runs today and
-    the appliance's component will run as well.
+    the state-backend appliance — its machine and the files committed
+    beside it, its dump and restore, its readiness wait — which the
+    `state-backend` script and the appliance's component run.
 -   `kluster.conventions` holds the decisions and identities that no
     layer owns, one module per domain (the next section); every layer
     above it may read them except `kluster.providers` (below).
@@ -119,6 +119,16 @@ account and is built from no argument at all, yet it is explicit, with
 its package's default disabled, because the fallback is what the rule
 removes, and a package with nothing to authenticate still has one. See
 [rfc-002](../rfc/rfc-002-src-layout-and-the-gateway.md) §8.
+
+**A credential that authenticates a stack's program to the estate's own
+state backend, rather than a provider of that stack, is read by the stack
+program from its workstation slot and handed down as a parameter.** The
+`operator` client bundle is that credential: the `state-backend` stack's
+hooks dump and restore through it, and the stack program passes its slot's
+directory to the component that registers them. It is not copied into
+configuration, which is committed and would carry the `operator` key into
+every workstation's clone; the slot is its one copy per workstation
+([credentials.md](../credentials.md) §1, rule 6).
 
 **Stack configuration is where a provider credential lives**, and it is
 the store the paragraph above licenses a component to read for itself.
@@ -330,6 +340,36 @@ keeps that physical name. Landing the rule on a child that state
 already holds under the old name is `aliases=[pulumi.Alias(name=<old>)]`
 on that child, dropped in a later change once state carries the new
 URN.
+
+**In a stack whose state is committed, an output that identifies a
+principal is declared secret** with `additional_secret_outputs` wherever
+the provider does not mark it — the OCID of the user that made a bucket —
+because the checkpoint is published at the push
+([framework/pulumi.md](../framework/pulumi.md) §3.3). **Where that property
+is also an input, the program passes the input as a secret**
+(`pulumi.Output.secret`): the engine wraps the output it is told to and
+leaves the input as the program passed it, and the checkpoint check refuses
+a declared-secret property in the clear on either side. The name is the
+provider's output name, which a test holds to the output names on the
+resource's SDK class, since a misspelled one leaves the real output in the
+clear and nothing notices. The checkpoint check is the backstop that
+catches the one missed, not the mechanism. An identifier that names a
+credential without authorizing anything — a B2 key's id, which the
+provider makes the resource's id and the engine cannot mark — is not a
+principal: as an output it stays in the clear, and where configuration
+holds one as a secret, the program reads it as one.
+
+**An input that the provider updates in place, but that the target reads
+only when it is created, is never left to be updated in place** — boot
+configuration, a boot image. It is declared `replace_on_changes` where a
+change must rebuild the target, or `ignore_changes` where another owner
+keeps the running target current, and a test holds each such option on
+the resource. The `state-backend` instance carries both: its `metadata`,
+the Ignition, replaces the box, and its image is ignored once launched,
+since Zincati keeps the running box current; updated in place, the first
+would be written into a box Ignition never reads again, and the second
+would replace the running box's boot volume without the dump hook that a
+replacement runs.
 
 **Adopted resources graduate to declared.** `import` is step one of
 adoption; the end state is an explicit declaration whose fields are

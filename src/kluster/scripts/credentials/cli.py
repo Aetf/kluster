@@ -1364,7 +1364,10 @@ def _check(registry: escrow.Registry) -> int:
     """
     problems = [*escrow.check(registry), *derived.backup_recipients_problems(registry, derived.BACKUP_RECIPIENTS_FILE)]
     if not derived.BACKUP_RECIPIENTS_FILE.is_file():
-        log.info('no backup recipients on file at %s; nothing reads one yet', derived.BACKUP_RECIPIENTS_FILE)
+        log.info(
+            'no backup recipients on file at %s; the state-backend stack refuses to plan without one',
+            derived.BACKUP_RECIPIENTS_FILE,
+        )
     for problem in problems:
         log.error('%s', problem)
     if not problems:
