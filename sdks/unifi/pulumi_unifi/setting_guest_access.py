@@ -1269,35 +1269,35 @@ class SettingGuestAccess(pulumi.CustomResource):
                  allowed_subnet: pulumi.Input[Optional[_builtins.str]] = None,
                  auth: pulumi.Input[Optional[_builtins.str]] = None,
                  auth_url: pulumi.Input[Optional[_builtins.str]] = None,
-                 authorize: pulumi.Input[Optional[Union['SettingGuestAccessAuthorizeArgs', 'SettingGuestAccessAuthorizeArgsDict']]] = None,
+                 authorize: pulumi.Input[Optional[Union['SettingGuestAccessAuthorizeArgs', 'SettingGuestAccessAuthorizeArgsDict', 'outputs.SettingGuestAccessAuthorize']]] = None,
                  custom_ip: pulumi.Input[Optional[_builtins.str]] = None,
                  ec_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
                  expire: pulumi.Input[Optional[_builtins.float]] = None,
                  expire_number: pulumi.Input[Optional[_builtins.float]] = None,
                  expire_unit: pulumi.Input[Optional[_builtins.float]] = None,
-                 facebook: pulumi.Input[Optional[Union['SettingGuestAccessFacebookArgs', 'SettingGuestAccessFacebookArgsDict']]] = None,
-                 facebook_wifi: pulumi.Input[Optional[Union['SettingGuestAccessFacebookWifiArgs', 'SettingGuestAccessFacebookWifiArgsDict']]] = None,
-                 google: pulumi.Input[Optional[Union['SettingGuestAccessGoogleArgs', 'SettingGuestAccessGoogleArgsDict']]] = None,
-                 ippay: pulumi.Input[Optional[Union['SettingGuestAccessIppayArgs', 'SettingGuestAccessIppayArgsDict']]] = None,
-                 merchant_warrior: pulumi.Input[Optional[Union['SettingGuestAccessMerchantWarriorArgs', 'SettingGuestAccessMerchantWarriorArgsDict']]] = None,
+                 facebook: pulumi.Input[Optional[Union['SettingGuestAccessFacebookArgs', 'SettingGuestAccessFacebookArgsDict', 'outputs.SettingGuestAccessFacebook']]] = None,
+                 facebook_wifi: pulumi.Input[Optional[Union['SettingGuestAccessFacebookWifiArgs', 'SettingGuestAccessFacebookWifiArgsDict', 'outputs.SettingGuestAccessFacebookWifi']]] = None,
+                 google: pulumi.Input[Optional[Union['SettingGuestAccessGoogleArgs', 'SettingGuestAccessGoogleArgsDict', 'outputs.SettingGuestAccessGoogle']]] = None,
+                 ippay: pulumi.Input[Optional[Union['SettingGuestAccessIppayArgs', 'SettingGuestAccessIppayArgsDict', 'outputs.SettingGuestAccessIppay']]] = None,
+                 merchant_warrior: pulumi.Input[Optional[Union['SettingGuestAccessMerchantWarriorArgs', 'SettingGuestAccessMerchantWarriorArgsDict', 'outputs.SettingGuestAccessMerchantWarrior']]] = None,
                  password: pulumi.Input[Optional[_builtins.str]] = None,
                  payment_gateway: pulumi.Input[Optional[_builtins.str]] = None,
-                 paypal: pulumi.Input[Optional[Union['SettingGuestAccessPaypalArgs', 'SettingGuestAccessPaypalArgsDict']]] = None,
-                 portal_customization: pulumi.Input[Optional[Union['SettingGuestAccessPortalCustomizationArgs', 'SettingGuestAccessPortalCustomizationArgsDict']]] = None,
+                 paypal: pulumi.Input[Optional[Union['SettingGuestAccessPaypalArgs', 'SettingGuestAccessPaypalArgsDict', 'outputs.SettingGuestAccessPaypal']]] = None,
+                 portal_customization: pulumi.Input[Optional[Union['SettingGuestAccessPortalCustomizationArgs', 'SettingGuestAccessPortalCustomizationArgsDict', 'outputs.SettingGuestAccessPortalCustomization']]] = None,
                  portal_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
                  portal_hostname: pulumi.Input[Optional[_builtins.str]] = None,
                  portal_use_hostname: pulumi.Input[Optional[_builtins.bool]] = None,
-                 quickpay: pulumi.Input[Optional[Union['SettingGuestAccessQuickpayArgs', 'SettingGuestAccessQuickpayArgsDict']]] = None,
-                 radius: pulumi.Input[Optional[Union['SettingGuestAccessRadiusArgs', 'SettingGuestAccessRadiusArgsDict']]] = None,
-                 redirect: pulumi.Input[Optional[Union['SettingGuestAccessRedirectArgs', 'SettingGuestAccessRedirectArgsDict']]] = None,
+                 quickpay: pulumi.Input[Optional[Union['SettingGuestAccessQuickpayArgs', 'SettingGuestAccessQuickpayArgsDict', 'outputs.SettingGuestAccessQuickpay']]] = None,
+                 radius: pulumi.Input[Optional[Union['SettingGuestAccessRadiusArgs', 'SettingGuestAccessRadiusArgsDict', 'outputs.SettingGuestAccessRadius']]] = None,
+                 redirect: pulumi.Input[Optional[Union['SettingGuestAccessRedirectArgs', 'SettingGuestAccessRedirectArgsDict', 'outputs.SettingGuestAccessRedirect']]] = None,
                  restricted_dns_servers: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
                  restricted_subnet: pulumi.Input[Optional[_builtins.str]] = None,
                  site: pulumi.Input[Optional[_builtins.str]] = None,
-                 stripe: pulumi.Input[Optional[Union['SettingGuestAccessStripeArgs', 'SettingGuestAccessStripeArgsDict']]] = None,
+                 stripe: pulumi.Input[Optional[Union['SettingGuestAccessStripeArgs', 'SettingGuestAccessStripeArgsDict', 'outputs.SettingGuestAccessStripe']]] = None,
                  template_engine: pulumi.Input[Optional[_builtins.str]] = None,
                  voucher_customized: pulumi.Input[Optional[_builtins.bool]] = None,
                  voucher_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
-                 wechat: pulumi.Input[Optional[Union['SettingGuestAccessWechatArgs', 'SettingGuestAccessWechatArgsDict']]] = None,
+                 wechat: pulumi.Input[Optional[Union['SettingGuestAccessWechatArgs', 'SettingGuestAccessWechatArgsDict', 'outputs.SettingGuestAccessWechat']]] = None,
                  __props__=None):
         """
         Create a SettingGuestAccess resource with the given unique name, props, and options.
@@ -1315,7 +1315,7 @@ class SettingGuestAccess(pulumi.CustomResource):
                For voucher authentication, set <span pulumi-lang-nodejs="`auth`" pulumi-lang-dotnet="`Auth`" pulumi-lang-go="`auth`" pulumi-lang-python="`auth`" pulumi-lang-yaml="`auth`" pulumi-lang-java="`auth`" pulumi-lang-hcl="`auth`">`auth`</span> to <span pulumi-lang-nodejs="`hotspot`" pulumi-lang-dotnet="`Hotspot`" pulumi-lang-go="`hotspot`" pulumi-lang-python="`hotspot`" pulumi-lang-yaml="`hotspot`" pulumi-lang-java="`hotspot`" pulumi-lang-hcl="`hotspot`">`hotspot`</span> and <span pulumi-lang-nodejs="`voucherEnabled`" pulumi-lang-dotnet="`VoucherEnabled`" pulumi-lang-go="`voucherEnabled`" pulumi-lang-python="`voucher_enabled`" pulumi-lang-yaml="`voucherEnabled`" pulumi-lang-java="`voucherEnabled`" pulumi-lang-hcl="`voucher_enabled`">`voucherEnabled`</span> to <span pulumi-lang-nodejs="`true`" pulumi-lang-dotnet="`True`" pulumi-lang-go="`true`" pulumi-lang-python="`true`" pulumi-lang-yaml="`true`" pulumi-lang-java="`true`" pulumi-lang-hcl="`true`">`true`</span>.
                For payment authentication, set <span pulumi-lang-nodejs="`auth`" pulumi-lang-dotnet="`Auth`" pulumi-lang-go="`auth`" pulumi-lang-python="`auth`" pulumi-lang-yaml="`auth`" pulumi-lang-java="`auth`" pulumi-lang-hcl="`auth`">`auth`</span> to <span pulumi-lang-nodejs="`hotspot`" pulumi-lang-dotnet="`Hotspot`" pulumi-lang-go="`hotspot`" pulumi-lang-python="`hotspot`" pulumi-lang-yaml="`hotspot`" pulumi-lang-java="`hotspot`" pulumi-lang-hcl="`hotspot`">`hotspot`</span> and <span pulumi-lang-nodejs="`paymentEnabled`" pulumi-lang-dotnet="`PaymentEnabled`" pulumi-lang-go="`paymentEnabled`" pulumi-lang-python="`payment_enabled`" pulumi-lang-yaml="`paymentEnabled`" pulumi-lang-java="`paymentEnabled`" pulumi-lang-hcl="`payment_enabled`">`paymentEnabled`</span> to <span pulumi-lang-nodejs="`true`" pulumi-lang-dotnet="`True`" pulumi-lang-go="`true`" pulumi-lang-python="`true`" pulumi-lang-yaml="`true`" pulumi-lang-java="`true`" pulumi-lang-hcl="`true`">`true`</span>.
         :param pulumi.Input[_builtins.str] auth_url: URL for authentication. Must be a valid URL including the protocol.
-        :param pulumi.Input[Union['SettingGuestAccessAuthorizeArgs', 'SettingGuestAccessAuthorizeArgsDict']] authorize: Authorize.net payment settings.
+        :param pulumi.Input[Union['SettingGuestAccessAuthorizeArgs', 'SettingGuestAccessAuthorizeArgsDict', 'outputs.SettingGuestAccessAuthorize']] authorize: Authorize.net payment settings.
         :param pulumi.Input[_builtins.str] custom_ip: Custom IP address. Must be a valid IPv4 address (e.g., `192.168.1.1`).
         :param pulumi.Input[_builtins.bool] ec_enabled: Enable enterprise controller functionality.
         :param pulumi.Input[_builtins.float] expire: Expiration time for guest access.
@@ -1325,11 +1325,11 @@ class SettingGuestAccess(pulumi.CustomResource):
                * <span pulumi-lang-nodejs="`60`" pulumi-lang-dotnet="`60`" pulumi-lang-go="`60`" pulumi-lang-python="`60`" pulumi-lang-yaml="`60`" pulumi-lang-java="`60`" pulumi-lang-hcl="`60`">`60`</span> - Hour
                * <span pulumi-lang-nodejs="`1440`" pulumi-lang-dotnet="`1440`" pulumi-lang-go="`1440`" pulumi-lang-python="`1440`" pulumi-lang-yaml="`1440`" pulumi-lang-java="`1440`" pulumi-lang-hcl="`1440`">`1440`</span> - Day
                * <span pulumi-lang-nodejs="`10080`" pulumi-lang-dotnet="`10080`" pulumi-lang-go="`10080`" pulumi-lang-python="`10080`" pulumi-lang-yaml="`10080`" pulumi-lang-java="`10080`" pulumi-lang-hcl="`10080`">`10080`</span> - Week
-        :param pulumi.Input[Union['SettingGuestAccessFacebookArgs', 'SettingGuestAccessFacebookArgsDict']] facebook: Facebook authentication settings.
-        :param pulumi.Input[Union['SettingGuestAccessFacebookWifiArgs', 'SettingGuestAccessFacebookWifiArgsDict']] facebook_wifi: Facebook WiFi authentication settings.
-        :param pulumi.Input[Union['SettingGuestAccessGoogleArgs', 'SettingGuestAccessGoogleArgsDict']] google: Google authentication settings.
-        :param pulumi.Input[Union['SettingGuestAccessIppayArgs', 'SettingGuestAccessIppayArgsDict']] ippay: IPpay Payments settings.
-        :param pulumi.Input[Union['SettingGuestAccessMerchantWarriorArgs', 'SettingGuestAccessMerchantWarriorArgsDict']] merchant_warrior: MerchantWarrior payment settings.
+        :param pulumi.Input[Union['SettingGuestAccessFacebookArgs', 'SettingGuestAccessFacebookArgsDict', 'outputs.SettingGuestAccessFacebook']] facebook: Facebook authentication settings.
+        :param pulumi.Input[Union['SettingGuestAccessFacebookWifiArgs', 'SettingGuestAccessFacebookWifiArgsDict', 'outputs.SettingGuestAccessFacebookWifi']] facebook_wifi: Facebook WiFi authentication settings.
+        :param pulumi.Input[Union['SettingGuestAccessGoogleArgs', 'SettingGuestAccessGoogleArgsDict', 'outputs.SettingGuestAccessGoogle']] google: Google authentication settings.
+        :param pulumi.Input[Union['SettingGuestAccessIppayArgs', 'SettingGuestAccessIppayArgsDict', 'outputs.SettingGuestAccessIppay']] ippay: IPpay Payments settings.
+        :param pulumi.Input[Union['SettingGuestAccessMerchantWarriorArgs', 'SettingGuestAccessMerchantWarriorArgsDict', 'outputs.SettingGuestAccessMerchantWarrior']] merchant_warrior: MerchantWarrior payment settings.
         :param pulumi.Input[_builtins.str] password: Password for guest access.
         :param pulumi.Input[_builtins.str] payment_gateway: Payment gateway. Valid values are:
                * <span pulumi-lang-nodejs="`paypal`" pulumi-lang-dotnet="`Paypal`" pulumi-lang-go="`paypal`" pulumi-lang-python="`paypal`" pulumi-lang-yaml="`paypal`" pulumi-lang-java="`paypal`" pulumi-lang-hcl="`paypal`">`paypal`</span> - PayPal
@@ -1338,22 +1338,22 @@ class SettingGuestAccess(pulumi.CustomResource):
                * <span pulumi-lang-nodejs="`quickpay`" pulumi-lang-dotnet="`Quickpay`" pulumi-lang-go="`quickpay`" pulumi-lang-python="`quickpay`" pulumi-lang-yaml="`quickpay`" pulumi-lang-java="`quickpay`" pulumi-lang-hcl="`quickpay`">`quickpay`</span> - QuickPay
                * <span pulumi-lang-nodejs="`merchantwarrior`" pulumi-lang-dotnet="`Merchantwarrior`" pulumi-lang-go="`merchantwarrior`" pulumi-lang-python="`merchantwarrior`" pulumi-lang-yaml="`merchantwarrior`" pulumi-lang-java="`merchantwarrior`" pulumi-lang-hcl="`merchantwarrior`">`merchantwarrior`</span> - Merchant Warrior
                * <span pulumi-lang-nodejs="`ippay`" pulumi-lang-dotnet="`Ippay`" pulumi-lang-go="`ippay`" pulumi-lang-python="`ippay`" pulumi-lang-yaml="`ippay`" pulumi-lang-java="`ippay`" pulumi-lang-hcl="`ippay`">`ippay`</span> - IP Payments
-        :param pulumi.Input[Union['SettingGuestAccessPaypalArgs', 'SettingGuestAccessPaypalArgsDict']] paypal: PayPal payment settings.
-        :param pulumi.Input[Union['SettingGuestAccessPortalCustomizationArgs', 'SettingGuestAccessPortalCustomizationArgsDict']] portal_customization: Portal customization settings.
+        :param pulumi.Input[Union['SettingGuestAccessPaypalArgs', 'SettingGuestAccessPaypalArgsDict', 'outputs.SettingGuestAccessPaypal']] paypal: PayPal payment settings.
+        :param pulumi.Input[Union['SettingGuestAccessPortalCustomizationArgs', 'SettingGuestAccessPortalCustomizationArgsDict', 'outputs.SettingGuestAccessPortalCustomization']] portal_customization: Portal customization settings.
         :param pulumi.Input[_builtins.bool] portal_enabled: Enable the guest portal.
         :param pulumi.Input[_builtins.str] portal_hostname: Hostname to use for the captive portal.
         :param pulumi.Input[_builtins.bool] portal_use_hostname: Use a custom hostname for the portal.
-        :param pulumi.Input[Union['SettingGuestAccessQuickpayArgs', 'SettingGuestAccessQuickpayArgsDict']] quickpay: QuickPay payment settings.
-        :param pulumi.Input[Union['SettingGuestAccessRadiusArgs', 'SettingGuestAccessRadiusArgsDict']] radius: RADIUS authentication settings.
-        :param pulumi.Input[Union['SettingGuestAccessRedirectArgs', 'SettingGuestAccessRedirectArgsDict']] redirect: Redirect after authentication settings.
+        :param pulumi.Input[Union['SettingGuestAccessQuickpayArgs', 'SettingGuestAccessQuickpayArgsDict', 'outputs.SettingGuestAccessQuickpay']] quickpay: QuickPay payment settings.
+        :param pulumi.Input[Union['SettingGuestAccessRadiusArgs', 'SettingGuestAccessRadiusArgsDict', 'outputs.SettingGuestAccessRadius']] radius: RADIUS authentication settings.
+        :param pulumi.Input[Union['SettingGuestAccessRedirectArgs', 'SettingGuestAccessRedirectArgsDict', 'outputs.SettingGuestAccessRedirect']] redirect: Redirect after authentication settings.
         :param pulumi.Input[Sequence[pulumi.Input[_builtins.str]]] restricted_dns_servers: List of restricted DNS servers for guest networks. Each value must be a valid IPv4 address.
         :param pulumi.Input[_builtins.str] restricted_subnet: Subnet for restricted guest access.
         :param pulumi.Input[_builtins.str] site: The name of the UniFi site where this resource should be applied. If not specified, the default site will be used.
-        :param pulumi.Input[Union['SettingGuestAccessStripeArgs', 'SettingGuestAccessStripeArgsDict']] stripe: Stripe payment settings.
+        :param pulumi.Input[Union['SettingGuestAccessStripeArgs', 'SettingGuestAccessStripeArgsDict', 'outputs.SettingGuestAccessStripe']] stripe: Stripe payment settings.
         :param pulumi.Input[_builtins.str] template_engine: Template engine for the portal. Valid values are: <span pulumi-lang-nodejs="`jsp`" pulumi-lang-dotnet="`Jsp`" pulumi-lang-go="`jsp`" pulumi-lang-python="`jsp`" pulumi-lang-yaml="`jsp`" pulumi-lang-java="`jsp`" pulumi-lang-hcl="`jsp`">`jsp`</span>, <span pulumi-lang-nodejs="`angular`" pulumi-lang-dotnet="`Angular`" pulumi-lang-go="`angular`" pulumi-lang-python="`angular`" pulumi-lang-yaml="`angular`" pulumi-lang-java="`angular`" pulumi-lang-hcl="`angular`">`angular`</span>.
         :param pulumi.Input[_builtins.bool] voucher_customized: Whether vouchers are customized.
         :param pulumi.Input[_builtins.bool] voucher_enabled: Enable voucher-based authentication for guest access.
-        :param pulumi.Input[Union['SettingGuestAccessWechatArgs', 'SettingGuestAccessWechatArgsDict']] wechat: WeChat authentication settings.
+        :param pulumi.Input[Union['SettingGuestAccessWechatArgs', 'SettingGuestAccessWechatArgsDict', 'outputs.SettingGuestAccessWechat']] wechat: WeChat authentication settings.
         """
         ...
     @overload
@@ -1382,35 +1382,35 @@ class SettingGuestAccess(pulumi.CustomResource):
                  allowed_subnet: pulumi.Input[Optional[_builtins.str]] = None,
                  auth: pulumi.Input[Optional[_builtins.str]] = None,
                  auth_url: pulumi.Input[Optional[_builtins.str]] = None,
-                 authorize: pulumi.Input[Optional[Union['SettingGuestAccessAuthorizeArgs', 'SettingGuestAccessAuthorizeArgsDict']]] = None,
+                 authorize: pulumi.Input[Optional[Union['SettingGuestAccessAuthorizeArgs', 'SettingGuestAccessAuthorizeArgsDict', 'outputs.SettingGuestAccessAuthorize']]] = None,
                  custom_ip: pulumi.Input[Optional[_builtins.str]] = None,
                  ec_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
                  expire: pulumi.Input[Optional[_builtins.float]] = None,
                  expire_number: pulumi.Input[Optional[_builtins.float]] = None,
                  expire_unit: pulumi.Input[Optional[_builtins.float]] = None,
-                 facebook: pulumi.Input[Optional[Union['SettingGuestAccessFacebookArgs', 'SettingGuestAccessFacebookArgsDict']]] = None,
-                 facebook_wifi: pulumi.Input[Optional[Union['SettingGuestAccessFacebookWifiArgs', 'SettingGuestAccessFacebookWifiArgsDict']]] = None,
-                 google: pulumi.Input[Optional[Union['SettingGuestAccessGoogleArgs', 'SettingGuestAccessGoogleArgsDict']]] = None,
-                 ippay: pulumi.Input[Optional[Union['SettingGuestAccessIppayArgs', 'SettingGuestAccessIppayArgsDict']]] = None,
-                 merchant_warrior: pulumi.Input[Optional[Union['SettingGuestAccessMerchantWarriorArgs', 'SettingGuestAccessMerchantWarriorArgsDict']]] = None,
+                 facebook: pulumi.Input[Optional[Union['SettingGuestAccessFacebookArgs', 'SettingGuestAccessFacebookArgsDict', 'outputs.SettingGuestAccessFacebook']]] = None,
+                 facebook_wifi: pulumi.Input[Optional[Union['SettingGuestAccessFacebookWifiArgs', 'SettingGuestAccessFacebookWifiArgsDict', 'outputs.SettingGuestAccessFacebookWifi']]] = None,
+                 google: pulumi.Input[Optional[Union['SettingGuestAccessGoogleArgs', 'SettingGuestAccessGoogleArgsDict', 'outputs.SettingGuestAccessGoogle']]] = None,
+                 ippay: pulumi.Input[Optional[Union['SettingGuestAccessIppayArgs', 'SettingGuestAccessIppayArgsDict', 'outputs.SettingGuestAccessIppay']]] = None,
+                 merchant_warrior: pulumi.Input[Optional[Union['SettingGuestAccessMerchantWarriorArgs', 'SettingGuestAccessMerchantWarriorArgsDict', 'outputs.SettingGuestAccessMerchantWarrior']]] = None,
                  password: pulumi.Input[Optional[_builtins.str]] = None,
                  payment_gateway: pulumi.Input[Optional[_builtins.str]] = None,
-                 paypal: pulumi.Input[Optional[Union['SettingGuestAccessPaypalArgs', 'SettingGuestAccessPaypalArgsDict']]] = None,
-                 portal_customization: pulumi.Input[Optional[Union['SettingGuestAccessPortalCustomizationArgs', 'SettingGuestAccessPortalCustomizationArgsDict']]] = None,
+                 paypal: pulumi.Input[Optional[Union['SettingGuestAccessPaypalArgs', 'SettingGuestAccessPaypalArgsDict', 'outputs.SettingGuestAccessPaypal']]] = None,
+                 portal_customization: pulumi.Input[Optional[Union['SettingGuestAccessPortalCustomizationArgs', 'SettingGuestAccessPortalCustomizationArgsDict', 'outputs.SettingGuestAccessPortalCustomization']]] = None,
                  portal_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
                  portal_hostname: pulumi.Input[Optional[_builtins.str]] = None,
                  portal_use_hostname: pulumi.Input[Optional[_builtins.bool]] = None,
-                 quickpay: pulumi.Input[Optional[Union['SettingGuestAccessQuickpayArgs', 'SettingGuestAccessQuickpayArgsDict']]] = None,
-                 radius: pulumi.Input[Optional[Union['SettingGuestAccessRadiusArgs', 'SettingGuestAccessRadiusArgsDict']]] = None,
-                 redirect: pulumi.Input[Optional[Union['SettingGuestAccessRedirectArgs', 'SettingGuestAccessRedirectArgsDict']]] = None,
+                 quickpay: pulumi.Input[Optional[Union['SettingGuestAccessQuickpayArgs', 'SettingGuestAccessQuickpayArgsDict', 'outputs.SettingGuestAccessQuickpay']]] = None,
+                 radius: pulumi.Input[Optional[Union['SettingGuestAccessRadiusArgs', 'SettingGuestAccessRadiusArgsDict', 'outputs.SettingGuestAccessRadius']]] = None,
+                 redirect: pulumi.Input[Optional[Union['SettingGuestAccessRedirectArgs', 'SettingGuestAccessRedirectArgsDict', 'outputs.SettingGuestAccessRedirect']]] = None,
                  restricted_dns_servers: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
                  restricted_subnet: pulumi.Input[Optional[_builtins.str]] = None,
                  site: pulumi.Input[Optional[_builtins.str]] = None,
-                 stripe: pulumi.Input[Optional[Union['SettingGuestAccessStripeArgs', 'SettingGuestAccessStripeArgsDict']]] = None,
+                 stripe: pulumi.Input[Optional[Union['SettingGuestAccessStripeArgs', 'SettingGuestAccessStripeArgsDict', 'outputs.SettingGuestAccessStripe']]] = None,
                  template_engine: pulumi.Input[Optional[_builtins.str]] = None,
                  voucher_customized: pulumi.Input[Optional[_builtins.bool]] = None,
                  voucher_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
-                 wechat: pulumi.Input[Optional[Union['SettingGuestAccessWechatArgs', 'SettingGuestAccessWechatArgsDict']]] = None,
+                 wechat: pulumi.Input[Optional[Union['SettingGuestAccessWechatArgs', 'SettingGuestAccessWechatArgsDict', 'outputs.SettingGuestAccessWechat']]] = None,
                  __props__=None):
         opts = pulumi.ResourceOptions.merge(_utilities.get_resource_opts_defaults(), opts)
         if not isinstance(opts, pulumi.ResourceOptions):
@@ -1476,42 +1476,42 @@ class SettingGuestAccess(pulumi.CustomResource):
             allowed_subnet: pulumi.Input[Optional[_builtins.str]] = None,
             auth: pulumi.Input[Optional[_builtins.str]] = None,
             auth_url: pulumi.Input[Optional[_builtins.str]] = None,
-            authorize: pulumi.Input[Optional[Union['SettingGuestAccessAuthorizeArgs', 'SettingGuestAccessAuthorizeArgsDict']]] = None,
+            authorize: pulumi.Input[Optional[Union['SettingGuestAccessAuthorizeArgs', 'SettingGuestAccessAuthorizeArgsDict', 'outputs.SettingGuestAccessAuthorize']]] = None,
             custom_ip: pulumi.Input[Optional[_builtins.str]] = None,
             ec_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
             expire: pulumi.Input[Optional[_builtins.float]] = None,
             expire_number: pulumi.Input[Optional[_builtins.float]] = None,
             expire_unit: pulumi.Input[Optional[_builtins.float]] = None,
-            facebook: pulumi.Input[Optional[Union['SettingGuestAccessFacebookArgs', 'SettingGuestAccessFacebookArgsDict']]] = None,
+            facebook: pulumi.Input[Optional[Union['SettingGuestAccessFacebookArgs', 'SettingGuestAccessFacebookArgsDict', 'outputs.SettingGuestAccessFacebook']]] = None,
             facebook_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
-            facebook_wifi: pulumi.Input[Optional[Union['SettingGuestAccessFacebookWifiArgs', 'SettingGuestAccessFacebookWifiArgsDict']]] = None,
-            google: pulumi.Input[Optional[Union['SettingGuestAccessGoogleArgs', 'SettingGuestAccessGoogleArgsDict']]] = None,
+            facebook_wifi: pulumi.Input[Optional[Union['SettingGuestAccessFacebookWifiArgs', 'SettingGuestAccessFacebookWifiArgsDict', 'outputs.SettingGuestAccessFacebookWifi']]] = None,
+            google: pulumi.Input[Optional[Union['SettingGuestAccessGoogleArgs', 'SettingGuestAccessGoogleArgsDict', 'outputs.SettingGuestAccessGoogle']]] = None,
             google_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
-            ippay: pulumi.Input[Optional[Union['SettingGuestAccessIppayArgs', 'SettingGuestAccessIppayArgsDict']]] = None,
-            merchant_warrior: pulumi.Input[Optional[Union['SettingGuestAccessMerchantWarriorArgs', 'SettingGuestAccessMerchantWarriorArgsDict']]] = None,
+            ippay: pulumi.Input[Optional[Union['SettingGuestAccessIppayArgs', 'SettingGuestAccessIppayArgsDict', 'outputs.SettingGuestAccessIppay']]] = None,
+            merchant_warrior: pulumi.Input[Optional[Union['SettingGuestAccessMerchantWarriorArgs', 'SettingGuestAccessMerchantWarriorArgsDict', 'outputs.SettingGuestAccessMerchantWarrior']]] = None,
             password: pulumi.Input[Optional[_builtins.str]] = None,
             password_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
             payment_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
             payment_gateway: pulumi.Input[Optional[_builtins.str]] = None,
-            paypal: pulumi.Input[Optional[Union['SettingGuestAccessPaypalArgs', 'SettingGuestAccessPaypalArgsDict']]] = None,
-            portal_customization: pulumi.Input[Optional[Union['SettingGuestAccessPortalCustomizationArgs', 'SettingGuestAccessPortalCustomizationArgsDict']]] = None,
+            paypal: pulumi.Input[Optional[Union['SettingGuestAccessPaypalArgs', 'SettingGuestAccessPaypalArgsDict', 'outputs.SettingGuestAccessPaypal']]] = None,
+            portal_customization: pulumi.Input[Optional[Union['SettingGuestAccessPortalCustomizationArgs', 'SettingGuestAccessPortalCustomizationArgsDict', 'outputs.SettingGuestAccessPortalCustomization']]] = None,
             portal_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
             portal_hostname: pulumi.Input[Optional[_builtins.str]] = None,
             portal_use_hostname: pulumi.Input[Optional[_builtins.bool]] = None,
-            quickpay: pulumi.Input[Optional[Union['SettingGuestAccessQuickpayArgs', 'SettingGuestAccessQuickpayArgsDict']]] = None,
-            radius: pulumi.Input[Optional[Union['SettingGuestAccessRadiusArgs', 'SettingGuestAccessRadiusArgsDict']]] = None,
+            quickpay: pulumi.Input[Optional[Union['SettingGuestAccessQuickpayArgs', 'SettingGuestAccessQuickpayArgsDict', 'outputs.SettingGuestAccessQuickpay']]] = None,
+            radius: pulumi.Input[Optional[Union['SettingGuestAccessRadiusArgs', 'SettingGuestAccessRadiusArgsDict', 'outputs.SettingGuestAccessRadius']]] = None,
             radius_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
-            redirect: pulumi.Input[Optional[Union['SettingGuestAccessRedirectArgs', 'SettingGuestAccessRedirectArgsDict']]] = None,
+            redirect: pulumi.Input[Optional[Union['SettingGuestAccessRedirectArgs', 'SettingGuestAccessRedirectArgsDict', 'outputs.SettingGuestAccessRedirect']]] = None,
             redirect_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
             restricted_dns_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
             restricted_dns_servers: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
             restricted_subnet: pulumi.Input[Optional[_builtins.str]] = None,
             site: pulumi.Input[Optional[_builtins.str]] = None,
-            stripe: pulumi.Input[Optional[Union['SettingGuestAccessStripeArgs', 'SettingGuestAccessStripeArgsDict']]] = None,
+            stripe: pulumi.Input[Optional[Union['SettingGuestAccessStripeArgs', 'SettingGuestAccessStripeArgsDict', 'outputs.SettingGuestAccessStripe']]] = None,
             template_engine: pulumi.Input[Optional[_builtins.str]] = None,
             voucher_customized: pulumi.Input[Optional[_builtins.bool]] = None,
             voucher_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
-            wechat: pulumi.Input[Optional[Union['SettingGuestAccessWechatArgs', 'SettingGuestAccessWechatArgsDict']]] = None,
+            wechat: pulumi.Input[Optional[Union['SettingGuestAccessWechatArgs', 'SettingGuestAccessWechatArgsDict', 'outputs.SettingGuestAccessWechat']]] = None,
             wechat_enabled: pulumi.Input[Optional[_builtins.bool]] = None) -> 'SettingGuestAccess':
         """
         Get an existing SettingGuestAccess resource's state with the given name, id, and optional extra
@@ -1531,7 +1531,7 @@ class SettingGuestAccess(pulumi.CustomResource):
                For voucher authentication, set <span pulumi-lang-nodejs="`auth`" pulumi-lang-dotnet="`Auth`" pulumi-lang-go="`auth`" pulumi-lang-python="`auth`" pulumi-lang-yaml="`auth`" pulumi-lang-java="`auth`" pulumi-lang-hcl="`auth`">`auth`</span> to <span pulumi-lang-nodejs="`hotspot`" pulumi-lang-dotnet="`Hotspot`" pulumi-lang-go="`hotspot`" pulumi-lang-python="`hotspot`" pulumi-lang-yaml="`hotspot`" pulumi-lang-java="`hotspot`" pulumi-lang-hcl="`hotspot`">`hotspot`</span> and <span pulumi-lang-nodejs="`voucherEnabled`" pulumi-lang-dotnet="`VoucherEnabled`" pulumi-lang-go="`voucherEnabled`" pulumi-lang-python="`voucher_enabled`" pulumi-lang-yaml="`voucherEnabled`" pulumi-lang-java="`voucherEnabled`" pulumi-lang-hcl="`voucher_enabled`">`voucherEnabled`</span> to <span pulumi-lang-nodejs="`true`" pulumi-lang-dotnet="`True`" pulumi-lang-go="`true`" pulumi-lang-python="`true`" pulumi-lang-yaml="`true`" pulumi-lang-java="`true`" pulumi-lang-hcl="`true`">`true`</span>.
                For payment authentication, set <span pulumi-lang-nodejs="`auth`" pulumi-lang-dotnet="`Auth`" pulumi-lang-go="`auth`" pulumi-lang-python="`auth`" pulumi-lang-yaml="`auth`" pulumi-lang-java="`auth`" pulumi-lang-hcl="`auth`">`auth`</span> to <span pulumi-lang-nodejs="`hotspot`" pulumi-lang-dotnet="`Hotspot`" pulumi-lang-go="`hotspot`" pulumi-lang-python="`hotspot`" pulumi-lang-yaml="`hotspot`" pulumi-lang-java="`hotspot`" pulumi-lang-hcl="`hotspot`">`hotspot`</span> and <span pulumi-lang-nodejs="`paymentEnabled`" pulumi-lang-dotnet="`PaymentEnabled`" pulumi-lang-go="`paymentEnabled`" pulumi-lang-python="`payment_enabled`" pulumi-lang-yaml="`paymentEnabled`" pulumi-lang-java="`paymentEnabled`" pulumi-lang-hcl="`payment_enabled`">`paymentEnabled`</span> to <span pulumi-lang-nodejs="`true`" pulumi-lang-dotnet="`True`" pulumi-lang-go="`true`" pulumi-lang-python="`true`" pulumi-lang-yaml="`true`" pulumi-lang-java="`true`" pulumi-lang-hcl="`true`">`true`</span>.
         :param pulumi.Input[_builtins.str] auth_url: URL for authentication. Must be a valid URL including the protocol.
-        :param pulumi.Input[Union['SettingGuestAccessAuthorizeArgs', 'SettingGuestAccessAuthorizeArgsDict']] authorize: Authorize.net payment settings.
+        :param pulumi.Input[Union['SettingGuestAccessAuthorizeArgs', 'SettingGuestAccessAuthorizeArgsDict', 'outputs.SettingGuestAccessAuthorize']] authorize: Authorize.net payment settings.
         :param pulumi.Input[_builtins.str] custom_ip: Custom IP address. Must be a valid IPv4 address (e.g., `192.168.1.1`).
         :param pulumi.Input[_builtins.bool] ec_enabled: Enable enterprise controller functionality.
         :param pulumi.Input[_builtins.float] expire: Expiration time for guest access.
@@ -1541,13 +1541,13 @@ class SettingGuestAccess(pulumi.CustomResource):
                * <span pulumi-lang-nodejs="`60`" pulumi-lang-dotnet="`60`" pulumi-lang-go="`60`" pulumi-lang-python="`60`" pulumi-lang-yaml="`60`" pulumi-lang-java="`60`" pulumi-lang-hcl="`60`">`60`</span> - Hour
                * <span pulumi-lang-nodejs="`1440`" pulumi-lang-dotnet="`1440`" pulumi-lang-go="`1440`" pulumi-lang-python="`1440`" pulumi-lang-yaml="`1440`" pulumi-lang-java="`1440`" pulumi-lang-hcl="`1440`">`1440`</span> - Day
                * <span pulumi-lang-nodejs="`10080`" pulumi-lang-dotnet="`10080`" pulumi-lang-go="`10080`" pulumi-lang-python="`10080`" pulumi-lang-yaml="`10080`" pulumi-lang-java="`10080`" pulumi-lang-hcl="`10080`">`10080`</span> - Week
-        :param pulumi.Input[Union['SettingGuestAccessFacebookArgs', 'SettingGuestAccessFacebookArgsDict']] facebook: Facebook authentication settings.
+        :param pulumi.Input[Union['SettingGuestAccessFacebookArgs', 'SettingGuestAccessFacebookArgsDict', 'outputs.SettingGuestAccessFacebook']] facebook: Facebook authentication settings.
         :param pulumi.Input[_builtins.bool] facebook_enabled: Whether Facebook authentication for guest access is enabled.
-        :param pulumi.Input[Union['SettingGuestAccessFacebookWifiArgs', 'SettingGuestAccessFacebookWifiArgsDict']] facebook_wifi: Facebook WiFi authentication settings.
-        :param pulumi.Input[Union['SettingGuestAccessGoogleArgs', 'SettingGuestAccessGoogleArgsDict']] google: Google authentication settings.
+        :param pulumi.Input[Union['SettingGuestAccessFacebookWifiArgs', 'SettingGuestAccessFacebookWifiArgsDict', 'outputs.SettingGuestAccessFacebookWifi']] facebook_wifi: Facebook WiFi authentication settings.
+        :param pulumi.Input[Union['SettingGuestAccessGoogleArgs', 'SettingGuestAccessGoogleArgsDict', 'outputs.SettingGuestAccessGoogle']] google: Google authentication settings.
         :param pulumi.Input[_builtins.bool] google_enabled: Whether Google authentication for guest access is enabled.
-        :param pulumi.Input[Union['SettingGuestAccessIppayArgs', 'SettingGuestAccessIppayArgsDict']] ippay: IPpay Payments settings.
-        :param pulumi.Input[Union['SettingGuestAccessMerchantWarriorArgs', 'SettingGuestAccessMerchantWarriorArgsDict']] merchant_warrior: MerchantWarrior payment settings.
+        :param pulumi.Input[Union['SettingGuestAccessIppayArgs', 'SettingGuestAccessIppayArgsDict', 'outputs.SettingGuestAccessIppay']] ippay: IPpay Payments settings.
+        :param pulumi.Input[Union['SettingGuestAccessMerchantWarriorArgs', 'SettingGuestAccessMerchantWarriorArgsDict', 'outputs.SettingGuestAccessMerchantWarrior']] merchant_warrior: MerchantWarrior payment settings.
         :param pulumi.Input[_builtins.str] password: Password for guest access.
         :param pulumi.Input[_builtins.bool] password_enabled: Enable password authentication for guest access.
         :param pulumi.Input[_builtins.bool] payment_enabled: Enable payment for guest access.
@@ -1558,25 +1558,25 @@ class SettingGuestAccess(pulumi.CustomResource):
                * <span pulumi-lang-nodejs="`quickpay`" pulumi-lang-dotnet="`Quickpay`" pulumi-lang-go="`quickpay`" pulumi-lang-python="`quickpay`" pulumi-lang-yaml="`quickpay`" pulumi-lang-java="`quickpay`" pulumi-lang-hcl="`quickpay`">`quickpay`</span> - QuickPay
                * <span pulumi-lang-nodejs="`merchantwarrior`" pulumi-lang-dotnet="`Merchantwarrior`" pulumi-lang-go="`merchantwarrior`" pulumi-lang-python="`merchantwarrior`" pulumi-lang-yaml="`merchantwarrior`" pulumi-lang-java="`merchantwarrior`" pulumi-lang-hcl="`merchantwarrior`">`merchantwarrior`</span> - Merchant Warrior
                * <span pulumi-lang-nodejs="`ippay`" pulumi-lang-dotnet="`Ippay`" pulumi-lang-go="`ippay`" pulumi-lang-python="`ippay`" pulumi-lang-yaml="`ippay`" pulumi-lang-java="`ippay`" pulumi-lang-hcl="`ippay`">`ippay`</span> - IP Payments
-        :param pulumi.Input[Union['SettingGuestAccessPaypalArgs', 'SettingGuestAccessPaypalArgsDict']] paypal: PayPal payment settings.
-        :param pulumi.Input[Union['SettingGuestAccessPortalCustomizationArgs', 'SettingGuestAccessPortalCustomizationArgsDict']] portal_customization: Portal customization settings.
+        :param pulumi.Input[Union['SettingGuestAccessPaypalArgs', 'SettingGuestAccessPaypalArgsDict', 'outputs.SettingGuestAccessPaypal']] paypal: PayPal payment settings.
+        :param pulumi.Input[Union['SettingGuestAccessPortalCustomizationArgs', 'SettingGuestAccessPortalCustomizationArgsDict', 'outputs.SettingGuestAccessPortalCustomization']] portal_customization: Portal customization settings.
         :param pulumi.Input[_builtins.bool] portal_enabled: Enable the guest portal.
         :param pulumi.Input[_builtins.str] portal_hostname: Hostname to use for the captive portal.
         :param pulumi.Input[_builtins.bool] portal_use_hostname: Use a custom hostname for the portal.
-        :param pulumi.Input[Union['SettingGuestAccessQuickpayArgs', 'SettingGuestAccessQuickpayArgsDict']] quickpay: QuickPay payment settings.
-        :param pulumi.Input[Union['SettingGuestAccessRadiusArgs', 'SettingGuestAccessRadiusArgsDict']] radius: RADIUS authentication settings.
+        :param pulumi.Input[Union['SettingGuestAccessQuickpayArgs', 'SettingGuestAccessQuickpayArgsDict', 'outputs.SettingGuestAccessQuickpay']] quickpay: QuickPay payment settings.
+        :param pulumi.Input[Union['SettingGuestAccessRadiusArgs', 'SettingGuestAccessRadiusArgsDict', 'outputs.SettingGuestAccessRadius']] radius: RADIUS authentication settings.
         :param pulumi.Input[_builtins.bool] radius_enabled: Whether RADIUS authentication for guest access is enabled.
-        :param pulumi.Input[Union['SettingGuestAccessRedirectArgs', 'SettingGuestAccessRedirectArgsDict']] redirect: Redirect after authentication settings.
+        :param pulumi.Input[Union['SettingGuestAccessRedirectArgs', 'SettingGuestAccessRedirectArgsDict', 'outputs.SettingGuestAccessRedirect']] redirect: Redirect after authentication settings.
         :param pulumi.Input[_builtins.bool] redirect_enabled: Whether redirect after authentication is enabled.
         :param pulumi.Input[_builtins.bool] restricted_dns_enabled: Whether restricted DNS servers for guest networks are enabled.
         :param pulumi.Input[Sequence[pulumi.Input[_builtins.str]]] restricted_dns_servers: List of restricted DNS servers for guest networks. Each value must be a valid IPv4 address.
         :param pulumi.Input[_builtins.str] restricted_subnet: Subnet for restricted guest access.
         :param pulumi.Input[_builtins.str] site: The name of the UniFi site where this resource should be applied. If not specified, the default site will be used.
-        :param pulumi.Input[Union['SettingGuestAccessStripeArgs', 'SettingGuestAccessStripeArgsDict']] stripe: Stripe payment settings.
+        :param pulumi.Input[Union['SettingGuestAccessStripeArgs', 'SettingGuestAccessStripeArgsDict', 'outputs.SettingGuestAccessStripe']] stripe: Stripe payment settings.
         :param pulumi.Input[_builtins.str] template_engine: Template engine for the portal. Valid values are: <span pulumi-lang-nodejs="`jsp`" pulumi-lang-dotnet="`Jsp`" pulumi-lang-go="`jsp`" pulumi-lang-python="`jsp`" pulumi-lang-yaml="`jsp`" pulumi-lang-java="`jsp`" pulumi-lang-hcl="`jsp`">`jsp`</span>, <span pulumi-lang-nodejs="`angular`" pulumi-lang-dotnet="`Angular`" pulumi-lang-go="`angular`" pulumi-lang-python="`angular`" pulumi-lang-yaml="`angular`" pulumi-lang-java="`angular`" pulumi-lang-hcl="`angular`">`angular`</span>.
         :param pulumi.Input[_builtins.bool] voucher_customized: Whether vouchers are customized.
         :param pulumi.Input[_builtins.bool] voucher_enabled: Enable voucher-based authentication for guest access.
-        :param pulumi.Input[Union['SettingGuestAccessWechatArgs', 'SettingGuestAccessWechatArgsDict']] wechat: WeChat authentication settings.
+        :param pulumi.Input[Union['SettingGuestAccessWechatArgs', 'SettingGuestAccessWechatArgsDict', 'outputs.SettingGuestAccessWechat']] wechat: WeChat authentication settings.
         :param pulumi.Input[_builtins.bool] wechat_enabled: Whether WeChat authentication for guest access is enabled.
         """
         opts = pulumi.ResourceOptions.merge(opts, pulumi.ResourceOptions(id=id))
