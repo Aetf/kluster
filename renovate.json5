@@ -272,8 +272,9 @@
       dependencyDashboardApproval: true,
     },
     {
-      // The appliance's pins are re-provision triggers rather than library
-      // upgrades: each one means terminating and relaunching the box, so they
+      // The appliance's pins change the box rather than a library: the
+      // Postgres line and the age release replace it, and the Fedora CoreOS
+      // release imports a new image that the next launch boots from, so they
       // travel alone and get read.
       matchFileNames: [
         'src/kluster/lib/state_backend/settings.py',
@@ -539,6 +540,27 @@
       datasourceTemplate: 'github-releases',
     },
     {
+      // The Fedora CoreOS release the `state-backend` stack imports its image
+      // from, and the digest of its compressed `oraclecloud` artifact, which
+      // the upload checks the download against (rfc-006 ruling 7). One
+      // manager for both, so a bump moves the pair: apart, the release would
+      // land with a digest the next upload refuses. Read from the stream's
+      // own metadata (`customDatasources` below), which publishes the current
+      // release alone, its digest beside it and when it last moved. A bump
+      // imports a new image and replaces nothing else; it falls in the
+      // appliance's group by its file.
+      customType: 'regex',
+      managerFilePatterns: [
+        '/^src/kluster/lib/state_backend/settings\\.py$/',
+      ],
+      matchStrings: [
+        "FCOS_RELEASE = '(?<currentValue>[\\d.]+)'\\nFCOS_ARTIFACT_SHA256 = '(?<currentDigest>[0-9a-f]{64})'",
+      ],
+      depNameTemplate: 'fedora-coreos',
+      datasourceTemplate: 'custom.fedora-coreos-stable',
+      versioningTemplate: 'loose',
+    },
+    {
       // The `crd2pulumi` release the CRD bindings are generated with, and the
       // digest `update_crds` checks its download against. Version and digest
       // are captured by one manager so they move as a pair: left to separate
@@ -638,4 +660,17 @@
       datasourceTemplate: 'docker',
     },
   ],
+  customDatasources: {
+    // Fedora CoreOS's stable stream, as the release the stream publishes now,
+    // the sha256 of that release's compressed `oraclecloud` disk, and when
+    // the stream last moved, which `minimumReleaseAge` ages it by. Read by
+    // the manager for `FCOS_RELEASE` above.
+    'fedora-coreos-stable': {
+      defaultRegistryUrlTemplate: 'https://builds.coreos.fedoraproject.org/streams/stable.json',
+      format: 'json',
+      transformTemplates: [
+        '{"releases": [{"version": architectures.x86_64.artifacts.oraclecloud.release, "digest": architectures.x86_64.artifacts.oraclecloud.formats.`qcow2.xz`.disk.sha256, "releaseTimestamp": metadata.`last-modified`}], "homepage": "https://fedoraproject.org/coreos/"}',
+      ],
+    },
+  },
 }

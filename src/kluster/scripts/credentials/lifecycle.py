@@ -221,8 +221,8 @@ def environment(
     acquisition chain (`stack_environment.operator_passphrase`), only when an
     operator stack is asked for, and at most once for this environment; the
     escrow is its recovery path, which `credentials derived
-    operator-passphrase recover` walks and a refusal names. The URL is read from the bundle the appliance's provisioner writes,
-    so the two halves of "log in to the backend" come from one command — and a
+    operator-passphrase recover` walks and a refusal names. The URL is read from the bundle `state-backend bundle`
+    writes, so the two halves of "log in to the backend" come from one command — and a
     machine with no bundle yet answers with no URL, which its caller can see
     rather than discover inside a subprocess.
     """
@@ -230,7 +230,7 @@ def environment(
     url = bundle.backend_url_file(bundle_dir)
     if url is None:
         log.warning(
-            'no %s; run `state-backend provision` (or `state-backend bundle operator`) first',
+            'no %s; run `state-backend bundle operator --address <the reserved address>` first',
             bundle_dir / bundle.URL_FILE,
         )
     return pulumi_config.BackendEnvironment(

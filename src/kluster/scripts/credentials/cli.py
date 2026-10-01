@@ -95,36 +95,9 @@ _ORDER = """when to run what:
          The recovery key is one of them, and creating it also writes
          escrow/RECIPIENTS. Stops at each credential no API can create and
          prints the console steps. Re-run it to resume.
-    2. credentials derived oci-state-backend mint
-         The appliance's own OCI key, minted from the seed into a
-         workstation slot. The next step reads it there; nothing else does.
-         The compartment it is confined to is the one conventions names for
-         the appliance, created by this command if it does not exist.
-    3. state-backend provision
-         The Pulumi state backend, which every stack needs before it can act,
-         and the first thing to escrow: it generates the CA and the backup
-         identities it is about to install and commits their ciphertexts.
-    4. credentials derived pulumi-passphrase generate
-         The one escrowed row no other command mints. It writes the
-         workstation slot as well as the ciphertext, so mise.toml puts the
-         passphrase in the environment of every pulumi run from here on.
-    5. credentials derived cloudflare-zones mint
-       credentials derived cloudflare-gateway-acme mint
-         The Cloudflare seed's delivered tokens: the zone-scoped provider
-         token into the dns stack's config, and the gateway's own ACME
-         token -- scoped to the zones it issues its vhosts under --
-         into the physical stack's. Each file is then committed. One
-         derived row per command; re-running one rotates it.
-    6. credentials derived oci-physical mint
-       credentials derived b2-management mint
-         The physical stack's minted provider credentials, its OCI key and
-         its B2 management key, into its config, which is then committed
-         like the one above. The first also
-         creates that stack's compartment where it does not exist yet, and
-         prints the OCID to record in conventions and commit.
-    7. credentials derived operator-passphrase generate
+    2. credentials derived operator-passphrase generate
          The operator passphrase, which encrypts the operator stacks (github
-         and state-backend), before anything reads or writes their config. Stage 4's
+         and state-backend), before anything reads or writes their config. Stage 5's
          command on a second row, and separate from it for the one reason the
          row exists: this value goes to no CI Environment, so the stack
          holding the forge's admin token is unreadable by anything CI can
@@ -132,6 +105,51 @@ _ORDER = """when to run what:
          machine with no store. A machine without it does not fall back to
          the stack passphrase -- every command that would touch those stacks
          refuses by name.
+    3. operator-stack state-backend pulumi stack init
+       credentials derived oci-state-backend mint
+       credentials derived b2-state-backend-management mint
+       credentials derived state-backend-ca generate
+       credentials derived state-backend-server issue
+       credentials derived state-backend-host-key generate
+       credentials derived backup-age-1 generate
+         The state-backend stack's configuration, which every key the box
+         is rendered from lives in. The stack's state is committed, so its
+         first checkpoint, and the stack file holding its encryptionsalt,
+         come from the driver and are landed like any change; each command
+         after it refuses until they are. Then the appliance's own OCI key,
+         confined to the compartment conventions names for it and created
+         by that command if it does not exist; its own B2 management key;
+         the CA, escrowed; the server key and certificate issued from it;
+         the SSH host key, whose public half is a file to commit; and the
+         first backup generation, escrowed, its public half written into
+         the committed recipients file. The config and both files are then
+         committed.
+    4. state-backend bundle operator --address <the reserved address>
+       operator-stack state-backend up --force
+         The Pulumi state backend, which every stack needs before it can
+         act. The bundle comes first because the run's hooks connect with
+         it. The first launch is a create, which waits for --force like
+         any other; the run ends at exit 3 on a backend that holds no
+         stack yet, naming the first stack init of a new site. Its
+         checkpoint is landed like any change.
+    5. credentials derived pulumi-passphrase generate
+         The one escrowed row no other command mints. It writes the
+         workstation slot as well as the ciphertext, so mise.toml puts the
+         passphrase in the environment of every pulumi run from here on.
+    6. credentials derived cloudflare-zones mint
+       credentials derived cloudflare-gateway-acme mint
+         The Cloudflare seed's delivered tokens: the zone-scoped provider
+         token into the dns stack's config, and the gateway's own ACME
+         token -- scoped to the zones it issues its vhosts under --
+         into the physical stack's. Each file is then committed. One
+         derived row per command; re-running one rotates it.
+    7. credentials derived oci-physical mint
+       credentials derived b2-management mint
+         The physical stack's minted provider credentials, its OCI key and
+         its B2 management key, into its config, which is then committed
+         like the one above. The first also
+         creates that stack's compartment where it does not exist yet, and
+         prints the OCID to record in conventions and commit.
     8. credentials derived unifi record
        credentials derived adguard record
        credentials derived zerotier record
@@ -146,7 +164,7 @@ _ORDER = """when to run what:
          dns for the AdGuard login, github for the admin token the forge
          is declared with. Those files are then committed. The GitHub one
          is last of these because stage 10 authenticates as it, and it
-         needs stage 7.
+         needs stage 2.
     9. credentials derived github-dispatch-key record
        credentials derived github-trigger-key record
          The two GitHub App private keys. Each is generated on its own App
@@ -162,27 +180,8 @@ _ORDER = """when to run what:
          of those values moves; a row it cannot fill yet says which slot is
          waiting on what. It authenticates as the admin token stage 8
          recorded, read back out of the github stack's config -- which needs
-         stage 7's passphrase. It pushes the stack passphrase into every
+         stage 2's passphrase. It pushes the stack passphrase into every
          Environment and the operator passphrase into none.
-
-  the state-backend stack's configuration, outside the bring-up
-    operator-stack state-backend pulumi stack init
-    credentials derived b2-state-backend-management mint
-    credentials derived state-backend-server issue
-    credentials derived state-backend-host-key generate
-    credentials derived backup-age-<N> generate
-         The keys the state-backend stack's box is rendered from. A
-         bring-up does not need them: stage 3 builds the box, and reads
-         none of this. The stack's state is committed, so its first
-         checkpoint, and the stack file holding its encryptionsalt, come
-         from the driver and are landed like any change; each command
-         after it refuses until they are. Then its own B2 management key,
-         the server key and certificate issued from the escrowed CA, and
-         the SSH host key, whose public half is a file to commit beside
-         the config; all need stage 7's passphrase. The last writes each
-         escrowed backup generation's public half into the committed
-         recipients file, once per generation the box encrypts to,
-         recovering one the escrow already holds.
 
   on a workstation that develops without the kit
     Copy the .credentials directory from a machine that has one: the
@@ -232,8 +231,8 @@ _ORDER = """when to run what:
          The drill key: a fresh identity into the ops repo's drill
          Environment, its recipient over the one on file. Escrowed nowhere,
          so nothing counts its generations -- the file is what refuses a
-         run without --rotate. Then commit, state-backend provision --force,
-         state-backend restore, and one fresh dump for the drill to open.
+         run without --rotate. Then commit, operator-stack state-backend
+         up --force, and one fresh dump for the drill to open.
     credentials derived drill-credentials mint [--only oci|b2]
          The drill's OCI and B2 keys, both into that same Environment: a
          re-run is the rotation of both, --only rotates one.
@@ -759,26 +758,26 @@ def build_parser() -> argparse.ArgumentParser:
         derived.OCI_STATE_BACKEND_ROW,
         help="the state-backend appliance's own OCI key",
         description=(
-            'The OCI credential the state-backend appliance is provisioned with. It is the one row that '
-            'is not delivered into a stack: its consumer is what builds the backend every stack keeps its '
-            'configuration in, so it runs before there is anywhere else to put a secret.'
+            'The OCI credential the state-backend stack builds its OCI provider with, delivered into that '
+            "stack's committed configuration like every other stack's."
         ),
     )
     appliance_verbs = appliance_key.add_subparsers(dest='action', required=True, metavar='<verb>')
     appliance_mint = appliance_verbs.add_parser(
         'mint',
-        help='mint the user, group, policy and key from the seed into a workstation slot',
+        help="mint the user, group, policy and key from the seed into the state-backend stack's config",
         description=(
             'Sign as the OCI seed to create a user, its group, its policy and its API key, confined to '
-            "the appliance's own compartment, and write the signing configuration into a `0600` file under "
-            'the checkout. `state-backend provision` reads it from there; nothing else does, and it '
-            'never leaves this machine. The compartment comes from `conventions` and is created if it is '
-            'not there yet, so nothing has to be prepared in a console first. A previous key of the same '
-            'name is retired once the new one answers *and* the slot holds it, so a run that fails to '
-            'write the slot leaves the working key alone; re-running this is the rotation.'
+            "the appliance's own compartment, and write the signing configuration into the state-backend "
+            "stack's config as three encrypted values. The compartment comes from `conventions` and is created "
+            'if it is not there yet, so nothing has to be prepared in a console first. Refused before anything '
+            'is minted while the stack has no checkpoint. A previous key of the same name is retired once the '
+            'new one answers *and* the config holds it, so a run that fails to write the config leaves the '
+            'working key alone; re-running this is the rotation.'
         ),
     )
     _add_oci_mint_options(appliance_mint, conventions.STATE_BACKEND)
+    _add_bundle_dir(appliance_mint)
 
     zones_row = rows.add_parser(
         derived.ZONES_ROW,
@@ -997,7 +996,7 @@ def build_parser() -> argparse.ArgumentParser:
             'a recipient every dump is encrypted to, after the escrowed backup generations; its private '
             'half is an Environment secret in the ops repository and nothing else -- not a kit row and not an '
             'escrow ciphertext, because every dump it opens also opens with an escrowed generation, so losing '
-            'it costs a fresh key and a converge rather than a byte of data.'
+            'it costs a fresh key and a replacement of the box rather than a byte of data.'
         ),
     )
     drill_identity_verbs = drill_identity.add_subparsers(dest='action', required=True, metavar='<verb>')
@@ -1012,9 +1011,9 @@ def build_parser() -> argparse.ArgumentParser:
             'file to commit. The private half exists in this process, on `gh` standard input and in the '
             'Environment; nothing on disk ever holds it. A recipient already on file refuses a second run: the '
             'file is the one durable trace of a key in service, and `--rotate` is how its successor is drawn. '
-            'Either way the appliance encrypts to the new recipient only after `state-backend provision '
-            "--force` -- the recipient list is part of the box's bill of materials, so the plain converge "
-            'reports the drift and stops -- followed by `state-backend restore` of the dump that run takes.'
+            'Either way the appliance encrypts to the new recipient only after `operator-stack state-backend '
+            "up --force` -- the recipient list is part of the box's bill of materials, so the plain run names "
+            'the replacement and stops -- which dumps the box, replaces it and restores into the new one.'
         ),
     )
     _ = drill_identity_generate.add_argument(
@@ -1362,12 +1361,11 @@ def _check(registry: escrow.Registry) -> int:
     to learn what is wrong with it, and stopping at the first missing label
     would turn one look into several.
     """
-    problems = [*escrow.check(registry), *derived.backup_recipients_problems(registry, derived.BACKUP_RECIPIENTS_FILE)]
-    if not derived.BACKUP_RECIPIENTS_FILE.is_file():
-        log.info(
-            'no backup recipients on file at %s; the state-backend stack refuses to plan without one',
-            derived.BACKUP_RECIPIENTS_FILE,
-        )
+    problems = [
+        *escrow.check(registry),
+        *derived.backup_recipients_problems(registry, derived.BACKUP_RECIPIENTS_FILE),
+        *derived.host_key_problems(derived.HOST_KEY_FILE),
+    ]
     for problem in problems:
         log.error('%s', problem)
     if not problems:
@@ -1451,7 +1449,7 @@ def _write_slot(label: str, value: str) -> None:
     """Put a freshly generated secret where its row's slot says (`_keep`).
 
     A label with no slot is not an error — it is the ordinary case, since
-    most rows reach their consumers through a provisioning run or a seal.
+    most rows reach their consumers through a stack's run or a seal.
     """
     slot = escrow.slot(label)
     if slot is not None:
@@ -1590,11 +1588,13 @@ def main(argv: list[str] | None = None) -> int:
                     compartment_id=args.compartment,
                     seed_entry=args.entry,
                 )
-            # The one row that opens no stack: its consumer is what builds
-            # the backend a stack's configuration lives in, so the push is a
-            # workstation slot and this command needs no `pulumi` at all.
             case ('derived', derived.OCI_STATE_BACKEND_ROW, 'mint'):
-                _ = derived.oci_state_backend(store, compartment_id=args.compartment, seed_entry=args.entry)
+                _ = derived.oci_state_backend(
+                    store,
+                    stack=_stack(args, store, derived.STATE_BACKEND_STACK, registry),
+                    compartment_id=args.compartment,
+                    seed_entry=args.entry,
+                )
             case ('derived', derived.B2_MANAGEMENT_ROW, 'mint'):
                 _ = derived.b2_management(
                     store, stack=_stack(args, store, derived.PHYSICAL_STACK, registry), seed_entry=args.entry

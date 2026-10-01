@@ -1,9 +1,12 @@
 """Everything the appliance is pinned to.
 
 Values a human chose once and renovate maintains afterwards. The appliance has
-no configuration surface beyond this file and the Butane template it feeds:
-changing anything here means re-provisioning, which is the only apply path
-this box has (physical/state-backend.md §1).
+no configuration surface beyond this file, the Butane template it feeds and
+the `state-backend` stack's configuration: a change here is a change to that
+stack, applied by `operator-stack state-backend up`. One that moves what the
+box is rendered from replaces the box, which waits for `--force`; a bump of
+the image imports a new image and replaces nothing (physical/state-backend.md
+§1).
 """
 
 from __future__ import annotations
@@ -15,11 +18,10 @@ from kluster.conventions import backup
 
 # --- OCI ------------------------------------------------------------------
 
-#: Every resource this script creates carries the same prefix, so the
-#: appliance's footprint is greppable in a console and safe to clean up. The
-#: string itself is a convention rather than a setting: the credentials
-#: package names the same appliance, and one of the two would eventually be
-#: edited alone.
+#: Every resource the stack declares carries the same prefix in its display
+#: name, so the appliance's footprint is greppable in a console. The string
+#: itself is a convention rather than a setting: the credentials package names
+#: the same appliance, and one of the two would eventually be edited alone.
 NAME = conventions.STATE_BACKEND
 
 SHAPE = 'VM.Standard.E2.1.Micro'
@@ -102,25 +104,24 @@ REBOOT_WINDOW_MINUTES = 60
 
 #: The appliance's reserved public IPv4 (state-backend.md §4): the address
 #: every client bundle's connection string names and the server certificate's
-#: SAN carries. A site fact that follows from the first provision, recorded
+#: SAN carries. A site fact that follows from the first reservation, recorded
 #: here the way the compartment is recorded in `conventions.OCI_TENANCY`, so
 #: that a probe run from another repository has an address to check without
 #: holding a bundle. Public already, on 5432 and 22 and in the certificate.
 #:
-#: Recorded rather than looked up, and held: `provision` reads the address the
-#: reservation carries and refuses, naming both, when it is not this one
-#: (`provision.hold_address`). A box at another address is a decision this
-#: line records, not drift for a converge to follow -- the probe dials this
-#: constant with no OCI credential to look anything up, and would otherwise
-#: report a dead certificate for a box alive elsewhere. Held on the
-#: appliance's own compartment; a run pointed elsewhere by `--compartment` is
-#: another site and is not.
+#: Recorded rather than looked up, and held: the stack's component refuses a
+#: reservation that carries any other address, naming both
+#: (`StateBackend._held_address`). A box at another address is a decision this
+#: line records, not drift for a run to follow -- the probe and `state-backend
+#: ssh` dial this constant with no OCI credential to look anything up, and
+#: would otherwise report a dead certificate for a box alive elsewhere.
 ADDRESS = '144.24.7.194'
 
 # --- Backups --------------------------------------------------------------
 
-#: Created by the provision script rather than by Pulumi, for the same reason
-#: the VCN is: the dumps must have somewhere to land before Pulumi exists.
+#: Declared by the `state-backend` stack, whose state is committed to this
+#: repository rather than kept in the backend whose dumps land here (rfc-006
+#: §3).
 B2_BUCKET = 'kluster-state-backend'
 
 #: The prefix the bucket's lifecycle rule governs and the appliance uploads
@@ -134,6 +135,25 @@ B2_PREFIX = conventions.STATE_DUMP_PREFIX
 B2_RETENTION_DAYS = 30
 
 #: The dump key the `state-backend` stack declares is named this, then `-`
-#: and the generation its configuration names (rfc-006 §4.1). Apart from the
-#: name `state-backend provision` mints under, so neither retires the other's.
+#: and the generation its configuration names (rfc-006 §4.1).
 B2_DUMP_KEY_NAME = f'{conventions.CLUSTER_NAME}-{NAME}-dump'
+
+# --- The server certificate's renewal ---------------------------------------
+
+#: The stack output carrying when the server certificate in the stack's
+#: configuration expires, as an ISO 8601 instant. The stack program exports it
+#: and the `operator-stack` driver reads it off every preview (rfc-006 §7).
+CERTIFICATE_EXPIRY_OUTPUT = 'serverCertificateExpiry'
+
+#: How much life the server certificate must have left for a run of the
+#: `state-backend` stack to stay quiet about it, and the only home of that
+#: number: the documents name the margin, never its value. Inside it, the run
+#: names the reissue, `credentials derived state-backend-server issue`, and
+#: the replacement that carries the new certificate.
+#:
+#: It is small against the certificate's validity, so a certificate spends a
+#: small fraction of its life inside the margin. And it is wider than the
+#: probe's alert margin (`kluster.scripts.state_backend.config.EXPIRY_ALERT_MARGIN`),
+#: so an operator who runs the stack has been told well before the probe's
+#: alert can fire.
+RENEWAL_MARGIN = dt.timedelta(days=90)

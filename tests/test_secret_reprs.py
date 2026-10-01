@@ -62,13 +62,12 @@ Secret's own data.
 
 **A field that holds a library's object is classified by what the object
 holds, not by what it prints**, as `pki.Authority`'s key is. `kdbx` and
-`provision` are here for that class of field: an unlocked `PyKeePass` holds the
-master password and prints only its type and address, the SDK's configuration
-carries an API key's passphrase whenever the file it was read from sets one,
-and a listed instance carries in its metadata the Ignition the box booted
-with. Such a field is filled with the kind of value it holds in production
-wherever that value prints what it carries, and with the bare marker where it
-does not (`SHAPED`).
+`adopt` are here for that class of field: an unlocked `PyKeePass` holds the
+master password and prints only its type and address, and an OCI client holds
+the configuration it was built from, the API key inside it. Such a field is
+filled with the kind of value it holds in production wherever that value
+prints what it carries, and with the bare marker where it does not
+(`SHAPED`).
 
 **A field that holds a record is classified by what that record prints**, in
 its repr and in pytest's explanation of a comparison, not by what it holds:
@@ -79,9 +78,6 @@ The one exception is a field already out of the repr for another reason —
 hidden field has to be one it can name.
 """
 
-# The SDK ships no stubs; the same waiver `provision.py` itself carries.
-# pyright: reportMissingTypeStubs=false
-
 from __future__ import annotations
 
 import dataclasses
@@ -91,7 +87,6 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, cast, final, is_typeddict
 
-import oci
 import pytest
 
 from kluster.components.gateway import container, routing
@@ -113,7 +108,7 @@ from kluster.scripts.credentials import (
     pulumi_config,
     slots,
 )
-from kluster.scripts.state_backend import config, provision
+from kluster.scripts.state_backend import adopt, config
 
 #: Written into every secret field of every record built below, and looked for
 #: in the repr. Distinctive because the assertion that it is *absent* is only
@@ -169,7 +164,7 @@ MODULES: tuple[ModuleType, ...] = (
     slots,
     config,
     render,
-    provision,
+    adopt,
     ssh,
     routing,
     container,
@@ -179,10 +174,9 @@ MODULES: tuple[ModuleType, ...] = (
 CENSUS: dict[type, Census] = {
     age.Identity: Census('secret public', secret='secret'),
     b2.AppKey: Census('key_id key', secret='key'),
-    b2.Bucket: Census('bucket_id lifecycle_rules'),
+    b2.Bucket: Census('bucket_id'),
     b2.FilePage: Census('names next_file_name'),
     b2.KeyPage: Census('keys next_key_id'),
-    b2.LifecycleRule: Census('file_name_prefix days_from_uploading_to_hiding days_from_hiding_to_deleting'),
     b2.ListedKey: Census('key_id name capabilities bucket_id name_prefix'),
     b2.MintedKey: Census('session app_key'),
     b2.Role: Census('name capabilities bucket_id name_prefix'),
@@ -285,23 +279,9 @@ CENSUS: dict[type, Census] = {
         secret='server_key ssh_host_key b2_dump_key',
     ),
     config.Roots: Census('ca age_recipients'),
-    provision.FcosArtifact: Census('release url sha256'),
-    provision.InstanceConfig: Census('digests dump_key_id server_cert_expiry'),
-    # What `oci.config.from_file` returns, which carries the API key's
-    # `pass_phrase` whenever the configuration file sets one.
-    provision.OciClients: Census('compartment_id config held', secret='config'),
-    provision.Placement: Census('vcn_id subnet_id'),
-    provision.ReservedAddress: Census('id address'),
-    provision.Route: Census('destination destination_type target'),
-    provision.SecurityRule: Census('direction protocol peer peer_type ports source_ports icmp stateless'),
-    # The listed instance, which the SDK prints with its launch metadata whole:
-    # `user_data` there is the Ignition the box booted with, and that carries
-    # the server's TLS key, its SSH host key and the dump's B2 key.
-    provision.Survey: Census(
-        'instance vcn gateway subnet security_group route_table security_rules groups default_security_list '
-        'security_lists interfaces public_ip fcos image',
-        secret='instance',
-    ),
+    # The OCI clients `adopt` reads through, each built from a configuration
+    # carrying the stack's OCI key.
+    adopt.Clients: Census('network object_storage buckets', secret='network object_storage'),
     ssh.CommandResult: Census('exit_status stdout stderr'),
     ssh.Device: Census('host username private_key host_key port', secret='private_key'),
     ssh.FileStat: Census('owner group mode size kind'),
@@ -395,26 +375,15 @@ def _uncompared(cls: type) -> set[str]:
     return {spec.name for spec in dataclasses.fields(cls) if not spec.compare}  # pyright: ignore[reportArgumentType]
 
 
-def _oci_config(pass_phrase: str) -> dict[str, object]:
-    """A configuration as `oci.config.from_file` returns one: its defaults, a profile, and the key's passphrase."""
+def _signing_configuration(key: str) -> dict[str, object]:
+    """What an OCI client holds as `adopt` builds one: a configuration, its key's content inside it."""
     return {
-        'log_requests': False,
-        'additional_user_agent': '',
         'user': 'ocid1.user.oc1..census',
         'fingerprint': '00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff',
-        'key_file': '/home/operator/.oci/key.pem',
+        'key_content': key,
         'tenancy': 'ocid1.tenancy.oc1..census',
         'region': 'us-ashburn-1',
-        'pass_phrase': pass_phrase,
     }
-
-
-def _listed_instance(user_data: str) -> object:
-    """An instance as the SDK lists one, its launch metadata with it."""
-    instance: object = oci.core.models.Instance(
-        display_name='census-vm', lifecycle_state='RUNNING', metadata={'user_data': user_data}
-    )
-    return instance
 
 
 #: The secret fields filled with the kind of value they hold in production, the
@@ -430,14 +399,14 @@ def _listed_instance(user_data: str) -> object:
 #: named tuples, and of nothing else. Filled with a database, or with a
 #: stand-in carrying a `password` attribute, the row would pass with both
 #: annotations removed.
-#: `test_an_unlocked_kit_and_a_read_configuration_print_neither_password` builds
+#: `test_an_unlocked_kit_prints_no_password` builds
 #: a real unlocked store and holds what this row rests on, that the store keeps
 #: the password as `.password`; it passes with both of `_db`'s annotations
 #: removed, because the real object prints no password either way, so the row
 #: filled with the bare marker is what fails when either annotation is dropped.
 SHAPED: dict[tuple[type, str], Callable[[str], object]] = {
-    (provision.OciClients, 'config'): _oci_config,
-    (provision.Survey, 'instance'): _listed_instance,
+    (adopt.Clients, 'network'): _signing_configuration,
+    (adopt.Clients, 'object_storage'): _signing_configuration,
 }
 
 
@@ -578,15 +547,12 @@ def test_a_failed_comparison_of_two_filled_records_prints_none_of_their_secrets(
         )
 
 
-def test_an_unlocked_kit_and_a_read_configuration_print_neither_password(
-    pytestconfig: pytest.Config, tmp_path: Path
-) -> None:
-    """The two library objects behind `_db` and `config`, built by their libraries rather than filled.
+def test_an_unlocked_kit_prints_no_password(pytestconfig: pytest.Config, tmp_path: Path) -> None:
+    """The library object behind `_db`, built by its library rather than filled.
 
-    An unlocked `PyKeePass` holds the master password as `.password`, and
-    `oci.config.from_file` carries a `pass_phrase` the file sets into the dict
-    it returns. Each is checked to hold its secret before its record is checked
-    not to print it, so neither half passes by the secret never having arrived.
+    An unlocked `PyKeePass` holds the master password as `.password`. It is
+    checked to hold it before its record is checked not to print it, so the
+    case does not pass by the secret never having arrived.
     """
     kit = kdbx.KdbxStore.create(tmp_path / 'kit.kdbx', SECRET)
     other = kdbx.KdbxStore.create(tmp_path / 'other.kdbx', f'{SECRET}-other')
@@ -597,30 +563,6 @@ def test_an_unlocked_kit_and_a_read_configuration_print_neither_password(
     explained = _explained(pytestconfig, kit, other)
     assert SECRET not in explained, explained
     assert 'other.kdbx' in explained, 'the explanation reached the path, which is what tells two kits apart'
-
-    key = tmp_path / 'key.pem'
-    key.write_text('never read: the SDK checks that the file exists, and nothing here signs\n')
-    written = tmp_path / 'config'
-    written.write_text(
-        '[DEFAULT]\n'
-        'user=ocid1.user.oc1..census\n'
-        'fingerprint=00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff\n'
-        f'key_file={key}\n'
-        'tenancy=ocid1.tenancy.oc1..census\n'
-        'region=us-ashburn-1\n'
-        f'pass_phrase={SECRET}\n'
-    )
-    read = cast('dict[str, Any]', oci.config.from_file(str(written)))
-    clients = provision.OciClients(compartment_id='ocid1.compartment.oc1..census', config=read, held=True)
-    elsewhere = provision.OciClients(
-        compartment_id='ocid1.compartment.oc1..elsewhere', config={**read, 'pass_phrase': f'{SECRET}-other'}, held=False
-    )
-
-    assert read['pass_phrase'] == SECRET, 'the SDK did not carry the passphrase into the configuration'
-    assert SECRET not in repr(clients)
-    explained = _explained(pytestconfig, clients, elsewhere)
-    assert SECRET not in explained, explained
-    assert 'oc1..elsewhere' in explained, 'the explanation reached the compartment, which says which site a run acts on'
 
 
 def test_a_record_that_carries_another_prints_no_secret_of_the_inner_one(pytestconfig: pytest.Config) -> None:

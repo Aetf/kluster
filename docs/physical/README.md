@@ -26,7 +26,7 @@ Documents:
 
 -   **[state-backend.md](state-backend.md)** — the Pulumi
     state-backend appliance (FCOS on the OCI E2.1.Micro): config
-    management (re-provision as the only apply path), Postgres
+    management (the `state-backend` stack, replacing rather than mutating), Postgres
     lifecycle, PKI, network exposure, backup with generational age keys,
     monitoring, playbook census.
 -   **[homelab-host.md](homelab-host.md)** — the homelab host & worker

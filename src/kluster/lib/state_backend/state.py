@@ -3,16 +3,18 @@
 The box dumps itself nightly (`machine/state-dump.sh`, §5); this module is
 the other side of the same artifact — an on-demand dump, and the only thing
 that reads one back. Both halves of every playbook that rebuilds the box are
-built out of it: a Postgres major upgrade is a dump, a re-provision and a
-restore (§7.2), and the quarterly drill is the same sequence against a
+built out of it, and so are the hooks around the box's replacement in the
+`state-backend` stack: a Postgres major upgrade is a dump, a replacement and
+a restore (§7.2), and the quarterly drill is the same sequence against a
 scratch box (§7.3).
 
 **The artifact is the same artifact.** A dump written here is `pg_dump -Fc`
-under `age`, encrypted to the recipients the escrow names — the ones the
-appliance itself encrypts to, which the caller recovers with the same function
-the render's recipients come from (`kluster.scripts.state_backend.config`). A
-restore therefore does not care which of the two produced its input, and an
-operator's dump is exactly as recoverable as a nightly one.
+under `age`, encrypted to the recipients the appliance itself encrypts to.
+The hooks read them from the committed file the render reads
+(`committed.age_recipients`), and `state-backend dump` recovers the same set
+from the escrow, which `credentials derived check` holds that file to. A
+restore therefore does not care which produced its input, and an operator's
+dump is exactly as recoverable as a nightly one.
 
 **Verification is part of the command, not of the playbook.** A dump of a
 backend serving no stack has a plausible size and a plausible name; what it
@@ -63,6 +65,11 @@ PG_RESTORE = 'pg_restore'
 TRANSFER_TIMEOUT = 1800
 AGE_TIMEOUT = 600
 LISTING_TIMEOUT = 120
+#: How long a connection to the backend may take to open before the question
+#: of what it serves is answered "it does not answer", and the variable libpq
+#: and the driver behind Pulumi's Postgres backend read it from.
+CONNECT_TIMEOUT = 5
+CONNECT_TIMEOUT_ENV = 'PGCONNECT_TIMEOUT'
 
 #: What the two file formats announce themselves as, in their first bytes.
 #: The appliance writes `age` binary output; the escrow's ciphertexts are
@@ -325,7 +332,7 @@ def pg_restore(target: Connection, archive: Path) -> None:
     leaves a box to re-run against rather than a half-populated backend that
     `pulumi` will happily read.
 
-    `--clean --if-exists` is what lets the archive land on a provisioned
+    `--clean --if-exists` is what lets the archive land on a new
     box at all: the backend creates its table, and writes its meta row, the
     first time anything opens it -- the restore's own first question to
     `pulumi` included -- so replaying the archive's own CREATE would abort the
@@ -369,17 +376,33 @@ def stacks(target: Connection) -> list[str]:
 
     `--all` because the question is about the backend rather than about the
     project directory the answer is asked from.
+
+    **The connection attempt is bounded** (`CONNECT_TIMEOUT`, as
+    `PGCONNECT_TIMEOUT`, which the driver behind Pulumi's Postgres backend
+    reads): an address whose traffic is dropped -- a lost box, or an address
+    not yet pointed at a new one -- would otherwise hold the question for as
+    long as TCP retries a connection, past the runner's own bound. A run that
+    still outlasts that bound is a backend that did not answer, refused as a
+    `StateError` like any other.
     """
-    log.info('asking pulumi which stacks %s serves', endpoint(target.url))
+    log.info(
+        'asking pulumi which stacks %s serves; a connection not made within %ds is a backend that does not answer',
+        endpoint(target.url),
+        CONNECT_TIMEOUT,
+    )
     try:
         printed = pulumi_cli.run_pulumi(
             ['stack', 'ls', '--all', '--json'],
             cwd=pulumi_cli.project_dir(),
-            env={'PULUMI_BACKEND_URL': target.url, **target.env},
+            env={'PULUMI_BACKEND_URL': target.url, CONNECT_TIMEOUT_ENV: str(CONNECT_TIMEOUT), **target.env},
             stdin=None,
         )
     except pulumi_cli.PulumiRefused as exc:
         raise StateError(str(exc)) from exc
+    except sp.TimeoutExpired as exc:
+        raise StateError(
+            f'`pulumi stack ls` against {endpoint(target.url)} did not finish within {exc.timeout}s'
+        ) from exc
     return sorted(_stack_names(printed))
 
 
@@ -498,8 +521,8 @@ def write_dump(destination: Path, *, bundle_dir: Path, recipients: Sequence[str]
     """`pg_dump -Fc` under age, verified before the file is called a dump.
 
     The single writer of the operator-side artifact, behind every producer of
-    one — `state-backend dump`, the converge dumping a box it is about to
-    destroy, and the `state-backend` stack's delete hook — so they cannot
+    one — `state-backend dump` and the `state-backend` stack's delete hook,
+    which dumps a box it is about to destroy — so they cannot
     drift into producing different files.
     """
     # The plaintext archive never lands beside the encrypted one: it is the
@@ -537,7 +560,7 @@ def served(target: Connection) -> list[str]:
     """The stacks the backend serves, or nothing if it cannot answer at all.
 
     Used before a restore, into a box that ordinarily serves nothing. A box
-    provisioned minutes ago answers with no stack rather than refusing: the
+    launched minutes ago answers with no stack rather than refusing: the
     question opens the backend, which creates its table and writes its meta
     row on the way. A backend that does not answer at all is read as
     serving nothing too, because the caller's guard is there to stop a

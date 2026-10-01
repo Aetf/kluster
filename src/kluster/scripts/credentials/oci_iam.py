@@ -1611,10 +1611,9 @@ def mint_api_key(
     key is confined to is `conventions`' to name and this command's to create,
     so a consumer whose compartment does not exist yet is one command away
     rather than a console errand. `compartment_id` overrides that mapping for a
-    drill tenancy. Where the result is delivered is the caller's business,
-    because that is the half that differs between a stack — a Pulumi config
-    secret — and the state-backend provisioner, which is not a stack and reads
-    a workstation slot instead.
+    drill tenancy. Where the result is delivered is the caller's business:
+    every stack's is a Pulumi config secret, and the drill's an Environment
+    secret of the ops repository.
 
     Idempotent, so rotating the row is re-running its command: the compartment,
     the user, the group and the policy are converged rather than created, the

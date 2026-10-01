@@ -26,6 +26,16 @@
     drops `applicationKeyId` from the key's `additional_secret_outputs`
     and narrows its new rule to an output that identifies a principal, and
     §14's slice 5 holds the key's id to that.
+*   **Updated:** 2026-10-01. The image is not adopted: OCI returns no
+    image's source, so an imported image differs from its declaration and
+    is replaced, and the engine refuses to replace a resource whose
+    declaration still carries an import id
+    ([`step_generator.go` at 3.257.0](https://github.com/pulumi/pulumi/blob/v3.257.0/pkg/resource/deploy/step_generator.go#L1975-L1999)).
+    §14's slice 6 adopts all but the instance, the image and the script's
+    dump key, and its drill deletes the script's image and its object by
+    hand; §3.6's list of what a lost state imports drops `Image`. The
+    drill disables the deploy workflow from before the dump until the
+    restore, so no run writes to the old box after its dump.
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
@@ -570,10 +580,13 @@ The other homes, each rejected on one ground:
     know about.
 *   **Lost**: only with every clone of the repository. Then every
     resource but the instance is imported through the program, as the
-    cutover imports it (§14, slice 6): the network's kinds, `PublicIp`,
-    `Image` and the Object Storage bucket (their Import sections in the
-    pinned schema), and the dump bucket (the provider declares an
-    importer). The instance is not imported: an import runs no program,
+    cutover imports it (§14, slice 6): the network's kinds, `PublicIp`
+    and the Object Storage bucket (their Import sections in the pinned
+    schema), and the dump bucket (the provider declares an importer).
+    The image is imported afresh rather than adopted: OCI returns no
+    image's source, so an adopted one differs from its declaration, and
+    the engine refuses to replace a resource that still carries an
+    import id. The instance is not imported: an import runs no program,
     so the box's `metadata`, with the keys its Ignition carries, would
     be recorded in the clear (§3.3). It is dumped, terminated by hand and
     launched again, and the dump key with it, since an imported
@@ -1518,8 +1531,8 @@ B2 SDK's regeneration.
     address check with it, and `plan`'s exit 3 read from the backend;
     the OCI key's mint writing configuration rather than its slot; a
     one-time `state-backend adopt` that writes the ids of every existing
-    resource the stack keeps — all but the instance and the script's
-    dump key — into the stack's configuration, which the component
+    resource the stack keeps — all but the instance, the image and the
+    script's dump key — into the stack's configuration, which the component
     passes to each resource as its `import_` option; the old path
     deleted — `provision.py` but `ssh` and its pin checks, the provision
     orchestration in `cli.py`, the restore-owed slot, from `config.py`
@@ -1552,12 +1565,17 @@ B2 SDK's regeneration.
     checks of §3.3 run after every writing step:
     1.  `adopt`, then `plan`, with the old box still serving. It shows
         the imports, the migration — the list and the table created, the
-        subnet moved to them — the new dump key, and a create of the
+        subnet moved to them — the image imported afresh, the new dump
+        key, and a create of the
         instance, which the address check would refuse while the old box
         holds the address. Any other update on an imported resource is
         a finding the builder names and stops on, rather than an
         `ignore_changes` to add.
-    2.  `state-backend dump`, into a file.
+    2.  `gh workflow disable deploy.yml --repo Aetf/kluster`, every
+        recent deploy run waited out to `completed` — one queued or
+        waiting on the `physical` environment cancelled — and nothing
+        pushed to `main` until step 5's restore; then `state-backend
+        dump`, into a file.
     3.  The old instance terminated by hand; the address is left
         pointing at nothing.
     4.  `up --force`: the imports, the migration, the launch, the
@@ -1566,15 +1584,16 @@ B2 SDK's regeneration.
         `state-backend restore`, and the run exits 3.
     5.  `state-backend restore <file>` of step 2's dump. `pulumi stack
         ls` on the estate's backend lists every stack it held; `plan`
-        plans nothing and exits 0; and the operator lands the
-        checkpoint.
+        plans nothing and exits 0; `gh workflow enable deploy.yml --repo
+        Aetf/kluster`; and the operator lands the checkpoint.
     6.  By hand: an ingress rule added to the list, the retention set to
         29 days. `plan` names both, and `up` repairs them with the
         instance's OCID unchanged.
     7.  A bare `up --replace <instance URN>` passed through to `pulumi`
         fails at the hook, with the box untouched.
-    8.  The old group, the dump key the script minted, and the OCI key's
-        slot are deleted by hand; the pull request names each step.
+    8.  The old group, the dump key the script minted, the script's
+        image and its object in the image bucket, and the OCI key's slot
+        are deleted by hand; the pull request names each step.
 
 **Slice 7: the adoption removed.** After slice 6.
 

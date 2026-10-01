@@ -21,21 +21,24 @@ the instance moves from the homelab host to an **OCI VM.Standard.E2.1.Micro**
     would re-couple every `pulumi up` (and all of CI) to the home uplink
     and to a per-run ZeroTier join. On the micro, the hot path needs no
     home connectivity at all.
--   **Bootstrap dependency, not Pulumi-managed**: like its predecessor,
-    the backend must exist before Pulumi can act, so no stack declares
-    it. The `state-backend provision` console script
-    (`src/kluster/scripts/state_backend/`) creates it: through the OCI
-    Python SDK the micro instance and the network, reserved address and
-    boot image it needs, and the bucket that image is imported through,
-    and through B2's API its dump bucket. What the
-    box runs is the machine definition in
-    `src/kluster/lib/state_backend/machine/`, rendered by the code beside
-    it; the design is physical/state-backend.md.
+-   **A bootstrap dependency, declared by a stack whose state is
+    elsewhere**: the backend must exist before any stack whose state it
+    holds can act, so none of those stacks declares it. The
+    `state-backend` stack does, because its state is not in the backend
+    it creates: its checkpoint is a file of this repository
+    (framework/pulumi.md §3.3), and the stack is an operator stack, run
+    from a workstation through `operator-stack` and by no CI job
+    (rfc-006). Through the OCI and B2 providers it declares the micro
+    instance and the network, reserved address and boot image it needs,
+    the bucket that image is imported through, and the dump bucket and
+    the key the box uploads with. What the box runs is the machine
+    definition in `src/kluster/lib/state_backend/machine/`, rendered by
+    the code beside it; the design is physical/state-backend.md.
 -   **The box itself is a designed appliance, not a pet** — Fedora
-    CoreOS provisioned entirely at create time from
-    `src/kluster/lib/state_backend/`, re-provision as the only apply path,
-    auto-updating OS and Postgres, externally monitored, every alert
-    backed by a playbook. The full design — OS & config management,
+    CoreOS configured entirely at create time from
+    `src/kluster/lib/state_backend/`, replaced rather than changed in
+    place, auto-updating OS and Postgres, externally monitored, every
+    alert backed by a playbook. The full design — OS & config management,
     Postgres lifecycle, PKI, network exposure, backup, monitoring,
     playbooks — is
     **[physical/state-backend.md](../physical/state-backend.md)**;

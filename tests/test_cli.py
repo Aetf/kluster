@@ -211,6 +211,10 @@ class Dispatch:
             (cli.escrow, 'from_kit', 'a-recorded-key'),
             (cli.escrow, 'rewrap', []),
             (cli.escrow, 'check', []),
+            # The committed files `derived check` holds beside the escrow, which a
+            # checkout holds or not by what its operator has landed.
+            (cli.derived, 'backup_recipients_problems', []),
+            (cli.derived, 'host_key_problems', []),
             (cli.escrow, 'missing', []),
             (cli.masters, 'stored', {}),
             (cli.masters, 'remember', []),
@@ -230,7 +234,7 @@ class Dispatch:
             (cli.derived, 'cloudflare_zones', None),
             (cli.derived, 'cloudflare_gateway_acme', 'token-id'),
             (cli.derived, 'oci_physical', 'ocid1.user.test'),
-            (cli.derived, 'oci_state_backend', Path('placeholder')),
+            (cli.derived, 'oci_state_backend', 'ocid1.user.test'),
             (cli.derived, 'b2_management', 'key-id'),
             (cli.derived, 'drill_age_identity', 'age1recipient'),
             (cli.derived, 'drill_credentials', {}),
@@ -694,6 +698,39 @@ def test_check_runs_without_opening_a_kit(dispatch: Dispatch) -> None:
 
     assert 'escrow.check' in dispatch.reached
     assert not [name for name in dispatch.reached if name.startswith('store.')]
+
+
+#: The real readers of the committed files `derived check` holds, taken at
+#: import, before a case's dispatch replaces them.
+HOST_KEY_PROBLEMS = cli.derived.host_key_problems
+BACKUP_RECIPIENTS_PROBLEMS = cli.derived.backup_recipients_problems
+
+
+@pytest.mark.parametrize('absent', ['host-key', 'backup-recipients'])
+def test_check_fails_while_a_file_the_stack_renders_from_is_absent(
+    dispatch: Dispatch,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    absent: str,
+) -> None:
+    # The `state-backend` stack refuses to plan without either file, so a
+    # checkout that has not committed one fails the check, naming the
+    # command that writes it -- over an escrow with nothing wrong in it.
+    del dispatch
+    present = tmp_path / 'present'
+    _ = present.write_text('ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPresent\n')
+    host_key = tmp_path / 'host-key.txt' if absent == 'host-key' else present
+    monkeypatch.setattr(cli.derived, 'HOST_KEY_FILE', host_key)
+    monkeypatch.setattr(cli.derived, 'BACKUP_RECIPIENTS_FILE', tmp_path / 'backup-recipients.txt')
+    monkeypatch.setattr(cli.derived, 'host_key_problems', HOST_KEY_PROBLEMS)
+    if absent == 'backup-recipients':
+        monkeypatch.setattr(cli.derived, 'backup_recipients_problems', BACKUP_RECIPIENTS_PROBLEMS)
+
+    assert cli.main(['derived', 'check']) == 1
+
+    assert f'{absent}.txt' in caplog.text
+    assert 'generate' in caplog.text
 
 
 def test_check_fails_on_a_registry_with_nothing_in_it(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:

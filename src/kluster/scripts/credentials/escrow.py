@@ -261,7 +261,7 @@ class Label:
     #: printing a secret. The config passphrases have one, being read by a
     #: `mise.toml` template or by the `operator-stack` driver, neither of
     #: which opens a kit; the rest reach their consumers through a
-    #: provisioning run, a seal or `credentials derived sync`. A property of
+    #: stack's run, a seal or `credentials derived sync`. A property of
     #: the row rather than a second table keyed by label, which could name a
     #: label the register does not.
     slot: WorkstationSlot | None = None
@@ -326,11 +326,13 @@ def backup_labels() -> tuple[str, ...]:
 
     **The backup generation is the label, so each label holds one identity
     for its lifetime** (credentials.md §2.2; `Label.single`). The
-    appliance's recipient list and the identities a restore opens a dump with
-    are both the latest escrow generation of each window label
-    (`kluster.scripts.state_backend.config`), so a second generation under one label would
-    have the next provision run encrypt every dump to a key that no dump
-    already in retention was written to, while `derived check` -- which reads
+    appliance's recipient list -- the committed recipients file, which
+    `backup-age-<N> generate` computes from the escrow -- and the identities a
+    restore opens a dump with are both the latest escrow generation of each
+    window label (`kluster.scripts.state_backend.config`), so a second
+    generation under one label would have the next replacement of the box
+    encrypt every dump to a key that no dump already in retention was written
+    to, while `derived check` -- which reads
     density, not count -- stays green. Rotating the backup key is bumping the
     pin below and generating the label that names the new generation.
 

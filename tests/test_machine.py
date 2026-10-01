@@ -1,9 +1,10 @@
-"""The appliance's bill of materials, which decides whether a box gets rebuilt.
+"""The machine a scratch box is rendered from, and the render itself.
 
-Leaf keys are random at issuance, so the naive digest — hash the rendered
-certificate — makes every converge see drift and replace a box that is
-perfectly fine. What the digest has to capture instead is what the box *is*:
-the CA it chains to, and the address it answers on.
+`state-backend render` builds the machine from the escrow (`config.machine`):
+a server certificate the escrowed CA issues with its key beside it, and the
+recipients its dumps are encrypted to, the drill's among them once its public
+half is committed. The render is the package's alone, so it runs from an
+installed copy with no checkout around it.
 """
 
 from __future__ import annotations
@@ -61,67 +62,6 @@ def roots() -> config.Roots:
     return config.Roots(ca=pki.Authority.from_pem(pki.generate_ca_key()), age_recipients=(RECIPIENT,))
 
 
-def _digests(roots: config.Roots, address: str = ADDRESS) -> dict[str, str]:
-    return config.digests(roots, address=address, dump_key_id='key-id', bucket_id='bucket-id')
-
-
-def test_a_re_render_is_not_drift(roots: config.Roots) -> None:
-    # Otherwise every converge terminates a healthy box and rebuilds it.
-    assert config.drift(_digests(roots), _digests(roots)) == []
-
-
-def test_the_address_the_server_answers_on_is_drift(roots: config.Roots) -> None:
-    # The reserved IP is in the server certificate's SAN, and a client
-    # connects to it with verify-full; a box holding the wrong one is unusable.
-    assert config.drift(_digests(roots), _digests(roots, OTHER)) == ['server_cert']
-
-
-def test_a_different_ca_is_drift(roots: config.Roots) -> None:
-    # The CA's key comes from escrow and outlives every render, so it is the
-    # one certificate compared by public key.
-    other = config.Roots(ca=pki.Authority.from_pem(pki.generate_ca_key()), age_recipients=roots.age_recipients)
-
-    assert 'ca_cert' in config.drift(_digests(roots), _digests(other))
-
-
-def test_a_different_backup_recipient_is_drift(roots: config.Roots) -> None:
-    # Rotating the backup generation has to reach the box, which holds the
-    # public halves in its Ignition.
-    other = config.Roots(ca=roots.ca, age_recipients=(RECIPIENT, 'age1second'))
-
-    assert config.drift(_digests(roots), _digests(other)) == ['age_recipients']
-
-
-def test_the_server_key_is_outside_the_bill_of_materials(roots: config.Roots) -> None:
-    # Not an oversight: it is random at issuance, so digesting it would be
-    # digesting this render rather than this machine. Rotating it is
-    # `provision --replace`.
-    assert 'server_key' not in _digests(roots)
-
-
-def test_the_dump_key_secret_is_outside_the_bill_of_materials(roots: config.Roots) -> None:
-    # The digest map travels in the instance's metadata. What the converge
-    # compares is the key's identity, which is `b2_dump_key_id`.
-    assert 'b2_dump_key' not in _digests(roots)
-
-
-def test_every_field_but_the_secrets_is_compared(roots: config.Roots) -> None:
-    # Each field declares its own digest treatment, so a field added to the
-    # machine is compared unless it says otherwise, and neither a rename nor a
-    # new field can quietly drop a component out of the comparison.
-    compared = set(_digests(roots)) - {'butane'}
-
-    secrets = {'server_key', 'b2_dump_key', 'ssh_host_key'}
-    assert compared == {spec.name for spec in fields(render.Machine)} - secrets
-
-
-def test_the_ssh_host_key_is_outside_the_bill_of_materials(roots: config.Roots) -> None:
-    # Minted fresh by every render, like the server key: digesting it would
-    # make every converge see drift. What a box is held to is its *public*
-    # half, which the launch records beside the digest map rather than in it.
-    assert 'ssh_host_key' not in _digests(roots)
-
-
 def test_the_certificate_the_box_gets_matches_the_key_it_gets(roots: config.Roots) -> None:
     # One issuance, both halves. Two calls would give the box a certificate
     # its private key does not answer for, and 5432 would never come up.
@@ -148,45 +88,10 @@ def vault(tmp_path: Path) -> escrow.Vault:
     return escrow.Vault.open(kit, registry)
 
 
-@needs_age
-def test_a_bring_up_escrows_the_roots_it_is_about_to_install(vault: escrow.Vault) -> None:
-    # The appliance is the first thing to escrow: a bring-up has a kit and an
-    # empty registry, and provisioning mints what it needs on the way.
-    roots = config.Roots.ensure(vault, appliance_exists=False)
-
-    for label in config.Roots.labels():
-        assert vault.registry.generations(label) == [1]
-    assert roots.age_recipients == tuple(age.recipient(vault.recover(label)) for label in escrow.backup_labels())
-
-
-@needs_age
-def test_a_second_run_reuses_what_is_already_escrowed(vault: escrow.Vault) -> None:
-    # Generating over a live CA would invalidate every certificate under it,
-    # and over a live backup identity would orphan every dump.
-    first = config.Roots.ensure(vault, appliance_exists=False)
-
-    second = config.Roots.ensure(vault, appliance_exists=False)
-
-    assert second.ca.key_pem == first.ca.key_pem
-    assert second.age_recipients == first.age_recipients
-    for label in config.Roots.labels():
-        assert vault.registry.generations(label) == [1]
-
-
-@needs_age
-def test_a_bring_up_refuses_a_registry_the_kit_in_hand_cannot_open(vault: escrow.Vault) -> None:
-    # `RECIPIENTS` naming another key -- a clone that predates a kit rotation.
-    # Minting there would file the CA and a backup identity the kit cannot
-    # open, and a backup label holds one identity for its lifetime, so the
-    # second is past repair the moment it is written. Refused before the first
-    # label is drawn.
-    vault.registry.set_recipients([age.generate().public])
-
-    with pytest.raises(escrow.EscrowError, match='the recovery recipient of the kit in hand'):
-        _ = config.Roots.ensure(vault, appliance_exists=False)
-
-    for label in config.Roots.labels():
-        assert vault.registry.generations(label) == []
+def _escrowed(vault: escrow.Vault) -> None:
+    """The appliance's roots escrowed, as `credentials derived <row> generate` escrows each."""
+    for label in (escrow.CA, *escrow.backup_labels()):
+        _ = escrow.generate(vault, label)
 
 
 @needs_age
@@ -209,7 +114,7 @@ def test_the_drill_recipient_on_file_follows_the_escrowed_generations(
     the escrow holds first. Comments in the file are the generator's, and
     are not recipients.
     """
-    _ = config.Roots.ensure(vault, appliance_exists=False)
+    _escrowed(vault)
     drill = age.generate().public
     _ = drill_recipient_file.write_text(f'# the drill key, public half\n{drill}\n')
 
@@ -221,9 +126,9 @@ def test_the_drill_recipient_on_file_follows_the_escrowed_generations(
 
 @needs_age
 def test_no_drill_recipient_on_file_is_the_generations_alone(vault: escrow.Vault, drill_recipient_file: Path) -> None:
-    # Absent is a state and not a refusal: every converge before the
-    # generator has run would otherwise refuse.
-    _ = config.Roots.ensure(vault, appliance_exists=False)
+    # Absent is a state and not a refusal: every render before the generator
+    # has run would otherwise refuse.
+    _escrowed(vault)
     assert not drill_recipient_file.exists()
 
     recipients = config.age_recipients(vault)
@@ -421,7 +326,7 @@ def test_the_ignition_carries_every_recipient_the_roots_name_one_per_line() -> N
 
     The dump script reads that file a line per recipient, so a third
     recipient reaches it through the same loop as the first two -- which is
-    what makes the drill key's adoption a converge rather than a template
+    what makes the drill key's adoption a replacement rather than a template
     change.
     """
     roots = config.Roots(
@@ -526,7 +431,7 @@ def test_the_client_roles_hold_the_state_and_nothing_more(ignition: str) -> None
 # -- the render, from the package alone ----------------------------------------
 
 #: What the installed copy is asked to do: build the machine from the
-#: arguments it is handed, render and digest it, and say where its code came
+#: arguments it is handed, render it and take its bill of materials, and say where its code came
 #: from and whether a checkout was there to be found. The arguments arrive on
 #: standard input and the answer leaves on standard output, both as JSON.
 INSTALLED_RENDER = """
@@ -548,7 +453,7 @@ json.dump(
         'checkout': checkout,
         'machine': {spec.name: getattr(machine, spec.name) for spec in fields(machine)},
         'butane': render.butane(machine),
-        'digests': render.digests(machine),
+        'digests': render.bill_of_materials(machine),
     },
     sys.stdout,
 )
@@ -563,8 +468,9 @@ def test_the_package_renders_from_an_installed_copy_with_no_checkout_around_it(
     The wheel is built from this tree and unpacked where no `mise.toml` sits
     above it, and a process whose import path starts there builds the machine
     from the keys and recipients the render takes as arguments -- reading the
-    operator keys and the dump script out of the package -- and renders and
-    digests it. The machine, the Butane document and the digest map all equal
+    operator keys and the dump script out of the package -- and renders it and
+    takes its bill of materials. The machine, the Butane document and the bill
+    of materials all equal
     the checkout's. A render that reached for the checkout -- a path found
     from `repo_root`, a file read from outside the package -- fails here,
     because there is none to find.
@@ -618,4 +524,4 @@ def test_the_package_renders_from_an_installed_copy_with_no_checkout_around_it(
     expected = {spec.name: getattr(machine, spec.name) for spec in fields(machine)}
     assert answer['machine'] == json.loads(json.dumps(expected))
     assert answer['butane'] == render.butane(machine)
-    assert answer['digests'] == render.digests(machine)
+    assert answer['digests'] == render.bill_of_materials(machine)
