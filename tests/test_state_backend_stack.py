@@ -306,6 +306,33 @@ def test_the_subnet_carries_only_the_programs_list_and_table(run: Appliance) -> 
     ]
 
 
+def _route_table_ids(inputs: object) -> Iterator[object]:
+    """Every `routeTableId` an input holds, at any depth."""
+    if isinstance(inputs, dict):
+        for key, value in cast('dict[str, object]', inputs).items():
+            if key == 'routeTableId':
+                yield value
+            yield from _route_table_ids(value)
+    elif isinstance(inputs, list):
+        for value in cast('list[object]', inputs):
+            yield from _route_table_ids(value)
+
+
+def test_the_subnet_is_the_only_resource_handed_a_route_table(run: Appliance) -> None:
+    """No route table on the interface's address or on the internet gateway (state-backend.md §1).
+
+    OCI attaches one in two more places: to a private address, the
+    interface's included, and to an internet gateway for ingress routing.
+    The stack declares neither, so Pulumi compares neither, and declaring
+    one later is this case going red rather than a silent change.
+    """
+    holding = {(declared.typ, declared.name) for declared in run.declared if list(_route_table_ids(declared.inputs))}
+
+    assert holding == {(SUBNET, f'{NAME}-subnet')}
+    assert run.of_type('oci:Core/privateIp:PrivateIp') == []
+    assert len(run.of_type('oci:Core/routeTable:RouteTable')) == 1
+
+
 PROTECTED = {
     'vcn': 'oci:Core/vcn:Vcn',
     'subnet': SUBNET,

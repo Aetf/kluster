@@ -164,6 +164,21 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     the box. The VCN, the subnet, the reserved address and both buckets
     are protected: a run that would replace any of them is an error, in
     a preview too.
+-   **Two route-table attachments are deliberately not declared, and
+    so not compared.** Besides a subnet, OCI attaches a route table to
+    a private address, the interface's included, for source-based
+    routing, and to an internet gateway, for ingress routing. The stack
+    sets neither: it declares no private address of its own, and it
+    leaves the gateway's `route_table_id` unset, which the provider
+    treats as optional and computed, so whatever is there is read back
+    and never differs. The subnet's table is the only one the program
+    owns, and the box's one path is that table's default route out
+    through the gateway; nothing here routes by source address or
+    inspects ingress. So a table put on the interface or on the gateway
+    by hand is drift no plan shows. A test in
+    `tests/test_state_backend_stack.py` holds the subnet as the only
+    resource the stack hands a route table, so declaring either later is
+    a visible change.
 -   **A replacement of the box waits for `--force`, and is dumped
     before it happens.** A plain `up` whose preview plans a create, a
     replacement or a delete of the instance writes nothing, names the
