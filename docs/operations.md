@@ -64,6 +64,23 @@ aged, so renovate holds its releases on the dependency dashboard until
 a person ticks them there. Two such sources feed waiting rows: the
 ZeroTier `deb` index and the runner labels.
 
+**A pin that records its bytes holds them; one that names a version
+does not.** A release asset uploaded again under its version moves
+under a pin written as a version alone, so wherever the tool can record
+a hash and check a download against it, the pin carries one. Today that
+is `uv.lock`'s hashes, the Actions pinned by commit, the container
+images written with their digest, and `mise.lock`, which records the
+sha256 of each `mise.toml` tool's artifact. `mise.toml` declares its
+tools locked, so an install refuses a pin the lock has no entry for,
+and a bump of any `mise.toml` pin, the Talos and age rows' included, is
+finished when `mise lock` has moved its entry: renovate does that on
+the branch where its host lets it run mise, and a person does it
+otherwise. A lock diff that changes a sum and not its version is a
+release uploaded again under its name, and is read as one. Every other
+pin names a version alone — today the Pulumi provider plugins, the
+bridge and the providers it fetches (`Pulumi.yaml` says why beside its
+`packages:` block), the Talos factory images and the Helm charts.
+
 | Surface | PR opened by | Applied by | Policy |
 | --- | --- | --- | --- |
 | Talos version (machine-config pin + Image Factory schematic + `mise.toml`'s `talosctl`) | renovate (GitHub-releases datasource) | `physical` stack for the pin and the schematic; `talosctl upgrade` by hand, serial, staged (declarative/physical.md §2) | Reviewed; one pull request moves `versions:talos` and the `talosctl` pin together, because `tests/test_talos_validate.py` holds the two equal; §2.1 runbook |

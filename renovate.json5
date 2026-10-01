@@ -57,7 +57,12 @@
   // is uv's too, for every library the new release pulls in. uv holds its
   // resolution to the same week itself -- `exclude-newer` in
   // `pyproject.toml`'s `[tool.uv]`, which the lock records as a span and not
-  // a date -- and a test holds the two durations equal.
+  // a date -- and a test holds the two durations equal. Over `mise.lock`,
+  // where renovate's host lets it run mise (the `toolchain` rule below), it
+  // runs `mise lock --bump`, which moves no pin written as an exact version --
+  // every pin `mise.toml` holds is one -- so it has nothing to age. What it can
+  // move is the sum of a release uploaded again under its version, and
+  // `mise.lock` is off noop-automerge's allow-list, so that waits for a reader.
   minimumReleaseAge: '7 days',
   lockFileMaintenance: {
     enabled: true,
@@ -181,6 +186,15 @@
       // other check runs, so it travels alone and is read: `mise.toml` is off
       // noop-automerge's allow-list (framework/ci.md §3), so a person merges
       // it.
+      //
+      // A bump is finished when `mise.lock` holds the new version and its
+      // sum: `mise.toml` declares its tools locked, so an install refuses a
+      // pin the lock has no entry for, and a test holds every pin to one. The
+      // mise manager runs `mise lock` on the branch only where renovate's host
+      // permits it to run mise (its `allowedUnsafeExecutions`); where it does
+      // not, the pull request arrives without the entry and a person runs
+      // `mise lock <tool>` onto it. The same holds for every mise pin a rule
+      // below takes out of this group (`talosctl`, `age`).
       matchManagers: [
         'mise',
       ],

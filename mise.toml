@@ -7,6 +7,28 @@
 # instead.
 redactions = ["PULUMI_CONFIG_PASSPHRASE", "PULUMI_BACKEND_URL"]
 
+# A version names a release, not its bytes: a publisher can upload a release
+# asset again under the version it already had, and an install by version takes
+# whatever is there. `mise.lock` records, for each tool below, the release's
+# download URL and the sha256 of the artifact behind it, and an install checks
+# what it downloaded against that sum and refuses a mismatch. `locked` is what
+# makes the record binding. Without it, a tool with no matching entry -- a pin
+# moved here and not in the lock -- installs anyway and the install writes
+# down the sum of whatever it fetched, so the record would vouch for nothing.
+# With it, that install refuses by name, and `mise lock` is what moves an
+# entry: a bump of a pin is finished when its entry has moved with it, and a
+# test holds every pin to an entry carrying a sum.
+#
+# The lock holds `linux-x64`, the platform of every runner, of a cloud
+# session and of the workstations; `mise lock` refreshes the platforms a lock
+# already holds, so renovate keeps that set. A checkout on another platform
+# adds its own with `mise lock --platform`. `mise lock` also rewrites the sum
+# of an entry whose version has not moved to what the release serves now, so a
+# lock diff that changes a sum and not its version is a release re-uploaded
+# under its name, and is read as one.
+[tool_config]
+locked = true
+
 # Pinned, not `latest`: CI installs from this file, so a floating version is a
 # breaking upgrade that lands without a PR, a preview, or a way to bisect it.
 # Renovate maintains these -- it cannot bump `latest`, which is why they are
