@@ -297,8 +297,8 @@ different things:
     ```python
     import pulumi
 
-    physical = pulumi.StackReference('organization/kluster/physical')
-    kubeconfig = physical.get_output('kubeconfig')
+    physical = pulumi.StackReference('organization/kluster-py/physical')
+    kubeconfig = physical.require_output('kubeconfig')
     ```
 
     This is the only route for a value no program can know before an
@@ -318,6 +318,8 @@ different things:
     mechanism, and the rule that nothing may read such an output until
     the rest of the producer is applied, are §1.4's "When an awaited
     value is unknown".
+    Whether a reader uses `require_output`, as above, or `get_output`
+    is [style/pulumi.md](../style/pulumi.md)'s rule under "Layering".
 
 -   **A Python module both programs import.** The value is a literal,
     so it is concrete during preview and imposes no apply order. It

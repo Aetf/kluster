@@ -87,8 +87,8 @@ the instance moves from the homelab host to an **OCI VM.Standard.E2.1.Micro**
 | State backend | all layers | public TLS (§1) |
 
 Only the `physical` and `dns` jobs touch ZeroTier; `apps` — the stack
-that changes daily — reaches nothing but the cluster, because the
-split-horizon rewrites its routes imply are applied by `dns` from the
+that changes daily — reaches the cluster and Cloudflare and nothing on
+the LAN, because the split-horizon rewrites its routes imply are applied by `dns` from the
 same plain-data declaration (dns.md §3). A typical app image bump
 stays entirely public-endpoint, and ZeroTier's availability is not a
 dependency of it. The AdGuard rewrite resources tolerate an
@@ -1095,9 +1095,10 @@ branch + git-sync).
 
 The pipeline above is complete; the installation it drives is not.
 `physical` holds no resources and has never been updated, and
-`k8s-base` and `apps` are not written at all — of the stacks this
-repository declares, only `dns` (whose resources were imported rather
-than created) and `github` have state behind them. The checks that
+`k8s-base` and `apps` exist but build nothing beyond their providers
+and have never been updated either — of the stacks this repository
+declares, only `dns` (whose resources were imported rather than
+created) and `github` have resources behind them. The checks that
 reach past the repository therefore fail, on `main` and on every pull
 request that touches code, and that red is a property of the phase
 rather than a fault to report. What follows is how to tell it apart
@@ -1159,16 +1160,19 @@ as Pulumi's unknown sentinel, which `pulumi stack output` returns as
 an ordinary value (physical/gateway-cutover.md §5). These jobs then
 join like any other.
 
-**`k8s-base` and `apps` are not stacks yet, so previewing them is an
-error.** Each entrypoint raises `NotImplementedError`, neither name
-has a `Pulumi.<stack>.yaml`, and no stack of either name exists in the
-state backend — while the `preview` and `prove` matrices already name
-all three stacks. Pulumi resolves the stack before it loads the
-program, so what CI reports is the backend's answer rather than the
-entrypoint's refusal:
+**`k8s-base` and `apps` preview red until they hold a kubeconfig they
+can open.** Both stacks exist, with their stack files committed, and
+each program opens its Kubernetes provider with the kubeconfig it reads
+from `physical` through a StackReference, with `require_output`
+(rfc-007 §3.1). That is how the kubeconfig reaches them until
+`kluster-ops#487` puts `physical` under a passphrase of its own and
+delivers the kubeconfig through each stack's own configuration instead,
+as the threat model rfc-005 rules. `physical` has never been updated, so it publishes no
+outputs, and the read fails the run naming the output it lacks — the
+program's traceback ends in
 
 ```
-error: no stack named 'k8s-base' found
+KeyError: 'kubeconfig'
 ```
 
 Every pull request that touches code runs both entries. `prove` is
@@ -1180,39 +1184,52 @@ only documentation, `.vscode/`, `.gitignore` or `checkpoints/` runs no
 It runs no `prove` either: none of those paths is on noop-automerge's
 allow-list, and `sdks/` is on it only beside renovate's bump of
 `Pulumi.yaml`, so such a pull request is merged by hand (§3). A candidate the list does
-admit runs `prove` against the missing stacks, which errors, and is
-merged by hand as well.
-**Retires with the M2 stacks** (`kluster-ops#77`), which create both
-and make the matrices honest.
+admit runs `prove` against stacks whose previews fail, and is merged
+by hand as well. The `KeyError` also hides the zones token's absence: the
+failed provider registration is raised ahead of the program's own
+`Missing required configuration variable`, so whether `apps` holds the
+token is checked on the workstation, with
+`pulumi config get cloudflareApiToken --stack apps`, rather than read
+off this preview. **Retires when these stacks hold a kubeconfig they
+can open.** The threat model, rfc-005, moves `physical` under a
+passphrase of its own, and a StackReference across that split elides a secret, so the
+kubeconfig reaches `k8s-base` and `apps` through their own
+configuration instead (rfc-007 §3.1, to be amended); from then on the
+preview reaches the cluster through the balancer's 6443 (§2), as
+rfc-007 §3.3 lists.
 
 **Neither of those is a secret-availability problem, and the tell is
-which step fails, and then which name the message carries.** All five
+which step fails, and then what the message names.** All five
 Environments hold the four `PULUMI_BACKEND_*` secrets and the
 passphrase, and the `state-backend` action checks the four before
 anything else runs: an empty one aborts the job in *Write the bundle
 into the checkout's slot* with `the ci client bundle is incomplete`,
 naming the variables that came through blank. The passphrase has no
-such guard — the `pulumi` step reads it directly, and a blank one
-surfaces only once a stack holding encrypted secrets is reached, which
-in this phase never happens.
+such guard — the `pulumi` step reads it directly. A blank one fails
+every stack whose file carries an `encryptionsalt`, `k8s-base` and
+`apps` included, before the program runs:
+
+```
+error: getting stack configuration: get stack secrets manager: incorrect passphrase
+```
 
 A job that reached a `pulumi` command therefore had a complete bundle,
-so `no stack named` at that step is not a blank secret. It is not
-proof that the backend answered either: whether `pulumi` was pointed
-at the appliance turns on `mise.toml` resolving the slot under
+and a job that got as far as the `KeyError` had the passphrase too. Whether `pulumi` was
+pointed at the appliance turns on `mise.toml` resolving the slot under
 `config_root`, which no line of the log settles either way. What
 `pulumi` does with no URL at all is left out here on purpose — it
 depends on the version and on whether the session is judged
-interactive, and nothing below rests on it. In this phase no job ever
-reaches a stack that exists, so no run here says anything about the
-box being up.
+interactive, and nothing below rests on it. The `KeyError` above is
+the one red in this phase that does settle it: the run that raises it
+has loaded its own stack and read `physical`'s outputs, both out of
+the appliance, so the box answered.
 
-**The names are the test.** The only ones ever expected in that
-message are `k8s-base` and `apps`. `no stack named 'dns'` or
-`no stack named 'physical'` — both exist in the backend, `dns` holding
-the records imported into it — means `pulumi` was pointed at a backend
-that is not the appliance, or that the state is gone, and is a
-regression on either reading. A bundle that resolves but cannot reach
+**The message is the test.** `no stack named` is never expected:
+every stack the matrices name exists in the backend, `dns` holding the
+records imported into it, so `no stack named 'k8s-base'`, or naming
+any other of them, means `pulumi` was pointed at a backend that is not
+the appliance, or that the state is gone, and is a regression on
+either reading. A bundle that resolves but cannot reach
 the appliance fails differently again, with
 `unable to open bucket ...: failed to ping PostgreSQL`.
 

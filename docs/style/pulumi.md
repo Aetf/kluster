@@ -144,7 +144,18 @@ above, and neither moves with the other.
 **Cross-component facts flow through parameters; cross-stack decisions
 flow through `conventions`.** StackReference is the exception and each
 use needs a recorded reason (today: the dns stack reading the cluster
-anchors).
+anchors, and `k8s-base` and `apps` reading the kubeconfig they open
+their Kubernetes provider with, until `kluster-ops#487` puts `physical`
+under a passphrase of its own, as the threat model rfc-005 rules, and
+delivers it through their own configuration). **A value the program cannot run
+without is read with `require_output`**, so a producer that has not
+published it stops the run at the read, naming the output; where a
+value that is there can still be unusable — a secret the reader cannot
+decrypt reads back as `{}`, Pulumi's unknown sentinel as an unknown —
+the reader checks it at the read as well (`kluster.lib.k8s.kubeconfig_from`).
+`get_output` answers an absent output with `None`. That is a known value,
+and the program carries it on as one, so it is for an output whose
+absence the reader handles itself.
 
 ## Data: conventions, configuration, censuses
 

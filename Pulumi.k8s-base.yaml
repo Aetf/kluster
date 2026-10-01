@@ -1,0 +1,4 @@
+encryptionsalt: v1:wrq0p/Txef0=:v1:krCwEd19Ka4eu6HD:I5PqBClppwidh8pMf/Gzuq8z3570MA==
+config:
+  pulumi:disable-default-providers:
+    - kubernetes

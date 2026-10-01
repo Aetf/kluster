@@ -39,6 +39,7 @@ from credentials_command_tree import commands
 from memory_keyring import MemoryKeyring, installed
 from memory_kit import MemoryKit
 
+from kluster import conventions
 from kluster.lib import acquisition, stack_environment
 from kluster.lib import workstation as lib_workstation
 from kluster.scripts.credentials import age, cli, devices, entries, escrow, masters
@@ -398,15 +399,29 @@ def test_rotate_refuses_an_unknown_member_before_creating_the_successor(
     assert 'lifecycle.rotate' not in dispatch.reached
 
 
-def test_the_zones_row_is_pushed_into_the_stack_it_names(dispatch: Dispatch) -> None:
-    assert cli.main(['derived', 'cloudflare-zones', 'mint', '--stack', 'elsewhere']) == 0
+def test_the_zones_row_is_pushed_into_every_stack_its_slot_map_row_names(dispatch: Dispatch) -> None:
+    assert cli.main(['derived', 'cloudflare-zones', 'mint']) == 0
 
-    # The slot is built by the dispatch, so the stack it names and the state
-    # the push opens have to arrive at the row's own function.
+    # The slots are built by the dispatch, from the row's own targets in the
+    # slot map, so the stacks the register names and the state the push
+    # opens have to arrive at the row's own function together.
     (_, _, kwargs), *rest = [call for call in dispatch.calls if call[0] == 'derived.cloudflare_zones']
     assert not rest
-    assert kwargs['stack'].name == 'elsewhere'
-    assert 'lifecycle.environment' in dispatch.reached
+    assert [slot.name for slot in kwargs['stacks']] == [
+        target.stack
+        for target in cli.slots.ROWS[cli.derived.ZONES_ROW].targets
+        if isinstance(target, cli.slots.PulumiConfig)
+    ]
+    assert {slot.name for slot in kwargs['stacks']} == {conventions.STACK_NAMES.dns, conventions.STACK_NAMES.apps}
+    # Opened once and shared: each stack picks its own passphrase out of it.
+    assert dispatch.reached.count('lifecycle.environment') == 1
+
+
+def test_the_zones_row_takes_no_stack_of_its_own(capsys: pytest.CaptureFixture[str]) -> None:
+    # The row names its stacks in the slot map, and one mint fills every one
+    # of them: the token it retires is the one they all hold, so a run aimed
+    # at one stack would revoke the others' live credential.
+    refuses_a_stack_of_its_own(['derived', 'cloudflare-zones', 'mint', '--stack', 'elsewhere'], capsys)
 
 
 def refuses_a_stack_of_its_own(argv: list[str], capsys: pytest.CaptureFixture[str]) -> None:
