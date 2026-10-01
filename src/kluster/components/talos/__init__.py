@@ -151,28 +151,56 @@ class Opening:
         }
 
 
+#: The host ports a pod calls besides the kubelet's: the metrics endpoints the
+#: scraper, a pod, reads off processes on the host network. Cilium's agent
+#: (9962), operator (9963) and Envoy (9964), and Hubble's metrics server
+#: (9965), at the defaults of the pinned chart (Cilium v1.20.1 `values.yaml`
+#: L1501, L2657, L3073, L3401; the port table of `system_requirements.rst`
+#: L437–457), every one of them on the host network; and the node exporter
+#: (9100), on the host network in the monitoring chart's pinned
+#: `prometheus-node-exporter` 4.55.1 (`values.yaml` L131, L382). The ports
+#: are the pinned releases' rather than this program's decision, as the
+#: kubelet's is Kubernetes'.
+POD_REACHED_PORTS: tuple[int, ...] = (9962, 9963, 9964, 9965, 9100)
+
+#: The listener ports of the Gateways, each on every transport it is served
+#: on: the public port census's rows the Gateways answer, and no other. A
+#: Gateway's packets are handed up the host's stack to the node's Envoy, so
+#: they cross this firewall, while a row a Service's pods answer is taken by
+#: the datapath ahead of it (rfc-007 §4.3).
+GATEWAY_PORTS: tuple[tuple[int, Literal['tcp', 'udp']], ...] = tuple(
+    (row.port, protocol)
+    for row in conventions.PUBLIC_PORT_CENSUS
+    if row.answerer is conventions.Answerer.GATEWAYS
+    for protocol in row.transports.protocols
+)
+
 #: What terminates in the host network namespace, and who may reach it. The
 #: firewall is the only filter in front of a public node: the cloud subnet
 #: admits everything (declarative/physical.md §1–2).
 #:
 #: The management APIs (`conventions.MANAGEMENT_PORTS`), which the balancer
 #: forwards from the same structure, are open to the internet; so is KubeSpan,
-#: whose peers include the homelab worker at a home address nothing declares.
-#: The kubelet is open to the cluster alone, and the DHCPv6 client to the
-#: link alone. etcd and trustd have no opening: their peers reach them over
-#: KubeSpan, which enters on `kubespan`.
+#: whose peers include the homelab worker at a home address nothing declares;
+#: and so are the Gateways' listeners, on every node: on a cloud node those
+#: ports are the internet's by design and nothing on the host binds them but
+#: through the proxy, and the worker's site gateway forwards none of them
+#: from outside the site. The kubelet and the other ports a pod calls are
+#: open to the cluster alone, the pod ranges included: a pod's call to its own
+#: node arrives on the pod's device from the pod's address, while one to
+#: another node is masqueraded to a node address and enters on `kubespan`.
+#: The DHCPv6 client is open to the link alone. etcd and trustd have no opening: their
+#: peers reach them over KubeSpan, which enters on `kubespan`.
 #:
-#: Service ports are absent. A raw TCP/UDP LoadBalancer Service is answered by
-#: Cilium's BPF datapath at tc ingress, ahead of nftables, so it serves
-#: without a firewall entry. A Gateway listener is not: the datapath hands its
-#: packets up the host stack to the node's Envoy, through this firewall, so
-#: each listener port needs an opening, which this list does not carry yet:
-#: k8s-base's design adds them from the public port census
-#: (declarative/physical.md §2).
+#: A raw TCP/UDP LoadBalancer Service's port is absent: Cilium's BPF datapath
+#: answers it at tc ingress, ahead of nftables, so it serves without a
+#: firewall entry.
 HOST_OPENINGS: tuple[Opening, ...] = (
     *(Opening(port, 'tcp', ANYWHERE) for port in conventions.MANAGEMENT_PORTS),
     Opening(KUBESPAN_PORT, 'udp', ANYWHERE),
+    *(Opening(port, protocol, ANYWHERE) for port, protocol in GATEWAY_PORTS),
     Opening(KUBELET_PORT, 'tcp', CLUSTER_RANGES),
+    *(Opening(port, 'tcp', CLUSTER_RANGES) for port in POD_REACHED_PORTS),
     Opening(DHCPV6_CLIENT_PORT, 'udp', (LINK_LOCAL,)),
 )
 
@@ -188,6 +216,13 @@ def node_patch() -> dict[str, Any]:
                 # There is no kube-proxy to fall back on, so the node-local
                 # apiserver front is mandatory rather than an optimization.
                 'kubePrism': {'enabled': True, 'port': conventions.KUBEPRISM_PORT},
+                # The cluster DNS forwards to Talos' own resolver on the host,
+                # at a link-local address the baseline network policy's
+                # metadata deny is shaped around (rfc-007 §4.5). The generated
+                # configuration already turns both on; the design depends on
+                # them, so they are stated rather than inherited, and
+                # forwarding is refused without the resolver it forwards to.
+                'hostDNS': {'enabled': True, 'forwardKubeDNSToHost': True},
             },
             'kubelet': {
                 'extraConfig': {'systemReserved': SYSTEM_RESERVED},
@@ -208,32 +243,45 @@ def node_patch() -> dict[str, Any]:
 
 
 def kubespan_document() -> dict[str, Any]:
-    """KubeSpan on, which every machine in the cluster carries.
+    """KubeSpan on, which every machine in the cluster carries, at the MTU the design sizes Cilium from.
 
-    Only `enabled` is stated. Every other field keeps the default Talos gives
-    it: pod networks are not advertised over the mesh (the CNI carries pod
-    traffic), traffic to a peer that is down does not bypass the mesh, no
-    extra endpoints are harvested, and the link MTU is Talos' own.
+    `enabled` and the link's MTU are stated. The MTU is
+    `conventions.KUBESPAN_MTU`, which rfc-007 §4.1 has Cilium's own MTU
+    setting read too, because Cilium's tunnel crosses this link; it equals
+    Talos' default, and is stated so that a moved default cannot leave the two
+    apart. Every other field keeps the default Talos gives it: pod networks
+    are not advertised over the mesh (Cilium's tunnel carries pod traffic),
+    traffic to a peer that is down does not bypass the mesh, and no extra
+    endpoints are harvested.
 
     It is a document of its own because the pinned release deprecates
     `machine.network.kubespan` for it, and a configuration carrying both is
     refused: the document's own validation rejects a `v1alpha1` that also
     configures KubeSpan.
     """
-    return {'apiVersion': 'v1alpha1', 'kind': 'KubeSpanConfig', 'enabled': True}
+    return {'apiVersion': 'v1alpha1', 'kind': 'KubeSpanConfig', 'enabled': True, 'mtu': conventions.KUBESPAN_MTU}
 
 
 def control_plane_patch(*, cert_sans: Sequence[str], secretbox_secret: str | None = None) -> dict[str, Any]:
-    """The parts only a control plane has: the apiserver, etcd, and the CNI.
+    """The parts only a control plane has: the apiserver, etcd, the CNI and the service proxy.
 
     A worker's configuration has no apiserver to harden and no etcd to
-    encrypt, and the CNI is installed by the control plane, so none of this
-    belongs in the shared patch.
+    encrypt, and the CNI and kube-proxy are installed by the control plane,
+    so none of this belongs in the shared patch.
+
+    Talos ships no CNI and no kube-proxy here: Cilium, which `k8s-base`
+    installs, is both (rfc-007 §4.2). kube-proxy is off from the first boot
+    because turning it off later is a procedure rather than a configuration
+    change: Talos applies a bootstrap manifest only while its object is
+    missing and never deletes one, so the DaemonSet stays until a `talosctl
+    upgrade-k8s` prunes it, and the rules kube-proxy programmed stay on each
+    node until it reboots.
     """
     config: dict[str, Any] = {
         'cluster': {
             'allowSchedulingOnControlPlanes': True,
             'network': {'cni': {'name': 'none'}},
+            'proxy': {'disabled': True},
             'apiServer': {
                 'certSANs': list(cert_sans),
                 # A public 6443 warrants both, defaults notwithstanding.
@@ -432,7 +480,9 @@ def static_address_documents(static: StaticAddress) -> list[dict[str, Any]]:
     off.
 
     Whatever else the lease carried goes with it. Resolvers fall back to
-    Talos' own defaults, which is what the cloud nodes effectively use too;
+    Talos' own defaults, since no platform layer names any here. A cloud node
+    is different: Talos' `oracle` platform gives it the cloud's resolver at
+    `169.254.169.254`, and a platform's resolvers outrank the defaults.
     IPv6 is untouched, because the GUA this design expects is SLAAC and SLAAC
     is the kernel's, not DHCP's.
 

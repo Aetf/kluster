@@ -140,8 +140,19 @@ machine_secrets
 
 -   **Patches are Python.** Per-node machine config is assembled from
     typed Python dicts (our framework's home turf), covering: KubeSpan
-    on; KubePrism; dual-stack pod/service CIDRs **IPv4 first**
-    (architecture.md §1.3); CP scheduling enabled
+    on, at the link MTU `conventions.KUBESPAN_MTU`, which rfc-007 §4.1
+    has `k8s-base` size Cilium from; KubePrism; host DNS with the cluster DNS
+    forwarded to it, which Talos' generated configuration already turns
+    on and which is stated because the baseline network policy is shaped
+    around the address it forwards to (rfc-007 §4.5); dual-stack
+    pod/service CIDRs **IPv4 first** (architecture.md §1.3); on the
+    control planes, no CNI and **no kube-proxy** — Cilium, which
+    `k8s-base` installs, is both, and kube-proxy is off from the first
+    boot because turning it off later is a procedure rather than a
+    configuration change: Talos applies a bootstrap manifest only while
+    its object is missing and never deletes one, so the DaemonSet stays
+    until a `talosctl upgrade-k8s` prunes it, and the rules kube-proxy
+    programmed stay on each node until it reboots (rfc-007 §4.2, §15.1); CP scheduling enabled
     (`allowSchedulingOnControlPlanes` — the combined CP+ingress role);
     cert SANs including the NLB IP; **etcd encryption at rest**
     (secretbox — the architecture.md §6.5 residual-risk mitigation for
@@ -167,8 +178,12 @@ machine_secrets
     an NLB listener) are open to anywhere. So is KubeSpan
     51820/**udp**: one of its peers, the homelab worker, comes from a
     home address that is dynamic, and WireGuard answers no packet not
-    keyed to a peer. The kubelet 10250/tcp is open to the cluster's own
-    ranges alone (the VCN, the cluster VLAN and both pod ranges). The
+    keyed to a peer. So are the ports of the public port census's rows
+    the Gateways answer, on every transport the row names — 80/tcp and
+    443/tcp today — on every node (the Service ports item below). The
+    kubelet 10250/tcp is open to the cluster's own ranges alone (the VCN,
+    the cluster VLAN and both pod ranges), and so is every other host
+    port a pod calls (the next item). The
     DHCPv6 client 546/udp is open to link-local sources alone: a cloud
     node's IPv6 address is leased over DHCPv6, and the server's Reply
     comes from its own address rather than the multicast group the
@@ -180,13 +195,23 @@ machine_secrets
     the apiserver's calls to a remote kubelet go between node
     addresses, which KubeSpan routes into the `kubespan` interface, and
     the ingress chain accepts that interface ahead of every rule, so no
-    opening names them. Traffic from a pod to a listener in the host netns
-    does not: on its own node it arrives on the pod's device with a
-    pod-range source. So a host port a pod calls needs an opening
-    from the pod ranges, as the kubelet's has. Which ports those are —
-    Cilium's and Hubble's metrics among them — is `k8s-base`'s design
-    (rfc-007, Aetf/kluster#406), and this configuration does not carry
-    them yet.
+    opening names them. Traffic from a pod to a listener in the host
+    netns rides it only when the listener is on another node: Cilium's
+    tunnel carries traffic addressed to pods, not to a node's own
+    addresses, so that call leaves its node masqueraded to a node
+    address. On the pod's own node the call arrives on the pod's device
+    with a pod-range source, which no interface rule accepts. So **a host
+    port a pod calls is opened from the cluster's own ranges and from
+    nothing else**, the kubelet's sources applied to
+    every such port. Those ports are the metrics endpoints the scraper, a
+    pod, reads off processes on the host network: Cilium's agent 9962,
+    operator 9963 and Envoy 9964, Hubble's metrics server 9965, and the
+    node exporter's 9100 (rfc-007 §4.3). Every other port Cilium listens
+    on takes no opening: node-to-node traffic rides KubeSpan, the local
+    ones bind `127.0.0.1` or `::1`, and the rest serve what this
+    installation does not use: the Hubble server, whose one client,
+    Relay, is off, and mutual authentication, Cilium's WireGuard and
+    `geneve`, which are off.
 -   **Service ports.** A raw TCP/UDP LoadBalancer Service's traffic —
     NLB health checks on backend ports included — is intercepted by
     Cilium's BPF datapath at tc ingress *before* nftables and sent to a
@@ -196,24 +221,27 @@ machine_secrets
     and machine config carries none of their ports. **A Gateway
     listener is different**: the datapath marks its packets for the
     node's Envoy and hands them up the host stack, where they cross the
-    ingress chain like any traffic to the host netns, and no rule
-    admits them.
-    Each Gateway listener port therefore needs an opening, which
-    `k8s-base`'s design adds from the public port census (rfc-007,
-    Aetf/kluster#406) and this configuration does not carry yet. The
+    ingress chain like any traffic to the host netns, and only an
+    opening admits them. **The Gateways' openings are derived from the
+    public port census** (`conventions.PUBLIC_PORT_CENSUS`), from its
+    rows the Gateways answer, and never listed: each such row is opened
+    from anywhere, on every transport it names, on every node. On a
+    cloud node those ports are the internet's by design, and nothing on
+    the host binds them but through the proxy; on the worker, the site
+    gateway forwards none of them (physical/gateway.md §4.2). The
     raw-Service half is verified both ways at bootstrap (§6); recorded
     fallback if BPF precedence fails on the chosen datapath mode: copy
-    the small public-port census (a `conventions` constant —
-    80/443/22000×2/8443/hath, rarely changing) into machine config,
-    accepting the cross-stack cost only in that world.
+    the census's other rows — the ones a Service's pods answer, rarely
+    changing — into machine config the same way, accepting the
+    cross-stack cost only in that world.
 -   **Document kinds.** A patch is either a strategic merge into the
     `v1alpha1` document or a configuration document of its own kind,
     which the provider appends beside it. Whatever the pinned Talos
     release deprecates in `v1alpha1` travels as its own document
     instead; at v1.13 that is every field of `machine.network`. The
     documents the component emits:
-    -   `KubeSpanConfig`, on every node: KubeSpan on, every other
-        setting Talos' default.
+    -   `KubeSpanConfig`, on every node: KubeSpan on at the link MTU
+        `conventions.KUBESPAN_MTU`, every other setting Talos' default.
     -   `LinkAliasConfig`, naming the node's one physical link
         `uplink`, and a `LinkConfig` on that alias — on the two nodes
         whose machine configuration states an address. The

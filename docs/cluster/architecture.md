@@ -423,13 +423,15 @@ belongs to — this section holds the cluster-level statements).
     and the subnet's security list admits everything (physical.md §1),
     so **the Talos ingress firewall is the only filter** (default-deny
     in machine config, physical.md §2). It polices the host netstack
-    alone: the management ports and KubeSpan are open to the internet,
-    the kubelet to the cluster's own ranges, the DHCPv6 client to the
+    alone: the management ports, KubeSpan and the Gateways' listener
+    ports are open to the internet, the kubelet and the metrics ports a
+    pod scrapes to the cluster's own ranges, the DHCPv6 client to the
     link, and nothing else. A raw TCP/UDP Service's traffic is answered
     by the BPF datapath in front of it, so those ports never enter
     machine config, while a Gateway listener's traffic goes up the host
-    stack to Envoy and crosses the firewall, so each listener port
-    needs an opening (physical.md §2). What the datapath answers on a
+    stack to Envoy and crosses the firewall, so machine config opens
+    each port of the public port census's rows the Gateways answer,
+    derived from the census (physical.md §2). What the datapath answers on a
     node's own address is internet-facing on a cloud node. That set is
     the declared `internet`-pool frontends and nothing else, which is
     why **no Service allocates a `NodePort`**

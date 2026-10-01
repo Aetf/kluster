@@ -222,13 +222,18 @@ KubeSpan on UDP, the kubelet from the cluster's own ranges alone, the
 DHCPv6 client from the link alone, etcd and `trustd` with no opening
 because their peers arrive over KubeSpan. The 2026-08-24 amendment holds
 for raw TCP/UDP Services only: a Gateway listener's packets go up the
-host stack to the node's Envoy and cross the firewall, so each listener
-port needs an opening (physical.md §2). `tests/test_talos_config.py`
+host stack to the node's Envoy and cross the firewall. *Amended
+2026-10-01* (rfc-007 §4.3): machine config therefore opens to anywhere
+each port of the public port census's rows the Gateways answer,
+derived from the census rather than listed, and opens the metrics ports
+a pod scrapes on the host network to the kubelet's sources and nothing
+wider (physical.md §2). `tests/test_talos_config.py`
 holds every node shape to the default-deny document, and holds the
 openings whose sources reach beyond the cluster's ranges, the link and
-the worker's BGP peer to exactly the management ports over TCP and
-KubeSpan over UDP, each from both families. What the datapath answers
-is bounded by a rule of its own:
+the worker's BGP peer to exactly the management ports over TCP, the
+Gateways' ports over the transports their rows name, and KubeSpan over
+UDP, each from both families. What the datapath answers is bounded by a
+rule of its own:
 **no Service allocates a `NodePort`** (cluster-infra.md §2, workloads.md
 §1), checked at bootstrap (physical.md §6).
 

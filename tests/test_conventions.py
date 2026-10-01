@@ -292,6 +292,44 @@ def test_the_block_quota_admits_the_largest_volume_and_a_restore_beside_it() -> 
 
 
 # --------------------------------------------------------------------------
+# The public port census.
+# --------------------------------------------------------------------------
+# Read by `physical` for the node firewall's openings; rfc-007 §5.3 makes it
+# the source of the balancer's listeners too, and makes `k8s-base` (the
+# Gateways' ports) and `apps` (the raw Services) its readers. What a row's
+# type cannot carry is how its rows relate.
+
+
+def test_no_two_public_ports_share_a_name() -> None:
+    """A row's name is what the balancer names its listener and backend set after.
+
+    Two rows of one name would claim one listener and one backend set
+    between them, so the name is the row's identity.
+    """
+    names = [row.name for row in conventions.PUBLIC_PORT_CENSUS]
+
+    assert len(names) == len(set(names)), names
+
+
+def test_a_port_the_gateways_answer_enters_at_the_balancer() -> None:
+    """The Gateways answer on the node addresses the balancer forwards to, and never on the dedicated VIP.
+
+    The internet Gateway's Service holds the cloud nodes' addresses, which
+    are the balancer's backends, while the dedicated VIP is held by one
+    Service of its own (rfc-007 §4.4). A Gateway row fronted by the VIP would
+    open a port on every node that no listener forwards and no Gateway
+    serves at that address.
+    """
+    stray = [
+        row.name
+        for row in conventions.PUBLIC_PORT_CENSUS
+        if row.answerer is conventions.Answerer.GATEWAYS and row.front is not conventions.Front.BALANCER
+    ]
+
+    assert not stray, stray
+
+
+# --------------------------------------------------------------------------
 # The overlay's managed DNS.
 # --------------------------------------------------------------------------
 # `conventions.overlay.MANAGED_DNS` is derived from two other tables -- its
