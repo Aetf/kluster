@@ -8,6 +8,7 @@ balancer forwards answers on both of its addresses, or that moving a
 management port renames nothing that state or the balancer keys on.
 """
 
+import base64
 from collections import Counter
 from itertools import product
 from typing import Any, cast
@@ -19,7 +20,7 @@ import pytest_asyncio
 from mock_monitor import Declaration, Recorder, declaring, decline_every_invoke, run_with
 
 from kluster import conventions
-from kluster.components.cloud.nodes import CloudNodes, NodeLoadBalancer
+from kluster.components.cloud.nodes import CloudNodes, NodeLoadBalancer, user_data
 from kluster.conventions import ManagementPorts
 from kluster.stacks import physical
 
@@ -205,13 +206,28 @@ async def test_the_legacy_metadata_endpoint_is_off_on_every_node(nodes: CloudNod
 
 @pytest.mark.asyncio
 async def test_each_node_boots_the_machine_config_it_was_given(nodes: CloudNodes) -> None:
+    """Read back the way Talos's `oracle` platform reads it: base64-decoded, strictly.
+
+    A value that does not decode is no configuration to Talos, and the node
+    boots into maintenance mode instead.
+    """
     metadata = {node: await instance.metadata.future() for node, instance in nodes.instances.items()}
 
-    assert {node: (fields or {}).get('user_data') for node, fields in metadata.items()} == {
-        'cp1': 'config-1',
-        'cp2': 'config-2',
-        'cp3': 'config-3',
+    decoded = {
+        node: base64.b64decode((fields or {}).get('user_data') or '', validate=True).decode()
+        for node, fields in metadata.items()
     }
+    assert decoded == {'cp1': 'config-1', 'cp2': 'config-2', 'cp3': 'config-3'}
+
+
+def test_user_data_is_standard_base64_of_the_utf8_bytes() -> None:
+    """The standard alphabet, padded, over UTF-8 -- what Go's `base64.StdEncoding` decodes.
+
+    The sample is chosen so its encoding carries the one character the two
+    alphabets disagree on (`/`, where the URL-safe one has `_`), padding, and
+    a character outside ASCII.
+    """
+    assert user_data('ü?>~') == 'w7w/Pn4='
 
 
 @pytest.mark.asyncio
