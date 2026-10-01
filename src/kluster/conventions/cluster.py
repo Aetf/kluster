@@ -1,9 +1,11 @@
-"""Inside the cluster: its address ranges, its management ports, its routing session, its pools, its storage classes."""
+"""Inside the cluster: its address ranges, its ports, its mesh's MTU, its routing session, its pools, its storage classes."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from enum import Enum
 from ipaddress import IPv4Network, IPv6Network
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 
 from kluster.conventions.cloud import USER_VOLUME_ROOT
 from kluster.conventions.identity import LABEL_DOMAIN
@@ -72,21 +74,89 @@ GATEWAY_LAN = 'lan-gw'
 #: decision "reachable from the IoT VLAN" (cluster-infra.md §2).
 GATEWAY_MEDIA = 'media-gw'
 
-#: Public port census — the ports the internet gateway and NLB terminate.
-#: Listeners are derived beside the services that need them, and no security
-#: rule names a port: the cloud subnet admits everything and the node's
-#: firewall is the filter (physical.md §1–2). The Gateway listeners among
-#: these ports cross that firewall to reach Envoy, so each needs an opening
-#: there, which k8s-base's design adds from this census; the recorded fallback,
-#: in which the firewall enumerates every service port, reads it too, and it
-#: is the firewall-audit reference.
-PUBLIC_PORT_CENSUS: tuple[tuple[int, str], ...] = (
-    (80, 'tcp'),  # HTTP, redirect only
-    (443, 'tcp'),  # HTTPS
-    (8443, 'tcp'),  # matrix federation (terminates its own TLS)
-    (22000, 'tcp'),  # syncthing
-    (22000, 'udp'),  # syncthing
-    (60011, 'tcp'),  # hath, on the dedicated VIP
+#: The MTU of KubeSpan's WireGuard link, which the machine configuration
+#: states; rfc-007 §4.1 has `k8s-base` size Cilium from it too. Cilium's own MTU setting
+#: is the underlying network's, and the network its tunnel crosses is this
+#: link, which Talos selects by a firewall mark rather than by a route, so
+#: detection would size it from the node's interface instead. Talos' default
+#: (`constants.KubeSpanLinkMTU`), stated rather than inherited so that a moved
+#: default cannot leave the two apart.
+KUBESPAN_MTU = 1420
+
+
+class Transports(Enum):
+    """The transport protocols a public port is served on, which one listener carries together."""
+
+    TCP = 'tcp'
+    UDP = 'udp'
+    TCP_AND_UDP = 'tcp+udp'
+
+    @property
+    def protocols(self) -> tuple[Literal['tcp', 'udp'], ...]:
+        """Each protocol on its own, as a firewall rule names one."""
+        match self:
+            case Transports.TCP:
+                return ('tcp',)
+            case Transports.UDP:
+                return ('udp',)
+            case Transports.TCP_AND_UDP:
+                return ('tcp', 'udp')
+
+
+class Front(Enum):
+    """Where a public port's traffic enters the installation."""
+
+    BALANCER = 'balancer'
+    """The network load balancer, which forwards to every cloud node."""
+    DEDICATED_VIP = 'dedicated-vip'
+    """The dedicated VIP, which one node holds (`cloud.DEDICATED_VIP_NODE`) and
+    no listener forwards to."""
+
+
+class Answerer(Enum):
+    """What takes a public port's traffic once it reaches a node."""
+
+    GATEWAYS = 'gateways'
+    """The Gateways, whose Envoy runs on the host: the datapath hands the
+    packet up the host's stack, through the node firewall, so the port is one
+    the firewall opens."""
+    PODS = 'pods'
+    """A LoadBalancer Service's pods, which the datapath reaches ahead of the
+    node firewall, so the port is one the firewall never sees."""
+
+
+@dataclass(frozen=True)
+class PublicPort:
+    """One row of the public port census: a port the internet reaches, and how."""
+
+    name: str
+    """What the port serves, never its number: the balancer's listener and
+    backend set are named after it, and after it and the family for IPv6."""
+    port: int
+    transports: Transports
+    front: Front
+    answerer: Answerer
+
+
+#: Public port census — every port the internet reaches a service of the
+#: cluster on through the cloud: at the balancer, or at the dedicated VIP. A
+#: node's own internet-facing ports are not rows (the management ports,
+#: `MANAGEMENT_PORTS`, and KubeSpan's, which the Talos component opens), and
+#: the home site's is `QBITTORRENT_PEER_PORT` below. Read by `physical` for
+#: the node firewall's openings of the rows the Gateways answer; rfc-007 §5.3
+#: makes `k8s-base` (the Gateways' ports) and `apps` (the raw Services) its
+#: readers too. No security rule names a port: the cloud subnet admits
+#: everything and the node's firewall is the filter (physical.md §1–2). It is
+#: the firewall-audit reference too, and what the recorded fallback copies
+#: into machine configuration for the rows a Service's pods answer.
+PUBLIC_PORT_CENSUS: tuple[PublicPort, ...] = (
+    # Redirects to HTTPS and nothing else.
+    PublicPort('http', 80, Transports.TCP, Front.BALANCER, Answerer.GATEWAYS),
+    PublicPort('https', 443, Transports.TCP, Front.BALANCER, Answerer.GATEWAYS),
+    # syncthing's discovery server, which terminates its own TLS.
+    PublicPort('syncthing-discovery', 8443, Transports.TCP, Front.BALANCER, Answerer.PODS),
+    PublicPort('syncthing', 22000, Transports.TCP_AND_UDP, Front.BALANCER, Answerer.PODS),
+    PublicPort('hath', 60011, Transports.TCP, Front.DEDICATED_VIP, Answerer.PODS),
 )
 
 #: The bulk-transfer peer port, which the *site* gateway terminates rather than

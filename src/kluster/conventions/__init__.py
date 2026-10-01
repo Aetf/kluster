@@ -154,6 +154,16 @@ node volume
     that name is also its dataset's identity on the node, its mount path and
     its node label (`cloud.node_volume_mount`, `cloud.NODE_VOLUME_LABEL`).
 
+public port
+    A port the internet reaches a service of the cluster on through the
+    cloud, at the balancer or the dedicated VIP; one row of the public port
+    census each (`cluster.PUBLIC_PORT_CENSUS`, `cluster.PublicPort`;
+    rfc-007 §5.3), named for what it serves and never for its number. Its
+    front is where its traffic enters — the balancer or the dedicated VIP
+    (`cluster.Front`) — and its answerer what takes the traffic on the node:
+    the Gateways, through the node firewall, or a Service's pods, ahead of it
+    (`cluster.Answerer`).
+
 CI
     This repository's own GitHub Actions, the deployment pipeline
     (cluster/architecture.md §4.3; `overlay.Role.CI`, `overlay.CI_MEMBERS`).
@@ -202,6 +212,7 @@ from kluster.conventions.cluster import (
     GATEWAY_MEDIA,
     GATEWAY_NAMESPACE,
     KUBEPRISM_PORT,
+    KUBESPAN_MTU,
     LB_POOL_LABEL,
     LOCAL_PATH_ROOT,
     LOCAL_PATH_VOLUME,
@@ -217,7 +228,11 @@ from kluster.conventions.cluster import (
     SERVICE_CIDR_V4,
     SERVICE_CIDR_V6,
     UDM_ASN,
+    Answerer,
+    Front,
     ManagementPorts,
+    PublicPort,
+    Transports,
 )
 from kluster.conventions.dns import (
     ALL_ZONES,
@@ -312,6 +327,7 @@ __all__ = (
     'HOMELAB_VCPUS',
     'IOT_VLAN',
     'KUBEPRISM_PORT',
+    'KUBESPAN_MTU',
     'LABEL_DOMAIN',
     'LAN_POOL',
     'LB_POOL_LABEL',
@@ -360,18 +376,22 @@ __all__ = (
     'ZONE_PRIMARY',
     'ZONE_SHORT',
     'AddressPool',
+    'Answerer',
     'B2Account',
     'CloudflareAccount',
     'Compartment',
     'CompartmentMissing',
     'FollowsDedicatedVip',
+    'Front',
     'ManagementPorts',
     'NodeVolumeEntry',
     'OciTenancy',
     'PhysicalOutputs',
+    'PublicPort',
     'RetentionClass',
     'SiteNetwork',
     'StackNames',
+    'Transports',
     'Vip',
     'alert',
     'barman_repo_path',

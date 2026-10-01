@@ -121,14 +121,54 @@ def test_no_patch_carries_a_field_the_pinned_release_deprecates(shape: str, path
 
 
 def test_kubespan_and_kubeprism_are_on() -> None:
-    # KubeSpan in its own document, with nothing but `enabled` stated: every
-    # other setting is Talos' default, and the document's defaults are the
-    # ones `machine.network.kubespan` has.
-    assert of_kind('KubeSpanConfig') == [{'apiVersion': 'v1alpha1', 'kind': 'KubeSpanConfig', 'enabled': True}]
+    # KubeSpan in its own document, with nothing but `enabled` and the MTU
+    # stated: every other setting is Talos' default, and the document's
+    # defaults are the ones `machine.network.kubespan` has.
+    assert of_kind('KubeSpanConfig') == [
+        {'apiVersion': 'v1alpha1', 'kind': 'KubeSpanConfig', 'enabled': True, 'mtu': conventions.KUBESPAN_MTU}
+    ]
     machine = merged('machine')
     # No kube-proxy exists to fall back on.
     assert machine['features']['kubePrism']['enabled'] is True
     assert machine['features']['kubePrism']['port'] == conventions.KUBEPRISM_PORT
+
+
+@pytest.mark.parametrize('shape', list(SHAPES))
+def test_kubespans_mtu_is_the_convention(shape: str) -> None:
+    """The link Cilium's tunnel crosses has the MTU the convention states (rfc-007 §4.1).
+
+    rfc-007 §4.1 has Cilium read the same convention rather than detect the
+    node's interface, so a document that left the MTU to Talos' default would
+    leave the two agreeing only for as long as that default does not move.
+    """
+    (kubespan,) = of_kind('KubeSpanConfig', **SHAPES[shape])
+    assert kubespan['mtu'] == conventions.KUBESPAN_MTU
+
+
+@pytest.mark.parametrize('shape', [shape for shape, arguments in SHAPES.items() if arguments.get('role') != 'worker'])
+def test_a_control_plane_runs_no_kube_proxy(shape: str) -> None:
+    """Cilium replaces kube-proxy, so the control planes install none (rfc-007 §4.2).
+
+    Talos installs kube-proxy unless told not to, and turning it off after
+    the first boot is a procedure rather than a configuration change: a
+    bootstrap manifest is applied only while its object is missing and never
+    deleted, so the DaemonSet stays until a `talosctl upgrade-k8s` prunes it.
+    """
+    assert merged('cluster', **SHAPES[shape])['proxy'] == {'disabled': True}
+
+
+@pytest.mark.parametrize('shape', list(SHAPES))
+def test_every_node_forwards_the_cluster_dns_to_its_own_resolver(shape: str) -> None:
+    """Host DNS and its forwarding are stated rather than inherited (rfc-007 §4.2).
+
+    The baseline network policy is shaped around the address the cluster DNS
+    forwards to (rfc-007 §4.5), and forwarding is refused without the
+    resolver it forwards to, so both are on in every node's configuration.
+    """
+    assert merged('machine', **SHAPES[shape])['features']['hostDNS'] == {
+        'enabled': True,
+        'forwardKubeDNSToHost': True,
+    }
 
 
 def test_the_cluster_is_dual_stack_ipv4_first() -> None:
@@ -293,14 +333,26 @@ def test_ingress_defaults_to_block_and_enumerates_host_ports_only() -> None:
     # opening the firewall lost would leave a listener forwarding to a port
     # the nodes drop.
     assert set(conventions.MANAGEMENT_PORTS) <= opened
-    # No public census port is opened by this list: a raw Service's port is
-    # answered by the BPF datapath before nftables sees it, and a Gateway
-    # listener's opening is k8s-base's design to add (physical.md §2).
-    assert not opened & {port for port, _ in conventions.PUBLIC_PORT_CENSUS}
+    # No port a Service's pods answer is opened: the BPF datapath answers it
+    # before nftables sees it (physical.md §2).
+    assert not opened & {row.port for row in PODS_ROWS}
 
 
 #: The whole internet, one source per family.
 INTERNET = {'0.0.0.0/0', '::/0'}
+
+#: The public port census's rows the Gateways answer, whose packets cross the
+#: node firewall to reach Envoy on the host, and the rows a Service's pods
+#: answer, which the datapath takes ahead of it (rfc-007 §4.3).
+GATEWAY_ROWS = [row for row in conventions.PUBLIC_PORT_CENSUS if row.answerer is conventions.Answerer.GATEWAYS]
+PODS_ROWS = [row for row in conventions.PUBLIC_PORT_CENSUS if row.answerer is conventions.Answerer.PODS]
+
+#: The host ports a pod calls besides the kubelet's, each a metrics endpoint
+#: on the host network: Cilium's agent, operator and Envoy and Hubble's
+#: metrics server at the pinned Cilium chart's defaults, and the node exporter
+#: in the pinned monitoring chart. Facts about the pinned releases, so the test
+#: states them rather than reading them back out of the module under test.
+POD_REACHED = (9962, 9963, 9964, 9965, 9100)
 
 #: KubeSpan's WireGuard listen port. Talos fixes it and offers no knob, and
 #: WireGuard runs over UDP; both are facts about the software, so the test
@@ -342,7 +394,7 @@ def openings(**kwargs: Any) -> list[tuple[int, str, set[str]]]:
 
 
 @pytest.mark.parametrize('shape', list(SHAPES))
-def test_the_internet_reaches_the_host_on_the_management_ports_and_kubespan_alone(shape: str) -> None:
+def test_the_internet_reaches_the_host_on_the_management_ports_kubespan_and_the_gateways_alone(shape: str) -> None:
     """The node firewall is the only filter in front of a public node (physical.md §2).
 
     The subnet admits everything, so a port this firewall opens to the
@@ -366,10 +418,28 @@ def test_the_internet_reaches_the_host_on_the_management_ports_and_kubespan_alon
     assert {(port, protocol) for port, protocol, _ in public} == {
         *((port, 'tcp') for port in conventions.MANAGEMENT_PORTS),
         KUBESPAN,
+        *((row.port, protocol) for row in GATEWAY_ROWS for protocol in row.transports.protocols),
     }
     # Both families: a node is dual-stack, and a client or a peer may come at
     # it over either.
     assert all(sources >= INTERNET for _, _, sources in public)
+
+
+@pytest.mark.parametrize('shape', list(SHAPES))
+def test_every_node_opens_each_gateway_port_to_the_whole_internet(shape: str) -> None:
+    """A Gateway's listener is a host socket, so its port crosses the firewall (rfc-007 §4.3).
+
+    The datapath hands a Gateway's packets up the host's stack to the node's
+    Envoy, and the ingress chain drops whatever no rule admits, the
+    balancer's health check with it. Every node opens every such port, on
+    every transport its row names, to both families' whole range: on a cloud
+    node those ports are the internet's by design.
+    """
+    assert GATEWAY_ROWS, 'the census holds no row the Gateways answer'
+    opened = {(port, protocol): sources for port, protocol, sources in openings(**SHAPES[shape])}
+    for row in GATEWAY_ROWS:
+        for protocol in row.transports.protocols:
+            assert opened.get((row.port, protocol)) == INTERNET, (row.name, protocol)
 
 
 @pytest.mark.parametrize('shape', list(SHAPES))
@@ -386,6 +456,25 @@ def test_the_kubelet_answers_the_cluster_alone(shape: str) -> None:
     assert not sources & INTERNET
     assert all(inside(ip_network(source), CLUSTER) for source in sources), sources
     assert {str(conventions.POD_CIDR_V4), str(conventions.POD_CIDR_V6)} <= sources
+
+
+@pytest.mark.parametrize('shape', list(SHAPES))
+def test_every_port_a_pod_calls_answers_whom_the_kubelet_answers(shape: str) -> None:
+    """A host port a pod reaches is opened from the cluster's own ranges and nothing else (rfc-007 §4.3).
+
+    The scraper is a pod. Its call to another node is masqueraded to a node
+    address and enters on `kubespan`, ahead of every rule, but its call to
+    its own node arrives on the pod's device from the pod's address, which
+    is why the kubelet's opening names the pod ranges. Every other port a pod
+    calls takes exactly the kubelet's sources, so none of them is wider and
+    none leaves a pod out.
+    """
+    opened = openings(**SHAPES[shape])
+    (kubelet,) = [sources for port, _, sources in opened if port == KUBELET_PORT]
+    for reached in POD_REACHED:
+        assert [(protocol, sources) for port, protocol, sources in opened if port == reached] == [('tcp', kubelet)], (
+            reached
+        )
 
 
 @pytest.mark.parametrize('shape', list(SHAPES))
@@ -406,8 +495,9 @@ def test_the_dhcpv6_client_hears_its_server_on_the_link(shape: str) -> None:
 def test_every_rule_names_itself_uniquely_even_on_a_shared_port() -> None:
     """Talos refuses two network rule documents of one name.
 
-    The recorded fallback puts the public port census into the firewall, and
-    the census opens 22000 over both protocols.
+    The recorded fallback puts the public port census's rows a Service's pods
+    answer into the firewall, and the census serves 22000 over both
+    protocols.
     """
     extra = [talos.Opening(22000, 'tcp', talos.ANYWHERE), talos.Opening(22000, 'udp', talos.ANYWHERE)]
     names = [rule['name'] for rule in talos.ingress_firewall_documents(extra) if rule['kind'] == 'NetworkRuleConfig']
