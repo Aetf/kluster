@@ -29,6 +29,7 @@ import argparse
 import getpass
 import logging
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 from kluster.lib import acquisition
@@ -139,10 +140,11 @@ _ORDER = """when to run what:
     6. credentials derived cloudflare-zones mint
        credentials derived cloudflare-gateway-acme mint
          The Cloudflare seed's delivered tokens: the zone-scoped provider
-         token into the dns stack's config, and the gateway's own ACME
-         token -- scoped to the zones it issues its vhosts under --
-         into the physical stack's. Each file is then committed. One
-         derived row per command; re-running one rotates it.
+         token into the dns and apps stacks' config -- apps created first,
+         with mise x -- pulumi stack init apps --no-select -- and the
+         gateway's own ACME token -- scoped to the zones it issues its
+         vhosts under -- into the physical stack's. Each file is then
+         committed. One derived row per command; re-running one rotates it.
     7. credentials derived oci-physical mint
        credentials derived b2-management mint
          The physical stack's minted provider credentials, its OCI key and
@@ -750,10 +752,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     # In bring-up order, which is the order an operator meets them in.
     #
-    # Only the zones row takes a `--stack`. What each of the others mints is
-    # named after the row and the mint retires everything else of that name, so
-    # a delivery aimed elsewhere would revoke the real stack's live credential
-    # on its way to filling another stack's slot (`derived.py`).
+    # No row takes a `--stack`. What each mints is named after the row and the
+    # mint retires everything else of that name, so a delivery aimed elsewhere
+    # would revoke the real stack's live credential on its way to filling
+    # another stack's slot (`derived.py`). The zones row fills every stack its
+    # slot map row names in one delivery, for the same reason.
     appliance_key = rows.add_parser(
         derived.OCI_STATE_BACKEND_ROW,
         help="the state-backend appliance's own OCI key",
@@ -783,23 +786,24 @@ def build_parser() -> argparse.ArgumentParser:
         derived.ZONES_ROW,
         help='the zone-scoped Cloudflare provider token',
         description=(
-            "The token the DNS stack's Cloudflare provider signs with. It carries record edit on the "
-            "installation's zones and nothing else, so widening it means adding a zone to the "
+            'The token the Cloudflare providers of the dns and apps stacks sign with. It carries record '
+            "edit on the installation's zones and nothing else, so widening it means adding a zone to the "
             "installation's list and running the mint again."
         ),
     )
     zones_verbs = zones_row.add_subparsers(dest='action', required=True, metavar='<verb>')
     zones_mint = zones_verbs.add_parser(
         'mint',
-        help="mint it from the seed into the dns stack's config secret",
+        help='mint it from the seed into the config secret of every stack that reads it',
         description=(
             'Open the Cloudflare seed in the kit, look up the ids of the zones this installation owns, '
-            'mint a token scoped to exactly those, and write it into the stack config as an encrypted '
-            'value. The account those zones live in is not written beside it: that is a fact this '
+            'mint a token scoped to exactly those, and write it as an encrypted value into the config of '
+            'every stack the slot map names for the row (dns and apps); any of them but dns must already '
+            'exist. The account those zones live in is not written beside it: that is a fact this '
             'program holds in `conventions`, and the mint holds the account it minted in against it and '
             'refuses on a mismatch. The push is read back before the run succeeds, and the committed '
-            'file is the delivery, so the change has to be committed afterwards. A live token of the '
-            'same name is retired once its successor is verified and the config has taken it, so a push '
+            'files are the delivery, so the change has to be committed afterwards. A live token of the '
+            'same name is retired once its successor is verified and every config has taken it, so a push '
             'that fails leaves the working token alone.'
         ),
     )
@@ -807,14 +811,6 @@ def build_parser() -> argparse.ArgumentParser:
         '--entry',
         default=derived.CLOUDFLARE_SEED_ENTRY,
         help=f'the kit entry the seed is read from (default: {derived.CLOUDFLARE_SEED_ENTRY})',
-    )
-    _ = zones_mint.add_argument(
-        '--stack',
-        default=derived.ZONES_STACK,
-        help=(
-            f'the stack whose config takes the token (default: {derived.ZONES_STACK}); any other must be a '
-            'stack of this project that already exists in the state backend'
-        ),
     )
     _add_bundle_dir(zones_mint)
 
@@ -1304,11 +1300,12 @@ def _stack(args: argparse.Namespace, store: KdbxStore, name: str, registry: escr
     passphrase through the acquisition chain. One command is one credential
     delivered, not a shell that has to be prepared first.
 
-    The stack is named by the caller rather than read off `args`, because only
-    one row has a stack to choose: the zones token is scoped to zones and can
-    be delivered to any stack of this project that already exists, while a row
-    whose credential is named after its consumer can only be delivered to that
-    consumer (`derived`).
+    The stack is named by the caller rather than read off `args`: no row takes
+    a stack on its command line. A row whose credential is named after its
+    consumer can only be delivered to that consumer, and the zones row, the one
+    delivered to more than one stack, is delivered to the stacks its slot map
+    row names (`_config_stacks`) -- the mint retires every other token of its
+    name, so a stack chosen per run would revoke the token the others hold.
 
     `registry` reaches the escrow the passphrase is recovered from, and is
     required rather than defaulted: every caller already holds the one
@@ -1316,11 +1313,27 @@ def _stack(args: argparse.Namespace, store: KdbxStore, name: str, registry: escr
     checkout's own `escrow/` instead of the directory the run was pointed at,
     silently and only for the commands that forgot.
     """
-    return pulumi_config.Stack(
-        name=name,
-        directory=pulumi_config.project_dir(),
-        environment=lifecycle.environment(store, args.bundle_dir, registry),
-    )
+    (stack,) = _stacks(args, store, (name,), registry)
+    return stack
+
+
+def _stacks(
+    args: argparse.Namespace, store: KdbxStore, names: Sequence[str], registry: escrow.Registry
+) -> list[pulumi_config.Stack]:
+    """The config slots one delivery fills, opened as `_stack` opens one.
+
+    The environment is recovered once and shared: each stack still picks its
+    own passphrase out of it by name (`pulumi_config.Stack`).
+    """
+    environment = lifecycle.environment(store, args.bundle_dir, registry)
+    return [
+        pulumi_config.Stack(name=name, directory=pulumi_config.project_dir(), environment=environment) for name in names
+    ]
+
+
+def _config_stacks(row: str) -> tuple[str, ...]:
+    """The stacks whose committed configuration the slot map's `row` delivers into, in its order."""
+    return tuple(target.stack for target in slots.ROWS[row].targets if isinstance(target, slots.PulumiConfig))
 
 
 def _forge(args: argparse.Namespace, store: KdbxStore, registry: escrow.Registry) -> github_secrets.Forge:
@@ -1576,7 +1589,11 @@ def main(argv: list[str] | None = None) -> int:
             # The minted rows, one command per row (`_stack` is the slot most
             # of them are pushed into).
             case ('derived', derived.ZONES_ROW, 'mint'):
-                derived.cloudflare_zones(store, stack=_stack(args, store, args.stack, registry), seed_entry=args.entry)
+                derived.cloudflare_zones(
+                    store,
+                    stacks=_stacks(args, store, _config_stacks(derived.ZONES_ROW), registry),
+                    seed_entry=args.entry,
+                )
             case ('derived', derived.GATEWAY_ACME_ROW, 'mint'):
                 _ = derived.cloudflare_gateway_acme(
                     store, stack=_stack(args, store, derived.PHYSICAL_STACK, registry), seed_entry=args.entry

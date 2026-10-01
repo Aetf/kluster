@@ -7,7 +7,7 @@ produces both, which is why an application cannot forget its rewrite -- it
 never writes one. Two readers is also what places the table here rather than
 in either stack's own area (declarative/README.md §2).
 
-The census is empty while `apps` is unwritten. It grows one row per
+The census is empty while `apps` declares no application. It grows one row per
 application as the migration proceeds, and each row's rewrite appears in a
 `dns` preview the same day the application's route does.
 

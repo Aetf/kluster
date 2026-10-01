@@ -1,6 +1,7 @@
 """Kubernetes helpers shared by the `k8s-base` and `apps` stacks.
 
-Only what both stacks need: installing a pinned upstream chart, reaching into
+Only what both stacks need: reading the kubeconfig their Kubernetes provider is
+opened with, installing a pinned upstream chart, reaching into
 what one rendered, declaring a SealedSecret in the shape
 [declarative/cluster-infra.md](../../docs/declarative/cluster-infra.md) §1.1
 fixes, and labeling a Service into a Cilium load-balancer pool. Anything
@@ -23,6 +24,8 @@ from typing import Any, cast
 import pulumi
 import pulumi_crds as crds
 import pulumi_kubernetes as k8s
+from pulumi.output import Unknown
+from pulumi.runtime.rpc import UNKNOWN as UNKNOWN_SENTINEL
 
 from kluster import conventions
 from kluster.lib.versions import ChartVersion
@@ -30,8 +33,10 @@ from kluster.lib.versions import ChartVersion
 __all__ = (
     'SealingScope',
     'SecretTemplate',
+    'UnusableKubeconfig',
     'find_rendered',
     'helm_chart',
+    'kubeconfig_from',
     'lb_pool_labels',
     'pick_resource',
     'sealed_secret',
@@ -40,6 +45,60 @@ __all__ = (
 #: An OCI-registry chart carries its registry in the reference itself, so it
 #: takes no repository options.
 _OCI_SCHEME = 'oci://'
+
+
+class UnusableKubeconfig(ValueError):
+    """The `physical` stack publishes a kubeconfig output that holds nothing a provider can open."""
+
+
+def kubeconfig_from(physical: pulumi.StackReference) -> pulumi.Output[str]:
+    """The kubeconfig `physical` publishes, refused unless it is one a provider can open.
+
+    `require_output` stops the run where the output is absent, and that is
+    the only state it stops. Three more get past it, and each would reach the
+    Kubernetes provider as something other than a kubeconfig:
+
+    -   **a secret this stack cannot decrypt**, which a StackReference elides
+        and reads back as `{}` -- `physical` under a passphrase of its own
+        (rfc-005 §5.1) does that to every reader under the stack passphrase;
+    -   **Pulumi's unknown sentinel**, which a targeted apply of `physical`
+        exports (framework/pulumi.md §1.4), read back as an unknown, or as
+        `None` where it is stored encrypted;
+    -   an empty string.
+
+    The provider reads a kubeconfig it cannot load as an unreachable
+    cluster, so a preview of plain resources would go green over nothing;
+    one that is handed no kubeconfig at all -- `None` is dropped on the
+    wire -- falls back to `$KUBECONFIG` and then `~/.kube/config`, so an
+    `up` from a shell holding another cluster's would act on that cluster.
+    So the value is checked where it is read, unknowns included
+    (`run_with_unknowns`), and the run stops naming what it found.
+    """
+    name = conventions.PHYSICAL_OUTPUTS.kubeconfig
+    return physical.require_output(name).apply(lambda value: _usable_kubeconfig(name, value), run_with_unknowns=True)
+
+
+def _usable_kubeconfig(name: str, value: object) -> str:
+    """`value` if it is a kubeconfig, else a refusal saying what it is -- never the value itself."""
+    if isinstance(value, str) and value and value != UNKNOWN_SENTINEL:
+        return value
+    if value is None or value == UNKNOWN_SENTINEL or isinstance(value, Unknown):
+        found = (
+            "unknown, which is how Pulumi's unknown sentinel reads back: a targeted apply of `physical` "
+            'exported it (framework/pulumi.md §1.4), and the rest of `physical` has to be applied first'
+        )
+    elif isinstance(value, Mapping):
+        found = (
+            'a mapping, which is how a StackReference reads back a secret it could not decrypt: this '
+            "stack cannot open `physical`'s secrets (rfc-005 §5.1)"
+        )
+    elif isinstance(value, str):
+        found = 'an empty string'
+    else:
+        found = f'a {type(value).__name__}'
+    raise UnusableKubeconfig(
+        f"the physical stack's {name!r} output is {found}; no Kubernetes provider is opened with it"
+    )
 
 
 def helm_chart(

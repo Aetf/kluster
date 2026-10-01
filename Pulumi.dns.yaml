@@ -3,7 +3,7 @@ config:
   pulumi:disable-default-providers:
     - cloudflare
   kluster-py:cloudflareApiToken:
-    secure: v1:Mvco7yk+WciKtog3:DmEnmE1QbwTyTIqJUiuD/KWJeMXrE04C2yry4yX1DIhyO1KdzDIaqP1kAmECRkiynGlDUkkeM+RESthdcY5GdRYrBKhQ
+    secure: v1:EU9UPId7wz1z0ee4:sgZVNTfvrtA08RVGFvnrLful9epOD/G+C/2epFiqL6nZjw6+ZOkuEZ28dgjrVN8vrFW0fKW/dZnYlJzL8Mn7vC/FIETT
   kluster-py:adguardUsername:
     secure: v1:v0S9CXrtbCmD6lIz:j+FA3gz2oL6QK+C+/AA5+2yBpUI=
   kluster-py:adguardPassword:

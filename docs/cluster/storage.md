@@ -18,8 +18,9 @@ resort, object storage used directly where an app supports it.
 > [architecture.md](architecture.md). Declared in code: the backup
 > bucket and its keys (`BackupBucket`, §4) and the cloud block volumes
 > (`conventions.NODE_VOLUMES`, §6), both by the `physical` stack. The
-> storage classes, VolSync and CNPG are the `k8s-base` stack's, which is
-> unwritten. None of it is provisioned.
+> storage classes, VolSync and CNPG are the `k8s-base` stack's, whose
+> program builds its Kubernetes provider and none of them yet. None of
+> it is provisioned.
 
 ## 1. Principles
 
@@ -268,8 +269,8 @@ Per nodes.md §5, durability = declarative rebuild + backups + drills:
     (§3.1), same bucket, retention by class
     (declarative/workloads.md §3); restores double as the volume-move
     mechanism, so every move exercises the restore path. Installed by
-    the `k8s-base` stack, which is unwritten, so none runs (nodes.md §5
-    Tier 0).
+    the `k8s-base` stack, which declares nothing beyond its provider yet,
+    so none runs (nodes.md §5 Tier 0).
 3.  **CNPG**: barman object-store backups + WAL archiving per database
     cluster (port the legacy barman-plugin setup), monthly automated
     restore drill (port the legacy drill; nothing runs it here yet).

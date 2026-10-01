@@ -706,6 +706,21 @@ def test_the_webhook_is_a_repository_secret_of_the_ops_repository_and_has_left_t
     ]
 
 
+def test_the_zones_token_lands_in_both_stacks_that_declare_records() -> None:
+    """`dns` and `apps` each open a Cloudflare provider with it, under one key.
+
+    `apps` declares the public records that travel with each application
+    (dns.md §1) and builds its own provider for them, so a row naming `dns`
+    alone would leave that stack refusing for a value no delivery writes.
+    """
+    row = slots.ROWS[derived.ZONES_ROW]
+
+    assert {(target.stack, target.key) for target in row.targets if isinstance(target, slots.PulumiConfig)} == {
+        (DNS_STACK, derived.API_TOKEN_KEY),
+        (conventions.STACK_NAMES.apps, derived.API_TOKEN_KEY),
+    }
+
+
 def test_the_drill_age_identity_is_delivered_by_its_generator_and_waits_on_nothing() -> None:
     """The row is built, so it names its producer and defers no channel.
 

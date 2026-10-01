@@ -65,6 +65,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+from collections.abc import Sequence
 from pathlib import Path
 
 from cryptography.hazmat.primitives import serialization
@@ -84,8 +85,10 @@ from .kdbx import KdbxStore
 
 log = logging.getLogger(__name__)
 
-#: The stack that manages the installation's DNS records, and therefore the slot
-#: the zones token is delivered into.
+#: The stack that manages the installation's DNS records: the zones token's own
+#: stack, which the row's first mint creates. The token is delivered into every
+#: stack the slot map's zones row names, and this is the one of them that may
+#: not exist yet.
 ZONES_STACK = conventions.STACK_NAMES.dns
 
 #: The stack that declares the forge itself, and therefore the slot the GitHub
@@ -276,17 +279,16 @@ B2_SEED_ENTRY = entries.SEEDS['b2'].entry
 def _deliverable(stack: pulumi_config.Stack, *, own: str) -> None:
     """Refuse a delivery aimed anywhere but a stack of this project that is there to take it.
 
-    The one row that takes a stack by name is the one row that can be aimed
-    wrong, and the mint retires every other token of the row's name once the
-    new one is verified: aimed at a misspelling, it would create that stack in
-    the backend, fill it, and revoke the live credential of the stack that
-    reads it. So the name has to be one the project declares
-    (`conventions.STACK_NAMES`), and any stack but the row's own has to exist
-    already -- a mint fills configuration, and creating a stack is that
-    stack's own bring-up rather than a side effect of delivering a token to
-    it. The row's own stack is the exception because its first mint *is* its
-    bring-up (credentials.md §4.1): nothing else creates it, so the push
-    cannot assume it exists.
+    The zones row is the one row delivered into more than one stack, and the
+    mint retires every other token of the row's name once the new one is in
+    all of them: a stack that cannot take it would fail the run part-way, and
+    one created by mistake would be filled with a credential nothing reads. So
+    the name has to be one the project declares (`conventions.STACK_NAMES`),
+    and any stack but the row's own has to exist already -- a mint fills
+    configuration, and creating a stack is that stack's own bring-up rather
+    than a side effect of delivering a token to it. The row's own stack is the
+    exception because its first mint *is* its bring-up (credentials.md §4.1):
+    nothing else creates it, so the push cannot assume it exists.
 
     Before the kit is opened and before anything is minted, so a refusal here
     leaves no token live at the provider and no stack in the backend.
@@ -299,13 +301,15 @@ def _deliverable(stack: pulumi_config.Stack, *, own: str) -> None:
     if stack.name != own and not stack.exists():
         raise pulumi_config.SlotRefused(
             f'the {stack.name} stack does not exist in the state backend, and a mint creates no stack but '
-            f"this row's own ({own}): a delivery aimed elsewhere fills a stack that is already there, and "
-            f'bringing {stack.name} into being is its own bring-up'
+            f"this row's own ({own}): a delivery fills a stack that is already there, and bringing "
+            f'{stack.name} into being is its own bring-up'
         )
 
 
-def cloudflare_zones(kit: KdbxStore, *, stack: pulumi_config.Stack, seed_entry: str = CLOUDFLARE_SEED_ENTRY) -> None:
-    """Mint the zones token from the seed and install it in a stack's config.
+def cloudflare_zones(
+    kit: KdbxStore, *, stacks: Sequence[pulumi_config.Stack], seed_entry: str = CLOUDFLARE_SEED_ENTRY
+) -> None:
+    """Mint the zones token from the seed and install it in every stack that reads it.
 
     The scope is the installation's zones as `conventions` lists them, so adding
     a zone there and re-running is the whole procedure for widening it.
@@ -316,22 +320,33 @@ def cloudflare_zones(kit: KdbxStore, *, stack: pulumi_config.Stack, seed_entry: 
     the account it is about to issue into is that one, and refuses before
     anything exists if it is not (`cloudflare.verify_account`).
 
-    Which stack takes it is the caller's, within limits `_deliverable` holds:
-    a stack of this project, and one that exists unless it is `ZONES_STACK`.
+    **One token, every stack, one retirement.** `stacks` are the zones row's
+    slots (the slot map's `PulumiConfig` targets, which the command builds them
+    from), and the one minted token is written into each of them before the
+    token it supersedes is retired. Retirement matches on the token's name, so
+    a run per stack would revoke the first stack's token while filling the
+    second; and a write that fails part-way retires nothing, leaving every
+    stack it had not reached on the token that still works. Each stack is held
+    to `_deliverable` before anything is minted.
     """
-    _deliverable(stack, own=ZONES_STACK)
+    if not stacks:
+        raise pulumi_config.SlotRefused(f'the {ZONES_ROW} row names no stack to deliver its token into')
+    for stack in stacks:
+        _deliverable(stack, own=ZONES_STACK)
     zones = conventions.ALL_ZONES
     log.info('opening the Cloudflare seed from the kit')
     session = cloudflare.Session.from_entry(kit, seed_entry)
     pending = cloudflare.mint_zone_token(session, role=cloudflare.ZONES, zones=zones)
 
-    _ = pending.deliver(
-        lambda token: stack.fill(
-            secret={API_TOKEN_KEY: token.value},
-            plain={},
-            holds=f'a token scoped to {", ".join(zones)}',
-        )
-    )
+    def fill_every_stack(token: cloudflare.ZoneToken) -> None:
+        for stack in stacks:
+            stack.fill(
+                secret={API_TOKEN_KEY: token.value},
+                plain={},
+                holds=f'a token scoped to {", ".join(zones)}',
+            )
+
+    _ = pending.deliver(fill_every_stack)
 
 
 def cloudflare_gateway_acme(

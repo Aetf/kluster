@@ -376,8 +376,9 @@ jobs:
           experimental: true
       - run: mise x uv -- uv sync --locked
       # dns is the LAN-touching stack: its AdGuard rewrites live on the UDM
-      # (declarative/dns.md §3). apps reaches nothing but the cluster, and an
-      # apps job holding ZeroTier secrets would break that partition.
+      # (declarative/dns.md §3). apps reaches the cluster and Cloudflare and
+      # nothing on the LAN, and an apps job holding ZeroTier secrets would
+      # break that partition.
       - uses: ./.github/actions/zerotier
         if: matrix.stack == 'dns'
         with:

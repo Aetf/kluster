@@ -121,7 +121,7 @@ def test_the_token_lands_in_the_stack_config_and_nothing_else_does(
 ) -> None:
     slot, runner = stack
 
-    derived.cloudflare_zones(kit, stack=slot)
+    derived.cloudflare_zones(kit, stacks=[slot])
 
     # One key: the provider's credential. The account whose zones it may touch
     # is discovered on the way, but it is a fact `conventions` already holds,
@@ -139,7 +139,7 @@ def test_a_seed_from_another_account_is_refused_before_anything_is_minted(
     _with_cloudflare_account(monkeypatch, 'some-other-account')
 
     with pytest.raises(masters.CredentialRejected, match='CLOUDFLARE_ACCOUNT'):
-        derived.cloudflare_zones(kit, stack=slot)
+        derived.cloudflare_zones(kit, stacks=[slot])
 
     # A kit re-seeded from another Cloudflare account, or an identifier written
     # down wrong: either way the token would be for zones the stack does not
@@ -156,7 +156,7 @@ def test_the_stack_is_created_when_the_backend_has_none(
 ) -> None:
     slot, runner = stack
 
-    derived.cloudflare_zones(kit, stack=slot)
+    derived.cloudflare_zones(kit, stacks=[slot])
 
     # A workstation that has never selected this stack is the ordinary case at
     # bring-up, so the push cannot assume one exists.
@@ -172,9 +172,9 @@ def test_a_stack_no_program_declares_is_refused_naming_the_census(api: FakeApi, 
     slot = pulumi_config.Stack(name='dsn', directory=pulumi_config.project_dir(), run=runner)
 
     with pytest.raises(pulumi_config.SlotRefused, match=r'dsn.*k8s-base') as refusal:
-        derived.cloudflare_zones(kit, stack=slot)
+        derived.cloudflare_zones(kit, stacks=[slot])
 
-    # A misspelled `--stack` would otherwise be created in the backend and
+    # A misspelled stack would otherwise be created in the backend and
     # filled, with the real stack's token retired by name on the way. Refused
     # before the seed is opened: no `pulumi` runs, nothing is minted.
     assert all(name in str(refusal.value) for name in conventions.STACK_NAMES.names())
@@ -182,29 +182,93 @@ def test_a_stack_no_program_declares_is_refused_naming_the_census(api: FakeApi, 
     assert _live(api) == []
 
 
-def test_a_delivery_aimed_at_another_stack_creates_none(api: FakeApi, kit: KdbxStore) -> None:
+APPS = conventions.STACK_NAMES.apps
+
+
+@pytest.fixture
+def apps_stack() -> tuple[pulumi_config.Stack, RecordedPulumi]:
+    """`apps`, which exists: the operator's `pulumi stack init` brought it up."""
+    runner = RecordedPulumi(stacks=[APPS])
+    return pulumi_config.Stack(name=APPS, directory=pulumi_config.project_dir(), run=runner), runner
+
+
+def _retirements(api: FakeApi) -> list[str]:
+    """The token ids the run deleted, in order, one entry per delete."""
+    return [path.removeprefix('/user/tokens/') for method, path in api.calls if method == 'DELETE']
+
+
+def test_one_mint_leaves_one_live_token_in_every_stack_and_retires_its_predecessor_once(
+    api: FakeApi,
+    kit: KdbxStore,
+    stack: tuple[pulumi_config.Stack, RecordedPulumi],
+    apps_stack: tuple[pulumi_config.Stack, RecordedPulumi],
+) -> None:
+    """`dns` and `apps` hold one token, and the run retires what it supersedes after both hold it.
+
+    Retirement matches on the token's name, so a mint per stack would leave
+    the first stack holding a token the second stack's mint had deleted.
+    """
+    (dns_slot, dns_runner), (apps_slot, apps_runner) = stack, apps_stack
+    derived.cloudflare_zones(kit, stacks=[dns_slot, apps_slot])
+    (predecessor,) = _live(api)
+    before = len(api.calls)
+
+    derived.cloudflare_zones(kit, stacks=[dns_slot, apps_slot])
+
+    held = dns_runner.config[derived.API_TOKEN_KEY]
+    assert apps_runner.config[derived.API_TOKEN_KEY] == held
+    assert _live(api) == [api.values[held]]
+    assert [path for method, path in api.calls[before:] if method == 'DELETE'] == [f'/user/tokens/{predecessor}']
+
+
+def test_a_write_that_fails_in_the_second_stack_retires_nothing(
+    api: FakeApi,
+    kit: KdbxStore,
+    stack: tuple[pulumi_config.Stack, RecordedPulumi],
+    apps_stack: tuple[pulumi_config.Stack, RecordedPulumi],
+) -> None:
+    """The stack the run did not reach keeps a token that still works.
+
+    The first stack took the successor; the second refused it. Retiring at
+    that point would delete the token `apps` is still reading, so nothing is
+    retired, and the next run that gets through both stacks reconciles.
+    """
+    (dns_slot, _), (apps_slot, apps_runner) = stack, apps_stack
+    derived.cloudflare_zones(kit, stacks=[dns_slot, apps_slot])
+    (predecessor,) = _live(api)
+    apps_runner.corrupts = True
+
+    with pytest.raises(pulumi_config.SlotRefused):
+        derived.cloudflare_zones(kit, stacks=[dns_slot, apps_slot])
+
+    assert _retirements(api) == []
+    assert predecessor in _live(api)
+
+
+def test_a_stack_that_does_not_exist_refuses_the_mint_before_anything_is_created(
+    api: FakeApi, kit: KdbxStore, stack: tuple[pulumi_config.Stack, RecordedPulumi]
+) -> None:
+    dns_slot, dns_runner = stack
     runner = RecordedPulumi()
-    slot = pulumi_config.Stack(name='apps', directory=pulumi_config.project_dir(), run=runner)
+    slot = pulumi_config.Stack(name=APPS, directory=pulumi_config.project_dir(), run=runner)
 
     with pytest.raises(pulumi_config.SlotRefused, match='apps stack does not exist'):
-        derived.cloudflare_zones(kit, stack=slot)
+        derived.cloudflare_zones(kit, stacks=[dns_slot, slot])
 
     # The row's own stack is created by its first mint, which is bring-up;
     # any other stack is brought up on its own, and a mint aimed there fills
-    # it or refuses. `stack init` is not reachable from here.
-    assert _inits(runner) == []
-    assert runner.stacks == []
+    # it or refuses -- and refuses before the row's own stack is created or
+    # anything is minted, so a refusal leaves nothing half-delivered.
+    assert _inits(runner) == [] and _inits(dns_runner) == []
+    assert runner.stacks == [] and dns_runner.stacks == []
     assert _live(api) == []
 
 
-def test_a_delivery_aimed_at_another_stack_that_exists_fills_it(api: FakeApi, kit: KdbxStore) -> None:
-    runner = RecordedPulumi(stacks=['apps'])
-    slot = pulumi_config.Stack(name='apps', directory=pulumi_config.project_dir(), run=runner)
+def test_a_mint_with_no_stack_to_deliver_into_is_refused(api: FakeApi, kit: KdbxStore) -> None:
+    with pytest.raises(pulumi_config.SlotRefused, match='names no stack'):
+        derived.cloudflare_zones(kit, stacks=[])
 
-    derived.cloudflare_zones(kit, stack=slot)
-
-    assert _inits(runner) == []
-    assert runner.config[derived.API_TOKEN_KEY] in api.values
+    assert _live(api) == []
 
 
 def test_the_minted_token_never_touches_the_kit(
@@ -212,7 +276,7 @@ def test_the_minted_token_never_touches_the_kit(
 ) -> None:
     slot, runner = stack
 
-    derived.cloudflare_zones(kit, stack=slot)
+    derived.cloudflare_zones(kit, stacks=[slot])
 
     # Rule 2: the offline store is not a staging area. The kit holds the seed
     # it held before, and the minted value exists only in the slot.
@@ -224,10 +288,10 @@ def test_a_re_run_rotates_the_row_and_leaves_one_live_token(
     api: FakeApi, kit: KdbxStore, stack: tuple[pulumi_config.Stack, RecordedPulumi]
 ) -> None:
     slot, runner = stack
-    derived.cloudflare_zones(kit, stack=slot)
+    derived.cloudflare_zones(kit, stacks=[slot])
     first = runner.config[derived.API_TOKEN_KEY]
 
-    derived.cloudflare_zones(kit, stack=slot)
+    derived.cloudflare_zones(kit, stacks=[slot])
 
     # Rotation is a re-run, not a second procedure: the predecessor is retired
     # once its successor is verified and the slot has taken it, and the slot
@@ -274,7 +338,7 @@ def test_the_token_lands_where_the_program_reads_it(
 ) -> None:
     slot, project = live_project
 
-    derived.cloudflare_zones(kit, stack=slot)
+    derived.cloudflare_zones(kit, stacks=[slot])
 
     # The consumer asks `pulumi.Config().require_secret('cloudflareApiToken')`,
     # which resolves under the project's name. A key this command spelled a
@@ -290,12 +354,12 @@ def test_a_push_that_fails_leaves_the_token_the_stack_already_holds_live(
     api: FakeApi, kit: KdbxStore, stack: tuple[pulumi_config.Stack, RecordedPulumi]
 ) -> None:
     slot, runner = stack
-    derived.cloudflare_zones(kit, stack=slot)
+    derived.cloudflare_zones(kit, stacks=[slot])
     (predecessor,) = _live(api)
     runner.corrupts = True
 
     with pytest.raises(pulumi_config.SlotRefused):
-        derived.cloudflare_zones(kit, stack=slot)
+        derived.cloudflare_zones(kit, stacks=[slot])
 
     # Cloudflare shows a token's value once, so between the mint and the push
     # the successor exists in this process and nowhere else. Retired first, the
@@ -310,7 +374,7 @@ def test_a_push_that_fails_leaves_the_token_the_stack_already_holds_live(
     # token name rather than on a recorded predecessor, so the next run that
     # gets as far as its push deletes everything the failed ones left.
     runner.corrupts = False
-    derived.cloudflare_zones(kit, stack=slot)
+    derived.cloudflare_zones(kit, stacks=[slot])
     assert _live(api) == [api.values[runner.config[derived.API_TOKEN_KEY]]]
 
 
@@ -321,13 +385,13 @@ def test_a_push_that_fails_is_healed_by_running_it_again(
     runner.corrupts = True
 
     with pytest.raises(pulumi_config.SlotRefused):
-        derived.cloudflare_zones(kit, stack=slot)
+        derived.cloudflare_zones(kit, stacks=[slot])
 
     # The interrupted run left a live token nobody holds; the re-run mints its
     # successor, retires it, and fills the slot, which is why a failed stage is
     # re-run rather than repaired by hand.
     runner.corrupts = False
-    derived.cloudflare_zones(kit, stack=slot)
+    derived.cloudflare_zones(kit, stacks=[slot])
     assert _live(api) == [api.values[runner.config[derived.API_TOKEN_KEY]]]
 
 
@@ -412,7 +476,7 @@ def test_the_two_cloudflare_rows_are_separate_credentials(
 ) -> None:
     zones_slot, zones_runner = stack
     gateway_slot, gateway_runner = physical_stack
-    derived.cloudflare_zones(kit, stack=zones_slot)
+    derived.cloudflare_zones(kit, stacks=[zones_slot])
 
     _ = derived.cloudflare_gateway_acme(kit, stack=gateway_slot)
 

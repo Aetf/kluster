@@ -127,6 +127,7 @@ BACKEND_KEY = 'PULUMI_BACKEND_KEY'
 
 PHYSICAL_STACK = derived.PHYSICAL_STACK
 DNS_STACK = derived.ZONES_STACK
+APPS_STACK = conventions.STACK_NAMES.apps
 STATE_BACKEND_STACK = derived.STATE_BACKEND_STACK
 
 #: The secret the ops repository's weekly drift trigger reads the trigger App's
@@ -897,7 +898,10 @@ ROWS: dict[str, Row] = {
     derived.ZONES_ROW: Row(
         register='Cloudflare token (zones)',
         source=Minted(f'credentials derived {derived.ZONES_ROW} mint'),
-        targets=(PulumiConfig(DNS_STACK, derived.API_TOKEN_KEY),),
+        # Both stacks that declare records open their own Cloudflare provider
+        # with it: `dns` for the records that belong to no application, `apps`
+        # for the public records declared beside each application.
+        targets=(PulumiConfig(DNS_STACK, derived.API_TOKEN_KEY), PulumiConfig(APPS_STACK, derived.API_TOKEN_KEY)),
     ),
     'cloudflare-dns01': Row(
         register='Cloudflare token (DNS-01)',
@@ -1115,11 +1119,11 @@ ROWS: dict[str, Row] = {
         # The `backed_pvc` helper is the producer of both channels -- it
         # generates the password into the `apps` stack's state and seals it --
         # so no `credentials` command will address either. Neither has an
-        # address until the helper and the `apps` program it runs in exist.
+        # address until the helper exists and the `apps` program runs it.
         pending={
             'Pulumi state': (
-                'the `backed_pvc` helper that generates each password is unwritten, and so is the `apps` '
-                'program whose state would hold it (declarative/workloads.md §3)'
+                'the `backed_pvc` helper that generates each password is unwritten, and the `apps` '
+                'program whose state would hold it declares no application (declarative/workloads.md §3)'
             ),
             'SealedSecret': _BACKED_PVC_UNBUILT,
         },
