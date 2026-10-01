@@ -59,6 +59,25 @@ config:
 # case as the registry API takes it: renovate looks the coordinates up
 # verbatim and the lookup is case-sensitive, while the bridge canonicalizes
 # either spelling to the same SDK.
+#
+# These pins name releases, not bytes, and no field here can hold a hash of
+# what they download. Pulumi reads a `checksums` map on an entry (`PackageSpec`
+# in its `sdk/go/common/workspace/project.go`), keyed by `<os>-<arch>`, but
+# declares the values as bytes, which its YAML decoder takes from no scalar,
+# while the project schema refuses anything but a string: at the pinned CLI an
+# entry carrying one fails to load, `package must be either a string or a
+# package specification object`. Nor would the map reach a run. A preview or
+# an update fetches the bridge plugin the SDK's `pulumi-plugin.json` names, and
+# that file has no field for a hash; the bridge then fetches the upstream
+# provider from the registry, and its loader installs it with no recorded hash
+# to hold it to.
+#
+# `pulumi plugin install --checksum` is the one route that holds a plugin to a
+# recorded sum: a plugin installed that way, ahead of the engine, is found
+# installed rather than downloaded. Nothing here installs plugins so yet
+# (Aetf/kluster-ops#489), and the same gap holds for the plugins the program's
+# provider SDKs name: `uv.lock` holds each SDK's hashes, not those of the
+# plugin binary the engine downloads for it.
 packages:
   b2:
     source: terraform-provider
