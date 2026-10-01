@@ -43,6 +43,7 @@ would ask Pulumi to resolve a cycle that does not actually exist.
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -77,6 +78,18 @@ def management_ports() -> list[tuple[str, int]]:
     """
     ports = conventions.MANAGEMENT_PORTS
     return list(zip(ports._fields, ports, strict=True))
+
+
+def user_data(machine_config: str) -> str:
+    """`machine_config` as the `user_data` an OCI instance's metadata carries.
+
+    Base64 in the standard alphabet, of the configuration's UTF-8 bytes. OCI
+    documents the value as base64-encoded data (the API reference's
+    `LaunchInstanceDetails.metadata`), and Talos's `oracle` platform decodes it
+    with `base64.StdEncoding`, reading a value that does not decode as no
+    configuration at all: the node boots into maintenance mode.
+    """
+    return base64.b64encode(machine_config.encode()).decode()
 
 
 def named(field: str, family: str) -> str:
@@ -250,8 +263,9 @@ class CloudNodes(Component, pulumi_type='kluster:cloud:CloudNodes'):
                     assign_ipv6ip=True,
                     display_name=f'{name}-{node}',
                 ),
-                # Talos reads its machine config from the metadata service.
-                metadata={'user_data': machine_config},
+                # Talos reads its machine config from the metadata service,
+                # base64-encoded by `user_data` once the configuration resolves.
+                metadata={'user_data': pulumi.Output.from_input(machine_config).apply(user_data)},
                 # Legacy IMDS serves that config without authentication; v2's
                 # header is a static string, so the baseline network policy is
                 # what actually keeps pods away from it (architecture.md §4.1).
