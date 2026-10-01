@@ -156,18 +156,18 @@ class AwaitableGetNetworkResult(GetNetworkResult):
             routes=self.routes)
 
 
-def get_network(assign_ipv4s: Optional[Sequence[Union['GetNetworkAssignIpv4Args', 'GetNetworkAssignIpv4ArgsDict']]] = None,
-                assign_ipv6s: Optional[Sequence[Union['GetNetworkAssignIpv6Args', 'GetNetworkAssignIpv6ArgsDict']]] = None,
-                assignment_pools: Optional[Sequence[Union['GetNetworkAssignmentPoolArgs', 'GetNetworkAssignmentPoolArgsDict']]] = None,
+def get_network(assign_ipv4s: Optional[Sequence[Union['GetNetworkAssignIpv4Args', 'GetNetworkAssignIpv4ArgsDict', 'outputs.GetNetworkAssignIpv4Result']]] = None,
+                assign_ipv6s: Optional[Sequence[Union['GetNetworkAssignIpv6Args', 'GetNetworkAssignIpv6ArgsDict', 'outputs.GetNetworkAssignIpv6Result']]] = None,
+                assignment_pools: Optional[Sequence[Union['GetNetworkAssignmentPoolArgs', 'GetNetworkAssignmentPoolArgsDict', 'outputs.GetNetworkAssignmentPoolResult']]] = None,
                 description: Optional[_builtins.str] = None,
-                dns: Optional[Sequence[Union['GetNetworkDnArgs', 'GetNetworkDnArgsDict']]] = None,
+                dns: Optional[Sequence[Union['GetNetworkDnArgs', 'GetNetworkDnArgsDict', 'outputs.GetNetworkDnResult']]] = None,
                 enable_broadcast: Optional[_builtins.bool] = None,
                 flow_rules: Optional[_builtins.str] = None,
                 id: Optional[_builtins.str] = None,
                 multicast_limit: Optional[_builtins.float] = None,
                 name: Optional[_builtins.str] = None,
                 private: Optional[_builtins.bool] = None,
-                routes: Optional[Sequence[Union['GetNetworkRouteArgs', 'GetNetworkRouteArgsDict']]] = None,
+                routes: Optional[Sequence[Union['GetNetworkRouteArgs', 'GetNetworkRouteArgsDict', 'outputs.GetNetworkRouteResult']]] = None,
                 opts: Optional[pulumi.InvokeOptions] = None) -> AwaitableGetNetworkResult:
     """
     Use this data source to access information about an existing resource.
@@ -202,18 +202,18 @@ def get_network(assign_ipv4s: Optional[Sequence[Union['GetNetworkAssignIpv4Args'
         name=pulumi.get(__ret__, 'name'),
         private=pulumi.get(__ret__, 'private'),
         routes=pulumi.get(__ret__, 'routes'))
-def get_network_output(assign_ipv4s: pulumi.Input[Optional[Optional[Sequence[Union['GetNetworkAssignIpv4Args', 'GetNetworkAssignIpv4ArgsDict']]]]] = None,
-                       assign_ipv6s: pulumi.Input[Optional[Optional[Sequence[Union['GetNetworkAssignIpv6Args', 'GetNetworkAssignIpv6ArgsDict']]]]] = None,
-                       assignment_pools: pulumi.Input[Optional[Optional[Sequence[Union['GetNetworkAssignmentPoolArgs', 'GetNetworkAssignmentPoolArgsDict']]]]] = None,
+def get_network_output(assign_ipv4s: pulumi.Input[Optional[Optional[Sequence[Union['GetNetworkAssignIpv4Args', 'GetNetworkAssignIpv4ArgsDict', 'outputs.GetNetworkAssignIpv4Result']]]]] = None,
+                       assign_ipv6s: pulumi.Input[Optional[Optional[Sequence[Union['GetNetworkAssignIpv6Args', 'GetNetworkAssignIpv6ArgsDict', 'outputs.GetNetworkAssignIpv6Result']]]]] = None,
+                       assignment_pools: pulumi.Input[Optional[Optional[Sequence[Union['GetNetworkAssignmentPoolArgs', 'GetNetworkAssignmentPoolArgsDict', 'outputs.GetNetworkAssignmentPoolResult']]]]] = None,
                        description: pulumi.Input[Optional[Optional[_builtins.str]]] = None,
-                       dns: pulumi.Input[Optional[Optional[Sequence[Union['GetNetworkDnArgs', 'GetNetworkDnArgsDict']]]]] = None,
+                       dns: pulumi.Input[Optional[Optional[Sequence[Union['GetNetworkDnArgs', 'GetNetworkDnArgsDict', 'outputs.GetNetworkDnResult']]]]] = None,
                        enable_broadcast: pulumi.Input[Optional[Optional[_builtins.bool]]] = None,
                        flow_rules: pulumi.Input[Optional[Optional[_builtins.str]]] = None,
                        id: pulumi.Input[Optional[Optional[_builtins.str]]] = None,
                        multicast_limit: pulumi.Input[Optional[Optional[_builtins.float]]] = None,
                        name: pulumi.Input[Optional[Optional[_builtins.str]]] = None,
                        private: pulumi.Input[Optional[Optional[_builtins.bool]]] = None,
-                       routes: pulumi.Input[Optional[Optional[Sequence[Union['GetNetworkRouteArgs', 'GetNetworkRouteArgsDict']]]]] = None,
+                       routes: pulumi.Input[Optional[Optional[Sequence[Union['GetNetworkRouteArgs', 'GetNetworkRouteArgsDict', 'outputs.GetNetworkRouteResult']]]]] = None,
                        opts: Optional[Union[pulumi.InvokeOptions, pulumi.InvokeOutputOptions]] = None) -> pulumi.Output[GetNetworkResult]:
     """
     Use this data source to access information about an existing resource.

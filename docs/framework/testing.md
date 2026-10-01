@@ -161,9 +161,7 @@ an import can aim at.
     logical name, and remembers every declaration -- its type, its inputs and
     the provider instance it was registered against.
 -   `run_with` points the runtime at a monitor and hands it back. It also
-    primes the parameterization feature a bridged provider reads before it may
-    register anything, and empties the registration queue left behind by
-    whichever run went before.
+    empties the registration queue left behind by whichever run went before.
 -   `declaring` is the barrier. Declaring a resource only schedules its
     registration, so without it the monitor has seen nothing and every
     assertion about it passes vacuously.
@@ -912,3 +910,29 @@ It runs in the suite, under the same bounds as every other case:
 -   **What one release does and the next stops doing is not held.** A test
     that pinned it would fail on the bump for a change that removes nothing
     the design relies on.
+
+`tests/test_extension_provider.py` holds what the CRD extension rests on
+(kluster-ops#160): a resource of an extension package -- a `crds:` resource
+of the Kubernetes provider's -- lands on the explicit `kubernetes` provider
+it is handed, whether through the option, the `providers` map or list, or a
+parent that carries it, with the default provider turned off as every stack
+here turns it off. The SDK settles that only once the extension's package
+registration resolves, and the mock monitor answers that registration
+without any provider seeing the extension, so only a `preview` against the
+engine shows it. A release before 3.266.0 sends the resource to the default
+provider instead, which is what the `pulumi` floor in `pyproject.toml`
+says; what the case holds is something the design relies on, which the
+rule above leaves in.
+
+It runs as the case above does, except where these say otherwise:
+
+-   **It fetches the Kubernetes provider plugin**, the one exception to
+    fetching nothing. The extension is that provider's, so generating it
+    and previewing it both need the plugin, at the version the locked
+    `pulumi-kubernetes` registers, and no stand-in would exercise the
+    provider's own handling of its extension.
+-   **The plugin is downloaded once per run**, into a `PULUMI_HOME` of the
+    module's own that the module removes when it finishes, rather than into
+    one per case; each case still has a backend of its own.
+-   **The provider the engine planned is read from `pulumi preview --json`**,
+    the step for the resource naming it, rather than from a log.

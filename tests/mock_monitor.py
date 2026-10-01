@@ -10,8 +10,8 @@ mocks was re-growing:
     declaration and every function call, so a case can ask what the program
     handed a provider, and through which provider, rather than only that it
     made something;
--   `run_with`, which points the runtime at a monitor and primes the one thing
-    a bridged provider needs before it may register anything;
+-   `run_with`, which points the runtime at a monitor and empties the
+    registration queue an earlier run left behind;
 -   `run_under_backstop`, which is `run_with` for a run that also refuses an
     unparented resource the way a real run does;
 -   `declaring`, which waits until the monitor has actually seen the
@@ -500,16 +500,6 @@ async def run_with[MonitorT: pulumi.runtime.Mocks](
 ) -> MonitorT:
     """Point the runtime at `monitor` and hand it back for the cases to read.
 
-    The priming call is what a bridged provider needs: a bridged SDK is a
-    *parameterized* package, so before it may register a resource it registers
-    its own package, and it gates that on a feature flag it reads out of a
-    synchronous cache. The mock monitor answers the feature and serves the
-    registration, but nothing on the mock path performs the async negotiation
-    that fills the cache, so a bridged provider refuses under mocks until it is
-    primed once. It costs a round trip against the mock and is done for every
-    suite, so that adding a bridged resource to a program is not also a puzzle
-    in whichever suite declares it.
-
     The monitor is built here rather than left to `set_mocks`, so that it
     carries `preview` to the thread the mock deserializes on
     (`_capture_request`).
@@ -523,7 +513,6 @@ async def run_with[MonitorT: pulumi.runtime.Mocks](
     # than "everything any run ever declared", half of it owned by loops that
     # are closed.
     pulumi.runtime.settings._get_rpc_manager().clear()  # pyright: ignore[reportPrivateUsage]
-    _ = await pulumi.runtime.settings.monitor_supports_feature('parameterization')
     return monitor
 
 

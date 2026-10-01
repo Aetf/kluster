@@ -426,28 +426,28 @@ class Network(pulumi.CustomResource):
     def __init__(__self__,
                  resource_name: str,
                  opts: Optional[pulumi.ResourceOptions] = None,
-                 assign_ipv4s: pulumi.Input[Optional[Sequence[pulumi.Input[Union['NetworkAssignIpv4Args', 'NetworkAssignIpv4ArgsDict']]]]] = None,
-                 assign_ipv6s: pulumi.Input[Optional[Sequence[pulumi.Input[Union['NetworkAssignIpv6Args', 'NetworkAssignIpv6ArgsDict']]]]] = None,
-                 assignment_pools: pulumi.Input[Optional[Sequence[pulumi.Input[Union['NetworkAssignmentPoolArgs', 'NetworkAssignmentPoolArgsDict']]]]] = None,
+                 assign_ipv4s: pulumi.Input[Optional[Sequence[pulumi.Input[Union['NetworkAssignIpv4Args', 'NetworkAssignIpv4ArgsDict', 'outputs.NetworkAssignIpv4']]]]] = None,
+                 assign_ipv6s: pulumi.Input[Optional[Sequence[pulumi.Input[Union['NetworkAssignIpv6Args', 'NetworkAssignIpv6ArgsDict', 'outputs.NetworkAssignIpv6']]]]] = None,
+                 assignment_pools: pulumi.Input[Optional[Sequence[pulumi.Input[Union['NetworkAssignmentPoolArgs', 'NetworkAssignmentPoolArgsDict', 'outputs.NetworkAssignmentPool']]]]] = None,
                  description: pulumi.Input[Optional[_builtins.str]] = None,
-                 dns: pulumi.Input[Optional[Sequence[pulumi.Input[Union['NetworkDnArgs', 'NetworkDnArgsDict']]]]] = None,
+                 dns: pulumi.Input[Optional[Sequence[pulumi.Input[Union['NetworkDnArgs', 'NetworkDnArgsDict', 'outputs.NetworkDn']]]]] = None,
                  enable_broadcast: pulumi.Input[Optional[_builtins.bool]] = None,
                  flow_rules: pulumi.Input[Optional[_builtins.str]] = None,
                  multicast_limit: pulumi.Input[Optional[_builtins.float]] = None,
                  name: pulumi.Input[Optional[_builtins.str]] = None,
                  network_id: pulumi.Input[Optional[_builtins.str]] = None,
                  private: pulumi.Input[Optional[_builtins.bool]] = None,
-                 routes: pulumi.Input[Optional[Sequence[pulumi.Input[Union['NetworkRouteArgs', 'NetworkRouteArgsDict']]]]] = None,
+                 routes: pulumi.Input[Optional[Sequence[pulumi.Input[Union['NetworkRouteArgs', 'NetworkRouteArgsDict', 'outputs.NetworkRoute']]]]] = None,
                  __props__=None):
         """
         Create a Network resource with the given unique name, props, and options.
 
         :param str resource_name: The name of the resource.
         :param pulumi.ResourceOptions opts: Options for the resource.
-        :param pulumi.Input[Sequence[pulumi.Input[Union['NetworkAssignIpv4Args', 'NetworkAssignIpv4ArgsDict']]]] assign_ipv4s: IPv4 Assignment RuleSets
-        :param pulumi.Input[Sequence[pulumi.Input[Union['NetworkAssignIpv6Args', 'NetworkAssignIpv6ArgsDict']]]] assign_ipv6s: IPv6 Assignment RuleSets
+        :param pulumi.Input[Sequence[pulumi.Input[Union['NetworkAssignIpv4Args', 'NetworkAssignIpv4ArgsDict', 'outputs.NetworkAssignIpv4']]]] assign_ipv4s: IPv4 Assignment RuleSets
+        :param pulumi.Input[Sequence[pulumi.Input[Union['NetworkAssignIpv6Args', 'NetworkAssignIpv6ArgsDict', 'outputs.NetworkAssignIpv6']]]] assign_ipv6s: IPv6 Assignment RuleSets
         :param pulumi.Input[_builtins.str] description: The description of the network
-        :param pulumi.Input[Sequence[pulumi.Input[Union['NetworkDnArgs', 'NetworkDnArgsDict']]]] dns: DNS settings for network members
+        :param pulumi.Input[Sequence[pulumi.Input[Union['NetworkDnArgs', 'NetworkDnArgsDict', 'outputs.NetworkDn']]]] dns: DNS settings for network members
         :param pulumi.Input[_builtins.bool] enable_broadcast: Enable broadcast packets on the network
         :param pulumi.Input[_builtins.str] flow_rules: The layer 2 flow rules to apply to packets traveling across this network. Please see https://www.zerotier.com/manual/#3_4_1 for more information.
         :param pulumi.Input[_builtins.float] multicast_limit: Maximum number of recipients per multicast or broadcast. Warning - Setting this to 0 will disable IPv4 communication on your network!
@@ -479,18 +479,18 @@ class Network(pulumi.CustomResource):
     def _internal_init(__self__,
                  resource_name: str,
                  opts: Optional[pulumi.ResourceOptions] = None,
-                 assign_ipv4s: pulumi.Input[Optional[Sequence[pulumi.Input[Union['NetworkAssignIpv4Args', 'NetworkAssignIpv4ArgsDict']]]]] = None,
-                 assign_ipv6s: pulumi.Input[Optional[Sequence[pulumi.Input[Union['NetworkAssignIpv6Args', 'NetworkAssignIpv6ArgsDict']]]]] = None,
-                 assignment_pools: pulumi.Input[Optional[Sequence[pulumi.Input[Union['NetworkAssignmentPoolArgs', 'NetworkAssignmentPoolArgsDict']]]]] = None,
+                 assign_ipv4s: pulumi.Input[Optional[Sequence[pulumi.Input[Union['NetworkAssignIpv4Args', 'NetworkAssignIpv4ArgsDict', 'outputs.NetworkAssignIpv4']]]]] = None,
+                 assign_ipv6s: pulumi.Input[Optional[Sequence[pulumi.Input[Union['NetworkAssignIpv6Args', 'NetworkAssignIpv6ArgsDict', 'outputs.NetworkAssignIpv6']]]]] = None,
+                 assignment_pools: pulumi.Input[Optional[Sequence[pulumi.Input[Union['NetworkAssignmentPoolArgs', 'NetworkAssignmentPoolArgsDict', 'outputs.NetworkAssignmentPool']]]]] = None,
                  description: pulumi.Input[Optional[_builtins.str]] = None,
-                 dns: pulumi.Input[Optional[Sequence[pulumi.Input[Union['NetworkDnArgs', 'NetworkDnArgsDict']]]]] = None,
+                 dns: pulumi.Input[Optional[Sequence[pulumi.Input[Union['NetworkDnArgs', 'NetworkDnArgsDict', 'outputs.NetworkDn']]]]] = None,
                  enable_broadcast: pulumi.Input[Optional[_builtins.bool]] = None,
                  flow_rules: pulumi.Input[Optional[_builtins.str]] = None,
                  multicast_limit: pulumi.Input[Optional[_builtins.float]] = None,
                  name: pulumi.Input[Optional[_builtins.str]] = None,
                  network_id: pulumi.Input[Optional[_builtins.str]] = None,
                  private: pulumi.Input[Optional[_builtins.bool]] = None,
-                 routes: pulumi.Input[Optional[Sequence[pulumi.Input[Union['NetworkRouteArgs', 'NetworkRouteArgsDict']]]]] = None,
+                 routes: pulumi.Input[Optional[Sequence[pulumi.Input[Union['NetworkRouteArgs', 'NetworkRouteArgsDict', 'outputs.NetworkRoute']]]]] = None,
                  __props__=None):
         opts = pulumi.ResourceOptions.merge(_utilities.get_resource_opts_defaults(), opts)
         if not isinstance(opts, pulumi.ResourceOptions):
@@ -524,19 +524,19 @@ class Network(pulumi.CustomResource):
     def get(resource_name: str,
             id: pulumi.Input[str],
             opts: Optional[pulumi.ResourceOptions] = None,
-            assign_ipv4s: pulumi.Input[Optional[Sequence[pulumi.Input[Union['NetworkAssignIpv4Args', 'NetworkAssignIpv4ArgsDict']]]]] = None,
-            assign_ipv6s: pulumi.Input[Optional[Sequence[pulumi.Input[Union['NetworkAssignIpv6Args', 'NetworkAssignIpv6ArgsDict']]]]] = None,
-            assignment_pools: pulumi.Input[Optional[Sequence[pulumi.Input[Union['NetworkAssignmentPoolArgs', 'NetworkAssignmentPoolArgsDict']]]]] = None,
+            assign_ipv4s: pulumi.Input[Optional[Sequence[pulumi.Input[Union['NetworkAssignIpv4Args', 'NetworkAssignIpv4ArgsDict', 'outputs.NetworkAssignIpv4']]]]] = None,
+            assign_ipv6s: pulumi.Input[Optional[Sequence[pulumi.Input[Union['NetworkAssignIpv6Args', 'NetworkAssignIpv6ArgsDict', 'outputs.NetworkAssignIpv6']]]]] = None,
+            assignment_pools: pulumi.Input[Optional[Sequence[pulumi.Input[Union['NetworkAssignmentPoolArgs', 'NetworkAssignmentPoolArgsDict', 'outputs.NetworkAssignmentPool']]]]] = None,
             creation_time: pulumi.Input[Optional[_builtins.float]] = None,
             description: pulumi.Input[Optional[_builtins.str]] = None,
-            dns: pulumi.Input[Optional[Sequence[pulumi.Input[Union['NetworkDnArgs', 'NetworkDnArgsDict']]]]] = None,
+            dns: pulumi.Input[Optional[Sequence[pulumi.Input[Union['NetworkDnArgs', 'NetworkDnArgsDict', 'outputs.NetworkDn']]]]] = None,
             enable_broadcast: pulumi.Input[Optional[_builtins.bool]] = None,
             flow_rules: pulumi.Input[Optional[_builtins.str]] = None,
             multicast_limit: pulumi.Input[Optional[_builtins.float]] = None,
             name: pulumi.Input[Optional[_builtins.str]] = None,
             network_id: pulumi.Input[Optional[_builtins.str]] = None,
             private: pulumi.Input[Optional[_builtins.bool]] = None,
-            routes: pulumi.Input[Optional[Sequence[pulumi.Input[Union['NetworkRouteArgs', 'NetworkRouteArgsDict']]]]] = None) -> 'Network':
+            routes: pulumi.Input[Optional[Sequence[pulumi.Input[Union['NetworkRouteArgs', 'NetworkRouteArgsDict', 'outputs.NetworkRoute']]]]] = None) -> 'Network':
         """
         Get an existing Network resource's state with the given name, id, and optional extra
         properties used to qualify the lookup.
@@ -544,11 +544,11 @@ class Network(pulumi.CustomResource):
         :param str resource_name: The unique name of the resulting resource.
         :param pulumi.Input[str] id: The unique provider ID of the resource to lookup.
         :param pulumi.ResourceOptions opts: Options for the resource.
-        :param pulumi.Input[Sequence[pulumi.Input[Union['NetworkAssignIpv4Args', 'NetworkAssignIpv4ArgsDict']]]] assign_ipv4s: IPv4 Assignment RuleSets
-        :param pulumi.Input[Sequence[pulumi.Input[Union['NetworkAssignIpv6Args', 'NetworkAssignIpv6ArgsDict']]]] assign_ipv6s: IPv6 Assignment RuleSets
+        :param pulumi.Input[Sequence[pulumi.Input[Union['NetworkAssignIpv4Args', 'NetworkAssignIpv4ArgsDict', 'outputs.NetworkAssignIpv4']]]] assign_ipv4s: IPv4 Assignment RuleSets
+        :param pulumi.Input[Sequence[pulumi.Input[Union['NetworkAssignIpv6Args', 'NetworkAssignIpv6ArgsDict', 'outputs.NetworkAssignIpv6']]]] assign_ipv6s: IPv6 Assignment RuleSets
         :param pulumi.Input[_builtins.float] creation_time: The time at which this network was created, in epoch seconds
         :param pulumi.Input[_builtins.str] description: The description of the network
-        :param pulumi.Input[Sequence[pulumi.Input[Union['NetworkDnArgs', 'NetworkDnArgsDict']]]] dns: DNS settings for network members
+        :param pulumi.Input[Sequence[pulumi.Input[Union['NetworkDnArgs', 'NetworkDnArgsDict', 'outputs.NetworkDn']]]] dns: DNS settings for network members
         :param pulumi.Input[_builtins.bool] enable_broadcast: Enable broadcast packets on the network
         :param pulumi.Input[_builtins.str] flow_rules: The layer 2 flow rules to apply to packets traveling across this network. Please see https://www.zerotier.com/manual/#3_4_1 for more information.
         :param pulumi.Input[_builtins.float] multicast_limit: Maximum number of recipients per multicast or broadcast. Warning - Setting this to 0 will disable IPv4 communication on your network!

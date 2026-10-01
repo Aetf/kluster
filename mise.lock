@@ -46,14 +46,14 @@ checksum = "sha256:6e1db87ef58b8819e5d5402eff1536491b18edd8eb7bee5ef7897876e88dc
 url = "https://nodejs.org/dist/v24.21.0/node-v24.21.0-linux-x64.tar.gz"
 
 [[tools.pulumi]]
-version = "3.257.0"
+version = "3.267.0"
 backend = "aqua:pulumi/pulumi"
-specifiers = ["3.257.0"]
+specifiers = ["3.267.0"]
 
 [tools.pulumi."platforms.linux-x64"]
-checksum = "sha256:d0e54b4645b98c6e108d90561fe2ef949c67348785ff80f8dc5114a7224f269b"
-url = "https://github.com/pulumi/pulumi/releases/download/v3.257.0/pulumi-v3.257.0-linux-x64.tar.gz"
-url_api = "https://api.github.com/repos/pulumi/pulumi/releases/assets/513003559"
+checksum = "sha256:527c1ce7c16cb38525a96d55422f221e819476e2b0743ae55c9862ad775ae10a"
+url = "https://github.com/pulumi/pulumi/releases/download/v3.267.0/pulumi-v3.267.0-linux-x64.tar.gz"
+url_api = "https://api.github.com/repos/pulumi/pulumi/releases/assets/603044166"
 provenance = "cosign"
 
 [[tools.talosctl]]

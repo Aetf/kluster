@@ -34,7 +34,7 @@ locked = true
 # Renovate maintains these -- it cannot bump `latest`, which is why they are
 # written out.
 [tools]
-pulumi = "3.257.0"
+pulumi = "3.267.0"
 uv = "0.11.26"
 # age is the tool this repository escrows with rather than a format it
 # reimplements: `age`/`age-keygen` write and open every ciphertext under

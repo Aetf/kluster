@@ -56,7 +56,9 @@ a self-built image's recipe fetches while CI builds it. The Talos row
 and the state-backend age move with a tool CI runs, so they wait as
 well. The second class is the container images and the Helm charts.
 uv resolves under the same age whatever it picks itself: renovate's
-lock file maintenance, and the libraries a bump pulls in. The criterion
+lock file maintenance, and the libraries a bump pulls in. `pulumi` alone
+is exempt until 2026-10-08T12:00:00Z, by the operator's decision of
+2026-10-01 (the comment on `exclude-newer-package` in `pyproject.toml`). The criterion
 and its reason are `renovate.json5`'s top-level `minimumReleaseAge`.
 `pyproject.toml`'s `exclude-newer` repeats the age for uv, and a test
 holds both. A data source that reports no publication time cannot be

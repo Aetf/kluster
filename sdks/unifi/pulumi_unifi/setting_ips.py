@@ -420,15 +420,15 @@ class SettingIps(pulumi.CustomResource):
                  opts: Optional[pulumi.ResourceOptions] = None,
                  ad_blocked_networks: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
                  advanced_filtering_preference: pulumi.Input[Optional[_builtins.str]] = None,
-                 dns_filters: pulumi.Input[Optional[Sequence[pulumi.Input[Union['SettingIpsDnsFilterArgs', 'SettingIpsDnsFilterArgsDict']]]]] = None,
+                 dns_filters: pulumi.Input[Optional[Sequence[pulumi.Input[Union['SettingIpsDnsFilterArgs', 'SettingIpsDnsFilterArgsDict', 'outputs.SettingIpsDnsFilter']]]]] = None,
                  enabled_categories: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
                  enabled_networks: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
-                 honeypots: pulumi.Input[Optional[Sequence[pulumi.Input[Union['SettingIpsHoneypotArgs', 'SettingIpsHoneypotArgsDict']]]]] = None,
+                 honeypots: pulumi.Input[Optional[Sequence[pulumi.Input[Union['SettingIpsHoneypotArgs', 'SettingIpsHoneypotArgsDict', 'outputs.SettingIpsHoneypot']]]]] = None,
                  ips_mode: pulumi.Input[Optional[_builtins.str]] = None,
                  memory_optimized: pulumi.Input[Optional[_builtins.bool]] = None,
                  restrict_torrents: pulumi.Input[Optional[_builtins.bool]] = None,
                  site: pulumi.Input[Optional[_builtins.str]] = None,
-                 suppression: pulumi.Input[Optional[Union['SettingIpsSuppressionArgs', 'SettingIpsSuppressionArgsDict']]] = None,
+                 suppression: pulumi.Input[Optional[Union['SettingIpsSuppressionArgs', 'SettingIpsSuppressionArgsDict', 'outputs.SettingIpsSuppression']]] = None,
                  __props__=None):
         """
         Create a SettingIps resource with the given unique name, props, and options.
@@ -439,10 +439,10 @@ class SettingIps(pulumi.CustomResource):
         :param pulumi.Input[_builtins.str] advanced_filtering_preference: The advanced filtering preference for IPS. Valid values are:
                  * <span pulumi-lang-nodejs="`disabled`" pulumi-lang-dotnet="`Disabled`" pulumi-lang-go="`disabled`" pulumi-lang-python="`disabled`" pulumi-lang-yaml="`disabled`" pulumi-lang-java="`disabled`" pulumi-lang-hcl="`disabled`">`disabled`</span> - Advanced filtering is disabled
                  * <span pulumi-lang-nodejs="`manual`" pulumi-lang-dotnet="`Manual`" pulumi-lang-go="`manual`" pulumi-lang-python="`manual`" pulumi-lang-yaml="`manual`" pulumi-lang-java="`manual`" pulumi-lang-hcl="`manual`">`manual`</span> - Advanced filtering is enabled and manually configured
-        :param pulumi.Input[Sequence[pulumi.Input[Union['SettingIpsDnsFilterArgs', 'SettingIpsDnsFilterArgsDict']]]] dns_filters: DNS filters configuration. If any filters are configured, DNS filtering will be automatically enabled. Each filter can be applied to a specific network and provides content filtering capabilities.
+        :param pulumi.Input[Sequence[pulumi.Input[Union['SettingIpsDnsFilterArgs', 'SettingIpsDnsFilterArgsDict', 'outputs.SettingIpsDnsFilter']]]] dns_filters: DNS filters configuration. If any filters are configured, DNS filtering will be automatically enabled. Each filter can be applied to a specific network and provides content filtering capabilities.
         :param pulumi.Input[Sequence[pulumi.Input[_builtins.str]]] enabled_categories: List of enabled IPS threat categories. Each entry enables detection and prevention for a specific type of threat. The list of valid categories includes common threats like malware, exploits, scanning, and policy violations. See the validator for the complete list of available categories.
         :param pulumi.Input[Sequence[pulumi.Input[_builtins.str]]] enabled_networks: List of network IDs to enable IPS protection for. Each entry should be a valid network ID from your UniFi configuration. IPS will only monitor and protect traffic on these networks.
-        :param pulumi.Input[Sequence[pulumi.Input[Union['SettingIpsHoneypotArgs', 'SettingIpsHoneypotArgsDict']]]] honeypots: Honeypots configuration. Honeypots are decoy systems designed to detect, deflect, or study hacking attempts. They appear as legitimate parts of the network but are isolated and monitored.
+        :param pulumi.Input[Sequence[pulumi.Input[Union['SettingIpsHoneypotArgs', 'SettingIpsHoneypotArgsDict', 'outputs.SettingIpsHoneypot']]]] honeypots: Honeypots configuration. Honeypots are decoy systems designed to detect, deflect, or study hacking attempts. They appear as legitimate parts of the network but are isolated and monitored.
         :param pulumi.Input[_builtins.str] ips_mode: The IPS operation mode. Valid values are:
                  * <span pulumi-lang-nodejs="`ids`" pulumi-lang-dotnet="`Ids`" pulumi-lang-go="`ids`" pulumi-lang-python="`ids`" pulumi-lang-yaml="`ids`" pulumi-lang-java="`ids`" pulumi-lang-hcl="`ids`">`ids`</span> - Intrusion Detection System mode (detect and log threats only)
                  * <span pulumi-lang-nodejs="`ips`" pulumi-lang-dotnet="`Ips`" pulumi-lang-go="`ips`" pulumi-lang-python="`ips`" pulumi-lang-yaml="`ips`" pulumi-lang-java="`ips`" pulumi-lang-hcl="`ips`">`ips`</span> - Intrusion Prevention System mode (detect and block threats)
@@ -451,7 +451,7 @@ class SettingIps(pulumi.CustomResource):
         :param pulumi.Input[_builtins.bool] memory_optimized: Whether memory optimization is enabled for IPS. When set to <span pulumi-lang-nodejs="`true`" pulumi-lang-dotnet="`True`" pulumi-lang-go="`true`" pulumi-lang-python="`true`" pulumi-lang-yaml="`true`" pulumi-lang-java="`true`" pulumi-lang-hcl="`true`">`true`</span>, the system will use less memory at the cost of potentially reduced detection capabilities. Useful for devices with limited resources. Defaults to <span pulumi-lang-nodejs="`false`" pulumi-lang-dotnet="`False`" pulumi-lang-go="`false`" pulumi-lang-python="`false`" pulumi-lang-yaml="`false`" pulumi-lang-java="`false`" pulumi-lang-hcl="`false`">`false`</span>. Requires controller version 9.0 or later.
         :param pulumi.Input[_builtins.bool] restrict_torrents: Whether to restrict BitTorrent and other peer-to-peer file sharing traffic. When set to <span pulumi-lang-nodejs="`true`" pulumi-lang-dotnet="`True`" pulumi-lang-go="`true`" pulumi-lang-python="`true`" pulumi-lang-yaml="`true`" pulumi-lang-java="`true`" pulumi-lang-hcl="`true`">`true`</span>, the system will block P2P traffic across the network. Defaults to <span pulumi-lang-nodejs="`false`" pulumi-lang-dotnet="`False`" pulumi-lang-go="`false`" pulumi-lang-python="`false`" pulumi-lang-yaml="`false`" pulumi-lang-java="`false`" pulumi-lang-hcl="`false`">`false`</span>.
         :param pulumi.Input[_builtins.str] site: The name of the UniFi site where this resource should be applied. If not specified, the default site will be used.
-        :param pulumi.Input[Union['SettingIpsSuppressionArgs', 'SettingIpsSuppressionArgsDict']] suppression: Suppression configuration for IPS. This allows you to customize which alerts are suppressed or tracked, and define whitelisted traffic that should never trigger IPS alerts.
+        :param pulumi.Input[Union['SettingIpsSuppressionArgs', 'SettingIpsSuppressionArgsDict', 'outputs.SettingIpsSuppression']] suppression: Suppression configuration for IPS. This allows you to customize which alerts are suppressed or tracked, and define whitelisted traffic that should never trigger IPS alerts.
         """
         ...
     @overload
@@ -479,15 +479,15 @@ class SettingIps(pulumi.CustomResource):
                  opts: Optional[pulumi.ResourceOptions] = None,
                  ad_blocked_networks: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
                  advanced_filtering_preference: pulumi.Input[Optional[_builtins.str]] = None,
-                 dns_filters: pulumi.Input[Optional[Sequence[pulumi.Input[Union['SettingIpsDnsFilterArgs', 'SettingIpsDnsFilterArgsDict']]]]] = None,
+                 dns_filters: pulumi.Input[Optional[Sequence[pulumi.Input[Union['SettingIpsDnsFilterArgs', 'SettingIpsDnsFilterArgsDict', 'outputs.SettingIpsDnsFilter']]]]] = None,
                  enabled_categories: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
                  enabled_networks: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
-                 honeypots: pulumi.Input[Optional[Sequence[pulumi.Input[Union['SettingIpsHoneypotArgs', 'SettingIpsHoneypotArgsDict']]]]] = None,
+                 honeypots: pulumi.Input[Optional[Sequence[pulumi.Input[Union['SettingIpsHoneypotArgs', 'SettingIpsHoneypotArgsDict', 'outputs.SettingIpsHoneypot']]]]] = None,
                  ips_mode: pulumi.Input[Optional[_builtins.str]] = None,
                  memory_optimized: pulumi.Input[Optional[_builtins.bool]] = None,
                  restrict_torrents: pulumi.Input[Optional[_builtins.bool]] = None,
                  site: pulumi.Input[Optional[_builtins.str]] = None,
-                 suppression: pulumi.Input[Optional[Union['SettingIpsSuppressionArgs', 'SettingIpsSuppressionArgsDict']]] = None,
+                 suppression: pulumi.Input[Optional[Union['SettingIpsSuppressionArgs', 'SettingIpsSuppressionArgsDict', 'outputs.SettingIpsSuppression']]] = None,
                  __props__=None):
         opts = pulumi.ResourceOptions.merge(_utilities.get_resource_opts_defaults(), opts)
         if not isinstance(opts, pulumi.ResourceOptions):
@@ -521,15 +521,15 @@ class SettingIps(pulumi.CustomResource):
             opts: Optional[pulumi.ResourceOptions] = None,
             ad_blocked_networks: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
             advanced_filtering_preference: pulumi.Input[Optional[_builtins.str]] = None,
-            dns_filters: pulumi.Input[Optional[Sequence[pulumi.Input[Union['SettingIpsDnsFilterArgs', 'SettingIpsDnsFilterArgsDict']]]]] = None,
+            dns_filters: pulumi.Input[Optional[Sequence[pulumi.Input[Union['SettingIpsDnsFilterArgs', 'SettingIpsDnsFilterArgsDict', 'outputs.SettingIpsDnsFilter']]]]] = None,
             enabled_categories: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
             enabled_networks: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
-            honeypots: pulumi.Input[Optional[Sequence[pulumi.Input[Union['SettingIpsHoneypotArgs', 'SettingIpsHoneypotArgsDict']]]]] = None,
+            honeypots: pulumi.Input[Optional[Sequence[pulumi.Input[Union['SettingIpsHoneypotArgs', 'SettingIpsHoneypotArgsDict', 'outputs.SettingIpsHoneypot']]]]] = None,
             ips_mode: pulumi.Input[Optional[_builtins.str]] = None,
             memory_optimized: pulumi.Input[Optional[_builtins.bool]] = None,
             restrict_torrents: pulumi.Input[Optional[_builtins.bool]] = None,
             site: pulumi.Input[Optional[_builtins.str]] = None,
-            suppression: pulumi.Input[Optional[Union['SettingIpsSuppressionArgs', 'SettingIpsSuppressionArgsDict']]] = None) -> 'SettingIps':
+            suppression: pulumi.Input[Optional[Union['SettingIpsSuppressionArgs', 'SettingIpsSuppressionArgsDict', 'outputs.SettingIpsSuppression']]] = None) -> 'SettingIps':
         """
         Get an existing SettingIps resource's state with the given name, id, and optional extra
         properties used to qualify the lookup.
@@ -541,10 +541,10 @@ class SettingIps(pulumi.CustomResource):
         :param pulumi.Input[_builtins.str] advanced_filtering_preference: The advanced filtering preference for IPS. Valid values are:
                  * <span pulumi-lang-nodejs="`disabled`" pulumi-lang-dotnet="`Disabled`" pulumi-lang-go="`disabled`" pulumi-lang-python="`disabled`" pulumi-lang-yaml="`disabled`" pulumi-lang-java="`disabled`" pulumi-lang-hcl="`disabled`">`disabled`</span> - Advanced filtering is disabled
                  * <span pulumi-lang-nodejs="`manual`" pulumi-lang-dotnet="`Manual`" pulumi-lang-go="`manual`" pulumi-lang-python="`manual`" pulumi-lang-yaml="`manual`" pulumi-lang-java="`manual`" pulumi-lang-hcl="`manual`">`manual`</span> - Advanced filtering is enabled and manually configured
-        :param pulumi.Input[Sequence[pulumi.Input[Union['SettingIpsDnsFilterArgs', 'SettingIpsDnsFilterArgsDict']]]] dns_filters: DNS filters configuration. If any filters are configured, DNS filtering will be automatically enabled. Each filter can be applied to a specific network and provides content filtering capabilities.
+        :param pulumi.Input[Sequence[pulumi.Input[Union['SettingIpsDnsFilterArgs', 'SettingIpsDnsFilterArgsDict', 'outputs.SettingIpsDnsFilter']]]] dns_filters: DNS filters configuration. If any filters are configured, DNS filtering will be automatically enabled. Each filter can be applied to a specific network and provides content filtering capabilities.
         :param pulumi.Input[Sequence[pulumi.Input[_builtins.str]]] enabled_categories: List of enabled IPS threat categories. Each entry enables detection and prevention for a specific type of threat. The list of valid categories includes common threats like malware, exploits, scanning, and policy violations. See the validator for the complete list of available categories.
         :param pulumi.Input[Sequence[pulumi.Input[_builtins.str]]] enabled_networks: List of network IDs to enable IPS protection for. Each entry should be a valid network ID from your UniFi configuration. IPS will only monitor and protect traffic on these networks.
-        :param pulumi.Input[Sequence[pulumi.Input[Union['SettingIpsHoneypotArgs', 'SettingIpsHoneypotArgsDict']]]] honeypots: Honeypots configuration. Honeypots are decoy systems designed to detect, deflect, or study hacking attempts. They appear as legitimate parts of the network but are isolated and monitored.
+        :param pulumi.Input[Sequence[pulumi.Input[Union['SettingIpsHoneypotArgs', 'SettingIpsHoneypotArgsDict', 'outputs.SettingIpsHoneypot']]]] honeypots: Honeypots configuration. Honeypots are decoy systems designed to detect, deflect, or study hacking attempts. They appear as legitimate parts of the network but are isolated and monitored.
         :param pulumi.Input[_builtins.str] ips_mode: The IPS operation mode. Valid values are:
                  * <span pulumi-lang-nodejs="`ids`" pulumi-lang-dotnet="`Ids`" pulumi-lang-go="`ids`" pulumi-lang-python="`ids`" pulumi-lang-yaml="`ids`" pulumi-lang-java="`ids`" pulumi-lang-hcl="`ids`">`ids`</span> - Intrusion Detection System mode (detect and log threats only)
                  * <span pulumi-lang-nodejs="`ips`" pulumi-lang-dotnet="`Ips`" pulumi-lang-go="`ips`" pulumi-lang-python="`ips`" pulumi-lang-yaml="`ips`" pulumi-lang-java="`ips`" pulumi-lang-hcl="`ips`">`ips`</span> - Intrusion Prevention System mode (detect and block threats)
@@ -553,7 +553,7 @@ class SettingIps(pulumi.CustomResource):
         :param pulumi.Input[_builtins.bool] memory_optimized: Whether memory optimization is enabled for IPS. When set to <span pulumi-lang-nodejs="`true`" pulumi-lang-dotnet="`True`" pulumi-lang-go="`true`" pulumi-lang-python="`true`" pulumi-lang-yaml="`true`" pulumi-lang-java="`true`" pulumi-lang-hcl="`true`">`true`</span>, the system will use less memory at the cost of potentially reduced detection capabilities. Useful for devices with limited resources. Defaults to <span pulumi-lang-nodejs="`false`" pulumi-lang-dotnet="`False`" pulumi-lang-go="`false`" pulumi-lang-python="`false`" pulumi-lang-yaml="`false`" pulumi-lang-java="`false`" pulumi-lang-hcl="`false`">`false`</span>. Requires controller version 9.0 or later.
         :param pulumi.Input[_builtins.bool] restrict_torrents: Whether to restrict BitTorrent and other peer-to-peer file sharing traffic. When set to <span pulumi-lang-nodejs="`true`" pulumi-lang-dotnet="`True`" pulumi-lang-go="`true`" pulumi-lang-python="`true`" pulumi-lang-yaml="`true`" pulumi-lang-java="`true`" pulumi-lang-hcl="`true`">`true`</span>, the system will block P2P traffic across the network. Defaults to <span pulumi-lang-nodejs="`false`" pulumi-lang-dotnet="`False`" pulumi-lang-go="`false`" pulumi-lang-python="`false`" pulumi-lang-yaml="`false`" pulumi-lang-java="`false`" pulumi-lang-hcl="`false`">`false`</span>.
         :param pulumi.Input[_builtins.str] site: The name of the UniFi site where this resource should be applied. If not specified, the default site will be used.
-        :param pulumi.Input[Union['SettingIpsSuppressionArgs', 'SettingIpsSuppressionArgsDict']] suppression: Suppression configuration for IPS. This allows you to customize which alerts are suppressed or tracked, and define whitelisted traffic that should never trigger IPS alerts.
+        :param pulumi.Input[Union['SettingIpsSuppressionArgs', 'SettingIpsSuppressionArgsDict', 'outputs.SettingIpsSuppression']] suppression: Suppression configuration for IPS. This allows you to customize which alerts are suppressed or tracked, and define whitelisted traffic that should never trigger IPS alerts.
         """
         opts = pulumi.ResourceOptions.merge(opts, pulumi.ResourceOptions(id=id))
 

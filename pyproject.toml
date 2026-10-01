@@ -11,7 +11,11 @@ license-files = ["LICENSE-MIT", "LICENSE-APACHE"]
 requires-python = ">= 3.12"
 
 dependencies = [
-    "pulumi>=3.254.0",
+    # The first release whose SDK gives a resource of an extension package --
+    # a `crds:` resource of the kubernetes provider's CRD extension -- the
+    # explicit provider it is handed (pulumi/pulumi#24702, in 3.266.0);
+    # `tests/test_extension_provider.py` holds it against the engine.
+    "pulumi>=3.266.0",
     # Exact, unlike every other floor here: `packages/crds` is generated against
     # one provider version and registers each of its resources at that version,
     # so the program has to install the same one -- two versions would be two
@@ -20,7 +24,7 @@ dependencies = [
     # no regeneration follows. A test holds the generated package to this pin;
     # a bump is finished by `uv run update_crds`, and renovate proposes it apart
     # from the python group (framework/pulumi.md §4).
-    "pulumi-kubernetes==4.34.1",
+    "pulumi-kubernetes==4.34.2",
     "requests>=2.32.3",
     "jinja2>=3.1.4",
     "pulumi-crds",
@@ -71,6 +75,13 @@ default-groups = ["dev"]
 # `minimumReleaseAge`, and a test holds the two equal. A relative value, so
 # `uv.lock` records the span, not a date.
 exclude-newer = "7 days"
+# The one release admitted younger than that, by the operator's decision of
+# 2026-10-01: `pulumi` 3.267.0, the newest release carrying the SDK fix the
+# `pulumi` floor above names, taken rather than waited for. A cutoff rather
+# than `false`, so the entry admits nothing uploaded after the decision. From
+# 2026-10-08T12:00:00Z the span admits everything the entry does, and from
+# then on the entry only holds `pulumi` back, silently: it is removed then.
+exclude-newer-package = { pulumi = "2026-10-01T12:00:00Z" }
 
 # Pin the package index so locking doesn't pick up ambient registry settings
 # (e.g. UV_INDEX_URL pointing at a private mirror). Note CLI flags and env

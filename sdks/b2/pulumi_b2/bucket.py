@@ -356,10 +356,10 @@ class Bucket(pulumi.CustomResource):
                  bucket_info: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
                  bucket_name: pulumi.Input[Optional[_builtins.str]] = None,
                  bucket_type: pulumi.Input[Optional[_builtins.str]] = None,
-                 cors_rules: pulumi.Input[Optional[Sequence[pulumi.Input[Union['BucketCorsRuleArgs', 'BucketCorsRuleArgsDict']]]]] = None,
-                 default_server_side_encryption: pulumi.Input[Optional[Union['BucketDefaultServerSideEncryptionArgs', 'BucketDefaultServerSideEncryptionArgsDict']]] = None,
-                 file_lock_configurations: pulumi.Input[Optional[Sequence[pulumi.Input[Union['BucketFileLockConfigurationArgs', 'BucketFileLockConfigurationArgsDict']]]]] = None,
-                 lifecycle_rules: pulumi.Input[Optional[Sequence[pulumi.Input[Union['BucketLifecycleRuleArgs', 'BucketLifecycleRuleArgsDict']]]]] = None,
+                 cors_rules: pulumi.Input[Optional[Sequence[pulumi.Input[Union['BucketCorsRuleArgs', 'BucketCorsRuleArgsDict', 'outputs.BucketCorsRule']]]]] = None,
+                 default_server_side_encryption: pulumi.Input[Optional[Union['BucketDefaultServerSideEncryptionArgs', 'BucketDefaultServerSideEncryptionArgsDict', 'outputs.BucketDefaultServerSideEncryption']]] = None,
+                 file_lock_configurations: pulumi.Input[Optional[Sequence[pulumi.Input[Union['BucketFileLockConfigurationArgs', 'BucketFileLockConfigurationArgsDict', 'outputs.BucketFileLockConfiguration']]]]] = None,
+                 lifecycle_rules: pulumi.Input[Optional[Sequence[pulumi.Input[Union['BucketLifecycleRuleArgs', 'BucketLifecycleRuleArgsDict', 'outputs.BucketLifecycleRule']]]]] = None,
                  __props__=None):
         """
         Create a Bucket resource with the given unique name, props, and options.
@@ -369,10 +369,10 @@ class Bucket(pulumi.CustomResource):
         :param pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]] bucket_info: User-defined information to be stored with the bucket. B2 converts keys to lower case, so they are stored and returned in lower case. Each key can be up to 50 bytes long, keys starting with 'b2-' are reserved, and all values together can take up to 10000 bytes.
         :param pulumi.Input[_builtins.str] bucket_name: The name of the bucket. **Modifying this attribute will force creation of a new resource.**
         :param pulumi.Input[_builtins.str] bucket_type: The bucket type. Either 'allPublic', meaning that files in this bucket can be downloaded by anybody, or 'allPrivate'.
-        :param pulumi.Input[Sequence[pulumi.Input[Union['BucketCorsRuleArgs', 'BucketCorsRuleArgsDict']]]] cors_rules: The initial list of CORS rules for this bucket.
-        :param pulumi.Input[Union['BucketDefaultServerSideEncryptionArgs', 'BucketDefaultServerSideEncryptionArgsDict']] default_server_side_encryption: The default server-side encryption settings for this bucket.
-        :param pulumi.Input[Sequence[pulumi.Input[Union['BucketFileLockConfigurationArgs', 'BucketFileLockConfigurationArgsDict']]]] file_lock_configurations: File lock enabled flag, and default retention settings.
-        :param pulumi.Input[Sequence[pulumi.Input[Union['BucketLifecycleRuleArgs', 'BucketLifecycleRuleArgsDict']]]] lifecycle_rules: The initial list of lifecycle rules for this bucket.
+        :param pulumi.Input[Sequence[pulumi.Input[Union['BucketCorsRuleArgs', 'BucketCorsRuleArgsDict', 'outputs.BucketCorsRule']]]] cors_rules: The initial list of CORS rules for this bucket.
+        :param pulumi.Input[Union['BucketDefaultServerSideEncryptionArgs', 'BucketDefaultServerSideEncryptionArgsDict', 'outputs.BucketDefaultServerSideEncryption']] default_server_side_encryption: The default server-side encryption settings for this bucket.
+        :param pulumi.Input[Sequence[pulumi.Input[Union['BucketFileLockConfigurationArgs', 'BucketFileLockConfigurationArgsDict', 'outputs.BucketFileLockConfiguration']]]] file_lock_configurations: File lock enabled flag, and default retention settings.
+        :param pulumi.Input[Sequence[pulumi.Input[Union['BucketLifecycleRuleArgs', 'BucketLifecycleRuleArgsDict', 'outputs.BucketLifecycleRule']]]] lifecycle_rules: The initial list of lifecycle rules for this bucket.
         """
         ...
     @overload
@@ -402,10 +402,10 @@ class Bucket(pulumi.CustomResource):
                  bucket_info: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
                  bucket_name: pulumi.Input[Optional[_builtins.str]] = None,
                  bucket_type: pulumi.Input[Optional[_builtins.str]] = None,
-                 cors_rules: pulumi.Input[Optional[Sequence[pulumi.Input[Union['BucketCorsRuleArgs', 'BucketCorsRuleArgsDict']]]]] = None,
-                 default_server_side_encryption: pulumi.Input[Optional[Union['BucketDefaultServerSideEncryptionArgs', 'BucketDefaultServerSideEncryptionArgsDict']]] = None,
-                 file_lock_configurations: pulumi.Input[Optional[Sequence[pulumi.Input[Union['BucketFileLockConfigurationArgs', 'BucketFileLockConfigurationArgsDict']]]]] = None,
-                 lifecycle_rules: pulumi.Input[Optional[Sequence[pulumi.Input[Union['BucketLifecycleRuleArgs', 'BucketLifecycleRuleArgsDict']]]]] = None,
+                 cors_rules: pulumi.Input[Optional[Sequence[pulumi.Input[Union['BucketCorsRuleArgs', 'BucketCorsRuleArgsDict', 'outputs.BucketCorsRule']]]]] = None,
+                 default_server_side_encryption: pulumi.Input[Optional[Union['BucketDefaultServerSideEncryptionArgs', 'BucketDefaultServerSideEncryptionArgsDict', 'outputs.BucketDefaultServerSideEncryption']]] = None,
+                 file_lock_configurations: pulumi.Input[Optional[Sequence[pulumi.Input[Union['BucketFileLockConfigurationArgs', 'BucketFileLockConfigurationArgsDict', 'outputs.BucketFileLockConfiguration']]]]] = None,
+                 lifecycle_rules: pulumi.Input[Optional[Sequence[pulumi.Input[Union['BucketLifecycleRuleArgs', 'BucketLifecycleRuleArgsDict', 'outputs.BucketLifecycleRule']]]]] = None,
                  __props__=None):
         opts = pulumi.ResourceOptions.merge(_utilities.get_resource_opts_defaults(), opts)
         if not isinstance(opts, pulumi.ResourceOptions):
@@ -448,10 +448,10 @@ class Bucket(pulumi.CustomResource):
             bucket_info: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
             bucket_name: pulumi.Input[Optional[_builtins.str]] = None,
             bucket_type: pulumi.Input[Optional[_builtins.str]] = None,
-            cors_rules: pulumi.Input[Optional[Sequence[pulumi.Input[Union['BucketCorsRuleArgs', 'BucketCorsRuleArgsDict']]]]] = None,
-            default_server_side_encryption: pulumi.Input[Optional[Union['BucketDefaultServerSideEncryptionArgs', 'BucketDefaultServerSideEncryptionArgsDict']]] = None,
-            file_lock_configurations: pulumi.Input[Optional[Sequence[pulumi.Input[Union['BucketFileLockConfigurationArgs', 'BucketFileLockConfigurationArgsDict']]]]] = None,
-            lifecycle_rules: pulumi.Input[Optional[Sequence[pulumi.Input[Union['BucketLifecycleRuleArgs', 'BucketLifecycleRuleArgsDict']]]]] = None,
+            cors_rules: pulumi.Input[Optional[Sequence[pulumi.Input[Union['BucketCorsRuleArgs', 'BucketCorsRuleArgsDict', 'outputs.BucketCorsRule']]]]] = None,
+            default_server_side_encryption: pulumi.Input[Optional[Union['BucketDefaultServerSideEncryptionArgs', 'BucketDefaultServerSideEncryptionArgsDict', 'outputs.BucketDefaultServerSideEncryption']]] = None,
+            file_lock_configurations: pulumi.Input[Optional[Sequence[pulumi.Input[Union['BucketFileLockConfigurationArgs', 'BucketFileLockConfigurationArgsDict', 'outputs.BucketFileLockConfiguration']]]]] = None,
+            lifecycle_rules: pulumi.Input[Optional[Sequence[pulumi.Input[Union['BucketLifecycleRuleArgs', 'BucketLifecycleRuleArgsDict', 'outputs.BucketLifecycleRule']]]]] = None,
             options: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
             revision: pulumi.Input[Optional[_builtins.float]] = None) -> 'Bucket':
         """
@@ -466,10 +466,10 @@ class Bucket(pulumi.CustomResource):
         :param pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]] bucket_info: User-defined information to be stored with the bucket. B2 converts keys to lower case, so they are stored and returned in lower case. Each key can be up to 50 bytes long, keys starting with 'b2-' are reserved, and all values together can take up to 10000 bytes.
         :param pulumi.Input[_builtins.str] bucket_name: The name of the bucket. **Modifying this attribute will force creation of a new resource.**
         :param pulumi.Input[_builtins.str] bucket_type: The bucket type. Either 'allPublic', meaning that files in this bucket can be downloaded by anybody, or 'allPrivate'.
-        :param pulumi.Input[Sequence[pulumi.Input[Union['BucketCorsRuleArgs', 'BucketCorsRuleArgsDict']]]] cors_rules: The initial list of CORS rules for this bucket.
-        :param pulumi.Input[Union['BucketDefaultServerSideEncryptionArgs', 'BucketDefaultServerSideEncryptionArgsDict']] default_server_side_encryption: The default server-side encryption settings for this bucket.
-        :param pulumi.Input[Sequence[pulumi.Input[Union['BucketFileLockConfigurationArgs', 'BucketFileLockConfigurationArgsDict']]]] file_lock_configurations: File lock enabled flag, and default retention settings.
-        :param pulumi.Input[Sequence[pulumi.Input[Union['BucketLifecycleRuleArgs', 'BucketLifecycleRuleArgsDict']]]] lifecycle_rules: The initial list of lifecycle rules for this bucket.
+        :param pulumi.Input[Sequence[pulumi.Input[Union['BucketCorsRuleArgs', 'BucketCorsRuleArgsDict', 'outputs.BucketCorsRule']]]] cors_rules: The initial list of CORS rules for this bucket.
+        :param pulumi.Input[Union['BucketDefaultServerSideEncryptionArgs', 'BucketDefaultServerSideEncryptionArgsDict', 'outputs.BucketDefaultServerSideEncryption']] default_server_side_encryption: The default server-side encryption settings for this bucket.
+        :param pulumi.Input[Sequence[pulumi.Input[Union['BucketFileLockConfigurationArgs', 'BucketFileLockConfigurationArgsDict', 'outputs.BucketFileLockConfiguration']]]] file_lock_configurations: File lock enabled flag, and default retention settings.
+        :param pulumi.Input[Sequence[pulumi.Input[Union['BucketLifecycleRuleArgs', 'BucketLifecycleRuleArgsDict', 'outputs.BucketLifecycleRule']]]] lifecycle_rules: The initial list of lifecycle rules for this bucket.
         :param pulumi.Input[Sequence[pulumi.Input[_builtins.str]]] options: List of bucket options.
         :param pulumi.Input[_builtins.float] revision: Bucket revision.
         """

@@ -572,7 +572,7 @@ class FirewallZonePolicy(pulumi.CustomResource):
                  connection_state_type: pulumi.Input[Optional[_builtins.str]] = None,
                  connection_states: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
                  description: pulumi.Input[Optional[_builtins.str]] = None,
-                 destination: pulumi.Input[Optional[Union['FirewallZonePolicyDestinationArgs', 'FirewallZonePolicyDestinationArgsDict']]] = None,
+                 destination: pulumi.Input[Optional[Union['FirewallZonePolicyDestinationArgs', 'FirewallZonePolicyDestinationArgsDict', 'outputs.FirewallZonePolicyDestination']]] = None,
                  enabled: pulumi.Input[Optional[_builtins.bool]] = None,
                  ip_version: pulumi.Input[Optional[_builtins.str]] = None,
                  logging: pulumi.Input[Optional[_builtins.bool]] = None,
@@ -580,9 +580,9 @@ class FirewallZonePolicy(pulumi.CustomResource):
                  match_opposite_protocol: pulumi.Input[Optional[_builtins.bool]] = None,
                  name: pulumi.Input[Optional[_builtins.str]] = None,
                  protocol: pulumi.Input[Optional[_builtins.str]] = None,
-                 schedule: pulumi.Input[Optional[Union['FirewallZonePolicyScheduleArgs', 'FirewallZonePolicyScheduleArgsDict']]] = None,
+                 schedule: pulumi.Input[Optional[Union['FirewallZonePolicyScheduleArgs', 'FirewallZonePolicyScheduleArgsDict', 'outputs.FirewallZonePolicySchedule']]] = None,
                  site: pulumi.Input[Optional[_builtins.str]] = None,
-                 source: pulumi.Input[Optional[Union['FirewallZonePolicySourceArgs', 'FirewallZonePolicySourceArgsDict']]] = None,
+                 source: pulumi.Input[Optional[Union['FirewallZonePolicySourceArgs', 'FirewallZonePolicySourceArgsDict', 'outputs.FirewallZonePolicySource']]] = None,
                  __props__=None):
         """
         Create a FirewallZonePolicy resource with the given unique name, props, and options.
@@ -594,7 +594,7 @@ class FirewallZonePolicy(pulumi.CustomResource):
         :param pulumi.Input[_builtins.str] connection_state_type: Optionally match on a firewall connection state such as traffic associated with an already existing connection. Valid values are `ALL`, `RESPOND_ONLY`, or `CUSTOM`.
         :param pulumi.Input[Sequence[pulumi.Input[_builtins.str]]] connection_states: Connection states to match when <span pulumi-lang-nodejs="`connectionStateType`" pulumi-lang-dotnet="`ConnectionStateType`" pulumi-lang-go="`connectionStateType`" pulumi-lang-python="`connection_state_type`" pulumi-lang-yaml="`connectionStateType`" pulumi-lang-java="`connectionStateType`" pulumi-lang-hcl="`connection_state_type`">`connectionStateType`</span> is `CUSTOM`. Valid values include `ESTABLISHED`, `NEW`, `RELATED`, and `INVALID`.
         :param pulumi.Input[_builtins.str] description: Description of the firewall zone policy.
-        :param pulumi.Input[Union['FirewallZonePolicyDestinationArgs', 'FirewallZonePolicyDestinationArgsDict']] destination: The zone matching the destination of the traffic. Optionally match on a specific destination inside the zone.
+        :param pulumi.Input[Union['FirewallZonePolicyDestinationArgs', 'FirewallZonePolicyDestinationArgsDict', 'outputs.FirewallZonePolicyDestination']] destination: The zone matching the destination of the traffic. Optionally match on a specific destination inside the zone.
         :param pulumi.Input[_builtins.bool] enabled: Enable the policy
         :param pulumi.Input[_builtins.str] ip_version: Optionally match on only IPv4 or IPv6. Valid values are `BOTH`, `IPV4`, or `IPV6`.
         :param pulumi.Input[_builtins.bool] logging: Enable to generate syslog entries when traffic is matched.
@@ -602,9 +602,9 @@ class FirewallZonePolicy(pulumi.CustomResource):
         :param pulumi.Input[_builtins.bool] match_opposite_protocol: Whether to match the opposite protocol.
         :param pulumi.Input[_builtins.str] name: The name of the firewall zone policy.
         :param pulumi.Input[_builtins.str] protocol: Optionally match a specific protocol. Valid values include: <span pulumi-lang-nodejs="`all`" pulumi-lang-dotnet="`All`" pulumi-lang-go="`all`" pulumi-lang-python="`all`" pulumi-lang-yaml="`all`" pulumi-lang-java="`all`" pulumi-lang-hcl="`all`">`all`</span>, <span pulumi-lang-nodejs="`tcpUdp`" pulumi-lang-dotnet="`TcpUdp`" pulumi-lang-go="`tcpUdp`" pulumi-lang-python="`tcp_udp`" pulumi-lang-yaml="`tcpUdp`" pulumi-lang-java="`tcpUdp`" pulumi-lang-hcl="`tcp_udp`">`tcpUdp`</span>, <span pulumi-lang-nodejs="`tcp`" pulumi-lang-dotnet="`Tcp`" pulumi-lang-go="`tcp`" pulumi-lang-python="`tcp`" pulumi-lang-yaml="`tcp`" pulumi-lang-java="`tcp`" pulumi-lang-hcl="`tcp`">`tcp`</span>, <span pulumi-lang-nodejs="`udp`" pulumi-lang-dotnet="`Udp`" pulumi-lang-go="`udp`" pulumi-lang-python="`udp`" pulumi-lang-yaml="`udp`" pulumi-lang-java="`udp`" pulumi-lang-hcl="`udp`">`udp`</span>, etc.
-        :param pulumi.Input[Union['FirewallZonePolicyScheduleArgs', 'FirewallZonePolicyScheduleArgsDict']] schedule: Enforce this policy at specific times.
+        :param pulumi.Input[Union['FirewallZonePolicyScheduleArgs', 'FirewallZonePolicyScheduleArgsDict', 'outputs.FirewallZonePolicySchedule']] schedule: Enforce this policy at specific times.
         :param pulumi.Input[_builtins.str] site: The name of the UniFi site where this resource should be applied. If not specified, the default site will be used.
-        :param pulumi.Input[Union['FirewallZonePolicySourceArgs', 'FirewallZonePolicySourceArgsDict']] source: The zone matching the source of the traffic. Optionally match on a specific source inside the zone.
+        :param pulumi.Input[Union['FirewallZonePolicySourceArgs', 'FirewallZonePolicySourceArgsDict', 'outputs.FirewallZonePolicySource']] source: The zone matching the source of the traffic. Optionally match on a specific source inside the zone.
         """
         ...
     @overload
@@ -635,7 +635,7 @@ class FirewallZonePolicy(pulumi.CustomResource):
                  connection_state_type: pulumi.Input[Optional[_builtins.str]] = None,
                  connection_states: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
                  description: pulumi.Input[Optional[_builtins.str]] = None,
-                 destination: pulumi.Input[Optional[Union['FirewallZonePolicyDestinationArgs', 'FirewallZonePolicyDestinationArgsDict']]] = None,
+                 destination: pulumi.Input[Optional[Union['FirewallZonePolicyDestinationArgs', 'FirewallZonePolicyDestinationArgsDict', 'outputs.FirewallZonePolicyDestination']]] = None,
                  enabled: pulumi.Input[Optional[_builtins.bool]] = None,
                  ip_version: pulumi.Input[Optional[_builtins.str]] = None,
                  logging: pulumi.Input[Optional[_builtins.bool]] = None,
@@ -643,9 +643,9 @@ class FirewallZonePolicy(pulumi.CustomResource):
                  match_opposite_protocol: pulumi.Input[Optional[_builtins.bool]] = None,
                  name: pulumi.Input[Optional[_builtins.str]] = None,
                  protocol: pulumi.Input[Optional[_builtins.str]] = None,
-                 schedule: pulumi.Input[Optional[Union['FirewallZonePolicyScheduleArgs', 'FirewallZonePolicyScheduleArgsDict']]] = None,
+                 schedule: pulumi.Input[Optional[Union['FirewallZonePolicyScheduleArgs', 'FirewallZonePolicyScheduleArgsDict', 'outputs.FirewallZonePolicySchedule']]] = None,
                  site: pulumi.Input[Optional[_builtins.str]] = None,
-                 source: pulumi.Input[Optional[Union['FirewallZonePolicySourceArgs', 'FirewallZonePolicySourceArgsDict']]] = None,
+                 source: pulumi.Input[Optional[Union['FirewallZonePolicySourceArgs', 'FirewallZonePolicySourceArgsDict', 'outputs.FirewallZonePolicySource']]] = None,
                  __props__=None):
         opts = pulumi.ResourceOptions.merge(_utilities.get_resource_opts_defaults(), opts)
         if not isinstance(opts, pulumi.ResourceOptions):
@@ -694,7 +694,7 @@ class FirewallZonePolicy(pulumi.CustomResource):
             connection_state_type: pulumi.Input[Optional[_builtins.str]] = None,
             connection_states: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
             description: pulumi.Input[Optional[_builtins.str]] = None,
-            destination: pulumi.Input[Optional[Union['FirewallZonePolicyDestinationArgs', 'FirewallZonePolicyDestinationArgsDict']]] = None,
+            destination: pulumi.Input[Optional[Union['FirewallZonePolicyDestinationArgs', 'FirewallZonePolicyDestinationArgsDict', 'outputs.FirewallZonePolicyDestination']]] = None,
             enabled: pulumi.Input[Optional[_builtins.bool]] = None,
             index: pulumi.Input[Optional[_builtins.float]] = None,
             ip_version: pulumi.Input[Optional[_builtins.str]] = None,
@@ -703,9 +703,9 @@ class FirewallZonePolicy(pulumi.CustomResource):
             match_opposite_protocol: pulumi.Input[Optional[_builtins.bool]] = None,
             name: pulumi.Input[Optional[_builtins.str]] = None,
             protocol: pulumi.Input[Optional[_builtins.str]] = None,
-            schedule: pulumi.Input[Optional[Union['FirewallZonePolicyScheduleArgs', 'FirewallZonePolicyScheduleArgsDict']]] = None,
+            schedule: pulumi.Input[Optional[Union['FirewallZonePolicyScheduleArgs', 'FirewallZonePolicyScheduleArgsDict', 'outputs.FirewallZonePolicySchedule']]] = None,
             site: pulumi.Input[Optional[_builtins.str]] = None,
-            source: pulumi.Input[Optional[Union['FirewallZonePolicySourceArgs', 'FirewallZonePolicySourceArgsDict']]] = None) -> 'FirewallZonePolicy':
+            source: pulumi.Input[Optional[Union['FirewallZonePolicySourceArgs', 'FirewallZonePolicySourceArgsDict', 'outputs.FirewallZonePolicySource']]] = None) -> 'FirewallZonePolicy':
         """
         Get an existing FirewallZonePolicy resource's state with the given name, id, and optional extra
         properties used to qualify the lookup.
@@ -718,7 +718,7 @@ class FirewallZonePolicy(pulumi.CustomResource):
         :param pulumi.Input[_builtins.str] connection_state_type: Optionally match on a firewall connection state such as traffic associated with an already existing connection. Valid values are `ALL`, `RESPOND_ONLY`, or `CUSTOM`.
         :param pulumi.Input[Sequence[pulumi.Input[_builtins.str]]] connection_states: Connection states to match when <span pulumi-lang-nodejs="`connectionStateType`" pulumi-lang-dotnet="`ConnectionStateType`" pulumi-lang-go="`connectionStateType`" pulumi-lang-python="`connection_state_type`" pulumi-lang-yaml="`connectionStateType`" pulumi-lang-java="`connectionStateType`" pulumi-lang-hcl="`connection_state_type`">`connectionStateType`</span> is `CUSTOM`. Valid values include `ESTABLISHED`, `NEW`, `RELATED`, and `INVALID`.
         :param pulumi.Input[_builtins.str] description: Description of the firewall zone policy.
-        :param pulumi.Input[Union['FirewallZonePolicyDestinationArgs', 'FirewallZonePolicyDestinationArgsDict']] destination: The zone matching the destination of the traffic. Optionally match on a specific destination inside the zone.
+        :param pulumi.Input[Union['FirewallZonePolicyDestinationArgs', 'FirewallZonePolicyDestinationArgsDict', 'outputs.FirewallZonePolicyDestination']] destination: The zone matching the destination of the traffic. Optionally match on a specific destination inside the zone.
         :param pulumi.Input[_builtins.bool] enabled: Enable the policy
         :param pulumi.Input[_builtins.float] index: Priority index for the policy. This value is assigned by the UniFi controller and cannot be set directly. To control policy ordering, use the <span pulumi-lang-nodejs="`unifi.FirewallZonePolicyOrder`" pulumi-lang-dotnet="`unifi.FirewallZonePolicyOrder`" pulumi-lang-go="`FirewallZonePolicyOrder`" pulumi-lang-python="`FirewallZonePolicyOrder`" pulumi-lang-yaml="`unifi.FirewallZonePolicyOrder`" pulumi-lang-java="`unifi.FirewallZonePolicyOrder`" pulumi-lang-hcl="`unifi_firewall_zone_policy_order`">`unifi.FirewallZonePolicyOrder`</span> resource (planned for future release).
         :param pulumi.Input[_builtins.str] ip_version: Optionally match on only IPv4 or IPv6. Valid values are `BOTH`, `IPV4`, or `IPV6`.
@@ -727,9 +727,9 @@ class FirewallZonePolicy(pulumi.CustomResource):
         :param pulumi.Input[_builtins.bool] match_opposite_protocol: Whether to match the opposite protocol.
         :param pulumi.Input[_builtins.str] name: The name of the firewall zone policy.
         :param pulumi.Input[_builtins.str] protocol: Optionally match a specific protocol. Valid values include: <span pulumi-lang-nodejs="`all`" pulumi-lang-dotnet="`All`" pulumi-lang-go="`all`" pulumi-lang-python="`all`" pulumi-lang-yaml="`all`" pulumi-lang-java="`all`" pulumi-lang-hcl="`all`">`all`</span>, <span pulumi-lang-nodejs="`tcpUdp`" pulumi-lang-dotnet="`TcpUdp`" pulumi-lang-go="`tcpUdp`" pulumi-lang-python="`tcp_udp`" pulumi-lang-yaml="`tcpUdp`" pulumi-lang-java="`tcpUdp`" pulumi-lang-hcl="`tcp_udp`">`tcpUdp`</span>, <span pulumi-lang-nodejs="`tcp`" pulumi-lang-dotnet="`Tcp`" pulumi-lang-go="`tcp`" pulumi-lang-python="`tcp`" pulumi-lang-yaml="`tcp`" pulumi-lang-java="`tcp`" pulumi-lang-hcl="`tcp`">`tcp`</span>, <span pulumi-lang-nodejs="`udp`" pulumi-lang-dotnet="`Udp`" pulumi-lang-go="`udp`" pulumi-lang-python="`udp`" pulumi-lang-yaml="`udp`" pulumi-lang-java="`udp`" pulumi-lang-hcl="`udp`">`udp`</span>, etc.
-        :param pulumi.Input[Union['FirewallZonePolicyScheduleArgs', 'FirewallZonePolicyScheduleArgsDict']] schedule: Enforce this policy at specific times.
+        :param pulumi.Input[Union['FirewallZonePolicyScheduleArgs', 'FirewallZonePolicyScheduleArgsDict', 'outputs.FirewallZonePolicySchedule']] schedule: Enforce this policy at specific times.
         :param pulumi.Input[_builtins.str] site: The name of the UniFi site where this resource should be applied. If not specified, the default site will be used.
-        :param pulumi.Input[Union['FirewallZonePolicySourceArgs', 'FirewallZonePolicySourceArgsDict']] source: The zone matching the source of the traffic. Optionally match on a specific source inside the zone.
+        :param pulumi.Input[Union['FirewallZonePolicySourceArgs', 'FirewallZonePolicySourceArgsDict', 'outputs.FirewallZonePolicySource']] source: The zone matching the source of the traffic. Optionally match on a specific source inside the zone.
         """
         opts = pulumi.ResourceOptions.merge(opts, pulumi.ResourceOptions(id=id))
 

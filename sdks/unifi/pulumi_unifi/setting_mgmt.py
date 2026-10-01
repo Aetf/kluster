@@ -631,7 +631,7 @@ class SettingMgmt(pulumi.CustomResource):
                  ssh_auth_password_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
                  ssh_bind_wildcard: pulumi.Input[Optional[_builtins.bool]] = None,
                  ssh_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
-                 ssh_keys: pulumi.Input[Optional[Sequence[pulumi.Input[Union['SettingMgmtSshKeyArgs', 'SettingMgmtSshKeyArgsDict']]]]] = None,
+                 ssh_keys: pulumi.Input[Optional[Sequence[pulumi.Input[Union['SettingMgmtSshKeyArgs', 'SettingMgmtSshKeyArgsDict', 'outputs.SettingMgmtSshKey']]]]] = None,
                  ssh_password: pulumi.Input[Optional[_builtins.str]] = None,
                  ssh_username: pulumi.Input[Optional[_builtins.str]] = None,
                  unifi_idp_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
@@ -655,7 +655,7 @@ class SettingMgmt(pulumi.CustomResource):
         :param pulumi.Input[_builtins.bool] ssh_auth_password_enabled: Enable SSH password authentication for UniFi devices at this site.
         :param pulumi.Input[_builtins.bool] ssh_bind_wildcard: Enable SSH bind wildcard for UniFi devices at this site.
         :param pulumi.Input[_builtins.bool] ssh_enabled: Enable SSH access to UniFi devices at this site. When enabled, you can connect to devices using SSH for advanced configuration and troubleshooting. It's recommended to only enable this temporarily when needed.
-        :param pulumi.Input[Sequence[pulumi.Input[Union['SettingMgmtSshKeyArgs', 'SettingMgmtSshKeyArgsDict']]]] ssh_keys: List of SSH public keys that are allowed to connect to UniFi devices when SSH is enabled. Using SSH keys is more secure than password authentication.
+        :param pulumi.Input[Sequence[pulumi.Input[Union['SettingMgmtSshKeyArgs', 'SettingMgmtSshKeyArgsDict', 'outputs.SettingMgmtSshKey']]]] ssh_keys: List of SSH public keys that are allowed to connect to UniFi devices when SSH is enabled. Using SSH keys is more secure than password authentication.
         :param pulumi.Input[_builtins.str] ssh_password: The SSH password for UniFi devices at this site.
         :param pulumi.Input[_builtins.str] ssh_username: The SSH username for UniFi devices at this site.
         :param pulumi.Input[_builtins.bool] unifi_idp_enabled: Enable UniFi IDP for UniFi devices at this site.
@@ -698,7 +698,7 @@ class SettingMgmt(pulumi.CustomResource):
                  ssh_auth_password_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
                  ssh_bind_wildcard: pulumi.Input[Optional[_builtins.bool]] = None,
                  ssh_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
-                 ssh_keys: pulumi.Input[Optional[Sequence[pulumi.Input[Union['SettingMgmtSshKeyArgs', 'SettingMgmtSshKeyArgsDict']]]]] = None,
+                 ssh_keys: pulumi.Input[Optional[Sequence[pulumi.Input[Union['SettingMgmtSshKeyArgs', 'SettingMgmtSshKeyArgsDict', 'outputs.SettingMgmtSshKey']]]]] = None,
                  ssh_password: pulumi.Input[Optional[_builtins.str]] = None,
                  ssh_username: pulumi.Input[Optional[_builtins.str]] = None,
                  unifi_idp_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
@@ -756,7 +756,7 @@ class SettingMgmt(pulumi.CustomResource):
             ssh_auth_password_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
             ssh_bind_wildcard: pulumi.Input[Optional[_builtins.bool]] = None,
             ssh_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
-            ssh_keys: pulumi.Input[Optional[Sequence[pulumi.Input[Union['SettingMgmtSshKeyArgs', 'SettingMgmtSshKeyArgsDict']]]]] = None,
+            ssh_keys: pulumi.Input[Optional[Sequence[pulumi.Input[Union['SettingMgmtSshKeyArgs', 'SettingMgmtSshKeyArgsDict', 'outputs.SettingMgmtSshKey']]]]] = None,
             ssh_password: pulumi.Input[Optional[_builtins.str]] = None,
             ssh_username: pulumi.Input[Optional[_builtins.str]] = None,
             unifi_idp_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
@@ -781,7 +781,7 @@ class SettingMgmt(pulumi.CustomResource):
         :param pulumi.Input[_builtins.bool] ssh_auth_password_enabled: Enable SSH password authentication for UniFi devices at this site.
         :param pulumi.Input[_builtins.bool] ssh_bind_wildcard: Enable SSH bind wildcard for UniFi devices at this site.
         :param pulumi.Input[_builtins.bool] ssh_enabled: Enable SSH access to UniFi devices at this site. When enabled, you can connect to devices using SSH for advanced configuration and troubleshooting. It's recommended to only enable this temporarily when needed.
-        :param pulumi.Input[Sequence[pulumi.Input[Union['SettingMgmtSshKeyArgs', 'SettingMgmtSshKeyArgsDict']]]] ssh_keys: List of SSH public keys that are allowed to connect to UniFi devices when SSH is enabled. Using SSH keys is more secure than password authentication.
+        :param pulumi.Input[Sequence[pulumi.Input[Union['SettingMgmtSshKeyArgs', 'SettingMgmtSshKeyArgsDict', 'outputs.SettingMgmtSshKey']]]] ssh_keys: List of SSH public keys that are allowed to connect to UniFi devices when SSH is enabled. Using SSH keys is more secure than password authentication.
         :param pulumi.Input[_builtins.str] ssh_password: The SSH password for UniFi devices at this site.
         :param pulumi.Input[_builtins.str] ssh_username: The SSH username for UniFi devices at this site.
         :param pulumi.Input[_builtins.bool] unifi_idp_enabled: Enable UniFi IDP for UniFi devices at this site.

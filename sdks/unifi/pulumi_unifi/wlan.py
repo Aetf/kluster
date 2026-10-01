@@ -1007,7 +1007,7 @@ class Wlan(pulumi.CustomResource):
                  pmf_mode: pulumi.Input[Optional[_builtins.str]] = None,
                  proxy_arp: pulumi.Input[Optional[_builtins.bool]] = None,
                  radius_profile_id: pulumi.Input[Optional[_builtins.str]] = None,
-                 schedules: pulumi.Input[Optional[Sequence[pulumi.Input[Union['WlanScheduleArgs', 'WlanScheduleArgsDict']]]]] = None,
+                 schedules: pulumi.Input[Optional[Sequence[pulumi.Input[Union['WlanScheduleArgs', 'WlanScheduleArgsDict', 'outputs.WlanSchedule']]]]] = None,
                  security: pulumi.Input[Optional[_builtins.str]] = None,
                  site: pulumi.Input[Optional[_builtins.str]] = None,
                  uapsd: pulumi.Input[Optional[_builtins.bool]] = None,
@@ -1046,7 +1046,7 @@ class Wlan(pulumi.CustomResource):
                  * <span pulumi-lang-nodejs="`disabled`" pulumi-lang-dotnet="`Disabled`" pulumi-lang-go="`disabled`" pulumi-lang-python="`disabled`" pulumi-lang-yaml="`disabled`" pulumi-lang-java="`disabled`" pulumi-lang-hcl="`disabled`">`disabled`</span> - PMF is disabled (not compatible with WPA3) Defaults to <span pulumi-lang-nodejs="`disabled`" pulumi-lang-dotnet="`Disabled`" pulumi-lang-go="`disabled`" pulumi-lang-python="`disabled`" pulumi-lang-yaml="`disabled`" pulumi-lang-java="`disabled`" pulumi-lang-hcl="`disabled`">`disabled`</span>.
         :param pulumi.Input[_builtins.bool] proxy_arp: Enable ARP proxy on this WLAN. When enabled, the UniFi controller will respond to ARP requests on behalf of clients, reducing broadcast traffic and potentially improving network performance. This is particularly useful in high-density wireless environments. Defaults to <span pulumi-lang-nodejs="`false`" pulumi-lang-dotnet="`False`" pulumi-lang-go="`false`" pulumi-lang-python="`false`" pulumi-lang-yaml="`false`" pulumi-lang-java="`false`" pulumi-lang-hcl="`false`">`false`</span>.
         :param pulumi.Input[_builtins.str] radius_profile_id: ID of the RADIUS profile to use for WPA Enterprise authentication (when security is 'wpaeap'). Reference existing profiles using the <span pulumi-lang-nodejs="`unifi.RadiusProfile`" pulumi-lang-dotnet="`unifi.RadiusProfile`" pulumi-lang-go="`RadiusProfile`" pulumi-lang-python="`RadiusProfile`" pulumi-lang-yaml="`unifi.RadiusProfile`" pulumi-lang-java="`unifi.RadiusProfile`" pulumi-lang-hcl="`unifi_radius_profile`">`unifi.RadiusProfile`</span> data source.
-        :param pulumi.Input[Sequence[pulumi.Input[Union['WlanScheduleArgs', 'WlanScheduleArgsDict']]]] schedules: Time-based access control configuration for the wireless network. Allows automatic enabling/disabling of the network on specified schedules.
+        :param pulumi.Input[Sequence[pulumi.Input[Union['WlanScheduleArgs', 'WlanScheduleArgsDict', 'outputs.WlanSchedule']]]] schedules: Time-based access control configuration for the wireless network. Allows automatic enabling/disabling of the network on specified schedules.
         :param pulumi.Input[_builtins.str] security: The security protocol for the wireless network. Valid values are:
                  * <span pulumi-lang-nodejs="`wpapsk`" pulumi-lang-dotnet="`Wpapsk`" pulumi-lang-go="`wpapsk`" pulumi-lang-python="`wpapsk`" pulumi-lang-yaml="`wpapsk`" pulumi-lang-java="`wpapsk`" pulumi-lang-hcl="`wpapsk`">`wpapsk`</span> - WPA Personal (PSK) with WPA2/WPA3 options
                  * <span pulumi-lang-nodejs="`wpaeap`" pulumi-lang-dotnet="`Wpaeap`" pulumi-lang-go="`wpaeap`" pulumi-lang-python="`wpaeap`" pulumi-lang-yaml="`wpaeap`" pulumi-lang-java="`wpaeap`" pulumi-lang-hcl="`wpaeap`">`wpaeap`</span> - WPA Enterprise (802.1x)
@@ -1107,7 +1107,7 @@ class Wlan(pulumi.CustomResource):
                  pmf_mode: pulumi.Input[Optional[_builtins.str]] = None,
                  proxy_arp: pulumi.Input[Optional[_builtins.bool]] = None,
                  radius_profile_id: pulumi.Input[Optional[_builtins.str]] = None,
-                 schedules: pulumi.Input[Optional[Sequence[pulumi.Input[Union['WlanScheduleArgs', 'WlanScheduleArgsDict']]]]] = None,
+                 schedules: pulumi.Input[Optional[Sequence[pulumi.Input[Union['WlanScheduleArgs', 'WlanScheduleArgsDict', 'outputs.WlanSchedule']]]]] = None,
                  security: pulumi.Input[Optional[_builtins.str]] = None,
                  site: pulumi.Input[Optional[_builtins.str]] = None,
                  uapsd: pulumi.Input[Optional[_builtins.bool]] = None,
@@ -1189,7 +1189,7 @@ class Wlan(pulumi.CustomResource):
             pmf_mode: pulumi.Input[Optional[_builtins.str]] = None,
             proxy_arp: pulumi.Input[Optional[_builtins.bool]] = None,
             radius_profile_id: pulumi.Input[Optional[_builtins.str]] = None,
-            schedules: pulumi.Input[Optional[Sequence[pulumi.Input[Union['WlanScheduleArgs', 'WlanScheduleArgsDict']]]]] = None,
+            schedules: pulumi.Input[Optional[Sequence[pulumi.Input[Union['WlanScheduleArgs', 'WlanScheduleArgsDict', 'outputs.WlanSchedule']]]]] = None,
             security: pulumi.Input[Optional[_builtins.str]] = None,
             site: pulumi.Input[Optional[_builtins.str]] = None,
             uapsd: pulumi.Input[Optional[_builtins.bool]] = None,
@@ -1229,7 +1229,7 @@ class Wlan(pulumi.CustomResource):
                  * <span pulumi-lang-nodejs="`disabled`" pulumi-lang-dotnet="`Disabled`" pulumi-lang-go="`disabled`" pulumi-lang-python="`disabled`" pulumi-lang-yaml="`disabled`" pulumi-lang-java="`disabled`" pulumi-lang-hcl="`disabled`">`disabled`</span> - PMF is disabled (not compatible with WPA3) Defaults to <span pulumi-lang-nodejs="`disabled`" pulumi-lang-dotnet="`Disabled`" pulumi-lang-go="`disabled`" pulumi-lang-python="`disabled`" pulumi-lang-yaml="`disabled`" pulumi-lang-java="`disabled`" pulumi-lang-hcl="`disabled`">`disabled`</span>.
         :param pulumi.Input[_builtins.bool] proxy_arp: Enable ARP proxy on this WLAN. When enabled, the UniFi controller will respond to ARP requests on behalf of clients, reducing broadcast traffic and potentially improving network performance. This is particularly useful in high-density wireless environments. Defaults to <span pulumi-lang-nodejs="`false`" pulumi-lang-dotnet="`False`" pulumi-lang-go="`false`" pulumi-lang-python="`false`" pulumi-lang-yaml="`false`" pulumi-lang-java="`false`" pulumi-lang-hcl="`false`">`false`</span>.
         :param pulumi.Input[_builtins.str] radius_profile_id: ID of the RADIUS profile to use for WPA Enterprise authentication (when security is 'wpaeap'). Reference existing profiles using the <span pulumi-lang-nodejs="`unifi.RadiusProfile`" pulumi-lang-dotnet="`unifi.RadiusProfile`" pulumi-lang-go="`RadiusProfile`" pulumi-lang-python="`RadiusProfile`" pulumi-lang-yaml="`unifi.RadiusProfile`" pulumi-lang-java="`unifi.RadiusProfile`" pulumi-lang-hcl="`unifi_radius_profile`">`unifi.RadiusProfile`</span> data source.
-        :param pulumi.Input[Sequence[pulumi.Input[Union['WlanScheduleArgs', 'WlanScheduleArgsDict']]]] schedules: Time-based access control configuration for the wireless network. Allows automatic enabling/disabling of the network on specified schedules.
+        :param pulumi.Input[Sequence[pulumi.Input[Union['WlanScheduleArgs', 'WlanScheduleArgsDict', 'outputs.WlanSchedule']]]] schedules: Time-based access control configuration for the wireless network. Allows automatic enabling/disabling of the network on specified schedules.
         :param pulumi.Input[_builtins.str] security: The security protocol for the wireless network. Valid values are:
                  * <span pulumi-lang-nodejs="`wpapsk`" pulumi-lang-dotnet="`Wpapsk`" pulumi-lang-go="`wpapsk`" pulumi-lang-python="`wpapsk`" pulumi-lang-yaml="`wpapsk`" pulumi-lang-java="`wpapsk`" pulumi-lang-hcl="`wpapsk`">`wpapsk`</span> - WPA Personal (PSK) with WPA2/WPA3 options
                  * <span pulumi-lang-nodejs="`wpaeap`" pulumi-lang-dotnet="`Wpaeap`" pulumi-lang-go="`wpaeap`" pulumi-lang-python="`wpaeap`" pulumi-lang-yaml="`wpaeap`" pulumi-lang-java="`wpaeap`" pulumi-lang-hcl="`wpaeap`">`wpaeap`</span> - WPA Enterprise (802.1x)

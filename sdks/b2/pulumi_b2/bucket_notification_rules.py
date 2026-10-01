@@ -130,7 +130,7 @@ class BucketNotificationRules(pulumi.CustomResource):
                  opts: Optional[pulumi.ResourceOptions] = None,
                  bucket_id: pulumi.Input[Optional[_builtins.str]] = None,
                  bucket_notification_rules_id: pulumi.Input[Optional[_builtins.str]] = None,
-                 notification_rules: pulumi.Input[Optional[Sequence[pulumi.Input[Union['BucketNotificationRulesNotificationRuleArgs', 'BucketNotificationRulesNotificationRuleArgsDict']]]]] = None,
+                 notification_rules: pulumi.Input[Optional[Sequence[pulumi.Input[Union['BucketNotificationRulesNotificationRuleArgs', 'BucketNotificationRulesNotificationRuleArgsDict', 'outputs.BucketNotificationRulesNotificationRule']]]]] = None,
                  __props__=None):
         """
         Create a BucketNotificationRules resource with the given unique name, props, and options.
@@ -138,7 +138,7 @@ class BucketNotificationRules(pulumi.CustomResource):
         :param str resource_name: The name of the resource.
         :param pulumi.ResourceOptions opts: Options for the resource.
         :param pulumi.Input[_builtins.str] bucket_id: The ID of the bucket. **Modifying this attribute will force creation of a new resource.**
-        :param pulumi.Input[Sequence[pulumi.Input[Union['BucketNotificationRulesNotificationRuleArgs', 'BucketNotificationRulesNotificationRuleArgsDict']]]] notification_rules: An array of Event Notification Rules.
+        :param pulumi.Input[Sequence[pulumi.Input[Union['BucketNotificationRulesNotificationRuleArgs', 'BucketNotificationRulesNotificationRuleArgsDict', 'outputs.BucketNotificationRulesNotificationRule']]]] notification_rules: An array of Event Notification Rules.
         """
         ...
     @overload
@@ -166,7 +166,7 @@ class BucketNotificationRules(pulumi.CustomResource):
                  opts: Optional[pulumi.ResourceOptions] = None,
                  bucket_id: pulumi.Input[Optional[_builtins.str]] = None,
                  bucket_notification_rules_id: pulumi.Input[Optional[_builtins.str]] = None,
-                 notification_rules: pulumi.Input[Optional[Sequence[pulumi.Input[Union['BucketNotificationRulesNotificationRuleArgs', 'BucketNotificationRulesNotificationRuleArgsDict']]]]] = None,
+                 notification_rules: pulumi.Input[Optional[Sequence[pulumi.Input[Union['BucketNotificationRulesNotificationRuleArgs', 'BucketNotificationRulesNotificationRuleArgsDict', 'outputs.BucketNotificationRulesNotificationRule']]]]] = None,
                  __props__=None):
         opts = pulumi.ResourceOptions.merge(_utilities.get_resource_opts_defaults(), opts)
         if not isinstance(opts, pulumi.ResourceOptions):
@@ -196,7 +196,7 @@ class BucketNotificationRules(pulumi.CustomResource):
             opts: Optional[pulumi.ResourceOptions] = None,
             bucket_id: pulumi.Input[Optional[_builtins.str]] = None,
             bucket_notification_rules_id: pulumi.Input[Optional[_builtins.str]] = None,
-            notification_rules: pulumi.Input[Optional[Sequence[pulumi.Input[Union['BucketNotificationRulesNotificationRuleArgs', 'BucketNotificationRulesNotificationRuleArgsDict']]]]] = None) -> 'BucketNotificationRules':
+            notification_rules: pulumi.Input[Optional[Sequence[pulumi.Input[Union['BucketNotificationRulesNotificationRuleArgs', 'BucketNotificationRulesNotificationRuleArgsDict', 'outputs.BucketNotificationRulesNotificationRule']]]]] = None) -> 'BucketNotificationRules':
         """
         Get an existing BucketNotificationRules resource's state with the given name, id, and optional extra
         properties used to qualify the lookup.
@@ -205,7 +205,7 @@ class BucketNotificationRules(pulumi.CustomResource):
         :param pulumi.Input[str] id: The unique provider ID of the resource to lookup.
         :param pulumi.ResourceOptions opts: Options for the resource.
         :param pulumi.Input[_builtins.str] bucket_id: The ID of the bucket. **Modifying this attribute will force creation of a new resource.**
-        :param pulumi.Input[Sequence[pulumi.Input[Union['BucketNotificationRulesNotificationRuleArgs', 'BucketNotificationRulesNotificationRuleArgsDict']]]] notification_rules: An array of Event Notification Rules.
+        :param pulumi.Input[Sequence[pulumi.Input[Union['BucketNotificationRulesNotificationRuleArgs', 'BucketNotificationRulesNotificationRuleArgsDict', 'outputs.BucketNotificationRulesNotificationRule']]]] notification_rules: An array of Event Notification Rules.
         """
         opts = pulumi.ResourceOptions.merge(opts, pulumi.ResourceOptions(id=id))
 

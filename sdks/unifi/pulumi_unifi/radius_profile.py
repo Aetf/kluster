@@ -427,8 +427,8 @@ class RadiusProfile(pulumi.CustomResource):
                  resource_name: str,
                  opts: Optional[pulumi.ResourceOptions] = None,
                  accounting_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
-                 acct_servers: pulumi.Input[Optional[Sequence[pulumi.Input[Union['RadiusProfileAcctServerArgs', 'RadiusProfileAcctServerArgsDict']]]]] = None,
-                 auth_servers: pulumi.Input[Optional[Sequence[pulumi.Input[Union['RadiusProfileAuthServerArgs', 'RadiusProfileAuthServerArgsDict']]]]] = None,
+                 acct_servers: pulumi.Input[Optional[Sequence[pulumi.Input[Union['RadiusProfileAcctServerArgs', 'RadiusProfileAcctServerArgsDict', 'outputs.RadiusProfileAcctServer']]]]] = None,
+                 auth_servers: pulumi.Input[Optional[Sequence[pulumi.Input[Union['RadiusProfileAuthServerArgs', 'RadiusProfileAuthServerArgsDict', 'outputs.RadiusProfileAuthServer']]]]] = None,
                  interim_update_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
                  interim_update_interval: pulumi.Input[Optional[_builtins.float]] = None,
                  name: pulumi.Input[Optional[_builtins.str]] = None,
@@ -444,11 +444,11 @@ class RadiusProfile(pulumi.CustomResource):
         :param str resource_name: The name of the resource.
         :param pulumi.ResourceOptions opts: Options for the resource.
         :param pulumi.Input[_builtins.bool] accounting_enabled: Enable RADIUS accounting to track user sessions, including login/logout times and data usage. Useful for billing and audit purposes. Defaults to <span pulumi-lang-nodejs="`false`" pulumi-lang-dotnet="`False`" pulumi-lang-go="`false`" pulumi-lang-python="`false`" pulumi-lang-yaml="`false`" pulumi-lang-java="`false`" pulumi-lang-hcl="`false`">`false`</span>.
-        :param pulumi.Input[Sequence[pulumi.Input[Union['RadiusProfileAcctServerArgs', 'RadiusProfileAcctServerArgsDict']]]] acct_servers: List of RADIUS accounting servers to use with this profile. Accounting servers track session data like connection time and data usage. Each server requires:
+        :param pulumi.Input[Sequence[pulumi.Input[Union['RadiusProfileAcctServerArgs', 'RadiusProfileAcctServerArgsDict', 'outputs.RadiusProfileAcctServer']]]] acct_servers: List of RADIUS accounting servers to use with this profile. Accounting servers track session data like connection time and data usage. Each server requires:
                  * IP address of the RADIUS server
                  * Port number (default: 1813)
                  * Shared secret for secure communication
-        :param pulumi.Input[Sequence[pulumi.Input[Union['RadiusProfileAuthServerArgs', 'RadiusProfileAuthServerArgsDict']]]] auth_servers: List of RADIUS authentication servers to use with this profile. Multiple servers provide failover - if the first server is unreachable, the system will try the next server in the list. Each server requires:
+        :param pulumi.Input[Sequence[pulumi.Input[Union['RadiusProfileAuthServerArgs', 'RadiusProfileAuthServerArgsDict', 'outputs.RadiusProfileAuthServer']]]] auth_servers: List of RADIUS authentication servers to use with this profile. Multiple servers provide failover - if the first server is unreachable, the system will try the next server in the list. Each server requires:
                  * IP address of the RADIUS server
                  * Shared secret for secure communication
         :param pulumi.Input[_builtins.bool] interim_update_enabled: Enable periodic updates during active sessions. This allows tracking of ongoing session data like bandwidth usage. Defaults to <span pulumi-lang-nodejs="`false`" pulumi-lang-dotnet="`False`" pulumi-lang-go="`false`" pulumi-lang-python="`false`" pulumi-lang-yaml="`false`" pulumi-lang-java="`false`" pulumi-lang-hcl="`false`">`false`</span>.
@@ -488,8 +488,8 @@ class RadiusProfile(pulumi.CustomResource):
                  resource_name: str,
                  opts: Optional[pulumi.ResourceOptions] = None,
                  accounting_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
-                 acct_servers: pulumi.Input[Optional[Sequence[pulumi.Input[Union['RadiusProfileAcctServerArgs', 'RadiusProfileAcctServerArgsDict']]]]] = None,
-                 auth_servers: pulumi.Input[Optional[Sequence[pulumi.Input[Union['RadiusProfileAuthServerArgs', 'RadiusProfileAuthServerArgsDict']]]]] = None,
+                 acct_servers: pulumi.Input[Optional[Sequence[pulumi.Input[Union['RadiusProfileAcctServerArgs', 'RadiusProfileAcctServerArgsDict', 'outputs.RadiusProfileAcctServer']]]]] = None,
+                 auth_servers: pulumi.Input[Optional[Sequence[pulumi.Input[Union['RadiusProfileAuthServerArgs', 'RadiusProfileAuthServerArgsDict', 'outputs.RadiusProfileAuthServer']]]]] = None,
                  interim_update_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
                  interim_update_interval: pulumi.Input[Optional[_builtins.float]] = None,
                  name: pulumi.Input[Optional[_builtins.str]] = None,
@@ -530,8 +530,8 @@ class RadiusProfile(pulumi.CustomResource):
             id: pulumi.Input[str],
             opts: Optional[pulumi.ResourceOptions] = None,
             accounting_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
-            acct_servers: pulumi.Input[Optional[Sequence[pulumi.Input[Union['RadiusProfileAcctServerArgs', 'RadiusProfileAcctServerArgsDict']]]]] = None,
-            auth_servers: pulumi.Input[Optional[Sequence[pulumi.Input[Union['RadiusProfileAuthServerArgs', 'RadiusProfileAuthServerArgsDict']]]]] = None,
+            acct_servers: pulumi.Input[Optional[Sequence[pulumi.Input[Union['RadiusProfileAcctServerArgs', 'RadiusProfileAcctServerArgsDict', 'outputs.RadiusProfileAcctServer']]]]] = None,
+            auth_servers: pulumi.Input[Optional[Sequence[pulumi.Input[Union['RadiusProfileAuthServerArgs', 'RadiusProfileAuthServerArgsDict', 'outputs.RadiusProfileAuthServer']]]]] = None,
             interim_update_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
             interim_update_interval: pulumi.Input[Optional[_builtins.float]] = None,
             name: pulumi.Input[Optional[_builtins.str]] = None,
@@ -548,11 +548,11 @@ class RadiusProfile(pulumi.CustomResource):
         :param pulumi.Input[str] id: The unique provider ID of the resource to lookup.
         :param pulumi.ResourceOptions opts: Options for the resource.
         :param pulumi.Input[_builtins.bool] accounting_enabled: Enable RADIUS accounting to track user sessions, including login/logout times and data usage. Useful for billing and audit purposes. Defaults to <span pulumi-lang-nodejs="`false`" pulumi-lang-dotnet="`False`" pulumi-lang-go="`false`" pulumi-lang-python="`false`" pulumi-lang-yaml="`false`" pulumi-lang-java="`false`" pulumi-lang-hcl="`false`">`false`</span>.
-        :param pulumi.Input[Sequence[pulumi.Input[Union['RadiusProfileAcctServerArgs', 'RadiusProfileAcctServerArgsDict']]]] acct_servers: List of RADIUS accounting servers to use with this profile. Accounting servers track session data like connection time and data usage. Each server requires:
+        :param pulumi.Input[Sequence[pulumi.Input[Union['RadiusProfileAcctServerArgs', 'RadiusProfileAcctServerArgsDict', 'outputs.RadiusProfileAcctServer']]]] acct_servers: List of RADIUS accounting servers to use with this profile. Accounting servers track session data like connection time and data usage. Each server requires:
                  * IP address of the RADIUS server
                  * Port number (default: 1813)
                  * Shared secret for secure communication
-        :param pulumi.Input[Sequence[pulumi.Input[Union['RadiusProfileAuthServerArgs', 'RadiusProfileAuthServerArgsDict']]]] auth_servers: List of RADIUS authentication servers to use with this profile. Multiple servers provide failover - if the first server is unreachable, the system will try the next server in the list. Each server requires:
+        :param pulumi.Input[Sequence[pulumi.Input[Union['RadiusProfileAuthServerArgs', 'RadiusProfileAuthServerArgsDict', 'outputs.RadiusProfileAuthServer']]]] auth_servers: List of RADIUS authentication servers to use with this profile. Multiple servers provide failover - if the first server is unreachable, the system will try the next server in the list. Each server requires:
                  * IP address of the RADIUS server
                  * Shared secret for secure communication
         :param pulumi.Input[_builtins.bool] interim_update_enabled: Enable periodic updates during active sessions. This allows tracking of ongoing session data like bandwidth usage. Defaults to <span pulumi-lang-nodejs="`false`" pulumi-lang-dotnet="`False`" pulumi-lang-go="`false`" pulumi-lang-python="`false`" pulumi-lang-yaml="`false`" pulumi-lang-java="`false`" pulumi-lang-hcl="`false`">`false`</span>.

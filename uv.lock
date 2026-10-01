@@ -11,6 +11,9 @@ resolution-markers = [
 exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
 exclude-newer-span = "P7D"
 
+[options.exclude-newer-package]
+pulumi = "2026-10-01T12:00:00Z"
+
 [manifest]
 members = [
     "kluster",
@@ -804,12 +807,12 @@ requires-dist = [
     { name = "jinja2", specifier = ">=3.1.4" },
     { name = "keyring", specifier = ">=25.7.0" },
     { name = "oci", specifier = ">=2.184.2" },
-    { name = "pulumi", specifier = ">=3.254.0" },
+    { name = "pulumi", specifier = ">=3.266.0" },
     { name = "pulumi-b2", editable = "sdks/b2" },
     { name = "pulumi-cloudflare", specifier = ">=6.11.0" },
     { name = "pulumi-crds", editable = "packages/crds" },
     { name = "pulumi-github", specifier = ">=6.4.0" },
-    { name = "pulumi-kubernetes", specifier = "==4.34.1" },
+    { name = "pulumi-kubernetes", specifier = "==4.34.2" },
     { name = "pulumi-kubernetes-cert-manager", specifier = ">=0.2.0" },
     { name = "pulumi-libvirt", specifier = ">=0.5.4" },
     { name = "pulumi-oci", specifier = ">=4.20.0" },
@@ -1309,7 +1312,7 @@ wheels = [
 
 [[package]]
 name = "pulumi"
-version = "3.257.0"
+version = "3.267.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "debugpy" },
@@ -1323,9 +1326,10 @@ dependencies = [
     { name = "protobuf" },
     { name = "pyyaml" },
     { name = "semver" },
+    { name = "typing-extensions" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8d/17/965108f9ef3bf3b5e63410d7876e4a7fadc6640748c98d85503d06e8b111/pulumi-3.257.0-py3-none-any.whl", hash = "sha256:d3797ef93c0a29f8145a29f184426d6468fa96560b88a1cda9db2df7b7ca5b81", size = 417227, upload-time = "2026-08-13T14:43:07.869Z" },
+    { url = "https://files.pythonhosted.org/packages/44/20/1ee1491d7e08a618c890073fbaf6c95e8cf8773f49a7ee31a11681c832ca/pulumi-3.267.0-py3-none-any.whl", hash = "sha256:2fe9efcf92a06e8f312da71387cc4a5ee7467ebd858440d33bf9f615c93020f2", size = 426522, upload-time = "2026-10-01T11:50:17.976Z" },
 ]
 
 [[package]]
@@ -1333,14 +1337,14 @@ name = "pulumi-b2"
 version = "0.14.0"
 source = { editable = "sdks/b2" }
 dependencies = [
-    { name = "parver" },
+    { name = "packaging" },
     { name = "pulumi" },
     { name = "semver" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "parver", specifier = ">=0.2.1" },
+    { name = "packaging", specifier = ">=24.0" },
     { name = "pulumi", specifier = ">=3.247.0,<4.0.0" },
     { name = "semver", specifier = ">=2.8.1" },
     { name = "typing-extensions", marker = "python_full_version < '3.11'", specifier = ">=4.11,<5" },
@@ -1362,7 +1366,7 @@ wheels = [
 
 [[package]]
 name = "pulumi-crds"
-version = "4.34.1"
+version = "4.34.2"
 source = { editable = "packages/crds" }
 dependencies = [
     { name = "parver" },
@@ -1376,7 +1380,7 @@ dependencies = [
 requires-dist = [
     { name = "parver", specifier = ">=0.2.1" },
     { name = "pulumi", specifier = ">=3.231.0,<4.0.0" },
-    { name = "pulumi-kubernetes", specifier = ">=4.34.1" },
+    { name = "pulumi-kubernetes", specifier = ">=4.34.2" },
     { name = "requests", specifier = ">=2.21,<3.0" },
     { name = "semver", specifier = ">=2.8.1" },
     { name = "typing-extensions", marker = "python_full_version < '3.11'", specifier = ">=4.11,<5" },
@@ -1398,7 +1402,7 @@ wheels = [
 
 [[package]]
 name = "pulumi-kubernetes"
-version = "4.34.1"
+version = "4.34.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "parver" },
@@ -1406,9 +1410,9 @@ dependencies = [
     { name = "requests" },
     { name = "semver" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/39/2a/5233c8f8238a2f3b19f1a0307fccff556f16ed3115537d482d19a1f738e1/pulumi_kubernetes-4.34.1.tar.gz", hash = "sha256:613f477ba6569e73d36236d4dd2a64c767d96d4ee837b7dab80f4095fcb007e6", size = 2196969, upload-time = "2026-09-08T23:36:12.647Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c6/59/ba53f0fb6e10c4d9625d1f6bee6e03f4b58e4fea25ada8b5cd4b80ec084d/pulumi_kubernetes-4.34.2.tar.gz", hash = "sha256:598e4f7cb5d5d1564f365590b50f82b99b831a24b9bb1fd66351287ab1c17908", size = 2197428, upload-time = "2026-09-21T18:11:10.576Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/75/85/445b444a7dc5781041e80f6be9334a343ca9fbf224a8183b9a49a6497160/pulumi_kubernetes-4.34.1-py3-none-any.whl", hash = "sha256:7fa70fbaa50d2f17c6f4efe747d5f9290fbf5c5de9a8818713b28b29a4615848", size = 3385916, upload-time = "2026-09-08T23:36:10.108Z" },
+    { url = "https://files.pythonhosted.org/packages/ca/e2/ce15a82298ada9df70ae39f3156ad4cba3eab32517c839f4b09703a65f6c/pulumi_kubernetes-4.34.2-py3-none-any.whl", hash = "sha256:94c94b6ce3facd2693b7f8e73adb589c38a8157da3289009db8e892b14ee68cb", size = 3385917, upload-time = "2026-09-21T18:11:08.913Z" },
 ]
 
 [[package]]
@@ -1459,14 +1463,14 @@ name = "pulumi-unifi"
 version = "1.1.0"
 source = { editable = "sdks/unifi" }
 dependencies = [
-    { name = "parver" },
+    { name = "packaging" },
     { name = "pulumi" },
     { name = "semver" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "parver", specifier = ">=0.2.1" },
+    { name = "packaging", specifier = ">=24.0" },
     { name = "pulumi", specifier = ">=3.247.0,<4.0.0" },
     { name = "semver", specifier = ">=2.8.1" },
     { name = "typing-extensions", marker = "python_full_version < '3.11'", specifier = ">=4.11,<5" },
@@ -1477,14 +1481,14 @@ name = "pulumi-zerotier"
 version = "1.6.0"
 source = { editable = "sdks/zerotier" }
 dependencies = [
-    { name = "parver" },
+    { name = "packaging" },
     { name = "pulumi" },
     { name = "semver" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "parver", specifier = ">=0.2.1" },
+    { name = "packaging", specifier = ">=24.0" },
     { name = "pulumi", specifier = ">=3.247.0,<4.0.0" },
     { name = "semver", specifier = ">=2.8.1" },
     { name = "typing-extensions", marker = "python_full_version < '3.11'", specifier = ">=4.11,<5" },

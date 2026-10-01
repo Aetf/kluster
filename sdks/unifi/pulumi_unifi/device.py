@@ -459,12 +459,12 @@ class Device(pulumi.CustomResource):
                  resource_name: str,
                  opts: Optional[pulumi.ResourceOptions] = None,
                  allow_adoption: pulumi.Input[Optional[_builtins.bool]] = None,
-                 ether_lighting: pulumi.Input[Optional[Union['DeviceEtherLightingArgs', 'DeviceEtherLightingArgsDict']]] = None,
+                 ether_lighting: pulumi.Input[Optional[Union['DeviceEtherLightingArgs', 'DeviceEtherLightingArgsDict', 'outputs.DeviceEtherLighting']]] = None,
                  forget_on_destroy: pulumi.Input[Optional[_builtins.bool]] = None,
                  mac: pulumi.Input[Optional[_builtins.str]] = None,
                  name: pulumi.Input[Optional[_builtins.str]] = None,
-                 port_overrides: pulumi.Input[Optional[Sequence[pulumi.Input[Union['DevicePortOverrideArgs', 'DevicePortOverrideArgsDict']]]]] = None,
-                 radios: pulumi.Input[Optional[Sequence[pulumi.Input[Union['DeviceRadioArgs', 'DeviceRadioArgsDict']]]]] = None,
+                 port_overrides: pulumi.Input[Optional[Sequence[pulumi.Input[Union['DevicePortOverrideArgs', 'DevicePortOverrideArgsDict', 'outputs.DevicePortOverride']]]]] = None,
+                 radios: pulumi.Input[Optional[Sequence[pulumi.Input[Union['DeviceRadioArgs', 'DeviceRadioArgsDict', 'outputs.DeviceRadio']]]]] = None,
                  site: pulumi.Input[Optional[_builtins.str]] = None,
                  switch_vlan_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
                  __props__=None):
@@ -478,7 +478,7 @@ class Device(pulumi.CustomResource):
                * Device must be in a pending adoption state
                * Device must be accessible on the network
                  Set to false if you want to manage adoption manually. Defaults to <span pulumi-lang-nodejs="`true`" pulumi-lang-dotnet="`True`" pulumi-lang-go="`true`" pulumi-lang-python="`true`" pulumi-lang-yaml="`true`" pulumi-lang-java="`true`" pulumi-lang-hcl="`true`">`true`</span>.
-        :param pulumi.Input[Union['DeviceEtherLightingArgs', 'DeviceEtherLightingArgsDict']] ether_lighting: Etherlighting configuration for switches with per-port LEDs (e.g. USW Pro Max). `mode = "network"` colors each port's LED by the VLAN/network it serves (per-network colors come from the site-level Etherlighting palette); `mode = "speed"` colors by link speed. Only the fields you set are written — unset fields keep their controller-side values (read-modify-write overlay). Devices without Etherlighting hardware ignore this object.
+        :param pulumi.Input[Union['DeviceEtherLightingArgs', 'DeviceEtherLightingArgsDict', 'outputs.DeviceEtherLighting']] ether_lighting: Etherlighting configuration for switches with per-port LEDs (e.g. USW Pro Max). `mode = "network"` colors each port's LED by the VLAN/network it serves (per-network colors come from the site-level Etherlighting palette); `mode = "speed"` colors by link speed. Only the fields you set are written — unset fields keep their controller-side values (read-modify-write overlay). Devices without Etherlighting hardware ignore this object.
         :param pulumi.Input[_builtins.bool] forget_on_destroy: Whether to forget (un-adopt) the device when this resource is destroyed. When true:
                * The device will be removed from the controller
                * The device will need to be readopted to be managed again
@@ -490,7 +490,7 @@ class Device(pulumi.CustomResource):
                * 'Core-Switch-01' for a switch
                * 'Main-Gateway' for a gateway
                  Choose descriptive names that indicate location and purpose.
-        :param pulumi.Input[Sequence[pulumi.Input[Union['DevicePortOverrideArgs', 'DevicePortOverrideArgsDict']]]] port_overrides: A list of port-specific configuration overrides for UniFi switches. This allows you to customize individual port settings such as:
+        :param pulumi.Input[Sequence[pulumi.Input[Union['DevicePortOverrideArgs', 'DevicePortOverrideArgsDict', 'outputs.DevicePortOverride']]]] port_overrides: A list of port-specific configuration overrides for UniFi switches. This allows you to customize individual port settings such as:
                  * Port names and labels for easy identification
                  * Port profiles for VLAN and security settings
                  * Per-port native (untagged) and tagged VLAN behavior, inline, without authoring a <span pulumi-lang-nodejs="`unifi.PortProfile`" pulumi-lang-dotnet="`unifi.PortProfile`" pulumi-lang-go="`PortProfile`" pulumi-lang-python="`PortProfile`" pulumi-lang-yaml="`unifi.PortProfile`" pulumi-lang-java="`unifi.PortProfile`" pulumi-lang-hcl="`unifi_port_profile`">`unifi.PortProfile`</span>
@@ -505,7 +505,7 @@ class Device(pulumi.CustomResource):
                **Warning:** the controller stores port overrides as a single array on the device and the provider replaces the entire array on every apply. Any port whose override is set outside Terraform (e.g. via the UniFi UI or another tool) and is NOT declared here will have its override reset to the controller default on the next apply. Declare every port you want overridden.
                
                **Tagged-VLAN model:** there is no positive "allowed VLANs" list. With `forward = "customize"`, tagged traffic is *all* networks **minus** the ones listed in <span pulumi-lang-nodejs="`excludedNetworkIds`" pulumi-lang-dotnet="`ExcludedNetworkIds`" pulumi-lang-go="`excludedNetworkIds`" pulumi-lang-python="`excluded_network_ids`" pulumi-lang-yaml="`excludedNetworkIds`" pulumi-lang-java="`excludedNetworkIds`" pulumi-lang-hcl="`excluded_network_ids`">`excludedNetworkIds`</span>, so an empty <span pulumi-lang-nodejs="`excludedNetworkIds`" pulumi-lang-dotnet="`ExcludedNetworkIds`" pulumi-lang-go="`excludedNetworkIds`" pulumi-lang-python="`excluded_network_ids`" pulumi-lang-yaml="`excludedNetworkIds`" pulumi-lang-java="`excludedNetworkIds`" pulumi-lang-hcl="`excluded_network_ids`">`excludedNetworkIds`</span> means "trunk everything", not "trunk nothing".
-        :param pulumi.Input[Sequence[pulumi.Input[Union['DeviceRadioArgs', 'DeviceRadioArgsDict']]]] radios: Per-band radio configuration for access points. Each block configures ONE band (<span pulumi-lang-nodejs="`ng`" pulumi-lang-dotnet="`Ng`" pulumi-lang-go="`ng`" pulumi-lang-python="`ng`" pulumi-lang-yaml="`ng`" pulumi-lang-java="`ng`" pulumi-lang-hcl="`ng`">`ng`</span> = 2.4GHz, <span pulumi-lang-nodejs="`na`" pulumi-lang-dotnet="`Na`" pulumi-lang-go="`na`" pulumi-lang-python="`na`" pulumi-lang-yaml="`na`" pulumi-lang-java="`na`" pulumi-lang-hcl="`na`">`na`</span> = 5GHz, <span pulumi-lang-nodejs="`6e`" pulumi-lang-dotnet="`6e`" pulumi-lang-go="`6e`" pulumi-lang-python="`6e`" pulumi-lang-yaml="`6e`" pulumi-lang-java="`6e`" pulumi-lang-hcl="`6e`">`6e`</span> = 6GHz). Only the bands you declare are managed — undeclared bands are left untouched (the provider read-modify-writes the device's full radio table to preserve them, so declaring just one band will not wipe the others). Common uses: disable a band (<span pulumi-lang-nodejs="`txPowerMode " pulumi-lang-dotnet="`TxPowerMode " pulumi-lang-go="`txPowerMode " pulumi-lang-python="`tx_power_mode " pulumi-lang-yaml="`txPowerMode " pulumi-lang-java="`txPowerMode " pulumi-lang-hcl="`tx_power_mode ">`txPowerMode </span>= "disabled"`), pin a channel/width, or set a minimum-RSSI client kick. Applies to access points; has no effect on switches.
+        :param pulumi.Input[Sequence[pulumi.Input[Union['DeviceRadioArgs', 'DeviceRadioArgsDict', 'outputs.DeviceRadio']]]] radios: Per-band radio configuration for access points. Each block configures ONE band (<span pulumi-lang-nodejs="`ng`" pulumi-lang-dotnet="`Ng`" pulumi-lang-go="`ng`" pulumi-lang-python="`ng`" pulumi-lang-yaml="`ng`" pulumi-lang-java="`ng`" pulumi-lang-hcl="`ng`">`ng`</span> = 2.4GHz, <span pulumi-lang-nodejs="`na`" pulumi-lang-dotnet="`Na`" pulumi-lang-go="`na`" pulumi-lang-python="`na`" pulumi-lang-yaml="`na`" pulumi-lang-java="`na`" pulumi-lang-hcl="`na`">`na`</span> = 5GHz, <span pulumi-lang-nodejs="`6e`" pulumi-lang-dotnet="`6e`" pulumi-lang-go="`6e`" pulumi-lang-python="`6e`" pulumi-lang-yaml="`6e`" pulumi-lang-java="`6e`" pulumi-lang-hcl="`6e`">`6e`</span> = 6GHz). Only the bands you declare are managed — undeclared bands are left untouched (the provider read-modify-writes the device's full radio table to preserve them, so declaring just one band will not wipe the others). Common uses: disable a band (<span pulumi-lang-nodejs="`txPowerMode " pulumi-lang-dotnet="`TxPowerMode " pulumi-lang-go="`txPowerMode " pulumi-lang-python="`tx_power_mode " pulumi-lang-yaml="`txPowerMode " pulumi-lang-java="`txPowerMode " pulumi-lang-hcl="`tx_power_mode ">`txPowerMode </span>= "disabled"`), pin a channel/width, or set a minimum-RSSI client kick. Applies to access points; has no effect on switches.
                
                Note: like other device fields, only non-zero values are written, so a field cannot be set back to its zero value through Terraform — manage by overriding with explicit non-zero values.
         :param pulumi.Input[_builtins.str] site: The name of the UniFi site where the device is located. If not specified, the default site will be used.
@@ -536,12 +536,12 @@ class Device(pulumi.CustomResource):
                  resource_name: str,
                  opts: Optional[pulumi.ResourceOptions] = None,
                  allow_adoption: pulumi.Input[Optional[_builtins.bool]] = None,
-                 ether_lighting: pulumi.Input[Optional[Union['DeviceEtherLightingArgs', 'DeviceEtherLightingArgsDict']]] = None,
+                 ether_lighting: pulumi.Input[Optional[Union['DeviceEtherLightingArgs', 'DeviceEtherLightingArgsDict', 'outputs.DeviceEtherLighting']]] = None,
                  forget_on_destroy: pulumi.Input[Optional[_builtins.bool]] = None,
                  mac: pulumi.Input[Optional[_builtins.str]] = None,
                  name: pulumi.Input[Optional[_builtins.str]] = None,
-                 port_overrides: pulumi.Input[Optional[Sequence[pulumi.Input[Union['DevicePortOverrideArgs', 'DevicePortOverrideArgsDict']]]]] = None,
-                 radios: pulumi.Input[Optional[Sequence[pulumi.Input[Union['DeviceRadioArgs', 'DeviceRadioArgsDict']]]]] = None,
+                 port_overrides: pulumi.Input[Optional[Sequence[pulumi.Input[Union['DevicePortOverrideArgs', 'DevicePortOverrideArgsDict', 'outputs.DevicePortOverride']]]]] = None,
+                 radios: pulumi.Input[Optional[Sequence[pulumi.Input[Union['DeviceRadioArgs', 'DeviceRadioArgsDict', 'outputs.DeviceRadio']]]]] = None,
                  site: pulumi.Input[Optional[_builtins.str]] = None,
                  switch_vlan_enabled: pulumi.Input[Optional[_builtins.bool]] = None,
                  __props__=None):
@@ -576,12 +576,12 @@ class Device(pulumi.CustomResource):
             opts: Optional[pulumi.ResourceOptions] = None,
             allow_adoption: pulumi.Input[Optional[_builtins.bool]] = None,
             disabled: pulumi.Input[Optional[_builtins.bool]] = None,
-            ether_lighting: pulumi.Input[Optional[Union['DeviceEtherLightingArgs', 'DeviceEtherLightingArgsDict']]] = None,
+            ether_lighting: pulumi.Input[Optional[Union['DeviceEtherLightingArgs', 'DeviceEtherLightingArgsDict', 'outputs.DeviceEtherLighting']]] = None,
             forget_on_destroy: pulumi.Input[Optional[_builtins.bool]] = None,
             mac: pulumi.Input[Optional[_builtins.str]] = None,
             name: pulumi.Input[Optional[_builtins.str]] = None,
-            port_overrides: pulumi.Input[Optional[Sequence[pulumi.Input[Union['DevicePortOverrideArgs', 'DevicePortOverrideArgsDict']]]]] = None,
-            radios: pulumi.Input[Optional[Sequence[pulumi.Input[Union['DeviceRadioArgs', 'DeviceRadioArgsDict']]]]] = None,
+            port_overrides: pulumi.Input[Optional[Sequence[pulumi.Input[Union['DevicePortOverrideArgs', 'DevicePortOverrideArgsDict', 'outputs.DevicePortOverride']]]]] = None,
+            radios: pulumi.Input[Optional[Sequence[pulumi.Input[Union['DeviceRadioArgs', 'DeviceRadioArgsDict', 'outputs.DeviceRadio']]]]] = None,
             site: pulumi.Input[Optional[_builtins.str]] = None,
             switch_vlan_enabled: pulumi.Input[Optional[_builtins.bool]] = None) -> 'Device':
         """
@@ -597,7 +597,7 @@ class Device(pulumi.CustomResource):
                * Device must be accessible on the network
                  Set to false if you want to manage adoption manually. Defaults to <span pulumi-lang-nodejs="`true`" pulumi-lang-dotnet="`True`" pulumi-lang-go="`true`" pulumi-lang-python="`true`" pulumi-lang-yaml="`true`" pulumi-lang-java="`true`" pulumi-lang-hcl="`true`">`true`</span>.
         :param pulumi.Input[_builtins.bool] disabled: Whether the device is administratively disabled. When true, the device will not forward traffic or provide services.
-        :param pulumi.Input[Union['DeviceEtherLightingArgs', 'DeviceEtherLightingArgsDict']] ether_lighting: Etherlighting configuration for switches with per-port LEDs (e.g. USW Pro Max). `mode = "network"` colors each port's LED by the VLAN/network it serves (per-network colors come from the site-level Etherlighting palette); `mode = "speed"` colors by link speed. Only the fields you set are written — unset fields keep their controller-side values (read-modify-write overlay). Devices without Etherlighting hardware ignore this object.
+        :param pulumi.Input[Union['DeviceEtherLightingArgs', 'DeviceEtherLightingArgsDict', 'outputs.DeviceEtherLighting']] ether_lighting: Etherlighting configuration for switches with per-port LEDs (e.g. USW Pro Max). `mode = "network"` colors each port's LED by the VLAN/network it serves (per-network colors come from the site-level Etherlighting palette); `mode = "speed"` colors by link speed. Only the fields you set are written — unset fields keep their controller-side values (read-modify-write overlay). Devices without Etherlighting hardware ignore this object.
         :param pulumi.Input[_builtins.bool] forget_on_destroy: Whether to forget (un-adopt) the device when this resource is destroyed. When true:
                * The device will be removed from the controller
                * The device will need to be readopted to be managed again
@@ -609,7 +609,7 @@ class Device(pulumi.CustomResource):
                * 'Core-Switch-01' for a switch
                * 'Main-Gateway' for a gateway
                  Choose descriptive names that indicate location and purpose.
-        :param pulumi.Input[Sequence[pulumi.Input[Union['DevicePortOverrideArgs', 'DevicePortOverrideArgsDict']]]] port_overrides: A list of port-specific configuration overrides for UniFi switches. This allows you to customize individual port settings such as:
+        :param pulumi.Input[Sequence[pulumi.Input[Union['DevicePortOverrideArgs', 'DevicePortOverrideArgsDict', 'outputs.DevicePortOverride']]]] port_overrides: A list of port-specific configuration overrides for UniFi switches. This allows you to customize individual port settings such as:
                  * Port names and labels for easy identification
                  * Port profiles for VLAN and security settings
                  * Per-port native (untagged) and tagged VLAN behavior, inline, without authoring a <span pulumi-lang-nodejs="`unifi.PortProfile`" pulumi-lang-dotnet="`unifi.PortProfile`" pulumi-lang-go="`PortProfile`" pulumi-lang-python="`PortProfile`" pulumi-lang-yaml="`unifi.PortProfile`" pulumi-lang-java="`unifi.PortProfile`" pulumi-lang-hcl="`unifi_port_profile`">`unifi.PortProfile`</span>
@@ -624,7 +624,7 @@ class Device(pulumi.CustomResource):
                **Warning:** the controller stores port overrides as a single array on the device and the provider replaces the entire array on every apply. Any port whose override is set outside Terraform (e.g. via the UniFi UI or another tool) and is NOT declared here will have its override reset to the controller default on the next apply. Declare every port you want overridden.
                
                **Tagged-VLAN model:** there is no positive "allowed VLANs" list. With `forward = "customize"`, tagged traffic is *all* networks **minus** the ones listed in <span pulumi-lang-nodejs="`excludedNetworkIds`" pulumi-lang-dotnet="`ExcludedNetworkIds`" pulumi-lang-go="`excludedNetworkIds`" pulumi-lang-python="`excluded_network_ids`" pulumi-lang-yaml="`excludedNetworkIds`" pulumi-lang-java="`excludedNetworkIds`" pulumi-lang-hcl="`excluded_network_ids`">`excludedNetworkIds`</span>, so an empty <span pulumi-lang-nodejs="`excludedNetworkIds`" pulumi-lang-dotnet="`ExcludedNetworkIds`" pulumi-lang-go="`excludedNetworkIds`" pulumi-lang-python="`excluded_network_ids`" pulumi-lang-yaml="`excludedNetworkIds`" pulumi-lang-java="`excludedNetworkIds`" pulumi-lang-hcl="`excluded_network_ids`">`excludedNetworkIds`</span> means "trunk everything", not "trunk nothing".
-        :param pulumi.Input[Sequence[pulumi.Input[Union['DeviceRadioArgs', 'DeviceRadioArgsDict']]]] radios: Per-band radio configuration for access points. Each block configures ONE band (<span pulumi-lang-nodejs="`ng`" pulumi-lang-dotnet="`Ng`" pulumi-lang-go="`ng`" pulumi-lang-python="`ng`" pulumi-lang-yaml="`ng`" pulumi-lang-java="`ng`" pulumi-lang-hcl="`ng`">`ng`</span> = 2.4GHz, <span pulumi-lang-nodejs="`na`" pulumi-lang-dotnet="`Na`" pulumi-lang-go="`na`" pulumi-lang-python="`na`" pulumi-lang-yaml="`na`" pulumi-lang-java="`na`" pulumi-lang-hcl="`na`">`na`</span> = 5GHz, <span pulumi-lang-nodejs="`6e`" pulumi-lang-dotnet="`6e`" pulumi-lang-go="`6e`" pulumi-lang-python="`6e`" pulumi-lang-yaml="`6e`" pulumi-lang-java="`6e`" pulumi-lang-hcl="`6e`">`6e`</span> = 6GHz). Only the bands you declare are managed — undeclared bands are left untouched (the provider read-modify-writes the device's full radio table to preserve them, so declaring just one band will not wipe the others). Common uses: disable a band (<span pulumi-lang-nodejs="`txPowerMode " pulumi-lang-dotnet="`TxPowerMode " pulumi-lang-go="`txPowerMode " pulumi-lang-python="`tx_power_mode " pulumi-lang-yaml="`txPowerMode " pulumi-lang-java="`txPowerMode " pulumi-lang-hcl="`tx_power_mode ">`txPowerMode </span>= "disabled"`), pin a channel/width, or set a minimum-RSSI client kick. Applies to access points; has no effect on switches.
+        :param pulumi.Input[Sequence[pulumi.Input[Union['DeviceRadioArgs', 'DeviceRadioArgsDict', 'outputs.DeviceRadio']]]] radios: Per-band radio configuration for access points. Each block configures ONE band (<span pulumi-lang-nodejs="`ng`" pulumi-lang-dotnet="`Ng`" pulumi-lang-go="`ng`" pulumi-lang-python="`ng`" pulumi-lang-yaml="`ng`" pulumi-lang-java="`ng`" pulumi-lang-hcl="`ng`">`ng`</span> = 2.4GHz, <span pulumi-lang-nodejs="`na`" pulumi-lang-dotnet="`Na`" pulumi-lang-go="`na`" pulumi-lang-python="`na`" pulumi-lang-yaml="`na`" pulumi-lang-java="`na`" pulumi-lang-hcl="`na`">`na`</span> = 5GHz, <span pulumi-lang-nodejs="`6e`" pulumi-lang-dotnet="`6e`" pulumi-lang-go="`6e`" pulumi-lang-python="`6e`" pulumi-lang-yaml="`6e`" pulumi-lang-java="`6e`" pulumi-lang-hcl="`6e`">`6e`</span> = 6GHz). Only the bands you declare are managed — undeclared bands are left untouched (the provider read-modify-writes the device's full radio table to preserve them, so declaring just one band will not wipe the others). Common uses: disable a band (<span pulumi-lang-nodejs="`txPowerMode " pulumi-lang-dotnet="`TxPowerMode " pulumi-lang-go="`txPowerMode " pulumi-lang-python="`tx_power_mode " pulumi-lang-yaml="`txPowerMode " pulumi-lang-java="`txPowerMode " pulumi-lang-hcl="`tx_power_mode ">`txPowerMode </span>= "disabled"`), pin a channel/width, or set a minimum-RSSI client kick. Applies to access points; has no effect on switches.
                
                Note: like other device fields, only non-zero values are written, so a field cannot be set back to its zero value through Terraform — manage by overriding with explicit non-zero values.
         :param pulumi.Input[_builtins.str] site: The name of the UniFi site where the device is located. If not specified, the default site will be used.
