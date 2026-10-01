@@ -1,21 +1,22 @@
-"""What the appliance is built from that only the escrow can produce, and the files a workstation writes for it.
+"""What a scratch box is built from that only the escrow can produce, and the files a workstation writes for the appliance.
 
-The machine itself -- the values, the Butane template they are rendered into,
-the digest a running box is compared on -- is `kluster.lib.state_backend.render`,
-which takes every key and recipient as an argument. This module is what mints
-and recovers them: the server certificate the escrowed CA signs and the box's
-SSH identity, minted per render; the age recipients whose identities the
-escrow holds, and the drill recipient committed beside the template. It also
-writes what a workstation keeps for the box -- the client bundle and the
-host-key pin -- and reads the one time-dependent fact about a running box, its
-certificate's expiry.
+The machine itself -- the values and the Butane template they are rendered
+into -- is `kluster.lib.state_backend.render`, which takes every key and
+recipient as an argument. The `state-backend` stack renders the appliance from
+the stable keys in its configuration; this module mints and recovers them for
+`state-backend render`, which renders a scratch box for the rebuild drill
+(physical/state-backend.md §7.3.1): a server certificate the escrowed CA signs
+and an SSH identity, minted per render, and the age recipients whose
+identities the escrow holds, with the drill recipient committed beside the
+template. It also writes what a workstation keeps for the appliance -- the
+client bundle and the host-key pin -- and reads the escrowed identities a
+restore decrypts with.
 """
 
 from __future__ import annotations
 
 import datetime as dt
 import logging
-from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -46,26 +47,13 @@ DRILL_RECIPIENT_FILE = Path(render.__file__).with_name(render.MACHINE) / DRILL_R
 #: `state-backend ssh` reads it, and nothing else may write it.
 KNOWN_HOSTS_FILE = 'known_hosts'
 
-#: How much life the server certificate must have left for a converge to leave
-#: a box alone, and the only home of that number: the documents name the
-#: margin, never its value.
-#:
-#: It is small against `pki.LEAF_VALIDITY`, so a certificate spends a small
-#: fraction of its life inside the margin and the box is replaced for expiry
-#: at most once per certificate. And it is wider than `EXPIRY_ALERT_MARGIN`
-#: below, so an installation being deployed at all has had the expiry
-#: reported to it -- reporting is what a converge does unaided, and the
-#: replacement itself waits for `--force` -- well before the probe's alert
-#: can fire.
-RENEWAL_MARGIN = dt.timedelta(days=90)
-
 #: How much life the server certificate must have left for `state-backend
 #: probe` to stay quiet (physical/state-backend.md §6), and the only home of
-#: that number. Held below `RENEWAL_MARGIN` by a test: the probe is the
-#: backstop for a box nobody has converged, or whose reports nobody acted on,
-#: and a backstop that fires before the margin opens is the first reporter
-#: rather than the last. The gap between the two is the time a reported
-#: expiry has to be acted on before it is alerted as well.
+#: that number. Held below `settings.RENEWAL_MARGIN` by a test: the probe is
+#: the backstop for an appliance whose stack nobody has run, or whose reports
+#: nobody acted on, and a backstop that fires before the margin opens is the
+#: first reporter rather than the last. The gap between the two is the time a
+#: reported expiry has to be acted on before it is alerted as well.
 EXPIRY_ALERT_MARGIN = dt.timedelta(days=30)
 
 
@@ -73,7 +61,7 @@ def drill_recipient(path: Path) -> str | None:
     """The drill key's public half as `path` holds it, or None while no such file exists.
 
     Absent is a state rather than a refusal: the file appears when the
-    generator first runs, and every converge before that would otherwise
+    generator first runs, and every render before that would otherwise
     refuse. A file that is there is held to what the generator writes -- one
     recipient, because the drill key has one slot and no generational pair
     (physical/state-backend.md §5) -- and an empty one is refused the way
@@ -122,7 +110,7 @@ def drill_recipient(path: Path) -> str | None:
 def drill_recipient_target() -> Path:
     """Where the drill recipient's writer puts it: `DRILL_RECIPIENT_FILE`, refused outside a checkout.
 
-    The file is one to commit, and the converge encrypts to the committed
+    The file is one to commit, and the appliance encrypts to the committed
     recipient alone. A package running from anywhere but the checkout it
     belongs to -- installed rather than editable -- resolves the path inside
     that installation, where no commit picks the file up. Its writer pushes
@@ -144,17 +132,15 @@ def drill_recipient_target() -> Path:
 def age_recipients(vault: escrow.Vault) -> tuple[str, ...]:
     """The public halves of every identity the appliance encrypts dumps to.
 
-    One function behind two callers, which is the point: the box's recipient
-    list is rendered from this, and so is the encryption of a dump an
-    operator takes by hand (`cli._dump`). A dump written to a different set
-    than the box's would be a file the drill and the escrow disagree about.
+    The scratch box's recipient list, read from the escrow where the
+    appliance's is read from the committed recipients file
+    (`committed.age_recipients`): the scratch box is the drill's, rendered with
+    the kit in hand.
 
     The escrowed generations first, then the drill recipient where one is on
     file (`DRILL_RECIPIENT_FILE`). The drill key is not a root the escrow
     holds -- it opens nothing an escrowed generation does not also open -- so
-    it is read from the committed file rather than recovered, and the field
-    it lands in is digested (`render.Machine.age_recipients`): committing the file
-    is drift the plain converge names.
+    it is read from the committed file rather than recovered.
     """
     generations = tuple(age.recipient(vault.recover(label)) for label in escrow.backup_labels())
     drill = drill_recipient(DRILL_RECIPIENT_FILE)
@@ -173,68 +159,19 @@ def backup_identities(vault: escrow.Vault) -> list[str]:
 
 @dataclass(frozen=True, eq=False)
 class Roots:
-    """What the appliance is built from that only the escrow can produce.
+    """What a scratch box is built from that only the escrow can produce.
 
-    Recovered once per run and passed down, so a converge that renders the
-    machine twice opens the offline registry once. The age recipients are
-    public halves: the identities themselves stay in the escrow -- or, for
-    the drill key, in the ops repository's `drill` Environment -- and the box
-    never holds one.
+    Recovered once and passed down. The age recipients are public halves: the
+    identities themselves stay in the escrow -- or, for the drill key, in the
+    ops repository's `drill` Environment -- and the box never holds one.
     """
 
     ca: pki.Authority
     age_recipients: tuple[str, ...]
 
-    @staticmethod
-    def labels() -> tuple[str, ...]:
-        """The escrow labels this appliance is built out of.
-
-        In the register's order: the authority, then the identities its dumps
-        are encrypted to.
-        """
-        return (escrow.CA, *escrow.backup_labels())
-
     @classmethod
     def recover(cls, vault: escrow.Vault) -> Roots:
         return cls(ca=pki.Authority.from_pem(vault.recover(escrow.CA)), age_recipients=age_recipients(vault))
-
-    @classmethod
-    def ensure(cls, vault: escrow.Vault, *, appliance_exists: bool) -> Roots:
-        """Recover the roots, minting first any the escrow does not hold yet.
-
-        The appliance is the first thing to escrow (credentials.md §4.1): a
-        bring-up has a kit and an empty registry, and the CA and the identity
-        this run is about to encrypt dumps to are generated and committed by
-        the same run that installs them. Idempotent by probing, like the rest
-        of `provision` — a label already escrowed is left exactly as it is,
-        because generating over it would orphan every dump under it.
-
-        **Generation is a bring-up act, and `appliance_exists` is what says
-        this run is not one.** It has no default: whether a box is running is
-        a fact about the caller's situation that this function cannot see, and
-        the direction a default would have to pick -- generate -- is the one
-        that destroys a live appliance's recoverability. With a box already running, a label the
-        registry cannot answer for means the registry is the wrong one —
-        `--escrow` pointed at another directory, or a clone whose `escrow/`
-        was never populated — rather than a label nobody has minted yet.
-        Minting there would rebuild the box under a CA no client bundle
-        chains to, and encrypt its dumps to a recipient no object still in
-        retention was written to: both halves of the recovery story break at
-        once, and neither failure shows until it is needed. So that case
-        refuses, naming the label it could not recover.
-        """
-        for label in cls.labels():
-            if vault.registry.generations(label):
-                continue
-            if appliance_exists:
-                raise escrow.EscrowError(
-                    f'nothing escrowed for {label}, and the appliance is already running: '
-                    'generating one now would rebuild the box under roots nothing else holds. '
-                    'Point --escrow at the registry this appliance was built from'
-                )
-            log.info('nothing escrowed for %s yet; generating it', label)
-            _ = escrow.generate(vault, label)
-        return cls.recover(vault)
 
 
 @dataclass(frozen=True)
@@ -279,23 +216,23 @@ def machine(
     bucket_id: str,
     now: dt.datetime | None = None,
 ) -> render.Machine:
-    """The machine this commit describes, at this address, with this dump key.
+    """The machine this commit describes, at this address, with this dump key: a scratch box.
 
     The keys it carries are minted here and handed to the render: a server
     certificate issued for `address`, and a fresh SSH host key. `now` is the
     instant the server certificate is issued at, and it goes to `pki`
     untouched: the default is `pki`'s, in one place, so a test can pin the
-    certificate's validity the way it pins `renewal_due`'s reading of it.
+    certificate's validity.
     """
     # One issuance, both halves. A leaf key is random at issuance (pki.py), so
     # asking the CA twice would hand the box a certificate its key does not
     # match -- and a box whose TLS key is wrong answers nothing.
     server = roots.ca.issue_server(address, now=now)
     # The box's SSH identity is minted here rather than generated on the box,
-    # which is what lets the launch record a pin for it before it boots. It is
-    # this render's alone: every caller that needs the public half derives it
-    # from the machine (`render.host_public_key`), so a pin can never describe
-    # a key the box was not given.
+    # so its fingerprint is in the console banner the render writes. It is this
+    # render's alone: the public half is derived from the machine
+    # (`render.host_public_key`), so it can never describe a key the box was
+    # not given.
     host_key = Ed25519PrivateKey.generate()
     return render.machine(
         ca_cert=roots.ca.certificate().cert_pem.decode().strip(),
@@ -313,64 +250,6 @@ def machine(
         dump_key=dump_key,
         bucket_id=bucket_id,
     )
-
-
-def renewal_due(recorded: str, *, now: dt.datetime | None = None) -> str | None:
-    """Why a recorded expiry makes the box stale, or None while it does not.
-
-    The one time-dependent part of the comparison, and deliberately a
-    threshold rather than a digest. A digest of "days remaining" would differ
-    from the box's on every run after the day it launched, and a converge that
-    always finds drift is a converge that always rebuilds. A threshold flaps in
-    neither direction: outside `RENEWAL_MARGIN` this answers None and a second
-    run is the same no-op as the first, and inside it the replacement carries a
-    certificate with a full `pki.LEAF_VALIDITY` ahead of it, so the run after
-    the rebuild is a no-op again.
-
-    A box recording no expiry is stale for the reason a box with no digest map
-    is: silence is not evidence that it matches, and an unreadable expiry is
-    exactly the state this component exists to refuse. That costs one
-    replacement, once, for a box built before this was recorded.
-    """
-    if not recorded:
-        return 'the box does not record when its server certificate expires, so an expiry cannot be seen coming'
-    try:
-        expiry = dt.datetime.fromisoformat(recorded)
-    except ValueError:
-        return f'the box records {recorded!r} as its server certificate expiry, and that is not a date'
-    # An expiry written by an older render could be naive; UTC is what every
-    # writer of this field means, and a naive value compared against an aware
-    # `now` raises rather than answering.
-    if expiry.tzinfo is None:
-        expiry = expiry.replace(tzinfo=dt.UTC)
-    remaining = expiry - (now or dt.datetime.now(dt.UTC))
-    if remaining > RENEWAL_MARGIN:
-        return None
-    if remaining.days < 0:
-        return f'the server certificate expired on {expiry.date().isoformat()}'
-    return (
-        f'the server certificate expires on {expiry.date().isoformat()}, '
-        f'{remaining.days} day(s) from now and inside the {RENEWAL_MARGIN.days}-day renewal margin'
-    )
-
-
-def digests(roots: Roots, *, address: str, dump_key_id: str, bucket_id: str) -> dict[str, str]:
-    """The digest map (`render.digests`) of the machine this commit describes at `address`.
-
-    The dump key's secret is left out: it is never digested, and a comparison
-    has no business holding one.
-    """
-    return render.digests(machine(roots, address=address, dump_key_id=dump_key_id, dump_key='', bucket_id=bucket_id))
-
-
-def drift(intended: Mapping[str, str], actual: Mapping[str, str]) -> list[str]:
-    """The component names that differ. An empty list means the box matches.
-
-    A component the box does not carry counts as drift, so a box provisioned
-    before a component existed -- or before this bookkeeping did -- converges
-    rather than passing on a silence.
-    """
-    return sorted(key for key in set(intended) | set(actual) if intended.get(key) != actual.get(key))
 
 
 def client_bundle(authority: pki.Authority, *, name: str, address: str) -> ClientBundle:

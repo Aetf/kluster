@@ -29,9 +29,10 @@ unifi resources on the UDM, and the B2 backup bucket. DNS lives in
 the `dns` stack (declarative/dns.md), which consumes this stack's IP
 outputs.
 
-Explicitly **not** owned: the state-backend E2.1.Micro (a bootstrap
-dependency of Pulumi itself — created by the `state-backend provision`
-script, documented in [framework/ci.md](../framework/ci.md) §1) and
+Explicitly **not** owned: the state-backend E2.1.Micro (the backend
+this stack's state lives in — declared by the `state-backend` stack,
+whose state is committed, documented in
+[framework/ci.md](../framework/ci.md) §1) and
 anything speaking the k8s API (that's `k8s-base`/`apps`).
 
 Stack outputs (the machine facts other stacks may reference,
@@ -115,8 +116,8 @@ credential (`ci_zerotier_identity_physical`,
 -   **Buckets**: none on this provider. The installation's
     cluster-data bucket is the backup bucket, which lives on B2
     precisely because it must not share a provider with what it
-    insures; the state backend's buckets are its provision script's,
-    not this stack's (storage.md §4).
+    insures; the state backend's buckets are the `state-backend`
+    stack's, not this stack's (storage.md §4).
 -   **Protection**: data- and identity-bearing resources here — block
     volumes and their attachments, the reserved public IP,
     `machine_secrets` — carry `protect=True` per storage.md §3.3.

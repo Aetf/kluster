@@ -460,6 +460,18 @@ through `mise.toml`'s `[env]`, and no `mise` task runs one
     words: `stack --color=never import` is a `stack import`.
 -   Exit 2 is a refusal, a failed preview, or a committed checkpoint that
     failed its checks.
+-   **A stack with a gate of its own has it applied around `plan` and
+    `up`.** The `state-backend` stack's is the one today
+    ([physical/state-backend.md](../physical/state-backend.md) §1): an
+    `up` that would create, replace or delete the box writes nothing and
+    names what moved until it is given `--force`, or `--replace`, which
+    replaces the box even when nothing moved; a create of the box
+    beside a reserved address that already points at something is
+    refused either way, and so is a run that would replace a resource
+    the program imports by id, which the engine would fail part way; and
+    after every `plan` and `up` the driver reads the estate's backend,
+    answering 3 while it serves no stack, in place of any status but 2,
+    and 4 while it does not answer, in place of 0 or 1.
 
 **A stack whose state is committed** has its backend in `checkpoints/`
 at the checkout's root, which the driver creates when it is missing,
@@ -604,8 +616,10 @@ needs is such a value. The `state-backend` stack's is
 `KLUSTER_STATE_BACKEND_REPLACE`, which the hooks on its instance read
 (`kluster.lib.state_backend.permission`, rfc-006 §4.3): without it, a step
 that would create, replace or delete the box fails at its hook with the box
-untouched, however the run was started. The driver does not set it yet, so
-every such step is refused.
+untouched, however the run was started. The driver sets it on the one
+`pulumi up` that `up --force` or `up --replace` starts, and takes it out
+of every other `pulumi` run of the stack, so a caller's shell that
+exported it grants nothing, to a passed-through `up` least of all.
 
 ## 4. CRD Types Handling
 

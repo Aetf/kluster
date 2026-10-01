@@ -27,7 +27,7 @@ from typing import Any
 
 import pytest
 import requests
-from b2_api import ACCOUNT_ID, FakeApi, Key
+from b2_api import ACCOUNT_ID, FakeApi
 from fake_gh import RecordedGh
 from memory_kit import MemoryKit
 
@@ -45,12 +45,12 @@ SEED_ENTRY = entries.SEEDS['b2'].entry
 
 BUCKET = 'kluster-state'
 
-#: The bucket's lifecycle rule and the uploader's key are confined to the same
-#: prefix, and the one home for it is `conventions` -- so a suite that made one
-#: up would be driving a bucket the key it mints cannot write into.
+#: The bucket's lifecycle rule and the keys on the dump prefix are confined to
+#: the same prefix, and the one home for it is `conventions` -- so a suite that
+#: made one up would be driving a bucket the keys it mints cannot list.
 PREFIX = conventions.STATE_DUMP_PREFIX
 RETENTION_DAYS = 30
-#: The lifecycle rule the dump prefix wants, as B2 exchanges it.
+#: The lifecycle rule the stack declares on the dump prefix, as B2 exchanges it.
 RETENTION: dict[str, Any] = {
     'fileNamePrefix': f'{PREFIX}/',
     'daysFromUploadingToHiding': RETENTION_DAYS,
@@ -375,24 +375,6 @@ def test_resuming_a_rotation_in_another_account_deletes_nothing(
     assert memory_kit.get(SEED_ENTRY, attribute='UserName') == stored.key_id
 
 
-def test_a_dump_key_is_not_minted_in_another_account(
-    api: FakeApi, kit: KdbxStore, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _ = _seeded(api, kit)
-    session, bucket_id = _bucket(api, kit)
-    before = _mints(api)
-    _elsewhere(monkeypatch)
-
-    # The same check as the three mints above, on the one mint that takes its
-    # session ready-made: a caller cannot hand this a session for an account
-    # `conventions` does not record and get a key out of it.
-    with pytest.raises(CredentialRejected, match=f'{ACCOUNT_ID}.*some-other-account'):
-        _ = b2.mint_dump_key(session, bucket_id=bucket_id)
-
-    assert _mints(api) == before
-    assert not api.named(b2.DUMPS_NAME)
-
-
 def _commands_named(message: str) -> list[list[str]]:
     """Every `credentials …` command a refusal quotes, as argv without the program name."""
     return [quoted.split()[1:] for quoted in re.findall(r'`(credentials [^`]+)`', message)]
@@ -522,201 +504,26 @@ def test_a_mint_retires_nothing_until_the_credential_has_been_delivered(api: Fak
     assert api.named(b2.MANAGEMENT.name) == [current.key_id]
 
 
-# -- the bucket and its write-only key --------------------------------------
+# -- the dump prefix's keys ----------------------------------------------------
+
+
+def _dump_bucket(api: FakeApi, name: str = BUCKET) -> str:
+    """The dump bucket, as the `state-backend` stack declares it: in the account already, made by no call here."""
+    for bucket_id, bucket in api.buckets.items():
+        if bucket['bucketName'] == name:
+            return bucket_id
+    bucket_id = f'bucket-{name}'
+    api.buckets[bucket_id] = {
+        'bucketId': bucket_id,
+        'bucketName': name,
+        'bucketType': 'allPrivate',
+        'lifecycleRules': [RETENTION],
+    }
+    return bucket_id
 
 
 def _bucket(api: FakeApi, kit: KdbxStore) -> tuple[b2.Session, str]:
-    session = _session(api, kit)
-    return session, b2.ensure_bucket(session, BUCKET, prefix=PREFIX, retention_days=RETENTION_DAYS)
-
-
-def test_the_bucket_is_created_private_with_the_retention_the_prefix_wants(api: FakeApi, kit: KdbxStore) -> None:
-    _ = _seeded(api, kit)
-
-    _, bucket_id = _bucket(api, kit)
-
-    bucket = api.buckets[bucket_id]
-    assert bucket['bucketType'] == 'allPrivate'
-    # Retention is a lifecycle rule so that nothing needs a delete capability
-    # to keep the bucket from growing forever.
-    assert bucket['lifecycleRules'] == [RETENTION]
-
-
-def test_converging_the_bucket_twice_creates_one_bucket(api: FakeApi, kit: KdbxStore) -> None:
-    _ = _seeded(api, kit)
-    _, first = _bucket(api, kit)
-
-    _, second = _bucket(api, kit)
-
-    assert (first, second) == (second, first)
-    assert list(api.buckets) == [first]
-    assert 'b2_update_bucket' not in api.calls
-
-
-@pytest.mark.parametrize(
-    'drifted',
-    [
-        [],
-        [RETENTION | {'daysFromUploadingToHiding': RETENTION_DAYS * 10}],
-        [RETENTION | {'daysFromHidingToDeleting': None}],
-    ],
-    ids=['removed', 'hidden-later', 'never-deleted'],
-)
-def test_a_retention_someone_changed_is_put_back(api: FakeApi, kit: KdbxStore, drifted: list[dict[str, Any]]) -> None:
-    _ = _seeded(api, kit)
-    session, bucket_id = _bucket(api, kit)
-    api.buckets[bucket_id]['lifecycleRules'] = drifted
-
-    _ = b2.ensure_bucket(session, BUCKET, prefix=PREFIX, retention_days=RETENTION_DAYS)
-
-    # The rule is the whole reason a compromised appliance cannot walk the
-    # dump history, so drift in it is corrected by every run that converges
-    # the bucket: a rule that still governs the prefix but keeps files longer
-    # is drift too.
-    assert api.buckets[bucket_id]['lifecycleRules'] == [RETENTION]
-
-
-def test_the_uploader_keeps_the_name_the_running_appliance_s_key_carries() -> None:
-    """The name is not free to change, which is why it is written down once.
-
-    Retirement matches on it and so does the currency check, so a key the
-    account already holds under the old name would read as "not the intended
-    one" -- a box rebuilt for a rename -- while the key itself outlived every
-    sweep that was supposed to reach it.
-    """
-    assert b2.DUMPS_NAME == 'kluster-state-dump'
-
-
-def test_the_dump_key_is_confined_to_one_prefix_of_one_bucket(api: FakeApi, kit: KdbxStore) -> None:
-    _ = _seeded(api, kit)
-    session, bucket_id = _bucket(api, kit)
-
-    key_id = _delivered(b2.mint_dump_key(session, bucket_id=bucket_id)).key_id
-
-    minted = api.keys[key_id]
-    assert (minted.capabilities, minted.bucket_id, minted.name_prefix) == (
-        b2.DUMP_CAPABILITIES,
-        bucket_id,
-        f'{PREFIX}/',
-    )
-
-
-def test_the_dump_key_can_write_and_nothing_else(api: FakeApi, kit: KdbxStore) -> None:
-    _ = _seeded(api, kit)
-    session, bucket_id = _bucket(api, kit)
-    minted = _delivered(b2.mint_dump_key(session, bucket_id=bucket_id))
-    key_id, key = minted.key_id, minted.key
-
-    uploader = b2.Session.authorize(key_id, key)
-
-    # An appliance that could list would be an appliance that could walk the
-    # dump history; the API refuses it rather than the code declining to ask.
-    with pytest.raises(requests.HTTPError):
-        _ = uploader.keys()
-    with pytest.raises(requests.HTTPError):
-        _ = uploader.buckets()
-
-
-def test_minting_a_dump_key_retires_the_one_the_old_box_held(api: FakeApi, kit: KdbxStore) -> None:
-    _ = _seeded(api, kit)
-    session, bucket_id = _bucket(api, kit)
-    previous = _delivered(b2.mint_dump_key(session, bucket_id=bucket_id)).key_id
-
-    key_id = _delivered(b2.mint_dump_key(session, bucket_id=bucket_id)).key_id
-
-    # The box's copy cannot be read back, so a replacement box means a
-    # replacement key and the old one is spent.
-    assert api.named(b2.DUMPS_NAME) == [key_id]
-    assert previous not in api.keys
-
-
-def test_the_dump_key_retires_nothing_until_the_credential_has_been_delivered(api: FakeApi, kit: KdbxStore) -> None:
-    _ = _seeded(api, kit)
-    session, bucket_id = _bucket(api, kit)
-    previous = _delivered(b2.mint_dump_key(session, bucket_id=bucket_id)).key_id
-
-    pending = b2.mint_dump_key(session, bucket_id=bucket_id)
-
-    # The order every mint in this package has: the successor's secret is
-    # disclosed once, so between here and the caller's push it exists in this
-    # process alone, and the push is a box being launched with it inside the
-    # Ignition. Retired here, a launch that then failed would leave the bucket
-    # with no uploader key at all.
-    # Asserted against the account rather than against the new key's id,
-    # because reading that id is delivering it.
-    standing = api.named(b2.DUMPS_NAME)
-    assert previous in standing
-    assert len(standing) == 2
-
-    current = _delivered(pending)
-
-    assert api.named(b2.DUMPS_NAME) == [current.key_id]
-
-
-def _current(session: b2.Session, key_id: str, bucket_id: str) -> bool:
-    return b2.dump_key_is_current(session, key_id, bucket_id=bucket_id)
-
-
-def test_the_key_the_box_holds_is_the_intended_one(api: FakeApi, kit: KdbxStore) -> None:
-    _ = _seeded(api, kit)
-    session, bucket_id = _bucket(api, kit)
-    key_id = _delivered(b2.mint_dump_key(session, bucket_id=bucket_id)).key_id
-
-    assert _current(session, key_id, bucket_id)
-
-
-def _deleted(api: FakeApi, key: Key) -> None:
-    del api.keys[key.key_id]
-
-
-def _rescoped_to_another_bucket(_api: FakeApi, key: Key) -> None:
-    key.bucket_id = 'bucket-elsewhere'
-
-
-def _rescoped_to_another_prefix(_api: FakeApi, key: Key) -> None:
-    key.name_prefix = 'elsewhere/'
-
-
-def _widened(_api: FakeApi, key: Key) -> None:
-    key.capabilities = ('writeFiles', 'readFiles')
-
-
-def _renamed(_api: FakeApi, key: Key) -> None:
-    key.name = 'someone-elses-key'
-
-
-@pytest.mark.parametrize(
-    ('description', 'mutate'),
-    [
-        ('deleted in the console', _deleted),
-        ('scoped to another bucket', _rescoped_to_another_bucket),
-        ('scoped to another prefix', _rescoped_to_another_prefix),
-        ('given a capability it should not have', _widened),
-        ('minted under another name', _renamed),
-    ],
-)
-def test_a_key_that_is_no_longer_what_the_box_needs_is_not_current(
-    api: FakeApi, kit: KdbxStore, description: str, mutate: Callable[[FakeApi, Key], None]
-) -> None:
-    _ = _seeded(api, kit)
-    session, bucket_id = _bucket(api, kit)
-    key_id = _delivered(b2.mint_dump_key(session, bucket_id=bucket_id)).key_id
-
-    mutate(api, api.keys[key_id])
-
-    # The box's secret cannot be read back, so "is it holding the right
-    # credential" is answered by identity — and a no here means a new box.
-    assert not _current(session, key_id, bucket_id), description
-
-
-def test_a_box_that_records_no_key_is_not_current(api: FakeApi, kit: KdbxStore) -> None:
-    _ = _seeded(api, kit)
-    session, bucket_id = _bucket(api, kit)
-
-    assert not _current(session, '', bucket_id)
-
-
-# -- the drill's reader -----------------------------------------------------
+    return _session(api, kit), _dump_bucket(api)
 
 
 #: The B2 capability families a read-only key must carry nothing from. Named
@@ -732,13 +539,14 @@ def test_the_drill_reader_keeps_its_name() -> None:
 
 
 def test_the_drill_reader_is_confined_to_the_prefix_the_uploader_writes() -> None:
-    reader, writer = b2.drill_reads('bucket-x'), b2.dumps('bucket-x')
+    reader = b2.drill_reads('bucket-x')
 
-    # The same bucket and the same prefix, separator included: a reader
-    # confined to `pulumi-state` where the writer writes `pulumi-state/` would
-    # read that prefix and every sibling that shares its letters.
-    assert reader.bucket_id == writer.bucket_id == 'bucket-x'
-    assert reader.name_prefix == writer.name_prefix == f'{PREFIX}/'
+    # The same bucket and the same prefix, separator included, as the
+    # `state-backend` stack's dump key: a reader confined to `pulumi-state`
+    # where the writer writes `pulumi-state/` would read that prefix and every
+    # sibling that shares its letters.
+    assert reader.bucket_id == 'bucket-x'
+    assert reader.name_prefix == b2.DUMP_PREFIX == f'{appliance_settings.B2_PREFIX}/'
 
 
 def test_the_drill_reader_may_do_nothing_the_uploader_may_and_nothing_administrative() -> None:
@@ -748,7 +556,7 @@ def test_the_drill_reader_may_do_nothing_the_uploader_may_and_nothing_administra
     # Disjoint from the writer's and from the administrative set: a key that
     # could write would be a second uploader, one that could administer would
     # be a second management key, and neither is what an exposed drill buys.
-    assert not set(reader.capabilities) & set(b2.dumps('bucket-x').capabilities)
+    assert not set(reader.capabilities) & set(b2.DUMP_CAPABILITIES)
     assert not set(reader.capabilities) & set(b2.CAPABILITIES)
     assert not [capability for capability in reader.capabilities if capability.startswith(MUTATING)]
     assert not [capability for capability in reader.capabilities if capability.endswith('Keys')]
@@ -883,13 +691,13 @@ def test_the_freshness_key_keeps_its_name() -> None:
 
 
 def test_the_freshness_key_is_confined_to_the_prefix_the_uploader_writes() -> None:
-    lister, writer = b2.freshness_dumps('bucket-x'), b2.dumps('bucket-x')
+    lister = b2.freshness_dumps('bucket-x')
 
     # The same bucket and the same prefix, separator included, for the reason
     # the drill's reader is held to them: a key confined to `pulumi-state`
     # would list that prefix and every sibling that shares its letters.
-    assert lister.bucket_id == writer.bucket_id == 'bucket-x'
-    assert lister.name_prefix == writer.name_prefix == f'{PREFIX}/'
+    assert lister.bucket_id == 'bucket-x'
+    assert lister.name_prefix == b2.DUMP_PREFIX == f'{appliance_settings.B2_PREFIX}/'
 
 
 def test_the_freshness_key_may_list_and_nothing_more() -> None:
@@ -901,7 +709,7 @@ def test_the_freshness_key_may_list_and_nothing_more() -> None:
     # would be a second drill reader held where only a listing is needed, and
     # one that could write would be a second uploader.
     assert set(lister.capabilities) < set(b2.drill_reads('bucket-x').capabilities)
-    assert not set(lister.capabilities) & set(b2.dumps('bucket-x').capabilities)
+    assert not set(lister.capabilities) & set(b2.DUMP_CAPABILITIES)
     assert not set(lister.capabilities) & set(b2.CAPABILITIES)
     assert not [capability for capability in lister.capabilities if capability.startswith(MUTATING)]
 
@@ -1025,9 +833,9 @@ OPS_REPOSITORY = conventions.forge.OPS.full_name
 
 
 def _freshness_bucket(api: FakeApi, kit: KdbxStore) -> str:
-    """The dump bucket, converged the way `state-backend provision` converges it, by its settings' name."""
-    session = b2.Session.from_entry(kit, SEED_ENTRY)
-    return b2.ensure_bucket(session, appliance_settings.B2_BUCKET, prefix=PREFIX, retention_days=RETENTION_DAYS)
+    """The dump bucket, under the name the `state-backend` stack declares it by."""
+    del kit
+    return _dump_bucket(api, appliance_settings.B2_BUCKET)
 
 
 def test_the_freshness_row_pushes_both_halves_as_repository_secrets_of_the_ops_repository(
@@ -1112,17 +920,15 @@ def test_the_freshness_row_mints_nothing_in_another_account(
 
 def test_an_account_larger_than_one_page_is_listed_whole(api: FakeApi, kit: KdbxStore) -> None:
     _ = _seeded(api, kit)
-    session, bucket_id = _bucket(api, kit)
-    key_id = _delivered(b2.mint_dump_key(session, bucket_id=bucket_id)).key_id
+    session = _session(api, kit)
     api.page_limit = 2
     for _ in range(5):
         _ = api.add_key('unrelated')
 
     # B2 pages `b2_list_keys` at a size it chooses, so a caller that reads the
-    # first page only would call a live key gone — and rebuild a box that was
-    # fine, while leaving every key it failed to see behind.
+    # first page only would call a live key gone, and leave every key it failed
+    # to see behind when it retires a role's predecessors.
     assert {listed.key_id for listed in session.keys()} == set(api.keys)  # noqa: SIM118 -- an API call that pages b2_list_keys; a Session is not iterable
-    assert _current(session, key_id, bucket_id)
 
 
 # -- the response boundary --------------------------------------------------
@@ -1131,7 +937,7 @@ def test_an_account_larger_than_one_page_is_listed_whole(api: FakeApi, kit: Kdbx
 def test_a_listed_key_missing_a_field_is_refused_naming_the_entry() -> None:
     answer = {
         'keys': [
-            {'applicationKeyId': 'key-1', 'keyName': b2.DUMPS_NAME, 'capabilities': ['writeFiles']},
+            {'applicationKeyId': 'key-1', 'keyName': b2.DRILL_READ_NAME, 'capabilities': ['listFiles']},
             {'applicationKeyId': 'key-2', 'capabilities': ['writeFiles']},
         ]
     }
@@ -1141,26 +947,6 @@ def test_a_listed_key_missing_a_field_is_refused_naming_the_entry() -> None:
     # retirement that has already deleted something.
     with pytest.raises(payload.ResponseRejected, match=r'b2_list_keys\.keys\[1\]: the answer carries no keyName'):
         _ = b2._key_page(answer)  # pyright: ignore[reportPrivateUsage]
-
-
-def test_a_retention_of_the_wrong_type_is_refused_rather_than_compared() -> None:
-    answer = {
-        'buckets': [
-            {
-                'bucketId': 'bucket-1',
-                'lifecycleRules': [
-                    {
-                        'fileNamePrefix': f'{PREFIX}/',
-                        'daysFromUploadingToHiding': 'thirty',
-                        'daysFromHidingToDeleting': 1,
-                    }
-                ],
-            }
-        ]
-    }
-
-    with pytest.raises(payload.ResponseRejected, match='daysFromUploadingToHiding'):
-        _ = b2._listed_buckets(answer)  # pyright: ignore[reportPrivateUsage]
 
 
 def test_an_answer_that_is_not_an_object_is_refused_rather_than_indexed() -> None:
@@ -1211,19 +997,6 @@ def test_a_refusal_describes_the_answer_and_never_quotes_it(answer: object, desc
     assert described_as in message, message
 
 
-def test_a_retention_that_already_says_this_is_not_rewritten(api: FakeApi, kit: KdbxStore) -> None:
-    _ = _seeded(api, kit)
-    session, bucket_id = _bucket(api, kit)
-    api.buckets[bucket_id]['lifecycleRules'] = [RETENTION | {'somethingB2Added': True}]
-
-    _ = b2.ensure_bucket(session, BUCKET, prefix=PREFIX, retention_days=RETENTION_DAYS)
-
-    # Rules are compared as rules -- the three fields a B2 lifecycle rule is
-    # made of -- so anything else the answer carries is not drift, and does not
-    # become a bucket rewritten on every run.
-    assert 'b2_update_bucket' not in api.calls
-
-
 # -- the fault sweep --------------------------------------------------------
 
 
@@ -1268,7 +1041,7 @@ class Faulty:
 
 
 #: The names the register mints under, and the invariant below counts.
-MANAGED = (b2.SEED.name, b2.MANAGEMENT.name, b2.DUMPS_NAME, b2.DRILL_READ_NAME, b2.FRESHNESS_DUMPS_NAME)
+MANAGED = (b2.SEED.name, b2.MANAGEMENT.name, b2.DRILL_READ_NAME, b2.FRESHNESS_DUMPS_NAME)
 
 
 def _kit_never_lies(kit: KdbxStore, api: FakeApi) -> None:
@@ -1319,36 +1092,17 @@ def _manage(api: FakeApi, kit: KdbxStore) -> None:
     _ = _delivered(b2.mint_management(kit, seed_entry=SEED_ENTRY))
 
 
-def _provision(api: FakeApi, kit: KdbxStore) -> None:
-    """The state-backend bring-up stage: converge the bucket, mint the key."""
-    session = b2.Session.from_entry(kit, SEED_ENTRY)
-    bucket_id = b2.ensure_bucket(session, BUCKET, prefix=PREFIX, retention_days=RETENTION_DAYS)
-    if not b2.dump_key_is_current(session, '', bucket_id=bucket_id):
-        # Delivered, not merely minted: a bare `mint_dump_key` retires nothing
-        # by design, so a stage that stopped there would sweep part of the
-        # calls and read the accumulation it leaves behind as healthy.
-        _ = _delivered(b2.mint_dump_key(session, bucket_id=bucket_id))
-
-
 def _drill(api: FakeApi, kit: KdbxStore) -> None:
-    """The drill row's B2 half: find the bucket, mint the reader, deliver it.
-
-    The bucket is converged here so the stage has one to confine the key to;
-    the row itself looks it up (`derived.py`), because a drill that finds no
-    bucket has nothing to read.
-    """
+    """The drill row's B2 half: mint the reader over the bucket the stack declares, deliver it."""
     session = b2.Session.from_entry(kit, SEED_ENTRY)
-    bucket_id = b2.ensure_bucket(session, BUCKET, prefix=PREFIX, retention_days=RETENTION_DAYS)
+    bucket_id = _dump_bucket(api)
     _ = _delivered(b2.mint_drill_read_key(session, bucket_id=bucket_id))
 
 
 def _freshness(api: FakeApi, kit: KdbxStore) -> None:
-    """The freshness row: find the bucket, mint the list-only key, deliver it.
-
-    The bucket is converged here for the reason `_drill` converges it.
-    """
+    """The freshness row: mint the list-only key over the bucket the stack declares, deliver it."""
     session = b2.Session.from_entry(kit, SEED_ENTRY)
-    bucket_id = b2.ensure_bucket(session, BUCKET, prefix=PREFIX, retention_days=RETENTION_DAYS)
+    bucket_id = _dump_bucket(api)
     _ = _delivered(b2.mint_freshness_dumps_key(session, bucket_id=bucket_id))
 
 
@@ -1385,7 +1139,6 @@ STAGES: tuple[tuple[str, Stage, bool], ...] = (
     ('create', _create, False),
     ('rotate', _rotate, True),
     ('management', _manage, True),
-    ('provision', _provision, True),
     ('drill', _drill, True),
     ('freshness', _freshness, True),
 )

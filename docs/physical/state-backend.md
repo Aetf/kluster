@@ -2,12 +2,15 @@
 
 The OCI **VM.Standard.E2.1.Micro** (Always Free, x86, 1 GB) running the
 Pulumi `postgres://` state backend for every stack. It sits
-**beneath** Pulumi — a bootstrap dependency that must exist before any
-stack can act — so it is the one hand-created OCI resource, provisioned
-from `src/kluster/lib/state_backend/` in this repo. Design goal: a
+**beneath** every stack that keeps its state there — a bootstrap
+dependency that must exist before any of them can act — so it is
+declared by a stack of its own, `state-backend`, whose state is
+committed to this repository rather than kept in the backend it creates
+([framework/pulumi.md](../framework/pulumi.md) §3.3), and whose
+machine is `src/kluster/lib/state_backend/`. Design goal: a
 **zero-maintenance appliance** — the box carries no state that
-`pg_dump` + re-provision can't rebuild, and every operational path is
-either automated or a written playbook (§7).
+`pg_dump` and a replacement can't rebuild, and every operational path
+is either automated or a written playbook (§7).
 
 The availability domain is **chosen by asking which one offers the
 shape**, not taken as the first one listed: this shape is offered in
@@ -20,34 +23,44 @@ shape nor the domain, which reads like a permissions problem.
 > (which keeps the *decision* — what the backend is and why it lives
 > here — and points at this document for everything about the box).
 > Why-it-moved-off-the-homelab and the OCI-Container-Instances
-> rejection live there. **The appliance is built and serving state**:
-> `src/kluster/lib/state_backend/machine/` holds the Butane file, the operator keys and
-> the dump script, and the `state-backend` console script renders,
-> provisions and converges the box, checks its pins, writes the client
-> bundle into its workstation slot (§3), logs in for diagnosis, and
-> takes and restores dumps (§7), and probes the box from outside
-> (§6). The **drill key** of §5 has its
-> generator (`credentials derived drill-age-identity generate`) and
-> joins the recipients from the converge that adopts its committed
-> public half. The two scheduled probes of §6 — the server
-> certificate's expiry, and the age of the newest dump — are
-> `state-backend probe`, built to be run from the ops repository on a
-> schedule; whether that schedule is in place is the ops repository's
-> own record (its README's census of workflows), and until that
-> schedule starts a job, the probe runs when an operator runs it.
-> Every key rotation this document describes is carried out with
-> commands that exist and, for the age identity, a pin edit (§7.4):
-> `state-backend provision --replace` for the server and dump keys
-> (§1), and the commands the §7.1 and §7.4 playbooks name for the CA
-> and the age identity; the one step no command takes is deleting a
-> compromised generation's objects from the bucket early. As of
-> 2026-09-25 the scheduled drill of §7.3 is design-only, so no drill
-> runs. §7.3.1 is
+> rejection live there. **The appliance serving state is the one a
+> script built, before the stack existed**; the `state-backend` stack
+> declares it whole (rfc-006 §4) and takes it over by the cutover of
+> rfc-006 §14, slice 6, whose live drill is the operator's: `state-backend
+> adopt` writes the ids of what exists into the stack's configuration,
+> the stack imports them through its program, and the box itself is
+> replaced rather than imported. Until that drill has run, the box
+> serving is the script's, with a server certificate and an SSH host
+> key of its own render rather than the stack's stable ones (§1), so
+> `state-backend ssh` refuses it. `src/kluster/lib/state_backend/machine/`
+> holds the Butane file, the operator keys, the dump script and the
+> files the `credentials derived` rows commit beside them; the
+> `operator-stack state-backend` driver plans and applies the stack;
+> and the `state-backend` console script renders a scratch box, checks
+> the pins, writes the client bundle into its workstation slot (§3),
+> logs in for diagnosis, takes and restores dumps (§7), and probes the
+> box from outside (§6). The **drill key** of §5 has its generator
+> (`credentials derived drill-age-identity generate`) and joins the
+> recipients from the replacement that carries its committed public
+> half. The two scheduled probes of §6 — the server certificate's
+> expiry, and the age of the newest dump — are `state-backend probe`,
+> built to be run from the ops repository on a schedule; whether that
+> schedule is in place is the ops repository's own record (its README's
+> census of workflows), and until that schedule starts a job, the probe
+> runs when an operator runs it. Every key rotation this document
+> describes is carried out with commands that exist and, for the age
+> identity, a pin edit (§7.4): a reissue into the stack's configuration
+> and the replacement that carries it for the server and host keys, a
+> generation bump in configuration for the dump key (§1), and the
+> commands the §7.1 and §7.4 playbooks name for the CA and the age
+> identity; the one step no command takes is deleting a compromised
+> generation's objects from the bucket early. As of 2026-09-25 the
+> scheduled drill of §7.3 is design-only, so no drill runs. §7.3.1 is
 > the restore rehearsal an operator runs in its place. It ran on
-> 2026-09-18 against a scratch box, on a dump taken from a
-> workstation, and `state-backend restore` ran against
-> the appliance itself in its first replace-and-restore on 2026-09-25;
-> §7.3.1 says which steps each proved, and what neither did.
+> 2026-09-18 against a scratch box, on a dump taken from a workstation,
+> and `state-backend restore` ran against the appliance itself in its
+> first replace-and-restore on 2026-09-25; §7.3.1 says which steps each
+> proved, and what neither did.
 
 ## 1. OS & configuration management
 
@@ -57,330 +70,163 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
 (PARAVIRTUALIZED launch mode), and Ignition is delivered as instance
 `user_data` — FCOS reads it in place of cloud-init.
 
--   **Single source of truth: `src/kluster/lib/state_backend/`** — one Butane
-    file plus a provision script wrapping the `oci` CLI (image import
-    if needed, instance launch with the rendered Ignition, and the
-    trivial NSG — 5432/22 open, §4). Butane renders to Ignition at provision time (`butane` via
-    mise). The Butane file is reviewed like any code, and so are the
-    pins it is rendered with: renovate opens pin-bump PRs against
-    `src/kluster/lib/state_backend/settings.py` (§2), and humans merge
-    them.
--   **The only apply path is re-provision.** No configuration agent,
-    no SSH mutation: any change = PR to the Butane file → run
-    `state-backend provision`, which compares the running box, and the
-    network and bucket it stands on, against the commit, names each
-    difference it finds and, once the replacement is asked for
-    (below), dumps that box, terminates it and relaunches (minutes of
-    5432 downtime — CI retries, local ops re-run). SSH exists (operator key in
-    Ignition) for **diagnosis only** — `state-backend ssh` looks the
-    address up and logs in, so reading a log does not start with
-    finding an IP. Note the key set is
-    `src/kluster/lib/state_backend/machine/operator-keys.txt`: a workstation whose key
-    is not in it cannot reach the box at all, which is a re-provision
-    to fix, not an `ssh-copy-id`. The
-    no-drift rule is what makes "the repo describes the box" true. What
-    tests that claim, as of 2026-09-25, is a converge an operator runs
-    by hand, which compares the box's bill of materials, and what the
-    box stands on, against the commit (below);
-    the quarterly drill (§7.3) is designed to prove it on a schedule, by
-    provisioning a scratch box from the same commit, and as of
-    2026-09-25 no pass of it has happened: its workflow is not written
-    (`kluster-ops#57`), and the ops repository's workflows that do
-    exist start no job until its Actions billing is restored
-    (`kluster-ops#393`).
+-   **Single source of truth: the `state-backend` stack.** Its
+    component, `kluster.components.state_backend`, declares every entity
+    the appliance is (rfc-006 §4.1): the network, the custom image,
+    the instance with the Ignition its Butane file renders to, the
+    reserved address, the readiness of the box on that address, the
+    dump bucket and its retention, and the dump key. The Butane file is
+    reviewed like any code, and so are the pins it is rendered with:
+    renovate opens pin-bump PRs against
+    `src/kluster/lib/state_backend/settings.py` (§2) — the Fedora CoreOS
+    release and its digest among them — and humans merge them.
+-   **A run of the stack is the apply path.** No configuration agent,
+    no SSH mutation: any change = PR → `operator-stack state-backend
+    plan`, a refreshed preview, which names every difference between
+    the commit and what OCI and B2 hold → `operator-stack state-backend
+    up`. A difference that does not touch the box — a security rule
+    added by hand, a retention changed — is repaired in place by the
+    next `up`, and the box keeps serving. A difference that replaces
+    the box — a changed Ignition, any input the provider replaces the
+    instance on — waits for `--force` (below). SSH exists (operator key
+    in Ignition) for **diagnosis only** — `state-backend ssh` dials the
+    recorded address and logs in. Note the key set is
+    `src/kluster/lib/state_backend/machine/operator-keys.txt`: a
+    workstation whose key is not in it cannot reach the box at all,
+    which is a replacement to fix, not an `ssh-copy-id`. The no-drift
+    rule is what makes "the repo describes the box" true, and the
+    refreshed `plan` is what reads it: a hand edit is in the refreshed
+    state, and a difference on the next run.
+-   **The keys the box carries are stable.** The server key and
+    certificate, the SSH host key, the dump key and the age recipients
+    are each minted once and held where the stack reads them (rfc-006
+    §5): the first three in the stack's configuration and state, under
+    the operator passphrase, the recipients committed beside the Butane
+    template. So two renders from the same commit are equal byte for
+    byte, and the diff Pulumi computes on the instance's `metadata` is
+    the box's bill of materials. The instance also carries a digest per
+    component of what it was built from in `extendedMetadata`, in the
+    clear, because `metadata` is secret, and a diff can show it only as
+    changed: a planned replacement names there which component moved —
+    the Butane file, the operator keys, a pin, a key, the dump key's id.
+    The Butane digest is over the template's text as committed,
+    comments included, so a comment-only edit moves that digest in
+    place and replaces nothing.
 -   **First contact with the box is not trust-on-first-use.** The
-    address is reserved, and the box is cattle, so every replace hands
-    the same address a machine with a different SSH identity — and the
-    one machine whose compromise reaches every stack's state is the
-    last place to answer that with "type yes". So the identity is
-    minted rather than discovered: the `config.machine` call that
-    produces the Ignition mints an ed25519 host key as one more field
-    of the render, the Ignition delivers it as
-    `/etc/ssh/ssh_host_ed25519_key`, and the launch records its public
-    half in the instance's metadata beside the digest map. Fedora
+    address is reserved, and the box is cattle, so every replacement
+    hands the same address a machine — and the one machine whose
+    compromise reaches every stack's state is the last place to answer
+    that with "type yes". So the SSH identity is minted rather than
+    discovered: `credentials derived state-backend-host-key generate`
+    draws an ed25519 key into the stack's configuration and writes its
+    public half to `src/kluster/lib/state_backend/machine/host-key.txt`,
+    a file to commit; the Ignition delivers the private half as
+    `/etc/ssh/ssh_host_ed25519_key`, and the stack refuses to plan while
+    the configured key's public half is not the committed one. Fedora
     CoreOS uses a delivered key as it stands — `sshd-keygen@.service`
-    runs only for a key type whose file is missing or empty — so
-    nothing on the box overwrites it.
-    Both facts must come from **one** render, which is why the
-    Ignition and the pin are taken from the same `Machine`: a pin
-    minted by a second call names a key the box was never given, and
-    every later login refuses the box it describes.
--   **`state-backend ssh` reads the pin back and holds the box to it.**
-    The public half comes from the running instance's metadata over the
-    authenticated OCI control plane — the channel the converge already
-    treats as the one place that cannot drift from the box — and goes
-    into a `known_hosts` file of the tool's own beside the client
-    bundle, which the client is pointed at exclusively and under strict
-    checking. A wrong or unknown key is refused rather than written
-    down. **No client configuration participates in that connection**
-    — the exec passes `-F /dev/null`, so neither the operator's
-    `ssh_config` nor the machine's is read. That is a cut rather than a
-    list of directives to distrust, and it has to be: a `ControlMaster`
-    block, which is ordinary on a workstation, would otherwise let one
-    bare login outside the tool leave a multiplexing socket that a later
-    pinned exec attaches to with no host-key check performed at all, and
-    a `KnownHostsCommand` would supply trusted keys beside the pinned
-    file. Re-read on every exec rather than trusted from disk, so it is
-    right on a workstation that did not perform the last replace.
-    Because it is read at exec time a refusal cannot mean a stale local
-    file, and the run says both of its readings before it connects: the
-    box was replaced between the read and the dial, or something is
+    runs only for a key type whose file is missing or empty — so nothing
+    on the box overwrites it. Rotating it is generating again and the
+    replacement that carries it.
+-   **`state-backend ssh` holds the box to the committed pin.** The
+    public half goes into a `known_hosts` file of the tool's own beside
+    the client bundle, keyed by `settings.ADDRESS`, which the client is
+    pointed at exclusively and under strict checking. A wrong or unknown
+    key is refused rather than written down. **No client configuration
+    participates in that connection** — the exec passes `-F /dev/null`,
+    so neither the operator's `ssh_config` nor the machine's is read.
+    That is a cut rather than a list of directives to distrust, and it
+    has to be: a `ControlMaster` block, which is ordinary on a
+    workstation, would otherwise let one bare login outside the tool
+    leave a multiplexing socket that a later pinned exec attaches to
+    with no host-key check performed at all, and a `KnownHostsCommand`
+    would supply trusted keys beside the pinned file. It needs no OCI
+    credential and makes no OCI call: the pin is a committed file, and
+    whoever can change it is whoever can merge into `main`. Before it
+    connects the run says both readings of a refusal: a box the stack
+    has not replaced since the key was generated, or something
     interposed on the path. The operator's own `~/.ssh/known_hosts` is
-    neither read nor written, so a bare `ssh core@<address>` outside
-    the tool is unpinned by definition and the answer to it is
-    `state-backend ssh`. What that bare login leaves behind reaches no
-    further than itself, which is the other thing `-F /dev/null` buys.
-    Whoever can instead rewrite that metadata to match a rogue box is
-    an OCI principal with instance-update on this compartment, which is
-    root-equivalent for the box already — the same posture "Secrets
-    ride Ignition" rests on, and one the network path adds nothing to.
-    The private half lives in the render and the Ignition and nowhere
-    else: it is escrowed nowhere, because a lost host key orphans
-    nothing and costs one replace, and a per-instance key dies with the
-    instance whose Ignition carried it rather than staying recoverable
-    from every generation's `user_data` forever. Rotating it is
-    `provision --replace`, like the server key beside it.
--   **The box decides that by carrying its own bill of materials.**
-    At launch, the instance's metadata records a digest per component
-    of what it was built from — the Butane file, the operator keys,
-    each pin, the certificate identities, the dump key's id — and a
-    converge run recomputes them and calls for the box's replacement
-    when any differs, naming the ones that did. The Butane digest is
-    over the template's text as committed, comments included, so an
-    edit that changes no rendered byte — a reworded comment — is drift
-    like any other: the next plain converge reports `the machine
-    definition changed: butane` and stops, and nothing accepts it short
-    of `--force`, which replaces the box. Certificates are compared by what they
-    assert rather than by bytes, because they are re-issued on every
-    render and would otherwise read as permanent drift. The two
-    comparisons differ, and the difference is which key is stable: the
-    **CA** is compared by subject *and public key*, its private half
-    coming from escrow and outliving every render, while the **server
-    certificate** is compared by subject and SANs alone, its key being
-    random at each issuance (§3). The server's private key is therefore
-    outside the bill of materials on purpose — rotating it is
-    `provision --replace`, which is what that flag is for. A box with
-    no such record (built before this existed) counts as drifted:
-    silence is not evidence that it matches.
--   **One component is compared against the clock rather than against
-    the repository: how much life the server certificate has left.**
-    Every digested component is re-derived from the current commit, and
-    the current commit issues a certificate that is always young, so
-    equality can never see an expiry approaching. What the box records
-    beside its digests is therefore the date its own certificate dies,
-    and a converge leaves the box alone while more than the **renewal
-    margin** remains and calls for its replacement once less does. The margin's value
-    lives in one place, `config.RENEWAL_MARGIN`, and its reason is a
-    ratio rather than a date: it is small against the certificate's
-    validity (`pki.LEAF_VALIDITY`), so a certificate spends a small
-    fraction of its life inside the margin and the box is replaced for
-    expiry at most once per certificate. It is also wider than the
-    expiry probe's alert margin (`config.EXPIRY_ALERT_MARGIN`, §6),
-    which makes that alert the backstop for a box nobody has converged
-    — or whose reports nobody acted on — rather than the trigger for
-    the rotation; a test holds the two margins in that order. A
-    **threshold**, not a date, is what
-    keeps a time-dependent component from making the converge flap:
-    outside the margin a second run is the same no-op as the first, and
-    inside it the replacement carries a certificate with its full
-    validity ahead of it, so the run after the rebuild is a no-op
-    again. A box recording no expiry is drifted for the reason a box
-    with no digest map is.
--   **What the box stands on is compared too, against what a run that
-    launches creates.** The reads that find the box also read the network
-    it stands in and the bucket its dumps go to, and the same report
-    names each of these differences: a VCN, internet gateway, subnet or
-    security group missing under the appliance's name; a disabled
-    gateway; a subnet whose range is not `settings.SUBNET_CIDR`; a route
-    in the table the subnet routes through other than the one sending
-    everything to the gateway, or that one missing; a security rule
-    nobody declared, or a declared one missing; a security list the
-    subnet carries other than the VCN's default one, or the default one
-    not carried; a rule in those lists, ingress or egress, nobody
-    declared, or a declared one missing; a security group the box's network interface
-    is in other than the appliance's, or the appliance's missing from
-    it; a second network interface attached to the box; and a dump
-    bucket whose lifecycle rules are not the retention of §5. A security
-    rule is compared whole — direction, protocol, source or destination,
-    ports, ICMP type and code, statelessness — so a rule narrowed to one
-    address or moved to another port is named as a rule nobody declared
-    beside the declared one it replaced, and an egress rule confined to
-    one port does not stand in for egress to everything. A security
-    list's rules are compared the same way, as the union over
-    every list the subnet carries, since OCI admits to the box whatever
-    any of them or its security group admits. The declared rules there
-    are the ones OCI creates a VCN's default list with — in, SSH from
-    anywhere, the ICMP "fragmentation needed" message from anywhere, and
-    every ICMP "destination unreachable" message from inside the VCN;
-    out, everything, stateful — rather than none: the list is OCI's creation, and a declaration of
-    none would name each of those as drift on a box nobody touched,
-    while they admit nothing the security group does not except ICMP
-    "destination unreachable" messages: "fragmentation needed" from
-    anywhere, which path MTU discovery needs, and every code from inside
-    the VCN. A list's egress is compared too, although no list can widen
-    what the security group already lets out: OCI gives a stateless
-    rule precedence over a stateful one covering the same traffic and
-    stops tracking the connection, so a stateless egress rule on a list
-    drops the replies to the box's own connections, the nightly upload
-    to B2 among them.
-    Each difference is one line of the report and exits the way any
-    other drift does: the plain run writes nothing and stops, and the
-    replacement `--force` asks for is also the repair. A run that
-    launches a box converges all of it — a replacement does so before
-    the dump, while the old box still serves: it puts the retention rule
-    back, enables the gateway, rewrites the route table and sets the
-    subnet's range — waiting until the subnet has taken it, since the
-    launch needs the subnet to accept a new interface — then adds the
-    declared security rules before it removes the others, so a port
-    that box serves on is never left with no rule, and only then
-    rewrites the default list's rules to the declared ones and
-    detaches every other list, waiting for the subnet again. OCI admits
-    to an interface whatever its groups or its subnet's lists admit, so
-    once the group holds every declared rule nothing the lists lose is
-    the only rule a port the old box serves on rides — provided every
-    interface that box has is in the group, since the reserved address
-    points at one of them and a hand can move it. When one is not, the
-    lists may be
-    all that admits 5432 for the dump, so they are left as they are
-    until the old box is terminated and converged then, before the
-    launch; one that fails there leaves no box, which the run's closing
-    words name, and a re-run finds none and converges the lists before
-    its own launch. The box's interfaces are the one thing the run does
-    not rewrite: they go with the old box, and the launch gives the new
-    one a single interface in the appliance's group alone. A run stopped
-    before the terminate leaves the repairs before the stop in place,
-    with the old box serving, and the next plain run names what is left.
-    So a
-    hand-narrowed rule costs a replacement to undo; repairing it on a
-    standing box would be a second write path on the one run that is
-    otherwise read-only. Everything not named above is outside the
-    comparison. Among what bears on who reaches the box or its dumps:
-    the security lists of a second interface's subnet, which
-    the second interface is named for rather than read through; and the
-    bucket's type.
--   **A replacement is asked for before it happens, and dumped before
-    it happens.** Drift is a reason to replace the box, not permission
-    to: a plain `state-backend provision` reports what differs and
-    stops, and `--force` asks for exactly that replacement.
-    (`--replace` is the same request for a box with no drift to find.)
-    **A run that leaves the box standing writes nothing to OCI or B2,
-    but one repair.** What the comparison needs — what OCI holds under
-    the appliance's names with the routes, security rules and security
-    lists inside it, the box's network interfaces, the reserved address,
-    the dump bucket and its rules, whether B2 still has the dump key —
-    is looked up, and nothing is
-    created or converged unless the run is going to launch a box: a
-    run that finds no box, which destroys nothing and so has nothing to
-    approve, or a replacement asked for. The report on a
-    drifted box nobody asked to replace writes nothing. The repair is
-    on a matching box: when the reserved address does not point at it,
-    the run points it back — the box has no other public address, and a
-    run that stopped between a launch and its attach leaves exactly that
-    — and against a box the address already points at, the run writes
-    nothing.
-    **Neither flag stands in front of a prompt** — the replacement
-    decision reads nothing from a terminal, so it means the same thing
-    in a playbook and under a scheduler as it does by hand. (The run as
-    a whole is not unattended: opening the kit asks for its password
-    when the desktop secret store does not hold one, which is the one
-    place a `provision` waits for a human.) Once asked for, the run
-    first converges everything the new box stands on that does not need
-    the old one gone — the bucket, the network (its security lists aside
-    when the box being replaced has an interface outside the appliance's
-    group, above),
-    the reserved address and the custom image — and looks up the
-    availability domain that offers
-    the shape, so a failure in any of them, a failed image import among
-    them, stops the run with the box still serving. Then it dumps the box
-    it is about to destroy and verifies the dump before terminating
-    anything, which closes the window back to the last nightly one. That
-    makes the replacement depend on the dump, deliberately: a dump that
-    fails stops the run with the box still standing. After the terminate
-    comes what needs the old box gone or the new one up — those security
-    lists, when they waited for it, then the launch,
-    which would otherwise adopt the old box by its name, then the
-    retirement of the dump key's predecessor, the reserved address
-    pointed at the new box and the wait for it to answer — and two steps
-    that need neither: the mint, on the branch that launches because B2
-    discloses a key's secret once (below), and the render that carries
-    the key. Those two follow the terminate so that a run whose dump
-    fails has minted no key that nothing holds; they and the lists that
-    waited are the fallible steps left before the launch in the stretch
-    with no backend. An image release not imported yet
-    is imported ahead of the terminate rather than in the stretch with no
-    backend. `--no-dump` is how an operator says the box cannot be
-    dumped at all — unreachable, or a Postgres that will not start,
-    which is the case §6 sends here as its diagnosis path — and accepts
-    losing everything since the nightly object.
--   **A run that replaced the box does not report success.** What it
-    leaves is an appliance answering on 5432 over an empty database,
-    which is half of the operation and reads as all of it. So the run
-    ends by naming the dump it took and the `state-backend restore`
-    that puts it back, and exits non-zero until that has happened — a
-    status distinct from both the converge that changed nothing and the
-    run that failed. Every run that got as far as the terminate ends
-    that way, whichever way it leaves, and what it says around the
-    restore follows how far it got. A new box that answers is named as
-    serving an empty database. One that is running and has not answered
-    is named as such, with a re-run of `state-backend provision`, which
-    points the address at it and waits again — `state-backend ssh`
-    reaches it once the address does — and the restore for once it
-    answers. A run that saw no new box running says so without claiming
-    none exists, since a launch OCI accepted may still come up, and names
-    a `state-backend provision`, which brings a box up where none is and
-    points the address at one that is, before the restore. Since the
-    terminate itself may be what failed, it also says the old box may
-    still stand: one that does is found as it was, holding its state,
-    and is owed no restore. Both re-runs are named as runs from the
-    same commit, because a box this run launched was built from it:
-    from a later one, the re-run reads that box as drifted and stops
-    before pointing the address at it (§7).
--   **The restore stays owed until it happens, whatever runs between.**
-    A replacement records the restore it leaves owed — the dump's path,
-    or none when it took no dump — in the workstation slot beside the
-    `operator` bundle, as it starts destroying the box, and `state-backend
-    restore` over that bundle removes the record once Pulumi lists what
-    it restored. While the record stands, a run that would exit 0 exits
-    with the replacement's status instead and names that dump again.
-    That is what a re-run after a replacement that stopped part way
-    meets: it launches a box where it finds none, or finds the new one
-    and points the address at it, and either way the box answers over
-    an empty database that nothing else the run reads tells apart from
-    one holding its state. The record is the checkout's rather than the
-    box's: a restore run from another checkout or over another bundle
-    leaves it standing, and so does a terminate that never took the old
-    box away, and the run's words name the file to delete in those
-    cases. A `--no-dump` replacement of a box an earlier one left empty
-    loses nothing, and its words name the dump that earlier run took
-    rather than the newest object in B2 — on this checkout's record;
-    where the box holds state that went back some other way, the words
-    say to delete the record first, and that `--no-dump` then loses what
-    is not in the nightly object. A replacement's own dump takes the
-    record over whenever it is taken, because a dump holds a stack by
-    rule (§5): a box an earlier replacement left empty cannot be dumped
-    at all, regardless of whether anything has opened it since, so the
-    record keeps naming the dump the state is in.
--   **The B2 dump key is one of those components, not a special case.**
-    B2 returns an application key's secret once, so the box's copy
-    cannot be read back, and every mint is followed by the retirement
-    of the keys it supersedes (`credentials/delivery.py`): on a run that
-    minted and then left the instance untouched, that retirement would
-    revoke the key the box holds, and the nightly dump would fail
-    silently until it next fired. So the key is minted only on the
-    branch that launches a box, and the converge
-    asks B2 whether the *recorded* key still exists with the scope
-    `b2.dumps` states for it: if it does not, the box cannot be handed the
-    intended key without being rebuilt, which is the same replace as
-    any other drift. **The dump key's lifetime is the instance's, give
-    or take a failure past the mint:** a retirement that fails with the
-    new box running, or a launch OCI accepted whose wait was lost, leaves
-    the predecessor live until the next run that launches a box retires
-    it with every other superseded dump key — the re-run that recovers
-    the new box launches nothing, so it is not that run. It can write into the
-    dump prefix and nothing else, and the replacement's last words name
-    it (§7).
-    `--replace` remains for the case with no diff to find: rotating the
-    dump key, or discarding a box broken in a way metadata cannot show.
+    neither read nor written, so a bare `ssh core@<address>` outside the
+    tool is unpinned by definition and the answer to it is
+    `state-backend ssh`.
+-   **What the box stands on is declared beside it, and repaired in
+    place.** The appliance's own VCN, internet gateway, route table and
+    subnet; one security list the program owns, which the subnet carries
+    alone, holding exactly TCP 22 and 5432 from anywhere, the ICMP rules
+    a VCN's default list carries — "fragmentation needed" from anywhere,
+    which path MTU discovery needs, and every "destination unreachable"
+    from inside the VCN — and all egress, every rule stateful; the box's
+    one interface, in the subnet, with no public address and no network
+    security group; the reserved address pointed at that interface's
+    primary private address; and the dump bucket with the retention of
+    §5. The security list's rules are one input of one resource, so a
+    rule added by hand is part of that resource's refreshed state and a
+    difference on the next run; `up` puts the list back without touching
+    the box. The VCN, the subnet, the reserved address and both buckets
+    are protected: a run that would replace any of them is an error, in
+    a preview too.
+-   **A replacement of the box waits for `--force`, and is dumped
+    before it happens.** A plain `up` whose preview plans a create, a
+    replacement or a delete of the instance writes nothing, names the
+    digests that moved and `--force`, and exits 1; `--force` runs it,
+    and `--replace` replaces the box when nothing moved. **The engine
+    enforces that gate, not the driver alone**: a `before_create` and a
+    `before_delete` hook on the instance refuse unless the run carries
+    the replacement permission, which the driver sets on the one process
+    `up --force` starts and removes from every other's environment, so a
+    bare `pulumi up` passed through, or a caller's shell that exported
+    the variable, fails at that step with the box untouched. The delete
+    hook then dumps the box about to go, through the reserved address,
+    which still points at it — the instance is replaced old box first —
+    and keeps the plaintext for the restore: a dump that fails fails the
+    delete, and the old box keeps serving. The new box answers on the
+    reserved address once the readiness resource is created, and its
+    `after_create` hook restores that plaintext and verifies it with
+    `pulumi stack ls`. **Neither flag stands in front of a prompt** for
+    the replacement — `--yes` skips the confirmation `up` asks before it
+    applies anything — so the flags mean the same thing in a playbook
+    as by hand.
+-   **A run that leaves the backend empty does not report success.** A
+    box whose run took no dump of its own — a first launch, a launch
+    after a lost box, the cutover, a run after one that died between its
+    terminate and its restore — finds a backend that holds no stack and
+    nothing to restore: the restore hook names `state-backend restore
+    <file>`, or the first `pulumi stack init` of a site with no state
+    yet, and fails, and the driver exits 3. **The record of a restore
+    owed is the backend itself**, not a workstation file: after every
+    `plan` and every `up` the driver asks the estate's backend which
+    stacks it serves, over the `operator` client bundle, and answers 3
+    while it answers and serves none, and 4 while it does not answer —
+    naming the address it dialed — so a second workstation reads what
+    the first left behind.
+-   **A create beside a held address is refused, `--force` or not.**
+    A run whose refreshed state holds no instance, while the refreshed
+    reserved address is assigned to something, would launch a second
+    box beside one another workstation launched and has not landed the
+    checkpoint of, or one the stack never declared, and take the address
+    from it. The driver refuses that run, naming what the address
+    points at. On a first launch, or after the box is lost, the address
+    points at nothing: an instance's termination deletes the private
+    address the reservation pointed at.
+-   **The server certificate's expiry is a stack output.** The program
+    exports when the certificate in its configuration expires, and the
+    driver holds it against the **renewal margin**
+    (`settings.RENEWAL_MARGIN`) on every preview: inside it, the run
+    names the reissue, `credentials derived state-backend-server issue`,
+    and the `up --force` that carries it, and changes nothing. The
+    margin is small against the certificate's validity
+    (`pki.LEAF_VALIDITY`), and wider than the expiry probe's alert
+    margin (`config.EXPIRY_ALERT_MARGIN`, §6), which makes that alert
+    the backstop for an appliance whose stack nobody has run rather than
+    the trigger for the rotation; a test holds the two margins in that
+    order.
+-   **The image matters only at the next launch.** The custom image is
+    imported from the pinned Fedora CoreOS release's `oraclecloud`
+    artifact, checked against its digest and uploaded to the image
+    bucket on the way; a release bump imports a new image and changes
+    nothing else, because the instance ignores a change of its source
+    image — an in-place one would replace the running box's boot volume
+    without deleting the instance, so without the dump hook — and
+    Zincati keeps the running OS current.
 -   **OS updates: Zincati `periodic` strategy** — reboots confined to
     a weekly maintenance window (exact window chosen at
     implementation), not finalized the moment a rollout arrives:
@@ -409,25 +255,25 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     workstation under whatever interpreter its shebang names, and on
     the box the same shebang fails at exec — `203/EXEC`, "No such file
     or directory" against a file that is there — on every timer run.
--   **Every hand operation is a script.** The box is outside Pulumi,
-    but not outside version control: `src/kluster/lib/state_backend/`
-    carries the machine's definition, and the `state-backend` console script
-    carries the executable form of the operations this document names
-    — render, provision/re-provision, ssh, pins, bundle, dump and
-    restore. Key rotation rides those commands rather than a script of
-    its own: `provision --replace` rotates the server key and the dump
-    key, and the CA and age identity rotations of §7.1 and §7.4 add the
-    `credentials derived` generator for the new generation, after the
-    pin edit §7.4 starts with for the age identity. The playbooks (§7)
-    *invoke* the script; a procedure that exists only as prose in a
-    playbook is a bug.
--   **Secrets ride Ignition, accepted**: the server TLS key (§3) and
-    the B2 upload credential (§5) are in `user_data`. On this box
-    that's fine where it wasn't for cluster nodes (audit H1): no
-    untrusted workload runs here, so instance metadata is readable
-    only by the instance itself and OCI principals with compartment
-    read — who are root-equivalent for this box anyway. Rotating
-    either secret is a re-provision.
+-   **Every hand operation is a command.** The box is declared by the
+    stack, and what the stack does not declare is a command of the
+    `state-backend` console script: render a scratch box, ssh, pins,
+    bundle, dump, restore, probe, and the cutover's `adopt`. Key
+    rotation rides the `credentials derived` rows that fill the stack's
+    configuration and the replacement that carries what they wrote; the
+    CA and age identity rotations of §7.1 and §7.4 add the generator for
+    the new generation, after the pin edit §7.4 starts with for the age
+    identity. The playbooks (§7) *invoke* those commands; a procedure
+    that exists only as prose in a playbook is a bug.
+-   **Secrets ride Ignition, accepted**: the server TLS key (§3), the
+    SSH host key and the B2 upload credential (§5) are in `user_data`.
+    On this box that's fine where it wasn't for cluster nodes (audit
+    H1): no untrusted workload runs here, so instance metadata is
+    readable only by the instance itself and OCI principals with
+    compartment read — who are root-equivalent for this box anyway.
+    The stack holds the same values as ciphertext under the operator
+    passphrase, in its committed configuration and checkpoint (rfc-006
+    §3.3). Rotating any of them is a replacement.
 
 ## 2. Postgres
 
@@ -440,10 +286,10 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     `podman-auto-update.timer`, enabled by the same Butane file,
     applies minor/patch releases — the same trust-the-stream posture
     as the OS, safe for the same reason (nothing outlives
-    `pg_dump` + re-provision).
--   **Major upgrades take the rebuild path** (§7.2): final dump → pin
-    bump → re-provision (fresh data dir, initdb'd by the new major) →
-    restore. At tens of MB of state, owning `pg_upgrade` machinery
+    `pg_dump` + a replacement).
+-   **Major upgrades take the rebuild path** (§7.2): pin bump → a
+    replacement, which dumps the old box, initdb's a fresh data
+    directory under the new major and restores into it. At tens of MB of state, owning `pg_upgrade` machinery
     buys nothing. (The *in-cluster* CNPG databases are the opposite
     case — their major-upgrade policy is workloads.md §4.)
 -   Config: TLS on, `pg_hba` requiring certificate auth over TCP
@@ -483,7 +329,7 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     created by `/docker-entrypoint-initdb.d`, the image's own
     initialization, from a script the Butane file delivers, so they
     exist from a fresh data directory's first start and change only
-    by re-provisioning.
+    by a replacement.
 
 ## 3. PKI: a tiny offline CA
 
@@ -491,17 +337,17 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
 
 -   **One single-purpose private CA** (~10-year validity), generated
     on the workstation; the CA key never reaches the micro, CI, or
-    Pulumi state — the only processes that hold it are the
-    `state-backend` runs that issue a certificate. It is **random at
-    creation and escrowed** as `state-backend/ca` (credentials.md §2.2): a
-    ciphertext in the repository that only the offline recovery key
-    opens, which is the copy a rebuild reads. The bring-up run that
-    first provisions the appliance is what generates and commits it
-    (credentials.md §4.1); every run after that reads it and mints
-    nothing, because generating over a live CA would invalidate every
+    Pulumi state — the only processes that hold it are the commands
+    that issue a certificate. It is **random at creation and escrowed**
+    as `state-backend/ca` (credentials.md §2.2): a ciphertext in the
+    repository that only the offline recovery key opens, which is the
+    copy a rebuild reads. `credentials derived state-backend-ca
+    generate` draws it once, at a site's bring-up (credentials.md
+    §4.1), and every issuance after that recovers it and mints nothing
+    over it, because generating over a live CA would invalidate every
     certificate under it. **Every certificate under it is a leaf issued
-    on demand, and issuing is routine**: every `provision` and every
-    `render` issues a server leaf, and every `bundle` and every
+    on demand**: `credentials derived state-backend-server issue` and
+    every `render` issue a server leaf, and every `bundle` and every
     `credentials derived sync` that reaches the `ci` bundle issues a
     client leaf. None of them is recorded anywhere, and each is valid until it
     expires, so the set of valid leaves grows with use and is not
@@ -510,7 +356,10 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     CN names, and the box admits only the two client roles (§2).
     Two kinds of leaf:
 -   **Server cert, 2–3 years, SAN = the micro's reserved public IP.**
-    Clients connect by literal IP with `sslmode=verify-full` (libpq
+    Issued into the `state-backend` stack's configuration, the key
+    as a secret and the certificate and the CA's certificate in the
+    clear, so the same key survives every replacement until it is
+    reissued (rfc-006 §5). Clients connect by literal IP with `sslmode=verify-full` (libpq
     matches IP SANs), keeping the state-backend hot path free of any
     DNS dependency — the backend stays reachable when Cloudflare or
     the `dns` stack is itself the thing being repaired.
@@ -518,9 +367,10 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     key is a CI Environment secret; the `operator` key is a
     **workstation slot** (credentials.md §1 rule 6) —
     `.credentials/state-backend/` in the
-    checkout, written by `state-backend provision` and by `state-backend
-    bundle operator`, alongside the connection string for the backend it
-    authenticates against. libpq refuses a client key anything but its
+    checkout, written by `state-backend bundle operator`, alongside the
+    connection string for the backend it authenticates against. The
+    `state-backend` stack's hooks connect with it, and the driver reads
+    the backend through it after every run (§1). libpq refuses a client key anything but its
     owner can read, so the key is `0600` and the directory `0700`.
 -   **The connection string names no file; the environment does.**
     `postgres://<role>@<ip>:5432/pulumi_state?sslmode=verify-full` is
@@ -540,74 +390,72 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     bundle it was written beside, and `state-backend bundle operator`
     rewrites it into the portable form.
 -   **Leaf keys are random at issuance and escrowed nowhere.** They
-    are re-issuable from the CA at any time, so a stored copy would be an exposure that buys nothing back: writing a
+    are re-issuable from the CA at any time, so a stored copy would be an exposure that buys nothing back. The server key is the one
+    leaf key held anywhere, in the stack's configuration, so the box's
+    replacements keep it (§1). Writing a
     client bundle mints a certificate rather than reproducing one, and
     the box authenticates the CA rather than a particular leaf, so a
     workstation re-running `state-backend bundle operator` needs no
     notice given to anything. Issuing twice yields two different keys,
     which is why a caller that needs a certificate and its key takes
     both halves from one issuance.
--   **No CRL/OCSP.** The box's configuration changes only by
-    re-provisioning (§1), so a revocation list could reach it only the
-    way a new CA does — and a new CA revokes every leaf under the old
-    one at once, with no list of leaves to keep. The compromise
-    response is therefore "regenerate the CA, re-provision, reissue
-    the client bundles" — playbook §7.1. Until then a leaked client
+-   **No CRL/OCSP.** The box's configuration changes only by a
+    replacement (§1), so a revocation list could reach it only the way
+    a new CA does — and a new CA revokes every leaf under the old one
+    at once, with no list of leaves to keep. The compromise response is
+    therefore "regenerate the CA, reissue the server certificate,
+    replace the box, reissue the client bundles" — playbook §7.1. Until then a leaked client
     leaf is its role (§2): the state, not the box.
--   **An approaching expiry surfaces as drift; rotating is still an
-    operator's decision.** Once the box's recorded expiry is inside the
-    renewal margin, every `state-backend provision` names it in the
-    drift it reports — so on an installation whose stacks are deployed
-    at all, nobody has to be watching a date. What the plain run does
-    *not* do is act: replacing the box is `--force`, like every other
-    replacement (§1), so the certificate is re-issued when an operator
-    says so and not before. The backstop is the expiry probe of §6:
+-   **An approaching expiry is named by every run of the stack;
+    rotating is still an operator's decision.** Once the configured
+    certificate's expiry is inside the renewal margin, every
+    `operator-stack state-backend plan` and `up` names it with the
+    reissue (§1) — so nobody has to be watching a date. What no run
+    does is act: the reissue is a command, and carrying it to the box
+    is the replacement `--force` asks for, so the certificate changes
+    when an operator says so and not before. The backstop is the expiry probe of §6:
     `state-backend probe` reads the server certificate off an `openssl
     s_client` handshake (no credentials needed) and fails once less
     than `config.EXPIRY_ALERT_MARGIN` remains, and the ops repo's
     scheduled workflow (ci.md §3) is what runs it, failing into the
     unified alert channel (architecture.md §4.3). The renewal margin
-    opens earlier than the alert margin, so the probe fires only for a
-    box nobody has converged — or whose reports nobody acted on — in
-    the interval between the two. Response: playbook §7.1.
+    opens earlier than the alert margin, so the probe fires only for an
+    appliance whose stack nobody has run — or whose reports nobody acted
+    on — in the interval between the two. Response: playbook §7.1.
 
 ## 4. Network exposure
 
-**The appliance owns its own network.** A VCN, public subnet, internet
-gateway, NSG and reserved public IP, all created by the provision script on a run that
-launches a box, compared by every run that finds a box standing and converged by
-every run that launches one (§1), and none of them the cluster's: the cluster VCN is a `physical`-stack
-resource, and putting the box inside it would invert the dependency this
-whole design exists to avoid (Pulumi needs the backend before it can
-create anything). The isolation is a bonus, not the point. The **reserved**
+**The appliance owns its own network.** A VCN, public subnet, route
+table, internet gateway, security list and reserved public IP, all
+declared by the `state-backend` stack and repaired in place by its runs
+(§1), and none of them the cluster's: the cluster VCN is a
+`physical`-stack resource, whose state is in the backend this box
+serves, so putting the box inside it would invert the dependency this
+whole design exists to avoid. The isolation is a bonus, not the point. The **reserved**
 public IP is load-bearing rather than tidy — the server certificate's SAN
 is that literal address, so an ephemeral IP would invalidate the
-certificate on every re-provision. The address is recorded as
+certificate on every replacement. The address is recorded as
 `settings.ADDRESS`, beside the other pins: a site fact that follows
-from the first provision, the way the compartment is recorded in
+from the first reservation, the way the compartment is recorded in
 `conventions`, and the one home a reader that holds no bundle — the
-probe of §6 — takes it from. It is public already, on 5432 and 22 and
-in the certificate. `provision` holds the box to it: every address it
-takes from the reservation is refused, naming both addresses, when the
-reservation carries anything else (`provision.hold_address`), so a moved box is a
-decision the repository records rather than drift a converge follows.
-The hold is on the appliance's own compartment; a run pointed
-elsewhere by `--compartment` is another site and is not held, the way
-credentials.md §3 does not hold such a run to the recorded account.
-On a site provisioned for the first time the run ends at that refusal
-naming the address OCI chose; recording it and re-running is the
-second half of the first provision.
+probe of §6, and `state-backend ssh` — takes it from. It is public
+already, on 5432 and 22 and in the certificate. The stack holds the
+reservation to it: the component refuses a reservation that carries any
+other address, naming both, before anything depends on it
+(`StateBackend._held_address`), so a moved box is a decision the
+repository records rather than drift a run follows. On a site whose
+address is reserved for the first time the run ends at that refusal
+naming the address OCI chose; recording it and running again is the
+second half of the first launch.
 
 Public 5432 with TLS + **mandatory client certificates** — the
 client cert is the wall, and **the only wall** (decided 2026-08-24):
-the NSG permits 5432 (and SSH, key-auth only) from anywhere. The
-subnet carries the VCN's default security list alone, holding the
-ingress rules OCI creates it with — SSH again, and ICMP "destination
-unreachable" messages: "fragmentation needed" from anywhere, which path
-MTU discovery needs, and every code from inside the VCN — and the box's
-one interface is in the NSG alone,
-so those rules and the NSG's are all that admit anything to the box
-(§1 says how a run holds both). The
+the subnet's one security list permits 5432 (and SSH, key-auth only)
+from anywhere, beside ICMP "destination unreachable" messages:
+"fragmentation needed" from anywhere, which path MTU discovery needs,
+and every code from inside the VCN. The box's one interface is in no
+network security group, so that list is all that admits anything to
+the box (§1 says how a run holds it). The
 earlier GitHub-Actions-ranges allowlist died on arithmetic —
 `api.github.com/meta` lists thousands of CIDRs against an NSG rule
 quota in the hundreds, so the "coarse pre-filter" cannot be
@@ -617,10 +465,18 @@ reaches is Postgres's TLS handshake rejecting certificate-less
 clients; brute force buys nothing against cert auth, a certificate
 gets no further than the role it names (§2), and the
 Postgres-CVE surface is bounded by the auto-updating minor stream
-(§2) plus the re-provision posture — the same appliance logic as
+(§2) plus the replace-not-mutate posture — the same appliance logic as
 everything else on this box. (A scheduled workflow auto-editing
 security rules was already rejected on standing-rent grounds; now
 there is nothing for it to edit.)
+
+**The security group is retired.** The appliance's script admitted
+traffic through a network security group and the VCN's default list;
+the stack declares a list of its own instead, because a rule added to a
+group by hand is a resource of its own that no state holds, while one
+added to a list is part of the list's refreshed state (rfc-006 §4.1).
+The group the script made is deleted by hand once the cutover's
+replacement has launched a box outside it.
 
 ## 5. Backup
 
@@ -631,7 +487,13 @@ there is nothing for it to edit.)
     uploads to B2 under the state-backend prefix with a
     **prefix-scoped key holding `writeFiles` alone** — the system's
     one genuinely write-only key: unlike restic, the uploader keeps
-    no index to read (storage.md §4). Pruning is not the box's job:
+    no index to read (storage.md §4). The key is a resource of the
+    `state-backend` stack, minted with the stack's own B2 management
+    key, its secret kept in the stack's state and in the box's Ignition
+    alone, B2 returning it once; its name carries a generation from the
+    stack's configuration, so a bump of that generation rotates it,
+    which replaces the box that must carry the successor, and the old
+    key is deleted at the end of that run. Pruning is not the box's job:
     RPO ≤ 24 h is fine — state is re-derivable from reality
     (`pulumi refresh`/import) at worst.
 -   **Every object under the dump prefix holds at least one stack
@@ -682,17 +544,17 @@ there is nothing for it to edit.)
     equivalent of. What it does not
     differ in is the archive: the same `pg_dump -Fc`, the same age
     recipients, and the same check — an archive holding no stack
-    checkpoint is refused, and no file is written. That is
-    what makes a hand-taken dump interchangeable with a nightly one: as
-    recoverable, and a restore cannot tell which produced its input.
-    The playbooks below take theirs from the converge.
+    checkpoint is refused, and no file is written. That is what makes a hand-taken
+    dump interchangeable with a nightly one: as recoverable, and a
+    restore cannot tell which produced its input. A replacement takes a
+    dump of the same form through the stack's delete hook (§1).
 -   **Retention, explicit: STANDARD class — daily, kept 30 days —
     enforced by a B2 lifecycle rule on the prefix** (storage.md §4),
-    not by the uploader. `state-backend provision` creates the bucket
-    with the rule and puts the rule back on every run that launches a
-    box, and every run that finds a box standing names a rule that
-    differs as drift (§1): a rule changed by hand is reported by the next plain run and stays
-    changed until the next launch. That keeps
+    not by the uploader. The `state-backend` stack declares the bucket
+    with the rule, protected, and the rule converges in place in both
+    directions: a rule changed by hand is a difference the next `plan`
+    names and the next `up` puts back, with the box left serving. That
+    keeps
     the box's key free of delete/prune capability (the H4
     discipline), and it is what gives retired encryption keys a
     definite end of life (below).
@@ -728,19 +590,22 @@ there is nothing for it to edit.)
     the identity for `backup/age/<generation>` is random at creation
     and its age ciphertext is committed under `escrow/`
     (credentials.md §2.2), where the offline recovery key alone opens
-    it. Like the CA, generation N is minted by the bring-up run that
-    first installs it, and read unchanged by every run after.
-    Rotating means generating the next one and re-provisioning, and a
-    retired generation's ciphertext stays in the repository until the
-    last dump under it expires. Rotation is a designed path, not an
+    it. `credentials derived backup-age-<N> generate` draws generation N
+    once and writes its public half into the committed recipients file,
+    `src/kluster/lib/state_backend/machine/backup-recipients.txt`, which
+    the stack renders the box's recipients from; `credentials derived
+    check` holds that file to the escrow. Rotating means generating the
+    next one and the replacement that carries it, and a retired
+    generation's ciphertext stays in the repository until the last dump
+    under it expires. Rotation is a designed path, not an
     emergency improvisation:
     -   **Every dump is encrypted to the two newest generations, and
         to the ops-repo-held drill key as a third recipient** — age is
         natively multi-recipient, and the public keys sit in the Butane
-        file. The recipients a provision run writes are the escrowed
-        generations followed by the drill recipient where
-        `src/kluster/lib/state_backend/machine/drill-recipient.txt` is on file
-        (`config.age_recipients`); the file is written by
+        file. The recipients the stack renders are the generations the
+        committed recipients file names followed by the drill recipient
+        where `src/kluster/lib/state_backend/machine/drill-recipient.txt`
+        is on file (`committed.age_recipients`); the drill file is written by
         `credentials derived drill-age-identity generate`, which pushes
         the private half into the ops repository's `drill` Environment
         first, and it is absent until that generator has run. Every
@@ -768,18 +633,20 @@ there is nothing for it to edit.)
         rotation is `credentials derived drill-age-identity generate
         --rotate`, which overwrites the one Environment secret — with
         one slot, that *is* deleting the old key — and the recipient
-        on file, then commit → `state-backend provision --force` →
-        `restore` → a fresh dump the drill opens: no N−1 bookkeeping,
+        on file, then commit → `operator-stack state-backend up
+        --force`, which dumps the box, replaces it and restores into the
+        new one → a fresh dump the drill opens: no N−1 bookkeeping,
         and between the overwrite and that dump the drill cannot open
         the newest object, a gap bounded by one nightly.
     -   **Rotate at least yearly** (and on compromise or custody
         change): `credentials derived backup-age-<N+1> generate`, then
         bump the appliance's generation pin, which swaps the Butane
-        recipients `[N, N−1] → [N+1, N]`, then re-provision —
-        playbook §7.4. The pin and the escrow's expectations come from
-        the same constant, so `credentials derived check` fails until
-        the new generation exists. The path stays warm because the
-        apply is the same re-provision as everything else.
+        recipients `[N, N−1] → [N+1, N]`, then the replacement that
+        carries them — playbook §7.4. The pin and the escrow's
+        expectations come from the same constant, so `credentials
+        derived check` fails until the new generation exists, and until
+        the recipients file names it. The path stays warm because the apply
+        is the same replacement as everything else.
     -   **Old keys get a definite end of life**: generation N−1
         becomes destroyable **30 days after the rotation to N+1** —
         every object it can uniquely decrypt has aged out, and
@@ -835,7 +702,7 @@ shell on it:
     prefix and no address: every number is this repository's.
     -   **Certificate.** `openssl s_client -connect <ADDRESS>:5432
         -starttls postgres -showcerts` — the same handshake the
-        provision's readiness wait makes, credential-free because the
+        stack's readiness wait makes, credential-free because the
         box sends its certificate before anything authenticates — and
         the **server leaf** is read off the transcript: the first
         certificate of the chain. It fails when the leaf is not valid
@@ -874,15 +741,16 @@ shell on it:
         and not the box's, nothing is known about the dumps that run,
         and the next scheduled run is the retry.
     -   The renewal margin of §1 narrows the certificate's gap — any
-        converge reports the coming expiry without being asked, though
-        the re-issue itself waits for `--force` — and the probe is the
-        backstop behind it; for the dump the probe is the only watcher.
+        run of the stack names the coming expiry without being asked,
+        though the reissue itself is a command and its delivery waits
+        for `--force` — and the probe is the backstop behind it; for the
+        dump the probe is the only watcher.
 -   **Deliberately unmonitored, with rationale**: Zincati/update
     failures and disk fill. The DB is ~4 orders of magnitude under
     the disk, and OS staleness is to be bounded by the quarterly
-    re-provision drill (§7.3), which always lands the current image —
-    until that drill is scheduled the bound is whatever converges an
-    operator runs. If either ever bites first, that is the signal to
+    rebuild drill (§7.3), whose scratch box boots the pinned image and
+    is updated by Zincati like the appliance — until that drill is
+    scheduled the bound is Zincati alone. If either ever bites first, that is the signal to
     add the probe — not before.
 
 So between scheduled runs of the probe, what observes this box is the
@@ -901,7 +769,7 @@ executable form of each is the `state-backend` commands of §1, and
 **The two moves the playbooks below are built from are commands, not
 prose.** `state-backend dump` writes a `pg_dump -Fc` of the live state,
 age-encrypted to the recipients of §5, into a named local file;
-`state-backend restore <file>` feeds one back into a provisioned box.
+`state-backend restore <file>` feeds one back into a box that serves no stack.
 Either form of file is accepted — an encrypted dump or a bare archive
 — and the identity that opens an encrypted one comes from the escrow
 via the kit, or from `--identity-file` for a workflow that was handed a
@@ -921,40 +789,35 @@ same `mise.toml` pin as of that commit. Both commands connect over the
 run — so a `pg_dump` that is really a wrapper around a container has to
 forward those variables and mount the bundle at the paths they name.
 
-A converge that is about to replace the box takes the first of those two
-moves for itself (§1), so a playbook below names the file that run wrote
-rather than a dump the operator had to remember to take.
+A run of the stack that replaces the box takes both moves for itself
+(§1): the delete hook on the instance takes the dump, of the box about
+to go, into the working directory, and the create hook on the readiness
+resource restores it into the new box once that box answers. The same code runs
+in both, `kluster.lib.state_backend.state`, so a hook's dump is the
+file `state-backend dump` would have written.
 
-**A replacement that stops part way is finished by the commands its
-last words name, from the commit it ran from.** Every playbook below
-that replaces the box can stop between the terminate and the restore,
-and the recovery is the same for each:
+**A replacement that ends without its restore is finished by
+`state-backend restore`.** Every playbook below that replaces the box
+can end with the backend empty: the restore failed, the run was killed
+between the terminate and the restore, or the run took no dump of its
+own. Each of those exits 3, and the recovery is the same for each:
 
--   Re-run `state-backend provision` from that commit. Where the run
-    saw no new box, the re-run launches one; where it did, the re-run
-    points the address at it and waits for it to answer. Either way it
-    exits with the replacement's status and names the dump again,
-    because the restore is still owed (§1). A new box OCI is still
-    provisioning is refused with that said, and a later re-run finds it
-    running. From a later commit the re-run reads the new box as
-    drifted and stops. `--force` then cannot dump the box, whose
-    archive holds no stack checkpoint regardless of whether anything
-    has opened it (§5), which leaves the record naming the first run's
-    dump, and `--no-dump` replaces the box without losing
-    anything, naming that dump — on this checkout's record; where the
-    box holds state that went back some other way, the words say to
-    delete the record first.
--   Then `state-backend restore <the dump it named>`. The restore
-    removes the record of what was owed, and `provision` exits 0 again.
-    Where the state went back some other way — a restore from another
-    checkout, or a terminate that never took the old box away — the
-    words name the record's file, and deleting it is the step instead.
--   Where the run minted a successor and did not retire the
-    predecessor — the retirement failed, or the launch was lost — the
-    words name that key too. It stays live until the next run that launches a box,
-    able to write into the dump prefix and nothing else, its secret
-    held nowhere but the destroyed box's Ignition; `state-backend
-    provision --replace` and the restore it names retire it sooner.
+-   `state-backend restore <file>` of the dump the replacement took —
+    the encrypted file its delete hook wrote, named in its output — or,
+    where none was taken, or where it is on another workstation, of the newest
+    nightly object, which loses what changed since. Then
+    `operator-stack state-backend plan` answers 0, the backend serving
+    its stacks again.
+-   A run killed after it launched the new box but before it pointed the
+    address at it leaves that box unknown to the stack, and the next run
+    launches another beside it: that one is an orphan, terminated by
+    hand. The way out of every case is to finish on the workstation that
+    started the run and land its checkpoint.
+-   A replacement of the dump key — its generation bumped — deletes the
+    old key at the end of the run that launched the box carrying its
+    successor; a run that stopped before that end leaves the old key
+    live, able to write into the dump prefix and nothing else, until
+    the next `up` completes.
 
 Each **verifies rather than reports**, because the moment either is run
 is the moment nobody can afford to find out later:
@@ -972,7 +835,7 @@ is the moment nobody can afford to find out later:
 -   A restore asks `pulumi stack ls` twice. Beforehand, so that a
     backend already serving stacks is refused rather than overwritten
     — `--force` is how a deliberate overwrite says so. A box
-    provisioned minutes ago answers with no stack, since the question
+    launched minutes ago answers with no stack, since the question
     opens the backend, which creates its table on the way; one that
     does not answer at all is read as serving nothing rather than as a
     reason to stop. Afterward as the verification proper: **a
@@ -990,37 +853,35 @@ is the moment nobody can afford to find out later:
     would abort the transaction.
 
 -   **§7.1 Certificate rotation / CA reissue.** Trigger: an expiry
-    inside the renewal margin, which the converge finds by itself (§1);
-    the expiry alert of §3 once it exists, which by then means no
-    converge has run since the margin opened; or key compromise.
-    Outline: `state-backend provision --force`, which dumps the running
-    box, replaces it with one holding a certificate re-issued under the
-    same CA, names the file it wrote and exits non-zero →
-    `state-backend restore <that file>`. The bracket is not
-    optional: the server certificate rides in Ignition, so re-issuing it
-    replaces the instance and its data directory with it — the same
-    shape as §7.2, for the same reason. Rotating the server *key* while
-    the certificate still has life left is `provision --replace`, there
-    being no drift for a converge to find. On compromise of the CA
-    itself: `credentials derived state-backend-ca generate` for a new
-    generation, the same replace-and-restore against it, redistribute
-    the `ci` and `operator` bundles → `verify-full` check.
+    inside the renewal margin, which every run of the stack names (§1);
+    the expiry alert of §3, which by then means no run of the stack has
+    happened since the margin opened; or key compromise. Outline:
+    `credentials derived state-backend-server issue`, which reissues the
+    server key and certificate under the same CA into the stack's
+    configuration → commit → `operator-stack state-backend up --force`,
+    which dumps the running box, replaces it with one carrying the new
+    certificate and restores into it. The replacement is not optional:
+    the server certificate rides in Ignition, so delivering it replaces
+    the instance and its data directory with it — the same shape as
+    §7.2, for the same reason. On compromise of the CA itself:
+    `credentials derived state-backend-ca generate` for a new generation,
+    the same reissue and replacement against it, redistribute the `ci`
+    and `operator` bundles → `verify-full` check.
 -   **§7.2 Postgres major upgrade.** Trigger: renovate major pin PR.
-    Outline: merge → `state-backend provision --force` (the run dumps the
-    old box before terminating it, and the new major initdb's a fresh
-    data directory) → `state-backend restore <the file the run named>`
-    → clean `pulumi preview`. The dump is the run's own first act
-    rather than a step the operator has to remember, because the
-    re-provision destroys the box it came from; it is verified as it is
-    taken rather than trusted for the minutes between the two, and a
-    dump that fails aborts the replacement.
+    Outline: merge → `operator-stack state-backend up --force` (the run
+    dumps the old box before deleting it, the new major initdb's a fresh
+    data directory, and the run restores into it) → `operator-stack
+    state-backend plan` answering 0. The dump is the run's own step
+    rather than one the operator has to remember, because the
+    replacement destroys the box it came from; it is verified as it is
+    taken, and a dump that fails leaves the old box serving.
 -   **§7.3 Rebuild / DR drill (quarterly, automated in the ops repo).** §7.2
-    minus the pin bump: provision a scratch micro from Butane,
+    minus the pin bump: launch a scratch micro from a rendered Ignition,
     restore the latest age-encrypted B2 object via the **drill key**
     (`state-backend restore <object> --identity-file <key>`, the form
     that needs no kit), verify, destroy — unattended, alert on failure
     (operations.md §4). One pass exercises B2 download, decryption,
-    provision-from-Butane, restore, and cert delivery. The *offline*
+    a launch from the Butane file, restore, and cert delivery. The *offline*
     age identity is proven separately by the yearly rotation (§7.4),
     which inherently decrypts with it. **As of 2026-09-25 the workflow is
     not built**:
@@ -1042,11 +903,10 @@ is the moment nobody can afford to find out later:
     `[N, N−1] → [N+1, N]` →
     `credentials derived backup-age-<N+1> generate` → note the rotation
     date and N−1's earliest-destroy date where the next offline day
-    will read them (nothing stores either — §5) →
-    `state-backend provision --force`, which replaces the box and leaves
-    it empty like every other replacement here →
-    `state-backend restore <the file that run named>` → verify both
-    decrypt paths →
+    will read them (nothing stores either — §5) → commit the recipients
+    file it wrote → `operator-stack state-backend up --force`, which
+    dumps the box, replaces it and restores into the new one → verify
+    both decrypt paths →
     destroy N−1 on its date by deleting its escrow ciphertext
     (compromise: the recipients are always the pin and the generation
     below it, so dropping N now is the pin at N+2 with
@@ -1066,8 +926,8 @@ scratch bundle selected a stack, and the times were recorded. Of step
 1, the minted key listed the prefix and found it empty; as of
 2026-09-25 no object has been downloaded from it. The appliance's
 first replace-and-restore, on 2026-09-25 (`kluster-ops#385`), ran
-`state-backend restore` against production, on the dump
-`state-backend provision --force` took of the box it replaced: the
+`state-backend restore` against production, on the dump the
+appliance's earlier script took of the box it replaced: the
 dump opened with the kit, went in as one transaction, and the
 restored backend served `dns`, `github` and `physical`. Neither opened an object the appliance
 uploaded itself, so as of 2026-09-25 that is unproven: step 1 as
@@ -1076,17 +936,17 @@ written, and the decrypt of a nightly with the kit
 
 The rest of §7 is outline because a command carries the detail; this
 one is written out because it proves `state-backend restore` against a
-live box ahead of a replacement, and every replacement of the
-appliance leaves a backend holding nothing until a restore fills it
-(§1). So the rehearsal comes *before* a replacement rather than during
-it, and it is the operator form of the §7.3 drill: same object, same
-commands, a kit where the drill would have had its own key.
+live box ahead of a replacement, and a replacement whose own restore
+fails, or that took no dump of its own, leaves a backend holding nothing
+until `state-backend restore` fills it (§1). So the rehearsal comes
+*before* a replacement rather than during it, and it is the operator
+form of the §7.3 drill: same object, same commands, a kit where the
+drill would have had its own key.
 
 **It runs against a scratch box, never against the appliance.** The
-appliance is a singleton — `state-backend provision` finds it by
-display name and owns the reserved address — so nothing here uses
-`provision`, and the scratch box is launched by hand from a rendered
-Ignition. What that costs is a second instance of the shape in the same
+appliance is a singleton — the `state-backend` stack declares it and
+owns the reserved address — so nothing here runs the stack, and the
+scratch box is launched by hand from a rendered Ignition. What that costs is a second instance of the shape in the same
 availability domain, the one that offers it (§1).
 
 **What it establishes**, and the order the steps are in so that each
@@ -1128,17 +988,15 @@ failure is cheap:
     against the rendered file, in the appliance's compartment, subnet
     and availability domain, on the imported FCOS image, with an
     ephemeral public IP. **Give it a display name that is not the
-    appliance's**: a second live box under that name stops every
-    `provision` run until one of the two is gone, and a scratch box that
-    is the only one under it would be adopted and handed the reserved
-    address.
+    appliance's**: the box the stack declares carries that name, and a
+    second one under it is a box an operator reading the console cannot
+    tell from the appliance.
 4.  **Open the tunnel**: `ssh -L 5432:127.0.0.1:5432 core@<scratch
     address>` with the operator key. The workstation's public key has to
     be in `src/kluster/lib/state_backend/machine/operator-keys.txt`, which is the file
     the render put on the box (§1). **This login is trust-on-first-use,
-    on purpose.** The pin of §1 rides an instance launched by
-    `provision`, and this box is launched by hand from a rendered file,
-    so nothing recorded a pin for it; what rides inside the tunnel is
+    on purpose.** The pin of §1 is the appliance's committed host key,
+    and this box carries a key its render drew, so nothing pins it; what rides inside the tunnel is
     libpq under `verify-full` against the escrowed CA, which an
     interposer does not reach. The tunnel is transport here, not
     trust. Where 5432 is taken locally, forward
@@ -1216,125 +1074,95 @@ its design. The machine is the files in
 | --- | --- |
 | `butane.yaml.j2` (template) | The machine, whole: the Postgres unit — a plain systemd unit running `podman run`, auto-updated by label, not a quadlet — PKI, `pg_hba` and the Postgres roles, the age recipients, the unit that installs the pinned `age`, the dump timer, the reboot window. |
 | `state-dump.sh` | What that timer runs — `pg_dump` → `pg_restore`, refusing an archive that holds no stack → age → B2. Shell, because the box has no interpreter: it uses what the Fedora CoreOS image ships plus the `age` the template installs, and a test holds the template to that (§1). |
-| `operator-keys.txt` | SSH keys for diagnosis (`state-backend ssh`). The box is never configured by hand, and a key absent here means no access until the next re-provision. |
+| `operator-keys.txt` | SSH keys for diagnosis (`state-backend ssh`). The box is never configured by hand, and a key absent here means no access until the next replacement. |
+| `host-key.txt` | The box's SSH host key, public half. Written by `credentials derived state-backend-host-key generate` beside the private half it puts in the stack's configuration, and committed; `state-backend ssh` pins the box to it, and the stack refuses to plan while it is absent or names another key. |
+| `backup-recipients.txt` | The backup generations' public halves, one line per generation the box encrypts to. Written by `credentials derived backup-age-<N> generate` and committed; `credentials derived check` holds it to the escrow, and the stack refuses to plan without it. |
 | `drill-recipient.txt` | The public half of the drill age identity, one recipient. Written by `credentials derived drill-age-identity generate` — which pushes the private half into the ops repository's `drill` Environment first — and committed; absent until that generator has run, and the appliance then encrypts to the escrowed generations alone. |
 
-The code that renders them, dumps and restores the state and waits for
-a box to answer is `kluster.lib.state_backend`, beside them; the code
-that mints and recovers what the render takes, and applies the result,
-is `src/kluster/scripts/state_backend/`, exposed as the `state-backend`
+The code that renders them, dumps and restores the state and reads the
+committed files is `kluster.lib.state_backend`, beside them; the stack
+that declares the appliance is `kluster.components.state_backend`,
+built by the `state-backend` stack program; and the code that renders a
+scratch box, logs in, writes bundles and probes is
+`src/kluster/scripts/state_backend/`, exposed as the `state-backend`
 console script.
 
-#### Provisioning
+#### Running the stack
 
-Runs on the workstation holding the offline kit. The CA and the backup
-encryption identities come out of the escrow registry — the first run generates
-them and commits their ciphertexts, every run after opens the same ones with
-the kit's recovery key (credentials.md §2.2) — the drill recipient is read
-from the committed file above, and the B2 credentials are minted from the seed
-key:
-
-```sh
-mise x uv -- uv run state-backend provision
-```
-
-The kit is `.credentials/kit.kdbx` in the checkout unless `$KLUSTER_KDBX`
-names one elsewhere — on removable media, or shared between checkouts.
-
-Idempotent end to end, so this is equally the bring-up command and the
-re-provision command; that is what keeps the rebuild path warm. A run that
-launches a box — one that finds none, or a replacement asked for below — creates (or
-converges) the dump bucket and the appliance's own VCN, subnet, gateway,
-security group and reserved public IP, and imports the current release of the
-Fedora CoreOS stream `settings.py` pins, all while any old box still serves;
-then it renders the Ignition and launches the instance. A run that leaves the
-box standing creates nothing; the one write it can make is pointing the
-reserved address back at a box that matches, when the address points anywhere
-else. A run that
-leaves a box to reach — one it matched, or one it just launched — writes the
-operator's client bundle to
-`.credentials/state-backend/` in the checkout, the workstation slot for it
-(credentials.md §4.4).
-
-**It applies the current commit.** A run compares the box to the repository —
-the Butane file, the operator keys, the age recipients, the pins, the
-certificate identities, the B2 dump key's scope — and what the box stands on
-to what a launching run creates: the appliance's security rules, whole, its
-route, its subnet's range, its gateway, the security lists the subnet carries
-and the rules in them, the security groups the box's network interface
-is in and the interfaces themselves, and the dump bucket's retention rule.
-One thing it compares to the clock: how much life the box's server certificate
-has left, which is drift once it is inside the renewal margin — so a coming
-expiry is something a run reports rather than something anyone has to watch a
-calendar for. Any of these differences makes a plain run say what it would
-replace and exit 1, and acting on it is still `--force`, like any other
-replacement: a hand edit to a security rule, the route or the retention rule
-is repaired by that same replacement, so undoing one costs one. A matching box is left untouched, including its dump key,
-whose secret exists only in the Ignition it booted with. `--replace` forces the rebuild when there is no diff
-to find (rotating the dump key or the server key, or discarding a box that is
-broken in a way its metadata cannot show).
-
-**Finding drift is not permission to act on it.** The box holds every stack's
-state and its boot volume goes with it, so a run that finds drift says what it
-would replace and stops:
+Runs on the workstation that holds `.credentials/` — the operator
+passphrase, which opens the stack's configuration and state, and the
+`operator` client bundle the hooks connect with — from its primary
+checkout, whose working copy holds the forge's `main`
+([framework/pulumi.md](../framework/pulumi.md) §3.3):
 
 ```sh
-state-backend provision --force   # replace the box that is running
+operator-stack state-backend plan          # a refreshed preview; writes nothing
+operator-stack state-backend up            # applies what is planned, once asked
+operator-stack state-backend up --force    # and a create, replacement or delete of the box
 ```
 
-There is no prompt behind that flag: the replacement decision reads nothing
-from a terminal, so it means the same thing in a script as it does by hand.
-(The run as a whole still asks for the kit password when the desktop secret
-store does not hold one — that is the one place a `provision` waits.)
+`plan` names every difference between the commit and what OCI and B2
+hold, the refresh reading what a hand changed. `up` applies a repair in
+place with the box left serving; one that would create, replace or delete
+the box writes nothing, names what moved and `--force`, and exits 1.
+`up --force` dumps the box before it goes, replaces it and restores
+into the new one; `up --replace` does the same when nothing moved. A
+run that wrote leaves the checkpoint under `checkpoints/` changed in the
+working copy, to land like any change.
 
-Once asked for, the run dumps the running box and verifies the dump before it
-terminates anything, printing the path it wrote — that file is what
-`state-backend restore` takes afterward, and `--dump-output` puts it
-somewhere other than the working directory. The replacement therefore depends
-on the dump: a dump that fails stops the run with the box still standing, and
-`--no-dump` is how an operator says the box cannot be dumped at all (it is
-unreachable, or Postgres will not start) and accepts losing everything since
-the last nightly dump.
-
-**A run that replaced the box exits non-zero, and says why.** What it leaves
-behind is an appliance answering on 5432 over an empty database, so its last
-words are the dump's path and the `state-backend restore` that puts the state
-back. Reaching zero takes that second command.
-
-The three statuses are an interface, so a script can branch on them
-(`provision --help` says the same):
+The statuses are an interface, so a script can branch on them
+(`operator-stack --help` says the same):
 
 | Exit | What happened | What to do |
 | --- | --- | --- |
-| `0` | The appliance is current, and no replacement run from this checkout left a restore owed. | Nothing. |
-| `3` | The box was replaced — by this run, or by an earlier one whose restore is still owed, which is what a re-run after a replacement that stopped part way meets — and the state is not back in it. | Run the `state-backend restore` the run printed; a restore over the workstation slot's bundle is what brings the next run back to `0`. |
-| `1` | The run failed. | Read the error, then the run's last words: once the run has started terminating the old box they name the dump to restore and say how far the replacement got, and they are silent when it stopped before that, with the old box still serving. |
+| `0` | Nothing planned, or what was planned applied, and the backend serves its stacks. | Land the checkpoint, where the run wrote one. |
+| other | `pulumi up` itself failed, and the backend serves its stacks: the status is `pulumi`'s own. | Read its output; land the checkpoint it wrote, which records every step that finished. |
+| `1` | Something is planned and nothing was applied: a plain `plan`, an `up` not confirmed, or one holding a replacement of the box for `--force`. | Read the plan; run `up`, or `up --force` for the box. |
+| `2` | A refusal or a failed check: the working copy behind the forge's `main`, a conflicted checkpoint, no `operator` bundle in its slot, a create beside a held address or a replacement of an adopted resource (§1), or a checkpoint carrying a secret in the clear. | Read the refusal; it names the repair. |
+| `3` | The estate's backend answers and serves no stack: a box owed a restore, or a site before its first `pulumi stack init`. | `state-backend restore <file>` of the dump the replacement took, or the newest nightly one; a new site needs only its first `stack init`. |
+| `4` | The estate's backend does not answer at the address the run names. | `state-backend ssh` reaches the box for diagnosis (§6). |
 
-`1` covers a run that stopped before touching anything **and** one that
-stopped after destroying the box, so it cannot be read as "nothing happened";
-only the run's own output distinguishes them. `3` is the one status whose
-meaning does not depend on how far the run got — the appliance is up, the
-restore a replacement left owed has not been run over this checkout's bundle,
-and the dump to feed it has been named — which is why the replacement does not
-reuse `1`. It reads the database as empty on this checkout's record
-(`.credentials/state-backend/restore-owed`) rather than by asking it, so a
-record left standing after the state went back some other way — a restore from
-another checkout or over another bundle, or a terminate that never took the old
-box away — gives `3` over a database that serves its state. The run's words
-say which of the two to act on: run the restore they name, or delete the record
-when the box already holds its state. Neither non-zero status says the state
-is safe.
+`3` reads the backend itself rather than a record on one workstation,
+so every workstation reads it the same way, and over a backend that
+serves no stack it is the answer whatever else the run did, a failed
+`pulumi up` included: only `2` keeps its own answer, a checkpoint that
+must not be pushed. `4` likewise stands in for `0` and `1`, while a
+failed `up` keeps `pulumi`'s status. The backend is asked over a
+connection that must open within a few seconds
+(`state.CONNECT_TIMEOUT`), so an address whose traffic is dropped is `4`
+in seconds rather than when TCP gives up.
+
+#### The cutover
+
+The appliance serving when the stack is first applied was built by a
+script, so the stack's first run adopts what that script built and
+replaces the box (rfc-006 §14, slice 6). `state-backend adopt` reads the
+ids of the VCN, its gateway and subnet, the reserved address, the image
+bucket and the dump bucket, under the names the stack declares, and
+writes them into the stack's configuration in the clear, all of them or
+none: the program refuses a partial set, since a name left out is a
+second resource beside the first. The program imports each through the
+component, with its secret markings. Three things are not imported. The
+instance, whose `metadata` would be recorded in the clear. The image:
+OCI returns no image's source, so an imported image differs from its
+declaration and is replaced, and the engine refuses to replace a
+resource whose declaration carries an import id — the driver refuses
+such a run before it starts, naming the resource. And the dump key the
+script minted. The stack makes its own of each, and the script's key,
+image and its object, the old security group and the box are deleted or
+terminated by hand.
 
 Other commands:
 
 ```sh
-state-backend render --address <ip>   # the Ignition, without touching the cloud
+state-backend render --address <ip>   # a scratch box's Ignition, without touching the cloud
 state-backend bundle ci --address <ip>  # the CI client certificate and its URL
 state-backend pins                    # verify the pinned digests (CI runs this)
 state-backend dump                    # a dump of the live state, encrypted like the nightly one
-state-backend restore <dump>          # feed a dump into a provisioned box
+state-backend restore <dump>          # feed a dump into a box that serves no stack
 state-backend probe                   # the scheduled checks, run by the ops repository
 state-backend ssh                     # a diagnostic login; the box is never configured by hand
+state-backend adopt                   # the cutover's ids, into the stack's configuration
 ```
 
 #### Connecting
@@ -1381,19 +1209,22 @@ dump timer reach it (§2).
 
 #### Changing it
 
-**Re-provision is the only apply path.** Nothing on the box is mutated in
-place: a change is a PR against `butane.yaml.j2` (or the pins in
-`src/kluster/lib/state_backend/settings.py`), then
-`state-backend provision --force` — minutes of downtime on 5432, which
-CI retries through and local runs re-run. SSH exists for diagnosis only.
+**A run of the stack is the apply path.** Nothing on the box is mutated in
+place: a change is a PR against `butane.yaml.j2`, the pins in
+`src/kluster/lib/state_backend/settings.py` or the stack's configuration,
+then `operator-stack state-backend up --force` for a change the box is
+rendered from — minutes of downtime on 5432, which CI retries through,
+and which local runs re-run — and a plain `up` for anything else. SSH exists for
+diagnosis only.
 
-Rotating the server certificate is that same command and nothing else: an
-expiry inside the renewal margin is drift, so the converge re-issues the
-certificate under the same CA, and the dump it took on the way is what the
-following `state-backend restore` feeds back.
+Rotating the server certificate is `credentials derived
+state-backend-server issue` and then that same `up --force`: the reissue
+writes the new key and certificate into the stack's configuration, and
+the replacement carries them to a new box, dumping the old one and
+restoring into the new one on the way.
 
 Because the OS and Postgres both follow their streams automatically, and
-because the machine carries nothing that `pg_dump` plus a re-provision cannot
+because the machine carries nothing that `pg_dump` plus a replacement cannot
 rebuild, "the repo describes the box" stays true without a configuration agent
 to enforce it.
 
@@ -1404,7 +1235,7 @@ stack checkpoint is refused and nothing is uploaded, since its restore would
 bring nothing back: a box replaced and not yet restored, or a site before its
 first `pulumi stack init`, so the newest object is always the last dump that
 held state (§5) — and age-encrypted to the
-recipients `config.age_recipients` renders into
+recipients the stack renders into
 the Butane file, one kind of recipient per reader. The escrowed
 `backup/age/<generation>` identities serve the operator: random at creation,
 their only stored copies the ciphertexts under `escrow/`, which the kit's
@@ -1416,8 +1247,9 @@ Environment and nowhere on disk, and the drill's `state-backend restore
 how each kind rotates and why the drill key needs no generational pair is
 §5; the register rows for both keys and the
 drill's own OCI and B2 credentials are credentials.md §3. The dump lands in
-B2 under a prefix whose lifecycle rule enforces retention. Recovery is a
-re-provision followed by `state-backend restore` of the newest object — the
+B2 under a prefix whose lifecycle rule enforces retention. Recovery from a lost
+box is an `up --force`, which launches a new one and exits 3 on an empty
+backend, followed by `state-backend restore` of the newest object — the
 path the drill is designed to exercise (§7.3),
 and the operator form of it, run by hand against a scratch box with the kit, is
 §7.3.1. As of 2026-09-25 the drill workflow is not written
@@ -1429,3 +1261,14 @@ production replace-and-restore followed on 2026-09-25 (`kluster-ops#385`). Two
 halves of the path are unproven as of 2026-09-25, and so assumed broken rather
 than known to work: opening, with the kit, an object the appliance uploaded
 itself, and the drill key's `--identity-file` restore.
+
+**A lost stack state** — only with every clone of the repository, since
+every checkpoint that ever landed is in `main`'s history — costs one
+replacement (rfc-006 §3.6). What the cutover adopts is adopted again
+the same way, `state-backend adopt` reading the ids by name; the image is
+imported afresh, the old one deleted by hand; the instance is dumped, terminated by hand and
+launched again by `up --force`, with the dump key beside it, since an
+imported key has no secret. A **stale** checkpoint is refused by the driver before a
+run starts (framework/pulumi.md §3.3), and a **corrupt** one is reverted
+by a commit, after which a refreshed `plan` shows what the revert does
+not know about.

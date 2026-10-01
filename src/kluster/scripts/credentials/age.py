@@ -22,7 +22,8 @@ yet known to be public, and travels on standard input (`check_recipient`).
 A backup generation is a **label with a stored ciphertext**, not a derivation:
 the identity behind `backup/age/<generation>` is random at creation, its age
 ciphertext is committed under `escrow/`, and that ciphertext is the only copy.
-Rotating is generating the next one and re-provisioning; losing its ciphertext
+Rotating is generating the next one and the replacement of the box that
+carries it; losing its ciphertext
 is losing every dump encrypted to it, which is the property `credentials
 derived check` exists to defend.
 """

@@ -1,9 +1,9 @@
 # The state-backend appliance, whole (docs/physical/state-backend.md).
 #
-# Rendered to Ignition at provision time and delivered as OCI user_data: the
-# box is defined here and nowhere else, and the only apply path is
-# re-provisioning it. Nothing on it is mutated in place, so anything missing
-# from this file does not exist on the machine.
+# Rendered to Ignition by the `state-backend` stack and delivered as OCI
+# user_data: the box is defined here and nowhere else, and a change to it is
+# applied by replacing the box. Nothing on it is mutated in place, so anything
+# missing from this file does not exist on the machine.
 #
 # Secrets ride Ignition deliberately (§1): no untrusted workload runs here, so
 # instance metadata is readable only by the instance itself and by OCI
@@ -11,7 +11,7 @@
 #
 # Two Postgres roles are this box's alone, so they are named here rather than
 # in `settings.py`: no client ever connects as either, and a change to either
-# name is a change to this file, which the converge compares whole.
+# name is a change to this file, which the box's bill of materials digests whole.
 #   - `superuser` is the image's bootstrap superuser. It answers on the
 #     container's local socket and nowhere else (pg_hba below); its users are
 #     the image's own initialization and the dump timer.
@@ -204,7 +204,7 @@ systemd:
   units:
     # Postgres, pinned to a major line; podman-auto-update follows the minor
     # stream, safe for the same reason the OS stream is — nothing here
-    # outlives pg_dump plus a re-provision.
+    # outlives pg_dump plus a replacement.
     #
     # `POSTGRES_HOST_AUTH_METHOD=trust` is what lets the image initialize a
     # superuser that has no password. The pg_hba.conf it writes into the data

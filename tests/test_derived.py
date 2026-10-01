@@ -29,7 +29,6 @@ import shutil
 from pathlib import Path
 
 import b2_api
-import oci
 import pytest
 from cloudflare_api import ACCOUNT_ID, FakeApi, console_seed
 from cryptography import x509
@@ -54,10 +53,8 @@ from kluster.scripts.credentials import (
     escrow,
     masters,
     oci_iam,
-    oci_slot,
     pki,
     pulumi_config,
-    workstation,
 )
 
 # Aliased: `slots` is the name a fixture below gives the workstation's
@@ -822,42 +819,36 @@ def test_pushes_that_keep_failing_are_refused_by_name_rather_than_filling_the_qu
     assert oci_iam.fingerprint(runner.config[derived.OCI_PRIVATE_KEY_KEY]) in tenancy.identity.keys[user]
 
 
-# -- the appliance's key, which is a workstation slot rather than a stack ----
+# -- the appliance's key, into the `state-backend` stack ----------------------
 
 
-@pytest.fixture
-def slots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """`.credentials/` somewhere that is not this checkout.
-
-    The slots are repo-relative by design (§4.4), and a suite that wrote into
-    the checkout it runs from would leave a placeholder credential where a
-    real one belongs.
-    """
-    directory = tmp_path / '.credentials'
-    monkeypatch.setattr(workstation, 'directory', lambda: directory)
-    return directory
-
-
-def test_the_appliance_key_lands_in_a_configuration_the_sdk_reads(
-    oci_kit: KdbxStore, tenancy: Tenancy, slots: Path
+def test_the_appliance_key_lands_in_the_state_backend_stack(
+    oci_kit: KdbxStore, tenancy: Tenancy, state_backend_stack: tuple[pulumi_config.Stack, RecordedPulumi]
 ) -> None:
-    written = derived.oci_state_backend(oci_kit, compartment_id=COMPARTMENT, connect=tenancy)
+    slot, runner = state_backend_stack
 
-    # The slot is an SDK configuration file because the SDK is the whole of the
-    # reader: what proves the push is that `from_file` accepts what it wrote.
-    assert written == slots / oci_slot.DIRECTORY / conventions.STATE_BACKEND / oci_slot.CONFIG
-    config = oci.config.from_file(str(written))
-    oci.config.validate_config(config)  # pyright: ignore[reportUnknownMemberType]
-    user = _named(tenancy, f'{conventions.CLUSTER_NAME}-{conventions.STATE_BACKEND}')
-    assert (config['tenancy'], config['user'], config['region']) == (TENANCY, user, conventions.OCI_TENANCY.region)
-    # The credential and nothing else: where the appliance may act is a
-    # convention its provisioner reads, so a copy here could only go stale.
-    assert 'compartment-id' not in config
+    user = derived.oci_state_backend(oci_kit, stack=slot, compartment_id=COMPARTMENT, connect=tenancy)
+
+    # The three values the stack program builds its OCI provider from, each a
+    # secret, the fingerprint the key's own; where the appliance may act is a
+    # convention the program reads, so nothing of the account is written.
+    assert user == _named(tenancy, f'{conventions.CLUSTER_NAME}-{conventions.STATE_BACKEND}')
+    assert runner.config[derived.OCI_USER_KEY] == user
+    key = runner.config[derived.OCI_PRIVATE_KEY_KEY]
+    assert runner.config[derived.OCI_FINGERPRINT_KEY] == oci_iam.fingerprint(key)
+    assert tenancy.identity.keys[user] == [oci_iam.fingerprint(key)]
+    written = {derived.OCI_USER_KEY, derived.OCI_FINGERPRINT_KEY, derived.OCI_PRIVATE_KEY_KEY}
+    assert set(runner.config) == written
+    assert {args[2] for args in runner.invocations if args[:2] == ['config', 'set'] and '--secret' in args} == written
 
 
 def test_the_appliance_row_is_refused_in_another_account_before_anything_is_created(
-    oci_kit: KdbxStore, tenancy: Tenancy, slots: Path, monkeypatch: pytest.MonkeyPatch
+    oci_kit: KdbxStore,
+    tenancy: Tenancy,
+    state_backend_stack: tuple[pulumi_config.Stack, RecordedPulumi],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    slot, runner = state_backend_stack
     with_tenancy_ocid(monkeypatch, ELSEWHERE)
     # The state before the appliance's first mint, where a run that reached
     # the compartment step would create one, so the empty tenancy below tells
@@ -868,51 +859,25 @@ def test_the_appliance_row_is_refused_in_another_account_before_anything_is_crea
     # No compartment is named, so this is the ordinary path rather than the
     # drill: the check fires before the compartment is even looked up.
     with pytest.raises(oci_iam.CredentialRejected, match=f'{TENANCY}.*{ELSEWHERE}'):
-        _ = derived.oci_state_backend(oci_kit, connect=tenancy)
+        _ = derived.oci_state_backend(oci_kit, stack=slot, connect=tenancy)
 
-    # The first place in a bring-up where the check can fire, and the row whose
-    # key builds the appliance the whole installation's state lives on.
-    assert not slots.exists()
+    # The row whose key builds the appliance the whole installation's state
+    # lives on.
+    assert runner.config == {}
     assert tenancy.identity.users == users
     assert tenancy.identity.policies == policies
     assert tenancy.identity.compartments == {}
 
 
-def test_the_appliance_key_is_a_file_only_its_owner_can_read(oci_kit: KdbxStore, tenancy: Tenancy, slots: Path) -> None:
-    written = derived.oci_state_backend(oci_kit, compartment_id=COMPARTMENT, connect=tenancy)
-
-    # Named absolutely, because the SDK expands nothing (§4.4), and `0600`
-    # under a `0700` directory like every other slot.
-    config = oci.config.from_file(str(written))
-    key = Path(str(config['key_file']))
-    assert key.is_absolute()
-    assert oci_iam.fingerprint(key.read_text()) == config['fingerprint']
-    assert key.stat().st_mode & 0o777 == 0o600
-    assert key.parent.stat().st_mode & 0o777 == 0o700
-
-
-def test_a_checkout_path_with_a_percent_in_it_is_still_written(
-    oci_kit: KdbxStore, tenancy: Tenancy, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_the_appliance_row_is_its_own_principal(
+    oci_kit: KdbxStore, tenancy: Tenancy, state_backend_stack: tuple[pulumi_config.Stack, RecordedPulumi]
 ) -> None:
-    # The slot is a configuration file, and a configuration parser reads `%` as
-    # the start of a substitution unless told otherwise. Nothing chooses the
-    # path this file sits at, so a checkout under one would fail the write --
-    # after the key it describes is already live in the tenancy.
-    awkward = tmp_path / 'build%20one' / '.credentials'
-    monkeypatch.setattr(workstation, 'directory', lambda: awkward)
+    slot, _ = state_backend_stack
+    _ = derived.oci_state_backend(oci_kit, stack=slot, compartment_id=COMPARTMENT, connect=tenancy)
 
-    written = derived.oci_state_backend(oci_kit, compartment_id=COMPARTMENT, connect=tenancy)
-
-    key = Path(str(oci.config.from_file(str(written))['key_file']))
-    assert key.read_text().startswith('-----BEGIN PRIVATE KEY-----')
-
-
-def test_the_appliance_row_is_its_own_principal(oci_kit: KdbxStore, tenancy: Tenancy, slots: Path) -> None:
-    _ = derived.oci_state_backend(oci_kit, compartment_id=COMPARTMENT, connect=tenancy)
-
-    # Two §3 OCI rows, two principals: the appliance provisioner and the
-    # physical stack are separate consumers, so a compromise of either is
-    # confined to its own compartment.
+    # Two §3 OCI rows, two principals: the appliance's stack and the physical
+    # stack are separate consumers, so a compromise of either is confined to
+    # its own compartment.
     name = f'{conventions.CLUSTER_NAME}-{conventions.STATE_BACKEND}'
     assert sorted(user.name for user in tenancy.identity.users.values()) == [oci_iam.SEED_NAME, name]
     assert [policy.statements for policy in tenancy.identity.policies.values() if policy.name == name] == [
@@ -1075,7 +1040,12 @@ def test_a_re_run_rotates_the_appliance_management_key(
 
 @needs_age
 def test_the_state_backend_rows_refuse_a_stack_with_no_checkpoint_before_anything_is_minted(
-    b2_api_fake: b2_api.FakeApi, b2_kit: KdbxStore, vault_in_hand: escrow.Vault, tmp_path: Path
+    b2_api_fake: b2_api.FakeApi,
+    b2_kit: KdbxStore,
+    oci_kit: KdbxStore,
+    tenancy: Tenancy,
+    vault_in_hand: escrow.Vault,
+    tmp_path: Path,
 ) -> None:
     # The stack's first `stack init` is the driver's, which checks the working
     # copy and leaves the checkpoint for the operator to land; a delivery that
@@ -1083,8 +1053,10 @@ def test_the_state_backend_rows_refuse_a_stack_with_no_checkpoint_before_anythin
     slot, runner = _state_backend_stack(tmp_path, initialized=False)
     _ = escrow.generate(vault_in_hand, escrow.CA)
     public_file = tmp_path / 'host-key.txt'
+    users = dict(tenancy.identity.users)
 
     for deliver in (
+        lambda: derived.oci_state_backend(oci_kit, stack=slot, compartment_id=COMPARTMENT, connect=tenancy),
         lambda: derived.b2_state_backend_management(b2_kit, stack=slot),
         lambda: derived.state_backend_server(vault_in_hand, stack=slot),
         lambda: derived.state_backend_host_key(stack=slot, public_file=public_file),
@@ -1095,6 +1067,7 @@ def test_the_state_backend_rows_refuse_a_stack_with_no_checkpoint_before_anythin
             deliver()
 
     assert b2_api_fake.named(b2.STATE_BACKEND_MANAGEMENT.name) == []
+    assert tenancy.identity.users == users
     assert runner.invocations == []
     assert not public_file.exists()
 
@@ -1274,8 +1247,37 @@ def test_check_never_prints_a_private_key_pasted_into_the_recipients_file(
     assert all(secret.removeprefix(age.SECRET_PREFIX) not in problem for problem in problems)
 
 
-def test_check_has_no_complaint_while_no_recipients_file_exists(vault_in_hand: escrow.Vault, tmp_path: Path) -> None:
-    assert derived.backup_recipients_problems(vault_in_hand.registry, tmp_path / 'backup-recipients.txt') == []
+def test_check_refuses_while_no_recipients_file_exists(vault_in_hand: escrow.Vault, tmp_path: Path) -> None:
+    # The stack renders the box's recipients from the file and refuses to plan
+    # without it, so its absence is a problem the check names, with the
+    # command that writes it.
+    (problem,) = derived.backup_recipients_problems(vault_in_hand.registry, tmp_path / 'backup-recipients.txt')
+
+    assert 'backup-recipients.txt' in problem
+    assert f'credentials derived {escrow.row_name(escrow.backup_labels()[0])} generate' in problem
+
+
+def test_check_refuses_while_no_host_key_file_exists(tmp_path: Path) -> None:
+    # The stack renders the box against the committed public half, and `ssh`
+    # pins the box to it.
+    (problem,) = derived.host_key_problems(tmp_path / 'host-key.txt')
+
+    assert 'host-key.txt' in problem
+    assert f'credentials derived {derived.STATE_BACKEND_HOST_KEY_ROW} generate' in problem
+
+
+def test_check_reads_a_committed_host_key_as_one_ed25519_line(tmp_path: Path) -> None:
+    path = tmp_path / 'host-key.txt'
+    _ = path.write_text('ssh-rsa AAAAB3NzaC1yc2E= someone\n')
+    assert derived.host_key_problems(path) != []
+
+    public = (
+        Ed25519PrivateKey.generate()
+        .public_key()
+        .public_bytes(serialization.Encoding.OpenSSH, serialization.PublicFormat.OpenSSH)
+    )
+    _ = path.write_text(public.decode() + '\n')
+    assert derived.host_key_problems(path) == []
 
 
 def test_a_value_in_the_clear_that_does_not_read_back_is_refused(tmp_path: Path) -> None:

@@ -193,10 +193,14 @@ class PulumiConfig:
 
 @dataclass(frozen=True)
 class PulumiState:
-    """A value that lives in the state backend, never in git.
+    """A value that lives in a stack's state: in the state backend, or in a committed checkpoint.
 
-    The stronger of the two Pulumi channels and the home of what a program
-    generates rather than what it needs to start (§1 rule 6).
+    The home of what a program generates rather than what it needs to start
+    (§1 rule 6). Every stack's state is in the appliance's backend and never in
+    git, but that of a stack whose state is committed (framework/pulumi.md
+    §3.3): `state-backend`'s checkpoint is a file of this repository, its
+    secrets ciphertext under the operator passphrase, which gives them the
+    exposure committed configuration has (rfc-006 §3.3).
     """
 
     stack: str
@@ -232,7 +236,7 @@ class SealedSecret:
 
 @dataclass(frozen=True)
 class OnBox:
-    """Delivered by provisioning -- embedded in Butane, or written by a run."""
+    """Delivered onto the appliance's box, embedded in the Ignition it boots with."""
 
     what: str
 
@@ -528,9 +532,10 @@ class Issued(Source):
 
     def describe(self) -> str:
         return (
-            f'issued with the kit from escrow label `{escrow.CA}`; the server and `operator` halves come from '
-            f'`state-backend provision`, and a push here issues a fresh `{self.role}` key, so re-running it '
-            f'replaces the bundle CI holds'
+            f'issued with the kit from escrow label `{escrow.CA}`; the server half is issued into the '
+            f'`{STATE_BACKEND_STACK}` stack by `credentials derived {derived.STATE_BACKEND_SERVER_ROW} issue` and '
+            f'the `operator` half by `state-backend bundle operator`, and a push here issues a fresh `{self.role}` '
+            f'key, so re-running it replaces the bundle CI holds'
         )
 
     def parts(self, context: Context, into: Collection[str]) -> Mapping[str, str]:
@@ -883,7 +888,11 @@ ROWS: dict[str, Row] = {
     derived.OCI_STATE_BACKEND_ROW: Row(
         register='OCI API key (state backend)',
         source=Minted(f'credentials derived {derived.OCI_STATE_BACKEND_ROW} mint'),
-        targets=(WorkstationSlot(f'oci/{conventions.STATE_BACKEND}/'),),
+        targets=(
+            PulumiConfig(STATE_BACKEND_STACK, derived.OCI_USER_KEY),
+            PulumiConfig(STATE_BACKEND_STACK, derived.OCI_FINGERPRINT_KEY),
+            PulumiConfig(STATE_BACKEND_STACK, derived.OCI_PRIVATE_KEY_KEY),
+        ),
     ),
     derived.ZONES_ROW: Row(
         register='Cloudflare token (zones)',
@@ -937,8 +946,11 @@ ROWS: dict[str, Row] = {
     ),
     'b2-dump': Row(
         register='B2 dump key (micro)',
-        source=Minted('state-backend provision'),
-        targets=(OnBox("the appliance's Ignition"),),
+        # Minted through the stack: the program declares the key with the
+        # stack's own management key, its secret is kept in the committed
+        # checkpoint, and the box carries it in its Ignition (rfc-006 §4.1).
+        source=Minted(f'the `{STATE_BACKEND_STACK}` stack'),
+        targets=(PulumiState(STATE_BACKEND_STACK, 'the dump key'), OnBox("the appliance's Ignition")),
     ),
     derived.B2_FRESHNESS_DUMPS_ROW: Row(
         register='B2 freshness key (state dumps)',

@@ -2,11 +2,12 @@
 
 The Butane template in `machine/` is the box; this module supplies the values
 it is rendered with and hands the result to `butane` for validation and
-conversion. The values that exist only at provision time -- the certificates
-the escrowed CA signs, the box's SSH identity, the age recipients whose
-identities the escrow holds, the write-only B2 credential -- are arguments:
-minting or recovering one is the caller's (`kluster.scripts.state_backend`),
-so nothing here opens the escrow.
+conversion. The keys and recipients -- the certificates the escrowed CA
+signs, the box's SSH identity, the age recipients, the write-only B2
+credential -- are arguments: the `state-backend` stack reads them from its
+configuration, its state and the files committed beside the template, and
+`state-backend render` mints and recovers them for a scratch box
+(`kluster.scripts.state_backend`), so nothing here opens the escrow.
 
 The files in `machine/` are read through `kluster.lib.templates`, relative to
 this package, so a render needs the package and nothing around it.
@@ -23,7 +24,6 @@ from dataclasses import dataclass, field, fields
 from importlib import resources
 from typing import Any
 
-from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -62,24 +62,20 @@ def operator_keys() -> tuple[str, ...]:
 
 
 class Digested(enum.Enum):
-    """How one field of the machine enters the digest map the box carries.
+    """How one field of the machine enters the bill of materials the box carries.
 
-    The converge compares a running box to this commit component by component
-    (`digests`), and some fields cannot be compared as their value: the
-    certificates are re-issued on every render, and the secrets must not be
-    digested at all. `NEVER` is therefore the enum's name for "this field is a
-    secret", which is why it decides the repr and the record's equality as
-    well as the digest.
+    The stack's instance carries a digest per component in its
+    `extendedMetadata`, in the clear (`bill_of_materials`), and a secret must
+    not be digested as its value. `NEVER` is therefore the enum's name for
+    "this field is a secret", which is why it decides the repr and the
+    record's equality as well as the digest.
     """
 
     #: The value itself, JSON-encoded. The default, and the safe one.
     VALUE = 'value'
-    #: A certificate, by subject, SANs and public key — "which CA is this".
-    AUTHORITY = 'authority'
-    #: A certificate, by subject and SANs only — "what does this box answer as".
-    LEAF = 'leaf'
-    #: Not compared at all, because the value is a secret: its digest would
-    #: travel in cloud metadata and its repr would travel in a transcript.
+    #: Not digested as its value, because the value is a secret: its digest
+    #: would travel in cloud metadata and its repr would travel in a
+    #: transcript. A secret with a public half is read by that half instead.
     NEVER = 'never'
 
 
@@ -105,10 +101,10 @@ class Machine:
     """Everything the Butane template needs: the machine, as values.
 
     A record rather than a mapping because two things read it — the renderer,
-    and the digest that decides whether a running box still matches the
-    repository (`digests`). A field the template uses but this does not carry
-    would be a change the converge cannot see, and the type checker is what
-    holds the two lists together.
+    and the bill of materials a planned replacement names what moved by
+    (`bill_of_materials`). A field the template uses but this does not carry
+    would be a change no plan names, and the type checker is what holds the
+    two lists together.
     """
 
     operator_keys: tuple[str, ...] = _digested()
@@ -117,30 +113,23 @@ class Machine:
     database: str = _digested()
     ci_role: str = _digested()
     operator_role: str = _digested()
-    #: The CA's private half comes from the escrow and outlives every render,
-    #: so "which CA does this box chain to" is a fact about the box and a
-    #: change to it is a rebuild.
-    ca_cert: str = _digested(Digested.AUTHORITY)
-    #: The leaf, compared by what it asserts and not by whose key it carries:
-    #: a re-render legitimately issues a new key for the same machine.
-    #: Rotating the server key therefore takes `provision --replace`.
-    server_cert: str = _digested(Digested.LEAF)
-    #: Random at every issuance (pki.py), so it describes this render rather
-    #: than this machine.
+    #: The CA's certificate; its private half stays in the escrow.
+    ca_cert: str = _digested()
+    #: The server's certificate, for the reserved address. Rotating it, and the
+    #: key below with it, is a reissue into the stack's configuration and then
+    #: the replacement `--force` asks for.
+    server_cert: str = _digested()
     server_key: str = _digested(Digested.NEVER)
-    #: The box's SSH identity, in OpenSSH's own private-key format, minted
-    #: fresh by every render like the server key above and delivered the same
-    #: way. `NEVER` for the same two reasons, and for one more: its public
-    #: half is what `ssh` pins the connection against, and a digest of the
-    #: private one in cloud metadata would buy nothing toward that.
-    #: Rotating it is `provision --replace`.
+    #: The box's SSH identity, in OpenSSH's own private-key format. Its public
+    #: half is what `state-backend ssh` pins the connection against, committed
+    #: beside the template.
     ssh_host_key: str = _digested(Digested.NEVER)
     age_recipients: tuple[str, ...] = _digested()
     age_url: str = _digested()
     age_sha256: str = _digested()
     b2_dump_key_id: str = _digested()
-    #: A credential. Its *identity* is what the converge compares, and that is
-    #: `b2_dump_key_id`; hashing the secret into cloud metadata buys nothing.
+    #: A credential. Its identity is `b2_dump_key_id`, which moves with it;
+    #: hashing the secret into cloud metadata buys nothing.
     b2_dump_key: str = _digested(Digested.NEVER)
     b2_bucket_id: str = _digested()
     b2_prefix: str = _digested()
@@ -160,8 +149,7 @@ class _Parameters(Machine):
     half, which the box carries as `ssh_host_key_pub` so that its fingerprint
     reaches the console banner. Derived rather than carried by `Machine`,
     because a second field could hold the public half of a different key than
-    the private one beside it -- and because it is minted per render, so a
-    field would have to be excluded from the digest map by hand (`digests`).
+    the private one beside it.
     """
 
     ssh_host_key_pub: str = field(kw_only=True)
@@ -228,13 +216,8 @@ def butane(values: Machine) -> str:
 def render_ignition(values: Machine) -> str:
     """Butane in, validated Ignition out.
 
-    Takes the machine rather than building one, because every fact recorded
-    beside the box has to come from the same render as the Ignition it boots
-    with: when the server certificate inside that Ignition expires
-    (`expires_at`), and the public half of the SSH host key it delivers
-    (`host_public_key`). A second machine would carry a second certificate
-    and a second host key, so the box would record an expiry belonging to a
-    certificate it never held and be pinned to a key it was never given.
+    Takes the machine rather than building one, so the Ignition and the bill
+    of materials beside it (`bill_of_materials`) describe the one machine.
     """
     document = butane(values)
     log.info('handing %s to butane for validation and conversion to Ignition', TEMPLATE)
@@ -253,15 +236,13 @@ def render_ignition(values: Machine) -> str:
 def host_public_key(values: Machine) -> str:
     """The `ssh-ed25519 AAAA...` line for the host key this machine carries.
 
-    What the launch records as the box's pin and what a `known_hosts` entry
-    holds, derived from the private half rather than stored beside it: there
-    is one value, so the pin cannot be the public half of a key the box was
-    never given. A machine is the only place both exist at once, which is why
-    this takes the machine rather than a key minted beside it.
+    What the box's console banner shows and what the bill of materials reads
+    the host key by, derived from the private half rather than stored beside
+    it: there is one value, so neither can name a key the box was never given.
 
     The type is checked rather than assumed: `load_ssh_private_key` answers
-    for every algorithm OpenSSH has, and only this one is what the client is
-    told to accept (`provision.ssh`).
+    for every algorithm OpenSSH has, and only this one is what `state-backend
+    ssh` tells the client to accept.
     """
     key = serialization.load_ssh_private_key(values.ssh_host_key.encode(), password=None)
     if not isinstance(key, Ed25519PrivateKey):
@@ -274,71 +255,6 @@ def host_public_key(values: Machine) -> str:
         )
         .decode()
     )
-
-
-def expires_at(values: Machine) -> str:
-    """When the server certificate this machine carries stops being valid.
-
-    Recorded on the box beside its digest map, because the bill of materials
-    cannot see an expiry coming on its own: every component of it is
-    re-derived from the repository, and the repository issues a fresh
-    certificate on every render, so the intended side is always young. Only
-    the box knows how old its own certificate is.
-    """
-    return x509.load_pem_x509_certificate(values.server_cert.encode()).not_valid_after_utc.isoformat()
-
-
-def _identity(pem: str, *, with_key: bool) -> str:
-    """A certificate reduced to what it *is*.
-
-    Validity dates, serial numbers and signature bytes move on every issuance;
-    the subject and the SANs do not. Digesting the latter is what lets a
-    re-render be recognized as the same machine.
-    """
-    cert = x509.load_pem_x509_certificate(pem.encode())
-    try:
-        names = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
-        san = sorted(str(name.value) for name in names)
-    except x509.ExtensionNotFound:
-        san = []
-    spki = ''
-    if with_key:
-        spki = hashlib.sha256(
-            cert.public_key().public_bytes(
-                encoding=serialization.Encoding.DER,
-                format=serialization.PublicFormat.SubjectPublicKeyInfo,
-            )
-        ).hexdigest()
-    return json.dumps([cert.subject.rfc4514_string(), san, spki])
-
-
-def digests(values: Machine) -> dict[str, str]:
-    """A digest per component of the machine, for comparing a box to the repo.
-
-    Per component rather than one number so that a drifted box can say *what*
-    drifted -- `butane`, `operator_keys`, `postgres_image` -- which is the
-    difference between "re-provision, trust me" and a converge whose reason is
-    readable. The map is small enough to travel in the instance's metadata,
-    which is where the answer for a running box comes from.
-
-    The template itself is a component: it is the machine's definition, and a
-    change to it must be visible without every value it interpolates changing.
-    That makes the template's text, comments included, part of what a running
-    box is compared on.
-    """
-    parts = {'butane': machine_file(TEMPLATE)}
-    for spec in fields(values):
-        value = getattr(values, spec.name)
-        match spec.metadata.get('digest', Digested.VALUE):
-            case Digested.NEVER:
-                continue
-            case Digested.AUTHORITY:
-                parts[spec.name] = _identity(value, with_key=True)
-            case Digested.LEAF:
-                parts[spec.name] = _identity(value, with_key=False)
-            case _:
-                parts[spec.name] = json.dumps(value, sort_keys=True, default=str)
-    return {key: hashlib.sha256(value.encode()).hexdigest()[:16] for key, value in sorted(parts.items())}
 
 
 def _server_public_key(values: Machine) -> str:
@@ -363,14 +279,15 @@ _PUBLIC_HALVES = {
 def bill_of_materials(values: Machine) -> dict[str, str]:
     """A digest per component of the machine, for a box whose keys are stable (rfc-006 §4.4).
 
-    The `state-backend` stack's counterpart of `digests`, and the map it
-    carries in the instance's `extendedMetadata`, in the clear: a planned
-    replacement names there what moved, beside a `metadata` the diff can show
-    only as secret. Every component is read as it is, the certificates whole,
-    because the stack renders from keys that outlive every render rather than
-    from ones issued per render; and each secret by its public half, so that
-    rotating a key moves its own entry. The template's text is a component, as
-    in `digests`. Nothing compares the map but the engine.
+    The map the `state-backend` stack carries in the instance's
+    `extendedMetadata`, in the clear: a planned replacement names there what
+    moved, beside a `metadata` the diff can show only as secret. Every
+    component is read as it is, the certificates whole, because the stack
+    renders from keys that outlive every render; and each secret by its public
+    half, so that rotating a key moves its own entry. The template itself is a
+    component, comments included: it is the machine's definition, and a change
+    to it is named without every value it interpolates changing. Nothing
+    compares the map but the engine.
     """
     parts = {'butane': machine_file(TEMPLATE)}
     for spec in fields(values):

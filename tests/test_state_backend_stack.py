@@ -19,6 +19,7 @@ import dataclasses
 import hashlib
 import importlib
 import inspect
+import json
 import lzma
 import socket
 import ssl
@@ -43,7 +44,7 @@ from kluster.components import state_backend as component
 from kluster.components.state_backend import hooks
 from kluster.lib import stack_environment
 from kluster.lib import workstation as lib_workstation
-from kluster.lib.state_backend import committed, permission, render, settings, state
+from kluster.lib.state_backend import adoption, committed, permission, render, settings, state
 from kluster.providers import oci_objects, postgres_tls
 from kluster.scripts.credentials import derived, escrow, pki
 from kluster.stacks import state_backend as program
@@ -200,8 +201,11 @@ def _hooks_accepted(monitor: Appliance) -> Generator[_Callbacks]:
         settings_.callbacks = before  # pyright: ignore[reportAttributeAccessIssue]
 
 
-async def _run(monitor: Appliance, machine: Machine) -> Appliance:
-    pulumi.runtime.set_all_config(_config(machine.keys))
+async def _run(monitor: Appliance, machine: Machine, *, adopted: dict[str, str] | None = None) -> Appliance:
+    config = _config(machine.keys)
+    if adopted is not None:
+        config[f'kluster:{adoption.KEY}'] = json.dumps(adopted)
+    pulumi.runtime.set_all_config(config)
     _ = await run_under_backstop(monitor, stack=NAME)
     with _hooks_accepted(monitor):
         async with declaring():
@@ -320,6 +324,84 @@ def test_nothing_else_is_protected(run: Appliance) -> None:
     protected = {request.type for request in run.requested if request.protect}
 
     assert protected == set(PROTECTED.values())
+
+
+# --------------------------------------------------------------------------
+# What the cutover adopts.
+# --------------------------------------------------------------------------
+
+#: Each resource the stack adopts, by the type it is declared as. The instance,
+#: the image and the dump key are not among them: the stack makes its own.
+ADOPTED = {
+    adoption.VCN: 'oci:Core/vcn:Vcn',
+    adoption.GATEWAY: 'oci:Core/internetGateway:InternetGateway',
+    adoption.SUBNET: SUBNET,
+    adoption.IMAGE_BUCKET: IMAGE_BUCKET,
+    adoption.ADDRESS: PUBLIC_IP,
+    adoption.DUMP_BUCKET: DUMP_BUCKET,
+}
+
+
+def test_every_adoptable_resource_is_named_once() -> None:
+    assert set(ADOPTED) == set(adoption.ADOPTABLE)
+
+
+@pytest.mark.asyncio
+async def test_each_adopted_id_is_its_resources_import(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The configuration's ids reach their resources as the program's import, and reach nothing else.
+
+    Through the program, so each imported resource is recorded with this
+    program's secret markings (framework/pulumi.md §3.3).
+    """
+    machine = _machine(tmp_path)
+    ids = {name: f'an-id-for-{name}' for name in adoption.ADOPTABLE}
+
+    with _files_in(monkeypatch, machine.directory):
+        run = await _run(Appliance(), machine, adopted=ids)
+
+    imported = {request.type: request.importId for request in run.requested if request.importId}
+    assert imported == {ADOPTED[name]: ids[name] for name in adoption.ADOPTABLE}
+
+
+def test_with_nothing_adopted_nothing_is_imported(run: Appliance) -> None:
+    assert [request.type for request in run.requested if request.importId] == []
+
+
+@pytest.mark.asyncio
+async def test_an_adopted_name_the_stack_does_not_keep_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    machine = _machine(tmp_path)
+
+    with (
+        _files_in(monkeypatch, machine.directory),
+        pytest.raises(adoption.Refused, match="names 'instance'"),
+    ):
+        _ = await _run(Appliance(), machine, adopted={'instance': 'ocid1.instance.oc1..box'})
+
+
+# --------------------------------------------------------------------------
+# The server certificate's expiry, a stack output.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_program_exports_when_the_configured_certificate_expires(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    machine = _machine(tmp_path)
+    exported: dict[str, object] = {}
+
+    def export(name: str, value: object) -> None:
+        exported[name] = value
+
+    monkeypatch.setattr(program.pulumi, 'export', export)
+
+    with _files_in(monkeypatch, machine.directory):
+        _ = await _run(Appliance(), machine)
+
+    certificate = pki.not_valid_after(machine.keys.server_certificate.encode())
+    assert exported == {settings.CERTIFICATE_EXPIRY_OUTPUT: certificate.isoformat()}
 
 
 # --------------------------------------------------------------------------

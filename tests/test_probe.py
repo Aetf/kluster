@@ -49,10 +49,10 @@ PREFIX = b2.DUMP_PREFIX
 
 
 def test_the_alert_margin_opens_after_the_renewal_margin() -> None:
-    # The probe is the backstop for a box nobody has converged: a backstop
-    # that fires before the converge would have reported is the first
-    # reporter rather than the last.
-    assert config.EXPIRY_ALERT_MARGIN < config.RENEWAL_MARGIN
+    # The probe is the backstop for an appliance whose stack nobody has run: a
+    # backstop that fires before a run of the stack would have named the
+    # reissue is the first reporter rather than the last.
+    assert config.EXPIRY_ALERT_MARGIN < settings.RENEWAL_MARGIN
     assert dt.timedelta(0) < config.EXPIRY_ALERT_MARGIN
 
 
@@ -111,7 +111,7 @@ def _left(days: int) -> dt.datetime:
     return NOW - pki.LEAF_VALIDITY + dt.timedelta(days=days)
 
 
-def test_the_handshake_is_the_one_provision_makes_with_the_chain_printed() -> None:
+def test_the_handshake_is_the_postgres_starttls_one_with_the_chain_printed() -> None:
     handshake = Handshake()
 
     _ = probe.certificate(now=NOW, handshake=handshake)
@@ -253,7 +253,15 @@ def lister(api: FakeApi) -> tuple[b2.AppKey, str]:
     )
     _ = b2.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY)
     session = b2.Session.from_entry(kit, SEED_ENTRY)
-    bucket_id = b2.ensure_bucket(session, settings.B2_BUCKET, prefix=settings.B2_PREFIX, retention_days=30)
+    # The dump bucket as the `state-backend` stack declares it: in the account
+    # already, made by no call here.
+    bucket_id = 'bucket-dumps'
+    api.buckets[bucket_id] = {
+        'bucketId': bucket_id,
+        'bucketName': settings.B2_BUCKET,
+        'bucketType': 'allPrivate',
+        'lifecycleRules': [],
+    }
     key, _ = b2.mint_freshness_dumps_key(session, bucket_id=bucket_id).deliver(lambda key: key)
     return key, bucket_id
 
@@ -702,7 +710,7 @@ def test_every_probe_has_a_bit_of_its_own_that_no_other_status_shares() -> None:
 
 def test_the_statuses_are_published_in_help() -> None:
     # A number a workflow's log is read by has to be readable without opening
-    # the source, the way `provision`'s replaced status is.
+    # the source, the way the `operator-stack` driver's restore-owed status is.
     for action in cli.build_parser()._actions:  # pyright: ignore[reportPrivateUsage]
         if isinstance(action, argparse._SubParsersAction):  # pyright: ignore[reportPrivateUsage]
             chosen = cast('argparse._SubParsersAction[argparse.ArgumentParser]', action)  # pyright: ignore[reportPrivateUsage]

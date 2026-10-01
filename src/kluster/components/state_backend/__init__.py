@@ -29,6 +29,12 @@ run that finds none writes nothing:
     caller passes: a new generation replaces the key, and so the box, and the
     old key goes at the end of that deployment.
 
+**What already exists is adopted through the program.** The ids its caller
+passes (`kluster.lib.state_backend.adoption`) go to their resources as the
+`import_` option, so the cutover brings what the appliance's earlier script
+built into the state with this program's secret markings; the box and the
+image are not among them, and are replaced (framework/pulumi.md §3.3).
+
 **Nothing here reads stack configuration.** The providers are the stack
 program's, set on this component's options and inherited by every native
 resource beneath it; the keys the box is rendered from arrive as `Keys`; the
@@ -46,6 +52,7 @@ nobody can reach or whose dumps nobody can open, so nothing is planned.
 from __future__ import annotations
 
 import base64
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -57,12 +64,21 @@ from cryptography.hazmat.primitives import serialization
 
 from kluster import conventions
 from kluster.components.state_backend.hooks import Replacement
-from kluster.lib.state_backend import committed, render, settings
+from kluster.lib.state_backend import adoption, committed, render, settings
 from kluster.providers.oci_objects import ArtifactObject
 from kluster.providers.postgres_tls import Readiness
 from putils import Component, async_output, background, resolve
 
-__all__ = ('ANYWHERE', 'RULES', 'SERVER_ROW', 'Keys', 'Rule', 'StateBackend', 'refuse_out_of_step')
+__all__ = (
+    'ANYWHERE',
+    'RULES',
+    'SERVER_ROW',
+    'Keys',
+    'Rule',
+    'StateBackend',
+    'certificate_expiry',
+    'refuse_out_of_step',
+)
 
 #: The one address range the appliance's routes and rules name: everything.
 ANYWHERE = '0.0.0.0/0'
@@ -148,6 +164,15 @@ class Keys:
 SERVER_ROW = f'{conventions.STATE_BACKEND}-server'
 
 
+def certificate_expiry(keys: Keys) -> str:
+    """When the configured server certificate stops being valid, as an ISO 8601 instant.
+
+    What the stack exports as `settings.CERTIFICATE_EXPIRY_OUTPUT`, for the
+    driver to hold against the renewal margin (rfc-006 §7).
+    """
+    return x509.load_pem_x509_certificate(keys.server_certificate.encode()).not_valid_after_utc.isoformat()
+
+
 def refuse_out_of_step(keys: Keys) -> None:
     """Refuse keys a failed `credentials derived` run left out of step with each other.
 
@@ -185,6 +210,7 @@ class StateBackend(Component, pulumi_type='kluster:state_backend:StateBackend'):
         dump_key_generation: int,
         bundle_dir: Path,
         dump_directory: Path,
+        adopted: Mapping[str, str] | None = None,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         """Declare the appliance.
@@ -192,13 +218,17 @@ class StateBackend(Component, pulumi_type='kluster:state_backend:StateBackend'):
         `keys` are the stable keys of rfc-006 §5, `dump_key_generation` the
         dump key's generation, `bundle_dir` the `operator` client bundle the
         hooks connect with and `dump_directory` where a replacement's dump is
-        written. The OCI and B2 providers come in on `opts`.
+        written. `adopted` holds the id of each resource that already exists,
+        by its name in `adoption.ADOPTABLE`, imported rather than created. The
+        OCI and B2 providers come in on `opts`.
         """
         refuse_out_of_step(keys)
         recipients = committed.age_recipients()
+        ids = adoption.read(adopted)
         super().__init__(name, opts=opts)
         self.compartment_id = compartment_id
         self.keys = keys
+        self.certificate_expiry = certificate_expiry(keys)
         self.replacement = Replacement(bundle_dir=bundle_dir, recipients=recipients, dump_directory=dump_directory)
 
         self.vcn = oci.core.Vcn(
@@ -207,7 +237,7 @@ class StateBackend(Component, pulumi_type='kluster:state_backend:StateBackend'):
             cidr_blocks=[settings.VCN_CIDR],
             display_name=f'{settings.NAME}-vcn',
             dns_label='statebackend',
-            opts=self.child_opts(protect=True),
+            opts=self.child_opts(protect=True, import_=ids.get(adoption.VCN)),
         )
         self.gateway = oci.core.InternetGateway(
             f'{name}-igw',
@@ -215,7 +245,7 @@ class StateBackend(Component, pulumi_type='kluster:state_backend:StateBackend'):
             vcn_id=self.vcn.id,
             enabled=True,
             display_name=f'{settings.NAME}-igw',
-            opts=self.child_opts(),
+            opts=self.child_opts(import_=ids.get(adoption.GATEWAY)),
         )
         self.routes = oci.core.RouteTable(
             f'{name}-routes',
@@ -248,7 +278,7 @@ class StateBackend(Component, pulumi_type='kluster:state_backend:StateBackend'):
             prohibit_public_ip_on_vnic=False,
             route_table_id=self.routes.id,
             security_list_ids=[self.rules.id],
-            opts=self.child_opts(protect=True),
+            opts=self.child_opts(protect=True, import_=ids.get(adoption.SUBNET)),
         )
 
         self.image_bucket = oci.objectstorage.Bucket(
@@ -259,7 +289,9 @@ class StateBackend(Component, pulumi_type='kluster:state_backend:StateBackend'):
             access_type='NoPublicAccess',
             # The OCID of the user that made it (rfc-006 §3.3), which the
             # provider does not mark.
-            opts=self.child_opts(protect=True, additional_secret_outputs=['createdBy']),
+            opts=self.child_opts(
+                protect=True, additional_secret_outputs=['createdBy'], import_=ids.get(adoption.IMAGE_BUCKET)
+            ),
         )
         self.artifact = ArtifactObject(
             f'{name}-fcos',
@@ -300,7 +332,7 @@ class StateBackend(Component, pulumi_type='kluster:state_backend:StateBackend'):
                     days_from_hiding_to_deleting=1,
                 )
             ],
-            opts=self.child_opts(protect=True),
+            opts=self.child_opts(protect=True, import_=ids.get(adoption.DUMP_BUCKET)),
         )
         # No `additional_secret_outputs`: the SDK marks the key secret, and its
         # id is the resource's id, which the engine cannot mark, and an
@@ -357,7 +389,7 @@ class StateBackend(Component, pulumi_type='kluster:state_backend:StateBackend'):
             lifetime='RESERVED',
             display_name=f'{settings.NAME}-ip',
             private_ip_id=async_output(self._primary_private_ip),
-            opts=self.child_opts(protect=True),
+            opts=self.child_opts(protect=True, import_=ids.get(adoption.ADDRESS)),
         )
         self.readiness = Readiness(
             f'{name}-ready',

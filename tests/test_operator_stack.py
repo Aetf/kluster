@@ -27,9 +27,11 @@ configuration.
 
 from __future__ import annotations
 
+import datetime as dt
 import io
 import json
 import os
+import re
 import shutil
 import signal
 import site
@@ -46,9 +48,10 @@ from memory_keyring import MemoryKeyring, installed
 
 from kluster.conventions import identity
 from kluster.lib import acquisition, bundle, stack_environment
+from kluster.lib.state_backend import permission, settings, state
 from kluster.scripts.credentials import escrow
 from kluster.scripts.credentials import workstation as credential_slots
-from kluster.scripts.operator_stack import checkpoint, cli, driver
+from kluster.scripts.operator_stack import appliance, checkpoint, cli, driver
 
 #: The stack a committed-state case adds to the census.
 PROBE = 'probe'
@@ -130,6 +133,13 @@ class FakePulumi:
     #: The export call, counted from one, that fails as a backend that stopped
     #: answering would.
     failing_export: int | None = None
+    #: What a preview prints, one engine event per line, where a case writes
+    #: the events out; otherwise a summary counting `changes`.
+    printed: str | None = None
+    #: What a preview asked to replace a resource prints, where it differs.
+    replacing: str | None = None
+    #: What a streamed command exits with.
+    code: int = 0
     streamed: list[list[str]] = field(default_factory=list[list[str]])
     captured: list[list[str]] = field(default_factory=list[list[str]])
     envs: list[dict[str, str]] = field(default_factory=list[dict[str, str]])
@@ -139,7 +149,7 @@ class FakePulumi:
         self.streamed.append(args)
         self.envs.append(dict(env))
         self.effect(args)
-        return 0
+        return self.code
 
     def events(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str]) -> tuple[int, str]:
         args = list(args)
@@ -147,6 +157,10 @@ class FakePulumi:
         self.envs.append(dict(env))
         assert args[:3] == ['preview', '--refresh', '--json'], args
         assert env[driver.STREAMING_JSON_ENV] == 'true'
+        if self.replacing is not None and '--replace' in args:
+            return 0, self.replacing
+        if self.printed is not None:
+            return 0, self.printed
         return 0, json.dumps({'summaryEvent': {'resourceChanges': self.changes}}) + '\n'
 
     def capture(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str]) -> str:
@@ -1457,3 +1471,577 @@ def test_a_real_operation_left_pending_is_checked_like_a_resource(echo: Scratch)
         'is named in additionalSecretOutputs and is not ciphertext; '
         'pass the input `x` whole as `pulumi.Output.secret(...)`'
     ]
+
+
+# --------------------------------------------------------------------------
+# The `state-backend` stack's gate, over the fake `pulumi`.
+# --------------------------------------------------------------------------
+
+STATE_BACKEND = appliance.STACK
+INSTANCE_URN = f'urn:pulumi:{STATE_BACKEND}::kluster-py::kluster:state_backend:StateBackend$oci:core/instance:Instance::state-backend-vm'
+ADDRESS_URN = f'urn:pulumi:{STATE_BACKEND}::kluster-py::kluster:state_backend:StateBackend$oci:core/publicIp:PublicIp::state-backend-ip'
+#: The box's bill of materials before a change and after it, one digest moved.
+BEFORE = {'butane': 'aaaa', 'operator_keys': 'bbbb', 'postgres_image': 'cccc'}
+AFTER = {'butane': 'aaaa', 'operator_keys': 'bbbb', 'postgres_image': 'dddd'}
+
+
+def _box(op: str, *, before: dict[str, str] | None = BEFORE, after: dict[str, str] = AFTER) -> dict[str, Any]:
+    """One step of the instance: `op`, with the bill of materials it starts from and the one it ends at."""
+    metadata: dict[str, Any] = {
+        'op': op,
+        'urn': INSTANCE_URN,
+        'type': appliance.INSTANCE,
+        'new': {'inputs': {appliance.BILL_OF_MATERIALS: after}},
+        'diffs': ['metadata', appliance.BILL_OF_MATERIALS],
+    }
+    if before is not None:
+        metadata['old'] = {'inputs': {appliance.BILL_OF_MATERIALS: before}}
+    return {'resourcePreEvent': {'metadata': metadata}}
+
+
+def _replacement(*, before: dict[str, str] = BEFORE, after: dict[str, str] = AFTER) -> list[dict[str, Any]]:
+    """A replacement of the instance as the engine emits it under `delete_before_replace`.
+
+    `delete-replaced` first, carrying the old state alone, then `replace` and
+    `create-replacement` with both: the shapes the pinned CLI emits, which
+    `test_a_real_replacement_of_the_box_names_only_the_digest_that_moved_and_waits_for_force`
+    reads off the engine itself.
+    """
+    gone = {
+        'op': 'delete-replaced',
+        'urn': INSTANCE_URN,
+        'type': appliance.INSTANCE,
+        'old': {'inputs': {appliance.BILL_OF_MATERIALS: before}},
+        'new': None,
+        'diffs': None,
+    }
+    return [
+        {'resourcePreEvent': {'metadata': gone}},
+        _box('replace', before=before, after=after),
+        _box('create-replacement', before=before, after=after),
+    ]
+
+
+def _address(assigned: str) -> list[dict[str, Any]]:
+    """The reserved address, refreshed: assigned to `assigned`, or to nothing where that is empty."""
+    outputs = {'ipAddress': settings.ADDRESS, 'assignedEntityId': assigned, 'privateIpId': assigned}
+    refreshed = {'op': 'refresh', 'urn': ADDRESS_URN, 'type': appliance.RESERVED_ADDRESS, 'new': {'outputs': outputs}}
+    same = {'op': 'same', 'urn': ADDRESS_URN, 'type': appliance.RESERVED_ADDRESS, 'old': {'outputs': outputs}}
+    return [{'resOutputsEvent': {'metadata': refreshed}}, {'resourcePreEvent': {'metadata': same}}]
+
+
+def _expiring(at: dt.datetime) -> dict[str, Any]:
+    """The stack's own outputs as the program computes them: the server certificate's expiry."""
+    outputs = {settings.CERTIFICATE_EXPIRY_OUTPUT: at.isoformat()}
+    metadata = {
+        'op': 'same',
+        'urn': 'urn:stack',
+        'type': driver.STACK_TYPE,
+        'old': {'outputs': outputs},
+        'new': {'outputs': outputs},
+    }
+    return {'resOutputsEvent': {'metadata': metadata}}
+
+
+NOW = dt.datetime(2026, 10, 1, tzinfo=dt.UTC)
+#: An expiry well outside the renewal margin, which nothing names.
+LATER = NOW + settings.RENEWAL_MARGIN + dt.timedelta(days=400)
+
+
+def _planned(*events: dict[str, Any], expiry: dt.datetime = LATER) -> str:
+    """A preview's events: these steps, the stack's expiry, and a summary counting the steps."""
+    counts: dict[str, int] = {'same': 1}
+    for event in events:
+        if (pre := event.get('resourcePreEvent')) is not None:
+            op = pre['metadata']['op']
+            counts[op] = counts.get(op, 0) + 1
+    return _events(*events, _expiring(expiry), {'summaryEvent': {'resourceChanges': counts}})
+
+
+@dataclass
+class Backend:
+    """The estate's backend as the gate asks it: the stacks it serves, or no answer at all."""
+
+    stacks: list[str] = field(default_factory=lambda: ['organization/kluster-py/physical'])
+    answers: bool = True
+    asked: int = 0
+
+    def served(self) -> list[str]:
+        self.asked += 1
+        if not self.answers:
+            raise appliance.Silent('postgres://operator@192.0.2.10:5432/pulumi_state did not answer')
+        return list(self.stacks)
+
+
+def _appliance(repository: Repository, fake: FakePulumi, backend: Backend | None = None) -> driver.Run:
+    gate = appliance.Gate(served=(backend or Backend()).served, now=lambda: NOW)
+    return driver.Run.open(STATE_BACKEND, repository.checkout, pulumi=fake, base=AMBIENT, gate=gate)
+
+
+def test_a_pending_replacement_without_force_makes_no_up_and_names_what_moved(
+    repository: Repository, caplog: pytest.LogCaptureFixture
+) -> None:
+    fake = FakePulumi(printed=_planned(*_replacement(), *_address('ocid1.privateip.box')))
+
+    assert _appliance(repository, fake).up(yes=True) == driver.PLANNED
+
+    assert fake.ups() == []
+    (refusal,) = [message for message in caplog.messages if 'nothing is applied' in message]
+    # The digest that moved, by component, and the run that replaces the box.
+    assert 'the postgres_image digest' in refusal
+    assert 'the butane digest' not in refusal
+    assert permission.REMEDY in refusal
+
+
+def test_force_grants_the_permission_on_the_up_alone(repository: Repository) -> None:
+    fake = FakePulumi(printed=_planned(*_replacement(), *_address('ocid1.privateip.box')))
+
+    assert _appliance(repository, fake).up(yes=True, force=True) == driver.NOTHING_PLANNED
+
+    (up,) = fake.ups()
+    assert up == ['up', '--refresh', '--yes', '--skip-preview', '--stack', STATE_BACKEND]
+    granted = [env.get(permission.ENV) for env in fake.envs]
+    # The preview carries none: it runs no hook, and grants nothing to anyone.
+    assert granted == [None, permission.GRANTED]
+
+
+def test_replace_passes_the_instance_urn_and_grants_the_permission(repository: Repository) -> None:
+    # Nothing moved: `--replace` is the replacement asked for regardless.
+    fake = FakePulumi(
+        printed=_planned(_box('same', after=BEFORE), *_address('ocid1.privateip.box')),
+        replacing=_planned(*_replacement(after=BEFORE), *_address('ocid1.privateip.box')),
+    )
+
+    assert _appliance(repository, fake).up(yes=True, replace=True) == driver.NOTHING_PLANNED
+
+    first, again, up = fake.streamed
+    assert '--replace' not in first
+    assert again[again.index('--replace') + 1] == INSTANCE_URN
+    assert up[up.index('--replace') + 1] == INSTANCE_URN
+    assert fake.envs[-1][permission.ENV] == permission.GRANTED
+
+
+@pytest.mark.parametrize('force', [False, True], ids=['plain', 'force'])
+def test_a_create_beside_a_held_address_is_refused_whatever_the_flags(repository: Repository, force: bool) -> None:
+    # The refreshed state holds no box, and the refreshed address points at
+    # one: another workstation's launch, or a box the stack never declared.
+    fake = FakePulumi(printed=_planned(_box('create', before=None), *_address('ocid1.privateip.elsewhere')))
+
+    with pytest.raises(driver.Refused, match=r'ocid1\.privateip\.elsewhere.*never import it'):
+        _ = _appliance(repository, fake).up(yes=True, force=force)
+
+    assert fake.ups() == []
+
+
+def test_a_create_while_the_address_points_at_nothing_is_a_launch(repository: Repository) -> None:
+    # A first launch, or one after the box is lost: the termination deleted the
+    # private address the reservation pointed at.
+    fake = FakePulumi(printed=_planned(_box('create', before=None), *_address('')))
+
+    assert _appliance(repository, fake).up(yes=True, force=True) == driver.NOTHING_PLANNED
+
+    assert len(fake.ups()) == 1
+
+
+def test_plan_names_a_create_beside_a_held_address_and_applies_nothing(
+    repository: Repository, caplog: pytest.LogCaptureFixture
+) -> None:
+    fake = FakePulumi(printed=_planned(_box('create', before=None), *_address('ocid1.privateip.elsewhere')))
+
+    assert _appliance(repository, fake).plan() == driver.PLANNED
+
+    assert any('ocid1.privateip.elsewhere' in message for message in caplog.messages)
+    assert fake.ups() == []
+
+
+@pytest.mark.parametrize(
+    ('expiry', 'named'),
+    [
+        (NOW + settings.RENEWAL_MARGIN - dt.timedelta(days=1), 'expires on'),
+        (NOW - dt.timedelta(days=1), 'expired on'),
+        (LATER, None),
+    ],
+    ids=['inside-the-margin', 'expired', 'outside-the-margin'],
+)
+def test_an_expiry_inside_the_margin_is_named(
+    repository: Repository, caplog: pytest.LogCaptureFixture, expiry: dt.datetime, named: str | None
+) -> None:
+    fake = FakePulumi(printed=_planned(*_address('ocid1.privateip.box'), expiry=expiry))
+
+    _ = _appliance(repository, fake).plan()
+
+    said = [message for message in caplog.messages if 'server certificate' in message]
+    if named is None:
+        assert said == []
+    else:
+        (message,) = said
+        assert named in message
+        assert expiry.date().isoformat() in message
+        assert 'credentials derived state-backend-server issue' in message
+
+
+@pytest.mark.parametrize(
+    ('backend', 'expected'),
+    [
+        (Backend(), driver.NOTHING_PLANNED),
+        (Backend(stacks=[]), driver.RESTORE_OWED),
+        (Backend(answers=False), driver.BACKEND_SILENT),
+    ],
+    ids=['serving', 'empty', 'silent'],
+)
+def test_plan_answers_from_the_estate_backend(repository: Repository, backend: Backend, expected: int) -> None:
+    fake = FakePulumi(printed=_planned(*_address('ocid1.privateip.box')))
+
+    assert _appliance(repository, fake, backend).plan() == expected
+
+    assert backend.asked == 1
+    assert fake.ups() == []
+
+
+def test_an_up_whose_restore_hook_failed_exits_3_over_an_empty_backend(repository: Repository) -> None:
+    # The readiness hook found no dump of its own and a backend holding no
+    # stack, failed, and `pulumi` exited non-zero: the run's answer is the
+    # restore owed, not the failure.
+    fake = FakePulumi(printed=_planned(*_replacement(), *_address('ocid1.privateip.box')), code=255)
+
+    assert _appliance(repository, fake, Backend(stacks=[])).up(yes=True, force=True) == driver.RESTORE_OWED
+
+
+def test_the_callers_permission_never_reaches_a_run(repository: Repository) -> None:
+    # A shell that exported the permission grants nothing: not to the preview,
+    # not to an `up` with no `--force`, not to a passed-through `up`, which the
+    # instance's hooks then refuse.
+    fake = FakePulumi(
+        printed=_planned(
+            *_address('ocid1.privateip.box'),
+            {
+                'resourcePreEvent': {
+                    'metadata': {'op': 'update', 'urn': 'urn:list', 'type': 'oci:core/securityList:SecurityList'}
+                }
+            },
+        )
+    )
+    gate = appliance.Gate(served=Backend().served, now=lambda: NOW)
+    run = driver.Run.open(
+        STATE_BACKEND,
+        repository.checkout,
+        pulumi=fake,
+        base=AMBIENT | {permission.ENV: permission.GRANTED},
+        gate=gate,
+    )
+
+    _ = run.plan()
+    _ = run.up(yes=True)
+    _ = run.passthrough(['up', '--yes'])
+
+    assert len(fake.ups()) == 2
+    assert [env.get(permission.ENV) for env in fake.envs] == [None] * len(fake.envs)
+
+
+def test_force_and_replace_are_the_appliances_alone(tmp_path: Path) -> None:
+    checkout = tmp_path / 'kluster'
+    _fill_slots(checkout)
+    fake = FakePulumi()
+    run = driver.Run.open('github', checkout, pulumi=fake, base=AMBIENT)
+
+    for flags in ({'force': True}, {'replace': True}):
+        with pytest.raises(driver.Refused, match='state-backend box'):
+            _ = run.up(yes=True, **flags)
+    assert fake.streamed == []
+
+
+def test_the_gate_reads_a_silent_backend_apart_from_a_missing_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkout = tmp_path / 'kluster'
+    gate = appliance.Gate.for_checkout(checkout)
+
+    # No bundle in the slot is this checkout's to repair, and the run refuses.
+    with pytest.raises(appliance.Refused, match='state-backend bundle operator'):
+        _ = gate.backend()
+
+    _fill_slots(checkout)
+
+    def unanswered(_target: state.Connection) -> list[str]:
+        raise state.StateError('`pulumi stack ls` failed: connection refused')
+
+    monkeypatch.setattr(state, 'stacks', unanswered)
+    assert gate.backend() is appliance.Backend.SILENT
+    monkeypatch.setattr(state, 'stacks', _served([]))
+    assert gate.backend() is appliance.Backend.EMPTY
+    monkeypatch.setattr(state, 'stacks', _served(['organization/kluster-py/physical']))
+    assert gate.backend() is appliance.Backend.SERVING
+
+
+def _served(stacks: list[str]) -> Callable[[state.Connection], list[str]]:
+    def answer(target: state.Connection) -> list[str]:
+        assert target.url == SLOT_URL
+        return stacks
+
+    return answer
+
+
+def test_the_command_line_carries_force_and_replace_to_the_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    class Recorded:
+        def up(self, *, yes: bool, force: bool, replace: bool) -> int:
+            seen.update(yes=yes, force=force, replace=replace)
+            return 0
+
+    def opened(_cls: type[driver.Run], *_args: object, **_kwargs: object) -> Recorded:
+        return Recorded()
+
+    monkeypatch.setattr(driver.Run, 'open', classmethod(opened))
+
+    assert cli.main([STATE_BACKEND, 'up', '--force']) == 0
+    assert seen == {'yes': False, 'force': True, 'replace': False}
+    assert cli.main([STATE_BACKEND, 'up', '--replace', '--yes']) == 0
+    assert seen == {'yes': True, 'force': False, 'replace': True}
+
+
+#: A program whose one resource stands in for the appliance's box: a dynamic
+#: resource declared as the instance is, `delete_before_replace` with a change
+#: of its bill of materials replacing it, so the engine emits the step events a
+#: replacement of the box carries.
+BOXES = """\
+import json
+import pathlib
+
+import pulumi
+from pulumi.dynamic import CreateResult, DiffResult, Resource, ResourceProvider
+
+
+class Box(ResourceProvider):
+    def create(self, props):
+        return CreateResult(id_='box-' + props['extendedMetadata']['image'], outs=dict(props))
+
+    def diff(self, _id, olds, news):
+        replaces = ['extendedMetadata'] if olds.get('extendedMetadata') != news.get('extendedMetadata') else []
+        return DiffResult(changes=bool(replaces), replaces=replaces)
+
+    def delete(self, _id, _props):
+        pass
+
+
+class BoxResource(Resource):
+    def __init__(self, name, props, opts):
+        super().__init__(Box(), name, props, opts)
+
+
+settings = json.loads(pathlib.Path('settings.json').read_text())
+BoxResource(
+    'box',
+    {'extendedMetadata': settings['bom']},
+    pulumi.ResourceOptions(delete_before_replace=True, replace_on_changes=['extendedMetadata']),
+)
+"""
+
+
+@dataclass
+class AsTheBox:
+    """The pinned `pulumi`, whose preview events name the stand-in `box` as the appliance's instance.
+
+    The type is the one thing the stand-in cannot carry: it is a dynamic
+    resource. Every other field of every event is the engine's own.
+    """
+
+    cli: driver.Cli = field(default_factory=driver.Cli)
+    printed: list[str] = field(default_factory=list[str])
+
+    def stream(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str]) -> int:
+        return self.cli.stream(args, cwd=cwd, env=env)
+
+    def capture(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str]) -> str:
+        return self.cli.capture(args, cwd=cwd, env=env)
+
+    def events(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str]) -> tuple[int, str]:
+        code, printed = self.cli.events(args, cwd=cwd, env=env)
+        lines: list[str] = []
+        for line in printed.splitlines():
+            event = cast('dict[str, Any]', json.loads(line)) if line.strip() else None
+            for kind in ('resourcePreEvent', 'resOutputsEvent'):
+                metadata = cast('dict[str, Any]', (event or {}).get(kind, {}).get('metadata') or {})
+                if str(metadata.get('urn', '')).endswith('::box'):
+                    metadata['type'] = appliance.INSTANCE
+            lines.append(json.dumps(event) if event is not None else line)
+        self.printed.append('\n'.join(lines))
+        return code, '\n'.join(lines) + '\n'
+
+
+@pytest.fixture
+def boxes(repository: Repository, committed: str, tmp_path: Path) -> Scratch:
+    made = _initialized(repository, committed, tmp_path, BOXES)
+    _ = (made.checkout / 'settings.json').write_text(json.dumps({'bom': {'butane': 'a', 'image': 'c'}}))
+    assert made.run.passthrough(['up', '--yes', '--skip-preview']) == 0
+    return made
+
+
+@needs_pulumi
+def test_a_real_replacement_of_the_box_names_only_the_digest_that_moved_and_waits_for_force(
+    boxes: Scratch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The engine's own events for a `delete_before_replace` replacement: `delete-replaced` first, with no new state.
+
+    Read through the gate as the appliance's instance, they hold the run for
+    `--force`, name the one digest that moved and not the one that did not, and
+    under `--force` apply.
+    """
+    _ = (boxes.checkout / 'settings.json').write_text(json.dumps({'bom': {'butane': 'a', 'image': 'd'}}))
+    pulumi = AsTheBox()
+    gate = appliance.Gate(served=Backend().served, now=lambda: NOW)
+    run = driver.Run.open(PROBE, boxes.checkout, base=boxes.base, pulumi=pulumi, gate=gate)
+
+    assert run.up(yes=True) == driver.PLANNED
+
+    preview = driver.read_preview(pulumi.printed[-1])
+    assert [step.op for step in appliance.box_steps(preview)] == ['delete-replaced', 'replace', 'create-replacement']
+    (refusal,) = [message for message in caplog.messages if 'nothing is applied' in message]
+    assert 'the image digest' in refusal
+    assert 'the butane digest' not in refusal
+
+    assert run.up(yes=True, force=True) == driver.NOTHING_PLANNED
+    assert run.plan() == driver.NOTHING_PLANNED
+
+
+def test_a_pending_delete_of_the_box_waits_for_force_and_says_so(
+    repository: Repository, caplog: pytest.LogCaptureFixture
+) -> None:
+    gone = {
+        'op': 'delete',
+        'urn': INSTANCE_URN,
+        'type': appliance.INSTANCE,
+        'old': {'inputs': {appliance.BILL_OF_MATERIALS: BEFORE}},
+        'new': None,
+    }
+    fake = FakePulumi(printed=_planned({'resourcePreEvent': {'metadata': gone}}, *_address('ocid1.privateip.box')))
+
+    assert _appliance(repository, fake).up(yes=True) == driver.PLANNED
+
+    assert fake.ups() == []
+    (refusal,) = [message for message in caplog.messages if 'nothing is applied' in message]
+    assert 'the program no longer declares the box' in refusal
+
+
+def test_an_up_over_nothing_planned_answers_from_the_estate_backend(repository: Repository) -> None:
+    # The one path that would otherwise report 0 over a backend serving no
+    # stack: nothing planned, so no `up` runs, and the backend is still read.
+    fake = FakePulumi(printed=_planned(*_address('ocid1.privateip.box')))
+    backend = Backend(stacks=[])
+
+    assert _appliance(repository, fake, backend).up(yes=True) == driver.RESTORE_OWED
+
+    assert fake.ups() == []
+    assert backend.asked == 1
+
+
+IMPORTED_URN = f'urn:pulumi:{STATE_BACKEND}::kluster-py::kluster:state_backend:StateBackend$oci:core/image:Image::state-backend-image'
+
+
+def _imported_then_replaced() -> list[dict[str, Any]]:
+    """An adopted resource the plan would replace: imported, then replaced, as a preview shows it."""
+    return [
+        {'resourcePreEvent': {'metadata': {'op': op, 'urn': IMPORTED_URN, 'type': 'oci:core/image:Image'}}}
+        for op in ('import', 'create-replacement', 'replace')
+    ]
+
+
+#: What the pinned engine says in a preview of such a run (`step_generator.go`
+#: at 3.257.0, L1975–L1999).
+ENGINE_WARNING = (
+    'previously-imported resources that still specify an ID may not be replaced; please remove the `import` '
+    'declaration from your program;\nimageSourceDetails: {} => {objectName: fedora-coreos-1.qcow2}'
+)
+
+
+@pytest.mark.parametrize(
+    'events',
+    [
+        _imported_then_replaced(),
+        [
+            {'resourcePreEvent': {'metadata': {'op': 'replace', 'urn': IMPORTED_URN, 'type': 'oci:core/image:Image'}}},
+            {'diagnosticEvent': {'urn': IMPORTED_URN, 'severity': 'warning', 'message': ENGINE_WARNING}},
+        ],
+    ],
+    ids=['imported-in-this-run', 'imported-earlier'],
+)
+def test_a_replacement_of_an_adopted_resource_is_refused_before_up_naming_it(
+    repository: Repository, events: list[dict[str, Any]]
+) -> None:
+    # The engine would fail the `up` at that step, after every step before it
+    # -- the terminate of the box among them on the cutover's run.
+    fake = FakePulumi(printed=_planned(*events, *_address('')))
+
+    with pytest.raises(driver.Refused, match=f'would replace {re.escape(IMPORTED_URN)}, which the program imports'):
+        _ = _appliance(repository, fake).up(yes=True, force=True)
+
+    assert fake.ups() == []
+
+
+@pytest.fixture
+def unanswered(monkeypatch: pytest.MonkeyPatch) -> list[Mapping[str, str]]:
+    """`pulumi stack ls` against a backend whose traffic is dropped: the runner's own bound runs out."""
+    asked: list[Mapping[str, str]] = []
+
+    def run_pulumi(args: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdin: str | None) -> str:
+        asked.append(env)
+        raise sp.TimeoutExpired(cmd=['pulumi', *args], timeout=120)
+
+    monkeypatch.setattr(state.pulumi_cli, 'run_pulumi', run_pulumi)
+    return asked
+
+
+def test_a_backend_whose_traffic_is_dropped_does_not_answer(
+    repository: Repository, unanswered: list[Mapping[str, str]]
+) -> None:
+    fake = FakePulumi(printed=_planned(*_address('')))
+    run = driver.Run.open(STATE_BACKEND, repository.checkout, pulumi=fake, base=AMBIENT)
+
+    assert run.plan() == driver.BACKEND_SILENT
+
+    # The connection attempt is bounded well inside that bound, so the
+    # question ends in seconds rather than when TCP gives up.
+    (env,) = unanswered
+    assert env[state.CONNECT_TIMEOUT_ENV] == str(state.CONNECT_TIMEOUT)
+    assert state.CONNECT_TIMEOUT <= 10
+
+
+def test_a_checkout_with_no_bundle_is_refused_before_anything_runs(repository: Repository) -> None:
+    # The run's hooks connect with the bundle and the driver reads the backend
+    # through it, so a run without one would fail only after it had written.
+    shutil.rmtree(repository.checkout / '.credentials' / 'state-backend')
+    fake = FakePulumi(printed=_planned(*_address('')))
+    run = driver.Run.open(STATE_BACKEND, repository.checkout, pulumi=fake, base=AMBIENT)
+
+    for act in (run.plan, lambda: run.up(yes=True)):
+        with pytest.raises(appliance.Refused, match='state-backend bundle operator'):
+            _ = act()
+    assert fake.streamed == []
+
+
+def test_a_replacement_that_names_nothing_moved_says_so_rather_than_inventing_a_reason(
+    repository: Repository, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The provider replaces the box and the events name no digest and no
+    # input: the refusal says that, and sends the operator to the plan.
+    steps = [
+        {
+            'resourcePreEvent': {
+                'metadata': {
+                    'op': op,
+                    'urn': INSTANCE_URN,
+                    'type': appliance.INSTANCE,
+                    'old': {'inputs': {appliance.BILL_OF_MATERIALS: BEFORE}},
+                    'new': None if op == 'delete-replaced' else {'inputs': {appliance.BILL_OF_MATERIALS: BEFORE}},
+                }
+            }
+        }
+        for op in ('delete-replaced', 'replace', 'create-replacement')
+    ]
+    fake = FakePulumi(printed=_planned(*steps, *_address('ocid1.privateip.box')))
+
+    assert _appliance(repository, fake).up(yes=True) == driver.PLANNED
+
+    (refusal,) = [message for message in caplog.messages if 'nothing is applied' in message]
+    assert appliance.NOTHING_NAMED in refusal
+    assert 'asked for' not in refusal

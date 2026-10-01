@@ -20,10 +20,8 @@ parked secret the register rules out.
 
 Which slot a row is pushed into follows from what consumes it. A stack's
 credential goes into that stack's committed configuration, where the program
-reads it before it can run. The state-backend appliance's OCI key is the one
-row whose consumer is not a stack — `state-backend provision` builds the
-backend the config secrets are stored behind — so it goes into a workstation
-slot instead (`oci_slot.py`).
+reads it before it can run -- the state-backend appliance's OCI key included,
+which the `state-backend` stack builds its OCI provider from.
 
 The drill age identity is drawn here rather than minted anywhere, as the
 appliance's SSH host key below is; its consumer is the ops repository's
@@ -44,11 +42,11 @@ other's predecessor live.
 
 **The `state-backend` stack's rows fill the configuration its program reads.**
 The stack keeps its state committed (framework/pulumi.md §3.3) and its
-program is rfc-006 §4's, so its rows are the stable keys that program renders
-the box from: its own B2 management key, minted like `physical`'s under a
-role of its own; the server key and certificate, issued from the escrowed CA;
-and the SSH host key, drawn here, whose public half is committed beside the
-Butane template. Each refuses before anything is minted while the stack has
+program is rfc-006 §4's, so its rows are its providers' credentials and the
+stable keys that program renders the box from: its own OCI key and B2
+management key, minted like `physical`'s under names of their own; the server
+key and certificate, issued from the escrowed CA; and the SSH host key, drawn
+here, whose public half is committed beside the Butane template. Each refuses before anything is minted while the stack has
 no checkpoint, since the stack's first `stack init` goes through the
 `operator-stack` driver and nothing here creates it. Beside them, a backup
 generation's `generate` writes that generation's public half into the
@@ -80,7 +78,7 @@ from kluster.lib.state_backend import settings as appliance_settings
 from ... import conventions
 from ..state_backend import config as appliance
 from ..state_backend import probe
-from . import age, b2, cloudflare, entries, escrow, oci_iam, oci_slot, pki, pulumi_config
+from . import age, b2, cloudflare, entries, escrow, oci_iam, pki, pulumi_config
 from .github_secrets import Forge, Slot
 from .kdbx import KdbxStore
 
@@ -445,24 +443,26 @@ def oci_physical(
 def oci_state_backend(
     kit: KdbxStore,
     *,
+    stack: pulumi_config.Stack,
     compartment_id: str | None = None,
     seed_entry: str = OCI_SEED_ENTRY,
     connect: oci_iam.Connect = oci_iam.identity_client,
-) -> Path:
-    """Mint the appliance's own OCI key into its workstation slot. Returns the slot's path.
+) -> str:
+    """Mint the appliance's own OCI user and key into the `state-backend` stack's config. Returns the user OCID.
 
-    The one §3 OCI row that is not pushed to a stack: `state-backend provision`
-    is workstation-only by design — bring-up and rebuild, never CI — and it
-    runs before there is a Pulumi backend to hold a secret at all, so the slot
-    is what a non-interactive reader can be pointed at (`oci_slot.py`).
+    The shape `oci_physical` delivers, confined to the compartment
+    `conventions` names for the appliance: the stack program builds its OCI
+    provider from these three values (rfc-006 §4.1). Refused before anything
+    is minted while the stack has no checkpoint (`_require_initialized`).
 
     The account is held against `conventions.OCI_TENANCY` here as it is for the
-    row above, because the mint holds it rather than the row does: this key
-    provisions the appliance the whole installation's state lives on, and one
-    minted in the wrong tenancy would build that appliance in an account
-    nothing here manages. A run given `compartment_id` is pointed at a drill
-    tenancy and is not held to it, exactly as the row above is not.
+    row above: this key builds the appliance the whole installation's state
+    lives on, and one minted in the wrong tenancy would build that appliance
+    in an account nothing here manages. A run given `compartment_id` is
+    pointed at a drill tenancy and is not held to it, exactly as the row above
+    is not.
     """
+    _require_initialized(stack)
     pending = oci_iam.mint_api_key(
         kit,
         consumer=conventions.STATE_BACKEND,
@@ -471,13 +471,10 @@ def oci_state_backend(
         connect=connect,
     )
 
-    _, written = pending.deliver(oci_slot.write)
-    log.info(
-        '`state-backend provision` signs as %s from now on, reading %s',
-        oci_iam.Identity.name_for(conventions.STATE_BACKEND),
-        written,
+    delivered, _ = pending.deliver(
+        lambda key: _push_api_key(stack, key, holds=f'a key for {oci_iam.Identity.name_for(conventions.STATE_BACKEND)}')
     )
-    return written
+    return delivered.user
 
 
 def b2_management(kit: KdbxStore, *, stack: pulumi_config.Stack, seed_entry: str = B2_SEED_ENTRY) -> str:
@@ -611,7 +608,7 @@ def state_backend_host_key(*, stack: pulumi_config.Stack, public_file: Path) -> 
     """Draw the box's SSH host key: the private half into the stack's config, the public half into `public_file`.
 
     Returns the public line. Ed25519, which is the one algorithm the client
-    is told to accept (`provision.ssh`). Drawn here rather than on the box, so
+    is told to accept (`state-backend ssh`). Drawn here rather than on the box, so
     the key is stable across replacements and the pin is known before a box
     boots with it; no provider issues it and nothing escrows it, since a lost
     one costs a fresh draw and a replacement (rfc-006 §5).
@@ -727,6 +724,23 @@ def backup_age_recipient(vault: escrow.Vault, label: str, *, recipients_file: Pa
     return public
 
 
+def host_key_problems(path: Path) -> list[str]:
+    """What is wrong with the committed host key's public half. No kit, no key.
+
+    The file holds one `ssh-ed25519` line (`committed.host_key`); an absent
+    one is a problem, since the `state-backend` stack refuses to plan without
+    it and `state-backend ssh` pins the box to it. Whether it is the public
+    half of the key in the stack's configuration is what only the operator
+    passphrase can answer; the stack's component holds the two to each other
+    before it plans (`refuse_out_of_step`).
+    """
+    try:
+        _ = committed.host_key(path)
+    except committed.Refused as exc:
+        return [str(exc)]
+    return []
+
+
 def backup_recipients_problems(registry: escrow.Registry, path: Path) -> list[str]:
     """What is wrong with the recipients file, held to the escrow. No kit, no key.
 
@@ -734,13 +748,13 @@ def backup_recipients_problems(registry: escrow.Registry, path: Path) -> list[st
     holds, each once, each a native recipient. Whether each recipient is the
     public half of the identity escrowed under its label is what only the kit
     can answer; `backup_age_recipient` computes it from that identity when it
-    writes. An absent file is no problem here: `state-backend provision`
-    builds the box from the escrow itself, and the stack's component, which
-    renders the box from the file, refuses to plan without it
+    writes. An absent file is a problem too: the `state-backend` stack renders
+    the box's recipients from it and refuses to plan without it
     (`committed.age_recipients`).
     """
     if not path.is_file():
-        return []
+        rows = ', '.join(f'`credentials derived {escrow.row_name(label)} generate`' for label in escrow.backup_labels())
+        return [f'no {path}: the state-backend stack renders the box from it; {rows} writes it, and it is committed']
     try:
         on_file = backup_recipients(path)
     except age.AgeMissing:
@@ -792,17 +806,17 @@ def drill_age_identity(forge: Forge, *, recipient_file: Path, rotate: bool) -> s
     on `gh`'s standard input, then in the Environment: no file, no kit row,
     no escrow ciphertext ever holds the private half, and `age.Identity`
     keeps it out of every repr. Losing the Environment secret costs a
-    `--rotate` and the converge that follows, never a byte of data, because
+    `--rotate` and the replacement that follows, never a byte of data, because
     every dump it opens is also encrypted to an escrowed generation.
 
     **The recipient on file is what refuses a second generation.** The row is
     no escrow label, so nothing counts its generations; the committed public
     half is the one durable trace of a key already in service, and drawing
     over it would leave the appliance encrypting to a key the Environment
-    no longer holds until the next converge. `rotate` says that is the
+    no longer holds until the next replacement. `rotate` says that is the
     intent -- and is refused when there is nothing on file to rotate, since
     an operator who believes a key exists where none does is about to skip
-    the converge that installs it.
+    the replacement that installs it.
 
     **`rotate` asks only whether the file is there, and never reads it.** A
     recipient on file that `appliance.drill_recipient` refuses -- a hand edit
@@ -820,10 +834,11 @@ def drill_age_identity(forge: Forge, *, recipient_file: Path, rotate: bool) -> s
     with the file untouched.
 
     What follows the write is the operator's: commit the file, then
-    `state-backend provision --force` -- the recipient list is digested, so
-    the plain converge reports the drift and stops -- and `restore` of the
-    dump that run takes. The first object the drill can open is the first
-    dump written after that replace.
+    `operator-stack state-backend up --force` -- the recipient list is part
+    of the box's bill of materials, so the plain run names the replacement
+    and stops -- which dumps the box, replaces it and restores into the new
+    one. The first object the drill can open is the first dump written after
+    that replacement.
     """
     if rotate:
         if not recipient_file.is_file():
@@ -844,8 +859,7 @@ def drill_age_identity(forge: Forge, *, recipient_file: Path, rotate: bool) -> s
             raise pulumi_config.SlotRefused(
                 f'{recipient_file} already names a drill recipient, so a drill key is in service; '
                 '`--rotate` draws its successor, and the sequence it starts is: commit the file, '
-                '`state-backend provision --force`, `state-backend restore` of the dump that run takes, '
-                'then a fresh dump for the drill to open'
+                '`operator-stack state-backend up --force`, then a fresh dump for the drill to open'
             )
     slot = DRILL_AGE_IDENTITY_SLOT
     log.info('drawing the drill age identity with %s', age.KEYGEN)
@@ -862,9 +876,8 @@ def drill_age_identity(forge: Forge, *, recipient_file: Path, rotate: bool) -> s
         f'# Written by `credentials derived {DRILL_AGE_IDENTITY_ROW} generate`; replaced by `--rotate`.\n'
         f'{identity.public}\n'
     )
-    log.info('commit %s; the appliance encrypts to it from the next converge on:', recipient_file)
-    log.info('    state-backend provision --force    # dumps under the new recipients, replaces, names the file')
-    log.info('    state-backend restore <that file>')
+    log.info('commit %s; the appliance encrypts to it from the replacement that carries it:', recipient_file)
+    log.info('    operator-stack state-backend up --force    # dumps the box, replaces it, restores into the new one')
     return identity.public
 
 
@@ -887,17 +900,17 @@ def _push_drill_api_key(forge: Forge, key: oci_iam.ApiKey) -> None:
 def _dump_bucket(session: b2.Session) -> str:
     """The id of the bucket the appliance dumps into, which is what confines the drill's key.
 
-    Looked up rather than converged: `state-backend provision` creates the
-    bucket and pins its retention, and a drill that finds no bucket has
-    nothing to read -- creating one here would mint a reader over an empty
-    prefix and report success.
+    Looked up rather than created: the `state-backend` stack declares the
+    bucket and its retention, and a drill that finds no bucket has nothing to
+    read -- creating one here would mint a reader over an empty prefix and
+    report success.
     """
     name = appliance_settings.B2_BUCKET
     found = session.buckets(name)
     if not found:
         raise pulumi_config.SlotRefused(
             f'the B2 account holds no bucket named {name}, so there is nothing for a drill to read; '
-            '`state-backend provision` creates it'
+            'the state-backend stack declares it'
         )
     return found[0].bucket_id
 

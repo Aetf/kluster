@@ -222,9 +222,9 @@ It is not the installation's only bucket. The state backend keeps two
 of its own: its dumps land in a bucket on the same B2 account
 (`kluster-state-backend`, physical/state-backend.md §5), and its boot
 image is imported through an OCI Object Storage bucket, which holds
-nothing the placement rule insures. The state backend exists before
-Pulumi can run, so both are created by the `state-backend provision`
-script rather than by a stack (framework/ci.md §1).
+nothing the placement rule insures. Both are declared by the
+`state-backend` stack, whose state is committed to this repository
+rather than kept in the backend it creates (framework/ci.md §1).
 
 **Backup-integrity rules (2026-08-23)** — backups are the actual HA
 mechanism (§5), so backup *deletability* is a first-class threat

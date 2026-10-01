@@ -5,15 +5,15 @@ server's and the `ci`/`operator` clients' (physical/state-backend.md §3).
 
 **The CA key is the only escrowed half.** It is random at creation and its
 ciphertext lives under `escrow/state-backend/ca` (credentials.md §2.2); losing
-it costs a new CA, which is a re-provision and a fresh bundle for every
-client. **Leaf keys are random at issuance and escrowed nowhere**:
+it costs a new CA, which is a reissued server certificate, a replacement of
+the box and a fresh bundle for every client. **Leaf keys are random at issuance and escrowed nowhere**:
 they are re-issuable from the CA, so keeping a copy would add an exposure that
 buys back nothing. Issuing one twice therefore produces two different keys,
 which is why a caller that needs a certificate and its key takes both halves
 from a single `issue_*` call.
 
 P-256 rather than RSA: the live CA is a P-256 key, and re-keying it is a
-re-provision of the appliance rather than an edit here.
+new CA and a replacement of the appliance rather than an edit here.
 """
 
 from __future__ import annotations

@@ -149,15 +149,22 @@ def kit(tenancy: Tenancy, api: B2Api) -> KdbxStore:
 
 
 @pytest.fixture
-def bucket_id(kit: KdbxStore) -> str:
-    """The dump bucket, converged the way `state-backend provision` converges it."""
-    session = b2.Session.from_entry(kit, derived.B2_SEED_ENTRY)
-    return b2.ensure_bucket(
-        session,
-        appliance_settings.B2_BUCKET,
-        prefix=appliance_settings.B2_PREFIX,
-        retention_days=appliance_settings.B2_RETENTION_DAYS,
-    )
+def bucket_id(api: B2Api) -> str:
+    """The dump bucket, as the `state-backend` stack declares it: in the account already, made by no call here."""
+    bucket_id = 'bucket-dumps'
+    api.buckets[bucket_id] = {
+        'bucketId': bucket_id,
+        'bucketName': appliance_settings.B2_BUCKET,
+        'bucketType': 'allPrivate',
+        'lifecycleRules': [
+            {
+                'fileNamePrefix': f'{appliance_settings.B2_PREFIX}/',
+                'daysFromUploadingToHiding': appliance_settings.B2_RETENTION_DAYS,
+                'daysFromHidingToDeleting': 1,
+            }
+        ],
+    }
+    return bucket_id
 
 
 def _mint(kit: KdbxStore, forge: Forge, tenancy: Tenancy, *, only: str | None = None) -> dict[str, str]:
@@ -237,7 +244,7 @@ def test_the_b2_carriers_are_the_read_only_key_on_the_dump_prefix(
         b2.DRILL_READ_NAME,
         b2.DRILL_READ_CAPABILITIES,
         bucket_id,
-        b2.dumps(bucket_id).name_prefix,
+        b2.DUMP_PREFIX,
     )
     # Proven by the one act the drill performs, as the new key: the listing
     # was served to it, not to the seed, and of the prefix the role names.
@@ -378,15 +385,15 @@ def test_no_dump_bucket_is_refused_before_a_key_is_minted(
     users, keys = dict(tenancy.identity.users), {user: list(held) for user, held in tenancy.identity.keys.items()}
     compartments = dict(tenancy.identity.compartments)
 
-    # No `bucket_id` fixture: the appliance has never been provisioned, so the
-    # bucket the reader would be confined to does not exist and there is
+    # No `bucket_id` fixture: the `state-backend` stack has never been applied,
+    # so the bucket the reader would be confined to does not exist and there is
     # nothing for a drill to read. Creating one here would mint a reader over
     # an empty prefix and report success. On the default run the refusal
     # fires before the OCI half too: a precondition the run can know before
     # minting is checked before anything is minted, so nothing is created on
     # either platform and nothing is rotated behind a refusal that says
     # nothing about it.
-    with pytest.raises(SlotRefused, match='state-backend provision'):
+    with pytest.raises(SlotRefused, match='the state-backend stack declares it'):
         _ = _mint(kit, forge, tenancy, only=only)
 
     assert api.calls.count('b2_create_key') == mints

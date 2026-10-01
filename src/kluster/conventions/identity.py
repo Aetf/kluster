@@ -12,11 +12,10 @@ CLUSTER_NAME = 'kluster'
 #: The state-backend appliance (physical/state-backend.md), which is one name
 #: wherever the appliance is named: the operator stack that declares it
 #: (`STACK_NAMES.state_backend`), the prefix on every cloud resource the box
-#: owns, the IAM principal its provisioner signs as, the workstation slot that
-#: key lands in, and the `credentials derived` rows that mint or draw what the
-#: box runs on (`oci-state-backend`, `state-backend-server`, ...). A name
-#: several packages have to agree on is a convention, not a setting of any one
-#: of them.
+#: owns, the IAM principal that stack's OCI provider signs as, and the
+#: `credentials derived` rows that mint or draw what the box runs on
+#: (`oci-state-backend`, `state-backend-server`, ...). A name several packages
+#: have to agree on is a convention, not a setting of any one of them.
 STATE_BACKEND = 'state-backend'
 
 #: The stack that owns the cloud installation (declarative/physical.md), which

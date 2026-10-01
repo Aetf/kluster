@@ -53,7 +53,7 @@ facts about them.
     the repository — ci.md §3) · **desktop secret store** (a value the
     operator hands a run by hand, found through §2's chain) ·
     **workstation slot** · on-box
-    (delivered by provisioning, e.g. Butane-embedded) · device secret
+    (delivered onto a box, e.g. Butane-embedded) · device secret
     (pushed to the gateway as a file beside its nspawn units,
     physical/gateway.md §1). A row names its channel(s); a
     credential living anywhere else is misplaced.
@@ -65,16 +65,14 @@ facts about them.
     run's environment, by the `operator-stack` driver building an
     operator stack's (framework/pulumi.md §3.3), or by a script that must
     not stop to ask. It holds what a workstation reads that way: the
-    stack passphrase, the state backend's `operator` bundle and the
-    appliance provisioner's OCI key (§4.4), the operator passphrase on a
-    machine whose desktop secret store does not hold it, and a root's
-    token file on one that has no store. The stack passphrase and the bundle are deliberately not in
+    stack passphrase, the state backend's `operator` bundle (§4.4), the
+    operator passphrase on a machine whose desktop secret store does not
+    hold it, and a root's token file on one that has no store. The stack passphrase and the bundle are deliberately not in
     the store: a `mise.toml` template reads them on *every* `pulumi` run,
     and a template can neither prompt nor unlock a keyring. **A provider
     credential is a slot here only
-    where a command rather than a stack consumes it** — the appliance
-    provisioner's OCI key, whose consumer `state-backend provision`
-    builds the backend every stack needs (§3), and a root's token file.
+    where a command rather than a stack consumes it** — a root's token
+    file, today.
     A stack may keep a working copy of its own config secret under
     `.credentials/` for the `0700` boundary — the libvirt identity
     `physical` writes to `libvirt/` on every run (§4.4) — which is not a
@@ -378,8 +376,8 @@ itself is self-service (§4.3).
     hold what they write to the recovery key it carries (§2.2); an App
     key's `record`, which also compares against what is filed;
     `derived <row> recover` — and so do the `state-backend` commands
-    that reach the CA or the backup identities: `provision`, `render`,
-    `bundle`, `dump` and `restore`. No runtime credential is in it: no
+    that reach the CA or the backup identities: `render`, `bundle`,
+    `dump` and `restore`. No runtime credential is in it: no
     workflow, timer or cluster component opens it, and the commands
     that run on a machine holding no kit at all are `credentials root`,
     `derived ls` and `derived check`, and `state-backend pins`, `ssh`,
@@ -496,8 +494,8 @@ Consequences, all deliberate:
     function of that seed, so replacing the seed for custody reasons —
     a new kit, a new custodian, a stick out of its envelope — replaces
     the stack passphrase (re-encrypting every stack) and the
-    state-backend CA (a re-provision, restore-shaped,
-    state-backend.md §7) along with it. Escrow separates the two
+    state-backend CA (a reissue and a replacement of the box,
+    state-backend.md §7.1) along with it. Escrow separates the two
     events: rotating one credential is a new generation of one label
     adopted by one consumer (§4.2), and rotating the kit is
     re-encryption and nothing else.
@@ -564,14 +562,14 @@ cell would say `pending` to an operator already being served.
 | Credential | From | Scope | Slot | Consumer |
 | --- | --- | --- | --- | --- |
 | OCI API key (`physical`) | OCI seed key | Its own user, group and policy; administrator of the `physical` compartment and a stranger outside it | Pulumi config secret | `physical` |
-| OCI API key (state backend) | OCI seed key | The same shape, over the appliance's own compartment | workstation slot (§4.4) | `state-backend provision` |
+| OCI API key (state backend) | OCI seed key (`credentials derived oci-state-backend mint`) | The same shape, over the appliance's own compartment | Pulumi config secret (`state-backend`) | the `state-backend` stack, which builds its OCI provider with it (rfc-006 §4) |
 | Cloudflare token (zones) | CF seed token | DNS edit, this installation's zones only | Pulumi config secret | `dns`, `apps` |
 | Cloudflare token (DNS-01) | CF seed token | `_acme-challenge` edit only | SealedSecret (pending) | cert-manager |
 | Cloudflare token (gateway ACME) | CF seed token | DNS edit on the zones the gateway's own vhosts are served under | Pulumi config secret (`physical`) · device secret (caddy's token file) | the gateway's caddy, written onto the device by `physical` |
 | B2 management key | B2 seed key | Bucket/key/lifecycle admin, **no file capabilities** | Pulumi config secret | `physical` |
 | B2 management key (state backend) | B2 seed key (`credentials derived b2-state-backend-management mint`) | The same capabilities as the one above, under a key name of its own, so that neither row's mint retires the other's key | Pulumi config secret (`state-backend`) | the `state-backend` stack, which declares the appliance's dump bucket and dump key with it (rfc-006 §4) |
 | B2 writer keys | B2 seed key (via `physical`) | Prefix-scoped, `list+read+write`, **no `deleteFiles`** — deletes degrade to lifecycle-purged hides (audit H4): VolSync, CNPG barman, etcd snapshots | SealedSecret (pending) · ops-repo secret (pending) | restic/barman, ops-repo workflow |
-| B2 dump key (micro) | B2 seed key | `writeFiles` alone, dump prefix | on-box (Ignition) | state-backend pg_dump timer |
+| B2 dump key (micro) | minted through the `state-backend` stack, with its own B2 management key; rotated by a generation bump in its configuration | `writeFiles` alone, dump prefix | Pulumi state (`state-backend`, its committed checkpoint) · on-box (Ignition) | state-backend pg_dump timer |
 | B2 freshness key (state dumps) | B2 seed key (`credentials derived b2-freshness-dumps mint`) | `listFiles` alone, confined to the dump prefix of the appliance's bucket: names, never a byte | ops-repo secret (`B2_FRESHNESS_DUMPS_KEY_ID`, `B2_FRESHNESS_DUMPS_KEY`) | `state-backend probe`, run daily by the ops repo's `probes.yml` (state-backend.md §6), which starts no job until the ops repository's Actions billing is restored (`kluster-ops#393`) |
 | B2 freshness key (etcd) | B2 seed key | The same shape over the etcd snapshots' prefix of the backup bucket, which a B2 key cannot share with the one above: a key confines to one bucket | ops-repo secret (pending) | the etcd snapshot age probe |
 | GitHub App key (dispatch) | Made on the App's own page (no key API) | Signs a JWT for that App alone, which mints a per-run installation token carrying contents:write on `kluster` and `kluster-ops` — the App is installed on both, and each mint is scoped to the one repository its run pushes to. The residual: the key is a repository secret any same-repository job can read, and its token pushes non-workflow files to `kluster`'s unprotected branches — not to `main`, which is protected with checks required — and to any branch of `kluster-ops`, a private repository with no branch protection on this plan; it writes no workflow file in either (no `workflows` permission) — the same "anyone who can push a branch" boundary this repository already accepts (ci.md §3) | escrow as `github/dispatch-key` · `kluster` repository secret (`DISPATCH_APP_PRIVATE_KEY`) | `sdk-regenerate.yml`, whose push onto a renovate branch is the App's act so that the pushed head's runs start on their own (ci.md §3); the alert producer (`alert.yml`), to which the `alert` job every workflow on `main` but `deploy.yml` ends in (ci.md §3) hands the key, and which posts the alert to `kluster-ops` |
@@ -581,8 +579,8 @@ cell would say `pending` to an operator already being served.
 | Operator passphrase | generated, escrowed as `operator/passphrase` | Decrypts the configuration and the state secrets of every operator stack, since a stack's state is encrypted under its configuration's salt — `github`'s configuration and its state in the backend, and `state-backend`'s configuration and committed state, today — and nothing else | escrow · desktop secret store · workstation slot (a machine with no store) | every run of an operator stack, through the `operator-stack` driver, and the `credentials` commands that reach an operator stack's config |
 | State-backend CA | generated, escrowed as `state-backend/ca` | Issues every certificate below | escrow (private half) · on-box and every bundle (the certificate) | certificate issuance |
 | State-backend certificates (server, `ci`, `operator`) | issued from the CA, keys generated at issuance and never escrowed | The server's: TLS for the appliance's reserved address. A client's: logs in over TLS as the role its CN names, into `pulumi_state` alone — a `NOSUPERUSER` member of the role that owns the state, holding `CONNECT` on that database and `USAGE` and `CREATE` on its `public` schema, which the box's own initialization grants, and ownership of the table Pulumi's backend keeps its objects in (physical/state-backend.md §2). The excess, which the platform cannot scope away: the backend refuses to open without owning its table, so either client certificate can drop or rewrite any stack's state, `github`'s included, and `CREATE` lets it add tables beside it; and every leaf stays valid until it expires, with nothing short of a new CA to revoke it (§3 there) | on-box (server) · CI env · workstation slot (the `operator` bundle) | Pulumi state access |
-| State-backend server key (`state-backend` stack) | issued from the CA by `credentials derived state-backend-server issue`, never escrowed | TLS for the appliance's reserved address, the same key across the box's replacements; the certificate and the CA's certificate sit beside it in the configuration in the clear | Pulumi config secret (`state-backend`) | the `state-backend` stack, which renders it into the box's Ignition (rfc-006 §4); the box serving today is the one `state-backend provision` built, with a server certificate of that run's own issuance (the certificates row) |
-| State-backend SSH host key | drawn by `credentials derived state-backend-host-key generate` and escrowed nowhere: a lost one costs a fresh draw and a replacement | The appliance's sshd identity, the same key across the box's replacements; its public half is committed as `src/kluster/lib/state_backend/machine/host-key.txt` | Pulumi config secret (`state-backend`) | the `state-backend` stack, which renders it into the box's Ignition and refuses to plan while its public half is not the committed one (rfc-006 §4); the box serving today is the one `state-backend provision` built, with a host key drawn for that render |
+| State-backend server key (`state-backend` stack) | issued from the CA by `credentials derived state-backend-server issue`, never escrowed | TLS for the appliance's reserved address, the same key across the box's replacements; the certificate and the CA's certificate sit beside it in the configuration in the clear | Pulumi config secret (`state-backend`) | the `state-backend` stack, which renders it into the box's Ignition (rfc-006 §4); until the cutover's replacement (rfc-006 §14, slice 6), the box serving is the one the appliance's earlier script built, with a server certificate of that script's own issuance (the certificates row) |
+| State-backend SSH host key | drawn by `credentials derived state-backend-host-key generate` and escrowed nowhere: a lost one costs a fresh draw and a replacement | The appliance's sshd identity, the same key across the box's replacements; its public half is committed as `src/kluster/lib/state_backend/machine/host-key.txt` | Pulumi config secret (`state-backend`) | the `state-backend` stack, which renders it into the box's Ignition and refuses to plan while its public half is not the committed one (rfc-006 §4); `state-backend ssh` pins the box to that public half, so it refuses the box the appliance's earlier script built, whose host key that script drew, until the cutover's replacement |
 | age backup identity | generated, escrowed as `backup/age/<generation>` | Decrypts state-backend pg_dumps | escrow · on-box (public half, a Butane recipient) | micro cron, a restore run from the kit |
 | Drill age identity | generated by `credentials derived drill-age-identity generate` and escrowed nowhere: the same generator as the backup identities (`age-keygen`), outside the generations | Its contract is the newest dump alone, with retention coverage left to the escrowed generations; what it *opens* is every dump written since it became a recipient and still in retention, whose payload secrets stay under the stack passphrase | ops-repo Environment (`drill`, the private half, as `DRILL_AGE_IDENTITY`) · on-box (the public half, the Butane recipient after the backup generations, read from `src/kluster/lib/state_backend/machine/drill-recipient.txt`) | Quarterly rebuild drill (state-backend.md §7.3) |
 | restic repo passwords | generated in-state (`backed_pvc`) | Per-PVC repos | Pulumi state (pending) · SealedSecret (via `backed_pvc`; pending) | VolSync |
@@ -614,10 +612,10 @@ swap rather than by any of those, because its contract covers the newest
 object rather than a retention window (state-backend.md §5):
 `credentials derived drill-age-identity generate --rotate` overwrites
 the Environment secret — with one slot, overwriting the old key *is*
-deleting it — and the recipient on file; committing that file is drift
-the plain converge names, so the adoption window is `state-backend
-provision --force` followed by `restore` of the dump that run takes,
-and the drill opens the first dump written after it. Between the
+deleting it — and the recipient on file; committing that file moves the
+box's bill of materials, so the adoption window is `operator-stack
+state-backend up --force`, which dumps the box, replaces it and restores
+into the new one, and the drill opens the first dump written after it. Between the
 overwrite and that dump the drill cannot open the newest object, which
 is the cost of a one-slot design and is bounded by one nightly.
 
@@ -652,18 +650,15 @@ shape: a job joins the overlay before it can reach anything the LAN
 holds, and that join is a workflow step rather than something a program
 does, which is why theirs is a CI Environment secret.
 
-**The OCI rows are one mint and two slots.** Both are the same act — the
+**The OCI rows are one mint and two stacks.** Both are the same act — the
 seed creates a user, the group that holds it and a policy confining that
 group to one compartment, then mints the user's API key — and they differ
-only in where the key is delivered, which follows from what consumes it.
-`physical` is a program, so its key is a Pulumi config secret it reads
-before it can run. `state-backend provision` is not: it is the command that
-*builds* the backend every config secret is stored in, it runs from a
-workstation at bring-up and at every rebuild, and it is never run by CI. Its
-key is therefore a **workstation slot** (§4.4), for the reason the operator
-bundle beside it is one: a file a non-interactive reader can be pointed at,
-and one a command can write again, so losing it costs a command rather than
-a credential.
+only in which stack the key is delivered into: `physical` and
+`state-backend` are each a program that builds its OCI provider from a
+Pulumi config secret before it can run. The `state-backend` stack's
+configuration is under the operator passphrase and its state is committed
+rather than kept in the backend it declares (framework/pulumi.md §3.3), so
+its key needs no backend to exist first.
 
 Scope is a compartment rather than a list of verbs, which is what makes the
 two rows independent. Each user administers its own compartment and is a
@@ -886,8 +881,6 @@ name.
 | `credentials seed <member> create` | The same single-row create, addressed by row rather than through `kit bootstrap`'s walk, and the form that takes `--entry` for a kit whose row sits somewhere else. It probes nothing: the row is written even when the kit already holds one — the entry's identifier and its secret are both replaced, and so is an attachment of the same name — which makes it the repair for a row that is present in the kit but dead at its platform: an OCI key or B2 key deleted at the platform, a Cloudflare token deleted in the dashboard. The recovery keypair is the exception: `seed recovery create` refuses a kit that already holds a recovery key, and a checkout that already holds `escrow/RECIPIENTS`, because every ciphertext opens with that one key and nothing else; replacing it deliberately is `credentials kit rotate` (§4.2), which re-wraps the escrow on its way. Every provider row holds its account against what `conventions` records before its first write: the OCI create, against the tenancy its account root names, ahead of the group, user, membership and policy it would otherwise leave standing there; the Cloudflare adopt, against the accounts the console-made token can see, while the operator is still on the dashboard page that fixes a token made in the wrong one; and the B2 create, against the account its master key authorizes as, before the seed every later B2 credential descends from exists. The recovery keypair is not a provider credential at all. |
 | `credentials seed oci rotate` / `credentials seed b2 rotate` | One self-reproducing seed replaced **inside the kit that is open**: the seed mints its successor, the successor is verified, and the predecessor is retired. Each holds its account against `conventions` before any of it, because a rotation's other act is to delete every key of that name that is in the successor's way — run against an account this installation does not own, that is a sweep through somebody else's keys. `credentials kit rotate` (§4.2) is the whole-kit form, which writes a new database instead. The rows the platform cannot rotate have no such subcommand — they are console visits. |
 | `credentials seed oci domain` | Once, on a kit written before the OCI row carried its identity domain (§4.3). Borrows the OCI account root; every rotation after it needs nothing but the kit. |
-| `credentials derived oci-state-backend mint` | After the kit exists and **before** `state-backend provision`, which is the only thing that reads it. Mints the appliance's own user, group, policy and API key from the OCI seed into the workstation slot (§4.4), confined to the compartment `conventions` names for it. Before it creates anything, it refuses a seed that belongs to an account other than the one `conventions` records — this being the first place in a bring-up that check can fire. Re-running it rotates that key; a workstation that does not hold the kit cannot run it, and does not provision. |
-| `state-backend provision` | After the kit and the appliance's key exist; every stack needs the backend before it can act. |
 | `credentials derived pulumi-passphrase generate` | After the state backend exists. The stack passphrase (§2.2) is generated, its ciphertext committed and its workstation slot (§4.4) written in one act, so `mise.toml` puts it into the environment of every later `pulumi` run and the backend URL comes from the bundle beside it — a `pulumi` command needs no prepared shell. The general form of this verb is below. |
 | `credentials derived operator-passphrase generate` | Before anything reads or writes an operator stack's config, and once per installation. Generates the operator passphrase, commits its ciphertext and keeps it in the desktop secret store — its workstation slot (§4.4) on a machine with no store — in one act: the same shape as the row above, differing in the one thing it exists for: it reaches no CI Environment, so nothing CI can start can read `Pulumi.github.yaml`. A second workstation runs `credentials derived operator-passphrase recover` instead. Re-running `generate` files a *new* generation and does **not** re-encrypt the stacks; rotating it is §4.2. |
 | `credentials derived cloudflare-zones mint [--stack <name>]` | After the kit and the state backend exist. Mints the zone-scoped Cloudflare token (§3) from the seed and writes it into the `dns` stack's config, under the one key the stack reads; the stack file is then committed. The account the zones live in is not written beside it — that is `conventions.CLOUDFLARE_ACCOUNT`, and the mint holds the account it is about to mint in against it, before it creates anything. Re-running it rotates that token. It is the only row that takes a `--stack` (default `dns`): what each of the others mints is named after its row and its mint retires everything else of that name, so a delivery aimed at another stack would revoke the real one's live credential on the way to filling that stack's slot. |
@@ -895,12 +888,15 @@ name.
 | `credentials derived oci-physical mint` | After the state backend exists. The same mint for the `physical` stack, into that stack's config secrets; the stack file is then committed. It also creates that stack's compartment where the tenancy has none, and prints the `OCID` to record in `conventions` and commit. Before it creates anything, it refuses a seed that belongs to an account other than the one `conventions` records. |
 | `credentials derived b2-management mint` | After the state backend exists. Mints the B2 management key (§3) from the B2 seed into the `physical` stack's config secret. Before it creates anything, it refuses a seed that authorizes as an account other than the one `conventions` records. Re-running it rotates that key and retires the one it replaces. |
 | `operator-stack state-backend pulumi stack init` | Once per installation, after `derived operator-passphrase generate`, and before any row below. Writes the `state-backend` stack's first checkpoint under `checkpoints/`, and `Pulumi.state-backend.yaml` holding the stack's `encryptionsalt`, which every row below encrypts under; the operator lands both like any change (framework/pulumi.md §3.3). Each row below refuses, before it mints anything, while the stack has no checkpoint: none of them creates the stack. |
+| `credentials derived oci-state-backend mint` | After the stack's first checkpoint. Mints the appliance's own user, group, policy and API key from the OCI seed into the `state-backend` stack's config secrets, confined to the compartment `conventions` names for it and created where it does not exist yet. Before it creates anything, it refuses a seed that belongs to an account other than the one `conventions` records. Re-running it rotates that key. |
 | `credentials derived b2-state-backend-management mint` | After the stack's first checkpoint. Mints the `state-backend` stack's own B2 management key (§3) from the B2 seed into that stack's config secret, held to the account `conventions` records as `b2-management mint` is. Its key name is its own, so neither row's mint retires the other's key. Re-running it rotates that key. |
 | `credentials derived state-backend-server issue` | After the stack's first checkpoint, and again to reissue before the certificate expires. Recovers the CA with the kit, issues a server key and certificate for the appliance's reserved address, and writes the key into the `state-backend` stack's config as a secret and the certificate and the CA's certificate beside it in the clear. Every value goes in on standard input and is read back. Nothing is retired: the box serves the certificate from the replacement that carries it, and the one it serves until then stays valid. |
 | `credentials derived state-backend-host-key generate` | After the stack's first checkpoint. Draws an ed25519 SSH host key, writes the private half into the `state-backend` stack's config as a secret and reads it back, and only then writes the public half to `src/kluster/lib/state_backend/machine/host-key.txt`; both files are committed together. Re-running it is the rotation, which the box adopts at its next replacement. |
 | `credentials derived backup-age-<N> generate` | Once per backup generation the appliance encrypts to, the one the pin names and the one before it. Draws and escrows the generation where the escrow has none — a backup label holds one identity for its lifetime (§2.2) — and recovers it where it has, and either way writes its public half, computed from the escrowed identity, into `src/kluster/lib/state_backend/machine/backup-recipients.txt`, a file to commit: one line per generation, its escrow label and its recipient. A line that disagrees with the escrow is replaced, and a generation the window has left is dropped. So it is run once for each generation escrowed before the file existed. |
+| `operator-stack state-backend up --force` | Once the rows above are committed and the `operator` bundle is in its slot (`state-backend bundle operator`, below): the Pulumi state backend, which every stack needs before it can act. The first launch is a create, which waits for `--force` like a replacement; on a site with no state yet the run exits 3, naming the first `pulumi stack init` against it. The checkpoint it writes is landed like any change (physical/state-backend.md §7.5). |
+| `state-backend adopt` | Once, at the cutover from the appliance's earlier script, after the rows above. Reads the ids of every resource the stack keeps but the box, the image and the dump key, signed with the stack's own keys, and writes them into its configuration in the clear, a file to commit; the stack imports each through its program (physical/state-backend.md §7.5). |
 | `credentials derived b2-freshness-dumps mint` | After the state backend exists — its bucket is what confines the key, and the key is proven by listing the dump prefix as itself. Mints the freshness probe's list-only B2 key (§3) and pushes both halves into the ops repository as repository secrets, as the GitHub admin token, each verified through the listing before the key it supersedes is retired. Re-running it rotates the key. |
-| `credentials derived drill-age-identity generate [--rotate]` | After `derived github-admin record`, whose token it pushes as, and before the rebuild drill first runs. Draws a fresh age identity and pushes its private half into the ops repository's `drill` Environment as `DRILL_AGE_IDENTITY`; once the listing shows the push landed, it writes the public half to `src/kluster/lib/state_backend/machine/drill-recipient.txt`, a file to commit. The private half never touches a disk. A recipient already on file refuses a second run, the file being the one durable trace of a key in service; `--rotate` draws the successor over both. A run without `--rotate` reads a recipient on file the way `derived check` reads `escrow/RECIPIENTS` — it must be a recipient the pinned `age` parses, and a line holding a private key is refused before `age` sees it, its content never printed — and it must be a native `age1…` one besides; a refusal names `--rotate`. `--rotate` asks only whether the file is there, so it also replaces a file that check refuses, which is the repair for a hand edit or a truncated write. So drawing needs `age-keygen` on `PATH`, and a run without `--rotate` over a recipient on file needs `age` beside it. The appliance encrypts to a new recipient only after `state-backend provision --force` and a `restore` of the dump that run takes (§3). |
+| `credentials derived drill-age-identity generate [--rotate]` | After `derived github-admin record`, whose token it pushes as, and before the rebuild drill first runs. Draws a fresh age identity and pushes its private half into the ops repository's `drill` Environment as `DRILL_AGE_IDENTITY`; once the listing shows the push landed, it writes the public half to `src/kluster/lib/state_backend/machine/drill-recipient.txt`, a file to commit. The private half never touches a disk. A recipient already on file refuses a second run, the file being the one durable trace of a key in service; `--rotate` draws the successor over both. A run without `--rotate` reads a recipient on file the way `derived check` reads `escrow/RECIPIENTS` — it must be a recipient the pinned `age` parses, and a line holding a private key is refused before `age` sees it, its content never printed — and it must be a native `age1…` one besides; a refusal names `--rotate`. `--rotate` asks only whether the file is there, so it also replaces a file that check refuses, which is the repair for a hand edit or a truncated write. So drawing needs `age-keygen` on `PATH`, and a run without `--rotate` over a recipient on file needs `age` beside it. The appliance encrypts to a new recipient only after `operator-stack state-backend up --force`, which dumps the box, replaces it and restores into the new one (§3). |
 | `credentials derived drill-credentials mint [--only <half>]` | After the state backend exists — its bucket is what confines the B2 key, and the key is proven by listing the dump prefix as itself — and beside the drill age identity, which the same Environment holds. Mints the rebuild drill's two provider keys (§3) and pushes their five carriers into the ops repository's `drill` Environment as the GitHub admin token, each verified through the listing before the key it supersedes is retired. The OCI half creates the `drill` compartment where the tenancy has none and prints the `OCID` to record in `conventions` and commit; it takes no `--compartment`, because the drill compartment is a recorded name in the recorded tenancy and the mint is held to it. Re-running it rotates both keys; `--only oci` or `--only b2` rotates one. |
 | `credentials derived unifi record` | After the state backend exists, and after the controller has minted a key for its dedicated local admin — which the command prints the steps for. Takes the key without echoing it, into the `physical` stack's config; the stack file is then committed. The controller's address is not recorded beside it, being the overlay address `conventions` assigns. Re-running it is how a replaced key is delivered. |
 | `credentials derived adguard record` | The same, for the admin login both AdGuard instances answer to, into the `dns` stack's config — the stack that writes the split-horizon rewrites. |
@@ -911,12 +907,12 @@ name.
 | `credentials derived ls` | Any time, with or without a kit. Prints the slot map (below): every §3 credential, where its value comes from, and every slot it lands in, the ones still waiting on a consumer included. It reads a checked-in file, so it needs no token, no kit and no network. |
 | `credentials derived sync [--only <row>] [--bundle-dir <path>]` | Once during bring-up, and again whenever one of those values moves or a slot is lost. Copies into their GitHub secrets the rows whose value lives somewhere else — recovered from the escrow; issued under the escrowed CA, as the `ci` client bundle is, afresh on every run; read back out of a stack's state; taken from `conventions`, as the overlay network's id is, which a workflow can only be handed as a secret; or typed in because the slot is its only storage — resolve, push, verify, per row. A row born into its slot is out of scope and is passed over; naming one is refused, pointing at the `mint` that owns it. `--only` addresses one row, and is what replaces a value that was typed in. |
 | `credentials derived <row> recover [--generation <n>] [--stdout]` | Reading an escrowed secret back out. `derived pulumi-passphrase recover` is the common one: it fills the passphrase slot (§4.4) so `mise.toml` finds it and a local preview needs no offline database; `--stdout` prints instead of writing, for a pipe into another machine. `--generation` opens an older one — the certificate issued under a superseded CA, the dump written under a superseded age identity — where the default is the newest. |
-| `state-backend bundle operator --address <ip> [--directory <path>]` | Once per workstation, or after a certificate reissue. Writes the client bundle into its slot; `state-backend provision` ends by doing the same thing. `--directory` writes it somewhere else instead — a second checkout, or a directory being staged for another machine — and the default is the slot. |
+| `state-backend bundle operator --address <ip> [--directory <path>]` | Once per workstation, or after a certificate reissue. Writes the client bundle into its slot, which the `state-backend` stack's hooks and the `operator-stack` driver connect with. `--directory` writes it somewhere else instead — a second checkout, or a directory being staged for another machine — and the default is the slot. |
 | `credentials derived <row> generate` | Rotating one escrowed credential (§4.2). Generates a new value, commits its ciphertext as the row's next generation and writes it into a workstation slot where the row has one — the passphrases do, and a row without one reaches its consumer through that consumer's own procedure (§4.2). One act, no other row touched. Unlocks the kit and refuses, before a value is drawn, an `escrow/RECIPIENTS` that does not name the kit's recovery recipient or holds a line `age` does not parse (§2.2). |
 | `credentials derived <row> import [--from-slot]` | Escrows a value that already exists as the row's next generation, changing nothing a consumer holds (§4.2). The value comes from standard input, or from the row's workstation slot with `--from-slot` — which is how a passphrase already sitting in `.credentials/` is escrowed without being copied through a shell. Refuses an empty or wrong-shaped value: a pipe whose producer failed dies here, not at the recovery that trusted the ciphertext. Unlocks the kit and refuses the same recipients file `generate` does (§2.2). |
 | `credentials kit rotate --into <new kit>` | Rotation (§4.2). Writes a new database and re-wraps the escrow to the successor recovery key in the same run; the retired one stays. A run that stopped part way is resumed by running it again with the same `--into`: the successor is opened rather than created, and each row it holds is finished rather than rotated twice. |
 | `credentials kit rewrap` | The re-wrap on its own, for a recipients file edited by hand: it takes no recipients, re-encrypts every generation to whatever `escrow/RECIPIENTS` already names, names in a warning each recipient beyond the kit's, and refuses a run that no identity in hand could open afterward. It opens with the one key the kit holds, so a rotation interrupted part way is not its case (§4.2: that is `kit rotate --into` the same file, again); an ordinary kit rotation never calls it. |
-| `credentials derived check` | Any time, kit or no kit: every escrowed row the register names is present, generations run from 1 with no gap, every ciphertext is an ASCII-armored age file, every line of `escrow/RECIPIENTS` is a recipient the pinned `age` parses — a line it refuses is named by its number and its content is never printed, and a line holding a private key, in any case and whatever quotes surround it, is refused before `age` sees it — nothing is escrowed under a label the register does not name, no stray file sits in the directory, and the backup recipients file, where there is one, names each escrowed generation of the appliance's window once and nothing else, each a native recipient the pinned `age` parses, a refused line named by its number alone. An absent recipients file is no problem to it: the box `state-backend provision` builds takes its recipients from the escrow itself, and the `state-backend` stack, which renders the box from the file, refuses to plan without it. It opens nothing, so a clone and `age` on `PATH` are enough to run it — which is what would let CI run it, though as of 2026-09-25 no workflow does. Having no kit, it cannot tell whether one of those recipients belongs to the kit in hand, nor whether a backup recipient is the public half of the identity escrowed under its label; each writer checks that (§2.2), and `backup-age-<N> generate` computes the line from that identity. |
+| `credentials derived check` | Any time, kit or no kit: every escrowed row the register names is present, generations run from 1 with no gap, every ciphertext is an ASCII-armored age file, every line of `escrow/RECIPIENTS` is a recipient the pinned `age` parses — a line it refuses is named by its number and its content is never printed, and a line holding a private key, in any case and whatever quotes surround it, is refused before `age` sees it — nothing is escrowed under a label the register does not name, no stray file sits in the directory, the backup recipients file names each escrowed generation of the appliance's window once and nothing else, each a native recipient the pinned `age` parses, a refused line named by its number alone, and the host key's public half is one `ssh-ed25519` line. Either file absent is a failure: the `state-backend` stack renders the box from both and refuses to plan without them, so on a checkout before they are committed, `check` names the command that writes each. It opens nothing, so a clone and `age` on `PATH` are enough to run it — which is what would let CI run it, though as of 2026-09-25 no workflow does. Having no kit, it cannot tell whether one of those recipients belongs to the kit in hand, nor whether a backup recipient is the public half of the identity escrowed under its label; each writer checks that (§2.2), and `backup-age-<N> generate` computes the line from that identity. |
 | `credentials kit ls [<group>]` / `show <entry>` | Looking without changing. `ls` prints entry paths and reads no field, so it can disclose nothing; a group narrows it to one branch of the kit (`seeds`), where the default is the whole of it. `show` prints one entry's non-secret fields. |
 | `credentials kit password remember` | Once per machine, so a run that lasts minutes is not guarded by a password typed into it. The password is proven against the kit before it is stored, keyed by the kit's resolved path — a kit reached by a new path needs one re-run. |
 | `credentials kit password forget` | Drops that remembered password again, for a machine that should stop holding it. |
@@ -1017,10 +1013,10 @@ the backend, which is
 the client bundle plus the stack's passphrase — the stack passphrase the
 kit recovers, or the operator passphrase §2's chain finds; the flag says
 which bundle, and the default is the workstation slot (§4.4)
-`state-backend bundle operator` writes. `derived oci-state-backend mint`
-is the one mint without it, because its value goes into a workstation
-slot and there is no backend yet to reach, and the App keys' `record`
-has none either: it files into the escrow and reaches no stack.
+`state-backend bundle operator` writes. The `state-backend` stack's rows
+need no bundle, its state being committed rather than in the backend,
+and the App keys' `record` has none either: it files into the escrow and
+reaches no stack.
 
 §3's minted rows are `credentials derived <row> mint`, and its escrowed
 rows are `credentials derived <row> generate`. A row is implemented when
@@ -1204,24 +1200,46 @@ operator-passphrase generate` and `recover`.
     console steps. The kit is all it writes secrets to; the recovery
     row additionally writes `escrow/RECIPIENTS` into the checkout — the
     public half, and a file to commit.
-2.  `credentials derived oci-state-backend mint` — the appliance's own
-    OCI key (§3), minted from the seed into the workstation slot the next
-    stage reads. It comes first among §3's rows because it is the only one
-    whose consumer runs before the state backend exists. The compartment
-    it is confined to is the one `conventions` names for the appliance,
-    adopted where it exists and created where it does not.
-3.  `state-backend provision` — the Pulumi state backend, which every
-    stack needs before it can act, and the first thing to escrow (§2.2):
-    it generates the CA and the age identity, commits their ciphertexts,
-    and the appliance's Ignition carries what is public about them — the
-    server certificate issued under that CA and the age identity's public
-    half — plus a B2 dump key minted from the B2 seed. The run ends by
-    writing the `operator` client bundle into its workstation slot (§4.4).
-4.  `credentials derived pulumi-passphrase generate` — the one escrowed
-    row no stage above mints, because it has no single installer: the
-    state backend owns the CA and the backup identities and generates
-    them in the run that installs them, while the stack passphrase
-    belongs to every stack and to none of them. The command writes the
+2.  `credentials derived operator-passphrase generate` — the operator
+    passphrase, before anything reads or writes an operator stack's
+    config. It is stage 5's command on a second row, and it is separate
+    from stage 5 for the one reason the row exists: this value goes to no
+    Environment, so the stacks it opens — the one whose config carries
+    the forge's admin token, and the appliance's — are unreadable by
+    anything CI can start (§1 rule 6). A machine that skips it does not
+    silently fall back to the stack passphrase: every `credentials`
+    command that would touch those stacks refuses by name, and a bare
+    `pulumi` run refuses with `incorrect passphrase`, the committed
+    `encryptionsalt` verifying this passphrase and no other (§4.2 on why
+    that line stays).
+3.  `operator-stack state-backend pulumi stack init`, then
+    `credentials derived oci-state-backend mint`,
+    `credentials derived b2-state-backend-management mint`,
+    `credentials derived state-backend-ca generate`,
+    `credentials derived state-backend-server issue`,
+    `credentials derived state-backend-host-key generate` and
+    `credentials derived backup-age-1 generate` — the `state-backend`
+    stack's configuration, which every key the appliance is rendered
+    from lives in, and the first thing to escrow (§2.2). The stack's
+    state is committed, so its first checkpoint comes from the driver
+    and is landed like any change, and every row after it refuses until
+    it is. Then the appliance's own OCI key, confined to the compartment
+    `conventions` names for it, adopted where it exists and created where
+    it does not; its own B2 management key; the CA, escrowed; the server
+    key and certificate issued under it; the SSH host key, whose public
+    half is a file to commit; and the first backup generation, escrowed,
+    its public half written into the committed recipients file.
+4.  `state-backend bundle operator --address <the reserved address>`,
+    then `operator-stack state-backend up --force` — the Pulumi state
+    backend, which every stack needs before it can act. The bundle comes
+    first because the run's hooks connect with it, and it lands in its
+    workstation slot (§4.4). The first launch is a create, which waits
+    for `--force` like a replacement, and the run exits 3 over a backend
+    that holds no stack yet, naming the first `pulumi stack init`; its
+    checkpoint is landed like any change.
+5.  `credentials derived pulumi-passphrase generate` — the stack
+    passphrase, which belongs to every stack the appliance's backend
+    holds and to none of them. The command writes the
     workstation slot (§4.4) as well as the ciphertext, and that slot is
     what a `pulumi` run reads from here on: `mise.toml` puts the
     passphrase and the bundle's `PULUMI_BACKEND_URL` into the
@@ -1232,13 +1250,13 @@ operator-passphrase generate` and `recover`.
     A kit that predates the escrow carries a live passphrase already and
     uses `import` here instead (§4.2), which escrows that value rather
     than replacing it.
-5.  `credentials derived cloudflare-zones mint` and
+6.  `credentials derived cloudflare-zones mint` and
     `credentials derived cloudflare-gateway-acme mint` — the Cloudflare
     seed's delivered tokens: the zones token into the `dns` stack's
     committed configuration, and the gateway's ACME token into the
     `physical` stack's, which that stack requires before it runs because
     it writes the token onto the device. Each file is then committed.
-6.  `credentials derived oci-physical mint` and
+7.  `credentials derived oci-physical mint` and
     `credentials derived b2-management mint` — `physical`'s minted
     provider credentials, its OCI key and its B2 management key, into its
     committed
@@ -1247,17 +1265,6 @@ operator-passphrase generate` and `recover`.
     creates the `physical` stack's compartment on its first run and
     prints the `OCID`, which is recorded in `conventions` and committed
     with the rest.
-7.  `credentials derived operator-passphrase generate` — the operator
-    passphrase, before anything reads or writes an operator stack's
-    config. It is stage 4's command on a second row, and it is separate
-    from stage 4 for the one reason the row exists: this value goes to no
-    Environment, so the stack whose config carries the forge's admin token
-    is unreadable by anything CI can start (§1 rule 6). A machine that
-    skips it does not silently fall back to the stack passphrase:
-    every `credentials` command that would touch those stacks refuses by
-    name, and a bare `pulumi` run refuses with `incorrect passphrase`,
-    the committed `encryptionsalt` verifying this passphrase and no
-    other (§4.2 on why that line stays).
 8.  `credentials derived unifi record`,
     `credentials derived adguard record`,
     `credentials derived zerotier record`,
@@ -1268,7 +1275,7 @@ operator-passphrase generate` and `recover`.
     rather than minted here. Each prints the steps that create it, takes
     the value, and writes it into the config of the stack that reads it,
     which is then committed like the rows above. The GitHub one is last of these
-    because stage 10 authenticates as it, and it needs stage 7 to have
+    because stage 10 authenticates as it, and it needs stage 2 to have
     run.
 9.  `credentials derived github-dispatch-key record` and
     `credentials derived github-trigger-key record` — the two GitHub App
@@ -1283,7 +1290,7 @@ operator-passphrase generate` and `recover`.
     fills it. It authenticates as the GitHub admin token stage 8
     recorded, read back out of the `github` stack's configuration, so a
     run before that stage refuses by naming the command that fills it —
-    and before stage 7, by naming the passphrase that opens it. It
+    and before stage 2, by naming the passphrase that opens it. It
     pushes the stack passphrase into every Environment and the operator
     passphrase into none, which is the partition ci.md §3 rests on.
 
@@ -1294,10 +1301,9 @@ done, the kit goes back in its envelope.
 SealedSecret has a writer in this repository. `credentials kit` and
 `seed` write the offline store; `credentials` writes the Pulumi config
 secrets, the escrow and the GitHub secrets;
-`credentials` and `state-backend` both write workstation slots;
-`state-backend provision` writes the on-box files; and each stack
-program writes its own Pulumi state and, for `physical`, the device
-secrets. No stack declares a SealedSecret yet, because the controller
+`credentials` and `state-backend` both write workstation slots; the
+`state-backend` stack writes the on-box files; and each stack program
+writes its own Pulumi state and, for `physical`, the device secrets. No stack declares a SealedSecret yet, because the controller
 that opens one arrives with `k8s-base`.
 
 -   The **SSH identities** (the UDM key and the libvirt identity) have no
@@ -1349,17 +1355,16 @@ Restic passwords will not join that list: they arrive with the
 `backed_pvc` helper (declarative/workloads.md §3), which is itself
 unwritten but generates its own password into state and seals it, so a
 new volume will need no `credentials` run (rule 6). Until the commands
-above exist, a bring-up delivers the seed kit; the appliance's OCI key
-and the state backend it provisions; the stack passphrase and the
-operator passphrase; the zones token, the gateway's ACME token, the
+above exist, a bring-up delivers the seed kit; the operator passphrase;
+the `state-backend` stack's configuration and the state backend it
+declares; the stack passphrase; the zones token, the gateway's ACME token, the
 `physical` OCI key and the B2 management key; the credentials made by
 hand that a stack reads — the
 UniFi key, the AdGuard login, the ZeroTier Central token, the BGP
 session password and the GitHub admin token; the App keys into the
 escrow; and the GitHub secrets whose values a workstation can obtain.
-The commands outside that sequence deliver the drill's keys, the
-dump freshness key, and the `state-backend` stack's configuration and
-the backup recipients file beside it. The rest of §3 is design rather
+The commands outside that sequence deliver the drill's keys and the
+dump freshness key. The rest of §3 is design rather
 than procedure.
 
 **Resumable by probing, not by bookkeeping.** `kit bootstrap` asks whether
@@ -1371,9 +1376,9 @@ become of the credential behind it at its platform, and that state — a
 provider seed's key deleted in a console, say — is repaired by
 `credentials seed <member> create`, which probes nothing and overwrites
 a provider row (§4's table; the recovery key has no platform to die at,
-and is the one row that command refuses to overwrite). `state-backend
-provision` compares the running appliance against the repository the
-same way. A checkpoint file would record "this ran" instead — which
+and is the one row that command refuses to overwrite). The `state-backend`
+stack's refreshed plan compares the running appliance against the
+repository the same way. A checkpoint file would record "this ran" instead — which
 stops being true the moment a row is deleted out of the kit — and the
 run after that would skip the repair.
 
@@ -1404,7 +1409,7 @@ same run, opens every generation in the registry — with either identity,
 so an interrupted run resumes — and writes each back encrypted to the
 successor's recipient, `escrow/RECIPIENTS` last so that the file names
 what the directory actually holds. No plaintext changes, so no consumer
-is touched, no stack is re-encrypted and no appliance is re-provisioned
+is touched, no stack is re-encrypted and no appliance is replaced
 — that commit and the new database are the whole of a kit rotation.
 `credentials kit rewrap` is the standalone form of the same
 re-encryption and takes no recipients: it re-encrypts to whatever
@@ -1535,7 +1540,8 @@ establishes the first part of it.
 derived <row> generate` produces a new random value, writes it to the
 slot §3 names where the row has one and commits its ciphertext as the
 row's next generation; adopting it is that one consumer's business — a
-re-provision for the state-backend CA, a re-seal or a secret update for
+reissue of the server certificate and a replacement of the box for the
+state-backend CA, a re-seal or a secret update for
 the Alertmanager token, the recipient swap that state-backend.md §5
 describes for an age generation. The recovery key is only read, to
 hold the new ciphertext to it (§2.2), and no other row moves.
@@ -1674,8 +1680,7 @@ never a hunt for per-machine environment wiring:
 | `pulumi.passphrase` | The stack passphrase (§2.2), kept here because `mise.toml` reads it from a file on every `pulumi` run: a template can neither prompt nor open a kit. | `credentials derived pulumi-passphrase generate`, `credentials derived pulumi-passphrase recover` |
 | `operator.passphrase` | The operator passphrase (§2.2), which opens the operator stacks (framework/pulumi.md §3.3) and nothing else, on a machine whose desktop secret store does not hold it: the file layer of §2's chain, below the store. Found by the `operator-stack` driver, which hands it to `pulumi` for every run of an operator stack, and read by no `mise.toml` template: `PULUMI_CONFIG_PASSPHRASE` is process-global, so which passphrase is right depends on the stack a command names, which a template never sees. | `credentials derived operator-passphrase generate`, `credentials derived operator-passphrase recover`, where the machine has no store |
 | `roots/<root>.<field>` | An account root's token file — the second layer of §2's chain, written only on a machine with no desktop secret store. No tool reads one on its own; a `credentials` run does, when a mint asks for the root. | `credentials root <name> remember` |
-| `state-backend/` | What a workstation knows about the appliance. The `operator` client bundle: CA, certificate, key, and the connection string for the appliance they authenticate against — which names the appliance and none of the files; the key is `0600`, which libpq insists on. Every run that leaves a box to reach writes it, and so does `bundle operator`, each time over the last. `known_hosts`, the box's SSH host-key pin (physical/state-backend.md §1): written by a `provision` that launched a box and by every `ssh` before it connects, rewritten whole rather than ever cleared. `restore-owed`, the restore a replacement left owed: written as a replacement starts destroying the box, and removed by a `restore` over this bundle once Pulumi lists what came back; while it stands, `provision` does not exit 0. | `state-backend provision`, `state-backend bundle operator`, `state-backend ssh`, `state-backend restore` (which removes `restore-owed`) |
-| `oci/state-backend/` | The appliance provisioner's own OCI key (§3): an SDK configuration file plus the `0600` PEM beside it, which is the key `state-backend` signs with whatever its `key_file` entry names. An SDK configuration rather than a shape of this repository's own, because the SDK is what signs with it. The compartment it acts in is not here — that is a convention its reader shares (§3). | `credentials derived oci-state-backend mint` |
+| `state-backend/` | What a workstation knows about the appliance. The `operator` client bundle: CA, certificate, key, and the connection string for the appliance they authenticate against — which names the appliance and none of the files; the key is `0600`, which libpq insists on. `bundle operator` writes it, each time over the last, and the `state-backend` stack's hooks and the `operator-stack` driver connect with it. `known_hosts`, the box's SSH host-key pin (physical/state-backend.md §1): the committed public half, written by every `ssh` before it connects, rewritten whole rather than ever cleared. | `state-backend bundle operator`, `state-backend ssh` |
 | `libvirt/` | Working files, not slots (physical/homelab-host.md): the libvirt provider's SSH identity and the host's pinned key, copied `0600` out of `physical`'s config on every run that opens it. | the `physical` stack |
 
 **The directory is `0700`, and that is the boundary that matters**: it
@@ -1707,8 +1712,7 @@ bundle from here too, for the stacks `mise.toml` leaves alone, and finds
 the operator passphrase through §2's chain, of which this directory's
 slot is the file layer; under `.claude/` it refuses to run rather than
 fall back to the caller's values (framework/pulumi.md §3.3). Of those
-this directory holds, the appliance's OCI key is read by `state-backend` alone and the libvirt
-identity is `physical`'s working copy of its own config secret; each
+this directory holds, the libvirt identity is `physical`'s working copy of its own config secret; each
 credential a stack authenticates with is a config secret in that stack,
 which the program opens with the passphrase this directory carries. **CI
 walks the same path rather than a parallel one.** The four Environment
@@ -1741,21 +1745,7 @@ carried on because it is the one libpq and the driver behind Pulumi's
 Postgres backend both read; a connection string expands nothing, which
 is why the paths are not in it (physical/state-backend.md §3).
 
-**The OCI slot travels as it is too, by a different route.** Its
-configuration's `key_file` names the PEM by absolute path into the
-checkout that minted it, because the SDK expands nothing either and a
-reader handed the file alone needs a path that opens. `state-backend`
-is not such a reader: it signs with the PEM beside the configuration it
-read, whatever the entry says, so the entry is a default and a copy at
-another path provisions with no edit and no re-mint. Only a tool
-pointed at the copied file directly — the `oci` CLI — still follows the
-entry back to the minting checkout.
-
-Every slot is read where it is now and nowhere else. The appliance's
-OCI key is no exception: `state-backend` reads a configuration
-`OCI_CLI_CONFIG_FILE` points one run at, and otherwise its slot; with
-neither it refuses by naming the mint rather than reading an SDK
-configuration kept anywhere else on the machine. A copy of a slot at an older
+Every slot is read where it is now and nowhere else. A copy of a slot at an older
 location — a client bundle under `~/.config/kluster/`, a
 `.pulumi.secret` or `.github.token` at the checkout's root — is inert,
 and deleting it is the last step of moving that machine onto

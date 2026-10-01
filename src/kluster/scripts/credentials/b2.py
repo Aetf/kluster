@@ -18,10 +18,10 @@ lifetime and reach, not permission. Neither carries file capabilities at
 all — the credential that manages the backup buckets cannot read a byte out
 of them. The keys that touch files are confined to one prefix of one bucket
 each, and the three on the dump prefix are ordered by what they may do: the
-appliance's uploader writes and can neither list nor read, the rebuild
-drill's reader lists and reads and can write nothing, and the freshness
-probe's key lists and nothing more — names, never a byte (`dumps`,
-`drill_reads`, `freshness_dumps`).
+appliance's uploader writes and can neither list nor read
+(`DUMP_CAPABILITIES`, which the `state-backend` stack declares), the rebuild drill's reader lists and reads and can write nothing, and the
+freshness probe's key lists and nothing more — names, never a byte
+(`drill_reads`, `freshness_dumps`).
 
 **Every answer B2 sends crosses into a typed value at one parser** (`payload`):
 `post` hands back the decoded JSON as an `object`, and the `_…` functions below
@@ -76,11 +76,13 @@ CAPABILITIES: tuple[str, ...] = (
     'deleteKeys',
 )
 
-#: The uploader's whole permission: it cannot list, read, or delete, so a
-#: compromised appliance cannot walk the dump history (storage.md §4).
+#: The appliance's uploader's whole permission, which the `state-backend` stack
+#: declares on its dump key: it cannot list, read, or delete, so a compromised
+#: appliance cannot walk the dump history (storage.md §4). The two roles below
+#: hold none of it.
 DUMP_CAPABILITIES: tuple[str, ...] = ('writeFiles',)
 
-#: The rebuild drill's whole permission over the same prefix: list the dumps
+#: The rebuild drill's whole permission over the dump prefix: list the dumps
 #: and read one. No write, no delete, no key capability -- an exposed drill
 #: key can read every object under the prefix and change nothing, and the
 #: objects it reads are age-encrypted (state-backend.md §5).
@@ -165,10 +167,7 @@ STATE_BACKEND_MANAGEMENT = Role(
     name=f'{conventions.CLUSTER_NAME}-{conventions.STATE_BACKEND}-management', capabilities=CAPABILITIES
 )
 
-#: What the uploader is called, on the same terms as the two names above.
-DUMPS_NAME = 'kluster-state-dump'
-
-#: What the drill's reader is called, on the same terms: `kluster-drill` is
+#: What the drill's reader is called, on the same terms as the names above: `kluster-drill` is
 #: the name its OCI principal carries (`oci_iam.Identity.name_for`), and the
 #: suffix says which of the drill's two keys this is.
 DRILL_READ_NAME = f'{conventions.CLUSTER_NAME}-{conventions.DRILL}-read'
@@ -179,37 +178,24 @@ DRILL_READ_NAME = f'{conventions.CLUSTER_NAME}-{conventions.DRILL}-read'
 FRESHNESS_DUMPS_NAME = f'{conventions.CLUSTER_NAME}-freshness-dumps'
 
 #: The prefix every dump-prefix role is confined to: the one `conventions`
-#: names, with the `/` B2 matches a `namePrefix` on literally. One value, so
-#: the writer and its readers cannot be confined to prefixes that differ by a
+#: names, with the `/` B2 matches a `namePrefix` on literally, which is the
+#: prefix the `state-backend` stack confines its dump key to as well. One
+#: value, so the readers cannot be confined to prefixes that differ by a
 #: separator.
 DUMP_PREFIX = f'{conventions.STATE_DUMP_PREFIX}/'
 
 
-def dumps(bucket_id: str) -> Role:
-    """The uploader's role: write-only, and confined to the dump prefix of one bucket.
-
-    A function where the two above are values, because a confined role is not
-    complete until B2 has assigned the bucket an id -- and the bucket id is the
-    only part of it B2 decides. The name and the prefix are this repository's,
-    so they are stated here beside the account-wide roles rather than handed in
-    by whoever is minting: a caller that could name the key could mint one this
-    module's own retirement does not match.
-    """
-    return Role(
-        name=DUMPS_NAME,
-        capabilities=DUMP_CAPABILITIES,
-        bucket_id=bucket_id,
-        name_prefix=DUMP_PREFIX,
-    )
-
-
 def drill_reads(bucket_id: str) -> Role:
-    """The rebuild drill's role: read-only, and confined to the same prefix the uploader writes.
+    """The rebuild drill's role: read-only, and confined to the prefix the appliance's uploader writes.
 
-    A function for the reason `dumps` is one, and a value the caller cannot
-    shape for the same reason: the prefix is the writer's, the capabilities are
-    the two the drill's one act needs -- list the objects, download the newest
-    -- and nothing in this repository can hand the mint a wider one.
+    A function rather than a value, because a confined role is not complete
+    until B2 has assigned the bucket an id -- and the bucket id is the only
+    part of it B2 decides. The name and the prefix are this repository's, so
+    they are stated here rather than handed in by whoever is minting: a caller
+    that could name the key could mint one this module's own retirement does
+    not match. The capabilities are the two the drill's one act needs -- list
+    the objects, download the newest -- and nothing in this repository can
+    hand the mint a wider one.
     """
     return Role(
         name=DRILL_READ_NAME,
@@ -220,9 +206,9 @@ def drill_reads(bucket_id: str) -> Role:
 
 
 def freshness_dumps(bucket_id: str) -> Role:
-    """The freshness probe's role: list-only, and confined to the same prefix the uploader writes.
+    """The freshness probe's role: list-only, and confined to the same prefix the drill's reader reads.
 
-    A function for the reason `dumps` is one, and the drill's reader narrowed
+    A function for the reason `drill_reads` is one, and the drill's reader narrowed
     to its first act: the probe asks which object is newest and never opens
     one, so the grant is the listing alone. Nothing in this repository can
     hand the mint a wider one.
@@ -258,7 +244,7 @@ class ListedKey:
 
     Scope is the two nullable halves — an account-wide key is confined to
     neither a bucket nor a prefix — and together with the capabilities they are
-    what `dump_key_is_current` measures an appliance's key against.
+    what a role's retirement matches a key on (`Role.describes`).
     """
 
     key_id: str
@@ -296,40 +282,15 @@ class FilePage:
 
 
 @dataclass(frozen=True)
-class LifecycleRule:
-    """One B2 lifecycle rule: which files it governs, and how long each phase lasts.
-
-    A record rather than the JSON document B2 exchanges, so "the bucket already
-    says what this program wants it to say" is a comparison of two rules. What
-    is compared is what a rule *is* — B2's schema is these three fields — so a
-    rule that agrees on all three is not rewritten.
-    """
-
-    file_name_prefix: str
-    #: `None` is B2's "never": files this rule never hides, or never deletes.
-    days_from_uploading_to_hiding: int | None
-    days_from_hiding_to_deleting: int | None
-
-    def body(self) -> dict[str, Any]:
-        """The rule as `b2_create_bucket` and `b2_update_bucket` take it."""
-        return {
-            'fileNamePrefix': self.file_name_prefix,
-            'daysFromUploadingToHiding': self.days_from_uploading_to_hiding,
-            'daysFromHidingToDeleting': self.days_from_hiding_to_deleting,
-        }
-
-
-@dataclass(frozen=True)
 class Bucket:
-    """A bucket as `b2_list_buckets` and `b2_create_bucket` describe it.
+    """A bucket as `b2_list_buckets` describes it: its id, which every confined key and file call names.
 
-    The id and the rules on it: what `ensure_bucket` returns, and what it
-    compares. The name is not part of it — a listing is asked for one name and
-    a creation is told one, so the answer's copy adds nothing.
+    The name is not part of it — a listing is asked for one name, so the
+    answer's copy adds nothing. The bucket itself is the `state-backend`
+    stack's to declare; this package only looks it up.
     """
 
     bucket_id: str
-    lifecycle_rules: tuple[LifecycleRule, ...]
 
 
 def _created_key(answer: object) -> AppKey:
@@ -367,32 +328,15 @@ def _file_page(answer: object) -> FilePage:
     )
 
 
-def _lifecycle_rule(entry: payload.Payload) -> LifecycleRule:
-    """One rule of a bucket's `lifecycleRules`."""
-    return LifecycleRule(
-        file_name_prefix=entry.string('fileNamePrefix'),
-        days_from_uploading_to_hiding=entry.optional_whole('daysFromUploadingToHiding'),
-        days_from_hiding_to_deleting=entry.optional_whole('daysFromHidingToDeleting'),
-    )
-
-
 def _bucket(body: payload.Payload) -> Bucket:
     """A bucket object, wherever it is being described."""
-    return Bucket(
-        bucket_id=body.text('bucketId'),
-        lifecycle_rules=tuple(_lifecycle_rule(rule) for rule in body.objects('lifecycleRules')),
-    )
+    return Bucket(bucket_id=body.text('bucketId'))
 
 
 def _listed_buckets(answer: object) -> tuple[Bucket, ...]:
     """`b2_list_buckets`: the buckets matching what was asked for."""
     body = payload.Payload.of(answer, 'b2_list_buckets')
     return tuple(_bucket(entry) for entry in body.objects('buckets'))
-
-
-def _created_bucket(answer: object) -> Bucket:
-    """`b2_create_bucket`: the bucket that now exists."""
-    return _bucket(payload.Payload.of(answer, 'b2_create_bucket'))
 
 
 def _authorization(key_id: str, key: str) -> object:
@@ -492,7 +436,7 @@ class Session:
         """Mint one key in this role. The one call that creates a B2 credential.
 
         A role rather than a name and an ambient capability list, so the
-        account-wide keys and the prefix-scoped uploader are the same call with
+        account-wide keys and the prefix-scoped readers are the same call with
         different roles instead of two spellings of one request.
         """
         return _created_key(self.post('b2_create_key', role.body(self.account_id)))
@@ -762,109 +706,11 @@ def mint_management(store: KdbxStore, *, seed_entry: str, role: Role = MANAGEMEN
     return Delivery.of(minted.app_key, lambda: retire_others(session, role, keep=minted.app_key.key_id))
 
 
-def _retention(prefix: str, retention_days: int) -> LifecycleRule:
-    """What the dump prefix's lifecycle rule has to say.
-
-    Retention is a lifecycle rule rather than a pruning job precisely so the
-    uploader needs no delete capability; hiding then deleting is what gives a
-    retired encryption key a definite end of life.
-    """
-    return LifecycleRule(
-        file_name_prefix=f'{prefix}/',
-        days_from_uploading_to_hiding=retention_days,
-        days_from_hiding_to_deleting=1,
-    )
-
-
-def ensure_bucket(session: Session, name: str, *, prefix: str, retention_days: int) -> str:
-    """Create the bucket if absent and pin its retention. Returns the bucket id.
-
-    Convergent in the rule as well as in the bucket: a retention someone
-    changed is put back, and one that already says this is left alone.
-    """
-    wanted = _retention(prefix, retention_days)
-    existing = session.buckets(name)
-    if existing:
-        bucket = existing[0]
-        if bucket.lifecycle_rules != (wanted,):
-            _ = session.post(
-                'b2_update_bucket',
-                {
-                    'accountId': session.account_id,
-                    'bucketId': bucket.bucket_id,
-                    'lifecycleRules': [wanted.body()],
-                },
-            )
-            log.info('bucket %s: retention set to %d days', name, retention_days)
-        return bucket.bucket_id
-
-    created = _created_bucket(
-        session.post(
-            'b2_create_bucket',
-            {
-                'accountId': session.account_id,
-                'bucketName': name,
-                'bucketType': 'allPrivate',
-                'lifecycleRules': [wanted.body()],
-            },
-        )
-    )
-    log.info('created bucket %s', name)
-    return created.bucket_id
-
-
-def dump_key_is_current(session: Session, key_id: str, *, bucket_id: str) -> bool:
-    """Whether `key_id` is still the write-only key this bucket wants.
-
-    The appliance's copy of the secret cannot be read back, so "is the box
-    holding the right credential" is answered by identity: a key that is gone
-    (deleted in the console, superseded by another mint) or one whose scope no
-    longer matches the role is not the intended key, and the only way to put
-    the intended one on the box is to build a new box.
-
-    What "the intended key" means is the role the mint below is given, asked of
-    a listing rather than restated: the two cannot drift apart into a box that
-    is rebuilt every run, or one that is never rebuilt at all.
-    """
-    if not key_id:
-        return False
-    role = dumps(bucket_id)
-    return any(role.describes(existing) for existing in session.keys() if existing.key_id == key_id)  # noqa: SIM118 -- an API call that pages b2_list_keys; a Session is not iterable
-
-
-def mint_dump_key(session: Session, *, bucket_id: str) -> Delivery[AppKey]:
-    """A write-only key confined to the dump prefix of one bucket.
-
-    The retirement comes back with the key rather than happening here, so it
-    runs after the caller's push and not before it (`delivery.py`, and the
-    register's §4 for why) -- the same order every mint in this package has.
-    The push for this credential is the box: B2 discloses an application key's
-    secret once, at creation, so the only way it reaches the appliance is the
-    Ignition the appliance boots with.
-
-    The closure retires as `session`, the credential that minted the key rather
-    than the key itself: a write-only key carries no `deleteKeys` and could
-    retire nothing, its predecessor least of all.
-
-    The account is held against `conventions` before the key exists, as every
-    mint here does: a session for another account would otherwise put the dump
-    key -- and with it every nightly dump -- into a bucket nothing here reads
-    back from. The one caller checks the same thing earlier, before the bucket
-    it converges on the way here (`state_backend.cli`); this is what makes the
-    rule hold for the mint itself, whoever calls it.
-    """
-    verify_account(session.account_id)
-    role = dumps(bucket_id)
-    minted = session.create_key(role)
-    log.info('minted %s (%s)', role.name, minted.key_id)
-    return Delivery.of(minted, lambda: retire_others(session, role, keep=minted.key_id))
-
-
 def mint_drill_read_key(session: Session, *, bucket_id: str) -> Delivery[AppKey]:
     """A read-only key confined to the dump prefix of one bucket, for the rebuild drill.
 
-    The same bucket and the same prefix as `mint_dump_key`, and the disjoint
-    capabilities: the uploader writes what this key lists and reads. What is
+    The same bucket and the same prefix as the appliance's dump key, and the
+    disjoint capabilities: the uploader writes what this key lists and reads. What is
     verified is the grant itself, by the one act the drill performs -- the new
     key lists the prefix, as itself, before anything is delivered. B2 refuses
     a prefix-confined key a listing outside its prefix, so the listing that
@@ -893,7 +739,7 @@ def mint_drill_read_key(session: Session, *, bucket_id: str) -> Delivery[AppKey]
 def mint_freshness_dumps_key(session: Session, *, bucket_id: str) -> Delivery[AppKey]:
     """A list-only key confined to the dump prefix of one bucket, for the freshness probe.
 
-    The same bucket and the same prefix as `mint_dump_key` and
+    The same bucket and the same prefix as the appliance's dump key and
     `mint_drill_read_key`, and the narrowest grant of the three: the probe
     asks what the newest object is called, and this key can ask that and
     nothing else. Verified the way the drill's key is, by the one act its

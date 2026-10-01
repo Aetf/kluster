@@ -1,1 +1,1 @@
-"""Provisioning and rotation scripts for the credential register."""
+"""Minting, delivery and rotation scripts for the credential register."""
