@@ -613,18 +613,18 @@ async def test_a_compartment_that_does_not_exist_yet_names_the_command_that_make
 class ExportedPhysical(Recorder):
     """A `physical` whose StackReference hands out exactly what the program exported.
 
-    Each output's value is its own name, so a record built from one says which
-    export it was read from, and a read of a name the program never exported
-    lands as `None` rather than as an invented address.
+    Each output's value is the one the program exported, resolved, so a read of
+    a name the program never exported is an absence -- which the `dns` anchors
+    refuse by name -- rather than an invented address.
     """
 
-    def __init__(self, exported: set[str]) -> None:
+    def __init__(self, exported: dict[str, object]) -> None:
         super().__init__()
         self.exported = exported
 
     def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
         if args.typ == 'pulumi:pulumi:StackReference':
-            return {'outputs': {name: name for name in self.exported}}
+            return {'outputs': self.exported}
         return {}
 
 
@@ -636,11 +636,12 @@ async def test_every_output_dns_reads_across_the_reference_is_one_this_program_e
 
     Both spell the names from `conventions.PHYSICAL_OUTPUTS`, so what is left
     to disagree is the programs themselves: an export this one dropped, or a
-    field `dns` reads that nothing here writes under. `dns` writes what it
-    reads into its anchors, and an output the reference does not carry arrives
-    there as the string `None` — so the anchors are declared against a
-    reference carrying this program's exports and nothing else, and each is
-    checked to carry one of them.
+    field `dns` reads that nothing here writes under. The anchors are declared
+    against a reference carrying this program's exports, resolved, and nothing
+    else. An output the reference does not carry is one the anchors refuse,
+    naming it (`UnusableAnchorAddress`), so a dropped export fails the run here;
+    and each anchor is checked to carry the address of its own family, or a
+    dual-stack anchor could be two records of one family.
     """
     from kluster.stacks import dns
 
@@ -652,27 +653,22 @@ async def test_every_output_dns_reads_across_the_reference_is_one_this_program_e
     monkeypatch.setattr(physical.pulumi, 'export', record)
     async with declaring():
         await physical.main()
+    resolved = {name: await pulumi.Output.from_input(value).future() for name, value in exported.items()}
 
     pulumi.runtime.set_all_config({f'kluster:{dns.CLOUDFLARE_API_TOKEN}': 'a-zones-token'})
-    reader = await run_under_backstop(ExportedPhysical(set(exported)), stack='dns')
+    reader = await run_under_backstop(ExportedPhysical(resolved), stack='dns')
     async with declaring():
         await dns.main()
 
     anchors = [
-        reader.inputs_of(f'{conventions.ZONE_PRIMARY}-{anchor}-{family}')
+        reader.inputs_of(f'{conventions.ZONE_PRIMARY}-{anchor}-{family}')['content']
         for anchor, family in (
             (conventions.ANCHOR_CLUSTER, 'a'),
             (conventions.ANCHOR_CLUSTER, 'aaaa'),
             (conventions.ANCHOR_VIP1, 'a'),
         )
     ]
-    for anchor in anchors:
-        assert anchor['content'] in exported, anchor
-    # And which export each family carries: the A records carry the IPv4
-    # outputs and the AAAA the IPv6 one, or a dual-stack anchor is two records
-    # of one family.
-    exports = [cast('pulumi.Output[str]', exported[cast('str', anchor['content'])]).future() for anchor in anchors]
-    assert [await export for export in exports] == [LB_ADDRESS, LB_ADDRESS_V6, VIP1_ADDRESS]
+    assert anchors == [LB_ADDRESS, LB_ADDRESS_V6, VIP1_ADDRESS]
 
 
 @pytest.mark.asyncio

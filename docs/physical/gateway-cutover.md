@@ -832,10 +832,12 @@ object with no file behind it and goes at the next boot, or to
     does not exist yet is written to state as Pulumi's unknown
     sentinel, the literal string
     `04da6b54-80e4-46f7-96ec-b56ff0331ba9`, which
-    `pulumi stack output` and a `StackReference` reader both return as
-    an ordinary value. A targeted apply against a stack that has state
-    leaves the outputs of a resource outside the target set as state
-    holds them; this one has no state, so **every export whose value
+    `pulumi stack output` returns as an ordinary value. A
+    `StackReference` reader gets no such string: a preview reads every
+    output of the stack as unknown, and an update reads the poisoned
+    ones as absent or `None` (framework/pulumi.md §1.4). A targeted
+    apply against a stack that has state leaves the outputs of a
+    resource outside the target set as state holds them; this one has no state, so **every export whose value
     comes from a resource is of that kind** — the kubeconfig and the
     talosconfig among them. Nothing may read one between step 3 and
     step 5: `credentials derived sync` and each `StackReference`
