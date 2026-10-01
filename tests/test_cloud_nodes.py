@@ -21,7 +21,7 @@ from mock_monitor import Declaration, Recorder, declaring, decline_every_invoke,
 
 from kluster import conventions
 from kluster.components.cloud.nodes import CloudNodes, NodeLoadBalancer, user_data
-from kluster.conventions import ManagementPorts
+from kluster.conventions import Answerer, Front, ManagementPorts, PublicPort, Transports
 from kluster.stacks import physical
 
 COMPARTMENT_ID = 'ocid1.compartment.test'
@@ -270,16 +270,32 @@ async def test_a_vnic_lookup_the_engine_declines_leaves_the_vip_unknown_rather_t
     assert await nodes.secondary_ip.display_name.is_known() is True
 
 
+def balancer_rows() -> list[PublicPort]:
+    """The census rows the balancer fronts, read when a case runs so a patched census reaches it."""
+    return [row for row in conventions.PUBLIC_PORT_CENSUS if row.front is Front.BALANCER]
+
+
+def forwarded_names() -> set[str]:
+    """What the balancer forwards, by name: the management ports' fields and the balancer rows'."""
+    return {*ManagementPorts._fields, *(row.name for row in balancer_rows())}
+
+
 @pytest.mark.asyncio
-async def test_every_management_port_preserves_the_client_address(balancer: NodeLoadBalancer) -> None:
-    # The backend sets are the management ports and nothing else, on each
-    # family: the same structure the node firewall opens and the cluster
-    # endpoint names.
+async def test_every_backend_set_preserves_the_client_address(balancer: NodeLoadBalancer) -> None:
+    """The client's address reaches the node through every set, the management ports' and the census's alike.
+
+    The backend sets are the management ports and the census rows the
+    balancer fronts, and nothing else, on each family: the structures the
+    node firewall opens, the cluster endpoint names and the Gateways answer.
+    A census set that dropped preservation would hand Envoy, and every
+    Service behind it, the balancer's address in place of the client's
+    (rfc-007 §5.1, §5.3).
+    """
     assert set(balancer.backend_sets) == {'IPV4', 'IPV6'}
     for family, backend_sets in balancer.backend_sets.items():
-        assert set(backend_sets) == set(ManagementPorts._fields), family
-        for backend_set in backend_sets.values():
-            assert await backend_set.is_preserve_source.future() is True
+        assert set(backend_sets) == forwarded_names(), family
+        for name, backend_set in backend_sets.items():
+            assert await backend_set.is_preserve_source.future() is True, (family, name)
 
 
 @pytest.mark.asyncio
@@ -288,7 +304,7 @@ async def test_every_node_backs_every_backend_set_once(monkeypatch: pytest.Monke
     backend_sets = {it.inputs['name'] for it in declared if it.typ == BACKEND_SET}
     backed = Counter(it.inputs['backendSetName'] for it in declared if it.typ == BACKEND)
 
-    assert len(backend_sets) == len(conventions.MANAGEMENT_PORTS) * 2
+    assert len(backend_sets) == len(forwarded_names()) * 2
     assert backed == dict.fromkeys(backend_sets, 3)
 
 
@@ -305,7 +321,7 @@ async def test_a_backend_reaches_its_node_on_the_family_of_its_set(monitor: Oci,
     for backend in nodes.backends:
         _ = await backend.urn.future()
     backends = monitor.of_type(BACKEND)
-    assert len(backends) == len(conventions.MANAGEMENT_PORTS) * len(nodes.instances) * 2
+    assert len(backends) == len(forwarded_names()) * len(nodes.instances) * 2
     for it in backends:
         node = it.name.rsplit('-', 1)[1]
         instance_id = str(await nodes.instances[node].id.future())
@@ -334,7 +350,16 @@ async def test_a_node_without_exactly_one_ipv6_address_is_refused(held: list[str
         except ValueError as error:
             assert f'holds {len(held)} IPv6 addresses on its primary VNIC, not one' in str(error)
             refused += 1
-    assert refused == len(conventions.MANAGEMENT_PORTS) * 3
+    assert refused == len(forwarded_names()) * 3
+
+
+@pytest.mark.asyncio
+async def test_each_node_exports_the_gua_its_own_vnic_holds(monitor: Oci, nodes: CloudNodes) -> None:
+    """What `physical` publishes for the `internet` pool is each node's own address, keyed by that node."""
+    assert set(nodes.guas) == {'cp1', 'cp2', 'cp3'}
+    for node, gua in nodes.guas.items():
+        instance_id = str(await nodes.instances[node].id.future())
+        assert await gua.future() == monitor.guas[vnic_of(instance_id)], node
 
 
 @pytest.mark.asyncio
@@ -360,7 +385,7 @@ async def test_a_family_the_provider_never_handed_out_is_refused(monitor: Oci) -
         _ = await balancer.address_v6.future()
 
 
-#: The types everything declared per management port is registered under.
+#: The types everything declared per forwarded port is registered under.
 BACKEND_SET = 'oci:NetworkLoadBalancer/backendSet:BackendSet'
 LISTENER = 'oci:NetworkLoadBalancer/listener:Listener'
 BACKEND = 'oci:NetworkLoadBalancer/backend:Backend'
@@ -433,8 +458,8 @@ async def test_every_port_the_balancer_forwards_is_served_on_each_family_it_hold
         assert backed[backend_set.inputs['name']] == 3, listener.name
         served.add((int(listener.inputs['port']), family_of(listener)))
 
-    # The ports are the census's, so an empty fleet cannot pass this.
-    assert forwarded_ports(declared) == set(conventions.MANAGEMENT_PORTS)
+    # The ports are the censuses', so an empty fleet cannot pass this.
+    assert forwarded_ports(declared) == {*conventions.MANAGEMENT_PORTS, *(row.port for row in balancer_rows())}
     assert families == {'IPV4', 'IPV6'}
     assert served == set(product(forwarded_ports(declared), families))
 
@@ -455,19 +480,85 @@ async def test_moving_a_management_port_renames_nothing(monkeypatch: pytest.Monk
     redeclared = await declared_per_port(moved, monkeypatch)
 
     # The edit reached the declarations; without it, equal names prove nothing.
-    assert forwarded_ports(declared) == set(census)
-    assert forwarded_ports(redeclared) == set(moved)
+    rows = {row.port for row in balancer_rows()}
+    assert forwarded_ports(declared) == {*census, *rows}
+    assert forwarded_ports(redeclared) == {*moved, *rows}
     assert every_name(redeclared) == every_name(declared)
     # Unchanged is not enough: an index is as stable as a field. Each name
-    # carries the field of the port it serves, and the family after it on any
-    # family but IPv4's.
+    # carries the field or the row of the port it serves, and the family
+    # after it on any family but IPv4's.
     for it in declared:
         named = it.inputs.get('backendSetName') or it.inputs.get('defaultBackendSetName') or it.inputs['name']
         field = named.removesuffix('-ipv6')
-        assert field in ManagementPorts._fields, it.name
+        assert field in forwarded_names(), it.name
         assert f'-{named}' in it.name, it.name
     # And the name on the balancer is the field itself, or the field and the family.
     assert {it.inputs['name'] for it in declared if it.typ in {BACKEND_SET, LISTENER}} == {
-        *ManagementPorts._fields,
-        *(f'{field}-ipv6' for field in ManagementPorts._fields),
+        *forwarded_names(),
+        *(f'{field}-ipv6' for field in forwarded_names()),
     }
+
+
+@pytest.mark.asyncio
+async def test_a_balancer_row_yields_a_listener_and_a_backend_set_per_family_named_after_the_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Named after the row and never its number, as the management ports are after their field.
+
+    Each listener of a row answers on the row's port and forwards to the
+    row's backend set of its own family, which checks that port over TCP.
+    """
+    declared = await declared_per_port(conventions.MANAGEMENT_PORTS, monkeypatch)
+    listeners = {it.inputs['name']: it for it in declared if it.typ == LISTENER}
+    backend_sets = {it.inputs['name']: it for it in declared if it.typ == BACKEND_SET}
+
+    assert balancer_rows()
+    for row in balancer_rows():
+        for name, family in ((row.name, 'IPV4'), (f'{row.name}-ipv6', 'IPV6')):
+            listener, backend_set = listeners[name], backend_sets[name]
+            assert int(listener.inputs['port']) == row.port, name
+            assert listener.inputs['defaultBackendSetName'] == name, name
+            assert family_of(listener) == family_of(backend_set) == family, name
+            assert backend_set.inputs['healthChecker'] == {'protocol': 'TCP', 'port': row.port}, name
+
+
+@pytest.mark.asyncio
+async def test_a_row_the_dedicated_vip_fronts_yields_nothing_on_the_balancer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A listener for it would forward to three nodes, none of which answers on its port at the address it reaches."""
+    declared = await declared_per_port(conventions.MANAGEMENT_PORTS, monkeypatch)
+    vip_rows = [row for row in conventions.PUBLIC_PORT_CENSUS if row.front is Front.DEDICATED_VIP]
+    names = {str(it.inputs.get('name') or it.inputs['backendSetName']) for it in declared}
+
+    assert vip_rows
+    for row in vip_rows:
+        assert row.port not in forwarded_ports(declared), row.name
+        assert not {row.name, f'{row.name}-ipv6'} & names, row.name
+
+
+@pytest.mark.asyncio
+async def test_the_listener_protocol_follows_the_rows_transports(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A port served on TCP and UDP is one listener carrying both (OCI: Managing listeners).
+
+    A listener of TCP alone would leave the UDP half of such a port -- the
+    syncthing protocol's -- answered by nothing on the balancer.
+    """
+    declared = await declared_per_port(conventions.MANAGEMENT_PORTS, monkeypatch)
+    protocols = {it.inputs['name']: it.inputs['protocol'] for it in declared if it.typ == LISTENER}
+    expected = {Transports.TCP: 'TCP', Transports.TCP_AND_UDP: 'TCP_AND_UDP'}
+
+    # Both kinds the census holds are exercised, or the case says nothing of one.
+    assert {row.transports for row in balancer_rows()} == set(expected)
+    for row in balancer_rows():
+        assert protocols[row.name] == protocols[f'{row.name}-ipv6'] == expected[row.transports], row.name
+    for field in ManagementPorts._fields:
+        assert protocols[field] == protocols[f'{field}-ipv6'] == 'TCP', field
+
+
+@pytest.mark.asyncio
+async def test_a_row_served_on_udp_alone_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Its backend set would have no TCP port to check, and a UDP check needs a reply a row cannot state."""
+    udp_only = PublicPort('udp-only', 3478, Transports.UDP, Front.BALANCER, Answerer.PODS)
+    monkeypatch.setattr(conventions, 'PUBLIC_PORT_CENSUS', (*conventions.PUBLIC_PORT_CENSUS, udp_only))
+
+    with pytest.raises(ValueError, match="'udp-only' is served on UDP alone"):
+        _ = build_balancer()

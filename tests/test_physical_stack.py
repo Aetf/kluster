@@ -694,6 +694,51 @@ async def test_the_program_exports_every_name_the_structure_carries_and_nothing_
 
 
 @pytest.mark.asyncio
+async def test_every_cloud_nodes_gua_is_exported_under_its_name(
+    setup: Installation, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The `internet` pool's IPv6 members, which `k8s-base` reads across the reference (rfc-007 §4.4).
+
+    One per cloud node, keyed by the node and carrying the address that
+    node's own VNIC reads back with; the worker holds no member of that pool.
+    The installation answers one VNIC, and one GUA, for every instance, so
+    this case gives each instance a VNIC of its own and each VNIC a GUA of its
+    own: an export that handed every node one node's address, or crossed two,
+    fails on the node that carries it.
+    """
+    guas = {
+        f'ocid1.vnic.{conventions.CLUSTER_NAME}-{node}_id': f'2001:db8:1::{index + 1:x}'
+        for index, node in enumerate(conventions.CLOUD_NODES)
+    }
+    answer = setup.answer
+
+    def own_vnics(args: pulumi.runtime.MockCallArgs) -> dict[str, Any]:
+        fields = cast('dict[str, Any]', args.args)
+        match args.token:
+            case 'oci:Core/getVnicAttachments:getVnicAttachments':
+                return {'vnicAttachments': [{'vnicId': f'ocid1.vnic.{fields["instanceId"]}'}]}
+            case 'oci:Core/getVnic:getVnic':
+                return {'ipv6addresses': [guas[str(fields['vnicId'])]]}
+            case _:
+                return answer(args)
+
+    monkeypatch.setattr(setup, 'answer', own_vnics)
+    exported: dict[str, object] = {}
+
+    def record(name: str, value: object) -> None:
+        exported[name] = value
+
+    monkeypatch.setattr(physical.pulumi, 'export', record)
+
+    await physical.main()
+
+    exports = cast('dict[str, pulumi.Output[str]]', exported[conventions.PHYSICAL_OUTPUTS.node_guas])
+    assert {node: await gua.future() for node, gua in exports.items()} == {
+        node: guas[f'ocid1.vnic.{conventions.CLUSTER_NAME}-{node}_id'] for node in conventions.CLOUD_NODES
+    }
+
+
+@pytest.mark.asyncio
 async def test_the_ci_join_credentials_are_exported_under_the_names_the_slot_map_reads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

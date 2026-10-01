@@ -40,6 +40,12 @@ class PhysicalOutputs:
     """Cloud node name → its VCN address."""
     node_public_ips: str
     """Cloud node name → its public address, which day 1 dials it at."""
+    node_guas: str
+    """Cloud node name → the one GUA its primary VNIC holds.
+
+    The `internet` pool's IPv6 members (rfc-007 §4.4), beside each node's
+    private address; the balancer's IPv6 backends name the same addresses.
+    """
     kubeconfig: str
     """The cluster-admin kubeconfig, secret; `k8s-base` and `apps` are built on it."""
     talosconfig: str
@@ -83,6 +89,7 @@ PHYSICAL_OUTPUTS = PhysicalOutputs(
     vip1_private='vip1_private',
     node_private_ips='node_private_ips',
     node_public_ips='node_public_ips',
+    node_guas='node_guas',
     kubeconfig='kubeconfig',
     talosconfig='talosconfig',
     backup_bucket='backup_bucket',

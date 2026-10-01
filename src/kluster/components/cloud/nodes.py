@@ -13,26 +13,29 @@ node through scheduling constraints declared beside the workload
 (architecture.md §3.2). Block volumes are a separate capability, attached per
 entry of the fleet's volume table (`storage`).
 
-Listeners are not a fixed list. The management listeners are declared here
-because the ports belong to the cluster rather than to any service -- they are
+The balancer forwards two lists of ports, both conventions (`forwarded`). The
+management ports belong to the cluster rather than to any service -- they are
 `conventions.MANAGEMENT_PORTS`, which the node firewall opens and the cluster
-endpoint names from the same structure; a service's listener is declared
-beside the service that needs it. Everything declared per management port is
-named after the port's field in that structure (`kubernetes`, say), never
-after its number -- the backend set and the listener in Pulumi and on the
-balancer, the backends in Pulumi and, through the autoname derived from that,
-on the balancer: a name is an identity that state and the balancer key on,
-and the number is a value the structure lets anyone edit.
+endpoint names from the same structure. Every other port is a row of the
+public port census the balancer fronts (`conventions.PUBLIC_PORT_CENSUS`):
+`apps` holds no OCI credential (credentials.md §3), so a service's listener is
+declared here from its row, never beside the service (rfc-007 §5.3). Everything
+declared per port is named after the port's field in the management
+structure (`kubernetes`, say) or the census row's name (`https`), never after
+its number -- the backend set and the listener in Pulumi and on the balancer,
+the backends in Pulumi and, through the autoname derived from that, on the
+balancer: a name is an identity that state and the balancer key on, and the
+number is a value either structure lets anyone edit.
 
 The balancer is dual-stack, and OCI's listeners and backend sets are not: each
 carries one `ip_version`, a listener forwards only to a backend set of its own
 family, and a backend set holds only backends of that family. So every
-management port is declared once per family the balancer holds (`FAMILIES`) --
+port it forwards is declared once per family the balancer holds (`FAMILIES`) --
 a listener, a backend set and a backend per node for each -- and a port served
 on one family alone is a port the other address of the same anchor refuses.
 IPv4 is the family the cluster endpoint names, and its children carry the
-field alone; every other family's carry the family after the field
-(`kubernetes-ipv6`).
+port's name alone; every other family's carry the family after the name
+(`kubernetes-ipv6`, `https-ipv6`).
 
 The load balancer is a component of its own because the dependency runs
 through it: a node's machine configuration names the cluster endpoint, which
@@ -45,12 +48,13 @@ from __future__ import annotations
 
 import base64
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, NamedTuple
 
 import pulumi
 import pulumi_oci as oci
 
 from kluster import conventions
+from kluster.conventions import Front, Transports
 from putils import Component, async_output, resolve
 
 #: How the two families are told apart in the balancer's address list. The
@@ -80,6 +84,50 @@ def management_ports() -> list[tuple[str, int]]:
     return list(zip(ports._fields, ports, strict=True))
 
 
+#: The listener protocol that carries each set of transports. A port served
+#: on both is one listener of `TCP_AND_UDP`, not a listener per transport
+#: (OCI: Managing listeners).
+LISTENER_PROTOCOL: Mapping[Transports, str] = {
+    Transports.TCP: 'TCP',
+    Transports.UDP: 'UDP',
+    Transports.TCP_AND_UDP: 'TCP_AND_UDP',
+}
+
+
+class Forwarded(NamedTuple):
+    """One port the balancer forwards to every cloud node, on each family it holds."""
+
+    name: str
+    """What everything declared for it is named after: a management port's
+    field, or a census row's name."""
+    port: int
+    transports: Transports
+
+
+def forwarded() -> list[Forwarded]:
+    """Every port the balancer forwards: each management port, then each census row it fronts.
+
+    A row the dedicated VIP fronts has no listener: one would forward to three
+    nodes, none of which answers on that port at the address the balancer
+    reaches it on. A row served on UDP alone is refused. Its backend set
+    would check the port over TCP, as every set here does, and a UDP check
+    needs a request the application answers with a known reply, which a row
+    cannot state (rfc-007 §5.3).
+    """
+    management = [Forwarded(field, port, Transports.TCP) for field, port in management_ports()]
+    census = [
+        Forwarded(row.name, row.port, row.transports)
+        for row in conventions.PUBLIC_PORT_CENSUS
+        if row.front is Front.BALANCER
+    ]
+    for entry in census:
+        if 'tcp' not in entry.transports.protocols:
+            raise ValueError(
+                f'the public port {entry.name!r} is served on UDP alone, and its backend set has no TCP port to check'
+            )
+    return [*management, *census]
+
+
 def user_data(machine_config: str) -> str:
     """`machine_config` as the `user_data` an OCI instance's metadata carries.
 
@@ -93,18 +141,19 @@ def user_data(machine_config: str) -> str:
 
 
 def named(field: str, family: str) -> str:
-    """What everything declared for one management port on one family is named after.
+    """What everything declared for one forwarded port on one family is named after.
 
-    The field alone for the endpoint's family, the field and the family for
-    any other. Both halves are identities that state and the balancer key on,
-    so the rule is fixed: a family renamed into or out of the bare field is
-    every one of its listeners and backend sets replaced.
+    `field` is the port's name (`Forwarded.name`): alone for the endpoint's
+    family, with the family after it for any other. Both halves are
+    identities that state and the balancer key on, so the rule is fixed: a
+    family renamed into or out of the bare name is every one of its listeners
+    and backend sets replaced.
     """
     return field if family == ENDPOINT_FAMILY else f'{field}-{family.lower()}'
 
 
 class NodeLoadBalancer(Component, pulumi_type='kluster:cloud:NodeLoadBalancer'):
-    """The NLB and its management backend sets, on each family it holds — the cluster's endpoint."""
+    """The NLB and a backend set per port it forwards, on each family it holds — the cluster's endpoint."""
 
     def __init__(
         self,
@@ -130,48 +179,55 @@ class NodeLoadBalancer(Component, pulumi_type='kluster:cloud:NodeLoadBalancer'):
             opts=self.child_opts(),
         )
 
-        #: Keyed by family and then by the port's field in
-        #: `conventions.ManagementPorts`; `named` of the two is each backend
-        #: set's OCI name and what its logical name carries.
+        #: What the balancer forwards, in the order it is declared; the
+        #: backends that fill each set are `CloudNodes`'s, from this same list.
+        self.forwarded = forwarded()
+
+        #: Keyed by family and then by the name of what it forwards
+        #: (`Forwarded.name`); `named` of the two is each backend set's OCI
+        #: name and what its logical name carries.
         self.backend_sets: dict[str, dict[str, oci.networkloadbalancer.BackendSet]] = {
             family: {
-                field: oci.networkloadbalancer.BackendSet(
-                    f'{name}-nlb-{named(field, family)}',
-                    name=named(field, family),
+                entry.name: oci.networkloadbalancer.BackendSet(
+                    f'{name}-nlb-{named(entry.name, family)}',
+                    name=named(entry.name, family),
                     network_load_balancer_id=self.load_balancer.id,
                     policy='FIVE_TUPLE',
-                    # On for every family: the apiserver's audit log on the
-                    # public 6443 (security-audit.md M3) records the client's
-                    # address, which without preservation is the balancer's.
-                    # It is also what makes the subnet's rule for a backend the
-                    # same rule as the listener's: a forwarded packet reaches
-                    # the node carrying the client's address.
+                    # On for every set and every family: the apiserver's
+                    # audit log on the public 6443 (security-audit.md M3) and
+                    # Envoy's access log behind 443 (rfc-007 §5.1) record the
+                    # client's address, which without preservation is the
+                    # balancer's. It is also what makes the subnet's rule for
+                    # a backend the same rule as the listener's: a forwarded
+                    # packet reaches the node carrying the client's address.
                     is_preserve_source=True,
-                    health_checker=oci.networkloadbalancer.BackendSetHealthCheckerArgs(protocol='TCP', port=port),
+                    # Over TCP for every set, a port served on TCP and UDP
+                    # included; `forwarded` refuses one with no TCP to check.
+                    health_checker=oci.networkloadbalancer.BackendSetHealthCheckerArgs(protocol='TCP', port=entry.port),
                     # Stated for every family, IPv4 included: the API
                     # reference gives the field no default, and it is fixed
                     # when the set is created.
                     ip_version=family,
                     opts=self.child_opts(),
                 )
-                for field, port in management_ports()
+                for entry in self.forwarded
             }
             for family in FAMILIES
         }
 
         self.listeners = [
             oci.networkloadbalancer.Listener(
-                f'{name}-nlb-listener-{named(field, family)}',
-                name=named(field, family),
+                f'{name}-nlb-listener-{named(entry.name, family)}',
+                name=named(entry.name, family),
                 network_load_balancer_id=self.load_balancer.id,
-                default_backend_set_name=self.backend_sets[family][field].name,
-                port=port,
-                protocol='TCP',
+                default_backend_set_name=self.backend_sets[family][entry.name].name,
+                port=entry.port,
+                protocol=LISTENER_PROTOCOL[entry.transports],
                 ip_version=family,
                 opts=self.child_opts(),
             )
             for family in FAMILIES
-            for field, port in management_ports()
+            for entry in self.forwarded
         ]
 
         self.register_outputs({})
@@ -300,12 +356,16 @@ class CloudNodes(Component, pulumi_type='kluster:cloud:CloudNodes'):
             opts=self.child_opts(protect=True),
         )
 
-        # One lookup per node, shared by every port's IPv6 backend on it.
-        guas = {node: async_output(lambda node=node: self._ipv6_address(node)) for node in self.instances}
+        #: Node → the one GUA its primary VNIC holds: what every IPv6 backend
+        #: on it names, and what `physical` exports for the `internet` pool
+        #: (rfc-007 §4.4). One lookup per node.
+        self.guas: dict[str, pulumi.Output[str]] = {
+            node: async_output(lambda node=node: self._ipv6_address(node)) for node in self.instances
+        }
         self.backends = [
             oci.networkloadbalancer.Backend(
-                f'{name}-nlb-{named(field, family)}-{node}',
-                backend_set_name=load_balancer.backend_sets[family][field].name,
+                f'{name}-nlb-{named(entry.name, family)}-{node}',
+                backend_set_name=load_balancer.backend_sets[family][entry.name].name,
                 network_load_balancer_id=load_balancer.load_balancer.id,
                 # An instance OCID stands for the primary VNIC's primary
                 # private IP, which is IPv4, so an IPv6 backend names its
@@ -316,7 +376,7 @@ class CloudNodes(Component, pulumi_type='kluster:cloud:CloudNodes'):
                 # first `up` that creates these settles it, and
                 # declarative/physical.md §6 names the fallback.
                 target_id=instance.id if family == 'IPV4' else None,
-                ip_address=None if family == 'IPV4' else guas[node],
+                ip_address=None if family == 'IPV4' else self.guas[node],
                 # No `name`: pulumi-oci autonames it from the logical name
                 # (`<logical>-<7 hex>`), so the name on the balancer carries
                 # the field and the family too. A backend's port is not
@@ -325,11 +385,11 @@ class CloudNodes(Component, pulumi_type='kluster:cloud:CloudNodes'):
                 # one is deleted, where a fixed name makes the provider delete
                 # first and leaves the node out of the set until its
                 # replacement lands.
-                port=port,
+                port=entry.port,
                 opts=self.child_opts(),
             )
             for family in FAMILIES
-            for field, port in management_ports()
+            for entry in load_balancer.forwarded
             for node, instance in sorted(self.instances.items())
         ]
 

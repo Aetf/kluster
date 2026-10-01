@@ -240,12 +240,12 @@ is one nobody here asked for, is the issue's question.
     reason: every CNAME that names the VPS, in every zone, targets that
     one record, and it retires with the machine.
     Declaring the anchors reaches across a StackReference and nothing
-    else in this stack does, so it is written not to await: an address
-    `physical` has not published yet becomes an unresolved record input
-    rather than an error, and `dns` previews the same records before
-    and after `physical` is applied. Applying is the step that needs
-    them real: all three names are exported by `physical`, so what
-    stands between the anchors and a value is `physical`'s own apply.
+    else in this stack does, and each address is checked where it is
+    read: one `physical` has not published, or one that is not an
+    address of its record's family, stops the run naming the output, in
+    a preview and an update alike. All three names are exported by
+    `physical`, so what stands between the anchors and a value is
+    `physical`'s own apply, and `dns` runs after it.
     Publishing the AAAA is not the same as it working — that the
     balancer answers on the address is the NLB's dual-stack
     verification (physical.md §6).
@@ -493,10 +493,9 @@ plane names:
 ## 5. The one-line helpers
 
 > **Not implemented; the implementation lands with the `apps` stack.**
-> The helpers belong to the app component base, and the stack that
-> would define that base refuses by name until it is written
-> (`stacks/apps.py` raises). This section and workloads.md §1 are the
-> contract that implementation has to satisfy, and nothing in the
+> The helpers belong to the app component base, which the `apps`
+> program does not declare yet. This section and workloads.md §1 are
+> the contract that implementation has to satisfy, and nothing in the
 > repository emits a route today — which is also why the route census
 > §3 reads from is empty.
 
@@ -529,10 +528,14 @@ helper has no say in it (cluster-infra.md §2, physical/gateway.md
 §4.2).
 
 `public_port(…)` is the raw TCP/UDP analog, and it stays a helper of
-its own because it emits something no HTTP route does: it is the
-**only** helper that emits NLB listeners — one per family the
-balancer holds; an HTTP route rides listeners the cluster already
-has.
+its own because it emits something no HTTP route does: a LoadBalancer
+Service on the `internet` pool, from the public port census row it is
+handed, under the `Cluster` traffic policy and without node ports
+(cluster/architecture.md §3.1). It emits **no** NLB listener. `apps`
+holds no OCI credential (credentials.md §3), so the balancer's listener
+and backend set for a row, one of each per family it holds, are declared
+in `physical` from the same row (physical.md §1); adding a public port is a
+census row and a `physical` apply before it is a `public_port` call.
 
 ## 6. Migration shape
 

@@ -294,9 +294,9 @@ def test_the_block_quota_admits_the_largest_volume_and_a_restore_beside_it() -> 
 # --------------------------------------------------------------------------
 # The public port census.
 # --------------------------------------------------------------------------
-# Read by `physical` for the node firewall's openings; rfc-007 §5.3 makes it
-# the source of the balancer's listeners too, and makes `k8s-base` (the
-# Gateways' ports) and `apps` (the raw Services) its readers. What a row's
+# Read by `physical` for the node firewall's openings and the balancer's
+# listeners; rfc-007 §5.3 makes `k8s-base` (the Gateways' ports) and `apps`
+# (the raw Services) its readers. What a row's
 # type cannot carry is how its rows relate.
 
 
@@ -327,6 +327,31 @@ def test_a_port_the_gateways_answer_enters_at_the_balancer() -> None:
     ]
 
     assert not stray, stray
+
+
+#: OCI's network load balancer holds at most fifty listeners and fifty backend
+#: sets (OCI: Network Load Balancer, "Limits"), the service's limits rather
+#: than a decision of this program.
+#: https://docs.oracle.com/en-us/iaas/Content/NetworkLoadBalancer/introduction.htm#LimitsNLBResources
+NLB_LISTENER_LIMIT = 50
+
+
+def test_the_balancers_names_are_distinct_and_fit_its_limit() -> None:
+    """The management ports and the rows the balancer fronts share one balancer, and one namespace on it.
+
+    Each is a listener and a backend set per family, named after the field
+    or the row, and after it and the family for IPv6 (rfc-007 §5.3). A row
+    named after a management field, or after one with the family appended,
+    would claim a listener the cluster endpoint already holds; and the two
+    lists together, twice over, are what the balancer's limit counts.
+    """
+    fronted = [row.name for row in conventions.PUBLIC_PORT_CENSUS if row.front is conventions.Front.BALANCER]
+    names = [*conventions.ManagementPorts._fields, *fronted]
+    on_the_balancer = [*names, *(f'{name}-ipv6' for name in names)]
+
+    assert not set(fronted) & set(conventions.ManagementPorts._fields), fronted
+    assert len(on_the_balancer) == len(set(on_the_balancer)), on_the_balancer
+    assert len(on_the_balancer) <= NLB_LISTENER_LIMIT
 
 
 # --------------------------------------------------------------------------
