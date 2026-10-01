@@ -814,9 +814,10 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     behind the zero-diff proof, and an `expect-changes` label opts a
     pull request out of the whole path. **Every other path waits for a
     human, and the list is short because of what a deny-list misses**:
-    the proof measures what the stack programs render, so a path no
-    stack program reads previews empty however it changed. Those paths
-    include the trust anchors — `escrow/RECIPIENTS`, the appliance's
+    the proof measures what the previewed stacks' programs render, so a
+    path no previewed stack reads previews empty however it changed —
+    the operator stacks, `state-backend` among them, are never previewed.
+    Those paths include the trust anchors — `escrow/RECIPIENTS`, the appliance's
     key files (`src/kluster/lib/state_backend/machine/*.txt`), the
     composite actions under `.github/actions/` that `plan-physical` runs
     with `physical-plan` secrets, `mise.toml`'s templates that read the

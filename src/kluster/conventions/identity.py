@@ -83,7 +83,7 @@ class StateHome(Enum):
 #: `state-backend` is the one whose state is committed: rfc-006 §4 declares the
 #: appliance in it, the backend every other stack keeps its state in, which
 #: must exist before Pulumi can act (framework/ci.md §1), so its own state
-#: cannot live there. Its program raises until that declaration is written.
+#: cannot live there.
 OPERATOR_STACKS: Mapping[str, StateHome] = MappingProxyType(
     {STACK_NAMES.github: StateHome.BACKEND, STACK_NAMES.state_backend: StateHome.COMMITTED}
 )

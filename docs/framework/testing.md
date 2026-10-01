@@ -4,7 +4,7 @@ Objective: Verify infrastructure logic without creating real cloud resources
 using Pulumi mocks and `pytest`, and rehearse against the real providers
 where no mock can answer the question.
 
-The suite has three tiers, and each one is bounded by what it can know:
+The suite has these tiers, and each one is bounded by what it can know:
 
 -   **Pulumi unit tests** (§2, §3) check the shape of what a component
     registers, against `pulumi.runtime` mocks.
@@ -12,8 +12,11 @@ The suite has three tiers, and each one is bounded by what it can know:
     the tests of the code that drives it. A fake carries the service's
     authorization and failure semantics, not only its happy path, and the set
     of behaviors it carries only grows.
+-   **Engine tests** (§8) run the pinned `pulumi` against a program of
+    stand-ins, for what the engine itself does that a design depends on —
+    around a hook, a replacement, an ignored input — which no mock can show.
 -   **Live drills** (§5) run against a real account. They exist for the class
-    of defect the other two tiers structurally cannot reach: our assumptions
+    of defect the other tiers structurally cannot reach: our assumptions
     about the provider being wrong.
 
 ## 1. Setup
@@ -869,3 +872,43 @@ fix, and the diff is the only artifact that disagrees.
         The one guard that stays in seconds is the `timeout=` handed to
         `subprocess.run`, where nothing yields to count -- and it fails as
         `TimeoutExpired` naming its seconds, which is a failure with a name.
+
+## 8. Engine Tests
+
+**An engine semantic a design depends on and no mock can show is pinned by an
+engine test.** The mock monitor answers a registration and records its
+options; it never plans a step, runs a hook or orders a replacement, so a
+design resting on what the engine does with those options is resting on
+something only the engine can answer. `tests/test_state_backend_engine.py`
+holds what the `state-backend` stack's hooks rest on (rfc-006 §4.3): a raising
+`before_delete` hook leaves its resource and fails the run, and a raising
+`before_create` hook leaves it uncreated; a passing `before_delete` hook runs
+before the delete; a preview runs no hook; a raising `after_create` hook
+leaves its resource recorded and fails the run; a replacement, targeted or
+not, is created from the program's value of an `ignore_changes` input; and a
+dependent declaring `replace_on_changes` on the replaced resource's id is
+replaced with it and runs its `after_create`, where one that does not is
+updated and runs nothing.
+
+It runs in the suite, under the same bounds as every other case:
+
+-   **The CLI is the one `mise.toml` pins**, found on `PATH`, so a pin bump
+    reruns the test against the release it moves to. A run with no `pulumi`
+    on `PATH` skips it, saying so.
+-   **Its backend and its home are its own, named on every process it
+    starts** — a `file://` directory and a `PULUMI_HOME` under the case's
+    temporary directory, with every `PULUMI_` and `PG` variable of the test
+    run's own removed — as they are for a scratch probe (§5.1), and it reads
+    `pulumi stack ls --all` back as empty before its first `stack init`.
+-   **The program runs on the locked SDK and fetches nothing.** Its virtual
+    environment's `.pth` file reaches the test run's own packages. A `uv`
+    environment carries no `pip`, which the language host asks for unless
+    the project's `toolchain` option is `uv`, and under `uv` it asks for a
+    lock beside the project, which `uv lock --offline` writes.
+-   **Each case is a few commands against a fresh stack**, under the
+    per-case bound (§1) like any other, and the order the engine ran things
+    in is read from a log every provider method and hook appends to, rather
+    than from the CLI's output.
+-   **What one release does and the next stops doing is not held.** A test
+    that pinned it would fail on the bump for a change that removes nothing
+    the design relies on.

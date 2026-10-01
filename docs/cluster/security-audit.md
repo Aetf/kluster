@@ -91,7 +91,7 @@ program's input, with the `sdks/` that bump regenerates. That entry
 tests the author as well as the
 path — it asks for `renovate[bot]` and for a document that is equal at
 base and head once `packages` is removed. Every other path waits for a
-human, and the paths no stack program reads above all — the escrow
+human, and the paths no previewed stack reads above all — the escrow
 recipients, the appliance's key files, the composite actions,
 `mise.toml`, documentation — because such a path previews empty however
 it changed, so no preview can hold it. ci.md §3 is where the rule is

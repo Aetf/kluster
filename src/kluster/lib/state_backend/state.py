@@ -497,23 +497,34 @@ def refuse_to_overwrite(destination: Path) -> None:
 def write_dump(destination: Path, *, bundle_dir: Path, recipients: Sequence[str]) -> None:
     """`pg_dump -Fc` under age, verified before the file is called a dump.
 
-    The single writer of the operator-side artifact, behind both commands that
-    produce one — `state-backend dump`, and the converge dumping a box it is
-    about to destroy — so the two cannot drift into producing different files.
+    The single writer of the operator-side artifact, behind every producer of
+    one — `state-backend dump`, the converge dumping a box it is about to
+    destroy, and the `state-backend` stack's delete hook — so they cannot
+    drift into producing different files.
     """
-    refuse_to_overwrite(destination)
-    target = connection(bundle_dir)
     # The plaintext archive never lands beside the encrypted one: it is the
     # whole state in the clear, and it exists only for as long as the two
     # steps that read it. `TemporaryDirectory` makes it 0700.
     with tempfile.TemporaryDirectory(prefix=f'{settings.NAME}-') as tmp:
-        archive = Path(tmp) / 'state.dump'
-        log.info('dumping the live state over the client bundle in %s', bundle_dir)
-        pg_dump(target, archive)
-        log.info('verifying the archive before calling it a dump')
-        _ = verify_dump(archive)
-        log.info('encrypting the dump')
-        encrypt(archive, destination, recipients)
+        take_dump(destination, bundle_dir=bundle_dir, recipients=recipients, archive=Path(tmp) / 'state.dump')
+
+
+def take_dump(destination: Path, *, bundle_dir: Path, recipients: Sequence[str], archive: Path) -> None:
+    """`write_dump`, leaving the plaintext archive at `archive` for the caller.
+
+    For the caller that restores what it dumped within its own run, the
+    `state-backend` stack's hooks (rfc-006 §4.3): `archive` is in a directory
+    that caller made private and removes, and the encrypted `destination` is
+    the dump that outlives the run.
+    """
+    refuse_to_overwrite(destination)
+    target = connection(bundle_dir)
+    log.info('dumping the live state over the client bundle in %s', bundle_dir)
+    pg_dump(target, archive)
+    log.info('verifying the archive before calling it a dump')
+    _ = verify_dump(archive)
+    log.info('encrypting the dump')
+    encrypt(archive, destination, recipients)
     log.info(
         '%s holds %.1f MiB, readable by the %d recipient(s) the appliance encrypts to',
         destination,

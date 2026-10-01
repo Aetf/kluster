@@ -37,6 +37,21 @@ SUBNET_CIDR = '10.10.0.0/24'
 FCOS_STREAM = 'stable'
 FCOS_STREAM_URL = f'https://builds.coreos.fedoraproject.org/streams/{FCOS_STREAM}.json'
 
+#: The release the `state-backend` stack imports its image from (rfc-006
+#: ruling 7), and the digest the stream metadata publishes for that release's
+#: compressed `oraclecloud` artifact, which the upload checks the download
+#: against. A bump imports a new image and replaces nothing else: Zincati
+#: keeps the running box current, and the image matters at the next launch.
+FCOS_RELEASE = '44.20260913.3.2'
+FCOS_ARTIFACT_SHA256 = '0906c9af259af314c2718fbb2384c2046c9a0b72cf1e1e14e9f3ed9dd016c2d3'
+FCOS_ARTIFACT_URL = (
+    f'https://builds.coreos.fedoraproject.org/prod/streams/{FCOS_STREAM}/builds/{FCOS_RELEASE}'
+    f'/x86_64/fedora-coreos-{FCOS_RELEASE}-oraclecloud.x86_64.qcow2.xz'
+)
+
+#: The Object Storage bucket the image is uploaded to before OCI imports it.
+IMAGE_BUCKET = f'{NAME}-images'
+
 # --- The box --------------------------------------------------------------
 
 #: Pinned to the major line; podman-auto-update follows the minor stream.
@@ -117,3 +132,8 @@ B2_PREFIX = conventions.STATE_DUMP_PREFIX
 #: Retention is a bucket lifecycle rule, which is what keeps the uploader's
 #: key free of any delete capability (storage.md §4).
 B2_RETENTION_DAYS = 30
+
+#: The dump key the `state-backend` stack declares is named this, then `-`
+#: and the generation its configuration names (rfc-006 §4.1). Apart from the
+#: name `state-backend provision` mints under, so neither retires the other's.
+B2_DUMP_KEY_NAME = f'{conventions.CLUSTER_NAME}-{NAME}-dump'

@@ -321,7 +321,7 @@ def test_a_path_a_stack_or_a_workflow_reads_is_the_human_route(path: str, tmp_pa
     ],
 )
 def test_a_trust_anchor_no_stack_reads_is_the_human_route(path: str, tmp_path: Path) -> None:
-    """A path no stack program reads previews empty however it changed, so only a reader can hold it."""
+    """A path no previewed stack reads previews empty however it changed, so only a reader can hold it."""
     verdict = _run(tmp_path, ['uv.lock', path])
     assert verdict.returncode == 0, verdict.stderr
     assert not verdict.noop

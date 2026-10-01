@@ -339,3 +339,44 @@ def digests(values: Machine) -> dict[str, str]:
             case _:
                 parts[spec.name] = json.dumps(value, sort_keys=True, default=str)
     return {key: hashlib.sha256(value.encode()).hexdigest()[:16] for key, value in sorted(parts.items())}
+
+
+def _server_public_key(values: Machine) -> str:
+    """The server key's public half, as DER SubjectPublicKeyInfo in hex: what the certificate beside it must carry."""
+    key = serialization.load_pem_private_key(values.server_key.encode(), password=None)
+    return (
+        key.public_key()
+        .public_bytes(encoding=serialization.Encoding.DER, format=serialization.PublicFormat.SubjectPublicKeyInfo)
+        .hex()
+    )
+
+
+#: How the stack's bill of materials reads each secret field: by its public
+#: half, which names the key without being it. The dump key's secret has none,
+#: and is read through its id (`b2_dump_key_id`), which moves with it.
+_PUBLIC_HALVES = {
+    'server_key': _server_public_key,
+    'ssh_host_key': host_public_key,
+}
+
+
+def bill_of_materials(values: Machine) -> dict[str, str]:
+    """A digest per component of the machine, for a box whose keys are stable (rfc-006 §4.4).
+
+    The `state-backend` stack's counterpart of `digests`, and the map it
+    carries in the instance's `extendedMetadata`, in the clear: a planned
+    replacement names there what moved, beside a `metadata` the diff can show
+    only as secret. Every component is read as it is, the certificates whole,
+    because the stack renders from keys that outlive every render rather than
+    from ones issued per render; and each secret by its public half, so that
+    rotating a key moves its own entry. The template's text is a component, as
+    in `digests`. Nothing compares the map but the engine.
+    """
+    parts = {'butane': machine_file(TEMPLATE)}
+    for spec in fields(values):
+        value = getattr(values, spec.name)
+        if spec.metadata.get('digest', Digested.VALUE) is not Digested.NEVER:
+            parts[spec.name] = json.dumps(value, sort_keys=True, default=str)
+        elif (public := _PUBLIC_HALVES.get(spec.name)) is not None:
+            parts[spec.name] = public(values)
+    return {key: hashlib.sha256(value.encode()).hexdigest()[:16] for key, value in sorted(parts.items())}

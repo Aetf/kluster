@@ -19,6 +19,13 @@
     where both are objects; a null passes, holding nothing; an envelope
     holding its plaintext is refused; and the resources of pending
     operations are read as well as the resources.
+*   **Updated:** 2026-10-01. The dump key's id is published, not
+    ciphertext: the B2 provider makes it the key's resource id, which the
+    engine cannot mark secret, and it is an identifier rather than a
+    credential (Aetf/kluster-ops#484). §3.3's table moves its row, §4.1
+    drops `applicationKeyId` from the key's `additional_secret_outputs`
+    and narrows its new rule to an output that identifies a principal, and
+    §14's slice 5 holds the key's id to that.
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
@@ -243,13 +250,13 @@ repository publishes today:
 | Names, ranges, DNS labels, security rules, shape, availability and fault domain, the box's private address | the declaration, and OCI's answers to it | All but the availability domain's tenancy prefix are, in the component and `settings.py` |
 | The reserved public address | `PublicIp.ipAddress` | Yes, as `settings.ADDRESS`, and on 5432, 22 and in the certificate |
 | The Object Storage namespace, and B2's bucket id and lifecycle | the image bucket and the dump bucket | The B2 account and both bucket names are |
+| The dump key's id | `ApplicationKey`'s resource id, which is its `applicationKeyId` | No. The engine cannot mark a resource's id secret, and the id names the key without authorizing anything |
 | When each resource was made and last touched | the engine and OCI | No |
 | Paths from the checkout to the interpreter, the SDK and the CLI's language host under mise's install directory | `sourcePosition` and `stackTrace` (§3.2) | The code's own paths are; the rest says the checkout sits in a home directory beside `.local/`, and names the CLI's version, so a pin bump rewrites every resource's entries at the next write |
 | Digests of what the box was built from | `extendedMetadata` (§4.1) | The inputs are, or are random keys whose digest tells nothing |
 | Plugin versions and the B2 bridge's parameters | the provider resources | Yes, in `uv.lock` and `Pulumi.yaml` |
 | **The OCID of the user that made the image bucket** | `Bucket.createdBy` | **No**: the repository keeps a user OCID as a config secret, because it is the identity a key signs as |
 | **The appliance user's OCID and its key's fingerprint** | the OCI provider resource's inputs | **No**, as above. The schema marks neither secret; they are ciphertext only because the program passes them from configuration secrets, which the second check below holds |
-| **The dump key's id** | `ApplicationKey.applicationKeyId` | **No**: the B2 provider's own configuration marks a key id secret |
 
 **Every plaintext row is an identifier or a fact the declaration already
 states, and none of them authorizes anything.** An OCI request is signed
@@ -610,7 +617,7 @@ cover is two small dynamic resources and two hooks.
 | Reserved address | `oci.core.PublicIp`, `RESERVED`, its `private_ip_id` the box's primary private address | `protect=True`. `privateIpId` updates in place, so pointing the address at a new box is an ordinary update. The component refuses a reservation whose address is not `settings.ADDRESS`. |
 | Readiness | A dynamic resource whose create waits until the reserved address completes a TLS handshake on 5432 with a certificate that chains to the CA and names the address | Its inputs are the address, the CA certificate and the instance's id, with `replace_on_changes` on the id, so it is replaced with the box (§4.3); it needs no credential, since the box sends its certificate before anything authenticates (physical/state-backend.md §6). Its `after_create` hook restores (§4.3). |
 | Dump bucket and retention | `b2.Bucket` with its lifecycle rule | `protect=True`. The rule updates in place in both directions (ruling 8), in the shape `components/backup` declares. |
-| Dump key | `b2.ApplicationKey`: `writeFiles`, the dump bucket, the dump prefix; `additional_secret_outputs=['applicationKeyId']` | Its secret is secret in the SDK and kept in state; the program adds its id (§3.3). **Rotation is a committed edit**: the key's name carries a generation from the configuration, a new generation replaces the key, and that rebuilds the box, which must carry the new one. The old key is deleted at the end of that deployment, once the new box holds its successor. A key deleted by hand is gone from the refreshed state, so the next run plans a new one and the box's replacement. |
+| Dump key | `b2.ApplicationKey`: `writeFiles`, the dump bucket, the dump prefix | Its secret is secret in the SDK and kept in state; its id is the resource's id, in the clear (§3.3). **Rotation is a committed edit**: the key's name carries a generation from the configuration, a new generation replaces the key, and that rebuilds the box, which must carry the new one. The old key is deleted at the end of that deployment, once the new box holds its successor. A key deleted by hand is gone from the refreshed state, so the next run plans a new one and the box's replacement. |
 | Providers | An explicit `oci.Provider` and `b2.Provider`, built by the stack program from the stack's configuration | The OCI key moves from its workstation slot into configuration, and B2 gets a management key of the stack's own (§5). The upload's dynamic provider reads the OCI key in `configure`, as framework/pulumi.md §5.2 prescribes. |
 
 The component's type token and the two dynamic resources' follow
@@ -619,10 +626,9 @@ style/pulumi.md's forms, `kluster:<area>:<Type>` and
 
 **New rule** ([style/pulumi.md](../style/pulumi.md), "Resources and
 their contents"): in a stack whose state is committed, an output that
-identifies a principal, or names a credential by its id, is declared
-secret with `additional_secret_outputs` wherever the provider does not
-mark it. §3.3's check is the backstop that catches the one missed, not
-the mechanism.
+identifies a principal is declared secret with `additional_secret_outputs`
+wherever the provider does not mark it. §3.3's check is the backstop that
+catches the one missed, not the mechanism.
 
 ### 4.2 The instance's options, and the traps they exist for
 
@@ -1489,7 +1495,7 @@ B2 SDK's regeneration.
         buckets are protected; the instance carries the options of §4.2
         and `metadata` is secret, and a mutation dropping
         `ignore_changes` goes red; the readiness resource replaces on
-        the instance's id; `createdBy`, `applicationKeyId` and the
+        the instance's id; `createdBy` and the
         provider's user and fingerprint are secret; two renders from
         the same inputs are equal byte for byte, and each single-input
         change moves exactly its own digest; the dump key's

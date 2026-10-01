@@ -11,9 +11,10 @@ name: noop-automerge
 # its own log and its own red X.
 #
 # **The route is an allow-list, because what a deny-list misses is what
-# matters.** The zero-diff preview below measures what the stack programs
-# render, and a path no stack program reads previews empty however it
-# changed. Those paths are not inert. `escrow/RECIPIENTS` names who every new
+# matters.** The zero-diff preview below measures what the previewed stacks'
+# programs render, and a path no previewed stack reads previews empty however
+# it changed -- the operator stacks, `state-backend` among them, are never
+# previewed. Those paths are not inert. `escrow/RECIPIENTS` names who every new
 # escrow generation is encrypted to; the `*.txt` files in
 # `src/kluster/lib/state_backend/machine/` hold the appliance's operator keys
 # and the drill recipient; `.github/actions/` is code `deploy.yml` runs with
