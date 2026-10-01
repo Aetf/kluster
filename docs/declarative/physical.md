@@ -39,7 +39,9 @@ Stack outputs (the machine facts other stacks may reference,
 [README.md](README.md) §2) are named by `conventions.PHYSICAL_OUTPUTS`
 (`conventions/outputs.py`), which is the list and which a test holds
 the stack's exports to: `kubeconfig`, `talosconfig`, per-node
-public/private IPs, both of the NLB's public addresses (IPv4 and IPv6 —
+public/private IPs, each cloud node's GUA (`node_guas` — with the
+private IPv4s and `vip1_private`, the `internet` pool's members, which
+`k8s-base` reads; rfc-007 §4.4), both of the NLB's public addresses (IPv4 and IPv6 —
 the cluster anchor in `dns` carries an A and an AAAA), the
 dedicated-VIP addresses (reserved public + secondary private), the
 backup bucket's name and S3 endpoint, the backup keys (one application
@@ -102,17 +104,34 @@ credential (`ci_zerotier_identity_physical`,
     public IPv6, and serves every port it forwards on both. OCI's
     listeners and backend sets are single-family — each carries one
     `ip_version`, and a listener forwards only to a backend set of its
-    own family — so each management port
-    (`conventions.ManagementPorts`) has a listener and a backend set
-    per family, each holding every cloud node: named by the port's
-    field for IPv4 (`kubernetes`) and by the field and the family for
-    IPv6 (`kubernetes-ipv6`). An IPv4 backend names the instance; an
-    IPv6 backend names the node's GUA, because an instance OCID stands
-    for the primary private IPv4. Declared here; **listeners are not a
-    fixed list** — the management listeners (6443/50000) live here,
-    while service listeners are declared beside the services that need
-    them, like DNS records, and a service listener is one per family as
-    well.
+    own family — so each port it forwards has a listener and a backend
+    set per family, each holding every cloud node: named by the port's
+    name for IPv4 (`kubernetes`, `https`) and by the name and the family
+    for IPv6 (`kubernetes-ipv6`, `https-ipv6`), never by its number. An
+    IPv4 backend names the instance; an IPv6 backend names the node's
+    GUA, because an instance OCID stands for the primary private IPv4.
+    **The ports are two conventions, and every listener is declared
+    here**, because `apps` holds no OCI credential (credentials.md §3,
+    rfc-007 §5.3): each management port (`conventions.ManagementPorts`,
+    6443/50000), named by its field, and each row of the public port
+    census the NLB fronts (`conventions.PUBLIC_PORT_CENSUS`), named by
+    the row. A row the dedicated VIP fronts has none — its port is
+    answered at the VIP alone. Adding a public port is a census row and
+    a `physical` apply; the Service behind it is `public_port`'s in
+    `apps` (dns.md §5). Every backend set **preserves the source**
+    (`is_preserve_source`), the census's as the management ports': the
+    apiserver's audit log and Envoy's access log both record the
+    client's address. Envoy keeps it under the `Cluster` policy every
+    Service on the node addresses takes, because it takes the traffic on
+    the node it arrives at (rfc-007 §5.1); a raw Service's pods see the
+    receiving node's address, which is that policy's cost
+    (architecture.md §3.1).
+    Every set checks its port over TCP; a row served on TCP and UDP is
+    one `TCP_AND_UDP` listener, and a UDP-only row is refused until a
+    row can say what a UDP check sends. The row names and the
+    management fields are disjoint, and twice their count fits the
+    balancer's fifty listeners and fifty backend sets — invariants of
+    the census, held by its tests.
 -   **Buckets**: none on this provider. The installation's
     cluster-data bucket is the backup bucket, which lives on B2
     precisely because it must not share a provider with what it
@@ -566,9 +585,38 @@ guide refuses ("Preserve source IP must be disabled in the backend set
 to add an IP address-based backend server") and Oracle's cloud
 controller manager declares. A refusal fails that `up` at those
 backends, which nothing depends on. The fallback is
-`is_preserve_source` off on the IPv6 backend sets alone, and its cost
-is that the apiserver's audit log records the balancer's address for
-every request through the IPv6 front.
+`is_preserve_source` off on the IPv6 backend sets alone, the census's
+with the management ports', and its cost is that the apiserver's audit
+log and Envoy's access log record the balancer's address for every
+request through the IPv6 front.
+
+The M2 bootstrap gate (rfc-007 §14, slice 13) runs these once Cilium
+and the Gateways are up, a transcript per item on its ops issue:
+
+-   No `kube-proxy` DaemonSet exists, the `kubespan` link carries the
+    MTU the machine configuration states (`conventions.KUBESPAN_MTU`),
+    and every KubeSpan peer is up.
+-   No Gateway Service carries a `nodePort` or a
+    `healthCheckNodePort`.
+-   443 answers through the NLB, and an undeclared port at a node's
+    public address does not.
+-   Envoy's access log shows the client's address for a request
+    through the NLB's IPv4 front.
+-   A request answers through the IPv6 front, and Envoy's log shows the
+    client's address where the IPv6 sets kept source preservation, or
+    the balancer's own address where the fallback above was taken —
+    that fallback's accepted cost.
+-   The cluster DNS resolves through host DNS with the baseline policy
+    on, and a pod's request to `169.254.169.254` is refused (the
+    security item below).
+-   A renewal cert-manager is made to perform is served by every
+    Gateway with no Envoy restarted.
+-   vmagent scrapes the node exporter on its own node, through the
+    opening the cluster's ranges have (§2); a scrape of another node's
+    rides `kubespan`, which the ingress chain accepts ahead of every
+    rule, and exercises no opening.
+-   An alert raised through alertmanager reaches the phone, and
+    stopping vmalert pushes the missed check-in.
 
 The zone-policy verification comes **before** the first `pulumi up`
 rather than in the gate, because that run's first half — the targeted

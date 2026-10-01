@@ -406,6 +406,10 @@ async def main() -> None:
     pulumi.export(outputs.vip1_private, nodes.secondary_ip.ip_address)
     pulumi.export(outputs.node_private_ips, {node: instance.private_ip for node, instance in nodes.instances.items()})
     pulumi.export(outputs.node_public_ips, {node: instance.public_ip for node, instance in nodes.instances.items()})
+    # Each node's GUA beside its private address: with the dedicated VIP's
+    # secondary private address (`vip1_private`), the `internet` pool's
+    # members, which `k8s-base` builds the pool from (rfc-007 §4.4).
+    pulumi.export(outputs.node_guas, nodes.guas)
 
     # Both are cluster-admin credentials, and both are marked secret at the
     # source; `k8s-base` and `apps` read them from here rather than from a file

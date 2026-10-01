@@ -11,9 +11,15 @@ that speaks the k8s API, consumed by `apps`.
 
 ## 0. Scope and rules
 
--   Inputs (StackReference to `physical`): kubeconfig, node
-    primary/private IPs, the dedicated-VIP node's secondary private IP, the
-    NLB IP.
+-   Inputs (StackReference to `physical`, by the names in
+    `conventions.PHYSICAL_OUTPUTS`): the kubeconfig, and the addresses the
+    `internet` pool is made of — each cloud node's primary private IPv4
+    (`node_private_ips`), each node's GUA (`node_guas`) and the dedicated
+    VIP's secondary private address (`vip1_private`). The kubeconfig is
+    read with `require_output`, so a run against a `physical` stack that
+    has not published one stops there and names the missing output. The
+    program builds one Kubernetes provider from it and disables the
+    package's default provider in its stack file (rfc-007 §3.1).
 -   **Names: explicit for shared singletons, outputs for the dynamic.**
     Cross-stack-referenced singletons (StorageClasses, Gateways, pools,
     shared Secret names) get explicit `metadata.name`s with autonaming
@@ -30,6 +36,23 @@ that speaks the k8s API, consumed by `apps`.
     prometheus-operator (replaced by VictoriaMetrics).
 -   Namespaces belong to app components (`apps` stack); this stack
     creates only the namespaces of its own components.
+-   **Every namespace this stack creates states its Pod Security
+    level** in its `enforce` label. Talos enforces `baseline`
+    cluster-wide and exempts `kube-system` alone, and `baseline` refuses
+    the host network, the host PID namespace and host paths. So a
+    namespace is `restricted`, the level workloads.md §1 gives an
+    application, unless its component's pods need the host, and then
+    `privileged`, with the reason in the component: the monitoring
+    namespace (the node exporter's host network, PID namespace and
+    paths), local-path-provisioner's (its helper pods mount the path
+    they provision), and NFD's and the GPU plugin's (device and host
+    mounts). What installs into `kube-system` — Cilium and the sealing
+    controller — stays under Talos' exemption. A chart whose pods need
+    no host and still miss `restricted` has its security-context values
+    set to meet it where the chart exposes them (reloader's container
+    context, empty at its pin, is the instance, and the component sets
+    it), and takes `baseline`, with the reason, only where the chart
+    does not (rfc-007 §8).
 
 ## 1. Install order
 
@@ -282,7 +305,7 @@ All decided behavior from architecture.md §3, expressed as config:
     and MITM the whole LAN. Verified at bootstrap by advertising a
     bogus prefix (physical.md §6).
 -   **Gateway API**: enabled; three `Gateway`s — `internet-gw` (Envoy
-    replicas across the cloud nodes, `externalTrafficPolicy: Local`,
+    replicas across the cloud nodes, `externalTrafficPolicy: Cluster`,
     Service requesting all three primary IPs via `lbipam.cilium.io/ips`
     + sharing-key), `lan-gw` (pinned to the homelab worker, `lan`
     pool), and `media-gw` (same shape as `lan-gw` on a **second,
@@ -339,8 +362,9 @@ All decided behavior from architecture.md §3, expressed as config:
 
 ## 3. What this stack deliberately does not do
 
--   No ingress of its own — gateways are wiring; routes and listeners
-    arrive with apps.
+-   No ingress of its own — gateways are wiring; routes arrive with
+    apps, and the balancer's listeners for public ports are `physical`'s
+    (physical.md §1).
 -   No app namespaces, quotas, or per-app policy.
 -   No backup schedules — VolSync `ReplicationSource`s are declared
     beside their PVCs in `apps` via the `backed_pvc` helper and

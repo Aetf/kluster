@@ -168,10 +168,17 @@ Mechanics shared by both pools:
 -   **Backends may live on any node.** With `externalTrafficPolicy: Cluster`
     the receiving node SNATs and forwards over KubeSpan to a remote backend
     — a public port can front a homelab pod. Cost: the backend
-    sees the ingress node's IP, not the client's. Use
-    `externalTrafficPolicy: Local` (client IP preserved, no extra hop) only
-    when the backends are pinned to the VIP-owning node. DSR is not usable
+    sees the ingress node's IP, not the client's. DSR is not usable
     across the WG/NAT path — stick with SNAT.
+-   **Every Service on the `internet` pool's node addresses takes
+    `Cluster`.** LB IPAM shares an address only between Services of one
+    traffic policy, and between two `Local` Services only when both
+    select the same pods; `internet-gw`'s Service is on those addresses
+    and selects nothing, so a `Local` Service beside it would never be
+    allocated (rfc-007 §4.4). `externalTrafficPolicy: Local` (client IP
+    preserved, no extra hop) is left to a Service that holds an address
+    alone — the dedicated VIP, a `lan` VIP — and there only when its
+    backends are pinned to the VIP-owning node.
 
 ### 3.2 The internet side: NLB in front, primary IPs underneath
 
@@ -185,7 +192,14 @@ Internet ingress is two layers, both free:
     listeners are single-family, so each public port (80, 443, syncthing
     22000/tcp+udp, …) has one listener per family, each with a backend
     set of its own family holding the three cloud nodes — by instance on
-    IPv4, by GUA on IPv6.
+    IPv4, by GUA on IPv6. The public ports are the rows of the public
+    port census the NLB fronts (`conventions.PUBLIC_PORT_CENSUS`), and
+    the `physical` stack declares each one's listeners from its row,
+    because `apps` holds no OCI credential (§5.1, credentials.md §3):
+    named after the
+    row, every backend set preserving the source and checking the
+    row's port over TCP, and a port served on both transports carried by
+    one `TCP_AND_UDP` listener. A row the dedicated VIP fronts has none.
 2.  **Cilium terminates on the node primary addresses — the on-the-wire
     forms.** OCI 1:1-NATs each public IPv4 to the VNIC's primary
     *private* IP (the interface never carries the public address), so
@@ -198,9 +212,11 @@ Internet ingress is two layers, both free:
     the front IP to a healthy backend node's address of the same family
     — the primary private IP for the IPv4 front, the GUA for the IPv6
     one — where the KPR datapath matches the
-    frontend and forwards to a pod — locally (`externalTrafficPolicy:
-    Local`, client IP preserved end-to-end through the pass-through NLB)
-    or via SNAT to another node (`Cluster`).
+    frontend and forwards to a pod under `Cluster`, the policy every
+    Service on these addresses takes (§3.1): a raw TCP/UDP Service's
+    backend sees the receiving node's address, while a Gateway's Envoy,
+    which takes the traffic on the node it arrives at, sees the client's
+    through the pass-through NLB under either policy (rfc-007 §5.1).
 
 Datapath-wise the node-side half is identical to `externalIPs` handling
 (KPR treats both frontend classes the same, claiming only declared
@@ -209,7 +225,12 @@ Caveats accepted knowingly, each with a cheap fallback:
 
 -   Cilium doesn't officially bless a pool containing node IPs (LB IPAM
     validates only pool-vs-pool overlap) — **verify at bootstrap**;
-    fallback is a reserved additional IP per node ($0 on OCI).
+    fallback is a reserved additional IP per node ($0 on OCI). It costs
+    the client's address: the NLB's IPv4 backends would then name those
+    addresses rather than the instances, and OCI refuses an
+    address-named backend in a set that preserves the source, so under
+    the fallback Envoy and every backend see the NLB's address on IPv4
+    too (rfc-007 §4.4).
 -   NLB dual-stack (v6 listener) and exact source-preservation semantics
     on a dual-stack VCN — **verify at bootstrap**; fallback is
     multi-A/AAAA DNS straight at the three node primary IPs (loses
@@ -258,13 +279,15 @@ LoadBalancer Service from its pool. An app publishes an `HTTPRoute`
 with the matching `parentRefs`; split-horizon apps (immich) attach to
 `internet-gw` + `lan-gw` both.
 
-Client-IP note: `internet-gw`'s Envoy runs as replicas across the cloud
-nodes (every NLB backend has a local Envoy) with
-`externalTrafficPolicy: Local` — real client IPs flow through the
+Client-IP note: every Gateway's Service takes `Cluster` (rfc-007 §5.1;
+on the `internet` pool's node addresses §3.1 leaves no other choice),
+and the client's address still reaches Envoy, which takes Gateway
+traffic on the node it arrives at — real client IPs flow through the
 pass-through NLB into Envoy's access logs and auth decisions without
-X-Forwarded-For games. `lan-gw`'s and `media-gw`'s Envoys are pinned
-to the homelab VM (the node owning their `lan` VIPs), likewise
-`Local`.
+X-Forwarded-For games. `internet-gw`'s Envoy runs as replicas across
+the cloud nodes (every NLB backend has a local Envoy); `lan-gw`'s and
+`media-gw`'s Envoys are pinned to the homelab VM (the node owning their
+`lan` VIPs).
 
 ### 3.4 LAN specifics: BGP to the UDM, dedicated subnet, split DNS
 
@@ -737,9 +760,12 @@ The entire stack is deployed via Pulumi using multiple providers:
     volumes, and a security list that admits everything — the Talos
     ingress firewall is the filter (§4.1, declarative/physical.md §1).
     -   NLB listeners are derived from declarations, not hand-listed:
-        the management listeners live in the physical stack; per-service
-        listeners are emitted beside the services that use them
-        (declarative/physical.md §1).
+        the management ports' and the public port census's, both
+        conventions, and both declared in the physical stack, because
+        `apps` holds no OCI credential (credentials.md §3). A service's
+        raw port is a census
+        row before it is a Service in `apps` (declarative/physical.md
+        §1).
     -   Guardrails (nodes.md §3.2): compartment quotas pinning creatable
         shapes to the free envelope + budget alerts.
 3.  **UniFi (filipowm/unifi, bridged; decided 2026-08-23)**: firewall
