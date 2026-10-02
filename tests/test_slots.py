@@ -62,6 +62,11 @@ CI_DNS_IDENTITY = conventions.PHYSICAL_OUTPUTS.ci_identity['ci-dns']
 
 PASSPHRASE = 'a-recovered-passphrase'
 
+#: The passphrases a state read and a config write are started under: the
+#: `physical` stack's own, and the one every other stack shares.
+PHYSICAL_PASSPHRASE = 'the-physical-passphrase'
+STACK_PASSPHRASE = 'the-stack-passphrase'
+
 PHYSICAL_STACK = slots.PHYSICAL_STACK
 DNS_STACK = slots.DNS_STACK
 
@@ -886,22 +891,49 @@ def test_an_ops_repo_environment_secret_is_named_after_its_environment() -> None
 
 @dataclass
 class RecordedPulumi:
-    """Just enough `pulumi` for a state read: which stacks exist, and what they hold."""
+    """Just enough `pulumi` for a state read and a config copy: which stacks exist, and what they hold.
+
+    `outputs` are the state of the stack being read; `config` is keyed by stack
+    and key, so a copy into two stacks is two entries. Each invocation is kept
+    with the passphrase it was started under, which is how a case tells a read
+    of `physical` from a write into a stack under the stack passphrase.
+    """
 
     stacks: list[str] = field(default_factory=list[str])
     outputs: dict[str, object] = field(default_factory=dict[str, object])
-    config: dict[str, str] = field(default_factory=dict[str, str])
+    config: dict[tuple[str, str], str] = field(default_factory=dict[tuple[str, str], str])
+    #: The keys stored in the clear rather than as secrets.
+    plain: set[tuple[str, str]] = field(default_factory=set[tuple[str, str]])
     invocations: list[list[str]] = field(default_factory=list[list[str]])
+    passphrases: list[tuple[str, str | None]] = field(default_factory=list[tuple[str, str | None]])
 
     def __call__(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdin: str | None) -> str:
         self.invocations.append(list(args))
+        self.passphrases.append((' '.join(args), env.get(pulumi_config.PASSPHRASE_ENV)))
         match list(args):
             case ['stack', 'ls', '--json']:
                 return json.dumps([{'name': name} for name in self.stacks])
             case ['stack', 'output', '--json', '--show-secrets', '--stack', _]:
                 return json.dumps(self.outputs)
-            case ['config', 'get', key, '--stack', _]:
-                return self.config[key] + '\n'
+            case ['config', 'get', key, '--stack', stack]:
+                if (stack, key) not in self.config:
+                    # What the real CLI does with a key the stack has no value
+                    # for: exit non-zero, which `run_pulumi` turns into this.
+                    raise SlotRefused(f"`pulumi config get` failed: configuration key '{key}' not found")
+                return self.config[(stack, key)] + '\n'
+            case ['config', 'get', key, '--json', '--stack', stack]:
+                if (stack, key) not in self.config:
+                    raise SlotRefused(f"`pulumi config get` failed: configuration key '{key}' not found")
+                # The shape the pinned CLI prints: the value, without the
+                # newline the plain form adds, and whether it is encrypted.
+                return json.dumps({'value': self.config[(stack, key)], 'secret': (stack, key) not in self.plain})
+            case ['config', 'set', key, '--secret', '--stack', stack]:
+                assert stdin is not None, 'a secret was passed as an argument rather than on standard input'
+                # What the real CLI does with a value on standard input: it
+                # drops one trailing newline.
+                self.config[(stack, key)] = stdin.removesuffix('\n')
+                self.plain.discard((stack, key))
+                return ''
             case unknown:  # pragma: no cover - an invocation a read is not meant to make
                 raise AssertionError(f'unexpected pulumi invocation {unknown}')
 
@@ -955,10 +987,13 @@ def context(
 ) -> slots.Context:
     """A push that reaches nothing real: no kit, no backend, no forge, no terminal."""
     # `physical`'s passphrase is there because the state reads are of that
-    # stack, which is opened under its own and refused without it.
-    resolved = pulumi_config.BackendEnvironment(url=backend_url, physical=lambda: 'the-physical-passphrase')
+    # stack, which is opened under its own and refused without it; the stack
+    # passphrase, for the stacks a copy writes into.
+    resolved = pulumi_config.BackendEnvironment(
+        passphrase=STACK_PASSPHRASE, url=backend_url, physical=lambda: PHYSICAL_PASSPHRASE
+    )
     return slots.Context(
-        forge=Forge(token='the-admin-token', run=gh),
+        open_forge=lambda: Forge(token='the-admin-token', run=gh),
         open_vault=open_vault,
         open_environment=lambda: resolved,
         runner=runner if runner is not None else RecordedPulumi(),
@@ -1294,6 +1329,145 @@ def test_a_state_read_of_the_unknown_sentinel_says_the_apply_was_targeted() -> N
         _ = slots.sync(context(gh, runner=pulumi), only='zerotier-identity-dns')
 
     assert not gh.values
+
+
+#: The cluster-admin kubeconfig as `physical` exports it: a YAML document,
+#: ending in the newline the channel it is copied into does not keep.
+KUBECONFIG = 'apiVersion: v1\nkind: Config\nclusters: [a-fake-cluster-nothing-reaches]\n'
+K8S_BASE_STACK = conventions.STACK_NAMES.k8s_base
+APPS_STACK = conventions.STACK_NAMES.apps
+KUBECONFIG_OUTPUT = conventions.PHYSICAL_OUTPUTS.kubeconfig
+
+
+def no_forge() -> Forge:
+    """A forge nobody may open: copying a row with no GitHub slot must not read the admin token."""
+    raise AssertionError('the copy opened the forge, which a row with no GitHub slot does not need')
+
+
+def kubeconfig_copy(pulumi: RecordedPulumi) -> slots.Context:
+    """The context `sync --only kubeconfig` runs in, with a forge that refuses to open."""
+    copying = context(RecordedGh(), runner=pulumi)
+    copying.open_forge = no_forge
+    return copying
+
+
+def published(held: Mapping[str, str] | None = None, *, plain: tuple[str, ...] = ()) -> RecordedPulumi:
+    """`physical` applied and exporting the kubeconfig, both reading stacks there, and `held` already in them.
+
+    `held` maps a stack to the copy it holds; `plain` names the stacks whose
+    copy is stored in the clear rather than as a secret.
+    """
+    return RecordedPulumi(
+        stacks=[PHYSICAL_STACK, K8S_BASE_STACK, APPS_STACK],
+        outputs={KUBECONFIG_OUTPUT: KUBECONFIG},
+        config={(stack, slots.KUBECONFIG_KEY): value for stack, value in (held or {}).items()},
+        plain={(stack, slots.KUBECONFIG_KEY) for stack in plain},
+    )
+
+
+def test_the_kubeconfig_is_copied_out_of_physical_into_both_stacks_that_read_it() -> None:
+    """`sync --only kubeconfig` reads `physical`'s state and writes both stacks' configuration.
+
+    Read under `physical`'s own passphrase and written under the stack
+    passphrase, which is the whole reason for the copy: neither reading stack
+    can open `physical`'s secrets (rfc-005 §5.1). Written stripped, because the
+    channel drops the newline the document ends in and a read-back that kept it
+    would never match. And no admin token is read: the row has no GitHub slot.
+    """
+    pulumi = published()
+
+    pushed = slots.sync(kubeconfig_copy(pulumi), only='kubeconfig')
+
+    assert pulumi.config == {
+        (K8S_BASE_STACK, slots.KUBECONFIG_KEY): KUBECONFIG.strip(),
+        (APPS_STACK, slots.KUBECONFIG_KEY): KUBECONFIG.strip(),
+    }
+    assert pushed == [
+        str(slots.PulumiConfig(K8S_BASE_STACK, slots.KUBECONFIG_KEY)),
+        str(slots.PulumiConfig(APPS_STACK, slots.KUBECONFIG_KEY)),
+    ]
+    read = [passphrase for command, passphrase in pulumi.passphrases if command.startswith('stack output')]
+    written = [passphrase for command, passphrase in pulumi.passphrases if command.startswith('config set')]
+    assert read == [PHYSICAL_PASSPHRASE]
+    assert written == [STACK_PASSPHRASE, STACK_PASSPHRASE]
+
+
+def test_a_kubeconfig_physical_has_not_published_is_refused_by_name_and_copied_nowhere() -> None:
+    pulumi = published()
+    pulumi.outputs = {}
+
+    with pytest.raises(SlotRefused, match=f'exports no `{KUBECONFIG_OUTPUT}`'):
+        _ = slots.sync(kubeconfig_copy(pulumi), only='kubeconfig')
+
+    assert pulumi.config == {}
+
+
+def test_a_copy_into_a_stack_that_does_not_exist_is_refused_before_physical_is_read() -> None:
+    """A copy fills a stack that is there; creating one is that stack's own bring-up."""
+    pulumi = published()
+    pulumi.stacks.remove(APPS_STACK)
+
+    with pytest.raises(SlotRefused, match=f'`pulumi stack init {APPS_STACK} --no-select`'):
+        _ = slots.sync(kubeconfig_copy(pulumi), only='kubeconfig')
+
+    assert pulumi.config == {}
+    assert not [command for command in pulumi.invocations if command[:2] == ['stack', 'output']]
+    assert not [command for command in pulumi.invocations if command[:2] == ['stack', 'init']]
+
+
+def test_a_stack_already_holding_the_kubeconfig_is_left_alone() -> None:
+    """A copy of an unchanged value writes nothing: every write is fresh ciphertext, a diff that changes nothing."""
+    pulumi = published({K8S_BASE_STACK: KUBECONFIG.strip(), APPS_STACK: 'the-copy-physical-rotated-away'})
+
+    pushed = slots.sync(kubeconfig_copy(pulumi), only='kubeconfig')
+
+    written = [command for command in pulumi.invocations if command[:2] == ['config', 'set']]
+    assert written == [['config', 'set', slots.KUBECONFIG_KEY, '--secret', '--stack', APPS_STACK]]
+    assert pushed == [str(slots.PulumiConfig(APPS_STACK, slots.KUBECONFIG_KEY))]
+    assert pulumi.config[(APPS_STACK, slots.KUBECONFIG_KEY)] == KUBECONFIG.strip()
+
+
+def test_a_copy_held_in_the_clear_is_written_again_as_a_secret() -> None:
+    """The same text stored without encryption is not a copy to leave alone.
+
+    Its decrypted value matches, so only how it is stored tells it apart, and
+    a cluster-admin credential in the clear in a committed file is one the
+    command that makes the copy repairs rather than certifies.
+    """
+    pulumi = published({K8S_BASE_STACK: KUBECONFIG.strip(), APPS_STACK: KUBECONFIG.strip()}, plain=(K8S_BASE_STACK,))
+
+    pushed = slots.sync(kubeconfig_copy(pulumi), only='kubeconfig')
+
+    assert pushed == [str(slots.PulumiConfig(K8S_BASE_STACK, slots.KUBECONFIG_KEY))]
+    assert pulumi.plain == set()
+
+
+def test_the_kubeconfig_copy_prints_nothing_of_the_value(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.DEBUG)
+    # One stack written and one left alone, so both of the copy's log lines run.
+    pulumi = published({K8S_BASE_STACK: KUBECONFIG.strip()})
+
+    _ = slots.sync(kubeconfig_copy(pulumi), only='kubeconfig')
+
+    assert 'a-fake-cluster-nothing-reaches' not in caplog.text
+    # Nor does it say it reads the forge, which a row with no GitHub slot does not.
+    assert 'forge' not in caplog.text
+    assert f'the {K8S_BASE_STACK} stack already holds it' in caplog.text
+    assert f'commit Pulumi.{APPS_STACK}.yaml' in caplog.text
+
+
+def test_a_typed_in_row_s_config_slots_are_left_to_its_own_command() -> None:
+    """A device row's config secrets are filled by its `record`, so `sync` neither asks for it nor writes them."""
+    gh = RecordedGh()
+    pulumi = RecordedPulumi(stacks=[PHYSICAL_STACK])
+
+    def never(_prompt: str) -> str:
+        raise AssertionError('sync asked for a value its own record command takes')
+
+    with pytest.raises(SlotRefused, match='no GitHub secret slot'):
+        _ = slots.sync(context(gh, runner=pulumi, ask=never), only='unifi')
+
+    assert pulumi.invocations == []
 
 
 def test_the_network_id_is_pushed_from_the_constant_that_decides_it() -> None:

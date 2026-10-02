@@ -15,6 +15,13 @@
     carrying only a floor included; and the manifest fetch lives in
     `kluster.lib.release_assets`, which imports no bindings, rather than
     in `kluster.lib.k8s`.
+*   **Updated:** 2026-10-02 — §2, §3.1, §3.3 and §13: the kubeconfig
+    reaches both programs as a config secret of their own, copied out of
+    `physical`'s state by `credentials derived sync --only kubeconfig`,
+    rather than across a StackReference, which elides it once `physical`
+    is under a passphrase of its own (rfc-005 §5.1); each program refuses
+    an absent or unusable copy at the read, naming that command. Slice
+    3's text keeps the StackReference read it built.
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
@@ -140,7 +147,7 @@ rather than a gated one of their own (§15.1).
 | The two pools, the three Gateways, BGP to the gateway, the Egress Gateway and ExternalAuth ([architecture.md](../cluster/architecture.md) §3, cluster-infra.md §2) | Cilium's values and objects (§4, §5); the Egress Gateway waits for hath's wave (§4.1) |
 | No Service allocates a `NodePort`, and the Talos ingress firewall is the only filter (built; out of scope above) | The Gateways' class configuration carries it (§5.1); the host ports Cilium adds are openings in that firewall (§4.3) |
 | Every provider explicit, its credential read at the line that builds it ([style/pulumi.md](../style/pulumi.md), "Layering"; rfc-002 §8) | The Kubernetes provider of both stacks, and the Cloudflare provider of `apps` (§3.1) |
-| What crosses a stack boundary: machine facts by StackReference, decisions by `conventions` ([declarative/README.md](../declarative/README.md) §2) | The kubeconfig, the pool addresses and the zone identifiers (§3.1) |
+| What crosses a stack boundary: machine facts by StackReference, decisions by `conventions` ([declarative/README.md](../declarative/README.md) §2) | The pool addresses and the zone identifiers; the kubeconfig, a secret no StackReference carries across `physical`'s passphrase, by a copy into each stack's configuration (§3.1) |
 | A census read by more than one program is a convention (style/pulumi.md, "Data") | The public port census gains readers (§5.3); the sealed values become a census (§6.2) |
 | Every version pin a stack program reads lives in `Pulumi.yaml`'s `versions:` block, and a pin a script reads too in a `kluster.lib` module ([framework/pulumi.md](../framework/pulumi.md) §3.2) | The chart and manifest pins join the block as structured values, and the second half is reversed: the script reads the block from the file through the program's parser (§3.4) |
 | Code a component and a script both run lives in `kluster.lib.<area>` (style/pulumi.md, "Layering") | The manifest fetch, run by the program and `update_crds`, in `kluster.lib.release_assets`, which imports no bindings (§3.4) |
@@ -159,13 +166,14 @@ Both are wiring, as every stack program is (style/pulumi.md,
 "Layering"): each reads its configuration and its StackReferences,
 builds its providers, and calls one component per unit.
 
-*   **`k8s-base`** reads, from the `physical` stack's outputs, the
-    kubeconfig and the addresses the `internet` pool is made of (§4.4).
-    It builds one Kubernetes provider from the kubeconfig and disables
-    the package's default provider in its stack file. It calls one
-    component per entry of the closed list, in cluster-infra.md §1's
-    order, and the order is also the parent and `depends_on` chain that
-    lets one `up` converge from an empty cluster.
+*   **`k8s-base`** reads, from its own configuration, the
+    kubeconfig, and, from the `physical` stack's outputs, the addresses
+    the `internet` pool is made of (§4.4). It builds one Kubernetes
+    provider from the kubeconfig and disables the package's default
+    provider in its stack file. It calls one component per entry of the
+    closed list, in cluster-infra.md §1's order, and the order is also
+    the parent and `depends_on` chain that lets one `up` converge from an
+    empty cluster.
 *   **`apps`** reads the kubeconfig the same way, and `dns`'s zone
     identifiers for the public records it declares beside each
     application ([dns.md](../declarative/dns.md) §1). It builds the
@@ -175,10 +183,22 @@ builds its providers, and calls one component per unit.
     ([credentials.md](../credentials.md) §3); the slot map gains the
     `apps` target when the stack exists (slice 3).
 
-**Both read the kubeconfig with `require_output`**, so a run against a
-`physical` stack that has not published one stops at that line and says
-which output is missing. The alternative, an unknown kubeconfig handed
-to the provider, is worse on both counts: `pulumi-kubernetes` marks the
+**The kubeconfig is a config secret of each stack's own**, under the key
+`kubeconfig`, because a StackReference cannot carry it: `physical` is
+encrypted under a passphrase of its own (rfc-005 §5.1), and a
+StackReference elides every secret output the reading stack cannot
+decrypt, reading the kubeconfig back as `{}`. `credentials derived sync
+--only kubeconfig` copies it out of `physical`'s state into both stacks'
+configuration, reading under `physical`'s passphrase and writing under
+the stack passphrase, and is run again whenever `physical` changes it
+([credentials.md](../credentials.md) §3).
+
+**Both read it so that anything but a kubeconfig stops the run at that
+line** (`kluster.lib.k8s.kubeconfig_from`): a stack holding no copy says
+which key is missing and names the command that fills it, and a copy
+that is blank or Pulumi's unknown sentinel says what it found. The
+alternative, an unknown or unusable kubeconfig handed to the provider,
+is worse on both counts: `pulumi-kubernetes` marks the
 cluster unreachable and previews plain resources by echoing their inputs
 ([`provider.go` L861–867](https://github.com/pulumi/pulumi-kubernetes/blob/v4.34.1/provider/pkg/provider/provider.go#L861-L867)),
 while `helm.v4.Chart` refuses outright with "configured Kubernetes
@@ -188,7 +208,8 @@ So one stack would preview green over nothing and the other red for a
 reason nobody can read off the log.
 
 The StackReference sentence in style/pulumi.md, which names the `dns`
-stack's anchors as the one use today, names the uses above beside it.
+stack's anchors as the one use today, says why a secret such as the
+kubeconfig travels as a copy instead.
 
 ### 3.2 The stacks exist, and the order the first applies run in
 
@@ -222,8 +243,8 @@ A preview of either stack is green when each of these holds:
 1.  the stack exists in the backend and its stack file is committed
     (§3.2);
 2.  its entrypoint no longer raises;
-3.  `physical` has been applied, so the kubeconfig output exists
-    (§3.1);
+3.  `physical` has been applied, so the kubeconfig output exists, and
+    its copy is in the stack's configuration (§3.1);
 4.  the cluster endpoint answers from wherever the preview runs, which
     for CI is the balancer's public 6443
     ([framework/ci.md](../framework/ci.md) §2); `helm.v4.Chart` renders
@@ -241,9 +262,9 @@ Whether pull requests preview at all is not this document's to decide
 (out of scope, above). If they do, the four conditions are what turns
 `preview (k8s-base)` and `preview (apps)` green, and slice 3 replaces
 ci.md §5's `no stack named` paragraph with the red the third condition
-leaves until the first `physical` apply. If they do not, the same four
-are what turn the chain's `up-k8s-base` and `up-apps` green, and the
-weekly drift run is what previews them.
+leaves until the first `physical` apply and the copy (§3.1). If they do
+not, the same four are what turn the chain's `up-k8s-base` and
+`up-apps` green, and the weekly drift run is what previews them.
 
 ### 3.4 The chart set, in the `versions:` block
 
@@ -1374,10 +1395,10 @@ none needs a ruling beyond this document.
 | [cluster/migration.md](../cluster/migration.md) | migration.md §1: the sealing key's restore at the first ported manifest, from §6.3, and the Egress Gateway's check out of the gate, from §4.1. migration.md §2: the monitoring move carries the dashboard's name and the read route, from §7.4. |
 | [cluster/security-audit.md](../cluster/security-audit.md) | H1's fix: the baseline's exception for the host DNS address, from §4.5. M3: the Gateways' ports among what machine configuration opens, from §4.3. |
 | [framework/pulumi.md](../framework/pulumi.md) | framework/pulumi.md §3.2: the rule for a pin a program and a script both read replaced by its new text — the pin lives in the `versions:` block, and the script reads `Pulumi.yaml` through the accessor's parser; the structured `value:` form; the `manifest-<name>` kind; no stack file overrides a pin a script reads; from §3.4. framework/pulumi.md §4: the record `update_crds` writes and the test holding it, from §3.4. |
-| [framework/ci.md](../framework/ci.md) | framework/ci.md §5: the `no stack named` paragraph replaced, from §3.3. |
-| [credentials.md](../credentials.md) | credentials.md §1, rule 6: the SealedSecret channel is a plain value in the declaring stack's configuration, from §6.2. credentials.md §3: the DNS-01 row's scope, the new webhook row and the existing one's consumers, the sealed slots of §6.2's values, and the zones row's `apps` target. credentials.md §4: the seal step of the commands that write them. |
-| [operations.md](../operations.md) | operations.md §1: the chart rows' opener. operations.md §4: the cluster's check-in and the second intake automation. operations.md §5: the playbook contract's test. |
-| [style/pulumi.md](../style/pulumi.md) | Under "Layering", the StackReference uses, and `require_output` for the value a program cannot run without, from §3.1. |
+| [framework/ci.md](../framework/ci.md) | framework/ci.md §5: the `no stack named` paragraph replaced, from §3.3, and the kubeconfig's red, which lasts until the copy, from §3.1. |
+| [credentials.md](../credentials.md) | credentials.md §1, rule 6: the SealedSecret channel is a plain value in the declaring stack's configuration, from §6.2. credentials.md §3: the DNS-01 row's scope, the new webhook row and the existing one's consumers, the sealed slots of §6.2's values, and the zones row's `apps` target. credentials.md §4: the seal step of the commands that write them. credentials.md §3's kubeconfig row, §4's `derived sync` row and §4.1's stage 10: the kubeconfig's copy into both stacks' configuration, from §3.1. |
+| [operations.md](../operations.md) | operations.md §1: the chart rows' opener. operations.md §4: the cluster's check-in and the second intake automation. operations.md §5: the playbook contract's test. operations.md §2.5: when the kubeconfig's copy is made again, from §3.1. |
+| [style/pulumi.md](../style/pulumi.md) | Under "Layering", the StackReference uses and why a secret crosses a passphrase split as a copy instead, and the read that stops the run for the value a program cannot run without, from §3.1. |
 | `README.md` | The `packages/crds/` row names the `versions:` block as what the bindings are rendered from. |
 
 --------------------------------------------------------------------------------

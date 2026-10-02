@@ -71,11 +71,13 @@ prints what it carries, and with the bare marker where it does not
 
 **A field that holds a record is classified by what that record prints**, in
 its repr and in pytest's explanation of a comparison, not by what it holds:
-`slots.Context` carries the forge's admin token through a `Forge` that hides
-it in both, and the last two tests here pin that mechanism.
+`pulumi_config.Stack` carries the stack passphrase through a
+`BackendEnvironment` that hides it in both, and the last two tests here pin
+that mechanism.
 The one exception is a field already out of the repr for another reason —
-`Context`'s two caches — which the census records as secret, since every
-hidden field has to be one it can name.
+`Context`'s three caches, the forge with its admin token among them — which
+the census records as secret, since every hidden field has to be one it can
+name.
 """
 
 from __future__ import annotations
@@ -232,12 +234,13 @@ CENSUS: dict[type, Census] = {
     # `physical`'s are found, functions, which hold no value to print.
     pulumi_config.BackendEnvironment: Census('passphrase url operator physical', secret='passphrase'),
     pulumi_config.Stack: Census('name directory environment run'),
-    # The two caches hold an opened escrow and the backend environment, each a
-    # record with a secret of its own, and are out of the repr and out of
-    # comparison for that reason as well as for being caches.
+    # The three caches hold the forge, an opened escrow and the backend
+    # environment, each a record with a secret of its own, and are out of the
+    # repr and out of comparison for that reason as well as for being caches.
+    # `open_forge` is a function, which holds no value to print.
     slots.Context: Census(
-        'forge open_vault open_environment project runner ask _vault _environment',
-        secret='_vault _environment',
+        'open_forge open_vault open_environment project runner ask _forge _vault _environment',
+        secret='_forge _vault _environment',
     ),
     slots.Decided: Census('where constant'),
     slots.Derived: Census('label'),
@@ -607,15 +610,17 @@ def test_a_context_prints_neither_the_token_nor_the_passphrase_it_reaches() -> N
     is what a config push runs as: one carries the forge's admin token, the
     `github` stack's config secret (framework/github.md §1), the other the
     passphrase that opens every stack's committed configuration.
-    Neither hides the containing field — the mechanism is the inner record's
-    own repr — so this is where a regression in either inner record would
-    show first.
+    The context opens the forge only when a row needs it and keeps what it
+    opened, so it is read once here before the context is printed, and the
+    forge is printed on its own as well: the inner record's own repr is the
+    mechanism for it as for the stack's environment, so this is where a
+    regression in either inner record would show first.
     """
     environment = pulumi_config.BackendEnvironment(
         passphrase=SECRET, url='https://backend.example', operator=lambda: SECRET
     )
     context = slots.Context(
-        forge=github_secrets.Forge(token=SECRET),
+        open_forge=lambda: github_secrets.Forge(token=SECRET),
         open_vault=lambda: cast('escrow.Vault', object()),
         open_environment=lambda: environment,
         project=Path('.'),
@@ -624,5 +629,6 @@ def test_a_context_prints_neither_the_token_nor_the_passphrase_it_reaches() -> N
 
     assert context.forge.token == SECRET and stack.environment.passphrase == SECRET, 'the records were not filled'
     assert SECRET not in repr(context)
+    assert SECRET not in repr(context.forge)
     assert SECRET not in repr(stack)
     assert 'https://backend.example' in repr(stack), 'the URL still prints: it says which backend a run opened'

@@ -2,10 +2,10 @@
 
 Both are wiring and nothing else yet: each builds the providers its components
 will be declared through (rfc-007 §3.1). What is held here is where those
-providers' credentials come from -- the kubeconfig across the StackReference to
-`physical`, read so that anything but a kubeconfig stops the run, and the zones
-token out of `apps`'s own configuration -- and that each committed stack file
-turns a missed provider into an error.
+providers' credentials come from -- the kubeconfig and the zones token, both
+out of the stack's own configuration, the kubeconfig read so that anything but
+a kubeconfig stops the run -- and that each committed stack file turns a missed
+provider into an error.
 
 Every run here is under the parent backstop `kluster.main` installs before a
 real run declares anything, so a resource the program leaves unparented fails
@@ -14,18 +14,16 @@ the run here rather than in `pulumi preview`.
 
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any
 
 import pulumi
 import pytest
 import pytest_asyncio
 import yaml
 from mock_monitor import Recorder, declaring, run_under_backstop
-from pulumi.output import UNKNOWN
 from pulumi.runtime.rpc import UNKNOWN as UNKNOWN_SENTINEL
 
 from kluster import conventions, stacks
-from kluster.lib.k8s import UnusableKubeconfig
+from kluster.lib.k8s import KUBECONFIG_KEY, UnusableKubeconfig
 from kluster.stacks import apps
 
 #: A stand-in for the cluster-admin kubeconfig, which says what it is if it ever
@@ -37,15 +35,16 @@ ZONES_TOKEN = 'a-fake-zones-token-that-opens-nothing'
 
 KUBERNETES_PROVIDER = 'pulumi:providers:kubernetes'
 CLOUDFLARE_PROVIDER = 'pulumi:providers:cloudflare'
+STACK_REFERENCE = 'pulumi:pulumi:StackReference'
 
 #: The prefix every provider resource's type carries; what follows it is the
 #: package the provider serves.
 PROVIDER_PREFIX = 'pulumi:providers:'
 
 #: Type prefixes that name no provider package: the engine's own (the stack,
-#: a StackReference, every provider resource), the dynamic resources' (whose
-#: default provider must stay enabled -- rfc-002 §8.1), and this repository's
-#: components, which no provider serves.
+#: every provider resource), the dynamic resources' (whose default provider
+#: must stay enabled -- rfc-002 §8.1), and this repository's components, which
+#: no provider serves.
 NOT_PACKAGES = frozenset({'pulumi', 'pulumi-python', 'kluster'})
 
 #: The checkout this file sits in, where the stack files are committed.
@@ -57,109 +56,119 @@ PROGRAMS: dict[str, Callable[[], Awaitable[None]]] = {
     name: stacks.STACKS[name] for name in (conventions.STACK_NAMES.k8s_base, conventions.STACK_NAMES.apps)
 }
 
-#: What a StackReference to a `physical` that publishes a kubeconfig output
-#: can read back in place of one, and the part of the refusal that names it.
-UNUSABLE: dict[str, tuple[object, str]] = {
-    # A secret the reader cannot decrypt, elided by the engine (rfc-005 §5.1).
-    'elided-secret': ({}, 'cannot open'),
-    # The unknown sentinel a targeted apply exports, as the SDK reads it back.
-    'unknown': (UNKNOWN, 'unknown'),
-    # The sentinel as a string, should it reach the reader undeserialized.
-    'sentinel': (UNKNOWN_SENTINEL, 'unknown'),
-    # The sentinel stored encrypted, which reads back as nothing.
-    'none': (None, 'unknown'),
-    'empty': ('', 'an empty string'),
+#: A configured kubeconfig that is present and no kubeconfig, and the part of
+#: the refusal that names it.
+UNUSABLE: dict[str, tuple[str, str]] = {
+    'empty': ('', 'a blank string'),
+    'blank': (' \n', 'a blank string'),
+    # The unknown sentinel a targeted apply of `physical` exports, as a copy
+    # of that output would carry it: an ordinary string.
+    'sentinel': (UNKNOWN_SENTINEL, 'unknown sentinel'),
 }
 
-
-class Physical(Recorder):
-    """A `physical` stack whose outputs are `published`, as its StackReference reads them."""
-
-    def __init__(self, published: dict[str, Any]) -> None:
-        super().__init__()
-        self.published = published
-
-    def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
-        if args.typ == 'pulumi:pulumi:StackReference':
-            return {'outputs': self.published}
-        return {}
+#: The command a refusal sends the operator to, which fills the key.
+FILLED_BY = f'credentials derived sync --only {KUBECONFIG_KEY}'
 
 
-async def declare(name: str, published: dict[str, Any]) -> Physical:
-    """One program, declared once against a `physical` that published `published`."""
-    pulumi.runtime.set_all_config({f'kluster:{apps.CLOUDFLARE_API_TOKEN}': ZONES_TOKEN})
-    monitor = await run_under_backstop(Physical(published), stack=name)
+async def declare(name: str, *, kubeconfig: str | None = KUBECONFIG) -> Recorder:
+    """One program, declared once, with `kubeconfig` in its configuration, or none at all."""
+    config = {f'kluster:{apps.CLOUDFLARE_API_TOKEN}': ZONES_TOKEN}
+    if kubeconfig is not None:
+        config[f'kluster:{KUBECONFIG_KEY}'] = kubeconfig
+    pulumi.runtime.set_all_config(config, secret_keys=list(config))
+    monitor = await run_under_backstop(Recorder(), stack=name)
     async with declaring():
         await PROGRAMS[name]()
     return monitor
 
 
 @pytest_asyncio.fixture(scope='module')
-async def applied() -> dict[str, Physical]:
-    """Each program, declared against a `physical` that has published its kubeconfig."""
-    published = {conventions.PHYSICAL_OUTPUTS.kubeconfig: KUBECONFIG}
-    return {name: await declare(name, published) for name in PROGRAMS}
+async def applied() -> dict[str, Recorder]:
+    """Each program, declared with a kubeconfig in its configuration."""
+    return {name: await declare(name) for name in PROGRAMS}
 
 
 @pytest.mark.parametrize('name', PROGRAMS)
-def test_each_program_builds_one_kubernetes_provider_from_the_published_kubeconfig(
-    applied: dict[str, Physical], name: str
+def test_each_program_builds_one_kubernetes_provider_from_its_configured_kubeconfig(
+    applied: dict[str, Recorder], name: str
 ) -> None:
-    """One provider, opened with the output `physical` publishes under the census's name.
+    """One provider, opened with the kubeconfig under the key the copy fills, kept secret.
 
     One, because every component of the stack is declared through it and a
     second would be a cluster some of them reach and others do not. The value
-    is compared rather than its presence, so a program reading some other
-    output of `physical` fails here.
+    is compared rather than its presence, so a program reading some other key
+    fails here; and it reaches the provider as a secret, since it is the
+    cluster-admin credential.
     """
     built = applied[name].of_type(KUBERNETES_PROVIDER)
 
     assert len(built) == 1
-    assert built[0].inputs['kubeconfig'] == KUBECONFIG
+    assert built[0].inputs['kubeconfig']['value'] == KUBECONFIG
+    assert ':' not in KUBECONFIG_KEY
+
+
+@pytest.mark.parametrize('name', PROGRAMS)
+def test_no_program_reads_the_kubeconfig_across_a_stack_reference(applied: dict[str, Recorder], name: str) -> None:
+    """Nothing is read from `physical` by StackReference: across its passphrase, a secret reads back elided.
+
+    `physical` is encrypted under a passphrase of its own (rfc-005 §5.1), and a
+    StackReference from a stack that cannot decrypt it hands back `{}` for the
+    kubeconfig; the copy in the stack's own configuration is the only route.
+    """
+    assert STACK_REFERENCE not in applied[name].types
 
 
 @pytest.mark.parametrize('name', PROGRAMS)
 @pytest.mark.asyncio
-async def test_a_physical_stack_with_no_kubeconfig_stops_the_run(name: str) -> None:
-    """Read with `require_output`, so a missing kubeconfig is an error rather than an unknown.
+async def test_a_stack_with_no_kubeconfig_configured_stops_the_run_naming_the_copy(name: str) -> None:
+    """Absent, it is refused at the read, sending the operator to the command that fills it.
 
-    An unknown kubeconfig would make the provider treat the cluster as
-    unreachable: plain resources would preview green by echoing their inputs,
-    and every chart would refuse with a message that names no output
-    (rfc-007 §3.1). The error names the output instead.
+    Not `require_secret`'s refusal, which tells the operator to `pulumi config
+    set` a value by hand: the copy is a command, and the refusal names it.
     """
-    with pytest.raises(KeyError, match=conventions.PHYSICAL_OUTPUTS.kubeconfig):
-        _ = await declare(name, {})
+    with pytest.raises(UnusableKubeconfig, match=FILLED_BY):
+        _ = await declare(name, kubeconfig=None)
 
 
 @pytest.mark.parametrize('found', UNUSABLE)
 @pytest.mark.parametrize('name', PROGRAMS)
 @pytest.mark.asyncio
-async def test_a_kubeconfig_output_that_is_not_one_stops_the_run(name: str, found: str) -> None:
-    """Anything but a non-empty string is refused by name, and no provider is opened with it.
+async def test_a_configured_kubeconfig_that_is_not_one_stops_the_run(name: str, found: str) -> None:
+    """Anything but a non-blank string that is not the sentinel is refused by name, and opens no provider.
 
     The provider reads a kubeconfig it cannot load as an unreachable cluster,
-    and one handed nothing falls back to `$KUBECONFIG`; either way the run
-    would go on against something other than this installation's cluster.
-    The refusal says what it found and never quotes it.
-
-    The read is answered here rather than by the mock monitor, which drops an
-    output that is `None` or unknown on its way to the reader and so can only
-    present the absence `require_output` already refuses.
+    so the run would go on against something other than this installation's
+    cluster. The refusal says what it found, and names the copy that replaces
+    it. Only the sentinel sends the operator to apply `physical` first: it is
+    what a targeted apply leaves, while a blank copy is replaced by the copy
+    alone.
     """
     value, named = UNUSABLE[found]
 
-    def read_back(_reference: pulumi.StackReference, output: pulumi.Input[str]) -> pulumi.Output[Any]:
-        assert output == conventions.PHYSICAL_OUTPUTS.kubeconfig
-        return pulumi.Output.from_input(value)
+    with pytest.raises(UnusableKubeconfig, match=named) as refused:
+        _ = await declare(name, kubeconfig=value)
 
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(pulumi.StackReference, 'require_output', read_back)
-        with pytest.raises(UnusableKubeconfig, match=named):
-            _ = await declare(name, {conventions.PHYSICAL_OUTPUTS.kubeconfig: KUBECONFIG})
+    assert FILLED_BY in str(refused.value)
+    assert ('apply physical in full' in str(refused.value).lower()) == (found == 'sentinel')
 
 
-def test_apps_builds_its_cloudflare_provider_from_its_own_configuration(applied: dict[str, Physical]) -> None:
+def test_the_kubeconfig_is_copied_under_the_key_both_programs_read() -> None:
+    """The slot map's targets for the kubeconfig are both stacks, under the programs' key.
+
+    `sync` writes the key the map names, so a key renamed in the programs alone
+    leaves the copy filling a slot nothing reads while both stacks refuse for a
+    value that is there under its old name; and a stack dropped from the map is
+    one the copy never reaches.
+    """
+    from kluster.scripts.credentials import slots
+
+    copied = {(target.stack, target.key) for target in slots.ROWS['kubeconfig'].config_sinks}
+
+    assert copied == {(name, KUBECONFIG_KEY) for name in PROGRAMS}
+    assert slots.KUBECONFIG_KEY == KUBECONFIG_KEY
+
+
+def test_apps_builds_its_cloudflare_provider_from_its_own_configuration(applied: dict[str, Recorder]) -> None:
     """The zones token is read at the line that builds the provider it opens.
 
     One provider for every zone, opened with the value under this project's
@@ -192,7 +201,7 @@ def test_the_zones_token_is_delivered_under_the_key_apps_reads() -> None:
 
 @pytest.mark.parametrize('name', PROGRAMS)
 def test_each_stack_file_disables_the_defaults_of_every_package_its_program_uses(
-    applied: dict[str, Physical], name: str
+    applied: dict[str, Recorder], name: str
 ) -> None:
     """The committed configuration turns a missed provider into an error.
 

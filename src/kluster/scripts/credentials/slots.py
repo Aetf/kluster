@@ -15,8 +15,9 @@ name an Environment.
 
 **Every value comes from one of five places**, which is the row's source class.
 Four of them hold a value that can be obtained again, and `derived sync` copies
-those into their GitHub slots; the remaining one is born into its slot and is no
-business of that command:
+those into their slots -- the GitHub secrets, and the Pulumi config secrets of
+every such row whose value nobody types in; the remaining one is born into its
+slot and is no business of that command:
 
 -   **derived** -- obtainable again from the kit alone, with no provider
     involved. Most such rows are an escrow label (§2.2): the value is
@@ -39,7 +40,11 @@ business of that command:
     exists because a stack ran. What separates this from *minted* is whether
     anything has to read the value again: a credential whose every slot the
     creating run fills is minted, and one that a second consumer needs a copy
-    of is read back out of state.
+    of is read back out of state. The second consumer is a workflow, which
+    takes the copy as a GitHub secret, or another stack that cannot read the
+    first one's secrets -- the kubeconfig, which `k8s-base` and `apps` take as
+    a config secret of their own because `physical` is encrypted under a
+    passphrase they do not hold.
 -   **manual** -- a value this system does not produce. Some are pasted from a
     console (the Home Assistant webhook, whose slot is its only storage), some
     are made by hand and delivered by a command of their own (`devices.py`) --
@@ -61,7 +66,8 @@ reason is filed **under the channel it is about**, in the same vocabulary §3's
 Slot column is written in, so a cell that marks one channel `pending` is held
 against the reason for *that* channel rather than against any reason the row
 happens to carry. `derived ls` prints each reason; `derived sync` passes over a
-row with no GitHub slot, naming what it waits on unless the row is minted -- a
+row with no slot it fills -- no GitHub secret, and no config secret
+`Row.config_sinks` names -- naming what it waits on unless the row is minted -- a
 minted row is outside `sync`'s scope and is passed over silently -- and
 `derived sync --only <row>` refuses either by name.
 
@@ -141,8 +147,18 @@ BACKEND_KEY = 'PULUMI_BACKEND_KEY'
 
 PHYSICAL_STACK = derived.PHYSICAL_STACK
 DNS_STACK = derived.ZONES_STACK
+K8S_BASE_STACK = conventions.STACK_NAMES.k8s_base
 APPS_STACK = conventions.STACK_NAMES.apps
 STATE_BACKEND_STACK = derived.STATE_BACKEND_STACK
+
+#: Where the `k8s-base` and `apps` programs read the cluster-admin kubeconfig,
+#: and therefore the key `sync` copies it under. Bare, in this project's
+#: namespace, for the reason the zones token's key is (`derived.API_TOKEN_KEY`).
+#: Stated here rather than imported from `kluster.lib.k8s`, which would drag the
+#: Kubernetes SDK into `credentials --help`; a test holds the two equal, so a
+#: key renamed in the programs alone fails there rather than leaving the copy in
+#: a slot nothing reads.
+KUBECONFIG_KEY = 'kubeconfig'
 
 #: The secret the ops repository's weekly drift trigger reads the trigger App's
 #: private key from (ci.md §3) -- a workflow designed and not built
@@ -304,8 +320,8 @@ class DeviceSecret:
         return f'device secret: {self.what}'
 
 
-#: Everything a row may be delivered into. `Slot` is the GitHub one, and the
-#: only kind this module can fill.
+#: Everything a row may be delivered into. `Slot` is the GitHub one; `sync`
+#: fills it, and the `PulumiConfig` targets that `Row.config_sinks` names.
 Channel = (
     Slot | PulumiConfig | PulumiState | EscrowCopy | SealedSecret | OnBox | SecretStore | WorkstationSlot | DeviceSecret
 )
@@ -385,10 +401,13 @@ class Context:
     """What a push may reach for, each part opened only when a row needs it.
 
     Everything here is lazy on purpose: pushing the one manual row asks for no
-    kit, and pushing an escrowed row opens no state backend.
+    kit, pushing an escrowed row opens no state backend, and copying a row whose
+    every slot is a Pulumi config secret reads no admin token.
     """
 
-    forge: Forge
+    #: The forge's secret store, as the GitHub admin token, for a row with a
+    #: GitHub slot. Called at most once.
+    open_forge: Callable[[], Forge]
     #: The kit's escrow, for a derived row. Called at most once.
     open_vault: Callable[[], escrow.Vault]
     #: The backend URL and the stack passphrase, for a state read.
@@ -400,8 +419,15 @@ class Context:
     runner: Runner = pulumi_config.run_pulumi
     #: How a manual row asks. `getpass`, so a typed value never echoes.
     ask: Callable[[str], str] = getpass.getpass
+    _forge: Forge | None = field(default=None, init=False, repr=False, compare=False)
     _vault: escrow.Vault | None = field(default=None, init=False, repr=False, compare=False)
     _environment: pulumi_config.BackendEnvironment | None = field(default=None, init=False, repr=False, compare=False)
+
+    @property
+    def forge(self) -> Forge:
+        if self._forge is None:
+            self._forge = self.open_forge()
+        return self._forge
 
     @property
     def vault(self) -> escrow.Vault:
@@ -772,20 +798,38 @@ class Row:
 
     @property
     def sinks(self) -> tuple[Slot, ...]:
-        """The targets this module can fill: the GitHub secrets, and only those."""
+        """The GitHub secrets among the targets, which `sync` fills for every row it walks."""
         return tuple(target for target in self.targets if isinstance(target, Slot))
 
-    def resolve(self, context: Context) -> dict[Slot, str]:
-        """What the push writes into each of this row's sinks.
+    @property
+    def config_sinks(self) -> tuple[PulumiConfig, ...]:
+        """The Pulumi config secrets among the targets that `sync` fills, which is not all of them.
+
+        A typed-in row's config secrets are filled by the command that takes
+        the value -- `credentials derived <row> record` (`devices.py`), or the
+        paste the row's console steps describe -- and a minted row's by its
+        mint, which `sync` passes over whole. Every other source is one this
+        module obtains on its own, so its config slots are a copy `sync` makes
+        like any GitHub one.
+        """
+        if isinstance(self.source, Manual | Minted):
+            return ()
+        return tuple(target for target in self.targets if isinstance(target, PulumiConfig))
+
+    def resolve(self, context: Context) -> dict[Slot | PulumiConfig, str]:
+        """What the push writes into each slot `sync` fills for this row.
 
         Almost every row is one credential fanned out into every slot that needs
         a copy of it, so one resolution answers for all of them. The client
         bundle is the exception, and resolving it once is what keeps its parts a
         set: a certificate and the key that opens it come from a single
-        issuance, so asking twice would deliver halves of two bundles.
+        issuance, so asking twice would deliver halves of two bundles. A part
+        is named by the GitHub secret's name, or by the config key.
         """
-        parts = self.source.parts(context, tuple(slot.name for slot in self.sinks))
-        missing = sorted({slot.name for slot in self.sinks} - parts.keys())
+        named: dict[Slot | PulumiConfig, str] = {slot: slot.name for slot in self.sinks}
+        named |= {target: target.key for target in self.config_sinks}
+        parts = self.source.parts(context, tuple(named.values()))
+        missing = sorted(set(named.values()) - parts.keys())
         if missing:
             # A sink added without the part that fills it, which is the one way
             # a bundle row can be wrong that the register interlock cannot see:
@@ -794,7 +838,7 @@ class Row:
                 f'{self.register}: nothing here produces {", ".join(missing)}, so that slot has no value to '
                 f'be pushed; this row delivers {", ".join(sorted(parts))}'
             )
-        return {slot: parts[slot.name] for slot in self.sinks}
+        return {target: parts[part] for target, part in named.items()}
 
 
 def _github(name: str, environments: tuple[str, ...]) -> tuple[Slot, ...]:
@@ -1175,10 +1219,17 @@ ROWS: dict[str, Row] = {
     'kubeconfig': Row(
         register='kubeconfig',
         source=StateRead(PHYSICAL_STACK, conventions.PHYSICAL_OUTPUTS.kubeconfig),
-        # Nothing pending: the `k8s-base` and `apps` programs take it from the
-        # `physical` stack through a StackReference, so the register names no
-        # secret for this row to be waiting on.
-        targets=(PulumiState(PHYSICAL_STACK, 'the cluster-admin credential'),),
+        # Copied into the configuration of both stacks that open a Kubernetes
+        # provider, under the stack passphrase, because neither can read it
+        # where it is generated: `physical`'s state is under a passphrase of
+        # its own, and a StackReference elides the secrets the reader cannot
+        # decrypt (rfc-005 §5.1). `sync --only kubeconfig` is the copy, and
+        # re-running it after `physical` changes the output is the refresh.
+        targets=(
+            PulumiState(PHYSICAL_STACK, 'the cluster-admin credential'),
+            PulumiConfig(K8S_BASE_STACK, KUBECONFIG_KEY),
+            PulumiConfig(APPS_STACK, KUBECONFIG_KEY),
+        ),
     ),
     'gateway-libvirt-identities': Row(
         register='UDM SSH key, libvirt SSH identity',
@@ -1309,14 +1360,55 @@ def _verify(forge: Forge, slot: Slot, before: str | None) -> None:
         log.info('%s: updated %s', slot, after)
 
 
+def _existing(context: Context, row: Row) -> list[pulumi_config.Stack]:
+    """The stacks `row`'s config slots are in, each refused by name unless the state backend holds it.
+
+    A copy fills a stack that is already there. Creating one is that stack's
+    own bring-up -- `pulumi stack init` from the checkout, and a stack file
+    committed with its `encryptionsalt` and its disabled default providers
+    (rfc-007 §3.2) -- which a stack created as a side effect of a copy would
+    not have had.
+    """
+    stacks = [context.stack(target.stack) for target in row.config_sinks]
+    for stack in stacks:
+        if not stack.exists():
+            raise SlotRefused(
+                f'the `{stack.name}` stack does not exist in the state backend, so it has no configuration to '
+                f'copy {row.register} into; `pulumi stack init {stack.name} --no-select` creates it, which is '
+                'its own bring-up rather than a side effect of a copy'
+            )
+    return stacks
+
+
+def _fill_config(name: str, stack: pulumi_config.Stack, key: str, value: str) -> bool:
+    """Write `value` under `key` in `stack`'s configuration unless it is there already. Returns whether it wrote.
+
+    Compared first because every `pulumi config set --secret` draws a fresh
+    nonce: an unchanged value written again is new ciphertext, a diff in a
+    committed file that changes nothing, which a whole-map run would leave in
+    every stack it copies into. The value goes in stripped. The channel keeps
+    nothing around it -- `pulumi config set` drops a trailing newline from
+    standard input and the read-back strips -- so a value that ended in one
+    would never read back as written; every value copied this way is a
+    document indifferent to the whitespace around it.
+    """
+    value = value.strip()
+    if stack.holds(key, value):
+        log.info('%s: the %s stack already holds it under %s; left alone', name, stack.name, key)
+        return False
+    stack.set_secret(key, value)
+    return True
+
+
 def sync(context: Context, *, rows: Mapping[str, Row] | None = None, only: str | None = None) -> list[str]:
-    """Copy into their GitHub slots the rows whose value lives elsewhere. Returns what was pushed.
+    """Copy into their slots the rows whose value lives elsewhere. Returns what was pushed.
 
     Resolve, push, verify -- per row, every run -- so a first fill and a refill
-    after a channel is lost are the same command. A row with no GitHub slot is
-    skipped with its reason; asking for one by name is an error instead, because
-    a request for a specific row that quietly does nothing is worse than a
-    refusal.
+    after a channel is lost are the same command. The slots are the GitHub
+    secrets, and the Pulumi config secrets of a row whose value nobody types in
+    (`Row.config_sinks`). A row with neither is skipped with its reason; asking
+    for one by name is an error instead, because a request for a specific row
+    that quietly does nothing is worse than a refusal.
 
     **What this is for is a copy, not a delivery.** The source classes are set
     out in the module docstring; what decides whether a row belongs to this
@@ -1365,7 +1457,7 @@ def sync(context: Context, *, rows: Mapping[str, Row] | None = None, only: str |
                     'and obtaining the value again would mint a different credential'
                 )
             continue
-        if not row.sinks:
+        if not row.sinks and not row.config_sinks:
             reason = _waiting_on(row)
             if only is not None:
                 raise SlotRefused(f'{name}: no GitHub secret slot; still waiting on - {reason}')
@@ -1374,9 +1466,12 @@ def sync(context: Context, *, rows: Mapping[str, Row] | None = None, only: str |
 
         # One listing per collection, read before the value is obtained: it is
         # what decides whether a manual row has to ask, and what the freshness
-        # check afterwards is compared against.
-        log.info('%s: reading what the forge already holds', name)
-        before = {slot: context.forge.listing(slot).get(slot.name) for slot in row.sinks}
+        # check afterwards is compared against. A row with no GitHub slot reads
+        # none, so the forge is never opened for it.
+        before: dict[Slot, str | None] = {}
+        if row.sinks:
+            log.info('%s: reading what the forge already holds', name)
+            before = {slot: context.forge.listing(slot).get(slot.name) for slot in row.sinks}
         # Naming a row is what turns a typed-in one from "leave what is there"
         # into "replace it": a full run must not stop to re-type a value that is
         # already in place, and a rotation must not be silently skipped.
@@ -1386,6 +1481,9 @@ def sync(context: Context, *, rows: Mapping[str, Row] | None = None, only: str |
 
         log.info('%s: %s', name, row.source.describe())
         try:
+            # The stacks first: a copy with nowhere to go is refused before the
+            # value is read out of anything.
+            stacks = _existing(context, row)
             values = row.resolve(context)
         except SlotRefused as exc:
             if only is not None:
@@ -1398,6 +1496,10 @@ def sync(context: Context, *, rows: Mapping[str, Row] | None = None, only: str |
             context.forge.put(slot, values[slot])
             _verify(context.forge, slot, before[slot])
             pushed.append(str(slot))
+        for stack, target in zip(stacks, row.config_sinks, strict=True):
+            if _fill_config(name, stack, target.key, values[target]):
+                pushed.append(str(target))
+                log.info('%s: commit Pulumi.%s.yaml to publish the slot', name, stack.name)
 
     # Deliberately after the walk rather than inside it: what is delivered is
     # delivered either way, and the exit status still says the map is not full.
@@ -1413,6 +1515,7 @@ __all__ = (
     'BACKEND_URL',
     'DISPATCH_APP_KEY',
     'HA_WEBHOOK_URL',
+    'KUBECONFIG_KEY',
     'PASSPHRASE_SECRET',
     'PHYSICAL_ENVIRONMENTS',
     'REGISTER_COLUMNS',

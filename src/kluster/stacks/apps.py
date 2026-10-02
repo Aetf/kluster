@@ -10,13 +10,14 @@ routes imply are applied by `dns`, from the same plain-data declaration (dns.md
 §3).
 
 What the program builds today is the two providers every application will be
-declared through, and nothing else. The Kubernetes provider is opened with the
-kubeconfig the `physical` stack publishes, read across a StackReference so that
-anything but a kubeconfig stops the run (rfc-007 §3.1,
-`kluster.lib.k8s.kubeconfig_from`); kluster-ops#487 moves it into this stack's
-own configuration once `physical` is under a passphrase of its own (rfc-005
-§5.1). The Cloudflare provider is opened with the zones token in this stack's
-own configuration, the credential the `dns` stack opens its provider with too
+declared through, and nothing else, each opened with a credential in this
+stack's own configuration. The Kubernetes provider is opened with the
+cluster-admin kubeconfig, which `credentials derived sync --only kubeconfig`
+copies there out of the `physical` stack's state, a StackReference being unable
+to carry a secret across `physical`'s own passphrase (rfc-005 §5.1); it is read
+so that anything but a kubeconfig stops the run (rfc-007 §3.1,
+`kluster.lib.k8s.kubeconfig_from`). The Cloudflare provider is opened with the
+zones token, the credential the `dns` stack opens its provider with too
 (credentials.md §3).
 """
 
@@ -27,7 +28,7 @@ import pulumi_cloudflare as cloudflare
 import pulumi_kubernetes as k8s
 
 from kluster import conventions
-from kluster.lib.k8s import kubeconfig_from
+from kluster.lib.k8s import KUBECONFIG_KEY, kubeconfig_from
 
 #: Where the zones token is read: at the line that builds the provider it
 #: configures, and nowhere else (rfc-002 §8.1). The same key as the `dns`
@@ -39,13 +40,13 @@ CLOUDFLARE_API_TOKEN = 'cloudflareApiToken'
 
 async def main() -> None:
     config = pulumi.Config()
-    physical = pulumi.StackReference(
-        f'{pulumi.get_organization()}/{pulumi.get_project()}/{conventions.STACK_NAMES.physical}'
-    )
 
     # Read so that anything but a kubeconfig stops the run, for the reason
     # `k8s_base` gives.
-    _ = k8s.Provider(f'{conventions.CLUSTER_NAME}-kubernetes', kubeconfig=kubeconfig_from(physical))
+    _ = k8s.Provider(
+        f'{conventions.CLUSTER_NAME}-kubernetes',
+        kubeconfig=kubeconfig_from(config.get_secret(KUBECONFIG_KEY)),
+    )
 
     # One provider for every zone, as in `dns`: the token is scoped to the
     # installation's zones as a set, so it belongs to the program rather than

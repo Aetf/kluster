@@ -1183,17 +1183,17 @@ join like any other.
 
 **`k8s-base` and `apps` preview red until they hold a kubeconfig they
 can open.** Both stacks exist, with their stack files committed, and
-each program opens its Kubernetes provider with the kubeconfig it reads
-from `physical` through a StackReference, with `require_output`
-(rfc-007 §3.1). That is how the kubeconfig reaches them until
-`kluster-ops#487` puts `physical` under a passphrase of its own and
-delivers the kubeconfig through each stack's own configuration instead,
-as the threat model rfc-005 rules. `physical` has never been updated, so it publishes no
-outputs, and the read fails the run naming the output it lacks — the
-program's traceback ends in
+each program opens its Kubernetes provider with the kubeconfig in its
+own configuration (rfc-007 §3.1). The value is generated in `physical`'s
+state, which is under a passphrase of its own, and a StackReference
+elides a secret across that split, so `credentials derived sync --only
+kubeconfig` copies it into both stacks' configuration from a
+workstation (credentials.md §3). `physical` has never been updated, so
+there is nothing to copy, and the read fails the run naming the key it
+lacks and the command that fills it — the program's traceback ends in
 
 ```
-KeyError: 'kubeconfig'
+kluster.lib.k8s.UnusableKubeconfig: this stack's configuration holds no 'kubeconfig', so no Kubernetes provider is opened; `credentials derived sync --only kubeconfig` copies it in from the physical stack's state once physical has been applied
 ```
 
 Every pull request that touches code runs both entries. `prove` is
@@ -1206,18 +1206,15 @@ It runs no `prove` either: none of those paths is on noop-automerge's
 allow-list, and `sdks/` is on it only beside renovate's bump of
 `Pulumi.yaml`, so such a pull request is merged by hand (§3). A candidate the list does
 admit runs `prove` against stacks whose previews fail, and is merged
-by hand as well. The `KeyError` also hides the zones token's absence: the
-failed provider registration is raised ahead of the program's own
-`Missing required configuration variable`, so whether `apps` holds the
-token is checked on the workstation, with
+by hand as well. The refusal also hides the zones token's absence: `apps`
+reads the kubeconfig first, so the run stops there ahead of the
+program's own `Missing required configuration variable` for the token,
+and whether `apps` holds the token is checked on the workstation, with
 `pulumi config get cloudflareApiToken --stack apps`, rather than read
 off this preview. **Retires when these stacks hold a kubeconfig they
-can open.** The threat model, rfc-005, moves `physical` under a
-passphrase of its own, and a StackReference across that split elides a secret, so the
-kubeconfig reaches `k8s-base` and `apps` through their own
-configuration instead (rfc-007 §3.1, to be amended); from then on the
-preview reaches the cluster through the balancer's 6443 (§2), as
-rfc-007 §3.3 lists.
+can open**: after `physical`'s first `up`, the copy and the commit of
+both stack files (operations.md §2.5); from then on the preview reaches
+the cluster through the balancer's 6443 (§2), as rfc-007 §3.3 lists.
 
 **Neither of those is a secret-availability problem, and the tell is
 which step fails, and then what the message names.** All five
@@ -1235,15 +1232,15 @@ error: getting stack configuration: get stack secrets manager: incorrect passphr
 ```
 
 A job that reached a `pulumi` command therefore had a complete bundle,
-and a job that got as far as the `KeyError` had the passphrase too. Whether `pulumi` was
+and a job that got as far as the `UnusableKubeconfig` had the passphrase too. Whether `pulumi` was
 pointed at the appliance turns on `mise.toml` resolving the slot under
 `config_root`, which no line of the log settles either way. What
 `pulumi` does with no URL at all is left out here on purpose — it
 depends on the version and on whether the session is judged
-interactive, and nothing below rests on it. The `KeyError` above is
-the one red in this phase that does settle it: the run that raises it
-has loaded its own stack and read `physical`'s outputs, both out of
-the appliance, so the box answered.
+interactive, and nothing below rests on it. The `UnusableKubeconfig`
+above is the one red in this phase that does settle it: the run that
+raises it has loaded its own stack out of the appliance, so the box
+answered.
 
 **The message is the test.** `no stack named` is never expected:
 every stack the matrices name exists in the backend, `dns` holding the

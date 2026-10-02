@@ -987,7 +987,15 @@ def _sync_reading_the_forge_token(
         seen.append(stack.env[cli.pulumi_config.PASSPHRASE_ENV])
         return 'a-token'
 
+    def sync(context: cli.slots.Context, **_: object) -> list[str]:
+        # The context opens the forge when a row with a GitHub slot reaches for
+        # it, and a whole-map run has such rows: reaching for it here is what
+        # makes the token's read happen inside the stubbed walk.
+        assert context.forge.token == 'a-token'
+        return []
+
     monkeypatch.setattr(cli.devices, 'borrow', borrow)
+    monkeypatch.setattr(cli.slots, 'sync', sync)
     code = cli.main(['derived', 'sync', '--bundle-dir', str(tmp_path / 'bundle')])
     assert dispatch.reached, 'the dispatch recorded nothing, so the stubs it installs were never in place'
     return code, seen
@@ -1017,3 +1025,18 @@ def test_sync_on_a_machine_the_chain_does_not_answer_on_is_refused_naming_recove
     assert code != 0
     assert seen == []
     assert f'credentials derived {stack_environment.OPERATOR_PASSPHRASE_ROW} recover' in caplog.text
+
+
+def test_sync_reads_no_admin_token_for_a_row_that_never_reaches_the_forge(dispatch: Dispatch, tmp_path: Path) -> None:
+    """The admin token is opened by the row that pushes a GitHub secret, not up front.
+
+    `--only kubeconfig` copies into two stacks' configuration and pushes no
+    GitHub secret, so the `github` stack -- and the operator passphrase it is
+    under -- is not read for it. The walk is stubbed here and reaches for
+    nothing, so a token read up front is the only way one happens.
+    """
+    code = cli.main(['derived', 'sync', '--only', 'kubeconfig', '--bundle-dir', str(tmp_path / 'bundle')])
+
+    assert code == 0
+    assert 'slots.sync' in dispatch.reached
+    assert 'devices.borrow' not in dispatch.reached

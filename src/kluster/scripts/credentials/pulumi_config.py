@@ -287,6 +287,33 @@ class Stack:
     def get(self, key: str) -> str:
         return self._pulumi('config', 'get', key, '--stack', self.name).strip()
 
+    def holds(self, key: str, value: str) -> bool:
+        """Whether `key` already holds `value`, stored as a secret.
+
+        Both halves, because the decrypted value alone cannot tell a secret
+        from the same text written in the clear, and a plain copy of a
+        credential in a committed file is one to replace rather than to leave
+        alone. `config get --json` answers with the value and whether it is
+        stored encrypted, and without the newline the plain form prints.
+
+        A key this cannot read -- absent, or refused for any other reason --
+        counts as not held, so the caller goes on to write it, and that write
+        either fills the slot or refuses with its own reason. Nothing is
+        logged: what is compared is a secret.
+        """
+        try:
+            printed = self._pulumi('config', 'get', key, '--json', '--stack', self.name)
+        except SlotRefused:
+            return False
+        try:
+            entry: object = json.loads(printed)
+        except ValueError:
+            return False
+        if not isinstance(entry, dict):
+            return False
+        held = cast('dict[str, object]', entry)
+        return held.get('secret') is True and held.get('value') == value
+
     def outputs(self) -> dict[str, Any]:
         """Every output of the stack's current state, secrets included.
 

@@ -191,7 +191,11 @@ _ORDER = """when to run what:
          stage 2's passphrase. It pushes the stack passphrase into every
          Environment a pull request can reach, the physical passphrase into
          physical-plan and physical alone, and the operator passphrase into
-         none.
+         none. It also copies physical's kubeconfig into the k8s-base and
+         apps stacks' config, once physical has been applied; `--only
+         kubeconfig` is that copy alone, which reads no admin token, and is
+         run again whenever physical's kubeconfig changes. Commit both
+         stack files when it writes them.
 
   on a workstation that develops without the kit
     Copy the .credentials directory from a machine that has one: the
@@ -755,15 +759,18 @@ def build_parser() -> argparse.ArgumentParser:
     checking.set_defaults(action='check')
     syncing = rows.add_parser(
         'sync',
-        help='copy into their GitHub slots the rows whose value lives elsewhere',
+        help='copy the rows whose value lives elsewhere into their GitHub secrets and stack configs',
         description=(
             'Fill the GitHub secrets of the rows whose value can be obtained here again and copied in: an '
             'escrowed secret, recovered with the kit; the `ci` client bundle, issued afresh under the '
             'escrowed CA on every run, so the one CI held is replaced and keeps working until it expires; a '
             'value generated inside a stack and read back out of its state; a constant this repository '
             'records, for a workflow input that can only be a secret; and a value that is typed in because '
-            'this slot is the only place it is stored. Resolve, push, verify, per row, so a first fill and a '
-            'refill after a channel is lost are one command. '
+            'this slot is the only place it is stored. A row read out of a stack whose secrets another stack '
+            "cannot open is copied into that other stack's committed configuration as well -- the kubeconfig, "
+            "from physical's state into k8s-base's and apps's -- and a stack already holding the value is left "
+            'alone, so the file to commit changes only when the value did. Resolve, push, verify, per row, so a '
+            'first fill and a refill after a channel is lost are one command. '
             'A row born into its slot is out of scope: a minted credential is disclosed once, to the call that '
             'creates it, so its own `mint` fills its slot in the same run and asking again would produce a '
             'different credential. Naming one is refused rather than silently doing nothing.'
@@ -1397,13 +1404,14 @@ def _forge(args: argparse.Namespace, store: KdbxStore, registry: escrow.Registry
 def _sync_context(args: argparse.Namespace, store: KdbxStore, registry: escrow.Registry) -> slots.Context:
     """What `derived sync` may reach for, with everything slow left unopened.
 
-    The token is fetched up front because every push needs it; the kit's
-    escrow and a second backend connection are passed as openers, so pushing
-    the one typed-in row asks for neither and a row recovered from escrow
-    never reaches for a backend.
+    Each is an opener rather than a value: the admin token, read out of the
+    `github` stack under the operator passphrase, only for a row with a GitHub
+    slot, so copying the kubeconfig into two stacks' configuration needs
+    neither; the kit's escrow only for a row recovered from it; and the
+    backend only for a row that reads or writes a stack.
     """
     return slots.Context(
-        forge=_forge(args, store, registry),
+        open_forge=lambda: _forge(args, store, registry),
         open_vault=lambda: escrow.Vault.open(store, registry),
         open_environment=lambda: lifecycle.environment(store, args.bundle_dir, registry),
     )

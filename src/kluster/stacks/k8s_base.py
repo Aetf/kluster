@@ -14,20 +14,24 @@ chart, sealing a secret, labeling a Service into a load-balancer pool — is in
 
 What the program builds today is the provider every one of those components
 will be declared through, and nothing else: one Kubernetes provider, opened
-with the kubeconfig the `physical` stack publishes. That is a machine fact, so
-it crosses the stack boundary by StackReference (declarative/README.md §2,
-rfc-007 §3.1), and it is read so that anything but a kubeconfig stops the run
-(`kluster.lib.k8s.kubeconfig_from`). Once `physical` is under a passphrase of
-its own (rfc-005 §5.1), a StackReference can no longer carry that secret, and
-the kubeconfig reaches this stack through its own configuration instead
-(kluster-ops#487).
+with the cluster-admin kubeconfig in this stack's own configuration
+(rfc-007 §3.1). The `physical` stack generates it, and it cannot cross the
+stack boundary by StackReference, the way the machine facts do
+(declarative/README.md §2): `physical` is encrypted under a passphrase of its
+own (rfc-005 §5.1), and a StackReference elides the secrets the reading stack
+cannot decrypt. So `credentials derived sync --only kubeconfig` copies it out
+of `physical`'s state into this stack's configuration, and it is read so that
+anything but a kubeconfig stops the run (`kluster.lib.k8s.kubeconfig_from`).
 
 What gates the implementation is recorded rather than assumed: the chart set is
 pinned on first contact (declarative/README.md, "Deliberately not
-pre-decided"), and the pins are stack configuration so that renovate can bump
-them. The custom resources — the Cilium pools, BGP configuration and Gateways —
-will be written against `packages/crds`, which `uv run update_crds` regenerates
-from the chart set its own register pins.
+pre-decided"), and each chart is a project-level `versions:chart-<name>` pin in
+`Pulumi.yaml`'s `config:` block, which renovate moves (framework/pulumi.md
+§3.2); each component that installs a chart will read its pin through
+`kluster.lib.versions`. The custom
+resources — the Cilium pools, BGP configuration and Gateways — will be written
+against `packages/crds`, which `uv run update_crds` regenerates from the same
+pins.
 """
 
 from __future__ import annotations
@@ -36,17 +40,19 @@ import pulumi
 import pulumi_kubernetes as k8s
 
 from kluster import conventions
-from kluster.lib.k8s import kubeconfig_from
+from kluster.lib.k8s import KUBECONFIG_KEY, kubeconfig_from
 
 
 async def main() -> None:
-    physical = pulumi.StackReference(
-        f'{pulumi.get_organization()}/{pulumi.get_project()}/{conventions.STACK_NAMES.physical}'
-    )
+    config = pulumi.Config()
 
     # Read so that anything but a kubeconfig stops the run, naming what it
-    # found: an absent output, a secret this stack cannot decrypt, the unknown
-    # sentinel a targeted apply exports. The provider would read each as an
-    # unreachable cluster -- plain resources previewing green by echoing their
-    # inputs -- or, handed nothing, fall back to the shell's `$KUBECONFIG`.
-    _ = k8s.Provider(f'{conventions.CLUSTER_NAME}-kubernetes', kubeconfig=kubeconfig_from(physical))
+    # found: no copy in this stack's configuration, or one that is blank or
+    # the unknown sentinel a targeted apply exports. The provider would read
+    # each as an unreachable cluster -- plain resources previewing green by
+    # echoing their inputs -- or, handed nothing, fall back to the shell's
+    # `$KUBECONFIG`.
+    _ = k8s.Provider(
+        f'{conventions.CLUSTER_NAME}-kubernetes',
+        kubeconfig=kubeconfig_from(config.get_secret(KUBECONFIG_KEY)),
+    )
