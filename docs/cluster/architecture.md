@@ -650,7 +650,21 @@ Costs and facts on record:
     repository's secrets, which are handed to workflow jobs alone.
     The self-contained rule is therefore load-bearing security
     rather than a style preference, and it binds every workflow ever
-    added to the ops repo. On this repo the fence is `main`'s own
+    added to the ops repo. The two mechanisms bound what a pushed
+    file can *be*; a **rule** bounds what it can *steer*: *nothing in
+    the ops repo that can write a workflow takes instructions from a
+    file the dispatch App's token can write* (rfc-005 §9.1). Its
+    ground is that token. The App's key is readable by any run of
+    this repo (credentials.md §3), and the ops repo's default branch
+    is unprotected on its plan, so such a file lands wherever a bot
+    reads its configuration, and a bot that writes workflows would
+    carry the token past the fence to the repository's secrets.
+    Renovate is trusted (rfc-005 §4.5), and the rule keeps it off the
+    ops repo only because its configuration would be such a file; the
+    operator removed its installation there on 2026-10-01. So the ops
+    repo's own pins move by hand, while the tool versions it shares
+    with this repo come from the commit of this repo it checks out.
+    On this repo the fence is `main`'s own
     protection, which applies to Apps: a token holder pushes to
     unprotected branches and not to `main`. A push starts the pushed
     head's runs, so what reaches `main` from such a branch with
