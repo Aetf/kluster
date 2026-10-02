@@ -16,9 +16,11 @@ from __future__ import annotations
 
 import base64
 import dataclasses
+import datetime as dt
 import hashlib
 import importlib
 import inspect
+import ipaddress
 import json
 import lzma
 import socket
@@ -35,8 +37,11 @@ import pulumi_b2 as b2
 import pulumi_oci as oci
 import pytest
 import pytest_asyncio
-from cryptography.hazmat.primitives import serialization
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 from mock_monitor import Recorder, declaring, run_under_backstop
 
 from kluster import conventions
@@ -1271,6 +1276,49 @@ def test_the_wait_takes_a_certificate_that_chains_to_the_ca_and_names_the_addres
     authority = pki.Authority.from_pem(pki.generate_ca_key())
 
     with _postgres_tls(authority.issue_server(LOOPBACK), tmp_path) as port:
+        postgres_tls.wait(LOOPBACK, port, authority.certificate().cert_pem.decode(), timeout=30)
+
+
+def _without_authority_key_identifier(authority: pki.Authority, address: str) -> pki.Credential:
+    """A server certificate the CA signed, for `address`, as `pki` issued them before it named the CA's key."""
+    key = ec.generate_private_key(pki.CURVE)
+    now = dt.datetime.now(dt.UTC)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, address)]))
+        .issuer_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, pki.CA_COMMON_NAME)]))
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now)
+        .not_valid_after(now + pki.LEAF_VALIDITY)
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+        .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address(address))]), critical=False)
+        .sign(authority.key, hashes.SHA256())
+    )
+    return pki.Credential(
+        key_pem=key.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+        ),
+        cert_pem=cert.public_bytes(serialization.Encoding.PEM),
+    )
+
+
+def test_the_wait_holds_the_chain_to_strict_checks_on_every_interpreter(tmp_path: Path) -> None:
+    # Python's default context is strict from 3.13 only; the wait sets it
+    # itself, so a chain one interpreter refuses is refused on all of them.
+    # The certificate is otherwise sound -- signed by the CA, for the address
+    # -- so what refuses it is the strict check alone.
+    authority = pki.Authority.from_pem(pki.generate_ca_key())
+    credential = _without_authority_key_identifier(authority, LOOPBACK)
+    x509.load_pem_x509_certificate(credential.cert_pem).verify_directly_issued_by(
+        x509.load_pem_x509_certificate(authority.certificate().cert_pem)
+    )
+
+    with (
+        _postgres_tls(credential, tmp_path) as port,
+        pytest.raises(postgres_tls.WrongCertificate, match='Authority Key Identifier'),
+    ):
         postgres_tls.wait(LOOPBACK, port, authority.certificate().cert_pem.decode(), timeout=30)
 
 

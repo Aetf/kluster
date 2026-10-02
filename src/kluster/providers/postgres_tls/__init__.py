@@ -1,8 +1,9 @@
 """A Postgres server's TLS handshake, waited for as a resource.
 
 `Readiness` is created once the server at `address` completes a TLS
-handshake on `port` with a certificate that chains to `ca_certificate` and
-names `address`. That is the whole of what the resource asserts: a box that
+handshake on `port` with a certificate that chains to `ca_certificate`,
+under OpenSSL's strict checks on every interpreter (`handshake`), and names
+`address`. That is the whole of what the resource asserts: a box that
 sends such a certificate is the box the address is meant to reach, and it
 sends it before anything authenticates, so the wait needs no credential.
 Postgres speaks TLS only after its own request for it, so the handshake opens
@@ -86,8 +87,14 @@ def handshake(address: str, port: int, ca_certificate: str, *, timeout: float = 
 
     `address` is what the certificate must name, as an IP address or a host
     name, which is how the server's clients hold it.
+
+    The chain is held to OpenSSL's strict checks (`VERIFY_X509_STRICT`) by
+    this function rather than by the interpreter's default: Python's default
+    context sets the flag from 3.13 and not before, so leaving it to the
+    default would accept on one interpreter a certificate another refuses.
     """
     context = ssl.create_default_context(cadata=ca_certificate)
+    context.verify_flags |= ssl.VERIFY_X509_STRICT
     try:
         with socket.create_connection((address, port), timeout=timeout) as raw:
             raw.sendall(SSL_REQUEST)
