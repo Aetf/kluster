@@ -22,6 +22,10 @@
     is under a passphrase of its own (rfc-005 §5.1); each program refuses
     an absent or unusable copy at the read, naming that command. Slice
     3's text keeps the StackReference read it built.
+*   **Updated:** 2026-10-02 — §5.2 and §14 slice 8's tests: the served
+    zones are the primary zone and every zone a route row names, the
+    primary served by definition, since slice 9 issues its certificate
+    before slice 12's first row exists.
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
@@ -777,13 +781,16 @@ own issue; the balancer's own fallback is architecture.md §3.2's.
 
 *   **One certificate per served zone, for the apex and the wildcard
     together**, the shape [dns.md](../declarative/dns.md) §4 gives the
-    cluster's issuance. The served zones are derived: every zone a row
-    of the route census names. The derivation is one function in
-    `conventions.routes`, because two programs read it — `k8s-base`,
-    which declares the certificates, and the `credentials` command,
-    which scopes the DNS-01 token to the same zones (§6.2). A row in a
-    new zone is then a new certificate in the same preview that shows
-    the row. **New rule**, landing in dns.md §4 and cluster-infra.md §2.
+    cluster's issuance. The served zones are derived: the primary zone,
+    and every zone a row of the route census names. The primary is
+    served by definition rather than by a row, because the cluster's own
+    endpoints are names under it and so is slice 9's first certificate,
+    which is issued before slice 12 adds the first row. The derivation
+    is one function in `conventions.routes`, because two programs read
+    it — `k8s-base`, which declares the certificates, and the
+    `credentials` command, which scopes the DNS-01 token to the same
+    zones (§6.2). A row in a new zone is then a new certificate in the
+    same preview that shows the row. **New rule**, landing in dns.md §4 and cluster-infra.md §2.
 *   **One `ClusterIssuer`, Let's Encrypt over DNS-01**, whose Cloudflare
     token is a Secret in cert-manager's own namespace, the one a cluster
     issuer's credentials are read from under the chart's defaults
@@ -1648,8 +1655,9 @@ slices 2 and 3.
     the ciphertext as a plain value at its row's path in its row's
     stack, through the `pulumi` runner the package already fakes in its
     tests (write it under another key; write it as a secret); the served
-    zones are exactly the zones the rows name (add a zone no row names);
-    the DNS-01 mint scopes to them (scope to every zone); the register
+    zones are the primary zone and exactly the zones the rows name (add
+    a zone no row names); the DNS-01 mint scopes to them (scope to every
+    zone); the register
     column holds every new slot (the existing seam).
 
 **Slice 9: the issuer, the certificates and the Gateways.** Live.

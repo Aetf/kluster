@@ -136,15 +136,22 @@ class Role:
     permissions: tuple[str, ...]
 
 
-#: The two §3 roles minted from the seed. Both carry `ZONE_PERMISSIONS` and
+#: The three §3 roles minted from the seed. All carry `ZONE_PERMISSIONS` and
 #: differ in name and in the zones they are minted for -- the provider token
-#: manages records in every zone of the installation, and the gateway's answers
-#: DNS-01 challenges in the zones its own vhosts live under.
+#: manages records in every zone of the installation, the gateway's answers
+#: DNS-01 challenges in the zones its own vhosts live under, and
+#: cert-manager's answers them in the zones the cluster serves.
+#:
+#: cert-manager needs no more than edits to `_acme-challenge` records, and
+#: Cloudflare scopes a token to zones rather than to records within one, so
+#: its token carries what the gateway's does, on its own zones: the excess is
+#: every other record in them, which its register row records (rule 4).
 #:
 #: The names are stable, because they are what retirement matches on: one live
 #: token per role is the invariant a re-run restores.
 ZONES = Role(name='kluster-zones', permissions=ZONE_PERMISSIONS)
 GATEWAY_ACME = Role(name='kluster-gateway-acme', permissions=ZONE_PERMISSIONS)
+DNS01 = Role(name='kluster-cert-manager-dns01', permissions=ZONE_PERMISSIONS)
 
 
 @dataclass(frozen=True)

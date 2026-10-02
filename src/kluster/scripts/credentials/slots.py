@@ -49,10 +49,10 @@ slot and is no business of that command:
     console (the Home Assistant webhook, whose slot is its only storage), some
     are made by hand and delivered by a command of their own (`devices.py`) --
     in the console that checks them for the UniFi key, the AdGuard login, the
-    ZeroTier Central token and the GitHub admin token, and drawn by the
-    operator for the gateway's BGP session password, which no console makes --
-    and some are installed by another tracker's automation entirely (the UDM
-    and libvirt SSH identities, §3).
+    ZeroTier Central token, the GitHub admin token and alertmanager's webhook,
+    and drawn by the operator for the gateway's BGP session password, which no
+    console makes -- and some are installed by another tracker's automation
+    entirely (the UDM and libvirt SSH identities, §3).
 -   **decided** -- not a credential at all, but a constant this repository
     holds in `conventions` that a continuous-integration job needs beside one.
     There is one: the overlay network's id, which a workflow can only pass as a
@@ -60,7 +60,7 @@ slot and is no business of that command:
 
 **A target has to be an address, not an intention.** Where §3 names a channel
 that nothing has given a name yet -- an Environment secret no workflow reads, a
-SealedSecret whose manifest does not exist -- the row records that in `pending`
+sealed value no stack declares -- the row records that in `pending`
 rather than inventing a name a future workflow would have to guess right. A
 reason is filed **under the channel it is about**, in the same vocabulary §3's
 Slot column is written in, so a cell that marks one channel `pending` is held
@@ -257,12 +257,29 @@ class EscrowCopy:
 
 @dataclass(frozen=True)
 class SealedSecret:
-    """A `kubeseal`-encrypted manifest committed to this repository."""
+    """A value sealed to the cluster: `kubeseal` ciphertext in the clear in the declaring stack's configuration.
 
-    what: str
+    The in-cluster channel (§1 rule 6, rfc-007 §6.2). The address is the row
+    of `conventions.sealed` the value is, which names the Secret it becomes
+    and the stack that declares it, and from which the configuration path
+    follows, so the command that seals it and the program that reads it name
+    one place. Written by the command that obtains the value, in the same
+    run, or by the row's `seal` from the configuration that already holds a
+    value recorded before there was a cluster (`sealing.py`), and never by
+    `sync`: a seal is fresh ciphertext every time, so it is a delivery and
+    not a copy.
+    """
+
+    #: The sealed value, by its row of the census; named as every other
+    #: channel's description is.
+    what: conventions.sealed.SealedValue
 
     def __str__(self) -> str:
-        return f'SealedSecret: {self.what}'
+        value = self.what
+        return (
+            f'SealedSecret: {value.namespace}/{value.name}, sealed {value.scope.value}, '
+            f'in {value.stack} at {", ".join(value.path(key) for key in value.keys)}'
+        )
 
 
 @dataclass(frozen=True)
@@ -875,14 +892,26 @@ def _device(member: str, *, onward: tuple[Channel, ...] = (), pending: Mapping[s
     the register promises for the row beyond that and nothing addresses yet.
     Most device rows have neither: the stack reads the credential out of its
     own committed configuration and authenticates with it there, so the keys
-    are the whole of the row.
+    are the whole of the row. A row the cluster needs too names its sealed
+    copy from the same table (`Device.sealed`).
     """
     device = devices.DEVICES[member]
+    sealed = () if device.sealed is None else (SealedSecret(device.sealed),)
     return Row(
         register=device.register,
         source=Manual(device.title, device.console, command=f'credentials derived {device.member} record'),
-        targets=(*(PulumiConfig(device.stack, field.key) for field in device.fields), *onward),
+        targets=(*(PulumiConfig(device.stack, field.key) for field in device.fields), *onward, *sealed),
         pending=pending if pending is not None else {},
+    )
+
+
+def _sealed_record(member: str) -> Row:
+    """A §3 row made by hand whose one delivery is a seal (`devices.SEALED_RECORDS`), built from that table."""
+    record = devices.SEALED_RECORDS[member]
+    return Row(
+        register=record.register,
+        source=Manual(record.title, record.console, command=f'credentials derived {record.member} record'),
+        targets=(SealedSecret(record.sealed),),
     )
 
 
@@ -901,15 +930,18 @@ _ETCD_PREFIX_UNBUILT = (
     'that would fill its prefix is not built, so no secret there names it'
 )
 
-#: Why an in-cluster row has no address: sealing needs the controller, and the
-#: controller arrives with `k8s-base`.
-_CLUSTER_UNBUILT = 'the sealed-secrets controller and its consumer arrive with `k8s-base`, so no manifest path exists'
+#: Why the writer keys' sealed copies have no address: nothing reads them until
+#: their consumers arrive, with `backed_pvc` and the first database
+#: (rfc-007 §6.2), so `conventions.sealed` has no row for them.
+_CLUSTER_UNBUILT = (
+    'their consumers arrive with `backed_pvc` and the first database, so no stack declares a sealed value for them yet'
+)
 
 #: Why the restic passwords' sealed copy has no address: the helper that seals
 #: each one beside its volume is not written.
 _BACKED_PVC_UNBUILT = (
     'the `backed_pvc` helper that generates and seals each password is unwritten (declarative/workloads.md §3), '
-    'so no manifest path exists'
+    'so no stack declares a sealed value for it'
 )
 
 #: Sinks this map used to carry, and where the fact each one delivered lives
@@ -966,12 +998,12 @@ ROWS: dict[str, Row] = {
         # for the public records declared beside each application.
         targets=(PulumiConfig(DNS_STACK, derived.API_TOKEN_KEY), PulumiConfig(APPS_STACK, derived.API_TOKEN_KEY)),
     ),
-    'cloudflare-dns01': Row(
+    derived.DNS01_ROW: Row(
         register='Cloudflare token (DNS-01)',
-        source=Minted(
-            'credentials derived cloudflare-dns01 mint', unbuilt='cert-manager has no slot to be sealed into'
-        ),
-        pending={'SealedSecret': _CLUSTER_UNBUILT},
+        # Sealed in the run that mints it, into the stack that declares the
+        # cluster issuer: the one consumer is in the cluster.
+        source=Minted(f'credentials derived {derived.DNS01_ROW} mint'),
+        targets=(SealedSecret(conventions.sealed.DNS01_TOKEN),),
     ),
     derived.GATEWAY_ACME_ROW: Row(
         register='Cloudflare token (gateway ACME)',
@@ -1254,14 +1286,9 @@ ROWS: dict[str, Row] = {
         # The stack reads the password out of its configuration and renders it
         # into the routing daemon's configuration on the device
         # (`components/gateway/routing.py`); the worker's end of the same
-        # session reads it from a SealedSecret that does not exist yet.
+        # session is Cilium's BGPv2 `authSecretRef`, the sealed copy
+        # `Device.sealed` names.
         onward=(DeviceSecret("the routing daemon's configuration"),),
-        pending={
-            'SealedSecret': (
-                "the worker's end of the session is Cilium's BGPv2 `authSecretRef`, and the controller "
-                'that would open the sealed copy arrives with `k8s-base`, so no manifest path exists'
-            )
-        },
     ),
     'alertmanager-read': Row(
         register='Alertmanager read token',
@@ -1297,11 +1324,12 @@ ROWS: dict[str, Row] = {
         # in place untouched -- not re-synced from here -- until that job
         # becomes a caller of the alert producer, and deleted from the
         # repository then.
+        # alertmanager is not a consumer: its body is fixed and this
+        # automation takes the ops repository's payload, so alertmanager posts
+        # to a webhook of its own, the row below (rfc-007 §7.3).
         targets=(Slot(repository=conventions.forge.OPS.full_name, name=HA_WEBHOOK_URL),),
-        # The in-cluster copy is alertmanager's, direct by design and permanent
-        # (cluster/architecture.md §4.3), and it waits on the controller.
-        pending={'SealedSecret': _CLUSTER_UNBUILT},
     ),
+    'alert-webhook': _sealed_record('alert-webhook'),
     derived.DRILL_CREDENTIALS_ROW: Row(
         register='Drill-environment credentials',
         # One row over five secrets, the way each ZeroTier row is one cell

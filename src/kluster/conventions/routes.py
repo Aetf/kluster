@@ -11,6 +11,15 @@ The census is empty while `apps` declares no application. It grows one row per
 application as the migration proceeds, and each row's rewrite appears in a
 `dns` preview the same day the application's route does.
 
+Two things are derived from the census here rather than in either reader,
+because two programs read each. The **served zones** (`served_zones`) are the
+zones the cluster issues a certificate for: `k8s-base` declares one
+certificate per zone, and the `credentials` command scopes the DNS-01 token to
+the same set (rfc-007 §5.2). The **route label** (`ROUTE_LABEL`) is what a
+namespace carries for a route declared in it to attach to a Gateway: the
+Gateways' `allowedRoutes` select on it, and the component declaring a route
+sets it on its namespace.
+
 Read qualified -- `conventions.routes.ROUTES` -- because the names a row is
 built from are common nouns that mean one particular thing only while the
 census stands beside them: `Route`, `Extra`, `SELF`.
@@ -18,13 +27,25 @@ census stands beside them: `Route`, `Extra`, `SELF`.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
+from types import MappingProxyType
 
-from kluster.conventions.dns import PRIMARY_ONLY
+from kluster.conventions.dns import PRIMARY_ONLY, ZONE_PRIMARY
+from kluster.conventions.identity import LABEL_DOMAIN
 
-__all__ = ('ROUTES', 'SELF', 'Exposure', 'Extra', 'Route', 'SelfTarget', 'Srv')
+__all__ = (
+    'ROUTES',
+    'ROUTE_LABEL',
+    'SELF',
+    'Exposure',
+    'Extra',
+    'Route',
+    'SelfTarget',
+    'Srv',
+    'served_zones',
+)
 
 
 class SelfTarget(Enum):
@@ -123,3 +144,35 @@ class Route:
 #: Every application route in the installation. Empty until `apps` declares
 #: one.
 ROUTES: tuple[Route, ...] = ()
+
+
+#: The label a namespace carries for an `HTTPRoute` declared in it to attach
+#: to a Gateway, as the one-entry mapping both sides use: the namespace's
+#: labels, and the `matchLabels` of each Gateway's `allowedRoutes`. A route in
+#: a namespace without it -- one a chart installs, say -- attaches to nothing.
+ROUTE_LABEL: Mapping[str, str] = MappingProxyType({f'{LABEL_DOMAIN}/routes': 'attach'})
+
+
+def served_zones(routes: Sequence[Route] | None = None) -> tuple[str, ...]:
+    """The zones the cluster serves, which is where it issues a certificate: the primary, then every zone a row names.
+
+    **The primary is served by definition**, not by a row: the cluster's own
+    endpoints are names under it, and so is the first certificate the cluster
+    issues, which comes before the first application's row does. Every other
+    zone is served because a row publishes in it, so a row in a new zone is a
+    new certificate in the same preview that shows the row, and a zone no row
+    names costs no certificate at all.
+
+    In that order, each zone once, so a reader that declares one resource per
+    zone declares them in the same order on every run. `routes` is the census
+    unless given, read when this is called rather than when the module was
+    imported.
+    """
+    if routes is None:
+        routes = ROUTES
+    zones = [ZONE_PRIMARY]
+    for route in routes:
+        for zone in route.zones:
+            if zone not in zones:
+                zones.append(zone)
+    return tuple(zones)

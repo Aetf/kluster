@@ -20,8 +20,9 @@ system only delivers it:
     shared secret both ends of the gateway's routing session are configured
     with, either end accepts any string, and the operator draws it. The
     `physical` stack writes it into the routing daemon's configuration on the
-    device (`components/gateway/routing.py`), and the cluster's half is a
-    SealedSecret that arrives with `k8s-base` (declarative/cluster-infra.md §2).
+    device (`components/gateway/routing.py`), and the cluster's half is the
+    same value sealed to the cluster (`sealing.py`), which `k8s-base`
+    declares (declarative/cluster-infra.md §2).
 
 None of them is a seed: a seed is a credential that mints successors
 (`entries.py`), and each of these mints nothing. Losing one costs a console
@@ -49,6 +50,19 @@ argument would put the credential in the process table of a shared machine —
 where `-` reads standard input. A plain field is supplied as the value itself,
 being an address rather than a credential.
 
+**A row whose value the cluster needs too is sealed in the same run**
+(`Device.sealed`): `record` seals it to the cluster's certificate and writes
+the ciphertext where the stack that declares it reads it, once a cluster
+exists to seal to. Before then -- the session password is recorded before
+`physical` first brings the cluster up -- the run says so and delivers the
+configuration alone, and `seal` is the step that writes the sealed copy once
+the cluster's controller runs, reading the value back out of the stack that
+holds it rather than asking for it again.
+
+One row is sealed and nothing else (`SEALED_RECORDS`): alertmanager's webhook,
+whose only consumer is in the cluster, so the seal is the whole of its
+delivery.
+
 **Which stack takes a row is not an argument.** The credential authenticates
 against one thing, and the stack that talks to that thing is the only consumer
 there is: `physical` drives the UDM's Network API and the overlay's Central
@@ -72,7 +86,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ... import conventions
-from . import derived, pulumi_config
+from . import derived, pulumi_config, sealing
 from .kdbx import KdbxError
 
 log = logging.getLogger(__name__)
@@ -127,8 +141,9 @@ class Field:
 
     #: The option stem, and the key this field is addressed by in `given`.
     name: str
-    #: The Pulumi config key it is delivered into. The slot map imports it, so
-    #: the map and the push cannot name different keys.
+    #: The key it is delivered under: for a device row, the Pulumi config key,
+    #: which the slot map imports so the map and the push cannot name
+    #: different keys; for a sealed row, the data key of its sealed value.
     key: str
     #: What to ask for, in the operator's words.
     describes: str
@@ -201,6 +216,10 @@ class Device:
     #: How the credential is created, printed at the moment it is asked for.
     console: str
     fields: tuple[Field, ...]
+    #: The sealed value the cluster's copy becomes, where the cluster needs
+    #: the value too; each field is sealed under the data key of the same
+    #: name as its own `name`.
+    sealed: conventions.sealed.SealedValue | None = None
 
 
 DEVICES: dict[str, Device] = {
@@ -322,13 +341,15 @@ DEVICES: dict[str, Device] = {
                 '  with, and either end accepts any string: draw one -- `openssl rand\n'
                 '  -base64 24` -- and hand it in. The stack writes it into the routing\n'
                 "  daemon's configuration on the device (physical/gateway.md §1.3);\n"
-                "  the worker's half is Cilium's BGPv2 `authSecretRef`, a SealedSecret\n"
-                '  carrying this same value that arrives with `k8s-base`\n'
-                '  (declarative/cluster-infra.md §2). Rotating it is a fresh draw and\n'
-                '  this command again, then both ends re-applied: the session is down\n'
-                '  from the first apply to the second.'
+                "  the worker's half is Cilium's BGPv2 `authSecretRef`, this same\n"
+                '  value sealed to the cluster into `k8s-base` -- by this command once\n'
+                '  the cluster exists, and by `seal` for a value recorded before it\n'
+                '  did (declarative/cluster-infra.md §2). Rotating it is a fresh draw\n'
+                '  and this command again, then both ends re-applied: the session is\n'
+                '  down from the first apply to the second.'
             ),
             fields=(Field('password', 'gatewayBgpPassword', 'the session password'),),
+            sealed=conventions.sealed.BGP_PASSWORD,
         ),
     )
 }
@@ -347,38 +368,160 @@ def announce(device: Device) -> None:
         log.warning('  %s', line)
 
 
+def _collect(
+    title: str, fields: tuple[Field, ...], given: Mapping[str, str | None] | None, prompt: Prompt
+) -> dict[Field, str]:
+    """Every field's value, from `given` or typed in, before anything is pushed.
+
+    So an answer left blank at the second prompt costs a re-run rather than a
+    half-filled slot. `given` is keyed by field name, which is what the command
+    line can build from the same table (`cli`). A key naming no field is
+    refused rather than dropped: dropping it turns a scripted run into an
+    interactive one at the prompt it was meant to answer.
+    """
+    handed = given or {}
+    unknown = sorted(set(handed) - {field.name for field in fields})
+    if unknown:
+        raise KdbxError(f'{title} has no field named {", ".join(unknown)}')
+    return {field: field.resolve(handed.get(field.name), prompt=prompt, title=title) for field in fields}
+
+
 def deliver(
     device: Device,
     *,
     stack: pulumi_config.Stack,
     given: Mapping[str, str | None] | None = None,
     prompt: Prompt = input,
+    sealer: sealing.Sealer | None = None,
 ) -> tuple[str, ...]:
     """Print the console steps, collect the values, push them. Returns the keys written.
 
-    Every value is collected before the first one is pushed, so an answer left
-    blank at the second prompt costs a re-run rather than a half-filled slot.
-
-    `given` is keyed by field name, which is what the command line can build
-    from the same table (`cli`). A key naming no field is refused rather than
-    dropped: dropping it turns a scripted run into an interactive one at the
-    prompt it was meant to answer.
+    For a row the cluster needs too (`Device.sealed`), `sealer` seals the
+    values in the same run: before the configuration is written, so a cluster
+    that refuses the seal leaves both slots as they were, and written after
+    it. `None` is a run with no cluster to seal to yet, which delivers the
+    configuration alone and names `seal` as the step that follows once there
+    is one; a sealed row's `sealer` is the caller's to build, and a caller
+    that cannot reach a cluster that exists refuses rather than passing
+    `None`.
     """
     announce(device)
-    handed = given or {}
-    unknown = sorted(set(handed) - {field.name for field in device.fields})
-    if unknown:
-        raise KdbxError(f'{device.title} has no field named {", ".join(unknown)}')
-    values = {
-        field: field.resolve(handed.get(field.name), prompt=prompt, title=device.title) for field in device.fields
-    }
+    values = _collect(device.title, device.fields, given, prompt)
+    sealed: tuple[sealing.Sealer, conventions.sealed.SealedValue, dict[str, str]] | None = None
+    if device.sealed is not None and sealer is not None:
+        ciphertexts = sealer.seal(device.sealed, {field.name: value for field, value in values.items()})
+        _ = sealer.stack(device.sealed)
+        sealed = (sealer, device.sealed, ciphertexts)
 
     stack.fill(
         secret={field.key: value for field, value in values.items() if field.secret},
         plain={field.key: value for field, value in values.items() if not field.secret},
         holds=device.holds,
     )
+    if sealed is not None:
+        writer, value, ciphertexts = sealed
+        writer.write(value, ciphertexts)
+    elif device.sealed is not None:
+        log.warning(
+            'no cluster to seal %s to yet, so its sealed copy for the %s stack is not written; once the '
+            "cluster's sealed-secrets controller runs, `credentials derived %s seal` writes it",
+            device.title,
+            device.sealed.stack,
+            device.member,
+        )
     return tuple(field.key for field in values)
+
+
+def seal(device: Device, *, stack: pulumi_config.Stack, sealer: sealing.Sealer) -> None:
+    """Seal what `stack` already holds for a row the cluster needs too, and write it where its declaring stack reads it.
+
+    The step after a `record` that ran before there was a cluster: the value
+    is read back out of the configuration that holds it rather than typed in
+    again, so the two ends of the credential are one value. Every run writes
+    fresh ciphertext (`sealing.py`).
+    """
+    if device.sealed is None:
+        raise KdbxError(f'{device.title} has no copy in the cluster, so there is nothing to seal')
+    values: dict[str, str] = {}
+    for field in device.fields:
+        try:
+            value = stack.get(field.key).strip()
+        except pulumi_config.PassphraseMissing:
+            raise
+        except pulumi_config.SlotRefused as exc:
+            raise pulumi_config.SlotRefused(
+                f"{device.title} is not in the {device.stack} stack's configuration: "
+                f'`credentials derived {device.member} record` is what puts it there ({exc})'
+            ) from exc
+        if not value:
+            raise pulumi_config.SlotRefused(
+                f'{device.title} decrypts to an empty value in the {device.stack} stack; '
+                f're-run `credentials derived {device.member} record`'
+            )
+        values[field.name] = value
+    sealer.deliver(device.sealed, values)
+
+
+@dataclass(frozen=True)
+class SealedRecord:
+    """One §3 row made by a person whose only delivery is a value sealed to the cluster.
+
+    No stack's configuration holds it as a secret: its one consumer is in the
+    cluster, so the seal is the whole of the delivery, written where the
+    stack its sealed value names reads it.
+    """
+
+    #: The `credentials derived <member> record` row name, which is also the
+    #: name this row carries in the slot map.
+    member: str
+    #: The §3 "Credential" cell, verbatim.
+    register: str
+    title: str
+    console: str
+    #: Each field is sealed under its `key`, a data key of `sealed`.
+    fields: tuple[Field, ...]
+    sealed: conventions.sealed.SealedValue
+
+
+#: The rows whose delivery is a seal alone, by member.
+SEALED_RECORDS: dict[str, SealedRecord] = {
+    record.member: record
+    for record in (
+        SealedRecord(
+            member='alert-webhook',
+            register='Alertmanager webhook URL',
+            title="alertmanager's Home Assistant webhook URL",
+            console=(
+                'Home Assistant → Settings → Automations → the alertmanager intake\n'
+                '  automation, created by the operator against the contract\n'
+                '  rfc-007 §7.3 gives: it reads the tier, the summary and the playbook\n'
+                "  off each alert's labels and annotations and pushes under the same\n"
+                "  title convention as the ops repository's handler → its webhook\n"
+                '  trigger, which shows the full URL. A second automation rather than\n'
+                "  the ops repository's own, whose body is that repository's payload.\n"
+                '  Nothing mints this and nothing derives it: rotating it is a new\n'
+                '  webhook id there and one more run of this command.'
+            ),
+            fields=(Field('url', 'url', 'the webhook URL'),),
+            sealed=conventions.sealed.ALERT_WEBHOOK,
+        ),
+    )
+}
+
+
+def record_sealed(
+    record: SealedRecord,
+    *,
+    sealer: sealing.Sealer,
+    given: Mapping[str, str | None] | None = None,
+    prompt: Prompt = input,
+) -> None:
+    """Print the console steps, collect the values, seal them into the stack that declares them."""
+    log.warning('%s is neither minted nor derived; it comes from here:', record.title)
+    for line in record.console.splitlines():
+        log.warning('  %s', line)
+    values = _collect(record.title, record.fields, given, prompt)
+    sealer.deliver(record.sealed, {field.key: value for field, value in values.items()})
 
 
 def borrow(device: Device, *, stack: pulumi_config.Stack) -> str:
@@ -424,4 +567,18 @@ def borrow(device: Device, *, stack: pulumi_config.Stack) -> str:
     return value
 
 
-__all__ = ('BGP', 'DEVICES', 'GITHUB_ADMIN', 'STDIN', 'Device', 'Field', 'announce', 'borrow', 'deliver')
+__all__ = (
+    'BGP',
+    'DEVICES',
+    'GITHUB_ADMIN',
+    'SEALED_RECORDS',
+    'STDIN',
+    'Device',
+    'Field',
+    'SealedRecord',
+    'announce',
+    'borrow',
+    'deliver',
+    'record_sealed',
+    'seal',
+)

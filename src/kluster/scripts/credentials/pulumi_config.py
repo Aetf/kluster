@@ -352,6 +352,31 @@ class Stack:
         if self.get(key) != value:
             raise SlotRefused(f'{key} on the {self.name} stack does not read back as what was just written')
 
+    def set_plain_at(self, path: str, value: str) -> None:
+        """Write `value` in the clear at a path inside a structured key, and read it back as written and as plain.
+
+        The channel of a sealed value (`conventions.sealed`): ciphertext that
+        needs no stack encryption, committed in the clear. `--plaintext`
+        because the CLI refuses a value that looks like a secret without
+        either it or `--secret`, and a sealed value always does. The read-back
+        asks for the stored form as well as the value, because a value written
+        encrypted reads back equal and is the wrong channel: the program reads
+        the key without decrypting it, and the file would carry a second
+        layer of encryption for no reader.
+        """
+        log.info('writing %s into the %s stack config in the clear', path, self.name)
+        _ = self._pulumi('config', 'set', '--path', '--plaintext', path, '--stack', self.name, stdin=value)
+        printed = self._pulumi('config', 'get', '--path', path, '--json', '--stack', self.name)
+        try:
+            entry: object = json.loads(printed)
+        except ValueError as exc:
+            raise SlotRefused(f'`pulumi config get --path {path} --json` did not print JSON') from exc
+        held = cast('dict[str, object]', entry) if isinstance(entry, dict) else {}
+        if held.get('secret') is not False:
+            raise SlotRefused(f'{path} on the {self.name} stack is not stored in the clear after being written so')
+        if held.get('value') != value:
+            raise SlotRefused(f'{path} on the {self.name} stack does not read back as what was just written')
+
     def set_secret(self, key: str, value: str) -> None:
         """Write a secret key, and read it back to prove the slot holds it.
 

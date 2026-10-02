@@ -20,7 +20,6 @@ from __future__ import annotations
 import fnmatch
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from enum import StrEnum
 from typing import Any, cast
 
 import pulumi
@@ -29,6 +28,7 @@ import pulumi_kubernetes as k8s
 from pulumi.runtime.rpc import UNKNOWN as UNKNOWN_SENTINEL
 
 from kluster import conventions
+from kluster.conventions.sealed import SealingScope
 from kluster.lib.versions import ChartPin
 
 __all__ = (
@@ -210,28 +210,6 @@ def pick_resource[R: pulumi.Resource](
         return matched[0]
     rendered = ', '.join(sorted(resource_name(urn) for _, urn in named)) or 'nothing'
     raise LookupError(f'{len(matched)} resources match {kind.__name__} {name_pattern!r}; the chart rendered {rendered}')
-
-
-class SealingScope(StrEnum):
-    """How much of a SealedSecret's identity its ciphertext is bound to.
-
-    The scope is sealed *into* the ciphertext by `kubeseal`, so it describes
-    how the value was produced rather than being a switch that can be flipped
-    afterwards: a manifest whose annotation disagrees with the sealing it was
-    given simply fails to decrypt.
-    """
-
-    STRICT = 'strict'
-    """Name and namespace both fixed. `kubeseal`'s own default."""
-
-    NAMESPACE_WIDE = 'namespace-wide'
-    """Namespace fixed, any name. What the legacy cluster's secrets carry, so
-    it stays the default here: the migration restores the legacy sealing key
-    and ports the existing manifests unchanged (cluster/migration.md §0.5),
-    and a different default would re-seal all of them for no gain."""
-
-    CLUSTER_WIDE = 'cluster-wide'
-    """Neither fixed — a secret any namespace can decrypt. Never a default."""
 
 
 @dataclass(frozen=True, kw_only=True)

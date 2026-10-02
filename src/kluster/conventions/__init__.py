@@ -19,11 +19,12 @@ says `conventions.X` and does not have to know which module owns `X`.
 
 **A module whose names need its own name beside them is read qualified
 instead** — `conventions.<module>.X`, never re-exported. Today that is
-`gateway`, `overlay`, `forge`, `routes` and `alert`, for one of two reasons.
-For `gateway` and `overlay` the module path carries what a prefix otherwise
-would (rfc-002 §3.1) — `conventions.overlay.ROSTER`,
-`conventions.gateway.SERVICES` — and it is the distinction the naming rules
-care about most: which network a name belongs to is never a thing to guess.
+`gateway`, `overlay`, `sealed`, `forge`, `routes` and `alert`, for one of two
+reasons. For `gateway`, `overlay` and `sealed` the module path carries what a
+prefix otherwise would (rfc-002 §3.1) — `conventions.overlay.ROSTER`,
+`conventions.gateway.SERVICES`, `conventions.sealed.DNS01_TOKEN` — and for the
+first two it is the distinction the naming rules care about most: which
+network a name belongs to is never a thing to guess.
 `forge`, `routes` and `alert` are qualified from the other side: their names
 are common nouns — `Repository`, `Environment`, `Account`; `Route`, `Extra`,
 `SELF`; `EVENT`, `Tier`, `FIELDS` — that mean one particular thing only while
@@ -175,7 +176,7 @@ CI
 
 from __future__ import annotations
 
-from kluster.conventions import alert, forge, gateway, overlay, routes
+from kluster.conventions import alert, forge, gateway, overlay, routes, sealed
 from kluster.conventions.backup import (
     BACKUP_VERSION_RETENTION_DAYS,
     BUCKET_BACKUP,
@@ -208,6 +209,8 @@ from kluster.conventions.cloud import (
     node_volume_mount,
 )
 from kluster.conventions.cluster import (
+    BGP_SECRETS_NAMESPACE,
+    CERT_MANAGER_NAMESPACE,
     CLUSTER_ASN,
     GATEWAY_INTERNET,
     GATEWAY_LAN,
@@ -219,6 +222,7 @@ from kluster.conventions.cluster import (
     LOCAL_PATH_ROOT,
     LOCAL_PATH_VOLUME,
     MANAGEMENT_PORTS,
+    MONITORING_NAMESPACE,
     POD_CIDR_V4,
     POD_CIDR_V6,
     POOL_INTERNET,
@@ -227,6 +231,8 @@ from kluster.conventions.cluster import (
     SC_CLOUD_BLOCK,
     SC_LOCAL_PATH,
     SC_NAS,
+    SEALING_CONTROLLER,
+    SEALING_NAMESPACE,
     SERVICE_CIDR_V4,
     SERVICE_CIDR_V6,
     UDM_ASN,
@@ -304,8 +310,10 @@ __all__ = (
     'ANCHOR_VIP1',
     'B2_ACCOUNT',
     'BACKUP_VERSION_RETENTION_DAYS',
+    'BGP_SECRETS_NAMESPACE',
     'BUCKET_BACKUP',
     'BULKY',
+    'CERT_MANAGER_NAMESPACE',
     'CLOUDFLARE_ACCOUNT',
     'CLOUD_NODES',
     'CLUSTER_ASN',
@@ -336,6 +344,7 @@ __all__ = (
     'LOCAL_PATH_ROOT',
     'LOCAL_PATH_VOLUME',
     'MANAGEMENT_PORTS',
+    'MONITORING_NAMESPACE',
     'NODE_BOOT_VOLUME_GB',
     'NODE_MEMORY_GB',
     'NODE_OCPUS',
@@ -360,6 +369,8 @@ __all__ = (
     'SC_CLOUD_BLOCK',
     'SC_LOCAL_PATH',
     'SC_NAS',
+    'SEALING_CONTROLLER',
+    'SEALING_NAMESPACE',
     'SERVER_LAN',
     'SERVICE_CIDR_V4',
     'SERVICE_CIDR_V6',
@@ -402,6 +413,7 @@ __all__ = (
     'node_volume_mount',
     'overlay',
     'routes',
+    'sealed',
     'ula_subnet',
     'volsync_repo_path',
 )

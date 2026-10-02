@@ -36,6 +36,16 @@ checksum = "sha256:1e16df6c578dc76ff97d644445d126ba6fba5c2e8e174178ab86372652fd7
 url = "https://github.com/ltex-plus/ltex-ls-plus/releases/download/18.7.0/ltex-ls-plus-18.7.0-linux-x64.tar.gz"
 url_api = "https://api.github.com/repos/ltex-plus/ltex-ls-plus/releases/assets/446654224"
 
+[[tools.kubeseal]]
+version = "0.39.1"
+backend = "aqua:bitnami/sealed-secrets"
+specifiers = ["0.39.1"]
+
+[tools.kubeseal."platforms.linux-x64"]
+checksum = "sha256:785c8316370073426d6ce0b7e9e949bd7ba3709ef7f9e45a900aa07e5596db9c"
+url = "https://github.com/bitnami/sealed-secrets/releases/download/v0.39.1/kubeseal-0.39.1-linux-amd64.tar.gz"
+url_api = "https://api.github.com/repos/bitnami/sealed-secrets/releases/assets/521998648"
+
 [[tools.node]]
 version = "24.21.0"
 backend = "core:node"

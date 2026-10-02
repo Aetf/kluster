@@ -46,7 +46,7 @@ facts about them.
     generated secret, opened only from the kit) · Pulumi config
     secret (an input a program needs before it runs, defined below;
     cluster-infra.md §1.1) · **Pulumi state** · SealedSecret
-    (in-cluster consumption) · CI Environment secret (the per-stack
+    (in-cluster consumption, defined below) · CI Environment secret (the per-stack
     GitHub Environments and the `drill` Environment, ci.md §3) ·
     ops-repo secret · `kluster` repository secret (the one slot that
     belongs to no stack, and is therefore readable by every workflow in
@@ -137,6 +137,25 @@ facts about them.
     the operator stacks one of their own (below) — each escrowed to the
     kit's recovery key (§2.2), so either channel opens from the kit and
     from nothing else.
+
+    A **SealedSecret** is a value the cluster itself consumes, sealed
+    to the cluster with `kubeseal` and held as ciphertext that opens with
+    the cluster's sealing key alone. **A sealed value is a plain value in
+    the configuration of the stack that declares it**, under the one
+    structured key `sealedSecrets`, keyed by the value's name and then by
+    its data key: it needs no stack encryption, so it is committed in the
+    clear beside that stack's config secrets, and the program reads it
+    there and declares the SealedSecret from it (rfc-007 §6.2). Each
+    sealed value is a row of the census `conventions.sealed`, which names
+    the Secret it becomes, its namespace, the keys of its data, the scope
+    it is sealed at and the stack that declares it, and the path follows
+    from the row, so the command that writes it and the program that
+    reads it name one place. A value `credentials` seals is sealed
+    strict — name and namespace bound into the ciphertext — by the
+    command that obtains it, in the same run, or, for a value recorded
+    before there was a cluster to seal it to, by its row's `seal`, from
+    the configuration that already holds it; neither parks a value
+    (rule 2).
 
     **The operator stacks are encrypted apart, under the operator
     passphrase.** An operator stack is one no CI job runs
@@ -561,9 +580,10 @@ Consequences, all deliberate:
     the kit stores them.
 -   **The sealed-secrets sealing key is not a recovery root.** It is
     the controller's own generated RSA key; losing it costs a re-seal,
-    not data, because every sealed value is itself escrowed or
-    re-mintable. Re-sealing is a script, not an archaeology project —
-    which is why no offline export of it exists.
+    not data, because every sealed value is held where it came from too —
+    escrowed, re-mintable, in the stack configuration it was recorded
+    into, or in the console that made it. Re-sealing is a command, not an
+    archaeology project — which is why no offline export of it exists.
 -   **A retired recovery key owes nothing forward.** Rotating the kit
     re-encrypts every generation in the registry to the successor
     identity (§4.2), and no secret is a function of the key that
@@ -599,7 +619,7 @@ cell would say `pending` to an operator already being served.
 | OCI API key (`physical`) | OCI seed key | Its own user, group and policy; administrator of the `physical` compartment and a stranger outside it | Pulumi config secret | `physical` |
 | OCI API key (state backend) | OCI seed key (`credentials derived oci-state-backend mint`) | The same shape, over the appliance's own compartment | Pulumi config secret (`state-backend`) | the `state-backend` stack, which builds its OCI provider with it (rfc-006 §4) |
 | Cloudflare token (zones) | CF seed token | DNS edit, this installation's zones only | Pulumi config secret | `dns`, `apps` |
-| Cloudflare token (DNS-01) | CF seed token | `_acme-challenge` edit only | SealedSecret (pending) | cert-manager |
+| Cloudflare token (DNS-01) | CF seed token (`credentials derived cloudflare-dns01 mint`) | DNS edit and zone read on the zones the cluster serves — the primary zone, and every zone a route publishes in (`conventions.routes.served_zones`). The excess, which the platform cannot scope away: cert-manager edits only `_acme-challenge` records, and Cloudflare scopes a token to zones rather than to records within one, so the token can edit every record in those zones | SealedSecret (`k8s-base`, `sealedSecrets.cloudflare-dns01`, in cert-manager's namespace) | cert-manager's cluster issuer |
 | Cloudflare token (gateway ACME) | CF seed token | DNS edit on the zones the gateway's own vhosts are served under | Pulumi config secret (`physical`) · device secret (caddy's token file) | the gateway's caddy, written onto the device by `physical` |
 | B2 management key | B2 seed key | Bucket/key/lifecycle admin, **no file capabilities** | Pulumi config secret | `physical` |
 | B2 management key (state backend) | B2 seed key (`credentials derived b2-state-backend-management mint`) | The same capabilities as the one above, under a key name of its own, so that neither row's mint retires the other's key | Pulumi config secret (`state-backend`) | the `state-backend` stack, which declares the appliance's dump bucket and dump key with it (rfc-006 §4) |
@@ -627,9 +647,10 @@ cell would say `pending` to an operator already being served.
 | AdGuard API credentials | AdGuard admin (no scoped API — audit M6) | alice/bob rewrite API | Pulumi config secret | `dns` rewrites |
 | ZeroTier Central API token | Made in the Central console (no token API) | The whole Central account: the installation's network, its members and its flow rules | Pulumi config secret (`zerotierApiToken`; the network id beside it is a constant in `conventions`, not a secret) | `physical` |
 | GitHub admin token | Made in the GitHub UI (no token API) | A fine-grained token on the account, confined to the repositories `conventions.forge` declares and to the repository permissions the calls made as it need (the set is below the table) | Pulumi config secret (`githubAdminToken`) | `github`, and every `credentials` command that pushes a GitHub secret as it: `derived sync`, `derived drill-age-identity generate`, and the mints that push their own carriers |
-| BGP session password | Drawn by the operator (no console makes it; `credentials derived bgp record` delivers it) | One BGP session, the gateway↔worker peering (cluster-infra.md §2): an MD5 password both ends are configured with | Pulumi config secret (`gatewayBgpPassword`) · device secret (the routing daemon's configuration) · SealedSecret (Cilium's `authSecretRef`; pending) | `physical`, which writes it onto the device; Cilium BGPv2 on the worker |
+| BGP session password | Drawn by the operator (no console makes it; `credentials derived bgp record` delivers it) | One BGP session, the gateway↔worker peering (cluster-infra.md §2): an MD5 password both ends are configured with | Pulumi config secret (`gatewayBgpPassword`) · device secret (the routing daemon's configuration) · SealedSecret (`k8s-base`, `sealedSecrets.bgp-password`, Cilium's `authSecretRef`) | `physical`, which writes it onto the device; Cilium BGPv2 on the worker |
 | Alertmanager read token | generated, escrowed as `alertmanager/read` | `GET /api/v2/alerts` only, by HTTPRoute method+path+header match | escrow · ops-repo secret (pending) · Pulumi config secret (the HTTPRoute's match, rendered with that route; pending) | Issue-sync poller |
-| HA webhook URL/ID | Home Assistant | One notify endpoint | SealedSecret (pending) · ops-repo secret (`HA_WEBHOOK_URL`) | alertmanager (pending), the ops repo's dispatch handler. Until `deploy.yml`'s `notify-failure` job becomes a caller of the alert producer it reads the legacy `kluster` repository secret `HAOS_DEPLOY_WEBHOOK_URL`, which this register no longer claims and `sync` does not touch; the operator deletes it from the repository with that job's conversion |
+| HA webhook URL/ID | Home Assistant | One notify endpoint, the automation that takes the ops repository's payload | ops-repo secret (`HA_WEBHOOK_URL`) | the ops repo's dispatch handler. Until `deploy.yml`'s `notify-failure` job becomes a caller of the alert producer it reads the legacy `kluster` repository secret `HAOS_DEPLOY_WEBHOOK_URL`, which this register no longer claims and `sync` does not touch; the operator deletes it from the repository with that job's conversion |
+| Alertmanager webhook URL | Home Assistant (`credentials derived alert-webhook record`) | One notify endpoint, a second automation that reads alertmanager's fixed body — the tier, the summary and the playbook off each alert — and pushes under the same title convention (rfc-007 §7.3) | SealedSecret (`k8s-base`, `sealedSecrets.alert-webhook`, in the monitoring namespace) | alertmanager, through the VictoriaMetrics operator's `url_secret` |
 | Drill-environment credentials | OCI seed key and B2 seed key, one command (`credentials derived drill-credentials mint`) | The OCI key is its own user, group and policy: administrator of the `drill` compartment, which holds the drill's scratch box and nothing else, and a stranger outside it — no `--compartment` on this row, and no quota or budget guardrail on that compartment until `physical` declares one. The B2 key is `listFiles` and `readFiles` on the dump prefix alone, the writer's own prefix and nothing the writer may do | ops-repo Environment (`drill`: `DRILL_OCI_USER_OCID`, `DRILL_OCI_FINGERPRINT`, `DRILL_OCI_PRIVATE_KEY`, `DRILL_B2_KEY_ID`, `DRILL_B2_KEY`) | Quarterly rebuild drill (state-backend.md §7.3) |
 
 Rows whose "From" is a seed rotate by re-running their subcommand.
@@ -941,12 +962,13 @@ name.
 | `credentials derived physical-passphrase re-encrypt [--bundle-dir <path>]` | After `generate` above: once for a `physical` stack made under the stack passphrase, and once per rotation of its own. Re-encrypts `physical`'s configuration and its state in the backend onto the newest generation of its own passphrase, from whichever of the stack passphrase and its own earlier generations opens it, every one recovered with the kit, and proves it took: the configuration and the state both decrypt under the new one. A stack already there is left alone; one that a run interrupted between the stack file and the state is refused, naming the recovery: restore the committed `Pulumi.physical.yaml` and run it again. `Pulumi.physical.yaml` is then committed in a pull request. Run `credentials derived sync --only physical-passphrase` immediately before merging the pull request that carries the re-encrypted `Pulumi.physical.yaml`, with nothing else merged and no drift dispatched in between: the merge starts `deploy`, whose `plan-physical` reads the passphrase when it starts. A `physical` job that runs between the two meets `incorrect passphrase`, which `plan-physical` reports as a diff; reject the approval `up-physical` asks for, and dispatch `deploy` again once both have landed. The first move off the stack passphrase comes before `physical`'s first `up`, and ends with every config secret `physical` held under it issued again by its own command, because git history keeps those ciphertexts under a passphrase every pull request's runs hold (§1 rule 6); for the SSH pairs that means installing each new public half where the old one is authorized, removing the old one there, and pasting the private halves in with the §4.4 form. |
 | `credentials derived cloudflare-zones mint` | After the kit and the state backend exist, and after `apps` exists. Mints the zone-scoped Cloudflare token (§3) from the seed and writes the one token into the config of every stack the slot map names for the row, `dns` and `apps`, under the one key both read; the stack files are then committed. Any of those stacks but `dns`, whose first mint creates it, must already exist, and the mint refuses before it creates anything when one does not. The account the zones live in is not written beside it — that is `conventions.CLOUDFLARE_ACCOUNT`, and the mint holds the account it is about to mint in against it, before it creates anything. Re-running it rotates that token. No row takes a `--stack`: what each row mints is named after the row and its mint retires everything else of that name, so a delivery aimed at one stack would revoke the live credential of every other stack the row fills. That is why this row fills its stacks in one delivery and retires the token it supersedes only once every one of them holds the new one: a write that fails part-way retires nothing. |
 | `credentials derived cloudflare-gateway-acme mint` | After the kit and the state backend exist. Mints the gateway's own ACME token (§3) from the same seed, scoped to the zones its vhosts are served under, and writes it into the `physical` stack's config secret; the stack file is then committed, and the stack writes the token onto the device. Which stack takes it is not a choice — the token is named after the row and minting retires every other token of that name. The account is held against `conventions.CLOUDFLARE_ACCOUNT` before the token is created, as it is for the zones row: the check belongs to the mint, so no row can be the one that forgets it. Re-running it rotates that token. |
+| `credentials derived cloudflare-dns01 mint` | After `physical` has brought the cluster up and `k8s-base` runs the sealed-secrets controller. Fetches the cluster's sealing certificate from the controller with the kubeconfig in `physical`'s state, then mints cert-manager's DNS-01 token (§3) from the Cloudflare seed, scoped to the zones the cluster serves, seals it with `kubeseal` strict for the Secret the cluster issuer reads, and writes the ciphertext in the clear at `sealedSecrets.cloudflare-dns01.api-token` in `k8s-base`'s config, reading it back; the stack file is then committed, and the next `k8s-base` apply hands the issuer the token. A cluster that cannot be reached, a `k8s-base` stack that does not exist and a seed in another account each refuse before the token is created; a live token of the same name is retired only once the ciphertext is written. Re-running it rotates the token, and widens it to a zone a new route publishes in. |
 | `credentials derived oci-physical mint` | After the state backend exists. The same mint for the `physical` stack, into that stack's config secrets; the stack file is then committed. It also creates that stack's compartment where the tenancy has none, and prints the `OCID` to record in `conventions` and commit. Before it creates anything, it refuses a seed that belongs to an account other than the one `conventions` records. |
 | `credentials derived b2-management mint` | After the state backend exists. Mints the B2 management key (§3) from the B2 seed into the `physical` stack's config secret. Before it creates anything, it refuses a seed that authorizes as an account other than the one `conventions` records. Re-running it rotates that key and retires the one it replaces. |
 | `operator-stack state-backend pulumi stack init` | Once per installation, after `derived operator-passphrase generate`, and before any row below. Writes the `state-backend` stack's first checkpoint under `checkpoints/`, and `Pulumi.state-backend.yaml` holding the stack's `encryptionsalt`, which every row below encrypts under; the operator lands both like any change (framework/pulumi.md §3.3). Each row below refuses, before it mints anything, while the stack has no checkpoint: none of them creates the stack. |
 | `credentials derived oci-state-backend mint` | After the stack's first checkpoint. Mints the appliance's own user, group, policy and API key from the OCI seed into the `state-backend` stack's config secrets, confined to the compartment `conventions` names for it and created where it does not exist yet. Before it creates anything, it refuses a seed that belongs to an account other than the one `conventions` records. Re-running it rotates that key. |
 | `credentials derived b2-state-backend-management mint` | After the stack's first checkpoint. Mints the `state-backend` stack's own B2 management key (§3) from the B2 seed into that stack's config secret, held to the account `conventions` records as `b2-management mint` is. Its key name is its own, so neither row's mint retires the other's key. Re-running it rotates that key. |
-| `credentials derived state-backend-server issue` | After the stack's first checkpoint, and again to reissue before the certificate expires. Recovers the CA with the kit, issues a server key and certificate for the appliance's reserved address, and writes the key into the `state-backend` stack's config as a secret and the certificate and the CA's certificate beside it in the clear. Every value goes in on standard input and is read back. Nothing is retired: the box serves the certificate from the replacement that carries it, and the one it serves until then stays valid. |
+| `credentials derived state-backend-server issue` | After the stack's first checkpoint, and again to reissue before the certificate expires. Recovers the CA with the kit, issues a server key and certificate for the appliance's reserved address, and writes the key into the `state-backend` stack's config as a secret and the certificate and the CA's certificate beside it in the clear. Every value goes in on standard input and is read back. The CA's certificate is a rendering of the escrowed CA that carries its Subject Key Identifier, which the server certificate's Authority Key Identifier names, and the state-backend readiness wait verifies the chain against it strictly: a strict verifier refuses a chain whose CA certificate lacks the one or whose leaf lacks the other. So a certificate issued before the CA carried those identifiers is issued again by this command before the box's next replacement, or the wait refuses it. Nothing is retired: the box serves the certificate from the replacement that carries it, and the one it serves until then stays valid. |
 | `credentials derived state-backend-host-key generate` | After the stack's first checkpoint. Draws an ed25519 SSH host key, writes the private half into the `state-backend` stack's config as a secret and reads it back, and only then writes the public half to `src/kluster/lib/state_backend/machine/host-key.txt`; both files are committed together. Re-running it is the rotation, which the box adopts at its next replacement. |
 | `credentials derived backup-age-<N> generate` | Once per backup generation the appliance encrypts to, the one the pin names and the one before it. Draws and escrows the generation where the escrow has none — a backup label holds one identity for its lifetime (§2.2) — and recovers it where it has, and either way writes its public half, computed from the escrowed identity, into `src/kluster/lib/state_backend/machine/backup-recipients.txt`, a file to commit: one line per generation, its escrow label and its recipient. A line that disagrees with the escrow is replaced, and a generation the window has left is dropped. So it is run once for each generation escrowed before the file existed. |
 | `operator-stack state-backend up --force` | Once the rows above are committed and the `operator` bundle is in its slot (`state-backend bundle operator`, below): the Pulumi state backend, which every stack needs before it can act. The first launch is a create, which waits for `--force` like a replacement; on a site with no state yet the run exits 3, naming the first `pulumi stack init` against it. The checkpoint it writes is landed like any change (physical/state-backend.md §7.5). |
@@ -957,7 +979,9 @@ name.
 | `credentials derived unifi record` | After the state backend exists, and after the controller has minted a key for its dedicated local admin — which the command prints the steps for. Takes the key without echoing it, into the `physical` stack's config; the stack file is then committed. The controller's address is not recorded beside it, being the overlay address `conventions` assigns. Re-running it is how a replaced key is delivered. |
 | `credentials derived adguard record` | The same, for the admin login both AdGuard instances answer to, into the `dns` stack's config — the stack that writes the split-horizon rewrites. |
 | `credentials derived zerotier record` | The same again, for the ZeroTier Central API token, into the `physical` stack's config — which network of that account is this installation's overlay is a constant in `conventions` rather than a value recorded beside the token. Central publishes no token API, so a token created in its web console and re-recorded here is the whole of a rotation; the superseded one is deleted in the same console. |
-| `credentials derived bgp record` | The same shape for the BGP session password, into the `physical` stack's config, except that no console makes it: the operator draws it — the command prints `openssl rand -base64 24` as the step — and hands it in. The stack writes it into the routing daemon's configuration on the gateway; the worker's end of the session, Cilium's BGPv2 `authSecretRef`, is a SealedSecret that arrives with `k8s-base`. Rotating it is a fresh draw and this command again, then both ends re-applied, the session being down from the first apply to the second. |
+| `credentials derived bgp record` | The same shape for the BGP session password, into the `physical` stack's config, except that no console makes it: the operator draws it — the command prints `openssl rand -base64 24` as the step — and hands it in. The stack writes it into the routing daemon's configuration on the gateway. The worker's end of the session, Cilium's BGPv2 `authSecretRef`, is the same value sealed into `k8s-base`'s configuration: once a cluster exists, this command seals it in the same run, before it writes either stack, so a cluster that refuses the seal leaves both as they were; before then — the password is recorded before `physical` first brings the cluster up — it says so and writes `physical`'s alone. Between the cluster's first `up` and the controller's, it refuses and writes neither stack; run it again once `k8s-base` runs the controller. Rotating it is a fresh draw and this command again, then both ends re-applied, the session being down from the first apply to the second. |
+| `credentials derived bgp seal` | Once, after `physical` has brought the cluster up and `k8s-base` runs the sealed-secrets controller, for a password recorded before there was a cluster. Reads the password back out of `physical`'s config, seals it with `kubeseal` to the cluster's certificate — fetched from the controller with the kubeconfig in `physical`'s state — strict, for the Secret Cilium reads, and writes the ciphertext in the clear at `sealedSecrets.bgp-password.password` in `k8s-base`'s config, reading it back; the stack file is then committed. Every run writes fresh ciphertext. |
+| `credentials derived alert-webhook record` | After `physical` has brought the cluster up and `k8s-base` runs the sealed-secrets controller, and after the operator has made alertmanager's intake automation in Home Assistant — which the command prints the steps for. Takes the webhook URL without echoing it, seals it with `kubeseal` strict for the Secret alertmanager's receiver reads, and writes the ciphertext in the clear at `sealedSecrets.alert-webhook.url` in `k8s-base`'s config, reading it back; the stack file is then committed. No stack holds the URL as a secret: its one consumer is in the cluster. A new webhook id and this command again is the rotation. |
 | `credentials derived github-admin record` | Once per installation, and again on each rotation, for the GitHub admin token — into the `github` stack's config, which is where the stack and every command that pushes a GitHub secret read it. Nothing in this repository can create the value: GitHub publishes no API that makes a personal access token, so a token generated on the account's settings page and recorded here is the whole of a rotation, and the superseded one is deleted on the same page. It runs before `derived sync`, which authenticates as it. |
 | `credentials derived github-dispatch-key record` / `credentials derived github-trigger-key record` | After the kit exists, and after the App's page has generated a private key — which the command prints the steps for. Takes the key on standard input and escrows it as the row's next generation, so a re-run with a key already on file changes nothing and a re-run with a fresh one is the rotation. `--from-kit` reads it out of the entry a kit that still carries the key as a seed row holds, instead of from standard input. A new generation is held to the recipients file as `generate`'s is (§2.2). |
 | `credentials derived ls` | Any time, with or without a kit. Prints the slot map (below): every §3 credential, where its value comes from, and every slot it lands in, the ones still waiting on a consumer included. It reads a checked-in file, so it needs no token, no kit and no network. |
@@ -1087,9 +1111,10 @@ which their `generate` draws rather than mints, and its server key,
 which its `issue` issues from the escrowed CA, each delivered the same
 way. The `state-backend` stack's three are delivered into that stack's
 configuration, which its program reads: the slot exists, so nothing is
-parked. The DNS-01 token joins them with
-cert-manager, the writer keys and the etcd freshness key with the
-backup bucket and their consumers. The GitHub-secret half of a row is
+parked. The DNS-01 token is delivered too, sealed to the cluster into
+`k8s-base`'s configuration (below); the writer keys and the etcd
+freshness key join them with the backup bucket and their consumers. The
+GitHub-secret half of a row is
 delivered separately, by `credentials derived sync` rather than by the
 row's own command, for the rows whose value can be obtained without
 minting one (below).
@@ -1106,6 +1131,25 @@ credential in the process table of a shared machine, with `-` reading
 standard input. The console steps live beside the row (`devices.py`) for
 the reason §2's live beside theirs: a runbook would be a second place
 for them to be wrong.
+
+**A value the cluster consumes is sealed by the command that obtains
+it, in the same run, or by its row's `seal` from the configuration that
+already holds it** (`sealing.py`), and is never copied by `sync`: `kubeseal` draws a
+session key for every seal, so a seal is a delivery and not a copy. The
+command fetches the sealing certificate from the cluster's sealed-secrets
+controller — through the API server's service proxy, the path `kubeseal`
+itself takes, with the kubeconfig in `physical`'s state — before it
+mints or writes anything, seals each data key strict for the Secret its
+row in `conventions.sealed` names, and writes the ciphertext in the clear
+at the row's path in the declaring stack's configuration, reading it
+back as written and as plain. `kubeseal` is pinned in `mise.toml`: the
+format is the controller's own hybrid encryption, and the tool built for
+it is what writes it. Three rows are sealed. The DNS-01 token is sealed
+by its `mint`; alertmanager's webhook by its `record`, which writes
+nothing else; and the BGP session password by its `record` once a
+cluster exists, or by its `seal`, which reads the value back out of
+`physical`'s configuration, for a password recorded before there was a
+cluster to seal it to.
 
 The **App-key rows** carry the same verb one slot over (`escrow.py`):
 console steps printed, the value taken on standard input, and the escrow
@@ -1176,7 +1220,8 @@ naming the source its value comes from — recovered from escrow, minted by
 the row's own command, read out of a stack, or typed in — and every slot
 it lands in, spelled as the closed set of channels §1 rule 6 lists:
 GitHub secret (repository, Environment, name), Pulumi config secret (per
-stack and key), Pulumi state, escrow ciphertext, SealedSecret, on-box,
+stack and key), Pulumi state, escrow ciphertext, SealedSecret (its row
+in `conventions.sealed`), on-box,
 workstation slot, device secret. The CI Environment secret, the
 ops-repo secret and the `kluster` repository secret are one channel there,
 differing in which repository they name and whether they name an
@@ -1190,7 +1235,7 @@ where the Cloudflare account identifier and the tenancy OCID both went.
 and a test reads this document and holds the two equal — so a credential
 in one and not the other fails a check rather than going unnoticed. A slot
 the register promises and nothing has given a name yet — an Environment
-secret no workflow reads, a SealedSecret with no manifest — is recorded on
+secret no workflow reads, a sealed value no stack declares — is recorded on
 the row as what it is waiting on, rather than as an invented name a future
 workflow would have to guess right. Each reason is filed under the channel
 it is about, in the same vocabulary the Slot column is written in, so the
@@ -1341,7 +1386,8 @@ operator-passphrase generate` and `recover`.
     the value, and writes it into the config of the stack that reads it,
     which is then committed like the rows above. The GitHub one is last of these
     because stage 10 authenticates as it, and it needs stage 2 to have
-    run.
+    run. The BGP password's sealed copy waits for stage 11: there is no
+    cluster to seal it to yet, and the command says so.
 9.  `credentials derived github-dispatch-key record` and
     `credentials derived github-trigger-key record` — the two GitHub App
     private keys, each generated on its own App's settings page and
@@ -1364,26 +1410,37 @@ operator-passphrase generate` and `recover`.
     `physical`'s passphrase into `physical-plan` and `physical` alone,
     and the operator passphrase into none, which is the partition ci.md
     §3 rests on.
+11. `credentials derived cloudflare-dns01 mint`,
+    `credentials derived bgp seal` and
+    `credentials derived alert-webhook record` — the values the cluster
+    consumes, once `physical` has brought the cluster up and `k8s-base`
+    runs the sealed-secrets controller. Each is sealed to the cluster
+    and its ciphertext written into `k8s-base`'s configuration (§4):
+    cert-manager's DNS-01 token, minted for the zones the cluster
+    serves; the BGP session password stage 8 recorded, read back out of
+    `physical`'s configuration; and alertmanager's own Home Assistant
+    webhook, made by the operator in Home Assistant. The stack file is
+    then committed, and the next `k8s-base` apply hands each to what
+    reads it.
 
 A stage that fails is re-run; nothing is parked. Once the last one is
 done, the kit goes back in its envelope.
 
-**What is not built yet**: the §3 rows below. Each channel but the
-SealedSecret has a writer in this repository. `credentials kit` and
+**What is not built yet**: the §3 rows below. Each channel has a writer
+in this repository. `credentials kit` and
 `seed` write the offline store; `credentials` writes the Pulumi config
-secrets, the escrow and the GitHub secrets;
+secrets, the escrow, the GitHub secrets and the sealed values;
 `credentials` and `state-backend` both write workstation slots; the
 `state-backend` stack writes the on-box files; and each stack program
-writes its own Pulumi state and, for `physical`, the device secrets. No stack declares a SealedSecret yet, because the controller
-that opens one arrives with `k8s-base`.
+writes its own Pulumi state and, for `physical`, the device secrets.
 
 -   The **SSH identities** (the UDM key and the libvirt identity) have no
     command on this side. Neither is created in a console, so there are
     no steps to print: the installation's other automation installs them
     (§3), and what is left here is a paste into `physical`'s
-    configuration. The **in-cluster secrets** (the DNS-01 token and the
-    writer keys, sealable only once `k8s-base` has the sealed-secrets
-    controller up) have neither half (`kluster-ops#42`).
+    configuration. The **writer keys' sealed copies** have neither half:
+    nothing reads them until their consumers arrive, with `backed_pvc`
+    and the first database (`kluster-ops#42`).
 -   Part of the **CI Environment half** (ci.md §3). The sink exists (§4)
     and fills what a workstation can obtain: the stack passphrase into
     every Environment but `physical`'s, `physical`'s own into those two,
@@ -1434,9 +1491,11 @@ declares; the stack passphrase and `physical`'s; the zones token, the gateway's 
 hand that a stack reads — the
 UniFi key, the AdGuard login, the ZeroTier Central token, the BGP
 session password and the GitHub admin token; the App keys into the
-escrow; the GitHub secrets whose values a workstation can obtain; and
-the kubeconfig's copy into `k8s-base`'s and `apps`'s configuration once
-`physical` has run. The commands outside that sequence deliver the drill's keys and the
+escrow; the GitHub secrets whose values a workstation can obtain; the
+kubeconfig's copy into `k8s-base`'s and `apps`'s configuration once
+`physical` has run; and, once `k8s-base` runs the sealed-secrets
+controller, the values sealed into its configuration — the DNS-01 token,
+the BGP session password's copy and alertmanager's webhook. The commands outside that sequence deliver the drill's keys and the
 dump freshness key. The rest of §3 is design rather
 than procedure.
 
