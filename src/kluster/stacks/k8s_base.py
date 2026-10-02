@@ -46,9 +46,12 @@ import pulumi
 import pulumi_kubernetes as k8s
 
 from kluster import conventions
+from kluster.components.backup.volsync import VolSync
 from kluster.components.certificates import CertManager
 from kluster.components.cilium import Cilium, InternetPoolMembers
+from kluster.components.gpu import IntelGpuPlugin, NodeFeatureDiscovery
 from kluster.components.local_path import LocalPathProvisioner
+from kluster.components.postgres import PostgresOperator
 from kluster.components.reloader import Reloader
 from kluster.components.sealing import SealedSecretsController
 from kluster.lib import stack_addresses
@@ -84,6 +87,9 @@ async def main() -> None:
     # cluster-infra.md §1's order. Nothing schedules before the CNI, so
     # everything is behind Cilium; cert-manager is behind the sealing
     # controller, because the credential its solver uses is a sealed value.
+    # A chart that declares objects another chart defines is behind that
+    # chart: the database operator's backup plugin and the GPU plugin's
+    # operator declare cert-manager's, and the GPU plugin declares NFD's.
     cilium = Cilium(
         'cilium',
         chart=versions.chart['cilium'],
@@ -94,7 +100,25 @@ async def main() -> None:
     sealing = SealedSecretsController(
         'sealed-secrets', chart=versions.chart['sealed-secrets'], after=[cilium], opts=opts
     )
-    _ = CertManager('cert-manager', chart=versions.chart['cert-manager'], after=[sealing], opts=opts)
+    cert_manager = CertManager('cert-manager', chart=versions.chart['cert-manager'], after=[sealing], opts=opts)
+    _ = PostgresOperator(
+        'cloudnative-pg',
+        operator_chart=versions.chart['cloudnative-pg'],
+        barman_cloud_chart=versions.chart['plugin-barman-cloud'],
+        after=[cert_manager],
+        opts=opts,
+    )
+    _ = VolSync('volsync', chart=versions.chart['volsync'], after=[cert_manager], opts=opts)
+    node_features = NodeFeatureDiscovery(
+        'node-feature-discovery', chart=versions.chart['node-feature-discovery'], after=[cilium], opts=opts
+    )
+    _ = IntelGpuPlugin(
+        'intel-device-plugins',
+        operator_chart=versions.chart['intel-device-plugins-operator'],
+        gpu_chart=versions.chart['intel-device-plugins-gpu'],
+        after=[cert_manager, node_features],
+        opts=opts,
+    )
     _ = LocalPathProvisioner(
         'local-path',
         provisioner_image=versions.image['local-path-provisioner'],

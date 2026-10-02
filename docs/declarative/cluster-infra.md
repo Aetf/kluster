@@ -9,10 +9,11 @@ that speaks the k8s API, consumed by `apps`.
 
 > **Status**: designed 2026-08-22. Declared: Cilium (§2: the datapath,
 > the Gateway API definitions and class, the pools and the baseline),
-> the sealed-secrets controller, cert-manager's chart,
+> the sealed-secrets controller, cert-manager's chart, CNPG and its
+> Barman Cloud plugin, VolSync, NFD and the Intel GPU plugin,
 > local-path-provisioner and reloader. Not yet implemented: the
 > Gateways, BGP, cert-manager's issuer and certificates, and the rest
-> of §1.
+> of §1: monitoring, with metrics-server.
 
 ## 0. Scope and rules
 
@@ -252,13 +253,17 @@ The API every component installs through, wrapped as
     registries need provider ≥4.27 for in-process login; nothing pinned
     here is private.
 -   **Hooks are dropped.** Any object annotated `helm.sh/hook` is
-    omitted from the rendered output, test hooks unconditionally. The
-    pinned set contains exactly one: cert-manager's `startupapicheck`
-    post-install Job, which blocks until the webhook answers. It is
-    therefore disabled explicitly (`startupapicheck.enabled: false`)
-    rather than left to vanish silently, and the wait it did is covered
-    by the install order — nothing declares an Issuer or a Certificate
-    until cert-manager is up. The provider's `includeHooks` (≥4.33) is
+    omitted from the rendered output, test hooks unconditionally, so a
+    hook a pinned chart renders is switched off explicitly rather than
+    left to vanish silently. The installed set renders two by default.
+    One is cert-manager's `startupapicheck` post-install Job, which
+    blocks until the webhook answers; it is disabled with
+    `startupapicheck.enabled: false`, and the wait it did is covered by
+    the install order — nothing declares an Issuer or a Certificate
+    until cert-manager is up. The other is NFD's post-delete cleanup, a
+    Job with its own account and permissions that strips NFD's labels
+    from the nodes once the chart is uninstalled; it is disabled with
+    `postDeleteCleanup: false`. The provider's `includeHooks` (≥4.33) is
     not a substitute: it only writes hooks into a rendered directory for
     some other tool to apply.
 -   **CRDs.** Definitions in a chart's `crds/` directory are installed by
