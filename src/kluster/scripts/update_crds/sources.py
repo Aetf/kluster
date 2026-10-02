@@ -272,7 +272,7 @@ def chart_app_version(helm: Path, pin: ChartPin, *, workdir: Path) -> str:
     metadata = _yaml().load(_helm(helm, ['show', 'chart', *_chart_location(pin)], workdir=workdir))
     app_version = metadata.get('appVersion') if isinstance(metadata, dict) else None
     if not isinstance(app_version, str) or not app_version:
-        raise SourceError(f'chart {pin.name} {pin.version} declares no appVersion to check its floor against')
+        raise SourceError(f'chart {pin.name} {pin.version} declares no appVersion')
     return app_version
 
 

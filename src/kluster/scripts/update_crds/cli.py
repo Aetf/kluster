@@ -4,9 +4,11 @@
 `PATH`. The bundle (`packages/crds/crds.yaml`) and the SDK (`sdks/crds`) are
 generated, not written, so this is the only supported way to change anything
 under either. The pins are the `versions:` block of `Pulumi.yaml`; the run
-checks each chart's floor, renders the definitions, writes the bundle to the
-path the same file's `packages:` entry names, writes beside it the record of
-the pins it read (`record`), and regenerates the SDK from that entry.
+reads the operator version each chart it reads declares and checks the floors,
+renders the definitions, writes the bundle to the path the same file's
+`packages:` entry names, writes beside it the record of the pins it read and of
+the operator versions the charts declare (`record`), and regenerates the SDK
+from that entry.
 """
 
 # `tqdm` is only partially typed.
@@ -55,28 +57,32 @@ LOGGING = {
 log = logging.getLogger(f'{LOG_NAME}.cli')
 
 
-def collect_documents(workdir: Path, project: ProjectFile) -> list[str]:
-    """Every YAML document the pinned sources produce, unfiltered.
+def collect_documents(workdir: Path, project: ProjectFile) -> tuple[list[str], dict[str, str]]:
+    """Every YAML document the pinned sources produce, unfiltered, and the operator version each chart declares.
 
-    Each chart's floor is checked before anything is rendered, so a pin below
-    one stops the run before it has fetched the rest. Fetching is announced
-    step by step because all of it is network: a chart set this size takes a
-    couple of minutes, and a silent one looks hung.
+    The operator version is the `appVersion` of every chart the script reads
+    (`record.read_charts`), keyed by the chart's name. It is read first, and
+    each chart's floor checked against it, before anything is rendered, so a
+    pin below one stops the run before it has fetched the rest. Fetching is
+    announced step by step because all of it is network: a chart set this size
+    takes a couple of minutes, and a silent one looks hung.
     """
     versions = Versions(project)
     charts = [versions.chart[name] for name in project.names(CHART)]
     manifests = [versions.manifest[name] for name in project.names(MANIFEST)]
     rendered = [chart for chart in charts if chart.definitions]
-    floored = [chart for chart in charts if chart.floor is not None]
+    read = [versions.chart[name] for name in record.read_charts(project)]
     log.info(
         f'Collecting from {len(rendered)} charts, '
         f'{len(manifests)} release manifests and {len(pins.SOURCE_TREES)} source trees'
     )
 
     helm = sources.fetch_helm(workdir)
-    log.info(f'Checking the floors of {len(floored)} charts')
-    for chart in floored:
-        sources.check_floor(chart, sources.chart_app_version(helm, chart, workdir=workdir))
+    log.info(f'Reading the operator versions of {len(read)} charts and checking their floors')
+    declared: dict[str, str] = {}
+    for chart in read:
+        declared[chart.name] = sources.chart_app_version(helm, chart, workdir=workdir)
+        sources.check_floor(chart, declared[chart.name])
 
     # One source at a time and `extend` throughout: a release manifest is one
     # document and a source tree is many, and the fetches stay sequential so
@@ -88,7 +94,7 @@ def collect_documents(workdir: Path, project: ProjectFile) -> list[str]:
     for tree in pins.SOURCE_TREES:
         documents.extend(sources.fetch_source_tree(tree, tree.ref(versions.chart[tree.chart])))
     documents.extend(sources.render_chart(helm, chart, workdir=workdir) for chart in rendered)
-    return documents
+    return documents, declared
 
 
 class NoPulumi(RuntimeError):
@@ -199,13 +205,14 @@ def main(argv: list[str] | None = None) -> int:
         # The record is written from the block as it was read here, not as it
         # stands when the run ends a few minutes later.
         project: ProjectFile | None = None
+        declared: dict[str, str] = {}
         if from_bundle is not None:
             log.info(f'Reading the rendered bundle from {from_bundle}')
             documents = [from_bundle.read_text()]
         else:
             log.info(f'Reading the pins in {project_file}')
             project = sources.read_project(project_file)
-            documents = collect_documents(workdir, project)
+            documents, declared = collect_documents(workdir, project)
 
         crds = sources.select_crds(documents)
         groups = sorted({crd.group for crd in crds})
@@ -223,6 +230,8 @@ def main(argv: list[str] | None = None) -> int:
         if project is not None:
             written = record.write(project, target.parent)
             log.info(f'Recorded the pins the bundle was rendered from in {written}')
+            written = record.write_app_versions(project, declared, target.parent)
+            log.info(f'Recorded the operator versions the charts declare in {written}')
         generate(project_file, pulumi=pulumi, workdir=workdir)
         log.info('Regenerated the SDK from the bundle')
     return 0
