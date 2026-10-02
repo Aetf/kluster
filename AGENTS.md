@@ -36,10 +36,11 @@ except where a bullet says otherwise:
   is a hang guard for what that bound cannot reach, an order of magnitude
   above the run's duration. Which form and why:
   [docs/framework/testing.md](docs/framework/testing.md) §1.
-* `ltex-cli-plus` on every markdown file touched, one file at a time —
-  how it reaches the repository's word lists is under "Writing the
-  prose". CI runs it the same way, over the markdown the pull request
-  changed, or over every markdown file in the cases that section names.
+* `ltex-cli-plus` on every markdown file touched outside the generated
+  `sdks/`, one file at a time — how it reaches the repository's word
+  lists is under "Writing the prose". CI runs it the same way, over the
+  markdown the pull request changed, or over every markdown file in the
+  cases that section names.
 * a claim the change made false is swept for — not the identifier that
   moved. How to shape the patterns, and what a sweep that found nothing
   owes the pull request, are in
@@ -98,8 +99,8 @@ documentation the change makes true ships with it rather than after it.
 * **Every artifact is as-built.** Docs, comments and commit messages say
   what is, not what was done: no "verified on", no narrative of attempts,
   no history the reader has to subtract.
-* **Prose is checked like code.** Every markdown file passes
-  `ltex-cli-plus` against `.vscode/ltex.dictionary.en-US.txt` and
+* **Prose is checked like code.** Every markdown file this repository
+  writes passes `ltex-cli-plus` against `.vscode/ltex.dictionary.en-US.txt` and
   `.vscode/ltex.disabledRules.en-US.txt`. The checker is pinned like
   every other gate tool — in `mise.toml`, since it is the one `uv.lock`
   cannot carry — so `mise x -- ltex-cli-plus` is the binary, installed
@@ -123,7 +124,11 @@ documentation the change makes true ships with it rather than after it.
   ([docs/framework/ci.md](docs/framework/ci.md) §3 says why). Outside
   those cases a file the change did not touch is not checked, so a
   finding an untouched file already carries on `main` surfaces on the
-  first change that touches it.
+  first change that touches it. In every case the generated SDKs under
+  `sdks/` are left out: their markdown is their generator's text, which
+  a regeneration writes back as it was, so it is not this repository's
+  prose to reword, any more than their code is this repository's to
+  annotate.
 
   - Both word-list files are one entry per line with **no comment
     syntax**, and the dictionary is **case-sensitive** — `homelab` and
