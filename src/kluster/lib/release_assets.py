@@ -2,9 +2,9 @@
 
 Run by the stack program that applies a release manifest and by `update_crds`,
 which renders definitions from one (docs/style/pulumi.md, "Layering", for why
-code both run lives in `kluster.lib`). It imports no generated bindings, unlike
-`kluster.lib.k8s`: `update_crds` is what regenerates `packages/crds`, so it has
-to start when that package does not import.
+code both run lives in `kluster.lib`). It imports no generated SDK, unlike
+`kluster.lib.k8s`: `update_crds` is what regenerates `sdks/crds`, so it has to
+start when that SDK does not import.
 """
 
 from __future__ import annotations

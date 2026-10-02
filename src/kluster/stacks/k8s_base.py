@@ -30,8 +30,8 @@ pre-decided"), and each chart is a project-level `versions:chart-<name>` pin in
 §3.2); each component that installs a chart will read its pin through
 `kluster.lib.versions`. The custom
 resources — the Cilium pools, BGP configuration and Gateways — will be written
-against `packages/crds`, which `uv run update_crds` regenerates from the same
-pins.
+against `sdks/crds`, which `mise x -- uv run update_crds` regenerates from the
+same pins.
 """
 
 from __future__ import annotations

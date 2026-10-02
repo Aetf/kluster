@@ -390,7 +390,7 @@ read instead of somewhere downstream.
 
 A pin no stack program reads lives with the tool that reads it: Python
 dependencies in `pyproject.toml` and `uv.lock`, the command-line tools
-in `mise.toml`, the bridged provider SDKs in `Pulumi.yaml`'s own
+in `mise.toml`, the generated SDKs' recipes in `Pulumi.yaml`'s own
 `packages:` block, a script's pins in that script's modules
 (`update_crds/pins.py`), the container builds' pins beside their build
 files under `docker/`, and the actions and mise's own release in the
@@ -676,49 +676,90 @@ exported it grants nothing, to a passed-through `up` least of all.
 
 Custom resources are written against generated Python types, so
 declaring one gets the same type checking and completion as declaring a
-built-in resource. The `update_crds` console script
-(`src/kluster/scripts/update_crds/`) renders the pinned chart set to
-collect the CRD schemas without touching a cluster and hands them to
-`crd2pulumi`, which writes the bindings into `packages/crds`; running
-it is the only supported way to change anything under that directory.
-The generated package is excluded from the type-annotation standard the
+built-in resource. The types are the Kubernetes provider's **CRD
+extension**: an SDK the provider generates from a CRD manifest, declared
+as the `crds` entry of `Pulumi.yaml`'s `packages:` block — the provider
+release and the manifest's path — and generated into `sdks/crds` by
+`pulumi install`, like the bridged SDKs beside it
+([ci.md](ci.md) §3). Its classes carry the extension's package in their
+type token, `crds:<group>/<version>:<Kind>`, and are served by the
+`kubernetes` provider a program hands them, explicit providers included
+(`tests/test_extension_provider.py` holds that against the engine). The
+generated SDK is excluded from the type-annotation standard the
 handwritten code holds to — it is not ours to annotate.
 
-**The bindings record the pins they were generated from.** The script
+**The manifest is authored here; the SDK is generated from it.** The
+`update_crds` console script (`src/kluster/scripts/update_crds/`)
+renders the pinned chart set to collect the CRD schemas without touching
+a cluster, selects the definitions, writes them as one bundle to
+`packages/crds/crds.yaml` — the path the entry names — and ends by
+running `pulumi install`, which regenerates every `sdks/<name>` from the
+block. It is run as `mise x -- uv run update_crds`, which puts the
+pinned `pulumi` CLI on `PATH`, and running it is the only supported way
+to change the bundle or the SDK. Around `pulumi install` it puts back
+the `pyproject.toml` the command rewrites and re-locks `uv.lock` with
+the pinned `uv`, and it hands the command an empty `file://` backend of
+its own, because the CLI with no backend logged in signs up a Pulumi
+Cloud account to answer a package lookup when it takes its environment
+for a coding agent's. Two tests hold the bundle and the SDK to each
+other. The bundle is a fixed point of the script's own selection, so a
+hand edit the script would not have written fails — definitions
+reordered, a `status` left in, a dropped group restored, text laid out
+other than the dumper lays it out. And the resources the SDK's embedded
+API document has paths for are exactly the served versions the bundle
+defines, so a bundle changed without a regeneration fails by name. A
+value edited inside one schema, in the dumper's own layout, passes both:
+the document normalizes every schema into shared definitions, so a field
+has no offline seam, and what covers it is that the bundle and the SDK
+have one writer.
+
+**A regeneration is committed from a `jj` working copy with the
+snapshot limit raised.** `jj` leaves out of a snapshot any file new to
+the working copy that is larger than `snapshot.max-new-file-size`,
+`1MiB` by default, and says so only in a warning. The bundle and the
+SDK's largest files — `pulumi-plugin.json`, `_utilities.py`, a group's
+`_inputs.py` and `outputs.py` — run to about ten times that, so a
+regeneration that adds one, a new group's modules among them, needs
+`jj --config snapshot.max-new-file-size=32MiB` on the command that
+snapshots it. Without it the change carries the rest of the tree and
+not those files, and the tests above go red on the branch rather than
+on the workstation.
+
+**The bundle records the pins it was rendered from.** The script
 reads the chart and manifest pins out of the `versions:` block (§3.2),
 checks each chart's floor against the `appVersion` the chart itself
 declares, so no operator version is kept by hand beside a pin, and
-renders the definitions. Beside the bindings it writes
+renders the definitions. Beside the bundle it writes
 `packages/crds/rendered-from.json`: every pin it read, as the file holds
 it — a chart that renders definitions, the chart whose version is the
 ref of the Cilium source tree the script reads Cilium's definitions
 from, a chart carrying a floor, and every manifest. A test holds that
 record to the block. Renovate moves those pins and cannot run the
 script, so a bump of one is red in `checks` until someone runs
-`update_crds` on the branch, as a bump of the provider SDK below is; a
-bump of a chart the script reads nothing from leaves the record as it is
-and needs nothing more. A run with `--from-bundle` writes no record,
-since the bindings it generates were not rendered from the pins.
+`update_crds` on the branch; a bump of a chart the script reads nothing
+from leaves the record as it is and needs nothing more. A run with
+`--from-bundle` writes no record, since the bundle it selects from was
+not rendered from the pins.
 
-**The Kubernetes provider SDK is pinned exactly, and a bump of the pin
-is finished only by a regeneration.** `pyproject.toml` holds
-`pulumi-kubernetes==<v>` where every other dependency holds a floor,
-because the generated package is one provider version's artifact: the
-bindings are generated against a version and register each resource at
-it, so a program installing any other version asks the engine for two
-`kubernetes` plugins and gets two default providers. Exact rather than a
-floor because a floor lets `lockFileMaintenance` move the resolved
-version in `uv.lock` alone — a change no regeneration follows and that
-a test would then have to read out of the lock. The generated package
-declares the version it was generated against as a floor of its own,
-which `update_crds` writes: `crd2pulumi` bakes the version its release
-was built with into that line, and `--version` moves the package
-version and `pulumi-plugin.json` without touching it. A test holds the
-three — the pin, the generated floor, `pulumi-plugin.json` — equal, so
-a pin moved alone is red naming `update_crds`. Renovate proposes the
-bump apart from the python dependencies group (`renovate.json5`) for
-the same reason: grouped, a bump waiting on a regeneration would hold
-every other library bump red with it.
+**The Kubernetes provider is pinned exactly, and the `crds` entry names
+the same release.** `pyproject.toml` holds `pulumi-kubernetes==<v>`
+where every other dependency holds a floor, because the generated SDK is
+one provider release's artifact: it registers each resource at the
+release it was generated against, so a program installing any other
+asks the engine for two `kubernetes` plugins and gets two default
+providers. Exact rather than a floor because a floor lets
+`lockFileMaintenance` move the resolved version in `uv.lock` alone — a
+change no regeneration follows and that a test would then have to read
+out of the lock. A test holds the four places that release is written
+equal: the pin, the entry's `version`, the SDK's `pulumi-plugin.json`,
+and the `pulumi_kubernetes>=` floor the SDK's own `pyproject.toml`
+declares. Renovate reads the pin and the entry as one dependency through
+one data source, and its `kubernetes provider` group puts both edits on
+one branch, apart from the python dependencies group: grouped there, a
+bump waiting on a regeneration would hold every other library bump red
+with it. Because the branch touches `Pulumi.yaml`, the regeneration
+workflow finishes it, and because it also moves `pyproject.toml`, it
+then waits for a reader ([ci.md](ci.md) §3).
 
 ## 5. Talking to a System With No Provider
 

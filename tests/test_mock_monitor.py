@@ -275,3 +275,26 @@ async def test_a_placed_type_registered_without_its_place_is_refused_rather_than
 
     with pytest.raises(AssertionError, match="no 'place' input"):
         _ = monitor.places_claimed_more_than_once(PLACE_OF)
+
+
+@pytest.mark.asyncio
+async def test_each_package_registers_under_a_reference_of_its_own() -> None:
+    """Two packages are two references, so an extension's provider record speaks for it alone.
+
+    The SDK records which provider serves the reference an extension package
+    was registered under, and looks a parented resource's or invoke's provider
+    up by it. With one reference for every package, as Pulumi's mock answers,
+    a bridged package registered after an extension would be taken for that
+    extension and its invokes sent to the extension's provider -- which a
+    bridged SDK's parent never carries.
+    """
+    _ = await run_with(Recorder(), stack='packages', project='mock-monitor')
+
+    extension = await pulumi.runtime.register_package(
+        'kubernetes', '4.34.2', '', 'probe-extension', '1.0.0', 'e30=', extension=True
+    )
+    bridged = await pulumi.runtime.register_package('terraform-provider', '1.4.0', '', 'probe-bridged', '0.1.0', 'e30=')
+
+    assert extension != bridged
+    assert pulumi.runtime.settings.get_base_provider_for_ref(extension) == 'kubernetes'
+    assert pulumi.runtime.settings.get_base_provider_for_ref(bridged) is None

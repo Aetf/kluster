@@ -20,8 +20,9 @@ mocks was re-growing:
 -   `decline_every_invoke`, the one answer to an invoke that the engine gives
     and the mock never does.
 
-Importing this module also installs the one patch of Pulumi's own mock monitor
-that the suite depends on (`_capture_request` below).
+Importing this module also installs the two patches of Pulumi's own mock
+monitor that the suite depends on (`_capture_request` and
+`_register_package` below).
 
 What a suite still writes for itself is the part that is its subject: which
 computed outputs the provider reads back, and which invokes it answers.
@@ -493,6 +494,34 @@ def _capture_request(self: Any, request: Any) -> Any:
 
 
 pulumi.runtime.mocks.MockMonitor.RegisterResource = _capture_request
+
+
+def _register_package(self: Any, request: Any) -> Any:
+    """A reference of its own for each package, as the engine hands out, where the mock hands out one for all.
+
+    The SDK keeps a record of which provider serves the reference an
+    extension package was registered under -- the CRD SDK's, whose classes
+    the `kubernetes` provider serves -- and consults it to find a resource's
+    or an invoke's provider among its parent's. Pulumi's mock monitor
+    answers every registration with the one reference `mock-uuid`, and the
+    settings `set_mocks` installs do not empty that record between runs
+    (`RegisterPackage` and `MockSettings` in `pulumi/runtime/mocks.py`,
+    pulumi 3.267.0). So once any run had registered an extension package,
+    every other parameterized package -- each bridged SDK -- would share its
+    reference, be taken for a `kubernetes` package, and have its invokes sent
+    to no provider in whichever suite ran next.
+
+    The reference is a function of what was registered, so a registration a
+    later run answers from the SDK's own cache of references names the same
+    package it did when it was made.
+    """
+    parameter = request.extension if request.HasField('extension') else request.parameterization
+    return resource_pb2.RegisterPackageResponse(
+        ref=f'mock:{request.name}@{request.version}:{parameter.name}@{parameter.version}'
+    )
+
+
+pulumi.runtime.mocks.MockMonitor.RegisterPackage = _register_package
 
 
 async def run_with[MonitorT: pulumi.runtime.Mocks](

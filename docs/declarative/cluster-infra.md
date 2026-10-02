@@ -130,8 +130,10 @@ Every chart this list installs is pinned in `Pulumi.yaml`'s `versions:`
 block as `versions:chart-<name>`, and the Gateway API definitions as
 `versions:manifest-gateway-api` (framework/pulumi.md §3.2). One copy:
 the stack program installs from those pins, and `update_crds` reads the
-same file through the same parser to regenerate `packages/crds` against
-exactly this chart set; the legacy chart list retires with kluster-code.
+same file through the same parser to render the CRD bundle
+`packages/crds/crds.yaml` from exactly this chart set and regenerate the
+SDK the custom resources are declared through, `sdks/crds`, from that
+bundle; the legacy chart list retires with kluster-code.
 A chart pin carries where the chart is served and its version — with the
 digest of its manifest where the chart comes from an OCI registry, which
 Helm pulls it by — and what the regeneration needs: whether the chart
@@ -140,11 +142,11 @@ its operator version has to clear with the section that states it. The
 floor is checked by `update_crds` against the `appVersion` the chart
 declares. Renovate moves the pins (operations.md §1), and a bump of one
 the script reads is finished by running `update_crds` on its branch:
-the bindings record the pins they were generated from, and a test holds
-that record to the block (framework/pulumi.md §4).
+the bundle records the pins it was rendered from, and a test holds that
+record to the block (framework/pulumi.md §4).
 
 Rendering is **offline**: a pinned Helm 3 binary renders each chart
-and the CRDs are filtered out of the result, so the bindings describe
+and the CRDs are filtered out of the result, so the bundle describes
 the pinned chart set rather than whatever some cluster happens to have
 installed. Two consequences worth naming. Cilium's chart contains no
 CRD at all — the agent registers its own at runtime — so its

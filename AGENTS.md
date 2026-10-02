@@ -69,8 +69,8 @@ documentation the change makes true ships with it rather than after it.
   glue over an untyped or partially typed library turns off, for that
   file alone, the checks the library defeats — a file-level
   `# pyright: report…=false` comment, and the file names the library.
-  Generated bindings — `packages/crds` and the SDKs under `sdks/` — are
-  excluded; they are not ours to annotate.
+  The generated SDKs under `sdks/` — the bridged providers and the CRD
+  types — are excluded; they are not ours to annotate.
 * **The source tree is layered, and the layering is a checked contract.**
   `kluster.stacks` → `kluster.components` → `kluster.providers` →
   `kluster.lib` → `kluster.conventions` → `putils`: a layer imports what is

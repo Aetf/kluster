@@ -227,10 +227,11 @@ def preview(extension: Extension, tmp_path: Path, spelling: str) -> sp.Completed
     venv = tmp_path / 'venv'
     _ = sp.run(['uv', 'venv', '-q', '--python', sys.executable, str(venv)], check=True, timeout=120)
     (site_packages,) = venv.glob('lib/python*/site-packages')
-    # The generated SDK first: the repository's own `pulumi_crds` is the
-    # `crd2pulumi` package of the same name. Then the test run's site
-    # directories, in its order, so the program runs on the SDK this run
-    # imports.
+    # The generated SDK first: the repository's own `pulumi_crds`, `sdks/crds`,
+    # is an extension SDK of the same name generated from another manifest,
+    # with no `probe` module, and the test run's site directories reach it.
+    # Then those site directories, in the run's order, so the program runs on
+    # the SDK this run imports.
     reached = [str(extension.sdk), *(entry for entry in sys.path if entry.endswith('site-packages'))]
     _ = (site_packages / 'test_run.pth').write_text('\n'.join(reached) + '\n')
     _ = (project / '__main__.py').write_text(

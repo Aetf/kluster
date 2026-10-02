@@ -2,7 +2,7 @@
 
 Three shapes, because upstream ships CRDs three ways: inside a chart, as a
 release asset, and — Cilium — as YAML that exists only in the source tree.
-None of them reads a live cluster: what the bindings describe is the chart set
+None of them reads a live cluster: what the bundle describes is the chart set
 this repository pins, not whatever happens to be installed somewhere.
 
 The pins are read out of `Pulumi.yaml` (`read_project`), through the parser
@@ -62,7 +62,7 @@ class BelowFloor(RuntimeError):
 class Definition:
     """One CustomResourceDefinition, with the two fields the selection turns on.
 
-    The document is carried whole because that is what `crd2pulumi` reads, but
+    The document is carried whole because the bundle carries it whole, but
     nothing downstream indexes it again: what the pipeline decides with —
     which group a definition belongs to, and which name makes it a duplicate —
     is read once, where the YAML stops being untyped.
@@ -82,14 +82,24 @@ def _progress_read(fileobj: IO[bytes], /, *, desc: str, total: int) -> Generator
         yield wrapped
 
 
+#: Wider than any line a definition holds, so the dumper never folds one.
+UNFOLDED = 2**31 - 1
+
+
 def _yaml() -> YAML:
-    """A loader that keeps key order and refuses the round-trip machinery.
+    """A loader that keeps key order and refuses the round-trip machinery, and a dumper that folds nothing.
 
     CRD schemas are large and nothing here edits them in place, so the
-    round-trip representer's comment bookkeeping is pure cost.
+    round-trip representer's comment bookkeeping is pure cost. The width is
+    what keeps a dumped bundle a fixed point of the selection: folding a plain
+    scalar, the dumper breaks a line inside a run of spaces, and the loader
+    reads the spaces left at the end of that line as nothing -- so a
+    description written `from.  Must` would come back `from. Must`, and the
+    bundle would not be the text the script writes from it.
     """
     yaml = YAML(typ='safe')
     yaml.default_flow_style = False
+    yaml.width = UNFOLDED
     return yaml
 
 
@@ -127,17 +137,6 @@ def _fetch_tool(workdir: Path, *, binary: str, version: str, url: str, sha256: s
 def fetch_helm(workdir: Path) -> Path:
     """The pinned Helm 3 binary, verified against its published digest."""
     return _fetch_tool(workdir, binary='helm', version=pins.HELM_VERSION, url=pins.HELM_URL, sha256=pins.HELM_SHA256)
-
-
-def fetch_crd2pulumi(workdir: Path) -> Path:
-    """The pinned `crd2pulumi` binary, verified against its published digest."""
-    return _fetch_tool(
-        workdir,
-        binary='crd2pulumi',
-        version=pins.CRD2PULUMI_VERSION,
-        url=pins.CRD2PULUMI_URL,
-        sha256=pins.CRD2PULUMI_SHA256,
-    )
 
 
 def _extracted_binary(workdir: Path, name: str, *, source: str) -> Path:
@@ -180,6 +179,40 @@ def read_project(path: Path) -> ProjectFile:
     and a pin needs neither.
     """
     return ProjectFile(read_config(path))
+
+
+#: The `packages:` entry of `Pulumi.yaml` the bundle is the manifest of, and
+#: the extension parameter of that entry that names the manifest's path.
+EXTENSION = 'crds'
+MANIFEST_PARAMETER = 'crd-manifest'
+
+
+def bundle_path(path: Path) -> Path:
+    """The CRD manifest the `packages:` entry of the `Pulumi.yaml` at `path` generates its SDK from.
+
+    The entry is the one place that names it: `pulumi install` reads the
+    manifest from there, relative to the project, so the script writes the
+    bundle to that path rather than to one of its own. Refused by name when the
+    entry is missing or names no manifest, or more than one.
+    """
+    document = _yaml().load(path.read_text())
+    packages = document.get('packages') if isinstance(document, dict) else None
+    entry = packages.get(EXTENSION) if isinstance(packages, dict) else None
+    extensions = entry.get('extensions') if isinstance(entry, dict) else None
+    if not isinstance(extensions, list):
+        raise SourceError(f'{path} has no `packages:` entry `{EXTENSION}` carrying `extensions:`')
+    manifests = [
+        value
+        for item in extensions
+        if isinstance(item, str)
+        for key, separator, value in [item.partition('=')]
+        if key == MANIFEST_PARAMETER and separator and value
+    ]
+    if len(manifests) != 1:
+        raise SourceError(
+            f'the `packages:` entry `{EXTENSION}` of {path} names {len(manifests)} `{MANIFEST_PARAMETER}=` paths, not one'
+        )
+    return path.parent / manifests[0]
 
 
 # --- Charts ---------------------------------------------------------------
@@ -362,13 +395,14 @@ def definition(document: dict[str, Any]) -> Definition:
 
 
 def select_crds(documents: Iterable[str]) -> list[Definition]:
-    """The CustomResourceDefinitions worth generating bindings from.
+    """The CustomResourceDefinitions the bundle carries, in the order it carries them.
 
     Pure, so what it decides is testable without the network: keep only CRDs,
     drop the groups `pins.DROPPED_GROUPS` names, drop the `status` a cluster
     would have written, and keep the first definition of any name — the same
-    CRD can legitimately arrive from two sources, and generating it twice is
-    what `crd2pulumi` cannot do.
+    CRD can legitimately arrive from two sources, and the bundle holds each
+    once. Ordered by name, so the bundle is a function of what was selected and
+    not of the order the sources were fetched in.
     """
     yaml = _yaml()
     selected: dict[str, Definition] = {}
@@ -384,20 +418,13 @@ def select_crds(documents: Iterable[str]) -> list[Definition]:
     return [selected[name] for name in sorted(selected)]
 
 
-def write_crd_files(crds: Iterable[Definition], directory: Path) -> list[Path]:
-    """One file per CRD, because `crd2pulumi` cannot read a multi-document one."""
-    yaml = _yaml()
-    files: list[Path] = []
-    for index, crd in enumerate(crds):
-        file = directory / f'crd_{index:03d}.yaml'
-        with file.open('w') as handle:
-            yaml.dump(crd.document, handle)
-        files.append(file)
-    return files
-
-
 def dump_bundle(crds: Iterable[Definition]) -> str:
-    """The selected CRDs as one multi-document YAML stream."""
+    """The selected CRDs as one multi-document YAML stream: the manifest the extension is generated from.
+
+    `select_crds` of what this returns selects the same definitions and dumps
+    to the same text, so a bundle this wrote is a fixed point of the script; a
+    test holds the committed bundle to that.
+    """
     yaml = _yaml()
     buffer = StringIO()
     yaml.dump_all([crd.document for crd in crds], buffer)

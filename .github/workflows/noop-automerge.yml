@@ -28,7 +28,7 @@ name: noop-automerge
 #     rewrites;
 #   * `Pulumi.yaml` itself, on renovate's pull request and when nothing but
 #     its `packages:` block changed -- the **admission** below;
-#   * `sdks/**` -- the bridged provider SDKs, which sdk-regenerate.yml
+#   * `sdks/**` -- the generated SDKs, which sdk-regenerate.yml
 #     generates from that block -- only beside that admitted bump, in the
 #     same pull request.
 #
@@ -37,9 +37,12 @@ name: noop-automerge
 # `uv.lock` is resolved by every previewed stack, so a change to what those
 # render shows as a diff. `sdks/` is not measured at all: the bridged SDKs
 # render only in `physical`, which no pull request previews, and `checks`
-# holds them to the block only through each SDK's `pulumi-plugin.json`. So a
-# change under `sdks/` merges unread, and runs in `plan-physical` on the next
-# run of the chain -- which is why it is admitted only as what it is for: the
+# holds them to the block only through each SDK's `pulumi-plugin.json`. The
+# CRD SDK, `sdks/crds`, does not take this route: it is regenerated on a
+# kubernetes provider bump, which also moves `pyproject.toml`'s exact pin,
+# and `pyproject.toml` is off the list. So a change under `sdks/` merges
+# unread, and runs in `plan-physical` on the next run of the chain -- which
+# is why it is admitted only as what it is for: the
 # regeneration sdk-regenerate.yml commits onto renovate's bump of the block,
 # the one way anything writes there. A change under `sdks/` on any other pull
 # request, renovate's lockfile maintenance included, waits for a reader.
@@ -81,7 +84,7 @@ name: noop-automerge
 #
 # **Why `Pulumi.yaml` is admitted at all**: its `packages:` block is not
 # stack configuration -- no stack program reads it. It is the recipe
-# `pulumi install` generates the three SDKs under `sdks/` from, and a bump of
+# `pulumi install` generates the SDKs under `sdks/` from, and a bump of
 # it reaches a stack only through the regenerated SDK, which `checks` already
 # holds to the block (ci.md §3). So `classify` counts `Pulumi.yaml` as on the
 # list when the author is renovate and the document with `packages` removed is
