@@ -93,7 +93,12 @@ jobs:
       # framework/ci.md §3. Only the markdown the event changed is checked --
       # at several seconds a file, the whole tree is minutes, and a file the
       # change did not touch says nothing about the change. Deleted files are
-      # left out (`--diff-filter=d`) since there is nothing to read.
+      # left out (`--diff-filter=d`) since there is nothing to read. So are
+      # the generated SDKs under `sdks/`, whichever way the files are chosen:
+      # their markdown is their generator's text, regenerated as it was
+      # written, so it is no more this repository's prose to reword than
+      # their code is its to annotate -- the directory basedpyright and ruff
+      # exclude for the same reason.
       #
       # A step inside this job rather than a job of its own: branch protection
       # requires the context `checks` by name (`REQUIRED_CHECKS` in the
@@ -137,11 +142,12 @@ jobs:
           # against the prose it judges, not landed unchecked for the next
           # change to an affected file to fail on.
           machinery=(mise.toml .vscode/ltex.dictionary.en-US.txt .vscode/ltex.disabledRules.en-US.txt .github/workflows/checks.yml)
+          generated=(':(exclude)sdks/')
           if git cat-file -e "${BASE:-none}^{commit}" 2>/dev/null \
              && [ -z "$(git diff --name-only "$BASE...HEAD" -- "${machinery[@]}")" ]; then
-            files=$(git diff --name-only --diff-filter=d "$BASE...HEAD" -- '*.md')
+            files=$(git diff --name-only --diff-filter=d "$BASE...HEAD" -- '*.md' "${generated[@]}")
           else
-            files=$(git ls-files -- '*.md')
+            files=$(git ls-files -- '*.md' "${generated[@]}")
           fi
           [ -n "$files" ] || { echo 'no markdown changed'; exit 0; }
 

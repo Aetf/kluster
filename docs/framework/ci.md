@@ -217,7 +217,11 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     `mise.toml` pin, either `.vscode/` word list, `checks.yml` itself —
     so that a bumped checker or a dropped dictionary
     word is proven against the prose it judges rather than landing for
-    the next change to an affected file to fail on. That whole-tree pass
+    the next change to an affected file to fail on. Neither way picks
+    up the generated SDKs under `sdks/`: their markdown is the
+    generator's text, written back as it was on every regeneration, and
+    the step leaves the directory out the way `basedpyright` and `ruff` do,
+    which `tests/test_prose_scope.py` holds. That whole-tree pass
     is where the cost sits: a file is five to eight seconds on a
     workstation and longer on a runner, nearly all of it the checker's
     startup rather than the document's length, which puts a tree of this
