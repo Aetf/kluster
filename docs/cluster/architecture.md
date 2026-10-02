@@ -46,7 +46,8 @@ lock-in, and declarative management using Pulumi.
     gateways that are themselves LoadBalancer Services from these pools
     (§3).
 -   **Egress**: default per-node local egress; bulk egress stays on the home
-    uplink; Cilium Egress Gateway available for stable-IP steering (§3.5).
+    uplink; the one stable-IP workload, hath, leaves on its own address
+    by a mechanism its migration wave chooses (§3.5).
 
 ### 1.2 Network Topology
 
@@ -125,12 +126,28 @@ The cluster will operate in Dual-Stack mode, prioritizing IPv4.
 
 ### 2.2 Cilium eBPF CNI ([Docs](https://docs.cilium.io/))
 
+-   **The installation both upstreams document for Talos**: Cilium's
+    guide for Talos and Talos' guide for Cilium prescribe the same
+    values, and each answers a property of Talos — Kubernetes IPAM,
+    because Talos assigns every node its pod ranges; the agent's
+    capabilities without `SYS_MODULE`, because Talos lets no workload
+    load a kernel module; Talos' own control-group mount, reused rather
+    than mounted again (rfc-007 §4.1). What the design adds to it is
+    cluster-infra.md §2's.
 -   **Kube-Proxy Replacement**: kube-proxy is disabled in Talos. Cilium
-    handles all L3/L4 routing directly in the kernel using eBPF, eliminating
-    iptables bottlenecks.
+    handles all L3/L4 service routing directly in the kernel using eBPF.
 -   **Bootstrap Requirement**: Because kube-proxy is disabled, the Cilium
     Helm chart must explicitly point to KubePrism (k8sServiceHost: localhost,
     k8sServicePort: 7445) to reach the API server on startup.
+-   **Host routing and masquerading take the host's stack.** BPF
+    masquerading would bring BPF host routing, which bypasses
+    `netfilter` in the host's namespace — and this design depends on it
+    twice: the node firewall is an nftables chain (§4.1), and KubeSpan
+    steers traffic into its link by an nftables mark. Both upstreams
+    answer BPF masquerading on Talos with the legacy host-routing switch,
+    so it stays unset, masquerading is the iptables implementation, and
+    host routing goes through the stack. Pod-to-pod traffic is Cilium's
+    `vxlan` tunnel, addressed node to node, which KubeSpan carries.
 
 ## 3. Ingress, Egress & Load Balancing
 
@@ -143,7 +160,7 @@ reach the VIP differs:
 
 | Pool | Addresses | How traffic reaches the VIP |
 | --- | --- | --- |
-| `internet` | The three cloud nodes' primary addresses **as seen on the wire** (§3.2): v4 = the primary **private** IPs (OCI 1:1-NATs each public IPv4 to its VNIC private IP — the interface never carries the public address), v6 = the GUAs (no NAT, on-interface) | OCI routes each public IP to its node; the free NLB fans the stable public front IP out across healthy nodes; no announcement needed |
+| `internet` | The three cloud nodes' primary addresses **as seen on the wire** (§3.2): v4 = the primary **private** IPs (OCI 1:1-NATs each public IPv4 to its VNIC private IP — the interface never carries the public address), v6 = the GUAs (no NAT, on-interface); and the NLB's two public addresses, answered for connections that start in the cluster (§3.2) | OCI routes each public IP to its node; the free NLB fans the stable public front IP out across healthy nodes; no announcement needed |
 | `lan` | Dedicated dual-stack subnet, `192.168.71.0/24` + a ULA `/64` — deliberately *not* inside any home network, the nodes' own VLAN 7 (`192.168.70.0/24`) included | BGP-announced to the UDM SE (§3.4) |
 
 This works because Cilium's kube-proxy replacement installs BPF service
@@ -162,9 +179,10 @@ Mechanics shared by both pools:
     `serviceSelector`. A Service that must be on both sides is simply two
     Services (or one per side attached to the same pods).
 -   **IP sharing**: `internet` Services all request the same three
-    primary IPs (`lbipam.cilium.io/ips` + a `sharing-key`, ports
-    disambiguate — §3.2); `lan` Services normally take one IP each (the
-    pool is plentiful).
+    primary IPs, and the NLB's two addresses beside them
+    (`lbipam.cilium.io/ips` + a `sharing-key`, ports disambiguate —
+    §3.2); `lan` Services normally take one IP each (the pool is
+    plentiful).
 -   **Backends may live on any node.** With `externalTrafficPolicy: Cluster`
     the receiving node SNATs and forwards over KubeSpan to a remote backend
     — a public port can front a homelab pod. Cost: the backend
@@ -205,8 +223,8 @@ Internet ingress is two layers, both free:
     *private* IP (the interface never carries the public address), so
     packets arrive with dst = the private IP; the v6 GUAs are
     on-interface, no NAT. The `internet` pool therefore contains the
-    three **primary private IPv4s + the GUAs** — a pool holding the
-    public v4 literals would never match arriving traffic. Every
+    three **primary private IPv4s + the GUAs** — a pool holding a
+    node's public v4 literal would never match arriving traffic. Every
     internet Service requests *all three* via the `lbipam.cilium.io/ips`
     annotation (plus a `sharing-key`, ports disambiguate). The NLB DNATs
     the front IP to a healthy backend node's address of the same family
@@ -217,6 +235,26 @@ Internet ingress is two layers, both free:
     backend sees the receiving node's address, while a Gateway's Envoy,
     which takes the traffic on the node it arrives at, sees the client's
     through the pass-through NLB under either policy (rfc-007 §5.1).
+3.  **The NLB's own two addresses are pool members too, for traffic
+    that starts inside the cluster.** OCI's NLB lets no backend reach
+    its front ("The backend server cannot function as both a client and
+    a backend simultaneously"), and every cloud node is a backend, so a
+    pod on a cloud node resolving one of the cluster's public names that
+    bypass Cloudflare's proxy would reach for the NLB and fail. So the
+    `internet` pool holds the NLB's public IPv4 and IPv6, and **a
+    Service whose census row the NLB fronts asks for them beside the
+    node addresses**: Cilium then installs them as frontends on every
+    node, and such a connection is answered on the caller's own node —
+    handed to that node's Envoy, or translated to a backend pod — and
+    never reaches the NLB. They match no arriving traffic, since the NLB
+    rewrites the destination to the backend's address and its
+    transparent mode stays off; they exist for connections that start in
+    the cluster, and only on the census ports (6443 and 50000 stay on
+    the cloud path, which no workload takes and KubePrism does without).
+    On a port those frontends do not cover, the worker, which is no NLB
+    backend, reaches the NLB as any internet client does. Design and
+    sources:
+    [Aetf/kluster-ops#493](https://github.com/Aetf/kluster-ops/issues/493).
 
 Datapath-wise the node-side half is identical to `externalIPs` handling
 (KPR treats both frontend classes the same, claiming only declared
@@ -239,20 +277,21 @@ Caveats accepted knowingly, each with a cheap fallback:
 **Dedicated VIPs for same-IP workloads (hath).** Some protocols require
 inbound and *outbound* on one stable IP — no NLB can satisfy that
 (nothing can source traffic from the NLB's address). For these the
-`internet` pool carries a second address class: an OCI **reserved
+`internet` pool carries a further address class: an OCI **reserved
 public IP** ($0, region-scoped, instance-independent) 1:1-NAT'd by OCI
 to a **secondary private IP** on some node's VNIC. Inbound: the
 workload's LoadBalancer Service requests that private IP from the pool
-— an ordinary Service. Outbound: a `CiliumEgressGatewayPolicy` with
-`egressIP` = the same private IP sources the workload's egress through
-it, which OCI NATs back to the reserved IP. In/out match, and the IP
-survives node replacement — re-homing is one Pulumi diff (reassign the
-reserved IP, move the policy), no re-registration, and the pattern is
-placement-agnostic (the pod may even run homelab-side; egress just
-crosses KubeSpan to the gateway node). hath is the only current user;
+— an ordinary Service. Outbound is decided in hath's migration wave,
+because the Egress Gateway is not enabled (§2.2: it needs BPF
+masquerading). The two options are rfc-007 §15.3's: a
+`CiliumEgressGatewayPolicy` with `egressIP` = the same private IP,
+which OCI NATs back to the reserved IP and which keeps the pattern
+placement-agnostic; or, recommended there, the reserved IP moved onto
+the primary private IP of the node hath runs on, so every pod on that
+node leaves through it by ordinary masquerading, with no Cilium feature
+involved. hath is the only current user;
 its practical node-stickiness comes from its RWO cache volume, not
-from networking. Bootstrap verification: Egress Gateway under the
-chosen routing mode (tunnel-mode EGW needs Cilium ≥1.16) and the
+from networking. Bootstrap verification: the
 reserved-IP↔secondary-private-IP NAT semantics.
 
 **The management plane rides the same NLB**: listeners for 6443
@@ -279,15 +318,22 @@ LoadBalancer Service from its pool. An app publishes an `HTTPRoute`
 with the matching `parentRefs`; split-horizon apps (immich) attach to
 `internet-gw` + `lan-gw` both.
 
+Envoy is Cilium's per-node DaemonSet, on every node, and Gateway
+traffic goes to the Envoy on the node it arrives at before any backend
+is chosen. So **where a Gateway answers is decided by where its address
+is routed**, not by where an Envoy runs: `internet-gw`'s addresses are
+the cloud nodes' own, so the NLB decides it — every NLB backend has a
+local Envoy — while `lan-gw`'s and `media-gw`'s are announced by the
+homelab VM alone (§3.4), so only it receives them.
+
 Client-IP note: every Gateway's Service takes `Cluster` (rfc-007 §5.1;
 on the `internet` pool's node addresses §3.1 leaves no other choice),
-and the client's address still reaches Envoy, which takes Gateway
-traffic on the node it arrives at — real client IPs flow through the
-pass-through NLB into Envoy's access logs and auth decisions without
-X-Forwarded-For games. `internet-gw`'s Envoy runs as replicas across
-the cloud nodes (every NLB backend has a local Envoy); `lan-gw`'s and
-`media-gw`'s Envoys are pinned to the homelab VM (the node owning their
-`lan` VIPs).
+and the client's address still reaches Envoy, because the handoff to
+the local Envoy comes ahead of any backend choice — real client IPs
+flow through the pass-through NLB into Envoy's access logs and auth
+decisions without X-Forwarded-For games. The Gateways share one
+`GatewayClass` whose configuration states `Cluster`, no node ports and
+both IP families (cluster-infra.md §2).
 
 ### 3.4 LAN specifics: BGP to the UDM, dedicated subnet, split DNS
 
@@ -360,8 +406,8 @@ the cloud nodes (every NLB backend has a local Envoy); `lan-gw`'s and
 -   **Default**: pods egress via their own node (cloud pods → that
     node's primary IP, homelab → home uplink). The three cloud nodes
     thus present three egress identities — irrelevant to every current
-    workload; anything ever needing one fixed cloud egress IP steers
-    through a Cilium Egress Gateway policy via a chosen node. The OCI
+    workload; anything ever needing one fixed cloud egress IP takes
+    the stable-IP pattern below. The OCI
     10 TB/mo egress allowance is tenancy-wide, shared by all three.
 -   **Bulk egress (qbittorrent, seeding, large syncs)**: pinned to the
     homelab pool; leaves via the home uplink. Never routed through a
@@ -380,15 +426,12 @@ the cloud nodes (every NLB backend has a local Envoy); `lan-gw`'s and
     that qbittorrent's own migration wave declares — physical/gateway.md
     §4.2).
 -   **Stable-IP workloads (hath)**: served by the dedicated-VIP pattern
-    (§3.2) — reserved public IP in, Egress Gateway `egressIP` out, same
-    address both ways, independent of any node's lifecycle. The pattern
-    is placement-agnostic: hath normally runs on the VIP's gateway node
-    (cache locality, zero extra hops), but if its storage ever outgrows
-    the free block allowance it moves to the homelab with the *same*
-    Service and policy — egress simply crosses KubeSpan to the gateway
-    node. This one mechanism replaces both the legacy hand-rolled
-    WireGuard-gateway-pod hack and the earlier pinned-primary-IP
-    special case. Egress Gateway is v4-mature (hath is v4-only).
+    (§3.2) — reserved public IP in, and out on the same address,
+    independent of any node's lifecycle. How it leaves is hath's wave's
+    choice between the Egress Gateway and the reserved IP on its node's
+    primary private IP (§3.2, rfc-007 §15.3); the Egress Gateway is not
+    enabled until that wave chooses it. Either replaces the legacy
+    hand-rolled WireGuard-gateway-pod hack.
 
 ### 3.6 Workload Routing Decision Matrix
 
@@ -403,7 +446,7 @@ Deploying an app now answers exactly two questions — *which pool(s)* and
 | Split-horizon HTTP/S (immich) | both | HTTPRoute → both gateways |
 | Public raw TCP/UDP (syncthing 22000) | `internet` | LoadBalancer Service + NLB listener |
 | LAN raw TCP/UDP | `lan` | LoadBalancer Service |
-| Same-IP-in/out (hath) | `internet` | LoadBalancer Service on a dedicated VIP + EgressGatewayPolicy (§3.2) |
+| Same-IP-in/out (hath) | `internet` | LoadBalancer Service on a dedicated VIP + its wave's egress mechanism (§3.2) |
 
 Placement (which node runs the pods) is orthogonal for every row — set
 by scheduling constraints, with §3.5's egress rules deciding it for
@@ -434,7 +477,11 @@ belongs to — this section holds the cluster-level statements).
     hop limit), so the load-bearing control is the cluster-wide
     baseline policy denying pod egress to `169.254.0.0/16`
     (cluster-infra.md §2), verified at bootstrap (physical.md §6);
-    legacy IMDS is additionally disabled on the instances.
+    legacy IMDS is additionally disabled on the instances. The range
+    also holds `169.254.116.108`, where Talos' host DNS answers pods and
+    the cluster DNS forwards to, so the deny excepts that one address,
+    and the baseline leaves default-deny to the per-namespace policies
+    rather than switching it on for every pod (rfc-007 §4.5).
 -   **Workload-origin risk, on record**: hath — a closed-source
     third-party binary serving public traffic and taking H@H network
     commands — runs on the combined CP+ingress nodes, one kernel away

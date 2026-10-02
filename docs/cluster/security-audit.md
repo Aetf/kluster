@@ -43,6 +43,22 @@ admin with one request.
 egress to `169.254.0.0/16` — this, not IMDSv2, is the real control;
 legacy IMDS (v1) is disabled on the instances as defense in depth.
 Verified at bootstrap (pod curl to the endpoint must be denied).
+*Amended 2026-10-02* (rfc-007 §4.5): the deny excepts
+`169.254.116.108/32`, the address in the same range where Talos' host
+DNS answers pods and the cluster DNS forwards to, so pods resolve names
+with the baseline on; the metadata service's `169.254.169.254` stays
+denied. A deny rule alone would switch every pod to default-deny
+egress, so the policy turns default-deny off in both directions. The
+bootstrap check covers both halves: the cluster DNS resolves with the
+baseline on, and the metadata request is refused (physical.md §6).
+
+**Residual.** The baseline selects Cilium's pod endpoints, and a pod on
+the host network is the host's endpoint rather than one of them. So
+host-network pods — Cilium's own, and the monitoring stack's node
+exporter — are outside it and still reach `169.254.169.254`. They live
+only in namespaces that are exempt or `privileged`, while H1's attack
+is an application pod, which the baseline covers; the bootstrap check
+exercises a pod off the host network.
 
 **Lives in.** cluster-infra.md §2 (policy), physical.md §1 (IMDS
 disable) + §6 (verification), architecture.md §4.1.

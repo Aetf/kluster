@@ -143,8 +143,10 @@ above, and neither moves with the other.
 
 **Cross-component facts flow through parameters; cross-stack decisions
 flow through `conventions`.** StackReference is the exception and each
-use needs a recorded reason (today: the dns stack reading the cluster
-anchors). **A StackReference carries plain outputs only, across a
+use needs a recorded reason. Today there are two, each reading addresses
+`physical` publishes and a program declares something from: the `dns`
+stack reading the cluster anchors, and `k8s-base` reading the addresses
+its `internet` pool is made of (rfc-007 §4.4). **A StackReference carries plain outputs only, across a
 passphrase split**: it elides every secret output the reading stack
 cannot decrypt, and `physical` is encrypted under a passphrase of its
 own (rfc-005 §5.1). So a secret that one stack generates, needed by a
@@ -164,7 +166,10 @@ targeted apply exports as an ordinary string — the reader checks it at
 the read as well (`kluster.lib.k8s.kubeconfig_from`).
 `get_output` answers an absent output with `None`. That is a known value,
 and the program carries it on as one, so it is for an output whose
-absence the reader handles itself.
+absence the reader handles itself. For an address that check is
+`kluster.lib.stack_addresses`, which refuses an absent, an unknown or an
+elided output by name, in a preview as in an update; the `dns` stack's
+anchors run a copy of it of their own (`_address` in `stacks/dns.py`).
 
 ## Data: conventions, configuration, censuses
 

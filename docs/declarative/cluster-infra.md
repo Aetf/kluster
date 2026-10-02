@@ -7,7 +7,10 @@ storage, nodes.md §4.4 for why this list is as small as it is). This is
 the middle stack of [README.md](README.md) §1: everything cluster-scoped
 that speaks the k8s API, consumed by `apps`.
 
-> **Status**: designed 2026-08-22. Not implemented.
+> **Status**: designed 2026-08-22. Cilium (§2: the datapath, the
+> Gateway API definitions and class, the pools and the baseline) is
+> declared; the Gateways, BGP and the rest of §1 are not yet
+> implemented.
 
 ## 0. Scope and rules
 
@@ -18,8 +21,11 @@ that speaks the k8s API, consumed by `apps`.
     by StackReference to `physical` under the names in
     `conventions.PHYSICAL_OUTPUTS`, the addresses the `internet` pool is
     made of — each cloud node's primary private IPv4
-    (`node_private_ips`), each node's GUA (`node_guas`) and the dedicated
-    VIP's secondary private address (`vip1_private`). A stack holding no
+    (`node_private_ips`), each node's GUA (`node_guas`), the dedicated
+    VIP's secondary private address (`vip1_private`) and the balancer's
+    public IPv4 and IPv6 (`cluster_endpoint`, `cluster_endpoint_v6`),
+    each read so that anything but an address of its family stops the
+    run naming the output (`kluster.lib.stack_addresses`). A stack holding no
     copy of the kubeconfig, or a blank one, stops at the read and names
     that command (`kluster.lib.k8s.kubeconfig_from`). The program builds
     one Kubernetes provider from it and disables the package's default
@@ -250,13 +256,30 @@ The API every component installs through, wrapped as
 
 All decided behavior from architecture.md §3, expressed as config:
 
--   **Datapath**: kube-proxy replacement on; `k8sServiceHost:
-    localhost`, `k8sServicePort: 7445` (KubePrism — mandatory, there is
-    no kube-proxy to fall back on); dual-stack with IPv4 primary;
-    IPv6 masquerade on — pod v6 addresses are internal/unroutable, so
-    outbound v6 is SNAT'd to the node's GUA; this *is* qbittorrent's
-    outbound-v6 mechanism (architecture.md §3.5); MTU sized for the
-    KubeSpan underlay (WireGuard overhead — verify, don't assume).
+-   **Datapath**: the installation Cilium's and Talos' guides both
+    document for Talos (rfc-007 §4.1) — Kubernetes IPAM, since Talos
+    assigns every node its pod ranges; the agent's capabilities without
+    `SYS_MODULE`, which Talos lets no workload use; Talos' own
+    control-group mount; and kube-proxy replacement on, reaching the API
+    server through KubePrism (`k8sServiceHost: localhost`,
+    `k8sServicePort: 7445` — mandatory, there is no kube-proxy to fall
+    back on). What the design adds: dual-stack with IPv4 primary; tunnel
+    routing over `vxlan`, whose packets are addressed node to node and so
+    ride KubeSpan; the MTU of KubeSpan's link, `conventions.KUBESPAN_MTU`,
+    stated rather than detected, because the agent takes the tunnel's
+    overhead off the MTU it is given and KubeSpan's link is selected by a
+    firewall mark, which detection would miss; and policies that leave
+    default-deny off, which the baseline below is. **BPF masquerading
+    and the legacy host-routing switch stay unset**: BPF masquerading
+    brings BPF host routing, which bypasses `netfilter` in the host's
+    namespace, where the node firewall and KubeSpan's steering both
+    live, and both upstreams answer that with the legacy switch; unset,
+    masquerading is the iptables implementation and host routing takes
+    the host's stack. Both families masquerade — pod v6 addresses are
+    internal/unroutable, so outbound v6 is SNAT'd to the node's GUA; this
+    *is* qbittorrent's outbound-v6 mechanism (architecture.md §3.5).
+    Metrics: the agent's, the operator's and Envoy's endpoints, and
+    Hubble's flow metrics.
 -   **No `NodePort`** (Aetf/kluster-ops#397): whatever the datapath
     answers on a node's own address is internet-facing on a cloud
     node, because the subnet admits everything and the datapath
@@ -282,15 +305,26 @@ All decided behavior from architecture.md §3, expressed as config:
     firewall filters, so **`enable-health-check-loadbalancer-ip` stays
     off**: turned on, it adds a BPF frontend for that port on the
     Service's load-balancer address, which for the `internet` pool is a
-    node's own address, ahead of the firewall.
+    node's own address, ahead of the firewall. The chart's values state
+    it.
 -   **LB IPAM**: two `CiliumLoadBalancerIPPool`s — `internet` (the
     on-the-wire node addresses: the three primary **private** IPv4s +
     the v6 GUAs + the dedicated-VIP node's secondary private IP — OCI
-    1:1-NATs public v4 to private, so public v4 literals would never
-    match (architecture.md §3.2); all from physical outputs) and `lan`
-    (`192.168.71.0/24` + the ULA /64, outside every home network and
-    the nodes' own VLAN 7 alike). Pool membership via the
-    `serviceSelector` label from `conventions`. Bootstrap verification: pool-contains-node-IP.
+    1:1-NATs a node's public v4 to its private one, so a node's public
+    v4 literal would never match (architecture.md §3.2) — and the
+    balancer's public IPv4 and IPv6, a class of its own that no arriving
+    traffic carries and that answers, on the caller's own node, a
+    connection that starts in the cluster; all from physical outputs,
+    one single-address block each) and `lan` (`192.168.71.0/24` + the
+    ULA /64, outside every home network and the nodes' own VLAN 7
+    alike). Pool membership via the `serviceSelector` label from
+    `conventions`. **Every Service on the `internet` pool's node
+    addresses takes `Cluster`** (architecture.md §3.1), and **a Service
+    whose census row the balancer fronts asks for the balancer's two
+    addresses beside the node addresses**, so a pod on a cloud node
+    reaching one of the cluster's public names is answered without the
+    balancer, which a node it forwards to cannot reach (architecture.md
+    §3.2). Bootstrap verification: pool-contains-node-IP.
 -   **BGP**: Cilium **BGPv2** resources — `CiliumBGPClusterConfig`
     (node-selected to the homelab worker only) +
     `CiliumBGPPeerConfig` + `CiliumBGPAdvertisement`; the v1
@@ -314,11 +348,16 @@ All decided behavior from architecture.md §3, expressed as config:
     advertise arbitrary /32s — the DNS servers' addresses included —
     and MITM the whole LAN. Verified at bootstrap by advertising a
     bogus prefix (physical.md §6).
--   **Gateway API**: enabled; three `Gateway`s — `internet-gw` (Envoy
-    replicas across the cloud nodes, `externalTrafficPolicy: Cluster`,
-    Service requesting all three primary IPs via `lbipam.cilium.io/ips`
-    + sharing-key), `lan-gw` (pinned to the homelab worker, `lan`
-    pool), and `media-gw` (same shape as `lan-gw` on a **second,
+-   **Gateway API**: enabled; Envoy is the release's per-node
+    DaemonSet, on every node, and Gateway traffic goes to the Envoy on
+    the node it arrives at before any backend is chosen, so where a
+    Gateway answers is decided by where its address is routed, and the
+    client's address reaches Envoy under either traffic policy
+    (rfc-007 §5.1). Three `Gateway`s — `internet-gw` (its Service
+    requesting the `internet` pool's node members and the balancer's two
+    addresses via `lbipam.cilium.io/ips` + sharing-key), `lan-gw` (the
+    `lan` pool's default VIP, which the homelab worker announces), and
+    `media-gw` (same shape as `lan-gw` on a **second,
     dedicated `lan`-pool VIP** — a `conventions` literal, because
     the UDM firewall's IoT→media allow names it,
     physical/gateway.md §4.2). Attaching a route to `media-gw` *is*
@@ -326,18 +365,25 @@ All decided behavior from architecture.md §3, expressed as config:
     row records it as `Exposure.IOT` (conventions/routes.py), so the
     choice is on the row a reviewer reads rather than an argument at a
     call site. Apps attach `HTTPRoute`s (architecture.md §3.6 matrix).
-    The Gateways' Services allocate no `NodePort`: the `GatewayClass`
-    names, in its `parametersRef`, a `CiliumGatewayClassConfig`
-    (`cilium.io/v2alpha1`)
-    setting `spec.service.allocateLoadBalancerNodePorts: false`.
--   **Egress Gateway**: enabled (the dedicated-VIP pattern's outbound
-    half, architecture.md §3.2); the `CiliumEgressGatewayPolicy`
-    instances themselves belong to the workloads that need them
-    (`apps`). Bootstrap verification: EGW under the chosen routing
-    mode.
+    The Gateways share one `GatewayClass`, `cilium`, which the stack
+    declares in place of the chart's own so that it can carry a
+    configuration: its `parametersRef` names a `CiliumGatewayClassConfig`
+    (`cilium.io/v2alpha1`, in `kube-system`) setting
+    `spec.service.externalTrafficPolicy: Cluster`, which a
+    configuration that sets any field imposes anyway and so is stated,
+    `allocateLoadBalancerNodePorts: false`, so the Gateways' Services
+    allocate no `NodePort`, and both IP families required. The
+    Gateways' secret sync, which hands Envoy the certificates, stays on
+    and is stated.
+-   **Egress Gateway**: not enabled. It refuses to start without BPF
+    masquerading, which on this platform brings the legacy host-routing
+    switch with it (Datapath, above). Only hath would use it, for the
+    dedicated-VIP pattern's outbound half (architecture.md §3.2), and
+    hath's migration wave decides between it and an address of the
+    node's own (rfc-007 §15.3).
 -   **Route-level auth (the Authelia gate)**: the Gateway API
     **ExternalAuth HTTPRoute filter** (GEP-1494; **Cilium ≥1.20 — this
-    sets the Cilium version floor**, above the ≥1.16 EGW-tunnel floor)
+    sets the Cilium version floor**)
     pointing at Authelia's Envoy `ext_authz` endpoint. This is how
     apps without native auth (qbittorrent Web UI, golinks, spoolman,
     thread-dashboard, …) get SSO-gated — the legacy traefik
@@ -358,17 +404,31 @@ All decided behavior from architecture.md §3, expressed as config:
     layer — harden and monitor the mechanism.) Apps with
     native OIDC (immich, grafana, matrix, splitpro) are unaffected by
     this mechanism's availability.
--   **Hubble**: enabled with relay + UI off by default (metrics into
-    VictoriaMetrics; the UI is a port-forward away when needed — no
-    standing dashboard, per the standing-rent rule).
+-   **Hubble**: enabled with relay + UI off (its flow metrics — drops,
+    TCP, flows, ICMP — into VictoriaMetrics; the UI is a port-forward
+    away when needed — no standing dashboard, per the standing-rent
+    rule).
 -   **Network policy stance** (architecture.md §4.1): default-deny is a
     per-namespace app concern; this stack ships only the cluster-wide
-    baseline (blocking pod→management-plane except where declared) —
-    which **explicitly includes pod egress to `169.254.0.0/16`**: the
-    OCI metadata service serves the machine config, and OCI's IMDSv2
+    baseline, a `CiliumClusterwideNetworkPolicy` selecting every pod that
+    **denies egress to `169.254.0.0/16` except `169.254.116.108/32`**:
+    the OCI metadata service serves the machine config, and OCI's IMDSv2
     header is static, so this policy is the only thing between a
     compromised pod and the cluster PKI (architecture.md §4.1;
-    bootstrap verification in physical.md §6).
+    bootstrap verification in physical.md §6); the one address excepted
+    is where Talos' host DNS answers pods, which the cluster DNS forwards
+    to. A deny rule alone switches every pod it selects to default-deny
+    egress, so the baseline sets `enableDefaultDeny` false in both
+    directions and leaves default-deny to the per-namespace policies
+    (rfc-007 §4.5). The baseline's wider intent, blocking pods from the
+    management plane except where declared, is **not built**: rfc-007
+    §4.5 scopes M2's baseline to the metadata range. A pod's call to
+    another node's management port leaves its node to a node address,
+    rides KubeSpan and enters on `kubespan`, which the ingress chain
+    accepts ahead of every rule, so each service's own authentication is
+    all that stands in its way. Building that block in a later slice or
+    retiring the intent is the operator's decision,
+    [Aetf/kluster-ops#499](https://github.com/Aetf/kluster-ops/issues/499).
 
 ## 3. What this stack deliberately does not do
 

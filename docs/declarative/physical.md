@@ -40,9 +40,10 @@ Stack outputs (the machine facts other stacks may reference,
 (`conventions/outputs.py`), which is the list and which a test holds
 the stack's exports to: `kubeconfig`, `talosconfig`, per-node
 public/private IPs, each cloud node's GUA (`node_guas` — with the
-private IPv4s and `vip1_private`, the `internet` pool's members, which
-`k8s-base` reads; rfc-007 §4.4), both of the NLB's public addresses (IPv4 and IPv6 —
-the cluster anchor in `dns` carries an A and an AAAA), the
+private IPv4s, `vip1_private` and the NLB's two addresses, the
+`internet` pool's members, which `k8s-base` reads; rfc-007 §4.4), both
+of the NLB's public addresses (IPv4 and IPv6 — the cluster anchor in
+`dns` carries an A and an AAAA), the
 dedicated-VIP addresses (reserved public + secondary private), the
 backup bucket's name and S3 endpoint, the backup keys (one application
 key per scope, `backup_keys`), and each CI overlay member's join
@@ -550,9 +551,8 @@ Cilium and therefore run only after `k8s-base` is up — the gate's place
 in the sequence is
 migration.md §1): LB IPAM pool containing node primary IPs; NLB dual-stack listeners +
 source-preservation semantics; etcd fsync latency on OCI block volumes;
-A1 capacity at creation; Egress Gateway under the chosen routing mode +
-reserved-IP↔secondary-private-IP NAT; Cilium MTU over the KubeSpan
-underlay; talosctl reaching the homelab node via cloud endpoints (apid
+A1 capacity at creation; reserved-IP↔secondary-private-IP NAT; Cilium's
+MTU, `conventions.KUBESPAN_MTU`, over the KubeSpan underlay; talosctl reaching the homelab node via cloud endpoints (apid
 proxy); VFIO iGPU passthrough capability on a scratch VM.
 
 The node volumes (§1, §2) are first exercised at bring-up too, and the
@@ -615,6 +615,21 @@ and the Gateways are up, a transcript per item on its ops issue:
     opening the cluster's ranges have (§2); a scrape of another node's
     rides `kubespan`, which the ingress chain accepts ahead of every
     rule, and exercises no opening.
+-   A pod on each cloud node and one on the worker, in the echo
+    server's namespace and meeting `restricted`, resolve the echo row's
+    name to the NLB's two addresses; a request to the name answers on
+    each family, and the client the echo server reports is the pod's
+    own address, which only the Envoy on the pod's own node would
+    report (rfc-007 §4.4). Beside it, the limit those addresses route
+    around: from a pod under the baseline policy alone, ten connections
+    on each family to the NLB's 6443, a port no Service claims at that
+    address, fail from each cloud node and answer from the worker. The
+    count goes on the issue: ten of ten failing is the limit as OCI
+    states it; about a third failing is a limit on the caller's own
+    backend alone, which the pool's addresses answer just as well; none
+    failing means it does not bind this tenancy, and
+    architecture.md §3.2 then records the NLB's addresses in the pool as
+    the shorter path rather than a repair.
 -   An alert raised through alertmanager reaches the phone, and
     stopping vmalert pushes the missed check-in.
 

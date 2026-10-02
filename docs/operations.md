@@ -118,8 +118,8 @@ from an HTTP repository, which offers nothing to check a download against
 -   **§2.2 Cilium upgrade.** Trigger: chart PR. Gist: the riskiest
     bump in the system — before merge, re-run the affected subset of
     the bootstrap verifications on the preview environment of one
-    node (LB-IPAM node-IP pools, EGW + reserved-IP NAT, MTU over
-    KubeSpan, ExternalAuth fail-closed); merge deploys; watch the
+    node (LB-IPAM node-IP pools, reserved-IP NAT, MTU over KubeSpan,
+    ExternalAuth fail-closed); merge deploys; watch the
     Envoy/agent rollout complete before calling it done.
 -   **§2.3 State-backend lifecycle** — owned by
     physical/state-backend.md §7 (pointer, not a copy).
