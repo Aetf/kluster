@@ -18,25 +18,21 @@ held at the end, on its own.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 from pathlib import Path
-from typing import Any, cast
 
-import pulumi
 import pytest
 import pytest_asyncio
 import yaml
-from k8s_base_installation import VERSIONS_CONFIG, Physical, release_assets
-from mock_monitor import Recorder, declaring, run_under_backstop, run_with
+from k8s_base_installation import Run, applied
+from mock_monitor import Recorder, declaring, run_with
 from renovate_text import as_python_spells_it, as_renovate_spells_it, listed, package_rules
 
 from kluster import conventions
 from kluster.components import local_path, reloader
-from kluster.lib.k8s import KUBECONFIG_KEY, PodSecurity, namespace
+from kluster.lib.k8s import PodSecurity, namespace
 from kluster.lib.versions import versions
-from kluster.stacks import k8s_base
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -102,55 +98,15 @@ RELOADER = 'reloader'
 CILIUM = 'cilium'
 
 
-class Autonaming(Physical):
-    """A `physical` whose Kubernetes objects are named the way the provider names one given none.
-
-    The provider fills in `metadata.name` from the logical name and a random
-    suffix when the program states none; the mock echoes inputs only, so an
-    autonamed object would read back nameless and a reference to it as `None`.
-    """
-
-    def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
-        outputs = super().computed(args)
-        metadata = cast('dict[str, Any]', args.inputs).get('metadata')
-        if args.typ.startswith('kubernetes:') and metadata is not None and 'name' not in metadata:
-            outputs['metadata'] = metadata | {'name': f'{args.name}-0a1b2c3d'}
-        return outputs
+def local_path_configuration(run: Run) -> dict[str, str]:
+    """What the provisioner's ConfigMap holds: its configuration, the helper pod's template and its scripts."""
+    return run.inputs(CONFIG_MAP, LOCAL_PATH)['data']
 
 
-class Run:
-    """One run of the program: what it registered."""
-
-    def __init__(self, monitor: Recorder) -> None:
-        self.monitor = monitor
-
-    def inputs(self, typ: str, name: str) -> dict[str, Any]:
-        return self.monitor.inputs_of(name, typ)
-
-    def values(self, chart: str) -> dict[str, Any]:
-        return self.inputs(CHART, chart)['values']
-
-    def urn(self, typ: str, name: str) -> str:
-        return next(
-            urn for urn, request in self.monitor.registrations.items() if (request.type, request.name) == (typ, name)
-        )
-
-    def local_path_configuration(self) -> dict[str, str]:
-        return self.inputs(CONFIG_MAP, LOCAL_PATH)['data']
-
-
-@pytest_asyncio.fixture(scope='module')
-async def applied() -> Run:
+@pytest_asyncio.fixture(scope='module', name='applied')
+async def applied_fixture() -> Run:
     """The whole program against a `physical` that has published every output."""
-    config = {f'kluster:{KUBECONFIG_KEY}': 'a-fake-kubeconfig-that-reaches-no-cluster'}
-    pulumi.runtime.set_all_config(config | VERSIONS_CONFIG, secret_keys=list(config))
-    monitor = await run_under_backstop(Autonaming(), stack=conventions.STACK_NAMES.k8s_base)
-    before = asyncio.all_tasks()
-    with release_assets():
-        async with declaring():
-            await k8s_base.main()
-        _ = await asyncio.gather(*(asyncio.all_tasks() - before - {asyncio.current_task()}), return_exceptions=True)
-    return Run(monitor)
+    return await applied()
 
 
 # -- Each chart, from its pin -------------------------------------------------
@@ -192,7 +148,7 @@ def test_cert_managers_definitions_are_installed_and_its_start_up_check_is_off(a
 
 def test_local_paths_configuration_hands_its_class_the_user_volume(applied: Run) -> None:
     """Every node's volumes of the `local-path` class are under the user volume, and no other class has a path."""
-    configuration = json.loads(applied.local_path_configuration()['config.json'])
+    configuration = json.loads(local_path_configuration(applied)['config.json'])
 
     assert configuration['nodePathMap'] == []
     assert configuration['storageClassConfigs'] == {
@@ -218,7 +174,7 @@ def test_local_path_is_the_default_class_reclaims_delete_and_binds_on_scheduling
 def test_both_local_path_images_come_from_their_pins(applied: Run) -> None:
     """The provisioner's image is its container's, and the helper's is the helper pod template's."""
     (container,) = applied.inputs(DEPLOYMENT, LOCAL_PATH)['spec']['template']['spec']['containers']
-    helper = yaml.safe_load(applied.local_path_configuration()['helperPod.yaml'])
+    helper = yaml.safe_load(local_path_configuration(applied)['helperPod.yaml'])
 
     assert container['image'] == str(versions.image['local-path-provisioner'])
     assert [it['image'] for it in helper['spec']['containers']] == [str(versions.image['local-path-helper'])]
@@ -232,7 +188,7 @@ def test_the_provisioner_reads_the_configmap_the_component_declares(applied: Run
 
     assert command[command.index('--configmap-name') + 1] == f'{LOCAL_PATH}-0a1b2c3d'
     assert 'name' not in configmap['metadata']
-    assert {'setup', 'teardown'} <= applied.local_path_configuration().keys()
+    assert {'setup', 'teardown'} <= local_path_configuration(applied).keys()
 
 
 def test_the_helper_pods_run_under_the_account_the_component_declares(applied: Run) -> None:
@@ -342,10 +298,11 @@ def test_each_namespace_enforces_its_pod_security_level(applied: Run, component:
 
 @pytest.mark.parametrize('chart', [CERT_MANAGER, RELOADER])
 def test_each_chart_installs_into_the_namespace_its_component_creates(applied: Run, chart: str) -> None:
-    """Into the namespace that states the level, and after it exists."""
+    """Into the namespace that states the level, and behind it, so the namespace exists before the chart's objects."""
     created = applied.inputs(NAMESPACE, f'{chart}-namespace')['metadata']['name']
 
     assert applied.inputs(CHART, chart)['namespace'] == created
+    assert applied.urn(NAMESPACE, f'{chart}-namespace') in applied.dependencies(CHART, chart)
 
 
 def test_the_sealing_controller_creates_no_namespace(applied: Run) -> None:

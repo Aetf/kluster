@@ -1,10 +1,11 @@
-"""The `k8s-base` program's stand-ins: what `physical` has published, the pins, and the release asset.
+"""The `k8s-base` program's stand-ins and its whole run: what `physical` has published, the pins, the release asset.
 
 Every suite that runs `k8s_base.main` whole needs the same three things the
 program reads besides its kubeconfig, so they are here rather than in any one
 of those suites (framework/testing.md §2): `test_stack_programs.py` runs it for
-its providers, and `test_cilium.py` and `test_standing_set.py` for what it
-installs.
+its providers, `test_cilium.py` for what Cilium declares, and every suite that
+takes an `applied` fixture for what the other components install. `applied`
+is that run, and `Run` reads what it registered.
 
 Every value is invented. The addresses are documentation and private ranges
 of the families each output carries, and each output holds addresses no other
@@ -13,16 +14,18 @@ output holds, so a pool built from the wrong output reads differently.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, cast
 
 import pulumi
 import pytest
-from mock_monitor import Recorder
+from mock_monitor import Recorder, declaring, run_under_backstop
 
 from kluster import conventions
+from kluster.lib.k8s import KUBECONFIG_KEY
 from kluster.lib.versions import ManifestPin
 
 OUTPUTS = conventions.PHYSICAL_OUTPUTS
@@ -83,6 +86,55 @@ VERSIONS_CONFIG = {
             'definitions': False,
         }
     ),
+    'versions:chart-cloudnative-pg': json.dumps(
+        {
+            'repository': 'oci://registry.example.invalid/charts',
+            'version': '9.6.0',
+            'digest': f'sha256:{"5" * 64}',
+            'definitions': True,
+            'floor': {'operator': '1.26', 'document': 'a stand-in floor'},
+        }
+    ),
+    'versions:chart-plugin-barman-cloud': json.dumps(
+        {
+            'repository': 'oci://registry.example.invalid/charts',
+            'version': '9.7.0',
+            'digest': f'sha256:{"6" * 64}',
+            'definitions': True,
+        }
+    ),
+    'versions:chart-volsync': json.dumps(
+        {
+            'repository': 'oci://registry.example.invalid/charts',
+            'version': '9.8.0',
+            'digest': f'sha256:{"7" * 64}',
+            'definitions': True,
+        }
+    ),
+    'versions:chart-node-feature-discovery': json.dumps(
+        {
+            'repository': 'oci://registry.example.invalid/charts',
+            'version': '9.9.0',
+            'digest': f'sha256:{"8" * 64}',
+            'definitions': True,
+        }
+    ),
+    'versions:chart-intel-device-plugins-operator': json.dumps(
+        {
+            'repository': 'oci://registry.example.invalid/charts',
+            'version': '9.10.0',
+            'digest': f'sha256:{"9" * 64}',
+            'definitions': True,
+        }
+    ),
+    'versions:chart-intel-device-plugins-gpu': json.dumps(
+        {
+            'repository': 'oci://registry.example.invalid/charts',
+            'version': '9.11.0',
+            'digest': f'sha256:{"a" * 64}',
+            'definitions': False,
+        }
+    ),
     'versions:image-local-path-provisioner': f'registry.example.invalid/local-path-provisioner:v9.4.0@sha256:{"3" * 64}',
     'versions:image-local-path-helper': f'registry.example.invalid/busybox:9.5.0@sha256:{"4" * 64}',
     'versions:manifest-gateway-api': json.dumps(
@@ -132,3 +184,73 @@ def release_assets() -> Generator[list[ManifestPin]]:
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(k8s_base, 'fetch_manifest', fetch)
         yield fetched
+
+
+#: The type the provider registers a chart under.
+CHART = 'kubernetes:helm.sh/v4:Chart'
+
+
+class Autonaming(Physical):
+    """A `physical` whose Kubernetes objects are named the way the provider names one given none.
+
+    The provider fills in `metadata.name` from the logical name and a random
+    suffix when the program states none; the mock echoes inputs only, so an
+    autonamed object would read back nameless and a reference to it as `None`.
+    """
+
+    def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
+        outputs = super().computed(args)
+        metadata = cast('dict[str, Any]', args.inputs).get('metadata')
+        if args.typ.startswith('kubernetes:') and metadata is not None and 'name' not in metadata:
+            outputs['metadata'] = metadata | {'name': f'{args.name}-0a1b2c3d'}
+        return outputs
+
+
+class Run:
+    """One run of the program: what it registered."""
+
+    def __init__(self, monitor: Recorder) -> None:
+        self.monitor = monitor
+
+    def inputs(self, typ: str, name: str) -> dict[str, Any]:
+        return self.monitor.inputs_of(name, typ)
+
+    def values(self, chart: str) -> dict[str, Any]:
+        return self.inputs(CHART, chart)['values']
+
+    def urn(self, typ: str, name: str) -> str:
+        return next(
+            urn for urn, request in self.monitor.registrations.items() if (request.type, request.name) == (typ, name)
+        )
+
+    def dependencies(self, typ: str, name: str) -> list[str]:
+        return list(self.monitor.registrations[self.urn(typ, name)].dependencies)
+
+    def children(self, component: str) -> list[tuple[str, str, list[str]]]:
+        """Each resource registered under the one component of type `component`: its type, name and dependencies."""
+        (parent,) = [urn for urn, request in self.monitor.registrations.items() if request.type == component]
+        return [
+            (request.type, request.name, list(request.dependencies))
+            for request in self.monitor.registrations.values()
+            if request.parent == parent
+        ]
+
+
+async def applied() -> Run:
+    """The whole program against a `physical` that has published every output.
+
+    A suite's `applied` fixture is this, once per module. The fixture itself
+    stays in the suite: one imported by name would be shadowed by every case
+    that takes it as an argument, which the linter reports as a redefinition.
+    """
+    from kluster.stacks import k8s_base
+
+    config = {f'kluster:{KUBECONFIG_KEY}': 'a-fake-kubeconfig-that-reaches-no-cluster'}
+    pulumi.runtime.set_all_config(config | VERSIONS_CONFIG, secret_keys=list(config))
+    monitor = await run_under_backstop(Autonaming(), stack=conventions.STACK_NAMES.k8s_base)
+    before = asyncio.all_tasks()
+    with release_assets():
+        async with declaring():
+            await k8s_base.main()
+        _ = await asyncio.gather(*(asyncio.all_tasks() - before - {asyncio.current_task()}), return_exceptions=True)
+    return Run(monitor)
