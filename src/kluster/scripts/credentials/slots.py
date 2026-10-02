@@ -107,11 +107,25 @@ from .pulumi_config import SlotRefused
 
 log = logging.getLogger(__name__)
 
+#: The Environments `physical`'s jobs run in: the ungated plan and the gated
+#: apply, the only two that take protected branches alone (ci.md §3). They are
+#: the cell of the partition a pull request cannot reach, which is why
+#: `physical`'s own passphrase goes into these and nowhere else, and the stack
+#: passphrase into every Environment but these (rfc-005 §5.1).
+PHYSICAL_ENVIRONMENTS = ('physical-plan', 'physical')
+
 #: The Environments whose jobs join ZeroTier, grouped by the stack whose
 #: identity they join with (physical/gateway.md §2.1). `k8s-base` and `apps` join nothing: the
 #: LAN-touching work is the AdGuard rewrites, which `dns` applies.
-ZEROTIER_PHYSICAL = ('physical-plan', 'physical')
+ZEROTIER_PHYSICAL = PHYSICAL_ENVIRONMENTS
 ZEROTIER_DNS = ('dns',)
+
+#: The secret a job's passphrase is read from, in every Environment: a job
+#: names this one secret whichever stack it runs, and which passphrase it
+#: holds is decided by the Environment the job names -- `physical`'s own in
+#: `PHYSICAL_ENVIRONMENTS`, the stack passphrase in every other. The rows
+#: below fill the two halves, and no Environment is in both.
+PASSPHRASE_SECRET = 'PULUMI_CONFIG_PASSPHRASE'
 
 #: The four secrets that carry one state-backend client bundle: the connection
 #: string, and the three files it authenticates with. They are **file contents
@@ -788,8 +802,8 @@ def _github(name: str, environments: tuple[str, ...]) -> tuple[Slot, ...]:
     return tuple(Slot(repository=repository, name=name, environment=environment) for environment in environments)
 
 
-def _every_environment(name: str) -> tuple[Slot, ...]:
-    """That secret in every Environment the deployment repository declares.
+def _every_environment(name: str, *, but: tuple[str, ...] = ()) -> tuple[Slot, ...]:
+    """That secret in every Environment the deployment repository declares, less those `but` names.
 
     The Environments come from the forge census (`conventions.forge`), which is
     where the credential partition ci.md §3 defines is written down and the one
@@ -797,7 +811,12 @@ def _every_environment(name: str) -> tuple[Slot, ...]:
     than listing them, so an Environment added to the partition is one this map
     fills without being edited.
     """
-    return _github(name, tuple(environment.name for environment in conventions.forge.DEPLOYMENT.environments))
+    return _github(
+        name,
+        tuple(
+            environment.name for environment in conventions.forge.DEPLOYMENT.environments if environment.name not in but
+        ),
+    )
 
 
 def _device(member: str, *, onward: tuple[Channel, ...] = (), pending: Mapping[str, str] | None = None) -> Row:
@@ -1023,20 +1042,39 @@ ROWS: dict[str, Row] = {
     'pulumi-passphrase': Row(
         register='Pulumi stack passphrase',
         source=Derived(escrow.PASSPHRASE),
-        # Every Environment, because every job runs a `pulumi` command and both
-        # Pulumi channels are encrypted under this one value.
+        # Every Environment but `physical`'s, because every job runs a `pulumi`
+        # command and both Pulumi channels of every other stack CI runs are
+        # encrypted under this one value. `physical`'s Environments hold that
+        # stack's own passphrase under the same name instead (the row below).
         targets=(
             EscrowCopy(escrow.PASSPHRASE),
             WorkstationSlot('pulumi.passphrase'),
-            *_every_environment('PULUMI_CONFIG_PASSPHRASE'),
+            *_every_environment(PASSPHRASE_SECRET, but=PHYSICAL_ENVIRONMENTS),
+        ),
+    ),
+    stack_environment.PHYSICAL_PASSPHRASE_ROW: Row(
+        register='`physical` passphrase',
+        source=Derived(escrow.PHYSICAL_PASSPHRASE),
+        # **`physical`'s Environments and no other, and that confinement is
+        # the row.** Those two take protected branches only, so no job of a
+        # pull request or of a branch push can enter them, while every other
+        # Environment takes any branch. `physical`'s provider credentials are
+        # config secrets under this passphrase, so a sink in any other
+        # Environment hands them to whatever a branch runs there; a test holds
+        # the set (rfc-005 §5.1).
+        targets=(
+            EscrowCopy(escrow.PHYSICAL_PASSPHRASE),
+            WorkstationSlot(workstation.PHYSICAL_PASSPHRASE),
+            *_github(PASSPHRASE_SECRET, PHYSICAL_ENVIRONMENTS),
         ),
     ),
     escrow.row_name(escrow.OPERATOR_PASSPHRASE): Row(
         register='Operator passphrase',
         source=Derived(escrow.OPERATOR_PASSPHRASE),
         # **No GitHub secret, and that absence is the row.** Every Environment
-        # holds the stack passphrase because every job runs a `pulumi`
-        # command; this one exists so that the operator stacks' config -- the
+        # holds a passphrase under `PULUMI_CONFIG_PASSPHRASE` because every job
+        # runs a `pulumi` command -- the stack passphrase, or `physical`'s own
+        # in its two; this one exists so that the operator stacks' config -- the
         # `github` stack's admin token that can unguard `main` among it -- is
         # readable by nothing CI can start. A sink added here would undo the
         # whole row, so a test holds it empty (ci.md §3).
@@ -1375,6 +1413,8 @@ __all__ = (
     'BACKEND_URL',
     'DISPATCH_APP_KEY',
     'HA_WEBHOOK_URL',
+    'PASSPHRASE_SECRET',
+    'PHYSICAL_ENVIRONMENTS',
     'REGISTER_COLUMNS',
     'ROWS',
     'TRIGGER_APP_KEY',

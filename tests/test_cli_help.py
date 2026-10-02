@@ -188,9 +188,10 @@ def test_a_mention_in_the_middle_of_a_help_text_is_caught(monkeypatch: pytest.Mo
 
 
 def test_the_help_names_the_shared_passphrase_by_the_registers_term(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The passphrase every stack but the operator stacks is encrypted under is
-    # the stack passphrase, the term its register row carries. The bring-up
-    # order names it where it says what reaches every Environment, and the
+    # The passphrase every stack but `physical` and the operator stacks is
+    # encrypted under is the stack passphrase, the term its register row
+    # carries. The bring-up order names it where it says which Environments
+    # it reaches, and the
     # row's own help names it where it says what the row holds; neither says
     # "estate", a word that means the operator's personal holdings and nothing
     # in this tree.

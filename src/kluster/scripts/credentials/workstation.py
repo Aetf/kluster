@@ -9,7 +9,10 @@ value without asking anybody for it.
 The stack passphrase and the state-backend client bundle are deliberately not
 in the desktop secret store: they are read on *every* `pulumi` run by a
 template that cannot prompt, cannot unlock a keyring and cannot fail
-gracefully, so a file is the shape that fits. The operator passphrase is read
+gracefully, so a file is the shape that fits. `physical`'s passphrase is a
+file for the same reason, though no template reads it: a `pulumi` run by hand
+against `physical` names the file to `pulumi` (`PULUMI_CONFIG_PASSPHRASE_FILE`,
+credentials.md §4.4), which a store entry could not be. The operator passphrase is read
 by the `operator-stack` driver instead, through the acquisition chain
 (`kluster.lib.acquisition`), so its slot is the chain's file layer, below the
 store in the chain's order: where it lives on a machine whose store does not
@@ -27,7 +30,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from kluster.lib.stack_environment import OPERATOR_PASSPHRASE_SLOT
+from kluster.lib.stack_environment import OPERATOR_PASSPHRASE_SLOT, PHYSICAL_PASSPHRASE_SLOT
 from kluster.lib.workstation import DIRECTORY, WorkstationError, directory, repo_root, secret_dir, write
 
 __all__ = (
@@ -36,6 +39,7 @@ __all__ = (
     'KIT',
     'OPERATOR_PASSPHRASE',
     'PASSPHRASE',
+    'PHYSICAL_PASSPHRASE',
     'ROOTS',
     'WorkstationError',
     'bundle_dir',
@@ -43,6 +47,7 @@ __all__ = (
     'kit_path',
     'operator_passphrase_path',
     'passphrase_path',
+    'physical_passphrase_path',
     'repo_root',
     'root_path',
     'secret_dir',
@@ -64,6 +69,12 @@ PASSPHRASE = 'pulumi.passphrase'
 #: gets. Named where the driver that reads it names it.
 OPERATOR_PASSPHRASE = OPERATOR_PASSPHRASE_SLOT
 
+#: `physical`'s passphrase (§2.2), which encrypts that stack and nothing else.
+#: A file of its own for the reason the operator passphrase has one: the
+#: property it exists for is the set of Environments it reaches, which is
+#: smaller than the stack passphrase's. Named where `stack_environment` names it.
+PHYSICAL_PASSPHRASE = PHYSICAL_PASSPHRASE_SLOT
+
 #: The account roots' file layer (`masters.py`), one file per field.
 ROOTS = 'roots'
 
@@ -81,6 +92,10 @@ def passphrase_path() -> Path:
 
 def operator_passphrase_path() -> Path:
     return directory() / OPERATOR_PASSPHRASE
+
+
+def physical_passphrase_path() -> Path:
+    return directory() / PHYSICAL_PASSPHRASE
 
 
 def root_path(name: str) -> Path:

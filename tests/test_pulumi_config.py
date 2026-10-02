@@ -11,6 +11,7 @@ CLI is not installed, which is neither CI nor a workstation with `mise`.
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 from collections.abc import Callable, Mapping, Sequence
@@ -22,7 +23,7 @@ from fake_pulumi import RecordedPulumi
 
 from kluster.conventions import identity
 from kluster.lib import pulumi_cli, stack_environment, workstation
-from kluster.scripts.credentials import pulumi_config
+from kluster.scripts.credentials import escrow, pulumi_config, slots
 
 STACK = 'dns'
 SECRET = 'a-minted-token'
@@ -272,3 +273,356 @@ def test_only_the_operator_stacks_are_given_the_operator_passphrase() -> None:
     assert asked == []
     assert environment.variables(operator_stack)[pulumi_config.PASSPHRASE_ENV] == 'the-operator-passphrase'
     assert asked == ['asked']
+
+
+def test_only_physical_is_given_its_own_passphrase() -> None:
+    """`physical` is handed what its finder answers and never the stack passphrase; no other stack asks.
+
+    The stack passphrase is in every Environment a pull request can reach, so
+    handing it to `physical` would be the one way `physical`'s configuration
+    reopens to a pull request's runs.
+    """
+    asked: list[str] = []
+
+    def find() -> str:
+        asked.append('asked')
+        return 'the-physical-passphrase'
+
+    environment = pulumi_config.BackendEnvironment(
+        passphrase='the-stack-passphrase', operator=lambda: 'the-operator-passphrase', physical=find
+    )
+
+    assert environment.variables(STACK)[pulumi_config.PASSPHRASE_ENV] == 'the-stack-passphrase'
+    for stack in pulumi_config.APART:
+        assert environment.variables(stack)[pulumi_config.PASSPHRASE_ENV] == 'the-operator-passphrase'
+    assert asked == []
+    assert environment.variables(pulumi_config.PHYSICAL)[pulumi_config.PASSPHRASE_ENV] == 'the-physical-passphrase'
+    assert asked == ['asked']
+
+
+def test_physical_is_refused_where_nothing_gives_its_passphrase() -> None:
+    environment = pulumi_config.BackendEnvironment(passphrase='the-stack-passphrase')
+
+    with pytest.raises(
+        pulumi_config.PassphraseMissing, match=f'credentials derived {pulumi_config.PHYSICAL_ROW} generate'
+    ):
+        _ = environment.variables(pulumi_config.PHYSICAL)
+
+
+def test_physical_is_refused_with_the_reason_its_finder_gives() -> None:
+    def find() -> str:
+        raise stack_environment.EnvironmentRefused('nothing escrowed for the label')
+
+    environment = pulumi_config.BackendEnvironment(passphrase='the-stack-passphrase', physical=find)
+
+    with pytest.raises(pulumi_config.PassphraseMissing, match='nothing escrowed for the label'):
+        _ = environment.variables(pulumi_config.PHYSICAL)
+
+
+def test_physical_names_the_row_the_register_carries() -> None:
+    # The row a refusal names is the slot map's and the escrow's own spelling.
+    assert pulumi_config.PHYSICAL_ROW in slots.ROWS
+    assert escrow.row_name(escrow.PHYSICAL_PASSPHRASE) == pulumi_config.PHYSICAL_ROW
+    assert identity.STACK_NAMES.physical == pulumi_config.PHYSICAL
+
+
+#: The passphrases the re-encryption cases move between.
+FORMER = 'the-stack-passphrase'
+OWN = 'the-own-passphrase'
+#: The secret the probe program's state holds once it has been applied.
+STATE_SECRET = 'a-state-secret'
+
+
+@pytest.fixture
+def physical_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, str]:
+    """A throwaway project and file backend for a stack named `physical`, driven by the real CLI."""
+    if shutil.which('pulumi') is None:
+        pytest.skip('the pinned pulumi CLI is not on PATH')
+    project = tmp_path / 'project'
+    project.mkdir()
+    # A YAML program with no resource and one secret output: an `up` puts a
+    # secret into the state with no provider to install, so the state has
+    # something of its own to move.
+    _ = (project / 'Pulumi.yaml').write_text(
+        f'name: {PROJECT}\nruntime: yaml\ndescription: slot probe\noutputs:\n  held:\n    fn::secret: {STATE_SECRET}\n'
+    )
+    state = tmp_path / 'state'
+    state.mkdir()
+    monkeypatch.setenv('PULUMI_HOME', str(tmp_path / 'home'))
+    monkeypatch.setenv('PULUMI_SKIP_UPDATE_CHECK', 'true')
+    return project, state.as_uri()
+
+
+def _physical_under(project: Path, url: str, own: str, *, former: str | None = None) -> pulumi_config.Stack:
+    """`physical` as a `credentials` run opens it: its own passphrase is `own`."""
+    return pulumi_config.Stack(
+        name=pulumi_config.PHYSICAL,
+        directory=project,
+        environment=pulumi_config.BackendEnvironment(passphrase=former, url=url, physical=lambda: own),
+    )
+
+
+def _salt(stack: pulumi_config.Stack) -> str:
+    """The stack file's salt, read as the plain line it is."""
+    found = re.search(r'^encryptionsalt:\s*(\S+)', _stack_file(stack).read_text(), re.M)
+    assert found is not None
+    return found.group(1)
+
+
+def _stack_file(stack: pulumi_config.Stack) -> Path:
+    return stack.directory / f'Pulumi.{stack.name}.yaml'
+
+
+def _under(stack: pulumi_config.Stack, passphrase: str, *args: str) -> str:
+    """One `pulumi` command against `stack`, under `passphrase` whatever the stack's own is."""
+    return stack.run(
+        [*args, '--stack', stack.name],
+        cwd=stack.directory,
+        env={**stack.env, 'PULUMI_CONFIG_PASSPHRASE': passphrase},
+        stdin=None,
+    )
+
+
+def _state_secret(stack: pulumi_config.Stack, passphrase: str) -> str:
+    """The secret output the applied program left in the state, decrypted under `passphrase`."""
+    exported = json.loads(_under(stack, passphrase, 'stack', 'export', '--show-secrets'))
+    (output,) = (
+        resource['outputs']['held']
+        for resource in exported['deployment']['resources']
+        if resource['type'] == 'pulumi:pulumi:Stack'
+    )
+    # `--show-secrets` writes a secret as an object whose `plaintext` holds
+    # its JSON encoding; the text is enough for a containment check.
+    return json.dumps(output)
+
+
+def _applied_under_former(project: Path, url: str) -> pulumi_config.Stack:
+    """`physical` under the former passphrase, with a secret in its configuration and one in its state."""
+    stack = _physical_under(project, url, FORMER)
+    stack.ensure()
+    stack.set_secret(QUALIFIED_KEY, SECRET)
+    _ = _under(stack, FORMER, 'up', '--yes', '--skip-preview')
+    assert STATE_SECRET in _state_secret(stack, FORMER)
+    return stack
+
+
+def test_the_real_cli_moves_a_stack_onto_its_own_passphrase(physical_project: tuple[Path, str]) -> None:
+    """Configuration and state both move: the new passphrase opens them, the old one no longer does."""
+    project, url = physical_project
+    made_under_former = _applied_under_former(project, url)
+    salt_before = _salt(made_under_former)
+    moving = _physical_under(project, url, OWN, former=FORMER)
+
+    assert moving.re_encrypt(former=[FORMER]) is True
+
+    assert moving.get(QUALIFIED_KEY) == SECRET
+    assert STATE_SECRET in _state_secret(moving, OWN)
+    with pytest.raises(pulumi_config.SlotRefused, match='incorrect passphrase'):
+        _ = made_under_former.get(QUALIFIED_KEY)
+    with pytest.raises(pulumi_config.SlotRefused, match='incorrect passphrase'):
+        _ = _state_secret(moving, FORMER)
+    assert _salt(moving) != salt_before
+    assert SECRET not in _stack_file(moving).read_text()
+
+
+def test_a_configuration_with_no_secret_is_moved_rather_than_called_moved(physical_project: tuple[Path, str]) -> None:
+    """Plain keys decrypt under any passphrase, so the former ones are asked first and the stack is moved.
+
+    Asked the other way round, such a stack would be reported as already
+    under its own passphrase and left under the former one, and the first
+    secret written under its own would end in `incorrect passphrase`.
+    """
+    project, url = physical_project
+    plain = _physical_under(project, url, FORMER)
+    plain.ensure()
+    plain.set('anIdentifier', 'account-1')
+    salt_before = _salt(plain)
+    moving = _physical_under(project, url, OWN, former=FORMER)
+
+    assert moving.re_encrypt(former=[FORMER]) is True
+
+    assert _salt(moving) != salt_before
+    moving.set_secret(QUALIFIED_KEY, SECRET)
+    assert moving.get(QUALIFIED_KEY) == SECRET
+
+
+def test_a_move_that_did_not_take_is_refused(physical_project: tuple[Path, str]) -> None:
+    """The check after the move: a `change-secrets-provider` that exits 0 and moves nothing is not a move."""
+    project, url = physical_project
+    _ = _applied_under_former(project, url)
+
+    def swallowing(args: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdin: str | None) -> str:
+        if list(args[:2]) == ['stack', 'change-secrets-provider']:
+            return ''
+        return pulumi_config.run_pulumi(args, cwd=cwd, env=env, stdin=stdin)
+
+    moving = pulumi_config.Stack(
+        name=pulumi_config.PHYSICAL,
+        directory=project,
+        environment=pulumi_config.BackendEnvironment(passphrase=FORMER, url=url, physical=lambda: OWN),
+        run=swallowing,
+    )
+
+    with pytest.raises(pulumi_config.SlotRefused, match='does not read back under its own passphrase'):
+        _ = moving.re_encrypt(former=[FORMER])
+
+
+def test_a_stack_already_under_its_own_passphrase_is_left_alone(physical_project: tuple[Path, str]) -> None:
+    project, url = physical_project
+    already = _physical_under(project, url, OWN, former=FORMER)
+    already.ensure()
+    already.set_secret(QUALIFIED_KEY, SECRET)
+    _ = _under(already, OWN, 'up', '--yes', '--skip-preview')
+    committed = _stack_file(already).read_text()
+
+    assert already.re_encrypt(former=[FORMER]) is False
+
+    assert _stack_file(already).read_text() == committed
+    assert already.get(QUALIFIED_KEY) == SECRET
+
+
+def test_a_stack_is_moved_from_whichever_former_passphrase_opens_it(physical_project: tuple[Path, str]) -> None:
+    """A rotation's case: the stack is under an earlier generation, not the first candidate tried."""
+    project, url = physical_project
+    earlier = _physical_under(project, url, 'an-earlier-generation')
+    earlier.ensure()
+    earlier.set_secret(QUALIFIED_KEY, SECRET)
+    moving = _physical_under(project, url, OWN, former=FORMER)
+
+    assert moving.re_encrypt(former=[FORMER, 'an-earlier-generation']) is True
+    assert moving.get(QUALIFIED_KEY) == SECRET
+
+
+def test_a_stack_under_a_passphrase_nobody_named_is_refused(physical_project: tuple[Path, str]) -> None:
+    project, url = physical_project
+    stranger = _physical_under(project, url, 'a-passphrase-nobody-holds')
+    stranger.ensure()
+    stranger.set_secret(QUALIFIED_KEY, SECRET)
+    committed = _stack_file(stranger).read_text()
+
+    with pytest.raises(pulumi_config.SlotRefused, match='opens under none'):
+        _ = _physical_under(project, url, OWN, former=FORMER).re_encrypt(former=[FORMER])
+
+    assert _stack_file(stranger).read_text() == committed
+
+
+def test_a_stack_the_backend_does_not_hold_is_refused(physical_project: tuple[Path, str]) -> None:
+    project, url = physical_project
+
+    with pytest.raises(pulumi_config.SlotRefused, match='holds no physical stack'):
+        _ = _physical_under(project, url, OWN, former=FORMER).re_encrypt(former=[FORMER])
+
+
+def _read_only(tree: Path, *, writable: bool) -> None:
+    for path in [tree, *tree.rglob('*')]:
+        mode = path.stat().st_mode
+        path.chmod(mode | 0o200 if writable else mode & ~0o222)
+
+
+def test_an_interrupted_move_names_the_recovery_and_the_recovery_finishes_it(
+    physical_project: tuple[Path, str], tmp_path: Path
+) -> None:
+    """A run stopped between the stack file and the state: each refusal names the way forward, and it works.
+
+    The import of the state is made to fail by a backend that cannot be
+    written, after the stack file is already rewritten.
+    """
+    project, url = physical_project
+    made_under_former = _applied_under_former(project, url)
+    committed = _stack_file(made_under_former).read_text()
+    moving = _physical_under(project, url, OWN, former=FORMER)
+    backend = tmp_path / 'state' / '.pulumi'
+
+    _read_only(backend, writable=False)
+    try:
+        with pytest.raises(
+            pulumi_config.SlotRefused, match=re.escape(f'may already be rewritten: {_recovery(project)}')
+        ):
+            _ = moving.re_encrypt(former=[FORMER])
+    finally:
+        _read_only(backend, writable=True)
+    assert _stack_file(moving).read_text() != committed
+
+    with pytest.raises(pulumi_config.SlotRefused, match=f'its state is not.*{re.escape(_recovery(project))}'):
+        _ = moving.re_encrypt(former=[FORMER])
+
+    _ = _stack_file(moving).write_text(committed)
+    assert moving.re_encrypt(former=[FORMER]) is True
+    assert moving.get(QUALIFIED_KEY) == SECRET
+    assert STATE_SECRET in _state_secret(moving, OWN)
+
+
+def test_a_finished_move_whose_stack_file_was_lost_is_recognized_as_moved(physical_project: tuple[Path, str]) -> None:
+    """The move ran, and the stack file it wrote was lost before it was committed: a second run finishes it.
+
+    The second run opens the restored file under the former passphrase,
+    rewrites it, and stops at the state, which the first run already moved;
+    the stack it leaves opens whole under its own passphrase, and a third
+    run has nothing to do.
+    """
+    project, url = physical_project
+    made_under_former = _applied_under_former(project, url)
+    committed = _stack_file(made_under_former).read_text()
+    moving = _physical_under(project, url, OWN, former=FORMER)
+    assert moving.re_encrypt(former=[FORMER]) is True
+
+    _ = _stack_file(moving).write_text(committed)
+
+    assert moving.re_encrypt(former=[FORMER]) is True
+    assert moving.get(QUALIFIED_KEY) == SECRET
+    assert STATE_SECRET in _state_secret(moving, OWN)
+    assert moving.re_encrypt(former=[FORMER]) is False
+
+
+def _recovery(project: Path) -> str:
+    """The recovery a refusal names, with the checkout it ran in, so it works from any directory."""
+    name = pulumi_config.PHYSICAL
+    return f'restore the committed Pulumi.{name}.yaml (`git -C {project} checkout -- Pulumi.{name}.yaml`)'
+
+
+def test_a_move_that_wrote_nothing_is_not_counted_because_nothing_holds_a_secret(
+    physical_project: tuple[Path, str],
+) -> None:
+    """Plain keys and an empty state decrypt under anything, so only a new salt says the run moved the stack.
+
+    The move is stopped before it writes by a stack file, and a directory,
+    that cannot be written.
+    """
+    project, url = physical_project
+    plain = _physical_under(project, url, FORMER)
+    plain.ensure()
+    plain.set('anIdentifier', 'account-1')
+    committed = _stack_file(plain).read_text()
+    moving = _physical_under(project, url, OWN, former=FORMER)
+
+    _read_only(project, writable=False)
+    try:
+        with pytest.raises(pulumi_config.SlotRefused, match='was not rewritten, so nothing moved'):
+            _ = moving.re_encrypt(former=[FORMER])
+    finally:
+        _read_only(project, writable=True)
+
+    assert _stack_file(moving).read_text() == committed
+
+
+def test_a_stack_file_left_between_its_two_saves_is_refused_naming_the_recovery(
+    physical_project: tuple[Path, str],
+) -> None:
+    """A new salt beside ciphertexts under the old one: `pulumi`'s own refusal, with the way forward added.
+
+    That is the file a run killed between `change-secrets-provider`'s two
+    saves of it leaves; it is made here from the files before and after a
+    move.
+    """
+    project, url = physical_project
+    made_under_former = _physical_under(project, url, FORMER)
+    made_under_former.ensure()
+    made_under_former.set_secret(QUALIFIED_KEY, SECRET)
+    before = _stack_file(made_under_former).read_text()
+    moving = _physical_under(project, url, OWN, former=FORMER)
+    assert moving.re_encrypt(former=[FORMER]) is True
+    new_salt = _salt(moving)
+    _ = _stack_file(moving).write_text(re.sub(r'(?m)^encryptionsalt:.*$', f'encryptionsalt: {new_salt}', before))
+
+    with pytest.raises(pulumi_config.SlotRefused, match=re.escape(_recovery(project))):
+        _ = moving.re_encrypt(former=[FORMER])

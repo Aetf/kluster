@@ -127,6 +127,10 @@ def expected(path: list[str]) -> str | None:
             # `import` is a keyword, so the register's verb and the function
             # that implements it cannot share a name.
             return 'escrow.adopt'
+        case ['derived', _, 're-encrypt']:
+            # The one escrowed row whose consumer is moved by a verb of its
+            # own: `physical`, onto its own passphrase.
+            return 'lifecycle.re_encrypt_physical'
         case ['derived', _, verb]:
             return f'escrow.{verb}'
         case ['seed', _, 'create']:
@@ -206,6 +210,7 @@ class Dispatch:
             (cli.lifecycle, 'rotate', []),
             (cli.lifecycle, 'create_seed', None),
             (cli.lifecycle, 'environment', cli.pulumi_config.BackendEnvironment()),
+            (cli.lifecycle, 're_encrypt_physical', True),
             (cli.escrow, 'generate', 'a-secret'),
             (cli.escrow, 'adopt', Path('placeholder')),
             (cli.escrow, 'record', Path('placeholder')),

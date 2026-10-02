@@ -216,7 +216,10 @@ def environment(
 
     The stack passphrase is recovered from the escrow with the kit's recovery
     key (§2.2), so the one place it exists outside its consumers is a committed
-    ciphertext nobody can open without the kit. The operator passphrase is
+    ciphertext nobody can open without the kit, and so is `physical`'s own
+    passphrase, though only when that stack is asked for: a kit with nothing
+    filed under its label refuses the commands that reach `physical` by naming
+    the command that files one, and no other. The operator passphrase is
     found the way the `operator-stack` driver finds it, through the
     acquisition chain (`stack_environment.operator_passphrase`), only when an
     operator stack is asked for, and at most once for this environment; the
@@ -240,7 +243,35 @@ def environment(
         # operator stack builds its environment again, and a chain that ends
         # at a prompt would ask on each of them.
         operator=functools.cache(_operator_passphrase),
+        physical=functools.cache(functools.partial(_physical_passphrase, vault)),
     )
+
+
+def _physical_passphrase(vault: escrow.Vault) -> str:
+    """`physical`'s passphrase, recovered with the kit; a label with nothing filed is refused by its fill command."""
+    try:
+        return vault.recover(escrow.PHYSICAL_PASSPHRASE)
+    except escrow.EscrowError as exc:
+        raise stack_environment.EnvironmentRefused(str(exc)) from exc
+
+
+def re_encrypt_physical(kit: KdbxStore, bundle_dir: Path, registry: escrow.Registry | None = None) -> bool:
+    """Move `physical` onto the newest generation of its own passphrase (`pulumi_config.Stack.re_encrypt`).
+
+    Every passphrase it may be under comes out of the kit, which is what lets
+    this run on any workstation that holds one: the stack passphrase, for a
+    stack made before it had one of its own, and each earlier generation of
+    its own, newest first, for a stack being moved onto a rotation's
+    successor (§4.2). The newest generation is the stack's environment, the
+    one every later run of it is given. Returns whether anything moved.
+    """
+    opened = environment(kit, bundle_dir, registry)
+    vault = escrow.Vault.open(kit, registry)
+    generations = vault.registry.generations(escrow.PHYSICAL_PASSPHRASE)
+    earlier = [vault.recover(escrow.PHYSICAL_PASSPHRASE, number) for number in reversed(generations[:-1])]
+    former = [passphrase for passphrase in (opened.passphrase, *earlier) if passphrase is not None]
+    stack = pulumi_config.Stack(name=pulumi_config.PHYSICAL, directory=pulumi_config.project_dir(), environment=opened)
+    return stack.re_encrypt(former=former)
 
 
 def _operator_passphrase() -> str:

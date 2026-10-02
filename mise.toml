@@ -1,6 +1,6 @@
 # mise does not echo these back in `mise env` or a task's command line. The
 # passphrase is a secret -- the Pulumi stack passphrase decrypts the state and
-# the config of every stack but the operator stacks. The URL carries no
+# the config of every stack but `physical` and the operator stacks. The URL carries no
 # credential -- the client key is a file `PGSSLKEY` names -- and is redacted
 # all the same: it names the state backend's address and role. This list is
 # variable names; the files they are read from are covered by .gitignore
@@ -101,6 +101,16 @@ node = "24.21.0"
 # `pulumi ... -s github` meets the stack passphrase, and that is not silent:
 # `encryptionsalt` is a verifier, so `pulumi` answers `error: incorrect
 # passphrase` and exits non-zero having written nothing.
+#
+# **Nor does `physical`'s passphrase**, for the same reason: that stack is
+# encrypted under a passphrase of its own, which reaches only the CI
+# Environments a pull request cannot (credentials.md §3), and a template
+# cannot see that a command names `physical`. A run by hand against it names
+# that passphrase's slot to `pulumi` itself, with the passphrase below taken
+# out of its environment -- `mise x -- env -u PULUMI_CONFIG_PASSPHRASE
+# PULUMI_CONFIG_PASSPHRASE_FILE=.credentials/physical.passphrase pulumi ...
+# --stack physical` (credentials.md §4.4); one that does not meets the
+# verifier the same way.
 #
 # Every one of them falls back to whatever is already in the environment
 # rather than to an empty string: CI sets the passphrase on the step that runs

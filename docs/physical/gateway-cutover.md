@@ -12,6 +12,27 @@ where a step says otherwise. That is not a preference: there is no
 overlay member yet — the member is one of the things this push delivers —
 which is why the ceremony's first three steps dial the LAN.
 
+The steps that run `pulumi` against `physical` run on the operator's
+workstation instead, through one shell function. Define it once, from
+the root of the checkout that holds `.credentials/`, in the shell those
+steps use:
+
+```sh
+CHECKOUT=$PWD
+physical() {
+    (cd "$CHECKOUT" && mise x -- env -u PULUMI_CONFIG_PASSPHRASE \
+        PULUMI_CONFIG_PASSPHRASE_FILE=.credentials/physical.passphrase \
+        pulumi "$@" --stack physical)
+}
+```
+
+`physical` is encrypted under a passphrase of its own, and `mise.toml`
+hands every run the stack passphrase, so the function takes that one
+out of the run's environment and names `physical`'s slot instead
+(credentials.md §4.4). A bare `pulumi` against `physical` ends in
+`error: incorrect passphrase`. The stack is under its own passphrase
+before this window opens (§3).
+
 ## 1. Why there is a window
 
 Nothing this program declares is on the device yet: the `physical` stack
@@ -113,6 +134,14 @@ not moved.
 
 ## 3. Before the window opens
 
+-   **`physical` is under its own passphrase.** `credentials derived
+    physical-passphrase re-encrypt` has moved it and `credentials
+    derived sync --only physical-passphrase` has pushed the passphrase
+    into its Environments (credentials.md §4). The move comes before
+    `physical`'s first `up`, which step 3 is: the state backend keeps
+    every checkpoint written before a move, readable under the stack
+    passphrase (credentials.md §1 rule 6). The `physical()` function
+    above opens the stack under that passphrase alone.
 -   **The legacy vhost census has landed.** The declared `Caddyfile`
     serves the controller console and the two resolver interfaces; the
     live one serves eleven names under `lan.ucw.phd` whose apps migrate
@@ -353,8 +382,12 @@ not moved.
     probe stack ls --all       # an empty table: the backend in hand is the probe's own
     probe stack init probe
     probe config set gatewayHost "$ADDR"
-    pulumi config get unifiApiKey --stack physical | probe config set --secret unifiApiKey
+    physical config get unifiApiKey | probe config set --secret unifiApiKey
     ```
+
+    The key is read out of `physical`'s configuration through the
+    `physical()` function defined at the top of this runbook, under that
+    stack's own passphrase.
 
     The rest runs one line at a time, because each reads the result of
     the one before it — above all, `rm -rf` runs only once `destroy`
@@ -532,8 +565,7 @@ not moved.
     window:
 
     ```sh
-    pulumi stack select physical
-    pulumi preview \
+    physical preview \
         -t 'urn:pulumi:physical::kluster-py::kluster:gateway:Gateway::kluster' \
         -t 'urn:pulumi:physical::kluster-py::kluster:gateway:Gateway$**::**'
     ```
@@ -637,8 +669,7 @@ state directory, and an empty one is what mints a new identity.
 workstation, over the LAN:
 
 ```sh
-pulumi stack select physical
-pulumi up \
+physical up \
     -t 'urn:pulumi:physical::kluster-py::kluster:gateway:Gateway::kluster' \
     -t 'urn:pulumi:physical::kluster-py::kluster:gateway:Gateway$**::**'
 ```
@@ -945,13 +976,13 @@ with a pass condition has passed, and the resolvers are answering
 again. Outside the window, and no longer against a clock:
 
 ```sh
-pulumi up
+physical up
 ```
 
 It completes the ceremony's step 1 (gateway.md §2.5) — the cloud
 fleet, the Talos bootstrap, the worker VM, the backup bucket, the
 overlay's network and routes — and re-walks the gateway as a no-op
-against the stamps. **It passes when a further `pulumi up` reports no
+against the stamps. **It passes when a further `physical up` reports no
 changes**, which is the whole-stack form of the reading above and the
 one the soak's previews go on repeating. **One diff may appear there
 without anything having drifted**: `routes` on
@@ -1028,10 +1059,10 @@ device-side children have to leave state before that can happen — each
 named individually, each with its own dependents:
 
 ```sh
-pulumi stack --show-urns | grep 'URN:' | grep -E \
+physical stack --show-urns | grep 'URN:' | grep -E \
     'kluster-(persistence|nspawn|caddy|adguard-alice|adguard-bob|zerotier|routing|access)$'
 # then, for each URN that printed:
-pulumi state delete --target-dependents '<urn>'
+physical state delete --target-dependents '<urn>'
 ```
 
 **Not the gateway component itself.** Deleting the parent takes every

@@ -65,7 +65,8 @@ facts about them.
     run's environment, by the `operator-stack` driver building an
     operator stack's (framework/pulumi.md §3.3), or by a script that must
     not stop to ask. It holds what a workstation reads that way: the
-    stack passphrase, the state backend's `operator` bundle (§4.4), the
+    stack passphrase, `physical`'s passphrase, the state backend's
+    `operator` bundle (§4.4), the
     operator passphrase on a machine whose desktop secret store does not
     hold it, and a root's token file on one that has no store. The stack passphrase and the bundle are deliberately not in
     the store: a `mise.toml` template reads them on *every* `pulumi` run,
@@ -128,16 +129,19 @@ facts about them.
     under `checkpoints/` (framework/pulumi.md §3.3), so its state has
     the configuration's exposure — ciphertext public from the push,
     under the operator passphrase — while it carries what its program
-    generates. Both channels are protected by the Pulumi *stack*
-    passphrase, escrowed to the kit's recovery key (§2.2) — so either
-    channel opens from the kit and from nothing else.
+    generates. Both channels of a stack are protected by its
+    passphrase — the Pulumi *stack* passphrase, or for `physical` and
+    the operator stacks one of their own (below) — each escrowed to the
+    kit's recovery key (§2.2), so either channel opens from the kit and
+    from nothing else.
 
     **The operator stacks are encrypted apart, under the operator
     passphrase.** An operator stack is one no CI job runs
     (framework/pulumi.md §3.3); `github` is one, and its config secret
     is the admin token that can switch off the protections guarding
-    `main`. The stack passphrase is in every CI Environment because
-    every job runs a `pulumi` command — so a config secret under *that*
+    `main`. The stack passphrase is in every CI Environment but
+    `physical`'s, because every job runs a `pulumi` command — so a
+    config secret under *that*
     passphrase is readable by anything CI can start, which for the
     ungated pull-request Environments means anybody who can push a
     branch here. Every operator stack is therefore encrypted under the
@@ -149,6 +153,33 @@ facts about them.
     and so is its exposure: `Pulumi.github.yaml` is committed, and its
     ciphertext is public. What differs is that the key opening it is
     held by the operator's workstation and the kit alone.
+
+    **`physical` is encrypted apart as well, under a passphrase of its
+    own.** Its config secrets are the credentials that can root the
+    gateway — the UniFi key, the ZeroTier Central token, the OCI and B2
+    keys among them — and under the stack passphrase they would reach
+    every run of a pull request, a preview or any workflow a branch adds.
+    CI runs `physical`, so its passphrase does reach Environments, but
+    only `physical-plan` and `physical`, the two that take protected
+    branches alone, and no job of a pull request or of a branch push can
+    enter those (rfc-005 §5.1). `dns`, `k8s-base` and `apps` keep
+    sharing the stack passphrase: their Environments all take any
+    branch, so a passphrase apiece would hold nothing out of anything.
+    **A pull request's runs therefore hold the configuration secrets of
+    the stacks it previews and never `physical`'s**, nor the operator
+    stacks'. The passphrase is escrowed like the stack passphrase and
+    kept in a workstation slot (§4.4), and a run is handed it by the
+    stack it names: the `credentials` commands choose it by name, and a
+    run by hand names its slot to `pulumi` (§4.4). Re-encrypting a stack
+    moves what its configuration holds now, not what git history keeps,
+    so a `physical` whose configuration was ever committed under the
+    stack passphrase is out of a pull request's reach only once every
+    config secret it held then has been issued again, as for a leaked
+    passphrase (§4.2). It moves the state's current checkpoint and not
+    the earlier ones: the backend keeps every checkpoint it wrote before
+    the move, in rows the `ci` bundle reads, so the move is made before
+    `physical`'s first `up`. A move after one extends the re-issuance to
+    every secret that state held, and deletes those rows.
 7.  **Provisioning is scripted.** Minting and distributing a
     credential is an executable procedure — a `credentials`
     subcommand (§4), never a documented sequence of console clicks.
@@ -414,6 +445,7 @@ issued under a superseded CA.
 | --- | --- | --- |
 | Pulumi stack passphrase | `pulumi/passphrase` | Generated |
 | The operator passphrase, which encrypts the operator stacks (§3) | `operator/passphrase` | Generated |
+| `physical`'s passphrase, which encrypts that stack alone (§3) | `physical/passphrase` | Generated |
 | Bearer token the issue-sync poller presents (§3) | `alertmanager/read` | Generated |
 | State-backend CA private key | `state-backend/ca` | Generated |
 | age identity for pg_dump encryption | `backup/age/<generation>` | Generated |
@@ -493,7 +525,7 @@ Consequences, all deliberate:
     secret cannot have: a value computed from a stored seed *is* a
     function of that seed, so replacing the seed for custody reasons —
     a new kit, a new custodian, a stick out of its envelope — replaces
-    the stack passphrase (re-encrypting every stack) and the
+    the stack passphrase (re-encrypting every stack under it) and the
     state-backend CA (a reissue and a replacement of the box,
     state-backend.md §7.1) along with it. Escrow separates the two
     events: rotating one credential is a new generation of one label
@@ -575,7 +607,8 @@ cell would say `pending` to an operator already being served.
 | GitHub App key (dispatch) | Made on the App's own page (no key API) | Signs a JWT for that App alone, which mints a per-run installation token carrying contents:write on `kluster` and `kluster-ops` — the App is installed on both, and each mint is scoped to the one repository its run pushes to. The residual: the key is a repository secret any same-repository job can read, and its token pushes non-workflow files to `kluster`'s unprotected branches — not to `main`, which is protected with checks required — and to any branch of `kluster-ops`, a private repository with no branch protection on this plan; it writes no workflow file in either (no `workflows` permission) — the same "anyone who can push a branch" boundary this repository already accepts (ci.md §3) | escrow as `github/dispatch-key` · `kluster` repository secret (`DISPATCH_APP_PRIVATE_KEY`) | `sdk-regenerate.yml`, whose push onto a renovate branch is the App's act so that the pushed head's runs start on their own (ci.md §3); the alert producer (`alert.yml`), to which the `alert` job every workflow on `main` but `deploy.yml` ends in (ci.md §3) hands the key, and which posts the alert to `kluster-ops` |
 | GitHub App key (trigger) | Made on the App's own page (no key API) | The same, for a per-run installation token carrying actions:write on `kluster` | escrow as `github/trigger-key` · ops-repo secret (`TRIGGER_APP_PRIVATE_KEY`) | Weekly drift trigger, the ops repo's `drift-trigger.yml`, which is not built (`kluster-ops#57`) |
 | overlay CI member identities (`ci-physical`, `ci-dns`) | generated in-state (`zerotier_identity`) | One per joining stack, `ci`-tagged and flow-rule-confined (gateway.md §2.3) | CI env | CI per-run join |
-| Pulumi stack passphrase | generated, escrowed as `pulumi/passphrase` | Decrypts the config secrets and the state secrets of every stack but the operator stacks | escrow · CI env (all stacks) · workstation slot | every `pulumi` run |
+| Pulumi stack passphrase | generated, escrowed as `pulumi/passphrase` | Decrypts the config secrets and the state secrets of every stack but `physical` and the operator stacks | escrow · CI env (every Environment but `physical-plan` and `physical`) · workstation slot | every `pulumi` run but those of `physical` and the operator stacks |
+| `physical` passphrase | generated, escrowed as `physical/passphrase` | Decrypts the configuration and the state secrets of `physical`, whose provider credentials can root the gateway, and nothing else | escrow · CI env (`physical-plan` and `physical` alone, the Environments that take protected branches only, as their `PULUMI_CONFIG_PASSPHRASE`) · workstation slot | every run of `physical`: its CI jobs, the `credentials` commands that reach its configuration or its state, and a run by hand (§4.4) |
 | Operator passphrase | generated, escrowed as `operator/passphrase` | Decrypts the configuration and the state secrets of every operator stack, since a stack's state is encrypted under its configuration's salt — `github`'s configuration and its state in the backend, and `state-backend`'s configuration and committed state, today — and nothing else | escrow · desktop secret store · workstation slot (a machine with no store) | every run of an operator stack, through the `operator-stack` driver, and the `credentials` commands that reach an operator stack's config |
 | State-backend CA | generated, escrowed as `state-backend/ca` | Issues every certificate below | escrow (private half) · on-box and every bundle (the certificate) | certificate issuance |
 | State-backend certificates (server, `ci`, `operator`) | issued from the CA, keys generated at issuance and never escrowed | The server's: TLS for the appliance's reserved address. A client's: logs in over TLS as the role its CN names, into `pulumi_state` alone — a `NOSUPERUSER` member of the role that owns the state, holding `CONNECT` on that database and `USAGE` and `CREATE` on its `public` schema, which the box's own initialization grants, and ownership of the table Pulumi's backend keeps its objects in (physical/state-backend.md §2). The excess, which the platform cannot scope away: the backend refuses to open without owning its table, so either client certificate can drop or rewrite any stack's state, `github`'s included, and `CREATE` lets it add tables beside it; and every leaf stays valid until it expires, with nothing short of a new CA to revoke it (§3 there) | on-box (server) · CI env · workstation slot (the `operator` bundle) | Pulumi state access |
@@ -643,7 +676,11 @@ wherever it is minted.
 **A stack-generated row leaves Pulumi state only where something
 outside Pulumi reads it.** The kubeconfig has no such reader: `k8s-base`
 and `apps` take it from the `physical` stack through a StackReference, so
-no workflow names a secret for it. The talosconfig has one — the hourly
+no workflow names a secret for it. That read crosses passphrases, since
+`physical` is encrypted apart from the two stacks reading it (§1 rule
+6), and a StackReference keeps another stack's plain outputs and elides
+the secrets it cannot decrypt; the kubeconfig is such a secret, so it is
+to reach them through their own configuration instead (`kluster-ops#487`). The talosconfig has one — the hourly
 etcd snapshot in the ops repository (ci.md §3) — and that reader is the
 whole of its ops-repo secret. The ZeroTier CI identities are the third
 shape: a job joins the overlay before it can reach anything the LAN
@@ -883,6 +920,8 @@ name.
 | `credentials seed oci domain` | Once, on a kit written before the OCI row carried its identity domain (§4.3). Borrows the OCI account root; every rotation after it needs nothing but the kit. |
 | `credentials derived pulumi-passphrase generate` | After the state backend exists. The stack passphrase (§2.2) is generated, its ciphertext committed and its workstation slot (§4.4) written in one act, so `mise.toml` puts it into the environment of every later `pulumi` run and the backend URL comes from the bundle beside it — a `pulumi` command needs no prepared shell. The general form of this verb is below. |
 | `credentials derived operator-passphrase generate` | Before anything reads or writes an operator stack's config, and once per installation. Generates the operator passphrase, commits its ciphertext and keeps it in the desktop secret store — its workstation slot (§4.4) on a machine with no store — in one act: the same shape as the row above, differing in the one thing it exists for: it reaches no CI Environment, so nothing CI can start can read `Pulumi.github.yaml`. A second workstation runs `credentials derived operator-passphrase recover` instead. Re-running `generate` files a *new* generation and does **not** re-encrypt the stacks; rotating it is §4.2. |
+| `credentials derived physical-passphrase generate` | After the state backend exists, and before anything reads or writes `physical`'s config. Generates `physical`'s passphrase (§2.2), commits its ciphertext and writes its workstation slot (§4.4) in one act — the stack passphrase's shape, differing in the Environments it reaches: `derived sync` pushes it into `physical-plan` and `physical` alone, so no run of a pull request can open `physical`'s configuration. Every `credentials` command that reaches `physical` opens it under this one, recovered with the kit, and refuses by naming this command where nothing is filed. Re-running it files a new generation and re-encrypts nothing: from then on those commands open `physical` under the new generation, and `re-encrypt` below is what moves the stack onto it (§4.2). |
+| `credentials derived physical-passphrase re-encrypt [--bundle-dir <path>]` | After `generate` above: once for a `physical` stack made under the stack passphrase, and once per rotation of its own. Re-encrypts `physical`'s configuration and its state in the backend onto the newest generation of its own passphrase, from whichever of the stack passphrase and its own earlier generations opens it, every one recovered with the kit, and proves it took: the configuration and the state both decrypt under the new one. A stack already there is left alone; one that a run interrupted between the stack file and the state is refused, naming the recovery: restore the committed `Pulumi.physical.yaml` and run it again. `Pulumi.physical.yaml` is then committed in a pull request. Run `credentials derived sync --only physical-passphrase` immediately before merging the pull request that carries the re-encrypted `Pulumi.physical.yaml`, with nothing else merged and no drift dispatched in between: the merge starts `deploy`, whose `plan-physical` reads the passphrase when it starts. A `physical` job that runs between the two meets `incorrect passphrase`, which `plan-physical` reports as a diff; reject the approval `up-physical` asks for, and dispatch `deploy` again once both have landed. The first move off the stack passphrase comes before `physical`'s first `up`, and ends with every config secret `physical` held under it issued again by its own command, because git history keeps those ciphertexts under a passphrase every pull request's runs hold (§1 rule 6); for the SSH pairs that means installing each new public half where the old one is authorized, removing the old one there, and pasting the private halves in with the §4.4 form. |
 | `credentials derived cloudflare-zones mint` | After the kit and the state backend exist, and after `apps` exists. Mints the zone-scoped Cloudflare token (§3) from the seed and writes the one token into the config of every stack the slot map names for the row, `dns` and `apps`, under the one key both read; the stack files are then committed. Any of those stacks but `dns`, whose first mint creates it, must already exist, and the mint refuses before it creates anything when one does not. The account the zones live in is not written beside it — that is `conventions.CLOUDFLARE_ACCOUNT`, and the mint holds the account it is about to mint in against it, before it creates anything. Re-running it rotates that token. No row takes a `--stack`: what each row mints is named after the row and its mint retires everything else of that name, so a delivery aimed at one stack would revoke the live credential of every other stack the row fills. That is why this row fills its stacks in one delivery and retires the token it supersedes only once every one of them holds the new one: a write that fails part-way retires nothing. |
 | `credentials derived cloudflare-gateway-acme mint` | After the kit and the state backend exist. Mints the gateway's own ACME token (§3) from the same seed, scoped to the zones its vhosts are served under, and writes it into the `physical` stack's config secret; the stack file is then committed, and the stack writes the token onto the device. Which stack takes it is not a choice — the token is named after the row and minting retires every other token of that name. The account is held against `conventions.CLOUDFLARE_ACCOUNT` before the token is created, as it is for the zones row: the check belongs to the mint, so no row can be the one that forgets it. Re-running it rotates that token. |
 | `credentials derived oci-physical mint` | After the state backend exists. The same mint for the `physical` stack, into that stack's config secrets; the stack file is then committed. It also creates that stack's compartment where the tenancy has none, and prints the `OCID` to record in `conventions` and commit. Before it creates anything, it refuses a seed that belongs to an account other than the one `conventions` records. |
@@ -1010,8 +1049,9 @@ token it pushes as is read out of the `github` stack's configuration —
 push their own carriers. A config command selects its stack in the state
 backend, so reading or writing a stack's configuration means reaching
 the backend, which is
-the client bundle plus the stack's passphrase — the stack passphrase the
-kit recovers, or the operator passphrase §2's chain finds; the flag says
+the client bundle plus the stack's passphrase — the stack passphrase or
+`physical`'s, each recovered with the kit, or the operator passphrase §2's
+chain finds; the flag says
 which bundle, and the default is the workstation slot (§4.4)
 `state-backend bundle operator` writes. The `state-backend` stack's rows
 need no bundle, its state being committed rather than in the backend,
@@ -1237,9 +1277,14 @@ operator-passphrase generate` and `recover`.
     for `--force` like a replacement, and the run exits 3 over a backend
     that holds no stack yet, naming the first `pulumi stack init`; its
     checkpoint is landed like any change.
-5.  `credentials derived pulumi-passphrase generate` — the stack
+5.  `credentials derived pulumi-passphrase generate`, then
+    `credentials derived physical-passphrase generate` — the stack
     passphrase, which belongs to every stack the appliance's backend
-    holds and to none of them. The command writes the
+    holds but `physical` and to none of them, and `physical`'s own,
+    which reaches no Environment a pull request can (§1 rule 6). Every
+    `credentials` command that writes `physical`'s configuration, from
+    stage 6 on, opens it under the second, so it comes first. The first
+    command writes the
     workstation slot (§4.4) as well as the ciphertext, and that slot is
     what a `pulumi` run reads from here on: `mise.toml` puts the
     passphrase and the bundle's `PULUMI_BACKEND_URL` into the
@@ -1294,8 +1339,10 @@ operator-passphrase generate` and `recover`.
     recorded, read back out of the `github` stack's configuration, so a
     run before that stage refuses by naming the command that fills it —
     and before stage 2, by naming the passphrase that opens it. It
-    pushes the stack passphrase into every Environment and the operator
-    passphrase into none, which is the partition ci.md §3 rests on.
+    pushes the stack passphrase into every Environment but `physical`'s,
+    `physical`'s passphrase into `physical-plan` and `physical` alone,
+    and the operator passphrase into none, which is the partition ci.md
+    §3 rests on.
 
 A stage that fails is re-run; nothing is parked. Once the last one is
 done, the kit goes back in its envelope.
@@ -1317,8 +1364,9 @@ that opens one arrives with `k8s-base`.
     writer keys, sealable only once `k8s-base` has the sealed-secrets
     controller up) have neither half (`kluster-ops#42`).
 -   Part of the **CI Environment half** (ci.md §3). The sink exists (§4)
-    and fills what a workstation can obtain: the stack passphrase and the
-    `ci` client bundle into every Environment, the overlay network's id
+    and fills what a workstation can obtain: the stack passphrase into
+    every Environment but `physical`'s, `physical`'s own into those two,
+    the `ci` client bundle into every Environment, the overlay network's id
     into the Environments whose jobs join it, and the dispatch App's key
     as a repository secret. What is left waits on something other than
     the sink — the ZeroTier CI identities, on the `physical` stack that
@@ -1360,7 +1408,7 @@ unwritten but generates its own password into state and seals it, so a
 new volume will need no `credentials` run (rule 6). Until the commands
 above exist, a bring-up delivers the seed kit; the operator passphrase;
 the `state-backend` stack's configuration and the state backend it
-declares; the stack passphrase; the zones token, the gateway's ACME token, the
+declares; the stack passphrase and `physical`'s; the zones token, the gateway's ACME token, the
 `physical` OCI key and the B2 management key; the credentials made by
 hand that a stack reads — the
 UniFi key, the AdGuard login, the ZeroTier Central token, the BGP
@@ -1563,18 +1611,26 @@ runs, the stack file disagrees with the passphrase the chain finds, and
 every command against that stack answers `error: incorrect passphrase` — loud, and repaired by
 finishing the adoption or by putting the predecessor back.
 
-**The stack's *state* carries a salt of its own, and it is rewritten by
-the next `up` rather than by that command.** A first run under a new
-passphrase therefore meets state whose secrets-provider salt names the
-old one, and succeeds — but only because that state holds no secret
-*values* to decrypt; the `up` then writes the state's salt afresh. Where
-a secret does exist there the mismatch is loud in its own way —
-`failed to decrypt: incorrect passphrase`, the state's own salt being a
-verifier checked when a secret is read — so the case this glosses over is
-a refusal and never a corruption. The stack passphrase adopts the same
-way, plus a `derived sync` to re-push it to every Environment. That
-re-encryption is the whole of a rotation made for custody; a passphrase
-that has leaked asks for more (below).
+**The same command re-encrypts the stack's *state*.** After rewriting
+the stack file it exports the state, decrypts it under the predecessor
+and imports it again under the new salt
+([`stack_change_secrets_provider.go` at v3.257.0](https://github.com/pulumi/pulumi/blob/v3.257.0/pkg/cmd/pulumi/stack/stack_change_secrets_provider.go)),
+so the state's salt is the stack file's from then on; for a stack whose
+state is committed the checkpoint is a second file to commit. The
+checkpoints the backend wrote before it stay under the predecessor. A
+passphrase whose consumer is `physical` adopts through a command of its
+own: `credentials derived physical-passphrase re-encrypt` runs that
+change from whichever of the stack passphrase and its own earlier
+generations opens the stack, recovered with the kit, and proves the
+result — the configuration and the state both decrypt under the new
+generation — before `Pulumi.physical.yaml` is committed and `derived
+sync --only physical-passphrase` re-pushes the passphrase to
+`physical`'s two Environments, immediately before the commit merges
+(§4). The stack passphrase
+adopts the way the operator passphrase does, once per stack under it,
+plus a `derived sync` to re-push it to every Environment but
+`physical`'s. That re-encryption is the whole of a rotation made for
+custody; a passphrase that has leaked asks for more (below).
 
 **Never repair that disagreement by deleting `encryptionsalt`.** With no
 salt there is nothing to verify against, and `pulumi` mints one from
@@ -1638,8 +1694,9 @@ A credential retired before the leak costs nothing, being dead at its
 platform. The same passphrase encrypts the stack's state (rule 6),
 which is not in git: a state secret is exposed only to whoever also
 reached that state, and anywhere that held the passphrase beside a way
-into the backend counts. Today every CI Environment holds the stack
-passphrase and the `ci` bundle, so a passphrase that leaked out of a job
+into the backend counts. Today every CI Environment holds the `ci`
+bundle and a passphrase — `physical`'s two hold `physical`'s, every other
+the stack passphrase — so a passphrase that leaked out of a job
 is a state leak as well, and each state secret is then replaced with the
 resource that owns it.
 
@@ -1681,6 +1738,7 @@ never a hunt for per-machine environment wiring:
 | --- | --- | --- |
 | `kit.kdbx` | The seed kit (§2.1), on the workstation that holds one. Not a slot — the offline store, whose canonical copies are the two envelopes. `$KLUSTER_KDBX` overrides the path, for a kit on removable media. | `credentials kit bootstrap` |
 | `pulumi.passphrase` | The stack passphrase (§2.2), kept here because `mise.toml` reads it from a file on every `pulumi` run: a template can neither prompt nor open a kit. | `credentials derived pulumi-passphrase generate`, `credentials derived pulumi-passphrase recover` |
+| `physical.passphrase` | `physical`'s passphrase (§2.2), which opens that stack and nothing else. No `mise.toml` template reads it, for the operator passphrase's reason: `PULUMI_CONFIG_PASSPHRASE` is process-global and a template never sees the stack a command names. A `credentials` run recovers it with the kit and needs no slot; the slot is for a `pulumi` run by hand against `physical`, which names it to `pulumi` as below. | `credentials derived physical-passphrase generate`, `credentials derived physical-passphrase recover` |
 | `operator.passphrase` | The operator passphrase (§2.2), which opens the operator stacks (framework/pulumi.md §3.3) and nothing else, on a machine whose desktop secret store does not hold it: the file layer of §2's chain, below the store. Found by the `operator-stack` driver, which hands it to `pulumi` for every run of an operator stack, and read by no `mise.toml` template: `PULUMI_CONFIG_PASSPHRASE` is process-global, so which passphrase is right depends on the stack a command names, which a template never sees. | `credentials derived operator-passphrase generate`, `credentials derived operator-passphrase recover`, where the machine has no store |
 | `roots/<root>.<field>` | An account root's token file — the second layer of §2's chain, written only on a machine with no desktop secret store. No tool reads one on its own; a `credentials` run does, when a mint asks for the root. | `credentials root <name> remember` |
 | `state-backend/` | What a workstation knows about the appliance. The `operator` client bundle: CA, certificate, key, and the connection string for the appliance they authenticate against — which names the appliance and none of the files; the key is `0600`, which libpq insists on. `bundle operator` writes it, each time over the last, and the `state-backend` stack's hooks and the `operator-stack` driver connect with it. `known_hosts`, the box's SSH host-key pin (physical/state-backend.md §1): the committed public half, written by every `ssh` before it connects, rewritten whole rather than ever cleared. | `state-backend bundle operator`, `state-backend ssh` |
@@ -1710,7 +1768,21 @@ sits, so a workspace's `mise x` hands on the caller's values and a
 `pulumi` run that needs this directory runs from the checkout that holds
 it (`kluster-ops#387`); a scratch probe runs `pulumi` as
 [framework/testing.md](framework/testing.md) §5.1 says. It reads no
-provider credential at all. The `operator-stack` driver reads the
+provider credential at all, and no passphrase but the stack passphrase.
+**A `pulumi` run by hand against `physical` therefore names `physical`'s
+slot itself**, with the stack passphrase taken out of its environment,
+because `pulumi` reads `PULUMI_CONFIG_PASSPHRASE` ahead of
+`PULUMI_CONFIG_PASSPHRASE_FILE`; from the checkout's root:
+
+    mise x -- env -u PULUMI_CONFIG_PASSPHRASE \
+        PULUMI_CONFIG_PASSPHRASE_FILE=.credentials/physical.passphrase \
+        pulumi preview --stack physical
+
+The passphrase stays out of every argument, as it does in every other
+run. A bare `pulumi … --stack physical` meets the stack passphrase,
+and the stack file's `encryptionsalt` is a verifier: the first secret
+the run decrypts or encrypts ends it with `error: incorrect passphrase`,
+before anything is written. The `operator-stack` driver reads the
 bundle from here too, for the stacks `mise.toml` leaves alone, and finds
 the operator passphrase through §2's chain, of which this directory's
 slot is the file layer; under `.claude/` it refuses to run rather than

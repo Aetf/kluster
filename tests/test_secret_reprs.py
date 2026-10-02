@@ -228,9 +228,9 @@ CENSUS: dict[type, Census] = {
     # print (`pki.Authority`).
     pki.Authority: Census('key', secret='key'),
     pki.Credential: Census('key_pem cert_pem', secret='key_pem'),
-    # `operator` is where the operator passphrase is found, a function, which
-    # holds no value to print.
-    pulumi_config.BackendEnvironment: Census('passphrase url operator', secret='passphrase'),
+    # `operator` and `physical` are where the operator passphrase and
+    # `physical`'s are found, functions, which hold no value to print.
+    pulumi_config.BackendEnvironment: Census('passphrase url operator physical', secret='passphrase'),
     pulumi_config.Stack: Census('name directory environment run'),
     # The two caches hold an opened escrow and the backend environment, each a
     # record with a secret of its own, and are out of the repr and out of

@@ -1,6 +1,7 @@
 # This stack is an operator stack, one no CI job runs, and its configuration is
 # encrypted under the operator passphrase rather than the stack passphrase
-# every CI Environment holds (docs/credentials.md §1 rule 6). The
+# every CI Environment but `physical`'s holds, or `physical`'s own, which those
+# two hold (docs/credentials.md §1 rule 6). The
 # `encryptionsalt` below is a verifier for that passphrase: the
 # `operator-stack` driver hands it to `pulumi` (docs/framework/pulumi.md §3.3),
 # and under any other value `pulumi` refuses with `incorrect passphrase` and

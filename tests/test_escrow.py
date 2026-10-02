@@ -397,7 +397,7 @@ def test_recording_something_that_is_not_a_private_key_is_refused(vault: escrow.
 def test_recording_a_row_that_is_drawn_here_is_refused(vault: escrow.Vault) -> None:
     # `record` is for a value this side cannot produce. Pointing it at the
     # passphrase would escrow whatever the operator pasted as a generation of
-    # a credential every stack is encrypted under.
+    # a credential every stack but those encrypted apart is under.
     with pytest.raises(escrow.EscrowError, match='drawn here'):
         _ = escrow.record(vault, escrow.PASSPHRASE, 'a-pasted-passphrase')
 

@@ -37,12 +37,14 @@ def refuses(prompt: str) -> str:
 
 #: What a machine that holds every passphrase can tell a `pulumi` run. The
 #: operator stacks, `github` among them, are encrypted under the operator
-#: passphrase rather than the stack passphrase (`pulumi_config.APART`), so a
-#: helper that left it out would have every case about that stack failing on
-#: the passphrase instead of on its subject.
+#: passphrase and `physical` under its own rather than the stack passphrase
+#: (`pulumi_config.APART`, `pulumi_config.PHYSICAL`), so a helper that left
+#: either out would have every case about those stacks failing on the
+#: passphrase instead of on its subject.
 FULLY_EQUIPPED = pulumi_config.BackendEnvironment(
     passphrase='the-stack-passphrase',
     operator=lambda: 'the-operator-passphrase',
+    physical=lambda: 'the-physical-passphrase',
 )
 
 
@@ -401,7 +403,7 @@ def test_a_stack_encrypted_apart_refuses_on_a_machine_that_holds_no_passphrase_f
         _ = devices.borrow(GITHUB_ADMIN, stack=bare)
 
     # And the stack passphrase is not quietly used instead, which is the whole
-    # point: that value is in every CI Environment. The refusal says so by the
+    # point: that value is in every Environment a pull request can reach. The refusal says so by the
     # name credentials.md gives that passphrase.
     assert runner.invocations == []
     assert 'The stack passphrase the other stacks share is deliberately not used' in str(refusal.value)

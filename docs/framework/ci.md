@@ -677,7 +677,8 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     which deploys it, or put reality back as the code says with
     `mise x -- pulumi up --refresh --stack <stack>` from the checkout
     that holds `.credentials/` (the workstation form README.md gives
-    for a preview). `deploy.yml`'s plain `up` does not do the second:
+    for a preview, which for `physical` names that stack's own
+    passphrase). `deploy.yml`'s plain `up` does not do the second:
     the drift run's refresh is a preview's and writes nothing, so
     state still holds what the last deploy wrote, and only the device
     resources, whose `diff` reads the device (architecture.md §5.2),
@@ -696,7 +697,8 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     find what the apply was waiting on — the last resource its log
     names — because re-running into the same hang repeats it. Then,
     from the checkout that holds `.credentials/` (the workstation form
-    README.md gives for a preview), for the stack the job names:
+    README.md gives for a preview, which for `physical` names that
+    stack's own passphrase), for the stack the job names:
 
     1.  Confirm that nothing is applying that stack: no deploy run past
         its plan, and no `up`, `refresh`, `import` or `state` command
@@ -793,7 +795,26 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     actual applies — the one approval door kept, guarding *apply*.
     kluster-code deleted its gate for the *apps* cadence, and apps
     stay frictionless here too — but a layer that can root the
-    gateway is not that layer. **PRs get no physical preview at
+    gateway is not that layer. **What a pull request's runs hold is
+    the credentials of the stacks it previews, and never
+    `physical`'s.** The two physical Environments take protected
+    branches only, so a job of a pull request or of a branch push that
+    names either is refused before any step, while `dns`, `k8s-base`
+    and `apps` take any branch for their previews. `physical`'s config
+    secrets are therefore encrypted under a passphrase of its own, which
+    `physical-plan` and `physical` hold and no other Environment does;
+    the three previewed stacks share the stack passphrase, which every
+    other Environment holds (rfc-005 §5.1, credentials.md §1 rule 6). A
+    pull request's preview, or any workflow a branch adds, thus runs
+    with the previewed stacks' configuration secrets, the `dns` overlay
+    membership and the `ci` bundle's access to every stack's state, and
+    with nothing that opens `physical`'s configuration — whose
+    ciphertexts from before the move stay in git history under the
+    stack passphrase, which is why that move ends with every
+    credential they held issued again, and is made before `physical`'s
+    first `up`, the backend keeping every checkpoint written before it
+    (credentials.md §1 rule 6).
+    **PRs get no physical preview at
     all**: a physical-path PR is reviewed as code, and its resource
     diff is read in `plan-physical`'s output on main — reading it is
     the approval moment before `up-physical`. Residual, accepted
@@ -876,23 +897,23 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     its own Environment's secrets could rewrite the partition
     confining it, which is the one property the partition exists to
     have. That is why the credential which writes them — the GitHub
-    admin token — sits in the one stack whose configuration is **not**
-    encrypted under the passphrase these Environments carry
-    (credentials.md §1 rule 6): every Environment holding that
-    passphrase means every Environment could otherwise read that
-    stack's config, and the ungated pull-request Environments make
-    "every Environment" reach as far as "anybody who can push a
-    branch" (github.md §1).
+    admin token — sits in a stack whose configuration is encrypted
+    under **neither** passphrase these Environments carry
+    (credentials.md §1 rule 6): the stack passphrase is in every
+    Environment but `physical`'s, the ungated pull-request Environments
+    among them, which make "every Environment" reach as far as "anybody
+    who can push a branch" (github.md §1).
     The partition above is therefore also the map's shape —
-    the Pulumi stack passphrase (`PULUMI_CONFIG_PASSPHRASE`) and the
-    state-backend bundle in every Environment because every job runs a
-    `pulumi` command,
+    a passphrase under `PULUMI_CONFIG_PASSPHRASE` and the state-backend
+    bundle in every Environment because every job runs a `pulumi`
+    command, the passphrase being `physical`'s own in its two
+    Environments and the stack passphrase in every other,
     `ZEROTIER_IDENTITY` only in the Environments of the stack it
     belongs to (physical/gateway.md §2.6).
 -   **Two ways a row fills, and which one applies is a property of the
     credential.** *Synced* rows are copies of a value whose truth lives
     elsewhere, and `credentials derived sync` re-reads and re-pushes
-    them: the stack passphrase out of the escrow, `ZEROTIER_IDENTITY`
+    them: the stack passphrase and `physical`'s out of the escrow, `ZEROTIER_IDENTITY`
     out of the `physical` stack's state, `ZEROTIER_NETWORK_ID` out of
     the constant `conventions.overlay.NETWORK_ID`, and the Home
     Assistant webhook URL from whoever types it — `HA_WEBHOOK_URL` in

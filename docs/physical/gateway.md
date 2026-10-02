@@ -1496,12 +1496,16 @@ apply is run in two parts around the cutover window:
     from a file rather than from the export, so step 1's export is
     written out first — it is a cluster-admin credential, so it is
     written where the operator keeps such things and not left in a
-    working directory:
+    working directory. The export is read from the root of the checkout
+    that holds `.credentials/`, under `physical`'s own passphrase, with
+    the stack passphrase `mise.toml` hands every run taken out
+    (credentials.md §4.4):
 
     ```sh
-    pulumi stack select physical
     mkdir -p ~/.talos
-    (umask 077; pulumi stack output talosconfig --show-secrets > ~/.talos/kluster)
+    (umask 077; mise x -- env -u PULUMI_CONFIG_PASSPHRASE \
+        PULUMI_CONFIG_PASSPHRASE_FILE=.credentials/physical.passphrase \
+        pulumi stack output talosconfig --show-secrets --stack physical > ~/.talos/kluster)
     talosctl --talosconfig ~/.talos/kluster -n 192.168.70.10 get addresses
     ```
 

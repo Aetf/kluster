@@ -45,6 +45,16 @@ REPOSITORY = conventions.forge.DEPLOYMENT.full_name
 OPS_REPOSITORY = conventions.forge.OPS.full_name
 DRILL_ENVIRONMENT = conventions.forge.DRILL.name
 ENVIRONMENTS = tuple(environment.name for environment in conventions.forge.DEPLOYMENT.environments)
+#: The Environments a job of a pull request or of a branch push can never
+#: enter: those that take protected branches only, read off the census.
+MAIN_ONLY = frozenset(
+    environment.name
+    for environment in conventions.forge.DEPLOYMENT.environments
+    if environment.branches is conventions.forge.BranchPolicy.PROTECTED_ONLY
+)
+#: The Environments the stack passphrase is pushed into, every one but those
+#: holding `physical`'s own, as the map partitions them.
+STACK_PASSPHRASE_ENVIRONMENTS = tuple(name for name in ENVIRONMENTS if name not in slots.PHYSICAL_ENVIRONMENTS)
 #: The output the `dns` identity's row reads, as the `physical` program exports
 #: it: the fake stack below answers under this name for the same reason the
 #: names above are read rather than copied.
@@ -448,14 +458,53 @@ def test_a_reason_filed_under_a_channel_the_row_addresses_is_refused() -> None:
         )
 
 
-def test_the_passphrase_reaches_every_environment() -> None:
-    # Every job runs a `pulumi` command, and both Pulumi channels are encrypted
-    # under this one value, so a missing Environment here is a layer of the
-    # merge chain that cannot start.
-    passphrase = slots.ROWS['pulumi-passphrase']
+def test_every_environment_holds_exactly_one_passphrase() -> None:
+    """Each Environment's `PULUMI_CONFIG_PASSPHRASE` is filled by one passphrase row, never none and never two.
 
-    assert {slot.environment for slot in passphrase.sinks} == set(ENVIRONMENTS)
-    assert {slot.name for slot in passphrase.sinks} == {'PULUMI_CONFIG_PASSPHRASE'}
+    Every job runs a `pulumi` command, so an Environment holding none is a
+    layer of the merge chain that cannot start; one that two rows fill holds
+    whichever the map's order pushed last.
+    """
+    passphrases = {
+        name: {slot.environment for slot in slots.ROWS[name].sinks}
+        for name in ('pulumi-passphrase', stack_environment.PHYSICAL_PASSPHRASE_ROW)
+    }
+
+    for name in passphrases:
+        assert {slot.name for slot in slots.ROWS[name].sinks} == {'PULUMI_CONFIG_PASSPHRASE'}
+    for environment in ENVIRONMENTS:
+        holders = [name for name, reached in passphrases.items() if environment in reached]
+        assert len(holders) == 1, f'{environment} holds {holders or "no passphrase"}'
+
+
+def test_physicals_passphrase_reaches_no_environment_a_pull_request_can_enter() -> None:
+    """The property `physical`'s own passphrase exists for, held rather than merely true (rfc-005 §5.1).
+
+    `physical`'s provider credentials are config secrets under it, so an
+    Environment that takes any branch and holds it hands them to whatever a
+    branch runs there, a preview or a workflow the branch adds. It goes to the
+    Environments `physical`'s jobs run in, each of them one that takes
+    protected branches only, and into no repository secret, which every job
+    can read.
+    """
+    row = slots.ROWS[stack_environment.PHYSICAL_PASSPHRASE_ROW]
+    reached = {slot.environment for slot in row.sinks}
+
+    assert reached == set(slots.PHYSICAL_ENVIRONMENTS)
+    assert reached <= MAIN_ONLY, f'{reached - MAIN_ONLY} take a branch a pull request can push'
+    assert {slot.repository for slot in row.sinks} == {REPOSITORY}
+    # The contrast, so this cannot pass by the census having no Environment
+    # that takes any branch.
+    assert set(ENVIRONMENTS) - MAIN_ONLY
+    # And its escrow copy and its workstation slot, the names `recover` and
+    # the driver-less run by hand use.
+    assert slots.EscrowCopy(escrow.PHYSICAL_PASSPHRASE) in row.targets
+    assert slots.WorkstationSlot(stack_environment.PHYSICAL_PASSPHRASE_SLOT) in row.targets
+    written = escrow.slot(escrow.PHYSICAL_PASSPHRASE)
+    assert written is not None
+    assert written.store is None
+    assert written.path().name == stack_environment.PHYSICAL_PASSPHRASE_SLOT
+    assert escrow.row_name(escrow.PHYSICAL_PASSPHRASE) == stack_environment.PHYSICAL_PASSPHRASE_ROW
 
 
 def workflow_backend_secrets() -> set[str]:
@@ -905,7 +954,9 @@ def context(
     backend_url: str | None = None,
 ) -> slots.Context:
     """A push that reaches nothing real: no kit, no backend, no forge, no terminal."""
-    resolved = pulumi_config.BackendEnvironment(url=backend_url)
+    # `physical`'s passphrase is there because the state reads are of that
+    # stack, which is opened under its own and refused without it.
+    resolved = pulumi_config.BackendEnvironment(url=backend_url, physical=lambda: 'the-physical-passphrase')
     return slots.Context(
         forge=Forge(token='the-admin-token', run=gh),
         open_vault=open_vault,
@@ -920,11 +971,28 @@ def test_a_derived_row_is_recovered_once_and_pushed_to_every_slot() -> None:
 
     pushed = slots.sync(context(gh, open_vault=opened), only='pulumi-passphrase')
 
-    # One recovery, five deliveries: the value is obtained once and fanned out,
-    # so a rotation is one command rather than one per Environment.
-    assert len(pushed) == len(ENVIRONMENTS)
-    for environment in ENVIRONMENTS:
+    # One recovery, a delivery per Environment: the value is obtained once and
+    # fanned out, so a rotation is one command rather than one per
+    # Environment.
+    assert len(pushed) == len(STACK_PASSPHRASE_ENVIRONMENTS)
+    for environment in STACK_PASSPHRASE_ENVIRONMENTS:
         assert gh.values[(REPOSITORY, environment, 'PULUMI_CONFIG_PASSPHRASE')] == PASSPHRASE
+    for environment in slots.PHYSICAL_ENVIRONMENTS:
+        assert (REPOSITORY, environment, 'PULUMI_CONFIG_PASSPHRASE') not in gh.values
+
+
+def test_physicals_passphrase_is_recovered_and_pushed_into_physicals_environments_alone() -> None:
+    """`sync --only physical-passphrase` is the delivery, and it writes nothing a pull request's jobs can read."""
+    gh = RecordedGh()
+    vault = opened()
+
+    pushed = slots.sync(context(gh, open_vault=lambda: vault), only=stack_environment.PHYSICAL_PASSPHRASE_ROW)
+
+    assert cast('Vault', vault).recovered == [escrow.PHYSICAL_PASSPHRASE]
+    assert len(pushed) == len(slots.PHYSICAL_ENVIRONMENTS)
+    assert set(gh.values) == {
+        (REPOSITORY, environment, 'PULUMI_CONFIG_PASSPHRASE') for environment in slots.PHYSICAL_ENVIRONMENTS
+    }
 
 
 def test_the_trigger_app_key_is_recovered_once_and_pushed_to_the_ops_repository() -> None:
@@ -1101,7 +1169,7 @@ def test_a_push_verifies_through_the_listing_because_the_value_never_comes_back(
     # A secret is write-only, so the check is that the name is in the listing
     # and its timestamp moved — read before the push and again after it.
     listings = [args for args in gh.invocations if args[0:2] == ['secret', 'list']]
-    assert len(listings) == 2 * len(ENVIRONMENTS)
+    assert len(listings) == 2 * len(STACK_PASSPHRASE_ENVIRONMENTS)
 
 
 def test_a_slot_that_does_not_show_the_secret_afterwards_is_a_failure() -> None:
@@ -1397,8 +1465,9 @@ def test_a_stack_encrypted_apart_has_a_row_that_generates_its_passphrase() -> No
 def test_the_passphrase_of_a_stack_encrypted_apart_reaches_no_github_secret() -> None:
     """The property the operator passphrase exists for, held rather than merely true.
 
-    The stack passphrase is in every Environment because every job runs a
-    `pulumi` command. This one is in none, which is what keeps the operator
+    Every Environment holds a passphrase under `PULUMI_CONFIG_PASSPHRASE`
+    because every job runs a `pulumi` command -- the stack passphrase, or
+    `physical`'s own in its two. This one is in none, which is what keeps the operator
     stacks' config -- the `github` stack's admin token that can unguard `main`
     among it -- unreadable by anything CI can start. A sink added to that row
     would undo it silently, so the emptiness is the assertion.
