@@ -4,6 +4,10 @@ Three shapes, because upstream ships CRDs three ways: inside a chart, as a
 release asset, and — Cilium — as YAML that exists only in the source tree.
 None of them reads a live cluster: what the bindings describe is the chart set
 this repository pins, not whatever happens to be installed somewhere.
+
+The pins are read out of `Pulumi.yaml` (`read_project`), through the parser
+the stack program reads them with, so the script and the program cannot
+disagree on a pin's shape.
 """
 
 # `ruamel.yaml` and `tqdm` are only partially typed, and this module is mostly
@@ -16,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import subprocess as sp
 import tarfile
 from collections.abc import Generator, Iterable
@@ -29,8 +34,9 @@ import requests
 from ruamel.yaml import YAML
 from tqdm import tqdm
 
+from kluster.lib.versions import ChartPin, ProjectFile
 from kluster.scripts.update_crds import pins
-from kluster.scripts.update_crds.pins import Chart, ReleaseManifest, SourceTree
+from kluster.scripts.update_crds.pins import SourceTree
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +52,10 @@ _GITHUB_API = 'https://api.github.com'
 
 class SourceError(RuntimeError):
     """A fetched document is not shaped the way the thing it claims to be is."""
+
+
+class BelowFloor(RuntimeError):
+    """A chart pin ships an operator older than the floor its design document states."""
 
 
 @dataclass(frozen=True)
@@ -143,59 +153,137 @@ def _extracted_binary(workdir: Path, name: str, *, source: str) -> Path:
     return found.resolve()
 
 
-# --- Sources --------------------------------------------------------------
+# --- The project file -------------------------------------------------------
 
 
-def render_chart(helm: Path, chart: Chart, *, workdir: Path) -> str:
-    """A chart's manifests, rendered offline.
+def read_config(path: Path, *, required: bool = True) -> dict[str, object]:
+    """The `config:` block of the Pulumi project or stack file at `path`, loaded.
 
-    `--include-crds` is what reaches the chart's `crds/` directory, which Helm
-    otherwise never templates; CRDs a chart ships as ordinary templates
-    (cert-manager) come out of the same render as everything else. Both forms
-    end up in this one document stream.
-
-    The render is values-aware, so a subchart the values disable contributes
-    nothing — which is the reason to prefer it over `helm show crds`.
+    A stack file `pulumi stack init` has just written holds no block yet,
+    which is a file configuring nothing rather than a broken one: `required`
+    says which reading the caller wants.
     """
-    command = [
-        str(helm),
-        'template',
-        chart.name,
-        chart.name,
-        '--repo',
-        chart.repo,
-        '--version',
-        chart.version,
-        '--namespace',
-        'render',
-        '--include-crds',
-    ]
-    for key, value in chart.values.items():
-        command += ['--set', f'{key}={value}']
+    document = _yaml().load(path.read_text())
+    config = document.get('config') if isinstance(document, dict) else None
+    if config is None and not required:
+        return {}
+    if not isinstance(config, dict):
+        raise SourceError(f'{path} has no `config:` block')
+    return cast('dict[str, object]', config)
 
-    log.info(f'Rendering chart {chart.name} {chart.version} from {chart.repo} (downloads the chart)')
-    # Helm writes its repository cache and its configuration under these; left
-    # to their defaults it would read, and dirty, the caller's own Helm state.
+
+def read_project(path: Path) -> ProjectFile:
+    """The `versions:` block of the `Pulumi.yaml` at `path`, as `kluster.lib.versions` reads it.
+
+    The file rather than `pulumi config`: the CLI answers only for a selected
+    stack, which means reaching the state backend and holding its passphrase,
+    and a pin needs neither.
+    """
+    return ProjectFile(read_config(path))
+
+
+# --- Charts ---------------------------------------------------------------
+
+
+def _chart_location(pin: ChartPin) -> list[str]:
+    """The arguments that make Helm fetch exactly the pinned chart.
+
+    An OCI chart by its digest-pinned reference, which Helm pulls by digest and
+    refuses if the version's tag names any other; an HTTP chart by name within
+    its repository, at its version.
+    """
+    location = [pin.reference, '--version', pin.version]
+    if not pin.oci:
+        location += ['--repo', pin.repository]
+    return location
+
+
+def _helm(helm: Path, arguments: list[str], *, workdir: Path) -> str:
+    """Run `helm` with its own state under `workdir`, and return what it prints.
+
+    Helm writes its repository cache and its configuration under these; left
+    to their defaults it would read, and dirty, the caller's own Helm state.
+    """
     environment = dict(
         os.environ,
         HELM_CONFIG_HOME=str(workdir / 'helm-config'),
         HELM_CACHE_HOME=str(workdir / 'helm-cache'),
         HELM_DATA_HOME=str(workdir / 'helm-data'),
     )
-    return sp.check_output(command, env=environment, text=True)
+    return sp.check_output([str(helm), *arguments], env=environment, text=True)
 
 
-def fetch_release_manifest(manifest: ReleaseManifest) -> str:
-    """A YAML bundle published as a release asset."""
-    url = f'https://github.com/{manifest.repo}/releases/download/{manifest.tag}/{manifest.asset}'
-    log.info(f'Downloading {manifest.repo} {manifest.tag} {manifest.asset}')
-    response = requests.get(url, timeout=60)
-    _ = response.raise_for_status()
-    return response.text
+def render_chart(helm: Path, pin: ChartPin, *, workdir: Path) -> str:
+    """A chart's manifests, rendered offline.
+
+    `--include-crds` is what reaches the chart's `crds/` directory, which Helm
+    otherwise never templates; CRDs a chart ships as ordinary templates
+    (cert-manager) come out of the same render as everything else, once the
+    pin's `render-values` ask for them. Both forms end up in this one document
+    stream.
+
+    The render is values-aware, so a subchart the values disable contributes
+    nothing — which is the reason to prefer it over `helm show crds`.
+    """
+    command = ['template', pin.name, *_chart_location(pin), '--namespace', 'render', '--include-crds']
+    for key, value in pin.render_values.items():
+        command += ['--set', f'{key}={value}']
+
+    log.info(f'Rendering chart {pin.name} {pin.version} from {pin.repository} (downloads the chart)')
+    return _helm(helm, command, workdir=workdir)
 
 
-def fetch_source_tree(tree: SourceTree) -> list[str]:
-    """Every YAML file under the pinned directories of a source repository.
+def chart_app_version(helm: Path, pin: ChartPin, *, workdir: Path) -> str:
+    """The operator version a pinned chart declares, its `Chart.yaml`'s `appVersion`."""
+    log.info(f'Reading the operator version chart {pin.name} {pin.version} declares (downloads the chart)')
+    metadata = _yaml().load(_helm(helm, ['show', 'chart', *_chart_location(pin)], workdir=workdir))
+    app_version = metadata.get('appVersion') if isinstance(metadata, dict) else None
+    if not isinstance(app_version, str) or not app_version:
+        raise SourceError(f'chart {pin.name} {pin.version} declares no appVersion to check its floor against')
+    return app_version
+
+
+def version_tuple(version: str) -> tuple[int, ...]:
+    """The numeric components of a version, for comparing one against a floor.
+
+    Upstream is not consistent about the leading `v` (`v1.21.1` and `1.20.1`
+    are both pinned), and a floor is written as far as it is meaningful —
+    `1.26` covers every `1.26.x`. Comparing tuples handles both, and stops at
+    the first non-numeric component so a pre-release suffix cannot make a
+    version sort below the release it precedes.
+    """
+    components: list[int] = []
+    for part in version.lstrip('vV').split('.'):
+        match = re.match(r'\d+', part)
+        if match is None:
+            break
+        components.append(int(match.group()))
+    return tuple(components)
+
+
+def check_floor(pin: ChartPin, app_version: str) -> None:
+    """Refuse a chart whose operator is older than the floor its pin states.
+
+    Checked against the version the chart itself declares rather than one
+    written beside the pin, so a bump cannot leave a hand-kept operator version
+    stale and pass on it.
+    """
+    floor = pin.floor
+    if floor is None:
+        return
+    if version_tuple(app_version) < version_tuple(floor.operator):
+        raise BelowFloor(
+            f'versions:chart-{pin.name} {pin.version} ships operator {app_version}, '
+            f'below its floor {floor.operator}: {floor.document}'
+        )
+    log.info(f'Chart {pin.name} {pin.version} ships operator {app_version}, clearing its floor {floor.operator}')
+
+
+# --- Source trees -----------------------------------------------------------
+
+
+def fetch_source_tree(tree: SourceTree, ref: str) -> list[str]:
+    """Every YAML file under the pinned directories of a source repository, at `ref`.
 
     Listed through the contents API rather than by a hard-coded file list: the
     set of definitions changes between releases, and a stale list would drop
@@ -203,17 +291,17 @@ def fetch_source_tree(tree: SourceTree) -> list[str]:
     """
     documents: list[str] = []
     for path in tree.paths:
-        log.info(f'Listing {tree.repo}@{tree.ref}:{path}')
+        log.info(f'Listing {tree.repo}@{ref}:{path}')
         listing = requests.get(
             f'{_GITHUB_API}/repos/{tree.repo}/contents/{path}',
-            params={'ref': tree.ref},
+            params={'ref': ref},
             headers={'Accept': 'application/vnd.github+json'},
             timeout=60,
         )
         _ = listing.raise_for_status()
-        urls = yaml_file_urls(listing.json(), what=f'{tree.repo}@{tree.ref}:{path}')
+        urls = yaml_file_urls(listing.json(), what=f'{tree.repo}@{ref}:{path}')
 
-        log.info(f'Downloading {len(urls)} CRD files from {tree.repo}@{tree.ref}:{path}')
+        log.info(f'Downloading {len(urls)} CRD files from {tree.repo}@{ref}:{path}')
         for url in tqdm(urls, desc=f'{tree.repo}:{path}'):
             file = requests.get(url, timeout=60)
             _ = file.raise_for_status()

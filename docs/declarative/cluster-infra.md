@@ -122,28 +122,30 @@ empty cluster:
     the VictoriaMetrics entry. None has an ordering constraint beyond
     Cilium.
 
-`packages/crds` is regenerated (`uv run update_crds`) against exactly
-this chart set; the legacy chart list retires with kluster-code. The
-register the regeneration reads — every chart, its repository, its
-pinned version, and the floor that pin has to clear — is
-`src/kluster/scripts/update_crds/pins.py`. It is not where a stack
-reads a chart's version: that is `versions:chart-<name>` in
-`Pulumi.yaml` (framework/pulumi.md §3.2), and nothing holds the two
-equal, so a chart bump is a Renovate-opened pin edit in `Pulumi.yaml`
-plus a hand edit to the same chart's entry in `pins.py` and, for a
-chart whose CRDs are rendered, a regeneration. As of 2026-09-25
-`Pulumi.yaml` carries no chart pin, since no stack installs a chart,
-and no Renovate manager matches one (`kluster-ops#249`); until both
-exist, `pins.py` is the one place a chart version is written, and it
-moves by hand.
+Every chart this list installs is pinned in `Pulumi.yaml`'s `versions:`
+block as `versions:chart-<name>`, and the Gateway API definitions as
+`versions:manifest-gateway-api` (framework/pulumi.md §3.2). One copy:
+the stack program installs from those pins, and `update_crds` reads the
+same file through the same parser to regenerate `packages/crds` against
+exactly this chart set; the legacy chart list retires with kluster-code.
+A chart pin carries where the chart is served and its version — with the
+digest of its manifest where the chart comes from an OCI registry, which
+Helm pulls it by — and what the regeneration needs: whether the chart
+renders definitions, the values that make it render them, and the floor
+its operator version has to clear with the section that states it. The
+floor is checked by `update_crds` against the `appVersion` the chart
+declares. Renovate moves the pins (operations.md §1), and a bump of one
+the script reads is finished by running `update_crds` on its branch:
+the bindings record the pins they were generated from, and a test holds
+that record to the block (framework/pulumi.md §4).
 
 Rendering is **offline**: a pinned Helm 3 binary renders each chart
 and the CRDs are filtered out of the result, so the bindings describe
 the pinned chart set rather than whatever some cluster happens to have
 installed. Two consequences worth naming. Cilium's chart contains no
 CRD at all — the agent registers its own at runtime — so its
-definitions are read from the checked-in YAML at the matching release
-tag, and the tag and the chart version move together. And the
+definitions are read from the checked-in YAML at the release tag the
+Cilium chart's pin names, and a chart bump moves both. And the
 VictoriaMetrics stack installs only `operator.victoriametrics.com`:
 this cluster has no `ServiceMonitor` and no `PodMonitor`, so a scrape
 target is declared as the VictoriaMetrics object, never as a
@@ -192,7 +194,9 @@ The API every component installs through, wrapped as
     adopt an existing release. This cluster is built from empty and
     every object in it is Pulumi's, so the losing side is empty too.
 -   **OCI registries.** A chart reference may be a full `oci://` URL in
-    `chart` itself, with no repository options beside it. This is the
+    `chart` itself, with no repository options beside it; `helm_chart`
+    writes a pin's digest into that reference, and Helm refuses the
+    pull when the version's tag resolves to another manifest. This is the
     wall the legacy program hit: it used `helm.v3.Chart`, which cannot
     read an OCI URL, so the Bitnami catalog's move to OCI forced
     single charts over to `v3.Release` (kluster-code#100). Private

@@ -54,7 +54,11 @@ pins, the ZeroTier release the CI member installs, the Pulumi
 providers and the bridged providers with their bridge, and the packages
 a self-built image's recipe fetches while CI builds it. The Talos row
 and the state-backend age move with a tool CI runs, so they wait as
-well. The second class is the container images and the Helm charts.
+well. The second class is the container images and the Helm charts. The
+Gateway API definitions reach the cluster the way a chart does, and wait
+all the same: the exemption is one rule keyed by data source alone, a test
+holds it to that shape, and the definitions' data source is also the CRD
+generator's, which waits.
 uv resolves under the same age whatever it picks itself: renovate's
 lock file maintenance, and the libraries a bump pulls in. `pulumi` alone
 is exempt until 2026-10-08T12:00:00Z, by the operator's decision of
@@ -71,8 +75,12 @@ does not.** A release asset uploaded again under its version moves
 under a pin written as a version alone, so wherever the tool can record
 a hash and check a download against it, the pin carries one. Today that
 is `uv.lock`'s hashes, the Actions pinned by commit, the container
-images written with their digest, and `mise.lock`, which records the
-sha256 of each `mise.toml` tool's artifact. `mise.toml` declares its
+images written with their digest, the Helm charts served from an OCI
+registry, written with the digest of their manifest, which Helm pulls
+them by, the Gateway API definitions, written with their asset's
+sha256, which `kluster.lib.release_assets.fetch_manifest` checks the
+download against, and `mise.lock`, which records the sha256 of each
+`mise.toml` tool's artifact. `mise.toml` declares its
 tools locked, so an install refuses a pin the lock has no entry for,
 and a bump of any `mise.toml` pin, the Talos and age rows' included, is
 finished when `mise lock` has moved its entry: renovate does that on
@@ -81,14 +89,16 @@ otherwise. A lock diff that changes a sum and not its version is a
 release uploaded again under its name, and is read as one. Every other
 pin names a version alone — today the Pulumi provider plugins, the
 bridge and the providers it fetches (`Pulumi.yaml` says why beside its
-`packages:` block), the Talos factory images and the Helm charts.
+`packages:` block), the Talos factory images and the Helm charts served
+from an HTTP repository, which offers nothing to check a download against
+(`Pulumi.yaml` says so beside them).
 
 | Surface | PR opened by | Applied by | Policy |
 | --- | --- | --- | --- |
 | Talos version (machine-config pin + Image Factory schematic + `mise.toml`'s `talosctl`) | renovate (GitHub-releases datasource) | `physical` stack for the pin and the schematic; `talosctl upgrade` by hand, serial, staged (declarative/physical.md §2) | Reviewed; one pull request moves `versions:talos` and the `talosctl` pin together, because `tests/test_talos_validate.py` holds the two equal; §2.1 runbook |
 | Kubernetes version | same PR family (Talos-coupled) | `talosctl upgrade-k8s` | Reviewed; after the Talos bump it belongs to |
-| Cilium chart | renovate | CI chain (merge = deploy) | Reviewed, **never automerged** — §2.2 runbook; ≥1.20 floor (ExternalAuth) |
-| k8s-base charts (cert-manager, CNPG, VolSync, sealed-secrets, VictoriaMetrics, …) | renovate | CI chain | Reviewed — chart bumps always produce a real diff; major behind dashboard approval |
+| Cilium chart | renovate — the custom manager for an OCI chart's `versions:chart-` pin in `Pulumi.yaml`, moving its version and digest together; alone in a `cilium` group, out of the `in-cluster` one, the way Talos travels alone | CI chain (merge = deploy) | Reviewed, **never automerged** — §2.2 runbook; ≥1.20 floor (ExternalAuth), checked by `update_crds`, which the bump is finished by running on its branch: the chart's version is the ref Cilium's definitions are rendered from |
+| k8s-base charts (cert-manager, CNPG, VolSync, sealed-secrets, VictoriaMetrics, …) and the Gateway API definitions | renovate — custom managers on the `versions:chart-` pins (the Helm data source for an HTTP repository, the docker one for an OCI registry, which moves the digest with the version) and on the `versions:manifest-` pin (its release and sha256 together); one `in-cluster` group, Cilium excepted, with the cluster images the block pins | CI chain | Reviewed — chart bumps always produce a real diff; major behind dashboard approval. A bump of a pin `update_crds` reads is red until `update_crds` runs on its branch, because `packages/crds` records the pins it was generated from (framework/pulumi.md §4) |
 | **Cluster images, infra and app alike** (CNPG operands, self-built, third-party app images) | renovate | CI chain (merge = deploy) | **Minor automerge** (patch stream folded into minor — the legacy `patch: enabled: false` precedent); **major behind dashboard approval + review**; CNPG operand major additionally gated on the self-built image line (workloads.md §4). The safety valve is the deploy-failure alert, not a per-bump eyeball — this deliberately reverses legacy's "applications get eyeballed" stance. A self-built image (ci.md §4) is published under a fingerprinted tag, `<TAG>-<12 hex digits>`, and a published tag never changes, so a consumer takes a new build by moving to its new tag; renovate offers that move only under a versioning that matches the fingerprint without capturing it, such as `regex:^(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)-[0-9a-f]{12}$` for emailproxy. Today's consumer is kluster-code, which pins these images by plain tag. Of what a self-built image is built from, the commit golinks is built from moves by hand, because upstream publishes no releases; a `pgvecto.rs` release (in `vchord-cnpg.conf`) waits on dashboard approval, because it is an extension upgrade of immich's existing database; every other version and base digest arrives as an ordinary renovate pull request, the digest refreshes grouped once a month |
 | blog image / built branch | blog repo CI | git-sync | Automatic — content, not code |
 | nspawn rootfs (caddy, AdGuard, ZeroTier) | renovate here — docker datasource, reading whole references off the `versions:image-gateway-…` pins | `physical` stack: the device pulls the pinned manifest itself and unpacks it beside the tree it is running, then the boot chain's machine script restarts what changed | Reviewed; the run-number tag reads as a major bump, so every one waits on dashboard approval |

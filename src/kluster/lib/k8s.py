@@ -1,11 +1,13 @@
 """Kubernetes helpers shared by the `k8s-base` and `apps` stacks.
 
 Only what both stacks need: reading the kubeconfig their Kubernetes provider is
-opened with, installing a pinned upstream chart, reaching into
-what one rendered, declaring a SealedSecret in the shape
+opened with, installing a pinned upstream chart, reaching into what one
+rendered, declaring a SealedSecret in the shape
 [declarative/cluster-infra.md](../../docs/declarative/cluster-infra.md) §1.1
 fixes, and labeling a Service into a Cilium load-balancer pool. Anything
-specific to one component belongs with that component, not here.
+specific to one component belongs with that component, not here. A pinned
+release manifest is fetched by `kluster.lib.release_assets`, which imports no
+bindings, so `update_crds` can run it while it regenerates them.
 
 These are functions returning provider resources rather than subclasses of
 them. A subclass buys nothing over a call — the resource is the resource — and
@@ -28,7 +30,7 @@ from pulumi.output import Unknown
 from pulumi.runtime.rpc import UNKNOWN as UNKNOWN_SENTINEL
 
 from kluster import conventions
-from kluster.lib.versions import ChartVersion
+from kluster.lib.versions import ChartPin
 
 __all__ = (
     'SealingScope',
@@ -41,10 +43,6 @@ __all__ = (
     'pick_resource',
     'sealed_secret',
 )
-
-#: An OCI-registry chart carries its registry in the reference itself, so it
-#: takes no repository options.
-_OCI_SCHEME = 'oci://'
 
 
 class UnusableKubeconfig(ValueError):
@@ -104,39 +102,43 @@ def _usable_kubeconfig(name: str, value: object) -> str:
 def helm_chart(
     name: str,
     *,
-    chart: str,
-    version: ChartVersion,
+    pin: ChartPin,
     namespace: pulumi.Input[str],
     values: Mapping[str, Any] | None = None,
     skip_crds: bool = False,
     opts: pulumi.ResourceOptions | None = None,
 ) -> k8s.helm.v4.Chart:
-    """An upstream chart, installed at the version its caller resolved.
+    """An upstream chart, installed from the pin its caller resolved.
 
     The pin is configuration, and this helper reads none: the stack program
     installing the chart reads it with `versions.chart[<name>]`
     (`lib/versions.py`) and passes the result down, as it does every other pin
     (docs/style/pulumi.md, "Layering"). Where the pin lives is the
     `versions:chart-<name>` key in `Pulumi.yaml`'s project-level `config:`
-    block, shared by every stack and overridden by a stack's own file only
-    where that stack deliberately runs a different version
-    (docs/framework/pulumi.md §3.2). A pin moves by a hand edit to that key.
+    block, which renovate moves (docs/framework/pulumi.md §3.2).
 
-    :param chart: The chart reference — a name within the pinned repository,
-        or a full ``oci://`` reference.
-    :param version: The pinned repository and version. The repository is
-        passed to Helm only for a named chart: an ``oci://`` reference carries
-        its registry itself.
+    A chart from an OCI registry is located by its digest-pinned reference,
+    `oci://<registry path>/<name>@sha256:<digest>`, with the version beside it.
+    Helm pulls the manifest the digest names and refuses the pull when the
+    version's tag resolves to any other (`pkg/registry/client.go` at the
+    v3.20.2 the pinned `pulumi-kubernetes` embeds); an OCI reference carries
+    its registry itself, so no repository options go with it. A chart from an
+    HTTP repository is located by its name in that repository.
+
+    :param pin: The parsed pin: where the chart is served, its version, and
+        for an OCI chart its digest.
+    :param values: The values the chart is installed with. The pin's
+        `render_values` are `update_crds`'s, not these.
     :param skip_crds: Leave the chart's bundled CRDs uninstalled. Helm never
         upgrades a CRD it installed that way, so a component whose CRDs are
         declared separately sets this and keeps them upgradable.
     """
     return k8s.helm.v4.Chart(
         name,
-        chart=chart,
-        version=version.version,
+        chart=pin.reference,
+        version=pin.version,
         namespace=namespace,
-        repository_opts=None if chart.startswith(_OCI_SCHEME) else k8s.helm.v4.RepositoryOptsArgs(repo=version.repo),
+        repository_opts=None if pin.oci else k8s.helm.v4.RepositoryOptsArgs(repo=pin.repository),
         values=dict(values) if values is not None else None,
         skip_crds=skip_crds,
         opts=opts,

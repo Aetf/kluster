@@ -1,27 +1,71 @@
 """Version pins: one namespace, the kind in the key, a parsed value out.
 
 What is under test is the boundary (docs/framework/pulumi.md §3.2). Every pin
-a stack program reads is a string an operator or a renovate branch edited, and the
-accessor is the one place that turns it into something typed and refuses a
-missing or malformed one by naming the key rather than failing further in.
+is a string or an object an operator or a renovate branch edited, and the
+parser is the one place that turns it into something typed and refuses a
+missing or malformed one by naming the key rather than failing further in. It
+reads two sources -- a program's configuration and the `Pulumi.yaml` a script
+opens -- and they have to agree.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
+from pathlib import Path
+from typing import cast
 
 import pulumi
 import pytest
 
-from kluster.lib.versions import ChartVersion, ImagePin, versions
+from kluster.lib.versions import (
+    CHART,
+    MANIFEST,
+    ChartPin,
+    Floor,
+    ImagePin,
+    ManifestPin,
+    ProgramConfig,
+    ProjectFile,
+    Versions,
+    versions,
+)
+from kluster.scripts.update_crds import sources
+
+ROOT = Path(__file__).parent.parent
 
 DIGEST = f'sha256:{"a" * 64}'
 REPOSITORY = 'ghcr.io/aetf/homelab-containers/caddy'
 
+OCI_CHART = {
+    'repository': 'oci://registry.example.invalid/charts',
+    'version': 'v1.21.1',
+    'digest': DIGEST,
+    'definitions': True,
+    'render-values': {'crds.enabled': 'true'},
+}
+HTTP_CHART = {
+    'repository': 'https://charts.example.invalid/',
+    'version': '0.29.0',
+    'definitions': False,
+    'floor': {'operator': '1.26', 'document': 'cluster-infra.md §1 item 5'},
+}
+MANIFEST_PIN = {
+    'repository': 'kubernetes-sigs/gateway-api',
+    'release': 'v1.6.1',
+    'asset': 'experimental-install.yaml',
+    'sha256': 'b' * 64,
+}
+
+#: The configuration a program is handed: a plain pin as itself, an object as
+#: the JSON text of its `value:`, which is how the engine passes a
+#: project-level object to the language host and what `Config.get_object`
+#: decodes.
 PINS = {
     'versions:talos': 'v1.13.9',
-    'versions:chart-cert-manager': 'https://charts.jetstack.io:v1.19.1',
-    'versions:chart-registry-only': 'oci://example.invalid/charts/thing:0.4.0',
+    'versions:chart-cert-manager': json.dumps(OCI_CHART),
+    'versions:chart-cloudnative-pg': json.dumps(HTTP_CHART),
+    'versions:manifest-gateway-api': json.dumps(MANIFEST_PIN),
     'versions:image-gateway-caddy': f'{REPOSITORY}:3@{DIGEST}',
 }
 
@@ -31,24 +75,90 @@ def pinned() -> None:
     pulumi.runtime.set_all_config(dict(PINS))
 
 
+def project_block() -> dict[str, object]:
+    """The `config:` block of the repository's own `Pulumi.yaml`, loaded as `update_crds` loads it."""
+    return sources.read_config(ROOT / 'Pulumi.yaml')
+
+
 def test_every_kind_shares_one_namespace_and_differs_by_key_prefix() -> None:
     """Which is what lets one renovate manager per kind match its own entries.
 
-    Three kinds and one `versions:` namespace, read the same way from any stack
+    Four kinds and one `versions:` namespace, read the same way from any stack
     because the keys are project-level configuration rather than one copy of
-    the same value per stack. The gateway's root filesystems are in the `image`
-    kind and not one of their own: they are registry images, so an image
-    reference is what pins them.
+    the same value per stack.
     """
     assert versions.talos == 'v1.13.9'
-    assert versions.chart['cert-manager'] == ChartVersion('https://charts.jetstack.io', 'v1.19.1')
     assert versions.image['gateway-caddy'] == ImagePin(REPOSITORY, '3', DIGEST)
+    assert versions.chart['cert-manager'] == ChartPin(
+        name='cert-manager',
+        repository='oci://registry.example.invalid/charts',
+        version='v1.21.1',
+        digest=DIGEST,
+        definitions=True,
+        render_values={'crds.enabled': 'true'},
+    )
+    assert versions.chart['cloudnative-pg'] == ChartPin(
+        name='cloudnative-pg',
+        repository='https://charts.example.invalid/',
+        version='0.29.0',
+        digest=None,
+        definitions=False,
+        floor=Floor(operator='1.26', document='cluster-infra.md §1 item 5'),
+    )
+    assert versions.manifest['gateway-api'] == ManifestPin(name='gateway-api', **MANIFEST_PIN)
 
 
-def test_a_chart_pinned_from_a_registry_keeps_the_scheme_in_its_repository() -> None:
-    # The separator is the last colon, not the first: an `oci://` reference
-    # carries one of its own and splitting on it would name no repository.
-    assert versions.chart['registry-only'] == ChartVersion('oci://example.invalid/charts/thing', '0.4.0')
+def test_a_chart_is_located_by_its_digest_where_its_registry_serves_one() -> None:
+    """An OCI chart is pulled by its digest-pinned reference; an HTTP chart by its name in the repository."""
+    assert versions.chart['cert-manager'].reference == f'oci://registry.example.invalid/charts/cert-manager@{DIGEST}'
+    assert versions.chart['cloudnative-pg'].reference == 'cloudnative-pg'
+
+
+def test_the_parser_reads_the_same_pins_from_a_program_and_from_the_file() -> None:
+    """The program and `update_crds` read one block through one parser, and cannot disagree on a pin.
+
+    Every pin in the repository's own `Pulumi.yaml`, read the way a script
+    reads it -- the file's `config:` block -- and the way a program is handed
+    it: a structured pin's `value:` as JSON text, a plain one as itself
+    (`pulumi.Config.get_object` is the SDK's own decoder of that text). The
+    two sources hand over different shapes and each undoes its own, so a
+    source that did not would give a different pin or none.
+    """
+    block = project_block()
+    project = ProjectFile(block)
+    program: dict[str, str] = {}
+    for key, value in block.items():
+        if not key.startswith('versions:'):
+            continue
+        inner = cast('dict[str, object]', value)['value'] if isinstance(value, dict) else value
+        program[key] = json.dumps(inner) if isinstance(inner, dict) else cast('str', inner)
+    pulumi.runtime.set_all_config(program)
+    from_file = Versions(project)
+    from_program = Versions(ProgramConfig())
+
+    charts = project.names(CHART)
+    manifests = project.names(MANIFEST)
+    # Not vacuous: the block pins both kinds.
+    assert charts
+    assert manifests
+    for name in charts:
+        assert from_program.chart[name] == from_file.chart[name], name
+    for name in manifests:
+        assert from_program.manifest[name] == from_file.manifest[name], name
+    assert from_program.talos == from_file.talos
+
+
+def test_a_structured_pin_written_outside_value_is_refused_by_name() -> None:
+    """Pulumi refuses an object written directly under a key, so a script reading the file does too.
+
+    Otherwise the script would read a pin no program can ever be handed: the
+    CLI fails the whole project file over it, `additionalProperties ...
+    not allowed` against its config type declaration.
+    """
+    project = ProjectFile({'versions:chart-cert-manager': dict(OCI_CHART)})
+
+    with pytest.raises(ValueError, match='versions:chart-cert-manager is an object written outside `value:`'):
+        _ = Versions(project).chart['cert-manager']
 
 
 @pytest.mark.parametrize(
@@ -56,9 +166,10 @@ def test_a_chart_pinned_from_a_registry_keeps_the_scheme_in_its_repository() -> 
     [
         ('the Talos release', lambda: versions.talos),
         ('versions:chart-nowhere', lambda: versions.chart['nowhere']),
+        ('versions:manifest-nowhere', lambda: versions.manifest['nowhere']),
         ('versions:image-nowhere', lambda: versions.image['nowhere']),
     ],
-    ids=['talos', 'chart', 'image'],
+    ids=['talos', 'chart', 'manifest', 'image'],
 )
 def test_a_pin_nothing_configures_is_refused_by_name(missing: str, read: Callable[[], object]) -> None:
     """A half-filled configuration is the ordinary state of a first run.
@@ -70,6 +181,74 @@ def test_a_pin_nothing_configures_is_refused_by_name(missing: str, read: Callabl
 
     with pytest.raises(KeyError, match=missing):
         _ = read()
+
+
+@pytest.mark.parametrize(
+    ('pin', 'refusal'),
+    [
+        (OCI_CHART | {'digest': None}, 'carries no lower-case `sha256:` digest'),
+        (OCI_CHART | {'digest': DIGEST.upper()}, 'carries no lower-case `sha256:` digest'),
+        (HTTP_CHART | {'digest': DIGEST}, 'offers no digest to check'),
+        (HTTP_CHART | {'repository': 'charts.example.invalid'}, 'neither `oci://` nor `https://`'),
+        (HTTP_CHART | {'version': 1.2}, 'has no `version` string'),
+        (HTTP_CHART | {'definitions': 'yes'}, 'has no `definitions` boolean'),
+        (HTTP_CHART | {'render-values': {'crds.enabled': 'true'}}, 'for definitions it does not render'),
+        (OCI_CHART | {'render-values': {'crds.enabled': True}}, 'not a string'),
+        (HTTP_CHART | {'floor': {'operator': '1.26'}}, 'has no `document` string'),
+        (HTTP_CHART | {'versoin': '0.30.0'}, 'fields this kind has not got: versoin'),
+        ('https://charts.example.invalid:0.29.0', 'is not an object written under `value:`'),
+    ],
+    ids=[
+        'oci without digest',
+        'upper-case digest',
+        'http with digest',
+        'no scheme',
+        'unquoted version',
+        'definitions not a flag',
+        'values without definitions',
+        'value not a string',
+        'floor without document',
+        'misspelled field',
+        'the old one-line form',
+    ],
+)
+def test_a_chart_pin_of_the_wrong_shape_is_refused_by_name(pin: object, refusal: str) -> None:
+    """Checked where the pin is read, so a mistake is a configuration error with a key on it.
+
+    The repository decides the digest: an OCI registry serves one and Helm
+    checks it, so an OCI pin without one would install whatever the tag names
+    today, while an HTTP repository offers none, so a digest on one would read
+    as a check that nothing makes.
+    """
+    pulumi.runtime.set_all_config(
+        dict(PINS)
+        | {
+            'versions:chart-cert-manager': pin
+            if isinstance(pin, str)
+            else json.dumps({key: value for key, value in cast('dict[str, object]', pin).items() if value is not None})
+        }
+    )
+
+    with pytest.raises(ValueError, match='versions:chart-cert-manager') as refused:
+        _ = versions.chart['cert-manager']
+    assert refusal in str(refused.value)
+
+
+@pytest.mark.parametrize(
+    ('pin', 'refusal'),
+    [
+        (MANIFEST_PIN | {'sha256': f'sha256:{"b" * 64}'}, 'carries no lower-case hexadecimal sha256'),
+        (MANIFEST_PIN | {'repository': 'gateway-api'}, 'names no `<owner>/<name>` GitHub repository'),
+        ({key: value for key, value in MANIFEST_PIN.items() if key != 'asset'}, 'has no `asset` string'),
+    ],
+    ids=['prefixed digest', 'no owner', 'no asset'],
+)
+def test_a_manifest_pin_of_the_wrong_shape_is_refused_by_name(pin: dict[str, str], refusal: str) -> None:
+    pulumi.runtime.set_all_config(dict(PINS) | {'versions:manifest-gateway-api': json.dumps(pin)})
+
+    with pytest.raises(ValueError, match='versions:manifest-gateway-api') as refused:
+        _ = versions.manifest['gateway-api']
+    assert refusal in str(refused.value)
 
 
 @pytest.mark.parametrize(
@@ -125,16 +304,3 @@ def test_a_talos_pin_that_is_not_a_release_tag_is_refused_by_name(value: str) ->
 
     with pytest.raises(ValueError, match='versions:talos'):
         _ = versions.talos
-
-
-def test_a_chart_pin_that_names_no_version_at_all_is_refused_by_name() -> None:
-    """The repository alone is not a pin, and an unpinned chart is a moving one.
-
-    How far the check goes is limited by the shape: `<repository>:<version>` is
-    split at the last colon, so a value carrying one is two halves whatever
-    they mean. What is unambiguous is a value with no colon in it.
-    """
-    pulumi.runtime.set_all_config(dict(PINS) | {'versions:chart-cert-manager': 'charts.jetstack.io'})
-
-    with pytest.raises(ValueError, match='versions:chart-cert-manager'):
-        _ = versions.chart['cert-manager']

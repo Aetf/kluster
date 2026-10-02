@@ -351,17 +351,30 @@ namespace may carry a value but neither a type nor a default.
 
 Every version pin a stack program reads lives in that block, in one
 `versions:` namespace with **the kind in the key** —
-`versions:talos`, `versions:chart-<name>` and `versions:image-<name>`,
-a container root filesystem being an image like any other. One
-namespace because they are one kind of fact, a build somebody else
-produced and this repository selects by version; the prefix because it
-is what lets one renovate manager per kind match its own entries and
-nothing else. `lib/versions.py` exposes one accessor per kind, each
-checking the pin's shape and returning it parsed — a chart as its
-repository and version, an image as its repository, tag and digest, the
-Talos release as a tag checked to be one — and each refusing a missing
-or malformed pin by naming the key, so a pin nobody set fails where it
-is read instead of somewhere downstream.
+`versions:talos`, `versions:image-<name>`, `versions:chart-<name>` and
+`versions:manifest-<name>`, a container root filesystem being an image
+like any other. One namespace because they are one kind of fact, a
+build somebody else produced and this repository selects by version;
+the prefix because it is what lets renovate's managers for a kind match
+its own entries and nothing else.
+
+The Talos release and an image are plain values. A chart and a manifest
+are objects, and **an object is written under `value:`**, the one form
+Pulumi's project schema accepts for one: written directly under the key,
+the CLI refuses the whole file as an invalid type declaration. A chart
+pin holds where the chart is served, its version and, for a chart from
+an OCI registry, the digest of its manifest, which Helm pulls the chart
+by; beside those, what `update_crds` needs to render it (§4) — whether
+it renders definitions, the values that make it render them, and the
+floor its operator version has to clear with the section that states
+it. A manifest pin, a YAML bundle published as a release asset, holds
+the GitHub repository, the release, the asset and the asset's sha256.
+`lib/versions.py` exposes one accessor per kind, each checking the
+pin's shape and returning it parsed — a chart as `ChartPin`, a manifest
+as `ManifestPin`, an image as its repository, tag and digest, the Talos
+release as a tag checked to be one — and each refusing a missing or
+malformed pin by naming the key, so a pin nobody set fails where it is
+read instead of somewhere downstream.
 
 A pin no stack program reads lives with the tool that reads it: Python
 dependencies in `pyproject.toml` and `uv.lock`, the command-line tools
@@ -372,16 +385,25 @@ files under `docker/`, and the actions and mise's own release in the
 workflows that call them (`.github/workflows/`).
 
 **A pin that a stack program and a script both read lives in the
-`kluster.lib` module they share, not in project configuration.**
-`lib/versions.py` reads the `versions:` block through the Pulumi SDK,
-which answers only inside a program, so a pin kept there would leave a
-script that runs outside one without it. The state-backend appliance's
-pins are that case: the Fedora CoreOS stream, the Postgres image and
-`age`'s release and digest are read outside any program by
-`state-backend` — its render, its pin check, its probe — so they live
-in `kluster.lib.state_backend.settings`, beside the render that a
-program declaring the appliance shares with that script
-([style/pulumi.md](../style/pulumi.md), "Layering").
+`versions:` block, and the script reads `Pulumi.yaml` itself, through
+the parser the program's accessor uses.** `lib/versions.py` parses a
+pin out of one of two sources: a program hands it its configuration
+(`ProgramConfig`), where the engine passes an object's `value:` as JSON
+text, and a script hands it the file's `config:` block (`ProjectFile`),
+which refuses an object written outside `value:`. Each source undoes its
+own shape, so one parse serves both, and the script and the program
+cannot disagree on a pin's shape. The script reads the file rather than
+asking `pulumi config`, which answers only for a selected stack — that
+means reaching the state backend and holding the stack passphrase, and
+a pin needs neither. **A pin a script reads is never overridden in a
+stack's own file**, which the script does not read; a test holds that no
+stack file carries one. `update_crds` is the case today: it reads the
+chart and manifest pins the `k8s-base` program installs from (§4). The
+state-backend appliance's pins are read the other way, from
+`kluster.lib.state_backend.settings`, the module the appliance's render
+shares with the `state-backend` script
+([style/pulumi.md](../style/pulumi.md), "Layering"); moving them into
+the block is that appliance's own change.
 
 ### 3.3 Operator stacks
 
@@ -649,6 +671,22 @@ collect the CRD schemas without touching a cluster and hands them to
 it is the only supported way to change anything under that directory.
 The generated package is excluded from the type-annotation standard the
 handwritten code holds to — it is not ours to annotate.
+
+**The bindings record the pins they were generated from.** The script
+reads the chart and manifest pins out of the `versions:` block (§3.2),
+checks each chart's floor against the `appVersion` the chart itself
+declares, so no operator version is kept by hand beside a pin, and
+renders the definitions. Beside the bindings it writes
+`packages/crds/rendered-from.json`: every pin it read, as the file holds
+it — a chart that renders definitions, the chart whose version is the
+ref of the Cilium source tree the script reads Cilium's definitions
+from, a chart carrying a floor, and every manifest. A test holds that
+record to the block. Renovate moves those pins and cannot run the
+script, so a bump of one is red in `checks` until someone runs
+`update_crds` on the branch, as a bump of the provider SDK below is; a
+bump of a chart the script reads nothing from leaves the record as it is
+and needs nothing more. A run with `--from-bundle` writes no record,
+since the bindings it generates were not rendered from the pins.
 
 **The Kubernetes provider SDK is pinned exactly, and a bump of the pin
 is finished only by a regeneration.** `pyproject.toml` holds

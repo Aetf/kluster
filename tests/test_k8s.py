@@ -1,13 +1,16 @@
 """The shared Kubernetes helpers, declared against mocks.
 
 What these check is the part a chart or a controller would otherwise only tell
-us at apply time: that a chart is installed at the version its caller resolved
-and at no other, that a search through a chart's rendered set refuses to guess,
-and that a SealedSecret carries its scope where the controller looks for it.
+us at apply time: that a chart is installed from the pin its caller resolved
+and from no other, that a manifest is refused unless its bytes are the pinned
+ones, that a search through a chart's rendered set refuses to guess, and that a
+SealedSecret carries its scope where the controller looks for it.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import cast
 
 import pulumi
@@ -17,21 +20,30 @@ import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
-from kluster.lib.versions import ChartVersion, versions
+from kluster.lib.versions import ChartPin, ManifestPin, versions
+
+DIGEST = f'sha256:{"c" * 64}'
 
 #: Chart pins, in the namespace every pin a stack program reads shares: the kind
 #: is the key's prefix rather than a namespace of its own (framework/pulumi.md
-#: §3.2). The fixture below resolves them the way a stack program does and
-#: passes them down; the helper itself reads none of them.
+#: §3.2), and each is an object the engine hands the program as JSON text. The
+#: fixture below resolves them the way a stack program does and passes them
+#: down; the helper itself reads none of them.
 CHART_CONFIG = {
-    'versions:chart-cilium': 'https://helm.cilium.io/:1.20.0',
-    'versions:chart-registry-only': 'oci://example.invalid/charts/thing:0.4.0',
+    'versions:chart-cilium': json.dumps(
+        {'repository': 'https://helm.cilium.io/', 'version': '1.20.0', 'definitions': False}
+    ),
+    'versions:chart-thing': json.dumps(
+        {'repository': 'oci://example.invalid/charts', 'version': '0.4.0', 'digest': DIGEST, 'definitions': False}
+    ),
 }
 
-#: A version handed to the helper that no pin above holds, for the same chart
+#: A pin handed to the helper that no configuration holds, for the same chart
 #: the `cilium` pin names — so a helper that consulted configuration would
 #: install `CHART_CONFIG`'s version instead of this one.
-EXPLICIT = ChartVersion('https://mirror.example.invalid/', '1.19.4')
+EXPLICIT = ChartPin(
+    name='cilium', repository='https://mirror.example.invalid/', version='1.19.4', digest=None, definitions=False
+)
 
 
 @pytest_asyncio.fixture(scope='module', autouse=True)
@@ -44,18 +56,12 @@ async def declarations() -> Recorder:
     async with declaring():
         helm_chart(
             'cilium',
-            chart='cilium',
-            version=versions.chart['cilium'],
+            pin=versions.chart['cilium'],
             namespace='kube-system',
             values={'kubeProxyReplacement': True},
         )
-        helm_chart(
-            'registry-only',
-            chart='oci://example.invalid/charts/thing',
-            version=versions.chart['registry-only'],
-            namespace='things',
-        )
-        helm_chart('explicit', chart='cilium', version=EXPLICIT, namespace='kube-system')
+        helm_chart('registry-only', pin=versions.chart['thing'], namespace='things')
+        helm_chart('explicit', pin=EXPLICIT, namespace='kube-system')
         sealed_secret(
             'cloudflare-dns01',
             namespace='cert-manager',
@@ -104,15 +110,20 @@ def test_a_chart_installs_the_pin_its_caller_resolved(declarations: Recorder) ->
     assert chart['values'] == {'kubeProxyReplacement': True}
 
 
-def test_a_registry_chart_carries_no_repository(declarations: Recorder) -> None:
-    """An `oci://` reference is self-locating, so the repository its pin
-    carries is not passed to Helm as one."""
+def test_a_registry_chart_is_installed_by_its_digest(declarations: Recorder) -> None:
+    """An OCI chart is located by its digest-pinned reference, which Helm pulls by.
+
+    The reference carries its registry itself, so the repository the pin
+    carries is not passed to Helm as one, and the version goes beside it:
+    Helm refuses the pull when that version's tag resolves to another digest.
+    """
     chart = declarations.inputs_of('registry-only', CHART)
+    assert chart['chart'] == f'oci://example.invalid/charts/thing@{DIGEST}'
     assert chart['version'] == '0.4.0'
     assert 'repositoryOpts' not in chart
 
 
-def test_a_chart_installs_the_version_it_is_given_whatever_is_pinned(declarations: Recorder) -> None:
+def test_a_chart_installs_the_pin_it_is_given_whatever_is_configured(declarations: Recorder) -> None:
     """The helper reads no pin: the chart's version and repository are the
     ones passed in, although configuration pins the same chart differently.
     Which pin applies is the stack program's decision (style/pulumi.md,
@@ -120,7 +131,75 @@ def test_a_chart_installs_the_version_it_is_given_whatever_is_pinned(declaration
     chart = declarations.inputs_of('explicit', CHART)
     assert chart['chart'] == 'cilium'
     assert chart['version'] == EXPLICIT.version
-    assert chart['repositoryOpts'] == {'repo': EXPLICIT.repo}
+    assert chart['repositoryOpts'] == {'repo': EXPLICIT.repository}
+
+
+# -- the release manifest --------------------------------------------------------
+
+#: A release asset, small enough to read; the pin below records its sha256.
+ASSET = (
+    b'apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nmetadata:\n  name: gateways.example.com\n'
+)
+
+MANIFEST = ManifestPin(
+    name='gateway-api',
+    repository='kubernetes-sigs/gateway-api',
+    release='v1.6.1',
+    asset='experimental-install.yaml',
+    sha256=hashlib.sha256(ASSET).hexdigest(),
+)
+
+
+class FakeAsset:
+    """A downloaded release asset holding the bytes it was given."""
+
+    def __init__(self, content: bytes) -> None:
+        self.content: bytes = content
+
+    def raise_for_status(self) -> None:
+        return None
+
+
+def serve(monkeypatch: pytest.MonkeyPatch, content: bytes) -> list[str]:
+    """Replace the download seam, and hand back the list of URLs it was asked for."""
+    from kluster.lib import release_assets as helpers
+
+    requested: list[str] = []
+
+    def get(url: str, **_: object) -> FakeAsset:
+        requested.append(url)
+        return FakeAsset(content)
+
+    monkeypatch.setattr(helpers.requests, 'get', get)
+    return requested
+
+
+def test_a_manifest_is_the_asset_its_pin_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    from kluster.lib.release_assets import fetch_manifest
+
+    requested = serve(monkeypatch, ASSET)
+
+    assert fetch_manifest(MANIFEST) == ASSET.decode()
+    assert requested == [
+        'https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.1/experimental-install.yaml'
+    ]
+
+
+def test_a_manifest_whose_digest_differs_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One byte off is a different asset: uploaded again under the tag, or not the release at all.
+
+    The refusal names the pin's key and both digests, since what the caller
+    has to decide is which of the two is wrong.
+    """
+    from kluster.lib.release_assets import ManifestDigestMismatch, fetch_manifest
+
+    altered = ASSET.replace(b'gateways', b'gatewayz')
+    _ = serve(monkeypatch, altered)
+
+    with pytest.raises(ManifestDigestMismatch, match='versions:manifest-gateway-api') as refused:
+        _ = fetch_manifest(MANIFEST)
+    assert hashlib.sha256(altered).hexdigest() in str(refused.value)
+    assert MANIFEST.sha256 in str(refused.value)
 
 
 def test_picking_a_rendered_resource_refuses_to_guess() -> None:

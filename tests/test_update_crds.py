@@ -1,29 +1,49 @@
-"""The register and the selection rule behind `packages/crds`.
+"""The pins and the selection rule behind `packages/crds`.
 
 Nothing here reaches the network: what is worth holding still is which CRDs
-survive the filter, that every pin still clears the floor its design doc put
-under it, and that a tool download nothing vouches for is refused. The one
-case that downloads at all is handed its bytes by a stand-in.
+survive the filter, that the pins the script reads are the block's and the
+bindings were generated from them, that a chart below its floor is refused,
+that renovate's managers read the block, and that a tool download nothing
+vouches for is refused. The cases that download at all are handed their bytes
+by a stand-in.
 """
 
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import importlib.metadata
 import json
 import re
+import subprocess
+import sys
 import tarfile
 import tomllib
+from collections.abc import Mapping
 from io import BytesIO
 from pathlib import Path
 from typing import cast
 
 import pytest
 import requests
+from renovate_text import as_python_spells_it, as_renovate_spells_it, listed, package_rules, scalar
 
-from kluster.scripts.update_crds import cli, pins, sources
+from kluster.lib.versions import CHART, MANIFEST, ChartPin, Floor, ProjectFile, Versions
+from kluster.scripts.update_crds import cli, pins, record, sources
 
 ROOT = Path(__file__).parent.parent
+
+
+def project_config() -> dict[str, object]:
+    """The `config:` block of the repository's own `Pulumi.yaml`, loaded as the script loads it."""
+    return sources.read_config(ROOT / 'Pulumi.yaml')
+
+
+def with_version(config: Mapping[str, object], key: str, version: str) -> dict[str, object]:
+    """`config` with the pin at `key` moved to `version`, and nothing else changed."""
+    pin = cast('dict[str, dict[str, object]]', config[key])
+    return dict(config) | {key: {'value': pin['value'] | {'version': version}}}
+
 
 CRD = """
 apiVersion: apiextensions.k8s.io/v1
@@ -171,42 +191,394 @@ def test_yaml_file_urls_names_the_directory_when_an_entry_has_no_name() -> None:
     ],
 )
 def test_version_tuple(version: str, expected: tuple[int, ...]) -> None:
-    assert pins.version_tuple(version) == expected
+    assert sources.version_tuple(version) == expected
 
 
-@pytest.mark.parametrize('chart', [chart for chart in pins.CHARTS if chart.min_app_version is not None], ids=str)
-def test_every_pin_clears_its_floor(chart: pins.Chart) -> None:
-    """A bump that drops a chart below a floor the design docs record fails here.
+# -- the pins the script reads ------------------------------------------------
 
-    The floor is on the operator, so it is checked against `app_version`: the
-    `cloudnative-pg` chart is versioned 0.x and ships CNPG 1.x.
+
+def test_no_stack_file_overrides_a_pin_the_script_reads() -> None:
+    """A stack's own file can override a project value, and the script reads only `Pulumi.yaml`.
+
+    A chart or manifest pin overridden in `Pulumi.<stack>.yaml` would install
+    one release while the bindings describe another, with every check green.
     """
-    assert chart.min_app_version is not None
-    assert pins.version_tuple(chart.app_version) >= pins.version_tuple(chart.min_app_version), (
-        f'{chart.name} {chart.app_version} is below its floor {chart.min_app_version}: {chart.floor}'
+    stack_files = sorted(ROOT.glob('Pulumi.*.yaml'))
+    # Not vacuous: the stacks have files of their own.
+    assert stack_files
+    overriding = [
+        f'{path.name}: {key}'
+        for path in stack_files
+        for key in sources.read_config(path, required=False)
+        if key.startswith((f'versions:{CHART}-', f'versions:{MANIFEST}-'))
+    ]
+    assert overriding == []
+
+
+def test_the_record_is_the_pins_the_bindings_were_generated_from() -> None:
+    """`packages/crds` records the pins `update_crds` read, and they are the block's.
+
+    Renovate moves a pin and cannot run `update_crds`, so a bump arrives with
+    the bindings describing the release before it. This is what makes such a
+    bump red until someone regenerates on its branch.
+    """
+    written = json.loads((ROOT / 'packages/crds' / record.FILE_NAME).read_text())
+
+    assert written == record.record(ProjectFile(project_config())), (
+        'packages/crds was generated from other pins than Pulumi.yaml holds; run `uv run update_crds`'
     )
 
 
-def test_every_pin_records_a_floor_or_says_there_is_none() -> None:
-    """`floor` is prose a reviewer reads, so the only thing to hold is that it is there."""
-    assert all(chart.floor for chart in pins.CHARTS)
-    assert all(manifest.floor for manifest in pins.MANIFESTS)
-    assert all(tree.floor for tree in pins.SOURCE_TREES)
+def test_the_record_holds_what_the_script_reads_and_nothing_else() -> None:
+    """A bump of a pin the script reads moves the record; a bump of one it reads nothing from does not.
+
+    A chart that renders no definitions, has no floor and names no source tree
+    is installed by the stack and nothing more, so its bump needs no
+    regeneration and must not be held red waiting for one.
+    """
+    config = project_config()
+    project = ProjectFile(config)
+    versions = Versions(project)
+    read = record.read_charts(project)
+    unread = [name for name in project.names(CHART) if name not in read]
+    trees = {tree.chart for tree in pins.SOURCE_TREES}
+    # Not vacuous: the block holds charts of both kinds.
+    assert read
+    assert unread
+    for name in project.names(CHART):
+        pin = versions.chart[name]
+        assert (name in read) == (pin.definitions or pin.floor is not None or name in trees), name
+
+    before = record.record(project)
+    for name in read:
+        moved = with_version(config, f'versions:chart-{name}', '99.0.0')
+        assert record.record(ProjectFile(moved)) != before, name
+    for name in unread:
+        moved = with_version(config, f'versions:chart-{name}', '99.0.0')
+        assert record.record(ProjectFile(moved)) == before, name
 
 
-def test_a_floor_is_stated_only_where_it_is_checkable() -> None:
-    """A chart claiming a numeric floor states the number, and one without does not."""
-    for chart in pins.CHARTS:
-        assert (chart.min_app_version is not None) == (chart.floor != 'NO FLOOR')
+def test_a_chart_the_script_reads_only_for_its_floor_is_recorded() -> None:
+    """A floor is checked by the run, so a chart carrying one is read even when it renders nothing.
+
+    Bumped, such a chart could fall below its floor with nothing checking it
+    but the next run of `update_crds`, so its bump waits for one.
+    """
+    floored = {
+        'versions:chart-floored': {
+            'value': {
+                'repository': 'https://charts.example.invalid/',
+                'version': '1.0.0',
+                'definitions': False,
+                'floor': {'operator': '1.0', 'document': 'a section that states it'},
+            }
+        }
+    }
+
+    assert record.read_charts(ProjectFile(floored)) == ['floored']
 
 
-def test_cilium_crds_come_from_the_source_tree_at_the_pinned_chart_version() -> None:
-    """The chart installs none, so the bindings would silently describe the wrong release."""
-    (cilium_chart,) = [chart for chart in pins.CHARTS if chart.name == 'cilium']
-    (cilium_tree,) = [tree for tree in pins.SOURCE_TREES if tree.repo == 'cilium/cilium']
+def test_a_chart_the_script_reads_only_for_its_source_tree_is_recorded() -> None:
+    """A chart whose version is a source tree's ref is read even when it renders nothing and has no floor.
 
-    assert not cilium_chart.crds
-    assert cilium_tree.ref == f'v{cilium_chart.version}'
+    Cilium's carries a floor today, which would hide a record that forgot the
+    tree: once the floor were dropped, a Cilium bump would leave the record
+    as it was, and the bindings would keep describing the previous release.
+    """
+    (tree,) = pins.SOURCE_TREES
+    tree_only = {
+        f'versions:chart-{tree.chart}': {
+            'value': {'repository': 'https://charts.example.invalid/', 'version': '1.0.0', 'definitions': False}
+        }
+    }
+
+    assert record.read_charts(ProjectFile(tree_only)) == [tree.chart]
+
+
+def test_the_cilium_source_tree_is_read_at_the_cilium_chart_version() -> None:
+    """The chart installs no definitions, so the bindings would silently describe the wrong release.
+
+    The tree's ref is derived from the chart pin rather than written beside it,
+    so a chart bump moves the tree with it.
+    """
+    (tree,) = [tree for tree in pins.SOURCE_TREES if tree.repo == 'cilium/cilium']
+    versions = Versions(ProjectFile(project_config()))
+    chart = versions.chart[tree.chart]
+
+    assert not chart.definitions
+    assert tree.ref(chart) == f'v{chart.version}'
+    assert (
+        tree.ref(
+            ChartPin(
+                name=tree.chart, repository=chart.repository, version='9.9.9', digest=chart.digest, definitions=False
+            )
+        )
+        == 'v9.9.9'
+    )
+
+
+FLOORED = ChartPin(
+    name='cloudnative-pg',
+    repository='https://charts.example.invalid/',
+    version='0.29.0',
+    digest=None,
+    definitions=True,
+    floor=Floor(operator='1.26', document='cluster-infra.md §1 item 5'),
+)
+
+
+@pytest.mark.parametrize('app_version', ['1.26', '1.26.0', '1.30.0', 'v1.26.1'])
+def test_a_chart_whose_operator_clears_its_floor_passes(app_version: str) -> None:
+    sources.check_floor(FLOORED, app_version)
+
+
+@pytest.mark.parametrize('app_version', ['1.25.9', 'v1.20.1'])
+def test_a_chart_whose_operator_is_below_its_floor_is_refused_by_name(app_version: str) -> None:
+    """The floor is on the operator the chart declares, not on the chart's own version.
+
+    `cloudnative-pg` 0.29.0 ships CNPG 1.30.0, so the version the check reads
+    is the chart's `appVersion`, which the refusal names beside the document
+    stating the floor.
+    """
+    with pytest.raises(sources.BelowFloor, match='versions:chart-cloudnative-pg') as refused:
+        sources.check_floor(FLOORED, app_version)
+    assert app_version in str(refused.value)
+    assert 'cluster-infra.md §1 item 5' in str(refused.value)
+
+
+def test_a_run_reads_every_source_from_the_pins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """What a run fetches is what the block pins, end to end, with the network replaced.
+
+    The floors are checked against the declared operator before anything is
+    rendered, the source tree is fetched at the ref its chart's pin names, the
+    manifest through the digest-checked fetch, and exactly the charts that
+    render definitions are rendered, each from its pin.
+    """
+    config = with_version(project_config(), 'versions:chart-cilium', '9.9.9')
+    project = ProjectFile(config)
+    versions = Versions(project)
+    calls: list[str] = []
+    helm = tmp_path / 'helm'
+
+    def app_version(_: Path, pin: ChartPin, *, workdir: Path) -> str:
+        calls.append(f'floor {pin.name}')
+        return '99.0.0'
+
+    def tree(source: pins.SourceTree, ref: str) -> list[str]:
+        calls.append(f'tree {source.repo}@{ref}')
+        return []
+
+    def manifest(pin: object) -> str:
+        calls.append(f'manifest {pin}')
+        return ''
+
+    def render(_: Path, pin: ChartPin, *, workdir: Path) -> str:
+        calls.append(f'render {pin.name} {pin.version}')
+        return ''
+
+    def fetch_helm(_: Path) -> Path:
+        return helm
+
+    monkeypatch.setattr(sources, 'fetch_helm', fetch_helm)
+    monkeypatch.setattr(sources, 'chart_app_version', app_version)
+    monkeypatch.setattr(sources, 'fetch_source_tree', tree)
+    monkeypatch.setattr(cli, 'fetch_manifest', manifest)
+    monkeypatch.setattr(sources, 'render_chart', render)
+
+    _ = cli.collect_documents(tmp_path, project)
+
+    charts = [versions.chart[name] for name in project.names(CHART)]
+    floored = [f'floor {chart.name}' for chart in charts if chart.floor is not None]
+    assert calls[: len(floored)] == floored
+    assert 'tree cilium/cilium@v9.9.9' in calls
+    assert [call for call in calls if call.startswith('manifest')] == [
+        f'manifest {versions.manifest[name]}' for name in project.names(MANIFEST)
+    ]
+    assert [call for call in calls if call.startswith('render')] == [
+        f'render {chart.name} {chart.version}' for chart in charts if chart.definitions
+    ]
+
+
+def test_a_pinned_chart_is_fetched_from_where_its_pin_says() -> None:
+    """An OCI chart by its digest-pinned reference, an HTTP chart by name within its repository."""
+    versions = Versions(ProjectFile(project_config()))
+    oci = versions.chart['cert-manager']
+    http = versions.chart['volsync']
+    assert oci.oci
+    assert not http.oci
+
+    assert sources._chart_location(oci) == [  # pyright: ignore[reportPrivateUsage] -- the seam under test
+        f'oci://quay.io/jetstack/charts/cert-manager@{oci.digest}',
+        '--version',
+        oci.version,
+    ]
+    assert sources._chart_location(http) == [  # pyright: ignore[reportPrivateUsage] -- the seam under test
+        'volsync',
+        '--version',
+        http.version,
+        '--repo',
+        http.repository,
+    ]
+
+
+def test_update_crds_starts_when_the_bindings_do_not_import() -> None:
+    """The script regenerates `packages/crds`, so it is what repairs a package that no longer imports.
+
+    It therefore imports nothing of the bindings, directly or through
+    `kluster.lib`: run with `pulumi_crds` made unimportable, `--help` still
+    answers.
+    """
+    broken = (
+        'import sys; sys.modules["pulumi_crds"] = None; '
+        'from kluster.scripts.update_crds import main; sys.exit(main(["--help"]))'
+    )
+
+    run = subprocess.run([sys.executable, '-c', broken], capture_output=True, text=True, timeout=120, check=False)
+
+    assert run.returncode == 0, run.stderr
+    assert '--project' in run.stdout
+
+
+def test_a_stack_file_with_no_config_block_overrides_nothing(tmp_path: Path) -> None:
+    """What `pulumi stack init` writes before any `config set`: a salt and no block."""
+    stack = tmp_path / 'Pulumi.fresh.yaml'
+    _ = stack.write_text('encryptionsalt: v1:abc\n')
+
+    assert sources.read_config(stack, required=False) == {}
+    with pytest.raises(sources.SourceError, match='has no `config:` block'):
+        _ = sources.read_config(stack)
+
+
+# -- renovate's managers on the block ---------------------------------------------
+
+#: What `renovate.json5` reads the block with, one pattern per manager, spelled
+#: as Python spells the pattern; `as_renovate_spells_it` turns each into the
+#: line the file holds.
+HTTP_CHART_MATCH_STRING = (
+    r'versions:chart-(?<depName>[\w-]+):\s+value:\s+repository: (?<registryUrl>https://\S+)'
+    r'\s+version: (?<currentValue>\S+)'
+)
+OCI_CHART_MATCH_STRING = (
+    r'versions:chart-(?<depName>[\w-]+):\s+value:\s+repository: oci://(?<registry>\S+)'
+    r'\s+version: (?<currentValue>\S+)\s+digest: (?<currentDigest>sha256:[0-9a-f]{64})'
+)
+MANIFEST_MATCH_STRING = (
+    r'versions:manifest-[\w-]+:\s+value:\s+repository: (?<depName>[\w.-]+/[\w.-]+)'
+    r'\s+release: (?<currentValue>\S+)\s+asset: \S+\s+sha256: (?<currentDigest>[0-9a-f]{64})'
+)
+
+
+def managers() -> list[str]:
+    """Each `customManagers` entry of `renovate.json5` that reads `Pulumi.yaml`, as text.
+
+    An entry is cut at the next `customType:`, since a template may carry the
+    braces a brace scan would cut at.
+    """
+    config = (ROOT / 'renovate.json5').read_text()
+    block = config[config.index('customManagers: [') : config.index('customDatasources: {')]
+    return [entry for entry in block.split('customType:')[1:] if "'/^Pulumi\\\\.yaml$/'" in entry]
+
+
+def manager(pattern: str) -> str:
+    """The one manager entry holding `pattern`."""
+    (entry,) = [entry for entry in managers() if as_renovate_spells_it(pattern) in entry]
+    return entry
+
+
+def test_the_http_chart_manager_reads_every_http_chart_pin_and_nothing_else() -> None:
+    """The chart, its repository and its version, from one match, through the Helm data source."""
+    text = (ROOT / 'Pulumi.yaml').read_text()
+    versions = Versions(ProjectFile(project_config()))
+    entry = manager(HTTP_CHART_MATCH_STRING)
+
+    found = {
+        match['depName']: (match['registryUrl'], match['currentValue'])
+        for match in as_python_spells_it(HTTP_CHART_MATCH_STRING).finditer(text)
+    }
+    expected = {
+        name: (pin.repository, pin.version)
+        for name in ProjectFile(project_config()).names(CHART)
+        if not (pin := versions.chart[name]).oci
+    }
+    assert expected
+    assert found == expected
+    assert scalar(entry, 'datasourceTemplate') == 'helm'
+
+
+def test_the_oci_chart_manager_reads_every_oci_chart_pin_and_nothing_else() -> None:
+    """The version and the digest from one match, through the docker data source, so a bump moves both.
+
+    The package is the reference Helm pulls: the registry path with the
+    chart's name, which is the key's `<name>`, appended.
+    """
+    text = (ROOT / 'Pulumi.yaml').read_text()
+    versions = Versions(ProjectFile(project_config()))
+    entry = manager(OCI_CHART_MATCH_STRING)
+
+    found = {
+        match['depName']: (f'{match["registry"]}/{match["depName"]}', match['currentValue'], match['currentDigest'])
+        for match in as_python_spells_it(OCI_CHART_MATCH_STRING).finditer(text)
+    }
+    expected = {
+        name: (f'{pin.repository.removeprefix("oci://")}/{name}', pin.version, pin.digest)
+        for name in ProjectFile(project_config()).names(CHART)
+        if (pin := versions.chart[name]).oci
+    }
+    assert expected
+    assert found == expected
+    assert scalar(entry, 'packageNameTemplate') == '{{{registry}}}/{{{depName}}}'
+    assert scalar(entry, 'datasourceTemplate') == 'docker'
+
+
+def test_the_manifest_manager_moves_the_release_and_its_digest_in_one_match() -> None:
+    """Apart, a release bump would land with a digest the fetch then refuses."""
+    text = (ROOT / 'Pulumi.yaml').read_text()
+    versions = Versions(ProjectFile(project_config()))
+    entry = manager(MANIFEST_MATCH_STRING)
+
+    found = [
+        (match['depName'], match['currentValue'], match['currentDigest'])
+        for match in as_python_spells_it(MANIFEST_MATCH_STRING).finditer(text)
+    ]
+    expected = [
+        ((pin := versions.manifest[name]).repository, pin.release, pin.sha256)
+        for name in ProjectFile(project_config()).names(MANIFEST)
+    ]
+    assert expected
+    assert found == expected
+    assert scalar(entry, 'datasourceTemplate') == 'github-release-attachments'
+
+
+#: The data sources the block's in-cluster pins are read through: the two chart
+#: managers', the manifest manager's, and the image manager's.
+IN_CLUSTER_DATASOURCES = {'helm', 'docker', 'github-release-attachments'}
+
+
+def test_the_in_cluster_rule_groups_what_the_block_managers_read() -> None:
+    """The group the chart, manifest and in-cluster image bumps travel in.
+
+    Matched by the file the managers read and the data sources they read
+    through. The gateway's root filesystems are images in the same file, so
+    the rule that takes them into their own group has to sit after this one:
+    the last matching rule wins a field. Nothing goes red in renovate itself
+    when this breaks -- renovate reads its configuration from the default
+    branch -- so it is held here.
+    """
+    config = (ROOT / 'renovate.json5').read_text()
+    rules = package_rules(config)
+    (in_cluster,) = [index for index, rule in enumerate(rules) if scalar(rule, 'groupSlug') == 'in-cluster']
+    (gateway,) = [index for index, rule in enumerate(rules) if scalar(rule, 'groupSlug') == 'gateway-rootfs']
+    rule = rules[in_cluster]
+
+    assert listed(rule, 'matchFileNames') == ['Pulumi.yaml']
+    assert set(listed(rule, 'matchDatasources')) == IN_CLUSTER_DATASOURCES
+    read_through = {
+        scalar(entry, 'datasourceTemplate')
+        for pattern in (HTTP_CHART_MATCH_STRING, OCI_CHART_MATCH_STRING, MANIFEST_MATCH_STRING)
+        for entry in [manager(pattern)]
+    }
+    assert read_through <= IN_CLUSTER_DATASOURCES
+    assert in_cluster < gateway
 
 
 # -- the pinned tool downloads ------------------------------------------------
@@ -332,23 +704,73 @@ def test_renovate_moves_the_crd2pulumi_version_and_digest_together() -> None:
     assert found.group('currentDigest') == pins.CRD2PULUMI_SHA256
 
 
+def _reaches_cilium(rule: str) -> bool:
+    """Whether `rule` could match the Cilium chart pin, by every matcher it sets.
+
+    A matcher this scan cannot read is taken as matching, so a rule is only
+    cleared by one that provably misses.
+    """
+    presents = {
+        'matchDepNames': ('cilium',),
+        'matchPackageNames': ('quay.io/cilium/charts/cilium',),
+        'matchFileNames': ('Pulumi.yaml',),
+        'matchDatasources': ('docker',),
+        'matchManagers': ('custom.regex', 'regex'),
+    }
+    for key in re.findall(r'^\s*((?:match|exclude)\w+):', rule, re.MULTILINE):
+        patterns = listed(rule, key)
+        values = presents.get(key)
+        if values is None or not patterns:
+            continue
+        if not any(fnmatch.fnmatch(value, pattern) for pattern in patterns for value in values):
+            return False
+    return True
+
+
+def test_the_cilium_chart_travels_alone() -> None:
+    """A Cilium bump replaces every node's datapath, so it is a pull request of its own, as Talos's is.
+
+    The rule names the chart pin's dependency, which the OCI chart manager
+    takes from the key's `<name>`, and sits after the in-cluster rule, which
+    matches the same pin by file and data source: the last matching rule wins
+    a field. No later rule that sets a group may reach it. Renovate reads its
+    configuration from the default branch, so nothing goes red there when
+    this breaks.
+    """
+    config = (ROOT / 'renovate.json5').read_text()
+    rules = package_rules(config)
+    versions = Versions(ProjectFile(project_config()))
+    (in_cluster,) = [index for index, rule in enumerate(rules) if scalar(rule, 'groupSlug') == 'in-cluster']
+    (cilium,) = [index for index, rule in enumerate(rules) if 'cilium' in listed(rule, 'matchDepNames')]
+    rule = rules[cilium]
+
+    assert versions.chart['cilium'].oci
+    assert listed(rule, 'matchDepNames') == ['cilium']
+    assert listed(rule, 'matchFileNames') == ['Pulumi.yaml']
+    assert scalar(rule, 'groupSlug') == 'cilium'
+    assert in_cluster < cilium
+    for later in rules[cilium + 1 :]:
+        if scalar(later, 'groupName') is None and scalar(later, 'groupSlug') is None:
+            continue
+        assert not _reaches_cilium(later), f'a later rule regroups the Cilium chart:\n{later}'
+
+
 def test_no_pin_carries_an_annotation_comment() -> None:
-    """The register announces no automation it does not have.
+    """The script's own pins announce no automation they do not have.
 
     The one manager that reads this module matches the `crd2pulumi` constants
-    by name and needs no comment to find them; every other pin here moves by
-    hand, and for the pins the render reads the bump is only finished by
-    regenerating `packages/crds`. An annotation above one of them would
-    therefore be inert — and inert ones are worse than none, because they read
-    as a working mechanism and stop anyone from building the real one.
+    by name and needs no comment to find them; the Helm binary moves by hand.
+    An annotation above it would therefore be inert — and inert ones are worse
+    than none, because they read as a working mechanism and stop anyone from
+    building the real one.
 
     Anywhere on the line, not only at its start: an annotation trailing a
     version is just as inert and reads just as much like automation.
     """
     module = Path(pins.__file__).read_text()
 
-    # An emptied or renamed register would satisfy a purely negative assertion.
-    assert f"version='{pins.CHARTS[0].version}'" in module
+    # An emptied or renamed module would satisfy a purely negative assertion.
+    assert f"CRD2PULUMI_VERSION = '{pins.CRD2PULUMI_VERSION}'" in module
 
     assert re.findall(r'# renovate:.*', module) == []
 
