@@ -7,10 +7,12 @@ docs/declarative/cluster-infra.md. The component list is closed: additions
 argue for themselves in writing first.
 
 Its components live in areas of `kluster/components/`, the way `physical`
-composes the areas it declares, Cilium's first: this module stays the wiring,
-one component per entry of the closed list. What every component shares — installing a pinned
-chart, sealing a secret, labeling a Service into a load-balancer pool — is in
-`kluster.lib.k8s`.
+composes the areas it declares: this module stays the wiring, one component per
+entry of the closed list, each handed what it is installed behind; those
+edges are the dependency chain that lets one `up` converge from an empty
+cluster. What every component shares — installing a pinned chart,
+creating a namespace at its Pod Security level, sealing a secret, labeling a
+Service into a load-balancer pool — is in `kluster.lib.k8s`.
 
 The program reads two things beside the pins. The cluster-admin kubeconfig
 opens the one Kubernetes provider every component is declared through, and is
@@ -31,7 +33,8 @@ The chart set is pinned on first contact (declarative/README.md, "Deliberately
 not pre-decided"), and each chart is a project-level `versions:chart-<name>`
 pin in `Pulumi.yaml`'s `config:` block, which renovate moves
 (framework/pulumi.md §3.2), as the Gateway API definitions are a
-`versions:manifest-<name>` pin; a component installs what the program reads
+`versions:manifest-<name>` pin and local-path-provisioner's two images are
+`versions:image-<name>` pins; a component installs what the program reads
 through `kluster.lib.versions` and hands it. The custom resources are written
 against `sdks/crds`, which `mise x -- uv run update_crds` regenerates from the
 same pins.
@@ -43,7 +46,11 @@ import pulumi
 import pulumi_kubernetes as k8s
 
 from kluster import conventions
+from kluster.components.certificates import CertManager
 from kluster.components.cilium import Cilium, InternetPoolMembers
+from kluster.components.local_path import LocalPathProvisioner
+from kluster.components.reloader import Reloader
+from kluster.components.sealing import SealedSecretsController
 from kluster.lib import stack_addresses
 from kluster.lib.k8s import KUBECONFIG_KEY, kubeconfig_from
 from kluster.lib.release_assets import fetch_manifest
@@ -72,13 +79,30 @@ async def main() -> None:
         f'{pulumi.get_organization()}/{pulumi.get_project()}/{conventions.STACK_NAMES.physical}'
     )
 
-    _ = Cilium(
+    opts = pulumi.ResourceOptions(providers=[provider])
+
+    # cluster-infra.md §1's order. Nothing schedules before the CNI, so
+    # everything is behind Cilium; cert-manager is behind the sealing
+    # controller, because the credential its solver uses is a sealed value.
+    cilium = Cilium(
         'cilium',
         chart=versions.chart['cilium'],
         gateway_api_definitions=gateway_api_definitions,
         internet_pool=_internet_pool_members(physical),
-        opts=pulumi.ResourceOptions(providers=[provider]),
+        opts=opts,
     )
+    sealing = SealedSecretsController(
+        'sealed-secrets', chart=versions.chart['sealed-secrets'], after=[cilium], opts=opts
+    )
+    _ = CertManager('cert-manager', chart=versions.chart['cert-manager'], after=[sealing], opts=opts)
+    _ = LocalPathProvisioner(
+        'local-path',
+        provisioner_image=versions.image['local-path-provisioner'],
+        helper_image=versions.image['local-path-helper'],
+        after=[cilium],
+        opts=opts,
+    )
+    _ = Reloader('reloader', chart=versions.chart['reloader'], after=[cilium], opts=opts)
 
 
 def _internet_pool_members(physical: pulumi.StackReference) -> InternetPoolMembers:

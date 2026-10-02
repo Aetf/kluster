@@ -1,0 +1,10 @@
+{
+  "nodePathMap": [],
+  "storageClassConfigs": {
+    {{ storage_class | tojson }}: {
+      "nodePathMap": [
+        {"node": "DEFAULT_PATH_FOR_NON_LISTED_NODES", "paths": [{{ path | tojson }}]}
+      ]
+    }
+  }
+}

@@ -42,6 +42,14 @@ config:
   versions:image-gateway-adguard-bob: ghcr.io/aetf/homelab-containers/adguard:3@sha256:45a2895bea93f2d7ed02a1ea4a36783e32eae29733ea613869724ddeb024aad5
   versions:image-gateway-zerotier: ghcr.io/aetf/homelab-containers/zerotier:3@sha256:e4d8cb40f8a5e787b7d4ad6ddc60d6a0289d2eb988b3575e6a54273a354c39d7
 
+  # local-path-provisioner, which `k8s-base` declares as resources rather than
+  # installing from a chart (declarative/cluster-infra.md §1): the provisioner,
+  # and the helper pod it starts on a node to create and remove a volume's
+  # directory. Each digest is the image index's, since the cluster's nodes run
+  # two architectures.
+  versions:image-local-path-provisioner: docker.io/rancher/local-path-provisioner:v0.0.37@sha256:e757967a5ec338f6a9b371c5a9688bedaa8c3578ea3dd4db329ea0084be0a86f
+  versions:image-local-path-helper: docker.io/library/busybox:1.38.0@sha256:fd7dc98638c8e305f4dc34e979f1c0fdfdcaeb0fbf8fcff77ae834b6da3d7e6e
+
   # The charts `k8s-base` installs (declarative/cluster-infra.md §1), one
   # object per chart, written under `value:` -- the one form Pulumi's project
   # schema accepts for an object. The key's `<name>` is the chart's name in its

@@ -285,6 +285,20 @@
       groupSlug: 'cilium',
     },
     {
+      // local-path-provisioner, whose every release is `v0.0.N`: docker
+      // versioning reads each one as a patch, which the global
+      // `patch: enabled: false` would drop, so its pin would never move. Its
+      // patches are re-enabled here, and nothing else's; the update then
+      // travels in the in-cluster group like any other chart or image bump.
+      matchDepNames: [
+        'docker.io/rancher/local-path-provisioner',
+      ],
+      matchUpdateTypes: [
+        'patch',
+      ],
+      enabled: true,
+    },
+    {
       // Outside the cluster: Talos, which reimages nodes. `physical` has no PR
       // preview by design (framework/ci.md §3), so this one is read as code
       // and approved before it is opened at all.
@@ -740,12 +754,17 @@
       // (framework/pulumi.md §3.2).
       //
       // Tag and digest are captured together, so one data source moves the
-      // pair and the reference the program pulls by stays whole. The
-      // publication tags each build with a monotonic run number, which docker
-      // versioning reads as a major version — so every bump is a decision that
-      // waits on the dashboard, which for software the site's router runs is
-      // the right default. The commit-hash tag beside it is not a version and
-      // is ignored.
+      // pair and the reference the program pulls by stays whole. A tag is
+      // read as docker versioning reads it, so how a bump arrives is the
+      // publisher's tagging scheme. The gateway's images are tagged by this
+      // repository's publication with a monotonic run number, which docker
+      // versioning reads as a major version — so each of their bumps is a
+      // decision that waits on the dashboard, which for software the site's
+      // router runs is the right default; the commit-hash tag beside it is
+      // not a version and is ignored. A third-party image carries its
+      // upstream's release tag, so its bumps are majors, minors or patches as
+      // that upstream numbers them, and a patch reaches a pull request only
+      // where a package rule re-enables it (local-path-provisioner's, above).
       customType: 'regex',
       managerFilePatterns: [
         '/^Pulumi\\.yaml$/',

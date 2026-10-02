@@ -37,6 +37,11 @@
     §4.3's pod-reached openings serve a pod calling its own node, a call
     to another node's riding KubeSpan; and slice 13 scrapes the node
     exporter on vmagent's own node.
+*   **Updated:** 2026-10-02 — §8, as slice 6 built it:
+    local-path-provisioner's permissions are the v0.0.37 release
+    manifest's, a `Role` in its own namespace for the helper pods beside
+    the `ClusterRole`, rather than the legacy cluster's single
+    `ClusterRole`.
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
@@ -1193,8 +1198,10 @@ Install steps, each a component area of its own, in cluster-infra.md
     bound, present from the start so that step needs no `k8s-base`
     change (item 7 of cluster-infra.md §1).
 *   **local-path-provisioner**, declared as resources of this program,
-    in the shape the legacy cluster already runs: a `ServiceAccount`
-    with its `ClusterRole` and binding; a `ConfigMap` carrying the
+    in the shape of the release's own manifest at the pinned version: a
+    `ServiceAccount`, a `Role` and binding for the helper pods it
+    creates in its own namespace, and a `ClusterRole` and binding for
+    the rest; a `ConfigMap` carrying the
     provisioner's configuration — `conventions.LOCAL_PATH_ROOT` as the
     path of the `local-path` class — and the template and the setup and
     teardown scripts of the helper pod the provisioner starts on a node
