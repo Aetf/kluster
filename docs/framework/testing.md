@@ -41,7 +41,9 @@ and the run is bounded twice against that, at two scales:
     the thread method ends the process after a stack dump, with no summary,
     which is the same blind result as a kill from outside. The bound is an
     order of magnitude above the slowest case: it is a hang guard, not a
-    budget any case approaches (§7 item 5).
+    budget any case approaches (§7 item 5). A case that runs the real Pulumi
+    engine is the exception: its duration grows with the machine's load, and
+    it carries a bound of its own, set from measurement (§8).
 -   **Around the run**, by the outer `timeout` above, for what a per-case
     bound cannot reach: collection, and a process still alive after the
     summary is printed. A kill there ends with status 124 and no summary,
@@ -51,7 +53,8 @@ and the run is bounded twice against that, at two scales:
     two-core runner, and it grows with every campaign.
 
 The outer number is carried wherever the gate's command is written out,
-and the per-case number lives in `pyproject.toml` alone.
+and the per-case number lives in `pyproject.toml`, apart from the
+real-engine cases' own, which live beside them (§8).
 `tests/test_gate_command.py` holds every launch of `pytest` it finds to one
 form, timed and through `mise`, and every launch of the whole suite to one
 number. What CI executes it finds by definition: every launch it knows
@@ -888,7 +891,8 @@ dependent declaring `replace_on_changes` on the replaced resource's id is
 replaced with it and runs its `after_create`, where one that does not is
 updated and runs nothing.
 
-It runs in the suite, under the same bounds as every other case:
+It runs in the suite, under the bounds every real-engine case carries
+(below):
 
 -   **The CLI is the one `mise.toml` pins**, found on `PATH`, so a pin bump
     reruns the test against the release it moves to. A run with no `pulumi`
@@ -904,9 +908,9 @@ It runs in the suite, under the same bounds as every other case:
     the project's `toolchain` option is `uv`, and under `uv` it asks for a
     lock beside the project, which `uv lock --offline` writes.
 -   **Each case is a few commands against a fresh stack**, under the
-    per-case bound (§1) like any other, and the order the engine ran things
-    in is read from a log every provider method and hook appends to, rather
-    than from the CLI's output.
+    real-engine bounds below, and the order the engine ran things in is
+    read from a log every provider method and hook appends to, rather than
+    from the CLI's output.
 -   **What one release does and the next stops doing is not held.** A test
     that pinned it would fail on the bump for a change that removes nothing
     the design relies on.
@@ -936,3 +940,31 @@ It runs as the case above does, except where these say otherwise:
     one per case; each case still has a backend of its own.
 -   **The provider the engine planned is read from `pulumi preview --json`**,
     the step for the resource naming it, rather than from a log.
+
+**A case that runs the real engine carries bounds set from its measured
+duration, not the suite's per-case bound.** Those cases are the two
+modules above and the `real` cases of `tests/test_operator_stack.py`,
+which run the operator driver against a scratch stack. Their durations
+grow with the machine's load far more than a mocked case's duration
+does, because each runs the CLI, a language host and a provider as
+processes of their own. On a four-core machine the slowest took 9 s
+idle, 25 s with twice as many busy processes as cores, and 40 s with
+four times as many. The suite's 60 s is not an order of magnitude above
+that, and a shared CI runner is a loaded machine. Each module states its bounds as named constants, with
+the measurement in their comment:
+
+-   **The case bound** covers the case's set-up and every command it
+    runs: `pytest.mark.timeout` with the module's constant.
+-   **The command bound** is the `timeout=` of each `pulumi` process, and
+    of any wait on one, and sits below the case bound, so a stalled
+    command fails as a `TimeoutExpired` naming it before the case's bound
+    fires. A process a case started and stops waiting on is killed, never
+    waited on without a bound.
+-   **Both are stop-losses.** Each sits several times above the worst
+    measured under load, and nothing asserts on elapsed time (§7 item 5).
+    A bump that measures a case slower moves the constant and its
+    comment together.
+
+The suite runs one case at a time: no plugin runs cases in parallel. So
+the load such a case meets is the machine's, never the suite's own, and
+there is nothing to keep it from sharing a machine with.

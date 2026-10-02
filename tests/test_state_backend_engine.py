@@ -33,9 +33,22 @@ from typing import Any, cast
 
 import pytest
 
-pytestmark = pytest.mark.skipif(
-    shutil.which('pulumi') is None or shutil.which('uv') is None, reason='the pinned pulumi CLI or uv is not on PATH'
-)
+#: How long one case may take: its project's set-up and every command it runs
+#: against the engine, set from measured durations rather than from the
+#: suite's per-case bound (testing.md §8). On a four-core machine the slowest
+#: case here took 9 s idle, 16 s with twice as many busy processes as cores,
+#: and 21 s with four times as many. Twice `COMMAND_TIMEOUT`, so a stalled
+#: command fails naming itself before this fires; a stop-loss, which nothing
+#: asserts on.
+CASE_TIMEOUT = 240
+
+pytestmark = [
+    pytest.mark.skipif(
+        shutil.which('pulumi') is None or shutil.which('uv') is None,
+        reason='the pinned pulumi CLI or uv is not on PATH',
+    ),
+    pytest.mark.timeout(CASE_TIMEOUT),
+]
 
 PROGRAM = """\
 import json
@@ -154,8 +167,9 @@ package = false
 """
 
 #: How long one `pulumi` command may take before the case fails naming it: a
-#: hang guard, far above what any of these takes.
-COMMAND_TIMEOUT = 300
+#: stop-loss, about six times the slowest whole case measured with four times
+#: as many busy processes as cores (`CASE_TIMEOUT`), and below that case bound.
+COMMAND_TIMEOUT = 120
 
 STACK = 'probe'
 PASSPHRASE = 'a-passphrase-for-a-scratch-stack-that-holds-nothing'

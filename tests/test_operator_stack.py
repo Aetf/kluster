@@ -1085,6 +1085,18 @@ def test_a_value_too_short_to_identify_and_pem_armor_are_not_searched_for() -> N
 
 needs_pulumi = pytest.mark.skipif(shutil.which('pulumi') is None, reason='the pinned pulumi CLI is not on PATH')
 
+#: The bounds a case that runs the real engine runs under, set from measured
+#: durations rather than from the suite's per-case bound (testing.md §8). On a
+#: four-core machine the slowest whole case here -- its stack's set-up and
+#: every command -- took 9 s idle, 25 s with twice as many busy processes as
+#: cores, and 40 s with four times as many. One command is bounded at three
+#: times that worst case, and the case at twice the command, so a stalled
+#: command fails by its own `TimeoutExpired`, naming it, before the case's
+#: bound fires; both are stop-losses, and nothing asserts on elapsed time.
+ENGINE_COMMAND_TIMEOUT = 120
+ENGINE_CASE_TIMEOUT = 240
+engine_bound = pytest.mark.timeout(ENGINE_CASE_TIMEOUT)
+
 #: A program with one real resource and no credential: a dynamic resource
 #: whose `gen` input replaces nothing and updates in place, and the stack's
 #: own outputs, one of them secret so that every write re-encrypts something.
@@ -1209,6 +1221,7 @@ def scratch(repository: Repository, committed: str, tmp_path: Path) -> Iterator[
 
 
 @needs_pulumi
+@engine_bound
 def test_the_real_preview_is_read_for_what_it_plans(scratch: Scratch) -> None:
     assert scratch.run.plan() == driver.NOTHING_PLANNED
 
@@ -1222,6 +1235,7 @@ def test_the_real_preview_is_read_for_what_it_plans(scratch: Scratch) -> None:
 
 
 @needs_pulumi
+@engine_bound
 def test_a_real_change_to_a_resources_protect_alone_is_planned_and_applied(scratch: Scratch) -> None:
     # The engine counts the step `same`; the state it writes carries the
     # option all the same, and `protect` refuses a replacement only once the
@@ -1241,6 +1255,7 @@ def test_a_real_change_to_a_resources_protect_alone_is_planned_and_applied(scrat
 
 
 @needs_pulumi
+@engine_bound
 def test_the_real_up_over_nothing_planned_writes_nothing(scratch: Scratch) -> None:
     before, history = scratch.path.read_bytes(), scratch.history()
 
@@ -1252,6 +1267,7 @@ def test_the_real_up_over_nothing_planned_writes_nothing(scratch: Scratch) -> No
 
 
 @needs_pulumi
+@engine_bound
 def test_a_real_write_over_an_unchanged_deployment_keeps_the_files_bytes(scratch: Scratch) -> None:
     before, history = scratch.path.read_bytes(), scratch.history()
 
@@ -1264,6 +1280,7 @@ def test_a_real_write_over_an_unchanged_deployment_keeps_the_files_bytes(scratch
 
 
 @needs_pulumi
+@engine_bound
 def test_a_real_up_over_nothing_planned_runs_while_a_failed_check_is_recorded_and_clears_it(scratch: Scratch) -> None:
     record = checkpoint.record(scratch.checkout, PROBE)
     _ = record.write_text('urn:box outputs.metadata: holds ciphertext as an input and is not ciphertext as an output\n')
@@ -1276,6 +1293,7 @@ def test_a_real_up_over_nothing_planned_runs_while_a_failed_check_is_recorded_an
 
 
 @needs_pulumi
+@engine_bound
 @pytest.mark.parametrize(
     'switch',
     [
@@ -1303,11 +1321,13 @@ def test_a_real_run_under_a_callers_state_switch_writes_the_checkpoint_the_check
 #: an array inside an object; inside an object the provider hands back as a
 #: string; or as the input of a property `additional_secret_outputs` names,
 #: plain or, as `marked`, secret. Where `hold` names a FIFO, the create waits
-#: on it, so the operation stays pending until the case opens the FIFO's
-#: other end.
+#: on it for one byte, so the operation stays pending until the case writes
+#: `RELEASE` into it; `hold_delay` seconds pass before the create opens it,
+#: standing in for a create the engine reaches late.
 ECHO = """\
 import json
 import pathlib
+import time
 
 import pulumi
 from pulumi.dynamic import CreateResult, Resource, ResourceProvider
@@ -1316,7 +1336,9 @@ from pulumi.dynamic import CreateResult, Resource, ResourceProvider
 class Echo(ResourceProvider):
     def create(self, props):
         if props.get('hold'):
-            pathlib.Path(props['hold']).read_text()
+            time.sleep(props['hold_delay'])
+            with open(props['hold'], 'rb') as fifo:
+                fifo.read(1)
         outs = dict(props)
         if props.get('reshape'):
             outs['deep'] = json.dumps(props['deep'], sort_keys=True)
@@ -1340,9 +1362,13 @@ elif settings['shape'] == 'additional':
 else:
     props, names = {'x': secret}, ['x']
 props['hold'] = settings['hold']
+if settings['hold']:
+    props['hold_delay'] = settings['hold_delay']
 EchoResource('echo', props, pulumi.ResourceOptions(additional_secret_outputs=names))
 """
 ECHOED = 'a-secret-the-echo-carries'
+#: The one byte `ECHO`'s create reads off its FIFO before it returns.
+RELEASE = b'.'
 
 
 @pytest.fixture
@@ -1350,9 +1376,9 @@ def echo(repository: Repository, committed: str, tmp_path: Path) -> Scratch:
     return _initialized(repository, committed, tmp_path, ECHO)
 
 
-def _echo_settings(scratch: Scratch, shape: str, hold: Path | None = None) -> None:
+def _echo_settings(scratch: Scratch, shape: str, hold: Path | None = None, hold_delay: float = 0) -> None:
     _ = (scratch.checkout / 'settings.json').write_text(
-        json.dumps({'shape': shape, 'secret': ECHOED, 'hold': str(hold) if hold else None})
+        json.dumps({'shape': shape, 'secret': ECHOED, 'hold': str(hold) if hold else None, 'hold_delay': hold_delay})
     )
 
 
@@ -1364,7 +1390,9 @@ UP = ('pulumi', 'up', '--yes', '--skip-preview', '--non-interactive', '--stack',
 def _echo_up(scratch: Scratch, shape: str) -> tuple[dict[str, Any], dict[str, Any]]:
     """The checkpoint the engine writes for `shape`, and the echo resource in it."""
     _echo_settings(scratch, shape)
-    up = sp.run(UP, cwd=scratch.checkout, env=scratch.run.env, capture_output=True, text=True, timeout=50)
+    up = sp.run(
+        UP, cwd=scratch.checkout, env=scratch.run.env, capture_output=True, text=True, timeout=ENGINE_COMMAND_TIMEOUT
+    )
     assert up.returncode == 0, up.stdout + up.stderr
     document = json.loads(scratch.path.read_text())
     (resource,) = [r for r in checkpoint.resources(document) if r['urn'].endswith('::echo')]
@@ -1378,6 +1406,7 @@ def _at(values: dict[str, Any], path: str) -> Any:
 
 
 @needs_pulumi
+@engine_bound
 @pytest.mark.parametrize(
     ('shape', 'place', 'input_whole', 'value'),
     [
@@ -1414,6 +1443,7 @@ def test_a_marking_the_real_engine_makes_below_the_top_is_found_once_lost(
 
 
 @needs_pulumi
+@engine_bound
 def test_the_real_engine_leaves_an_additional_secret_outputs_input_in_the_clear_and_it_is_found(
     echo: Scratch,
 ) -> None:
@@ -1437,31 +1467,43 @@ def test_the_real_engine_leaves_an_additional_secret_outputs_input_in_the_clear_
 
 
 @needs_pulumi
-def test_a_real_operation_left_pending_is_checked_like_a_resource(echo: Scratch) -> None:
+@engine_bound
+@pytest.mark.parametrize('hold_delay', [0, 2], ids=['prompt', 'late'])
+def test_a_real_operation_left_pending_is_checked_like_a_resource(echo: Scratch, hold_delay: float) -> None:
     hold = echo.checkout.parent / 'hold'
     os.mkfifo(hold)
-    _echo_settings(echo, 'additional', hold)
+    _echo_settings(echo, 'additional', hold, hold_delay)
+    # The FIFO is held open from before the run starts -- for reading and
+    # writing, which never blocks on Linux -- so the release waits in the pipe
+    # for a create that opens it late, where a non-blocking open for writing
+    # alone fails while nothing has it open for reading and loses the release.
+    # The `late` case is that create. A run that outlasts its bound is killed
+    # rather than waited on.
+    release = os.open(hold, os.O_RDWR)
     pending: dict[str, Any] | None = None
-    with sp.Popen(UP, cwd=echo.checkout, env=echo.run.env, stdout=sp.DEVNULL, stderr=sp.DEVNULL) as up:
-        try:
-            # The engine records the operation before it starts it, and the
-            # create does not end until the FIFO opens: the file read here is
-            # the one a run killed at this moment would leave. The deadline
-            # is a bound on a hang, under the case's own.
-            deadline = time.monotonic() + 40
-            while pending is None and up.poll() is None and time.monotonic() < deadline:
-                document = cast('dict[str, Any]', json.loads(echo.path.read_text()))
-                if document['checkpoint']['latest'].get('pending_operations'):
-                    pending = document
-                else:
-                    time.sleep(0.1)
-        finally:
+    try:
+        with sp.Popen(UP, cwd=echo.checkout, env=echo.run.env, stdout=sp.DEVNULL, stderr=sp.DEVNULL) as up:
             try:
-                _ = os.write(release := os.open(hold, os.O_WRONLY | os.O_NONBLOCK), b'go')
-                os.close(release)
-            except OSError:
-                pass  # no create is waiting on it
-            _ = up.wait(timeout=50)
+                # The engine records the operation before it starts it, and
+                # the create does not end until the release is written: the
+                # file read here is the one a run killed at this moment would
+                # leave. The deadline is a stop-loss, under the case's own.
+                deadline = time.monotonic() + ENGINE_COMMAND_TIMEOUT
+                while pending is None and up.poll() is None and time.monotonic() < deadline:
+                    document = cast('dict[str, Any]', json.loads(echo.path.read_text()))
+                    if document['checkpoint']['latest'].get('pending_operations'):
+                        pending = document
+                    else:
+                        time.sleep(0.1)
+            finally:
+                _ = os.write(release, RELEASE)
+                try:
+                    _ = up.wait(timeout=ENGINE_COMMAND_TIMEOUT)
+                except sp.TimeoutExpired:
+                    up.kill()
+                    raise
+    finally:
+        os.close(release)
 
     assert pending is not None
     assert not [r for r in checkpoint.resources(pending) if r['urn'].endswith('::echo')]
@@ -1878,6 +1920,7 @@ def boxes(repository: Repository, committed: str, tmp_path: Path) -> Scratch:
 
 
 @needs_pulumi
+@engine_bound
 def test_a_real_replacement_of_the_box_names_only_the_digest_that_moved_and_waits_for_force(
     boxes: Scratch, caplog: pytest.LogCaptureFixture
 ) -> None:

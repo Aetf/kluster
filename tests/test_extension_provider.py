@@ -148,9 +148,19 @@ dependencies = []
 package = false
 """
 
+#: How long one case may take, the module's plugin download and SDK
+#: generation included for the first: set from measured durations rather than
+#: from the suite's per-case bound (testing.md §8). On a four-core machine the
+#: first case took 6 s idle and 15 s with four times as many busy processes as
+#: cores, and every other case under 6 s. Twice `COMMAND_TIMEOUT`, so a
+#: stalled command fails naming itself before this fires; a stop-loss, which
+#: nothing asserts on.
+CASE_TIMEOUT = 240
+
 #: How long one `pulumi` command may take before the case fails naming it: a
-#: hang guard, far above what any of these takes.
-COMMAND_TIMEOUT = 300
+#: stop-loss, eight times the slowest case measured under that load, and below
+#: `CASE_TIMEOUT`.
+COMMAND_TIMEOUT = 120
 
 STACK = 'probe'
 PASSPHRASE = 'a-passphrase-for-a-scratch-stack-that-holds-nothing'
@@ -261,7 +271,7 @@ def preview(extension: Extension, tmp_path: Path, spelling: str) -> sp.Completed
     return _pulumi('preview', '--json', cwd=project, env=env)
 
 
-@pytest.mark.timeout(240)
+@pytest.mark.timeout(CASE_TIMEOUT)
 @pytest.mark.parametrize('spelling', sorted(SPELLINGS))
 def test_an_extension_resource_lands_on_the_explicit_provider_it_is_handed(
     extension: Extension, tmp_path: Path, spelling: str
