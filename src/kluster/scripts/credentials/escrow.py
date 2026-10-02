@@ -85,6 +85,13 @@ PASSPHRASE = 'pulumi/passphrase'
 #: `github` stack's config to the workstation (framework/github.md §1).
 OPERATOR_PASSPHRASE = 'operator/passphrase'
 
+#: `physical`'s passphrase, which decrypts that stack and nothing else. Its
+#: own label for the reason the operator passphrase has one: what makes it a
+#: row is where it is pushed, the two Environments that take protected
+#: branches only, against the stack passphrase's every Environment a pull
+#: request can reach (rfc-005 §5.1).
+PHYSICAL_PASSPHRASE = 'physical/passphrase'
+
 CA = 'state-backend/ca'
 ALERTMANAGER = 'alertmanager/read'
 BACKUP = 'backup/age'
@@ -451,6 +458,21 @@ def register() -> dict[str, Label]:
                 path=workstation.operator_passphrase_path,
                 read_by='`operator-stack` finds it there for every run of an operator stack',
                 store=stack_environment.OPERATOR_PASSPHRASE_ACCOUNT,
+            ),
+        ),
+        Label(
+            PHYSICAL_PASSPHRASE,
+            "the physical stack's passphrase, which only physical's own Environments hold",
+            Generated(_token),
+            # Read by no template: a `credentials` run recovers it with the
+            # kit, and a `pulumi` run by hand names this file to `pulumi`
+            # (credentials.md §4.4).
+            slot=WorkstationSlot(
+                path=workstation.physical_passphrase_path,
+                read_by=(
+                    'a pulumi run by hand against physical names it as PULUMI_CONFIG_PASSPHRASE_FILE, '
+                    'with the stack passphrase unset (docs/credentials.md §4.4)'
+                ),
             ),
         ),
         Label(CA, "the state-backend CA's private key", Generated(pki.generate_ca_key), shape=PRIVATE_KEY),

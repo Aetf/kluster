@@ -43,7 +43,9 @@ timeout 1200 mise x uv -- uv run pytest   # the outer hang guard; the per-case
                                           # bound is pyproject.toml's
 mise x uv -- uv run ruff check .
 mise x uv -- uv run basedpyright
-mise x -- pulumi preview --stack <stack>   # any stack but an operator stack
+mise x -- pulumi preview --stack <stack>   # any stack but physical and the operator stacks
+mise x -- env -u PULUMI_CONFIG_PASSPHRASE PULUMI_CONFIG_PASSPHRASE_FILE=.credentials/physical.passphrase \
+    pulumi preview --stack physical         # physical, under its own passphrase
 mise x uv -- uv run operator-stack github plan   # an operator stack
 ```
 
@@ -51,14 +53,16 @@ A `pulumi` run needs two things that cannot be looked up: `PULUMI_BACKEND_URL`,
 written by `state-backend bundle operator` into the same slot as the client
 bundle it authenticates with, and the passphrase that opens the stack's configuration.
 That is the stack passphrase in `PULUMI_CONFIG_PASSPHRASE` for every stack
-but the operator stacks — the stacks no CI job runs, `github` and
-`state-backend` today — whose configuration is encrypted under the
-operator passphrase, which no CI environment carries. Each passphrase is a random secret whose only recoverable
+but two kinds. `physical` is encrypted under a passphrase of its own, which
+only its two CI Environments carry, the ones no pull request can reach. The
+operator stacks — the stacks no CI job runs, `github` and `state-backend`
+today — are encrypted under the operator passphrase, which no CI environment
+carries. Each passphrase is a random secret whose only recoverable
 copy is a ciphertext committed under `escrow/`, which the offline kit's recovery
 key alone opens (docs/credentials.md §2.2). The rest is read from
 `.credentials/`, a git-ignored directory in the checkout holding everything
 local this repository needs — the seed kit, the cached stack passphrase
-(`pulumi.passphrase`), the state backend's client bundle, the operator passphrase (`operator.passphrase`) on a
+(`pulumi.passphrase`), `physical`'s passphrase (`physical.passphrase`), the state backend's client bundle, the operator passphrase (`operator.passphrase`) on a
 machine whose desktop secret store does not hold it, and the account roots'
 token files on one with no store (docs/credentials.md §4.4). `mise.toml` reads the stack passphrase and the
 bundle from there, and the `operator-stack` driver the bundle; the driver finds
@@ -79,7 +83,8 @@ file, and the bundle's three certificates travel beside it as `PGSSLROOTCERT`,
 checkout it runs in (docs/physical/state-backend.md §3).
 
 On a machine that holds the kit, `credentials derived pulumi-passphrase recover`
-writes the stack passphrase's slot, `credentials derived operator-passphrase
+writes the stack passphrase's slot, `credentials derived physical-passphrase
+recover` writes `physical`'s, `credentials derived operator-passphrase
 recover` keeps the operator passphrase in the desktop secret store (in its slot
 where there is no store), and `state-backend bundle operator --address <ip>`
 writes the bundle.
@@ -91,7 +96,15 @@ therefore goes through the `operator-stack` driver: `operator-stack github
 plan`, `operator-stack github up`, or `operator-stack github pulumi <pulumi
 arguments>`, which fixes the stack and hands `pulumi` that stack's backend and
 passphrase (docs/framework/pulumi.md §3.3). A bare `pulumi … --stack github` meets the stack passphrase and stops at
-`error: incorrect passphrase`, having written nothing.
+`error: incorrect passphrase`, having written nothing. A run by hand against
+`physical`, which CI does run, names that stack's slot to `pulumi` itself, with
+the stack passphrase taken out of its environment (docs/credentials.md §4.4):
+
+```sh
+mise x -- env -u PULUMI_CONFIG_PASSPHRASE \
+    PULUMI_CONFIG_PASSPHRASE_FILE=.credentials/physical.passphrase \
+    pulumi preview --stack physical
+```
 
 No provider credential is in that directory: every one is a secret in the
 committed configuration of the stack that reads it, which the passphrases above

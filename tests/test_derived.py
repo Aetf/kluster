@@ -536,11 +536,22 @@ def test_a_gateway_push_that_fails_is_healed_by_running_it_again(
 # -- the OCI rows: a user, a group, a policy and the key that signs as them --
 
 
+#: What a run against `physical` needs on top of the defaults: that stack is
+#: encrypted under a passphrase of its own, and is refused where none is given
+#: (`pulumi_config.PHYSICAL`).
+PHYSICAL_EQUIPPED = pulumi_config.BackendEnvironment(physical=lambda: 'the-physical-passphrase')
+
+
 @pytest.fixture
 def physical_stack() -> tuple[pulumi_config.Stack, RecordedPulumi]:
     runner = RecordedPulumi()
     return (
-        pulumi_config.Stack(name=derived.PHYSICAL_STACK, directory=pulumi_config.project_dir(), run=runner),
+        pulumi_config.Stack(
+            name=derived.PHYSICAL_STACK,
+            directory=pulumi_config.project_dir(),
+            environment=PHYSICAL_EQUIPPED,
+            run=runner,
+        ),
         runner,
     )
 

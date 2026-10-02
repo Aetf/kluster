@@ -67,8 +67,8 @@ rather than a silent fallback.
 
 **This stack's configuration is encrypted apart from the other stacks,
 and that is what keeps CI away from the token.** The Pulumi stack
-passphrase, which every other stack is encrypted under, is an
-Environment secret in *every* Environment, because
+passphrase, which `dns`, `k8s-base` and `apps` are encrypted under, is
+an Environment secret in every Environment but `physical`'s two, because
 every job runs a `pulumi` command — so a config secret under that
 passphrase is readable by anything CI can start. That is a wider set
 than it sounds: `dns`, `k8s-base` and `apps` are `ANY_BRANCH` and
@@ -101,12 +101,35 @@ the operator passphrase reaches no GitHub secret (a case over the slot map). A
 means holding the passphrase, and a workflow that held it would have it
 in an Environment.
 
+**`physical` is encrypted apart as well, under a passphrase that CI
+does hold, in `physical-plan` and `physical` alone.** Its config secrets
+can root the gateway, and CI runs it, so its passphrase has to reach a
+job; what keeps it from a pull request is which jobs. Those two
+Environments take protected branches only, and a job that names one
+must pass that rule before any step of it runs, which a pull request's
+`refs/pull/<number>/merge` and a push to any branch but `main` never do
+(rfc-005 §5.1).
+The stack passphrase stays in every other Environment, so **a pull
+request's runs, a preview or any workflow a branch adds, hold the
+configuration secrets of the stacks it previews — `dns`, `k8s-base` and
+`apps` — and never `physical`'s**, nor this stack's. A case over the
+slot map holds `physical`'s passphrase to those two Environments, the
+same idiom that holds the operator passphrase out of every one. The
+ciphertexts `Pulumi.physical.yaml` carried under the stack passphrase
+before it moved stay in git history, so the move is finished when every
+credential they held has been issued again; and the backend keeps every
+checkpoint written before the move, so it comes before `physical`'s first
+`up` (credentials.md §1 rule 6).
+
 **`PULUMI_CONFIG_PASSPHRASE` is process-global, so "a passphrase per
 stack" is a property of how a stack is invoked.** Every `credentials`
 command resolves it from the stack it is acting on, in one place — a
 `Stack` derives its own environment from its own name, so no call site
-can pair one stack with another's passphrase. A `pulumi` run by hand
-gets the same property from the driver. This stack is an operator stack
+can pair one stack with another's passphrase. In CI the Environment a
+job names decides it: each holds its stack's passphrase under that one
+name. A run by hand against `physical` names `physical`'s slot to
+`pulumi` itself (credentials.md §4.4), and one against an operator stack
+gets the property from the driver. This stack is an operator stack
 ([pulumi.md](pulumi.md) §3.3), and `operator-stack` sets its backend and
 the operator passphrase on the process it starts, with the stack named once, as
 the driver's first argument:

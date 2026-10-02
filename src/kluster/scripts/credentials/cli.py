@@ -134,9 +134,15 @@ _ORDER = """when to run what:
          stack yet, naming the first stack init of a new site. Its
          checkpoint is landed like any change.
     5. credentials derived pulumi-passphrase generate
-         The one escrowed row no other command mints. It writes the
-         workstation slot as well as the ciphertext, so mise.toml puts the
-         passphrase in the environment of every pulumi run from here on.
+       credentials derived physical-passphrase generate
+         The escrowed rows no other command mints. The first is the stack
+         passphrase, whose workstation slot mise.toml reads, so it is in
+         the environment of every pulumi run from here on. The second is
+         the physical stack's own, which reaches only physical's two
+         Environments, so that no run of a pull request can open the
+         credentials that root the gateway. Every credentials command
+         that writes physical's config, from stage 6 on, opens it under
+         this one.
     6. credentials derived cloudflare-zones mint
        credentials derived cloudflare-gateway-acme mint
          The Cloudflare seed's delivered tokens: the zone-scoped provider
@@ -183,7 +189,9 @@ _ORDER = """when to run what:
          waiting on what. It authenticates as the admin token stage 8
          recorded, read back out of the github stack's config -- which needs
          stage 2's passphrase. It pushes the stack passphrase into every
-         Environment and the operator passphrase into none.
+         Environment a pull request can reach, the physical passphrase into
+         physical-plan and physical alone, and the operator passphrase into
+         none.
 
   on a workstation that develops without the kit
     Copy the .credentials directory from a machine that has one: the
@@ -217,6 +225,23 @@ _ORDER = """when to run what:
          or records a fresh one and overwrites the row without probing.
          Not the recovery key either: it refuses to be overwritten, and
          replacing it deliberately is `kit rotate`.
+
+  moving physical onto its own passphrase, or onto a rotation of it
+    credentials derived physical-passphrase generate
+    credentials derived physical-passphrase re-encrypt
+    credentials derived sync --only physical-passphrase
+         For a physical stack made under the stack passphrase, and for
+         each new generation of its own. The second re-encrypts its
+         configuration and its state, from a workstation whose kit
+         recovers what it is under now; commit Pulumi.physical.yaml in a
+         pull request. The first move comes before physical's first up.
+         Run the third immediately before merging that pull request, with
+         nothing else merged and no drift dispatched in between: the merge
+         starts deploy, whose plan-physical reads the passphrase when it
+         starts. A physical job that runs between the two meets incorrect
+         passphrase, which plan-physical reports as a diff; reject the
+         approval up-physical asks for, and dispatch deploy again once
+         both have landed.
 
   one-time repair
     credentials seed oci domain
@@ -1241,6 +1266,23 @@ def build_parser() -> argparse.ArgumentParser:
             '--generation', type=int, default=None, metavar='<n>', help='which generation to open (default: the newest)'
         )
         _ = recover.add_argument('--stdout', action='store_true', help='print it instead of writing the slot it has')
+        if label.name == escrow.PHYSICAL_PASSPHRASE:
+            moving = escrow_verbs.add_parser(
+                're-encrypt',
+                help="move the physical stack's configuration and state onto this passphrase",
+                description=(
+                    "Re-encrypt the physical stack's configuration and its state in the backend onto this row's "
+                    'newest generation, from whichever of the stack passphrase and the earlier generations opens '
+                    'it, every one recovered with the kit: once for a stack made before it had a passphrase of its '
+                    "own, and once per rotation of its own. The stack file's salt and every ciphertext in it "
+                    'change, so it is a file to commit. A stack already under this generation is left alone, so a '
+                    're-run costs nothing; a stack a run interrupted between the stack file and the state is '
+                    'refused, naming the recovery. `credentials derived sync --only physical-passphrase` pushes the '
+                    "passphrase into physical's Environments immediately before the commit merges, since the "
+                    "merge's deploy reads it as soon as it starts."
+                ),
+            )
+            _add_bundle_dir(moving)
 
     return parser
 
@@ -1702,6 +1744,11 @@ def main(argv: list[str] | None = None) -> int:
                 _ = escrow.record(escrow.Vault.open(store, registry), args.label, _recorded(args, store))
             case ('derived', row, 'recover') if row in escrow.rows():
                 return _recover(args, escrow.Vault.open(store, registry))
+            # The one escrowed row with a verb of its own: `physical` is moved
+            # off the stack passphrase once, from a workstation holding the kit
+            # that recovers both.
+            case ('derived', row, 're-encrypt') if row == escrow.row_name(escrow.PHYSICAL_PASSPHRASE):
+                _ = lifecycle.re_encrypt_physical(store, args.bundle_dir, registry)
             # The slot map's sink: one row at a time or every row whose value
             # lives elsewhere, each resolved, pushed and verified in the same
             # run.

@@ -14,7 +14,7 @@ import functools
 import io
 import re
 import shutil
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -931,3 +931,73 @@ def test_a_command_asks_for_the_operator_passphrase_at_most_once(
 
     assert given == ['typed-at-the-terminal'] * 3
     assert len(asked) == 1
+
+
+@needs_age
+def test_physical_is_given_its_own_passphrase_recovered_with_the_kit(
+    kit: KdbxStore, registry: escrow.Registry, tmp_path: Path
+) -> None:
+    """`physical` opens under the newest generation of its own label, and no other stack does.
+
+    Recovered only when `physical` is asked for and at most once, as the
+    operator passphrase is found: a command that writes three keys into the
+    stack builds its environment three times.
+    """
+    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
+    stack_passphrase = escrow.generate(escrow.Vault.open(kit, registry), escrow.PASSPHRASE)
+    _ = escrow.generate(escrow.Vault.open(kit, registry), escrow.PHYSICAL_PASSPHRASE)
+    newest = escrow.generate(escrow.Vault.open(kit, registry), escrow.PHYSICAL_PASSPHRASE)
+
+    found = lifecycle.environment(kit, tmp_path / 'absent', registry)
+    given = [found.variables(pulumi_config.PHYSICAL)[pulumi_config.PASSPHRASE_ENV] for _ in range(3)]
+
+    assert given == [newest] * 3
+    assert newest != stack_passphrase
+    assert found.variables(conventions.STACK_NAMES.dns)[pulumi_config.PASSPHRASE_ENV] == stack_passphrase
+
+
+@needs_age
+def test_physical_with_nothing_escrowed_is_refused_naming_the_command_that_files_it(
+    kit: KdbxStore, registry: escrow.Registry, tmp_path: Path
+) -> None:
+    """A kit with no generation of `physical`'s passphrase refuses that stack and only that stack.
+
+    And never by handing it the stack passphrase, which every Environment a
+    pull request can reach holds.
+    """
+    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
+    stack_passphrase = escrow.generate(escrow.Vault.open(kit, registry), escrow.PASSPHRASE)
+
+    found = lifecycle.environment(kit, tmp_path / 'absent', registry)
+
+    assert found.variables(conventions.STACK_NAMES.dns)[pulumi_config.PASSPHRASE_ENV] == stack_passphrase
+    fills = f'credentials derived {pulumi_config.PHYSICAL_ROW} generate'
+    with pytest.raises(pulumi_config.PassphraseMissing, match=re.escape(fills)) as refusal:
+        _ = found.variables(pulumi_config.PHYSICAL)
+    assert 'The stack passphrase the previewed stacks share is deliberately not used' in str(refusal.value)
+
+
+@needs_age
+def test_physical_is_moved_from_the_stack_passphrase_or_an_earlier_generation_of_its_own(
+    kit: KdbxStore, registry: escrow.Registry, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What `re-encrypt` may find the stack under: the stack passphrase first, then its own generations, newest first.
+
+    The newest generation is what it is moved onto, so it is never among them.
+    """
+    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
+    stack_passphrase = escrow.generate(escrow.Vault.open(kit, registry), escrow.PASSPHRASE)
+    first, second, newest = (
+        escrow.generate(escrow.Vault.open(kit, registry), escrow.PHYSICAL_PASSPHRASE) for _ in range(3)
+    )
+    seen: list[tuple[str, Sequence[str], str]] = []
+
+    def moved(stack: pulumi_config.Stack, *, former: Sequence[str]) -> bool:
+        seen.append((stack.name, former, stack.env[pulumi_config.PASSPHRASE_ENV]))
+        return True
+
+    monkeypatch.setattr(pulumi_config.Stack, 're_encrypt', moved)
+    monkeypatch.setattr(pulumi_config, 'project_dir', lambda: tmp_path)
+
+    assert lifecycle.re_encrypt_physical(kit, tmp_path / 'absent', registry)
+    assert seen == [(pulumi_config.PHYSICAL, [stack_passphrase, second, first], newest)]

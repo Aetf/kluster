@@ -71,6 +71,9 @@ jobs:
         timeout-minutes: 30
         id: plan
         env:
+          # `physical`'s own passphrase, which only this Environment and
+          # `physical` hold; the stack passphrase is in neither
+          # (credentials.md §3).
           PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
         run: |
           if mise x -- pulumi preview --stack physical --diff --expect-no-changes; then
@@ -124,6 +127,7 @@ jobs:
         # what follows.
         timeout-minutes: 120
         env:
+          # `physical`'s own passphrase, as in `plan-physical`.
           PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
         run: mise x -- pulumi up --stack physical --yes --diff
 

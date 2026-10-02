@@ -148,8 +148,11 @@ the VPS empties progressively):
     table); stop the legacy qbittorrent and delete a hand-kept forward
     if one exists; turn UPnP off in the copied profile, since the
     declared forward is the mechanism from here on; then
-    `pulumi config set qbittorrentOnWorker true --stack physical` and
-    apply `physical`, whose plan creates the forward to the worker.
+    `physical config set qbittorrentOnWorker true`, through the
+    `physical()` shell function physical/gateway-cutover.md defines,
+    which runs `pulumi` under that stack's own passphrase
+    (credentials.md §4.4), and apply `physical`, whose plan creates the
+    forward to the worker.
 -   **Wave E — hath, deliberately last of the apps**: hath is the
     highest-stakes workload (global-archive data, IP re-registration,
     strict downtime cap), so it moves only after the cluster has run

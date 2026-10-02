@@ -95,6 +95,9 @@ jobs:
       - name: Refresh and compare
         timeout-minutes: 30
         env:
+          # The passphrase of the stack the entry's Environment runs:
+          # `physical`'s own in `physical-plan`, the stack passphrase in the
+          # others (credentials.md §3).
           PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
         run: mise x -- pulumi preview --stack ${{ matrix.stack }} --refresh --diff --expect-no-changes
 

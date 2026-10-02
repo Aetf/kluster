@@ -1,16 +1,20 @@
 """Which backend and which passphrase a `pulumi` run against a stack is given.
 
 `pulumi` reads its backend and its passphrase from the environment, one of
-each per process, while this installation has more than one of each: every
-stack CI deploys keeps its state in the appliance's backend under the stack
-passphrase, and an **operator stack** (`conventions.identity.OPERATOR_STACKS`)
-is encrypted under the operator passphrase, which no CI job holds, and keeps
-its state where the census says — the same backend, or a checkpoint committed
-to this repository (framework/pulumi.md §3.3). So the environment is a
-function of the stack, and this module is that function, for the two kinds of
-caller that start `pulumi` against a stack: the `operator-stack` driver, and
-the `credentials` commands that write a stack's configuration, which need a
-committed stack's backend as much as an `up` does.
+each per process, while this installation has more than one of each. Every
+stack CI deploys keeps its state in the appliance's backend, and is encrypted
+under one of two passphrases: `physical` under a passphrase of its own, which
+reaches only the Environments that take protected branches, and every other
+such stack under the stack passphrase, which every Environment a pull request
+can reach holds (framework/github.md §1). An **operator stack**
+(`conventions.identity.OPERATOR_STACKS`) is encrypted under the operator
+passphrase, which no CI job holds, and keeps its state where the census says —
+the same backend, or a checkpoint committed to this repository
+(framework/pulumi.md §3.3). So the environment is a function of the stack, and
+this module is that function, for the two kinds of caller that start `pulumi`
+against a stack: the `operator-stack` driver, and the `credentials` commands
+that write a stack's configuration, which need a committed stack's backend as
+much as an `up` does.
 
 **An operator stack's run takes these variables from here or not at all.**
 `operator_variables` finds the passphrase through the acquisition chain and
@@ -77,6 +81,18 @@ OPERATOR_PASSPHRASE_ACCOUNT = 'operator-passphrase'
 OPERATOR_PASSPHRASE_SLOT = 'operator.passphrase'
 OPERATOR_PASSPHRASE_ENV = 'KLUSTER_OPERATOR_PASSPHRASE'
 OPERATOR_PASSPHRASE_ROW = 'operator-passphrase'
+#: The stack encrypted under a passphrase of its own, and the names that
+#: passphrase goes by: its workstation slot (credentials.md §4.4), which
+#: `kluster.scripts.credentials.workstation` takes from here, and the register
+#: row whose `generate` and `recover` fill that slot, which a case holds to the
+#: escrow's own spelling. CI hands it to `physical`'s jobs alone, as the
+#: `PULUMI_CONFIG_PASSPHRASE` of the two Environments that take protected
+#: branches only (credentials.md §3): what keeps `physical`'s provider
+#: credentials out of a pull request's runs is that no Environment a pull
+#: request can reach holds it (rfc-005 §5.1).
+PHYSICAL_STACK = identity.STACK_NAMES.physical
+PHYSICAL_PASSPHRASE_SLOT = 'physical.passphrase'
+PHYSICAL_PASSPHRASE_ROW = 'physical-passphrase'
 #: The slot holding the `operator` client bundle, named likewise in
 #: `kluster.scripts.credentials.workstation`.
 BUNDLE_SLOT = 'state-backend'
