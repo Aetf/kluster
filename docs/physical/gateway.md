@@ -1665,9 +1665,11 @@ has opted in:
     and a bare label completes under the search domain: `ssh haos`
     resolves `haos.zt.<primary>`. Labels are the roster names as the
     record helper normalizes them (`pixel-7-pro`, `aetf-arch-homelab`).
-    Today the resolvers answer such a name by forwarding it upstream and
-    returning the public record — the same address, derived from the
-    same roster entry.
+    The resolvers answer such a name from a rewrite of their own, one
+    per roster entry (declarative/dns.md §3), with the address the
+    public record carries. Both are derived from the same entry, so the
+    answer is the same whichever of them gives it, and it no longer
+    depends on the resolvers reaching upstream.
 -   Every other name resolves where it resolved before. **Application
     names stay outside the pushed domain on purpose**: the domain is
     the block's and not the primary because the primary would put every

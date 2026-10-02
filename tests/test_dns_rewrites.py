@@ -1,8 +1,9 @@
-"""The rewrites: which rows a route census implies, and how they are declared.
+"""The rewrites: which rows a census implies, and how they are declared.
 
-Two subjects, in the order the module puts them. The derivation is plain data
-and needs no runtime: what a route implies is a function of the row. The
-component is the declaration — which instance a row says it belongs to, where
+Two subjects, in the order the module puts them. The derivations are plain
+data and need no runtime: what a route implies is a function of the row, and
+what the overlay roster implies is held against the host block derived from
+the same roster. The component is the declaration — which instance a row says it belongs to, where
 that instance is reached, and what a resource is called. The provider's own
 behavior when any of those moves is `test_dns_adguard.py`.
 """
@@ -13,7 +14,8 @@ import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
-from kluster.components.dns.rewrites import ResolverRewrites, Rewrite, rewrites
+from kluster.components.dns.base import overlay_records
+from kluster.components.dns.rewrites import ResolverRewrites, Rewrite, overlay_rewrites, rewrites
 from kluster.providers import configured
 
 ROUTE = conventions.routes.Route(host='photos', exposure=conventions.routes.Exposure.SPLIT, zones=('ucw.phd',))
@@ -142,10 +144,11 @@ def test_a_split_route_is_rewritten_in_every_zone_it_is_published_in() -> None:
 
 
 def test_both_families_are_rewritten() -> None:
-    """A LAN client that prefers IPv6 must not fall through to the public answer.
+    """A LAN client asking for AAAA gets the VIP's ULA, not an empty answer.
 
-    AdGuard answers a rewrite only for the family of its answer, so a v4-only
-    rewrite leaves AAAA resolving to the cloud path (RFC 6724).
+    AdGuard answers the other family of a rewritten name with an empty
+    response rather than forwarding it, so a v4-only rewrite leaves the name
+    with no IPv6 address on the LAN.
     """
     entries = rewrites(
         [conventions.routes.Route(host='tube', exposure=conventions.routes.Exposure.SPLIT, zones=('ucw.phd',))]
@@ -178,3 +181,47 @@ def test_a_lan_only_route_is_rewrite_only() -> None:
 
     assert route.public is False
     assert len(rewrites([route])) == 2
+
+
+def test_the_overlay_rewrites_are_the_overlay_records_both_ways() -> None:
+    """For an overlay name there is one answer, whichever path a client takes.
+
+    alice and bob answer from the rewrite and every other resolver from the
+    public record, and both are derived from the same roster entry. Held
+    against the host block as the `dns` stack publishes it rather than against
+    a copy of the roster, so a pair that differs in the name, the address, the
+    members or the count fails here -- and a pair on one side only is a name
+    that resolves differently depending on who is asked.
+    """
+    rewritten = {(entry.domain, str(entry.answer)) for entry in overlay_rewrites(conventions.overlay.ROSTER)}
+    published = {(record.fqdn(conventions.ZONE_PRIMARY), record.content) for record in overlay_records()}
+
+    assert rewritten == published
+
+
+def test_every_overlay_rewrite_answers_under_the_domain_the_network_pushes() -> None:
+    """The seam between the two halves of the overlay's naming.
+
+    A member that opts in to the network's managed DNS installs a resolver
+    scoped to the pushed domain and nothing wider, so a rewrite outside it is
+    one no such member ever asks alice or bob for. The domain is read from what
+    `physical` pushes rather than from the constant the derivation uses, so
+    the two cannot move apart unnoticed.
+    """
+    pushed = conventions.overlay.MANAGED_DNS.domain
+
+    for entry in overlay_rewrites(conventions.overlay.ROSTER):
+        assert entry.domain.endswith(f'.{pushed}'), entry.domain
+
+
+def test_an_overlay_rewrite_is_one_family() -> None:
+    """The overlay is IPv4-only, so an overlay name has an A answer and no other.
+
+    An A rewrite answers AAAA with an empty `NOERROR`, which is what the
+    A-only public record produces too; a second family would be an answer the
+    public record does not give.
+    """
+    entries = overlay_rewrites(conventions.overlay.ROSTER)
+
+    assert entries
+    assert {entry.family for entry in entries} == {'v4'}

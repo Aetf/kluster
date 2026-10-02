@@ -3,9 +3,11 @@
 Per-app records live beside their apps in `apps` (docs/declarative/dns.md);
 what lands here is what has no app to co-locate with — mail, the overlay host
 block, verifications, the family and parked zones — plus the anchors every app
-record points at, plus the split-horizon rewrites for every app: they are
-read from the same plain-data route declaration `apps` builds its routes
-from, and they are the reason this stack joins ZeroTier.
+record points at, plus the rewrites alice and bob answer with: the
+split-horizon rewrites for every app, read from the same plain-data route
+declaration `apps` builds its routes from, and one per overlay member, read
+from the same roster the overlay host block is. The rewrites are the reason
+this stack joins ZeroTier.
 
 The records themselves are data, written as blocks — the records that appear
 together, in every zone of one set (`kluster.components.dns.base`,
@@ -37,7 +39,7 @@ from kluster import conventions
 from kluster.components.dns import base
 from kluster.components.dns.legacy import LEGACY
 from kluster.components.dns.record import zone_records
-from kluster.components.dns.rewrites import ResolverRewrites, rewrites
+from kluster.components.dns.rewrites import ResolverRewrites, overlay_rewrites, rewrites
 from kluster.components.dns.zone import ManagedZone
 
 #: Where the zones token is read: at the line that builds the provider it
@@ -87,14 +89,14 @@ async def main() -> None:
         for zone in conventions.ALL_ZONES
     }
 
-    # The rewrites the routes imply, one component per AdGuard instance and
-    # unconditionally: with an empty route census each declares nothing, no
-    # dynamic resource exists, the provider process never starts and the login
-    # is never read. Nothing here reads it in any case -- it opens the rewrite
-    # provider and nothing else, so the provider reads it in `configure`
-    # (framework/pulumi.md §5.2), and where each instance is reached is the census's answer
-    # rather than a key this stack carries.
-    entries = rewrites(conventions.routes.ROUTES)
+    # The rewrites the routes and the overlay roster imply, one component per
+    # AdGuard instance, each handed the whole set. The roster is never empty,
+    # so every run declares rewrites and the provider reads the login on every
+    # run; nothing here reads it -- it opens the rewrite provider and nothing
+    # else, so the provider reads it in `configure` (framework/pulumi.md
+    # §5.2), and where each instance is reached is the census's answer rather
+    # than a key this stack carries.
+    entries = (*rewrites(conventions.routes.ROUTES), *overlay_rewrites(conventions.overlay.ROSTER))
     for resolver in conventions.gateway.RESOLVERS:
         _ = ResolverRewrites(f'rewrites-{resolver.name}', resolver=resolver, entries=entries)
 

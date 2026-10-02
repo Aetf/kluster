@@ -13,7 +13,8 @@ DNS controller (architecture.md §6.4); the standalone DNSControl repo
 > `src/kluster/components/dns/` holds the record model and the block
 > (`record.py`), the base records (`base.py`), the app records the
 > legacy VPS still serves (`legacy.py`, transitional — §6), the
-> derivation from routes to rewrites (`rewrites.py`), and the two
+> derivations from the routes and from the overlay roster to rewrites
+> (`rewrites.py`), and the two
 > components that turn data into resources (`zone.py` and `rewrites.py`
 > again, the latter over the custom provider in
 > `src/kluster/providers/adguard_rewrites/`). The route rows themselves
@@ -275,11 +276,14 @@ is one nobody here asked for, is the issue's question.
     members as the network's managed-DNS search domain, with alice and
     bob as the resolvers for it (physical/gateway.md §2.7). A member
     that opts in resolves `*.zt` at home and nothing else there, and
-    the resolvers answer such a name today by forwarding it upstream,
-    which returns this block's record; a member that does not opt in,
-    and every Linux member, resolves the block through the public
-    records as before. Application names are outside the pushed domain
-    by design, so the push changes nothing about how any of them
+    alice and bob answer such a name from a rewrite of their own (§3):
+    one per roster entry, derived from the same entry as the record, so
+    the rewrite and the public record are one name and one address
+    whichever of them answers. A member that does not opt in, and every
+    Linux member, resolves the block through the public records as
+    before, and a LAN client, whose resolver is alice or bob for every
+    name, gets the rewrite. Application names are outside the pushed
+    domain by design, so the push changes nothing about how any of them
     resolves.
 -   **Apps are CNAMEs to anchors**: `<app>.<zone>` → `kluster.hosts.…`
     declared inside the app component. A node rebuild or VIP re-home
@@ -418,6 +422,19 @@ on the UDM.
     it. One edit, two stack diffs, both previewable — rather than
     one edit and a second stack to remember. LAN ULA AAAAs are
     emitted alongside (RFC 6724 caveat noted, architecture.md §1.3).
+    The overlay host block (§2) is rewritten the same way from the
+    other census it is derived from: one rewrite per entry of
+    `conventions.overlay.ROSTER`, `<label>.zt.<primary>` answered with
+    the member's overlay address — never a `lan` VIP, since these names
+    are hosts and not routes — and IPv4 alone, because the overlay is
+    IPv4-only and the block's public record is an A. Both sets are
+    handed to each instance as one list; `ResolverRewrites` receives
+    rows and does not care which derivation they came from. The roster
+    is never empty, so every run declares rewrites and reads the
+    AdGuard login, before any application has a route as after. A
+    rewrite under the overlay domain is the only kind the roster can
+    produce, which is what keeps it from shadowing any name outside the
+    block.
 -   **Where each instance is reached is derived, not configured.** A
     rewrite is written over plain HTTP to the instance's address on the
     container VLAN, at the port `conventions.gateway.ADGUARD_API_PORT`

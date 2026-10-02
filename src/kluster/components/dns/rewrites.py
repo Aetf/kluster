@@ -1,12 +1,16 @@
-"""The split-horizon rewrites: what a route census implies, and who writes it.
+"""The AdGuard rewrites: what the route census and the overlay roster imply, and who writes them.
 
-Three things, in the order a reader meets them: the row (`Rewrite`), the
-derivation that turns the shared route census into rows (`rewrites`), and the
-component that writes one instance's rows (`ResolverRewrites`).
+Four things, in the order a reader meets them: the row (`Rewrite`), the two
+derivations that turn a shared census into rows -- the split-horizon rewrites
+of the routes (`rewrites`) and the overlay names of the roster
+(`overlay_rewrites`) -- and the component that writes one instance's rows
+(`ResolverRewrites`), which takes rows and does not care which derivation they
+came from.
 
-The routes themselves are a convention (`kluster.conventions.routes`) because
-`apps` and `dns` both read them. The derivation is not: only `dns` turns a
-route into rewrites, so it lives beside the component that declares them.
+The routes and the roster are conventions (`kluster.conventions.routes`,
+`kluster.conventions.overlay`) because more than one stack reads each. The
+derivations are not: only `dns` turns a route or a member into rewrites, so
+they live beside the component that declares them.
 
 **A rewrite answers with an address and never with a name.** That is
 `Rewrite.answer`'s type rather than a convention anyone has to keep, so a
@@ -33,15 +37,16 @@ from ipaddress import IPv4Address, IPv6Address
 import pulumi
 
 from kluster import conventions
+from kluster.components.dns.base import overlay_label
 from kluster.providers.adguard_rewrites import AdGuardRewrite
 from putils import Component
 
-__all__ = ('ResolverRewrites', 'Rewrite', 'rewrites')
+__all__ = ('ResolverRewrites', 'Rewrite', 'overlay_rewrites', 'rewrites')
 
 
 @dataclass(frozen=True)
 class Rewrite:
-    """One AdGuard rewrite: a name, and the address LAN clients get for it."""
+    """One AdGuard rewrite: a name, and the address a client resolving through the instance gets for it."""
 
     domain: str
     answer: IPv4Address | IPv6Address
@@ -58,10 +63,11 @@ def rewrites(routes: Iterable[conventions.routes.Route]) -> tuple[Rewrite, ...]:
 
     A rewrite is emitted for every zone a LAN-side route is published in --
     including LAN-only names, which have no public record but still resolve
-    for LAN clients. Both address families are emitted: AdGuard answers a
-    rewrite only for the family its answer is in, and a LAN client that
-    prefers IPv6 (RFC 6724) would otherwise fall through to the public
-    answer and take the cloud path.
+    for LAN clients. Both address families are emitted. AdGuard answers the
+    other family of a rewritten name with an empty response, not with the
+    public one, so a v4-only row would leave the name with no IPv6 address
+    on the LAN at all; the v6 row gives it the VIP's ULA (architecture.md
+    §1.3 on how rarely a client picks it).
 
     The only answers this can produce are the two LAN VIPs, so the addresses
     are the site's own and the gateway resolves them without help.
@@ -81,6 +87,29 @@ def rewrites(routes: Iterable[conventions.routes.Route]) -> tuple[Rewrite, ...]:
     return tuple(emitted)
 
 
+def overlay_rewrites(roster: Iterable[conventions.overlay.RosterEntry]) -> tuple[Rewrite, ...]:
+    """One rewrite per overlay member: its name under the overlay domain, its overlay address.
+
+    The name and the address are the pair the overlay host block publishes for
+    the same entry (`base.overlay_records`), so a client gets one answer for an
+    overlay name whichever path it takes: alice and bob answer it from here, and
+    every other resolver from the public record. The domain is
+    `conventions.OVERLAY_DOMAIN`, the one the network pushes to its members as
+    the scope of their managed DNS, so a member that has opted in is answered
+    from here for exactly these names and for no application name.
+
+    One family, where `rewrites` emits two: the overlay is IPv4-only, a roster
+    address is an `IPv4Address` by type, and an A rewrite answers AAAA with an
+    empty `NOERROR` -- which is what the A-only public record produces too.
+    The answer is the member's own address and never a LAN VIP: these names
+    are hosts, not routes.
+    """
+    return tuple(
+        Rewrite(domain=f'{overlay_label(entry.name)}.{conventions.OVERLAY_DOMAIN}', answer=entry.address)
+        for entry in roster
+    )
+
+
 class ResolverRewrites(Component, pulumi_type='kluster:dns:ResolverRewrites'):
     """Every rewrite one AdGuard instance answers, written directly to it.
 
@@ -93,8 +122,8 @@ class ResolverRewrites(Component, pulumi_type='kluster:dns:ResolverRewrites'):
     The instance is taken as its census entry rather than as a URL, which is
     what leaves `conventions.gateway.resolver_api_url` the only spelling of the
     address. The rows are taken as a parameter for the opposite reason:
-    deriving them from `ROUTES` in here would be a component reaching for a
-    census instead of receiving one.
+    deriving them from `ROUTES` or `ROSTER` in here would be a component
+    reaching for a census instead of receiving one.
 
     The instances' login is not a parameter either. It is the provider's own,
     read in `configure` out of the stack's configuration, so nothing on this

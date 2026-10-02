@@ -2,7 +2,8 @@
 
 What it catches is wiring rather than data: that every zone is declared with
 its records, that the anchors carry the physical stack's addresses rather
-than literals, and that the rewrites are emitted from the route census.
+than literals, and that the rewrites are emitted from the route census and
+the overlay roster.
 
 Every run here is under the parent backstop `kluster.main` installs before a
 real run declares anything, so a resource the program leaves unparented fails
@@ -22,7 +23,7 @@ from mock_monitor import Recorder, declaring, run_under_backstop
 
 from kluster import conventions
 from kluster.components.dns.base import overlay_label
-from kluster.components.dns.rewrites import ResolverRewrites, rewrites
+from kluster.components.dns.rewrites import ResolverRewrites, overlay_rewrites, rewrites
 from kluster.components.dns.zone import ManagedZone
 from kluster.providers.adguard_rewrites import AdGuardRewrite
 
@@ -298,14 +299,25 @@ def test_a_rewrite_component_is_declared_for_every_resolver_the_census_names(sta
     assert declared == {f'rewrites-{resolver.name}' for resolver in conventions.gateway.RESOLVERS}
 
 
-def test_no_rewrite_is_declared_while_no_app_declares_a_route(stack: AppliedPhysical) -> None:
-    """With no row to write, the components declare no dynamic resource.
+def test_both_instances_carry_the_overlay_set_while_no_app_declares_a_route(stack: AppliedPhysical) -> None:
+    """The roster's rewrites owe nothing to the route census, and reach both instances.
 
-    So the provider process never starts and the AdGuard login is never read,
-    which is what lets the stack deploy before that login exists. The census
-    is empty in this run because the run sets it so.
+    The census is empty in this run because the run sets it so, which leaves
+    the overlay set as the whole of what either instance is handed. Grouped
+    by the component a rewrite is declared under, so an instance handed
+    nothing, or handed a different set, fails here rather than disappearing
+    into a union of both.
     """
-    assert not stack.by_name(REWRITE)
+    overlay = {(entry.domain, str(entry.answer)) for entry in overlay_rewrites(conventions.overlay.ROSTER)}
+    declared = stack.by_name(REWRITE)
+
+    for resolver in conventions.gateway.RESOLVERS:
+        component = f'rewrites-{resolver.name}-'
+        written = {
+            (inputs['domain'], inputs['answer']) for name, inputs in declared.items() if name.startswith(component)
+        }
+        assert written == overlay, resolver.name
+    assert len(declared) == len(conventions.gateway.RESOLVERS) * len(overlay)
 
 
 def test_a_route_in_the_census_is_rewritten_on_every_resolver(routed: AppliedPhysical) -> None:
@@ -313,19 +325,21 @@ def test_a_route_in_the_census_is_rewritten_on_every_resolver(routed: AppliedPhy
 
     What a row implies is `rewrites`' subject (`test_dns_rewrites.py`); what
     is asserted here is that the program hands that derivation the census
-    rather than anything else, and hands every instance the result. The names
-    are stated independently of the derivation, so a run that derives nothing
-    at all fails here rather than agreeing with itself.
+    rather than anything else, and hands every instance the result beside the
+    overlay set. The route's names are stated independently of the
+    derivation, so a run that derives nothing from the census fails here
+    rather than agreeing with itself.
     """
     written = {(inputs['instance'], inputs['domain'], inputs['answer']) for inputs in routed.by_name(REWRITE).values()}
     implied = {
         (resolver.name, entry.domain, str(entry.answer))
         for resolver in conventions.gateway.RESOLVERS
-        for entry in rewrites((ROUTE,))
+        for entry in (*rewrites((ROUTE,)), *overlay_rewrites(conventions.overlay.ROSTER))
     }
 
     assert written == implied
-    assert {domain for _, domain, _ in written} == {f'{ROUTE.host}.{conventions.ZONE_PRIMARY}'}
+    routed_names = {domain for _, domain, _ in written if not domain.endswith(f'.{conventions.OVERLAY_DOMAIN}')}
+    assert routed_names == {f'{ROUTE.host}.{conventions.ZONE_PRIMARY}'}
 
 
 def test_every_zone_and_record_is_signed_by_one_explicit_provider(stack: AppliedPhysical) -> None:
