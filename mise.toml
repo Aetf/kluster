@@ -53,14 +53,22 @@ age = "1.3.1"
 # verdict is the pinned release's own -- a test holds the two equal, and one
 # renovate rule moves both.
 talosctl = "1.13.9"
+# kubeseal is what `credentials` seals the cluster's sealed values with
+# (docs/credentials.md §1 rule 6): the format is a hybrid encryption of the
+# sealed-secrets controller's own, so the tool built for it does the sealing
+# rather than a reimplementation that could disagree with the controller. The
+# suite opens what it seals with `--recovery-unseal` and a key pair of its own.
+# This version is the controller's release (rfc-007 §6.1).
+kubeseal = "0.39.1"
 # node runs ZeroTier's own rule compiler, which the suite asks whether Central
 # would accept the overlay's rendered flow rules. The compiler is JavaScript
 # with no dependencies, vendored at the release the CI member runs
 # (tests/vendor/zerotier-rule-compiler/source.toml), so node is the whole of
 # what it needs installed.
 node = "24.21.0"
-# The prose checker AGENTS.md's gate runs over every markdown file, and the
-# one gate tool no registry carries: it is pinned straight to its GitHub
+# The prose checker AGENTS.md's gate runs over every markdown file but the
+# generated SDKs' under `sdks/`, and the one gate tool no registry carries: it
+# is pinned straight to its GitHub
 # release, whose `linux-x64` archive bundles the Java it runs on, so a runner
 # needs no JDK beside it. Both `ltex-cli-plus` and the `ltex-ls-plus` server
 # the editors speak to come from this one archive.

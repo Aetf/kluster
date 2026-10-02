@@ -46,6 +46,7 @@ from workflow_files import GITHUB, github_name, mapping, read_workflow, workflow
 from kluster import conventions
 from kluster.components.dns.base import overlay_records
 from kluster.conventions import backup, identity
+from kluster.lib import k8s as lib_k8s
 from kluster.scripts.credentials import pulumi_config
 
 # --------------------------------------------------------------------------
@@ -2498,3 +2499,67 @@ def test_the_glossary_names_terms_the_package_uses_and_refuses_words_it_does_not
         word: files for entry in entries for word in entry.refused if (files := _files_using(_phrase(word), vocabulary))
     }
     assert not used, f'the conventions package uses a word its own glossary refuses: {used}'
+
+
+# -- the served zones, and the route label (rfc-007 §5.2) ---------------------
+
+
+def test_the_served_zones_are_the_primary_and_exactly_the_zones_the_rows_name() -> None:
+    """Two programs derive one set: `k8s-base` declares a certificate per zone, `credentials` scopes a token to it.
+
+    Held on a census of its own as well as on the real one, which is empty
+    until `apps` declares its first application: the primary is served by
+    definition, and a zone joins only because a row publishes in it.
+    """
+    route = conventions.routes.Route
+    rows = (
+        route(host='photos'),
+        route(host='www', zones=('unlimitedcodeworks.xyz', conventions.ZONE_PRIMARY)),
+        route(host='media', zones=('unlimitedcodeworks.xyz',)),
+    )
+
+    assert conventions.routes.served_zones(()) == (conventions.ZONE_PRIMARY,)
+    assert conventions.routes.served_zones(rows) == (conventions.ZONE_PRIMARY, 'unlimitedcodeworks.xyz')
+    # Served by definition: a census whose rows are all in another zone still
+    # serves the primary, whose certificate the cluster's own endpoints hold.
+    assert conventions.routes.served_zones(rows[2:]) == (conventions.ZONE_PRIMARY, 'unlimitedcodeworks.xyz')
+    named = {zone for row in conventions.routes.ROUTES for zone in row.zones}
+    assert set(conventions.routes.served_zones()) == {conventions.ZONE_PRIMARY} | named
+    assert conventions.routes.served_zones()[0] == conventions.ZONE_PRIMARY
+
+
+def test_the_route_label_is_one_label_this_program_owns() -> None:
+    ((key, value),) = conventions.routes.ROUTE_LABEL.items()
+
+    assert key.startswith(f'{conventions.LABEL_DOMAIN}/')
+    assert value
+
+
+# -- the sealed values (rfc-007 §6.2) ------------------------------------------
+
+
+def test_every_sealed_value_is_declared_by_a_stack_of_the_census() -> None:
+    assert {value.stack for value in conventions.sealed.VALUES.values()} <= set(conventions.STACK_NAMES.names())
+
+
+def test_every_value_credentials_seals_is_sealed_strict() -> None:
+    # Name and namespace bound into the ciphertext: nothing about one of these
+    # will be renamed, and `namespace-wide` stays for the legacy manifests.
+    assert {value.scope for value in conventions.sealed.VALUES.values()} == {conventions.sealed.SealingScope.STRICT}
+
+
+def test_no_two_sealed_values_share_a_path() -> None:
+    paths = [(value.stack, value.path(key)) for value in conventions.sealed.VALUES.values() for key in value.keys]
+
+    assert len(paths) == len(set(paths))
+    assert all(path.startswith(f'{conventions.sealed.CONFIG_KEY}.') for _, path in paths)
+    assert all(value.keys for value in conventions.sealed.VALUES.values())
+
+
+def test_a_sealed_values_path_refuses_a_key_it_does_not_carry() -> None:
+    with pytest.raises(KeyError):
+        _ = conventions.sealed.DNS01_TOKEN.path('token')
+
+
+def test_the_scope_a_secret_is_declared_at_is_the_one_values_are_sealed_at() -> None:
+    assert lib_k8s.SealingScope is conventions.sealed.SealingScope

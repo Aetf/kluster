@@ -116,6 +116,13 @@ def expected(path: list[str]) -> str | None:
             # One handler for every device row: what differs between them is
             # the table in `devices.py`, not the code that reads it.
             return 'devices.deliver'
+        case ['derived', row, 'seal'] if row in devices.DEVICES:
+            # The sealed copy of a device row recorded before the cluster
+            # existed, read back out of the stack that holds the value.
+            return 'devices.seal'
+        case ['derived', row, 'record'] if row in devices.SEALED_RECORDS:
+            # A row made by hand whose one delivery is a seal.
+            return 'devices.record_sealed'
         case ['derived', _, 'record']:
             # The same verb for a console-made row whose consumer is not a
             # stack: what it is delivered into is the escrow, so the writer is
@@ -155,6 +162,10 @@ class _Vault:
 
     def recover(self, _label: str, _generation: int | None = None) -> str:
         return 'a-secret'
+
+
+def _no_stack(name: str) -> cli.pulumi_config.Stack:
+    raise AssertionError(f'a dispatch test opened the {name} stack through a stubbed sealer')
 
 
 class Dispatch:
@@ -239,6 +250,7 @@ class Dispatch:
             (cli.b2, 'rotate_seed', 'key-id'),
             (cli.derived, 'cloudflare_zones', None),
             (cli.derived, 'cloudflare_gateway_acme', 'token-id'),
+            (cli.derived, 'cloudflare_dns01', 'token-id'),
             (cli.derived, 'oci_physical', 'ocid1.user.test'),
             (cli.derived, 'oci_state_backend', 'ocid1.user.test'),
             (cli.derived, 'b2_management', 'key-id'),
@@ -250,6 +262,11 @@ class Dispatch:
             (cli.derived, 'state_backend_host_key', 'ssh-ed25519 AAAA'),
             (cli.derived, 'backup_age_recipient', 'age1recipient'),
             (cli.devices, 'deliver', ()),
+            (cli.devices, 'seal', None),
+            (cli.devices, 'record_sealed', None),
+            # The cluster a seal is made to: its certificate is fetched with the
+            # kubeconfig in `physical`'s state, which a dispatch test has none of.
+            (cli.sealing, 'cluster_sealer', cli.sealing.Sealer(certificate='', open_stack=_no_stack)),
             # Slots are files in the checkout this test is running from, so
             # the writer is stubbed: a dispatch test must not leave a
             # placeholder passphrase where mise would then read it.
@@ -323,7 +340,11 @@ def test_the_walk_finds_every_register_row() -> None:
             assert ['seed', member, seed.repair.verb] in found
     for member in masters.ROOTS:
         assert ['root', member, 'remember'] in found
-    for member in devices.DEVICES:
+    for member, device in devices.DEVICES.items():
+        assert ['derived', member, 'record'] in found
+        # `seal` exists exactly where the cluster needs a copy of the value.
+        assert (['derived', member, 'seal'] in found) == (device.sealed is not None)
+    for member in devices.SEALED_RECORDS:
         assert ['derived', member, 'record'] in found
     for row, label in escrow.rows().items():
         # The verb an escrowed row carries follows from its origin: a value
@@ -349,6 +370,42 @@ def test_every_leaf_dispatches(argv: list[str], dispatch: Dispatch, caplog: pyte
         return
     assert code == 0, caplog.text
     assert target in dispatch.reached
+
+
+def _refusing(refusal: Exception) -> Callable[..., Any]:
+    def refuse(*_args: Any, **_kwargs: Any) -> Any:
+        raise refusal
+
+    return refuse
+
+
+def test_a_bgp_record_before_there_is_a_cluster_writes_the_gateways_end_alone(
+    dispatch: Dispatch, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Stage 8 records the password before `physical` has brought a cluster up:
+    # the gateway's end is delivered, and the sealed copy is left to `seal`.
+    monkeypatch.setattr(cli.sealing, 'cluster_sealer', _refusing(cli.sealing.NoCluster('no cluster to seal to yet')))
+
+    assert cli.main(['derived', devices.BGP, 'record']) == 0
+
+    (kwargs,) = [kwargs for name, _, kwargs in dispatch.calls if name == 'devices.deliver']
+    assert kwargs['sealer'] is None
+
+
+def test_a_bgp_record_whose_cluster_refuses_the_seal_writes_neither_end(
+    dispatch: Dispatch, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A cluster that exists and cannot be sealed to is not the stage-8 case:
+    # writing the gateway's end alone would leave the worker on the old
+    # password with nothing saying so.
+    monkeypatch.setattr(
+        cli.sealing, 'cluster_sealer', _refusing(cli.pulumi_config.SlotRefused('kubeseal refused: no controller'))
+    )
+
+    assert cli.main(['derived', devices.BGP, 'record']) != 0
+
+    assert 'devices.deliver' not in dispatch.reached
+    assert 'kubeseal refused' in caplog.text
 
 
 def test_bootstrap_carries_its_only_through(dispatch: Dispatch) -> None:

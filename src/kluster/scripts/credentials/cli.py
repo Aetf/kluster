@@ -29,7 +29,7 @@ import argparse
 import getpass
 import logging
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from kluster.lib import acquisition
@@ -48,6 +48,7 @@ from . import (
     masters,
     oci_iam,
     pulumi_config,
+    sealing,
     slots,
     workstation,
 )
@@ -172,7 +173,8 @@ _ORDER = """when to run what:
          dns for the AdGuard login, github for the admin token the forge
          is declared with. Those files are then committed. The GitHub one
          is last of these because stage 10 authenticates as it, and it
-         needs stage 2.
+         needs stage 2. The BGP password's copy for the cluster waits for
+         stage 11: there is no cluster to seal it to yet.
     9. credentials derived github-dispatch-key record
        credentials derived github-trigger-key record
          The two GitHub App private keys. Each is generated on its own App
@@ -196,6 +198,21 @@ _ORDER = """when to run what:
          kubeconfig` is that copy alone, which reads no admin token, and is
          run again whenever physical's kubeconfig changes. Commit both
          stack files when it writes them.
+   11. credentials derived cloudflare-dns01 mint
+       credentials derived bgp seal
+       credentials derived alert-webhook record
+         The values the cluster consumes, once physical has brought the
+         cluster up and k8s-base runs the sealed-secrets controller. Each
+         is sealed with kubeseal to the cluster's certificate, fetched with
+         the kubeconfig in physical's state, and its ciphertext -- which
+         anyone may read and only the cluster can open -- written into the
+         k8s-base stack's config: cert-manager's DNS-01 token, scoped to
+         the zones the cluster serves; the BGP session password stage 8
+         recorded, read back out of physical's config; and alertmanager's
+         own Home Assistant webhook, made by the operator in Home
+         Assistant. Commit the stack file; the next k8s-base apply hands
+         each to what reads it. Re-running the first rotates the token;
+         a `bgp record` from here on seals in the same run.
 
   on a workstation that develops without the kit
     Copy the .credentials directory from a machine that has one: the
@@ -723,8 +740,10 @@ def build_parser() -> argparse.ArgumentParser:
             'a row a person makes -- in a console, where no API of that platform makes one, or by drawing '
             'it, where no console does: it prints the steps and takes what they produce, into the stack '
             'that authenticates with the value or into the escrow '
-            'where a row whose consumer is not built yet rests. `ls`, `check` and `sync` act on the map '
-            'rather than on one row.'
+            'where a row whose consumer is not built yet rests. A value the cluster consumes is sealed to the '
+            "cluster's certificate with kubeseal and written, as ciphertext anyone may read, into the "
+            'configuration of the stack that declares it; `seal` writes that copy for a row recorded before '
+            'the cluster existed. `ls`, `check` and `sync` act on the map rather than on one row.'
         ),
         epilog=_see_also('§3'),
     )
@@ -879,6 +898,41 @@ def build_parser() -> argparse.ArgumentParser:
         help=f'the kit entry the seed is read from (default: {derived.CLOUDFLARE_SEED_ENTRY})',
     )
     _add_bundle_dir(gateway_acme_mint)
+
+    dns01 = rows.add_parser(
+        derived.DNS01_ROW,
+        help="cert-manager's DNS-01 token, sealed to the cluster",
+        description=(
+            "The token the cluster's certificate issuer answers DNS-01 challenges with. A third token from the "
+            "Cloudflare seed, apart from the gateway's: two issuers that have to survive each other's outage "
+            'do not share a credential. Its scope is the zones the cluster serves -- the primary zone, and every '
+            'zone a route publishes in -- the same set the cluster issues a certificate for each of. Cloudflare '
+            'scopes a token to zones and not to records, so it can edit every record in those zones although '
+            'it needs only the challenge records. Its one consumer is in the cluster, so it is sealed to the '
+            "cluster's certificate rather than written as a stack secret."
+        ),
+    )
+    dns01_verbs = dns01.add_subparsers(dest='action', required=True, metavar='<verb>')
+    dns01_mint = dns01_verbs.add_parser(
+        'mint',
+        help="mint it from the seed and seal it into the k8s-base stack's config",
+        description=(
+            "Fetch the sealing certificate from the cluster's sealed-secrets controller, with the kubeconfig "
+            "in the physical stack's state; open the Cloudflare seed in the kit; mint a token scoped to the "
+            'zones the cluster serves; seal it with kubeseal for the Secret the issuer reads, bound to that '
+            "Secret's name and namespace; and write the ciphertext in the clear into the config of the stack "
+            'that declares the issuer, reading it back. Everything that can refuse -- the cluster, the stack, '
+            'the account -- refuses before the token exists. A live token of the same name is retired only once '
+            'the ciphertext is written, so a run that fails leaves the working token alone. The stack file is '
+            'then committed, and the next apply hands the issuer the new token. Re-running this is the rotation.'
+        ),
+    )
+    _ = dns01_mint.add_argument(
+        '--entry',
+        default=derived.CLOUDFLARE_SEED_ENTRY,
+        help=f'the kit entry the seed is read from (default: {derived.CLOUDFLARE_SEED_ENTRY})',
+    )
+    _add_bundle_dir(dns01_mint)
 
     physical_key = rows.add_parser(
         derived.OCI_PHYSICAL_ROW,
@@ -1152,15 +1206,24 @@ def build_parser() -> argparse.ArgumentParser:
             ),
         )
         device_verbs = device_row.add_subparsers(dest='action', required=True, metavar='<verb>')
+        sealed = (
+            ''
+            if device.sealed is None
+            else (
+                f' The cluster needs it too, so once the cluster exists the same run seals it with kubeseal '
+                f"and writes the ciphertext into the {device.sealed.stack} stack's config; before that, it "
+                'says so, and `seal` writes that copy later.'
+            )
+        )
         record = device_verbs.add_parser(
             'record',
             help=f"take it by hand into the {device.stack} stack's config",
             description=(
                 'Print the steps that create this credential, take each of its values without echoing a '
                 f"secret, and write them into the {device.stack} stack's committed config, reading them "
-                'back to prove the push landed. Then commit the config. Rotating it is the same sequence '
-                'with a fresh value, then whatever the printed steps say to do with the superseded one, '
-                'which nothing here can do for you.'
+                f'back to prove the push landed.{sealed} Then commit the config. Rotating it is the same '
+                'sequence with a fresh value, then whatever the printed steps say to do with the superseded '
+                'one, which nothing here can do for you.'
             ),
         )
         for field in device.fields:
@@ -1175,6 +1238,57 @@ def build_parser() -> argparse.ArgumentParser:
                 ),
             )
         _add_bundle_dir(record)
+        if device.sealed is not None:
+            sealing_verb = device_verbs.add_parser(
+                'seal',
+                help=f"seal what the {device.stack} stack holds into the {device.sealed.stack} stack's config",
+                description=(
+                    f"Read the value back out of the {device.stack} stack's config, seal it with kubeseal to "
+                    "the cluster's certificate -- fetched from the sealed-secrets controller with the kubeconfig "
+                    f"in the physical stack's state -- and write the ciphertext in the clear into the "
+                    f"{device.sealed.stack} stack's config, reading it back. The step for a value recorded "
+                    'before the cluster existed; a `record` once it exists seals in the same run. Every run '
+                    'writes fresh ciphertext. Then commit the config.'
+                ),
+            )
+            _add_bundle_dir(sealing_verb)
+
+    # The rows a person makes whose one consumer is in the cluster: no stack
+    # holds them as a secret, and `record` seals what it takes.
+    for sealed_record in devices.SEALED_RECORDS.values():
+        sealed_row = rows.add_parser(
+            sealed_record.member,
+            help=f'{sealed_record.title}, made by a person and sealed to the cluster',
+            description=(
+                f'Nothing here mints {sealed_record.title}: a person makes it, by the steps `record` prints. '
+                'Its one consumer is in the cluster, so this side seals it and writes the ciphertext where the '
+                f'{sealed_record.sealed.stack} stack reads it.'
+            ),
+        )
+        sealed_verbs = sealed_row.add_subparsers(dest='action', required=True, metavar='<verb>')
+        sealed_take = sealed_verbs.add_parser(
+            'record',
+            help=f"take it by hand, sealed, into the {sealed_record.sealed.stack} stack's config",
+            description=(
+                "Print the steps that create it, take its value without echoing it, fetch the cluster's "
+                "sealing certificate with the kubeconfig in the physical stack's state, seal the value with "
+                f"kubeseal, and write the ciphertext in the clear into the {sealed_record.sealed.stack} stack's "
+                'config, reading it back. Then commit the config. Rotating it is the same sequence with a fresh '
+                'value.'
+            ),
+        )
+        for field in sealed_record.fields:
+            _ = sealed_take.add_argument(
+                field.flag,
+                default=None,
+                metavar='<path>' if field.secret else '<value>',
+                help=(
+                    f'read {field.describes} from a file rather than a prompt (`{devices.STDIN}` reads stdin)'
+                    if field.secret
+                    else f'{field.describes}, rather than a prompt'
+                ),
+            )
+        _add_bundle_dir(sealed_take)
 
     # The escrowed rows: the secrets no provider mints, whose ciphertexts are
     # committed and open with the one recovery key the kit holds. Which verbs a
@@ -1378,6 +1492,20 @@ def _stacks(
     return [
         pulumi_config.Stack(name=name, directory=pulumi_config.project_dir(), environment=environment) for name in names
     ]
+
+
+def _opener(
+    args: argparse.Namespace, store: KdbxStore, registry: escrow.Registry
+) -> Callable[[str], pulumi_config.Stack]:
+    """Opens any stack by name under one environment, recovered once, for a run that reaches several."""
+    environment = lifecycle.environment(store, args.bundle_dir, registry)
+    directory = pulumi_config.project_dir()
+    return lambda name: pulumi_config.Stack(name=name, directory=directory, environment=environment)
+
+
+def _sealer(open_stack: Callable[[str], pulumi_config.Stack]) -> sealing.Sealer:
+    """A sealer for the cluster `physical` brought up, its certificate fetched now (`sealing.cluster_sealer`)."""
+    return sealing.cluster_sealer(open_stack(derived.PHYSICAL_STACK), open_stack=open_stack)
 
 
 def _config_stacks(row: str) -> tuple[str, ...]:
@@ -1648,6 +1776,13 @@ def main(argv: list[str] | None = None) -> int:
                 _ = derived.cloudflare_gateway_acme(
                     store, stack=_stack(args, store, derived.PHYSICAL_STACK, registry), seed_entry=args.entry
                 )
+            # Sealed rather than pushed: the certificate is fetched before the
+            # seed is opened, so a cluster that cannot be reached refuses the
+            # run with no token minted.
+            case ('derived', derived.DNS01_ROW, 'mint'):
+                _ = derived.cloudflare_dns01(
+                    store, sealer=_sealer(_opener(args, store, registry)), seed_entry=args.entry
+                )
             case ('derived', derived.OCI_PHYSICAL_ROW, 'mint'):
                 _ = derived.oci_physical(
                     store,
@@ -1714,12 +1849,35 @@ def main(argv: list[str] | None = None) -> int:
             # plus the push. Which stack takes it comes from the row rather
             # than from an argument -- the credential authenticates against
             # one device, and one stack talks to that device.
+            #
+            # A row the cluster needs too is sealed in the same run once there
+            # is a cluster to seal to; before `physical` has brought one up
+            # there is none, and the delivery goes ahead without the copy.
             case ('derived', member, 'record') if member in devices.DEVICES:
                 device = devices.DEVICES[member]
+                open_stack = _opener(args, store, registry)
+                sealer: sealing.Sealer | None = None
+                if device.sealed is not None:
+                    try:
+                        sealer = _sealer(open_stack)
+                    except sealing.NoCluster as exc:
+                        log.info('%s', exc)
                 _ = devices.deliver(
                     device,
-                    stack=_stack(args, store, device.stack, registry),
+                    stack=open_stack(device.stack),
                     given={field.name: getattr(args, field.dest) for field in device.fields},
+                    sealer=sealer,
+                )
+            case ('derived', member, 'seal') if member in devices.DEVICES:
+                device = devices.DEVICES[member]
+                open_stack = _opener(args, store, registry)
+                devices.seal(device, stack=open_stack(device.stack), sealer=_sealer(open_stack))
+            case ('derived', member, 'record') if member in devices.SEALED_RECORDS:
+                sealed_record = devices.SEALED_RECORDS[member]
+                devices.record_sealed(
+                    sealed_record,
+                    sealer=_sealer(_opener(args, store, registry)),
+                    given={field.name: getattr(args, field.dest) for field in sealed_record.fields},
                 )
             # The escrowed rows. generate -> escrow -> push: the value reaches
             # the slot the map names for it in the same run, and the push lives

@@ -1,4 +1,4 @@
-"""Inside the cluster: its address ranges, its ports, its mesh's MTU, its routing session, its pools, its storage classes."""
+"""Inside the cluster: its address ranges, its ports, its mesh's MTU, its routing session, its pools, its namespaces, its storage classes."""
 
 from __future__ import annotations
 
@@ -73,6 +73,25 @@ GATEWAY_LAN = 'lan-gw'
 #: Same shape as lan-gw on its own VIP; attaching a route here *is* the
 #: decision "reachable from the IoT VLAN" (cluster-infra.md §2).
 GATEWAY_MEDIA = 'media-gw'
+
+#: The namespaces a sealed value is bound to (`conventions.sealed`): `kubeseal`
+#: seals each value strict, its namespace part of the ciphertext, so the
+#: command that seals it and the stack that installs what reads it have to
+#: agree on the name.
+#:
+#: The sealed-secrets controller's name and namespace are the two `kubeseal`
+#: looks for unless told otherwise, so the chart is installed under them
+#: (rfc-007 §6.1) and the certificate a value is sealed to is fetched from
+#: them.
+SEALING_CONTROLLER = 'sealed-secrets-controller'
+SEALING_NAMESPACE = 'kube-system'
+#: cert-manager's own: a cluster issuer's credentials are read from the
+#: controller's namespace under the chart's defaults (rfc-007 §5.2).
+CERT_MANAGER_NAMESPACE = 'cert-manager'
+#: Cilium's secrets namespace for BGP, the release's default (rfc-007 §4.6).
+BGP_SECRETS_NAMESPACE = 'kube-system'
+#: The monitoring stack's, alertmanager's among it (rfc-007 §7).
+MONITORING_NAMESPACE = 'monitoring'
 
 #: The MTU of KubeSpan's WireGuard link, which the machine configuration
 #: states; rfc-007 §4.1 has `k8s-base` size Cilium from it too. Cilium's own MTU setting

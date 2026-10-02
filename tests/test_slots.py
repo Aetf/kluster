@@ -244,7 +244,7 @@ def channels_of_every_kind() -> tuple[slots.Channel, ...]:
         slots.PulumiConfig('a-stack', 'aKey'),
         slots.PulumiState('a-stack', 'a value'),
         slots.EscrowCopy('a-label'),
-        slots.SealedSecret('a manifest'),
+        slots.SealedSecret(conventions.sealed.DNS01_TOKEN),
         slots.OnBox('a file'),
         slots.SecretStore('a-key'),
         slots.WorkstationSlot('a-file'),
@@ -577,7 +577,8 @@ def test_the_session_password_row_names_the_device_and_the_sealed_copy() -> None
     # saying only "config secret" would read as a credential the gateway never
     # holds.
     assert slots.DeviceSecret("the routing daemon's configuration") in row.targets
-    assert slots.register_column(slots.SealedSecret('a manifest')) in channels(row)
+    assert slots.SealedSecret(conventions.sealed.BGP_PASSWORD) in row.targets
+    assert not row.pending
 
 
 #: `secure:` keys in a committed stack file that authenticate nothing, each with
@@ -739,7 +740,8 @@ def test_the_webhook_is_a_repository_secret_of_the_ops_repository_and_has_left_t
     One sink, a repository secret of the ops repository with no Environment
     -- the handler belongs to none, so an Environment secret would be
     invisible to it and the prefix rule does not apply -- under the name the
-    handler reads, and the in-cluster copy beside it. And no row of the map
+    handler reads, and no copy in the cluster, alertmanager posting to a
+    webhook of its own. And no row of the map
     delivers a webhook into the deployment repository any more: the secret
     `deploy.yml` still reads there is the legacy channel, which this map
     leaves alone rather than re-syncing.
@@ -751,7 +753,10 @@ def test_the_webhook_is_a_repository_secret_of_the_ops_repository_and_has_left_t
     assert slot.environment is None
     assert slot.name == 'HA_WEBHOOK_URL'
     assert not slot.name.startswith(f'{DRILL_ENVIRONMENT.upper()}_')
-    assert slots.register_column(slots.SealedSecret('a manifest')) in channels(row)
+    # alertmanager is no consumer of this one: its body is fixed and this
+    # automation takes the ops repository's payload, so alertmanager posts to
+    # a webhook of its own (rfc-007 §7.3).
+    assert slots.register_column(slots.SealedSecret(conventions.sealed.ALERT_WEBHOOK)) not in channels(row)
     assert not [
         slot
         for row in slots.ROWS.values()
@@ -1678,3 +1683,37 @@ def test_the_operator_passphrase_lands_where_its_chain_reads_it() -> None:
     stack = escrow.slot(escrow.PASSPHRASE)
     assert stack is not None
     assert stack.store is None
+
+
+def test_a_sealed_row_lands_at_the_census_row_its_value_is() -> None:
+    sealed = {
+        name: [target.what for target in row.targets if isinstance(target, slots.SealedSecret)]
+        for name, row in slots.ROWS.items()
+    }
+
+    # Every sealed value the census carries is delivered by exactly one row,
+    # and a row's sealed target is a census row rather than a description: the
+    # command that seals it and the program that reads it find the place by
+    # the same row.
+    delivered = [value for values in sealed.values() for value in values]
+    assert sorted(value.name for value in delivered) == sorted(conventions.sealed.VALUES)
+    assert sealed[derived.DNS01_ROW] == [conventions.sealed.DNS01_TOKEN]
+    assert sealed[devices.BGP] == [conventions.sealed.BGP_PASSWORD]
+    assert sealed['alert-webhook'] == [conventions.sealed.ALERT_WEBHOOK]
+
+
+def test_the_dns01_row_is_minted_by_its_own_command_and_waits_on_nothing() -> None:
+    row = slots.ROWS[derived.DNS01_ROW]
+
+    assert isinstance(row.source, slots.Minted)
+    assert row.source.command == f'credentials derived {derived.DNS01_ROW} mint'
+    assert not row.source.unbuilt
+    assert not row.pending
+
+
+def test_alertmanagers_webhook_is_its_own_row_and_its_seal_is_its_only_delivery() -> None:
+    row = slots.ROWS['alert-webhook']
+
+    assert row.targets == (slots.SealedSecret(conventions.sealed.ALERT_WEBHOOK),)
+    assert 'credentials derived alert-webhook record' in row.source.describe()
+    assert row.register == devices.SEALED_RECORDS['alert-webhook'].register

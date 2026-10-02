@@ -13,15 +13,16 @@ pushes and only then retires, and which keeps the credential behind that call �
 so reaching for the value directly is a type error rather than a shortcut. What
 that buys, and what a failed push costs instead, is the register's to say.
 
-A row appears here when it has a slot to be delivered into. The one
-Cloudflare row that is still absent — the DNS-01 token for cert-manager — has
-nowhere to be delivered yet, and a mint with no slot would be exactly the
-parked secret the register rules out.
+A row appears here when it has a slot to be delivered into: a mint with no
+slot would be exactly the parked secret the register rules out.
 
 Which slot a row is pushed into follows from what consumes it. A stack's
 credential goes into that stack's committed configuration, where the program
 reads it before it can run -- the state-backend appliance's OCI key included,
-which the `state-backend` stack builds its OCI provider from.
+which the `state-backend` stack builds its OCI provider from. A credential the
+cluster consumes is sealed to the cluster instead and its ciphertext written
+in the clear into the configuration of the stack that declares it
+(`sealing.py`): the DNS-01 token cert-manager answers challenges with.
 
 The drill age identity is drawn here rather than minted anywhere, as the
 appliance's SSH host key below is; its consumer is the ops repository's
@@ -79,7 +80,7 @@ from kluster.lib.state_backend import settings as appliance_settings
 from ... import conventions
 from ..state_backend import config as appliance
 from ..state_backend import probe
-from . import age, b2, cloudflare, entries, escrow, oci_iam, pki, pulumi_config
+from . import age, b2, cloudflare, entries, escrow, oci_iam, pki, pulumi_config, sealing
 from .github_secrets import Forge, Slot
 from .kdbx import KdbxStore
 
@@ -210,6 +211,7 @@ BACKUP_RECIPIENTS_FILE = committed.BACKUP_RECIPIENTS
 #: of the convention.
 ZONES_ROW = 'cloudflare-zones'
 GATEWAY_ACME_ROW = 'cloudflare-gateway-acme'
+DNS01_ROW = 'cloudflare-dns01'
 OCI_PHYSICAL_ROW = 'oci-physical'
 OCI_STATE_BACKEND_ROW = f'oci-{conventions.STATE_BACKEND}'
 B2_MANAGEMENT_ROW = 'b2-management'
@@ -385,6 +387,50 @@ def cloudflare_gateway_acme(
             plain={},
             holds=f'{cloudflare.GATEWAY_ACME.name} ({token.token_id}), scoped to {", ".join(zones)}',
         )
+    )
+    return delivered.token_id
+
+
+def cloudflare_dns01(kit: KdbxStore, *, sealer: sealing.Sealer, seed_entry: str = CLOUDFLARE_SEED_ENTRY) -> str:
+    """Mint cert-manager's DNS-01 token from the seed and seal it into the stack that declares it. Returns its id.
+
+    The scope is the zones the cluster serves (`conventions.routes.served_zones`),
+    the same derivation `k8s-base` declares one certificate per zone from, so
+    a route in a new zone widens the token on the next run of this command and
+    the two never disagree about which zones are served. Cloudflare scopes a
+    token to zones and not to records within one, so the token carries the
+    permissions of the gateway's own (`cloudflare.DNS01`) on those zones.
+
+    The delivery is a seal (`sealing.py`): the token is sealed strict to the
+    cluster's certificate under the name and namespace its row in
+    `conventions.sealed` gives it, and the ciphertext written in the clear at
+    the path the row derives, in the stack the row names. A third token from
+    the same seed, apart from the gateway's on purpose: two issuers that have
+    to survive each other's outage do not share a credential.
+
+    **Every refusal the run can know before minting fires before anything is
+    minted**: a scope with no zone in it, a declaring stack that does not
+    exist, and -- by the time this is called -- a cluster whose certificate
+    could not be fetched, which is what building `sealer` does. The account
+    is held to `conventions.CLOUDFLARE_ACCOUNT` before the token is created,
+    as for every Cloudflare row.
+    """
+    value = conventions.sealed.DNS01_TOKEN
+    zones = conventions.routes.served_zones()
+    if not zones:
+        raise pulumi_config.SlotRefused(
+            f'the cluster serves no zone, so the {DNS01_ROW} token would be scoped to nothing; '
+            'the primary zone is served by definition, so the route census or its derivation is broken'
+        )
+    _ = sealer.stack(value)
+    log.info('opening the Cloudflare seed from the kit')
+    session = cloudflare.Session.from_entry(kit, seed_entry)
+    pending = cloudflare.mint_zone_token(session, role=cloudflare.DNS01, zones=zones)
+
+    (key,) = value.keys
+    delivered, _ = pending.deliver(lambda token: sealer.deliver(value, {key: token.value}))
+    log.info(
+        'cert-manager answers DNS-01 challenges in %s as %s from the next apply', ', '.join(zones), delivered.token_id
     )
     return delivered.token_id
 
