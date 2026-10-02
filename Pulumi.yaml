@@ -17,7 +17,10 @@ description: Kluster configurations
 # one. `pulumi config set` cannot write project-level values, so these are
 # hand-edited YAML, which is what a renovate-maintained pin wants anyway; a
 # key in someone else's namespace may carry a value and neither a type nor a
-# default. `lib/versions.py` is what reads them.
+# default. `lib/versions.py` is what reads them, for a stack program from its
+# configuration and for a script from this file, so a pin a script also reads
+# lives here too; no stack file overrides one of those, since the script
+# reads only this file, and a test holds that.
 config:
   # The whole fleet's Talos release: machine configurations, the cloud image
   # imported from the factory, and the worker's `nocloud` disk image.
@@ -38,6 +41,139 @@ config:
   versions:image-gateway-adguard-alice: ghcr.io/aetf/homelab-containers/adguard:3@sha256:45a2895bea93f2d7ed02a1ea4a36783e32eae29733ea613869724ddeb024aad5
   versions:image-gateway-adguard-bob: ghcr.io/aetf/homelab-containers/adguard:3@sha256:45a2895bea93f2d7ed02a1ea4a36783e32eae29733ea613869724ddeb024aad5
   versions:image-gateway-zerotier: ghcr.io/aetf/homelab-containers/zerotier:3@sha256:e4d8cb40f8a5e787b7d4ad6ddc60d6a0289d2eb988b3575e6a54273a354c39d7
+
+  # The charts `k8s-base` installs (declarative/cluster-infra.md §1), one
+  # object per chart, written under `value:` -- the one form Pulumi's project
+  # schema accepts for an object. The key's `<name>` is the chart's name in its
+  # repository. Beside where the chart is served and its version, a pin carries
+  # what `update_crds` needs to render it: whether it renders definitions into
+  # `packages/crds`, the `render-values` that make it render them, and a
+  # `floor` its operator version has to clear, with the section that states
+  # it. The script checks a floor against the `appVersion` the chart itself
+  # declares, so no operator version is kept by hand here.
+  #
+  # Renovate reads `repository` and moves `version` and `digest`, which are
+  # the first three fields after `value:`, in that order. It cannot finish a
+  # bump of a pin `update_crds` reads: `packages/crds` records the pins it was
+  # generated from, and a test holds that record to this block, so such a bump
+  # is red until `update_crds` has run on its branch (framework/pulumi.md §4).
+  #
+  # A chart carries the digest of its manifest wherever its publisher's OCI
+  # registry has the pinned version. Helm pulls the chart by that digest and
+  # refuses one the version's tag no longer resolves to, so the pin holds the
+  # bytes it was proposed at. Cilium's bump travels alone in renovate, the
+  # way Talos's does (operations.md §2.2).
+  versions:chart-cilium:
+    value:
+      repository: oci://quay.io/cilium/charts
+      version: 1.20.1
+      digest: sha256:906ce40d35daad838d12add8a5ba7033e767767f51799a93c7eace2cec9cdc05
+      # The chart installs no definitions: the agent registers its own at
+      # runtime, and `update_crds` reads them from the source tree at this
+      # version's tag instead.
+      definitions: false
+      floor:
+        operator: '1.20'
+        document: 'cluster-infra.md §2: the ExternalAuth route filter (GEP-1494)'
+  versions:chart-cert-manager:
+    value:
+      repository: oci://quay.io/jetstack/charts
+      version: v1.21.1
+      digest: sha256:15c0b46d9006ce8eb9ff14d1bf54d1bbfcc587bb9e24cd9fe186fb8fec56af1f
+      definitions: true
+      # The definitions are templates behind this switch rather than the
+      # chart's `crds/` directory, so the render has to ask for them.
+      render-values:
+        crds.enabled: 'true'
+  versions:chart-cloudnative-pg:
+    value:
+      repository: oci://ghcr.io/cloudnative-pg/charts
+      version: 0.29.0
+      digest: sha256:209c588b902982bf283a0073db83edd422d9710a2c8a670fe57c0329abe789a4
+      definitions: true
+      floor:
+        operator: '1.26'
+        document: 'cluster-infra.md §1 item 5: declarative offline in-place major upgrades (workloads.md §4)'
+  versions:chart-plugin-barman-cloud:
+    value:
+      repository: oci://ghcr.io/cloudnative-pg/charts
+      version: 0.7.1
+      digest: sha256:fc5683ec655b140e2f82219ffc9ae468e9cf2c0f204251b7da2294e5ce52b625
+      definitions: true
+  versions:chart-victoria-metrics-k8s-stack:
+    value:
+      repository: oci://ghcr.io/victoriametrics/helm-charts
+      version: 0.91.2
+      digest: sha256:9783c9b651fdece12a03ba4c62b84689b6df6c6e7c92d4f4949b3bc4114020a5
+      definitions: true
+  versions:chart-node-feature-discovery:
+    value:
+      repository: oci://registry.k8s.io/nfd/charts
+      version: 0.19.0
+      digest: sha256:c74eeb7fe33c060e49e42cc8d588eeeddfbda6ae9bcd0835e0e398e02c5c2223
+      definitions: true
+  versions:chart-reloader:
+    value:
+      repository: oci://ghcr.io/stakater/charts
+      version: 2.2.16
+      digest: sha256:af2e01b729b9460048ed9482bf6c391154270903072f0e7b1e01db9aba9ea7a5
+      definitions: false
+
+  versions:chart-sealed-secrets:
+    value:
+      repository: oci://registry-1.docker.io/bitnamicharts
+      version: 2.19.3
+      digest: sha256:0a22f95d56c30e5e9778bf887ba7e3e68b6570356c3d9de4921f3816edf098f5
+      definitions: true
+  versions:chart-intel-device-plugins-operator:
+    value:
+      repository: oci://ghcr.io/intel/helm-charts
+      version: 0.36.0
+      digest: sha256:24ec70426a851c04e97efb61a4664479fbe1986ac74e39f497c03cce9b7bc282
+      definitions: true
+  versions:chart-intel-device-plugins-gpu:
+    value:
+      repository: oci://ghcr.io/intel/helm-charts
+      version: 0.36.0
+      digest: sha256:6f09a445227e1bec9d625f0c384182480ce7fc3c63c634549c8f813f1a77a3d0
+      # The `GpuDevicePlugin` object it creates is defined by the operator
+      # chart above; this one is a plain workload.
+      definitions: false
+
+  # The two charts below come from HTTP chart repositories, and carry no
+  # digest because there is none to check: Helm downloads an archive from such
+  # a repository and checks nothing about it but an optional provenance
+  # signature against its publisher's key, so the version is all a pin can
+  # hold. A chart carries a digest wherever its publisher's registry has the
+  # pinned version, and neither of these is published to one: volsync's
+  # release workflows push no chart, and metrics-server's chart workflow runs
+  # chart-releaser alone, which publishes to the HTTP repository.
+  versions:chart-volsync:
+    value:
+      repository: https://backube.github.io/helm-charts/
+      version: 0.16.0
+      definitions: true
+  versions:chart-metrics-server:
+    value:
+      repository: https://kubernetes-sigs.github.io/metrics-server/
+      version: 3.14.0
+      # `metrics.k8s.io` is an aggregated APIService, not a definition.
+      definitions: false
+
+  # The Gateway API definitions, which are no chart (cluster-infra.md §1
+  # item 1): a release asset, applied by the program and rendered by
+  # `update_crds`, both through `kluster.lib.release_assets.fetch_manifest`,
+  # which refuses an asset whose sha256 is not this one. The experimental
+  # channel is the one carrying the ExternalAuth route filter (GEP-1494) every
+  # app that does not speak OIDC is gated by (cluster-infra.md §2). Renovate
+  # moves `release` and `sha256` together, hashing the same asset of the next
+  # release.
+  versions:manifest-gateway-api:
+    value:
+      repository: kubernetes-sigs/gateway-api
+      release: v1.6.1
+      asset: experimental-install.yaml
+      sha256: d7fa77650e4ef28fca0411536fcb5e237deb4d50301cfded3be49d9a1b7bbd02
 
 # The bridged provider SDKs under `sdks/`, one entry per SDK: the release of
 # Pulumi's any-Terraform-provider bridge (`version`) and the upstream provider

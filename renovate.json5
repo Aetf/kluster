@@ -42,9 +42,12 @@
   // routes the cluster only pulls are the container images, by tag and by
   // digest, and the Helm charts: the first rule under `packageRules` takes
   // the age off them. The age is set here rather than per route, so a
-  // route added later waits unless it is one of those, and so does the one
-  // route in neither class, the `crd2pulumi` a person generates bindings
-  // with. A test holds the age to that shape.
+  // route added later waits unless it is one of those. Two more wait: the
+  // `crd2pulumi` a person generates bindings with, a route in neither class,
+  // and the Gateway API definitions, which the cluster only pulls as it does
+  // a chart. The exemption is one rule keyed by data source alone, a test
+  // holds the age to that shape, and the definitions' data source is also
+  // `crd2pulumi`'s.
   //
   // A data source that reports no release time cannot be aged, and two
   // waiting routes read such a source: the `deb` index the ZeroTier release
@@ -236,15 +239,49 @@
       groupSlug: 'toolchain',
     },
     {
-      // Inside the cluster: chart versions and container images, applied by a
-      // rollout. Blast radius is one workload.
+      // Inside the cluster: the charts, the Gateway API definitions and the
+      // container images the in-cluster stacks install, read off the
+      // `versions:` block of `Pulumi.yaml` by the chart, manifest and image
+      // managers below and applied by a rollout. Matched by the file those
+      // managers read and the data sources they read through, which no other
+      // pin in the file shares but the gateway's root filesystems: those are
+      // images too, and the gateway rule further down takes them back into a
+      // group of their own.
+      //
+      // Position is load-bearing, as for the `jdx/mise-action` rule: this sits
+      // *before* the gateway rule, so the later rule's group wins for the
+      // gateway's images, and before the Cilium rule, which takes the Cilium
+      // chart into a group of its own. A test holds both orders.
       matchFileNames: [
-        'Pulumi.k8s-base.yaml',
-        'Pulumi.apps.yaml',
-        'Pulumi.dns.yaml',
+        'Pulumi.yaml',
+      ],
+      matchDatasources: [
+        'helm',
+        'docker',
+        'github-release-attachments',
       ],
       groupName: 'in-cluster charts and images',
       groupSlug: 'in-cluster',
+    },
+    {
+      // Cilium's chart, out of the in-cluster group and into one of its own:
+      // a Cilium bump replaces the datapath every node runs, the riskiest
+      // upgrade operations.md §2.2 runs, so it travels alone and is read,
+      // the way the Talos release does. The dependency is the chart pin's
+      // key, `versions:chart-cilium`, whose `<name>` the chart managers take
+      // as the dependency's name.
+      //
+      // Position is load-bearing, as for the `jdx/mise-action` rule: this sits
+      // *after* the in-cluster rule, which matches the same pin by file and
+      // data source, so its group wins. A test holds the order.
+      matchFileNames: [
+        'Pulumi.yaml',
+      ],
+      matchDepNames: [
+        'cilium',
+      ],
+      groupName: 'cilium',
+      groupSlug: 'cilium',
     },
     {
       // Outside the cluster: Talos, which reimages nodes. `physical` has no PR
@@ -650,6 +687,60 @@
       ],
       datasourceTemplate: 'terraform-provider',
       registryUrlTemplate: 'https://registry.opentofu.org',
+    },
+    {
+      // The chart pins served from an HTTP chart repository: the key's
+      // `<name>` is the chart, `repository` the repository and `version` the
+      // version, read through the Helm data source off the repository's
+      // index. Each pin is an object under `value:`, and the three are the
+      // first lines after it (framework/pulumi.md §3.2). A bump of a pin
+      // `update_crds` reads is finished by running it on the branch, which
+      // rewrites the record `packages/crds` carries of the block.
+      customType: 'regex',
+      managerFilePatterns: [
+        '/^Pulumi\\.yaml$/',
+      ],
+      matchStrings: [
+        'versions:chart-(?<depName>[\\w-]+):\\s+value:\\s+repository: (?<registryUrl>https://\\S+)\\s+version: (?<currentValue>\\S+)',
+      ],
+      datasourceTemplate: 'helm',
+    },
+    {
+      // The chart pins served from an OCI registry, which carry the digest of
+      // the chart's manifest beside the version. An OCI chart is an artifact
+      // in a container registry, so it is read through the docker data source
+      // -- as renovate's own Helm managers read one
+      // (`lib/modules/manager/helmv3/oci.ts`) -- which moves the version and
+      // the digest together, the way it moves an image's tag and digest. The
+      // package is the registry path with the chart's name appended, which is
+      // the reference Helm pulls.
+      customType: 'regex',
+      managerFilePatterns: [
+        '/^Pulumi\\.yaml$/',
+      ],
+      matchStrings: [
+        'versions:chart-(?<depName>[\\w-]+):\\s+value:\\s+repository: oci://(?<registry>\\S+)\\s+version: (?<currentValue>\\S+)\\s+digest: (?<currentDigest>sha256:[0-9a-f]{64})',
+      ],
+      packageNameTemplate: '{{{registry}}}/{{{depName}}}',
+      datasourceTemplate: 'docker',
+    },
+    {
+      // The release manifest pins: a GitHub release, one of its assets and the
+      // asset's sha256, captured in one match so the release and the digest
+      // move together. `github-release-attachments` is the data source that
+      // maintains a digest: it finds the pinned asset in the current release by
+      // its sha256, from a checksum file the release publishes or, where there
+      // is none, by hashing the assets, and hashes the same asset of the next
+      // release (`lib/modules/datasource/github-release-attachments/index.ts`).
+      // A bump is finished by running `update_crds`, as for a chart.
+      customType: 'regex',
+      managerFilePatterns: [
+        '/^Pulumi\\.yaml$/',
+      ],
+      matchStrings: [
+        'versions:manifest-[\\w-]+:\\s+value:\\s+repository: (?<depName>[\\w.-]+/[\\w.-]+)\\s+release: (?<currentValue>\\S+)\\s+asset: \\S+\\s+sha256: (?<currentDigest>[0-9a-f]{64})',
+      ],
+      datasourceTemplate: 'github-release-attachments',
     },
     {
       // The image pins in the same project-level block. Each value is a whole

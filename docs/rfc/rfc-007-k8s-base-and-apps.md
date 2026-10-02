@@ -7,6 +7,14 @@
     Gateway's certificate renewal over SDS, and §15.1 ruled (a). §15.3
     records the two decisions left to later changes.
 *   **Created:** 2026-09-28
+*   **Updated:** 2026-10-02 — §3.4, as slice 4 built it: a chart pin
+    carries its manifest's digest wherever the publisher's OCI registry
+    has the pinned version; two managers read the chart pins, through the
+    Helm data source for an HTTP repository and the docker one for an OCI
+    registry; the record covers every chart pin the script reads, one
+    carrying only a floor included; and the manifest fetch lives in
+    `kluster.lib.release_assets`, which imports no bindings, rather than
+    in `kluster.lib.k8s`.
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
@@ -135,7 +143,7 @@ rather than a gated one of their own (§15.1).
 | What crosses a stack boundary: machine facts by StackReference, decisions by `conventions` ([declarative/README.md](../declarative/README.md) §2) | The kubeconfig, the pool addresses and the zone identifiers (§3.1) |
 | A census read by more than one program is a convention (style/pulumi.md, "Data") | The public port census gains readers (§5.3); the sealed values become a census (§6.2) |
 | Every version pin a stack program reads lives in `Pulumi.yaml`'s `versions:` block, and a pin a script reads too in a `kluster.lib` module ([framework/pulumi.md](../framework/pulumi.md) §3.2) | The chart and manifest pins join the block as structured values, and the second half is reversed: the script reads the block from the file through the program's parser (§3.4) |
-| Code a component and a script both run lives in `kluster.lib.<area>` (style/pulumi.md, "Layering") | The manifest fetch, run by the program and `update_crds`, in `kluster.lib.k8s` (§3.4) |
+| Code a component and a script both run lives in `kluster.lib.<area>` (style/pulumi.md, "Layering") | The manifest fetch, run by the program and `update_crds`, in `kluster.lib.release_assets`, which imports no bindings (§3.4) |
 | The installation Cilium's and Talos' guides document for Talos | Taken as written, and every addition is a setting the design needs (§4.1) |
 | The route census, the exposure model and the one `route(row)` helper (rfc-003 §6, [dns.md](../declarative/dns.md) §5) | The helper's home, and the zone set of a LAN-side row (§9) |
 | The alert channel, its tiers and the playbook rule (architecture.md §4.3, [operations.md](../operations.md) §4 and §5) | The in-cluster rules and the push leg (§7) |
@@ -241,8 +249,10 @@ weekly drift run is what previews them.
 
 **Every chart `k8s-base` installs is a structured pin in `Pulumi.yaml`'s
 `versions:` block**, `versions:chart-<name>`, one value per chart. It
-holds the chart's repository and version, and what `update_crds` needs
-to render and check it: whether it carries definitions, the values that
+holds the chart's repository and version — with the digest of the
+chart's manifest wherever the publisher's OCI registry has that version,
+which Helm pulls the chart by — and what `update_crds` needs to render
+and check it: whether it carries definitions, the values that
 make it render them, and the floor its operator version has to clear,
 with the document that states the floor. A structured value is written
 under `value:`, the one form Pulumi's project schema accepts for an
@@ -282,8 +292,10 @@ disagreeing on a pin's shape. A pin the
 script reads is never overridden in a stack's own file, which the script
 does not read; a test holds that no stack file carries one.
 
-**Renovate reads the block**, one custom manager per kind: a chart's
-repository and version from one match, through the Helm data source; a
+**Renovate reads the block**, through custom managers: a chart's
+repository and version from one match, through the Helm data source for
+an HTTP repository, and with its digest through the docker data source
+for an OCI registry, which moves the version and the digest together; a
 manifest's release and digest from one match, through
 `github-release-attachments`, the data source the CRD generator's pair
 already uses, which takes an asset's digest from a checksum file the
@@ -291,21 +303,23 @@ release publishes or, where there is none, by hashing the asset
 ([`github-release-attachments/index.ts`](https://github.com/renovatebot/renovate/blob/main/lib/modules/datasource/github-release-attachments/index.ts)).
 A bump is still finished by running `update_crds`, which renovate cannot
 do, and what makes it safe to open is a record: **`update_crds` writes
-into `packages/crds` the pins it rendered from, and a test holds that
-record to the block.** A bump of a pin that renders definitions is then
-red in `checks` until someone runs `update_crds` on the branch — how a
-bump of the CRD generator already finishes — while a bump of one that
-renders none needs nothing more. The floor is checked by `update_crds`
+into `packages/crds` the pins it read — the ones it renders from, and a
+chart pin carrying a floor it checks — and a test holds that record to
+the block.** A bump of a pin the record holds is then red in `checks`
+until someone runs `update_crds` on the branch — how a bump of the CRD
+generator already finishes — while a bump of one the script reads
+nothing from needs nothing more. The floor is checked by `update_crds`
 against the operator version the chart itself declares, so the block
 carries no hand-kept operator version for a bump to leave stale. **New
 rule** for the record, landing in framework/pulumi.md §4.
 
 **The one manifest left is the Gateway API definitions**, which the
 program applies and `update_crds` renders from. One function in
-`kluster.lib.k8s` fetches it and refuses an asset whose digest differs,
-run by both: code a component and a script both run, which
-style/pulumi.md ("Layering") puts in `kluster.lib`. local-path-provisioner
-is no manifest: it is declared as resources of this program, its image
+`kluster.lib.release_assets` fetches it and refuses an asset whose
+digest differs, run by both: code a component and a script both run,
+which style/pulumi.md ("Layering") puts in `kluster.lib`. The module
+imports no generated bindings, so `update_crds`, which regenerates them,
+starts when they do not import. local-path-provisioner is no manifest: it is declared as resources of this program, its image
 an ordinary image pin (§8).
 
 --------------------------------------------------------------------------------

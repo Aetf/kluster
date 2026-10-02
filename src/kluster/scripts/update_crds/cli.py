@@ -1,7 +1,10 @@
 """Regenerate `packages/crds` from the pinned chart set.
 
 `uv run update_crds`. The bindings are generated, not written, so this is the
-only supported way to change anything under `packages/crds`.
+only supported way to change anything under `packages/crds`. The pins are the
+`versions:` block of `Pulumi.yaml`; the run checks each chart's floor, renders
+the definitions, generates the bindings and writes beside them the record of
+the pins it read (`record`).
 """
 
 # `tqdm` is only partially typed, and `pulumi_kubernetes._utilities` is where
@@ -23,7 +26,9 @@ from tempfile import TemporaryDirectory
 import pulumi_kubernetes
 from tqdm.contrib.logging import logging_redirect_tqdm
 
-from kluster.scripts.update_crds import pins, sources
+from kluster.lib.release_assets import fetch_manifest
+from kluster.lib.versions import CHART, MANIFEST, ProjectFile, Versions
+from kluster.scripts.update_crds import pins, record, sources
 
 #: The package logger the configuration below attaches the console to. Every
 #: module here logs to `__name__`, which is a child of it, so the handler and
@@ -50,28 +55,39 @@ LOGGING = {
 log = logging.getLogger(f'{LOG_NAME}.cli')
 
 
-def collect_documents(workdir: Path) -> list[str]:
+def collect_documents(workdir: Path, project: ProjectFile) -> list[str]:
     """Every YAML document the pinned sources produce, unfiltered.
 
-    Fetching is announced step by step because all of it is network: a chart
-    set this size takes a couple of minutes, and a silent one looks hung.
+    Each chart's floor is checked before anything is rendered, so a pin below
+    one stops the run before it has fetched the rest. Fetching is announced
+    step by step because all of it is network: a chart set this size takes a
+    couple of minutes, and a silent one looks hung.
     """
-    charts = [chart for chart in pins.CHARTS if chart.crds]
+    versions = Versions(project)
+    charts = [versions.chart[name] for name in project.names(CHART)]
+    manifests = [versions.manifest[name] for name in project.names(MANIFEST)]
+    rendered = [chart for chart in charts if chart.definitions]
+    floored = [chart for chart in charts if chart.floor is not None]
     log.info(
-        f'Collecting from {len(charts)} charts, '
-        f'{len(pins.MANIFESTS)} release manifests and {len(pins.SOURCE_TREES)} source trees'
+        f'Collecting from {len(rendered)} charts, '
+        f'{len(manifests)} release manifests and {len(pins.SOURCE_TREES)} source trees'
     )
+
+    helm = sources.fetch_helm(workdir)
+    log.info(f'Checking the floors of {len(floored)} charts')
+    for chart in floored:
+        sources.check_floor(chart, sources.chart_app_version(helm, chart, workdir=workdir))
 
     # One source at a time and `extend` throughout: a release manifest is one
     # document and a source tree is many, and the fetches stay sequential so
     # that the log above stays a running commentary rather than a summary.
     documents: list[str] = []
-    documents.extend(sources.fetch_release_manifest(manifest) for manifest in pins.MANIFESTS)
+    for manifest in manifests:
+        log.info(f'Downloading {manifest.repository} {manifest.release} {manifest.asset}')
+        documents.append(fetch_manifest(manifest))
     for tree in pins.SOURCE_TREES:
-        documents.extend(sources.fetch_source_tree(tree))
-
-    helm = sources.fetch_helm(workdir)
-    documents.extend(sources.render_chart(helm, chart, workdir=workdir) for chart in charts)
+        documents.extend(sources.fetch_source_tree(tree, tree.ref(versions.chart[tree.chart])))
+    documents.extend(sources.render_chart(helm, chart, workdir=workdir) for chart in rendered)
     return documents
 
 
@@ -145,6 +161,12 @@ def main(argv: list[str] | None = None) -> int:
     logging.config.dictConfig(LOGGING)
     parser = argparse.ArgumentParser(description=__doc__)
     _ = parser.add_argument(
+        '--project',
+        type=Path,
+        default=Path('./Pulumi.yaml'),
+        help='the project file whose `versions:` block pins the chart set (default: %(default)s)',
+    )
+    _ = parser.add_argument(
         '--output',
         type=Path,
         default=Path('./packages/crds'),
@@ -158,10 +180,14 @@ def main(argv: list[str] | None = None) -> int:
     _ = parser.add_argument(
         '--from-bundle',
         type=Path,
-        help='generate from an already rendered bundle instead of fetching the pinned sources',
+        help=(
+            'generate from an already rendered bundle instead of fetching the pinned sources; '
+            'no record is written, since the pins did not produce the bundle'
+        ),
     )
     args = parser.parse_args(argv)
 
+    project_file: Path = args.project
     output: Path = args.output
     bundle: Path | None = args.bundle
     from_bundle: Path | None = args.from_bundle
@@ -170,11 +196,16 @@ def main(argv: list[str] | None = None) -> int:
         workdir = Path(name)
         log.info(f'Working directory: {workdir}')
 
+        # The record is written from the block as it was read here, not as it
+        # stands when the run ends a few minutes later.
+        project: ProjectFile | None = None
         if from_bundle is not None:
             log.info(f'Reading the rendered bundle from {from_bundle}')
             documents = [from_bundle.read_text()]
         else:
-            documents = collect_documents(workdir)
+            log.info(f'Reading the pins in {project_file}')
+            project = sources.read_project(project_file)
+            documents = collect_documents(workdir, project)
 
         crds = sources.select_crds(documents)
         groups = sorted({crd.group for crd in crds})
@@ -188,6 +219,9 @@ def main(argv: list[str] | None = None) -> int:
         crd_files = sources.write_crd_files(crds, workdir)
         generate(crd_files, output.resolve(), sources.fetch_crd2pulumi(workdir))
         log.info(f'Regenerated {output}')
+        if project is not None:
+            written = record.write(project, output)
+            log.info(f'Recorded the pins the bindings were rendered from in {written}')
     return 0
 
 

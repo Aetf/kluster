@@ -1,0 +1,72 @@
+{
+  "versions:chart-cert-manager": {
+    "definitions": true,
+    "digest": "sha256:15c0b46d9006ce8eb9ff14d1bf54d1bbfcc587bb9e24cd9fe186fb8fec56af1f",
+    "render-values": {
+      "crds.enabled": "true"
+    },
+    "repository": "oci://quay.io/jetstack/charts",
+    "version": "v1.21.1"
+  },
+  "versions:chart-cilium": {
+    "definitions": false,
+    "digest": "sha256:906ce40d35daad838d12add8a5ba7033e767767f51799a93c7eace2cec9cdc05",
+    "floor": {
+      "document": "cluster-infra.md §2: the ExternalAuth route filter (GEP-1494)",
+      "operator": "1.20"
+    },
+    "repository": "oci://quay.io/cilium/charts",
+    "version": "1.20.1"
+  },
+  "versions:chart-cloudnative-pg": {
+    "definitions": true,
+    "digest": "sha256:209c588b902982bf283a0073db83edd422d9710a2c8a670fe57c0329abe789a4",
+    "floor": {
+      "document": "cluster-infra.md §1 item 5: declarative offline in-place major upgrades (workloads.md §4)",
+      "operator": "1.26"
+    },
+    "repository": "oci://ghcr.io/cloudnative-pg/charts",
+    "version": "0.29.0"
+  },
+  "versions:chart-intel-device-plugins-operator": {
+    "definitions": true,
+    "digest": "sha256:24ec70426a851c04e97efb61a4664479fbe1986ac74e39f497c03cce9b7bc282",
+    "repository": "oci://ghcr.io/intel/helm-charts",
+    "version": "0.36.0"
+  },
+  "versions:chart-node-feature-discovery": {
+    "definitions": true,
+    "digest": "sha256:c74eeb7fe33c060e49e42cc8d588eeeddfbda6ae9bcd0835e0e398e02c5c2223",
+    "repository": "oci://registry.k8s.io/nfd/charts",
+    "version": "0.19.0"
+  },
+  "versions:chart-plugin-barman-cloud": {
+    "definitions": true,
+    "digest": "sha256:fc5683ec655b140e2f82219ffc9ae468e9cf2c0f204251b7da2294e5ce52b625",
+    "repository": "oci://ghcr.io/cloudnative-pg/charts",
+    "version": "0.7.1"
+  },
+  "versions:chart-sealed-secrets": {
+    "definitions": true,
+    "digest": "sha256:0a22f95d56c30e5e9778bf887ba7e3e68b6570356c3d9de4921f3816edf098f5",
+    "repository": "oci://registry-1.docker.io/bitnamicharts",
+    "version": "2.19.3"
+  },
+  "versions:chart-victoria-metrics-k8s-stack": {
+    "definitions": true,
+    "digest": "sha256:9783c9b651fdece12a03ba4c62b84689b6df6c6e7c92d4f4949b3bc4114020a5",
+    "repository": "oci://ghcr.io/victoriametrics/helm-charts",
+    "version": "0.91.2"
+  },
+  "versions:chart-volsync": {
+    "definitions": true,
+    "repository": "https://backube.github.io/helm-charts/",
+    "version": "0.16.0"
+  },
+  "versions:manifest-gateway-api": {
+    "asset": "experimental-install.yaml",
+    "release": "v1.6.1",
+    "repository": "kubernetes-sigs/gateway-api",
+    "sha256": "d7fa77650e4ef28fca0411536fcb5e237deb4d50301cfded3be49d9a1b7bbd02"
+  }
+}

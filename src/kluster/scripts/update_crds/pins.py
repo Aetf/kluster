@@ -1,62 +1,25 @@
-"""Everything `packages/crds` is generated from.
+"""What only `update_crds` reads: the tools it runs, a source no pin locates, the groups it drops.
 
-The chart set of [declarative/cluster-infra.md](../../../../docs/declarative/cluster-infra.md)
-§1, written down as versions. Every entry carries the *floor* it has to clear —
-a minimum stated in the design docs, with the section that states it — so a
-version bump that would violate one is visible in the diff rather than only at
-the next `up`.
-
-Where a floor exists, the pin is the newest release that clears it; where none
-exists, the pin is simply the newest release. Floors are on the **operator**,
-which for several projects is the chart's `appVersion` rather than its chart
-version: `cloudnative-pg` 0.29.0 ships CNPG 1.30.0. Both are recorded, and a
-test holds `app_version` to `min_app_version`.
-
-Only the sources whose CRDs the cluster actually declares are rendered.
-Everything else in §1 is listed anyway, with `crds=False`, so this file is a
-complete register of what the stack installs rather than a partial one.
-
-**These pins move by hand, and `uv run update_crds` is the other half of the
-move** for every pin the render reads — the Helm binary, the release manifests,
-the source trees, and the charts with `crds=True`. `packages/crds` is generated
-from those, so a bump nobody regenerates leaves the bindings describing a
-release the cluster does not run. A `crds=False` entry renders nothing and is
-register only, so bumping one changes nothing here; Cilium is not the exception
-it looks like, because its chart version is held equal to the `SOURCE_TREES`
-ref, which does render.
+The chart set and the Gateway API manifest are not here: they are pins in the
+`versions:` block of `Pulumi.yaml`, which the stack program installs from and
+this script reads out of the file through the program's own parser
+(`kluster.lib.versions`, docs/framework/pulumi.md §3.2). What stays is what no
+stack program reads — the Helm binary and the CRD generator, each with its
+digest; the directories of the Cilium source tree the definitions are read
+from, at the ref the Cilium chart's pin names; and the definition groups that
+reach the renderer but not the bindings.
 
 Renovate reads exactly one thing in this file — the `crd2pulumi` version and
 the digest beside it, through the custom manager in `renovate.json5` that moves
-the pair together — and it does not read the rest by design rather than by
-oversight: an annotation comment on a chart version would look like automation
-without being any, because finishing that bump means running a command
-renovate has no way to run.
+the pair together. The Helm binary moves by hand.
 """
 
 from __future__ import annotations
 
-import re
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Sequence
+from dataclasses import dataclass
 
-
-def version_tuple(version: str) -> tuple[int, ...]:
-    """The numeric components of a version, for comparing one against a floor.
-
-    Upstream is not consistent about the leading `v` (`v1.21.1` and `1.20.1`
-    are both here), and a floor is written as far as it is meaningful —
-    `1.26` covers every `1.26.x`. Comparing tuples handles both, and stops at
-    the first non-numeric component so a pre-release suffix cannot make a
-    version sort below the release it precedes.
-    """
-    components: list[int] = []
-    for part in version.lstrip('vV').split('.'):
-        match = re.match(r'\d+', part)
-        if match is None:
-            break
-        components.append(int(match.group()))
-    return tuple(components)
-
+from kluster.lib.versions import ChartPin
 
 # --- Tools ----------------------------------------------------------------
 
@@ -94,47 +57,7 @@ CRD2PULUMI_URL = (
 #: manager in `renovate.json5` moves this line with the version above.
 CRD2PULUMI_SHA256 = 'eda24f0fd79654784171357cffca7f6e99d46f1026da429ee416dbe993c73309'
 
-# --- Sources --------------------------------------------------------------
-
-
-@dataclass(frozen=True, kw_only=True)
-class Chart:
-    """An upstream Helm chart, and how much of it is CRDs."""
-
-    name: str
-    """The chart name inside `repo`."""
-
-    repo: str
-    """The chart repository URL."""
-
-    version: str
-    """The chart version, which is not necessarily the operator's version."""
-
-    app_version: str
-    """The operator version this chart version ships, for the floor check."""
-
-    floor: str
-    """Why the pin cannot go below where it is — the doc section that says so,
-    or `NO FLOOR` when the docs record none and the pin is simply the latest."""
-
-    min_app_version: str | None = None
-    """The `app_version` this pin may not fall below, when `floor` names one."""
-
-    crds: bool = True
-    """Whether the chart renders any CustomResourceDefinition at all."""
-
-    values: Mapping[str, str] = field(default_factory=dict[str, str])
-    """`--set` values needed to make the chart render its CRDs."""
-
-
-@dataclass(frozen=True, kw_only=True)
-class ReleaseManifest:
-    """A plain YAML bundle published as a GitHub release asset."""
-
-    repo: str
-    tag: str
-    asset: str
-    floor: str
+# --- The source tree -------------------------------------------------------
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -145,143 +68,34 @@ class SourceTree:
     the agent registers its own at runtime. The definitions still exist as
     checked-in YAML at each release tag, which is what makes an offline render
     of them possible at all.
+
+    The ref is not written here. It is the release the chart named `chart`
+    pins, so the bindings describe the release the cluster runs and a chart
+    bump moves both; a second copy of the version would be a second place for
+    it to be wrong.
     """
 
     repo: str
-    ref: str
+    chart: str
+    """The `<name>` of the `versions:chart-<name>` pin whose version is the tag."""
+
     paths: Sequence[str]
-    floor: str
+
+    def ref(self, pin: ChartPin) -> str:
+        """The tag the chart's version is released under."""
+        if pin.name != self.chart:
+            raise ValueError(f'{self.repo} is read at the version of the {self.chart} chart, not of {pin.name}')
+        return f'v{pin.version}'
 
 
-#: Gateway API is not a chart (cluster-infra.md §1 item 1). The **experimental**
-#: channel is required, not preferred: the ExternalAuth HTTPRoute filter
-#: (GEP-1494) that gates every non-OIDC app ships only there (cluster-infra.md
-#: §2, "Route-level auth").
-MANIFESTS: Sequence[ReleaseManifest] = (
-    ReleaseManifest(
-        repo='kubernetes-sigs/gateway-api',
-        tag='v1.6.1',
-        asset='experimental-install.yaml',
-        floor='cluster-infra.md §1 item 1 — experimental channel, for ExternalAuth (GEP-1494)',
-    ),
-)
-
-#: Cilium's CRDs, from the tag matching the pinned chart. The two move
-#: together: bindings generated from a different release than the one running
-#: describe fields the cluster does not have.
 SOURCE_TREES: Sequence[SourceTree] = (
     SourceTree(
         repo='cilium/cilium',
-        ref='v1.20.1',
+        chart='cilium',
         paths=(
             'pkg/k8s/apis/cilium.io/client/crds/v2',
             'pkg/k8s/apis/cilium.io/client/crds/v2alpha1',
         ),
-        floor='cluster-infra.md §2 — ≥1.20 for the ExternalAuth route filter, above the ≥1.16 tunnel-mode Egress Gateway floor (architecture.md §3.2)',
-    ),
-)
-
-#: The §1 chart set. Order follows the install order, so the register reads
-#: like the dependency chain it encodes.
-CHARTS: Sequence[Chart] = (
-    Chart(
-        name='cilium',
-        repo='https://helm.cilium.io/',
-        version='1.20.1',
-        app_version='1.20.1',
-        min_app_version='1.20',
-        floor='cluster-infra.md §2 — ExternalAuth route filter (GEP-1494); also covers the ≥1.16 tunnel-mode Egress Gateway floor',
-        # The chart installs none: the agent registers them at runtime, so they
-        # come from SOURCE_TREES instead.
-        crds=False,
-    ),
-    Chart(
-        name='sealed-secrets',
-        # `bitnami-labs.github.io` answers 404 rather than redirecting here.
-        repo='https://bitnami.github.io/sealed-secrets',
-        version='2.19.3',
-        app_version='0.39.1',
-        floor='NO FLOOR',
-    ),
-    Chart(
-        name='cert-manager',
-        repo='https://charts.jetstack.io',
-        version='v1.21.1',
-        app_version='v1.21.1',
-        floor='NO FLOOR',
-        # cert-manager ships its CRDs as templates behind this switch rather
-        # than in the chart's `crds/` directory, so the render has to ask.
-        values={'crds.enabled': 'true'},
-    ),
-    Chart(
-        name='cloudnative-pg',
-        repo='https://cloudnative-pg.github.io/charts',
-        version='0.29.0',
-        app_version='1.30.0',
-        min_app_version='1.26',
-        floor='cluster-infra.md §1 item 5 — declarative offline in-place major upgrades (workloads.md §4)',
-    ),
-    Chart(
-        name='plugin-barman-cloud',
-        repo='https://cloudnative-pg.github.io/charts',
-        version='0.7.1',
-        app_version='v0.14.0',
-        floor='NO FLOOR',
-    ),
-    Chart(
-        name='volsync',
-        repo='https://backube.github.io/helm-charts/',
-        version='0.16.0',
-        app_version='0.16.0',
-        floor='NO FLOOR',
-    ),
-    Chart(
-        name='victoria-metrics-k8s-stack',
-        repo='https://victoriametrics.github.io/helm-charts/',
-        version='0.91.2',
-        app_version='v1.150.0',
-        floor='NO FLOOR',
-    ),
-    Chart(
-        name='node-feature-discovery',
-        repo='https://kubernetes-sigs.github.io/node-feature-discovery/charts',
-        version='0.19.0',
-        app_version='v0.19.0',
-        floor='NO FLOOR',
-    ),
-    Chart(
-        name='intel-device-plugins-operator',
-        repo='https://intel.github.io/helm-charts/',
-        version='0.36.0',
-        app_version='0.36.0',
-        floor='NO FLOOR',
-    ),
-    Chart(
-        name='intel-device-plugins-gpu',
-        repo='https://intel.github.io/helm-charts/',
-        version='0.36.0',
-        app_version='0.36.0',
-        floor='NO FLOOR',
-        # The GpuDevicePlugin object it creates is defined by the operator
-        # chart above; this one is a plain workload.
-        crds=False,
-    ),
-    Chart(
-        name='metrics-server',
-        repo='https://kubernetes-sigs.github.io/metrics-server/',
-        version='3.14.0',
-        app_version='0.9.0',
-        floor='NO FLOOR',
-        # `metrics.k8s.io` is an aggregated APIService, not a CRD.
-        crds=False,
-    ),
-    Chart(
-        name='reloader',
-        repo='https://stakater.github.io/stakater-charts',
-        version='2.2.16',
-        app_version='v1.4.21',
-        floor='NO FLOOR',
-        crds=False,
     ),
 )
 
