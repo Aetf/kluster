@@ -14,6 +14,18 @@ from a single `issue_*` call.
 
 P-256 rather than RSA: the live CA is a P-256 key, and re-keying it is a
 new CA and a replacement of the appliance rather than an edit here.
+
+**Every certificate names its key, and every leaf names its issuer's.** The
+CA certificate carries a Subject Key Identifier, and each leaf an Authority
+Key Identifier equal to it, beside a Subject Key Identifier of its own.
+OpenSSL's strict verification (`VERIFY_X509_STRICT`, which Python's default
+TLS context sets from 3.13) refuses a chain without the first two: a leaf
+lacking the Authority Key Identifier, and a CA certificate lacking the
+Subject Key Identifier even under a leaf that has one. Both identifiers are
+the SHA-1 of the CA's public key (RFC 5280 §4.2.1.2, method 1) and the
+Authority Key Identifier carries nothing else, no issuer name or serial:
+the CA certificate is rendered afresh with a new serial each time, and a
+leaf has to keep chaining to every rendering of it.
 """
 
 from __future__ import annotations
@@ -142,6 +154,7 @@ class Authority:
                 ),
                 critical=True,
             )
+            .add_extension(x509.SubjectKeyIdentifier.from_public_key(self.key.public_key()), critical=False)
             .sign(self.key, hashes.SHA256())
         )
         return Credential(key_pem=self.key_pem, cert_pem=cert.public_bytes(serialization.Encoding.PEM))
@@ -165,6 +178,8 @@ class Authority:
             .not_valid_after(now + LEAF_VALIDITY)
             .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
             .add_extension(usage, critical=False)
+            .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(self.key.public_key()), critical=False)
+            .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)
         )
         if san is not None:
             builder = builder.add_extension(san, critical=False)

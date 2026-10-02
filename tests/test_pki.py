@@ -3,7 +3,7 @@
 The properties worth holding are the ones a silent break would hide — that a
 CA recovered from its PEM is the same CA, that a leaf gets a *fresh* key every
 time (escrowing leaves is what this design deliberately does not do), and that
-openssl itself accepts the chain.
+openssl itself accepts the chain, under its strict checks.
 """
 
 import ipaddress
@@ -108,6 +108,40 @@ def test_a_re_issued_ca_certificate_still_verifies_an_older_leaf(authority: pki.
     leaf.verify_directly_issued_by(later)
 
 
+def _extension[T: x509.ExtensionType](pem: bytes, kind: type[T]) -> T:
+    return x509.load_pem_x509_certificate(pem).extensions.get_extension_for_class(kind).value
+
+
+def test_the_ca_certificate_carries_its_key_s_identifier(authority: pki.Authority) -> None:
+    # Strict verification refuses a CA certificate without one, even under a
+    # leaf that names it. Derived from the key, so every rendering carries
+    # the same one.
+    ski = _extension(authority.certificate().cert_pem, x509.SubjectKeyIdentifier)
+
+    assert ski == x509.SubjectKeyIdentifier.from_public_key(authority.key.public_key())
+
+
+@pytest.mark.parametrize('leaf', ['server', 'client'])
+def test_every_leaf_names_the_ca_by_its_key_identifier(authority: pki.Authority, leaf: str) -> None:
+    # Strict verification refuses a leaf without one. It names the key alone:
+    # an issuer serial in it would stop matching the next rendering of the CA.
+    aki = _extension(_issue(authority, leaf).cert_pem, x509.AuthorityKeyIdentifier)
+    later = _extension(authority.certificate().cert_pem, x509.SubjectKeyIdentifier)
+
+    assert aki.key_identifier == later.digest
+    assert aki.authority_cert_issuer is None
+    assert aki.authority_cert_serial_number is None
+
+
+@pytest.mark.parametrize('leaf', ['server', 'client'])
+def test_every_leaf_carries_its_own_key_identifier(authority: pki.Authority, leaf: str) -> None:
+    pem = _issue(authority, leaf).cert_pem
+
+    ski = _extension(pem, x509.SubjectKeyIdentifier)
+
+    assert ski == x509.SubjectKeyIdentifier.from_public_key(x509.load_pem_x509_certificate(pem).public_key())
+
+
 def test_ca_is_a_ca_and_leaves_are_not(authority: pki.Authority) -> None:
     ca = x509.load_pem_x509_certificate(authority.certificate().cert_pem)
     leaf = x509.load_pem_x509_certificate(authority.issue_client('ci').cert_pem)
@@ -116,7 +150,9 @@ def test_ca_is_a_ca_and_leaves_are_not(authority: pki.Authority) -> None:
 
 
 #: Each leaf, and the `openssl verify -purpose` it has to pass: the purpose
-#: a TLS peer holds the certificate to on its side of the handshake.
+#: a TLS peer holds the certificate to on its side of the handshake. Every
+#: verification here is `-x509_strict`, the checks Python's default TLS
+#: context applies from 3.13.
 PURPOSES = {'server': 'sslserver', 'client': 'sslclient'}
 
 
@@ -130,7 +166,7 @@ def _verify(ca: bytes, leaf: bytes, directory: Path, *purpose: str) -> sp.Comple
     _ = ca_file.write_bytes(ca)
     _ = leaf_file.write_bytes(leaf)
     return sp.run(
-        ['openssl', 'verify', *purpose, '-CAfile', str(ca_file), str(leaf_file)],
+        ['openssl', 'verify', '-x509_strict', *purpose, '-CAfile', str(ca_file), str(leaf_file)],
         capture_output=True,
         text=True,
         timeout=30,
