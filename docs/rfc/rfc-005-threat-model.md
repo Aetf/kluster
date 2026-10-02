@@ -1,13 +1,41 @@
 # RFC 005: The Threat Model
 
-*   **Status:** Accepted, 2026-10-01. The operator approved the model
-    with the recommended options: §5.1's partition (`physical` under a
-    passphrase of its own, behind the Environments only `main` reaches),
-    §5.2's clearance check, which keeps merges into `main` unattended,
-    and §9.1's hand-moved pins for the operations repository, which takes
-    kluster's tool versions from the kluster commit it checks out. The
-    operator removed Renovate from the operations repository the same
-    day (§14).
+*   **Status:** Implemented, 2026-10-02. Accepted 2026-10-01: the
+    operator approved the model with the recommended options: §5.1's
+    partition (`physical` under a passphrase of its own, behind the
+    Environments only `main` reaches), §5.2's clearance check, which
+    keeps merges into `main` unattended, and §9.1's hand-moved pins for
+    the operations repository, which takes kluster's tool versions from
+    the kluster commit it checks out. The operator removed Renovate from
+    the operations repository the same day (§14). Every slice of §13 is
+    done, and the text below is kept as the accepted proposal rather
+    than as a description of the system. What the model *is* lives in
+    [threat-model.md](../threat-model.md), which carries §3 to §6; the
+    cluster's controls and residuals under it in
+    [cluster/architecture.md](../cluster/architecture.md) §4.1; the
+    rules of §8 in [framework/dispatch.md](../framework/dispatch.md) §1
+    and §3; the rule on bots in the operations repository beside its
+    fence, cluster/architecture.md §4.3; and the partition in
+    [framework/github.md](../framework/github.md) §1 and
+    [framework/ci.md](../framework/ci.md) §3, where the move is built and
+    the operator's run of it, with its first contact, is pending
+    (Aetf/kluster-ops#487). Where this text and those documents
+    disagree, they are right. **What moved since acceptance:** §4.6 and
+    §9.3 describe the pins as they stood then. Since then the tools
+    `mise.toml` pins, the charts served from an OCI registry and the
+    Gateway API definitions record their bytes; the pins threat-model.md
+    §2.6 names as accepted residuals, and the cluster's unaged images and
+    charts, are the operator's acceptances, and the members it names as
+    awaiting a ruling are not. §5.1's cost list omits one cost the
+    partition carries: the ciphertexts `physical`'s configuration held
+    under the stack passphrase stay in git history, so the move is
+    finished when every credential they held has been issued again, and
+    it comes before `physical`'s first `up` (credentials.md §1 rule 6).
+    **What remains outside the slices:** §5.2's clearance check
+    (Aetf/kluster-ops#488), and with it §12's row for
+    framework/dispatch.md §2 rule 8, which lands with that check's
+    design; until it is built threat-model.md §3.2 records the second
+    half of the merge boundary as unenforced.
 *   **Created:** 2026-09-27
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),

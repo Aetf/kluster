@@ -19,10 +19,16 @@ down.
 ## How to read this
 
 Each finding: the attack, why it matters *here* (not in the abstract),
-the fix, and where the fix now lives. Severities are relative to this
-cluster's own threat model (§4.1 of architecture.md): a single $0-trust
-cloud tenancy holding etcd, a home network the cluster is wired into at
-L3, and a design that treats off-site backups as the last line.
+the fix, and where the fix now lives. A finding's grade is read against
+the installation's threat model, [threat-model.md](../threat-model.md):
+the actor that reaches it, and whether its fix passes the model's test
+(threat-model.md §4). The cluster's controls and residuals under that
+model are architecture.md §4.1. The audit's premises were a single
+$0-trust cloud tenancy holding etcd, a home network the cluster is wired
+into at L3, and a design that treats off-site backups as the last line.
+The model does not carry the first as a scope line, since it accepts a
+platform's compromise (threat-model.md §2.7); the controls built on it,
+etcd encrypted at rest among them, stay.
 
 ---
 
