@@ -454,9 +454,12 @@ bulk-egress workloads and storage locality deciding it for hath.
 
 ## 4. Security & Observability
 
-### 4.1 Threat Model
+### 4.1 The cluster's controls and residuals
 
-Full findings register: [security-audit.md](security-audit.md)
+The installation's threat model is [threat-model.md](../threat-model.md):
+who can act, which of them are defended against, and the test a finding
+must pass. The bullets below are the cluster's controls and residuals
+under it. Full findings register: [security-audit.md](security-audit.md)
 (audited 2026-08-23; every accepted finding is designed into the doc it
 belongs to — this section holds the cluster-level statements).
 
@@ -481,7 +484,9 @@ belongs to — this section holds the cluster-level statements).
     also holds `169.254.116.108`, where Talos' host DNS answers pods and
     the cluster DNS forwards to, so the deny excepts that one address,
     and the baseline leaves default-deny to the per-namespace policies
-    rather than switching it on for every pod (rfc-007 §4.5).
+    rather than switching it on for every pod (rfc-007 §4.5). A pod on
+    the host network is outside the baseline and still reaches the
+    endpoint, the residual security-audit.md H1 records.
 -   **Workload-origin risk, on record**: hath — a closed-source
     third-party binary serving public traffic and taking H@H network
     commands — runs on the combined CP+ingress nodes, one kernel away
@@ -528,11 +533,17 @@ belongs to — this section holds the cluster-level statements).
     the gateway answers a run at the gateway's address. The residual is
     every other run: one dialing the bootstrap address, which any host
     on the dialing workstation's segment can answer, and one made from
-    a personal overlay member, which any member but the two CI
-    identities can, since traffic with no run at either end keeps the LAN's
-    posture. A certificate pin in the provider would retire it, and
-    filipowm/unifi has none at the pinned release; the key's rotation
-    is credentials.md §3.
+    a personal overlay member, which any member but the CI identities
+    can, since traffic with no run at either end keeps the LAN's
+    posture. Both answerers are trusted at the network layer — a host on
+    the server LAN, or a personal overlay member (threat-model.md
+    §2.10) — so the residual is accepted as it stands for a dial made
+    over the server LAN or from a personal overlay member, and nothing
+    is owed to retire it. A dial made
+    over the cluster VLAN, from a host with a leg on it as the homelab
+    host has, would put the cluster's node within answering reach, and
+    the acceptance does not cover it. The key's rotation is
+    credentials.md §3.
 
 ### 4.2 L7 Observability (Hubble)
 
@@ -706,23 +717,27 @@ Costs and facts on record:
     is unprotected on its plan, so such a file lands wherever a bot
     reads its configuration, and a bot that writes workflows would
     carry the token past the fence to the repository's secrets.
-    Renovate is trusted (rfc-005 §4.5), and the rule keeps it off the
+    Renovate is trusted (threat-model.md §2.5), and the rule keeps it off the
     ops repo only because its configuration would be such a file; the
     operator removed its installation there on 2026-10-01. So the ops
     repo's own pins move by hand, while the tool versions it shares
     with this repo come from the commit of this repo it checks out.
-    On this repo the fence is `main`'s own
-    protection, which applies to Apps: a token holder pushes to
-    unprotected branches and not to `main`. A push starts the pushed
-    head's runs, so what reaches `main` from such a branch with
-    nobody reading it is what noop-automerge admits: a pull request
+    On this repo `main`'s own protection is no fence against the
+    token: it requires `checks` and `changes` on an up-to-date branch
+    and restricts nobody (framework/github.md §3), so a token holder
+    pushes to every unprotected branch, and its contents:write merges
+    any pull request whose required checks are green and that changes
+    no workflow file (threat-model.md §3.2). A push starts the pushed
+    head's runs, so what reaches `main` from such a branch by the
+    unattended route, with nobody reading it, is what noop-automerge
+    admits: a pull request
     that changes nothing but paths on its **allow-list** — `uv.lock`,
     and renovate's bump of `Pulumi.yaml`'s `packages:` block with the
     `sdks/` it regenerates — and only behind a zero-diff preview (framework/ci.md
-    §3). Every other path waits for a human, the trust anchors no
-    stack reads among them: the escrow recipients, the appliance's
-    key files, the composite actions, `mise.toml`. That allow-list
-    is the residual on this side: a pushed `uv.lock` change that
+    §3). Every other path waits on that route for a human, the trust
+    anchors no stack reads among them: the escrow recipients, the
+    appliance's key files, the composite actions, `mise.toml`. That
+    allow-list is the route's residual: a pushed `uv.lock` change that
     renders identically merges unread, and so does a change under
     `sdks/` pushed onto renovate's bump of the block — the bridged SDKs render only in `physical`, which
     no pull request previews, and `checks` holds them to the block

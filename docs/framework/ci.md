@@ -540,11 +540,13 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     readable by any same-repository job, and its token pushes to
     `kluster`'s unprotected branches and to any branch of
     `kluster-ops`, `main` included — a private repository has no branch
-    protection on this plan (github.md §2) — but never to `kluster`'s
-    `main` (protected, checks required) and to no workflow file in
-    either (no `workflows` permission). On `kluster` that is the same
-    "anyone who can push a branch" boundary this repository already
-    accepts; on `kluster-ops` it is the fence of architecture.md §4.3. A merge route of the
+    protection on this plan (github.md §2) — and to no workflow file in
+    either (no `workflows` permission). `kluster`'s `main` requires
+    `checks` and `changes` on an up-to-date branch and restricts nobody
+    (github.md §3), so on `kluster` the token's contents:write also
+    merges any pull request whose required checks are green and that
+    changes no workflow file (threat-model.md §3.2); on `kluster-ops` it
+    is held by the fence of architecture.md §4.3. A merge route of the
     regeneration workflow's own is not part of it and never was: it
     would be a second copy of `prove`, for a proof it cannot improve on.
 -   **Plan-pinning (`preview --save-plan` / `up --plan`) is deliberately

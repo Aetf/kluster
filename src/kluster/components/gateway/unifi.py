@@ -158,8 +158,11 @@ API_KEY = 'unifiApiKey'
 #: (`components/overlay/flow_rules.py`). Every other run is the residual — one
 #: dialing the bootstrap address, which any host on the dialing workstation's
 #: segment can answer, and one made from a personal overlay member, which any
-#: member without the `ci` role can. architecture.md §4.1 records it, and a
-#: certificate pin in the provider is what would retire it.
+#: member without the `ci` role can. Both answerers are trusted at the network
+#: layer (docs/threat-model.md §2.10), so architecture.md §4.1 accepts the
+#: residual as it stands for a dial over the server LAN or from a personal
+#: overlay member; a dial over the cluster VLAN is not covered by that
+#: acceptance.
 ALLOW_INSECURE = True
 
 
