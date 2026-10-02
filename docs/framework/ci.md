@@ -1127,10 +1127,10 @@ branch + git-sync).
 
 The pipeline above is complete; the installation it drives is not.
 `physical` holds no resources and has never been updated, and
-`k8s-base` and `apps` exist but build nothing beyond their providers
-and have never been updated either — of the stacks this repository
-declares, only `dns` (whose resources were imported rather than
-created) and `github` have resources behind them. The checks that
+`k8s-base` and `apps` exist and have never been updated either —
+`k8s-base` declares Cilium, `apps` nothing beyond its providers. Of the
+stacks this repository declares, only `dns` (whose resources were
+imported rather than created) and `github` have resources behind them. The checks that
 reach past the repository therefore fail, on `main` and on every pull
 request that touches code, and that red is a property of the phase
 rather than a fault to report. What follows is how to tell it apart

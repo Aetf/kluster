@@ -96,8 +96,8 @@ owns sequencing, data movement, and teardown.
     (physical.md §6) less the controller-side items item 2 ran before
     the window, run **after `k8s-base`** because most items
     exercise Cilium: LB-IPAM pool with the on-the-wire node IPs; NLB
-    dual-stack + source preservation; Egress Gateway under the
-    routing mode + reserved-IP NAT; MTU over KubeSpan; the security
+    dual-stack + source preservation; reserved-IP NAT; MTU over
+    KubeSpan; the security
     verifications (pod→IMDS denied, bogus-BGP rejected, ExternalAuth
     fail-closed) — alongside the physical-only items (etcd fsync;
     VFIO capability on a scratch VM). **No app migrates until this
@@ -156,8 +156,12 @@ the VPS empties progressively):
 -   **Wave E — hath, deliberately last of the apps**: hath is the
     highest-stakes workload (global-archive data, IP re-registration,
     strict downtime cap), so it moves only after the cluster has run
-    everything else stably — the dedicated-VIP path, EGW, and the
-    cloud pool all long proven by then. Execution: pre-provision the
+    everything else stably — the dedicated-VIP path and the cloud pool
+    long proven by then. The wave first chooses how hath leaves on its
+    own address, the Egress Gateway or the reserved IP on its node's
+    primary private IP (architecture.md §3.2, rfc-007 §15.3), and
+    verifies the choice; the Egress Gateway is not enabled before it.
+    Execution: pre-provision the
     protected cache volume, rsync the 50 Gi cache warm ahead of time,
     then a short window for the final delta + client-state copy,
     dedicated VIP live, re-register.

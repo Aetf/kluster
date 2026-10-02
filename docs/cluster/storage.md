@@ -269,8 +269,8 @@ Per nodes.md §5, durability = declarative rebuild + backups + drills:
     (§3.1), same bucket, retention by class
     (declarative/workloads.md §3); restores double as the volume-move
     mechanism, so every move exercises the restore path. Installed by
-    the `k8s-base` stack, which declares nothing beyond its provider yet,
-    so none runs (nodes.md §5 Tier 0).
+    the `k8s-base` stack, which declares Cilium and not VolSync yet, so
+    none runs (nodes.md §5 Tier 0).
 3.  **CNPG**: barman object-store backups + WAL archiving per database
     cluster (port the legacy barman-plugin setup), monthly automated
     restore drill (port the legacy drill; nothing runs it here yet).

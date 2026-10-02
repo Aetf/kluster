@@ -389,8 +389,9 @@ async def main() -> None:
     ##
     ## The exports: everything another stack or the credential machinery reads
     ## out of this one (rfc-002 §12). The names are `conventions.PHYSICAL_OUTPUTS`,
-    ## which every reader asks by — the `dns` StackReference, the state reads of
-    ## `credentials derived sync` — so a rename is one edit both sides see.
+    ## which every reader asks by — the `dns` and `k8s-base` StackReferences, the
+    ## state reads of `credentials derived sync` — so a rename is one edit both
+    ## sides see.
     ##
     outputs = conventions.PHYSICAL_OUTPUTS
 
@@ -398,8 +399,9 @@ async def main() -> None:
     # conventions — those they share as code.
     #
     # Both families of the balancer are published, because the cluster anchor
-    # in `dns` carries an A and an AAAA; the VIP below is IPv4 only, and that
-    # is a property of the address rather than an omission here.
+    # in `dns` carries an A and an AAAA and both are `internet` pool members
+    # (rfc-007 §4.4); the VIP below is IPv4 only, and that is a property of
+    # the address rather than an omission here.
     pulumi.export(outputs.cluster_endpoint, load_balancer.address)
     pulumi.export(outputs.cluster_endpoint_v6, load_balancer.address_v6)
     pulumi.export(outputs.vip1, nodes.reserved_ip.ip_address)
@@ -407,8 +409,9 @@ async def main() -> None:
     pulumi.export(outputs.node_private_ips, {node: instance.private_ip for node, instance in nodes.instances.items()})
     pulumi.export(outputs.node_public_ips, {node: instance.public_ip for node, instance in nodes.instances.items()})
     # Each node's GUA beside its private address: with the dedicated VIP's
-    # secondary private address (`vip1_private`), the `internet` pool's
-    # members, which `k8s-base` builds the pool from (rfc-007 §4.4).
+    # secondary private address (`vip1_private`) and the balancer's two
+    # addresses, the `internet` pool's members, which `k8s-base` builds the
+    # pool from (rfc-007 §4.4).
     pulumi.export(outputs.node_guas, nodes.guas)
 
     # Both are cluster-admin credentials, and both are marked secret at the

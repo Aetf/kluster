@@ -6,30 +6,33 @@ cluster proved — in that dependency order, per
 docs/declarative/cluster-infra.md. The component list is closed: additions
 argue for themselves in writing first.
 
-Its components will live in areas of `kluster/components/`, the way `physical`
-composes the areas it declares: this module stays the wiring, one component per
-entry of the closed list. What every component shares — installing a pinned
+Its components live in areas of `kluster/components/`, the way `physical`
+composes the areas it declares, Cilium's first: this module stays the wiring,
+one component per entry of the closed list. What every component shares — installing a pinned
 chart, sealing a secret, labeling a Service into a load-balancer pool — is in
 `kluster.lib.k8s`.
 
-What the program builds today is the provider every one of those components
-will be declared through, and nothing else: one Kubernetes provider, opened
-with the cluster-admin kubeconfig in this stack's own configuration
-(rfc-007 §3.1). The `physical` stack generates it, and it cannot cross the
-stack boundary by StackReference, the way the machine facts do
-(declarative/README.md §2): `physical` is encrypted under a passphrase of its
-own (rfc-005 §5.1), and a StackReference elides the secrets the reading stack
-cannot decrypt. So `credentials derived sync --only kubeconfig` copies it out
-of `physical`'s state into this stack's configuration, and it is read so that
-anything but a kubeconfig stops the run (`kluster.lib.k8s.kubeconfig_from`).
+The program reads two things beside the pins. The cluster-admin kubeconfig
+opens the one Kubernetes provider every component is declared through, and is
+a config secret of this stack's own (rfc-007 §3.1). The `physical` stack
+generates it, and it cannot cross the stack boundary by StackReference, the way
+the machine facts do (declarative/README.md §2): `physical` is encrypted under
+a passphrase of its own (rfc-005 §5.1), and a StackReference elides the secrets
+the reading stack cannot decrypt. So `credentials derived sync --only
+kubeconfig` copies it out of `physical`'s state into this stack's
+configuration, and it is read so that anything but a kubeconfig stops the run
+(`kluster.lib.k8s.kubeconfig_from`). The addresses the `internet` pool is made
+of are plain machine facts, and they do cross by StackReference: the cloud
+nodes' private IPv4s and GUAs, the dedicated VIP's private address and the
+balancer's two public ones (rfc-007 §4.4), each read so that anything but an
+address stops the run (`kluster.lib.stack_addresses`).
 
-What gates the implementation is recorded rather than assumed: the chart set is
-pinned on first contact (declarative/README.md, "Deliberately not
-pre-decided"), and each chart is a project-level `versions:chart-<name>` pin in
-`Pulumi.yaml`'s `config:` block, which renovate moves (framework/pulumi.md
-§3.2); each component that installs a chart will read its pin through
-`kluster.lib.versions`. The custom
-resources — the Cilium pools, BGP configuration and Gateways — will be written
+The chart set is pinned on first contact (declarative/README.md, "Deliberately
+not pre-decided"), and each chart is a project-level `versions:chart-<name>`
+pin in `Pulumi.yaml`'s `config:` block, which renovate moves
+(framework/pulumi.md §3.2), as the Gateway API definitions are a
+`versions:manifest-<name>` pin; a component installs what the program reads
+through `kluster.lib.versions` and hands it. The custom resources are written
 against `sdks/crds`, which `mise x -- uv run update_crds` regenerates from the
 same pins.
 """
@@ -40,11 +43,20 @@ import pulumi
 import pulumi_kubernetes as k8s
 
 from kluster import conventions
+from kluster.components.cilium import Cilium, InternetPoolMembers
+from kluster.lib import stack_addresses
 from kluster.lib.k8s import KUBECONFIG_KEY, kubeconfig_from
+from kluster.lib.release_assets import fetch_manifest
+from kluster.lib.versions import versions
+from putils import background
 
 
 async def main() -> None:
     config = pulumi.Config()
+
+    # Fetched before anything is declared: it reads no output, and it is a
+    # release asset, refused unless its bytes are the pin's.
+    gateway_api_definitions = await background(fetch_manifest)(versions.manifest['gateway-api'])
 
     # Read so that anything but a kubeconfig stops the run, naming what it
     # found: no copy in this stack's configuration, or one that is blank or
@@ -52,7 +64,39 @@ async def main() -> None:
     # each as an unreachable cluster -- plain resources previewing green by
     # echoing their inputs -- or, handed nothing, fall back to the shell's
     # `$KUBECONFIG`.
-    _ = k8s.Provider(
+    provider = k8s.Provider(
         f'{conventions.CLUSTER_NAME}-kubernetes',
         kubeconfig=kubeconfig_from(config.get_secret(KUBECONFIG_KEY)),
+    )
+    physical = pulumi.StackReference(
+        f'{pulumi.get_organization()}/{pulumi.get_project()}/{conventions.STACK_NAMES.physical}'
+    )
+
+    _ = Cilium(
+        'cilium',
+        chart=versions.chart['cilium'],
+        gateway_api_definitions=gateway_api_definitions,
+        internet_pool=_internet_pool_members(physical),
+        opts=pulumi.ResourceOptions(providers=[provider]),
+    )
+
+
+def _internet_pool_members(physical: pulumi.StackReference) -> InternetPoolMembers:
+    """The `internet` pool's members, out of the physical stack, each refused unless it is an address.
+
+    These are the only outputs this program reads across the reference. The
+    names asked for are `conventions.PHYSICAL_OUTPUTS`, the structure
+    `physical` exports under, so a rename there is a rename here in the same
+    edit. Each read checks what it got, unknowns included: a targeted apply of
+    `physical` can leave any of these as Pulumi's unknown sentinel, which reads
+    back absent or unknown, and a pool built from that would carry `"None"`
+    as an address (framework/pulumi.md §1.4).
+    """
+    outputs = conventions.PHYSICAL_OUTPUTS
+    return InternetPoolMembers(
+        node_private_ips=stack_addresses.addresses_by_name(physical, outputs.node_private_ips, 4),
+        node_guas=stack_addresses.addresses_by_name(physical, outputs.node_guas, 6),
+        dedicated_vip=stack_addresses.address(physical, outputs.vip1_private, 4),
+        balancer_v4=stack_addresses.address(physical, outputs.cluster_endpoint, 4),
+        balancer_v6=stack_addresses.address(physical, outputs.cluster_endpoint_v6, 6),
     )

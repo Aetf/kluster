@@ -58,9 +58,11 @@ UDM_ASN = 65000
 CLUSTER_ASN = 65001
 
 #: The `internet` pool holds on-the-wire node addresses — private IPv4s (OCI
-#: 1:1-NATs the public v4, so public literals never match) and v6 GUAs. Its
-#: membership is a physical-stack output, not a constant; the `lan` pool's
-#: range is `site.LAN_POOL`, which is a decision of this program.
+#: 1:1-NATs the public v4, so a node's public literal never matches) and v6
+#: GUAs — and the balancer's two public addresses, which no arriving traffic
+#: carries and which answer connections that start in the cluster (rfc-007
+#: §4.4). Its membership is a physical-stack output, not a constant; the `lan`
+#: pool's range is `site.LAN_POOL`, which is a decision of this program.
 POOL_INTERNET = 'internet'
 
 #: A Service opts into a pool by carrying this label; the pools'

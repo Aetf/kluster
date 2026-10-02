@@ -23,8 +23,9 @@ baseline to beat is the legacy Vultr VPS at $30/mo all-in.
 ## 1. What the cloud pool actually does
 
 Per architecture.md §1.1 the cloud site is **three combined
-CP+ingress+worker nodes**: the etcd/apiserver quorum, the `internet-gw`
-Envoy replicas, the shared-VIP raw TCP/UDP services behind the NLB,
+CP+ingress+worker nodes**: the etcd/apiserver quorum, the Envoy that
+answers `internet-gw` on each of them, the shared-VIP raw TCP/UDP
+services behind the NLB,
 KubeSpan endpoints, hath (pinned to one node), and the internet-pool
 workloads. This means the cloud pool needs:
 
@@ -479,8 +480,8 @@ by construction; Tier 0 remains the foundation everything else sits on:
     the storage.md §4 placement rule) — an ops-repo workflow, and that
     workflow is unwritten, so none is taken; VolSync volume
     backups and CNPG barman to the same bucket (storage.md §5) —
-    installed by the `k8s-base` stack, which declares nothing beyond
-    its provider yet, so neither runs; and periodically *drilled* restores — the drill program of
+    installed by the `k8s-base` stack, which declares Cilium and neither
+    of them yet, so neither runs; and periodically *drilled* restores — the drill program of
     operations.md §4, none of which has run.
     Target: RPO ≤ 1 h, RTO ~1–2 h hands-on. The **cold-standby drill**
     covers total-cloud-loss (tenancy termination included): bootstrap a

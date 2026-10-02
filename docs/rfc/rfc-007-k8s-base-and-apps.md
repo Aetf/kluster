@@ -26,6 +26,17 @@
     zones are the primary zone and every zone a route row names, the
     primary served by definition, since slice 9 issues its certificate
     before slice 12's first row exists.
+*   **Updated:** 2026-10-02 — §3.1, §4.3, §4.4, §5.1, §13 and §14
+    slices 5, 9 and 13, as slice 5 built it: the `internet` pool also
+    holds the balancer's two public addresses, so that a connection from
+    inside the cluster to the balancer's address is answered on the
+    caller's own node, which OCI's balancer would not answer for a node
+    it forwards to (Aetf/kluster-ops#493); `k8s-base`'s StackReference
+    read of the pool's addresses is a recorded use beside the `dns`
+    stack's anchors, checked at the read by `kluster.lib.stack_addresses`;
+    §4.3's pod-reached openings serve a pod calling its own node, a call
+    to another node's riding KubeSpan; and slice 13 scrapes the node
+    exporter on vmagent's own node.
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
@@ -211,9 +222,9 @@ cluster is unreachable"
 So one stack would preview green over nothing and the other red for a
 reason nobody can read off the log.
 
-The StackReference sentence in style/pulumi.md, which names the `dns`
-stack's anchors as the one use today, says why a secret such as the
-kubeconfig travels as a copy instead.
+The StackReference sentence in style/pulumi.md names its recorded uses,
+the `dns` stack's anchors and `k8s-base`'s pool addresses among them,
+and says why a secret such as the kubeconfig travels as a copy instead.
 
 ### 3.2 The stacks exist, and the order the first applies run in
 
@@ -546,11 +557,13 @@ Every Cilium process is on the host network
 for the operator; the agent and Envoy hard-code it), so each metrics
 port is a host port, and the scraper is a pod. The same class holds the
 node exporter's 9100, which is on the host network in the monitoring
-stack's pinned chart. The pod ranges are required rather than only the
-node networks because a pod's request arrives from its own address
-whether it crosses a tunnel to reach the node or not, which is why the
-kubelet's opening names them already. **New rule**, landing in
-physical.md §2 beside the kubelet's.
+stack's pinned chart. The openings serve a pod calling its own node:
+there the request arrives on the pod's device from a pod-range address,
+which no interface rule accepts, which is why the kubelet's opening names
+the pod ranges already. A call to another node's port leaves its node
+masqueraded to a node address, rides KubeSpan and enters on `kubespan`,
+which the ingress chain accepts ahead of every rule. **New rule**,
+landing in physical.md §2 beside the kubelet's.
 
 What the classes leave out is on purpose. Hubble's server is not opened,
 so turning Relay on later is one opening in the same change. Nor is the
@@ -565,10 +578,37 @@ members. What the design adds:
 
 *   **The `internet` pool reads its members from `physical`'s outputs**,
     one block per address: each cloud node's primary private IPv4, each
-    node's GUA, and the dedicated VIP's secondary private address. The
-    `physical` stack exports no GUA today (§10, finding 5), so it gains
-    an output for them in slice 2, named in
-    `conventions.PHYSICAL_OUTPUTS` like every other.
+    node's GUA, the dedicated VIP's secondary private address, and the
+    balancer's public IPv4 and IPv6. The GUAs are an output slice 2 adds
+    (§10, finding 5), named in `conventions.PHYSICAL_OUTPUTS` like every
+    other. Each output is read so that anything but an address stops the
+    run, naming the output (`kluster.lib.stack_addresses`): a targeted
+    apply of `physical` can leave any of them as Pulumi's unknown
+    sentinel, which a StackReference reads back as absent or unknown, and
+    a pool built from that would carry `None` as an address.
+*   **The balancer's two addresses are a member class of their own,
+    answered for connections that start in the cluster.** OCI's balancer
+    does not let a backend reach its own front: "The backend server
+    cannot function as both a client and a backend simultaneously as
+    it's unable to start traffic to the network load balancer's virtual
+    IP (VIP)"
+    ([OCI: Network Load Balancer](https://docs.oracle.com/en-us/iaas/Content/NetworkLoadBalancer/introduction.htm)),
+    and every cloud node is a backend. A pod on a cloud node resolving
+    one of the cluster's names that bypass Cloudflare's proxy gets the
+    balancer's address, and its connection would leave the node and
+    fail. With the two addresses in the pool, each Service whose census
+    row the balancer fronts asks for them beside the node addresses, LB
+    IPAM writes them into the Service's status, and Cilium installs them
+    as frontends on every node: the connection is answered on the
+    caller's own node, handed to its Envoy or translated to a backend
+    pod, and never reaches the balancer. Nothing from outside arrives
+    carrying them, because the balancer rewrites the destination to the
+    backend's address and its transparent mode stays off. Only the census
+    ports are covered: 6443 and 50000 stay on the cloud path, which no
+    workload takes and KubePrism does without. Design and sources:
+    [Aetf/kluster-ops#493](https://github.com/Aetf/kluster-ops/issues/493).
+    **New rule**, landing in architecture.md §3.2 and cluster-infra.md
+    §2, and in workloads.md §1 with `public_port`.
 *   **A Service asks for its addresses the way the release documents**:
     `lbipam.cilium.io/ips`, a comma-separated list, and
     `lbipam.cilium.io/sharing-key`; and because the Gateways and the raw
@@ -751,9 +791,10 @@ becomes the address annotation of §4.4, and `spec.infrastructure` labels
 and annotations are copied onto the generated Service
 ([`gateway.go` L155–178](https://github.com/cilium/cilium/blob/v1.20.1/operator/pkg/model/ingestion/gateway.go#L155-L178)),
 which is how the pool label and the sharing annotations reach it.
-`internet-gw` names the `internet` pool's node members, `lan-gw` the
-`lan` pool's default VIP and `media-gw` its media VIP, both literals in
-`conventions.LAN_POOL` already.
+`internet-gw` names the `internet` pool's node members and the
+balancer's two addresses (§4.4), `lan-gw` the `lan` pool's default VIP
+and `media-gw` its media VIP, both literals in `conventions.LAN_POOL`
+already.
 
 **What a cloud node does with a Gateway's node port** is then answered
 by removal: the Service has none and no health check port. The bootstrap
@@ -1394,7 +1435,7 @@ none needs a ruling beyond this document.
 
 | Document | What lands there |
 | --- | --- |
-| [cluster/architecture.md](../cluster/architecture.md) | architecture.md §2.2: the installation both guides document, and why host routing and masquerading take the stack's path, from this document's §4.1. architecture.md §3.1 and §3.2: every Service on the node addresses takes `Cluster`, and the reserved-address fallback's cost in client address, from §4.4; the census rows' listeners, from §5.3. architecture.md §1.1, §3.2 and §3.5: the Egress Gateway left to hath's wave, from §4.1. architecture.md §3.3: where a Gateway answers and why its client address survives, from §5.1. architecture.md §4.1: the baseline deny's exception, from §4.5, and the Gateways' ports among the node's openings, from §4.3. architecture.md §4.3: the rule contract and alertmanager's own webhook, from §7.2 and §7.3. architecture.md §5.1: listeners from the census. |
+| [cluster/architecture.md](../cluster/architecture.md) | architecture.md §2.2: the installation both guides document, and why host routing and masquerading take the stack's path, from this document's §4.1. architecture.md §3.1 and §3.2: every Service on the node addresses takes `Cluster`, the reserved-address fallback's cost in client address, and the balancer's two addresses among the pool's members, from §4.4; the census rows' listeners, from §5.3. architecture.md §1.1, §3.2 and §3.5: the Egress Gateway left to hath's wave, from §4.1. architecture.md §3.3: where a Gateway answers and why its client address survives, from §5.1. architecture.md §4.1: the baseline deny's exception, from §4.5, and the Gateways' ports among the node's openings, from §4.3. architecture.md §4.3: the rule contract and alertmanager's own webhook, from §7.2 and §7.3. architecture.md §5.1: listeners from the census. |
 | [declarative/cluster-infra.md](../declarative/cluster-infra.md) | cluster-infra.md §0: what the stack reads, from §3.1, and each namespace's Pod Security level, from §8. cluster-infra.md §1: the chart pins in the `versions:` block and the record `update_crds` writes, from §3.4; local-path-provisioner as declared resources, from §8; the monitoring component's settings, from §7.1. cluster-infra.md §1.1: the sealed census and the stack configuration its values live in, from §6.2. cluster-infra.md §2: the recommended values and what the design adds, the Egress Gateway's deferral, the pools' inputs and the traffic-policy rule, the baseline, BGP's placement, the class configuration, listeners, certificates and their renewal, from §4 and §5. cluster-infra.md §3: a component's own routes, from §7.4. |
 | [declarative/physical.md](../declarative/physical.md) | physical.md §0: the GUA output. physical.md §1: the census listeners and their source preservation, from §5.3. physical.md §2: kube-proxy, host DNS and KubeSpan's MTU, from §4.2, and the Gateway and pod-reached host ports, from §4.3. physical.md §6: the verification items slice 13 runs, which slice 2 adds, and the Egress Gateway's item moved to hath's wave, from §4.1. |
 | [declarative/workloads.md](../declarative/workloads.md) | workloads.md §1: `public_port` emits the Service alone, under `Cluster`; the route label and the admission of `ingress`; the scrape-object convention in place of the `release` label. |
@@ -1562,10 +1603,15 @@ slices 2, 3 and 4.
     §4.1, physical.md §6, migration.md §1, and the security audit's H1
     are true.
 *   **Owned paths**: `src/kluster/components/cilium/` (new),
-    `src/kluster/stacks/k8s_base.py`, `tests/test_cilium.py` (new),
+    `src/kluster/stacks/k8s_base.py`, `src/kluster/lib/stack_addresses.py`
+    (new), `tests/test_cilium.py`, `tests/test_stack_addresses.py` and
+    `tests/k8s_base_installation.py` (new), `tests/test_stack_programs.py`,
     `docs/declarative/cluster-infra.md`, `docs/cluster/architecture.md`,
     `docs/cluster/security-audit.md`, `docs/declarative/physical.md`,
-    `docs/cluster/migration.md`.
+    `docs/cluster/migration.md`, `docs/style/pulumi.md`, and this
+    document; the `POOL_INTERNET` comment in
+    `src/kluster/conventions/cluster.py` and the readers comment in
+    `src/kluster/stacks/physical.py`.
 *   **Tests that fail without it**: the values both guides prescribe,
     each as written (keep `SYS_MODULE`; let Cilium mount the control
     groups);
@@ -1578,8 +1624,13 @@ slices 2, 3 and 4.
     (drop the policy, which the CRD would default the same way, so the
     test reads the declared field); every Service the stack declares on
     the node addresses states `Cluster` (state `Local` on one); the
-    `internet` pool's blocks are exactly the outputs' node addresses and
-    the VIP (add a public IPv4); the deny in the baseline excepts the
+    `internet` pool's blocks are exactly the outputs' node addresses,
+    the VIP and the balancer's two (drop the balancer's IPv6; add a
+    node's public IPv4); an output the pool reads that is not an address
+    stops the run naming it (read the node GUAs as the unknown sentinel,
+    in a preview and in an update); `k8s-base` reads only the pool's
+    outputs across a StackReference, and `apps` none (read the
+    kubeconfig across one); the deny in the baseline excepts the
     host DNS address and switches default-deny off in both directions
     (drop the exception; drop the switch).
 *   **Unproven live**, in slice 13.
@@ -1674,7 +1725,9 @@ having sealed the DNS-01 token into the branch.
     `docs/declarative/cluster-infra.md`, `docs/declarative/dns.md`.
 *   **Tests that fail without it**: a certificate per served zone for the
     apex and the wildcard (derive from a fixed list); each Gateway's
-    addresses are its pool's (swap two); the listeners' ports are the
+    addresses are its pool's, `internet-gw`'s the node members and the
+    balancer's two (swap two; drop one of the balancer's); the listeners'
+    ports are the
     census rows the Gateways answer (hard-code 443); the HTTPS listeners
     reference their own zone's certificate (cross two); `allowedRoutes`
     selects the route label (allow every namespace); the issuer's token
@@ -1759,8 +1812,14 @@ item fails. **After** slices 10, 11 and 12.
     the cluster DNS resolves through host DNS with the baseline on, and a
     pod's request to `169.254.169.254` is refused (§4.5); a renewal
     cert-manager is made to perform is served by every Gateway with no
-    Envoy restarted (§5.2); vmagent scrapes the node exporter on a node
-    other than its own (§4.3); an
+    Envoy restarted (§5.2); vmagent scrapes the node exporter on its own
+    node (§4.3); a pod on each cloud node and one on the worker, in the
+    echo server's namespace, resolve the echo row's name to the
+    balancer's two addresses, a request answers on each family, and the
+    client the echo server reports is the pod's own address, while ten
+    connections on each family from a pod under the baseline alone to
+    the balancer's 6443 fail from each cloud node and answer from the
+    worker (§4.4); an
     alert raised through alertmanager reaches the phone, and stopping
     vmalert pushes the missed check-in (§7.3). A transcript per item on
     the ops issue; an item that fails is its own issue, and a fallback it
