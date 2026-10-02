@@ -1,7 +1,7 @@
 """Kubernetes helpers shared by the `k8s-base` and `apps` stacks.
 
-Only what both stacks need: reading the kubeconfig their Kubernetes provider is
-opened with, installing a pinned upstream chart, reaching into what one
+Only what both stacks need: checking the kubeconfig their Kubernetes provider
+is opened with, installing a pinned upstream chart, reaching into what one
 rendered, declaring a SealedSecret in the shape
 [declarative/cluster-infra.md](../../docs/declarative/cluster-infra.md) §1.1
 fixes, and labeling a Service into a Cilium load-balancer pool. Anything
@@ -26,13 +26,13 @@ from typing import Any, cast
 import pulumi
 import pulumi_crds as crds
 import pulumi_kubernetes as k8s
-from pulumi.output import Unknown
 from pulumi.runtime.rpc import UNKNOWN as UNKNOWN_SENTINEL
 
 from kluster import conventions
 from kluster.lib.versions import ChartPin
 
 __all__ = (
+    'KUBECONFIG_KEY',
     'SealingScope',
     'SecretTemplate',
     'UnusableKubeconfig',
@@ -45,57 +45,71 @@ __all__ = (
 )
 
 
+#: Where the `k8s-base` and `apps` programs read the cluster-admin kubeconfig:
+#: a config secret of each stack's own, in this project's namespace, as every
+#: credential a program opens a provider with is (rfc-002 §8.1). It is
+#: generated in the `physical` stack's state, and a StackReference cannot carry
+#: it here: `physical` is encrypted under a passphrase of its own (rfc-005
+#: §5.1), and a StackReference elides every secret output the reading stack
+#: cannot decrypt. So `credentials derived sync --only kubeconfig` copies it out
+#: of that state into both stacks' configuration (credentials.md §3), under this
+#: key, which the slot map names as its target.
+KUBECONFIG_KEY = 'kubeconfig'
+
+#: What fills `KUBECONFIG_KEY`, named in every refusal below.
+_FILLED_BY = f'`credentials derived sync --only {KUBECONFIG_KEY}`'
+
+
 class UnusableKubeconfig(ValueError):
-    """The `physical` stack publishes a kubeconfig output that holds nothing a provider can open."""
+    """The stack's configuration holds no kubeconfig, or holds one no provider can open."""
 
 
-def kubeconfig_from(physical: pulumi.StackReference) -> pulumi.Output[str]:
-    """The kubeconfig `physical` publishes, refused unless it is one a provider can open.
+def kubeconfig_from(configured: pulumi.Output[str] | None) -> pulumi.Output[str]:
+    """The kubeconfig a stack's configuration holds, refused unless it is one a provider can open.
 
-    `require_output` stops the run where the output is absent, and that is
-    the only state it stops. Three more get past it, and each would reach the
-    Kubernetes provider as something other than a kubeconfig:
+    `configured` is what the program read under `KUBECONFIG_KEY` with
+    `get_secret`, at the line that builds its Kubernetes provider; this reads
+    no configuration itself. Absent, it is refused here and now, naming the
+    command that fills it -- `require_secret` would refuse too, but by telling
+    the operator to `pulumi config set` a value by hand, which is the copy the
+    command exists to make. Present, it can still be no kubeconfig:
 
-    -   **a secret this stack cannot decrypt**, which a StackReference elides
-        and reads back as `{}` -- `physical` under a passphrase of its own
-        (rfc-005 §5.1) does that to every reader under the stack passphrase;
-    -   **Pulumi's unknown sentinel**, which a targeted apply of `physical`
-        exports (framework/pulumi.md §1.4), read back as an unknown, or as
-        `None` where it is stored encrypted;
-    -   an empty string.
+    -   an empty or blank string;
+    -   Pulumi's unknown sentinel, which a targeted apply of `physical` exports
+        as an ordinary string (framework/pulumi.md §1.4), should a copy ever
+        carry it here -- the command refuses to.
 
-    The provider reads a kubeconfig it cannot load as an unreachable
-    cluster, so a preview of plain resources would go green over nothing;
-    one that is handed no kubeconfig at all -- `None` is dropped on the
-    wire -- falls back to `$KUBECONFIG` and then `~/.kube/config`, so an
-    `up` from a shell holding another cluster's would act on that cluster.
-    So the value is checked where it is read, unknowns included
-    (`run_with_unknowns`), and the run stops naming what it found.
+    The provider reads a kubeconfig it cannot load as an unreachable cluster,
+    so a preview of plain resources would go green over nothing; one that is
+    handed no kubeconfig at all falls back to `$KUBECONFIG` and then
+    `~/.kube/config`, so an `up` from a shell holding another cluster's would
+    act on that cluster. So the value is checked where it is read, and the run
+    stops naming what it found and never the value.
     """
-    name = conventions.PHYSICAL_OUTPUTS.kubeconfig
-    return physical.require_output(name).apply(lambda value: _usable_kubeconfig(name, value), run_with_unknowns=True)
+    if configured is None:
+        raise UnusableKubeconfig(
+            f"this stack's configuration holds no {KUBECONFIG_KEY!r}, so no Kubernetes provider is opened; "
+            f"{_FILLED_BY} copies it in from the physical stack's state once physical has been applied"
+        )
+    return configured.apply(_usable_kubeconfig)
 
 
-def _usable_kubeconfig(name: str, value: object) -> str:
+def _usable_kubeconfig(value: object) -> str:
     """`value` if it is a kubeconfig, else a refusal saying what it is -- never the value itself."""
-    if isinstance(value, str) and value and value != UNKNOWN_SENTINEL:
+    if isinstance(value, str) and value.strip() and value != UNKNOWN_SENTINEL:
         return value
-    if value is None or value == UNKNOWN_SENTINEL or isinstance(value, Unknown):
+    if value == UNKNOWN_SENTINEL:
         found = (
-            "unknown, which is how Pulumi's unknown sentinel reads back: a targeted apply of `physical` "
-            'exported it (framework/pulumi.md §1.4), and the rest of `physical` has to be applied first'
+            "Pulumi's unknown sentinel, which a targeted apply of `physical` exports for a value it did not "
+            'produce (framework/pulumi.md §1.4)'
         )
-    elif isinstance(value, Mapping):
-        found = (
-            'a mapping, which is how a StackReference reads back a secret it could not decrypt: this '
-            "stack cannot open `physical`'s secrets (rfc-005 §5.1)"
-        )
-    elif isinstance(value, str):
-        found = 'an empty string'
+        remedy = f'apply physical in full, then {_FILLED_BY} copies it in again'
     else:
-        found = f'a {type(value).__name__}'
+        found = 'a blank string' if isinstance(value, str) else f'a {type(value).__name__}'
+        remedy = f"{_FILLED_BY} replaces it with physical's"
     raise UnusableKubeconfig(
-        f"the physical stack's {name!r} output is {found}; no Kubernetes provider is opened with it"
+        f"this stack's configured {KUBECONFIG_KEY!r} is {found}; no Kubernetes provider is opened with it. "
+        f'{remedy[0].upper()}{remedy[1:]}'
     )
 
 

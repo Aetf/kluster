@@ -4,7 +4,9 @@ Conventions are code, not stack outputs (declarative/README.md §2): a
 cross-stack-referenced singleton gets an explicit name from this package with
 autonaming disabled, so `apps` can address a `k8s-base` gateway (or a
 `physical` bucket layout) without a StackReference. StackReferences carry only
-machine facts — kubeconfig, node IPs, zone IDs.
+machine facts — node IPs, zone IDs — and only plain ones: a secret such as the
+kubeconfig is elided across `physical`'s passphrase, and reaches `k8s-base` and
+`apps` as a copy in their own configuration (credentials.md §3).
 
 What belongs here: a value the program must agree on with itself. What does
 not: machine facts (OCIDs, generated names, IPs the cloud hands out) — those

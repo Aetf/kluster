@@ -144,15 +144,24 @@ above, and neither moves with the other.
 **Cross-component facts flow through parameters; cross-stack decisions
 flow through `conventions`.** StackReference is the exception and each
 use needs a recorded reason (today: the dns stack reading the cluster
-anchors, and `k8s-base` and `apps` reading the kubeconfig they open
-their Kubernetes provider with, until `kluster-ops#487` puts `physical`
-under a passphrase of its own, as the threat model rfc-005 rules, and
-delivers it through their own configuration). **A value the program cannot run
-without is read with `require_output`**, so a producer that has not
-published it stops the run at the read, naming the output; where a
-value that is there can still be unusable — a secret the reader cannot
-decrypt reads back as `{}`, Pulumi's unknown sentinel as an unknown —
-the reader checks it at the read as well (`kluster.lib.k8s.kubeconfig_from`).
+anchors). **A StackReference carries plain outputs only, across a
+passphrase split**: it elides every secret output the reading stack
+cannot decrypt, and `physical` is encrypted under a passphrase of its
+own (rfc-005 §5.1). So a secret that one stack generates, needed by a
+stack encrypted apart from it, travels as a config secret of the reader,
+copied out of the producer's state by `credentials derived sync` — today
+the kubeconfig `k8s-base` and `apps` open their Kubernetes provider
+with ([credentials.md](../credentials.md) §3). **A value the program
+cannot run without is read so that its absence stops the run at the
+read**: an output with `require_output`, which names the output; a
+config value with `require_secret`. A config value that is a copy a
+command keeps in step with its source — today the kubeconfig — is read
+with `get_secret`, and its absence is refused naming that command, since
+`require_secret`'s own refusal sends the operator to `pulumi config set`
+a value that is not theirs to type. Where a value that is there can still
+be unusable — a blank string, or Pulumi's unknown sentinel, which a
+targeted apply exports as an ordinary string — the reader checks it at
+the read as well (`kluster.lib.k8s.kubeconfig_from`).
 `get_output` answers an absent output with `None`. That is a known value,
 and the program carries it on as one, so it is for an output whose
 absence the reader handles itself.

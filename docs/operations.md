@@ -38,9 +38,10 @@ changes is on its allow-list — `uv.lock`, and renovate's bump of
 (ci.md §3). A bump that also edits
 `pyproject.toml`, a workflow file, `mise.toml` or an image's `.conf`
 waits for a human outright. One that stays on the list proves itself
-with a preview of `k8s-base` and `apps` among others, and no stack of
-either name exists in the state backend for that preview to resolve —
-so the proof errors rather than passing. The whole account, the other facts
+with a preview of `k8s-base` and `apps` among others, and both stacks
+fail that preview until they hold a copy of the kubeconfig, which
+waits on `physical`'s first `up` — so the proof errors rather than
+passing. The whole account, the other facts
 behind that error included, is ci.md §5. Every bump therefore merges
 the way the waiting rows do: as a reviewed pull request.
 
@@ -124,6 +125,24 @@ from an HTTP repository, which offers nothing to check a download against
     physical/state-backend.md §7 (pointer, not a copy).
 -   **§2.4 CNPG major upgrade** — owned by workloads.md §4
     (pointer).
+-   **§2.5 The cluster credential's copies.** Trigger: a `physical`
+    apply that changes its `kubeconfig` output, which no operator sees
+    happen. The Talos provider's `Kubeconfig` resource issues the
+    cluster-admin client certificate again by itself in whichever
+    `physical` apply runs within its renewal window of the certificate's
+    expiry — 720 hours by default, and `physical` sets none — so a CI
+    `up-physical` re-issues it; replacing the cluster's PKI changes it
+    too. Cadence: after every `physical` `up`, and at least monthly,
+    which no 30-day window can slip past. Gist: `credentials derived sync
+    --only kubeconfig` from the checkout that holds the kit, then commit
+    `Pulumi.k8s-base.yaml` and `Pulumi.apps.yaml`, whose copies the two
+    stacks open their Kubernetes provider with (credentials.md §3). A
+    stack already holding the current value as a secret is left alone,
+    so a run writes only what changed. A stale copy keeps opening the
+    cluster only while the certificate it carries is valid and its
+    authority still trusted. Past that, both stacks fail to authenticate
+    to the API server — a provider error, not `UnusableKubeconfig`,
+    which only an absent or blank copy raises — until the copy is made.
 
 ## 3. Node replacement runbooks (census)
 

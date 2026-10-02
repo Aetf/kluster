@@ -11,15 +11,19 @@ that speaks the k8s API, consumed by `apps`.
 
 ## 0. Scope and rules
 
--   Inputs (StackReference to `physical`, by the names in
-    `conventions.PHYSICAL_OUTPUTS`): the kubeconfig, and the addresses the
-    `internet` pool is made of — each cloud node's primary private IPv4
+-   Inputs: the kubeconfig, a config secret of the stack's own that
+    `credentials derived sync --only kubeconfig` copies out of
+    `physical`'s state, since a StackReference elides a secret across
+    `physical`'s passphrase ([credentials.md](../credentials.md) §3); and,
+    by StackReference to `physical` under the names in
+    `conventions.PHYSICAL_OUTPUTS`, the addresses the `internet` pool is
+    made of — each cloud node's primary private IPv4
     (`node_private_ips`), each node's GUA (`node_guas`) and the dedicated
-    VIP's secondary private address (`vip1_private`). The kubeconfig is
-    read with `require_output`, so a run against a `physical` stack that
-    has not published one stops there and names the missing output. The
-    program builds one Kubernetes provider from it and disables the
-    package's default provider in its stack file (rfc-007 §3.1).
+    VIP's secondary private address (`vip1_private`). A stack holding no
+    copy of the kubeconfig, or a blank one, stops at the read and names
+    that command (`kluster.lib.k8s.kubeconfig_from`). The program builds
+    one Kubernetes provider from it and disables the package's default
+    provider in its stack file (rfc-007 §3.1).
 -   **Names: explicit for shared singletons, outputs for the dynamic.**
     Cross-stack-referenced singletons (StorageClasses, Gateways, pools,
     shared Secret names) get explicit `metadata.name`s with autonaming

@@ -289,7 +289,7 @@ between them fall are design decisions rather than mechanism:
 
 ### 3.1 Cross-stack data
 
-A value reaches another stack by one of two routes, and they carry
+A value reaches another stack by one of three routes, and they carry
 different things:
 
 -   **A stack output, read through a `StackReference`:**
@@ -298,13 +298,15 @@ different things:
     import pulumi
 
     physical = pulumi.StackReference('organization/kluster-py/physical')
-    kubeconfig = physical.require_output('kubeconfig')
+    endpoint = physical.get_output('cluster_endpoint')
     ```
 
-    This is the only route for a value no program can know before an
-    apply — an identifier the cloud generates, an address it assigns, a
-    credential a resource mints. The cost is that a reader sees
-    whatever the producer published last, so a preview taken before the
+    This is the route for a value no program can know before an apply —
+    an identifier the cloud generates, an address it assigns — and it
+    carries plain outputs only: a reader whose stack is encrypted apart
+    from the producer's gets every secret output elided. The cost is that
+    a reader sees whatever the producer published last, so a preview
+    taken before the
     producer applies previews stale values. Staleness is the milder
     hazard. An output that holds nothing usable reaches a reader with
     no error and nothing to mark it: `get_output` answers an absent
@@ -318,8 +320,18 @@ different things:
     mechanism, and the rule that nothing may read such an output until
     the rest of the producer is applied, are §1.4's "When an awaited
     value is unknown".
-    Whether a reader uses `require_output`, as above, or `get_output`
+    Whether a reader uses `require_output` or `get_output`, as above,
     is [style/pulumi.md](../style/pulumi.md)'s rule under "Layering".
+
+-   **A workstation copy into the reader's own configuration.** A
+    credential a resource mints crosses a passphrase split only this
+    way: `credentials derived sync` reads it out of the producer's state
+    under the producer's passphrase and writes it as a config secret of
+    the reader under the reader's, today the kubeconfig out of
+    `physical`'s state into `k8s-base`'s and `apps`'s
+    ([credentials.md](../credentials.md) §3). The reader sees the copy
+    last made, so the copy is re-run whenever the producer changes the
+    value ([operations.md](../operations.md) §2.5).
 
 -   **A Python module both programs import.** The value is a literal,
     so it is concrete during preview and imposes no apply order. It
