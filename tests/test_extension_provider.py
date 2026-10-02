@@ -187,7 +187,16 @@ def extension(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Extension]:
     manifest = root / 'crd.yaml'
     _ = manifest.write_text(CRD)
     home = root / 'pulumi-home'
-    env = _scrubbed(os.environ) | {'PULUMI_HOME': str(home), 'PULUMI_SKIP_UPDATE_CHECK': 'true'}
+    # A backend of the module's own: with none, and a coding agent's variable in
+    # the environment, the pinned CLI signs up an ephemeral Pulumi Cloud account
+    # (`currentOrSignupAgentAccount`, pkg/backend/httpstate/backend.go), an
+    # outward write no test may make.
+    env = _scrubbed(os.environ) | {
+        'PULUMI_BACKEND_URL': f'file://{root / "state"}',
+        'PULUMI_HOME': str(home),
+        'PULUMI_SKIP_UPDATE_CHECK': 'true',
+    }
+    (root / 'state').mkdir()
     generated = _pulumi(
         'package',
         'gen-sdk',
