@@ -7,10 +7,12 @@ storage, nodes.md §4.4 for why this list is as small as it is). This is
 the middle stack of [README.md](README.md) §1: everything cluster-scoped
 that speaks the k8s API, consumed by `apps`.
 
-> **Status**: designed 2026-08-22. Cilium (§2: the datapath, the
-> Gateway API definitions and class, the pools and the baseline) is
-> declared; the Gateways, BGP and the rest of §1 are not yet
-> implemented.
+> **Status**: designed 2026-08-22. Declared: Cilium (§2: the datapath,
+> the Gateway API definitions and class, the pools and the baseline),
+> the sealed-secrets controller, cert-manager's chart,
+> local-path-provisioner and reloader. Not yet implemented: the
+> Gateways, BGP, cert-manager's issuer and certificates, and the rest
+> of §1.
 
 ## 0. Scope and rules
 
@@ -62,7 +64,9 @@ that speaks the k8s API, consumed by `apps`.
     set to meet it where the chart exposes them (reloader's container
     context, empty at its pin, is the instance, and the component sets
     it), and takes `baseline`, with the reason, only where the chart
-    does not (rfc-007 §8).
+    does not (rfc-007 §8). Every such namespace is created through
+    `kluster.lib.k8s.namespace`, which takes the level as a required
+    argument.
 
 ## 1. Install order
 
@@ -80,10 +84,13 @@ empty cluster:
     back-to-back, and nothing else can schedule anyway).
 3.  **sealed-secrets controller** — fully self-contained (generates its
     own key pair), so it comes right after the CNI and every later
-    component's credentials can be SealedSecrets (§1.1). Migration
-    note: the legacy sealing key is restored into the new cluster
-    *before* any legacy SealedSecret manifests are ported, or
-    everything gets re-sealed (migration.md).
+    component's credentials can be SealedSecrets (§1.1). Installed as
+    `sealed-secrets-controller` in `kube-system`, the name and namespace
+    `kubeseal` looks for unless told otherwise, so `kubeseal` run by hand
+    finds it with no flag; the sealing command names both all the same,
+    from `conventions` (rfc-007 §6.1). Migration note: the legacy sealing key is restored
+    into the new cluster *before* any legacy SealedSecret manifests are
+    ported, or everything gets re-sealed (migration.md).
 4.  **cert-manager** — ACME with Cloudflare DNS-01; the solver
     credential is a SealedSecret per §1.1 (a *separate*,
     minimally-scoped token from the one the pulumi-cloudflare provider
@@ -103,7 +110,13 @@ empty cluster:
     spine). This is the **in-cluster half of the unified alert
     channel** (architecture.md §4.3): same payload convention as the
     CI-origin alerts, every alert carrying its playbook reference.
-    Alertmanager's one receiver is the HA webhook — it holds **no
+    Alertmanager's one receiver is a Home Assistant webhook of its own,
+    an automation apart from the one the operations repository posts to,
+    because alertmanager's body is fixed: it reads the tier, the summary
+    and the playbook off each alert and pushes under the same title
+    convention. The webhook's address is a sealed value
+    (`conventions.sealed`'s alert-webhook row, §1.1), so it appears in
+    no rendered configuration (rfc-007 §7.3). Alertmanager holds **no
     GitHub credential**; the GitHub-issue leg is *pulled* by the
     ops repo's poller reading alertmanager's API through a
     **dedicated header-match route** at the internet gateway
@@ -126,15 +139,21 @@ empty cluster:
     named them — explicit now so the closed list is honest):
     **local-path-provisioner** (Talos ships no default StorageClass;
     its backing directory is a Talos user volume on every node,
-    physical.md §2),
+    physical.md §2), declared as resources of this program after the
+    release's own manifest rather than installed from a chart, since
+    its upstream publishes no chart repository; its namespace is
+    `privileged`, because the helper pods it starts mount the path they
+    provision (§0),
     **metrics-server**, **reloader**. Monitoring internals
     (kube-state-metrics, the node-exporter DaemonSet) count as part of
     the VictoriaMetrics entry. None has an ordering constraint beyond
     Cilium.
 
 Every chart this list installs is pinned in `Pulumi.yaml`'s `versions:`
-block as `versions:chart-<name>`, and the Gateway API definitions as
-`versions:manifest-gateway-api` (framework/pulumi.md §3.2). One copy:
+block as `versions:chart-<name>`, the Gateway API definitions as
+`versions:manifest-gateway-api`, and local-path-provisioner's two images,
+the provisioner's and its helper pod's, as `versions:image-<name>`
+(framework/pulumi.md §3.2). One copy:
 the stack program installs from those pins, and `update_crds` reads the
 same file through the same parser to render the CRD bundle
 `packages/crds/crds.yaml` from exactly this chart set and regenerate the
@@ -176,6 +195,24 @@ Two channels, chosen by who consumes the secret:
     git, only the sensitive fields are sealed). Examples: cert-manager's
     DNS-01 token, app credentials, VolSync restic passwords, CNPG user
     secrets.
+    -   **A sealed value is a plain value in the configuration of the
+        stack that declares it**, under the one structured key
+        `sealedSecrets`, keyed by the value's name and then by its data
+        key. The ciphertext opens with the cluster's sealing key alone,
+        so it is committed in the clear beside the stack's config
+        secrets; the stack program reads it and hands each component
+        the ciphertext of the values it declares, and the component
+        declares the SealedSecret through `kluster.lib.k8s.sealed_secret`.
+    -   **The sealed values are a census**, `conventions.sealed`,
+        because two programs agree on each one: the `credentials`
+        command seals and writes it, and a stack declares it. Each row
+        names the Secret the value becomes, its namespace, the keys of
+        its data, the scope it is sealed at and the stack that declares
+        it, and the configuration path follows from the row. A value
+        `credentials` seals is sealed strict — name and namespace bound
+        into the ciphertext, `kubeseal`'s own default — since nothing
+        about it will be renamed ([credentials.md](../credentials.md)
+        §1, rule 6, and §3).
 -   **Consumed by a Pulumi provider itself → Pulumi config secret**
     (passphrase-encrypted in state) — the only cases where SealedSecret
     is impossible, because the consumer is not the cluster (or the

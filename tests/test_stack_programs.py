@@ -4,8 +4,8 @@ What is held here is where each program's providers' credentials come from --
 the kubeconfig and the zones token, both out of the stack's own configuration,
 the kubeconfig read so that anything but a kubeconfig stops the run -- what
 each reads across a StackReference, and that each committed stack file turns a
-missed provider into an error. What `k8s-base` installs is
-`test_cilium.py`'s.
+missed provider into an error. What `k8s-base` installs is `test_cilium.py`'s
+and `test_standing_set.py`'s.
 
 Every run here is under the parent backstop `kluster.main` installs before a
 real run declares anything, so a resource the program leaves unparented fails

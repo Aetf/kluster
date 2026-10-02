@@ -2,7 +2,8 @@
 
 Only what both stacks need: checking the kubeconfig their Kubernetes provider
 is opened with, installing a pinned upstream chart, reaching into what one
-rendered, declaring a SealedSecret in the shape
+rendered, creating a namespace at its Pod Security level, declaring a
+SealedSecret in the shape
 [declarative/cluster-infra.md](../../docs/declarative/cluster-infra.md) §1.1
 fixes, and labeling a Service into a Cilium load-balancer pool. Anything
 specific to one component belongs with that component, not here. A pinned
@@ -20,6 +21,7 @@ from __future__ import annotations
 import fnmatch
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any, cast
 
 import pulumi
@@ -33,6 +35,8 @@ from kluster.lib.versions import ChartPin
 
 __all__ = (
     'KUBECONFIG_KEY',
+    'POD_SECURITY_ENFORCE_LABEL',
+    'PodSecurity',
     'SealingScope',
     'SecretTemplate',
     'UnusableKubeconfig',
@@ -40,6 +44,7 @@ __all__ = (
     'helm_chart',
     'kubeconfig_from',
     'lb_pool_labels',
+    'namespace',
     'pick_resource',
     'sealed_secret',
 )
@@ -210,6 +215,64 @@ def pick_resource[R: pulumi.Resource](
         return matched[0]
     rendered = ', '.join(sorted(resource_name(urn) for _, urn in named)) or 'nothing'
     raise LookupError(f'{len(matched)} resources match {kind.__name__} {name_pattern!r}; the chart rendered {rendered}')
+
+
+class PodSecurity(StrEnum):
+    """A Pod Security Standards level, as the admission controller spells it.
+
+    The values are Kubernetes' own: the admission controller reads them off a
+    namespace's labels, and an unknown one is refused when the label is set.
+    """
+
+    PRIVILEGED = 'privileged'
+    """No restriction: what a namespace needs when its pods use the host --
+    its network, its PID namespace, its paths or its devices."""
+
+    BASELINE = 'baseline'
+    """Refuses the host's namespaces and paths, privileged containers and
+    added capabilities beyond a default set."""
+
+    RESTRICTED = 'restricted'
+    """`baseline`, plus: volumes only of the configMap, csi, downwardAPI,
+    emptyDir, ephemeral, persistentVolumeClaim, projected and secret types;
+    no privilege escalation; a non-root user; a `RuntimeDefault` or
+    `Localhost` seccomp profile; and every capability dropped,
+    `NET_BIND_SERVICE` alone allowed back."""
+
+
+#: The label the Pod Security admission controller enforces a namespace's
+#: level from. A pod that violates the level is refused at admission.
+POD_SECURITY_ENFORCE_LABEL = 'pod-security.kubernetes.io/enforce'
+
+
+def namespace(
+    resource_name: str,
+    *,
+    name: str,
+    pod_security: PodSecurity,
+    opts: pulumi.ResourceOptions | None = None,
+) -> k8s.core.v1.Namespace:
+    """A namespace, with the Pod Security level its pods are admitted under.
+
+    The level is required rather than defaulted, because a namespace that
+    states none is held to the cluster-wide default, whatever that is, and the
+    pods in it fail admission only once they are created
+    (declarative/cluster-infra.md §0). A namespace whose level is not
+    `restricted` says why where it is declared.
+
+    :param resource_name: The logical name, which carries the declaring
+        component's name.
+    :param name: The namespace's own name. It is fixed rather than autonamed:
+        what installs into the namespace names it.
+    """
+    return k8s.core.v1.Namespace(
+        resource_name,
+        metadata=k8s.meta.v1.ObjectMetaArgs(
+            name=name,
+            labels={POD_SECURITY_ENFORCE_LABEL: pod_security.value},
+        ),
+        opts=opts,
+    )
 
 
 @dataclass(frozen=True, kw_only=True)

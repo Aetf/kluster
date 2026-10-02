@@ -3,7 +3,8 @@
 Every suite that runs `k8s_base.main` whole needs the same three things the
 program reads besides its kubeconfig, so they are here rather than in any one
 of those suites (framework/testing.md §2): `test_stack_programs.py` runs it for
-its providers and `test_cilium.py` for what it installs.
+its providers, and `test_cilium.py` and `test_standing_set.py` for what it
+installs.
 
 Every value is invented. The addresses are documentation and private ranges
 of the families each output carries, and each output holds addresses no other
@@ -43,9 +44,12 @@ PUBLISHED: dict[str, object] = {
 
 DIGEST = f'sha256:{"d" * 64}'
 
-#: The pins the program reads, as the engine hands a stack program a
-#: project-level object: the JSON text of its `value:` (framework/pulumi.md
-#: §3.2).
+#: The pins the program reads, as the engine hands them to a stack program: a
+#: project-level object as the JSON text of its `value:`, a scalar as itself
+#: (framework/pulumi.md §3.2). Each chart and image added beside Cilium's is
+#: at a version and a digest no real pin names, and one chart is served from
+#: an HTTP repository, so one installed from anything but its pin reads
+#: differently.
 VERSIONS_CONFIG = {
     'versions:chart-cilium': json.dumps(
         {
@@ -55,6 +59,32 @@ VERSIONS_CONFIG = {
             'definitions': False,
         }
     ),
+    'versions:chart-sealed-secrets': json.dumps(
+        {
+            'repository': 'oci://registry.example.invalid/charts',
+            'version': '9.1.0',
+            'digest': f'sha256:{"1" * 64}',
+            'definitions': True,
+        }
+    ),
+    'versions:chart-cert-manager': json.dumps(
+        {
+            'repository': 'oci://registry.example.invalid/charts',
+            'version': 'v9.2.0',
+            'digest': f'sha256:{"2" * 64}',
+            'definitions': True,
+            'render-values': {'crds.enabled': 'true'},
+        }
+    ),
+    'versions:chart-reloader': json.dumps(
+        {
+            'repository': 'https://charts.example.invalid/',
+            'version': '9.3.0',
+            'definitions': False,
+        }
+    ),
+    'versions:image-local-path-provisioner': f'registry.example.invalid/local-path-provisioner:v9.4.0@sha256:{"3" * 64}',
+    'versions:image-local-path-helper': f'registry.example.invalid/busybox:9.5.0@sha256:{"4" * 64}',
     'versions:manifest-gateway-api': json.dumps(
         {
             'repository': 'example/gateway-api',
