@@ -277,7 +277,7 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     single-layer case to select — the three filters are one YAML anchor
     and its two aliases, so `changes` answers with all three names or
     with none, never a subset. That is deliberate: shared code
-    (`conventions/`, `putils/`, `packages/crds`) is most of what a
+    (`conventions/`, `putils/`, `sdks/crds`) is most of what a
     change touches, and a per-layer list would have to be right about
     which layer reads it.
 -   **The list is a deny-list, and only reads as one under
@@ -454,7 +454,7 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     cancelling one leaves nothing to repair, so those take the ordinary
     rule.
 -   **A bridged-SDK bump is finished on its branch by a workflow, and
-    nobody clicks.** The three SDKs under `sdks/` are generated from the
+    nobody clicks.** The SDKs under `sdks/` are generated from the
     `packages:` block of `Pulumi.yaml`, and a test in `checks` holds
     each committed SDK to the block, so a renovate bump of a bridge or
     provider version is a red `checks` until `pulumi install` has
@@ -462,7 +462,14 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     branch: it regenerates `sdks/`, re-locks `uv.lock`, runs AGENTS.md's
     gate step for step on the regenerated tree, and pushes the result
     onto the branch — a tree that fails the gate is never pushed, and
-    the run is red on the head renovate pushed. **The push is the
+    the run is red on the head renovate pushed. The Kubernetes
+    provider's CRD extension, `sdks/crds`, is regenerated the same way
+    on renovate's Kubernetes provider bump, which moves the block's
+    `crds` entry together with `pyproject.toml`'s exact pin
+    ([pulumi.md](pulumi.md) §4); `pyproject.toml` is off
+    noop-automerge's allow-list, so that bump, once regenerated, waits
+    for a reader, and what follows of the unattended route is the
+    bridged SDKs'. **The push is the
     dispatch App's act, not `GITHUB_TOKEN`'s.** A `pull_request` run
     that a `GITHUB_TOKEN` push causes is created in an approval-required
     state and starts only when someone with write access selects
@@ -500,7 +507,7 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     on the allow-list: `uv.lock` in its own right, and `sdks/` beside
     the admitted `Pulumi.yaml` and on no other pull request, since the
     regeneration is the one way anything writes there. What
-    `prove` can say about such a bump is nothing in any case: the three
+    `prove` can say about such a bump is nothing in any case: the bridged
     SDKs render only in `physical`, which has no pull-request preview,
     so `prove` cannot see a bump's diff, and it surfaces where every
     provider-SDK bump does —

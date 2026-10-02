@@ -47,16 +47,17 @@ config:
   # schema accepts for an object. The key's `<name>` is the chart's name in its
   # repository. Beside where the chart is served and its version, a pin carries
   # what `update_crds` needs to render it: whether it renders definitions into
-  # `packages/crds`, the `render-values` that make it render them, and a
-  # `floor` its operator version has to clear, with the section that states
-  # it. The script checks a floor against the `appVersion` the chart itself
-  # declares, so no operator version is kept by hand here.
+  # the CRD bundle (`packages/crds`), the `render-values` that make it render
+  # them, and a `floor` its operator version has to clear, with the section
+  # that states it. The script checks a floor against the `appVersion` the
+  # chart itself declares, so no operator version is kept by hand here.
   #
   # Renovate reads `repository` and moves `version` and `digest`, which are
   # the first three fields after `value:`, in that order. It cannot finish a
-  # bump of a pin `update_crds` reads: `packages/crds` records the pins it was
-  # generated from, and a test holds that record to this block, so such a bump
-  # is red until `update_crds` has run on its branch (framework/pulumi.md §4).
+  # bump of a pin `update_crds` reads: `packages/crds` records the pins the
+  # bundle was rendered from, and a test holds that record to this block, so
+  # such a bump is red until `update_crds` has run on its branch
+  # (framework/pulumi.md §4).
   #
   # A chart carries the digest of its manifest wherever its publisher's OCI
   # registry has the pinned version. Helm pulls the chart by that digest and
@@ -175,26 +176,34 @@ config:
       asset: experimental-install.yaml
       sha256: d7fa77650e4ef28fca0411536fcb5e237deb4d50301cfded3be49d9a1b7bbd02
 
-# The bridged provider SDKs under `sdks/`, one entry per SDK: the release of
-# Pulumi's any-Terraform-provider bridge (`version`) and the upstream provider
-# it is parameterized with (`parameters`: the registry coordinates, then the
-# provider's version). Three providers have no published Pulumi SDK, and this
-# block is their recipe -- `pulumi install` regenerates every `sdks/<name>`
-# from it, and the result is committed (the tree is small, and every CI job
-# would otherwise fetch two plugins before it could `uv sync`). Each SDK's own
-# `pulumi_<name>/pulumi-plugin.json` records the same three values, and a test
-# holds it to this block, so a bump here is not finished until the SDK has been
-# regenerated: renovate proposes the bump, and a workflow regenerates on its
-# branch (framework/ci.md §3). No stack program reads this block -- it is the
-# generator's input, and the engine resolves the plugin at run time from the
-# SDK's `pulumi-plugin.json`.
+# The generated SDKs under `sdks/`, one entry per SDK. None of them is a
+# published Pulumi SDK, and this block is their recipe -- `pulumi install`
+# regenerates every `sdks/<name>` from it, and the result is committed (every
+# CI job would otherwise fetch the generators' plugins before it could
+# `uv sync`). Each SDK's own `pulumi_<name>/pulumi-plugin.json` records what it
+# was generated from, and a test holds it to this block, so a bump here is not
+# finished until the SDK has been regenerated: renovate proposes the bump, and
+# a workflow regenerates on its branch (framework/ci.md §3). No stack program
+# reads this block -- it is the generator's input, and the engine resolves the
+# plugin at run time from the SDK's `pulumi-plugin.json`.
 #
+# Three entries are providers Pulumi's any-Terraform-provider bridge generates:
+# the bridge release (`version`) and the upstream provider it is parameterized
+# with (`parameters`: the registry coordinates, then the provider's version).
 # The bridge version is shared by all three: it moves under one renovate
 # dependency (`pulumi/pulumi-terraform-provider`), so it moves for all three at
 # once. Each upstream provider is a dependency of its own, spelled in lower
 # case as the registry API takes it: renovate looks the coordinates up
 # verbatim and the lookup is case-sensitive, while the bridge canonicalizes
 # either spelling to the same SDK.
+#
+# One entry, `crds`, is the kubernetes provider's CRD extension: the provider
+# release (`version`) and the CRD manifest it generates the custom resources'
+# classes from (`crd-manifest`, relative to this file). The manifest is the
+# bundle `update_crds` renders from the `versions:` pins above, and a run of it
+# ends by running `pulumi install`; the release is the `pulumi-kubernetes`
+# version `pyproject.toml` pins exactly, held equal to it by a test and moved
+# with it by one renovate dependency (framework/pulumi.md §4).
 #
 # These pins name releases, not bytes, and no field here can hold a hash of
 # what they download. Pulumi reads a `checksums` map on an entry (`PackageSpec`
@@ -203,10 +212,10 @@ config:
 # while the project schema refuses anything but a string: at the pinned CLI an
 # entry carrying one fails to load, `package must be either a string or a
 # package specification object`. Nor would the map reach a run. A preview or
-# an update fetches the bridge plugin the SDK's `pulumi-plugin.json` names, and
-# that file has no field for a hash; the bridge then fetches the upstream
-# provider from the registry, and its loader installs it with no recorded hash
-# to hold it to.
+# an update fetches the plugin the SDK's `pulumi-plugin.json` names, and that
+# file has no field for a hash; the bridge then fetches the upstream provider
+# from the registry, and its loader installs it with no recorded hash to hold
+# it to.
 #
 # `pulumi plugin install --checksum` is the one route that holds a plugin to a
 # recorded sum: a plugin installed that way, ahead of the engine, is found
@@ -233,3 +242,9 @@ packages:
     parameters:
       - zerotier/zerotier
       - 1.6.0
+  crds:
+    source: kubernetes
+    version: 4.34.2
+    extensions:
+      - name=crds
+      - crd-manifest=packages/crds/crds.yaml

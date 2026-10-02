@@ -1,29 +1,29 @@
-"""Regenerate `packages/crds` from the pinned chart set.
+"""Regenerate the CRD bundle and the SDK generated from it, from the pinned chart set.
 
-`uv run update_crds`. The bindings are generated, not written, so this is the
-only supported way to change anything under `packages/crds`. The pins are the
-`versions:` block of `Pulumi.yaml`; the run checks each chart's floor, renders
-the definitions, generates the bindings and writes beside them the record of
-the pins it read (`record`).
+`mise x -- uv run update_crds`, which puts the `pulumi` CLI `mise.toml` pins on
+`PATH`. The bundle (`packages/crds/crds.yaml`) and the SDK (`sdks/crds`) are
+generated, not written, so this is the only supported way to change anything
+under either. The pins are the `versions:` block of `Pulumi.yaml`; the run
+checks each chart's floor, renders the definitions, writes the bundle to the
+path the same file's `packages:` entry names, writes beside it the record of
+the pins it read (`record`), and regenerates the SDK from that entry.
 """
 
-# `tqdm` is only partially typed, and `pulumi_kubernetes._utilities` is where
-# the SDK keeps its plugin version, with no public equivalent.
-# pyright: reportUnknownMemberType=false, reportPrivateUsage=false
+# `tqdm` is only partially typed.
+# pyright: reportUnknownMemberType=false
 
 from __future__ import annotations
 
 import argparse
 import logging
 import logging.config
-import re
+import os
 import shutil
 import subprocess as sp
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-import pulumi_kubernetes
 from tqdm.contrib.logging import logging_redirect_tqdm
 
 from kluster.lib.release_assets import fetch_manifest
@@ -91,70 +91,74 @@ def collect_documents(workdir: Path, project: ProjectFile) -> list[str]:
     return documents
 
 
-#: The `pulumi-kubernetes` requirement `crd2pulumi` writes into the generated
-#: `pyproject.toml`. The version in it is the one its release was built
-#: against, baked into the binary: `--version` moves the package's own version
-#: and `pulumi-plugin.json`, and leaves this line as it was.
-BAKED_DEPENDENCY = re.compile(r'"pulumi-kubernetes==[^"]*"')
+class NoPulumi(RuntimeError):
+    """The `pulumi` CLI the SDK is generated with is not on `PATH`."""
 
 
-def declare_sdk_floor(pyproject: Path, version: str) -> None:
-    """Rewrite the generated package's `pulumi-kubernetes` requirement to a floor at `version`.
+def find_pulumi() -> Path:
+    """The `pulumi` CLI on `PATH`, refused by name before anything is fetched.
 
-    The classes register every resource at the version the package was
-    generated against, so the program has to install that version: the root
-    `pyproject.toml` pins it exactly, and a test holds the two to each other.
-    What this leaves in the generated file is a floor rather than the pin,
-    so the one pin lives in one place and the generated package cannot hold
-    the whole project on the release `crd2pulumi` happened to be built with.
-
-    Refused by name when the line is not where the generator writes it: a
-    release that changed its template is a change to what this rewrites, and
-    is answered by reading its output rather than by generating around it.
+    Asked before the render rather than after it, because the render is a
+    couple of minutes of network that a missing CLI would throw away.
     """
-    text = pyproject.read_text()
-    matches = BAKED_DEPENDENCY.findall(text)
-    if len(matches) != 1:
-        raise RuntimeError(
-            f'{pyproject} carries {len(matches)} pulumi-kubernetes requirements where crd2pulumi writes one; '
-            'this release generates a different pyproject.toml than the rewrite expects'
+    found = shutil.which('pulumi')
+    if found is None:
+        raise NoPulumi(
+            'no `pulumi` on PATH to generate the SDK with; run `mise x -- uv run update_crds`, '
+            'which puts the CLI mise.toml pins there'
         )
-    _ = pyproject.write_text(BAKED_DEPENDENCY.sub(f'"pulumi-kubernetes>={version}"', text))
-    log.info(f"Declared the generated package's pulumi-kubernetes floor at {version}")
+    return Path(found)
 
 
-def generate(crd_files: list[Path], output: Path, crd2pulumi: Path) -> None:
-    """Replace `output` with bindings for exactly `crd_files`.
+def generate(project_file: Path, *, pulumi: Path, workdir: Path) -> None:
+    """Regenerate every SDK the `packages:` block of `project_file` declares, `sdks/crds` among them.
 
-    The old tree is moved aside rather than merged into: a group that left the
-    chart set has to disappear, and a generator that only ever adds would keep
-    retired bindings alive forever.
+    `pulumi install` generates each entry into `sdks/<name>`, replacing the
+    tree whole, so a group that left the bundle leaves the SDK with it. The
+    bridged SDKs come out of it byte for byte as they went in, since their
+    entries did not move. Two of its effects are not a regeneration, and the
+    run undoes them:
 
-    The tree has one writer, and the rewrite of the dependency line is part of
-    it: what `crd2pulumi` leaves behind is not the package this repository
-    commits until `declare_sdk_floor` has run on it.
+    -   It links each SDK through `uv add`, which rewrites `[tool.uv.sources]`
+        in `pyproject.toml` (the entries come back in another order). The file
+        gets back the bytes it had, whether or not the command succeeded,
+        because a `jj` working copy would otherwise snapshot the rewrite into
+        the change.
+    -   It re-locks `uv.lock` with whichever `uv` it finds. The lock is made
+        again by the `uv` on `PATH`, which under `mise x` is the pinned one.
+
+    The command reads the block and the manifest and nothing else, so it is
+    handed an empty `file://` backend of its own: the CLI answers a package
+    lookup through the current backend, and with none logged in, in an
+    environment it takes for a coding agent's, it signs up an account on
+    Pulumi Cloud to answer it (`currentOrSignupAgentAccount` in
+    `pkg/backend/httpstate/backend.go`, pulumi v3.267.0). A `file://` backend
+    answers with the unauthenticated registry instead
+    (`GetReadOnlyCloudRegistry` in `pkg/backend/diy/backend.go`), and never
+    reaches the backend a caller's environment names.
     """
-    backup = output.with_suffix('.bak')
-    log.info(f'Moving the existing bindings aside to {backup}')
-    shutil.rmtree(backup, ignore_errors=True)
-    output.replace(backup)
+    project = project_file.resolve().parent
+    pyproject = project / 'pyproject.toml'
+    before = pyproject.read_bytes()
+    backend = workdir / 'backend'
+    backend.mkdir()
+    environment = dict(os.environ, PULUMI_BACKEND_URL=backend.as_uri(), PULUMI_SKIP_UPDATE_CHECK='true')
 
-    # The bindings declare the SDK they were generated against, which is the
-    # one this environment resolves rather than one written down twice.
-    sdk_version = pulumi_kubernetes._utilities.get_version()
-    log.info(f'Generating bindings for {len(crd_files)} CRDs against pulumi-kubernetes {sdk_version}')
+    log.info('Regenerating the SDKs of the packages block with pulumi install (downloads the provider plugins)')
     try:
         _ = sp.check_call(
-            [str(crd2pulumi), '--python', '--pythonPath', str(output), '--version', sdk_version]
-            + [str(file) for file in crd_files]
+            [str(pulumi), '--non-interactive', 'install', '--no-dependencies', '--no-plugins'],
+            cwd=project,
+            env=environment,
         )
-        declare_sdk_floor(output / 'pyproject.toml', sdk_version)
     except BaseException:
-        log.error('Generation failed; restoring the previous bindings')
-        shutil.rmtree(output, ignore_errors=True)
-        backup.replace(output)
+        log.error('pulumi install failed; the bundle is written and the SDK does not match it until a run succeeds')
         raise
-    shutil.rmtree(backup, ignore_errors=True)
+    finally:
+        _ = pyproject.write_bytes(before)
+
+    log.info('Re-locking uv.lock')
+    _ = sp.check_call(['uv', 'lock'], cwd=project)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -167,31 +171,27 @@ def main(argv: list[str] | None = None) -> int:
         help='the project file whose `versions:` block pins the chart set (default: %(default)s)',
     )
     _ = parser.add_argument(
-        '--output',
-        type=Path,
-        default=Path('./packages/crds'),
-        help='the bindings package to replace (default: %(default)s)',
-    )
-    _ = parser.add_argument(
         '--bundle',
         type=Path,
-        help='write the rendered CRD bundle here and stop, without generating bindings',
+        help='write the rendered CRD bundle here and stop, touching neither the committed bundle nor the SDK',
     )
     _ = parser.add_argument(
         '--from-bundle',
         type=Path,
         help=(
-            'generate from an already rendered bundle instead of fetching the pinned sources; '
-            'no record is written, since the pins did not produce the bundle'
+            'select from an already rendered bundle instead of fetching the pinned sources, and regenerate '
+            'from it; no record is written, since the pins did not produce the bundle'
         ),
     )
     args = parser.parse_args(argv)
 
     project_file: Path = args.project
-    output: Path = args.output
     bundle: Path | None = args.bundle
     from_bundle: Path | None = args.from_bundle
 
+    # Only a run that regenerates needs the CLI, and it is asked for before
+    # the render (`find_pulumi`).
+    pulumi = find_pulumi() if bundle is None else None
     with logging_redirect_tqdm(), TemporaryDirectory(prefix='update_crds-') as name:
         workdir = Path(name)
         log.info(f'Working directory: {workdir}')
@@ -215,13 +215,16 @@ def main(argv: list[str] | None = None) -> int:
             _ = bundle.write_text(sources.dump_bundle(crds))
             log.info(f'Wrote the bundle to {bundle}')
             return 0
+        assert pulumi is not None, 'found before the render whenever no --bundle is given'
 
-        crd_files = sources.write_crd_files(crds, workdir)
-        generate(crd_files, output.resolve(), sources.fetch_crd2pulumi(workdir))
-        log.info(f'Regenerated {output}')
+        target = sources.bundle_path(project_file)
+        _ = target.write_text(sources.dump_bundle(crds))
+        log.info(f'Wrote the bundle to {target}')
         if project is not None:
-            written = record.write(project, output)
-            log.info(f'Recorded the pins the bindings were rendered from in {written}')
+            written = record.write(project, target.parent)
+            log.info(f'Recorded the pins the bundle was rendered from in {written}')
+        generate(project_file, pulumi=pulumi, workdir=workdir)
+        log.info('Regenerated the SDK from the bundle')
     return 0
 
 

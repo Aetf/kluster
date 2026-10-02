@@ -3,8 +3,10 @@
 What these check is the part a chart or a controller would otherwise only tell
 us at apply time: that a chart is installed from the pin its caller resolved
 and from no other, that a manifest is refused unless its bytes are the pinned
-ones, that a search through a chart's rendered set refuses to guess, and that a
-SealedSecret carries its scope where the controller looks for it.
+ones, that a search through a chart's rendered set refuses to guess, that a
+SealedSecret carries its scope where the controller looks for it, and that a
+custom resource of the generated CRD SDK reaches the provider as the object the
+API server takes.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ import json
 from typing import cast
 
 import pulumi
+import pulumi_crds as crds
 import pulumi_kubernetes as k8s
 import pytest
 import pytest_asyncio
@@ -74,6 +77,13 @@ async def declarations() -> Recorder:
             scope=SealingScope.STRICT,
         )
         sealed_secret('ported', namespace='apps', encrypted_data={'password': 'AgAx...'})
+        crds.cilium.v2.CiliumLoadBalancerIPPool(
+            'lan',
+            metadata=k8s.meta.v1.ObjectMetaArgs(name='lan'),
+            spec=crds.cilium.v2.CiliumLoadBalancerIPPoolSpecArgs(
+                blocks=[crds.cilium.v2.CiliumLoadBalancerIPPoolSpecBlocksArgs(cidr='192.0.2.0/24')]
+            ),
+        )
     return monitor
 
 
@@ -99,7 +109,10 @@ async def rendered_search(declarations: Recorder) -> tuple[str, str]:
 
 
 CHART = 'kubernetes:helm.sh/v4:Chart'
-SEALED_SECRET = 'kubernetes:bitnami.com/v1alpha1:SealedSecret'
+#: A class of the CRD SDK carries the extension's package in its token, not the
+#: provider's (framework/pulumi.md §4).
+SEALED_SECRET = 'crds:bitnami.com/v1alpha1:SealedSecret'
+LB_IP_POOL = 'crds:cilium.io/v2:CiliumLoadBalancerIPPool'
 
 
 def test_a_chart_installs_the_pin_its_caller_resolved(declarations: Recorder) -> None:
@@ -258,6 +271,22 @@ def test_a_sealed_secret_defaults_to_the_scope_the_legacy_manifests_carry(declar
     (cluster/migration.md §0.5), so the default cannot quietly move."""
     secret = declarations.inputs_of('ported', SEALED_SECRET)
     assert secret['metadata']['annotations'] == {'sealedsecrets.bitnami.com/namespace-wide': 'true'}
+
+
+def test_a_custom_resource_reaches_the_provider_as_the_object_the_api_server_takes(declarations: Recorder) -> None:
+    """A pool the stacks will declare, from the CRD SDK: its kind's token, and `apiVersion` and `kind` set.
+
+    The provider sends the inputs as the object, so a class that registered
+    without the two would be an object the API server refuses. The kind is one
+    of the Cilium definitions, which the bundle reads from the source tree at
+    the Cilium chart's version rather than from a chart.
+    """
+    pool = declarations.inputs_of('lan', LB_IP_POOL)
+
+    assert pool['apiVersion'] == 'cilium.io/v2'
+    assert pool['kind'] == 'CiliumLoadBalancerIPPool'
+    assert pool['metadata'] == {'name': 'lan'}
+    assert pool['spec'] == {'blocks': [{'cidr': '192.0.2.0/24'}]}
 
 
 def test_load_balancer_pools_are_a_service_label() -> None:

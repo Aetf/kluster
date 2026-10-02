@@ -16,14 +16,15 @@ dependencies = [
     # explicit provider it is handed (pulumi/pulumi#24702, in 3.266.0);
     # `tests/test_extension_provider.py` holds it against the engine.
     "pulumi>=3.266.0",
-    # Exact, unlike every other floor here: `packages/crds` is generated against
+    # Exact, unlike every other floor here: `sdks/crds` is generated against
     # one provider version and registers each of its resources at that version,
     # so the program has to install the same one -- two versions would be two
     # kubernetes plugins and two default providers. A floor would let
     # `lockFileMaintenance` move the resolved version in `uv.lock` alone, which
-    # no regeneration follows. A test holds the generated package to this pin;
-    # a bump is finished by `uv run update_crds`, and renovate proposes it apart
-    # from the python group (framework/pulumi.md §4).
+    # no regeneration follows. A test holds the `packages:` entry in
+    # `Pulumi.yaml` and the generated SDK to this pin; renovate moves the pin
+    # and the entry together, apart from the python group, and a workflow
+    # regenerates on its branch (framework/pulumi.md §4).
     "pulumi-kubernetes==4.34.2",
     "requests>=2.32.3",
     "jinja2>=3.1.4",
@@ -91,31 +92,36 @@ name = "pypi"
 url = "https://pypi.org/simple"
 default = true
 
-# Generated SDKs, committed like `packages/crds` rather than fetched: three of
-# them have no published Python package at all. Each is a **local package** of
-# Pulumi's any-Terraform-provider bridge, declared in `Pulumi.yaml`'s
-# `packages:` block -- which bridge release, which upstream provider, which
-# version -- and `pulumi install` is what regenerates `sdks/<name>` from that
-# declaration. Nothing under `sdks/` is edited by hand; a test holds each
-# committed SDK's `pulumi-plugin.json` to the block, so a declaration and its
-# artifact cannot drift apart unnoticed. Renovate proposes the bumps and a
+# Generated SDKs, committed rather than fetched: none of them is a published
+# Python package. Each is a **local package** declared in `Pulumi.yaml`'s
+# `packages:` block -- three of Pulumi's any-Terraform-provider bridge (which
+# bridge release, which upstream provider, which version), and the kubernetes
+# provider's CRD extension (which provider version, which CRD manifest) -- and
+# `pulumi install` is what regenerates `sdks/<name>` from that declaration.
+# Nothing under `sdks/` is edited by hand; a test holds each committed SDK's
+# `pulumi-plugin.json` to the block, so a declaration and its artifact cannot
+# drift apart unnoticed. Renovate proposes the bumps and a
 # workflow regenerates on its branch (framework/ci.md §3).
 #
 # They are workspace members rather than the `path` sources `pulumi install`
 # would write for a fresh project, so that they install editable: uv keys a
 # path dependency's rebuild on its `pyproject.toml` alone, and a regenerated
-# SDK whose version did not move -- a bridge bump -- would otherwise keep
-# serving the stale wheel out of the cache.
+# SDK whose version did not move would otherwise keep serving the stale wheel
+# out of the cache. A bridge bump is such a regeneration, and so is every
+# regeneration of `sdks/crds`, whose version is the extension's constant
+# `1.0.0` whatever the provider or the manifest.
 [tool.uv.sources]
 pulumi-crds = { workspace = true }
 pulumi-b2 = { workspace = true }
 pulumi-unifi = { workspace = true }
 pulumi-zerotier = { workspace = true }
 
-# `packages/` is what this repository authors; `sdks/` is what `pulumi
-# install` generates from `Pulumi.yaml`.
+# `sdks/` is what `pulumi install` generates from `Pulumi.yaml`. `packages/` is
+# what this repository authors -- the CRD manifest one of those SDKs is
+# generated from -- and holds no Python package, which uv refuses a member
+# glob to match.
 [tool.uv.workspace]
-members = ["packages/*", "sdks/*"]
+members = ["sdks/*"]
 
 [build-system]
 requires = ["hatchling"]
@@ -145,10 +151,8 @@ timeout_method = "signal"
 ##
 [tool.ruff]
 line-length = 120
-# In addition to the standard set of exclusions: the two directories of
-# generated bindings -- `packages/` (the CRD types) and `sdks/` (the bridged
-# provider SDKs).
-extend-exclude = ["packages", "sdks"]
+# In addition to the standard set of exclusions: the generated SDKs.
+extend-exclude = ["sdks"]
 
 [tool.ruff.format]
 quote-style = "single"
@@ -194,12 +198,11 @@ include = ["src", "tests", "deploy", "__main__.py"]
 # Listing `src` is not redundant: naming any extra path makes this the whole
 # search path, so leaving it out resolves `kluster` as an unstubbed
 # third-party library.
-extraPaths = ["src", "packages/crds", "sdks/b2", "sdks/unifi", "sdks/zerotier"]
-# Generated bindings — CRD schemas and bridged provider SDKs — are not ours to
-# annotate. They are still on the search path above, so code that imports them
-# is checked against them; only their own sources are skipped.
+extraPaths = ["src", "sdks/crds", "sdks/b2", "sdks/unifi", "sdks/zerotier"]
+# Generated SDKs are not ours to annotate. They are still on the search path
+# above, so code that imports them is checked against them; only their own
+# sources are skipped.
 exclude = [
-    "packages",
     "sdks",
     "**/__pycache__",
     ".venv",

@@ -34,7 +34,7 @@ import tomllib
 from collections.abc import Iterable, Iterator
 from ipaddress import IPv6Network
 from pathlib import Path
-from typing import NamedTuple, cast
+from typing import Any, NamedTuple, cast
 
 import pytest
 import yaml
@@ -1712,23 +1712,30 @@ def test_the_alert_label_is_declared_and_on_no_public_repository() -> None:
 # The local packages.
 # --------------------------------------------------------------------------
 # `Pulumi.yaml`'s `packages:` block is the recipe for every SDK under `sdks/`:
-# which release of Pulumi's any-Terraform-provider bridge, parameterized with
-# which upstream provider at which version. No program reads the block -- it is
-# `pulumi install`'s input -- and the SDK that command generates records the
-# same three values in its own `pulumi-plugin.json`, which is what the engine
-# resolves the plugin from at run time. Two artifacts of independent origin,
-# so they can disagree: a version edited into the block is not a bump until the
-# SDK is regenerated from it, and the cases below are what say so. They are the
+# for a bridged SDK, which release of Pulumi's any-Terraform-provider bridge,
+# parameterized with which upstream provider at which version; for the CRD
+# SDK, which kubernetes provider release, extended with which CRD manifest. No
+# program reads the block -- it is `pulumi install`'s input -- and the SDK
+# that command generates records what it was generated from in its own
+# `pulumi-plugin.json`, which is what the engine resolves the plugin from at
+# run time. Two artifacts of independent origin, so they can disagree: a
+# version edited into the block is not a bump until the SDK is regenerated
+# from it, and the cases below are what say so. They are the
 # `uv sync --locked` of these packages.
 
 PULUMI_YAML = ROOT / 'Pulumi.yaml'
 PACKAGES = ROOT / 'packages'
 SDKS = ROOT / 'sdks'
 
-#: The generator every entry of the block names, and the `name` every SDK's
-#: `pulumi-plugin.json` carries: the bridge is the plugin, and the upstream
-#: provider is its parameter.
+#: The generator every bridged entry of the block names, and the `name` every
+#: bridged SDK's `pulumi-plugin.json` carries: the bridge is the plugin, and
+#: the upstream provider is its parameter.
 BRIDGE = 'terraform-provider'
+
+#: The CRD SDK's entry, and the provider it extends: the provider is the
+#: plugin, and the CRD manifest is the extension's parameter.
+CRDS = 'crds'
+KUBERNETES = 'kubernetes'
 
 
 class Declared(NamedTuple):
@@ -1739,12 +1746,16 @@ class Declared(NamedTuple):
     version: str
 
 
+def _block() -> dict[str, dict[str, Any]]:
+    """Every entry of the block as written, keyed by the SDK it declares."""
+    return yaml.safe_load(PULUMI_YAML.read_text())['packages']
+
+
 def _declared_packages() -> dict[str, Declared]:
-    """The block as written, keyed by the SDK it declares."""
-    block = yaml.safe_load(PULUMI_YAML.read_text())['packages']
+    """The bridged entries of the block, keyed by the SDK each declares."""
     return {
         name: Declared(str(entry['version']), str(entry['parameters'][0]), str(entry['parameters'][1]))
-        for name, entry in block.items()
+        for name, entry in _block().items()
         if entry['source'] == BRIDGE
     }
 
@@ -1781,13 +1792,15 @@ def test_every_sdk_is_declared_and_every_declaration_has_its_sdk() -> None:
 
     An SDK the block does not declare is one `pulumi install` cannot regenerate
     and no bump can reach; a declaration with no SDK is an import that fails at
-    the first `pulumi` run. The bridge is the only generator the block names
-    today, which the filter in `_declared_packages` states rather than assumes.
+    the first `pulumi` run. Every entry counts, whichever generator it names:
+    two do today, the bridge and the kubernetes provider, and each SDK they
+    generate is held to its entry below.
     """
-    declared = set(_declared_packages())
+    declared = set(_block())
     committed = {path.name for path in SDKS.iterdir() if path.is_dir()}
 
-    assert declared, 'the block declares no bridged package'
+    assert set(_declared_packages()), 'the block declares no bridged package'
+    assert CRDS in declared, 'the block declares no CRD SDK'
     assert declared == committed, (
         f'declared but not committed: {sorted(declared - committed)}; committed but not declared: {sorted(committed - declared)}'
     )
@@ -1814,6 +1827,106 @@ def test_a_committed_sdk_was_generated_from_what_the_block_declares(name: str) -
     assert parameterization['name'] == name, stale
     assert parameterization['version'] == declared.version, stale
     assert recorded == _bridge_parameterization(declared.provider, declared.version), stale
+
+
+def _pinned_provider(requirements: list[str], *, name: str, operator: str) -> str:
+    """The version the one `<name><operator>` requirement in `requirements` names."""
+    (version,) = [
+        found.group(1)
+        for requirement in requirements
+        if (found := re.fullmatch(rf'{re.escape(name)}{re.escape(operator)}([\d.]+)', requirement))
+    ]
+    return version
+
+
+def test_the_crd_sdk_is_held_to_the_pinned_kubernetes_provider() -> None:
+    """`pyproject.toml`'s exact pin, the `crds` entry and the generated SDK name one provider release.
+
+    The SDK registers every resource at the provider release it was generated
+    against, so the release the program installs and the one the SDK carries
+    are one fact written in four places (framework/pulumi.md §4): the pin, the
+    entry's `version`, the SDK's `pulumi-plugin.json` and the floor the SDK's
+    own `pyproject.toml` declares. The pin and the entry are edited -- by
+    renovate, together, or by hand -- and the SDK is generated, so they agree
+    only when `pulumi install` has run since the edit.
+    """
+    pinned = _pinned_provider(
+        tomllib.loads((ROOT / 'pyproject.toml').read_text())['project']['dependencies'],
+        name='pulumi-kubernetes',
+        operator='==',
+    )
+    entry = _block()[CRDS]
+    plugin = _generated_plugin(SDKS / CRDS)
+    assert plugin is not None, f'sdks/{CRDS} carries no pulumi-plugin.json'
+    parameterization = cast('dict[str, str]', plugin['extensionParameterization'])
+    generated = tomllib.loads((SDKS / CRDS / 'pyproject.toml').read_text())['project']
+
+    assert entry['source'] == KUBERNETES
+    assert str(entry['version']) == pinned, (
+        f'the {CRDS} entry of Pulumi.yaml names kubernetes {entry["version"]} and pyproject.toml pins {pinned}'
+    )
+    stale = f'sdks/{CRDS} was generated against another provider than Pulumi.yaml declares; run `pulumi install`'
+    assert plugin['name'] == KUBERNETES, stale
+    assert plugin['version'] == pinned, stale
+    assert parameterization['name'] == CRDS, stale
+    assert _pinned_provider(generated['dependencies'], name='pulumi_kubernetes', operator='>=') == pinned, stale
+
+
+#: A path of the API document the extension embeds in its SDK: one collection
+#: of a served version of a definition, or a single object or subresource of
+#: it, as `/apis/<group>/<version>/[namespaces/{namespace}/]<plural>[/...]`.
+API_PATH = re.compile(
+    r'/apis/(?P<group>[^/]+)/(?P<version>[^/]+)/(?:namespaces/\{namespace\}/)?(?P<plural>[^/{]+)(?:/.*)?'
+)
+
+
+def _bundle_resources(text: str) -> set[tuple[str, str, str]]:
+    """Each served `(group, version, plural)` the CRD bundle defines."""
+    return {
+        (document['spec']['group'], version['name'], document['spec']['names']['plural'])
+        for document in yaml.safe_load_all(text)
+        for version in document['spec']['versions']
+        if version['served']
+    }
+
+
+def _sdk_resources(plugin: dict[str, object]) -> set[tuple[str, str, str]]:
+    """Each `(group, version, plural)` the API document embedded in the CRD SDK has a path for.
+
+    Every path has to parse: one that does not is a shape this reading does
+    not know, and skipping it would let a resource go uncounted.
+    """
+    parameterization = cast('dict[str, str]', plugin['extensionParameterization'])
+    document = json.loads(base64.b64decode(parameterization['value']))
+    resources: set[tuple[str, str, str]] = set()
+    for path in cast('dict[str, object]', document['paths']):
+        found = API_PATH.fullmatch(path)
+        assert found is not None, f'sdks/{CRDS} embeds an API path of a shape nothing here reads: {path}'
+        resources.add((found['group'], found['version'], found['plural']))
+    return resources
+
+
+def test_the_crd_sdk_was_generated_from_the_committed_bundle() -> None:
+    """The resources the SDK carries are the ones the bundle its entry names defines, both ways.
+
+    The SDK embeds the API document the provider built from the bundle, not
+    the bundle's bytes, and every schema in that document is normalized into
+    shared definitions, so a field edited inside one has no offline seam. What
+    the document does keep is one path per served version of each definition,
+    and that set read off the SDK has to be the set read off the bundle: a
+    definition or a served version added to or removed from the bundle without
+    a regeneration fails here, by name. That the bundle is the script's own
+    output is `test_update_crds`'.
+    """
+    bundle = _bundle_resources((ROOT / 'packages' / CRDS / 'crds.yaml').read_text())
+    plugin = _generated_plugin(SDKS / CRDS)
+    assert plugin is not None, f'sdks/{CRDS} carries no pulumi-plugin.json'
+    generated = _sdk_resources(plugin)
+
+    assert bundle, 'the bundle defines nothing'
+    stale = f'; sdks/{CRDS} was generated from another bundle than packages/{CRDS}/crds.yaml, run `pulumi install`'
+    assert sorted(bundle - generated) == [], f'in the bundle and not the SDK{stale}'
+    assert sorted(generated - bundle) == [], f'in the SDK and not the bundle{stale}'
 
 
 #: What `renovate.json5` reads the block with, spelled exactly as that file
@@ -1851,6 +1964,39 @@ def test_renovate_reads_every_entry_of_the_packages_block() -> None:
 
     assert bridges == [entry.bridge for entry in declared.values()]
     assert providers == {(entry.provider, entry.version) for entry in declared.values()}
+
+
+#: What `renovate.json5` reads the `crds` entry's provider release with,
+#: spelled as Python spells the pattern.
+PROVIDER_RELEASE_MATCH_STRING = r'source: kubernetes\s+version: (?<currentValue>\d[\d.]*)'
+
+
+def test_renovate_reads_the_crd_entrys_provider_as_the_pinned_dependency() -> None:
+    """The manager on the `crds` entry reads the release `pyproject.toml` pins, as that same dependency.
+
+    The same name through the same data source is what lets renovate see one
+    dependency in two files, propose one release for both, and the `kubernetes
+    provider` rule put both edits on one branch; a pattern that stopped
+    matching the entry would leave the pin to move alone, which the held-equal
+    case above then turns red on every provider bump.
+    """
+    config = (ROOT / 'renovate.json5').read_text()
+    (entry,) = [
+        entry
+        for entry in config[config.index('customManagers: [') : config.index('customDatasources: {')].split(
+            'customType:'
+        )[1:]
+        if as_renovate_spells_it(PROVIDER_RELEASE_MATCH_STRING) in entry
+    ]
+    found = [
+        match.group('currentValue')
+        for match in as_python_spells_it(PROVIDER_RELEASE_MATCH_STRING).finditer(PULUMI_YAML.read_text())
+    ]
+
+    assert found == [str(_block()[CRDS]['version'])]
+    assert "depNameTemplate: 'pulumi-kubernetes'" in entry
+    assert "datasourceTemplate: 'pypi'" in entry
+    assert "'/^Pulumi\\\\.yaml$/'" in entry
 
 
 #: The workflow that merges a bump of the block without a human, and the one
@@ -1891,7 +2037,7 @@ def test_the_unattended_route_for_a_bump_removes_the_block_and_tests_renovate() 
     (removed,) = BLOCK_REMOVED_BEFORE_COMPARING.findall(deciding[0]['run'])
     declared = cast('dict[str, object]', yaml.safe_load(PULUMI_YAML.read_text())[removed])
 
-    assert set(declared) == set(_declared_packages()), (
+    assert set(declared) == set(_block()), (
         f'the admission compares the two revisions with `{removed}` removed, which is not the block sdks/ is generated from'
     )
     # A verdict that consults nothing the step decided is the same dead route
@@ -1956,21 +2102,19 @@ def test_the_candidacy_test_reads_every_changed_path_or_refuses() -> None:
     )
 
 
-def test_nothing_under_packages_is_a_bridged_sdk() -> None:
-    """`packages/` is what this repository authors; a bridged SDK belongs under `sdks/`.
+def test_nothing_under_packages_is_a_generated_sdk() -> None:
+    """`packages/` is what this repository authors; a generated SDK belongs under `sdks/`.
 
-    Held by what a bridged SDK is -- one whose plugin is the bridge -- rather
-    than by listing the directories, so a fourth provider added on the wrong
-    side of the line fails by name. A member with no plugin file at all is a
-    package someone wrote, which is what the directory is for.
+    Held by what a generated SDK is -- one carrying the `pulumi-plugin.json`
+    its generator writes -- rather than by listing the directories, so an SDK
+    added on the wrong side of the line fails by name, whichever generator
+    wrote it. A directory with no plugin file is something this repository
+    authors, which is what `packages/` is for: today the CRD manifest one of
+    the SDKs is generated from.
     """
-    bridged = [
-        path.name
-        for path in PACKAGES.iterdir()
-        if path.is_dir() and (plugin := _generated_plugin(path)) is not None and plugin['name'] == BRIDGE
-    ]
+    generated = [path.name for path in PACKAGES.iterdir() if path.is_dir() and _generated_plugin(path) is not None]
 
-    assert bridged == [], f'generated by the bridge and committed under packages/ rather than sdks/: {bridged}'
+    assert generated == [], f'generated and committed under packages/ rather than sdks/: {generated}'
 
 
 # --------------------------------------------------------------------------

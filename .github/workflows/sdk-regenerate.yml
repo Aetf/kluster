@@ -32,11 +32,16 @@ name: sdk-regenerate
 # (A `push` made with `GITHUB_TOKEN` still starts nothing, which is the
 # property the unattended merge relies on to start no deploy.)
 #
-# **Nothing is asked of anyone.** A bump that leaves `Pulumi.yaml` changed
-# only in `packages:` is a noop-automerge candidate on renovate's own pull
-# request, so it merges unattended once the regenerated head's runs have
-# gone green; `noop-automerge.yml` is where that is decided and ci.md §3 is
-# where the rule is stated. The comment this workflow leaves says as much.
+# **Nothing is asked of anyone that the bump did not already ask.** A bump
+# that leaves `Pulumi.yaml` changed only in `packages:` is a noop-automerge
+# candidate on renovate's own pull request when every other path it changes
+# is on that workflow's allow-list too -- a bridge or bridged-provider bump's
+# are -- so it merges unattended once the regenerated head's runs have gone
+# green. A kubernetes provider bump also moves `pyproject.toml`'s exact pin,
+# which is off the list, so it waits for a reader like any `pyproject.toml`
+# change; the regeneration is what makes it ready to read.
+# `noop-automerge.yml` is where that is decided and ci.md §3 is where the rule
+# is stated. The comment this workflow leaves says as much.
 #
 # **Recognized by outcome, not by parsing.** The block is regenerated whenever
 # a renovate branch touches `Pulumi.yaml` at all, and a regeneration that
@@ -77,8 +82,9 @@ jobs:
       github.event.pull_request.user.login == 'renovate[bot]'
       && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
-    # Two plugin downloads and a re-lock on top of the gate; the tests carry
-    # the gate's own outer `timeout`, and this bound is for everything else.
+    # The generators' plugin downloads and a re-lock on top of the gate; the
+    # tests carry the gate's own outer `timeout`, and this bound is for
+    # everything else.
     timeout-minutes: 30
     steps:
       # The dispatch App's installation token, for this repository alone: the
@@ -111,9 +117,11 @@ jobs:
           version: 2026.9.14
           experimental: true
 
-      # The generator reads the block and nothing else: no stack, no backend,
-      # no passphrase. `--no-plugins` leaves the program's own providers out
-      # (the bridge it needs is fetched regardless), and `--no-dependencies`
+      # The generator reads the block, and the CRD manifest the `crds` entry
+      # names, and nothing else: no stack, no backend, no passphrase.
+      # `--no-plugins` leaves the program's own providers out (the plugin each
+      # entry generates with -- the bridge, the kubernetes provider -- is
+      # fetched regardless), and `--no-dependencies`
       # leaves the venv to the gate below, which installs it `--locked`. It is
       # not a pure generator even so: it links each SDK through `uv add`,
       # which rewrites the `[tool.uv.sources]` table (the entries come back in
@@ -197,6 +205,6 @@ jobs:
           cat > "$RUNNER_TEMP/comment.md" <<EOF
           Regenerated \`sdks/\` from the \`packages:\` block and pushed $(cat "$RUNNER_TEMP/pushed"); the gate passed on that tree in [this run]($RUN_URL).
 
-          The push was made with the dispatch App's token, so that head's runs start on their own. Nothing here needs a person: a \`Pulumi.yaml\` changed only in \`packages:\` on a renovate pull request is a noop-automerge candidate, so once the required checks and the zero-diff proof are green it merges on its own (framework/ci.md §3). If either goes red the merge is yours, on a run that says why.
+          The push was made with the dispatch App's token, so that head's runs start on their own. A \`Pulumi.yaml\` changed only in \`packages:\` on a renovate pull request is a noop-automerge candidate when every other path it changes is on that workflow's allow-list, so such a bump merges on its own once the required checks and the zero-diff proof are green (framework/ci.md §3); one that also moves a path off the list, as a kubernetes provider bump moves \`pyproject.toml\`, waits for a reader. If a check goes red the merge is yours, on a run that says why.
           EOF
           gh pr comment "$PR" --body-file "$RUNNER_TEMP/comment.md"

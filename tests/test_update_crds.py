@@ -1,24 +1,24 @@
-"""The pins and the selection rule behind `packages/crds`.
+"""The pins, the selection rule and the regeneration behind `packages/crds` and `sdks/crds`.
 
 Nothing here reaches the network: what is worth holding still is which CRDs
-survive the filter, that the pins the script reads are the block's and the
-bindings were generated from them, that a chart below its floor is refused,
-that renovate's managers read the block, and that a tool download nothing
-vouches for is refused. The cases that download at all are handed their bytes
-by a stand-in.
+survive the filter, that the committed bundle is the script's own output, that
+the pins the script reads are the block's and the bundle was rendered from
+them, that a chart below its floor is refused, that renovate's managers read
+the block, that a tool download nothing vouches for is refused, and what the
+script leaves behind when it regenerates the SDK. The cases that download or
+run a tool at all are handed a stand-in. That the SDK was generated from the
+bundle is `test_conventions`', beside the other generated SDKs.
 """
 
 from __future__ import annotations
 
 import fnmatch
-import hashlib
-import importlib.metadata
 import json
+import os
 import re
 import subprocess
 import sys
 import tarfile
-import tomllib
 from collections.abc import Mapping
 from io import BytesIO
 from pathlib import Path
@@ -98,7 +98,7 @@ def test_select_crds_strips_the_cluster_written_status() -> None:
 
 
 def test_select_crds_deduplicates_by_name() -> None:
-    """Two sources may legitimately ship the same definition; `crd2pulumi` may not see it twice."""
+    """Two sources may legitimately ship the same definition; the bundle carries it once."""
     selected = sources.select_crds([CRD, CRD])
 
     assert len(selected) == 1
@@ -201,7 +201,7 @@ def test_no_stack_file_overrides_a_pin_the_script_reads() -> None:
     """A stack's own file can override a project value, and the script reads only `Pulumi.yaml`.
 
     A chart or manifest pin overridden in `Pulumi.<stack>.yaml` would install
-    one release while the bindings describe another, with every check green.
+    one release while the bundle describes another, with every check green.
     """
     stack_files = sorted(ROOT.glob('Pulumi.*.yaml'))
     # Not vacuous: the stacks have files of their own.
@@ -215,17 +215,17 @@ def test_no_stack_file_overrides_a_pin_the_script_reads() -> None:
     assert overriding == []
 
 
-def test_the_record_is_the_pins_the_bindings_were_generated_from() -> None:
+def test_the_record_is_the_pins_the_bundle_was_rendered_from() -> None:
     """`packages/crds` records the pins `update_crds` read, and they are the block's.
 
     Renovate moves a pin and cannot run `update_crds`, so a bump arrives with
-    the bindings describing the release before it. This is what makes such a
-    bump red until someone regenerates on its branch.
+    the bundle and the SDK describing the release before it. This is what
+    makes such a bump red until someone regenerates on its branch.
     """
-    written = json.loads((ROOT / 'packages/crds' / record.FILE_NAME).read_text())
+    written = json.loads((sources.bundle_path(ROOT / 'Pulumi.yaml').parent / record.FILE_NAME).read_text())
 
     assert written == record.record(ProjectFile(project_config())), (
-        'packages/crds was generated from other pins than Pulumi.yaml holds; run `uv run update_crds`'
+        'packages/crds was rendered from other pins than Pulumi.yaml holds; run `mise x -- uv run update_crds`'
     )
 
 
@@ -283,7 +283,7 @@ def test_a_chart_the_script_reads_only_for_its_source_tree_is_recorded() -> None
 
     Cilium's carries a floor today, which would hide a record that forgot the
     tree: once the floor were dropped, a Cilium bump would leave the record
-    as it was, and the bindings would keep describing the previous release.
+    as it was, and the bundle would keep describing the previous release.
     """
     (tree,) = pins.SOURCE_TREES
     tree_only = {
@@ -296,7 +296,7 @@ def test_a_chart_the_script_reads_only_for_its_source_tree_is_recorded() -> None
 
 
 def test_the_cilium_source_tree_is_read_at_the_cilium_chart_version() -> None:
-    """The chart installs no definitions, so the bindings would silently describe the wrong release.
+    """The chart installs no definitions, so the bundle would silently describe the wrong release.
 
     The tree's ref is derived from the chart pin rather than written beside it,
     so a chart bump moves the tree with it.
@@ -421,12 +421,11 @@ def test_a_pinned_chart_is_fetched_from_where_its_pin_says() -> None:
     ]
 
 
-def test_update_crds_starts_when_the_bindings_do_not_import() -> None:
-    """The script regenerates `packages/crds`, so it is what repairs a package that no longer imports.
+def test_update_crds_starts_when_the_sdk_does_not_import() -> None:
+    """The script regenerates `sdks/crds`, so it is what repairs an SDK that no longer imports.
 
-    It therefore imports nothing of the bindings, directly or through
-    `kluster.lib`: run with `pulumi_crds` made unimportable, `--help` still
-    answers.
+    It therefore imports nothing of the SDK, directly or through `kluster.lib`:
+    run with `pulumi_crds` made unimportable, `--help` still answers.
     """
     broken = (
         'import sys; sys.modules["pulumi_crds"] = None; '
@@ -584,13 +583,6 @@ def test_the_in_cluster_rule_groups_what_the_block_managers_read() -> None:
 # -- the pinned tool downloads ------------------------------------------------
 
 
-#: What `renovate.json5` matches the pin with, spelled exactly as that file
-#: holds it. Both constants are captured by one pattern because a bump has to
-#: move them together.
-CRD2PULUMI_MATCH_STRING = (
-    "CRD2PULUMI_VERSION = '(?<currentValue>v[\\d.]+)'[\\s\\S]*?CRD2PULUMI_SHA256 = '(?<currentDigest>[0-9a-f]{64})'"
-)
-
 #: Contents for the one file the fetch cares about. Nothing runs it.
 TOOL = b'#!/bin/sh\nexit 0\n'
 
@@ -635,7 +627,7 @@ def serve(monkeypatch: pytest.MonkeyPatch, payload: bytes) -> list[str]:
     return requested
 
 
-def test_fetch_crd2pulumi_refuses_an_archive_that_is_not_the_pinned_one(
+def test_fetch_helm_refuses_an_archive_that_is_not_the_pinned_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A well-formed tarball that is not the pinned release is refused by digest.
@@ -644,64 +636,12 @@ def test_fetch_crd2pulumi_refuses_an_archive_that_is_not_the_pinned_one(
     about: an archive already extracted has had its say whatever the digest
     turns out to be.
     """
-    _ = serve(monkeypatch, archive('crd2pulumi'))
-
-    with pytest.raises(ValueError, match=pins.CRD2PULUMI_SHA256):
-        _ = sources.fetch_crd2pulumi(tmp_path)
-
-    assert list(tmp_path.iterdir()) == []
-
-
-def test_fetch_helm_refuses_an_archive_that_is_not_the_pinned_one(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Both tools answer to the same check, so both are held to it here."""
     _ = serve(monkeypatch, archive('helm'))
 
     with pytest.raises(ValueError, match=pins.HELM_SHA256):
         _ = sources.fetch_helm(tmp_path)
 
     assert list(tmp_path.iterdir()) == []
-
-
-def test_fetch_crd2pulumi_unpacks_the_archive_whose_digest_matches_the_pin(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    payload = archive('crd2pulumi')
-    monkeypatch.setattr(pins, 'CRD2PULUMI_SHA256', hashlib.sha256(payload).hexdigest())
-    requested = serve(monkeypatch, payload)
-
-    binary = sources.fetch_crd2pulumi(tmp_path)
-
-    assert requested == [pins.CRD2PULUMI_URL]
-    assert binary == (tmp_path / 'crd2pulumi').resolve()
-
-
-def test_the_pinned_asset_is_named_after_the_pinned_version() -> None:
-    """What renovate substitutes into to find the next release's asset and checksum."""
-    assert pins.CRD2PULUMI_URL.endswith(f'crd2pulumi-{pins.CRD2PULUMI_VERSION}-linux-amd64.tar.gz')
-
-
-def test_renovate_moves_the_crd2pulumi_version_and_digest_together() -> None:
-    """The manager's pattern is the one this module answers to.
-
-    A stale digest cannot be caught by the next `update_crds` run alone — that
-    run is what the pin exists to stop — so the link between the file and the
-    manager is held here: a rename, or a line inserted between the two
-    constants, fails here rather than in a pull request nobody can merge.
-    """
-    config = (ROOT / 'renovate.json5').read_text()
-    module = Path(pins.__file__).read_text()
-
-    # `json.dumps` is the escaping renovate.json5 holds the pattern in.
-    assert json.dumps(CRD2PULUMI_MATCH_STRING) in config
-
-    # Python spells a named group `(?P<...>`, renovate's regex engine `(?<...>`.
-    found = re.search(CRD2PULUMI_MATCH_STRING.replace('(?<', '(?P<'), module)
-
-    assert found is not None
-    assert found.group('currentValue') == pins.CRD2PULUMI_VERSION
-    assert found.group('currentDigest') == pins.CRD2PULUMI_SHA256
 
 
 def _reaches_cilium(rule: str) -> bool:
@@ -758,11 +698,10 @@ def test_the_cilium_chart_travels_alone() -> None:
 def test_no_pin_carries_an_annotation_comment() -> None:
     """The script's own pins announce no automation they do not have.
 
-    The one manager that reads this module matches the `crd2pulumi` constants
-    by name and needs no comment to find them; the Helm binary moves by hand.
-    An annotation above it would therefore be inert — and inert ones are worse
-    than none, because they read as a working mechanism and stop anyone from
-    building the real one.
+    No manager reads this module: the Helm binary moves by hand. An annotation
+    above it would therefore be inert — and inert ones are worse than none,
+    because they read as a working mechanism and stop anyone from building
+    the real one.
 
     Anywhere on the line, not only at its start: an annotation trailing a
     version is just as inert and reads just as much like automation.
@@ -770,7 +709,7 @@ def test_no_pin_carries_an_annotation_comment() -> None:
     module = Path(pins.__file__).read_text()
 
     # An emptied or renamed module would satisfy a purely negative assertion.
-    assert f"CRD2PULUMI_VERSION = '{pins.CRD2PULUMI_VERSION}'" in module
+    assert f"HELM_VERSION = '{pins.HELM_VERSION}'" in module
 
     assert re.findall(r'# renovate:.*', module) == []
 
@@ -803,104 +742,247 @@ def test_the_kubernetes_provider_rule_outranks_the_python_group() -> None:
     come after the rule matching that manager; reordered, the provider bump
     rides in the python group again, where a bump waiting on a regeneration
     holds every other library bump red, and nothing goes red here for it.
+    Each rule is found by what it matches, so the dependency's name written
+    elsewhere -- the manager on the `packages:` block names it too -- is no
+    second candidate.
     """
-    config = (ROOT / 'renovate.json5').read_text()
+    rules = package_rules((ROOT / 'renovate.json5').read_text())
 
-    assert config.count("'pep621'") == 1
-    assert config.count("'pulumi-kubernetes'") == 1
+    (python,) = [index for index, rule in enumerate(rules) if 'pep621' in listed(rule, 'matchManagers')]
+    (provider,) = [index for index, rule in enumerate(rules) if 'pulumi-kubernetes' in listed(rule, 'matchDepNames')]
 
-    assert config.index("'pulumi-kubernetes'") > config.index("'pep621'")
-
-
-# -- the generated package and the provider it was generated against ----------
+    assert provider > python
+    assert scalar(rules[provider], 'groupSlug') == 'kubernetes-provider'
 
 
-#: The `dependencies` line as `crd2pulumi` v1.6.2 writes it, with the version
-#: its release was built against baked in.
-BAKED_PYPROJECT = """[project]
-  name = "pulumi_crds"
-  dependencies = ["parver>=0.2.1", "pulumi>=3.231.0,<4.0.0", "pulumi-kubernetes==4.23.0", "requests>=2.21,<3.0"]
-  version = "4.34.1"
+# -- the bundle -------------------------------------------------------------------
+
+
+#: The repository's own bundle, at the path its `packages:` entry names.
+BUNDLE = sources.bundle_path(ROOT / 'Pulumi.yaml')
+
+
+def test_the_bundle_is_where_the_packages_entry_names_it() -> None:
+    """The script writes the manifest `pulumi install` reads, so it reads the path from the same entry."""
+    assert BUNDLE == ROOT / 'packages/crds/crds.yaml'
+    assert BUNDLE.is_file()
+
+
+@pytest.mark.parametrize(
+    ('packages', 'refusal'),
+    [
+        ({}, 'has no `packages:` entry `crds`'),
+        ({'crds': {'source': 'kubernetes', 'version': '1.0.0'}}, 'has no `packages:` entry `crds`'),
+        ({'crds': {'source': 'kubernetes', 'extensions': ['name=crds']}}, 'names 0 `crd-manifest=` paths'),
+        (
+            {'crds': {'source': 'kubernetes', 'extensions': ['crd-manifest=a.yaml', 'crd-manifest=b.yaml']}},
+            'names 2 `crd-manifest=` paths',
+        ),
+    ],
+)
+def test_a_project_whose_entry_names_no_one_manifest_is_refused_by_name(
+    tmp_path: Path, packages: dict[str, object], refusal: str
+) -> None:
+    project = tmp_path / 'Pulumi.yaml'
+    _ = project.write_text(json.dumps({'name': 'p', 'packages': packages}))
+
+    with pytest.raises(sources.SourceError, match=re.escape(refusal)):
+        _ = sources.bundle_path(project)
+
+
+def test_the_committed_bundle_is_the_scripts_own_output() -> None:
+    """Selecting from the committed bundle and dumping it again gives back the same text.
+
+    The bundle is the one input of the SDK's generation, and what keeps it
+    honest is that it has one writer: definitions out of the order the
+    selection writes them in, a `status` left in, a definition of a dropped
+    group restored, or text laid out other than the dumper lays it out, is not
+    a fixed point of the selection. A value edited in the dumper's own layout
+    is one, and no offline check reaches it: `test_conventions` holds the
+    resources the SDK carries to the bundle's, not their fields.
+    """
+    text = BUNDLE.read_text()
+
+    assert sources.dump_bundle(sources.select_crds([text])) == text, (
+        'packages/crds/crds.yaml is not what update_crds writes; run `mise x -- uv run update_crds`'
+    )
+
+
+#: The Cilium kinds only the agent writes, whose schemas carry hyphenated
+#: property names the extension's generator takes since pulumi-kubernetes
+#: 4.34.2 (pulumi/pulumi-kubernetes#4611).
+AGENT_WRITTEN_CILIUM = (
+    'ciliumendpoints.cilium.io',
+    'ciliumendpointslices.cilium.io',
+    'ciliumidentities.cilium.io',
+    'ciliumnodes.cilium.io',
+)
+
+
+def test_the_bundle_carries_the_agent_written_cilium_kinds() -> None:
+    """Nothing declares these four, and the bundle carries them like every definition its sources ship.
+
+    The bundle is the cluster's definitions as the pins render them, not a
+    list of what the stacks happen to use, so a kind is missing from it only
+    by a rule `select_crds` states. None names these.
+    """
+    names = {crd.name for crd in sources.select_crds([BUNDLE.read_text()])}
+
+    assert [name for name in AGENT_WRITTEN_CILIUM if name not in names] == []
+
+
+# -- the regeneration ---------------------------------------------------------------
+
+#: A stand-in for a tool the regeneration runs: it appends what it was asked
+#: and from where to the log `FAKE_LOG` names, does what the real `pulumi
+#: install` does to `pyproject.toml` -- rewrites it -- and exits with
+#: `FAKE_EXIT`.
+FAKE_TOOL = """#!{python}
+import json, os, pathlib, sys
+name = pathlib.Path(sys.argv[0]).name
+with open(os.environ['FAKE_LOG'], 'a') as log:
+    log.write(json.dumps({{
+        'tool': name,
+        'argv': sys.argv[1:],
+        'cwd': os.getcwd(),
+        'backend': os.environ.get('PULUMI_BACKEND_URL'),
+    }}) + '\\n')
+if name == 'pulumi':
+    pathlib.Path('pyproject.toml').write_text('[tool.uv.sources]\\nrewritten = true\\n')
+sys.exit(int(os.environ.get('FAKE_EXIT', '0')))
 """
 
+PROJECT = """\
+name: project
+packages:
+  crds:
+    source: kubernetes
+    version: 1.0.0
+    extensions:
+      - name=crds
+      - crd-manifest=packages/crds/crds.yaml
+"""
 
-def fake_crd2pulumi(directory: Path, pyproject: str) -> Path:
-    """A generator that writes one file into `--pythonPath`: the `pyproject.toml` the rewrite reads."""
-    script = directory / 'crd2pulumi'
-    _ = script.write_text(
-        '#!/usr/bin/env python3\n'
-        'import pathlib, sys\n'
-        'output = pathlib.Path(sys.argv[sys.argv.index("--pythonPath") + 1])\n'
-        'output.mkdir()\n'
-        f'(output / "pyproject.toml").write_text({pyproject!r})\n'
-    )
-    script.chmod(0o755)
-    return script
+PYPROJECT = '[project]\nname = "project"\n'
 
 
-def test_generate_declares_the_provider_it_generated_against_as_a_floor(tmp_path: Path) -> None:
-    """`--version` leaves the baked dependency line alone, so the script rewrites it.
+def stand_ins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    """`pulumi` and `uv` stand-ins first on `PATH`, and the log they write: the bin directory and the log."""
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir()
+    for tool in ('pulumi', 'uv'):
+        script = bin_dir / tool
+        _ = script.write_text(FAKE_TOOL.format(python=sys.executable))
+        script.chmod(0o755)
+    log = tmp_path / 'tools.log'
+    monkeypatch.setenv('FAKE_LOG', str(log))
+    monkeypatch.setenv('PATH', f'{bin_dir}{os.pathsep}{os.environ["PATH"]}')
+    # Whatever backend the caller's environment names is not the one the run uses.
+    monkeypatch.setenv('PULUMI_BACKEND_URL', 'postgres://the-callers-backend.invalid/state')
+    return bin_dir, log
 
-    A floor at the generated-against version rather than the baked pin: the
-    root `pyproject.toml` is where the one exact pin lives, and the generated
-    package left as `crd2pulumi` wrote it would hold the whole project on the
-    release the tool happened to be built with.
+
+def runs(log: Path) -> list[dict[str, object]]:
+    return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+
+
+def project_dir(tmp_path: Path) -> Path:
+    project = tmp_path / 'project'
+    (project / 'packages/crds').mkdir(parents=True)
+    _ = (project / 'Pulumi.yaml').write_text(PROJECT)
+    _ = (project / 'pyproject.toml').write_text(PYPROJECT)
+    return project
+
+
+def test_generate_runs_pulumi_install_on_a_backend_of_its_own_then_relocks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`pulumi install` from the project, offline of any backend the caller's environment names, then `uv lock`.
+
+    The backend it is handed is an empty `file://` directory under the run's
+    working directory: with no backend logged in, the CLI in an agent's
+    environment signs up a Pulumi Cloud account to answer a package lookup.
+    `pyproject.toml` comes back byte for byte, since the rewrite `pulumi
+    install` makes of it is not part of a regeneration.
     """
-    output = tmp_path / 'crds'
-    output.mkdir()
-    _ = (output / 'stale').write_text('the previous bindings')
-    generated_against = importlib.metadata.version('pulumi-kubernetes')
+    bin_dir, log = stand_ins(tmp_path, monkeypatch)
+    project = project_dir(tmp_path)
+    workdir = tmp_path / 'work'
+    workdir.mkdir()
 
-    cli.generate([], output, fake_crd2pulumi(tmp_path, BAKED_PYPROJECT))
+    cli.generate(project / 'Pulumi.yaml', pulumi=bin_dir / 'pulumi', workdir=workdir)
 
-    dependencies = tomllib.loads((output / 'pyproject.toml').read_text())['project']['dependencies']
-    assert f'pulumi-kubernetes>={generated_against}' in dependencies
-    assert not [dep for dep in dependencies if dep.startswith('pulumi-kubernetes==')]
-    assert not (output / 'stale').exists()
-    assert not output.with_suffix('.bak').exists()
-
-
-def test_generate_refuses_a_generator_that_wrote_no_dependency_line(tmp_path: Path) -> None:
-    """A release whose template changed fails the run by name, and the previous bindings come back."""
-    output = tmp_path / 'crds'
-    output.mkdir()
-    _ = (output / 'previous').write_text('the previous bindings')
-    without_the_line = BAKED_PYPROJECT.replace('"pulumi-kubernetes==4.23.0", ', '')
-
-    with pytest.raises(RuntimeError, match='carries 0 pulumi-kubernetes requirements'):
-        cli.generate([], output, fake_crd2pulumi(tmp_path, without_the_line))
-
-    assert (output / 'previous').read_text() == 'the previous bindings'
-    assert not (output / 'pyproject.toml').exists()
+    install, lock = runs(log)
+    assert install['tool'] == 'pulumi'
+    assert install['argv'] == ['--non-interactive', 'install', '--no-dependencies', '--no-plugins']
+    assert install['cwd'] == str(project)
+    assert install['backend'] == (workdir / 'backend').as_uri()
+    assert lock['tool'] == 'uv'
+    assert lock['argv'] == ['lock']
+    assert lock['cwd'] == str(project)
+    assert (project / 'pyproject.toml').read_text() == PYPROJECT
 
 
-def _pinned_provider(requirements: list[str], *, operator: str) -> str:
-    """The version one `pulumi-kubernetes<operator>` requirement in `requirements` names."""
-    (version,) = [
-        found.group(1)
-        for requirement in requirements
-        if (found := re.fullmatch(rf'pulumi-kubernetes{re.escape(operator)}([\d.]+)', requirement))
-    ]
-    return version
+def test_a_failed_install_leaves_pyproject_as_it_was_and_locks_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bin_dir, log = stand_ins(tmp_path, monkeypatch)
+    monkeypatch.setenv('FAKE_EXIT', '1')
+    project = project_dir(tmp_path)
+    workdir = tmp_path / 'work'
+    workdir.mkdir()
+
+    with pytest.raises(subprocess.CalledProcessError):
+        cli.generate(project / 'Pulumi.yaml', pulumi=bin_dir / 'pulumi', workdir=workdir)
+
+    assert [run['tool'] for run in runs(log)] == ['pulumi']
+    assert (project / 'pyproject.toml').read_text() == PYPROJECT
 
 
-def test_the_generated_package_is_held_to_the_pinned_provider() -> None:
-    """`pyproject.toml`'s exact pin, the generated floor and `pulumi-plugin.json` name one version.
+def test_a_run_with_no_pulumi_on_path_is_refused_before_it_reads_anything(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The render is minutes of network a missing CLI would throw away, so the CLI is asked for first."""
+    monkeypatch.setenv('PATH', str(tmp_path))
+    missing = tmp_path / 'no-such-project.yaml'
 
-    The bindings register every resource at the version they were generated
-    against, so the version the program installs and the version the package
-    carries are one fact written in three places (framework/pulumi.md §4).
-    The pin is edited -- by renovate or by hand -- and the package is
-    generated, so the three agree only when `update_crds` has run since the
-    edit; this is the `uv sync --locked` of that package.
+    with pytest.raises(cli.NoPulumi, match=re.escape('mise x -- uv run update_crds')):
+        _ = cli.main(['--project', str(missing)])
+
+
+def test_a_run_from_a_bundle_writes_the_selection_where_the_entry_names_it_and_regenerates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--from-bundle` selects, writes the bundle the block names, regenerates from it, and records nothing.
+
+    No record, because the pins did not produce that bundle: a record written
+    beside it would vouch for a render that never ran.
     """
-    pinned = _pinned_provider(
-        tomllib.loads((ROOT / 'pyproject.toml').read_text())['project']['dependencies'], operator='=='
-    )
-    generated = tomllib.loads((ROOT / 'packages/crds/pyproject.toml').read_text())['project']
-    plugin = json.loads((ROOT / 'packages/crds/pulumi_crds/pulumi-plugin.json').read_text())
+    _, log = stand_ins(tmp_path, monkeypatch)
+    project = project_dir(tmp_path)
+    rendered = tmp_path / 'rendered.yaml'
+    _ = rendered.write_text(f'{DEPLOYMENT}---{DROPPED}---{CRD}')
 
-    stale = f'packages/crds was generated against a different pulumi-kubernetes than pyproject.toml pins ({pinned}); run `uv run update_crds`'
-    assert _pinned_provider(generated['dependencies'], operator='>=') == pinned, stale
-    assert generated['version'] == pinned, stale
-    assert plugin == {'resource': True, 'name': 'crds', 'version': pinned}, stale
+    assert cli.main(['--project', str(project / 'Pulumi.yaml'), '--from-bundle', str(rendered)]) == 0
+
+    written = project / 'packages/crds/crds.yaml'
+    assert written.read_text() == sources.dump_bundle(sources.select_crds([CRD]))
+    assert not (written.parent / record.FILE_NAME).exists()
+    assert [run['tool'] for run in runs(log)] == ['pulumi', 'uv']
+
+
+def test_a_run_with_bundle_writes_only_there(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--bundle` is a look at the render, and leaves the committed bundle, the record and the SDK alone."""
+    _, log = stand_ins(tmp_path, monkeypatch)
+    project = project_dir(tmp_path)
+    rendered = tmp_path / 'rendered.yaml'
+    _ = rendered.write_text(CRD)
+    out = tmp_path / 'out.yaml'
+
+    assert (
+        cli.main(['--project', str(project / 'Pulumi.yaml'), '--from-bundle', str(rendered), '--bundle', str(out)]) == 0
+    )
+
+    assert out.read_text() == sources.dump_bundle(sources.select_crds([CRD]))
+    assert list((project / 'packages/crds').iterdir()) == []
+    assert runs(log) == []

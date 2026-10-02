@@ -810,7 +810,7 @@ requires-dist = [
     { name = "pulumi", specifier = ">=3.266.0" },
     { name = "pulumi-b2", editable = "sdks/b2" },
     { name = "pulumi-cloudflare", specifier = ">=6.11.0" },
-    { name = "pulumi-crds", editable = "packages/crds" },
+    { name = "pulumi-crds", editable = "sdks/crds" },
     { name = "pulumi-github", specifier = ">=6.4.0" },
     { name = "pulumi-kubernetes", specifier = "==4.34.2" },
     { name = "pulumi-kubernetes-cert-manager", specifier = ">=0.2.0" },
@@ -1366,10 +1366,10 @@ wheels = [
 
 [[package]]
 name = "pulumi-crds"
-version = "4.34.2"
-source = { editable = "packages/crds" }
+version = "1.0.0"
+source = { editable = "sdks/crds" }
 dependencies = [
-    { name = "parver" },
+    { name = "packaging" },
     { name = "pulumi" },
     { name = "pulumi-kubernetes" },
     { name = "requests" },
@@ -1378,8 +1378,8 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "parver", specifier = ">=0.2.1" },
-    { name = "pulumi", specifier = ">=3.231.0,<4.0.0" },
+    { name = "packaging", specifier = ">=24.0" },
+    { name = "pulumi", specifier = ">=3.247.0,<4.0.0" },
     { name = "pulumi-kubernetes", specifier = ">=4.34.2" },
     { name = "requests", specifier = ">=2.21,<3.0" },
     { name = "semver", specifier = ">=2.8.1" },

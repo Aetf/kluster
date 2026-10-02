@@ -1,12 +1,12 @@
-"""The record of the pins `packages/crds` was generated from.
+"""The record of the pins the CRD bundle in `packages/crds` was rendered from.
 
 Renovate moves a chart or manifest pin in `Pulumi.yaml`, and cannot run
-`update_crds`, so a bump arrives with the bindings still describing the release
-before it. The record is what makes that visible: `update_crds` writes into
-`packages/crds` every pin it read, as the file held it, and a test holds the
-record to the block. A bump of a pin the script reads is therefore red in
-`checks` until someone runs `update_crds` on the branch, and a bump of one it
-reads nothing from changes nothing here and needs nothing more.
+`update_crds`, so a bump arrives with the bundle and the SDK generated from it
+still describing the release before it. The record is what makes that visible:
+`update_crds` writes beside the bundle every pin it read, as the file held it,
+and a test holds the record to the block. A bump of a pin the script reads is
+therefore red in `checks` until someone runs `update_crds` on the branch, and a
+bump of one it reads nothing from changes nothing here and needs nothing more.
 
 The pins the script reads are the chart pins it renders definitions from, the
 chart pins whose version names a source tree's ref, the chart pins carrying a
@@ -21,7 +21,7 @@ from pathlib import Path
 from kluster.lib.versions import CHART, MANIFEST, NAMESPACE, ProjectFile, Versions
 from kluster.scripts.update_crds import pins
 
-#: Beside the generated package's `pyproject.toml`, outside the module tree.
+#: Beside the bundle, in the directory the `packages:` entry names it in.
 FILE_NAME = 'rendered-from.json'
 
 
@@ -58,8 +58,8 @@ def render(entries: dict[str, object]) -> str:
     return json.dumps(entries, indent=2, sort_keys=True, ensure_ascii=False) + '\n'
 
 
-def write(project: ProjectFile, package: Path) -> Path:
-    """Write the record into the generated package at `package`."""
-    path = package / FILE_NAME
+def write(project: ProjectFile, directory: Path) -> Path:
+    """Write the record into `directory`, the bundle's."""
+    path = directory / FILE_NAME
     _ = path.write_text(render(record(project)), encoding='utf-8')
     return path
