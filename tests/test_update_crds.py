@@ -3,8 +3,9 @@
 Nothing here reaches the network: what is worth holding still is which CRDs
 survive the filter, that the committed bundle is the script's own output, that
 the pins the script reads are the block's and the bundle was rendered from
-them, that a chart below its floor is refused, that renovate's managers read
-the block, that a tool download nothing vouches for is refused, and what the
+them, that a chart below its floor is refused, that the operator version each chart
+declares is recorded and `kubeseal` is the sealed-secrets one, that renovate's
+managers read the block, that a tool download nothing vouches for is refused, and what the
 script leaves behind when it regenerates the SDK. The cases that download or
 run a tool at all are handed a stand-in. That the SDK was generated from the
 bundle is `test_conventions`', beside the other generated SDKs.
@@ -26,7 +27,7 @@ from typing import cast
 
 import pytest
 import requests
-from renovate_text import as_python_spells_it, as_renovate_spells_it, listed, package_rules, scalar
+from renovate_text import as_python_spells_it, as_renovate_spells_it, group, listed, package_rules, scalar
 
 from kluster.lib.versions import CHART, MANIFEST, ChartPin, Floor, ProjectFile, Versions
 from kluster.scripts.update_crds import cli, pins, record, sources
@@ -229,6 +230,91 @@ def test_the_record_is_the_pins_the_bundle_was_rendered_from() -> None:
     )
 
 
+def app_versions_written() -> dict[str, dict[str, str]]:
+    """`packages/crds/app-versions.json` as `update_crds` last wrote it."""
+    path = sources.bundle_path(ROOT / 'Pulumi.yaml').parent / record.APP_VERSIONS_FILE_NAME
+    return cast('dict[str, dict[str, str]]', json.loads(path.read_text()))
+
+
+def test_the_operator_versions_are_of_the_charts_the_script_reads_at_the_pinned_versions() -> None:
+    """Each chart the script reads, at the version the block pins, so a bump leaves the record visibly stale.
+
+    The `appVersion` is a fact of the chart, which no test can read without
+    the network, so what is held here is that the record was written for the
+    pins the block holds -- the same charts the pin record names, each at its
+    version. A bump of one is red until `update_crds` reads it again.
+    """
+    project = ProjectFile(project_config())
+    versions = Versions(project)
+
+    assert {key: entry['version'] for key, entry in app_versions_written().items()} == {
+        f'versions:{CHART}-{name}': versions.chart[name].version for name in record.read_charts(project)
+    }, 'packages/crds records operator versions of other chart pins than Pulumi.yaml holds; run update_crds'
+
+
+def test_the_record_holds_the_operator_version_the_run_read_beside_the_version_it_read_it_at() -> None:
+    project = ProjectFile(project_config())
+    versions = Versions(project)
+    declared = {name: f'{position}.0.0' for position, name in enumerate(record.read_charts(project))}
+
+    assert record.app_versions(project, declared) == {
+        f'versions:{CHART}-{name}': {'version': versions.chart[name].version, 'appVersion': declared[name]}
+        for name in record.read_charts(project)
+    }
+
+
+def test_kubeseal_is_the_release_of_the_controller_the_sealed_secrets_chart_installs() -> None:
+    """`credentials` seals with `mise.toml`'s `kubeseal`, for the controller the chart's pin installs.
+
+    The controller's release is the chart's declared `appVersion`, which the
+    record carries. A chart bump to a new controller is red once `update_crds`
+    has rewritten the record on its branch, and a `kubeseal` bump at once;
+    renovate moves the two in one pull request (the rule below).
+    """
+    import tomllib
+
+    tools = tomllib.loads((ROOT / 'mise.toml').read_text())['tools']
+    controller = app_versions_written()[f'versions:{CHART}-sealed-secrets']['appVersion']
+
+    assert str(tools['kubeseal']) == controller.removeprefix('v')
+
+
+def test_renovate_moves_kubeseal_with_the_sealed_secrets_chart() -> None:
+    """The pair the test above holds equal has to move in one renovate pull request.
+
+    The mise manager reads `mise.toml`, and the rule matching that manager puts
+    every tool in the toolchain group; the rule taking `kubeseal` into the
+    in-cluster group, where the chart's bump travels, has to come after that one
+    -- the last match wins a field -- match that one dependency, spelled the way
+    `mise.toml` keys it, and name the in-cluster group. The slug is the branch.
+    Renovate reads its configuration from the default branch, so nothing goes
+    red there when this breaks.
+    """
+    import tomllib
+
+    rules = package_rules((ROOT / 'renovate.json5').read_text())
+    (toolchain,) = [
+        index
+        for index, rule in enumerate(rules)
+        if listed(rule, 'matchManagers') == ['mise'] and not listed(rule, 'matchDepNames')
+    ]
+    (kubeseal,) = [index for index, rule in enumerate(rules) if 'kubeseal' in listed(rule, 'matchDepNames')]
+    rule = rules[kubeseal]
+
+    assert toolchain < kubeseal
+    keys = re.findall(r'^\s*(\w+):', rule, re.MULTILINE)
+    assert [key for key in keys if key.startswith(('match', 'exclude'))] == ['matchDepNames']
+    (tool,) = listed(rule, 'matchDepNames')
+    assert tool in tomllib.loads((ROOT / 'mise.toml').read_text())['tools']
+    assert len(group(rule)) == 2
+    assert group(rule) == group(rules[in_cluster_rule(rules)])
+    # No later rule that sets a group takes it back out.
+    for later in rules[kubeseal + 1 :]:
+        if group(later):
+            assert tool not in listed(later, 'matchDepNames'), later
+            assert 'mise' not in listed(later, 'matchManagers') or listed(later, 'matchDepNames'), later
+
+
 def test_the_record_holds_what_the_script_reads_and_nothing_else() -> None:
     """A bump of a pin the script reads moves the record; a bump of one it reads nothing from does not.
 
@@ -349,8 +435,9 @@ def test_a_chart_whose_operator_is_below_its_floor_is_refused_by_name(app_versio
 def test_a_run_reads_every_source_from_the_pins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """What a run fetches is what the block pins, end to end, with the network replaced.
 
-    The floors are checked against the declared operator before anything is
-    rendered, the source tree is fetched at the ref its chart's pin names, the
+    The operator version of every chart the script reads is read, and the
+    floors checked against it, before anything is rendered, and is handed back
+    by chart; the source tree is fetched at the ref its chart's pin names, the
     manifest through the digest-checked fetch, and exactly the charts that
     render definitions are rendered, each from its pin.
     """
@@ -361,8 +448,8 @@ def test_a_run_reads_every_source_from_the_pins(tmp_path: Path, monkeypatch: pyt
     helm = tmp_path / 'helm'
 
     def app_version(_: Path, pin: ChartPin, *, workdir: Path) -> str:
-        calls.append(f'floor {pin.name}')
-        return '99.0.0'
+        calls.append(f'app-version {pin.name}')
+        return f'99.0.{len(calls)}'
 
     def tree(source: pins.SourceTree, ref: str) -> list[str]:
         calls.append(f'tree {source.repo}@{ref}')
@@ -385,11 +472,12 @@ def test_a_run_reads_every_source_from_the_pins(tmp_path: Path, monkeypatch: pyt
     monkeypatch.setattr(cli, 'fetch_manifest', manifest)
     monkeypatch.setattr(sources, 'render_chart', render)
 
-    _ = cli.collect_documents(tmp_path, project)
+    _, declared = cli.collect_documents(tmp_path, project)
 
     charts = [versions.chart[name] for name in project.names(CHART)]
-    floored = [f'floor {chart.name}' for chart in charts if chart.floor is not None]
-    assert calls[: len(floored)] == floored
+    read = record.read_charts(project)
+    assert calls[: len(read)] == [f'app-version {name}' for name in read]
+    assert declared == {name: f'99.0.{position}' for position, name in enumerate(read, start=1)}
     assert 'tree cilium/cilium@v9.9.9' in calls
     assert [call for call in calls if call.startswith('manifest')] == [
         f'manifest {versions.manifest[name]}' for name in project.names(MANIFEST)
@@ -553,6 +641,20 @@ def test_the_manifest_manager_moves_the_release_and_its_digest_in_one_match() ->
 IN_CLUSTER_DATASOURCES = {'helm', 'docker', 'github-release-attachments'}
 
 
+def in_cluster_rule(rules: list[str]) -> int:
+    """The index of the rule that groups the block's in-cluster pins: by the file, not by a dependency.
+
+    Its group is shared: the `kubeseal` rule names it too, so the slug alone
+    does not find it.
+    """
+    (found,) = [
+        index
+        for index, rule in enumerate(rules)
+        if scalar(rule, 'groupSlug') == 'in-cluster' and listed(rule, 'matchFileNames') == ['Pulumi.yaml']
+    ]
+    return found
+
+
 def test_the_in_cluster_rule_groups_what_the_block_managers_read() -> None:
     """The group the chart, manifest and in-cluster image bumps travel in.
 
@@ -565,7 +667,7 @@ def test_the_in_cluster_rule_groups_what_the_block_managers_read() -> None:
     """
     config = (ROOT / 'renovate.json5').read_text()
     rules = package_rules(config)
-    (in_cluster,) = [index for index, rule in enumerate(rules) if scalar(rule, 'groupSlug') == 'in-cluster']
+    in_cluster = in_cluster_rule(rules)
     (gateway,) = [index for index, rule in enumerate(rules) if scalar(rule, 'groupSlug') == 'gateway-rootfs']
     rule = rules[in_cluster]
 
@@ -680,7 +782,7 @@ def test_the_cilium_chart_travels_alone() -> None:
     config = (ROOT / 'renovate.json5').read_text()
     rules = package_rules(config)
     versions = Versions(ProjectFile(project_config()))
-    (in_cluster,) = [index for index, rule in enumerate(rules) if scalar(rule, 'groupSlug') == 'in-cluster']
+    in_cluster = in_cluster_rule(rules)
     (cilium,) = [index for index, rule in enumerate(rules) if 'cilium' in listed(rule, 'matchDepNames')]
     rule = rules[cilium]
 

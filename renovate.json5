@@ -198,7 +198,7 @@
       // permits it to run mise (its `allowedUnsafeExecutions`); where it does
       // not, the pull request arrives without the entry and a person runs
       // `mise lock <tool>` onto it. The same holds for every mise pin a rule
-      // below takes out of this group (`talosctl`, `age`).
+      // below takes out of this group (`kubeseal`, `talosctl`, `age`).
       matchManagers: [
         'mise',
       ],
@@ -283,6 +283,31 @@
       ],
       groupName: 'cilium',
       groupSlug: 'cilium',
+    },
+    {
+      // kubeseal, out of the toolchain group and into the in-cluster one,
+      // beside the chart whose controller it seals for. `mise.toml` pins the
+      // tool `credentials` seals the cluster's values with, and a test holds
+      // it equal to the `appVersion` the sealed-secrets chart declares, which
+      // `update_crds` records beside the bundle (framework/pulumi.md §4). So a
+      // release has to move both in one pull request: apart, each half fails
+      // that test on its own -- the tool's at once, the chart's once the
+      // regeneration a chart bump needs anyway has rewritten the record.
+      //
+      // Matched by dependency alone, the mise manager's name for the pin, its
+      // key under `[tools]`, the way the Talos rule matches `talosctl`. The
+      // tool still waits the release age, which CI running it calls for, and
+      // the chart does not.
+      //
+      // Position is load-bearing, as for the `jdx/mise-action` rule: this sits
+      // *after* the rule grouping the whole mise manager as the toolchain, so
+      // its group wins. Its group's name and slug are the in-cluster rule's,
+      // since the slug names the branch. A test holds the order and the group.
+      matchDepNames: [
+        'kubeseal',
+      ],
+      groupName: 'in-cluster charts and images',
+      groupSlug: 'in-cluster',
     },
     {
       // local-path-provisioner, whose every release is `v0.0.N`: docker

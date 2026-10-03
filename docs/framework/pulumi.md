@@ -727,9 +727,9 @@ on the workstation.
 
 **The bundle records the pins it was rendered from.** The script
 reads the chart and manifest pins out of the `versions:` block (§3.2),
-checks each chart's floor against the `appVersion` the chart itself
-declares, so no operator version is kept by hand beside a pin, and
-renders the definitions. Beside the bundle it writes
+reads the `appVersion` each chart it reads declares and checks the
+chart's floor against it, so no operator version is kept by hand beside
+a pin, and renders the definitions. Beside the bundle it writes
 `packages/crds/rendered-from.json`: every pin it read, as the file holds
 it — a chart that renders definitions, the chart whose version is the
 ref of the Cilium source tree the script reads Cilium's definitions
@@ -740,6 +740,24 @@ script, so a bump of one is red in `checks` until someone runs
 from leaves the record as it is and needs nothing more. A run with
 `--from-bundle` writes no record, since the bundle it selects from was
 not rendered from the pins.
+
+**Beside it, the operator version each of those charts declares.**
+`packages/crds/app-versions.json` holds, for every chart in the record,
+the version the script read it at and the `appVersion` its `Chart.yaml`
+declares there. That is a fact of the chart rather than of the block, so
+it is a file of its own: the pin record is rebuilt from the block alone
+in its test, which no test can do for this one without the network. A
+test holds its chart versions to the block's, so a chart bump leaves it
+as visibly stale as the pin record. It is what a pin outside the block
+that has to agree with a chart's operator is held to: `mise.toml`'s
+`kubeseal`, which `credentials` seals the cluster's values with, equals
+the `appVersion` of the sealed-secrets chart, whose controller opens
+them. A floor on that pin would not do, since a floor passes a chart
+that ships a newer controller. A `kubeseal` bump alone is red at once,
+and a chart bump to a new controller once `update_crds` has rewritten
+the record on its branch; a renovate rule moves `kubeseal` into the
+in-cluster group the chart's bump travels in, so the two arrive in one
+pull request.
 
 **The Kubernetes provider is pinned exactly, and the `crds` entry names
 the same release.** `pyproject.toml` holds `pulumi-kubernetes==<v>`
