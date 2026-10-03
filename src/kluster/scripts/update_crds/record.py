@@ -11,11 +11,20 @@ bump of one it reads nothing from changes nothing here and needs nothing more.
 The pins the script reads are the chart pins it renders definitions from, the
 chart pins whose version names a source tree's ref, the chart pins carrying a
 floor it checks, and every manifest pin.
+
+Beside the pin record, in a file of its own, the script records the operator
+version each chart it reads declares, its `Chart.yaml`'s `appVersion`, at the
+version the pin names. That is a fact of the chart rather than of the block,
+so it cannot live in the pin record, which a test rebuilds from the block
+alone; it is what a pin elsewhere that has to agree with a chart's operator is
+held to -- `kubeseal` in `mise.toml`, which seals for the sealed-secrets
+controller the chart installs.
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 
 from kluster.lib.versions import CHART, MANIFEST, NAMESPACE, ProjectFile, Versions
@@ -23,6 +32,9 @@ from kluster.scripts.update_crds import pins
 
 #: Beside the bundle, in the directory the `packages:` entry names it in.
 FILE_NAME = 'rendered-from.json'
+
+#: Beside the pin record: the operator version each chart it reads declares.
+APP_VERSIONS_FILE_NAME = 'app-versions.json'
 
 
 def read_charts(project: ProjectFile) -> list[str]:
@@ -53,6 +65,21 @@ def record(project: ProjectFile) -> dict[str, object]:
     return entries
 
 
+def app_versions(project: ProjectFile, declared: Mapping[str, str]) -> dict[str, object]:
+    """Each chart the script reads, keyed as the pin record keys it, with the `appVersion` it declares.
+
+    `declared` is chart name to `appVersion`, as the run read it off each
+    chart's `Chart.yaml`. Each entry carries the chart version it was read at,
+    so a test can hold the file to the block's versions and a bump leaves it
+    visibly stale, as it does the pin record.
+    """
+    versions = Versions(project)
+    return {
+        f'{NAMESPACE}:{CHART}-{name}': {'version': versions.chart[name].version, 'appVersion': declared[name]}
+        for name in read_charts(project)
+    }
+
+
 def render(entries: dict[str, object]) -> str:
     """The record's text: sorted, indented JSON, so a diff of it reads pin by pin."""
     return json.dumps(entries, indent=2, sort_keys=True, ensure_ascii=False) + '\n'
@@ -62,4 +89,11 @@ def write(project: ProjectFile, directory: Path) -> Path:
     """Write the record into `directory`, the bundle's."""
     path = directory / FILE_NAME
     _ = path.write_text(render(record(project)), encoding='utf-8')
+    return path
+
+
+def write_app_versions(project: ProjectFile, declared: Mapping[str, str], directory: Path) -> Path:
+    """Write the operator versions the charts declare into `directory`, beside the pin record."""
+    path = directory / APP_VERSIONS_FILE_NAME
+    _ = path.write_text(render(app_versions(project, declared)), encoding='utf-8')
     return path
