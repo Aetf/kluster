@@ -23,7 +23,12 @@ DNS controller (architecture.md §6.4); the standalone DNSControl repo
 > Cloudflare and their state is imported rather than applied, so this
 > stack's first `up` is a cutover step and is not to be run while that
 > program still owns the zones, or the two write over each other. Every
-> change here is judged by a preview until that day.
+> change here is judged by a preview until that day. This is the zones'
+> instance of the interim rule in
+> [sources-of-truth.md](../sources-of-truth.md): a change to the zones
+> lands in Aetf/dns first and here second, in the same sitting. That
+> document's row R1 holds the readings, what a change in Aetf/dns takes,
+> and the cutover's steps with the ruling still pending on their order.
 
 ## 1. Why a fourth stack
 
@@ -541,8 +546,9 @@ census row and a `physical` apply before it is a `public_port` call.
 
 Per-app cutover falls out of the anchor design: an app's records point
 at `archvps.hosts` until the app migrates, then its component declares
-the same names against `kluster.hosts` (and the DNSControl entry is
-deleted).
+the same names against `kluster.hosts`, and its `legacy.py` block is
+deleted (below). DNSControl holds no entry by then: it retires at the
+zones' cutover, before any application migrates.
 
 **`legacy.py` is one block per application**, because the unit of every
 remaining edit to it is a migration: each block is deleted whole when the
@@ -567,4 +573,5 @@ fifth member of the block. The served pair repoints to `kluster.hosts`
 when the site behind it moves; the parked pair's records go with the
 machine instead (§2). None may still reference `archvps.hosts` when the
 VPS retires (migration.md Wave F checks this). The DNSControl repo
-retires with a pointer commit (the old-tracker rule, migration.md §0).
+retires with a pointer commit at the zones' cutover (the old-tracker
+rule, migration.md §0; sources-of-truth.md, row R1).
