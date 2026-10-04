@@ -21,13 +21,14 @@ owns sequencing, data movement, and teardown.
     (declarative/dns.md §6): the app's records repoint from
     `archvps.hosts` to `kluster.hosts` (or become rewrite-only) the
     moment it verifies. No big-bang DNS day.
-3.  **Every absorbed resource updates its old tracker**: gw-config
-    (FRR, nspawn, on_boot.d, caddy — the whole repo retires),
-    yadm/aconfmgr (qbittorrent unit, quadlets, state-backend compose,
-    adguardhome-sync), DNSControl. Each step ends with a
-    removal/pointer commit — nothing tracked twice or by nothing. What
-    the gw-config commit covers, piece by piece, and what holds each
-    piece instead: physical/gateway-cutover.md §7.
+3.  **Every absorbed resource updates its old tracker**: the step that
+    moves a domain onto a stack ends with that tracker's
+    removal/pointer commit — nothing tracked twice or by nothing.
+    Which tracker holds each domain until then, what a change there
+    takes, the step that flips it, and the interim rule for a change
+    made before the flip: [sources-of-truth.md](../sources-of-truth.md).
+    What the gw-config commit covers, piece by piece, and what holds
+    each piece instead: physical/gateway-cutover.md §7.
 4.  **NVMe space *and* RAM are interleaved** (nodes.md §4.2): ~85 GB
     free and no spare RAM while both clusters coexist — legacy k3s
     still holds ~16 GiB of the host's 32, so the worker VM **cannot
@@ -207,14 +208,19 @@ orphans, finishing with the disk-reclaim that feeds rule 0.4.
 1.  Legacy VPS: after Wave E verifies (hath stable on its new IP for a
     comfortable soak — the VPS necessarily outlives every other
     migration for exactly this reason), tear down remaining k3s residue
-    and **cancel the Vultr instance** (the $30/mo baseline ends). `archvps.hosts` and
-    remaining DNSControl entries deleted; DNSControl repo archived with
-    a pointer commit.
+    and **cancel the Vultr instance** (the $30/mo baseline ends).
+    `archvps.hosts`, which nothing references by then, deleted from the
+    `dns` stack (dns.md §6). DNSControl is not among the
+    trackers retired here: it retires at the zones' cutover, the `dns`
+    up of §1 item 2 (sources-of-truth.md, row R1).
 2.  Homelab host: k3s uninstalled after Waves C/D; freed NVMe grows the
     worker VM to its 100+ GB target; JuiceFS redis/mount residue gone
     with k3s; `lan.ucw.phd` entries emptied (dns.md §4).
 3.  Trackers: gw-config repo retired (provider owns the device);
-    adguardhome-sync unit removed; qbittorrent/quadlet units removed
+    adguardhome-sync unit removed — whether the sync stops here or at
+    the split-horizon row's flip, as dns.md §3 has it, is an operator
+    ruling pending on `kluster-ops#505` (sources-of-truth.md, row R2);
+    qbittorrent/quadlet units removed
     from yadm/aconfmgr; the legacy state backend's Postgres stops last,
     once kluster-code needs no further `pulumi` operations.
 4.  **Sealing-key rotation**: with every app migrated, all

@@ -220,6 +220,11 @@ documentation the change makes true ships with it rather than after it.
 * Shared files — `AGENTS.md`, `docs/framework/ci.md`, `pyproject.toml` —
   are **serialized**: at most one open pull request may touch each of
   them, whoever opened it.
+* **A change to a domain a legacy tracker still owns lands in that
+  tracker first**, and here second in the same sitting, never applied
+  until the domain's row flips. Which tracker owns each domain, and what
+  a change there takes, is
+  [docs/sources-of-truth.md](docs/sources-of-truth.md).
 * Work happens in a `jj` workspace of its own (`jj workspace add -r main
   .claude/workspaces/<name>`, then `mise trust` inside it, which every
   `mise x uv` command otherwise refuses), and **a workspace dies with the

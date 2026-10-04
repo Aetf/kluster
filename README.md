@@ -152,7 +152,9 @@ mutual TLS, declared by the `state-backend` stack, whose cutover from the
 script that built the box is the operator's next step
 (`docs/rfc/rfc-006-state-backend-stack.md` §14)
 — and the `dns` stack, which declares this installation's Cloudflare zones
-and records and is applied against them. The CI workflow set and renovate are
+and records and holds them imported, not yet applied: DNSControl stays
+authoritative until the zones' cutover
+([docs/sources-of-truth.md](docs/sources-of-truth.md)). The CI workflow set and renovate are
 wired for this repository, and the `images` workflow builds and publishes the
 self-built container images in `docker/` to ghcr, multi-arch on native runners.
 
