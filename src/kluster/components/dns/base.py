@@ -96,15 +96,19 @@ def overlay_records() -> tuple[Record, ...]:
     )
 
 
+#: The public half of the in-cluster mail relay's DKIM key. The key pair is
+#: a cert-manager certificate's private key in the production cluster
+#: (kluster-code `src/mail`), pinned there with `rotationPolicy: Never`;
+#: re-issuing it means publishing the new public half here.
 DKIM_K8S = (
     'v=DKIM1; p='
-    'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuzTvyPAmNw5A3UK+60qy'
-    'FZ1bxydUZPqZ93+Y/iTQdYPK8GjHs/RpnbBwCUMuHqjcjgm6c2pCKPxIGPjBSfzT'
-    'cX4KaMb3dG+dios0H9g8wgXT8k1uimMibfIkCir7gxWxPS+hDnUA3/WSbaLHqJIF'
-    'Du/Wi+QtthXY16gzIVU+V7Z0UwB97uKZTypBDOT8USlwJwqe8GFSsQenqJ2YiQFf'
-    'IeVrnRIeaNuhyi6zGdNIXSXslvZL4FOENzELciJ2WHOSXHattqJ5G/FiOWiA9QI+'
-    '66KRIFQ7Hjc5DtUOURyfTykH6HgDxDUXHMqMl4qfY5UV5S83K+rLITWCCZGbz2HJ'
-    'rQIDAQAB'
+    'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuj8B2gp8kvvHRtA2KTdu'
+    '0YPxiEd494Sf3JFo8nC25bqR8ceNTXMimfRY/f3+1+hjm34hD2I1WsUy8wjLgyge'
+    'CjpmZ/UJX9xRF6kW/FyHRml12e4eCq3qiN96++YN8LFh0Xi9Pkm/ION8vhLtCHdv'
+    'MFUgp51Dyz8hwVl54Y/5zvGwxim3VvMy/zNmZelbablRB/kDfaR7EPe4r8z5TW2S'
+    'F35VwhRP8ZR6I3tN7C7ivMhedSdj3GlpL3r0FQym0sNxeIsyeWeO4t/oEya0MP7i'
+    'frXXN1+G5a2BnljcgvCdLP+wp6S//9XfrxPFqfXOxcFb483AW+T8zudxxJMjO+NH'
+    'cQIDAQAB'
 )
 
 DKIM_GOOGLE_UCW = (
