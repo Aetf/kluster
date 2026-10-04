@@ -5,10 +5,10 @@
 generated, not written, so this is the only supported way to change anything
 under either. The pins are the `versions:` block of `Pulumi.yaml`; the run
 reads the operator version each chart it reads declares and checks the floors,
-renders the definitions, writes the bundle to the path the same file's
-`packages:` entry names, writes beside it the record of the pins it read and of
-the operator versions the charts declare (`record`), and regenerates the SDK
-from that entry.
+reads the value paths every pinned chart has, renders the definitions, writes
+the bundle to the path the same file's `packages:` entry names, writes beside it
+the record of the pins it read, of the operator versions the charts declare and
+of the charts' value paths (`record`), and regenerates the SDK from that entry.
 """
 
 # `tqdm` is only partially typed.
@@ -31,6 +31,7 @@ from tqdm.contrib.logging import logging_redirect_tqdm
 from kluster.lib.release_assets import fetch_manifest
 from kluster.lib.versions import CHART, MANIFEST, ProjectFile, Versions
 from kluster.scripts.update_crds import pins, record, sources
+from kluster.scripts.update_crds.values import ValuePaths
 
 #: The package logger the configuration below attaches the console to. Every
 #: module here logs to `__name__`, which is a child of it, so the handler and
@@ -63,13 +64,16 @@ LOGGING = {
 log = logging.getLogger(f'{LOG_NAME}.cli')
 
 
-def collect_documents(workdir: Path, project: ProjectFile) -> tuple[list[str], dict[str, str]]:
-    """Every YAML document the pinned sources produce, unfiltered, and the operator version each chart declares.
+def collect_documents(workdir: Path, project: ProjectFile) -> tuple[list[str], dict[str, str], dict[str, ValuePaths]]:
+    """Every YAML document the pinned sources produce, unfiltered, the operator version each chart declares,
+    and the value paths every pinned chart has.
 
     The operator version is the `appVersion` of every chart the script reads
     (`record.read_charts`), keyed by the chart's name. It is read first, and
     each chart's floor checked against it, before anything is rendered, so a
-    pin below one stops the run before it has fetched the rest. Fetching is
+    pin below one stops the run before it has fetched the rest. The value
+    paths are read off every chart pin, keyed by name, whether or not the
+    script renders anything from it (`record.chart_values`). Fetching is
     announced step by step because all of it is network: a chart set this size
     takes a couple of minutes, and a silent one looks hung.
     """
@@ -89,6 +93,8 @@ def collect_documents(workdir: Path, project: ProjectFile) -> tuple[list[str], d
     for chart in read:
         declared[chart.name] = sources.chart_app_version(helm, chart, workdir=workdir)
         sources.check_floor(chart, declared[chart.name])
+    log.info(f'Reading the value paths of {len(charts)} charts')
+    value_paths = {chart.name: sources.chart_value_paths(helm, chart, workdir=workdir) for chart in charts}
 
     # One source at a time and `extend` throughout: a release manifest is one
     # document and a source tree is many, and the fetches stay sequential so
@@ -100,7 +106,7 @@ def collect_documents(workdir: Path, project: ProjectFile) -> tuple[list[str], d
     for tree in pins.SOURCE_TREES:
         documents.extend(sources.fetch_source_tree(tree, tree.ref(versions.chart[tree.chart])))
     documents.extend(sources.render_chart(helm, chart, workdir=workdir) for chart in rendered)
-    return documents, declared
+    return documents, declared, value_paths
 
 
 class NoPulumi(RuntimeError):
@@ -212,13 +218,14 @@ def main(argv: list[str] | None = None) -> int:
         # stands when the run ends a few minutes later.
         project: ProjectFile | None = None
         declared: dict[str, str] = {}
+        value_paths: dict[str, ValuePaths] = {}
         if from_bundle is not None:
             log.info(f'Reading the rendered bundle from {from_bundle}')
             documents = [from_bundle.read_text()]
         else:
             log.info(f'Reading the pins in {project_file}')
             project = sources.read_project(project_file)
-            documents, declared = collect_documents(workdir, project)
+            documents, declared, value_paths = collect_documents(workdir, project)
 
         crds = sources.select_crds(documents)
         groups = sorted({crd.group for crd in crds})
@@ -238,6 +245,8 @@ def main(argv: list[str] | None = None) -> int:
             log.info(f'Recorded the pins the bundle was rendered from in {written}')
             written = record.write_app_versions(project, declared, target.parent)
             log.info(f'Recorded the operator versions the charts declare in {written}')
+            written = record.write_chart_values(project, value_paths, target.parent)
+            log.info(f'Recorded the value paths the charts have in {written}')
         generate(project_file, pulumi=pulumi, workdir=workdir)
         log.info('Regenerated the SDK from the bundle')
     return 0

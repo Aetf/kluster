@@ -737,7 +737,8 @@ from, a chart carrying a floor, and every manifest. A test holds that
 record to the block. Renovate moves those pins and cannot run the
 script, so a bump of one is red in `checks` until someone runs
 `update_crds` on the branch; a bump of a chart the script reads nothing
-from leaves the record as it is and needs nothing more. A run with
+else from leaves this record as it is, and only the value record below
+goes stale. A run with
 `--from-bundle` writes no record, since the bundle it selects from was
 not rendered from the pins.
 
@@ -758,6 +759,27 @@ and a chart bump to a new controller once `update_crds` has rewritten
 the record on its branch; a renovate rule moves `kubeseal` into the
 in-cluster group the chart's bump travels in, so the two arrive in one
 pull request.
+
+**And the value paths every pinned chart has.** Helm ignores a value a
+chart does not have, so a component handing its chart a key that a bump
+renamed or removed installs as before, says nothing, and behaves
+differently. `packages/crds/chart-values.json` holds, for every chart
+pin, the version the script read it at, every value path the chart has
+there, and the free-form maps among them (`update_crds/values.py`). It
+covers every chart pin, not only those read for definitions, since a
+component can install a chart that has none. A path is the chart's keys
+from the root, joined with `.`: every key its `values.yaml` sets, every
+property its `values.schema.json` declares, its local `$ref`s followed,
+and every path of a chart it depends on, below the key it passes that
+dependency's values under. A free-form map fixes no keys, and any path
+below one is accepted: an empty `{}`, a key whose default is null, and a
+schema object open to further properties. `tests/test_chart_values.py`
+runs the `k8s-base` program under mocks and holds every path each
+installed chart's values set to the record, naming the component, the
+chart and the path it lacks. A test holds the record's versions to the
+block's, so any chart bump is red until `update_crds` has read the chart
+again on its branch, and stays red if a component sets a key the new
+version does not have.
 
 **The Kubernetes provider is pinned exactly, and the `crds` entry names
 the same release.** `pyproject.toml` holds `pulumi-kubernetes==<v>`
