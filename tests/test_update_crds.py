@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import logging
 import os
 import re
 import subprocess
@@ -524,6 +525,23 @@ def test_update_crds_starts_when_the_sdk_does_not_import() -> None:
 
     assert run.returncode == 0, run.stderr
     assert '--project' in run.stdout
+
+
+def test_the_clis_logging_setup_leaves_a_logger_made_before_it_working() -> None:
+    """A logger another module made before the CLI configured logging still logs after it.
+
+    `dictConfig` disables every existing logger it does not name unless told
+    otherwise, so a process that imported another `kluster` module first -- the
+    test suite, running this module before `test_sealing` -- lost that module's
+    log lines to the CLI's setup.
+    """
+    before = logging.getLogger('kluster.scripts.credentials.made_before_update_crds')
+    try:
+        with pytest.raises(SystemExit):
+            _ = cli.main(['--help'])
+        assert not before.disabled
+    finally:
+        before.disabled = False
 
 
 def test_a_stack_file_with_no_config_block_overrides_nothing(tmp_path: Path) -> None:
