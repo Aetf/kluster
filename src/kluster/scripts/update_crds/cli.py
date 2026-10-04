@@ -39,6 +39,12 @@ LOG_NAME = 'kluster.scripts.update_crds'
 
 LOGGING = {
     'version': 1,
+    # The configuration names this package's logger alone, and every other
+    # logger the process holds keeps working: left to its default, `dictConfig`
+    # disables each logger created before it that it does not name, which in a
+    # process that imported other `kluster` modules first -- a test run, say --
+    # silences theirs.
+    'disable_existing_loggers': False,
     'formatters': {
         'standard': {'format': '%(asctime)s %(levelname)s: %(message)s', 'datefmt': '%Y-%m-%d - %H:%M:%S'},
     },
