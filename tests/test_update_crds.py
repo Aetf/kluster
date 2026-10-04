@@ -32,6 +32,7 @@ from renovate_text import as_python_spells_it, as_renovate_spells_it, group, lis
 
 from kluster.lib.versions import CHART, MANIFEST, ChartPin, Floor, ProjectFile, Versions
 from kluster.scripts.update_crds import cli, pins, record, sources
+from kluster.scripts.update_crds.values import ValuePaths, read_chart
 
 ROOT = Path(__file__).parent.parent
 
@@ -264,6 +265,140 @@ def test_the_record_holds_the_operator_version_the_run_read_beside_the_version_i
     }
 
 
+def chart_values_written() -> dict[str, dict[str, object]]:
+    """`packages/crds/chart-values.json` as `update_crds` last wrote it."""
+    path = sources.bundle_path(ROOT / 'Pulumi.yaml').parent / record.CHART_VALUES_FILE_NAME
+    return cast('dict[str, dict[str, object]]', json.loads(path.read_text()))
+
+
+def test_the_value_paths_are_of_every_chart_pin_at_its_pinned_version() -> None:
+    """Every chart pin, at the version the block pins, so any chart bump leaves the record visibly stale.
+
+    The paths are facts of the charts, which no test can read without the
+    network, so what is held here is that the record was written for the pins
+    the block holds. Every chart pin rather than the ones read for definitions:
+    a component can install a chart that has none (`test_chart_values.py`).
+    """
+    project = ProjectFile(project_config())
+    versions = Versions(project)
+
+    assert {key: entry['version'] for key, entry in chart_values_written().items()} == {
+        f'versions:{CHART}-{name}': versions.chart[name].version for name in project.names(CHART)
+    }, 'packages/crds records value paths of other chart pins than Pulumi.yaml holds; run update_crds'
+
+
+def test_the_value_record_holds_what_the_run_read_beside_the_version_it_read_it_at() -> None:
+    project = ProjectFile(project_config())
+    versions = Versions(project)
+    read = {
+        name: ValuePaths(paths=frozenset({f'{name}.b', f'{name}.a'}), free_form=frozenset({f'{name}.a'}))
+        for name in project.names(CHART)
+    }
+
+    assert record.chart_values(project, read) == {
+        f'versions:{CHART}-{name}': {
+            'version': versions.chart[name].version,
+            'paths': [f'{name}.a', f'{name}.b'],
+            'free-form': [f'{name}.a'],
+        }
+        for name in project.names(CHART)
+    }
+    cilium = cast('Mapping[str, object]', record.chart_values(project, read)[f'versions:{CHART}-cilium'])
+    assert ValuePaths.from_entry(cilium) == read['cilium']
+
+
+def chart(directory: Path, *, name: str, values: str, schema: object = None, dependencies: str = '') -> Path:
+    """An unpacked chart: its `Chart.yaml`, its `values.yaml` and, when given, its schema."""
+    directory.mkdir(parents=True)
+    _ = (directory / 'Chart.yaml').write_text(f'apiVersion: v2\nname: {name}\nversion: 1.0.0\n{dependencies}')
+    _ = (directory / 'values.yaml').write_text(values)
+    if schema is not None:
+        _ = (directory / 'values.schema.json').write_text(json.dumps(schema))
+    return directory
+
+
+def test_the_value_paths_of_a_chart_are_every_key_its_values_set(tmp_path: Path) -> None:
+    """Each key from the root is a path; a list is a value at its path, not walked into."""
+    directory = chart(
+        tmp_path / 'c',
+        name='c',
+        values='image:\n  repository: example\n  tag: v1\nreplicas: 1\ntolerations:\n  - key: a\n',
+    )
+
+    read = read_chart(directory)
+
+    assert read.paths == {'image', 'image.repository', 'image.tag', 'replicas', 'tolerations'}
+    assert read.free_form == set()
+
+
+def test_an_empty_map_and_a_null_default_are_free_form(tmp_path: Path) -> None:
+    """A map the chart leaves for its user to fill, spelled `{}` or left without a default."""
+    directory = chart(
+        tmp_path / 'c',
+        name='c',
+        values='podAnnotations: {}\nmanager:\n  devices:\n    # gpu: true\n  image: x\n',
+    )
+
+    read = read_chart(directory)
+
+    assert read.free_form == {'podAnnotations', 'manager.devices'}
+    assert read.accepts(('manager', 'devices', 'gpu'))
+    assert not read.accepts(('manager', 'device', 'gpu'))
+
+
+def test_the_schema_adds_the_properties_it_declares_through_its_references(tmp_path: Path) -> None:
+    """A path only the schema declares is one the chart has; `additionalProperties` makes a map free-form.
+
+    cert-manager's schema reaches every property through `$ref` into `$defs`,
+    so a local reference is followed, and a reference to itself ends.
+    """
+    schema = {
+        '$ref': '#/$defs/root',
+        '$defs': {
+            'root': {
+                'properties': {
+                    'crds': {'$ref': '#/$defs/crds'},
+                    'labels': {'type': 'object', 'additionalProperties': {'type': 'string'}},
+                    'tree': {'$ref': '#/$defs/root'},
+                },
+                'allOf': [{'properties': {'webhook': {'type': 'object'}}}],
+            },
+            'crds': {'properties': {'enabled': {'type': 'boolean'}, 'keep': {'type': 'boolean'}}},
+        },
+    }
+    directory = chart(tmp_path / 'c', name='c', values='crds:\n  enabled: false\n', schema=schema)
+
+    read = read_chart(directory)
+
+    assert read.paths == {'crds', 'crds.enabled', 'crds.keep', 'labels', 'tree', 'webhook'}
+    assert read.free_form == {'labels'}
+
+
+def test_a_subcharts_paths_are_below_the_key_the_parent_passes_its_values_under(tmp_path: Path) -> None:
+    """A dependency's alias, or its name when it has none."""
+    parent = chart(
+        tmp_path / 'p',
+        name='p',
+        values='enabled: true\n',
+        dependencies='dependencies:\n  - name: cluster\n    alias: monitoring\n  - name: plain\n',
+    )
+    _ = chart(parent / 'charts' / 'cluster', name='cluster', values='dashboard:\n  create: false\nlabels: {}\n')
+    _ = chart(parent / 'charts' / 'plain', name='plain', values='size: 1\n')
+
+    read = read_chart(parent)
+
+    assert read.paths == {
+        'enabled',
+        'monitoring',
+        'monitoring.dashboard',
+        'monitoring.dashboard.create',
+        'monitoring.labels',
+        'plain',
+        'plain.size',
+    }
+    assert read.free_form == {'monitoring.labels'}
+
+
 def test_kubeseal_is_the_release_of_the_controller_the_sealed_secrets_chart_installs() -> None:
     """`credentials` seals with `mise.toml`'s `kubeseal`, for the controller the chart's pin installs.
 
@@ -439,8 +574,9 @@ def test_a_run_reads_every_source_from_the_pins(tmp_path: Path, monkeypatch: pyt
     The operator version of every chart the script reads is read, and the
     floors checked against it, before anything is rendered, and is handed back
     by chart; the source tree is fetched at the ref its chart's pin names, the
-    manifest through the digest-checked fetch, and exactly the charts that
-    render definitions are rendered, each from its pin.
+    manifest through the digest-checked fetch, exactly the charts that render
+    definitions are rendered, each from its pin, and the value paths of every
+    chart pin are read, each from its pin, and handed back by chart.
     """
     config = with_version(project_config(), 'versions:chart-cilium', '9.9.9')
     project = ProjectFile(config)
@@ -464,16 +600,21 @@ def test_a_run_reads_every_source_from_the_pins(tmp_path: Path, monkeypatch: pyt
         calls.append(f'render {pin.name} {pin.version}')
         return ''
 
+    def value_paths(_: Path, pin: ChartPin, *, workdir: Path) -> ValuePaths:
+        calls.append(f'values {pin.name} {pin.version}')
+        return ValuePaths(paths=frozenset({pin.name}), free_form=frozenset())
+
     def fetch_helm(_: Path) -> Path:
         return helm
 
     monkeypatch.setattr(sources, 'fetch_helm', fetch_helm)
+    monkeypatch.setattr(sources, 'chart_value_paths', value_paths)
     monkeypatch.setattr(sources, 'chart_app_version', app_version)
     monkeypatch.setattr(sources, 'fetch_source_tree', tree)
     monkeypatch.setattr(cli, 'fetch_manifest', manifest)
     monkeypatch.setattr(sources, 'render_chart', render)
 
-    _, declared = cli.collect_documents(tmp_path, project)
+    _, declared, read_values = cli.collect_documents(tmp_path, project)
 
     charts = [versions.chart[name] for name in project.names(CHART)]
     read = record.read_charts(project)
@@ -486,6 +627,12 @@ def test_a_run_reads_every_source_from_the_pins(tmp_path: Path, monkeypatch: pyt
     assert [call for call in calls if call.startswith('render')] == [
         f'render {chart.name} {chart.version}' for chart in charts if chart.definitions
     ]
+    assert [call for call in calls if call.startswith('values')] == [
+        f'values {chart.name} {chart.version}' for chart in charts
+    ]
+    assert read_values == {
+        chart.name: ValuePaths(paths=frozenset({chart.name}), free_form=frozenset()) for chart in charts
+    }
 
 
 def test_a_pinned_chart_is_fetched_from_where_its_pin_says() -> None:

@@ -37,6 +37,7 @@ from tqdm import tqdm
 from kluster.lib.versions import ChartPin, ProjectFile
 from kluster.scripts.update_crds import pins
 from kluster.scripts.update_crds.pins import SourceTree
+from kluster.scripts.update_crds.values import ValuePaths, read_chart
 
 log = logging.getLogger(__name__)
 
@@ -274,6 +275,18 @@ def chart_app_version(helm: Path, pin: ChartPin, *, workdir: Path) -> str:
     if not isinstance(app_version, str) or not app_version:
         raise SourceError(f'chart {pin.name} {pin.version} declares no appVersion')
     return app_version
+
+
+def chart_value_paths(helm: Path, pin: ChartPin, *, workdir: Path) -> ValuePaths:
+    """The value paths a pinned chart has, read off the chart unpacked at its pinned version (`values`)."""
+    log.info(f'Reading the value paths chart {pin.name} {pin.version} has (downloads the chart)')
+    destination = workdir / 'values' / pin.name
+    destination.mkdir(parents=True)
+    _ = _helm(helm, ['pull', *_chart_location(pin), '--untar', '--untardir', str(destination)], workdir=workdir)
+    unpacked = [path for path in destination.iterdir() if (path / 'Chart.yaml').is_file()]
+    if len(unpacked) != 1:
+        raise SourceError(f'chart {pin.name} {pin.version} unpacked into {len(unpacked)} charts, not one')
+    return read_chart(unpacked[0])
 
 
 def version_tuple(version: str) -> tuple[int, ...]:
