@@ -107,6 +107,7 @@ Components are written as ordinary imperative Python:
 import pulumi
 from putils import Component, async_output, resolve
 
+
 class MyComponent(Component):
     def __init__(self, name: str, opts: pulumi.ResourceOptions | None = None):
         super().__init__(name, opts=opts)
@@ -119,7 +120,7 @@ class MyComponent(Component):
         )
         self.subnet = gcp.compute.Subnetwork(
             f'{name}-subnet',
-            cidr='10.0.1.0/24',                         # known: passed plainly
+            cidr='10.0.1.0/24',  # known: passed plainly
             network_id=async_output(self._network_id),  # async: wrapped
             opts=self.child_opts(protect=True),
         )

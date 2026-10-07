@@ -26,6 +26,7 @@ and propagates their secretness to the resulting input.
 import pulumi
 from putils import Component, async_output, resolve
 
+
 class MyComponent(Component):
     def __init__(self, name: str, opts: pulumi.ResourceOptions | None = None):
         super().__init__(name, opts=opts)
@@ -38,7 +39,7 @@ class MyComponent(Component):
         )
         self.subnet = gcp.compute.Subnetwork(
             f'{name}-subnet',
-            cidr='10.0.1.0/24',                         # known: passed plainly
+            cidr='10.0.1.0/24',  # known: passed plainly
             network_id=async_output(self._network_id),  # async: wrapped
             opts=self.child_opts(protect=True),
         )
@@ -179,6 +180,7 @@ a thread instead of stalling the event loop:
 ```python
 from putils import background
 
+
 async def _machine_config(self) -> str:
     ip = await resolve(self.vm.ip)
     return await background(render_heavy_template)(ip)
@@ -205,7 +207,7 @@ belongs there, and stack outputs are published with `pulumi.export`:
 
 ```python
 async def main() -> None:
-    ami = await fetch_talos_ami()      # plain asyncio, no outputs involved
+    ami = await fetch_talos_ami()  # plain asyncio, no outputs involved
     cluster = Cluster('kluster', ami=ami)
     pulumi.export('endpoint', cluster.endpoint)
 ```
