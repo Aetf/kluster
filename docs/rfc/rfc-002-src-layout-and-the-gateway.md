@@ -1226,7 +1226,7 @@ class SiteNetwork:
     # One subnet the gateway serves, and the gateway's own leg on it.
     name: str
     v4: IPv4Network
-    vlan_id: int | None = None          # None: the untagged LAN
+    vlan_id: int | None = None  # None: the untagged LAN
     gateway_v4: IPv4Address | None = None
 
     @property
@@ -1254,11 +1254,13 @@ class BridgedService:
     address: IPv4Address
     vhost: str | None = None
 
+
 @dataclass(frozen=True)
 class HostNetworkService:
     # A service in the host's own network namespace: no address of its own,
     # and therefore nothing the gateway can proxy to.
     name: str
+
 
 ContainerService = BridgedService | HostNetworkService
 ```
@@ -1306,12 +1308,21 @@ than checked at runtime:
 
 ```python
 @dataclass(frozen=True)
-class EnrolledMember:      # a device that minted its own identity
-    name: str; node_id: str; address: IPv4Address; role: Role; note: str = ''
+class EnrolledMember:  # a device that minted its own identity
+    name: str
+    node_id: str
+    address: IPv4Address
+    role: Role
+    note: str = ''
+
 
 @dataclass(frozen=True)
-class GeneratedMember:     # an identity this program creates in state
-    name: str; address: IPv4Address; role: Role; note: str = ''
+class GeneratedMember:  # an identity this program creates in state
+    name: str
+    address: IPv4Address
+    role: Role
+    note: str = ''
+
 
 RosterEntry = EnrolledMember | GeneratedMember
 ```
@@ -1337,6 +1348,7 @@ class OciTenancy:
     tenancy_ocid: str
     user_email_domain: str
     compartments: Mapping[str, Compartment]
+
 
 @dataclass(frozen=True)
 class B2Account:

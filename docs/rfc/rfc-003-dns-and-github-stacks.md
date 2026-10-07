@@ -305,9 +305,7 @@ class Block:
 
 def zone_records(zone: str, blocks: Iterable[Block]) -> tuple[Record, ...]:
     """What one zone carries: the provider's per-zone view, derived."""
-    return tuple(
-        record for block in blocks if zone in block.zones for record in block.records
-    )
+    return tuple(record for block in blocks if zone in block.zones for record in block.records)
 ```
 
 The zone set belongs to the block rather than to the record, which is the
@@ -322,10 +320,13 @@ set in the first column:
 BASE_RECORDS: tuple[Block, ...] = (
     # The zones that answer for a website: the apex and www, served by a web
     # server rather than by an app.
-    Block((*conventions.WEB_ZONES, *conventions.PARKED_ZONES), (
-        a('@', legacy.IP_ARCHVPS, proxied=True, comment='web origin; repoints to kluster.hosts at migration'),
-        cname('www', legacy.ANCHOR_ARCHVPS, proxied=True),
-    )),
+    Block(
+        (*conventions.WEB_ZONES, *conventions.PARKED_ZONES),
+        (
+            a('@', legacy.IP_ARCHVPS, proxied=True, comment='web origin; repoints to kluster.hosts at migration'),
+            cname('www', legacy.ANCHOR_ARCHVPS, proxied=True),
+        ),
+    ),
     # The overlay host block, one record per roster member.
     Block(conventions.PRIMARY_ONLY, overlay_records()),
     # The mail zones: the exchangers, SPF, the in-cluster DKIM key and DMARC,
@@ -357,8 +358,7 @@ The stack program keeps its loop and loses both conditional arms:
 ```python
 blocks = base.blocks(anchors=_anchor_addresses(physical))
 zones = {
-    zone: ManagedZone(zone, zone=zone, account_id=account,
-                      records=zone_records(zone, blocks), opts=on_cloudflare)
+    zone: ManagedZone(zone, zone=zone, account_id=account, records=zone_records(zone, blocks), opts=on_cloudflare)
     for zone in conventions.ALL_ZONES
 }
 ```
@@ -793,9 +793,9 @@ records belong in the route row, in a field for what is published beside the
 name and derived by no helper:
 
 ```python
-MATRIX = Route('matrix', proxied=False,
-               extras=(srv('_matrix-identity._tcp', priority=10, weight=0,
-                           port=443, target=SELF),))
+MATRIX = Route(
+    'matrix', proxied=False, extras=(srv('_matrix-identity._tcp', priority=10, weight=0, port=443, target=SELF),)
+)
 ```
 
 **Not beside the component**, which is where the reasoning "`dns` derives
@@ -910,8 +910,8 @@ becomes one component per AdGuard instance:
 
 ```python
 ResolverRewrites(
-    f'rewrites-{resolver.name}',      # rewrites-adguard-alice
-    resolver=resolver,                # a conventions.gateway.BridgedService
+    f'rewrites-{resolver.name}',  # rewrites-adguard-alice
+    resolver=resolver,  # a conventions.gateway.BridgedService
     entries=rewrites(conventions.ROUTES),
 )
 ```
@@ -1216,14 +1216,16 @@ That is §3's new rule in its purest form — two programs that must agree, and
 
 ```python
 class BranchPolicy(Enum):
-    ANY_BRANCH = 'any'          # a pull request's own branch may deploy
+    ANY_BRANCH = 'any'  # a pull request's own branch may deploy
     PROTECTED_ONLY = 'protected'
+
 
 @dataclass(frozen=True)
 class Environment:
     name: str
     branches: BranchPolicy
     gated: bool = False
+
 
 @dataclass(frozen=True)
 class Repository:
