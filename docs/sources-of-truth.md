@@ -85,11 +85,14 @@ program refuses until `physical` publishes the anchors' addresses
 (declarative/dns.md §2).
 
 **N2. adguardhome-sync may stop at any time** (operator ruling,
-`kluster-ops#505`). No rule is written by hand on either instance
-(`kluster-ops#507`), so it carries nothing the stack does not write to
-both; it must stop before the stack first writes bob, since it would
-overwrite bob's list with alice's. migration.md §4 removes its unit in
-Wave F at the latest.
+`kluster-ops#505`). It carries more than the rules written by hand, which
+end with `kluster-ops#507`: alice's whole configuration but its DHCP,
+so also the block `bili-cdn-probe` writes into alice's `user_rules`
+and every setting outside `user_rules` (upstreams, filter lists, clients;
+the census on `kluster-ops#508`). Stopping it leaves bob with what it
+last copied of those until they are declared. It must stop before the
+stack first writes bob, since it would overwrite bob's list with
+alice's. migration.md §4 removes its unit in Wave F at the latest.
 
 **N3. After the cutover window nothing runs `deploy.sh`.** Its
 `rsync` calls carry `--delete` into `/data/on_boot.d/`,
