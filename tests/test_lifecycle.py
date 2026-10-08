@@ -1001,3 +1001,27 @@ def test_physical_is_moved_from_the_stack_passphrase_or_an_earlier_generation_of
 
     assert lifecycle.re_encrypt_physical(kit, tmp_path / 'absent', registry)
     assert seen == [(pulumi_config.PHYSICAL, [stack_passphrase, second, first], newest)]
+
+
+@needs_age
+def test_the_stacks_under_the_stack_passphrase_are_moved_from_its_earlier_generations(
+    kit: KdbxStore, registry: escrow.Registry, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What `pulumi-passphrase re-encrypt` hands the move: the newest generation, and every earlier one, newest first.
+
+    The newest is what the environment gives the stacks, so it is never among
+    the passphrases a stack may be moved from, and `physical`'s own
+    passphrase is not among them either.
+    """
+    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
+    first, second, newest = (escrow.generate(escrow.Vault.open(kit, registry), escrow.PASSPHRASE) for _ in range(3))
+    seen: list[tuple[str | None, Sequence[str]]] = []
+
+    def moving(environment: pulumi_config.BackendEnvironment, *, former: Sequence[str]) -> list[str]:
+        seen.append((environment.passphrase, former))
+        return list(pulumi_config.ON_STACK_PASSPHRASE)
+
+    monkeypatch.setattr(pulumi_config, 're_encrypt_on_stack_passphrase', moving)
+
+    assert lifecycle.re_encrypt_stacks(kit, tmp_path / 'absent', registry) == list(pulumi_config.ON_STACK_PASSPHRASE)
+    assert seen == [(newest, [second, first])]

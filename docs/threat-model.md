@@ -360,7 +360,7 @@ Grouped by who controls their software:
     delete, versioned state, and the kit.
 
 The first half of the merge boundary holds for the operator stacks'
-credentials, and for `physical`'s once that stack has moved (§3.1). The forge does not enforce the second half today (§3.2).
+credentials, and for `physical`'s once it has moved and the stack passphrase it was under has been rotated out of every Environment (§3.1). The forge does not enforce the second half today (§3.2).
 The workstation is outside the boundary by construction (§3.3).
 
 ### 3.1 The first half: what an unmerged ref's runs hold
@@ -371,20 +371,25 @@ The workstation is outside the boundary by construction (§3.3).
 > stack's state; `physical`'s credentials, and the operator stacks', never
 > reach it.
 
-That is the half once `physical` has moved. `physical`'s configuration
+That is the half once `physical` has moved and the stack passphrase it
+was under has been rotated out of every Environment. `physical`'s configuration
 moves under a passphrase of its own, which only `physical-plan` and
 `physical` receive. Those Environments take protected branches only, so
 a job of a pull request or of a branch push that names either is refused
 before any step of it runs: GitHub documents this, and the move's first
 contact observes it ([framework/github.md](framework/github.md) §1,
-framework/ci.md §3). The move is built, and running it is the operator's
-step (Aetf/kluster-ops#487). Until it has run, `Pulumi.physical.yaml` is
-under the stack passphrase, and a pull request's runs open it. The move
-comes before `physical`'s first `up`, because the backend keeps every
-checkpoint written before it in rows those runs read. It is finished when
-every credential the configuration held under the stack passphrase has
-been issued again, because git history keeps those ciphertexts
-(credentials.md §1 rule 6).
+framework/ci.md §3). `Pulumi.physical.yaml` is under that passphrase
+(Aetf/kluster-ops#487). The move comes before `physical`'s first `up`, because the backend keeps every
+checkpoint written before it in rows those runs read. Git history keeps
+the ciphertexts `physical`'s configuration held under the stack
+passphrase (credentials.md §1 rule 6), so this half holds for `physical`
+once the stack passphrase those ciphertexts are under has been rotated
+out of every Environment: `credentials derived sync --only
+pulumi-passphrase` replaces it there, once `credentials derived
+pulumi-passphrase re-encrypt` has moved every stack under it
+(credentials.md §4.2). A pull request's runs then hold only
+a generation that opens none of them, the earlier one being assumed not
+leaked.
 
 `dns`, `k8s-base` and `apps` share the stack passphrase: their
 Environments take any branch for the previews, so whatever reaches one

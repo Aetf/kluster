@@ -195,13 +195,16 @@ facts about them.
     run by hand names its slot to `pulumi` (§4.4). Re-encrypting a stack
     moves what its configuration holds now, not what git history keeps,
     so a `physical` whose configuration was ever committed under the
-    stack passphrase is out of a pull request's reach only once every
-    config secret it held then has been issued again, as for a leaked
-    passphrase (§4.2). It moves the state's current checkpoint and not
+    stack passphrase is out of a pull request's reach once the stack
+    passphrase it was under has been rotated out of every Environment
+    (§4.2), the earlier generation being assumed not leaked; one that has
+    leaked is §4.2's leaked passphrase, and every config secret it held
+    is issued again. It moves the state's current checkpoint and not
     the earlier ones: the backend keeps every checkpoint it wrote before
     the move, in rows the `ci` bundle reads, so the move is made before
-    `physical`'s first `up`. A move after one extends the re-issuance to
-    every secret that state held, and deletes those rows.
+    `physical`'s first `up`. A move after one leaves those rows under the
+    stack passphrase too, out of reach on the same rotation, and deletes
+    them.
 7.  **Provisioning is scripted.** Minting and distributing a
     credential is an executable procedure — a `credentials`
     subcommand (§4), never a documented sequence of console clicks.
@@ -959,7 +962,8 @@ name.
 | `credentials derived pulumi-passphrase generate` | After the state backend exists. The stack passphrase (§2.2) is generated, its ciphertext committed and its workstation slot (§4.4) written in one act, so `mise.toml` puts it into the environment of every later `pulumi` run and the backend URL comes from the bundle beside it — a `pulumi` command needs no prepared shell. The general form of this verb is below. |
 | `credentials derived operator-passphrase generate` | Before anything reads or writes an operator stack's config, and once per installation. Generates the operator passphrase, commits its ciphertext and keeps it in the desktop secret store — its workstation slot (§4.4) on a machine with no store — in one act: the same shape as the row above, differing in the one thing it exists for: it reaches no CI Environment, so nothing CI can start can read `Pulumi.github.yaml`. A second workstation runs `credentials derived operator-passphrase recover` instead. Re-running `generate` files a *new* generation and does **not** re-encrypt the stacks; rotating it is §4.2. |
 | `credentials derived physical-passphrase generate` | After the state backend exists, and before anything reads or writes `physical`'s config. Generates `physical`'s passphrase (§2.2), commits its ciphertext and writes its workstation slot (§4.4) in one act — the stack passphrase's shape, differing in the Environments it reaches: `derived sync` pushes it into `physical-plan` and `physical` alone, so no run of a pull request can open `physical`'s configuration. Every `credentials` command that reaches `physical` opens it under this one, recovered with the kit, and refuses by naming this command where nothing is filed. Re-running it files a new generation and re-encrypts nothing: from then on those commands open `physical` under the new generation, and `re-encrypt` below is what moves the stack onto it (§4.2). |
-| `credentials derived physical-passphrase re-encrypt [--bundle-dir <path>]` | After `generate` above: once for a `physical` stack made under the stack passphrase, and once per rotation of its own. Re-encrypts `physical`'s configuration and its state in the backend onto the newest generation of its own passphrase, from whichever of the stack passphrase and its own earlier generations opens it, every one recovered with the kit, and proves it took: the configuration and the state both decrypt under the new one. A stack already there is left alone; one that a run interrupted between the stack file and the state is refused, naming the recovery: restore the committed `Pulumi.physical.yaml` and run it again. `Pulumi.physical.yaml` is then committed in a pull request. Run `credentials derived sync --only physical-passphrase` immediately before merging the pull request that carries the re-encrypted `Pulumi.physical.yaml`, with nothing else merged and no drift dispatched in between: the merge starts `deploy`, whose `plan-physical` reads the passphrase when it starts. A `physical` job that runs between the two meets `incorrect passphrase`, which `plan-physical` reports as a diff; reject the approval `up-physical` asks for, and dispatch `deploy` again once both have landed. The first move off the stack passphrase comes before `physical`'s first `up`, and ends with every config secret `physical` held under it issued again by its own command, because git history keeps those ciphertexts under a passphrase every pull request's runs hold (§1 rule 6); for the SSH pairs that means installing each new public half where the old one is authorized, removing the old one there, and pasting the private halves in with the §4.4 form. |
+| `credentials derived physical-passphrase re-encrypt [--bundle-dir <path>]` | After `generate` above: once for a `physical` stack made under the stack passphrase, and once per rotation of its own. Re-encrypts `physical`'s configuration and its state in the backend onto the newest generation of its own passphrase, from whichever of the stack passphrase and its own earlier generations opens it, every one recovered with the kit, and proves it took: the configuration and the state both decrypt under the new one. A stack already there is left alone; one that a run interrupted between the stack file and the state is refused, naming the recovery: restore the committed `Pulumi.physical.yaml` and run it again. `Pulumi.physical.yaml` is then committed in a pull request. Run `credentials derived sync --only physical-passphrase` immediately before merging the pull request that carries the re-encrypted `Pulumi.physical.yaml`, with nothing else merged and no drift dispatched in between: the merge starts `deploy`, whose `plan-physical` reads the passphrase when it starts. A `physical` job that runs between the two meets `incorrect passphrase`, which `plan-physical` reports as a diff; reject the approval `up-physical` asks for, and dispatch `deploy` again once both have landed. The first move off the stack passphrase comes before `physical`'s first `up`. Git history keeps the ciphertexts `physical` held under the stack passphrase (§1 rule 6), so that move is finished once `credentials derived sync --only pulumi-passphrase` has replaced the generation they are under in every Environment, which the row below makes safe: a pull request's runs then hold only a generation that opens none of them, the earlier one being assumed not leaked. |
+| `credentials derived pulumi-passphrase re-encrypt [--bundle-dir <path>]` | Each rotation of the stack passphrase, after `derived pulumi-passphrase generate` has filed its next generation. Re-encrypts every stack under the stack passphrase — each stack a run hands it to, which is every one that is neither an operator stack nor `physical` (`pulumi_config.ON_STACK_PASSPHRASE`): today `dns`, `k8s-base` and `apps` — configuration and state in the backend, onto the newest generation, from whichever earlier generation opens each, every one recovered with the kit, and proves each move took: the configuration and the state both decrypt under the new one. A stack already there is left alone, so a re-run moves nothing it has moved. A refusal stops the run at that stack: those before it stay moved, those after it are not reached, and a re-run finishes them. A stack the backend does not hold is refused, naming the `pulumi stack init` that creates it; one that a run interrupted between its stack file and its state is refused, naming the recovery. The `Pulumi.<stack>.yaml` files and the generation's `escrow/pulumi/passphrase/<n>.age` go into one pull request, `credentials derived sync --only pulumi-passphrase` runs, and the pull request merges. From this run until the merge, nothing else merges into `main`, and neither `deploy` nor `drift` is dispatched. During that time the states have moved, while `main` and the Environments hold the earlier generation, so a run in that window either meets `incorrect passphrase` or, on a stack whose state holds no secret yet, succeeds and writes that state back under the earlier generation. Such a stack is recovered by restoring the `Pulumi.<stack>.yaml` that `main` held before the rotation and running this again, which its refusal names. Re-running the pull request's previews after the sync checks that the Environments hold the generation the files are under: they refuse before it and pass after (§4.2). |
 | `credentials derived cloudflare-zones mint` | After the kit and the state backend exist, and after `apps` exists. Mints the zone-scoped Cloudflare token (§3) from the seed and writes the one token into the config of every stack the slot map names for the row, `dns` and `apps`, under the one key both read; the stack files are then committed. Any of those stacks but `dns`, whose first mint creates it, must already exist, and the mint refuses before it creates anything when one does not. The account the zones live in is not written beside it — that is `conventions.CLOUDFLARE_ACCOUNT`, and the mint holds the account it is about to mint in against it, before it creates anything. Re-running it rotates that token. No row takes a `--stack`: what each row mints is named after the row and its mint retires everything else of that name, so a delivery aimed at one stack would revoke the live credential of every other stack the row fills. That is why this row fills its stacks in one delivery and retires the token it supersedes only once every one of them holds the new one: a write that fails part-way retires nothing. |
 | `credentials derived cloudflare-gateway-acme mint` | After the kit and the state backend exist. Mints the gateway's own ACME token (§3) from the same seed, scoped to the zones its vhosts are served under, and writes it into the `physical` stack's config secret; the stack file is then committed, and the stack writes the token onto the device. Which stack takes it is not a choice — the token is named after the row and minting retires every other token of that name. The account is held against `conventions.CLOUDFLARE_ACCOUNT` before the token is created, as it is for the zones row: the check belongs to the mint, so no row can be the one that forgets it. Re-running it rotates that token. |
 | `credentials derived cloudflare-dns01 mint` | After `physical` has brought the cluster up and `k8s-base` runs the sealed-secrets controller. Fetches the cluster's sealing certificate from the controller with the kubeconfig in `physical`'s state, then mints cert-manager's DNS-01 token (§3) from the Cloudflare seed, scoped to the zones the cluster serves, seals it with `kubeseal` strict for the Secret the cluster issuer reads, and writes the ciphertext in the clear at `sealedSecrets.cloudflare-dns01.api-token` in `k8s-base`'s config, reading it back; the stack file is then committed, and the next `k8s-base` apply hands the issuer the token. A cluster that cannot be reached, a `k8s-base` stack that does not exist and a seed in another account each refuse before the token is created; a live token of the same name is retired only once the ciphertext is written. Re-running it rotates the token, and widens it to a zone a new route publishes in. |
@@ -1707,11 +1711,34 @@ result — the configuration and the state both decrypt under the new
 generation — before `Pulumi.physical.yaml` is committed and `derived
 sync --only physical-passphrase` re-pushes the passphrase to
 `physical`'s two Environments, immediately before the commit merges
-(§4). The stack passphrase
-adopts the way the operator passphrase does, once per stack under it,
-plus a `derived sync` to re-push it to every Environment but
-`physical`'s. That re-encryption is the whole of a rotation made for
-custody; a passphrase that has leaked asks for more (below).
+(§4). The stack passphrase adopts through a command of its own too:
+`credentials derived pulumi-passphrase generate` files the next
+generation, `credentials derived pulumi-passphrase re-encrypt` moves
+every stack under it — each one a run hands it to, never an operator
+stack or `physical` — from whichever earlier generation opens it and
+proves each move, the `Pulumi.<stack>.yaml` files and the generation's
+`escrow/pulumi/passphrase/<n>.age` go into one pull request, and
+`credentials derived sync --only pulumi-passphrase` re-pushes the
+passphrase to every Environment but `physical`'s immediately before it
+merges, since the merge's runs read it as soon as they start. Without
+the escrow file, `main`'s registry is a generation behind the
+Environments, and a workstation that recovers from it is handed the
+earlier one. The window opens at `re-encrypt`, not at the sync. From
+that run until the merge, nothing else merges into `main`, and neither
+`deploy` nor `drift` is dispatched: the states have moved, while `main`
+and the Environments hold the earlier generation. A run in that window
+either meets `incorrect passphrase` or, on a stack whose state holds no
+secret yet, succeeds and writes that state back under the earlier
+generation. To recover such a stack, restore the `Pulumi.<stack>.yaml`
+that `main` held before the rotation and run `re-encrypt` again; the
+committed file is by then the moved one, so restoring it changes
+nothing. Re-running the pull request's previews after the sync is the
+end-to-end check that the Environments hold the generation the files are
+under. That re-encryption is the whole of a rotation made for
+custody. The sync, which takes the earlier generation out of the
+Environments, is also what puts `physical`'s earlier ciphertexts in git
+history out of a pull request's reach (§1 rule 6); a passphrase that
+has leaked asks for more (below).
 
 **Never repair that disagreement by deleting `encryptionsalt`.** With no
 salt there is nothing to verify against, and `pulumi` mints one from

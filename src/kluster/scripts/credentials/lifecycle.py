@@ -266,12 +266,30 @@ def re_encrypt_physical(kit: KdbxStore, bundle_dir: Path, registry: escrow.Regis
     one every later run of it is given. Returns whether anything moved.
     """
     opened = environment(kit, bundle_dir, registry)
-    vault = escrow.Vault.open(kit, registry)
-    generations = vault.registry.generations(escrow.PHYSICAL_PASSPHRASE)
-    earlier = [vault.recover(escrow.PHYSICAL_PASSPHRASE, number) for number in reversed(generations[:-1])]
+    earlier = _earlier_generations(escrow.Vault.open(kit, registry), escrow.PHYSICAL_PASSPHRASE)
     former = [passphrase for passphrase in (opened.passphrase, *earlier) if passphrase is not None]
     stack = pulumi_config.Stack(name=pulumi_config.PHYSICAL, directory=pulumi_config.project_dir(), environment=opened)
     return stack.re_encrypt(former=former)
+
+
+def re_encrypt_stacks(kit: KdbxStore, bundle_dir: Path, registry: escrow.Registry | None = None) -> list[str]:
+    """Move every stack under the stack passphrase onto its newest generation (`pulumi_config.ON_STACK_PASSPHRASE`).
+
+    The newest generation is what the environment hands those stacks, and
+    every earlier one, newest first, is what each may still be under; all of
+    them come out of the kit, the way `re_encrypt_physical`'s do. The stacks
+    are the census's, never a list kept here, and each is moved and proven by
+    `pulumi_config.Stack.re_encrypt`. Returns the stacks that moved.
+    """
+    opened = environment(kit, bundle_dir, registry)
+    former = _earlier_generations(escrow.Vault.open(kit, registry), escrow.PASSPHRASE)
+    return pulumi_config.re_encrypt_on_stack_passphrase(opened, former=former)
+
+
+def _earlier_generations(vault: escrow.Vault, label: str) -> list[str]:
+    """Every generation of `label` before the newest, newest first: what a stack being moved onto it may be under."""
+    generations = vault.registry.generations(label)
+    return [vault.recover(label, number) for number in reversed(generations[:-1])]
 
 
 def _operator_passphrase() -> str:

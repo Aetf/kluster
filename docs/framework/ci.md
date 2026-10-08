@@ -823,8 +823,9 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     membership and the `ci` bundle's access to every stack's state, and
     with nothing that opens `physical`'s configuration — whose
     ciphertexts from before the move stay in git history under the
-    stack passphrase, which is why that move ends with every
-    credential they held issued again, and is made before `physical`'s
+    stack passphrase, which is why that move ends once the stack
+    passphrase they are under has been rotated out of every
+    Environment (credentials.md §4.2), and is made before `physical`'s
     first `up`, the backend keeping every checkpoint written before it
     (credentials.md §1 rule 6).
     **PRs get no physical preview at
