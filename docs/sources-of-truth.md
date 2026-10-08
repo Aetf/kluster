@@ -30,6 +30,10 @@ this file.
     again before anything relies on it.
 3.  **A flip's pull request edits its row**, in the change that
     performs or records the flip.
+4.  **A flip keeps the live service's feature parity**, unless an
+    arrangement recorded in its row says otherwise. Whatever the live
+    source of truth provides when the row flips is declared here before
+    the flip, or named in the row with the arrangement that retires it.
 
 ## 2. The table
 
@@ -41,7 +45,7 @@ Column 5 names issues in the ops repository, where the drift is tracked.
 | Row | Domain | (1) Live source of truth today | (2) Stack · apply state | (3) Tracker until the flip · what "take" means | (4) Flip → retirement | (5) Known drift |
 |---|---|---|---|---|---|---|
 | R1 | `dns` · the Cloudflare zones: base records, mail with DKIM, the `*.zt` block, `legacy.py`'s application records, anchors, CAA, DNSSEC | DNSControl: Aetf/dns `dnsconfig.js`, whose `push.yml` is active and last applied on 2026-10-04 (G5). Its preview reports no correction on any zone at `e865032` (C1). The ruling that keeps it authoritative is `kluster-ops#177` | `dns` · **imported, never applied.** Its only update is a `resource-import` that succeeded on 2026-08-26, run locally (B2). It holds 139 resources (B1): 123 `DnsRecord`, 6 `Zone`, 6 `ManagedZone`, 2 `ZoneDnssec` (B3). The repository-against-live preview cannot run before `physical` is applied (note N1), and the stack's refresh fails against Cloudflare (`kluster-ops#511`) | Aetf/dns: edit `dnsconfig.js` and merge to `master`, and the merge applies (`push.yml`, no gate). Here: the same edit to `components/dns/`, same sitting, unapplied; the DKIM key change (Aetf/kluster#441) is the shape | `kluster-ops#75`'s `dns` first up, in the order of note N1 → `kluster-ops#7` (the pointer commit, then the archive) | `kluster-ops#510`; `kluster-ops#511`; `kluster-ops#478` |
-| R2 | `dns` · the split-horizon answers on alice and bob | alice, by hand. adguardhome-sync, a homelab user unit that is running (H2), copies alice to bob. Both instances answer from `$dnsrewrite` user rules, 18 each, with the rewrite list the stack writes empty and switched off (U3) | `dns` · declares none: B3 lists no rewrite among the stack's types. Its first rows are Aetf/kluster#408, open and held | alice's UI, which the sync carries to bob, and the weekly backup pull records in yadm. Here: only the names the stack will declare (the `*.zt` set of `kluster-ops#69`, the gateway trio of `kluster-ops#143`, the route rows), same sitting, unapplied. The `lan.ucw.phd` rules are never declared, and retire per application (dns.md §4, item 3) | Aetf/kluster#408 merged and applied after R1's flip (`kluster-ops#69`'s design). When adguardhome-sync stops is a **pending ruling** (note N2) → its unit's removal (`kluster-ops#79`) | `kluster-ops#507`; `kluster-ops#482`; `kluster-ops#223`; `kluster-ops#143` |
+| R2 | `dns` · the split-horizon answers on alice and bob | alice, by hand. adguardhome-sync, a homelab user unit that is running (H2), copies alice to bob. Both instances answer from `$dnsrewrite` user rules, 18 each, with the rewrite list the stack writes empty and switched off (U3) | `dns` · declares none: B3 lists no rewrite among the stack's types. Its first rows are Aetf/kluster#408, open and held | alice's UI, which the sync carries to bob, and the weekly backup pull records in yadm. Here: every rule the instances answer from, declared in the `user_rules` list of each instance, a list one resource per instance owns whole (`kluster-ops#507`, way (b)), same sitting, unapplied. The `lan.ucw.phd` rules are declared too until their application migrates (rule 4), since the first apply of that list removes every rule it does not declare | Aetf/kluster#408, rebuilt on the user-rules list, merged and applied after R1's flip; adguardhome-sync stopped before it (note N2) → its unit's removal (`kluster-ops#79`) | `kluster-ops#507`; `kluster-ops#482`; `kluster-ops#223`; `kluster-ops#143` |
 | R3 | `physical` · the cloud fleet in compartment `kluster-physical` (network, nodes, load balancer, addresses, volumes, guardrails) and the Talos day-1 chain | none: never applied | `physical` · **no history**: 0 resources, the stack initialized on 2026-08-26 and never updated (B1, B2). The console read of OCI (O1) was not taken | none | `physical`'s run with no targets in `kluster-ops#75` (physical/gateway.md §2.5) → none | none known |
 | R4 | `physical` · the homelab's libvirt objects: the pool on the `nodatacow` subvolume, and the worker's volume, seed and domain | none. The host preparation under them is aconfmgr's, and applied (physical/homelab-host.md, status) | as R3. The host holds one domain, `haos`, and one pool, `images` (H3): no worker and no cluster pool | none for these. The host preparation stays aconfmgr's for good, and a pool defined there would fail the first apply (physical/homelab-host.md §4) | the same run as R3, then the host-side `truncate` and `virsh blockresize` (physical/homelab-host.md §1) → none | none known |
 | R5 | `physical` · the gateway's device state: boot chain, units, `nspawn` settings and machines, `caddy`, AdGuard's initial state, authorized keys, device secrets, root filesystems. FRR's configuration and the ZeroTier machine are new | gw-config, yadm's `~/.config/gw-config`, pushed by hand with `deploy.sh`; root filesystems pushed by homelab-containers. Its dry run passes against the device (U1), which runs `adguard-alice`, `adguard-bob` and `caddy` under an active `udm-boot` (U2) | as R3 | gw-config: edit, `./deploy.sh`, the restart it prints, `yadm commit`. Here: the same change in `components/gateway/` or `conventions.gateway`, same sitting, unapplied | the window of physical/gateway-cutover.md, after which gw-config is frozen (note N3) → physical/gateway-cutover.md §7 after the soak; `kluster-ops#79` | `kluster-ops#508`: the live `Caddyfile` carries the Bilibili steering (U4), which nothing here declares |
@@ -64,20 +68,13 @@ outside their censuses.
 
 **N1. R1's flip.** `kluster-ops#75` runs the `dns` first up from the
 operator's checkout, and `kluster-ops#7` retires Aetf/dns with a
-pointer commit and its `push.yml` disabled. Where the disable falls
-is a **pending ruling**, asked on `kluster-ops#505` in its design
-comment:
+pointer commit. **Aetf/dns takes no push from 2026-10-08 on** (operator
+ruling, `kluster-ops#505`): a push to its `master` runs DNSControl over
+the zones, and DNSControl removes what its file does not declare, so
+one landing between the `up` and the retirement would undo the `up`.
+`push.yml` stays enabled as a workflow and is not run.
 
--   **After the `up`**, as `kluster-ops#75` and `kluster-ops#7` stand.
--   **Before it**, as that design proposes: disable `push.yml`
-    (`gh workflow disable push.yml --repo Aetf/dns`), confirm with C1 that
-    DNSControl reports no correction, reconcile `pulumi preview --stack
-    dns` line by line, run the `up`, and only then commit the pointer.
-    Its reason is that a push to Aetf/dns `master` between the `up` and
-    the disable runs DNSControl over the zones the `up` has just
-    written, and DNSControl removes what its file does not declare.
-
-Either way the preview is reconciled line by line, as
+The preview is reconciled line by line, as
 `kluster-ops#75` asks: no replace or delete from the type move
 (`kluster-ops#478`), the co-host zone's expected deletes
 (`kluster-ops#202`), and the first `up`'s own changes, which are CAA and
@@ -87,12 +84,12 @@ alone (C2). That preview cannot run before `physical` is applied: the
 program refuses until `physical` publishes the anchors' addresses
 (declarative/dns.md §2).
 
-**N2. When adguardhome-sync stops** is a **pending ruling**, asked on
-`kluster-ops#505` in its design comment. declarative/dns.md §3 and
-cluster/nodes.md §4.1 retire the sync once the stack writes both
-instances, since it would overwrite bob's declared rows; migration.md §4
-removes its unit in Wave F. Until the ruling, neither timing is
-settled.
+**N2. adguardhome-sync may stop at any time** (operator ruling,
+`kluster-ops#505`). No rule is written by hand on either instance
+(`kluster-ops#507`), so it carries nothing the stack does not write to
+both; it must stop before the stack first writes bob, since it would
+overwrite bob's list with alice's. migration.md §4 removes its unit in
+Wave F at the latest.
 
 **N3. After the cutover window nothing runs `deploy.sh`.** Its
 `rsync` calls carry `--delete` into `/data/on_boot.d/`,
@@ -120,10 +117,9 @@ by stack, on something other than the merge:
     identity sync only after the `dns` first up, and that is an ordering
     in a checklist: once the sync delivers the identities, every merge
     applies `dns`, and the `dns` Environment has no protection rule
-    (G2). Whether a required reviewer goes on
-    the `dns` Environment until R1 flips, declared in the `github` stack
-    (`conventions/forge.py`) so that the guard is the forge's, is a
-    **pending ruling**, asked on `kluster-ops#505` in its design comment.
+    (G2). No reviewer is added (operator ruling, `kluster-ops#505`):
+    the bring-up runs the identity sync and the `dns` first up in one
+    sitting, so no merge lands between them.
 -   **`physical`:** the required reviewer on the `physical` Environment
     (G2; framework/ci.md §3). From the window's preparation on, the
     committed `gatewayBootstrapHost` also fails CI's `physical` jobs
