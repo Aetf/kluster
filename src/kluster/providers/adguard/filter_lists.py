@@ -34,7 +34,7 @@ import pulumi
 import pulumi.dynamic as dynamic
 
 from kluster.providers.adguard.api import DOWNLOAD_TIMEOUT, Api
-from kluster.providers.adguard.base import ENDPOINT, INSTANCE, AdGuardProvider, missing_or_extra
+from kluster.providers.adguard.base import ENDPOINT, INSTANCE, SETUP_ENDPOINT, AdGuardProvider, missing_or_extra
 
 __all__ = ('ALLOW', 'BLOCK', 'AdGuardFilterLists', 'AdGuardFilterListsProvider', 'FilterList')
 
@@ -136,8 +136,8 @@ class AdGuardFilterLists(dynamic.Resource, module='adguard', name='AdGuardFilter
 
     instance: pulumi.Output[str]
     endpoint: pulumi.Output[str]
-    filters: pulumi.Output[list[FilterList]]
-    whitelist_filters: pulumi.Output[list[FilterList]]
+    filters: pulumi.Output[list[dict[str, Any]]]
+    whitelist_filters: pulumi.Output[list[dict[str, Any]]]
 
     def __init__(
         self,
@@ -145,6 +145,7 @@ class AdGuardFilterLists(dynamic.Resource, module='adguard', name='AdGuardFilter
         *,
         instance: pulumi.Input[str],
         endpoint: pulumi.Input[str],
+        setup_endpoint: pulumi.Input[str],
         filters: pulumi.Input[Sequence[FilterList]],
         whitelist_filters: pulumi.Input[Sequence[FilterList]],
         opts: pulumi.ResourceOptions | None = None,
@@ -153,6 +154,12 @@ class AdGuardFilterLists(dynamic.Resource, module='adguard', name='AdGuardFilter
         super().__init__(
             AdGuardFilterListsProvider(),
             name,
-            {INSTANCE: instance, ENDPOINT: endpoint, BLOCK: filters, ALLOW: whitelist_filters},
+            {
+                INSTANCE: instance,
+                ENDPOINT: endpoint,
+                SETUP_ENDPOINT: setup_endpoint,
+                BLOCK: filters,
+                ALLOW: whitelist_filters,
+            },
             opts,
         )

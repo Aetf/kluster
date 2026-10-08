@@ -17,7 +17,7 @@ import pulumi
 import pulumi.dynamic as dynamic
 
 from kluster.providers.adguard.api import Api
-from kluster.providers.adguard.base import ENDPOINT, INSTANCE, AdGuardProvider, missing_or_extra
+from kluster.providers.adguard.base import ENDPOINT, INSTANCE, SETUP_ENDPOINT, AdGuardProvider, missing_or_extra
 
 __all__ = ('QUERYLOG', 'STATS', 'AdGuardLogSettings', 'AdGuardLogSettingsProvider', 'QueryLogConfig', 'StatsConfig')
 
@@ -84,8 +84,8 @@ class AdGuardLogSettings(dynamic.Resource, module='adguard', name='AdGuardLogSet
 
     instance: pulumi.Output[str]
     endpoint: pulumi.Output[str]
-    querylog: pulumi.Output[QueryLogConfig]
-    stats: pulumi.Output[StatsConfig]
+    querylog: pulumi.Output[dict[str, Any]]
+    stats: pulumi.Output[dict[str, Any]]
 
     def __init__(
         self,
@@ -93,6 +93,7 @@ class AdGuardLogSettings(dynamic.Resource, module='adguard', name='AdGuardLogSet
         *,
         instance: pulumi.Input[str],
         endpoint: pulumi.Input[str],
+        setup_endpoint: pulumi.Input[str],
         querylog: pulumi.Input[QueryLogConfig],
         stats: pulumi.Input[StatsConfig],
         opts: pulumi.ResourceOptions | None = None,
@@ -101,6 +102,6 @@ class AdGuardLogSettings(dynamic.Resource, module='adguard', name='AdGuardLogSet
         super().__init__(
             AdGuardLogSettingsProvider(),
             name,
-            {INSTANCE: instance, ENDPOINT: endpoint, QUERYLOG: querylog, STATS: stats},
+            {INSTANCE: instance, ENDPOINT: endpoint, SETUP_ENDPOINT: setup_endpoint, QUERYLOG: querylog, STATS: stats},
             opts,
         )

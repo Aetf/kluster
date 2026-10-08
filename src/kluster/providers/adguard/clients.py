@@ -39,7 +39,7 @@ import pulumi
 import pulumi.dynamic as dynamic
 
 from kluster.providers.adguard.api import Api
-from kluster.providers.adguard.base import ENDPOINT, INSTANCE, AdGuardProvider, missing_or_extra
+from kluster.providers.adguard.base import ENDPOINT, INSTANCE, SETUP_ENDPOINT, AdGuardProvider, missing_or_extra
 from kluster.providers.adguard.filtering import SafeSearch
 
 __all__ = ('CLIENTS', 'AdGuardClients', 'AdGuardClientsProvider', 'Client', 'canonical_ids')
@@ -221,7 +221,7 @@ class AdGuardClients(dynamic.Resource, module='adguard', name='AdGuardClients'):
 
     instance: pulumi.Output[str]
     endpoint: pulumi.Output[str]
-    clients: pulumi.Output[list[Client]]
+    clients: pulumi.Output[list[dict[str, Any]]]
 
     def __init__(
         self,
@@ -229,10 +229,14 @@ class AdGuardClients(dynamic.Resource, module='adguard', name='AdGuardClients'):
         *,
         instance: pulumi.Input[str],
         endpoint: pulumi.Input[str],
+        setup_endpoint: pulumi.Input[str],
         clients: pulumi.Input[Sequence[Client]],
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         """Declare that `instance` holds exactly these persistent clients."""
         super().__init__(
-            AdGuardClientsProvider(), name, {INSTANCE: instance, ENDPOINT: endpoint, CLIENTS: clients}, opts
+            AdGuardClientsProvider(),
+            name,
+            {INSTANCE: instance, ENDPOINT: endpoint, SETUP_ENDPOINT: setup_endpoint, CLIENTS: clients},
+            opts,
         )

@@ -24,7 +24,7 @@ import pulumi
 import pulumi.dynamic as dynamic
 
 from kluster.providers.adguard.api import Api
-from kluster.providers.adguard.base import ENDPOINT, INSTANCE, AdGuardProvider, missing_or_extra
+from kluster.providers.adguard.base import ENDPOINT, INSTANCE, SETUP_ENDPOINT, AdGuardProvider, missing_or_extra
 
 __all__ = (
     'BLOCKED_SERVICES',
@@ -139,11 +139,11 @@ class AdGuardFiltering(dynamic.Resource, module='adguard', name='AdGuardFilterin
 
     instance: pulumi.Output[str]
     endpoint: pulumi.Output[str]
-    filtering: pulumi.Output[FilteringSwitch]
-    safebrowsing: pulumi.Output[Switch]
-    parental: pulumi.Output[Switch]
-    safe_search: pulumi.Output[SafeSearch]
-    blocked_services: pulumi.Output[BlockedServices]
+    filtering: pulumi.Output[dict[str, Any]]
+    safebrowsing: pulumi.Output[dict[str, Any]]
+    parental: pulumi.Output[dict[str, Any]]
+    safe_search: pulumi.Output[dict[str, Any]]
+    blocked_services: pulumi.Output[dict[str, Any]]
 
     def __init__(
         self,
@@ -151,6 +151,7 @@ class AdGuardFiltering(dynamic.Resource, module='adguard', name='AdGuardFilterin
         *,
         instance: pulumi.Input[str],
         endpoint: pulumi.Input[str],
+        setup_endpoint: pulumi.Input[str],
         filtering: pulumi.Input[FilteringSwitch],
         safebrowsing: pulumi.Input[Switch],
         parental: pulumi.Input[Switch],
@@ -165,6 +166,7 @@ class AdGuardFiltering(dynamic.Resource, module='adguard', name='AdGuardFilterin
             {
                 INSTANCE: instance,
                 ENDPOINT: endpoint,
+                SETUP_ENDPOINT: setup_endpoint,
                 FILTERING: filtering,
                 SAFEBROWSING: safebrowsing,
                 PARENTAL: parental,
