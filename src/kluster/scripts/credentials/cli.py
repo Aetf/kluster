@@ -247,6 +247,25 @@ _ORDER = """when to run what:
          Not the recovery key either: it refuses to be overwritten, and
          replacing it deliberately is `kit rotate`.
 
+  rotating the stack passphrase
+    credentials derived pulumi-passphrase generate
+    credentials derived pulumi-passphrase re-encrypt
+    credentials derived sync --only pulumi-passphrase
+         The second moves every stack under the stack passphrase -- each
+         one that is neither an operator stack nor physical -- onto the
+         generation the first filed, configuration and state, from a
+         workstation whose kit recovers the earlier ones. Commit the
+         Pulumi.<stack>.yaml files and the generation's escrow file in
+         one pull request, run the third, and merge it. From the second
+         until the merge, nothing else merges and neither deploy nor
+         drift is dispatched: the states have moved while main and the
+         Environments hold the earlier generation, so a run meets
+         incorrect passphrase or, on a stack whose state holds no secret
+         yet, writes that state back under the earlier generation. Such
+         a stack is recovered by restoring the Pulumi.<stack>.yaml main
+         held before the rotation and running the second again. A
+         refusal stops the second at that stack; a re-run finishes it.
+
   moving physical onto its own passphrase, or onto a rotation of it
     credentials derived physical-passphrase generate
     credentials derived physical-passphrase re-encrypt
@@ -1404,6 +1423,29 @@ def build_parser() -> argparse.ArgumentParser:
                 ),
             )
             _add_bundle_dir(moving)
+        if label.name == escrow.PASSPHRASE:
+            moving = escrow_verbs.add_parser(
+                're-encrypt',
+                help='move every stack under the stack passphrase onto its newest generation',
+                description=(
+                    'Re-encrypt the configuration and the state in the backend of every stack under the stack '
+                    "passphrase -- each stack that is neither an operator stack nor physical -- onto this row's "
+                    'newest generation, from whichever earlier generation opens it, every one recovered with the '
+                    "kit. Each stack file's salt and every ciphertext in it change, so they are files to commit, "
+                    "with the generation's escrow file, in one pull request. A stack already under the newest "
+                    'generation is left alone, so a re-run costs nothing; a refusal stops the run at that stack, '
+                    'the ones before it staying moved and the ones after it not reached, and a re-run finishes '
+                    'them. A stack a run interrupted between its stack file and its state is refused, naming the '
+                    'recovery. From this run until the merge, nothing else merges and neither deploy nor drift is '
+                    'dispatched: the states have moved while main and the Environments hold the earlier '
+                    'generation, so a run meets incorrect passphrase or, on a stack whose state holds no secret '
+                    'yet, writes that state back under the earlier generation, which restoring the stack file main '
+                    'held before the rotation and running this again recovers. `credentials derived sync --only '
+                    'pulumi-passphrase` pushes the new generation into the Environments immediately before the '
+                    "merge, since the merge's runs read it as soon as they start."
+                ),
+            )
+            _add_bundle_dir(moving)
 
     return parser
 
@@ -1910,11 +1952,16 @@ def main(argv: list[str] | None = None) -> int:
                 _ = escrow.record(escrow.Vault.open(store, registry), args.label, _recorded(args, store))
             case ('derived', row, 'recover') if row in escrow.rows():
                 return _recover(args, escrow.Vault.open(store, registry))
-            # The one escrowed row with a verb of its own: `physical` is moved
-            # off the stack passphrase once, from a workstation holding the kit
-            # that recovers both.
+            # `physical`'s row has a verb of its own: the stack is moved
+            # off the stack passphrase once, and onto each rotation of its own,
+            # from a workstation holding the kit that recovers both.
             case ('derived', row, 're-encrypt') if row == escrow.row_name(escrow.PHYSICAL_PASSPHRASE):
                 _ = lifecycle.re_encrypt_physical(store, args.bundle_dir, registry)
+            # The stack passphrase's own rotation: every stack under it, moved
+            # onto its newest generation from a workstation holding the kit.
+            case ('derived', row, 're-encrypt') if row == escrow.row_name(escrow.PASSPHRASE):
+                moved = lifecycle.re_encrypt_stacks(store, args.bundle_dir, registry)
+                log.info('moved %s', ', '.join(moved) if moved else 'nothing')
             # The slot map's sink: one row at a time or every row whose value
             # lives elsewhere, each resolved, pushed and verified in the same
             # run.

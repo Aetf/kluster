@@ -326,6 +326,16 @@ def test_physical_names_the_row_the_register_carries() -> None:
     assert identity.STACK_NAMES.physical == pulumi_config.PHYSICAL
 
 
+#: The bound a rotation case runs under, and the write-back case: a rotation
+#: case makes four stacks with the real CLI and moves three, the write-back
+#: case applies one stack between three moves, so it is set from measured
+#: durations rather than from the suite's per-case bound (testing.md §8). On
+#: a four-core machine the slowest rotation case took 28 s idle and 100 s
+#: with four times as many busy processes as cores, and the write-back case
+#: 15 s and 55 s, at the suite's bound. A stop-loss; nothing asserts on
+#: elapsed time.
+ROTATION_CASE_TIMEOUT = 360
+
 #: The passphrases the re-encryption cases move between.
 FORMER = 'the-stack-passphrase'
 OWN = 'the-own-passphrase'
@@ -511,6 +521,237 @@ def test_a_stack_the_backend_does_not_hold_is_refused(physical_project: tuple[Pa
 
     with pytest.raises(pulumi_config.SlotRefused, match='holds no physical stack'):
         _ = _physical_under(project, url, OWN, former=FORMER).re_encrypt(former=[FORMER])
+
+
+#: The stack passphrase's generations the rotation cases move between, and
+#: `physical`'s own, which no rotation of the stack passphrase may touch.
+EARLIER_GENERATION = 'an-earlier-stack-passphrase'
+NEWEST_GENERATION = 'the-newest-stack-passphrase'
+PHYSICAL_OWN = 'physicals-own-passphrase'
+#: The stack whose configuration holds no secret, as `main`'s `k8s-base`
+#: holds only a plain setting, and the setting it holds.
+PLAIN_ONLY = identity.STACK_NAMES.k8s_base
+PLAIN_KEY = 'example:aSetting'
+
+
+def test_the_stacks_under_the_stack_passphrase_are_the_ones_a_run_hands_it_to(tmp_path: Path) -> None:
+    """The census by definition: every stack whose run is given the stack passphrase, and no other.
+
+    Asked of `BackendEnvironment.variables`, the one place a run's passphrase
+    is chosen, so an operator stack or `physical` cannot be moved onto the
+    stack passphrase, and a stack added to the census is moved without a
+    second list to edit.
+    """
+    environment = pulumi_config.BackendEnvironment(
+        passphrase='the-stack-passphrase', url='file:///nowhere', operator=lambda: 'operator', physical=lambda: 'own'
+    )
+    handed = [
+        name
+        for name in identity.STACK_NAMES.names()
+        if environment.variables(name, checkout=tmp_path).get(pulumi_config.PASSPHRASE_ENV) == 'the-stack-passphrase'
+    ]
+
+    assert handed
+    assert list(pulumi_config.ON_STACK_PASSPHRASE) == handed
+
+
+def _on_stack_passphrase(url: str, passphrase: str) -> pulumi_config.BackendEnvironment:
+    """What a `credentials` run hands the stacks: `passphrase` as the stack passphrase, `physical` its own."""
+    return pulumi_config.BackendEnvironment(passphrase=passphrase, url=url, physical=lambda: PHYSICAL_OWN)
+
+
+def _rotation_estate(project: Path, url: str) -> dict[str, pulumi_config.Stack]:
+    """Every stack under the stack passphrase made under its earlier generation, and `physical` under its own.
+
+    Each holds a secret in its configuration but `PLAIN_ONLY`, which holds a
+    plain setting alone, as on `main`: a configuration with nothing to
+    decrypt opens under any passphrase, so it is the one whose generation a
+    decryption cannot tell. That the state moves with it is
+    `Stack.re_encrypt`'s own proof, held with a secret in the state by the
+    cases above; these cases are about which stacks are moved.
+    """
+    estate: dict[str, pulumi_config.Stack] = {}
+    for name in (*pulumi_config.ON_STACK_PASSPHRASE, pulumi_config.PHYSICAL):
+        stack = pulumi_config.Stack(
+            name=name, directory=project, environment=_on_stack_passphrase(url, EARLIER_GENERATION)
+        )
+        stack.ensure()
+        if name == PLAIN_ONLY:
+            stack.set(PLAIN_KEY, 'a-public-value')
+        else:
+            stack.set_secret(QUALIFIED_KEY, SECRET)
+        estate[name] = stack
+    return estate
+
+
+def _moved(project: Path, url: str, name: str) -> pulumi_config.Stack:
+    return pulumi_config.Stack(name=name, directory=project, environment=_on_stack_passphrase(url, NEWEST_GENERATION))
+
+
+@pytest.mark.timeout(ROTATION_CASE_TIMEOUT)
+def test_every_stack_under_the_stack_passphrase_is_moved_and_no_other(physical_project: tuple[Path, str]) -> None:
+    """Each moves onto the newest generation and off the earlier one; `physical`, under its own, is not touched."""
+    project, url = physical_project
+    estate = _rotation_estate(project, url)
+    physical_file = _stack_file(estate[pulumi_config.PHYSICAL]).read_text()
+
+    moved = pulumi_config.re_encrypt_on_stack_passphrase(
+        _on_stack_passphrase(url, NEWEST_GENERATION), former=[EARLIER_GENERATION], directory=project
+    )
+
+    assert moved == list(pulumi_config.ON_STACK_PASSPHRASE)
+    for name in pulumi_config.ON_STACK_PASSPHRASE:
+        if name == PLAIN_ONLY:
+            # Nothing in it to decrypt, so the salt is what moved: a secret
+            # written under the earlier generation is refused, and one under
+            # the newest is taken.
+            with pytest.raises(pulumi_config.SlotRefused, match='incorrect passphrase'):
+                estate[name].set_secret(QUALIFIED_KEY, SECRET)
+            _moved(project, url, name).set_secret(QUALIFIED_KEY, SECRET)
+            continue
+        assert _moved(project, url, name).get(QUALIFIED_KEY) == SECRET, name
+        with pytest.raises(pulumi_config.SlotRefused, match='incorrect passphrase'):
+            _ = estate[name].get(QUALIFIED_KEY)
+    assert _stack_file(estate[pulumi_config.PHYSICAL]).read_text() == physical_file
+
+
+@pytest.mark.timeout(ROTATION_CASE_TIMEOUT)
+def test_a_stack_already_on_the_newest_generation_is_left_alone(physical_project: tuple[Path, str]) -> None:
+    """A re-run after a stop part-way moves what is left and nothing twice, and a run after that moves nothing.
+
+    `PLAIN_ONLY` holds no secret, so it is the stack a run that read the
+    generation off a decryption would move again every time.
+    """
+    project, url = physical_project
+    _ = _rotation_estate(project, url)
+    first, *rest = pulumi_config.ON_STACK_PASSPHRASE
+    assert _moved(project, url, first).re_encrypt(former=[EARLIER_GENERATION]) is True
+    committed = _stack_file(_moved(project, url, first)).read_text()
+
+    moved = pulumi_config.re_encrypt_on_stack_passphrase(
+        _on_stack_passphrase(url, NEWEST_GENERATION), former=[EARLIER_GENERATION], directory=project
+    )
+
+    assert moved == rest
+    assert _stack_file(_moved(project, url, first)).read_text() == committed
+    files = {name: _stack_file(_moved(project, url, name)).read_text() for name in pulumi_config.ON_STACK_PASSPHRASE}
+
+    again = pulumi_config.re_encrypt_on_stack_passphrase(
+        _on_stack_passphrase(url, NEWEST_GENERATION), former=[EARLIER_GENERATION], directory=project
+    )
+
+    assert again == []
+    assert {name: _stack_file(_moved(project, url, name)).read_text() for name in files} == files
+
+
+@pytest.mark.timeout(ROTATION_CASE_TIMEOUT)
+def test_a_rotation_whose_move_did_not_take_is_refused(physical_project: tuple[Path, str]) -> None:
+    """The proof after each move holds here too: a `change-secrets-provider` that exits 0 and moves nothing."""
+    project, url = physical_project
+    _ = _rotation_estate(project, url)
+
+    def swallowing(args: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdin: str | None) -> str:
+        if list(args[:2]) == ['stack', 'change-secrets-provider']:
+            return ''
+        return pulumi_config.run_pulumi(args, cwd=cwd, env=env, stdin=stdin)
+
+    with pytest.raises(pulumi_config.SlotRefused, match='does not read back under its own passphrase'):
+        _ = pulumi_config.re_encrypt_on_stack_passphrase(
+            _on_stack_passphrase(url, NEWEST_GENERATION),
+            former=[EARLIER_GENERATION],
+            directory=project,
+            run=swallowing,
+        )
+
+
+@pytest.mark.timeout(ROTATION_CASE_TIMEOUT)
+def test_a_refusal_stops_the_rotation_at_that_stack(physical_project: tuple[Path, str]) -> None:
+    """The stacks before it stay moved, and the ones after it are not reached: neither file nor state is touched.
+
+    A stack moved ahead of a failure is one more state a run from `main`
+    meets under the wrong generation until the merge, so a run that carried
+    on past the refusal and reported it at the end would leave more to undo.
+    """
+    project, url = physical_project
+    estate = _rotation_estate(project, url)
+    first, failing, *after = pulumi_config.ON_STACK_PASSPHRASE
+    assert after
+
+    def state(name: str) -> str:
+        return pulumi_config.run_pulumi(
+            ['stack', 'export', '--stack', name], cwd=project, env=estate[name].env, stdin=None
+        )
+
+    untouched = {name: (_stack_file(estate[name]).read_text(), state(name)) for name in after}
+
+    def failing_import(args: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdin: str | None) -> str:
+        if list(args[:2]) == ['stack', 'change-secrets-provider'] and failing in args:
+            raise pulumi_config.SlotRefused('the state import failed')
+        return pulumi_config.run_pulumi(args, cwd=cwd, env=env, stdin=stdin)
+
+    with pytest.raises(pulumi_config.SlotRefused, match='the state import failed'):
+        _ = pulumi_config.re_encrypt_on_stack_passphrase(
+            _on_stack_passphrase(url, NEWEST_GENERATION),
+            former=[EARLIER_GENERATION],
+            directory=project,
+            run=failing_import,
+        )
+
+    assert _moved(project, url, first).get(QUALIFIED_KEY) == SECRET
+    assert {name: (_stack_file(estate[name]).read_text(), state(name)) for name in after} == untouched
+
+
+def test_a_census_stack_the_backend_does_not_hold_stops_the_rotation_naming_what_makes_it(
+    physical_project: tuple[Path, str],
+) -> None:
+    project, url = physical_project
+    first = pulumi_config.ON_STACK_PASSPHRASE[0]
+
+    with pytest.raises(
+        pulumi_config.SlotRefused,
+        match=f'holds no {first} stack.*{re.escape(f"`mise x -- pulumi stack init {first} --no-select`")}',
+    ):
+        _ = pulumi_config.re_encrypt_on_stack_passphrase(
+            _on_stack_passphrase(url, NEWEST_GENERATION), former=[EARLIER_GENERATION], directory=project
+        )
+
+
+@pytest.mark.timeout(ROTATION_CASE_TIMEOUT)
+def test_a_state_written_back_under_the_earlier_passphrase_is_refused_and_the_named_recovery_finishes_it(
+    physical_project: tuple[Path, str],
+) -> None:
+    """A run from `main`'s checkout after the move, before the merge, on a state that held no secret.
+
+    Its `up` succeeds and writes the state back under the earlier
+    passphrase, while the checkout holds the moved file. The refusal names
+    the file `main` held before the move, not the committed one, and
+    restoring it lets the next run move the stack.
+    """
+    project, url = physical_project
+    earlier = _physical_under(project, url, FORMER)
+    earlier.ensure()
+    earlier.set_secret(QUALIFIED_KEY, SECRET)
+    before = _stack_file(earlier).read_text()
+    moving = _physical_under(project, url, OWN, former=FORMER)
+    assert moving.re_encrypt(former=[FORMER]) is True
+    moved = _stack_file(moving).read_text()
+
+    _ = _stack_file(earlier).write_text(before)
+    _ = _under(earlier, FORMER, 'up', '--yes', '--skip-preview')
+    _ = _stack_file(moving).write_text(moved)
+    assert STATE_SECRET in _state_secret(moving, FORMER)
+
+    name = pulumi_config.PHYSICAL
+    with pytest.raises(
+        pulumi_config.SlotRefused,
+        match=re.escape(f'`git -C {project} checkout <that commit> -- Pulumi.{name}.yaml`) and run this again'),
+    ):
+        _ = moving.re_encrypt(former=[FORMER])
+
+    _ = _stack_file(moving).write_text(before)
+    assert moving.re_encrypt(former=[FORMER]) is True
+    assert moving.get(QUALIFIED_KEY) == SECRET
+    assert STATE_SECRET in _state_secret(moving, OWN)
 
 
 def _read_only(tree: Path, *, writable: bool) -> None:

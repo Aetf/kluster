@@ -116,8 +116,10 @@ configuration secrets of the stacks it previews — `dns`, `k8s-base` and
 slot map holds `physical`'s passphrase to those two Environments, the
 same idiom that holds the operator passphrase out of every one. The
 ciphertexts `Pulumi.physical.yaml` carried under the stack passphrase
-before it moved stay in git history, so the move is finished when every
-credential they held has been issued again; and the backend keeps every
+before it moved stay in git history, so the move is finished once the
+stack passphrase they are under has been rotated out of every
+Environment (credentials.md §4.2), the earlier generation being assumed
+not leaked; and the backend keeps every
 checkpoint written before the move, so it comes before `physical`'s first
 `up` (credentials.md §1 rule 6).
 

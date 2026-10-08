@@ -29,14 +29,21 @@
     awaiting a ruling are not. §5.1's cost list omits one cost the
     partition carries: the ciphertexts `physical`'s configuration held
     under the stack passphrase stay in git history, so the move is
-    finished when every credential they held has been issued again, and
-    it comes before `physical`'s first `up` (credentials.md §1 rule 6).
+    finished once the stack passphrase they are under has been rotated
+    out of every Environment, the earlier generation being assumed not
+    leaked, and it comes before `physical`'s first `up` (credentials.md
+    §1 rule 6).
     **What remains outside the slices:** §5.2's clearance check
     (Aetf/kluster-ops#488), and with it §12's row for
     framework/dispatch.md §2 rule 8, which lands with that check's
     design; until it is built threat-model.md §3.2 records the second
     half of the merge boundary as unenforced.
 *   **Created:** 2026-09-27
+*   **Updated:** 2026-10-08. The status's cost of §5.1's partition: the
+    move off the stack passphrase is finished once that passphrase has
+    been rotated out of every Environment, the earlier generation being
+    assumed not leaked, where it said once every credential `physical`'s
+    configuration held under it had been issued again.
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules

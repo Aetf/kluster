@@ -21,6 +21,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+import shutil
+import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -105,6 +107,16 @@ APART: Mapping[str, str] = dict.fromkeys(identity.OPERATOR_STACKS, stack_environ
 #: incorrect passphrase`, which names neither the stack nor the fix.
 PHYSICAL = stack_environment.PHYSICAL_STACK
 PHYSICAL_ROW = stack_environment.PHYSICAL_PASSPHRASE_ROW
+
+#: Every stack under the stack passphrase, in the census's order: each stack
+#: of the project that is neither apart (`APART`) nor `physical`. Derived
+#: rather than listed, so a stack added to `conventions.identity.STACK_NAMES`
+#: is one `credentials derived pulumi-passphrase re-encrypt` moves without a
+#: second edit, and the test holding it asks `BackendEnvironment.variables`
+#: which stacks a run hands the stack passphrase to.
+ON_STACK_PASSPHRASE: tuple[str, ...] = tuple(
+    name for name in identity.STACK_NAMES.names() if name not in APART and name != PHYSICAL
+)
 
 
 @dataclass(frozen=True)
@@ -422,6 +434,12 @@ class Stack:
         It rewrites the stack file first, then imports the state again under
         the new salt.
 
+        **Which passphrase the stack is under is read off its salt**
+        (`_salt_verifies`), not off a decryption: a configuration holding no
+        secret decrypts under anything, so a decryption would call such a
+        stack under every passphrase in `former` and move it again on every
+        run.
+
         **Moved means that both decrypt under the stack's own passphrase**:
         the configuration (`_opens_under`) and the state (`_state_opens_under`).
         That is the test for a stack already there, and the check after the
@@ -432,30 +450,26 @@ class Stack:
         move whose stack file was lost rewrites the file under a fresh salt
         and then fails on the state, already moved, and the stack it leaves
         opens whole under its own passphrase.
-
-        `former` is tried first because a configuration holding no secret
-        decrypts under anything, and moving such a stack again costs a new
-        salt, where calling it moved when it is not would leave it under the
-        passphrase it was to leave.
         """
         own = self.env[PASSPHRASE_ENV]
         if not self.exists():
-            raise SlotRefused(
-                f'the state backend holds no {self.name} stack, so there is nothing to re-encrypt: its first '
-                'write creates it under its own passphrase'
-            )
+            raise SlotRefused(self._absent())
         log.info('checking which passphrase the %s stack is under', self.name)
-        current = next((passphrase for passphrase in former if self._config_opens_under(passphrase)), None)
+        current = next((passphrase for passphrase in former if self._salt_verifies(passphrase)), None)
         if current is None:
-            if not self._config_opens_under(own):
+            if not self._salt_verifies(own) or not self._config_opens_under(own):
                 raise SlotRefused(
                     f'the {self.name} stack opens under none of the passphrases it may be moved from, nor under '
                     'its own, so nothing here can re-encrypt it'
                 )
             if not self._state_opens_under(own):
                 raise SlotRefused(
-                    f"the {self.name} stack's configuration is under its own passphrase and its state is not, "
-                    f'which is what a re-encryption interrupted between the two leaves: {self._recovery()}'
+                    f"the {self.name} stack's configuration is under its own passphrase and its state is not. "
+                    f'A re-encryption interrupted between the two leaves that: {self._recovery()}. So does a '
+                    f'run from a checkout still under the earlier passphrase that wrote the state back after this '
+                    f'one moved it, and the committed file is then the moved one: restore the '
+                    f'Pulumi.{self.name}.yaml `main` held before the move (`git -C {self.directory} checkout '
+                    f'<that commit> -- Pulumi.{self.name}.yaml`) and run this again'
                 )
             log.info('the %s stack is already under its own passphrase; nothing to move', self.name)
             return False
@@ -499,6 +513,20 @@ class Stack:
             ) from failure
         raise SlotRefused(f'the {self.name} stack does not read back under its own passphrase after the re-encryption')
 
+    def _absent(self) -> str:
+        """The refusal for a stack the backend does not hold, naming what makes it, which a re-run then finds."""
+        create = f'`mise x -- pulumi stack init {self.name} --no-select` from the checkout'
+        if not (self.directory / f'Pulumi.{self.name}.yaml').exists():
+            return (
+                f'the state backend holds no {self.name} stack, and nothing here moves past a stack it cannot '
+                f'open: create it first with {create}, which makes it under its own passphrase, and run this again'
+            )
+        return (
+            f'the state backend holds no {self.name} stack, though the checkout holds Pulumi.{self.name}.yaml, and '
+            f'nothing here moves past a stack it cannot open: create it first with {create}, under the passphrase '
+            "that file's salt was made under, and run this again"
+        )
+
     def _recovery(self) -> str:
         """The way forward from a re-encryption that stopped partway, naming the checkout it ran in."""
         return (
@@ -527,6 +555,25 @@ class Stack:
                 f'{self._recovery()}'
             ) from exc
 
+    def _salt_verifies(self, passphrase: str) -> bool:
+        """Whether this stack file's `encryptionsalt` was made under `passphrase`, whatever the file holds.
+
+        Asked of `pulumi config set --secret`, which checks the salt before it
+        encrypts anything, so it answers `incorrect passphrase` for a
+        configuration holding no secret too, where `config --show-secrets`,
+        having nothing to decrypt, never reads the salt. It writes to a
+        scratch copy of the file, never to the stack file; the probe value is
+        no secret.
+        """
+        with tempfile.TemporaryDirectory(prefix='kluster-salt-') as scratch:
+            copy = Path(scratch) / f'Pulumi.{self.name}.yaml'
+            shutil.copyfile(self.directory / f'Pulumi.{self.name}.yaml', copy)
+            return self._decrypts(
+                ['config', 'set', _SALT_PROBE, '--secret', '--config-file', str(copy), '--stack', self.name],
+                passphrase,
+                stdin=_SALT_PROBE,
+            )
+
     def _opens_under(self, passphrase: str) -> bool:
         """Whether this stack's configuration decrypts under `passphrase`.
 
@@ -545,9 +592,9 @@ class Stack:
         """
         return self._decrypts(['stack', 'export', '--show-secrets', '--stack', self.name], passphrase)
 
-    def _decrypts(self, args: Sequence[str], passphrase: str) -> bool:
+    def _decrypts(self, args: Sequence[str], passphrase: str, *, stdin: str | None = None) -> bool:
         try:
-            _ = self.run(list(args), cwd=self.directory, env={**self.env, PASSPHRASE_ENV: passphrase}, stdin=None)
+            _ = self.run(list(args), cwd=self.directory, env={**self.env, PASSPHRASE_ENV: passphrase}, stdin=stdin)
         except SlotRefused as exc:
             if 'incorrect passphrase' in str(exc):
                 return False
@@ -558,3 +605,32 @@ class Stack:
 #: The salt line of a stack file, which `pulumi` writes when it creates or
 #: re-encrypts the stack.
 _SALT = re.compile(r'^encryptionsalt:\s*(\S+)\s*$', re.MULTILINE)
+
+#: The key `Stack._salt_verifies` encrypts into a scratch copy of a stack file,
+#: and the value it encrypts: neither is a secret, and neither reaches the
+#: stack file.
+_SALT_PROBE = 'kluster-salt-probe'
+
+
+def re_encrypt_on_stack_passphrase(
+    environment: BackendEnvironment,
+    *,
+    former: Sequence[str],
+    directory: Path | None = None,
+    run: Runner = run_pulumi,
+) -> list[str]:
+    """Move every stack under the stack passphrase onto the one `environment` holds, from whichever of `former` opens it.
+
+    Each stack in `ON_STACK_PASSPHRASE` is moved by `Stack.re_encrypt`, which
+    proves the move took and leaves a stack already under the newest
+    generation alone. A stack the run cannot move is refused there, naming its
+    recovery, and the stacks after it are not reached: a re-run moves them and
+    leaves the ones already moved alone. Returns the stacks that moved, in the
+    census's order.
+    """
+    where = directory if directory is not None else project_dir()
+    return [
+        name
+        for name in ON_STACK_PASSPHRASE
+        if Stack(name=name, directory=where, environment=environment, run=run).re_encrypt(former=former)
+    ]
