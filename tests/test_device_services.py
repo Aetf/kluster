@@ -15,9 +15,11 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from pathlib import Path
+from typing import cast
 
 import pytest
 import pytest_asyncio
+import yaml
 from device_places import DEVICE_ARTIFACT, DEVICE_FILE
 from gateway_services import ACME_TOKEN, DIGEST, TAG, caddy, pin, served
 from mock_monitor import Recorder, declaring, run_with
@@ -373,6 +375,58 @@ def test_a_resolver_is_placed_statically_and_points_at_more_than_one_upstream() 
     for upstream in container.ADGUARD_UPSTREAMS:
         assert upstream in rendered
     assert len(container.ADGUARD_UPSTREAMS) > 1
+
+
+def initial_dns(service: str) -> dict[str, object]:
+    """The `dns` section of one resolver's initial state, as the instance parses it."""
+    document = yaml.safe_load(container.adguard_initial_state(bridged_service(service).address))
+    assert isinstance(document, dict)
+    section = cast('dict[str, object]', document)['dns']
+    assert isinstance(section, dict)
+    return cast('dict[str, object]', section)
+
+
+def per_domain_upstreams(dns: Mapping[str, object]) -> dict[str, str]:
+    """The `[/zone/]resolver` entries of `upstream_dns`, as zone to resolver."""
+    upstreams = dns['upstream_dns']
+    assert isinstance(upstreams, list)
+    entries = (re.fullmatch(r'\[/([^/]+)/\](\S+)', str(entry)) for entry in cast('list[object]', upstreams))
+    return {match[1]: match[2] for match in entries if match}
+
+
+@pytest.mark.parametrize('service', ['adguard-alice', 'adguard-bob'])
+def test_a_fresh_resolver_asks_the_gateway_about_the_sites_own_names_and_addresses(service: str) -> None:
+    """No public resolver answers a device's name or a site address's pointer.
+
+    Those names are the gateway's: it derives the device plane from its leases
+    and answers the pointers of the networks it numbers. An instance that comes
+    up on its initial state — new, or rebuilt after its device was lost — sends
+    them to the gateway as the running pair does, or it answers none of them,
+    and every name behind a device-plane alias goes with them. A private
+    address's pointer takes a path of its own inside the instance, which asks
+    only the resolvers named for private addresses and only while it is
+    allowed to.
+    """
+    dns = initial_dns(service)
+    gateway = str(conventions.CONTAINER_VLAN.require_gateway())
+    forwarded = per_domain_upstreams(dns)
+
+    assert forwarded.get('home.arpa') == gateway
+    # Every network the gateway serves has its pointers answered by it: some
+    # zone sent to the gateway holds the network's own pointer.
+    for network in conventions.SITE_NETWORKS:
+        pointer = network.v4.network_address.reverse_pointer
+        zones = [zone for zone in forwarded if pointer.endswith(f'.{zone}')]
+        assert zones, network.name
+        assert all(forwarded[zone] == gateway for zone in zones), network.name
+    assert dns['local_ptr_upstreams'] == [gateway]
+    assert dns['use_private_ptr_resolvers'] is True
+    # The public pair still takes everything else.
+    upstreams = dns['upstream_dns']
+    assert isinstance(upstreams, list)
+    assert [entry for entry in cast('list[object]', upstreams) if not str(entry).startswith('[')] == list(
+        container.ADGUARD_UPSTREAMS
+    )
 
 
 def test_the_gateway_issues_its_own_certificates_from_its_own_credential() -> None:

@@ -300,7 +300,9 @@ CENSUS: dict[type, Census] = {
     container.OverlayDaemon: Census('service pin'),
     container.ResolverService: Census('service pin'),
     container.Rootfs: Census('repository tag digest'),
-    container._AdguardInitialParams: Census('cluster address api_port upstreams'),  # pyright: ignore[reportPrivateUsage]
+    container._AdguardInitialParams: Census(  # pyright: ignore[reportPrivateUsage]
+        'cluster address api_port upstreams gateway_zones gateway_resolver'
+    ),
     container._CaddyParams: Census(  # pyright: ignore[reportPrivateUsage]
         'acme_contact zone controller controller_upstream token_path api_port vhosts legacy_zone legacy'
     ),

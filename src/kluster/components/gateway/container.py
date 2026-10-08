@@ -59,6 +59,7 @@ from putils import Component
 
 __all__ = (
     'ADGUARD_CONFIG',
+    'ADGUARD_GATEWAY_ZONES',
     'ADGUARD_INSTALL',
     'ADGUARD_STATE',
     'ADGUARD_UPSTREAMS',
@@ -105,9 +106,18 @@ SECRET_MODE = '0600'
 # What the images are
 # ---------------------------------------------------------------------------
 
-#: The resolvers every AdGuard instance forwards to. Two providers on purpose:
-#: the LAN's name service must not fail with any single one of them.
+#: The public resolvers every AdGuard instance forwards to, for every name
+#: outside `ADGUARD_GATEWAY_ZONES`. Two providers on purpose: the LAN's name
+#: service must not fail with any single one of them.
 ADGUARD_UPSTREAMS = ('https://dns.quad9.net/dns-query', 'https://dns.cloudflare.com/dns-query')
+
+#: The zones every AdGuard instance forwards to the gateway's own resolver
+#: instead: the device plane, whose names that resolver derives from its
+#: leases (dns.md §4 item 1), and the reverse zones of the private ranges
+#: every network of this site is numbered from. No public resolver answers
+#: any of them, so an instance that sent them to `ADGUARD_UPSTREAMS` would
+#: answer no device's name and no site address's pointer.
+ADGUARD_GATEWAY_ZONES = ('home.arpa', '10.in-addr.arpa', '168.192.in-addr.arpa')
 
 #: The resolvers' own working directory, bind-mounted from the device so that a
 #: digest bump replaces the software and keeps the configuration; and the file
@@ -744,6 +754,8 @@ class _AdguardInitialParams:
     address: IPv4Address
     api_port: int
     upstreams: tuple[str, ...]
+    gateway_zones: tuple[str, ...]
+    gateway_resolver: IPv4Address
 
 
 def adguard_initial_state(address: IPv4Address) -> str:
@@ -758,6 +770,15 @@ def adguard_initial_state(address: IPv4Address) -> str:
     from nothing. Replacing the root filesystem is not such a moment, because
     the working directory is bind-mounted from the device and survives the tree
     that is thrown away with it.
+
+    **What it forwards to is two sets of resolvers.** The public pair takes
+    everything except `ADGUARD_GATEWAY_ZONES`, which go to the gateway's own
+    resolver: the container VLAN's gateway, the address the instance's own
+    default route names. A pointer query for a private address is the
+    instance's own case. It sends one only to the resolvers named for private
+    addresses, and only while it is allowed to use them, so the gateway is
+    named there too and the permission is given; without it, the instance
+    answers a site address's pointer with nothing.
     """
     return templates.render(
         TEMPLATE_PACKAGE,
@@ -767,6 +788,8 @@ def adguard_initial_state(address: IPv4Address) -> str:
             address=address,
             api_port=conventions.gateway.ADGUARD_API_PORT,
             upstreams=ADGUARD_UPSTREAMS,
+            gateway_zones=ADGUARD_GATEWAY_ZONES,
+            gateway_resolver=conventions.CONTAINER_VLAN.require_gateway(),
         ),
     )
 

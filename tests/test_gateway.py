@@ -115,17 +115,36 @@ async def test_the_machine_carrying_the_session_actuates_after_every_other_child
     assert str(await gateway.firewall.network.urn.future()) not in monitor.depends_on(f'{NAME}-caddy-nspawn')
 
 
+def rendered_packages(monitor: Controller) -> list[str]:
+    """The package set the device's boot chain reinstalls, as the script spells it."""
+    script = str(monitor.inputs_of(f'{NAME}-persistence-on-boot-{persistence.PACKAGES_SCRIPT}')['content'])
+    declared = re.search(r'^PACKAGES=\((.*)\)$', script, re.MULTILINE)
+    assert declared is not None
+    return declared[1].split()
+
+
 def test_the_device_is_asked_for_what_the_layers_above_the_mechanism_require(monitor: Controller) -> None:
     """The package list is data the mechanism renders, not a set it decides.
 
-    One layer requires anything today, so the union is that layer's constant;
-    what makes it a union is that the mechanism is handed it rather than
-    holding it.
+    Each consumer states what it requires as a constant, and the union is
+    what the gateway hands the mechanism rather than a set the mechanism holds.
     """
-    script = str(monitor.inputs_of(f'{NAME}-persistence-on-boot-{persistence.PACKAGES_SCRIPT}')['content'])
+    packages = rendered_packages(monitor)
 
     for package in nspawn.NspawnRuntime.REQUIRED_PACKAGES:
-        assert package in script, package
+        assert package in packages, package
+
+
+def test_the_device_keeps_the_program_the_backup_pull_runs_on_its_end(monitor: Controller) -> None:
+    """The controller's autobackups leave the device over `rsync`, which needs it on both ends.
+
+    Nothing on the device uses it, so no layer here requires it; the pull on
+    the homelab host does, and it keeps that transfer after the configuration
+    repository it ships with retires (gateway-cutover.md §7). A firmware update
+    takes every package it did not ship, so a set without `rsync` breaks the
+    pull at the first update after the window.
+    """
+    assert 'rsync' in rendered_packages(monitor)
 
 
 def test_the_routing_configuration_answers_to_its_daemon_and_not_to_the_boot_chain(monitor: Controller) -> None:

@@ -250,6 +250,23 @@ declarative/physical.md §4.
     the initial state, and the flow rule that admits the `dns` stack's
     runner (§2.3) — and a test holds the four to one value.
 
+    **A fresh instance asks the gateway about the site's own names.**
+    The initial state forwards `home.arpa` and the reverse zones of the
+    private ranges the site is numbered from to the device's own
+    resolver, at the container VLAN's gateway address, and lets the
+    instance send a private address's pointer query there too; every
+    other name goes to two public resolvers
+    (`container.ADGUARD_GATEWAY_ZONES`, `ADGUARD_UPSTREAMS`). No public
+    resolver answers any of those names, so an instance without the
+    forward answers no device's name and no site address's pointer. The
+    running pair forwards them the same way, and the initial state is
+    read only by an instance that has no configuration of its own — a
+    new one, or one rebuilt after the device was lost (§3). The rest of
+    a running instance's settings is carried by the window and declared
+    nowhere here: an instance rebuilt from the initial state comes up
+    without its filter lists and clients, and on the initial state's
+    public resolvers rather than the ones the pair forwards to.
+
     **Which resolver a container asks is a fact about this site, not
     about the image**, so where it differs from the image's own default
     it arrives as a mounted file. The reverse proxy is the case that
@@ -710,6 +727,15 @@ programs the device pulls and unpacks its own root filesystems with
 reach `10-packages.sh` without that script naming a package of its own.
 The machines themselves are the workloads on it, and they own nothing
 of the framework.
+
+**One package in the set is for a consumer off the device**: `rsync`,
+which the homelab host's backup pull runs on this end of its session to
+copy the controller's autobackups off the box. Nothing on the device
+uses it, so no layer requires it; the gateway states it itself
+(`components.gateway.BACKUP_PULL_PACKAGES`). Without it in the set, the
+first firmware update takes `rsync` with the rest of `/usr`, and the
+pull fails from then on at that transfer — the one the "UDM replaced"
+playbook of §3 restores from.
 
 ### 1.3 The routing daemon: its configuration, its on-state, and what converges both
 

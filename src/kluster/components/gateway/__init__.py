@@ -51,7 +51,24 @@ from putils import Component
 
 #: The declaration types the stack program builds a `Gateway` out of are
 #: re-exported here, so that wiring the gateway is one import.
-__all__ = ('CaddyService', 'Gateway', 'OverlayDaemon', 'PublicKey', 'ResolverService', 'Rootfs', 'RoutingSession')
+__all__ = (
+    'BACKUP_PULL_PACKAGES',
+    'CaddyService',
+    'Gateway',
+    'OverlayDaemon',
+    'PublicKey',
+    'ResolverService',
+    'Rootfs',
+    'RoutingSession',
+)
+
+#: What the device must hold for a consumer that is not on it: the homelab
+#: host's backup pull, which copies the controller's autobackups off the device
+#: with `rsync` and so runs `rsync` on this end of its session too. The pull
+#: outlives the configuration repository it ships with and keeps that transfer
+#: (gateway-cutover.md §7), and a firmware update wipes every package it did not
+#: ship, so the package set carries it beside what the layers here require.
+BACKUP_PULL_PACKAGES: tuple[str, ...] = ('rsync',)
 
 
 def url_host(host: str) -> str:
@@ -142,13 +159,13 @@ class Gateway(Component, pulumi_type='kluster:gateway:Gateway'):
         # The mechanism under everything else on the device: what puts the
         # customization back after a firmware update, and the way the layers
         # above deliver a script, an executable, a unit or a directory. The
-        # package set it renders is the union of what those layers require, so
+        # package set it renders is the union of what its consumers require, so
         # each of them states its own requirement and none of them writes the
         # script.
         self.persistence = DevicePersistence(
             f'{name}-persistence',
             connection=connection,
-            packages=NspawnRuntime.REQUIRED_PACKAGES,
+            packages=(*NspawnRuntime.REQUIRED_PACKAGES, *BACKUP_PULL_PACKAGES),
             opts=self.child_opts(),
         )
         # The framework the services run on, told nothing about them. What

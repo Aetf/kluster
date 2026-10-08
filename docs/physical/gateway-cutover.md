@@ -149,15 +149,17 @@ not moved.
     the declaration, so the cutover is not a user-visible regression
     (Aetf/kluster-ops#155, ruled; #163 builds it). Without them on the
     branch being applied, the window takes those names down for weeks.
--   **The four packages are installed already.** The push's first act is
+-   **The package set is installed already.** The push's first act is
     `10-packages.sh`, which exits without doing anything when
-    `systemd-container`, `libnss-mymachines`, `skopeo` and `umoci` are
-    all present, and fails the push when apt cannot reach the internet
-    and the offline cache cannot satisfy them — *after* the machines have
-    been stopped and moved. Installing them in advance takes that failure
-    out of the window: `apt-get install -y systemd-container
-    libnss-mymachines skopeo umoci`, on any day before it. The pull probe
-    below needs them in place.
+    `systemd-container`, `libnss-mymachines`, `skopeo`, `umoci` and
+    `rsync` are all present, and fails the push when apt cannot reach
+    the internet and the offline cache cannot satisfy them — *after* the
+    machines have been stopped and moved. Installing them in advance
+    takes that failure out of the window: `apt-get install -y
+    systemd-container libnss-mymachines skopeo umoci rsync`, on any day
+    before it. `rsync` is there today, from gw-config's own package
+    script, and stays in the set for the backup pull (§7). The pull
+    probe below needs `skopeo` and `umoci` in place.
 -   **The ACME token is minted and committed**: `credentials derived
     cloudflare-gateway-acme mint` has run and the `physical` stack file
     carrying the token is committed (credentials.md §3). The proxy comes
@@ -729,8 +731,8 @@ root whose machine has no settings file behind it. The failed unit is a runtime
 object with no file behind it and goes at the next boot, or to
 `systemctl reset-failed`.
 
--   **The offline package cache takes in §3's install of the four
-    packages and gives up every deb no part of the set reaches.** The
+-   **The offline package cache takes in §3's install of the package
+    set and gives up every deb no part of the set reaches.** The
     cache the old script left in `/data/custom/dpkg` was copied from apt's
     shared archives on some earlier boot. So it can hold debs that belong
     to no part of the set — an `frr` deb above all, which an offline
@@ -743,7 +745,7 @@ object with no file behind it and goes at the next boot, or to
     so none of that is repaired by anything else. Repair it by hand, once,
     now:
 
-        set='systemd-container libnss-mymachines skopeo umoci'
+        set='systemd-container libnss-mymachines skopeo umoci rsync'
         took=$(awk -v RS= -v set="$set" '
             { n = split($0, l, "\n"); c = ""
               for (i = 1; i <= n; i++)
@@ -780,7 +782,7 @@ object with no file behind it and goes at the next boot, or to
     apt recorded them in `/var/log/apt/history.log`: the `Install:` and
     `Upgrade:` lines of every entry whose `Commandline:` runs `apt` or
     `apt-get` with the word `install` anywhere on it and names at least one
-    of the four packages. §3's install matches whatever its options and
+    package of the set. §3's install matches whatever its options and
     their place (`apt-get -y install …`), and so does the set installed a
     few packages at a time. Each package is copied in at the version its
     entry installed, and only while that is still the version installed, so
@@ -1184,7 +1186,8 @@ lets the gw-config directory be deleted whole. Four edits make that true:
     now, and keeps what the device still needs: the four machines
     running, the boot chain enabled with its last run clean, the offline
     package cache matching the rendered set — `systemd-container`,
-    `libnss-mymachines`, `skopeo`, `umoci`, with `rsync` gone from it —
+    `libnss-mymachines`, `skopeo`, `umoci`, and `rsync`, which the pull
+    job's own transfer runs on the device end (gateway.md §1.2) —
     and a certificate probe, which now names a declared vhost and reaches
     it with `curl --resolve` rather than through a `lan.ucw.phd` name.
 -   **The two timer units** (yadm `##h` alternates on the homelab host)
