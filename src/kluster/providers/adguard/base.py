@@ -1,5 +1,10 @@
 """The lifecycle every AdGuard kind shares, and what a kind supplies to it.
 
+`InstanceProvider` is what every kind shares: the login, the stamps, `check`,
+`diff` and `delete`. `AdGuardProvider` adds the lifecycle of the kinds that
+configure a running instance, every kind but `AdGuardSetup`, whose lifecycle is
+its own (`setup`).
+
 A kind declares its object as **sections**: top-level properties, each in the
 shape the endpoint that owns it reads and writes. The base turns those into the
 dynamic-provider operations:
@@ -8,13 +13,18 @@ dynamic-provider operations:
     `provider_version` through `kluster.providers.configured`.
 -   **`diff`** calls no instance. A value still unknown answers unknown; a
     changed `instance` is a replacement; otherwise it compares each section in
-    the kind's comparable form, `endpoint` and the stamps.
--   **`read`** dials, and returns the instance's sections as the outputs and as
-    the inputs, so a refresh renders a hand edit as a property diff against the
-    program. `instance`, `endpoint` and the stamps come from the stored bag.
+    the kind's comparable form, `endpoint`, `setup_endpoint` and the stamps.
+-   **`read`** classifies the instance (`api.classify`). An instance in first
+    run holds no configuration at all, so the resource is reported gone, and
+    the run that refreshes re-creates it after the instance's setup. A
+    configured one is dialed, and its sections are returned as the outputs and
+    as the inputs, so a refresh renders a hand edit as a property diff against
+    the program. `instance`, `endpoint`, `setup_endpoint` and the stamps come
+    from the stored bag. Any other verdict raises, sending no login.
 -   **`create`** writes every section. **`update`** writes only when a section
     differs from the stored outputs; a moved endpoint or stamp alone calls
-    nothing and is recorded.
+    nothing and is recorded. Both refuse an instance their setup has not
+    configured yet.
 -   **`delete`** calls nothing: an instance's settings have no absent state to
     restore, and a replacement deletes after it creates, so a delete that
     emptied anything would undo the create before it.
@@ -30,16 +40,21 @@ from typing import Any, ClassVar, cast
 
 import pulumi.dynamic as dynamic
 
-from kluster.providers.adguard.api import Api
+from kluster.providers.adguard.api import Api, Verdict, classify
 from kluster.providers.configured import STAMPS, ConfiguredProvider, is_unknown
 
 __all__ = (
     'ENDPOINT',
     'INSTANCE',
     'PASSWORD_CONFIG',
+    'RECORDED',
+    'SETUP_ENDPOINT',
     'USERNAME_CONFIG',
     'VERSION',
     'AdGuardProvider',
+    'InstanceProvider',
+    'SetupNotRun',
+    'gone',
     'missing_or_extra',
     'unknown_anywhere',
 )
@@ -53,13 +68,35 @@ PASSWORD_CONFIG = 'adguardPassword'
 #: is a replacement.
 INSTANCE = 'instance'
 
-#: Where this run reaches the instance. A change is an update that writes
-#: nothing: the same instance, re-addressed.
+#: Where this run reaches the instance's administration API. A change is an
+#: update that writes nothing: the same instance, re-addressed.
 ENDPOINT = 'endpoint'
+
+#: Where this run reaches the instance's setup wizard, which answers only in
+#: first run. Recorded like `endpoint`: a change writes nothing.
+SETUP_ENDPOINT = 'setup_endpoint'
 
 #: This package's version, bumped by hand when an operation's behavior changes
 #: (`configured`). One for the package, since the kinds share the lifecycle.
-VERSION = '1'
+VERSION = '2'
+
+#: The inputs every kind records and never writes.
+RECORDED = (INSTANCE, ENDPOINT, SETUP_ENDPOINT, *STAMPS)
+
+
+class SetupNotRun(RuntimeError):
+    """The instance is in first run, and its `AdGuardSetup` has not configured it in this run."""
+
+
+def gone() -> dynamic.ReadResult:
+    """What `read` returns for a resource the instance does not hold.
+
+    Dropping the identifier is how the engine learns the resource is gone. The
+    outputs are an empty bag rather than `None`, and a fresh one each time,
+    because the dynamic-provider host writes its own bookkeeping key into
+    whatever bag it is handed.
+    """
+    return dynamic.ReadResult(id_=None, outs={})
 
 
 def unknown_anywhere(value: Any) -> bool:
@@ -95,8 +132,8 @@ def missing_or_extra(
     return not missing and not extra
 
 
-class AdGuardProvider(ConfiguredProvider):
-    """One kind's operations against one instance."""
+class InstanceProvider(ConfiguredProvider):
+    """What every kind shares: one instance, one login, and an offline `diff`."""
 
     #: The kind, as the resource id spells it after the instance.
     kind: ClassVar[str]
@@ -129,17 +166,6 @@ class AdGuardProvider(ConfiguredProvider):
         reports and the declaration does not name is never compared.
         """
 
-    @abc.abstractmethod
-    def _read(self, api: Api) -> dict[str, Any]:
-        """Every section, as the instance holds it, in the declared shape."""
-
-    @abc.abstractmethod
-    def _write(self, api: Api, news: Mapping[str, Any], olds: Mapping[str, Any] | None) -> None:
-        """Bring the instance to `news`.
-
-        `olds` is the stored output bag on an update and `None` on a create.
-        """
-
     def _refusals(self, _news: Mapping[str, Any], _failures: list[dynamic.CheckFailure]) -> None:
         """Record what the instance would refuse and can be told offline. Every section is known here."""
         return
@@ -154,30 +180,8 @@ class AdGuardProvider(ConfiguredProvider):
         replaces = [INSTANCE] if not is_unknown(news.get(INSTANCE)) and olds.get(INSTANCE) != news.get(INSTANCE) else []
         if unknown_anywhere(news):
             return dynamic.DiffResult(changes=None, replaces=replaces, delete_before_replace=False)
-        changed = bool(self._changed(olds, news)) or any(
-            olds.get(key) != news.get(key) for key in (INSTANCE, ENDPOINT, *STAMPS)
-        )
+        changed = bool(self._changed(olds, news)) or any(olds.get(key) != news.get(key) for key in RECORDED)
         return dynamic.DiffResult(changes=changed, replaces=replaces, delete_before_replace=False)
-
-    def create(self, props: dict[str, Any]) -> dynamic.CreateResult:
-        self._write(self._api(props), props, None)
-        # The checked inputs go back out as the outputs, stamps included, so
-        # the stored bag records the login that wrote the instance.
-        return dynamic.CreateResult(id_=f'{props[INSTANCE]}|{self.kind}', outs=props)
-
-    def read(self, id_: str, props: dict[str, Any]) -> dynamic.ReadResult:
-        live = self._read(self._api(props))
-        carried = {key: props[key] for key in (INSTANCE, ENDPOINT, *STAMPS) if key in props}
-        # Two bags, because the provider host writes its own key into each.
-        return dynamic.ReadResult(id_=id_, outs={**carried, **live}, inputs={**carried, **live})
-
-    def update(self, _id: str, olds: dict[str, Any], news: dict[str, Any]) -> dynamic.UpdateResult:
-        if self._changed(olds, news):
-            self._write(self._api(news), news, olds)
-        # The outs replace the stored output bag (framework/pulumi.md §5.3 E9),
-        # so what state says about the door the instance was written through
-        # stays true.
-        return dynamic.UpdateResult(outs=news)
 
     def delete(self, _id: str, _props: dict[str, Any]) -> None:
         return
@@ -192,6 +196,57 @@ class AdGuardProvider(ConfiguredProvider):
             if self._comparable(section, olds.get(section)) != self._comparable(section, news.get(section))
         ]
 
+    def _verdict(self, props: Mapping[str, Any]) -> Verdict:
+        """The instance a property bag names, classified for the configured login; raises where it is unusable."""
+        return classify(self._endpoint(props), str(props[SETUP_ENDPOINT]), self.username, self.password)
+
     def _api(self, props: Mapping[str, Any]) -> Api:
         """The instance a property bag names, opened with the configured login."""
         return Api(self._endpoint(props), self.username, self.password)
+
+
+class AdGuardProvider(InstanceProvider):
+    """One kind's operations against the configuration of one running instance."""
+
+    @abc.abstractmethod
+    def _read(self, api: Api) -> dict[str, Any]:
+        """Every section, as the instance holds it, in the declared shape."""
+
+    @abc.abstractmethod
+    def _write(self, api: Api, news: Mapping[str, Any], olds: Mapping[str, Any] | None) -> None:
+        """Bring the instance to `news`.
+
+        `olds` is the stored output bag on an update and `None` on a create.
+        """
+
+    def create(self, props: dict[str, Any]) -> dynamic.CreateResult:
+        self._write(self._configured(props), props, None)
+        # The checked inputs go back out as the outputs, stamps included, so
+        # the stored bag records the login that wrote the instance.
+        return dynamic.CreateResult(id_=f'{props[INSTANCE]}|{self.kind}', outs=props)
+
+    def read(self, id_: str, props: dict[str, Any]) -> dynamic.ReadResult:
+        if self._verdict(props) is Verdict.FIRST_RUN:
+            return gone()
+        live = self._read(self._api(props))
+        carried = {key: props[key] for key in RECORDED if key in props}
+        # Two bags, because the provider host writes its own key into each.
+        return dynamic.ReadResult(id_=id_, outs={**carried, **live}, inputs={**carried, **live})
+
+    def update(self, _id: str, olds: dict[str, Any], news: dict[str, Any]) -> dynamic.UpdateResult:
+        if self._changed(olds, news):
+            self._write(self._configured(news), news, olds)
+        # The outs replace the stored output bag (framework/pulumi.md §5.3 E9),
+        # so what state says about the door the instance was written through
+        # stays true.
+        return dynamic.UpdateResult(outs=news)
+
+    def _configured(self, props: Mapping[str, Any]) -> Api:
+        """The instance opened for a write, which only a configured one takes."""
+        if self._verdict(props) is Verdict.FIRST_RUN:
+            raise SetupNotRun(
+                f'{props[INSTANCE]} is in first run: it holds no configuration and no account, and its '
+                'AdGuardSetup has not configured it in this run. Run again with --refresh, which drops its '
+                "resources and re-creates them after the instance's setup."
+            )
+        return self._api(props)

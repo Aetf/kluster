@@ -9,9 +9,11 @@ what the tests exercise is the real ordering rather than attributes set by
 hand.
 
 **The stand-in is a model of the release, and it only tightens** (testing.md
-§4). `Instance` serves every endpoint the providers reach, starts from what a
-fresh v0.107.79 serves, and keeps what the release does that a careless caller
-would miss:
+§4). `Instance` serves every endpoint the providers reach, on the port the
+release serves it on, starts from what a fresh v0.107.79 serves once its
+first-run setup has configured it, and keeps what the release does that a
+careless caller would miss. `Network` routes a request to an instance by host,
+and a port nothing listens on refuses the connection:
 
 1.  `set_rules` replaces the list whole, and answers a body that is not JSON
     with 415.
@@ -37,6 +39,22 @@ would miss:
     body is plain text, never the payload.
 10. A whole number written as a float -- `20.0` -- is refused (400) for every
     field the instance decodes as an integer.
+11. **First run**: the API's port is closed and there is no DNS. On the setup
+    port, `install/get_addresses` answers `200` and every other path `302`, to
+    an `install.html` beside the path; followed, the redirects end in
+    `TooManyRedirects`.
+12. `install/configure`'s refusals -- a body that does not parse, a port 0, an
+    unknown language, an address the box does not hold, a password under eight
+    characters -- each leave first run. A success moves the API to the web
+    address, creates the one account and closes the setup port.
+13. The install routes answer `403` on the API's port after `configure`, and
+    `404` after a restart, before any login is asked for.
+14. A `configure` that answered `500` leaves the setup port up, and refuses
+    later calls with `400` until a restart, which is a clean first run.
+15. **No account**: every path answers without credentials. **The limiter**:
+    a request without credentials is not counted, an accepted login resets the
+    count, and after five refused logins the right one is refused (401) too,
+    until a restart.
 
 A case catches an operation that reads a refusal as success by expecting the
 operation to raise; what the instance holds afterwards is the stand-in's doing,
@@ -45,28 +63,58 @@ not the provider's.
 
 from __future__ import annotations
 
+import base64
+import concurrent.futures
+import contextlib
 import copy
 import hashlib
 import ipaddress
 import re
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, cast
+from typing import Any, NamedTuple, cast
+from urllib.parse import urlsplit
 
 import pulumi.dynamic as dynamic
 import pytest
 import requests
+from mock_monitor import Recorder, declaring, run_with
 from pulumi.runtime import rpc
+from requests.auth import AuthBase, HTTPBasicAuth
 from shimmed_serialization import serialized
 
-from kluster.providers import adguard_rewrites, configured
-from kluster.providers.adguard import base, clients, dns_server, filter_lists, filtering, log_settings, user_rules
+from kluster.providers import adguard, adguard_rewrites, configured
+from kluster.providers.adguard import (
+    api,
+    base,
+    clients,
+    dns_server,
+    filter_lists,
+    filtering,
+    log_settings,
+    setup,
+    user_rules,
+)
 
 INSTANCE = 'adguard-alice'
+#: The ports an instance serves its API and its setup wizard on.
+API_PORT = 80
+SETUP_PORT = 3000
 ENDPOINT = 'http://10.0.5.3:80'
+SETUP_ENDPOINT = 'http://10.0.5.3:3000'
 MOVED = 'http://10.0.5.30:80'
+#: A second instance, for what one command does to each of two.
+BOB = 'adguard-bob'
+BOB_ENDPOINT = 'http://10.0.5.4:80'
+BOB_SETUP_ENDPOINT = 'http://10.0.5.4:3000'
 USERNAME = 'admin'
 PASSWORD = 'a-typed-secret'
+#: What a setup declares: the web server on every address on the API's port,
+#: and DNS on every address.
+LISTEN: dict[str, Any] = {'web': {'ip': '0.0.0.0', 'port': API_PORT}, 'dns': {'ip': '0.0.0.0', 'port': 53}}
+#: Refused logins after which the instance refuses the right one too.
+LIMIT = 5
 
 #: The project the configuration keys below are namespaced by. An unqualified
 #: key is resolved against the running project, which is how the plugin finds
@@ -83,10 +131,9 @@ REFUSED = 401
 # --------------------------------------------------------------------------
 # The stand-in.
 
-#: What a fresh v0.107.79 serves, from a throwaway instance started on nothing
-#: but the initial state (`http.address`, `dns.bind_hosts`, `dns.port`,
-#: `filtering.rewrites_enabled: false`, `schema_version: 34`). Lists the
-#: instance computes or measures are left out.
+#: What a fresh v0.107.79 serves, from a throwaway instance configured through
+#: its first-run setup and nothing else. Lists the instance computes or
+#: measures are left out.
 FRESH_DNS: dict[str, Any] = {
     'upstream_dns': ['https://dns10.quad9.net/dns-query'],
     'upstream_dns_file': '',
@@ -202,11 +249,14 @@ class Refusal(Exception):
 
 
 class FakeResponse:
-    def __init__(self, url: str, payload: object, status: int = 200, text: str = '') -> None:
+    def __init__(
+        self, url: str, payload: object, status: int = 200, text: str = '', headers: dict[str, str] | None = None
+    ) -> None:
         self.url: str = url
         self.payload: object = payload
         self.status_code: int = status
         self.text: str = text
+        self.headers: dict[str, str] = headers or {}
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
@@ -253,23 +303,67 @@ def _sorted_ids(ids: list[str]) -> list[str]:
     ]
 
 
+class Call(NamedTuple):
+    """One connection attempt, answered or not."""
+
+    method: str
+    port: int
+    #: The path under `/control/`.
+    path: str
+    #: The basic-authentication pair it carried, read as UTF-8, or `None` for none.
+    auth: tuple[str, str] | None
+
+
 @dataclass
 class Instance:
-    """One AdGuard instance's configuration, and a log of what was asked of it."""
+    """One AdGuard instance: its listeners, its accounts, its configuration, and a log of what was asked of it."""
 
     #: The rewrite list's rows, in the order the instance holds them.
     entries: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
     #: Every POST, as `(last path segment, body)`, refused ones included.
     posts: list[tuple[str, Any]] = field(default_factory=list[tuple[str, Any]])
-    #: Every request, as `(method, path under /control/, body)`, refused ones included.
+    #: Every request a listener took, as `(method, path under /control/, body)`, refused ones included.
     requests: list[tuple[str, str, Any]] = field(default_factory=list[tuple[str, str, Any]])
-    #: Every session opened onto it, so a test can ask what it authenticated as.
+    #: Every connection attempt, a refused or timed-out one included.
+    calls: list[Call] = field(default_factory=list[Call])
+    #: Every session that dialed it, so a test can ask whether anything did.
     opened: list[FakeSession] = field(default_factory=list['FakeSession'])
     #: The paths under `/control/` the instance refuses. A refused request
     #: changes nothing the instance holds.
     refusing: set[str] = field(default_factory=set[str])
 
+    #: The accounts, as `(name, password)`. Empty is an instance configured
+    #: with `users: []`, which asks no request for a login (item 15).
+    accounts: list[tuple[str, str]] = field(default_factory=lambda: [(USERNAME, PASSWORD)])
+    #: Where the configuration's web server listens, as `(address, port)`, or
+    #: `None` while there is no configuration file: in first run, and after a
+    #: `configure` that failed to write it.
+    web: tuple[str, int] | None = ('0.0.0.0', API_PORT)
+    #: The setup wizard's port, on every address, or `None` while it is down.
+    wizard: int | None = None
+    #: Whether this process left first run through `configure` (item 13).
+    installed_here: bool = False
+    #: Whether a `configure` failed after adding the account (item 14).
+    half_applied: bool = False
+    #: Whether the work directory takes the file `configure` writes.
+    writable: bool = True
+    #: The addresses the box holds, which `configure` can bind.
+    addresses: frozenset[str] = frozenset({'10.0.5.3', '10.0.5.30', '10.0.5.4', '127.0.0.1'})
+    #: Refused logins since the last accepted one (item 15).
+    failures: int = 0
+    #: Ports whose packets are dropped, so a connection times out rather than being refused.
+    dropped: set[int] = field(default_factory=set[int])
+    #: Connections to the web server refused after `configure`, before it has rebound.
+    rebinding: int = 0
+    #: Whether an answer to the status path breaks off mid-body once a login has been taken.
+    breaking: bool = False
+    #: Where an answer to the status path without credentials waits for other
+    #: callers, so that callers racing for one instance reach it together.
+    held: threading.Barrier | None = None
+
     user_rules: list[str] | None = None
+    #: The rewrite list's switch, which `configure` leaves on.
+    rewrites_enabled: bool = True
     filtering_enabled: bool = True
     interval: int = 24
     filters: list[dict[str, Any]] = field(default_factory=lambda: copy.deepcopy(FRESH_FILTERS))
@@ -317,21 +411,74 @@ class Instance:
     next_id: int = 1700000000
     next_uid: int = 1
 
-    def session(self) -> FakeSession:
-        """A `requests.Session` onto this instance, as the provider builds one."""
-        served = FakeSession(self)
-        self.opened.append(served)
-        return served
+    @classmethod
+    def in_first_run(cls) -> Instance:
+        """An instance started with no configuration file (item 11)."""
+        return cls(accounts=[], web=None, wizard=SETUP_PORT)
+
+    def restart(self) -> None:
+        """Start the process again: on its file, configured; with none, in a clean first run (item 14)."""
+        if self.web is None:
+            self.accounts, self.wizard, self.half_applied = [], SETUP_PORT, False
+        else:
+            self.wizard, self.installed_here = None, False
+        # The limiter's block is held in memory.
+        self.failures = 0
 
     def writes(self) -> list[tuple[str, str, Any]]:
         """Every request but a GET."""
         return [request for request in self.requests if request[0] != 'GET']
 
-    def answer(self, method: str, url: str, body: Any, *, as_json: bool) -> FakeResponse:
+    def credentialed(self) -> list[Call]:
+        """Every connection attempt that carried a login."""
+        return [call for call in self.calls if call.auth is not None]
+
+    def answer(
+        self, session: FakeSession, method: str, url: str, body: Any, *, as_json: bool, allow_redirects: bool
+    ) -> FakeResponse:
+        parts = urlsplit(url)
+        port = parts.port or API_PORT
         path = url.split('/control/', 1)[1]
+        credentials = session.credentials()
+        auth = (
+            None
+            if credentials is None
+            else (credentials[0].decode(errors='replace'), credentials[1].decode(errors='replace'))
+        )
+        self.calls.append(Call(method, port, path, auth))
+        if session not in self.opened:
+            self.opened.append(session)
+        if port in self.dropped:
+            raise requests.ConnectTimeout(f'connecting to {url} timed out')
+        if self.web is not None and port == self.web[1] and self.web[0] in ('0.0.0.0', parts.hostname):
+            if self.rebinding:
+                self.rebinding -= 1
+                raise requests.ConnectionError(f'connecting to {url}: connection refused')
+            return self._api(credentials, method, url, path, body, as_json=as_json)
+        if port == self.wizard:
+            return self._wizard(method, url, path, body, as_json=as_json, allow_redirects=allow_redirects)
+        raise requests.ConnectionError(f'connecting to {url}: connection refused')
+
+    def _api(
+        self, credentials: tuple[bytes, bytes] | None, method: str, url: str, path: str, body: Any, *, as_json: bool
+    ) -> FakeResponse:
+        """What the configuration's web server answers."""
         self.requests.append((method, path, body))
         if method == 'POST':
             self.posts.append((path.rsplit('/', 1)[-1], body))
+        if path.startswith('install/'):
+            # Public, so answered before any login is asked for (item 13).
+            if self.installed_here:
+                return FakeResponse(url, None, 403, 'application is already configured')
+            return FakeResponse(url, None, 404, '404 page not found')
+        if path == 'status' and credentials is None and self.held is not None:
+            # A caller the lock let through alone waits out the barrier and breaks it.
+            with contextlib.suppress(threading.BrokenBarrierError):
+                _ = self.held.wait()
+        if self.accounts and not self._admitted(credentials):
+            return FakeResponse(url, None, 401, 'Unauthorized')
+        if path == 'status' and credentials is not None and self.breaking:
+            raise requests.exceptions.ChunkedEncodingError('Connection broken: IncompleteRead(0 bytes read)')
         if path in self.refusing:
             return FakeResponse(url, None, REFUSED, 'Unauthorized')
         if method != 'GET' and not as_json:
@@ -342,6 +489,82 @@ class Instance:
         except Refusal as refused:
             return FakeResponse(url, None, refused.status, refused.reason)
         return FakeResponse(url, copy.deepcopy(payload), 200, 'OK')
+
+    def _admitted(self, credentials: tuple[bytes, bytes] | None) -> bool:
+        """Whether a request's login opens a `/control/` path, counted by the limiter (item 15).
+
+        The accounts hold what `configure` received as JSON, so a login matches
+        as the UTF-8 of each half, against the bytes basic authentication
+        carried, split at their first colon.
+        """
+        if credentials is None:
+            return False
+        if self.failures >= LIMIT:
+            return False
+        if credentials in [(name.encode(), password.encode()) for name, password in self.accounts]:
+            self.failures = 0
+            return True
+        self.failures += 1
+        return False
+
+    def _wizard(
+        self, method: str, url: str, path: str, body: Any, *, as_json: bool, allow_redirects: bool
+    ) -> FakeResponse:
+        """What the setup wizard answers, to anyone (item 11)."""
+        self.requests.append((method, path, body))
+        if path == 'install/get_addresses' and method == 'GET':
+            return FakeResponse(url, {'interfaces': {}, 'version': 'v0.107.79', 'web_port': 80, 'dns_port': 53})
+        if path == 'install/configure':
+            return self._configure(url, method, body, as_json=as_json)
+        if allow_redirects:
+            # The redirect's target redirects again.
+            raise requests.TooManyRedirects('Exceeded 30 redirects.')
+        folder = path.rpartition('/')[0]
+        location = f'/control/{folder}/install.html' if folder else '/control/install.html'
+        return FakeResponse(url, None, 302, '', {'Location': location})
+
+    def _configure(self, url: str, method: str, body: Any, *, as_json: bool) -> FakeResponse:
+        """`install/configure`, its refusals in the release's order (item 12)."""
+        if method != 'POST':
+            return FakeResponse(url, None, 405, 'Method Not Allowed')
+        if not as_json:
+            return FakeResponse(url, None, 415, 'only content-type application/json is allowed')
+        try:
+            web, dns = cast('dict[str, Any]', body['web']), cast('dict[str, Any]', body['dns'])
+            username, password = str(body.get('username', '')), str(body['password'])
+            for part in (web, dns):
+                _ = ipaddress.ip_address(part['ip'])
+                if not isinstance(part['port'], int):
+                    raise TypeError(part['port'])
+        except (KeyError, TypeError, ValueError) as unparsed:
+            return FakeResponse(url, None, 400, f'parsing request: {unparsed}')
+        if not web['port'] or not dns['port']:
+            return FakeResponse(url, None, 400, 'ports cannot be 0')
+        if body.get('language', '') not in ('', 'en'):
+            return FakeResponse(url, None, 400, f'unknown language: "{body["language"]}"')
+        if web['ip'] != '0.0.0.0' and web['ip'] not in self.addresses:
+            reason = f'listen tcp {web["ip"]}:{web["port"]}: bind: cannot assign requested address'
+            return FakeResponse(url, None, 400, f'checking address {web["ip"]}:{web["port"]}: {reason}')
+        if len(password) < 8:
+            return FakeResponse(url, None, 422, 'password must be at least 8 symbols long')
+        if dns['ip'] != '0.0.0.0' and dns['ip'] not in self.addresses:
+            return FakeResponse(
+                url, None, 400, f'listen udp {dns["ip"]}:{dns["port"]}: bind: cannot assign requested address'
+            )
+        if self.half_applied:
+            return FakeResponse(url, None, 400, f'listen udp {dns["ip"]}:{dns["port"]}: bind: address already in use')
+        # The account is added and the DNS server started before the file is written.
+        self.accounts = [(username, password)]
+        if not self.writable:
+            self.half_applied, self.accounts = True, []
+            return FakeResponse(
+                url,
+                None,
+                500,
+                "Couldn't write config: writing config file: open /data/adguard/.AdGuardHome.yaml: permission denied",
+            )
+        self.web, self.wizard, self.installed_here = (str(web['ip']), int(web['port'])), None, True
+        return FakeResponse(url, None, 200, 'OK')
 
     def _integers(self, path: str, body: Any) -> None:
         if not isinstance(body, dict):
@@ -395,6 +618,8 @@ class Instance:
             self._log_config(path.split('/', 1)[0], body)
         elif path == 'rewrite/add':
             self.entries.append(body)
+        elif path == 'rewrite/settings/update':
+            self.rewrites_enabled = bool(body.get('enabled'))
         elif path == 'rewrite/delete':
             # AdGuard removes every entry equal to the pair, and answers a
             # pair it does not hold with success all the same.
@@ -448,6 +673,10 @@ class Instance:
                 return self.stats
             case 'rewrite/list':
                 return [{**entry, 'enabled': entry.get('enabled', True)} for entry in self.entries]
+            case 'rewrite/settings':
+                return {'enabled': self.rewrites_enabled}
+            case 'status':
+                return {'version': 'v0.107.79', 'running': True, 'protection_enabled': self.dns['protection_enabled']}
             case _:
                 raise AssertionError(f'the instance serves no GET {path}')
 
@@ -613,13 +842,43 @@ class Instance:
         setattr(self, which, held)
 
 
-class FakeSession:
-    def __init__(self, instance: Instance) -> None:
-        self.instance: Instance = instance
-        self.auth: tuple[str, str] | None = None
+@dataclass
+class Network:
+    """The instances, by the host each is reached at."""
 
-    def get(self, url: str, timeout: int = 0) -> FakeResponse:
-        return self.instance.answer('GET', url, None, as_json=True)
+    boxes: dict[str, Instance] = field(default_factory=dict[str, Instance])
+
+    def session(self) -> FakeSession:
+        """A `requests.Session`, as the provider builds one."""
+        return FakeSession(self)
+
+    def answer(
+        self, session: FakeSession, method: str, url: str, body: Any, *, as_json: bool, allow_redirects: bool
+    ) -> FakeResponse:
+        box = self.boxes.get(urlsplit(url).hostname or '')
+        if box is None:
+            raise requests.ConnectionError(f'connecting to {url}: no route to host')
+        return box.answer(session, method, url, body, as_json=as_json, allow_redirects=allow_redirects)
+
+
+class FakeSession:
+    def __init__(self, network: Network) -> None:
+        self.network: Network = network
+        self.auth: tuple[str, str] | AuthBase | None = None
+
+    def credentials(self) -> tuple[bytes, bytes] | None:
+        """The bytes a request's basic authentication carries, written by `requests` itself, split at the first colon."""
+        if self.auth is None:
+            return None
+        auth = HTTPBasicAuth(*self.auth) if isinstance(self.auth, tuple) else self.auth
+        prepared = requests.PreparedRequest()
+        prepared.prepare_headers({})
+        header = cast('Any', auth)(prepared).headers['Authorization']
+        username, _, password = base64.b64decode(str(header).removeprefix('Basic ')).partition(b':')
+        return username, password
+
+    def get(self, url: str, timeout: int = 0, allow_redirects: bool = True) -> FakeResponse:
+        return self.network.answer(self, 'GET', url, None, as_json=True, allow_redirects=allow_redirects)
 
     def post(
         self,
@@ -628,19 +887,39 @@ class FakeSession:
         data: Any = None,
         headers: dict[str, str] | None = None,
         timeout: int = 0,
+        allow_redirects: bool = True,
     ) -> FakeResponse:
         sent_json = data is None and (headers or {}).get('Content-Type', 'application/json') == 'application/json'
-        return self.instance.answer('POST', url, data if json is None else json, as_json=sent_json)
+        return self.network.answer(
+            self, 'POST', url, data if json is None else json, as_json=sent_json, allow_redirects=allow_redirects
+        )
 
-    def put(self, url: str, json: Any = None, timeout: int = 0) -> FakeResponse:
-        return self.instance.answer('PUT', url, json, as_json=True)
+    def put(self, url: str, json: Any = None, timeout: int = 0, allow_redirects: bool = True) -> FakeResponse:
+        return self.network.answer(self, 'PUT', url, json, as_json=True, allow_redirects=allow_redirects)
 
 
 @pytest.fixture(autouse=True)
-def instance(monkeypatch: pytest.MonkeyPatch) -> Instance:
-    """The instance the provider reaches, fresh unless a case changes it."""
-    served = Instance()
+def network(monkeypatch: pytest.MonkeyPatch) -> Network:
+    """What every session the provider opens reaches. Each case is a `pulumi` command of its own, verdicts included."""
+    served = Network()
     monkeypatch.setattr(requests, 'Session', served.session)
+    monkeypatch.setattr(api, '_verdicts', {})
+    return served
+
+
+@pytest.fixture(autouse=True)
+def instance(network: Network) -> Instance:
+    """The instance the provider reaches at either of its addresses, configured, unless a case changes it."""
+    served = Instance()
+    network.boxes.update({'10.0.5.3': served, '10.0.5.30': served})
+    return served
+
+
+@pytest.fixture
+def first_run(network: Network) -> Instance:
+    """The instance the provider reaches, started with no configuration file instead."""
+    served = Instance.in_first_run()
+    network.boxes.update({'10.0.5.3': served, '10.0.5.30': served})
     return served
 
 
@@ -717,6 +996,11 @@ class Kind:
         return self.provider.kind
 
 
+def _edit_rules(instance: Instance) -> None:
+    instance.user_rules = ['|tube^$dnsrewrite=NOERROR;A;192.168.71.9']
+    instance.rewrites_enabled = True
+
+
 def _edit_dns(instance: Instance) -> None:
     instance.dns.update(ratelimit=40)
     instance.access['blocked_hosts'] = ['id.server']
@@ -752,10 +1036,11 @@ KINDS = (
                 '! Declared by the dns stack: an edit here is overwritten.',
                 '|tube^$dnsrewrite=NOERROR;A;192.168.71.1',
                 '||psn.example^$client=PS4',
-            ]
+            ],
+            'rewrites_enabled': False,
         },
-        lambda instance: setattr(instance, 'user_rules', ['|tube^$dnsrewrite=NOERROR;A;192.168.71.9']),
-        ('filtering/status', 'rewrite/list'),
+        _edit_rules,
+        ('filtering/status', 'rewrite/list', 'rewrite/settings'),
     ),
     Kind(dns_server.AdGuardDnsServerProvider, {'dns': DNS, 'access': ACCESS}, _edit_dns, ('dns_info', 'access/list')),
     Kind(
@@ -783,7 +1068,7 @@ KINDS = (
 EVERY_KIND = pytest.mark.parametrize('kind', KINDS, ids=str)
 
 
-def configured_provider(cls: type[base.AdGuardProvider], password: str = PASSWORD) -> base.AdGuardProvider:
+def configured_provider[P: base.InstanceProvider](cls: type[P], password: str = PASSWORD) -> P:
     """A provider as an operation receives one: revived, then handed the config.
 
     The login arrives already decrypted, which is what the plugin does with a
@@ -815,11 +1100,17 @@ def as_engine(value: Any) -> Any:
 
 
 def checked(
-    cls: type[base.AdGuardProvider], sections: dict[str, Any], *, password: str = PASSWORD, endpoint: str = ENDPOINT
+    cls: type[base.InstanceProvider],
+    sections: dict[str, Any],
+    *,
+    password: str = PASSWORD,
+    endpoint: str = ENDPOINT,
+    setup_endpoint: str = SETUP_ENDPOINT,
+    instance: str = INSTANCE,
 ) -> dict[str, Any]:
     """The inputs as the engine stores and compares them: what `check` returned, every number a float."""
     result = configured_provider(cls, password).check(
-        {}, as_engine({'instance': INSTANCE, 'endpoint': endpoint, **sections})
+        {}, as_engine({'instance': instance, 'endpoint': endpoint, 'setup_endpoint': setup_endpoint, **sections})
     )
     assert not result.failures, [(failure.property, failure.reason) for failure in result.failures or []]
     return result.inputs
@@ -831,12 +1122,12 @@ def created(kind: Kind) -> dict[str, Any]:
     return dict(configured_provider(kind.provider).create(news).outs or {})
 
 
-def refreshed(cls: type[base.AdGuardProvider], stored: dict[str, Any]) -> dict[str, Any]:
+def refreshed(cls: type[base.InstanceProvider], stored: dict[str, Any]) -> dict[str, Any]:
     """What a refresh leaves as the stored outputs."""
     return dict(configured_provider(cls).read(f'{INSTANCE}|{cls.kind}', stored).outs or {})
 
 
-def drifted(cls: type[base.AdGuardProvider], stored: dict[str, Any], sections: dict[str, Any]) -> bool | None:
+def drifted(cls: type[base.InstanceProvider], stored: dict[str, Any], sections: dict[str, Any]) -> bool | None:
     """Whether a refreshing preview plans a change: refresh, then diff against the declaration."""
     return configured_provider(cls).diff('an-id', refreshed(cls, stored), checked(cls, sections)).changes
 
@@ -955,9 +1246,11 @@ def test_an_input_still_unknown_is_an_unknown_diff(kind: Kind, instance: Instanc
 
 @EVERY_KIND
 def test_a_write_authenticates_as_the_configured_login(kind: Kind, instance: Instance) -> None:
+    """Every request carries the login but the classification's first, which asks whether an account exists."""
     _ = created(kind)
 
-    assert {opened.auth for opened in instance.opened} == {(USERNAME, PASSWORD)}
+    assert {call.auth for call in instance.credentialed()} == {(USERNAME, PASSWORD)}
+    assert [(call.path, call.auth) for call in instance.calls if call.auth is None] == [('status', None)]
 
 
 @EVERY_KIND
@@ -1009,8 +1302,12 @@ def test_a_missing_half_of_the_login_refuses_by_name() -> None:
 # What `check` refuses offline, so a preview fails where the update would.
 
 
-def _failures(cls: type[base.AdGuardProvider], sections: dict[str, Any]) -> list[str]:
-    result = configured_provider(cls).check({}, {'instance': INSTANCE, 'endpoint': ENDPOINT, **sections})
+def _failures(
+    cls: type[base.InstanceProvider], sections: dict[str, Any], *, password: str = PASSWORD, endpoint: str = ENDPOINT
+) -> list[str]:
+    result = configured_provider(cls, password).check(
+        {}, {'instance': INSTANCE, 'endpoint': endpoint, 'setup_endpoint': SETUP_ENDPOINT, **sections}
+    )
     return [failure.reason for failure in result.failures or []]
 
 
@@ -1174,6 +1471,22 @@ def test_a_hand_added_rewrite_row_is_drift(instance: Instance) -> None:
         {'domain': 'tube.ucw.phd', 'answer': '192.168.71.9', 'enabled': True}
     ]
     assert drifted(RULES, stored, KINDS[0].declared) is True
+
+
+def test_the_rewrite_switch_the_setup_leaves_on_is_turned_off_and_a_hand_toggle_is_drift(instance: Instance) -> None:
+    """A rebuilt instance comes up with the rewrite list on, so the declaration is what turns it off."""
+    assert instance.rewrites_enabled is True
+
+    stored = created(KINDS[0])
+
+    assert instance.rewrites_enabled is False
+    assert ('PUT', 'rewrite/settings/update', {'enabled': False}) in instance.requests
+
+    instance.rewrites_enabled = True
+
+    assert drifted(RULES, stored, KINDS[0].declared) is True
+    _ = configured_provider(RULES).update('an-id', refreshed(RULES, stored), checked(RULES, KINDS[0].declared))
+    assert instance.rewrites_enabled is False
 
 
 # --------------------------------------------------------------------------
@@ -1532,6 +1845,400 @@ def test_an_identifier_moving_to_a_client_declared_first_converges(instance: Ins
         'giver': ['192.168.1.10'],
         'taker': ['192.168.1.11', '192.168.1.12'],
     }
+
+
+# --------------------------------------------------------------------------
+# AdGuardSetup, and the classification every kind consults.
+
+SETUP = setup.AdGuardSetupProvider
+SET_UP: dict[str, Any] = {'listen': LISTEN}
+
+#: Every kind, the setup included, each with a declaration of every section.
+SEVEN: tuple[tuple[type[base.InstanceProvider], dict[str, Any]], ...] = (
+    (SETUP, SET_UP),
+    *((kind.provider, kind.declared) for kind in KINDS),
+)
+EVERY_ONE_OF_SEVEN = pytest.mark.parametrize(('cls', 'declared'), SEVEN, ids=[cls.kind for cls, _ in SEVEN])
+
+#: How long the status answer without credentials waits for the other callers
+#: of one instance, in the concurrent case. Only a caller the lock let through
+#: reaches it alone, so with the lock in place every wait runs out.
+HOLD = 0.5
+
+
+def test_a_first_run_instance_is_configured_with_the_declared_listen_and_the_login_and_the_six_then_write(
+    first_run: Instance,
+) -> None:
+    """One command: the setup's create configures the instance, and each of the six then creates and converges."""
+    stored = configured_provider(SETUP).create(checked(SETUP, SET_UP)).outs or {}
+
+    (sent,) = [body for _method, path, body in first_run.requests if path == 'install/configure']
+    assert sent == {**LISTEN, 'username': USERNAME, 'password': PASSWORD}
+    assert [call.auth for call in first_run.calls if call.path == 'install/configure'] == [None]
+    assert first_run.accounts == [(USERNAME, PASSWORD)]
+    assert first_run.web == ('0.0.0.0', API_PORT)
+    assert stored['listen'] == as_engine(LISTEN)
+    for kind in KINDS:
+        assert drifted(kind.provider, created(kind), kind.declared) is False, kind
+
+
+def test_a_configured_instance_whose_login_is_accepted_is_adopted_with_no_write(instance: Instance) -> None:
+    result = configured_provider(SETUP).create(checked(SETUP, SET_UP))
+
+    assert result.id == f'{INSTANCE}|setup'
+    assert instance.writes() == []
+    assert [call.port for call in instance.calls] == [API_PORT, API_PORT]
+
+
+@pytest.mark.parametrize('password', ['pässwörd-123', '八个字符的密码呀'], ids=['latin', 'cjk'])
+def test_a_non_ascii_login_the_setup_configures_then_authenticates(password: str, first_run: Instance) -> None:
+    """`configure` stores the login as the UTF-8 of its JSON, so every later request has to send that."""
+    _ = configured_provider(SETUP, password).create(checked(SETUP, SET_UP, password=password))
+
+    assert first_run.accounts == [(USERNAME, password)]
+    assert [call.auth for call in first_run.credentialed()] == [(USERNAME, password)]
+    assert first_run.failures == 0
+
+
+def test_a_configure_answering_500_is_not_retried(first_run: Instance) -> None:
+    """The instance is half-applied: it refuses every later configure, so a retry would only bury the reason."""
+    first_run.writable = False
+
+    with pytest.raises(setup.HalfApplied, match=r'500: Couldn.t write config.*half-applied.*restarts'):
+        _ = configured_provider(SETUP).create(checked(SETUP, SET_UP))
+
+    assert [path for _method, path, _body in first_run.writes()] == ['install/configure']
+
+
+def test_a_half_applied_instance_is_refused_naming_the_restart_it_needs(
+    first_run: Instance, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After a `500` the instance looks like first run to the next command, and refuses its configure."""
+    first_run.writable = False
+    with pytest.raises(setup.HalfApplied, match='Restart the machine or container'):
+        _ = configured_provider(SETUP).create(checked(SETUP, SET_UP))
+    # The next command.
+    monkeypatch.setattr(api, '_verdicts', {})
+
+    with pytest.raises(setup.SetupRefused, match=r'400: .*address already in use.*half-applied.*restart the machine'):
+        _ = configured_provider(SETUP).create(checked(SETUP, SET_UP))
+
+
+def test_a_refused_configure_raises_with_the_instances_reason_and_leaves_first_run(first_run: Instance) -> None:
+    elsewhere = {'listen': {**LISTEN, 'web': {'ip': '10.0.5.99', 'port': API_PORT}}}
+
+    with pytest.raises(setup.SetupRefused, match=r'400: checking address 10\.0\.5\.99:80.*has applied nothing'):
+        _ = configured_provider(SETUP).create(checked(SETUP, elsewhere, endpoint='http://10.0.5.99:80'))
+
+    assert first_run.wizard == SETUP_PORT
+    assert first_run.accounts == []
+    assert [path for _method, path, _body in first_run.writes()] == ['install/configure']
+
+
+def test_the_setup_waits_out_the_rebind(first_run: Instance, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A refused connection after `configure` is the web server not rebound yet, and is tried again."""
+    monkeypatch.setattr(setup, 'POLL_INTERVAL', 0)
+    first_run.rebinding = 2
+
+    _ = configured_provider(SETUP).create(checked(SETUP, SET_UP))
+
+    assert [call.path for call in first_run.credentialed()] == ['status'] * 3
+
+
+def test_the_setup_never_retries_an_answer_to_the_login(first_run: Instance, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An answer is final, because every refused login counts toward the instance's limiter."""
+    monkeypatch.setattr(setup, 'POLL_INTERVAL', 0)
+    monkeypatch.setattr(setup, 'REBIND_TIMEOUT', 1)
+    first_run.refusing = {'status'}
+
+    with pytest.raises(api.Unusable, match='took its configure, but'):
+        _ = configured_provider(SETUP).create(checked(SETUP, SET_UP))
+
+    assert [call.path for call in first_run.credentialed()] == ['status']
+
+
+def test_concurrent_reads_with_a_refused_login_send_one_credentialed_request_per_instance(
+    instance: Instance, network: Network
+) -> None:
+    """Every resource of one command shares its instance's one verdict, whatever order and concurrency the host reads in.
+
+    The workers start together, and each instance holds its answer to the
+    uncredentialed status request until its other callers arrive or `HOLD`
+    runs out, so callers the lock did not serialize meet inside the
+    classification and each send the login.
+    """
+    bob = Instance()
+    network.boxes['10.0.5.4'] = bob
+    reads: list[tuple[type[base.InstanceProvider], dict[str, Any]]] = []
+    for name, endpoint, setup_endpoint, box in (
+        (INSTANCE, ENDPOINT, SETUP_ENDPOINT, instance),
+        (BOB, BOB_ENDPOINT, BOB_SETUP_ENDPOINT, bob),
+    ):
+        box.held = threading.Barrier(len(SEVEN), timeout=HOLD)
+        reads += [
+            (cls, checked(cls, declared, instance=name, endpoint=endpoint, setup_endpoint=setup_endpoint))
+            for cls, declared in SEVEN
+        ]
+    start = threading.Barrier(len(reads))
+
+    def read(cls: type[base.InstanceProvider], stored: dict[str, Any]) -> Exception | None:
+        provider = configured_provider(cls, 'not-the-password')
+        _ = start.wait()
+        try:
+            _ = provider.read(f'{stored["instance"]}|{cls.kind}', stored)
+        except Exception as raised:  # noqa: BLE001 -- the outcome is what is compared
+            return raised
+        return None
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(reads)) as pool:
+        outcomes = list(pool.map(read, *zip(*reads, strict=True)))
+
+    assert [type(outcome) for outcome in outcomes] == [api.Unusable] * len(reads)
+    assert all('refused the login' in str(outcome) and '15 minutes' in str(outcome) for outcome in outcomes)
+    assert [len(box.credentialed()) for box in (instance, bob)] == [1, 1]
+    assert [box.failures for box in (instance, bob)] == [1, 1]
+
+
+def test_a_classification_that_breaks_off_after_the_login_is_a_verdict_too(instance: Instance) -> None:
+    """Every request of the classification can fail after the login went out; none of them sends it twice."""
+    instance.breaking = True
+
+    for cls, declared in SEVEN:
+        with pytest.raises(api.Unusable, match='ChunkedEncodingError'):
+            _ = configured_provider(cls).read('an-id', checked(cls, declared))
+
+    assert len(instance.credentialed()) == 1
+
+
+@EVERY_ONE_OF_SEVEN
+def test_nothing_is_sent_to_the_setup_port_while_the_api_port_answers(
+    cls: type[base.InstanceProvider], declared: dict[str, Any], instance: Instance
+) -> None:
+    _ = configured_provider(cls).read('an-id', checked(cls, declared))
+
+    assert SETUP_PORT not in {call.port for call in instance.calls}
+
+
+@pytest.mark.parametrize('setup_port', ['refused', 'dropped'])
+@EVERY_ONE_OF_SEVEN
+def test_an_instance_down_on_both_ports_raises_in_every_kind(
+    cls: type[base.InstanceProvider], declared: dict[str, Any], setup_port: str, instance: Instance
+) -> None:
+    """A dropped setup port is what a caller that reaches the API's port alone, CI's, meets on a first-run instance."""
+    instance.web = None
+    if setup_port == 'dropped':
+        instance.wizard, instance.dropped = SETUP_PORT, {SETUP_PORT}
+    provider = configured_provider(cls)
+    stored = checked(cls, declared)
+
+    with pytest.raises(api.Unusable, match='unreachable'):
+        _ = provider.read('an-id', stored)
+    with pytest.raises(api.Unusable, match='unreachable'):
+        _ = provider.create(stored)
+    assert instance.credentialed() == []
+
+
+@EVERY_ONE_OF_SEVEN
+def test_a_first_run_instance_reads_as_gone_in_every_kind(
+    cls: type[base.InstanceProvider], declared: dict[str, Any], first_run: Instance
+) -> None:
+    """It holds no configuration at all, so a refreshing run drops the resource and re-creates it after the setup."""
+    result = configured_provider(cls).read('an-id', checked(cls, declared))
+
+    assert result.id is None
+    assert result.outs == {}
+    assert first_run.credentialed() == []
+
+
+@pytest.mark.parametrize('kind', KINDS, ids=str)
+def test_the_six_refuse_to_write_a_first_run_instance_their_setup_has_not_configured(
+    kind: Kind, first_run: Instance
+) -> None:
+    provider = configured_provider(kind.provider)
+
+    with pytest.raises(base.SetupNotRun, match='is in first run'):
+        _ = provider.create(checked(kind.provider, kind.declared))
+
+    assert first_run.credentialed() == []
+    assert first_run.writes() == []
+
+
+@EVERY_ONE_OF_SEVEN
+def test_an_instance_with_no_account_raises(
+    cls: type[base.InstanceProvider], declared: dict[str, Any], instance: Instance
+) -> None:
+    """Every path answers it without credentials, so anyone who reaches it can configure it."""
+    instance.accounts = []
+
+    with pytest.raises(api.Unusable, match='holds no account'):
+        _ = configured_provider(cls).read('an-id', checked(cls, declared))
+    assert instance.credentialed() == []
+
+
+def test_a_changed_listen_raises_at_update(instance: Instance) -> None:
+    olds = checked(SETUP, SET_UP)
+    news = checked(SETUP, {'listen': {**LISTEN, 'dns': {'ip': '10.0.5.3', 'port': 53}}})
+    provider = configured_provider(SETUP)
+
+    assert provider.diff('an-id', olds, news).changes is True
+    with pytest.raises(setup.ListenChanged, match=r"Only an instance's first run sets it"):
+        _ = provider.update('an-id', olds, news)
+    assert instance.opened == []
+
+
+def test_a_moved_login_on_setup_sends_one_credentialed_request_and_a_refusal_raises(
+    instance: Instance, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No endpoint changes an account, so a rotation is a reset: the update says so rather than recording it."""
+    olds = checked(SETUP, SET_UP)
+    rotated = checked(SETUP, SET_UP, password='a-rotated-secret')
+
+    with pytest.raises(api.Unusable, match=r'refused the login.*reset'):
+        _ = configured_provider(SETUP, 'a-rotated-secret').update('an-id', olds, rotated)
+    assert [call.auth for call in instance.credentialed()] == [(USERNAME, 'a-rotated-secret')]
+
+    # The next command, after the instance's reset made the rotated login its account.
+    monkeypatch.setattr(api, '_verdicts', {})
+    instance.calls.clear()
+    instance.accounts = [(USERNAME, 'a-rotated-secret')]
+
+    assert configured_provider(SETUP, 'a-rotated-secret').update('an-id', olds, rotated).outs == rotated
+    assert [call.auth for call in instance.credentialed()] == [(USERNAME, 'a-rotated-secret')]
+
+
+def test_a_moved_endpoint_on_setup_is_recorded_with_no_call(instance: Instance) -> None:
+    olds = checked(SETUP, SET_UP)
+    news = checked(SETUP, SET_UP, endpoint=MOVED, setup_endpoint='http://10.0.5.30:3000')
+    provider = configured_provider(SETUP)
+
+    assert provider.diff('an-id', olds, news).changes is True
+    assert provider.diff('an-id', olds, news).replaces == []
+    assert provider.update('an-id', olds, news).outs == news
+    assert instance.opened == []
+
+
+def test_a_configured_setup_reads_back_its_stored_bag(instance: Instance) -> None:
+    """`GET /control/status` reports the expanded interface list, not the bind address, so `listen` is not read."""
+    stored = checked(SETUP, SET_UP)
+
+    result = configured_provider(SETUP).read(f'{INSTANCE}|setup', stored)
+
+    assert result.outs == stored
+    assert result.inputs == stored
+    assert instance.writes() == []
+
+
+@pytest.mark.parametrize(
+    ('password', 'username', 'key'),
+    [
+        ('a7chars', USERNAME, base.PASSWORD_CONFIG),
+        ('a-typed-secret', '', base.USERNAME_CONFIG),
+        ('a-typed-secret', 'ad:min', base.USERNAME_CONFIG),
+    ],
+    ids=['short-password', 'empty-username', 'colon-username'],
+)
+def test_check_refuses_a_short_password_and_an_empty_username_by_key_never_by_value(
+    password: str, username: str, key: str
+) -> None:
+    provider = SETUP()
+    provider.configure(
+        dynamic.ConfigureRequest(
+            config=dynamic.Config(
+                {f'{PROJECT}:{base.USERNAME_CONFIG}': username, f'{PROJECT}:{base.PASSWORD_CONFIG}': password},
+                PROJECT,
+            )
+        )
+    )
+
+    result = provider.check(
+        {}, {'instance': INSTANCE, 'endpoint': ENDPOINT, 'setup_endpoint': SETUP_ENDPOINT, **SET_UP}
+    )
+
+    failures = [(failure.property, failure.reason) for failure in result.failures or []]
+    assert [prop for prop, _reason in failures] == [key]
+    assert all(password not in reason for _prop, reason in failures)
+    assert all(username not in reason for _prop, reason in failures if username)
+
+
+@pytest.mark.parametrize(
+    ('listen', 'endpoint', 'reason'),
+    [
+        (LISTEN, 'http://10.0.5.3:8080', 'endpoint http://10.0.5.3:8080 is not on listen.web.port 80'),
+        (
+            {**LISTEN, 'web': {'ip': '10.0.5.3', 'port': 80}},
+            'http://10.0.5.30:80',
+            'endpoint http://10.0.5.30:80 is not on listen.web.ip 10.0.5.3',
+        ),
+        ({**LISTEN, 'web': {'ip': '0.0.0.0', 'port': 0}}, ENDPOINT, 'listen.web.port 0 is not a port'),
+        ({**LISTEN, 'dns': {'ip': '0.0.0.0', 'port': 80}}, ENDPOINT, 'listen.web and listen.dns are on one port'),
+        ({**LISTEN, 'dns': {'ip': 'bogus', 'port': 53}}, ENDPOINT, "listen.dns.ip 'bogus' is not an address"),
+        ({'web': LISTEN['web']}, ENDPOINT, 'listen lacks dns'),
+    ],
+    ids=['endpoint-port', 'endpoint-host', 'port-zero', 'one-port', 'unparsed-address', 'missing-part'],
+)
+def test_check_refuses_a_listen_configure_would_refuse_or_an_endpoint_it_would_not_reach(
+    listen: dict[str, Any], endpoint: str, reason: str
+) -> None:
+    assert any(reason in failure for failure in _failures(SETUP, {'listen': listen}, endpoint=endpoint)), _failures(
+        SETUP, {'listen': listen}, endpoint=endpoint
+    )
+
+
+def test_check_accepts_the_setup_declaration() -> None:
+    assert _failures(SETUP, SET_UP) == []
+
+
+def test_a_redirect_is_a_refusal_naming_where_it_points(first_run: Instance) -> None:
+    """A first-run instance redirects every path but its install routes, and following them ends nowhere useful."""
+    stored = checked(RULES, KINDS[0].declared, endpoint=SETUP_ENDPOINT)
+
+    with pytest.raises(api.Unusable, match=r'answered 302 to /control/install\.html'):
+        _ = configured_provider(RULES).read('an-id', stored)
+
+
+def test_a_redirect_answering_a_credentialed_request_is_a_refusal(first_run: Instance) -> None:
+    with pytest.raises(requests.HTTPError, match=r'GET /control/status answered 302 to /control/install\.html'):
+        _ = api.Api(SETUP_ENDPOINT, USERNAME, PASSWORD).get('status')
+
+
+def test_the_setup_is_a_kind_with_the_shared_lifecycle(instance: Instance) -> None:
+    """Its id is the instance and the kind; a changed instance replaces; delete calls nothing."""
+    olds = checked(SETUP, SET_UP)
+    provider = configured_provider(SETUP)
+
+    assert provider.diff('an-id', olds, checked(SETUP, SET_UP, instance=BOB)).replaces == ['instance']
+    assert provider.diff('an-id', olds, olds).changes is False
+    provider.delete('an-id', olds)
+    assert instance.opened == []
+
+
+#: Each kind's resource class, with what a declaration passes it besides the instance and the endpoints.
+RESOURCES: tuple[tuple[Callable[..., dynamic.Resource], dict[str, Any]], ...] = (
+    (adguard.AdGuardSetup, SET_UP),
+    (adguard.AdGuardUserRules, {'rules': KINDS[0].declared['rules']}),
+    (adguard.AdGuardDnsServer, KINDS[1].declared),
+    (adguard.AdGuardFiltering, KINDS[2].declared),
+    (adguard.AdGuardFilterLists, KINDS[3].declared),
+    (adguard.AdGuardClients, KINDS[4].declared),
+    (adguard.AdGuardLogSettings, KINDS[5].declared),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('resource', 'sections'), RESOURCES, ids=[getattr(cls, '__name__', '') for cls, _ in RESOURCES]
+)
+async def test_every_kind_declares_through_the_engine_and_resolves_its_outputs(
+    resource: Callable[..., dynamic.Resource], sections: dict[str, Any]
+) -> None:
+    """The SDK holds a resolved output to its annotation, and refuses a dict where the class says a `TypedDict`."""
+    _ = await run_with(Recorder(), stack='dns')
+    async with declaring():
+        declared = resource('kind', instance=INSTANCE, endpoint=ENDPOINT, setup_endpoint=SETUP_ENDPOINT, **sections)
+
+    for section, value in sections.items():
+        output = getattr(declared, section)
+        assert await output.future() == as_engine(value)
 
 
 # --------------------------------------------------------------------------

@@ -33,7 +33,7 @@ import pulumi
 import pulumi.dynamic as dynamic
 
 from kluster.providers.adguard.api import Api
-from kluster.providers.adguard.base import ENDPOINT, INSTANCE, AdGuardProvider, missing_or_extra
+from kluster.providers.adguard.base import ENDPOINT, INSTANCE, SETUP_ENDPOINT, AdGuardProvider, missing_or_extra
 
 __all__ = (
     'ACCESS',
@@ -196,8 +196,8 @@ class AdGuardDnsServer(dynamic.Resource, module='adguard', name='AdGuardDnsServe
 
     instance: pulumi.Output[str]
     endpoint: pulumi.Output[str]
-    dns: pulumi.Output[DnsSettings]
-    access: pulumi.Output[AccessLists]
+    dns: pulumi.Output[dict[str, Any]]
+    access: pulumi.Output[dict[str, Any]]
 
     def __init__(
         self,
@@ -205,6 +205,7 @@ class AdGuardDnsServer(dynamic.Resource, module='adguard', name='AdGuardDnsServe
         *,
         instance: pulumi.Input[str],
         endpoint: pulumi.Input[str],
+        setup_endpoint: pulumi.Input[str],
         dns: pulumi.Input[DnsSettings],
         access: pulumi.Input[AccessLists],
         opts: pulumi.ResourceOptions | None = None,
@@ -213,6 +214,6 @@ class AdGuardDnsServer(dynamic.Resource, module='adguard', name='AdGuardDnsServe
         super().__init__(
             AdGuardDnsServerProvider(),
             name,
-            {INSTANCE: instance, ENDPOINT: endpoint, DNS: dns, ACCESS: access},
+            {INSTANCE: instance, ENDPOINT: endpoint, SETUP_ENDPOINT: setup_endpoint, DNS: dns, ACCESS: access},
             opts,
         )

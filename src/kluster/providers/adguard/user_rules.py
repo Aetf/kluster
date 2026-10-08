@@ -10,10 +10,16 @@ instance answers a `text/plain` one with 415.
 **The rewrite list is guarded, not written.** Once the list is switched on
 (`filtering.rewrites_enabled`), a row there outranks every user rule and decides
 its name's answer whatever the rules say; while it is off, a row waits for the
-switch. Either way nothing declares it. `read` reports
-its rows as `rewrites`, which the declaration holds empty, so a refresh shows a
-hand-added row as drift; and a write refuses, naming the rows, before
-`set_rules` is sent. Its switch is neither read nor written.
+switch. Either way nothing declares a row. `read` reports its rows as
+`rewrites`, which the declaration holds empty, so a refresh shows a hand-added
+row as drift; and a write refuses, naming the rows, before it sends anything.
+
+**The switch is declared off**, as `rewrites_enabled`, by every resource of the
+kind rather than by its caller: an instance's first-run setup leaves it on, and
+the guard above is what the declaration means. It is read from `GET
+/control/rewrite/settings` and written by `PUT /control/rewrite/settings/update`
+with an explicit body, so a switch turned on by hand is drift and the next
+write turns it off.
 """
 
 from __future__ import annotations
@@ -25,9 +31,16 @@ import pulumi
 import pulumi.dynamic as dynamic
 
 from kluster.providers.adguard.api import Api
-from kluster.providers.adguard.base import ENDPOINT, INSTANCE, AdGuardProvider
+from kluster.providers.adguard.base import ENDPOINT, INSTANCE, SETUP_ENDPOINT, AdGuardProvider
 
-__all__ = ('REWRITES', 'RULES', 'AdGuardUserRules', 'AdGuardUserRulesProvider', 'RewriteListNotEmpty')
+__all__ = (
+    'REWRITES',
+    'REWRITES_ENABLED',
+    'RULES',
+    'AdGuardUserRules',
+    'AdGuardUserRulesProvider',
+    'RewriteListNotEmpty',
+)
 
 #: The declared list.
 RULES = 'rules'
@@ -35,6 +48,9 @@ RULES = 'rules'
 #: The rewrite list's rows, as `read` reports them. Never declared: the
 #: declaration is that there are none.
 REWRITES = 'rewrites'
+
+#: The rewrite list's switch, which every resource of the kind declares off.
+REWRITES_ENABLED = 'rewrites_enabled'
 
 
 class RewriteListNotEmpty(RuntimeError):
@@ -48,7 +64,7 @@ def _rows(value: Any) -> list[dict[str, Any]]:
 @final
 class AdGuardUserRulesProvider(AdGuardProvider):
     kind = 'user-rules'
-    sections = (RULES, REWRITES)
+    sections = (RULES, REWRITES, REWRITES_ENABLED)
 
     def _refusals(self, news: Mapping[str, Any], failures: list[dynamic.CheckFailure]) -> None:
         rules = news.get(RULES)
@@ -67,11 +83,18 @@ class AdGuardUserRulesProvider(AdGuardProvider):
     def _comparable(self, section: str, value: Any) -> object:
         if section == REWRITES:
             return _rows(value)
+        if section == REWRITES_ENABLED:
+            return bool(value)
         return list(cast('Sequence[Any]', value or []))
 
     def _read(self, api: Api) -> dict[str, Any]:
         status = cast('Mapping[str, Any]', api.get('filtering/status'))
-        return {RULES: list(status.get('user_rules') or []), REWRITES: _rows(api.get('rewrite/list'))}
+        switch = cast('Mapping[str, Any]', api.get('rewrite/settings'))
+        return {
+            RULES: list(status.get('user_rules') or []),
+            REWRITES: _rows(api.get('rewrite/list')),
+            REWRITES_ENABLED: bool(switch.get('enabled')),
+        }
 
     def _write(self, api: Api, news: Mapping[str, Any], olds: Mapping[str, Any] | None) -> None:
         if rows := _rows(api.get('rewrite/list')):
@@ -81,8 +104,11 @@ class AdGuardUserRulesProvider(AdGuardProvider):
                 'list is switched on, and nothing declares it: remove the rows in the instance\'s "DNS rewrites" '
                 'page, then run again.'
             )
-        if olds is None or self._comparable(RULES, olds.get(RULES)) != self._comparable(RULES, news.get(RULES)):
+        changed = self._changed(olds, news)
+        if RULES in changed:
             api.post('filtering/set_rules', {'rules': list(news[RULES])})
+        if REWRITES_ENABLED in changed:
+            api.put('rewrite/settings/update', {'enabled': bool(news[REWRITES_ENABLED])})
 
 
 @final
@@ -99,13 +125,26 @@ class AdGuardUserRules(dynamic.Resource, module='adguard', name='AdGuardUserRule
         *,
         instance: pulumi.Input[str],
         endpoint: pulumi.Input[str],
+        setup_endpoint: pulumi.Input[str],
         rules: pulumi.Input[Sequence[str]],
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
-        """Declare that `instance`, reached at `endpoint`, holds exactly `rules`, in order.
+        """Declare that `instance`, reached at `endpoint`, holds exactly `rules`, in order, and its rewrite list off.
 
-        `instance` is which resolver this is and never moves; `endpoint` is
-        where this run finds it and may. The login that writes the list is not
-        a property: it is read in `configure`.
+        `instance` is which resolver this is and never moves; `endpoint` and
+        `setup_endpoint` are where this run finds its API and its setup, and
+        may. The login that writes the list is not a property: it is read in
+        `configure`.
         """
-        super().__init__(AdGuardUserRulesProvider(), name, {INSTANCE: instance, ENDPOINT: endpoint, RULES: rules}, opts)
+        super().__init__(
+            AdGuardUserRulesProvider(),
+            name,
+            {
+                INSTANCE: instance,
+                ENDPOINT: endpoint,
+                SETUP_ENDPOINT: setup_endpoint,
+                RULES: rules,
+                REWRITES_ENABLED: False,
+            },
+            opts,
+        )
