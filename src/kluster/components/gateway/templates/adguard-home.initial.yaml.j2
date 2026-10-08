@@ -8,10 +8,16 @@ dns:
     - {{ address }}
   port: 53
   upstream_dns:
+{%- for zone in gateway_zones %}
+    - '[/{{ zone }}/]{{ gateway_resolver }}'
+{%- endfor %}
 {%- for upstream in upstreams %}
     - {{ upstream }}
 {%- endfor %}
   bootstrap_dns:
     - 9.9.9.9
     - 1.1.1.1
+  local_ptr_upstreams:
+    - {{ gateway_resolver }}
+  use_private_ptr_resolvers: true
 schema_version: 29
