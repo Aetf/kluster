@@ -13,12 +13,16 @@ DNS controller (architecture.md §6.4); the standalone DNSControl repo
 > `src/kluster/components/dns/` holds the record model and the block
 > (`record.py`), the base records (`base.py`), the app records the
 > legacy VPS still serves (`legacy.py`, transitional — §6), the
-> derivation from routes to rewrites (`rewrites.py`), and the two
-> components that turn data into resources (`zone.py` and `rewrites.py`
-> again, the latter over the custom provider in
-> `src/kluster/providers/adguard_rewrites/`). The route rows themselves
-> are a convention, `src/kluster/conventions/routes.py`, because `apps`
-> and `dns` both read them (README.md §2). **The retiring DNSControl
+> resolvers' rule list with the derivations that produce its rows
+> (`rewrites.py`), the rest of what the resolvers are configured with
+> (`resolver_settings.py`, `aliases.py`, `blocklists.py`), and the two
+> components that turn data into resources (`zone.py`, and `resolver.py`
+> over the custom provider in `src/kluster/providers/adguard/`). The
+> route rows themselves are a convention,
+> `src/kluster/conventions/routes.py`, because `apps` and `dns` both
+> read them (README.md §2). The resolvers' configuration is declared
+> and not applied: its first apply is a flip of its own
+> ([sources-of-truth.md](../sources-of-truth.md), row R2). **The retiring DNSControl
 > program is authoritative until cutover**: the zones exist at
 > Cloudflare and their state is imported rather than applied, so this
 > stack's first `up` is a cutover step and is not to be run while that
@@ -280,12 +284,15 @@ is one nobody here asked for, is the issue's question.
     members as the network's managed-DNS search domain, with alice and
     bob as the resolvers for it (physical/gateway.md §2.7). A member
     that opts in resolves `*.zt` at home and nothing else there, and
-    the resolvers answer such a name today by forwarding it upstream,
-    which returns this block's record; a member that does not opt in,
-    and every Linux member, resolves the block through the public
-    records as before. Application names are outside the pushed domain
-    by design, so the push changes nothing about how any of them
-    resolves.
+    alice and bob answer such a name from a rule of their own (§3):
+    one per roster entry, derived from the same entry as the record, so
+    the rule and the public record are one name and one address
+    whichever of them answers. A member that does not opt in, and every
+    Linux member, resolves the block through the public records as
+    before, and a LAN client, whose resolver is alice or bob for every
+    name, gets the rule's answer. Application names are outside the
+    pushed domain by design, so the push changes nothing about how any
+    of them resolves.
 -   **Apps are CNAMEs to anchors**: `<app>.<zone>` → `kluster.hosts.…`
     declared inside the app component. A node rebuild or VIP re-home
     touches exactly one anchor record, previewed in `dns`.
@@ -351,7 +358,7 @@ is one nobody here asked for, is the issue's question.
     ports (syncthing, matrix, minecraft) — become explicit
     `proxied=False` arguments instead of lore in comments.
 
-## 3. Split-horizon (AdGuard, both instances, no sync)
+## 3. The resolvers: AdGuard, both instances, no sync
 
 LAN clients must resolve split-horizon apps to their `lan` VIPs,
 never the cloud path. Which clients the rewrites steer is defined in
@@ -359,56 +366,108 @@ architecture.md §3.4: those whose resolver is alice/bob for the name
 asked — every LAN lease, and an overlay member only under the pushed
 domain, which application names sit outside — so an overlay member is
 steered to a `lan` VIP by nothing. The AdGuard pair (alice/bob) lives
-on the UDM.
+on the UDM, and this stack declares each instance's whole
+configuration, the split-horizon rewrites among it.
 
--   **Mechanism**: a dynamic-provider resource wrapping the AdGuard
-    rewrite API (the legacy golinks work established the technique),
-    applied **directly to both instances** — idempotent diff/apply.
-    What a dynamic provider is, and the rules a `diff` here obeys —
-    among them that its two property bags are not symmetrical, so the
-    comparison names its keys instead of walking a bag — are
+-   **Mechanism: dynamic resources over the administration API**,
+    applied **directly to both instances**
+    (`src/kluster/providers/adguard/`). Each instance gets its
+    first-run setup, `AdGuardSetup`, and six kinds that each own one
+    subsystem's endpoints: the rule list, the DNS server with its
+    protection switch and access lists, the filtering switches with
+    safe search and blocked services, the filter lists, the persistent
+    clients, and the query-log and statistics settings. Every key the
+    API can set belongs to exactly one of them, apart from those left
+    undeclared below. A `diff` calls no
+    instance, so a preview costs neither resolver anything; a `read`
+    dials, and reports what the instance holds as the inputs, so a
+    refreshing preview renders a hand edit as a property diff; an
+    update writes only the sections that differ, whole. What a dynamic
+    provider is, and the rules a `diff` here obeys — among them that its
+    two property bags are not symmetrical, so the comparison names its
+    keys instead of walking a bag — are
     [framework/pulumi.md](../framework/pulumi.md) §5. The instances'
     login is that section's provider credential: `adguardUsername` and
     `adguardPassword` on this stack, read in the provider's own
-    `configure` and declared by no rewrite, so no row carries it into
-    state. It is an admin login because AdGuard has no scoped API
+    `configure` and declared by no resource, so no resource carries it
+    into state. It is an admin login because AdGuard has no scoped API
     token, and that residual is on record as M6
     (cluster/security-audit.md). A rotation is visible all the same —
-    every rewrite is stamped with the door it was written through — the
-    endpoint, and a short digest of the login — so the preview names
-    what changed.
+    every resource is stamped with the door it was written through, the
+    endpoint and a short digest of the login — so the preview names
+    what changed. Each instance is classified once per `pulumi` process,
+    before any resource sends it the login, so a wrong password costs
+    one refused login per instance rather than one per resource,
+    against an instance that blocks the caller for fifteen minutes
+    after five.
+-   **The rule list is generated, and written whole.** No rule on
+    either instance is written by hand: every line of the list is
+    rendered by `rewrites.user_rules`, a header saying the stack
+    declares it and then each block under a comment naming its source —
+    the routes' split-horizon rewrites, the overlay members (§2), the
+    gateway's own names at its proxy, the legacy names until their
+    application migrates (§4 item 3), the aliases to device-plane names
+    (§4 item 1), and the hosts one client may not resolve. One
+    `AdGuardUserRules`
+    resource per instance owns the list and replaces it in one request,
+    so a line added, edited or reordered in the UI is drift. A rewrite
+    takes the exact anchor, `|name^`, so a bare label answers for
+    itself and not for a top-level domain of its spelling; its record
+    type is its answer's; and no rule narrows the query type, so a
+    rewritten name answers every other type with an empty `NOERROR` and
+    no query for it leaves the instance. The **rewrite list**, the
+    instances' other mechanism, is not used: the declaration holds it
+    empty and switched off, a row added by hand is drift, and the list
+    is refused before it is written while such a row stands.
+-   **What stays undeclared, and why.** The statistics and the query
+    log are what the instance measures (their settings are declared);
+    TLS is unused, since caddy terminates TLS for the instances' names
+    (§4 item 4); DHCP is off, since every VLAN's leases are the
+    controller's (§4 item 1); the UI's language, theme and session
+    settings change no answer; and what the instance generates — list
+    contents, ids, client UIDs, runtime clients — is regenerated by
+    running it. The admin account is not a setting at all: no endpoint
+    lists, changes or deletes one, and only the first-run setup makes
+    one.
 -   **Owned by this stack, not by `apps`.** Split-horizon is DNS, and
-    the AdGuard pair is on the UDM: putting the rewrites here keeps the
-    LAN reachability requirement — the ZeroTier join, and its
-    availability as a dependency of every CI run that touches the stack
-    — off the busiest stack in the repo and on the quietest one. `apps`
-    then needs no LAN access at all.
--   **adguardhome-sync retires.** With Pulumi dual-writing the dynamic
-    config, the sync service is redundant *and* a conflict source (it
-    would overwrite bob's Pulumi-written rewrites), and one standing
-    service leaves the homelab host. What the `physical` stack's
-    `ResolverService` takes over is the static half (listeners,
-    upstreams) as an **initial state**, not as live state: it declares
-    one `AdGuardHome.yaml` per instance, delivered under the machine's
-    `initial-state/` directory rather than into its state, and the
-    device's `40-machines.sh` copies that directory onto the state
-    directory the instance reads only while the state directory is
-    empty — before the first start, or after a wipe, and at no other
-    time (physical/gateway.md §1.1). What keeps the initial state apart
-    from the live file is where it sits, not a second name.
--   **An initial state, because the file is the instance's own.**
-    AdGuard Home keeps its whole configuration in one YAML file that a
-    running instance rewrites whenever it accepts a change through its
-    API, and it has no include or multi-file mechanism:
-    `upstream_dns_file` externalizes the upstream list and nothing
-    else, while the rewrites above land in `filtering.rewrites` inside
-    that same file. Declaring the live file would therefore delete this
-    stack's rewrites on every apply. The two instances start identical
-    because both initial-state files come from one template (only the
-    listen address differs), and their dynamic halves stay identical
-    because Pulumi writes both; a change made in one instance's web UI
-    afterward is reconciled by nothing. See
-    `components/gateway/container.py` for the device's side of this.
+    the AdGuard pair is on the UDM: putting the resolvers'
+    configuration here keeps the LAN reachability requirement — the
+    ZeroTier join, and its availability as a dependency of every CI run
+    that touches the stack — off the busiest stack in the repo and on
+    the quietest one. `apps` then needs no LAN access at all.
+-   **adguardhome-sync retires.** With every API-settable key written
+    to both instances, a synchronizer carries nothing the stack does
+    not write, and it would be a conflict source: it would overwrite
+    bob's configuration with whatever alice held. It stops before the
+    stack first writes either instance
+    ([sources-of-truth.md](../sources-of-truth.md), note N2).
+-   **A rebuilt instance is set up by this stack.** An instance whose
+    state directory holds no `AdGuardHome.yaml` starts in **first
+    run**: it answers no DNS, serves only its setup wizard, on port
+    3000, and holds no account. Only the wizard's `install/configure`
+    makes an account, so `AdGuardSetup` calls it with the stack's own
+    login and the listen addresses it declares, and the kinds that
+    configure a running instance then write the configuration. A refreshing run reads a first-run
+    instance as holding none of its resources, so its refresh drops
+    them and its update re-creates them, the setup first; a plain `up`,
+    which is CI's deploy, reads no instance and so cannot notice one,
+    and the `ci-dns` identity reaches the API's port alone
+    (physical/gateway.md §2.3). The run that sets an instance up
+    therefore goes from the checkout that holds `.credentials/`
+    (physical/gateway.md §3). The initial state `physical` still
+    installs into an empty state directory (physical/gateway.md §1.1)
+    names no account, so an instance started from it is refused by its
+    setup until it is reset; its removal is `kluster-ops#507`'s last
+    slice.
+-   **The account is the setup's, so a rotation is a reset.** An
+    instance keeps the account its setup made, and no endpoint changes
+    it: rotating the login, or recovering an instance whose account is
+    not the stack's, takes a reset of each instance in turn — its
+    `AdGuardHome.yaml` moved aside, its machine restarted — in the
+    passes physical/gateway.md §3 gives, and no `up` may record a new
+    login before the last of them. A rotation recorded without the
+    reset is refused at each setup, one refused login per instance, and
+    nothing is written.
 -   **Placement**: rewrites are emitted automatically for any app
     with a LAN-side gateway attachment — split-horizon (both
     gateways), LAN-only (`lan-gw`), or IoT-reachable (`media-gw`,
@@ -418,30 +477,41 @@ on the UDM.
     **plain data** in a module both stacks import
     (`kluster.conventions.routes`), so `apps` builds its HTTPRoutes from
     it and `dns` builds the rewrites from the same rows. A rewrite's
-    answer is an address and never a name, so what it steers a LAN
-    client to cannot depend on some other rewrite existing to resolve
-    it. One edit, two stack diffs, both previewable — rather than
+    answer is an address, or a name on the device plane answered as a
+    CNAME, which the instance resolves through the gateway's own
+    resolver without applying its rules again: a target outside
+    `home.arpa` cannot be built, and no target may be a name a rule
+    answers. One edit, two stack diffs, both previewable — rather than
     one edit and a second stack to remember. LAN ULA AAAAs are
     emitted alongside (RFC 6724 caveat noted, architecture.md §1.3).
--   **Where each instance is reached is derived, not configured.** A
-    rewrite is written over plain HTTP to the instance's address on the
-    container VLAN, at the port `conventions.gateway.ADGUARD_API_PORT`
-    names — the same constant the caddy vhost that proxies the instance,
+    The overlay host block (§2) is rewritten the same way from the
+    other census it is derived from: one rewrite per entry of
+    `conventions.overlay.ROSTER`, `<label>.zt.<primary>` answered with
+    the member's overlay address — never a `lan` VIP, since these names
+    are hosts and not routes — and IPv4 alone, because the overlay is
+    IPv4-only and the block's public record is an A.
+-   **Where each instance is reached is derived, not configured.** The
+    stack reaches the instance over plain HTTP at its address on the
+    container VLAN: the API at the port
+    `conventions.gateway.ADGUARD_API_PORT` names — the same constant the
+    caddy vhost that proxies the instance, the setup's listen address,
     the initial state that tells it where to listen, and the overlay
-    flow rule that admits a `dns` run all meet on. There is no endpoint
-    key to set, and therefore nothing for a stale one to disagree with;
-    `Pulumi.dns.yaml` carries the AdGuard login and nothing else about
-    the pair. Dialing the instance's own public name instead would have
-    the runner resolve a name that only a split-horizon rewrite answers,
-    which is the thing the run is declaring.
--   **A rewrite is identified by its instance, not by its address.**
-    `dns` declares one `ResolverRewrites` component per entry of
-    `conventions.gateway.RESOLVERS`, and both the resource id and the
-    logical name are built from that entry's name — never from the
-    address. Re-addressing an instance is then an update that dials
-    somewhere new and writes the same rows in the same place, rather
-    than a delete of every rewrite at the old address and a create of
-    every one at the new. The general rule is
+    flow rule that admits a `dns` run all meet on — and the setup
+    wizard at `conventions.gateway.ADGUARD_SETUP_PORT`, the appliance's
+    own. There is no endpoint key to set, and therefore nothing for a
+    stale one to disagree with; `Pulumi.dns.yaml` carries the AdGuard
+    login and nothing else about the pair. Dialing the instance's own
+    public name instead would have the runner resolve a name that only
+    a split-horizon rewrite answers, which is the thing the run is
+    declaring.
+-   **A resource is identified by its instance, not by its address.**
+    `dns` declares one `ResolverConfiguration` component per entry of
+    `conventions.gateway.RESOLVERS`, named after that entry and handed
+    the one configuration both instances share, and every resource
+    id and logical name under it is built from the entry's name —
+    never from the address. Re-addressing an instance is then an
+    update that writes nothing, rather than a replacement of every
+    resource at the old address. The general rule is
     [style/pulumi.md](../style/pulumi.md)'s.
 
 ## 4. LAN DNS: three name planes
@@ -453,7 +523,10 @@ plane names:
     VLAN)**: device hostnames, DHCP-derived and served by the UDM's
     resolver as today. Inherently dynamic — not Pulumi-managed; any
     *static* host entries that prove necessary go through the unifi
-    provider.
+    provider. An alias to a device's name (`nas`) is not a static
+    entry: it is a CNAME rewrite in the resolvers' rule list (§3), so
+    it follows the device across a new lease, and the resolvers forward
+    `home.arpa` to the UDM's resolver to answer its target.
 2.  **Service plane — public-zone names, resolved via AdGuard**:
     every LAN-reachable service uses its *public* hostname
     (`<app>.<zone>`); AdGuard rewrites (§3) steer LAN clients to the
@@ -473,7 +546,13 @@ plane names:
     the public names, and LAN-only names become rewrite-only names in
     the public zones (with proper TLS, which `lan.` names never had
     cleanly). The zone's entries are dropped one-by-one as each app
-    migrates, like the archvps repointing.
+    migrates, like the archvps repointing. Until then each row of
+    `conventions.gateway.LEGACY_VHOSTS` is answered by a rule in the
+    resolvers' list (§3), its name under the zone at the proxy's
+    address, and the bare label with its `home.arpa` form beside it
+    where the proxy answers the bare label too; a rule leaves with its
+    row. A name under the zone with no row gets the public answer,
+    NXDOMAIN, rather than reaching the proxy.
 4.  **Gateway-local TLS stays gateway-issued** (decided 2026-08-23).
     The UDM caddy's vhosts (UniFi console, AdGuard UIs) follow the
     same naming move — their `lan.ucw.phd` names become rewrite-only

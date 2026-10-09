@@ -27,7 +27,6 @@ from kluster.components.forge import ManagedRepository
 from kluster.components.gateway import Gateway
 from kluster.components.talos.image import TalosArtifact, TalosImage
 from kluster.providers.adguard import AdGuardUserRules
-from kluster.providers.adguard_rewrites import AdGuardRewrite
 from kluster.providers.device_files.provider import DeviceFile
 from kluster.providers.talos_factory import FactoryImage
 from putils import Component, UnstatedTypeError
@@ -178,7 +177,7 @@ def test_the_census_reaches_a_dynamic_resource_of_every_provider() -> None:
     # package that defines one.
     found = dynamic_resources()
 
-    assert {DeviceFile, FactoryImage, AdGuardRewrite, AdGuardUserRules} <= set(found)
+    assert {DeviceFile, FactoryImage, AdGuardUserRules} <= set(found)
 
 
 def test_every_dynamic_resource_class_states_its_token_in_the_installations_form() -> None:

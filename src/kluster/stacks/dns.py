@@ -1,19 +1,22 @@
-"""The `dns` stack: zones, the base records that belong to no app, anchors.
+"""The `dns` stack: zones, the base records that belong to no app, anchors, and the resolvers' configuration.
 
 Per-app records live beside their apps in `apps` (docs/declarative/dns.md);
 what lands here is what has no app to co-locate with — mail, the overlay host
 block, verifications, the family and parked zones — plus the anchors every app
-record points at, plus the split-horizon rewrites for every app: they are
-read from the same plain-data route declaration `apps` builds its routes
-from, and they are the reason this stack joins ZeroTier.
+record points at, plus the whole configuration of the AdGuard pair the LAN
+resolves through: the split-horizon rewrites for every app, read from the same
+plain-data route declaration `apps` builds its routes from, the overlay names,
+the gateway's own and legacy names, and every setting the instances hold. That
+configuration is the reason this stack joins ZeroTier.
 
 The records themselves are data, written as blocks — the records that appear
 together, in every zone of one set (`kluster.components.dns.base`,
 `kluster.components.dns.legacy`). This program is only the wiring: which zones
-exist, and which addresses the anchors carry. What each zone carries is derived
-from the blocks by `zone_records`, so no zone set is spelled out here, and
-which instances the rewrites are written to is the gateway census's answer
-(`conventions.gateway.RESOLVERS`), so no instance is spelled out here either.
+exist, which addresses the anchors carry, and which censuses the resolvers'
+rule list is derived from. What each zone carries is derived from the blocks
+by `zone_records`, so no zone set is spelled out here, and which instances are
+configured is the gateway census's answer (`conventions.gateway.RESOLVERS`), so
+no instance is spelled out here either.
 
 The anchors, `kluster.hosts` and `vip1.hosts`, are the one thing whose
 contents are not written down: the addresses in them are machine facts the
@@ -34,11 +37,21 @@ import pulumi_cloudflare as cloudflare
 from pulumi.output import Unknown
 
 from kluster import conventions
-from kluster.components.dns import base
+from kluster.components.dns import base, resolver_settings
+from kluster.components.dns.aliases import ALIASES
+from kluster.components.dns.blocklists import PS4_UPDATES, PS4_UPDATES_SOURCE
 from kluster.components.dns.legacy import LEGACY
 from kluster.components.dns.record import zone_records
-from kluster.components.dns.rewrites import ResolverRewrites, rewrites
+from kluster.components.dns.resolver import AdGuardConfiguration, ResolverConfiguration
+from kluster.components.dns.rewrites import (
+    RuleBlock,
+    gateway_rewrites,
+    legacy_vhost_rewrites,
+    overlay_rewrites,
+    rewrites,
+)
 from kluster.components.dns.zone import ManagedZone
+from kluster.components.gateway.container import ADGUARD_GATEWAY_ZONES
 
 #: Where the zones token is read: at the line that builds the provider it
 #: configures, and nowhere else (rfc-002 §8.1). The key is this project's, not
@@ -87,19 +100,49 @@ async def main() -> None:
         for zone in conventions.ALL_ZONES
     }
 
-    # The rewrites the routes imply, one component per AdGuard instance and
-    # unconditionally: with an empty route census each declares nothing, no
-    # dynamic resource exists, the provider process never starts and the login
-    # is never read. Nothing here reads it in any case -- it opens the rewrite
-    # provider and nothing else, so the provider reads it in `configure`
-    # (framework/pulumi.md §5.2), and where each instance is reached is the census's answer
+    # One configuration, handed whole to one component per AdGuard instance:
+    # the instances differ in no setting. Nothing here reads the instances'
+    # login -- the provider reads it in `configure` (framework/pulumi.md
+    # §5.2) -- and where each instance is reached is the census's answer
     # rather than a key this stack carries.
-    entries = rewrites(conventions.routes.ROUTES)
+    configuration = resolver_configuration()
     for resolver in conventions.gateway.RESOLVERS:
-        _ = ResolverRewrites(f'rewrites-{resolver.name}', resolver=resolver, entries=entries)
+        _ = ResolverConfiguration(resolver.name, resolver=resolver, configuration=configuration)
 
     # Machine facts: `apps` needs the zone ids to declare its own records.
     pulumi.export('zone_ids', {zone: managed.zone.id for zone, managed in zones.items()})
+
+
+def resolver_configuration() -> AdGuardConfiguration:
+    """The one configuration both resolvers are handed.
+
+    The rule list is derived from the censuses it answers for, in the order it
+    renders, and the client set from its blocklist rows. A function of its own
+    so that a rehearsal against a throwaway instance declares exactly what
+    this program does.
+    """
+    return resolver_settings.configuration(
+        blocks=(
+            RuleBlock('split-horizon routes (conventions.routes.ROUTES)', rewrites(conventions.routes.ROUTES)),
+            RuleBlock('overlay members (conventions.overlay.ROSTER)', overlay_rewrites(conventions.overlay.ROSTER)),
+            RuleBlock(
+                "the gateway's own names, at its proxy (conventions.gateway)",
+                gateway_rewrites(
+                    conventions.gateway.VHOST_CONTROLLER, conventions.gateway.RESOLVERS, conventions.gateway.CADDY
+                ),
+            ),
+            RuleBlock(
+                'legacy names until their application migrates (conventions.gateway.LEGACY_VHOSTS)',
+                legacy_vhost_rewrites(conventions.gateway.LEGACY_VHOSTS, conventions.gateway.CADDY),
+            ),
+            RuleBlock('aliases to device-plane names', ALIASES),
+            RuleBlock(PS4_UPDATES_SOURCE, (PS4_UPDATES,)),
+        ),
+        # The device plane and the site's reverse zones go to the gateway's
+        # own resolver, the one `physical` renders into the initial state too.
+        forwarded_zones=ADGUARD_GATEWAY_ZONES,
+        gateway=conventions.CONTAINER_VLAN.require_gateway(),
+    )
 
 
 def _anchor_addresses(physical: pulumi.StackReference) -> base.AnchorAddresses:

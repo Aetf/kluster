@@ -10,13 +10,15 @@ system only delivers it:
     admin and shows once;
 -   the **AdGuard admin login**, which *is* the API credential — AdGuard Home
     has no scoped API at all (the security audit's M6), so the account both
-    instances carry is what a rewrite call authenticates as;
+    instances carry is what every configuration call authenticates as. No
+    console makes it either: the operator draws it, and each instance receives
+    it from the first-run setup the `dns` stack runs on it;
 -   the **ZeroTier Central API token**, which Central mints only in its own
     web console and scopes to the whole account;
 -   the **GitHub admin token**, a personal access token created in the GitHub
     UI, which is what the `github` stack declares the forge with and what
     every `credentials` command that pushes a GitHub secret authenticates as;
--   the **BGP session password**, the one row here no console makes: it is a
+-   the **BGP session password**, the other row here no console makes: it is a
     shared secret both ends of the gateway's routing session are configured
     with, either end accepts any string, and the operator draws it. The
     `physical` stack writes it into the routing daemon's configuration on the
@@ -26,8 +28,10 @@ system only delivers it:
 
 None of them is a seed: a seed is a credential that mints successors
 (`entries.py`), and each of these mints nothing. Losing one costs a console
-visit — or, for the session password, a fresh draw — and a re-run of its
-`record` command, which is also the whole of its rotation.
+visit — or, for the two the operator draws, a fresh draw — and a re-run of its
+`record` command, which is also the whole of its rotation, apart from the
+AdGuard login's: an instance holds the account its first-run setup made, so
+rotating that login also takes a reset of each instance.
 
 **A row here is a provider credential like any other**, and lives where every
 other provider credential of this installation lives: the committed
@@ -67,8 +71,8 @@ delivery.
 against one thing, and the stack that talks to that thing is the only consumer
 there is: `physical` drives the UDM's Network API and the overlay's Central
 account and writes the routing daemon's configuration onto the device, `dns`
-writes the split-horizon rewrites on the AdGuard pair (declarative/dns.md §3),
-and `github` declares the forge.
+configures the AdGuard pair (declarative/dns.md §3), and `github` declares the
+forge.
 
 §3's other pasted row — the UDM SSH key and the libvirt identity — has no
 member here, because there are no console steps to print for it: nobody
@@ -258,14 +262,19 @@ DEVICES: dict[str, Device] = {
             stack=DNS_STACK,
             holds='the admin login both AdGuard instances answer to',
             console=(
-                'There is nothing to mint: AdGuard Home has no scoped API, so its\n'
-                '  admin account is the API credential, and both instances carry\n'
-                '  the same one — a rewrite is written to alice and bob directly,\n'
-                '  with a single login (declarative/dns.md §3).\n'
-                "  That account lives in each instance's own `AdGuardHome.yaml`, state\n"
-                '  the device keeps: the initial state the `physical` stack installs\n'
-                '  names no account (credentials.md §3). Changing it is a change on\n'
-                '  the instances; this command delivers whatever they now answer to.'
+                'No console makes this one: AdGuard Home has no scoped API, so its\n'
+                '  admin account is the API credential, and no endpoint of it makes\n'
+                '  or changes an account. Draw the login -- a username with no colon\n'
+                '  in it, and a password of at least 8 characters, `openssl rand\n'
+                '  -base64 24` -- and hand it in. Both instances carry the same one,\n'
+                '  because the `dns` stack configures alice and bob directly\n'
+                '  (declarative/dns.md §3), and each receives it from its first-run\n'
+                '  setup, which that stack runs on an instance started with no\n'
+                '  configuration file. An instance already set up keeps the account\n'
+                '  it was set up with, so rotating this login is this command, then\n'
+                '  a reset of each instance in turn, in the passes physical/gateway.md\n'
+                '  §3 gives. Keep the changed stack file off `main` until the last of\n'
+                "  them: no `up`, CI's included, may record the new login before then."
             ),
             fields=(
                 Field('username', 'adguardUsername', 'the admin username'),

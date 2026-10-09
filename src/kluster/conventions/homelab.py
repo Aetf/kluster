@@ -4,6 +4,14 @@ from __future__ import annotations
 
 from ipaddress import IPv4Address
 
+#: The homelab host as the device plane names it: a DHCP-derived name the
+#: gateway's own resolver answers and no public one does (dns.md §4 item 1).
+#: Two programs dial or alias the host by it: `physical`'s proxy reaches the
+#: legacy services on it (`gateway.LEGACY_UPSTREAM_HOST`), and the `dns`
+#: stack's `nas` aliases answer with it. It outlives the legacy census, which
+#: empties in Wave D while the aliases stay.
+HOMELAB_HOST_NAME = 'aetf-arch-homelab.home.arpa'
+
 #: A pure worker, because the control plane is cloud-side (nodes.md §4.2).
 HOMELAB_NODE = 'worker'
 

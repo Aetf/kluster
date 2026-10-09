@@ -2,17 +2,20 @@
 
 What it catches is wiring rather than data: that every zone is declared with
 its records, that the anchors carry the physical stack's addresses rather
-than literals, and that the rewrites are emitted from the route census.
+than literals, and that each resolver is handed the one configuration the
+censuses imply, through one resource of each kind.
 
 Every run here is under the parent backstop `kluster.main` installs before a
 real run declares anything, so a resource the program leaves unparented fails
 the run here rather than in `pulumi preview`. The route census is set by each
 run rather than inherited: one run holds it empty and one holds a single row,
-because what the stack declares for rewrites is a function of that state.
+because what the stack declares in the rule list is a function of that state.
 """
 
+import re
 from collections import Counter
 from typing import Any
+from urllib.parse import urlsplit
 
 import pulumi
 import pytest
@@ -22,9 +25,11 @@ from mock_monitor import Recorder, declaring, run_under_backstop
 
 from kluster import conventions
 from kluster.components.dns.base import overlay_label
-from kluster.components.dns.rewrites import ResolverRewrites, rewrites
+from kluster.components.dns.resolver import ResolverConfiguration
+from kluster.components.dns.rewrites import overlay_rewrites, user_rules
 from kluster.components.dns.zone import ManagedZone
-from kluster.providers.adguard_rewrites import AdGuardRewrite
+from kluster.components.gateway.container import ADGUARD_GATEWAY_ZONES
+from kluster.providers import adguard, configured
 
 LB_ADDRESS = '203.0.113.10'
 LB_ADDRESS_V6 = '2001:db8::10'
@@ -34,11 +39,36 @@ API_TOKEN = 'a-zones-token'
 ZONE = 'cloudflare:index/zone:Zone'
 DNSSEC = 'cloudflare:index/zoneDnssec:ZoneDnssec'
 RECORD = 'cloudflare:index/dnsRecord:DnsRecord'
-RESOLVER_REWRITES = ResolverRewrites.__pulumi_type__
+RESOLVER_CONFIGURATION = ResolverConfiguration.__pulumi_type__
 MANAGED_ZONE = ManagedZone.__pulumi_type__
-# The type a rewrite is declared under, as `AdGuardRewrite` states it; the SDK
-# keeps the stated half on this attribute and nowhere public.
-REWRITE = f'pulumi-python:{AdGuardRewrite._resource_type_name}'  # pyright: ignore[reportPrivateUsage]
+
+
+def _dynamic_type(cls: type[Any]) -> str:
+    """The type a dynamic resource is declared under; the SDK keeps the stated half on this attribute and nowhere public."""
+    return f'pulumi-python:{cls._resource_type_name}'
+
+
+#: Every kind one instance is configured through, by the suffix its logical name carries.
+KINDS: dict[str, str] = {
+    'setup': _dynamic_type(adguard.AdGuardSetup),
+    'user-rules': _dynamic_type(adguard.AdGuardUserRules),
+    'dns-server': _dynamic_type(adguard.AdGuardDnsServer),
+    'filtering': _dynamic_type(adguard.AdGuardFiltering),
+    'filter-lists': _dynamic_type(adguard.AdGuardFilterLists),
+    'clients': _dynamic_type(adguard.AdGuardClients),
+    'log-settings': _dynamic_type(adguard.AdGuardLogSettings),
+}
+SETUP = KINDS['setup']
+USER_RULES = KINDS['user-rules']
+DNS_SERVER = KINDS['dns-server']
+CLIENTS = KINDS['clients']
+
+#: A rewrite as the rule list renders one: its name and what it answers with.
+REWRITE_RULE = re.compile(r'\|(?P<name>[^|^]+)\^\$dnsrewrite=NOERROR;(?P<type>[A-Z]+);(?P<answer>\S+)')
+#: A blocking rule, and the client it names.
+CLIENT_RULE = re.compile(r'\|\|[^^]+\^\$client=(?P<client>\S+)')
+#: A per-domain upstream line: the zone, and where its queries go.
+FORWARDED = re.compile(r'\[/(?P<zone>[^/]+)/\](?P<upstream>\S+)')
 
 #: The one row the routed run declares: a name answered on both sides,
 #: published in the primary zone alone.
@@ -285,47 +315,239 @@ def test_no_record_still_points_at_the_retired_host(stack: AppliedPhysical) -> N
     assert not any('141.212.111.192' in content for content in contents)
 
 
-def test_a_rewrite_component_is_declared_for_every_resolver_the_census_names(stack: AppliedPhysical) -> None:
-    """One per instance, unconditionally, and named after the instance.
+def resource(stack: AppliedPhysical, resolver: conventions.gateway.BridgedService, kind: str) -> dict[str, Any]:
+    """What one instance's resource of one kind was declared with."""
+    return stack.inputs_of(f'{resolver.name}-{kind}', KINDS[kind])
 
-    Their independence is the design: an instance that is down fails its own
-    resources and leaves the other's converged, and as two sibling components
-    that is what the resource tree says. Which instances there are is the
-    gateway census's answer, so the program spells out neither.
+
+def answers(rules: list[str]) -> dict[str, set[tuple[str, str]]]:
+    """Every name a rule list rewrites, with the record types and answers it gives the name."""
+    found: dict[str, set[tuple[str, str]]] = {}
+    for rule in rules:
+        if match := REWRITE_RULE.fullmatch(rule):
+            found.setdefault(match['name'], set()).add((match['type'], match['answer']))
+    return found
+
+
+def test_one_resolver_configuration_per_resolver_with_one_resource_of_each_kind_under_it(
+    stack: AppliedPhysical,
+) -> None:
+    """Their independence is the design: an instance that is down fails its own resources and leaves the other's.
+
+    One component per instance, named after it, and exactly one resource of
+    each kind under each, so no endpoint of an instance has two writers.
+    Counted per type rather than gathered by name, so a second resource of one
+    kind for one instance fails here instead of collapsing into the first.
     """
-    declared = stack.names(RESOLVER_REWRITES)
+    assert stack.names(RESOLVER_CONFIGURATION) == {resolver.name for resolver in conventions.gateway.RESOLVERS}
+    for kind, typ in KINDS.items():
+        declared = Counter(declaration.inputs['instance'] for declaration in stack.of_type(typ))
+        assert declared == {resolver.name: 1 for resolver in conventions.gateway.RESOLVERS}, kind
+        for resolver in conventions.gateway.RESOLVERS:
+            parent = stack.options_of(f'{resolver.name}-{kind}', typ).parent
+            assert parent.endswith(f'{RESOLVER_CONFIGURATION}::{resolver.name}'), (kind, parent)
 
-    assert declared == {f'rewrites-{resolver.name}' for resolver in conventions.gateway.RESOLVERS}
 
+def test_both_instances_are_handed_one_configuration(stack: AppliedPhysical) -> None:
+    """alice and bob differ in no setting, so whatever one instance is declared with, the other is too.
 
-def test_no_rewrite_is_declared_while_no_app_declares_a_route(stack: AppliedPhysical) -> None:
-    """With no row to write, the components declare no dynamic resource.
-
-    So the provider process never starts and the AdGuard login is never read,
-    which is what lets the stack deploy before that login exists. The census
-    is empty in this run because the run sets it so.
+    Compared kind by kind with only what names the instance taken out, so a
+    rule list, a client or a setting handed to one instance alone fails here.
     """
-    assert not stack.by_name(REWRITE)
+    where = {'instance', 'endpoint', 'setup_endpoint'}
+    alice, bob = conventions.gateway.RESOLVERS
+    for kind in KINDS:
+        declared = [
+            {key: value for key, value in resource(stack, resolver, kind).items() if key not in where}
+            for resolver in (alice, bob)
+        ]
+        assert declared[0] == declared[1], kind
 
 
-def test_a_route_in_the_census_is_rewritten_on_every_resolver(routed: AppliedPhysical) -> None:
-    """The wiring from the route census to the rewrites, held on a census of one row.
+def test_every_kind_depends_on_its_own_instances_setup(stack: AppliedPhysical) -> None:
+    """An instance started with no configuration file holds no account until its setup has run."""
+    for resolver in conventions.gateway.RESOLVERS:
+        setup = stack.one(f'{resolver.name}-setup', SETUP)
+        for kind, typ in KINDS.items():
+            if kind == 'setup':
+                continue
+            depends = stack.depends_on(f'{resolver.name}-{kind}', typ)
+            assert [urn for urn in depends if urn.endswith(f'::{setup.name}')], (resolver.name, kind, depends)
+            assert all(f'::{resolver.name}-setup' in urn for urn in depends if '-setup' in urn), depends
+
+
+def test_each_resource_names_its_instance_and_where_this_run_reaches_it(stack: AppliedPhysical) -> None:
+    """The census name identifies the resource; the two addresses are the census entry's, derived the one way."""
+    for resolver in conventions.gateway.RESOLVERS:
+        for kind in KINDS:
+            inputs = resource(stack, resolver, kind)
+            assert inputs['instance'] == resolver.name
+            assert inputs['endpoint'] == conventions.gateway.resolver_api_url(resolver)
+            assert inputs['setup_endpoint'] == conventions.gateway.resolver_setup_url(resolver)
+
+
+def test_the_setup_listens_where_the_stack_dials(stack: AppliedPhysical) -> None:
+    """`listen.web.port` is the API endpoint's port, or the configured instance answers nowhere the stack asks."""
+    for resolver in conventions.gateway.RESOLVERS:
+        listen = resource(stack, resolver, 'setup')['listen']
+        assert listen['web']['port'] == urlsplit(conventions.gateway.resolver_api_url(resolver)).port
+        assert listen['web']['port'] != listen['dns']['port']
+
+
+def test_a_resource_is_named_after_the_instance_and_never_after_its_address(stack: AppliedPhysical) -> None:
+    """A logical name is half of the URN state is keyed by (style/pulumi.md).
+
+    Naming a resource after the address it is written at would make moving an
+    instance a delete and a create of everything on it. Neither the address
+    nor any label spelled out of it appears -- an address with its dots
+    swapped for hyphens is still an address.
+    """
+    for resolver in conventions.gateway.RESOLVERS:
+        address = str(resolver.address)
+        for typ in KINDS.values():
+            for name in stack.names(typ):
+                assert address not in name
+                assert '-'.join(address.split('.')) not in name
+
+
+def test_no_resource_declares_a_credential_or_a_stamp(stack: AppliedPhysical) -> None:
+    """What the program declares, and no more.
+
+    The login is the provider's, read in `configure`; the two stamps are added
+    by `check` in the plugin's process. A resource that carried either would
+    put it in state on both instances, for every kind.
+    """
+    for resolver in conventions.gateway.RESOLVERS:
+        for kind in KINDS:
+            inputs = resource(stack, resolver, kind)
+            assert not {'username', 'password', configured.SESSION, configured.PROVIDER_VERSION} & set(inputs), kind
+
+
+def test_the_rule_list_is_rendered_from_the_censuses(stack: AppliedPhysical) -> None:
+    """The overlay members, the gateway's own names and the legacy names answer on both instances.
+
+    Stated from the censuses rather than from the derivations, so a run that
+    hands a derivation the wrong census, or drops a block, fails here.
+    """
+    proxy = str(conventions.gateway.CADDY.address)
+    for resolver in conventions.gateway.RESOLVERS:
+        answered = answers(resource(stack, resolver, 'user-rules')['rules'])
+        for entry in conventions.overlay.ROSTER:
+            name = f'{overlay_label(entry.name)}.{conventions.OVERLAY_DOMAIN}'
+            assert answered[name] == {('A', str(entry.address))}, name
+        for name in (
+            conventions.gateway.VHOST_CONTROLLER,
+            *(each.vhost for each in conventions.gateway.RESOLVERS if each.vhost),
+            *(row.host for row in conventions.gateway.LEGACY_VHOSTS),
+        ):
+            assert answered[name] == {('A', proxy)}, name
+
+
+def test_a_route_in_the_census_is_answered_on_every_resolver(routed: AppliedPhysical) -> None:
+    """The wiring from the route census to the rule list, held on a census of one row.
 
     What a row implies is `rewrites`' subject (`test_dns_rewrites.py`); what
     is asserted here is that the program hands that derivation the census
-    rather than anything else, and hands every instance the result. The names
-    are stated independently of the derivation, so a run that derives nothing
-    at all fails here rather than agreeing with itself.
+    rather than anything else, and hands every instance the result beside the
+    rest of the list. The name and the answers are stated independently of the
+    derivation, so a run that derives nothing from the census fails here.
     """
-    written = {(inputs['instance'], inputs['domain'], inputs['answer']) for inputs in routed.by_name(REWRITE).values()}
-    implied = {
-        (resolver.name, entry.domain, str(entry.answer))
-        for resolver in conventions.gateway.RESOLVERS
-        for entry in rewrites((ROUTE,))
-    }
+    name = f'{ROUTE.host}.{conventions.ZONE_PRIMARY}'
+    vip = conventions.LAN_POOL.default_vip
+    for resolver in conventions.gateway.RESOLVERS:
+        answered = answers(resource(routed, resolver, 'user-rules')['rules'])
+        assert answered[name] == {('A', str(vip.v4)), ('AAAA', str(vip.v6))}
 
-    assert written == implied
-    assert {domain for _, domain, _ in written} == {f'{ROUTE.host}.{conventions.ZONE_PRIMARY}'}
+
+def test_the_overlay_rows_reach_both_instances_while_no_app_declares_a_route(stack: AppliedPhysical) -> None:
+    """The roster's rewrites owe nothing to the route census, and reach both instances.
+
+    The census is empty in this run because the run sets it so. Grouped by the
+    instance a list is declared for, so an instance handed none of them, or a
+    different set, fails here rather than disappearing into a union of both.
+    """
+    overlay = {(entry.domain, 'A', str(entry.answer)) for entry in overlay_rewrites(conventions.overlay.ROSTER)}
+    for resolver in conventions.gateway.RESOLVERS:
+        answered = answers(resource(stack, resolver, 'user-rules')['rules'])
+        declared = {
+            (name, typ, answer)
+            for name, given in answered.items()
+            if name.endswith(f'.{conventions.OVERLAY_DOMAIN}')
+            for typ, answer in given
+        }
+        assert declared == overlay, resolver.name
+
+
+def test_no_cname_target_is_a_name_a_rule_answers(stack: AppliedPhysical) -> None:
+    """An instance resolves a CNAME's target upstream without applying its own rules to it again.
+
+    A target that some rule answers would therefore resolve to the public or
+    the device plane's answer for that name, not to the rule's, and the alias
+    would point somewhere other than where the list says.
+    """
+    answered = answers(resource(stack, conventions.gateway.ADGUARD_ALICE, 'user-rules')['rules'])
+    targets = {answer for given in answered.values() for typ, answer in given if typ == 'CNAME'}
+
+    assert targets, 'the list declares no alias; the pattern is what broke'
+    assert sorted(targets & set(answered)) == []
+
+
+def test_every_cname_target_is_under_a_zone_forwarded_to_the_gateway(stack: AppliedPhysical) -> None:
+    """The target is resolved upstream, and only the gateway's resolver answers the device plane.
+
+    Read from what the DNS server is declared with, so a forwarded zone dropped
+    from the settings fails here and not when a client asks for `nas`.
+    """
+    gateway = str(conventions.CONTAINER_VLAN.require_gateway())
+    for resolver in conventions.gateway.RESOLVERS:
+        answered = answers(resource(stack, resolver, 'user-rules')['rules'])
+        upstreams = resource(stack, resolver, 'dns-server')['dns']['upstream_dns']
+        forwarded = {
+            match['zone'] for line in upstreams if (match := FORWARDED.fullmatch(line)) and match['upstream'] == gateway
+        }
+        targets = {answer for given in answered.values() for typ, answer in given if typ == 'CNAME'}
+        assert targets
+        for target in targets:
+            assert any(target.endswith(f'.{zone}') for zone in forwarded), (target, forwarded)
+
+
+def test_the_forwarded_zones_are_the_ones_physical_renders_into_the_initial_state(stack: AppliedPhysical) -> None:
+    """Until the initial state shrinks, both programs declare the zones the gateway's resolver answers.
+
+    `physical` renders them into the template from the same constant, so the
+    two cannot name different zones.
+    """
+    gateway = str(conventions.CONTAINER_VLAN.require_gateway())
+    upstreams = resource(stack, conventions.gateway.ADGUARD_ALICE, 'dns-server')['dns']['upstream_dns']
+
+    assert [line for line in upstreams if FORWARDED.fullmatch(line)] == [
+        f'[/{zone}/]{gateway}' for zone in ADGUARD_GATEWAY_ZONES
+    ]
+
+
+def test_the_client_set_holds_every_client_a_blocklist_rule_names(stack: AppliedPhysical) -> None:
+    """A `$client=` rule naming a client the instance lacks matches nothing, silently.
+
+    Read off the two declarations rather than off the row they are both drawn
+    from, so a client set built from a separate list fails here.
+    """
+    for resolver in conventions.gateway.RESOLVERS:
+        named = {
+            match['client']
+            for rule in resource(stack, resolver, 'user-rules')['rules']
+            if (match := CLIENT_RULE.fullmatch(rule))
+        }
+        held = {client['name'] for client in resource(stack, resolver, 'clients')['clients']}
+        assert named, 'the list declares no blocking rule; the pattern is what broke'
+        assert named <= held, (named, held)
+
+
+def test_the_rule_list_renders_what_the_derivation_renders(stack: AppliedPhysical) -> None:
+    """The list a resource carries is the rendering whole, header first, and no line typed beside it."""
+    rules = resource(stack, conventions.gateway.ADGUARD_ALICE, 'user-rules')['rules']
+
+    assert rules[0] == user_rules(())[0]
+    assert all(rule.startswith('! ') or REWRITE_RULE.fullmatch(rule) or CLIENT_RULE.fullmatch(rule) for rule in rules)
 
 
 def test_every_zone_and_record_is_signed_by_one_explicit_provider(stack: AppliedPhysical) -> None:
@@ -398,9 +620,9 @@ def test_default_providers_stay_disabled_for_the_package_this_key_left() -> None
 
     Naming the package is what makes an explicit provider the only Cloudflare
     provider there is, which is half of why the token no longer sits in that
-    package's namespace. It cannot widen to everything: the dynamic rewrites
-    are declared through the `pulumi-python` default provider (rfc-002 §8.1),
-    and disabling that one would leave them undeclarable.
+    package's namespace. It cannot widen to everything: the resolvers'
+    configuration is declared through the `pulumi-python` default provider
+    (rfc-002 §8.1), and disabling that one would leave it undeclarable.
     """
     from kluster.scripts.credentials import derived, pulumi_config
 

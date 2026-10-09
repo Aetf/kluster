@@ -29,9 +29,8 @@ import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
 
-from kluster.providers.adguard import AdGuardSetup
+from kluster.providers.adguard import AdGuardSetup, AdGuardUserRules
 from kluster.providers.adguard.setup import AdGuardSetupProvider
-from kluster.providers.adguard_rewrites import AdGuardRewrite
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -43,7 +42,8 @@ PICKLER: type[Any] = pickle._Pickler  # pyright: ignore[reportPrivateUsage]
 LEAKED_METHODS = ('_batch_setitems', 'save_dict')
 
 INSTANCE = 'adguard-test'
-ENDPOINT = 'http://adguard.test:3000'
+ENDPOINT = 'http://adguard.test:80'
+SETUP_ENDPOINT = 'http://adguard.test:3000'
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -52,9 +52,11 @@ async def monitor() -> Recorder:
 
 
 async def declare(name: str) -> None:
-    """One rewrite, which is one provider serialized."""
+    """One rule list, which is one provider serialized."""
     async with declaring():
-        _ = AdGuardRewrite(name, instance=INSTANCE, endpoint=ENDPOINT, domain=f'{name}.test', answer='192.0.2.1')
+        _ = AdGuardUserRules(
+            name, instance=INSTANCE, endpoint=ENDPOINT, setup_endpoint=SETUP_ENDPOINT, rules=[f'|{name}.test^']
+        )
 
 
 def methods() -> dict[str, Any]:
