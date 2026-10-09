@@ -85,10 +85,15 @@ def materialize(url: str, path: Path) -> None:
 
     Fetching and decompressing are the same pass. Neither form of the artifact
     is ever held in memory, and a failure removes the partial file rather than
-    leaving something that looks finished.
+    leaving something that looks finished. Which of the two it does -- the
+    pass, or reusing the file -- it says first, through `pulumi.log`, which
+    `pulumi` draws on the stack's row as the run goes; the standard `logging`
+    module would reach nobody in the process a dynamic provider runs in.
     """
     if path.exists():
+        pulumi.log.info(f'{path} holds the artifact already: reused, nothing fetched')
         return
+    pulumi.log.info(f'fetching {url} and decompressing it into {path} as it arrives')
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, name = tempfile.mkstemp(dir=path.parent, prefix=f'{path.name}.', suffix='.part')
     partial = Path(name)

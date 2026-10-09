@@ -1945,6 +1945,46 @@ def test_the_setup_waits_out_the_rebind(first_run: Instance, monkeypatch: pytest
     assert [call.path for call in first_run.credentialed()] == ['status'] * 3
 
 
+def _recorder(said: list[str]) -> object:
+    """A stand-in for `pulumi.log.info` that keeps each message in `said`."""
+
+    def info(message: str, *_args: object, **_kwargs: object) -> None:
+        said.append(message)
+
+    return info
+
+
+def test_the_setup_says_what_it_does_and_what_it_waits_on(first_run: Instance, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Through the engine's diagnostics, which `pulumi` draws as the run goes, never the `logging` module's.
+
+    A dynamic provider's process configures no `logging`, so its `info` lines
+    reach nobody.
+    """
+    said: list[str] = []
+    monkeypatch.setattr(setup.pulumi.log, 'info', _recorder(said))
+    monkeypatch.setattr(setup, 'POLL_INTERVAL', 0)
+    first_run.rebinding = 2
+
+    _ = configured_provider(SETUP).create(checked(SETUP, SET_UP))
+
+    configuring, waiting, *between, answered = said
+    assert 'configuring' in configuring and INSTANCE in configuring, said
+    assert 'waiting for' in waiting and f'{setup.REBIND_TIMEOUT}s' in waiting, said
+    assert len(between) == 2, said
+    assert all(text.startswith('not yet: ') for text in between), said
+    assert 'configured' in answered and INSTANCE in answered, said
+
+
+def test_an_adopted_setup_says_so(instance: Instance, monkeypatch: pytest.MonkeyPatch) -> None:
+    said: list[str] = []
+    monkeypatch.setattr(setup.pulumi.log, 'info', _recorder(said))
+
+    _ = configured_provider(SETUP).create(checked(SETUP, SET_UP))
+
+    (adopted,) = said
+    assert INSTANCE in adopted and 'adopted' in adopted, said
+
+
 def test_the_setup_never_retries_an_answer_to_the_login(first_run: Instance, monkeypatch: pytest.MonkeyPatch) -> None:
     """An answer is final, because every refused login counts toward the instance's limiter."""
     monkeypatch.setattr(setup, 'POLL_INTERVAL', 0)

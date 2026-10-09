@@ -340,6 +340,19 @@ alias on the resource itself, `aliases=[pulumi.Alias(type_=<old>)]`,
 since a component's alias moves the type chain its children inherit and
 not a child's own type.
 
+**A dynamic provider says what it is doing through `pulumi.log`.** Its
+operations run in the process the provider host starts, where nothing
+configures the standard `logging` module, so a line written through it is
+dropped, and the operator sees none of it. `pulumi.log` is the engine's
+diagnostics: `pulumi` draws each line on the stack's row while the run goes,
+at a terminal and under a pipe alike, and lists them at the run's end. The
+row is the stack's, not the resource's, since a provider has no URN to
+attach a line to, so a line names what it is about. A step that takes long
+-- a fetch, a decompression, an upload, a wait -- says what it is doing
+before it starts, and a wait that polls says so at each attempt.
+`tests/test_provider_output.py` refuses an import of `logging` anywhere
+under `src/kluster/providers/`.
+
 **A child's logical name carries its component's `name`.** A URN
 qualifies a logical name by the chain of parent *types*, never by a
 parent's name, so two components of one type that each declare a child
