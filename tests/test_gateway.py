@@ -147,19 +147,17 @@ def test_the_device_keeps_the_program_the_backup_pull_runs_on_its_end(monitor: C
     assert 'rsync' in rendered_packages(monitor)
 
 
-def test_the_routing_configuration_answers_to_its_daemon_and_not_to_the_boot_chain(monitor: Controller) -> None:
-    """It is the one piece of desired state on this device with no machine behind it.
+def test_the_routing_configuration_carries_the_gateways_session_password_as_a_secret(monitor: Controller) -> None:
+    """The gateway hands its routing session's password to the file, and the file is secret because of it.
 
-    So what applies it is a converger of its own — an executable the file's
-    hook runs and a unit runs at boot — rather than one of the boot chain's
-    scripts, and it is secret because the session password is in it.
+    What the file is and how it is applied -- its path, its mode, the converger
+    its hook runs -- are `test_site_routing`'s, which declares the component on
+    its own; what is the gateway's is which password reaches it.
     """
     config = monitor.inputs_of(f'{NAME}-routing-config')
 
-    assert config['path'] == routing.FRR_CONFIG
-    assert config['hook'] == routing.converger_hook()
-    assert config['mode'] == routing.FRR_MODE
     assert f'password {BGP_PASSWORD}' in config['content']
+    assert 'content' in monitor.options_of(f'{NAME}-routing-config').additionalSecretOutputs
 
 
 def test_the_device_keeps_accepting_the_key_this_program_dials_with(monitor: Controller) -> None:

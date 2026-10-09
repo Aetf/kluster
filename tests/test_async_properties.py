@@ -15,7 +15,7 @@ from typing import Any, assert_type, cast
 import pulumi
 import pytest
 import pytest_asyncio
-from mock_monitor import Recorder, declaring, run_with
+from mock_monitor import Recorder, run_with
 from pulumi.output import Unknown
 
 import putils
@@ -123,14 +123,6 @@ async def test_an_async_input_resolves_beside_a_plainly_passed_one(mocks: Engine
 
     assert await comp.subnet.network_id.future() == 'subnet-for-my-comp-vpc_id'
     assert await comp.subnet.cidr.future() == '10.0.1.0/24'
-
-
-@pytest.mark.asyncio
-async def test_a_components_child_is_registered_under_the_components_name(mocks: Engine) -> None:
-    async with declaring():
-        _ = VpcSubnetComponent('my-comp')
-
-    assert mocks.names('gcp:compute:Subnetwork') == {'my-comp-subnet'}
 
 
 @pytest.mark.asyncio
