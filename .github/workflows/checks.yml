@@ -77,17 +77,15 @@ jobs:
       # `tests/test_state_roles.py` runs the appliance's Postgres roles in the
       # image the box runs, and skips where no copy of it is local rather
       # than fetch one mid-run; this step makes it local, so those cases run
-      # on every event (framework/ci.md §3). The name is read from
-      # `settings.POSTGRES_IMAGE`, the one place it is pinned. That pin is a
-      # tag with no digest -- the major line the box's own podman-auto-update
-      # follows -- so the tag is resolved to its digest here.
+      # on every event (framework/ci.md §3). The image is the one
+      # `settings.POSTGRES_IMAGE` pins, by its tag and digest.
       #
       # Docker Hub limits anonymous pulls per address, and a runner's address
       # is shared, so the image is pulled from Google's mirror of Docker Hub
-      # instead: by the digest Docker Hub itself names for the tag, read with
-      # a HEAD request, which Docker Hub does not count against the limit.
-      # The mirror therefore serves exactly Docker Hub's image or the pull
-      # fails, and the image is then tagged with the name the program uses.
+      # instead, by the pinned digest: the mirror serves exactly the pinned
+      # image or the pull fails. It is then tagged with the repository and
+      # tag of the pin, which is what lets the pinned reference -- tag and
+      # digest -- resolve to it locally, as the cases run it.
       #
       # The log names the podman the module runs on and the buildah it
       # carries, which is what the module's podman workarounds name as their
@@ -97,16 +95,11 @@ jobs:
         run: |
           set -euo pipefail
           podman info --format 'podman {{.Version.Version}}, buildah {{.Host.BuildahVersion}}, rootless network {{.Host.RootlessNetworkCmd}}'
-          image=$(mise x uv -- uv run python -c 'from kluster.lib.state_backend import settings; print(settings.POSTGRES_IMAGE)')
-          repository=${image#docker.io/}; repository=${repository%:*}; tag=${image##*:}
-          token=$(curl -fsS "https://auth.docker.io/token?service=registry.docker.io&scope=repository:$repository:pull" | mise x -- jq -r .token)
-          digest=$(curl -fsSI -H "Authorization: Bearer $token" \
-            -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' \
-            "https://registry-1.docker.io/v2/$repository/manifests/$tag" | tr -d '\r' | awk 'tolower($1) == "docker-content-digest:" {print $2}')
-          test -n "$digest"
-          echo "$image is $digest on Docker Hub; pulling it from mirror.gcr.io"
-          id=$(podman pull --quiet "mirror.gcr.io/$repository@$digest")
-          podman tag "$id" "$image"
+          pin=$(mise x uv -- uv run python -c 'from kluster.lib.state_backend import settings as s; print(s.POSTGRES_REPOSITORY, s.POSTGRES_TAG, s.POSTGRES_DIGEST)')
+          read -r repository tag digest <<<"$pin"
+          echo "pulling $repository:$tag@$digest from mirror.gcr.io"
+          id=$(podman pull --quiet "mirror.gcr.io/${repository#docker.io/}@$digest")
+          podman tag "$id" "$repository:$tag"
 
       # A hung case fails by name under the per-case bound `pyproject.toml`
       # configures; the outer `timeout` is the hang guard for what that

@@ -327,7 +327,9 @@ are:
 
 -   **a pin that cannot move under its name**, a recorded hash or digest.
     `uv.lock` records hashes, the Actions are pinned by commit, and the
-    container images are written with their digest. The tools, the
+    container images the program names itself are written with their
+    digest; an image a chart deploys is named by its chart's values, by
+    tag (Aetf/kluster-ops#503). The tools, the
     providers, the charts and the Talos image are pinned by version alone,
     and a release asset uploaded again under the same version moves under
     such a pin (§9.3);

@@ -53,7 +53,12 @@ shape nor the domain, which reads like a permissions problem.
 > generation bump in configuration for the dump key (§1), and the
 > commands the §7.1 and §7.4 playbooks name for the CA and the age
 > identity; the one step no command takes is deleting a compromised
-> generation's objects from the bucket early. As of 2026-09-25 the
+> generation's objects from the bucket early. The box runs the Postgres
+> image `POSTGRES_IMAGE` pins by digest (§2) once the first
+> `operator-stack state-backend up --force` after that pin has run
+> (Aetf/kluster-ops#504): until then the stack's `plan` shows that
+> replacement -- a dump, a new box, a restore -- and the box runs the
+> `postgres:17` its first boot pulled. As of 2026-09-25 the
 > scheduled drill of §7.3 is design-only, so no drill runs. §7.3.1 is
 > the restore rehearsal an operator runs in its place. It ran on
 > 2026-09-18 against a scratch box, on a dump taken from a workstation,
@@ -293,14 +298,15 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
 
 -   A plain systemd unit, `pgstate.service`, whose `ExecStart` is
     `podman run --replace …` — not a quadlet, so the box holds no
-    `.container` file — with the image pinned to the major line
-    (`postgres:NN` — `POSTGRES_IMAGE` in the `state-backend` script's
-    settings, rendered into the Butane file). The container carries the
-    `io.containers.autoupdate=registry` label, and
-    `podman-auto-update.timer`, enabled by the same Butane file,
-    applies minor/patch releases — the same trust-the-stream posture
-    as the OS, safe for the same reason (nothing outlives
-    `pg_dump` + a replacement).
+    `.container` file — with the image pinned by digest: the major
+    line's tag and the digest it named when the pin last moved
+    (`postgres:NN@sha256:…` — `POSTGRES_IMAGE` in
+    `kluster.lib.state_backend.settings`, rendered into the Butane file).
+    The box runs that image and nothing on it moves to another: the
+    container carries no auto-update label, and no auto-update timer
+    runs. A new digest — the tag rebuilt for a minor release or a new
+    base — reaches the box as a renovate pull request, taken monthly, and
+    the replacement that carries it (§7.2).
 -   **Major upgrades take the rebuild path** (§7.2): pin bump → a
     replacement, which dumps the old box, initdb's a fresh data
     directory under the new major and restores into it. At tens of MB of state, owning `pg_upgrade` machinery
@@ -478,9 +484,9 @@ home-/32-only rule would simply break CI. What an arbitrary IP
 reaches is Postgres's TLS handshake rejecting certificate-less
 clients; brute force buys nothing against cert auth, a certificate
 gets no further than the role it names (§2), and the
-Postgres-CVE surface is bounded by the auto-updating minor stream
-(§2) plus the replace-not-mutate posture — the same appliance logic as
-everything else on this box. (A scheduled workflow auto-editing
+Postgres-CVE surface is bounded by the pinned image's monthly moves to
+the tag's newest build (§2) plus the replace-not-mutate posture — the
+same appliance logic as everything else on this box. (A scheduled workflow auto-editing
 security rules was already rejected on standing-rent grounds; now
 there is nothing for it to edit.)
 
@@ -1090,7 +1096,7 @@ its design. The machine is the files in
 
 | Path | What |
 | --- | --- |
-| `butane.yaml.j2` (template) | The machine, whole: the Postgres unit — a plain systemd unit running `podman run`, auto-updated by label, not a quadlet — PKI, `pg_hba` and the Postgres roles, the age recipients, the unit that installs the pinned `age`, the dump timer, the reboot window. |
+| `butane.yaml.j2` (template) | The machine, whole: the Postgres unit — a plain systemd unit running `podman run` at the image pinned by digest, not a quadlet — PKI, `pg_hba` and the Postgres roles, the age recipients, the unit that installs the pinned `age`, the dump timer, the reboot window. |
 | `state-dump.sh` | What that timer runs — `pg_dump` → `pg_restore`, refusing an archive that holds no stack → age → B2. Shell, because the box has no interpreter: it uses what the Fedora CoreOS image ships plus the `age` the template installs, and a test holds the template to that (§1). |
 | `operator-keys.txt` | SSH keys for diagnosis (`state-backend ssh`). The box is never configured by hand, and a key absent here means no access until the next replacement. |
 | `host-key.txt` | The box's SSH host key, public half. Written by `credentials derived state-backend-host-key generate` beside the private half it puts in the stack's configuration, and committed; `state-backend ssh` pins the box to it, and the stack refuses to plan while it is absent or names another key. |

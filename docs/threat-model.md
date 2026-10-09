@@ -213,6 +213,9 @@ Today:
     `chart-intel-device-plugins-gpu`;
 -   a manifest fetched as a release asset, by its sha256, which the fetch
     checks: `manifest-gateway-api`, the Gateway API definitions;
+-   the state backend's Postgres image, by the digest
+    `settings.POSTGRES_IMAGE` names beside its tag, which the box pulls and
+    runs and nothing on the box moves;
 -   the state backend's Fedora CoreOS artifact and its `age` binary, by
     the sha256 beside each pin in `kluster.lib.state_backend.settings`,
     and the Helm binary `update_crds` renders with, by the sha256 beside
@@ -228,31 +231,40 @@ Each of these carries its reason, and these are accepted residuals:
     (`Pulumi.yaml` says why beside its `packages:` block);
 -   the Talos factory images, fetched by schematic and release: the public
     Image Factory publishes no checksum, and OCI imports the cloud image
-    from a URL with no digest.
-
-These await the operator's ruling, each named with its issue:
-
--   an image a chart deploys, which is pinned as that chart's own values
-    pin it: the chart's digest holds the reference and not the bytes
-    behind a tag (Aetf/kluster-ops#503);
--   mise itself, whose version every workflow hands `jdx/mise-action`
-    with no sum for the action to check, and which a cloud session
-    installs from `npm` by version (Aetf/kluster-ops#504);
--   the ZeroTier client, installed from ZeroTier's apt repository by
-    version, with the repository's signing key pinned by fingerprint, so
-    an upload its publisher signs again under the same version passes
-    (Aetf/kluster-ops#504);
--   the state backend's Postgres image, `postgres:17`, a tag naming a
-    major line (Aetf/kluster-ops#504).
+    from a URL with no digest;
+-   an image a chart deploys, pinned as that chart's own values pin it:
+    the chart's digest fixes the reference, and a reference that is a
+    version tag can be pushed again by its publisher. Overriding every
+    chart image with a digest pin of its own was weighed and rejected, its
+    cost growing with every chart and image against a publisher pushing a
+    tag again (the operator's ruling, Aetf/kluster-ops#503);
+-   mise itself in CI, whose version every workflow hands `jdx/mise-action`
+    and renovate moves by pull request, under the release age: the action
+    takes no sum renovate could fill, so a release asset replaced under a
+    version already reviewed passes (Aetf/kluster-ops#504). A cloud
+    session installs the same version from `npm`, which refuses a second
+    publish under a version, so that route is not this residual;
+-   the ZeroTier client, installed from ZeroTier's apt repository at the
+    version the action pins and renovate moves by pull request, with the
+    repository's signing key trusted only at its fingerprint: an upload
+    its publisher signs again under the same version passes
+    (Aetf/kluster-ops#504).
 
 **A release no pin holds**, which arrives on its publisher's schedule,
-with no age and no merge. These await the operator's ruling too
+with no age and no merge. These are accepted residuals
 (Aetf/kluster-ops#504):
 
--   the state backend's Postgres minor releases, which
-    `podman-auto-update` pulls under that tag;
 -   the state backend's Fedora CoreOS updates, which Zincati applies to
-    the running box.
+    the running box: each is signed by Fedora and applied atomically, with
+    a rollback, and a box with Zincati off falls behind until it is
+    rebuilt;
+-   the UDM's firmware, which the gateway takes on its vendor's schedule
+    with its auto-update left on;
+-   what a self-built image's `RUN` step fetches in `homelab-containers`,
+    whose checks are that repository's matter.
+
+What a `RUN` step of this repository's own images (`docker/`) fetches as
+it builds awaits the operator's ruling (Aetf/kluster-ops#593).
 
 [operations.md](operations.md) §1 is the census of who moves each pin.
 
@@ -265,6 +277,10 @@ the Helm charts, which the cluster only pulls, wait for none, and that is
 an accepted residual: the cluster runs what it pulls with whatever the
 workload holds, so a poisoned image or chart release reaches it the day
 it is published, held by its pin and by whatever reading its bump gets.
+The state backend's Postgres image is one of these, though it holds every
+stack's state: CI runs it only in `checks`, which holds no stack's secret,
+and every move of its digest is a pull request a person reads, taken at
+most monthly, and a replacement of the box the operator runs.
 Which routes wait, and why a week, is the comment on `minimumReleaseAge`
 in `renovate.json5`.
 

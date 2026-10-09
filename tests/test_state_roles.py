@@ -32,8 +32,9 @@ writes -- none on a box the backend has only opened, one after `stack init`.
 
 **Skipped where the image cannot be run without fetching it.** A test that
 pulls an image needs the network. This one runs where the pinned image is
-already local, which a workstation that has run it once satisfies, and is
-skipped elsewhere with the reason named.
+already local -- a workstation has it once it has pulled
+`settings.POSTGRES_IMAGE`, the tag and digest the box runs, and again after
+each move of the pin -- and is skipped elsewhere with the reason named.
 """
 
 from __future__ import annotations

@@ -20,9 +20,12 @@ import importlib.util
 import json
 import logging
 import types
+import urllib.error
+import urllib.request
 from collections.abc import Callable, Iterator, Sequence
+from email.message import Message
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import oci
 import pytest
@@ -89,14 +92,14 @@ def test_a_manifest_without_a_digest_header_is_refused(monkeypatch: pytest.Monke
     _registry(monkeypatch, _Answer(body={'token': 'a-pull-token'}), _Answer(headers={}))
 
     with pytest.raises(RuntimeError, match='without a Docker-Content-Digest header'):
-        _ = provision._image_digest('docker.io/library/postgres:17')  # pyright: ignore[reportPrivateUsage]
+        _ = provision._image_digest('docker.io/library/postgres', '17')  # pyright: ignore[reportPrivateUsage]
 
 
 def test_a_token_response_without_a_token_names_the_repository(monkeypatch: pytest.MonkeyPatch) -> None:
     _registry(monkeypatch, _Answer(body={'errors': ['nope']}))
 
     with pytest.raises(RuntimeError, match='the registry pull token for library/postgres has no token'):
-        _ = provision._image_digest('docker.io/library/postgres:17')  # pyright: ignore[reportPrivateUsage]
+        _ = provision._image_digest('docker.io/library/postgres', '17')  # pyright: ignore[reportPrivateUsage]
 
 
 def test_a_resolved_manifest_answers_its_digest(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -106,7 +109,60 @@ def test_a_resolved_manifest_answers_its_digest(monkeypatch: pytest.MonkeyPatch)
         _Answer(headers={'Docker-Content-Digest': 'sha256:abc'}),
     )
 
-    assert provision._image_digest('docker.io/library/postgres:17') == 'sha256:abc'  # pyright: ignore[reportPrivateUsage]
+    assert provision._image_digest('docker.io/library/postgres', '17') == 'sha256:abc'  # pyright: ignore[reportPrivateUsage]
+
+
+def _resolving(monkeypatch: pytest.MonkeyPatch, answers: dict[str, str | urllib.error.HTTPError]) -> list[str]:
+    """`_image_digest` answering each reference from `answers`; returns the references asked, in order."""
+    asked: list[str] = []
+
+    def image_digest(repository: str, reference: str) -> str:
+        assert repository == settings.POSTGRES_REPOSITORY
+        asked.append(reference)
+        answer = answers[reference]
+        if isinstance(answer, urllib.error.HTTPError):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(provision, '_image_digest', image_digest)
+    return asked
+
+
+def test_a_pinned_digest_the_registry_serves_passes_though_the_tag_has_moved(monkeypatch: pytest.MonkeyPatch) -> None:
+    asked = _resolving(
+        monkeypatch, {settings.POSTGRES_DIGEST: settings.POSTGRES_DIGEST, settings.POSTGRES_TAG: 'sha256:' + 'e' * 64}
+    )
+
+    assert provision._postgres_pin_ok()  # pyright: ignore[reportPrivateUsage]
+    assert set(asked) == {settings.POSTGRES_DIGEST, settings.POSTGRES_TAG}
+
+
+def test_a_pinned_digest_the_registry_does_not_serve_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    missing = urllib.error.HTTPError('https://registry-1.docker.io', 404, 'manifest unknown', Message(), None)
+    _ = _resolving(monkeypatch, {settings.POSTGRES_DIGEST: missing, settings.POSTGRES_TAG: settings.POSTGRES_DIGEST})
+
+    assert not provision._postgres_pin_ok()  # pyright: ignore[reportPrivateUsage]
+
+
+def test_a_pin_the_registry_serves_as_another_digest_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    other = 'sha256:' + 'f' * 64
+    _ = _resolving(monkeypatch, {settings.POSTGRES_DIGEST: other, settings.POSTGRES_TAG: other})
+
+    assert not provision._postgres_pin_ok()  # pyright: ignore[reportPrivateUsage]
+
+
+def test_the_digest_a_reference_is_asked_by_is_the_manifest_requested(monkeypatch: pytest.MonkeyPatch) -> None:
+    requested: list[str] = []
+    answers = [_Answer(body={'token': 'a-pull-token'}), _Answer(headers={'Docker-Content-Digest': 'sha256:abc'})]
+
+    def urlopen(request: object, *_args: object, **_kwargs: object) -> _Answer:
+        requested.append(request if isinstance(request, str) else cast('urllib.request.Request', request).full_url)
+        return answers.pop(0)
+
+    monkeypatch.setattr(provision.urllib.request, 'urlopen', urlopen)
+    _ = provision._image_digest('docker.io/library/postgres', 'sha256:abc')  # pyright: ignore[reportPrivateUsage]
+
+    assert requested[-1] == 'https://registry-1.docker.io/v2/library/postgres/manifests/sha256:abc'
 
 
 # -- the readiness wait --------------------------------------------------------
