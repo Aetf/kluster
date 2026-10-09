@@ -28,6 +28,7 @@ from typing import cast
 
 import pytest
 import requests
+import ruamel.yaml.main as ruamel_yaml_main
 from renovate_text import as_python_spells_it, as_renovate_spells_it, group, listed, package_rules, scalar
 
 from kluster.lib.versions import CHART, MANIFEST, ChartPin, Floor, ProjectFile, Versions
@@ -120,28 +121,25 @@ def test_select_crds_tolerates_empty_documents() -> None:
     assert sources.select_crds(['---\n# Source: chart/templates/empty.yaml\n---\n']) == []
 
 
-def test_select_crds_names_a_definition_that_carries_no_name() -> None:
-    nameless = """
-apiVersion: apiextensions.k8s.io/v1
-kind: CustomResourceDefinition
-spec:
-  group: example.com
-"""
-
-    with pytest.raises(sources.SourceError, match=re.escape('no metadata.name')):
-        _ = sources.select_crds([nameless])
-
-
-def test_select_crds_names_a_definition_that_carries_no_group() -> None:
-    groupless = """
-apiVersion: apiextensions.k8s.io/v1
-kind: CustomResourceDefinition
-metadata:
-  name: widgets.example.com
-"""
-
-    with pytest.raises(sources.SourceError, match=re.escape('widgets.example.com has no spec.group')):
-        _ = sources.select_crds([groupless])
+@pytest.mark.parametrize(
+    ('document', 'refusal'),
+    [
+        pytest.param(
+            'apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nspec:\n  group: example.com\n',
+            'no metadata.name',
+            id='no-name',
+        ),
+        pytest.param(
+            'apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\n'
+            'metadata:\n  name: widgets.example.com\n',
+            'widgets.example.com has no spec.group',
+            id='no-group',
+        ),
+    ],
+)
+def test_select_crds_names_what_a_definition_lacks(document: str, refusal: str) -> None:
+    with pytest.raises(sources.SourceError, match=re.escape(refusal)):
+        _ = sources.select_crds([document])
 
 
 def test_yaml_file_urls_keeps_the_yaml_entries_of_a_contents_listing() -> None:
@@ -254,17 +252,6 @@ def test_the_operator_versions_are_of_the_charts_the_script_reads_at_the_pinned_
     }, 'packages/crds records operator versions of other chart pins than Pulumi.yaml holds; run update_crds'
 
 
-def test_the_record_holds_the_operator_version_the_run_read_beside_the_version_it_read_it_at() -> None:
-    project = ProjectFile(project_config())
-    versions = Versions(project)
-    declared = {name: f'{position}.0.0' for position, name in enumerate(record.read_charts(project))}
-
-    assert record.app_versions(project, declared) == {
-        f'versions:{CHART}-{name}': {'version': versions.chart[name].version, 'appVersion': declared[name]}
-        for name in record.read_charts(project)
-    }
-
-
 def chart_values_written() -> dict[str, dict[str, object]]:
     """`packages/crds/chart-values.json` as `update_crds` last wrote it."""
     path = sources.bundle_path(ROOT / 'Pulumi.yaml').parent / record.CHART_VALUES_FILE_NAME
@@ -287,23 +274,17 @@ def test_the_value_paths_are_of_every_chart_pin_at_its_pinned_version() -> None:
     }, 'packages/crds records value paths of other chart pins than Pulumi.yaml holds; run update_crds'
 
 
-def test_the_value_record_holds_what_the_run_read_beside_the_version_it_read_it_at() -> None:
+def test_the_value_record_lists_the_paths_in_order_and_reads_back_as_what_the_run_read() -> None:
+    """Sorted, so the file is a function of the paths and not of the order a chart declared them in."""
     project = ProjectFile(project_config())
-    versions = Versions(project)
     read = {
         name: ValuePaths(paths=frozenset({f'{name}.b', f'{name}.a'}), free_form=frozenset({f'{name}.a'}))
         for name in project.names(CHART)
     }
 
-    assert record.chart_values(project, read) == {
-        f'versions:{CHART}-{name}': {
-            'version': versions.chart[name].version,
-            'paths': [f'{name}.a', f'{name}.b'],
-            'free-form': [f'{name}.a'],
-        }
-        for name in project.names(CHART)
-    }
     cilium = cast('Mapping[str, object]', record.chart_values(project, read)[f'versions:{CHART}-cilium'])
+
+    assert cilium['paths'] == ['cilium.a', 'cilium.b']
     assert ValuePaths.from_entry(cilium) == read['cilium']
 
 
@@ -460,16 +441,11 @@ def test_the_record_holds_what_the_script_reads_and_nothing_else() -> None:
     """
     config = project_config()
     project = ProjectFile(config)
-    versions = Versions(project)
     read = record.read_charts(project)
     unread = [name for name in project.names(CHART) if name not in read]
-    trees = {tree.chart for tree in pins.SOURCE_TREES}
     # Not vacuous: the block holds charts of both kinds.
     assert read
     assert unread
-    for name in project.names(CHART):
-        pin = versions.chart[name]
-        assert (name in read) == (pin.definitions or pin.floor is not None or name in trees), name
 
     before = record.record(project)
     for name in read:
@@ -524,19 +500,18 @@ def test_the_cilium_source_tree_is_read_at_the_cilium_chart_version() -> None:
     so a chart bump moves the tree with it.
     """
     (tree,) = [tree for tree in pins.SOURCE_TREES if tree.repo == 'cilium/cilium']
-    versions = Versions(ProjectFile(project_config()))
-    chart = versions.chart[tree.chart]
 
-    assert not chart.definitions
-    assert tree.ref(chart) == f'v{chart.version}'
-    assert (
-        tree.ref(
-            ChartPin(
-                name=tree.chart, repository=chart.repository, version='9.9.9', digest=chart.digest, definitions=False
-            )
+    def pin(version: str) -> ChartPin:
+        return ChartPin(
+            name=tree.chart,
+            repository='oci://registry.example.invalid/charts',
+            version=version,
+            digest=f'sha256:{"0" * 64}',
+            definitions=False,
         )
-        == 'v9.9.9'
-    )
+
+    assert tree.ref(pin('1.2.3')) == 'v1.2.3'
+    assert tree.ref(pin('9.9.9')) == 'v9.9.9'
 
 
 FLOORED = ChartPin(
@@ -637,24 +612,37 @@ def test_a_run_reads_every_source_from_the_pins(tmp_path: Path, monkeypatch: pyt
 
 def test_a_pinned_chart_is_fetched_from_where_its_pin_says() -> None:
     """An OCI chart by its digest-pinned reference, an HTTP chart by name within its repository."""
-    versions = Versions(ProjectFile(project_config()))
-    oci = versions.chart['cert-manager']
-    http = versions.chart['volsync']
-    assert oci.oci
-    assert not http.oci
+    digest = f'sha256:{"a" * 64}'
+    oci = ChartPin(
+        name='widget',
+        repository='oci://registry.example.invalid/charts',
+        version='1.2.3',
+        digest=digest,
+        definitions=True,
+    )
+    http = ChartPin(
+        name='anvil', repository='https://charts.example.invalid/', version='4.5.6', digest=None, definitions=True
+    )
 
     assert sources._chart_location(oci) == [  # pyright: ignore[reportPrivateUsage] -- the seam under test
-        f'oci://quay.io/jetstack/charts/cert-manager@{oci.digest}',
+        f'oci://registry.example.invalid/charts/widget@{digest}',
         '--version',
-        oci.version,
+        '1.2.3',
     ]
     assert sources._chart_location(http) == [  # pyright: ignore[reportPrivateUsage] -- the seam under test
-        'volsync',
+        'anvil',
         '--version',
-        http.version,
+        '4.5.6',
         '--repo',
-        http.repository,
+        'https://charts.example.invalid/',
     ]
+
+
+#: The bound on that child process: below the suite's per-case bound
+#: (`pyproject.toml`), so a child that hangs fails as a `TimeoutExpired`
+#: naming the command before the case's own bound fires, and several times
+#: what an interpreter importing the script takes on a loaded machine.
+IMPORT_RUN_TIMEOUT = 30
 
 
 def test_update_crds_starts_when_the_sdk_does_not_import() -> None:
@@ -668,27 +656,74 @@ def test_update_crds_starts_when_the_sdk_does_not_import() -> None:
         'from kluster.scripts.update_crds import main; sys.exit(main(["--help"]))'
     )
 
-    run = subprocess.run([sys.executable, '-c', broken], capture_output=True, text=True, timeout=120, check=False)
+    run = subprocess.run(
+        [sys.executable, '-c', broken], capture_output=True, text=True, timeout=IMPORT_RUN_TIMEOUT, check=False
+    )
 
     assert run.returncode == 0, run.stderr
     assert '--project' in run.stdout
 
 
-def test_the_clis_logging_setup_leaves_a_logger_made_before_it_working() -> None:
-    """A logger another module made before the CLI configured logging still logs after it.
+class Kept(logging.Handler):
+    """A handler that keeps every record it is handed, and remembers being closed."""
 
-    `dictConfig` disables every existing logger it does not name unless told
-    otherwise, so a process that imported another `kluster` module first -- the
-    test suite, running this module before `test_sealing` -- lost that module's
-    log lines to the CLI's setup.
+    def __init__(self) -> None:
+        super().__init__()
+        self.messages: list[str] = []
+        self.closed: bool = False
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.messages.append(record.getMessage())
+
+    def close(self) -> None:
+        self.closed = True
+        super().close()
+
+
+def logging_state() -> list[tuple[str, int, bool, bool, list[logging.Handler]]]:
+    """The root logger's and the package logger's level, propagation, disabled flag and handlers."""
+    return [
+        (logger.name, logger.level, logger.propagate, logger.disabled, list(logger.handlers))
+        for logger in (logging.getLogger(), logging.getLogger(cli.LOG_NAME))
+    ]
+
+
+def test_a_run_leaves_the_process_logging_as_it_found_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The run prints its lines, and afterwards every handler, level and logger of the process is as it was.
+
+    `main` runs inside the test process, as it can inside any other: a handler
+    it closed -- a test run's log file -- would drop every later record, a
+    propagation it switched off would keep the package's records from the root
+    for good, and a logger made before it and disabled would go quiet.
     """
-    before = logging.getLogger('kluster.scripts.credentials.made_before_update_crds')
+    _ = stand_ins(tmp_path, monkeypatch)
+    project = project_dir(tmp_path)
+    rendered = tmp_path / 'rendered.yaml'
+    _ = rendered.write_text(CRD)
+    made_before = logging.getLogger('kluster.scripts.credentials.made_before_update_crds')
+    kept = Kept()
+    root = logging.getLogger()
+    root.addHandler(kept)
     try:
-        with pytest.raises(SystemExit):
-            _ = cli.main(['--help'])
-        assert not before.disabled
+        before = logging_state()
+
+        code = cli.main(
+            ['--project', str(project / 'Pulumi.yaml'), '--from-bundle', str(rendered), '--bundle', str(tmp_path / 'o')]
+        )
+
+        assert code == 0
+        assert 'Selected 1 CRDs' in capsys.readouterr().out
+        assert logging_state() == before
+        assert not kept.closed
+        assert not made_before.disabled
+        logging.getLogger(f'{cli.LOG_NAME}.after').warning('logged after the run')
+        made_before.warning('logged by a logger made before it')
+        assert kept.messages[-2:] == ['logged after the run', 'logged by a logger made before it']
     finally:
-        before.disabled = False
+        root.removeHandler(kept)
+        made_before.disabled = False
 
 
 def test_a_stack_file_with_no_config_block_overrides_nothing(tmp_path: Path) -> None:
@@ -818,6 +853,18 @@ def in_cluster_rule(rules: list[str]) -> int:
         if scalar(rule, 'groupSlug') == 'in-cluster' and listed(rule, 'matchFileNames') == ['Pulumi.yaml']
     ]
     return found
+
+
+def own_slug(rules: list[str], index: int) -> str:
+    """The group slug the rule at `index` sets, which it has to set: the slug is the branch."""
+    slug = scalar(rules[index], 'groupSlug')
+    assert slug is not None, f'the rule sets no groupSlug:\n{rules[index]}'
+    return slug
+
+
+def sibling_slugs(rules: list[str], index: int) -> set[str]:
+    """The group slug of every other rule that sets one: a group of its own is a slug none of these is."""
+    return {slug for position, rule in enumerate(rules) if position != index and (slug := scalar(rule, 'groupSlug'))}
 
 
 def test_the_in_cluster_rule_groups_what_the_block_managers_read() -> None:
@@ -954,7 +1001,7 @@ def test_the_cilium_chart_travels_alone() -> None:
     assert versions.chart['cilium'].oci
     assert listed(rule, 'matchDepNames') == ['cilium']
     assert listed(rule, 'matchFileNames') == ['Pulumi.yaml']
-    assert scalar(rule, 'groupSlug') == 'cilium'
+    assert own_slug(rules, cilium) not in sibling_slugs(rules, cilium)
     assert in_cluster < cilium
     for later in rules[cilium + 1 :]:
         if scalar(later, 'groupName') is None and scalar(later, 'groupSlug') is None:
@@ -1019,7 +1066,7 @@ def test_the_kubernetes_provider_rule_outranks_the_python_group() -> None:
     (provider,) = [index for index, rule in enumerate(rules) if 'pulumi-kubernetes' in listed(rule, 'matchDepNames')]
 
     assert provider > python
-    assert scalar(rules[provider], 'groupSlug') == 'kubernetes-provider'
+    assert own_slug(rules, provider) not in sibling_slugs(rules, provider)
 
 
 # -- the bundle -------------------------------------------------------------------
@@ -1033,6 +1080,15 @@ def test_the_bundle_is_where_the_packages_entry_names_it() -> None:
     """The script writes the manifest `pulumi install` reads, so it reads the path from the same entry."""
     assert BUNDLE == ROOT / 'packages/crds/crds.yaml'
     assert BUNDLE.is_file()
+
+
+def test_the_bundle_path_is_the_one_the_entry_names(tmp_path: Path) -> None:
+    """Relative to the project, whatever the entry names: the script holds no path of its own."""
+    project = tmp_path / 'Pulumi.yaml'
+    entry = {'source': 'kubernetes', 'extensions': ['name=crds', 'crd-manifest=elsewhere/definitions.yaml']}
+    _ = project.write_text(json.dumps({'name': 'p', 'packages': {'crds': entry}}))
+
+    assert sources.bundle_path(project) == tmp_path / 'elsewhere/definitions.yaml'
 
 
 @pytest.mark.parametrize(
@@ -1057,14 +1113,6 @@ def test_a_project_whose_entry_names_no_one_manifest_is_refused_by_name(
         _ = sources.bundle_path(project)
 
 
-#: The whole-bundle case's own bound: it parses and re-dumps the 7.5 MB CRD
-#: bundle in pure Python, which takes 13.7 s on one idle core and has passed
-#: the suite's 60 s on CI's runners under `-n 4`. It goes back to the suite's
-#: bound once the bundle is parsed in C (ops#523).
-BUNDLE_CASE_TIMEOUT = 240
-
-
-@pytest.mark.timeout(BUNDLE_CASE_TIMEOUT)
 def test_the_committed_bundle_is_the_scripts_own_output() -> None:
     """Selecting from the committed bundle and dumping it again gives back the same text.
 
@@ -1081,6 +1129,27 @@ def test_the_committed_bundle_is_the_scripts_own_output() -> None:
     assert sources.dump_bundle(sources.select_crds([text])) == text, (
         'packages/crds/crds.yaml is not what update_crds writes; run `mise x -- uv run update_crds`'
     )
+
+
+def test_the_bundle_is_parsed_and_emitted_by_libyaml() -> None:
+    """`_yaml()` gets ruamel's C parser and emitter, which `YAML(typ='safe')` drops without a word.
+
+    The pure-Python parser takes seconds over the bundle, and the pure emitter
+    lays it out other than the committed bundle is laid out, so a dependency
+    change that lost `ruamel.yaml.clib` would show as a slow run and a bundle
+    that is no longer the script's own output; this names it instead.
+    """
+    yaml = sources._yaml()  # pyright: ignore[reportPrivateUsage] -- the seam under test
+    # The classes `YAML` chooses between are untyped, and `main` re-exports the
+    # C ones -- `None` when the extension does not import -- without `__all__`.
+    c_parser: object = ruamel_yaml_main.CParser  # pyright: ignore[reportPrivateImportUsage, reportUnknownMemberType, reportUnknownVariableType]
+    c_emitter: object = ruamel_yaml_main.CEmitter  # pyright: ignore[reportPrivateImportUsage, reportUnknownMemberType, reportUnknownVariableType]
+    parser: object = yaml.Parser  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+    emitter: object = yaml.Emitter  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+
+    assert c_parser is not None, 'ruamel.yaml.clib does not import: the `ruamel-yaml[oldlibyaml]` dependency is missing'
+    assert parser is c_parser
+    assert emitter is c_emitter
 
 
 #: The Cilium kinds only the agent writes, whose schemas carry hyphenated

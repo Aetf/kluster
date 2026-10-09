@@ -18,13 +18,14 @@ from __future__ import annotations
 
 import argparse
 import logging
-import logging.config
 import os
 import shutil
 import subprocess as sp
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import TYPE_CHECKING
 
 from tqdm.contrib.logging import logging_redirect_tqdm
 
@@ -33,33 +34,21 @@ from kluster.lib.versions import CHART, MANIFEST, ProjectFile, Versions
 from kluster.scripts.update_crds import pins, record, sources
 from kluster.scripts.update_crds.values import ValuePaths
 
-#: The package logger the configuration below attaches the console to. Every
-#: module here logs to `__name__`, which is a child of it, so the handler and
-#: the level are stated once.
+if TYPE_CHECKING:
+    from collections.abc import Generator
+
+#: The package logger `console` attaches the console to. Every module here
+#: logs to `__name__`, which is a child of it, so the handler and the level
+#: are stated once.
 LOG_NAME = 'kluster.scripts.update_crds'
 
-LOGGING = {
-    'version': 1,
-    # The configuration names this package's logger alone, and every other
-    # logger the process holds keeps working: left to its default, `dictConfig`
-    # disables each logger created before it that it does not name, which in a
-    # process that imported other `kluster` modules first -- a test run, say --
-    # silences theirs.
-    'disable_existing_loggers': False,
-    'formatters': {
-        'standard': {'format': '%(asctime)s %(levelname)s: %(message)s', 'datefmt': '%Y-%m-%d - %H:%M:%S'},
-    },
-    'handlers': {
-        'console': {'class': 'logging.StreamHandler', 'formatter': 'standard', 'level': 'DEBUG', 'stream': sys.stdout},
-    },
-    'loggers': {
-        LOG_NAME: {'level': 'INFO', 'handlers': ['console'], 'propagate': False},
-    },
-}
+#: How a line the package logs reads on the console.
+LINE_FORMAT = '%(asctime)s %(levelname)s: %(message)s'
+DATE_FORMAT = '%Y-%m-%d - %H:%M:%S'
 
 #: Spelled out rather than taken from `__name__`, which is `'__main__'` when
-#: this file is run directly and would then sit outside the tree configured
-#: above -- so a direct run would print nothing. Sibling modules take
+#: this file is run directly and would then sit outside the tree `console`
+#: configures -- so a direct run would print nothing. Sibling modules take
 #: `__name__`, which for them is always a child of `LOG_NAME`.
 log = logging.getLogger(f'{LOG_NAME}.cli')
 
@@ -179,8 +168,42 @@ def generate(project_file: Path, *, pulumi: Path, workdir: Path) -> None:
     _ = sp.check_call(['uv', 'lock'], cwd=project)
 
 
+@contextmanager
+def console() -> Generator[None]:
+    """The package's lines on stdout for the length of a run, and the process's logging as it was found afterwards.
+
+    Set on the package logger alone, and by hand: `logging.config.dictConfig`
+    is not incremental, so it would close every handler the process holds -- a
+    test run's log file among them -- and what it set would outlast the run.
+    `main` runs inside other processes as well as its own, a test run's
+    included, so it attaches a handler, sets the level and stops propagation
+    for the run, and puts back what it found when the run ends, however it
+    ends. Propagation is off so that a process whose root logger prints does
+    not print each line twice. The stream is the `sys.stdout` of the moment
+    the run starts, rather than the one the module was imported under.
+    """
+    logger = logging.getLogger(LOG_NAME)
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter(LINE_FORMAT, datefmt=DATE_FORMAT))
+    level, propagate = logger.level, logger.propagate
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    try:
+        yield
+    finally:
+        logger.removeHandler(handler)
+        handler.close()
+        logger.setLevel(level)
+        logger.propagate = propagate
+
+
 def main(argv: list[str] | None = None) -> int:
-    logging.config.dictConfig(LOGGING)
+    with console():
+        return _run(argv)
+
+
+def _run(argv: list[str] | None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     _ = parser.add_argument(
         '--project',

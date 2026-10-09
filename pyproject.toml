@@ -57,7 +57,11 @@ dev = [
     "tqdm>=4.67.1",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
-    "ruamel-yaml>=0.19.1",
+    # With libyaml's parser and emitter, which `update_crds` reads and writes the
+    # CRD bundle with (`sources._yaml`). The `oldlibyaml` extra rather than
+    # `libyaml`: `YAML()` imports only the extension this one installs, and
+    # without it runs in pure Python.
+    "ruamel-yaml[oldlibyaml]>=0.19.1",
     "ruff>=0.15.11",
     "basedpyright>=1.39.10",
     "import-linter>=2.14",
@@ -143,9 +147,9 @@ packages = ["src/kluster", "src/putils"]
 # wraps the run in (docs/framework/testing.md §1) guards what this cannot
 # reach -- collection, and a process that will not exit. The signal method is
 # what keeps the run going past the failed case; the thread method ends the
-# process instead. The bound is not an order of magnitude above every case:
-# under the four workers, test_update_crds' whole-bundle cases take 20-25 s,
-# 2.4-3x below it, and a machine loaded four times over brings them to it.
+# process instead. The bound is an order of magnitude above every case it
+# bounds (docs/framework/testing.md §1 has the measurement); a case that
+# starts the pinned `pulumi` CLI carries a bound of its own (§8).
 timeout = 60
 timeout_method = "signal"
 # The suite runs on four workers, here and in CI alike, so a case that is not

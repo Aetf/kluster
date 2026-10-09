@@ -54,14 +54,13 @@ and the run is bounded twice against that, at two scales:
     which is the same blind result as a kill from outside. A worker runs its
     cases on its main thread, so the signal reaches them there as it does in
     a run without workers, and the worker goes on to its next case. The
-    bound is a hang guard, an order of magnitude above every case but
-    three CPU-bound ones: under the four workers,
-    `tests/test_update_crds.py`'s two whole-bundle cases take 20–25 s, and
-    `tests/test_conventions.py`'s CRD-SDK case 9–13 s. So the headroom over
-    the slowest is 2.4–3×, and on a machine loaded four times over those
-    cases reach the bound and fail by it. A case that starts the pinned
-    `pulumi` CLI carries a bound of its own instead, set from measurement,
-    because its duration grows with the machine's load (§8).
+    bound is a hang guard, an order of magnitude above every case it
+    bounds: under the four workers the slowest take about 4 s. On a
+    machine loaded four times over -- twelve busy processes beside the
+    workers on four cores -- the slowest take 8–12 s, five times under it.
+    A case that starts the pinned `pulumi` CLI carries a bound of its own
+    instead, set from measurement, because its duration grows with the
+    machine's load (§8).
 -   **Around the run**, by the outer `timeout` above, for what a per-case
     bound cannot reach: collection, and a process still alive after the
     summary is printed. A kill there ends with status 124 and no summary,
@@ -895,9 +894,9 @@ fix, and the diff is the only artifact that disagrees.
         by how loaded the machine is -- the flake in a new shape. That path
         is left to the gate's bounds. The per-case bound among them is the
         one real-clock bound a case runs under, and it is admitted because
-        it fails differently: an order of magnitude above every case but
-        the three CPU-bound ones §1 names, and with the stack the case hung
-        in, which is what tells a stall from a hang (§1).
+        it fails differently: an order of magnitude above every case it
+        bounds, and with the stack the case hung in, which is what tells a
+        stall from a hang (§1).
         The one guard that stays in seconds is the `timeout=` handed to
         `subprocess.run`, where nothing yields to count -- and it fails as
         `TimeoutExpired` naming its seconds, which is a failure with a name.
