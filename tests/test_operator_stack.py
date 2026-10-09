@@ -8,18 +8,24 @@ Three levels, because they answer different questions:
     checkpoint.
 -   **A scratch repository** — a bare repository standing for the forge and a
     clone of it standing for the checkout — says the working-copy checks read
-    git's own answers the way they are believed to.
+    git's own answers the way they are believed to. The checks' `git` and
+    `jj` run with none of the caller's configuration or `GIT_` variables,
+    and `git` looks no higher than the case's own directory.
 -   **The real engine over a scratch `file://` backend**, with a program
     whose one resource is a dynamic one that needs no credential and so
     reaches no network, says the driver's handling of a committed checkpoint
     holds against what the pinned CLI actually writes: that the preview's
     plan is read from its streamed events, that the apply writes to the
     driver's own output, a terminal's or a pipe's, and is still read from
-    the events and the state, that no `up` runs over nothing planned, that a write over an unchanged deployment keeps the file's
-    bytes, that no switch of the caller's moves the state out of the file
-    the checks read, and that the check needing no value finds a secret in
-    the clear at each place the engine marks one. Skipped where the pinned
-    CLI or `uv` is not installed.
+    the events and the state, that no `up` runs over nothing planned, that
+    a write over an unchanged deployment keeps the file's bytes, that no
+    switch of the caller's moves the state out of the file the checks read,
+    and that the check needing no value finds a secret in the clear at each
+    place the engine marks one. The driver reaches the engine there through
+    `Bounded`, each command in a POSIX session of its own and bounded below
+    the case (framework/testing.md §1.2, §8); a case whose subject is the
+    production `Cli` runs the driver in a session `started` ends instead.
+    Skipped where the pinned CLI or `uv` is not installed.
 
 The cases that need a committed stack add `probe` to the census for their own
 duration, so they run no program of the census's own and hold no stack's real
@@ -50,6 +56,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
+import process_sessions
 import pytest
 from credentials_command_tree import named_leaves
 from memory_keyring import MemoryKeyring, installed
@@ -109,6 +116,28 @@ GIT_ENV = {
 # --------------------------------------------------------------------------
 # Fixtures.
 # --------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def isolated_vcs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The `git` and `jj` the code under test runs, kept to this case's own repositories and configuration.
+
+    The checks call both with this process's environment. A `GIT_DIR` or
+    `GIT_WORK_TREE` the caller carries would point them elsewhere, and so
+    would a case directory inside a repository -- a `--basetemp` under a
+    `jj` workspace sits inside the primary checkout, whose forge `git` would
+    then ask. So no `GIT_` variable of the caller's reaches them, `git`
+    never looks above the case's directory, and neither tool reads the
+    operator's configuration.
+    """
+    for name in [name for name in os.environ if name.startswith('GIT_')]:
+        monkeypatch.delenv(name)
+    # `git` does not move up *into* a ceiling, so the case's own directory is
+    # the last one it looks in.
+    monkeypatch.setenv('GIT_CEILING_DIRECTORIES', str(tmp_path.parent))
+    monkeypatch.setenv('GIT_CONFIG_GLOBAL', os.devnull)
+    monkeypatch.setenv('GIT_CONFIG_NOSYSTEM', '1')
+    monkeypatch.setenv('JJ_CONFIG', os.devnull)
 
 
 @pytest.fixture(autouse=True)
@@ -188,8 +217,10 @@ class FakePulumi:
 
 
 def _git(*args: str, cwd: Path) -> str:
-    return sp.run(
-        ['git', *args], cwd=cwd, env=os.environ | GIT_ENV, capture_output=True, text=True, check=True, timeout=60
+    # Through a POSIX session of its own: a push, a fetch or a clone starts
+    # processes of its own (`git-receive-pack`, `git-upload-pack`).
+    return process_sessions.run(
+        ['git', *args], cwd=cwd, env=os.environ | GIT_ENV, text=True, check=True, timeout=60
     ).stdout
 
 
@@ -726,19 +757,13 @@ def test_in_a_jj_checkout_the_working_copy_is_jjs(repository: Repository, commit
     # forge's main is checked against it, as it is where a run's checkpoint
     # sits.
     jj_env = os.environ | {'JJ_CONFIG': os.devnull, 'JJ_USER': 'probe', 'JJ_EMAIL': 'probe@example.invalid'}
-    _ = sp.run(
-        ['jj', 'git', 'init', '--colocate'],
-        cwd=repository.checkout,
-        env=jj_env,
-        capture_output=True,
-        check=True,
-        timeout=60,
+    _ = process_sessions.run(
+        ['jj', 'git', 'init', '--colocate'], cwd=repository.checkout, env=jj_env, check=True, timeout=60
     )
-    at = sp.run(
+    at = process_sessions.run(
         ['jj', 'log', '--no-graph', '-r', '@', '-T', 'commit_id'],
         cwd=repository.checkout,
         env=jj_env,
-        capture_output=True,
         text=True,
         check=True,
         timeout=60,
@@ -754,7 +779,9 @@ def test_in_a_jj_checkout_the_working_copy_is_jjs(repository: Repository, commit
 
 
 def _jj(*args: str, cwd: Path) -> str:
-    return sp.run(['jj', *args], cwd=cwd, capture_output=True, text=True, check=True, timeout=60).stdout
+    # Through a POSIX session of its own: `jj git fetch` runs `git fetch`,
+    # which starts processes of its own.
+    return process_sessions.run(['jj', *args], cwd=cwd, text=True, check=True, timeout=60).stdout
 
 
 @pytest.mark.skipif(shutil.which('jj') is None, reason='jj is not on PATH')
@@ -789,14 +816,30 @@ def test_a_primary_working_copy_another_workspace_rewrote_is_refused(
         checkpoint.require_current(primary, ours)
 
 
+#: How long the stand-in below runs before it ends by itself: a bound on a
+#: stand-in whose case can no longer kill it, since an outright kill of the
+#: test process runs no clean-up. A stop-loss, far above the case, and
+#: nothing waits on it: the ^C ends it first.
+STAND_IN_LIFETIME = 300
+
 #: A `pulumi` that answers ^C the way the real one does, by finishing what it
-#: has in flight before it exits: it takes a second over it, and says so in a
-#: file once it has. One killed part-way through never writes that file.
-PULUMI_ANSWERING_SIGINT = """\
+#: has in flight before it exits: it takes a second over it -- longer than the
+#: quarter-second after which `subprocess.run` would kill it, which is the
+#: regression the case catches -- and says so once it has. Its lifetime is a
+#: `sleep` it starts in the background, which a shell without job control
+#: starts with ^C ignored, so the trap ends it: left running, it would hold
+#: the driver's standard output, and the case's read after the ^C with it.
+#: Everything is in place before it says it has started, on the standard
+#: output the driver hands it, so a ^C at any moment after that line meets
+#: the trap.
+PULUMI_ANSWERING_SIGINT = f"""\
 #!/bin/sh
-trap 'sleep 1; echo finished > "$MARKS/finished"; exit 3' INT
-echo started > "$MARKS/started"
-while :; do sleep 0.1; done
+sleep {STAND_IN_LIFETIME} &
+lifetime=$!
+trap 'kill $lifetime 2>/dev/null; sleep 1; echo finished; exit 3' INT
+echo started
+wait $lifetime
+exit 4
 """
 
 #: The driver's `Cli` streaming a run of it, in a process of its own.
@@ -807,28 +850,34 @@ from kluster.scripts.operator_stack import driver
 sys.exit(driver.Cli().stream(['up'], cwd=Path.cwd(), env=dict(os.environ)))
 """
 
+#: How long the case waits on the driver once it has sent ^C: a stop-loss
+#: below the case bound, which nothing asserts on.
+SIGINT_WAIT = 30
+
 
 def test_a_sigint_during_a_run_is_pulumis_to_answer(tmp_path: Path) -> None:
     # The terminal sends ^C to the whole foreground process group; the driver
     # lets `pulumi` finish answering it, and returns what `pulumi` exits with.
-    bin_dir, marks = tmp_path / 'bin', tmp_path / 'marks'
+    # The driver leads a POSIX session of its own, and the stand-in runs in
+    # its process group, so `killpg` on the session's id is that ^C.
+    bin_dir = tmp_path / 'bin'
     bin_dir.mkdir()
-    marks.mkdir()
     stand_in = bin_dir / 'pulumi'
     _ = stand_in.write_text(PULUMI_ANSWERING_SIGINT)
     stand_in.chmod(0o755)
-    env = os.environ | {'PATH': f'{bin_dir}:{os.environ["PATH"]}', 'MARKS': str(marks)}
-    with sp.Popen([sys.executable, '-c', STREAMING], cwd=tmp_path, env=env, start_new_session=True) as running:
-        # Stop-loss only: the run is waited on by its own marker.
-        for _ in range(600):
-            if (marks / 'started').exists() or running.poll() is not None:
-                break
-            time.sleep(0.05)
-        assert (marks / 'started').exists(), 'the stand-in never started'
+    env = os.environ | {'PATH': f'{bin_dir}:{os.environ["PATH"]}'}
+    with process_sessions.started(
+        [sys.executable, '-c', STREAMING], cwd=tmp_path, env=env, stdout=process_sessions.PIPE, text=True
+    ) as running:
+        assert running.stdout is not None
+        # An event: the stand-in's own line. It meets EOF instead if the
+        # driver ends before starting it, and the case fails here by name.
+        assert running.stdout.readline() == 'started\n', 'the stand-in never started'
         os.killpg(running.pid, signal.SIGINT)
-        code = running.wait(timeout=30)
+        code = running.wait(timeout=SIGINT_WAIT)
+        answered = running.stdout.read()
 
-    assert (marks / 'finished').exists(), 'pulumi was killed before it finished answering ^C'
+    assert answered == 'finished\n', 'pulumi was killed before it finished answering ^C'
     assert code == 3
 
 
@@ -1222,12 +1271,52 @@ class Scratch:
         return {path.name for path in self.path.parent.iterdir()}
 
 
+class Bounded:
+    """The driver's `Pulumi` for a case: the pinned CLI, each command in a POSIX session of its own.
+
+    The production `Cli` waits on an operator's run with no bound, which is
+    right at a terminal and wrong in a case: a stalled command would hang the
+    case past its bound. Here every command goes through
+    `process_sessions.run` at `ENGINE_COMMAND_TIMEOUT`, so a stall fails as a
+    `TimeoutExpired` naming it, and nothing the command started -- the
+    language host, a dynamic provider -- outlives the call. What the driver
+    reads it reads the same way: `events` hands back standard output,
+    `capture` refuses a failure naming the command and its standard error,
+    and `stream`'s output is the case's.
+    """
+
+    def _run(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str]) -> sp.CompletedProcess[str]:
+        return process_sessions.run(['pulumi', *args], cwd=cwd, env=env, text=True, timeout=ENGINE_COMMAND_TIMEOUT)
+
+    def stream(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str]) -> int:
+        ran = self._run(args, cwd=cwd, env=env)
+        _ = sys.stdout.write(ran.stdout)
+        _ = sys.stderr.write(ran.stderr)
+        return ran.returncode
+
+    def events(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str]) -> tuple[int, str]:
+        ran = self._run(args, cwd=cwd, env=env)
+        _ = sys.stderr.write(ran.stderr)
+        return ran.returncode, ran.stdout
+
+    def capture(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str]) -> str:
+        ran = self._run([*args, '--non-interactive'], cwd=cwd, env=env)
+        if ran.returncode != 0:
+            raise driver.Refused(f'`pulumi {" ".join(args[:2])}` failed: {ran.stderr.strip() or ran.returncode}')
+        return ran.stdout
+
+
 def _initialized(repository: Repository, stack: str, tmp_path: Path, program: str) -> Scratch:
     """`program` as `probe`'s, with its stack initialized and nothing applied."""
     if shutil.which('pulumi') is None or shutil.which('uv') is None:
         pytest.skip('the pinned pulumi CLI or uv is not on PATH')
     venv = tmp_path / 'venv'
-    _ = sp.run(['uv', 'venv', '-q', '--python', sys.executable, str(venv)], check=True, timeout=60)
+    # `uv` keeps what it learns of an interpreter in its cache, which is the
+    # case's own here, as it is for the language host's `uv` below.
+    uv_env = os.environ | {'UV_CACHE_DIR': str(tmp_path / 'uv-cache')}
+    _ = process_sessions.run(
+        ['uv', 'venv', '-q', '--python', sys.executable, str(venv)], env=uv_env, timeout=60, check=True
+    )
     (site_packages,) = venv.glob('lib/python*/site-packages')
     _ = (site_packages / 'test_run.pth').write_text('\n'.join(site.getsitepackages()) + '\n')
     checkout = repository.checkout
@@ -1236,13 +1325,14 @@ def _initialized(repository: Repository, stack: str, tmp_path: Path, program: st
     _ = (checkout / 'pyproject.toml').write_text(
         PYPROJECT.format(major=sys.version_info.major, minor=sys.version_info.minor)
     )
-    _ = sp.run(['uv', 'lock', '-q', '--offline'], cwd=checkout, check=True, timeout=60)
+    _ = process_sessions.run(['uv', 'lock', '-q', '--offline'], cwd=checkout, env=uv_env, timeout=60, check=True)
     base = dict(os.environ) | {
         'PULUMI_HOME': str(tmp_path / 'pulumi-home'),
         'PULUMI_SKIP_UPDATE_CHECK': 'true',
         'UV_OFFLINE': '1',
+        'UV_CACHE_DIR': uv_env['UV_CACHE_DIR'],
     }
-    made = Scratch(run=driver.Run.open(stack, checkout, base=base), checkout=checkout, base=base)
+    made = Scratch(run=driver.Run.open(stack, checkout, base=base, pulumi=Bounded()), checkout=checkout, base=base)
     assert made.run.passthrough(['stack', 'init']) == 0
     return made
 
@@ -1354,16 +1444,23 @@ REDRAW = re.compile(rb'\x1b\[\d+A')
 COLOUR = re.compile(rb'\x1b\[38;5;\d+m')
 
 
-def _drained(reader: int, child: sp.Popen[bytes]) -> bytes:
-    """Everything written to `reader` until its last writer is gone, or a failure naming the run at the bound."""
+def _drained(reader: int, command: process_sessions.Command) -> bytes:
+    """Everything written to `reader` until its last writer is gone, or a `TimeoutExpired` naming the run.
+
+    The bound is on the whole read, `ENGINE_COMMAND_TIMEOUT` from its start,
+    not on a silence: a stalled `pulumi` is not silent, since its display
+    redraws at a terminal and prints `@ updating....` under a pipe. The
+    `started` block the timeout is raised in then ends the run's whole
+    session.
+    """
     read = b''
+    deadline = time.monotonic() + ENGINE_COMMAND_TIMEOUT
     with selectors.DefaultSelector() as selector:
         _ = selector.register(reader, selectors.EVENT_READ)
         while True:
-            if not selector.select(timeout=ENGINE_COMMAND_TIMEOUT):
-                os.killpg(child.pid, signal.SIGKILL)
-                _ = child.wait(timeout=ENGINE_COMMAND_TIMEOUT)
-                raise AssertionError(f'the driver wrote nothing for {ENGINE_COMMAND_TIMEOUT} s:\n{read.decode()}')
+            left = deadline - time.monotonic()
+            if left <= 0 or not selector.select(timeout=left):
+                raise sp.TimeoutExpired(command.args, ENGINE_COMMAND_TIMEOUT, output=read)
             try:
                 chunk = os.read(reader, 65536)
             except OSError:  # a pty whose last writer is gone reads as EIO
@@ -1393,32 +1490,30 @@ def test_a_real_up_hands_pulumi_the_drivers_own_output_and_reads_what_it_needs_f
     program = UP_IN_A_PROCESS.format(
         tests=str(Path(__file__).parent), stack=PROBE, checkout=str(scratch.checkout), base=json.dumps(env)
     )
+    # The driver's standard streams: a terminal of real dimensions, or a pipe.
     if terminal:
         reader, writer = pty.openpty()
         fcntl.ioctl(writer, termios.TIOCSWINSZ, struct.pack('HHHH', 40, 120, 0, 0))
-        child = sp.Popen(
-            [sys.executable, '-c', program], stdin=writer, stdout=writer, stderr=writer, env=env, start_new_session=True
-        )
-        os.close(writer)
     else:
-        child = sp.Popen(
-            [sys.executable, '-c', program],
-            stdin=sp.DEVNULL,
-            stdout=sp.PIPE,
-            stderr=sp.STDOUT,
-            env=env,
-            start_new_session=True,
-        )
-        assert child.stdout is not None
-        reader = child.stdout.fileno()
+        reader, writer = os.pipe()
     try:
-        shown = _drained(reader, child)
-        code = child.wait(timeout=ENGINE_COMMAND_TIMEOUT)
+        with process_sessions.started(
+            [sys.executable, '-c', program],
+            env=env,
+            stdin=writer if terminal else process_sessions.DEVNULL,
+            stdout=writer,
+            stderr=process_sessions.STDOUT,
+        ) as command:
+            # The driver holds its own copy; with this one closed, the read
+            # meets its end once every writer in the run is gone.
+            os.close(writer)
+            writer = -1
+            shown = _drained(reader, command)
+            code = command.wait(timeout=ENGINE_COMMAND_TIMEOUT)
     finally:
-        if terminal:
-            os.close(reader)
-        elif child.stdout is not None:
-            child.stdout.close()
+        os.close(reader)
+        if writer >= 0:
+            os.close(writer)
 
     assert code == 0, shown.decode()
     assert b'applying the probe stack' in shown, shown.decode()
@@ -1450,7 +1545,7 @@ def test_a_real_run_under_a_callers_state_switch_writes_the_checkpoint_the_check
 ) -> None:
     # Each switch would write the stack's state as a file beside the
     # checkpoint, or in its place, where the checks never look.
-    run = driver.Run.open(PROBE, scratch.checkout, base=scratch.base | switch)
+    run = driver.Run.open(PROBE, scratch.checkout, base=scratch.base | switch, pulumi=Bounded())
     scratch.settings(gen='g2')
 
     assert run.passthrough(['up', '--yes', '--skip-preview']) == 0
@@ -1533,9 +1628,7 @@ UP = ('pulumi', 'up', '--yes', '--skip-preview', '--non-interactive', '--stack',
 def _echo_up(scratch: Scratch, shape: str, copy: Path | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
     """The checkpoint the engine writes for `shape`, and the echo resource in it."""
     _echo_settings(scratch, shape, copy)
-    up = sp.run(
-        UP, cwd=scratch.checkout, env=scratch.run.env, capture_output=True, text=True, timeout=ENGINE_COMMAND_TIMEOUT
-    )
+    up = process_sessions.run(UP, cwd=scratch.checkout, env=scratch.run.env, text=True, timeout=ENGINE_COMMAND_TIMEOUT)
     assert up.returncode == 0, up.stdout + up.stderr
     document = json.loads(scratch.path.read_text())
     (resource,) = [r for r in checkpoint.resources(document) if r['urn'].endswith('::echo')]
@@ -2105,7 +2198,7 @@ class AsTheBox:
     resource. Every other field of every event is the engine's own.
     """
 
-    cli: driver.Cli = field(default_factory=driver.Cli)
+    cli: driver.Pulumi = field(default_factory=Bounded)
     printed: list[str] = field(default_factory=list[str])
 
     def stream(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str]) -> int:
