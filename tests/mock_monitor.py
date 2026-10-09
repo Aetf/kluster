@@ -580,12 +580,39 @@ async def declaring() -> AsyncGenerator[None]:
     process-global and holds, among other things, the deliberately failing
     outputs other modules park in it, so draining it wholesale would fail a
     suite for something another suite arranged on purpose.
+
+    An exception that leaves the block is re-raised only after the same wait,
+    because the read after a refused block is an absence read -- that the
+    refusal declared nothing -- and before the wait it passes whatever the
+    block declared. It is the block's exception that leaves, since that is the
+    one a case's `pytest.raises` around the block waits for; a failure the wait
+    meets on that path is added to it as a note instead. Catching the refusal
+    inside the block, ``async with declaring(): with pytest.raises(...): ...``,
+    lets the block end normally, so the wait runs as on any other exit and a
+    failure it meets is raised as it is. An exception that is not an
+    `Exception` -- a cancellation, an interrupt, a case's timeout -- leaves at
+    once, without the wait.
     """
     before = asyncio.all_tasks()
-    yield
-    pending = asyncio.all_tasks() - before - {asyncio.current_task()}
-    _ = await asyncio.gather(*pending)
+    try:
+        yield
+    except Exception as escaped:
+        outcomes = await asyncio.gather(*_added_since(before), return_exceptions=True)
+        try:
+            await wait_for_rpcs(await_all_outstanding_tasks=False)
+        except Exception as failure:  # noqa: BLE001 -- kept, as a note on the exception that does leave
+            outcomes.append(failure)
+        for outcome in outcomes:
+            if isinstance(outcome, BaseException):
+                escaped.add_note(f'and the wait for what the block declared failed: {outcome!r}')
+        raise
+    _ = await asyncio.gather(*_added_since(before))
     await wait_for_rpcs(await_all_outstanding_tasks=False)
+
+
+def _added_since(before: set[asyncio.Task[Any]]) -> set[asyncio.Task[Any]]:
+    """The tasks started since `before` was taken, other than the one asking."""
+    return asyncio.all_tasks() - before - {asyncio.current_task()}
 
 
 def decline_every_invoke() -> None:
