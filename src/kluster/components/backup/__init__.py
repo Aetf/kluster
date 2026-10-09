@@ -56,10 +56,6 @@ from putils import Component, own_provider_opts, with_provider
 #: before every write, so a key without them cannot take a backup at all.
 WRITER_CAPABILITIES: tuple[str, ...] = ('listFiles', 'readFiles', 'writeFiles')
 
-#: The capability no key in any automation carries. Named rather than merely
-#: absent, so the rule can be asserted instead of remembered.
-FORBIDDEN_CAPABILITY = 'deleteFiles'
-
 #: Unfinished large files are the invisible half of an object-storage bill: a
 #: multipart upload killed mid-flight bills for its parts forever and appears
 #: in no listing. A day is far longer than any mover's retry window.
