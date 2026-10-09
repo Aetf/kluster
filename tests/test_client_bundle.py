@@ -22,6 +22,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from kluster.lib.bundle import KEY_FILE, URL_FILE, ssl_env
+from kluster.lib.state_backend import settings
 from kluster.scripts.credentials import pki
 from kluster.scripts.state_backend import config
 
@@ -65,7 +66,7 @@ def test_the_url_pins_the_server_by_address(authority: pki.Authority, tmp_path: 
     config.write_client_bundle(config.client_bundle(authority, name='ci', address='192.0.2.10'), tmp_path)
 
     url = (tmp_path / URL_FILE).read_text().strip()
-    assert url.startswith('postgres://ci@192.0.2.10:5432/')
+    assert url.startswith(f'postgres://ci@192.0.2.10:{settings.PORT}/')
     assert _query(url)['sslmode'] == 'verify-full'
 
 

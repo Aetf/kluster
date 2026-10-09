@@ -283,7 +283,7 @@ def test_ssh_holds_the_box_to_the_committed_host_key(execed: list[list[str]], ho
     known_hosts = Path(named[0])
     # The tool's own file, in the slot that holds this box's client bundle --
     # never the operator's, which the tool neither reads nor writes.
-    assert known_hosts == tmp_path / '.credentials' / 'state-backend' / config.KNOWN_HOSTS_FILE
+    assert known_hosts == tmp_path / '.credentials' / workstation.BUNDLE / config.KNOWN_HOSTS_FILE
     assert known_hosts.read_text() == f'{settings.ADDRESS} {PIN}\n'
 
 
@@ -310,9 +310,11 @@ def test_the_refusal_is_framed_before_the_connection_is_made(
 def test_ssh_with_no_committed_host_key_is_refused_before_it_pins_anything(
     execed: list[list[str]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Silence is the state the pin exists to rule out, and the refusal names what writes the file.
+    """Silence is the state the pin exists to rule out: one line through `main`, not a traceback.
 
-    One line through `main`, not a traceback.
+    That the refusal names the command writing the file is held by
+    `test_derived`'s `test_check_refuses_while_no_host_key_file_exists`,
+    against the writer's own spelling of the row.
     """
     monkeypatch.setattr(committed, 'HOST_KEY', tmp_path / 'host-key.txt')
     caplog.set_level(logging.ERROR)
@@ -320,9 +322,8 @@ def test_ssh_with_no_committed_host_key_is_refused_before_it_pins_anything(
     assert cli.main(['ssh']) == 1
 
     assert execed == []
-    assert not (tmp_path / '.credentials' / 'state-backend' / config.KNOWN_HOSTS_FILE).exists()
+    assert not (tmp_path / '.credentials' / workstation.BUNDLE / config.KNOWN_HOSTS_FILE).exists()
     [record] = caplog.records
-    assert f'credentials derived {committed.HOST_KEY_ROW} generate' in record.getMessage()
     assert record.exc_info is None
 
 
@@ -440,7 +441,7 @@ def test_two_live_holders_of_a_name_are_refused_naming_both(existing: adopt.Clie
     ]
 
     with pytest.raises(
-        adopt.Refused, match=r'2 live resources carry the name state-backend-subnet \(.*-available, .*-updating\)'
+        adopt.Refused, match=rf'2 live resources carry the name {settings.NAME}-subnet \(.*-available, .*-updating\)'
     ):
         _ = adopt.find(existing, COMPARTMENT)
 
@@ -450,7 +451,7 @@ def test_a_name_nothing_live_carries_is_refused(existing: adopt.Clients) -> None
         [_resource('internetgateway', f'{settings.NAME}-igw', state='TERMINATED')]
     ]
 
-    with pytest.raises(adopt.Refused, match='no live internet gateway carries the name state-backend-igw'):
+    with pytest.raises(adopt.Refused, match=f'no live internet gateway carries the name {settings.NAME}-igw'):
         _ = adopt.find(existing, COMPARTMENT)
 
 

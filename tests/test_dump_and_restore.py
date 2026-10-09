@@ -14,9 +14,11 @@ a restore refuses to land on top of live state, and it finishes by asking
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess as sp
 from collections.abc import Callable, Mapping, Sequence
@@ -29,7 +31,7 @@ from memory_kit import MemoryKit
 from state_dump_box import CHECKPOINT, CHECKPOINT_BAK, META, OPENED, SERVING, UNOPENED, rows
 
 from kluster.lib.bundle import CA_FILE, CERT_FILE, KEY_FILE, URL_FILE
-from kluster.lib.state_backend import settings, state
+from kluster.lib.state_backend import render, settings, state
 from kluster.scripts.credentials import age, escrow
 from kluster.scripts.credentials.kdbx import PATH_ENV, KdbxStore
 from kluster.scripts.state_backend import cli
@@ -248,7 +250,7 @@ def registry(kit: KdbxStore, tmp_path: Path) -> escrow.Registry:
 def bundle(tmp_path: Path) -> Path:
     directory = tmp_path / 'bundle'
     directory.mkdir()
-    _ = (directory / 'backend-url').write_text(f'{URL}\n')
+    _ = (directory / URL_FILE).write_text(f'{URL}\n')
     return directory
 
 
@@ -464,25 +466,12 @@ def test_a_restore_decrypts_verifies_and_lands_the_archive(
     assert '--single-transaction' in landing
     assert '--clean' in landing
     assert '--if-exists' in landing
-
-
-def test_a_restore_lands_an_archive_whose_objects_a_client_role_owns(
-    double: Callable[..., Double], kit: KdbxStore, registry: escrow.Registry, bundle: Path, tmp_path: Path
-) -> None:
-    """An archive from a box whose client roles were superusers still restores.
-
-    Such a box's archive names `ci` or `operator` as the owner of its tables
-    (`LISTING` names `ci`), and the operator's restore connects as a role that
-    is no superuser and cannot become either. The objects go to the owner the
-    box's own roles act as, so the archive's ownership is not replayed.
-    """
-    tools = double()
-    dump = tmp_path / 'taken.dump.age'
-    assert _dump(kit, registry, bundle, dump) == 0
-
-    assert _restore(kit, registry, bundle, dump) == 0
-
-    assert tools.restored == ARCHIVE
+    # An archive from a box whose client roles were superusers names `ci` or
+    # `operator` as the owner of its tables (`LISTING` names `ci`), and the
+    # operator's restore connects as a role that is no superuser and cannot
+    # become either. The objects go to the owner the box's own roles act as,
+    # so the archive's ownership is not replayed.
+    assert '--no-owner' in landing
 
 
 def _printing(printed: str, monkeypatch: pytest.MonkeyPatch) -> state.Connection:
@@ -813,26 +802,67 @@ def test_every_slow_step_announces_itself_before_it_starts(
 
 
 def test_the_default_name_is_the_one_the_appliance_uses() -> None:
+    """The stamp and the suffix are the appliance's own, read off the script that names its objects.
+
+    `state-dump.sh` names each object `$B2_PREFIX/<stamp><suffix>`, with the
+    stamp from `date -u +<format>`; a local dump keeps both so that the two
+    sort and read the same way, and prefixes the appliance's name.
+    """
     import datetime as dt
 
-    name = state.dump_name(dt.datetime(2026, 8, 26, 2, 30, tzinfo=dt.UTC))
+    script = render.machine_file(render.DUMP_SCRIPT)
+    (stamp_format,) = re.findall(r'^\s*stamp=\$\(date -u \+(\S+)\)$', script, re.MULTILINE)
+    (suffix,) = re.findall(r'^\s*name="\$B2_PREFIX/\$stamp([^"$]+)"$', script, re.MULTILINE)
+    now = dt.datetime(2026, 8, 26, 2, 30, tzinfo=dt.UTC)
 
-    assert name == f'{settings.NAME}-20260826T023000Z.dump.age'
+    assert state.dump_name(now) == f'{settings.NAME}-{now.strftime(stamp_format)}{suffix}'
 
 
-def test_both_commands_are_on_the_command_line() -> None:
-    # Cheap, and it is what fails first when a parser and a handler disagree
-    # about what an argument is called.
-    parsed = cli.build_parser().parse_args(['dump'])  # pyright: ignore[reportPrivateUsage]
-    assert (parsed.action, parsed.output) == ('dump', None)
+def test_the_dump_and_the_kit_restore_hand_their_handlers_what_the_command_line_said(
+    registry: escrow.Registry, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`main` reads each argument by its parser's name and hands it on under its handler's.
 
-    parsed = cli.build_parser().parse_args(['restore', 'a.dump.age', '--force'])  # pyright: ignore[reportPrivateUsage]
-    assert (parsed.action, parsed.dump, parsed.identity_file, parsed.force) == (
-        'restore',
-        Path('a.dump.age'),
-        None,
-        True,
-    )
+    Each handler is replaced by one that binds the call against the real
+    handler's signature, so a name changed on one side and not the other
+    fails here: a dest the parser no longer sets fails as `main` reads it, and
+    a parameter the handler no longer takes fails the bind.
+    """
+    kit = MemoryKit()
+    handed: dict[str, dict[str, object]] = {}
+
+    def recording(name: str, real: Callable[..., int]) -> Callable[..., int]:
+        def record(*args: object, **kwargs: object) -> int:
+            handed[name] = dict(inspect.signature(real).bind(*args, **kwargs).arguments)
+            return 0
+
+        return record
+
+    monkeypatch.setattr(cli, '_dump', recording('dump', cli._dump))  # pyright: ignore[reportPrivateUsage]
+    monkeypatch.setattr(cli, '_restore', recording('restore', cli._restore))  # pyright: ignore[reportPrivateUsage]
+
+    def the_kit(_path: Path | None = None) -> KdbxStore:
+        return kit
+
+    def the_registry(_root: Path | None = None) -> escrow.Registry:
+        return registry
+
+    monkeypatch.setattr(cli.KdbxStore, 'from_env', the_kit)
+    monkeypatch.setattr(cli.escrow.Registry, 'open', the_registry)
+    bundle, output, dump = tmp_path / 'bundle', tmp_path / 'taken.dump.age', tmp_path / 'a.dump.age'
+
+    assert cli.main(['dump', '--output', str(output), '--bundle', str(bundle)]) == 0
+    assert cli.main(['restore', str(dump), '--force', '--bundle', str(bundle)]) == 0
+
+    assert handed['dump'] == {'store': kit, 'registry': registry, 'bundle_dir': bundle, 'output': output}
+    assert handed['restore'] == {
+        'store': kit,
+        'registry': registry,
+        'bundle_dir': bundle,
+        'source': dump,
+        'identity': None,
+        'force': True,
+    }
 
 
 def test_a_bundle_that_is_not_there_names_the_command_that_writes_one(tmp_path: Path) -> None:

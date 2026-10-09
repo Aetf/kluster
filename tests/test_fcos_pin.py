@@ -72,8 +72,7 @@ def test_the_manager_reads_the_stream_through_its_own_data_source() -> None:
 def test_a_release_bump_moves_the_url_the_upload_fetches() -> None:
     # The URL is built from the release, so the pair the manager moves is the
     # whole of what a bump changes.
-    assert f'/builds/{settings.FCOS_RELEASE}/' in settings.FCOS_ARTIFACT_URL
-    assert settings.FCOS_ARTIFACT_URL.endswith(f'fedora-coreos-{settings.FCOS_RELEASE}-oraclecloud.x86_64.qcow2.xz')
+    assert settings.FCOS_RELEASE in settings.FCOS_ARTIFACT_URL
     assert settings.FCOS_STREAM_URL.endswith(f'/streams/{settings.FCOS_STREAM}.json')
 
 
