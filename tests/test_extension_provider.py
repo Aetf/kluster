@@ -53,6 +53,7 @@ from typing import Any, cast
 
 import process_sessions
 import pytest
+from scratch_projects import LEFT_BEHIND, cli_directories
 
 pytestmark = pytest.mark.skipif(
     shutil.which('pulumi') is None or shutil.which('uv') is None, reason='the pinned pulumi CLI or uv is not on PATH'
@@ -212,10 +213,17 @@ def _uv(*args: str, cwd: Path | None = None) -> None:
 
 @dataclass
 class Extension:
-    """The generated extension SDK, and the home holding the plugin it was generated with."""
+    """The generated extension SDK, the home holding the plugin it was generated with, and where its temporary files went.
+
+    `outer` is the `TMPDIR` the module's commands would have had without
+    their own: a directory nothing writes to unless the CLI's temporary files
+    escape the module's `temporary`.
+    """
 
     sdk: Path
     home: Path
+    temporary: Path
+    outer: Path
 
 
 @pytest.fixture(scope='module')
@@ -223,16 +231,22 @@ def extension(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Extension]:
     root = tmp_path_factory.mktemp('extension')
     manifest = root / 'crd.yaml'
     _ = manifest.write_text(CRD)
-    home = root / 'pulumi-home'
+    outer = root / 'outer'
+    outer.mkdir()
+    directories = cli_directories(root)
     # A backend of the module's own: with none, and a coding agent's variable in
     # the environment, the pinned CLI signs up an ephemeral Pulumi Cloud account
     # (`currentOrSignupAgentAccount`, pkg/backend/httpstate/backend.go), an
     # outward write no test may make.
-    env = _scrubbed(os.environ) | {
-        'PULUMI_BACKEND_URL': f'file://{root / "state"}',
-        'PULUMI_HOME': str(home),
-        'PULUMI_SKIP_UPDATE_CHECK': 'true',
-    }
+    env = (
+        _scrubbed(os.environ)
+        | {'TMPDIR': str(outer)}
+        | directories
+        | {
+            'PULUMI_BACKEND_URL': f'file://{root / "state"}',
+            'PULUMI_SKIP_UPDATE_CHECK': 'true',
+        }
+    )
     (root / 'state').mkdir()
     source = f'kubernetes@{PLUGIN}'
     generated = _pulumi(
@@ -253,7 +267,12 @@ def extension(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Extension]:
         + generated.stdout
         + generated.stderr
     )
-    yield Extension(sdk=root / 'sdk' / 'python', home=home)
+    yield Extension(
+        sdk=root / 'sdk' / 'python',
+        home=Path(directories['PULUMI_HOME']),
+        temporary=Path(env['TMPDIR']),
+        outer=outer,
+    )
     # The plugin is hundreds of megabytes unpacked: gone with the module, not
     # left for the temporary directory's retention.
     shutil.rmtree(root, ignore_errors=True)
@@ -284,13 +303,16 @@ def preview(extension: Extension, tmp_path: Path, spelling: str) -> sp.Completed
     )
     _uv('lock', '-q', '--offline', cwd=project)
     (tmp_path / 'state').mkdir()
-    env = _scrubbed(os.environ) | {
-        'PULUMI_BACKEND_URL': f'file://{tmp_path / "state"}',
-        'PULUMI_HOME': str(extension.home),
-        'PULUMI_CONFIG_PASSPHRASE': PASSPHRASE,
-        'PULUMI_SKIP_UPDATE_CHECK': 'true',
-        'UV_OFFLINE': '1',
-    }
+    env = (
+        _scrubbed(os.environ)
+        | cli_directories(tmp_path, home=extension.home)
+        | {
+            'PULUMI_BACKEND_URL': f'file://{tmp_path / "state"}',
+            'PULUMI_CONFIG_PASSPHRASE': PASSPHRASE,
+            'PULUMI_SKIP_UPDATE_CHECK': 'true',
+            'UV_OFFLINE': '1',
+        }
+    )
     # The backend in hand is the case's own, and holds nothing yet
     # (framework/testing.md §5.1).
     listed = _pulumi('stack', 'ls', '--all', '--json', cwd=project, env=env)
@@ -317,11 +339,14 @@ def test_an_extension_resource_lands_on_the_explicit_provider_it_is_handed(
 
 @pytest.mark.timeout(CASE_TIMEOUT)
 def test_the_extension_is_generated_by_the_plugin_the_lock_registers(extension: Extension, tmp_path: Path) -> None:
-    env = _scrubbed(os.environ) | {
-        'PULUMI_BACKEND_URL': f'file://{tmp_path}',
-        'PULUMI_HOME': str(extension.home),
-        'PULUMI_SKIP_UPDATE_CHECK': 'true',
-    }
+    env = (
+        _scrubbed(os.environ)
+        | cli_directories(tmp_path, home=extension.home)
+        | {
+            'PULUMI_BACKEND_URL': f'file://{tmp_path}',
+            'PULUMI_SKIP_UPDATE_CHECK': 'true',
+        }
+    )
     listed = _pulumi('plugin', 'ls', '--json', cwd=tmp_path, env=env)
     assert listed.returncode == 0, listed.stderr
     plugins = cast('list[dict[str, Any]]', json.loads(listed.stdout))
@@ -330,3 +355,16 @@ def test_the_extension_is_generated_by_the_plugin_the_lock_registers(extension: 
     ]
     registered = json.loads((extension.sdk / 'pulumi_crds' / 'pulumi-plugin.json').read_text())
     assert (registered['name'], registered['version']) == ('kubernetes', PLUGIN)
+
+
+@pytest.mark.timeout(CASE_TIMEOUT)
+def test_what_the_gen_sdk_leaves_behind_is_in_the_modules_own_temporary_directory(extension: Extension) -> None:
+    # `gen-sdk` keeps the plugin's tarball after it unpacks it. With `TMPDIR`
+    # its own, that file is the module's, removed with it; without, it lands
+    # in the directory the module would otherwise have used.
+    escaped = sorted(path.name for path in extension.outer.iterdir() if path.name.startswith(LEFT_BEHIND))
+    kept = sorted(path.name for path in extension.temporary.iterdir() if path.name.startswith(LEFT_BEHIND))
+
+    assert escaped == []
+    # Not vacuous: the gen-sdk left something, and it is in the module's own.
+    assert [name for name in kept if name.startswith('pulumi-plugin-tar')], kept

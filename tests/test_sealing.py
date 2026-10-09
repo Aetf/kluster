@@ -43,6 +43,7 @@ from cryptography.x509.oid import NameOID
 from fake_pulumi import RecordedPulumi
 from memory_kit import MemoryKit
 from pulumi.runtime import rpc
+from scratch_projects import cli_directories
 
 from kluster import conventions
 from kluster.scripts.credentials import cloudflare, derived, devices, pulumi_config, sealing
@@ -333,7 +334,8 @@ def test_the_write_is_held_to_what_the_real_cli_accepts(
     _ = (project / 'Pulumi.yaml').write_text('name: sealing-probe\nruntime: python\n')
     state = tmp_path / 'state'
     state.mkdir()
-    monkeypatch.setenv('PULUMI_HOME', str(tmp_path / 'home'))
+    for variable, directory in cli_directories(tmp_path).items():
+        monkeypatch.setenv(variable, directory)
     monkeypatch.setenv('PULUMI_SKIP_UPDATE_CHECK', 'true')
     environment = pulumi_config.BackendEnvironment(
         passphrase='probe-passphrase', url=state.as_uri(), physical=lambda: 'probe-physical-passphrase'

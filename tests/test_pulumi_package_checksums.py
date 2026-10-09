@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pinned_tools
 import pytest
+from scratch_projects import cli_directories
 
 #: The sha256 of the bridge plugin's `linux-amd64` archive at the release the
 #: block pins. Any 32 bytes would do: the entry is refused before anything is
@@ -56,7 +57,7 @@ def load(pulumi: str, project: str, directory: Path) -> subprocess.CompletedProc
     _ = (directory / 'Pulumi.yaml').write_text(project)
     env = {
         **os.environ,
-        'PULUMI_HOME': str(directory / 'home'),
+        **cli_directories(directory),
         'PULUMI_BACKEND_URL': f'file://{directory / "state"}',
         'PULUMI_SKIP_UPDATE_CHECK': '1',
     }

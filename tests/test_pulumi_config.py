@@ -24,6 +24,7 @@ from pathlib import Path
 import pytest
 from credentials_command_tree import named_leaves
 from fake_pulumi import RecordedPulumi
+from scratch_projects import cli_directories
 
 from kluster.conventions import identity
 from kluster.lib import pulumi_cli, stack_environment, workstation
@@ -212,7 +213,8 @@ def live_stack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> pulumi_config
     # file or their selected stack. It goes in the ambient environment because
     # it is not part of what a `credentials` run knows -- `run_pulumi` overlays
     # the stack's own variables on whatever is already there.
-    monkeypatch.setenv('PULUMI_HOME', str(tmp_path / 'home'))
+    for variable, directory in cli_directories(tmp_path).items():
+        monkeypatch.setenv(variable, directory)
     monkeypatch.setenv('PULUMI_SKIP_UPDATE_CHECK', 'true')
     return pulumi_config.Stack(
         name=STACK,
@@ -255,7 +257,7 @@ def test_a_failing_invocation_names_the_command(side: Side, tmp_path: Path) -> N
         _ = side.run_pulumi(
             ['stack', 'ls', '--json'],
             cwd=tmp_path,
-            env={'PULUMI_HOME': str(tmp_path / 'home'), 'PULUMI_BACKEND_URL': (tmp_path / 'state').as_uri()},
+            env=cli_directories(tmp_path) | {'PULUMI_BACKEND_URL': (tmp_path / 'state').as_uri()},
             stdin=None,
         )
 
@@ -382,7 +384,8 @@ def physical_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[P
     )
     state = tmp_path / 'state'
     state.mkdir()
-    monkeypatch.setenv('PULUMI_HOME', str(tmp_path / 'home'))
+    for variable, directory in cli_directories(tmp_path).items():
+        monkeypatch.setenv(variable, directory)
     monkeypatch.setenv('PULUMI_SKIP_UPDATE_CHECK', 'true')
     return project, state.as_uri()
 

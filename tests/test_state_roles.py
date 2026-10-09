@@ -57,6 +57,7 @@ from typing import Any
 import process_sessions
 import pytest
 from root_credentials import fake
+from scratch_projects import cli_directories
 
 from kluster.lib import pulumi_cli
 from kluster.lib.bundle import CA_ENV, CERT_ENV, KEY_ENV, ssl_env
@@ -461,7 +462,8 @@ def clients(tools: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Pat
     monkeypatch.setattr(pulumi_cli, 'TIMEOUT', COMMAND_TIMEOUT)
     monkeypatch.setattr(state, 'LISTING_TIMEOUT', COMMAND_TIMEOUT)
     monkeypatch.setattr(state, 'TRANSFER_TIMEOUT', COMMAND_TIMEOUT)
-    monkeypatch.setenv('PULUMI_HOME', str(tmp_path / 'pulumi-home'))
+    for variable, directory in cli_directories(tmp_path).items():
+        monkeypatch.setenv(variable, directory)
     monkeypatch.setenv('PULUMI_SKIP_UPDATE_CHECK', 'true')
     for variable in (CA_ENV, CERT_ENV, KEY_ENV):
         monkeypatch.delenv(variable, raising=False)
