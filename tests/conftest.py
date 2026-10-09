@@ -15,7 +15,9 @@ The other thing shared here is the cost of a key derivation. Several suites do
 want a real KeePass file rather than the in-memory stand-in -- the row shape is
 half of what they check -- and a KDBX4 file is guarded by Argon2 at settings
 chosen to be slow. `cheap_kdbx_kdf` moves that cost to the algorithm's floor
-for the whole session.
+for the whole session. The same holds for RSA: the credential suites mint OCI
+keys hundreds of times over, and `keys_from_the_pool` hands each case keys
+generated once per process rather than once per call.
 
 Next is a watch on a process-global the suites share without meaning to:
 `pickler_left_as_found` names the case that changes the pickler, so that the
@@ -48,10 +50,11 @@ from memory_kit import MemoryKit
 from pulumi.runtime.settings import SETTINGS
 from pykeepass import PyKeePass
 
+from kluster.scripts.credentials import oci_iam
 from kluster.scripts.credentials.kdbx import KdbxStore
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
     from contextlib import AbstractContextManager
 
 # At import rather than in a fixture, even a session-scoped autouse one: the
@@ -143,6 +146,55 @@ def cheap_kdbx_kdf(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
     assert written == FLOOR, f'the template kept {written} rather than {FLOOR}'
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(pykeepass_module, 'BLANK_DATABASE_LOCATION', str(blank))
+        yield
+
+
+@pytest.fixture(scope='session')
+def key_pool() -> list[oci_iam.KeyPair]:
+    """The OCI key pairs this process has generated for its cases, in the order they were first drawn."""
+    return []
+
+
+def drawing(pool: list[oci_iam.KeyPair], generate: Callable[[], oci_iam.KeyPair]) -> Callable[[], oci_iam.KeyPair]:
+    """A `generate_key` for one case: `pool`'s keys from the first, each once, then fresh ones added to it."""
+    drawn = 0
+
+    def draw() -> oci_iam.KeyPair:
+        nonlocal drawn
+        if drawn == len(pool):
+            pool.append(generate())
+        drawn += 1
+        return pool[drawn - 1]
+
+    return draw
+
+
+@pytest.fixture
+def generated_keys() -> None:
+    """Asked for by a case about `oci_iam.generate_key` itself, which then mints for real."""
+
+
+@pytest.fixture(autouse=True)
+def keys_from_the_pool(key_pool: list[oci_iam.KeyPair], request: pytest.FixtureRequest) -> Iterator[None]:
+    """`oci_iam.generate_key` draws from the process's pool of keys for the length of the case.
+
+    A 2048-bit key takes tens of milliseconds to generate, and what the cases
+    that mint one are about is the order of the calls around a key rather than
+    the arithmetic inside one. A case draws the pool's keys in order, each
+    once, so every call within it is a key of its own -- the cases tell keys
+    apart by fingerprint -- and a case that draws past the end generates the
+    next key into the pool, so it stays correct and is only as slow as it was
+    without one. The keys are `generate_key`'s own, at the production size,
+    so nothing downstream sees a different key shape; they are shared across
+    cases and never across processes, and the tenancies, kits and stores they
+    land in are each case's own. A case asking for `generated_keys` is left
+    the real function.
+    """
+    if 'generated_keys' in request.fixturenames:
+        yield
+        return
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(oci_iam, 'generate_key', drawing(key_pool, oci_iam.generate_key))
         yield
 
 
