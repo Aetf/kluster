@@ -103,7 +103,7 @@ def local_path_configuration(run: Run) -> dict[str, str]:
     return run.inputs(CONFIG_MAP, LOCAL_PATH)['data']
 
 
-@pytest_asyncio.fixture(scope='module', name='applied')
+@pytest_asyncio.fixture(scope='module', loop_scope='module', name='applied')
 async def applied_fixture() -> Run:
     """The whole program against a `physical` that has published every output."""
     return await applied()

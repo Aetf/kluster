@@ -160,6 +160,10 @@ timeout_method = "signal"
 # failures and errors, with every skipped case and its reason added, so a
 # skip is read rather than counted.
 addopts = "-n 4 -rfEs"
+# An async fixture runs on its case's loop unless it names another, so one
+# scoped wider than a case states `loop_scope` beside its `scope`;
+# tests/test_suite_fixtures.py holds that over every module under `tests/`.
+asyncio_default_fixture_loop_scope = "function"
 
 ##
 ## Formatter and linter

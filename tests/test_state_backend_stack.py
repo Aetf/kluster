@@ -224,7 +224,7 @@ async def _run(
     return monitor
 
 
-@pytest_asyncio.fixture(scope='module')
+@pytest_asyncio.fixture(scope='module', loop_scope='module')
 async def run(tmp_path_factory: pytest.TempPathFactory) -> AsyncGenerator[Appliance]:
     """The whole program, declared once: every case below reads the same run."""
     machine = _machine(tmp_path_factory.mktemp('machine'))

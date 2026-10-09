@@ -71,13 +71,13 @@ def bridged_service(name: str) -> conventions.gateway.BridgedService:
     return service
 
 
-@pytest_asyncio.fixture(scope='module', autouse=True)
+@pytest_asyncio.fixture(scope='module', loop_scope='module', autouse=True)
 async def monitor() -> Recorder:
     """What the run registered, for the cases that read declarations directly."""
     return await run_with(Recorder(), stack='physical')
 
 
-@pytest_asyncio.fixture(scope='module', autouse=True)
+@pytest_asyncio.fixture(scope='module', loop_scope='module', autouse=True)
 async def containers(monitor: Recorder) -> tuple[Container, ...]:
     """The four services on a runtime, the way `Gateway` declares them."""
     connection = Connection(host=HOST, host_key=HOST_KEY, username=conventions.gateway.SSH_USER)

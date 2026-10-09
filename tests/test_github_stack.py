@@ -80,7 +80,7 @@ class Forge(Recorder):
         return {}
 
 
-@pytest_asyncio.fixture(scope='module', autouse=True)
+@pytest_asyncio.fixture(scope='module', loop_scope='module', autouse=True)
 async def stack() -> AsyncGenerator[Forge]:
     """The whole program, declared once: every case below reads the same run."""
     pulumi.runtime.set_all_config({f'kluster:{program.ADMIN_TOKEN}': TOKEN})

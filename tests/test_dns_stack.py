@@ -77,13 +77,13 @@ async def declare_program(routes: tuple[conventions.routes.Route, ...]) -> Appli
     return monitor
 
 
-@pytest_asyncio.fixture(scope='module', autouse=True)
+@pytest_asyncio.fixture(scope='module', loop_scope='module', autouse=True)
 async def stack() -> AppliedPhysical:
     """The program with an empty route census."""
     return await declare_program(())
 
 
-@pytest_asyncio.fixture(scope='module')
+@pytest_asyncio.fixture(scope='module', loop_scope='module')
 async def routed() -> AppliedPhysical:
     """The program with a census of one row, `ROUTE`."""
     return await declare_program((ROUTE,))

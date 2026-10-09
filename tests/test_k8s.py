@@ -48,7 +48,7 @@ EXPLICIT = ChartPin(
 )
 
 
-@pytest_asyncio.fixture(scope='module', autouse=True)
+@pytest_asyncio.fixture(scope='module', loop_scope='module', autouse=True)
 async def declarations() -> Recorder:
     """One of each helper, declared once; the cases below read what they became."""
     from kluster.lib.k8s import SealingScope, SecretTemplate, helm_chart, sealed_secret
@@ -86,7 +86,7 @@ async def declarations() -> Recorder:
     return monitor
 
 
-@pytest_asyncio.fixture(scope='module')
+@pytest_asyncio.fixture(scope='module', loop_scope='module')
 async def rendered_search(declarations: Recorder) -> tuple[str, str]:
     """Search a rendered set for a kind that is in it, and then for one that is not.
 

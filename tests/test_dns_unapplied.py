@@ -154,7 +154,7 @@ def non_addresses(run: Run) -> dict[str, object]:
     return found
 
 
-@pytest_asyncio.fixture(scope='module', params=[True, False], ids=['preview', 'update'])
+@pytest_asyncio.fixture(scope='module', loop_scope='module', params=[True, False], ids=['preview', 'update'])
 async def unapplied(request: pytest.FixtureRequest) -> Run:
     """The program against a `physical` that has never been applied: its stack publishes nothing."""
     preview: bool = request.param

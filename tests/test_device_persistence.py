@@ -116,13 +116,13 @@ class OtherClaimant(Component, pulumi_type='test:gateway:OtherClaimant'):
         self.register_outputs({})
 
 
-@pytest_asyncio.fixture(scope='module', autouse=True)
+@pytest_asyncio.fixture(scope='module', loop_scope='module', autouse=True)
 async def monitor() -> Recorder:
     """What the run registered, for the cases that read declarations directly."""
     return await run_with(Recorder(), stack='physical')
 
 
-@pytest_asyncio.fixture(scope='module', autouse=True)
+@pytest_asyncio.fixture(scope='module', loop_scope='module', autouse=True)
 async def mechanism(monitor: Recorder) -> DevicePersistence:
     """The mechanism and one consumer of it, declared once."""
     async with declaring():
