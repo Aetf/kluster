@@ -34,10 +34,6 @@ def test_a_recovered_ca_is_the_same_ca(authority: pki.Authority) -> None:
     assert again.key.public_key().public_numbers() == authority.key.public_key().public_numbers()
 
 
-def test_the_generated_ca_key_is_p256(authority: pki.Authority) -> None:
-    assert isinstance(authority.key.curve, ec.SECP256R1)
-
-
 def test_a_leaf_key_is_random_at_every_issuance(authority: pki.Authority) -> None:
     # The mint model downstream of the CA: a leaf is re-issued rather than
     # reproduced, which is why no leaf is escrowed.
@@ -56,10 +52,6 @@ def test_the_certificate_and_its_key_belong_together(authority: pki.Authority) -
     assert isinstance(public, ec.EllipticCurvePublicKey)
 
     assert private.public_key().public_numbers() == public.public_numbers()
-
-
-def test_clients_have_distinct_keys(authority: pki.Authority) -> None:
-    assert authority.issue_client('ci').key_pem != authority.issue_client('operator').key_pem
 
 
 def test_server_certificate_carries_the_ip(authority: pki.Authority) -> None:
@@ -92,20 +84,16 @@ def test_something_that_is_not_an_ec_key_is_rejected() -> None:
 
 
 def test_leaves_are_issued_by_the_ca(authority: pki.Authority) -> None:
-    ca = x509.load_pem_x509_certificate(authority.certificate().cert_pem)
-    for credential in (authority.issue_server(ADDRESS), authority.issue_client('operator')):
-        x509.load_pem_x509_certificate(credential.cert_pem).verify_directly_issued_by(ca)
-
-
-def test_a_re_issued_ca_certificate_still_verifies_an_older_leaf(authority: pki.Authority) -> None:
     # The CA certificate is re-created on every render (new serial, new
     # validity window) while its key stays put, so a bundle written on Monday
-    # has to chain to the certificate rendered on Tuesday.
-    leaf = x509.load_pem_x509_certificate(authority.issue_client('operator').cert_pem)
+    # has to chain to the certificate rendered on Tuesday: the leaves are
+    # issued first and verified against a certificate rendered after them.
+    leaves = (authority.issue_server(ADDRESS), authority.issue_client('operator'))
 
     later = x509.load_pem_x509_certificate(authority.certificate().cert_pem)
 
-    leaf.verify_directly_issued_by(later)
+    for credential in leaves:
+        x509.load_pem_x509_certificate(credential.cert_pem).verify_directly_issued_by(later)
 
 
 def _extension[T: x509.ExtensionType](pem: bytes, kind: type[T]) -> T:

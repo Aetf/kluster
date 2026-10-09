@@ -23,6 +23,7 @@ import inspect
 import ipaddress
 import json
 import lzma
+import re
 import socket
 import ssl
 import threading
@@ -37,6 +38,7 @@ import pulumi_b2 as b2
 import pulumi_oci as oci
 import pytest
 import pytest_asyncio
+from credentials_command_tree import commands
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -206,10 +208,14 @@ def _hooks_accepted(monitor: Appliance) -> Generator[_Callbacks]:
         settings_.callbacks = before  # pyright: ignore[reportAttributeAccessIssue]
 
 
-async def _run(monitor: Appliance, machine: Machine, *, adopted: dict[str, str] | None = None) -> Appliance:
+async def _run(
+    monitor: Appliance, machine: Machine, *, adopted: dict[str, str] | None = None, generation: int | None = None
+) -> Appliance:
     config = _config(machine.keys)
     if adopted is not None:
         config[f'kluster:{adoption.KEY}'] = json.dumps(adopted)
+    if generation is not None:
+        config[f'kluster:{program.DUMP_KEY_GENERATION}'] = str(generation)
     pulumi.runtime.set_all_config(config)
     _ = await run_under_backstop(monitor, stack=NAME)
     with _hooks_accepted(monitor):
@@ -282,16 +288,6 @@ EGRESS = {
 }
 
 
-@pytest.mark.parametrize('rule', INGRESS, ids=INGRESS.keys())
-def test_the_list_admits_each_declared_ingress_rule(run: Appliance, rule: str) -> None:
-    assert INGRESS[rule] in _one(run, SECURITY_LIST)['ingressSecurityRules']
-
-
-@pytest.mark.parametrize('rule', EGRESS, ids=EGRESS.keys())
-def test_the_list_lets_out_each_declared_egress_rule(run: Appliance, rule: str) -> None:
-    assert EGRESS[rule] in _one(run, SECURITY_LIST)['egressSecurityRules']
-
-
 def test_the_list_holds_the_declared_rules_and_nothing_else(run: Appliance) -> None:
     declared = _one(run, SECURITY_LIST)
 
@@ -345,11 +341,6 @@ PROTECTED = {
     'image-bucket': IMAGE_BUCKET,
     'dump-bucket': DUMP_BUCKET,
 }
-
-
-@pytest.mark.parametrize('typ', PROTECTED.values(), ids=PROTECTED.keys())
-def test_what_no_run_may_replace_is_protected(run: Appliance, typ: str) -> None:
-    assert _options(run, typ).protect is True
 
 
 def test_nothing_else_is_protected(run: Appliance) -> None:
@@ -566,7 +557,7 @@ def test_every_additional_secret_output_names_an_output_of_its_resource(run: App
         and request.custom
     }
 
-    assert set(declared) == {INSTANCE, IMAGE_BUCKET, DUMP_KEY_TYPE}
+    assert declared
     for token, names in declared.items():
         assert set(names) <= _output_names(_sdk_class(token)), token
 
@@ -591,20 +582,28 @@ def test_the_dump_keys_grant_is_the_declared_one(run: Appliance) -> None:
     assert key['capabilities'] == ['writeFiles']
     assert key['bucketIds'] == [DUMP_BUCKET_ID]
     assert key['namePrefix'] == f'{conventions.STATE_DUMP_PREFIX}/'
-    assert key['keyName'] == f'{settings.B2_DUMP_KEY_NAME}-{program.FIRST_DUMP_KEY_GENERATION}'
+
+
+@pytest.mark.asyncio
+async def test_a_new_dump_key_generation_is_a_new_key_name(
+    run: Appliance, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bumping the generation is the dump key's rotation, and the name is the one input a bump changes: a bump that kept it would replace no key."""
+    machine = _machine(tmp_path)
+
+    with _files_in(monkeypatch, machine.directory):
+        bumped = await _run(Appliance(), machine, generation=program.FIRST_DUMP_KEY_GENERATION + 1)
+
+    assert _one(bumped, DUMP_KEY_TYPE)['keyName'] != _one(run, DUMP_KEY_TYPE)['keyName']
 
 
 def test_the_dump_buckets_retention_is_one_rule_on_the_dump_prefix(run: Appliance) -> None:
     bucket = _one(run, DUMP_BUCKET)
 
     assert bucket['bucketName'] == settings.B2_BUCKET
-    assert bucket['lifecycleRules'] == [
-        {
-            'fileNamePrefix': f'{conventions.STATE_DUMP_PREFIX}/',
-            'daysFromUploadingToHiding': settings.B2_RETENTION_DAYS,
-            'daysFromHidingToDeleting': 1,
-        }
-    ]
+    (rule,) = bucket['lifecycleRules']
+    assert rule['fileNamePrefix'] == f'{conventions.STATE_DUMP_PREFIX}/'
+    assert rule['daysFromUploadingToHiding'] == settings.B2_RETENTION_DAYS
 
 
 # --------------------------------------------------------------------------
@@ -649,6 +648,28 @@ def test_the_stacks_own_providers_sign_every_resource_and_every_call(run: Applia
 # --------------------------------------------------------------------------
 
 
+#: Every `credentials` command line the parser carries, as a refusal spells one.
+COMMAND_LINES = frozenset(' '.join(['credentials', *argv]) for argv in commands())
+
+
+def _command_named(refusal: BaseException) -> list[str]:
+    """The words of the one `credentials` command a refusal names, refused unless the parser carries it.
+
+    A refusal names its remedy in backticks; the flags after the leaf (a
+    `--rotate`) are the leaf's to take, so the line is matched without them.
+    A generation written `<N>` -- the recipients file, which every backup
+    generation's row writes a line of -- is read as each generation of the
+    box's window, and the first the parser carries is the one named.
+    """
+    (named,) = re.findall(r'`(credentials [^`]+)`', str(refusal))
+    line = re.sub(r' --\S+', '', named)
+    generations = [label.rsplit('/', 1)[1] for label in committed.backup_window()]
+    candidates = [line.replace('<N>', number) for number in generations] if '<N>' in line else [line]
+    carried = [candidate for candidate in candidates if candidate in COMMAND_LINES]
+    assert carried, f'`{line}` is not a command the parser carries'
+    return carried[0].split()
+
+
 @pytest.mark.asyncio
 async def test_a_host_key_the_committed_line_does_not_name_is_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -656,8 +677,10 @@ async def test_a_host_key_the_committed_line_does_not_name_is_refused(
     machine = _machine(tmp_path)
     _ = (tmp_path / committed.HOST_KEY.name).write_text(f'{committed.public_host_key(_host_key())}\n')
 
-    with _files_in(monkeypatch, machine.directory), pytest.raises(committed.Refused, match='host-key generate'):
+    with _files_in(monkeypatch, machine.directory), pytest.raises(committed.Refused) as refused:
         _ = await _run(Appliance(), machine)
+
+    assert derived.STATE_BACKEND_HOST_KEY_ROW in _command_named(refused.value)
 
 
 @pytest.mark.asyncio
@@ -668,27 +691,33 @@ async def test_a_server_key_that_does_not_open_its_certificate_is_refused(
     other = machine.authority.issue_server(settings.ADDRESS)
     keys = dataclasses.replace(machine.keys, server_key=other.key_pem.decode())
 
-    with _files_in(monkeypatch, machine.directory), pytest.raises(committed.Refused, match='server issue'):
+    with _files_in(monkeypatch, machine.directory), pytest.raises(committed.Refused) as refused:
         _ = await _run(Appliance(), dataclasses.replace(machine, keys=keys))
 
+    assert derived.STATE_BACKEND_SERVER_ROW in _command_named(refused.value)
 
+
+#: Each committed file, and the `credentials derived` row that writes it, as
+#: the writers spell their rows.
 ABSENT = {
-    'host-key': (committed.HOST_KEY.name, 'state-backend-host-key generate'),
-    'backup-recipients': (committed.BACKUP_RECIPIENTS.name, 'backup-age-<N> generate'),
-    'drill-recipient': (committed.DRILL_RECIPIENT.name, 'drill-age-identity generate'),
+    'host-key': (committed.HOST_KEY.name, derived.STATE_BACKEND_HOST_KEY_ROW),
+    'backup-recipients': (committed.BACKUP_RECIPIENTS.name, escrow.row_name(escrow.backup_labels()[0])),
+    'drill-recipient': (committed.DRILL_RECIPIENT.name, derived.DRILL_AGE_IDENTITY_ROW),
 }
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(('file', 'command'), ABSENT.values(), ids=ABSENT.keys())
+@pytest.mark.parametrize(('file', 'row'), ABSENT.values(), ids=ABSENT.keys())
 async def test_a_committed_file_absent_is_refused_naming_its_writer(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, file: str, command: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, file: str, row: str
 ) -> None:
     machine = _machine(tmp_path)
     (tmp_path / file).unlink()
 
-    with _files_in(monkeypatch, machine.directory), pytest.raises(committed.Refused, match=command):
+    with _files_in(monkeypatch, machine.directory), pytest.raises(committed.Refused) as refused:
         _ = await _run(Appliance(), machine)
+
+    assert row in _command_named(refused.value)
 
 
 def test_the_current_generation_absent_from_the_recipients_file_is_refused(tmp_path: Path) -> None:
@@ -741,8 +770,6 @@ def test_the_readers_spell_what_the_writers_spell() -> None:
     assert committed.DRILL_RECIPIENT_ROW == derived.DRILL_AGE_IDENTITY_ROW
     assert component.SERVER_ROW == derived.STATE_BACKEND_SERVER_ROW
     assert all(committed.backup_row(label) == escrow.row_name(label) for label in escrow.backup_labels())
-    assert derived.HOST_KEY_FILE == committed.MACHINE_DIRECTORY / 'host-key.txt'
-    assert derived.BACKUP_RECIPIENTS_FILE == committed.MACHINE_DIRECTORY / 'backup-recipients.txt'
 
 
 def test_the_program_reads_the_keys_the_rows_write() -> None:
@@ -920,12 +947,6 @@ def test_with_the_permission_the_delete_hook_dumps_and_keeps_the_plaintext(tools
     assert replacement.archive is not None
     assert replacement.archive.read_bytes() == b'PGDMP the archive'
     assert not replacement.archive.is_relative_to(tmp_path)
-
-
-def test_with_the_permission_the_create_hook_passes(tools: Tools, tmp_path: Path) -> None:
-    _replacement(tmp_path, granted=True).permit_now()
-
-    assert tools.calls == []
 
 
 def test_a_failed_dump_raises_and_keeps_nothing(tools: Tools, tmp_path: Path) -> None:

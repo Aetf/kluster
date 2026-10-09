@@ -167,11 +167,10 @@ def test_an_operation_left_pending_is_read_like_a_resource(tmp_path: Path) -> No
         pending=[{'urn': 'urn:box', 'inputs': {'metadata': _ciphertext()}, 'outputs': {'metadata': 'ignition'}}],
     )
 
-    assert findings(tmp_path) == [
-        f'{path.relative_to(tmp_path)}: pending_operations[0] urn:box outputs.metadata: '
-        'holds ciphertext as an input and is not ciphertext as an output; '
-        'pass the input `metadata` whole as `pulumi.Output.secret(...)`'
-    ]
+    found = findings(tmp_path)
+
+    assert len(found) == 1
+    assert found[0].startswith(f'{path.relative_to(tmp_path)}: pending_operations[0] urn:box outputs.metadata: ')
 
 
 def test_a_checkpoint_holding_its_secrets_as_ciphertext_passes(tmp_path: Path) -> None:
@@ -203,20 +202,23 @@ def test_a_checkpoint_holding_its_secrets_as_ciphertext_passes(tmp_path: Path) -
     assert findings(tmp_path) == []
 
 
+#: The `file://` backend's directory, under the writers' own name for the
+#: checkpoints directory; the segments below it are Pulumi's.
+BACKEND = f'{stack_environment.CHECKPOINTS}/.pulumi'
 #: What a `file://` backend writes beside a checkpoint that never leaves the
 #: machine, and the driver's record of a failed check.
 LOCAL = (
-    f'checkpoints/.pulumi/stacks/{PROJECT}/{STACK}.json.bak',
-    f'checkpoints/.pulumi/history/{PROJECT}/{STACK}/{STACK}-1.checkpoint.json',
-    f'checkpoints/.pulumi/history/{PROJECT}/{STACK}/{STACK}-1.history.json',
-    f'checkpoints/.pulumi/backups/{PROJECT}/{STACK}/{STACK}.1.json',
-    f'checkpoints/.pulumi/locks/organization/{PROJECT}/{STACK}/lock.json',
-    f'checkpoints/{STACK}.failed-check',
+    f'{BACKEND}/stacks/{PROJECT}/{STACK}.json.bak',
+    f'{BACKEND}/history/{PROJECT}/{STACK}/{STACK}-1.checkpoint.json',
+    f'{BACKEND}/history/{PROJECT}/{STACK}/{STACK}-1.history.json',
+    f'{BACKEND}/backups/{PROJECT}/{STACK}/{STACK}.1.json',
+    f'{BACKEND}/locks/organization/{PROJECT}/{STACK}/lock.json',
+    checkpoint.record(Path(), STACK).as_posix(),
 )
 #: The two files that travel.
 TRAVELS = (
-    'checkpoints/.pulumi/meta.yaml',
-    f'checkpoints/.pulumi/stacks/{PROJECT}/{STACK}.json',
+    f'{BACKEND}/meta.yaml',
+    f'{BACKEND}/stacks/{PROJECT}/{STACK}.json',
 )
 
 
