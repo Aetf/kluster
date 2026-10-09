@@ -1,16 +1,14 @@
 """A nested unknown reads back as the run in hand says, whatever run came before it.
 
-The mock monitor deserializes a registration's inputs on an executor thread
-that has no Python context of its own, where the runtime's `dry_run` answers
-with a process-wide default the SDK fixes at the first value set in a context
-(`mock_monitor._capture_request`). An unknown nested in those inputs is an
-`Unknown` under a preview and a dropped key otherwise, so without the patch
-the second run of a different kind in one context reads its nested unknown
-back the first run's way.
+The mock monitor deserializes a registration's inputs on an executor thread,
+which the pinned SDK runs under a copy of the registering context, so the
+runtime's `dry_run` there answers for the run in hand. An unknown nested in
+those inputs is an `Unknown` under a preview and a dropped key otherwise, and
+an answer an earlier run left behind would read it back that run's way.
 
-Both runs happen inside one case here, in each order, because that is the
-condition the SDK's default is fixed under: the test runner hands every case a
-fresh context, which would hide the artifact if the two runs were two cases.
+Both runs happen inside one case here, in each order, because one context is
+where such an answer would show: the test runner hands every case a fresh
+context, which would hide it if the two runs were two cases.
 """
 
 from __future__ import annotations
