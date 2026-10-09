@@ -161,8 +161,9 @@ async def test_the_disk_is_not_sized_by_the_declaration(monitor: Providers) -> N
     request = await registration(monitor, host.volume)
 
     # The provider refuses `size` beside `source` outright — it takes the
-    # volume's capacity from the image — so stating the worker's intended disk
-    # size here would not shrink-wrap anything, it would fail the apply.
+    # volume's capacity from its source file — so stating the worker's
+    # intended disk size here would not shrink-wrap anything, it would fail
+    # the apply.
     assert 'size' not in dict(request.object)
     assert await host.volume.size.future() is None
 
@@ -172,9 +173,9 @@ async def test_growing_the_disk_is_a_host_operation_not_a_diff(monitor: Provider
     host = build()
     request = await registration(monitor, host.volume)
 
-    # The volume is created at the image's size and grown on the host with
-    # `truncate` plus `virsh blockresize`, so the file and the state part
-    # company from the first day. Every field of a libvirt volume replaces the
+    # The volume is created at its source file's size and grown on the host
+    # with `truncate` plus `virsh blockresize`, so the file and the state part
+    # company from the first growth. Every field of a libvirt volume replaces the
     # volume, so a refresh that read the grown file back and diffed against it
     # would propose destroying the worker's disk.
     assert 'size' in set(request.ignoreChanges)
