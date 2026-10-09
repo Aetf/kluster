@@ -7,7 +7,89 @@ doubles and fakes, and the recipe for proving a case fails without the
 change it ships with. A rule about the machinery belongs there; a rule
 about what a case is entitled to claim belongs here.
 
+## Tests verify behavior
+
+A test exists to fail when the program's behavior breaks. **A
+change-detector assertion is not written**: an assertion whose only way
+to fail is someone changing the value it restates, when that change
+could well be correct. It catches no regression, since the event that
+reddens it is an edit already visible in the diff under review, which
+the same hand updates on both sides in the same change. And it breaks
+on every legitimate rename and rewording, charging a fix cycle for each.
+The name and the argument against it are from
+[*Change-Detector Tests Considered Harmful*](https://testing.googleblog.com/2015/01/testing-on-toilet-change-detector-tests.html)
+(Google Testing Blog, 2015). The shapes it takes here:
+
+-   a constant pinned to a literal;
+-   a table copied from a document or from the implementation;
+-   an exact message or wording;
+-   a call shape — which function was called, with which arguments;
+-   a wiring assertion symbolic on both sides.
+
+**What decides is what can make the assertion fail.** An assertion
+earns its place when it fails because behavior broke: an output wrong
+for its input, two parts of the code that stopped agreeing, an external
+contract no longer met, or a disagreement with a source independent of
+the code, such as a vendor's documentation or a recorded response. An
+assertion only an edit to the value it restates can redden is a change
+detector, however much it reads like a guard.
+
+**Protecting something sensitive from accidental change belongs in the
+program's design**, which makes the change conspicuous in review, and
+not in a test that pins its value. Pulumi's `protect` is the model: a
+resource holding data is protected by the attribute on the resource,
+not by a test that it still exists. In the same way, a value whose
+change matters outside the program says so at its declaration,
+where whoever edits it is looking, and a posture that must not loosen is
+written restrictive by default, each exception carrying its reason, so
+that a loosening is a line in the diff.
+
+### Worked examples
+
+Each shape is answered the same way: the pin is deleted, and what it
+seemed to guard moves into a test of behavior or into the design.
+
+-   **Which fields are secret, listed in a test.** The list mirrors the
+    types it names and misses the next secret field until someone
+    remembers to add it. The fact belongs to the field, as a marker in
+    its production type (`Annotated[str, Secret]` or similar). A case
+    then holds every marked field to `repr=False, compare=False` with no
+    list, and the checks that a secret does not leak take their fields
+    from the marker.
+-   **A name already in state or in the world, pinned to its literal.**
+    The pin fails only for whoever renames the constant, and a rename
+    that brings its migration is correct. The cases test behavior with
+    the constant or a fake name: that minting and retirement address the
+    same name, say. That the name is remembered outside the program is
+    stated at its declaration ("renaming needs a migration"), or the
+    code handles the migration.
+-   **A requirement written in a document, copied as a table.** The copy
+    agrees with the document until one of them is edited, and then
+    fails for the editor. A security posture that must not regress is
+    protected by the program's structure instead: restrictive by
+    default, with each exception carrying its reason.
+-   **A fragment of a message, telling two branches apart.** A match on
+    the wording fails on a rewording, and passes when the wrong branch
+    raises a similar sentence. Branches are told apart by exception type
+    or by a structured field; where two branches share a type, the code
+    gives each its own.
+-   **A wiring assertion symbolic on both sides**, such as an accessor's
+    result held to its own body written again. It is deleted. Crossed
+    wiring, an IPv4 value where an IPv6 one belongs, is prevented by the
+    types or caught by a test of the wired behavior.
+-   **Prose pinned verbatim**, such as a help text or a rendered
+    paragraph. It is deleted, and what stays are relations: every
+    register row appears in the rendered help.
+
 ## A test holds a value still only against a second source
+
+This is the rule above applied to a literal on an assertion's expected
+side. A literal is a change detector unless something other than the
+edit under review can move the side it is compared with: the sides
+below are the ones that can, and the **mirror** this section names is
+the change detector in its literal form. The mechanical test it gives,
+whether the check can fail for anybody other than the person editing
+the value, is the definition above asked of one literal.
 
 A test writes a value as a literal only where the assertion has a side
 the edit under review cannot move. Three sides qualify:
