@@ -151,6 +151,16 @@
       ],
       groupName: 'python dependencies',
       groupSlug: 'python',
+      // Every requirement in `pyproject.toml` admits one compatible line (the
+      // comment above its `dependencies`). A release inside the range moves
+      // no requirement, and lock file maintenance relocks to it. A release
+      // past the bound is proposed as a pull request that replaces the range
+      // with one holding that release's line, both ends moved: `>=4.20,<5`
+      // becomes `>=5.1,<6` for a 5.1.0. `replace` is what `auto` resolves to
+      // for the pep621 manager, which updates no locked dependency; it is
+      // written out so that a change in that resolution reaches the bounds
+      // through a reader.
+      rangeStrategy: 'replace',
     },
     {
       // The kubernetes provider, out of the python group and into one of its

@@ -61,9 +61,7 @@ all the same: the exemption is one rule keyed by data source alone, a test
 holds it to that shape, and the definitions' data source is also the CRD
 generator's, which waits.
 uv resolves under the same age whatever it picks itself: renovate's
-lock file maintenance, and the libraries a bump pulls in. `pulumi` alone
-is exempt until 2026-10-08T12:00:00Z, by the operator's decision of
-2026-10-01 (the comment on `exclude-newer-package` in `pyproject.toml`). The criterion
+lock file maintenance, and the libraries a bump pulls in. The criterion
 and its reason are `renovate.json5`'s top-level `minimumReleaseAge`.
 `pyproject.toml`'s `exclude-newer` repeats the age for uv, and a test
 holds both. A data source that reports no publication time cannot be

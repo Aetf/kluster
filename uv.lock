@@ -11,9 +11,6 @@ resolution-markers = [
 exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
 exclude-newer-span = "P7D"
 
-[options.exclude-newer-package]
-pulumi = "2026-10-01T12:00:00Z"
-
 [manifest]
 members = [
     "kluster",
@@ -1085,6 +1082,7 @@ dev = [
     { name = "basedpyright" },
     { name = "import-linter" },
     { name = "ipython" },
+    { name = "packaging" },
     { name = "psutil" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -1096,41 +1094,42 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "asyncssh", specifier = ">=2.24.0" },
-    { name = "cryptography", specifier = ">=50.0.0" },
-    { name = "jinja2", specifier = ">=3.1.4" },
-    { name = "keyring", specifier = ">=25.7.0" },
-    { name = "oci", specifier = ">=2.184.2" },
-    { name = "pulumi", specifier = ">=3.266.0" },
+    { name = "asyncssh", specifier = ">=2.24.0,<3" },
+    { name = "cryptography", specifier = ">=50.0.0,<51" },
+    { name = "jinja2", specifier = ">=3.1.4,<4" },
+    { name = "keyring", specifier = ">=25.7.0,<26" },
+    { name = "oci", specifier = ">=2.184.2,<3" },
+    { name = "pulumi", specifier = ">=3.266.0,<4" },
     { name = "pulumi-b2", editable = "sdks/b2" },
-    { name = "pulumi-cloudflare", specifier = ">=6.11.0" },
+    { name = "pulumi-cloudflare", specifier = ">=6.11.0,<7" },
     { name = "pulumi-crds", editable = "sdks/crds" },
-    { name = "pulumi-github", specifier = ">=6.4.0" },
+    { name = "pulumi-github", specifier = ">=6.4.0,<7" },
     { name = "pulumi-kubernetes", specifier = "==4.34.2" },
-    { name = "pulumi-kubernetes-cert-manager", specifier = ">=0.2.0" },
-    { name = "pulumi-libvirt", specifier = ">=0.5.4" },
-    { name = "pulumi-oci", specifier = ">=4.20.0" },
+    { name = "pulumi-kubernetes-cert-manager", specifier = ">=0.2.0,<0.3" },
+    { name = "pulumi-libvirt", specifier = ">=0.5.4,<0.6" },
+    { name = "pulumi-oci", specifier = ">=5.1.0,<6" },
     { name = "pulumi-unifi", editable = "sdks/unifi" },
     { name = "pulumi-zerotier", editable = "sdks/zerotier" },
-    { name = "pulumiverse-talos", specifier = ">=0.8.1" },
-    { name = "pykeepass", specifier = ">=4.2.0" },
-    { name = "requests", specifier = ">=2.32.3" },
-    { name = "ruamel-yaml", extras = ["oldlibyaml"], specifier = ">=0.19.1" },
-    { name = "tqdm", specifier = ">=4.67.1" },
+    { name = "pulumiverse-talos", specifier = ">=0.8.1,<0.9" },
+    { name = "pykeepass", specifier = ">=4.2.0,<5" },
+    { name = "requests", specifier = ">=2.32.3,<3" },
+    { name = "ruamel-yaml", extras = ["oldlibyaml"], specifier = ">=0.19.1,<0.20" },
+    { name = "tqdm", specifier = ">=4.67.1,<5" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "basedpyright", specifier = ">=1.39.10" },
-    { name = "import-linter", specifier = ">=2.14" },
-    { name = "ipython", specifier = ">=8.30.0" },
-    { name = "psutil", specifier = ">=7.2.2" },
-    { name = "pytest", specifier = ">=8.0.0" },
-    { name = "pytest-asyncio", specifier = ">=0.23.0" },
-    { name = "pytest-timeout", specifier = ">=2.4.0" },
-    { name = "pytest-xdist", specifier = ">=3.8.0" },
-    { name = "ruff", specifier = ">=0.15.11" },
-    { name = "types-psutil", specifier = ">=7.2.2" },
+    { name = "basedpyright", specifier = ">=1.39.10,<2" },
+    { name = "import-linter", specifier = ">=2.14,<3" },
+    { name = "ipython", specifier = ">=9.17.1,<10" },
+    { name = "packaging", specifier = ">=26.3,<27" },
+    { name = "psutil", specifier = ">=7.2.2,<8" },
+    { name = "pytest", specifier = ">=9.1.1,<10" },
+    { name = "pytest-asyncio", specifier = ">=1.4.0,<2" },
+    { name = "pytest-timeout", specifier = ">=2.4.0,<3" },
+    { name = "pytest-xdist", specifier = ">=3.8.0,<4" },
+    { name = "ruff", specifier = ">=0.16.9,<0.17" },
+    { name = "types-psutil", specifier = ">=7.2.2,<8" },
 ]
 
 [[package]]
