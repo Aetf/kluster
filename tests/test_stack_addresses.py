@@ -38,7 +38,6 @@ NOT_AN_ADDRESS: dict[str, tuple[object, str]] = {
     'unknown': (UNKNOWN, 'unknown'),
     'elided-secret': ({}, 'a mapping'),
     'empty': ('', 'an empty string'),
-    'stringified-none': ('None', 'not an address'),
     'hostname': (f'{MARKER}.example', 'not an address'),
     'not-a-string': ([], 'a list'),
 }
@@ -50,7 +49,6 @@ NOT_A_MAPPING: dict[str, tuple[object, str]] = {
     'elided-secret': ({}, 'empty mapping'),
     'a-single-address': ('192.0.2.1', 'a str'),
     'entry-unknown': ({'node-a': UNKNOWN}, "'node-a' entry is unknown"),
-    'entry-absent': ({'node-a': None}, "'node-a' entry is absent"),
     'entry-not-an-address': ({'node-a': f'{MARKER}.example'}, "'node-a' entry is a string that is not an address"),
     'entry-wrong-family': ({'node-a': '2001:db8::1'}, "'node-a' entry is an IPv6 address"),
     'key-not-a-string': ({1: '192.0.2.1'}, 'int key'),

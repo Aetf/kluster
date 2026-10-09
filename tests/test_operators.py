@@ -191,7 +191,3 @@ def test_every_child_is_installed_behind_what_its_component_is_ordered_after(
 def test_a_plugin_chart_is_installed_behind_its_operators(applied: Run, chart: str, after: str) -> None:
     """The backup plugin is the database operator's; the `GpuDevicePlugin` is the device-plugin operator's definition."""
     assert applied.urn(CHART, after) in applied.dependencies(CHART, chart)
-
-
-def test_every_child_carries_its_components_name(applied: Run) -> None:
-    assert applied.monitor.children_not_named_for_their_component() == {}

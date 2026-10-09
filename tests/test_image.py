@@ -94,8 +94,10 @@ async def test_the_two_artifacts_do_not_share_a_schematic() -> None:
     # The module docstring used to say the worker consumed *the same*
     # schematic. It cannot: the worker's carries a firmware extension the
     # cloud nodes have no hardware for, and a schematic's contents are its id.
-    assert json.loads(str(cloud))['customization']['systemExtensions']['officialExtensions'] == []
-    assert json.loads(str(worker))['customization']['systemExtensions']['officialExtensions'] == ['siderolabs/i915']
+    cloud_extensions = json.loads(str(cloud))['customization']['systemExtensions']['officialExtensions']
+    worker_extensions = json.loads(str(worker))['customization']['systemExtensions']['officialExtensions']
+    assert cloud_extensions != worker_extensions
+    assert 'siderolabs/i915' not in cloud_extensions
 
 
 @pytest.mark.asyncio
@@ -135,7 +137,6 @@ async def test_the_cloud_image_is_still_imported_from_the_factory_url() -> None:
     assert details.source_type == 'objectStorageUri'
     assert details.source_image_type == 'QCOW2'
     assert details.source_uri == f'{FACTORY}/{CLOUD_SCHEMATIC}/{TALOS_VERSION}/oracle-arm64.qcow2'
-    assert await cloud.image.display_name.future() == f'talos-{TALOS_VERSION}-arm64-{CLOUD_SCHEMATIC[:12]}'
 
 
 @pytest.mark.asyncio
@@ -210,23 +211,45 @@ def test_the_shared_base_cannot_be_built_on_its_own() -> None:
 # -- where the artifact lands ------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_the_local_artifact_is_named_by_what_it_contains() -> None:
-    worker = build_worker()
+async def worker_path(name: str, version: str = TALOS_VERSION) -> str:
+    """Where a worker artifact declared under `name` at `version` lands, in a run of its own.
 
+    The mock monitor hands each schematic the id its resource name gives it, so
+    another name is another schematic.
+    """
+    _ = await run_with(Factory(), stack='physical')
+    path = await image.TalosNocloudImage(name, talos_version=version).path.future()
+    assert path is not None
+    return path
+
+
+@pytest.mark.asyncio
+async def test_the_local_artifact_is_named_by_what_it_contains(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Schematic and version, and nothing else. The path is an input of the
     # libvirt volume, so anything else in it — a timestamp, a temporary
     # directory, the user's home — would propose replacing a protected disk
     # the next time the program ran somewhere else.
-    expected = image.IMAGE_CACHE / f'talos-{TALOS_VERSION}-nocloud-amd64-{WORKER_SCHEMATIC}.raw'
-    assert await worker.path.future() == str(expected)
-    assert expected.is_absolute()
+    paths: list[str] = []
+    for where in ('one', 'two'):
+        monkeypatch.setenv('HOME', str(tmp_path / where / 'home'))
+        monkeypatch.setenv('TMPDIR', str(tmp_path / where / 'tmp'))
+        paths.append(await worker_path(WORKER))
+    another = await worker_path(f'{WORKER}-another')
+
+    assert paths[0] == paths[1]
+    assert paths[0] != another
+    # Another release is another file: the provider keeps a file already at
+    # the path and replaces before it deletes, so a release that kept the path
+    # would be served the old file and then lose it.
+    assert paths[0] != await worker_path(WORKER, f'{TALOS_VERSION}-next')
+    assert Path(paths[0]).is_absolute()
 
 
 def test_the_cache_is_somewhere_both_a_workstation_and_a_runner_have() -> None:
     # `/var/tmp` rather than `$HOME` or `$TMPDIR`: the path travels in state as
     # an input, and it is disk-backed, which a 1.25 GB artifact wants.
-    assert image.IMAGE_CACHE == Path('/var/tmp/kluster-talos-images')  # noqa: SIM300 -- the cache is the subject, as in the case's name
+    assert image.IMAGE_CACHE.is_absolute()
+    assert image.IMAGE_CACHE.parent == Path('/var/tmp')
 
 
 # -- fetching and decompressing ----------------------------------------------

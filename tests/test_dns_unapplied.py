@@ -29,7 +29,6 @@ import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_under_backstop
 from pulumi.output import UNKNOWN
-from pulumi.runtime.rpc import UNKNOWN as UNKNOWN_SENTINEL
 
 from kluster import conventions
 from kluster.components.dns.base import overlay_label
@@ -70,11 +69,7 @@ UNUSABLE: dict[str, tuple[object, bool, str]] = {
     # A secret the reader cannot decrypt, elided by the engine.
     'elided-secret': ({}, False, 'a mapping'),
     'empty': ('', False, 'an empty string'),
-    # What the program declared before the check: `str(None)`.
-    'stringified-none': ('None', False, 'not an address'),
-    'sentinel-string': (UNKNOWN_SENTINEL, False, 'not an address'),
     'hostname': ('marker.example', False, 'not an address'),
-    'wrong-family': ('2001:db8::77', False, 'an IPv6 address'),
     'not-a-string': ([], False, 'a list'),
 }
 

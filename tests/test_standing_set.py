@@ -25,7 +25,7 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 import yaml
-from k8s_base_installation import Run, applied
+from k8s_base_installation import AUTONAME_SUFFIX, Run, applied
 from mock_monitor import Recorder, declaring, run_with
 from renovate_text import as_python_spells_it, as_renovate_spells_it, listed, package_rules
 
@@ -186,7 +186,7 @@ def test_the_provisioner_reads_the_configmap_the_component_declares(applied: Run
     command = container['command']
     configmap = applied.monitor.inputs_of(LOCAL_PATH, CONFIG_MAP)
 
-    assert command[command.index('--configmap-name') + 1] == f'{LOCAL_PATH}-0a1b2c3d'
+    assert command[command.index('--configmap-name') + 1] == f'{LOCAL_PATH}-{AUTONAME_SUFFIX}'
     assert 'name' not in configmap['metadata']
     assert {'setup', 'teardown'} <= local_path_configuration(applied).keys()
 
@@ -347,10 +347,15 @@ def test_every_child_carries_its_components_name(applied: Run) -> None:
 # -- The namespace helper ------------------------------------------------------
 
 
-@pytest.mark.parametrize('level', list(PodSecurity))
 @pytest.mark.asyncio
-async def test_a_namespace_enforces_the_level_it_is_created_with(level: PodSecurity) -> None:
-    """The level is the admission controller's label, with the value it reads, and the namespace keeps its name."""
+async def test_a_namespace_enforces_the_level_it_is_created_with() -> None:
+    """The level is the admission controller's label, with the value it reads, and the namespace keeps its name.
+
+    One level, the one furthest from the house default: every level takes the
+    same path to the label, and a helper that wrote the default whatever it
+    was handed would pass for the default itself.
+    """
+    level = PodSecurity.PRIVILEGED
     monitor = await run_with(Recorder(), stack='test')
     async with declaring():
         _ = namespace('owner-namespace', name='owned', pod_security=level)
