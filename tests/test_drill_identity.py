@@ -23,14 +23,19 @@ from kluster.scripts.credentials.github_secrets import Forge
 from kluster.scripts.credentials.pulumi_config import SlotRefused
 from kluster.scripts.state_backend import config
 
-pytestmark = pytest.mark.skipif(shutil.which(age.KEYGEN) is None, reason='age-keygen is not on PATH (mise x -- ...)')
+SLOT = derived.DRILL_AGE_IDENTITY_SLOT
 
-#: For the cases that read a recipient on file back: `age` is what parses it
-#: (`config.drill_recipient`), where `age-keygen` alone draws the identity.
-needs_age = pytest.mark.skipif(shutil.which(age.BINARY) is None, reason='age is not on PATH (mise x -- ...)')
 
-OPS_REPOSITORY = conventions.forge.OPS.full_name
-DRILL_ENVIRONMENT = conventions.forge.DRILL.name
+@pytest.fixture(autouse=True, scope='module')
+def pinned_age() -> None:
+    """The pinned `age-keygen`, which draws the identity, and `age`, which reads a recipient on file back.
+
+    Refused when either is missing rather than skipped, as the module would
+    otherwise pass with nothing run.
+    """
+    for binary in (age.KEYGEN, age.BINARY):
+        if shutil.which(binary) is None:
+            pytest.fail(f'{binary} is not on PATH: mise.toml pins it, so run the suite under `mise x`')
 
 
 @pytest.fixture
@@ -50,11 +55,10 @@ def recipient_file(tmp_path: Path) -> Path:
 
 def _pushed(gh: RecordedGh) -> str:
     """The one value the fake was handed for the drill's slot."""
-    (value,) = [value for (_, _, name), value in gh.values.items() if name == 'DRILL_AGE_IDENTITY']
+    (value,) = [value for (_, _, name), value in gh.values.items() if name == SLOT.name]
     return value
 
 
-@needs_age
 def test_the_pushed_secret_and_the_written_recipient_are_one_pair(
     forge: Forge, gh: RecordedGh, recipient_file: Path
 ) -> None:
@@ -74,10 +78,14 @@ def test_the_private_half_lands_in_the_ops_repo_drill_environment_under_its_name
     # -- a `drill` Environment exists in exactly one of them (ci.md §3).
     _ = derived.drill_age_identity(forge, recipient_file=recipient_file, rotate=False)
 
-    assert list(gh.values) == [(OPS_REPOSITORY, DRILL_ENVIRONMENT, 'DRILL_AGE_IDENTITY')]
-    assert ['secret', 'set', 'DRILL_AGE_IDENTITY', '--repo', OPS_REPOSITORY, '--env', DRILL_ENVIRONMENT] in (
-        gh.invocations
-    )
+    assert list(gh.values) == [(SLOT.repository, SLOT.environment, SLOT.name)]
+    assert conventions.forge.DRILL in conventions.forge.OPS.environments
+    holders = [
+        repository.full_name
+        for repository in conventions.forge.REPOSITORIES
+        if SLOT.environment in {environment.name for environment in repository.environments}
+    ]
+    assert holders == [SLOT.repository]
 
 
 def test_the_pushed_value_is_the_secret_line_alone(forge: Forge, gh: RecordedGh, recipient_file: Path) -> None:
@@ -92,7 +100,6 @@ def test_the_pushed_value_is_the_secret_line_alone(forge: Forge, gh: RecordedGh,
     assert '\n' not in pushed
 
 
-@needs_age
 def test_a_second_generation_is_refused_by_the_recipient_on_file(
     forge: Forge, gh: RecordedGh, recipient_file: Path
 ) -> None:
@@ -109,7 +116,6 @@ def test_a_second_generation_is_refused_by_the_recipient_on_file(
     assert config.drill_recipient(recipient_file) == first
 
 
-@needs_age
 def test_rotate_replaces_both_halves(forge: Forge, gh: RecordedGh, recipient_file: Path) -> None:
     first = derived.drill_age_identity(forge, recipient_file=recipient_file, rotate=False)
 
@@ -145,7 +151,6 @@ def _refused_files() -> list[str]:
     ]
 
 
-@needs_age
 @pytest.mark.parametrize('shape', range(2), ids=['bad-checksum', 'two-recipients'])
 def test_rotate_draws_a_successor_over_a_file_the_reader_refuses(
     shape: int, forge: Forge, gh: RecordedGh, recipient_file: Path
@@ -161,7 +166,6 @@ def test_rotate_draws_a_successor_over_a_file_the_reader_refuses(
     assert config.drill_recipient(recipient_file) == written
 
 
-@needs_age
 @pytest.mark.parametrize('shape', range(2), ids=['bad-checksum', 'two-recipients'])
 def test_a_file_the_reader_refuses_names_rotate_as_its_repair(
     shape: int, forge: Forge, gh: RecordedGh, recipient_file: Path
@@ -213,7 +217,7 @@ def test_the_private_half_reaches_no_file_and_no_log_line(
         if path.is_file():
             assert secret not in path.read_text(), path
     assert secret not in caplog.text
-    assert 'DRILL_AGE_IDENTITY' in caplog.text
+    assert SLOT.name in caplog.text
 
 
 def test_the_written_file_is_one_recipient_with_the_rest_comments(forge: Forge, recipient_file: Path) -> None:

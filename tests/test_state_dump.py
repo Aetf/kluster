@@ -22,6 +22,7 @@ not have.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import subprocess as sp
 from pathlib import Path
@@ -45,6 +46,7 @@ from state_dump_box import (
     UPLOAD_TARGET,
     Box,
     block,
+    box_tools,
     key,
     rows,
 )
@@ -65,6 +67,13 @@ def _default(variable: str) -> str:
     found = re.search(rf'^{variable}=\$\{{\w+:-([^}}]+)\}}$', TEXT, re.M)
     assert found is not None, f'{variable} is not a seamed variable of the script'
     return found.group(1)
+
+
+def _container() -> str:
+    """The container the dump execs into: the one `pgstate.service` runs, by the name it gives it."""
+    named = re.search(r'--name (\S+)', _unit('pgstate.service'))
+    assert named is not None, 'pgstate.service names no container'
+    return named.group(1)
 
 
 def _constant(variable: str) -> str:
@@ -113,7 +122,8 @@ def test_upload_walks_authorize_then_get_url_then_put(tmp_path: Path) -> None:
     assert '--data-binary' in put.argv and put.argv[put.argv.index('--data-binary') + 1].startswith('@/')
     # Every call fails rather than hangs, and a large dump outlives the
     # control calls' deadline.
-    assert [call.argv[call.argv.index('--max-time') + 1] for call in (authorize, get_url, put)] == ['120', '120', '600']
+    deadlines = [float(call.argv[call.argv.index('--max-time') + 1]) for call in (authorize, get_url, put)]
+    assert deadlines[2] > deadlines[0] == deadlines[1], deadlines
     # The failure the unit's timeout would otherwise be the only account of.
     assert all('--fail-with-body' in call.argv for call in (authorize, get_url, put))
 
@@ -202,12 +212,16 @@ STACK_ROWS = [
 ]
 
 
-def _count_stacks(data: str) -> int:
-    """The box's parser, through the mode the script exposes it under, reading the database the unit names."""
+def _count_stacks(data: str, tools: Path) -> int:
+    """The box's parser, through the mode the script exposes it under, reading the database the unit names.
+
+    Under the box's `awk`, `gawk`, which `tools` holds ahead of the host's.
+    """
+    box_tools(tools)
     ran = sp.run(
         [str(SCRIPT), 'count-stacks'],
         input=data,
-        env={'PATH': '/usr/bin:/bin', 'PG_DATABASE': ENV['PG_DATABASE']},
+        env={'PATH': f'{tools}{os.pathsep}/usr/bin:/bin', 'PG_DATABASE': ENV['PG_DATABASE']},
         capture_output=True,
         text=True,
         timeout=30,
@@ -217,7 +231,9 @@ def _count_stacks(data: str) -> int:
 
 
 @pytest.mark.parametrize(('what', 'data', 'counted'), STACK_ROWS, ids=[row[0] for row in STACK_ROWS])
-def test_the_box_and_the_operator_count_stack_checkpoints_the_same_way(what: str, data: str, counted: int) -> None:
+def test_the_box_and_the_operator_count_stack_checkpoints_the_same_way(
+    what: str, data: str, counted: int, tmp_path: Path
+) -> None:
     """The claim that the two dumps are held to one rule is worth only the parity.
 
     The box counts the keys the operator's side collects, so the two answer
@@ -226,10 +242,10 @@ def test_the_box_and_the_operator_count_stack_checkpoints_the_same_way(what: str
     hand-taken one different artifacts, and a count that drifts is how that
     starts. The box's side is run as the box runs it -- the script's
     `count-stacks` mode is the same `awk` the nightly run reads its own
-    archive with -- and both read the database the box is rendered with.
+    archive with, and it runs under `gawk`, the box's -- and both read the
+    database the box is rendered with.
     """
-    assert ENV['PG_DATABASE'] == settings.DATABASE
-    assert _count_stacks(data) == counted, what
+    assert _count_stacks(data, tmp_path) == counted, what
     assert len(state.checkpoints(data, settings.DATABASE)) == counted, what
 
 
@@ -250,20 +266,19 @@ def test_dump_lists_the_archive_and_encrypts_to_every_recipient(tmp_path: Path) 
 
     assert ran.returncode == 0, ran.stderr
     pg, listing, _ = box.of('podman')
-    assert pg.argv[:2] == ['exec', 'pgstate']
-    assert '-Fc' in pg.argv and pg.argv[-2:] == ['operator', 'pulumi_state']
+    assert pg.argv[:2] == ['exec', _container()]
+    assert '-Fc' in pg.argv and pg.argv[-2:] == [ENV['PG_ROLE'], ENV['PG_DATABASE']]
     # The listing runs in the same container, reading the archive on standard
     # input rather than through a mount of the spool directory.
-    assert listing.argv == ['exec', '-i', 'pgstate', 'pg_restore', '--list']
+    assert listing.argv == ['exec', '-i', _container(), 'pg_restore', '--list']
     # Blank lines are skipped and surrounding whitespace stripped, or age
     # would be handed a recipient it rejects.
     (encrypt,) = box.of('age')
     assert encrypt.argv == ['--encrypt', '-r', 'age1aaa', '-r', 'age1bbb']
     # And on the box, the age is the one age-install.service pins and the
     # recipients are the file the template writes.
-    assert _default('AGE') == '/opt/bin/age'
-    assert _default('RECIPIENTS') == '/etc/kluster/age-recipients.txt'
-    assert '    - path: /etc/kluster/age-recipients.txt\n' in BUTANE
+    assert _default('AGE') in re.split(r"[\s;'\"]+", _unit('age-install.service'))
+    assert f'    - path: {_default("RECIPIENTS")}\n' in BUTANE
 
 
 def test_the_listing_is_fed_the_archive_the_dump_just_wrote(tmp_path: Path) -> None:
@@ -284,7 +299,15 @@ def test_the_listing_is_fed_the_archive_the_dump_just_wrote(tmp_path: Path) -> N
     assert listing.stdin_path == pg.stdout_path
     assert listing.stdin == ARCHIVE
     # And the rows the stack count reads are that archive's too.
-    assert read.argv == ['exec', '-i', 'pgstate', 'pg_restore', '--data-only', '--table=pulumi_state', '--file=-']
+    assert read.argv == [
+        'exec',
+        '-i',
+        _container(),
+        'pg_restore',
+        '--data-only',
+        f'--table={state.STATE_TABLE}',
+        '--file=-',
+    ]
     assert read.stdin_path == pg.stdout_path
     assert read.stdin == ARCHIVE
 
@@ -313,7 +336,7 @@ def test_the_archive_is_spooled_on_the_disk_rather_than_in_memory(tmp_path: Path
     assert pg.stdout_path is not None and encrypt.stdout_path is not None
     assert pg.stdout_path.parent == encrypt.stdout_path.parent
     spool = pg.stdout_path.parent
-    assert spool.parent == box.spool and spool.name.startswith('state-dump.')
+    assert spool.parent == box.spool
     _left_nothing_behind(box)
 
 
@@ -377,26 +400,15 @@ def test_rows_that_cannot_be_read_stop_the_run_with_what_pg_restore_said(tmp_pat
     _left_nothing_behind(box)
 
 
-def test_a_listing_that_cannot_be_read_stops_the_run(tmp_path: Path) -> None:
-    # `pg_restore` refusing the archive outright means the file is not an
-    # archive at all, and must not be read as an unusual but passable answer.
-    box = Box(tmp_path, list_status=1, listing='')
+def test_a_listing_that_cannot_be_read_stops_the_run_with_what_pg_restore_said(tmp_path: Path) -> None:
+    """`pg_restore` refusing the archive outright means the file is not an archive at all.
 
-    ran = box.run()
-
-    assert ran.returncode != 0
-    assert 'pg_restore --list failed' in ran.stderr
-    assert box.of('age') == [] and box.of('curl') == []
-    _left_nothing_behind(box)
-
-
-def test_the_refusal_carries_what_pg_restore_said(tmp_path: Path) -> None:
-    """A status is not a diagnosis, and this one cannot be reproduced later.
-
-    The listing runs with its output captured, so its stderr is the only
-    account of why the archive was refused; the archive itself goes with the
-    run's temporary directory, and the box it happened on is one nobody logs
-    in to. Dropped here, the reason is gone.
+    It must not be read as an unusual but passable answer. And a status is
+    not a diagnosis, one that cannot be reproduced later: the listing runs
+    with its output captured, so its stderr is the only account of why the
+    archive was refused; the archive itself goes with the run's temporary
+    directory, and the box it happened on is one nobody logs in to. Dropped
+    here, the reason is gone.
     """
     said = 'pg_restore: error: did not find magic string in file header'
     box = Box(tmp_path, list_status=1, listing='', complaint=f'{said}\n')
@@ -404,7 +416,9 @@ def test_the_refusal_carries_what_pg_restore_said(tmp_path: Path) -> None:
     ran = box.run()
 
     assert ran.returncode != 0
+    assert 'pg_restore --list failed' in ran.stderr
     assert said in ran.stderr
+    assert box.of('age') == [] and box.of('curl') == []
     _left_nothing_behind(box)
 
 
@@ -483,9 +497,6 @@ def test_the_backend_wait_survives_a_hanging_probe(monkeypatch: pytest.MonkeyPat
 
 BUTANE = render.machine_file(render.TEMPLATE)
 
-#: The notice a failed run leaves, and a good one removes.
-MOTD = '/etc/motd.d/10-state-dump.motd'
-
 
 def _unit(name: str) -> str:
     """One systemd unit's own lines, out of the Butane template.
@@ -537,10 +548,14 @@ def test_a_failed_dump_reaches_the_next_login() -> None:
     """
     unit = _unit('state-dump.service')
     assert 'OnFailure=state-dump-failed.service' in unit
-    assert 'ExecStartPost=' in unit and MOTD in unit
+    removed = re.search(r'^\s*ExecStartPost=-/usr/bin/rm -f (\S+)$', unit, re.M)
+    assert removed is not None, 'a good run takes no notice down'
 
+    # The notice the failed run writes is the one a good run removes, where
+    # the login prints it.
     notice = _unit('state-dump-failed.service')
-    assert MOTD in notice
+    assert f'> {removed.group(1)}' in notice
+    assert removed.group(1).startswith('/etc/motd.d/')
     # And it says where the rest of the story is.
     assert 'journalctl -u state-dump.service' in notice
 

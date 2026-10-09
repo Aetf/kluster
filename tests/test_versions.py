@@ -11,7 +11,7 @@ opens -- and they have to agree.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import cast
 
@@ -71,8 +71,17 @@ PINS = {
 
 
 @pytest.fixture(autouse=True)
-def pinned() -> None:
+def pinned() -> Iterator[None]:
+    """The pins every case starts from, and whatever was configured before restored once it ends.
+
+    The cases here set program configuration in pytest's main context, which
+    pytest-asyncio copies into every async case after them, so a pin a case
+    breaks on purpose would otherwise be what those read.
+    """
+    before = dict(pulumi.runtime.config.CONFIG.get())
     pulumi.runtime.set_all_config(dict(PINS))
+    yield
+    pulumi.runtime.set_all_config(before)
 
 
 def project_block() -> dict[str, object]:

@@ -22,14 +22,51 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shlex
+import shutil
 import subprocess as sp
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from kluster.lib.state_backend import render, settings
 
 SCRIPT = Path(render.__file__).with_name(render.MACHINE) / render.DUMP_SCRIPT
+
+#: The interpreter the script's shebang names, which a run here executes as
+#: the box does.
+SHEBANG = SCRIPT.read_text().splitlines()[0].removeprefix('#!')
+
+#: What the box's image carries that the script runs, that no fake here stands
+#: in for, and that a host may lack: the image's set the script's header names,
+#: less `bash`, which `SHEBANG` names by path, and `podman`, `age` and `curl`,
+#: which are faked. Nothing pins them for this suite, so a host without one
+#: fails the run by naming it rather than with the script's own failure.
+#: `gawk` is the box's `awk`, and a run here reaches it under that name,
+#: whichever `awk` the host has.
+HOST_TOOLS = ('jq', 'sha1sum', 'gawk', 'sed')
+
+
+def box_tools(directory: Path) -> None:
+    """Refuse a host missing what the box's image carries, and put the box's `awk` in `directory`.
+
+    The stand-in is a shell stub naming `gawk` by the path found on this
+    host, so it holds however short the `PATH` it is run under.
+    """
+    missing = [tool for tool in HOST_TOOLS if shutil.which(tool) is None]
+    if not os.access(SHEBANG, os.X_OK):
+        missing.insert(0, SHEBANG)
+    if missing:
+        pytest.fail(
+            f'not on this host: {", ".join(missing)}, which the box runs the dump script with, as a run here does'
+        )
+    awk = directory / 'awk'
+    _ = awk.write_text(f'#!/bin/sh\nexec {shlex.quote(str(shutil.which("gawk")))} "$@"\n')
+    awk.chmod(0o755)
+
 
 #: A `pg_restore --list` output, header and all, of a box the backend has
 #: opened: its one table, the table's rows, and the key's constraint and
@@ -99,10 +136,16 @@ UPLOAD_TARGET: dict[str, Any] = {
     'authorizationToken': 'upload-token',
 }
 
-#: The environment the unit's `EnvironmentFile=` provides (butane.yaml.j2).
+#: The role the dump connects as: the template's superuser, which the
+#: container's local socket admits.
+_SUPERUSER = re.search(r"\{%- set superuser = '([^']+)' %\}", render.machine_file(render.TEMPLATE))
+assert _SUPERUSER is not None, 'the Butane template names no superuser'
+
+#: The environment the unit's `EnvironmentFile=` provides (butane.yaml.j2),
+#: with the values the box is rendered with where the template names them.
 ENV = {
-    'PG_ROLE': 'operator',
-    'PG_DATABASE': 'pulumi_state',
+    'PG_ROLE': _SUPERUSER[1],
+    'PG_DATABASE': settings.DATABASE,
     'B2_KEY_ID': 'key-id',
     'B2_KEY': 'key-secret',
     'B2_BUCKET_ID': 'bucket-id',
@@ -225,11 +268,12 @@ class Box:
         #: script's trap removes what a run put there, on every way out.
         self.spool: Path = root / 'spool'
         self.bin.mkdir()
+        box_tools(self.bin)
         self.record.mkdir()
         self.spool.mkdir()
         for tool, body in FAKES.items():
             fake = self.bin / tool
-            _ = fake.write_text(f'#!/usr/bin/bash\nset -uo pipefail\nFAKE_TOOL={tool}\n{body}')
+            _ = fake.write_text(f'#!{SHEBANG}\nset -uo pipefail\nFAKE_TOOL={tool}\n{body}')
             fake.chmod(0o755)
         recipients_file = root / 'age-recipients.txt'
         _ = recipients_file.write_text(recipients)

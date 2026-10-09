@@ -14,6 +14,7 @@ at which the server may not be up yet.
 
 from __future__ import annotations
 
+import getpass
 import os
 import shutil
 import subprocess as sp
@@ -319,6 +320,10 @@ def test_a_multiplexing_master_cannot_carry_the_pinned_exec(tmp_path: Path, pyte
     admitted = tmp_path / 'authorized_keys'
     _ = admitted.write_text(identity.public + '\n')
     proxy = _serving(tmp_path, interposer, admits=admitted)
+    # The server runs as this account, so the login names it. `getuser`
+    # reads `LOGNAME` or `USER` first and the account database only where
+    # neither is set, so the case does not fail for want of `USER`.
+    login = f'{getpass.getuser()}@{ADDRESS}'
 
     try:
         # The operator's bare login: trust-on-first-use, against the wrong
@@ -340,7 +345,7 @@ def test_a_multiplexing_master_cannot_carry_the_pinned_exec(tmp_path: Path, pyte
                 'BatchMode=yes',
                 '-o',
                 f'ProxyCommand={proxy}',
-                f'{os.environ["USER"]}@{ADDRESS}',
+                login,
                 'true',
             ],
             cwd=sockets,
@@ -364,7 +369,7 @@ def test_a_multiplexing_master_cannot_carry_the_pinned_exec(tmp_path: Path, pyte
         assert REFUSED in pinned.stderr
     finally:
         _ = _client(
-            ['ssh', '-O', 'exit', '-o', 'ControlPath=./mux-%h', f'{os.environ["USER"]}@{ADDRESS}'],
+            ['ssh', '-O', 'exit', '-o', 'ControlPath=./mux-%h', login],
             cwd=sockets,
             home=home,
         )
