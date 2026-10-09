@@ -59,6 +59,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
+import pinned_tools
 import process_sessions
 import pytest
 from credentials_command_tree import named_leaves
@@ -788,7 +789,16 @@ def test_behind_the_forge_and_conflicted_the_ancestry_is_what_is_refused(
     assert 'conflicted' not in str(refused.value)
 
 
-@pytest.mark.skipif(shutil.which('jj') is None, reason='jj is not on PATH')
+@pytest.fixture(scope='module')
+def pinned_jj() -> None:
+    """The pinned `jj`, refused when missing rather than skipped."""
+    pinned_tools.require('jj')
+
+
+needs_jj = pytest.mark.usefixtures('pinned_jj')
+
+
+@needs_jj
 def test_in_a_jj_checkout_the_working_copy_is_jjs(repository: Repository, committed: str) -> None:
     # `@` in a colocated checkout is a commit git's HEAD is the parent of; the
     # forge's main is checked against it, as it is where a run's checkpoint
@@ -821,7 +831,7 @@ def _jj(*args: str, cwd: Path) -> str:
     return process_sessions.run(['jj', *args], cwd=cwd, text=True, check=True, timeout=60).stdout
 
 
-@pytest.mark.skipif(shutil.which('jj') is None, reason='jj is not on PATH')
+@needs_jj
 def test_a_primary_working_copy_another_workspace_rewrote_is_refused(
     repository: Repository, committed: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:

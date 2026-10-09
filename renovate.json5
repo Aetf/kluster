@@ -527,8 +527,10 @@
       // test holds the two equal. This rule goes once the mise manager passes
       // the channel on: a lookup with it removed then finds the package.
       //
-      // Matched by datasource rather than manager: the conda datasource reaches
-      // this repository only through that pin.
+      // Matched by datasource and name, as the other conda pin's rule below
+      // is: the conda datasource reaches this repository through every
+      // `mise.toml` pin that names a `channel`, and each needs the channel in
+      // its name.
       matchDatasources: [
         'conda',
       ],
@@ -563,6 +565,46 @@
       ],
       groupName: 'state-backend appliance',
       groupSlug: 'state-backend',
+    },
+    {
+      // The local gawk's lookup, for the reason the client's rule above gives:
+      // the mise manager hands the conda datasource the bare name, `gawk`,
+      // which api.anaconda.org does not answer, so the name is the channel's
+      // here, `conda-forge/gawk`, the channel `mise.toml` writes. A test holds
+      // every channel pin to such a rule.
+      //
+      // The pin holds the appliance's gawk line rather than gawk's newest
+      // release (its comment in `mise.toml`), and conda-forge's newest release
+      // is on a later line, so the line bounds what renovate may offer, and a
+      // test holds the bound to the pin's line. Within the line every release
+      // is a patch, which the global `patch: enabled: false` drops, so nothing
+      // here moves the pin: the appliance's Fedora CoreOS major moves it, by
+      // the re-check the pin's comment describes, and the rule after this one
+      // puts that re-check in front of whoever reads such a bump.
+      matchDatasources: [
+        'conda',
+      ],
+      matchDepNames: [
+        'conda:gawk',
+      ],
+      overridePackageName: 'conda-forge/gawk',
+      allowedVersions: '/^5\\.3\\./',
+    },
+    {
+      // A Fedora CoreOS major for the appliance ships its own gawk line, and
+      // the local gawk follows the appliance's (the rule above). The pull
+      // request moving the major says so, since no renovate rule can tie the
+      // two: the line a Fedora major ships is read off the build's package
+      // list, not off any data source.
+      matchDepNames: [
+        'fedora-coreos',
+      ],
+      matchUpdateTypes: [
+        'major',
+      ],
+      prBodyNotes: [
+        'This moves the appliance to a new Fedora CoreOS major, which ships its own gawk line. Re-check `mise.toml`\'s `conda:gawk` pin and the `allowedVersions` of its rule in `renovate.json5` against the new build\'s gawk, as the pin\'s comment describes.',
+      ],
     },
     {
       // The self-built images (ci.md §4). Each pin here is one image, so they
