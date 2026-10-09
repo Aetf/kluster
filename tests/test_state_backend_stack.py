@@ -23,7 +23,6 @@ import inspect
 import ipaddress
 import json
 import lzma
-import re
 import socket
 import ssl
 import threading
@@ -38,7 +37,7 @@ import pulumi_b2 as b2
 import pulumi_oci as oci
 import pytest
 import pytest_asyncio
-from credentials_command_tree import commands
+from credentials_command_tree import named_commands
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -649,19 +648,18 @@ def test_the_stacks_own_providers_sign_every_resource_and_every_call(run: Applia
 
 
 def _commands_named(refusal: BaseException) -> list[list[str]]:
-    """The words of each `credentials` command a refusal names, in its order, refused unless the parser carries it.
+    """The leaf of each `credentials` command a refusal names, in its order, refused unless the parser carries it.
 
-    A refusal names its remedy in backticks; the flags after the leaf (a
-    `--rotate`) are the leaf's to take, so the line is matched without them.
-    The parser is read when the refusal is, since the backup generations'
-    rows are the window the settings name at that moment.
+    A refusal names its remedy in backticks. What is returned is the leaf as
+    the parser reads it -- subject, row, verb -- so the options after it (a
+    `--rotate`) and their values are left out, and a row named only as an
+    option's value is not taken for the row. The parser is read when the
+    refusal is, since the backup generations' rows are the window the settings
+    name at that moment.
     """
-    carried = frozenset(' '.join(['credentials', *argv]) for argv in commands())
-    named = [re.sub(r' --\S+', '', line) for line in re.findall(r'`(credentials [^`]+)`', str(refusal))]
+    named = named_commands(str(refusal))
     assert named, f'{refusal} names no `credentials` command'
-    for line in named:
-        assert line in carried, f'`{line}` is not a command the parser carries'
-    return [line.split() for line in named]
+    return [['credentials', parsed['subject'], parsed['member'], parsed['action']] for _, parsed in named]
 
 
 def _command_named(refusal: BaseException) -> list[str]:

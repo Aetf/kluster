@@ -18,10 +18,11 @@ import re
 from pathlib import Path
 
 import pytest
+from credentials_command_tree import named_commands
 from fake_pulumi import RecordedPulumi
 
 from kluster import conventions
-from kluster.scripts.credentials import cli, devices, escrow, pulumi_config
+from kluster.scripts.credentials import devices, escrow, pulumi_config
 from kluster.scripts.credentials.kdbx import KdbxError
 
 UNIFI = devices.DEVICES['unifi']
@@ -56,9 +57,7 @@ def stack(name: str) -> tuple[pulumi_config.Stack, RecordedPulumi]:
 
 def parsed_commands(message: str) -> list[tuple[str, str, str]]:
     """Every `credentials …` command a message quotes, as the parser reads it: subject, member, action."""
-    parser = cli.build_parser()
-    parsed = [vars(parser.parse_args(quoted.split())) for quoted in re.findall(r'`credentials ([^`]+)`', message)]
-    return [(argv['subject'], argv['member'], argv['action']) for argv in parsed]
+    return [(args['subject'], args['member'], args['action']) for _, args in named_commands(message)]
 
 
 @pytest.fixture

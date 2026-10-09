@@ -17,6 +17,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pinned_tools
 import pytest
 from renovate_text import group, listed, package_rule
 
@@ -26,9 +27,7 @@ from kluster.scripts.credentials import age
 @pytest.fixture(scope='module')
 def pinned_age() -> None:
     """The pinned `age` and `age-keygen`, refused when either is missing rather than skipped."""
-    for binary in (age.BINARY, age.KEYGEN):
-        if shutil.which(binary) is None:
-            pytest.fail(f'{binary} is not on PATH: mise.toml pins it, so run the suite under `mise x`')
+    pinned_tools.require(*pinned_tools.AGE)
 
 
 needs_age = pytest.mark.usefixtures('pinned_age')

@@ -12,15 +12,15 @@ desktop session, so the code under test is the code that runs on a workstation
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import keyring.backends.fail
 import pytest
+from credentials_command_tree import named_commands
 from memory_keyring import MemoryKeyring, installed
 
-from kluster.scripts.credentials import cli, devices, kdbx, masters, workstation
+from kluster.scripts.credentials import devices, kdbx, masters, workstation
 from kluster.scripts.credentials.kdbx import KdbxError
 
 
@@ -140,8 +140,7 @@ def test_the_fallback_prompt_says_where_the_credential_comes_from(
     root = masters.ROOTS[masters.B2]
     for line in root.console.splitlines():
         assert line in caplog.text
-    (quoted,) = re.findall(r'`credentials ([^`]+)`', caplog.text)
-    parsed = vars(cli.build_parser().parse_args(quoted.split()))
+    ((_, parsed),) = named_commands(caplog.text)
     assert (parsed['subject'], parsed['member'], parsed['action']) == ('root', root.member, 'remember')
 
 

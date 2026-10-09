@@ -10,13 +10,13 @@ plaintext, and a new generation changes no other label.
 from __future__ import annotations
 
 import functools
-import re
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import keyring.backends.fail
 import pinned_tools
 import pytest
+from credentials_command_tree import named_commands
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from memory_keyring import MemoryKeyring, installed
@@ -349,11 +349,6 @@ def test_a_token_label_asks_only_that_there_be_a_value(vault: escrow.Vault) -> N
 # --------------------------------------------------------------------------
 
 
-def commands_named(message: str) -> list[list[str]]:
-    """Every `credentials …` command a message quotes, as argv without the program name."""
-    return [quoted.split()[1:] for quoted in re.findall(r'`(credentials [^`]+)`', message)]
-
-
 def console_rows() -> list[str]:
     """Every label whose value is made somewhere no API of this repository reaches."""
     return [label for label, row in escrow.register().items() if isinstance(row.origin, escrow.Console)]
@@ -463,8 +458,7 @@ def test_a_kit_carrying_no_such_row_sends_the_operator_to_the_console(kit: KdbxS
     with pytest.raises(escrow.EscrowError, match='carries no such row') as refused:
         _ = escrow.from_kit(kit, escrow.DISPATCH_KEY)
 
-    (named,) = commands_named(str(refused.value))
-    parsed = vars(cli.build_parser().parse_args(named))
+    ((_, parsed),) = named_commands(str(refused.value))
     assert (parsed['action'], parsed['label']) == (escrow.register()[escrow.DISPATCH_KEY].verb, escrow.DISPATCH_KEY)
     assert '--from-kit' in str(refused.value)
 
@@ -780,8 +774,7 @@ def test_a_kit_without_a_recovery_key_is_sent_to_bootstrap(registry: escrow.Regi
     with pytest.raises(escrow.EscrowError, match='recovery key') as refused:
         _ = escrow.Vault.open(MemoryKit(), registry)
 
-    (named,) = commands_named(str(refused.value))
-    parsed = vars(cli.build_parser().parse_args(named))
+    ((_, parsed),) = named_commands(str(refused.value))
     assert (parsed['subject'], parsed['action'], parsed['only']) == ('kit', 'bootstrap', entries.RECOVERY)
 
 
