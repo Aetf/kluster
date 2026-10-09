@@ -63,6 +63,21 @@ not a few lines, is the unit. `allowed-confusables` is none of these:
 it tells the confusable-character rules which character this tree uses
 on purpose, and every one of those rules still runs everywhere.
 
+**A long step says what it is doing before it starts.** A script logs
+what it is about to do before any step that can take more than a second
+or two: a network call, a poll, a batch. A wait also says what
+condition it waits on and how long that usually takes. The result line
+after the step stays; the line before says what is happening, the line
+after says what came of it, and neither replaces the other. Where a
+script waits on a process whose own output may not say what that
+process is doing, the script narrates the wait itself. The reason is the
+operator watching the run: with only after-the-fact lines, a silence
+reads the same whether the step is working, waiting on something the
+operator could fix, or hung, and a silence that was announced is one
+they can read. This is runtime output, not documentation, so the
+as-built rule of [README.md](README.md) does not reach it: it describes
+the process as it happens, where docs and comments describe what is.
+
 **Long literals are not code.** Another program's configuration
 language (a config file, a rules program) lives in a file beside the
 module, loaded by the shared mechanism — string literals in Python are
@@ -89,7 +104,8 @@ the assert. Rules that keep it that way:
     "irrelevant setup out of sight" rather than competing with it —
     abstract the setup that is *not* the point into clean modules with
     clean interfaces, and keep the values that *are* the point literal
-    and in view.
+    and in view. Readability licenses no assertion: which values a
+    case may hold still as literals is [testing.md](testing.md)'s rule.
 
 **A claim belongs at import time when the collection itself depends on
 it** — a value that sizes a parametrization, or a property the

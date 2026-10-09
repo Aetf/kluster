@@ -22,6 +22,48 @@ together are declared together; an API that must be called a certain
 way accepts only that way; a state machine that has no "half done"
 carries no flag that says so.
 
+## A workaround for an upstream defect is a layer of its own
+
+Code that works around a defect upstream — in a provider, a tool, a
+library — is built as one separable layer, designed as though upstream
+were already fixed:
+
+-   **Its interface is the one the architecture would have without the
+    defect.** Callers ask for what they need, and the layer supplies it
+    by whatever detour the defect forces. Nothing outside the layer takes
+    a parameter, a field or a step that exists because of the defect.
+-   **Its boundary is stated**, where the layer is written: which
+    modules, steps or rules make it up, so that removing it means reading
+    a list rather than investigating.
+-   **Its removal condition is stated** beside the boundary — usually
+    the upstream issue or release that fixes the defect, written as what
+    is observably true once it has.
+-   **A tripwire holds it** — a test, or a step of a CI job — red when
+    the upstream behavior the layer answers changes: what the detour
+    leans on moves, or the defect is fixed. The layer then neither
+    breaks unnoticed nor outlives its reason. Where a version or a
+    behavior can be observed by a step or a test of ours, the tripwire
+    observes it there: a job step can read the version of a tool its
+    runner carries and fail once that version ships the fix. Only for a
+    party that nothing of ours can observe, such as a service hosted on
+    the forge, is the removal condition written at the layer the whole
+    guard, standing where whoever edits the layer is looking
+    ([testing.md](testing.md) says why reach decides).
+
+**The test of a good layer is the day upstream fixes the defect.**
+Removing the workaround then means deleting that one layer, and no
+interface or data shape elsewhere was bent for it. A detour threaded
+through the code instead stays after the fix ships, because by then
+nobody can tell which parts of an interface exist for the defect and
+which for the design, and the detour has become the design.
+
+The layers built this way today include the Renovate rule that looks
+`postgresql` up under its channel, as `conda-forge/postgresql`
+(`renovate.json5`), which goes once Renovate's mise manager passes a
+pin's channel on, and the drop-in that makes pasta podman's rootless
+network on CI ([framework/ci.md](../framework/ci.md) §3), which goes
+once the runner's podman defaults to pasta by itself.
+
 ## Naming
 
 **Descriptive over metaphorical.** A name states what the thing is, not

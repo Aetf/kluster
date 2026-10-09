@@ -347,9 +347,11 @@ dropped, and the operator sees none of it. `pulumi.log` is the engine's
 diagnostics: `pulumi` draws each line on the stack's row while the run goes,
 at a terminal and under a pipe alike, and lists them at the run's end. The
 row is the stack's, not the resource's, since a provider has no URN to
-attach a line to, so a line names what it is about. A step that takes long
--- a fetch, a decompression, an upload, a wait -- says what it is doing
-before it starts, and a wait that polls says so at each attempt.
+attach a line to, so a line names what it is about. A long step -- a fetch,
+a decompression, an upload, a wait -- follows the rule every script does
+([python.md](python.md), "A long step says what it is doing before it
+starts") through that channel, and a wait that polls says so at each
+attempt.
 `tests/test_provider_output.py` refuses an import of `logging` anywhere
 under `src/kluster/providers/`.
 
