@@ -1133,9 +1133,9 @@ this repository's own, one package per system under
 `src/kluster/providers/`: today the desired-state files on the gateway
 device, the UniFi controller's rank of a zone pair's policies and its
 site BGP configuration, the site's delegated prefix, read off the
-gateway's PD lease, the Talos image factory's artifacts, the rewrites
-on an AdGuard instance, the objects OCI imports a custom image from,
-and the appliance's TLS handshake waited for. Every one of them is
+gateway's PD lease, the Talos image factory's artifacts, an AdGuard Home
+instance's whole configuration, the objects OCI imports a custom image
+from, and the appliance's TLS handshake waited for. Every one of them is
 a **dynamic provider**, and this section is what that costs and how one
 is written. *Which* of them
 should be one is a design decision, argued where each is designed
@@ -1338,6 +1338,31 @@ a file backend.
 
 `refresh` and `destroy` need no special flag on this version: both ran
 plainly, and both called `configure` before `read` and `delete`.
+
+Three more, measured against Pulumi 3.267.0, which every dynamic
+provider here is subject to:
+
+-   **E11 — an output annotated as a `TypedDict` is refused.** The SDK
+    holds an output resolved in the program to the annotation on the
+    resource class, and refuses a dict where that annotation names a
+    `TypedDict`. So an object output is annotated as a plain dict, or a
+    list of them, and the `TypedDict` types the input alone.
+-   **E12 — a phase runs in a process of its own.** A `pulumi up` runs
+    its preview and its update in two plugin processes, and under
+    `--refresh` each phase runs its refresh in another, four in all.
+    The host deserializes and configures a provider once per process,
+    and serves up to four operations of it at once. So a memo a
+    provider keeps in its module lives one phase, is shared by every
+    resource that phase serves, and needs a lock.
+-   **E13 — a refresh is served with the configuration recorded in
+    state.** The `pulumi-python` default provider records the stack's
+    configuration in state at every update, failed ones included, and a
+    refresh reads that copy rather than the current one. A refresh
+    after a credential changed in configuration dials with the old one;
+    once a failed update has recorded a wrong value, a refreshing
+    command keeps sending it after the configuration is right again, and
+    only a plain `pulumi up` records the current one. So a credential's
+    rotation ends with a plain `up`.
 
 ## 6. Rendered Configuration
 

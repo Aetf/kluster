@@ -323,10 +323,12 @@ declarative/physical.md §4.
     running pair forwards them the same way, and the initial state is
     read only by an instance that has no configuration of its own — a
     new one, or one rebuilt after the device was lost (§3). The rest of
-    a running instance's settings is carried by the window and declared
-    nowhere here: an instance rebuilt from the initial state comes up
-    without its filter lists and clients, and on the initial state's
-    public resolvers rather than the ones the pair forwards to.
+    a running instance's settings is carried by the window, and the
+    `dns` stack declares all of it (declarative/dns.md §3): an instance
+    rebuilt from the initial state comes up without its filter lists
+    and clients, and on the initial state's public resolvers rather
+    than the ones the pair forwards to, until it is reset and that
+    stack's run sets it up (§3).
 
     **Which resolver a container asks is a fact about this site, not
     about the image**, so where it differs from the image's own default
@@ -1102,7 +1104,7 @@ legacy cluster — they migrate in Waves B through D
 (cluster/migration.md §2), while the declaration replaces the device's
 live configuration whole in one window before any of them does. Without
 the block, every one of them goes on resolving — the resolvers answer
-the whole zone from a rewrite of their own — and stops being served, on
+each of these names from a rule of their own — and stops being served, on
 the day the device is taken over rather than on the day its application
 moves.
 
@@ -1488,7 +1490,7 @@ deletes its member.
 | `Aetf-Arch-VPS` | `infra` | The legacy deployment. Its entry leaves the roster in Wave F, no later than the machine is cancelled (cluster/migration.md §4). |
 | `haos` | `infra` | Home automation, reachable while the cluster is not. A Linux client on its defaults, so it installs the subnet route alone (§2.2). |
 | `ci-physical` | `ci` | The `physical` stack's identity: `plan-physical`, `up-physical`, and the drift matrix's `physical` entry join with it. Identity generated in state (`zerotier_identity`), private key an Environment secret; `zt-physical` keeps it live in one job at a time (§2.6). IPv4-only (§2.3). |
-| `ci-dns` | `ci` | The `dns` stack's identity: `up-dns`, the drift matrix's `dns` entry, and a pull request's join proof `join (dns)` join with it — the LAN-touching work is the AdGuard rewrites (declarative/dns.md §3). A pull request's previews of `dns` dial nothing over the overlay and do not join (ci.md §2). Same generation, its own confinement (§2.3), serialized by `zt-dns` (§2.6). IPv4-only (§2.3). |
+| `ci-dns` | `ci` | The `dns` stack's identity: `up-dns`, the drift matrix's `dns` entry, and a pull request's join proof `join (dns)` join with it — the LAN-touching work is the AdGuard pair's configuration (declarative/dns.md §3). A pull request's previews of `dns` dial nothing over the overlay and do not join (ci.md §2). Same generation, its own confinement (§2.3), serialized by `zt-dns` (§2.6). IPv4-only (§2.3). |
 | Personal devices | `personal` | Phones and laptops, each named in the roster. Full access — parity with sitting on the LAN — and the escape hatch: the tunnel into the home, which the device opens itself. Whether a device holds the tunnel and applies its resolver (§2.2, §2.7) is its own setting, decided on the device: not a roster field, because the controller can neither read nor set it. |
 
 ### 2.2 Managed routes
@@ -1685,7 +1687,10 @@ and nothing else: `ci-physical` the UDM's SSH (the device-files push),
 the UDM's UniFi Network API (443, the UniFi OS proxy — the unifi
 provider's controller calls, declarative/physical.md §4) and the
 homelab host's SSH (the libvirt session); `ci-dns` the two AdGuard
-APIs (the rewrites, `components/dns/rewrites.py`). One leaking buys
+APIs, on the port an instance's configuration is written through
+(`components/dns/resolver.py`) and not the port its first-run setup
+answers on, so a run from CI can configure a running instance and can
+neither see nor set up one in first run (§3). One leaking buys
 neither the LAN nor the other's reach.
 
 **No leg names a Talos node**, the worker included, because no run
@@ -2979,9 +2984,12 @@ join.
     suffix (`osdep/WinDNSHelper.cpp`), and the Linux recipe above sets a
     routing-only domain, `~<primary>`, so on both a member is reached at
     its full name. Labels are the roster names as the record helper
-    normalizes them (`pixel-7-pro`, `aetf-arch-homelab`), and the
-    resolvers answer such a name by forwarding it upstream and returning
-    the public record (declarative/dns.md §2).
+    normalizes them (`pixel-7-pro`, `aetf-arch-homelab`). The resolvers
+    answer such a name from a rule of their own, one per roster entry
+    (declarative/dns.md §3), with the address the public record carries.
+    Both are derived from the same entry, so the answer is the same
+    whichever of them gives it, and it does not depend on the resolvers
+    reaching upstream.
 -   A client keeps at most four pushed servers and drops the rest
     silently; two are pushed, and the block is held inside the bound —
     the client's `ZT_MAX_DNS_SERVERS` — in `test_conventions`.
@@ -3030,14 +3038,20 @@ knob is what covers a gateway that is off the overlay for a reason
 (§2.5).
 
 The `dns` stack is deliberately the other way round: an unreachable
-resolver fails only its own rewrite resources and the rest of the zone
-converges (framework/ci.md §2). The two are asymmetric because the
+resolver fails its own resources, and the zones and the other
+resolver's resources converge wherever their steps had already started
+(framework/ci.md §2). Once a step fails the engine starts no further
+one, so in the steady state, where no setup changes and every step
+starts at once, that is all of them; a kind still waiting on a setup
+being created or updated does not run, and neither does a write of the
+DNS server's settings waiting for the same write on the resolver before it
+(declarative/dns.md §3). The two are asymmetric because the
 gateway is `physical`'s own management path, so a plan made without
 reaching it would describe a device the apply cannot touch either,
 while a resolver is a leaf whose absence says nothing about the records
 at the registrar. The `dns` join waits for the first of the two
 resolvers to answer, which proves the run's own route through the
-gateway (§2.2), so one resolver down fails its own rewrites and both
+gateway (§2.2), so one resolver down fails its own resources and both
 down, or the gateway, fail the job at the join.
 
 -   **ZeroTier container down on the UDM** — trigger: physical-stack CI runs
@@ -3079,7 +3093,63 @@ down, or the gateway, fail the job at the join.
     replacement no member answers at `10.144.1.1`, so a device holding
     the tunnel has no network until its setting is off (personal
     members' direct paths still work throughout), and no device opens
-    the tunnel during a replacement.
+    the tunnel during a replacement. Then run
+    `mise x uv -- uv run ci-stack dns up --refresh` from the checkout that
+    holds `.credentials/`: its refresh finds each resolver holding none
+    of its resources, and its update re-creates them, each resolver's
+    first-run setup making the account with the stack's own login
+    before the rest of the configuration is written
+    (declarative/dns.md §3). Nothing is typed into a wizard and no
+    account is written by hand. The run goes from the checkout because
+    CI's deploy is a plain `up`, which reads no instance, and the
+    `ci-dns` identity reaches the API's port alone (§2.3). Until it,
+    the LAN has no resolver, so the checkout resolves through another
+    one, as it has to for the `physical` re-run before it; and a
+    resolver's state directory has to be writable by its machine, or
+    the instance exits before its wizard starts (`kluster-ops#515`).
+    The initial state `physical` installs (§1.1) names no account, so
+    an instance started from it is refused by its setup, and the reset
+    below is what lets the run set it up.
+-   **A resolver's login rotated, or its account lost** — trigger: a
+    new `adguardPassword`, or a setup refusing the stack's login. No
+    endpoint changes an account, so each resolver is reset in turn, and
+    **no `up` of the stack may record the new login before the last
+    pass** — CI's `up-dns` included, which runs the moment a new
+    `Pulumi.dns.yaml` reaches `main`. A refresh dials with the login the
+    last update recorded in state, failed updates included
+    (framework/pulumi.md §5.3): once the new one is recorded, the first
+    pass's refresh sends it to the resolver not yet reset, which
+    refuses it, and the run fails before it writes anything, leaving
+    the reset resolver answering no DNS. So:
+    1.  Where the login rotates, record it with
+        `credentials derived adguard record`, and keep the changed
+        `Pulumi.dns.yaml` off `main` until step 5.
+    2.  Reset the resolver `conventions.gateway.RESOLVERS` names first,
+        since the other's DNS server settings wait for its
+        (declarative/dns.md §3): stop its machine with
+        `systemctl stop systemd-nspawn@<name>.service`, which its
+        restart policy does not act on; move
+        `/data/custom/machines/<name>/state/AdGuardHome.yaml` aside —
+        the `data/` beside it keeps the state directory from reading as
+        empty, so no initial state is copied back in (§1.1) — and start
+        the machine again.
+    3.  Run `mise x uv -- uv run ci-stack dns up --refresh --continue-on-error`.
+        Its refresh drops the reset resolver's resources, and its update
+        sets that resolver up and writes its whole configuration. Where
+        the login rotated, it exits non-zero at the other resolver's
+        setup, which refuses the new login, at the cost of that one
+        refused login; without `--continue-on-error` that refusal stops
+        the run before the reset resolver's configuration is written.
+        The other resolver serves meanwhile on its configuration.
+    4.  Reset the other resolver as step 2 resets the first, and run
+        `mise x uv -- uv run ci-stack dns up --refresh`.
+    5.  End with a plain `mise x uv -- uv run ci-stack dns up`, which records
+        the current login in state, then land the stack file on `main`.
+
+    The instance's `data/` keeps its query log, its statistics and its
+    list cache across the reset. The other correct form resets both
+    resolvers and runs step 4 once, at the cost of the LAN having no
+    resolver for that run.
 
 The readings of §1.6 name the entries below: `gateway-health`'s
 findings first, then the ones `check-gateway` raises of its own, then

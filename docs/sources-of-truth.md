@@ -45,10 +45,10 @@ Column 5 names issues in the ops repository, where the drift is tracked.
 | Row | Domain | (1) Live source of truth today | (2) Stack · apply state | (3) Tracker until the flip · what "take" means | (4) Flip → retirement | (5) Known drift |
 |---|---|---|---|---|---|---|
 | R1 | `dns` · the Cloudflare zones: base records, mail with DKIM, the `*.zt` block, `legacy.py`'s application records, anchors, CAA, DNSSEC | the `dns` stack, applied as column 3 gives it. Aetf/dns is archived and declares nothing: its pointer commit `fe7cc03` removed `dnsconfig.js` and every workflow, and it holds no secret (G5; note N1) | `dns` · **applied locally.** Its first `up` ran on 2026-11-15 from the operator's checkout (physical/gateway-cutover.md §8.2) and reported 57 created, 67 updated and 55 deleted, the deletes being the records note N1 lists, the set B6 printed before it. A second `up`, from `main` once Aetf/kluster#708 declared a TXT over 255 characters and an SRV's priority as Cloudflare reads them back, followed it. On 2026-11-15 the stack against the zones, the first reading of physical/gateway-cutover.md §8.2, reports nothing but the `status` of the `ZoneDnssec` in each zone it signed first, peifeng.phd, ucw.phd, jiahui.id and jiahui.love, read back as `pending` against the declared `active` | none: flipped. A change is a pull request to `components/dns/` or the conventions it reads, and the merge applies it (§3) | flipped by `kluster-ops#75`'s `dns` first `up` (physical/gateway-cutover.md §8.2) → `kluster-ops#7`: Aetf/dns's pointer commit and its archive, and the revocation at Cloudflare of the token its workflow held (note N1) | the `pending` DNSSEC status of column 2, which physical/gateway-cutover.md §8.4 clears zone by zone (`kluster-ops#75`) |
-| R2 | `dns` · the split-horizon answers on alice and bob | alice, by hand. adguardhome-sync, a homelab user unit that is running (H2), copies alice to bob. Both instances answer from `$dnsrewrite` user rules, 18 each, with the rewrite list the stack writes empty and switched off (U3) | `dns` · declares none: B3 lists no rewrite among the stack's types. Its first rows are Aetf/kluster#454, open and held | alice's UI, which the sync carries to bob, and the weekly backup pull, `gateway-backup-pull`, records in yadm's `~/.config/gw-backups` (physical/gateway.md §1.6). Here: every rule the instances answer from, declared in the `user_rules` list of each instance, a list one resource per instance owns whole (`kluster-ops#507`, way (b)), same sitting, unapplied. The `lan.ucw.phd` rules are declared too until their application migrates (rule 4), since the first apply of that list removes every rule it does not declare | Aetf/kluster#454, which declares the user-rules list, merged and applied after R1's flip; adguardhome-sync stopped before it (note N2) → its unit's removal (`kluster-ops#79`); the pull's AdGuard transfer, which keeps column 3's record until the flip (rule 4), is removed in the change that applies #454 | `kluster-ops#507`; `kluster-ops#482`; `kluster-ops#223`; `kluster-ops#143` |
+| R2 | `dns` · the AdGuard pair's whole configuration: the rule list each instance answers from, the DNS server's settings, the filter lists, the persistent clients, the filtering, query-log and statistics settings, and each instance's account | alice, by hand. adguardhome-sync, a homelab user unit that is running (H2), copies alice's whole configuration but its DHCP to bob. On 2026-10-08 the two held one configuration apart from what each measures: 92 user rules, the rewrite list empty and switched off, TLS and DHCP off, and one persistent client (U6) | `dns` · declares it, one `ResolverConfiguration` per instance (declarative/dns.md §3), and holds none of it: B3 lists no AdGuard resource among the stack's types | alice's UI, which the sync carries to bob, and the weekly backup pull, `gateway-backup-pull`, records in yadm's `~/.config/gw-backups` (physical/gateway.md §1.6). Here: the same change in `components/dns/` — a rule as a row of a derivation the list is rendered from, a setting in `resolver_settings.py` — same sitting, unapplied. Every rule the instances answer from is declared, the `lan.ucw.phd` names among them until their application migrates (rule 4), since the first write of the list removes every rule it does not declare. The Bilibili steering is paused and declared nowhere (`kluster-ops#513`) | the declaration's first `up`, which is the merge of Aetf/kluster#454 now that R1 has flipped, with adguardhome-sync stopped (note N2) and U6 taken again just before it as the record of what the first write replaces; `kluster-ops#223` is its drill → its unit's removal (`kluster-ops#79`); the pull's AdGuard transfer, which keeps column 3's record until the flip (rule 4), is removed in the change that applies #454 | `kluster-ops#507`; `kluster-ops#223`; `kluster-ops#513`; `kluster-ops#514` |
 | R3 | `physical` · the cloud fleet in compartment `kluster-physical` (network, nodes, load balancer, addresses, volumes, guardrails) and the Talos day-1 chain | the `physical` stack, for what its runs have created; nothing else declares the rest | `physical` · **created by step 5's first run** (physical/gateway-cutover.md §5), from 2026-11-14, as far as that run has reached: a resource it has not reached is absent, with nothing standing in for it. On 2026-11-14 it stopped short of the instances and the Talos configuration, on the image (`kluster-ops#729`). The console read of OCI (O1) was not taken | none | `physical`'s step 5 in `kluster-ops#75`: its first run, which leaves out the overlay's network and members (physical/gateway-cutover.md §5) → none | none known |
 | R4 | `physical` · the homelab's libvirt objects: the pool on the `nodatacow` subvolume, and the worker's volume, seed and domain | the `physical` stack, for what its runs have created. The host preparation under them is aconfmgr's, and applied (physical/homelab-host.md, status) | as R3. On 2026-11-14 the run created the pool and the worker's volume and stopped short of the worker's domain; beside them the host holds the domain `haos` and the pool `images` (H3) | none for these. The host preparation stays aconfmgr's for good, and a pool defined there would fail the first apply (physical/homelab-host.md §4) | the same run as R3, which creates the worker's disk at its declared size; growth to the end state is the host-side procedure of physical/homelab-host.md §1 → none | none known |
-| R5 | `physical` · the gateway's device state: boot chain, units, `nspawn` settings and machines, `caddy`, AdGuard's initial state, authorized keys, device secrets, root filesystems. The ZeroTier machine is new | gw-config, yadm's `~/.config/gw-config`, pushed by hand with `deploy.sh`; root filesystems pushed by homelab-containers. Its dry run passes against the device (U1), which runs `adguard-alice`, `adguard-bob` and `caddy` under an active `udm-boot` (U2) | as R3 | gw-config: edit, `./deploy.sh`, the restart it prints, `yadm commit`. Here: the same change in `components/gateway/` or `conventions.gateway`, same sitting, unapplied | the window of physical/gateway-cutover.md, after which gw-config is frozen (note N3) → physical/gateway-cutover.md §7 after the soak; `kluster-ops#79` | `kluster-ops#508`: the live `Caddyfile` carries the Bilibili steering (U4), which nothing here declares |
+| R5 | `physical` · the gateway's device state: boot chain, units, `nspawn` settings and machines, `caddy`, AdGuard's initial state, authorized keys, device secrets, root filesystems. The ZeroTier machine is new | gw-config, yadm's `~/.config/gw-config`, pushed by hand with `deploy.sh`; root filesystems pushed by homelab-containers. Its dry run passes against the device (U1), which runs `adguard-alice`, `adguard-bob` and `caddy` under an active `udm-boot` (U2) | as R3 | gw-config: edit, `./deploy.sh`, the restart it prints, `yadm commit`. Here: the same change in `components/gateway/` or `conventions.gateway`, same sitting, unapplied | the window of physical/gateway-cutover.md, after which gw-config is frozen (note N3) → physical/gateway-cutover.md §7 after the soak; `kluster-ops#79` | `kluster-ops#513`: the live `Caddyfile` carries the Bilibili steering (U4), paused and declared nowhere. The rest of `kluster-ops#508`'s census is declared: the forwarded zones and `rsync` here, and the resolvers' upstreams, lists and client in R2 |
 | R6 | `physical` · the controller census of declarative/physical.md §4: the cluster VLAN's network, its zone, every custom policy on a pair the census orders, whatever traffic it is about, and their order, the v6 pinhole, the v4 peer-port forward, static host entries, the site's BGP configuration | the `physical` stack: the window's targeted run applied the cluster VLAN's network, its zone, the address groups and the policies and orders of the census's pairs on 2026-11-05 (`kluster-ops#75`), and the retirement's targeted run applied the site's BGP configuration on 2026-11-14 (physical/gateway-cutover.md §7, `kluster-ops#736`). The pinhole names the worker's GUA as each run derives it from the delegated prefix it reads; the forward waits for Wave D, and the peer port's WAN side stays the legacy qbittorrent's until then (physical/gateway.md §4.2) | `physical` · **applied by the window's targeted run**, 2026-11-05 (`kluster-ops#75`), which read the census's policies ranked ahead of the predefined ones on Internal → External; the site's BGP configuration **applied by the retirement's targeted run**, 2026-11-14 (`kluster-ops#736`), after which the controller held one configuration, switched on. The console read (U5) was not taken | none: a custom policy on a pair the census orders is a census row, and one found in the console is drift (physical/gateway.md §4.2). What the census leaves to the console, the pairs it does not order, stays there for good, recovered from the UniFi autobackup (physical/gateway-cutover.md §7) | flipped by the window's targeted run; the pinhole by the first apply of the whole stack; the forward in Wave D (`qbittorrentOnWorker`, migration.md §2) → none | none known |
 | R7 | `physical` · ZeroTier Central: routes, flow rules, managed DNS, members | Central, hand-kept in its console (physical/gateway.md §2.1). It holds the route `10.144.0.0/16`, default rules and no managed DNS (Z2). Its RFC 4193 and 6PLANE addressing is on: the homelab member's overlay interface carries one address of each, derived from the network id (H4, 2026-10-24), and Z2's `v6` reads the setting itself, not yet taken. Its members match `conventions.overlay.ROSTER`, which also lists `ci-dns` and `ci-physical`, not yet created, and `udm`, whose member the ceremony's step 2 creates (Z3, Z4). Beside them, every kluster-code preview and deploy job authorizes a member of its own at Central with a Central token, outside the roster, and deletes it when the job ends, so Z3 lists one only while a job runs. Those members draw their addresses from the IPv4 assignment pools, which Z2 reads and no reading here records | as R3; the network enters state in the window's targeted run. The managed DNS of `kluster-ops#69`'s first slice is merged and not live (Z2) | none. "Take" is the Central change plus the same change to `conventions.overlay` (`ROSTER`, `MANAGED_ROUTES`), same sitting: the converge deletes a route the census lacks, and admits no member the roster lacks (physical/gateway.md §2.1–2.3) | the window's targeted run adopts the network at Central's values. Once the gateway's entry has landed, a run targeting its member alone creates it and the device is read answering at its overlay address; and once that run and the rest of the stack's first run have passed, the run with no targets converges the network, its default route via the gateway included (physical/gateway.md §2.2, §2.5). The converge turns RFC 4193 and 6PLANE off, so every member loses its two derived IPv6 addresses: the single-family overlay of physical/gateway.md §2.2 is the arrangement (rule 4). The converge also replaces Central's assignment pools with every overlay host address but the roster's and the gateway's (physical/gateway.md §2.1), and admits and removes none of kluster-code's self-authorized CI members: they keep joining outside the roster, the arrangement retired by the step of `kluster-ops#79` that disables kluster-code's workflows or archives the repository and deletes its `ZEROTIER_CENTRAL_TOKEN` at Central (rule 4; threat-model.md §2.10) → hand edits stop | none known |
 | R8 | `physical` · the B2 bucket `aetf-kluster-backup` and its keys | the `physical` stack | as R3: the bucket and its keys are among what step 5's first run created on 2026-11-14. The console read of B2 (O2) was not taken | none | the same run as R3, after `credentials derived b2-management mint` (credentials.md) → none | none known |
@@ -130,15 +130,17 @@ above but the ones already gone live, and the `up`'s deletes were the
 same set. From then on, a line it prints is a record in state that the
 program no longer declares, which the next `up` deletes.
 
-**N2. adguardhome-sync may stop at any time** (operator ruling,
-`kluster-ops#505`). It carries more than the rules written by hand, which
-end with `kluster-ops#507`: alice's whole configuration but its DHCP,
-so also the block `bili-cdn-probe` writes into alice's `user_rules`
-and every setting outside `user_rules` (upstreams, filter lists, clients;
-the census on `kluster-ops#508`). Stopping it leaves bob with what it
-last copied of those until they are declared. It must stop before the
-stack first writes bob, since it would overwrite bob's list with
-alice's. migration.md §4 removes its unit in Wave F at the latest.
+**N2. adguardhome-sync stops before the stack first writes either
+instance** (operator ruling, `kluster-ops#505`, which lets it stop at
+any time). It copies alice's whole configuration but its DHCP to bob
+every 15 minutes. R2's declaration writes every setting it carries to
+both instances, so from that apply on it carries nothing the stack does
+not write, and left running it would overwrite bob with whatever alice
+held between two applies. The apply checks it:
+`systemctl --user is-active adguardhome-sync.service` answers
+`inactive`. Nothing else writes `user_rules`: `bili-cdn-probe`'s timer
+is disabled (`kluster-ops#513`). migration.md §4 removes the unit in
+Wave F at the latest.
 
 **N3. After the cutover window nothing runs `deploy.sh`.** Its
 `rsync` calls carry `--delete` into `/data/on_boot.d/`,
@@ -190,8 +192,10 @@ stack, on something other than the merge:
 -   **`state-backend` and `github`:** operator stacks, which no job runs
     (framework/pulumi.md §3.3).
 
-A held pull request carries the rule by hand today: Aetf/kluster#454
-(R2).
+A held pull request carries the rule by hand today: Aetf/kluster#454,
+the declaration of R2's configuration (`kluster-ops#507`). R1 has
+flipped, so its merge applies `dns`, and it waits on note N2 and a fresh
+U6.
 
 ## 4. Taking the readings again
 
@@ -383,8 +387,8 @@ for z in $(mise x uv -- uv run python -c 'from kluster import conventions as c; 
 done
 ```
 
--   **C0** is the one place in the script that decrypts, with the real
-    stack passphrase, which `mise` supplies here. `config get` reads one
+-   **C0** decrypts, with the real stack passphrase, which `mise`
+    supplies here, and so does U6; nothing else in the script does. `config get` reads one
     secret and rewrites the stack file only when the secrets manager's
     state changes (`pkg/cmd/pulumi/config/config.go`, `getConfig`),
     which the surrounding checksum would show. `47ab103` is the commit
@@ -440,12 +444,36 @@ ssh gw 'machinectl list --no-legend; systemctl is-active udm-boot.service'
 ssh gw 'for i in alice bob; do f=/data/adguard-$i/AdGuardHome.yaml; echo "$i rewrites_enabled=$(sed -n "s/^ *rewrites_enabled: //p" $f) rewrites=$(grep -c "^    - domain:" $f) dnsrewrite_rules=$(grep -c dnsrewrite $f)"; done'
 # U4
 ssh gw 'grep -c -E "mirrorakam|layer4" /data/caddy/config/caddy/Caddyfile'
+# U6 the resolvers' whole configuration, into a private directory
+h="$(sha256sum Pulumi.dns.yaml)"; AU="$(mise x -- pulumi config get adguardUsername --stack dns)"; AP="$(mise x -- pulumi config get adguardPassword --stack dns)"; [ "$h" = "$(sha256sum Pulumi.dns.yaml)" ] && echo "stack file unchanged"
+ag() { printf 'user = "%s:%s"\n' "$AU" "$AP" | curl -fsS -K - "http://$1/control/$2"; }
+R=~/.cache/adguard-u6/"$(date -u +%Y%m%dT%H%M%SZ)"; mkdir -p "$R" && chmod 700 "$R"
+for r in $(mise x uv -- uv run python -c 'from kluster import conventions as c; print(*(f"{r.name}={r.address}" for r in c.gateway.RESOLVERS))'); do
+  n=${r%%=*}; a=${r#*=}
+  ag "$a" status >/dev/null || { echo "$n refused the login: stopping"; break; }
+  for e in status dns_info access/list filtering/status safebrowsing/status parental/status safesearch/status blocked_services/get clients querylog/config stats/config rewrite/list rewrite/settings tls/status dhcp/status; do
+    ag "$a" "$e" > "$R/$n-${e//\//_}.json" || echo "$n $e failed"
+  done
+  ssh gw "cat /data/custom/machines/$n/state/AdGuardHome.yaml 2>/dev/null || cat /data/$n/AdGuardHome.yaml" > "$R/$n-AdGuardHome.yaml"
+done
 ```
 
 -   **U1** is gw-config's dry run, the one its daily `check-gw` timer
     runs. Its `--check` branch runs `rsync -n` and `ssh gw cat`/`stat`,
     and exits before the first write of its apply branch (`deploy.sh`).
 -   **U2–U4** are read verbs over SSH.
+-   **U6** is a GET to every endpoint the `dns` stack's resources read,
+    and to the rewrite list, TLS and DHCP besides, then a `cat` of each
+    instance's file, at the machine's state directory or, on the layout
+    before the cutover window and after a rollback, at the path gw-config
+    deploys. The login is read
+    out of the stack's configuration as C0 reads the zones token, goes
+    to `curl` on standard input rather than on its command line, and is
+    tried once per instance before anything else: an instance blocks an
+    address for fifteen minutes after five refused logins, a correct one
+    included. The directory holds what is private — the accounts'
+    hashes, the console's MAC addresses — so a reading posted to an
+    issue is a sanitized copy of it.
 -   **U5** is the controller, read in its console: the bridged provider
     is this repository's only client of the controller's API, and a
     `physical` preview refuses without the B2 keys. It reads whether

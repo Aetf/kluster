@@ -92,9 +92,10 @@ that changes daily — reaches the cluster and Cloudflare and nothing on
 the LAN, because the split-horizon rewrites its routes imply are applied by `dns` from the
 same plain-data declaration (dns.md §3). A typical app image bump
 stays entirely public-endpoint, and ZeroTier's availability is not a
-dependency of it. The AdGuard rewrite resources tolerate one
-unreachable resolver by failing only their own resources, not the whole
-up. Each CI overlay identity is **confined by Central flow rules**
+dependency of it. An unreachable resolver fails its own
+resources, not the whole up: the zones and the other resolver's
+resources converge wherever their steps had already started
+(physical/gateway.md §3). Each CI overlay identity is **confined by Central flow rules**
 (managed with the rest of the Central config, architecture.md §5.3)
 to the targets its own stack calls — today `ci-physical` to UDM SSH,
 the UDM UniFi API and homelab libvirt SSH, and `ci-dns` to the AdGuard

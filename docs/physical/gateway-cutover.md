@@ -2366,23 +2366,17 @@ counted, because the counts move with every census change:
     anchors, `kluster.hosts` with an A and an AAAA and `vip1.hosts` with
     an A, in the primary zone; and any other record the census declares
     and state lacks, such as the `*.zt` names of roster members the
-    imported block did not carry (Aetf/kluster-ops#510). Beside the
-    records, one `kluster:dns:ResolverRewrites` component per entry of
-    `conventions.gateway.RESOLVERS`, named `rewrites-<name>`, each
-    holding one rewrite per entry that
-    `rewrites(conventions.routes.EXPOSURES.values())` derives
-    (`components/dns/rewrites.py`); while the exposure census implies no
-    rewrite, the components hold none. The one-liner after this list prints what those rows are
-    matched against.
+    imported block did not carry (Aetf/kluster-ops#510). The resolvers
+    are no part of this step: the `dns` stack's state holds their
+    configuration as one `kluster:dns:ResolverConfiguration` per entry
+    of `conventions.gateway.RESOLVERS`, each instance's setup and the
+    six kinds that configure it (declarative/dns.md §3), written by the
+    apply that is sources-of-truth.md R2's flip and not by this one.
 -   **The updates** are read row by row: the right side of each field
     is the value of its row in the census.
 -   **The anchors carry `physical`'s addresses**: `physical stack output
     cluster_endpoint`, `cluster_endpoint_v6` and `vip1` print the values
     their rows show.
-
-```sh
-mise x uv -- uv run python -c 'from kluster import conventions as c; from kluster.components.dns.rewrites import rewrites; print(*(f"rewrites-{r.name}" for r in c.gateway.RESOLVERS)); print(*rewrites(c.routes.EXPOSURES.values()), sep="\n")'
-```
 
 A preview that matches all of that is applied, and the `up` shows the
 same plan before it asks:
