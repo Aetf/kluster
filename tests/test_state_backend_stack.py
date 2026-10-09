@@ -27,7 +27,7 @@ import re
 import socket
 import ssl
 import threading
-from collections.abc import AsyncGenerator, Callable, Generator, Iterator
+from collections.abc import AsyncGenerator, Callable, Generator, Iterable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType
@@ -648,26 +648,26 @@ def test_the_stacks_own_providers_sign_every_resource_and_every_call(run: Applia
 # --------------------------------------------------------------------------
 
 
-#: Every `credentials` command line the parser carries, as a refusal spells one.
-COMMAND_LINES = frozenset(' '.join(['credentials', *argv]) for argv in commands())
-
-
-def _command_named(refusal: BaseException) -> list[str]:
-    """The words of the one `credentials` command a refusal names, refused unless the parser carries it.
+def _commands_named(refusal: BaseException) -> list[list[str]]:
+    """The words of each `credentials` command a refusal names, in its order, refused unless the parser carries it.
 
     A refusal names its remedy in backticks; the flags after the leaf (a
     `--rotate`) are the leaf's to take, so the line is matched without them.
-    A generation written `<N>` -- the recipients file, which every backup
-    generation's row writes a line of -- is read as each generation of the
-    box's window, and the first the parser carries is the one named.
+    The parser is read when the refusal is, since the backup generations'
+    rows are the window the settings name at that moment.
     """
-    (named,) = re.findall(r'`(credentials [^`]+)`', str(refusal))
-    line = re.sub(r' --\S+', '', named)
-    generations = [label.rsplit('/', 1)[1] for label in committed.backup_window()]
-    candidates = [line.replace('<N>', number) for number in generations] if '<N>' in line else [line]
-    carried = [candidate for candidate in candidates if candidate in COMMAND_LINES]
-    assert carried, f'`{line}` is not a command the parser carries'
-    return carried[0].split()
+    carried = frozenset(' '.join(['credentials', *argv]) for argv in commands())
+    named = [re.sub(r' --\S+', '', line) for line in re.findall(r'`(credentials [^`]+)`', str(refusal))]
+    assert named, f'{refusal} names no `credentials` command'
+    for line in named:
+        assert line in carried, f'`{line}` is not a command the parser carries'
+    return [line.split() for line in named]
+
+
+def _command_named(refusal: BaseException) -> list[str]:
+    """The words of the one `credentials` command a refusal names, refused unless the parser carries it."""
+    (named,) = _commands_named(refusal)
+    return named
 
 
 @pytest.mark.asyncio
@@ -697,19 +697,24 @@ async def test_a_server_key_that_does_not_open_its_certificate_is_refused(
     assert derived.STATE_BACKEND_SERVER_ROW in _command_named(refused.value)
 
 
-#: Each committed file, and the `credentials derived` row that writes it, as
-#: the writers spell their rows.
+#: Each committed file, and the `credentials derived` rows that write it in
+#: the order a refusal names them, as the writers spell their rows.
 ABSENT = {
-    'host-key': (committed.HOST_KEY.name, derived.STATE_BACKEND_HOST_KEY_ROW),
-    'backup-recipients': (committed.BACKUP_RECIPIENTS.name, escrow.row_name(escrow.backup_labels()[0])),
-    'drill-recipient': (committed.DRILL_RECIPIENT.name, derived.DRILL_AGE_IDENTITY_ROW),
+    'host-key': (committed.HOST_KEY.name, (derived.STATE_BACKEND_HOST_KEY_ROW,)),
+    'backup-recipients': (committed.BACKUP_RECIPIENTS.name, tuple(map(escrow.row_name, escrow.backup_labels()))),
+    'drill-recipient': (committed.DRILL_RECIPIENT.name, (derived.DRILL_AGE_IDENTITY_ROW,)),
 }
 
 
+def _generating(rows: Iterable[str]) -> list[list[str]]:
+    """The command that writes each row's file, as a refusal names it."""
+    return [['credentials', 'derived', row, 'generate'] for row in rows]
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize(('file', 'row'), ABSENT.values(), ids=ABSENT.keys())
-async def test_a_committed_file_absent_is_refused_naming_its_writer(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, file: str, row: str
+@pytest.mark.parametrize(('file', 'rows'), ABSENT.values(), ids=ABSENT.keys())
+async def test_a_committed_file_absent_is_refused_naming_its_writers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, file: str, rows: tuple[str, ...]
 ) -> None:
     machine = _machine(tmp_path)
     (tmp_path / file).unlink()
@@ -717,7 +722,25 @@ async def test_a_committed_file_absent_is_refused_naming_its_writer(
     with _files_in(monkeypatch, machine.directory), pytest.raises(committed.Refused) as refused:
         _ = await _run(Appliance(), machine)
 
-    assert row in _command_named(refused.value)
+    assert _commands_named(refused.value) == _generating(rows)
+
+
+@pytest.mark.parametrize(
+    ('generation', 'width'),
+    [(committed.FIRST_GENERATION, 1), (committed.FIRST_GENERATION + 1, 2)],
+    ids=['first', 'after-a-rotation'],
+)
+def test_an_absent_recipients_file_names_each_generation_of_the_window_current_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, generation: int, width: int
+) -> None:
+    monkeypatch.setattr(settings, 'AGE_GENERATION', generation)
+
+    with pytest.raises(committed.Refused) as refused:
+        _ = committed.backup_recipients(tmp_path / committed.BACKUP_RECIPIENTS.name)
+
+    window = escrow.backup_labels()
+    assert (window[0], len(window)) == (f'{escrow.BACKUP}/{generation}', width)
+    assert _commands_named(refused.value) == _generating(map(escrow.row_name, window))
 
 
 def test_the_current_generation_absent_from_the_recipients_file_is_refused(tmp_path: Path) -> None:
@@ -1363,22 +1386,38 @@ def test_the_wait_refuses_a_certificate_from_another_authority(tmp_path: Path) -
 
 @dataclasses.dataclass
 class _Clock:
-    """A clock the wait's own sleeps advance, so its deadline is reached with no wall time passing."""
+    """`postgres_tls`'s clock in the wait's cases: only the wait's own sleeps move it, and each read is counted.
+
+    It replaces `postgres_tls`'s own name `time` rather than anything in the
+    `time` module, so the wait is the one thing that reads it and everything
+    else the case runs keeps the real clock.
+    """
 
     now: float = 0.0
+    reads: int = 0
 
     def monotonic(self) -> float:
+        self.reads += 1
         return self.now
 
     def sleep(self, seconds: float) -> None:
         self.now += seconds
 
+    def read(self) -> float:
+        """The time an attempt is made at, refused if the wait took its deadline from another clock.
+
+        The wait reads its clock for the deadline before its first attempt, so
+        an attempt that finds this clock unread is one about to be waited out
+        in real seconds, and the case stops there instead of paying them.
+        """
+        assert self.reads, '`postgres_tls.wait` read another clock for its deadline'
+        return self.now
+
 
 @pytest.fixture
 def clock(monkeypatch: pytest.MonkeyPatch) -> _Clock:
     found = _Clock()
-    monkeypatch.setattr(postgres_tls.time, 'monotonic', found.monotonic)
-    monkeypatch.setattr(postgres_tls.time, 'sleep', found.sleep)
+    monkeypatch.setattr(postgres_tls, 'time', found)
     return found
 
 
@@ -1386,7 +1425,7 @@ def test_the_wait_waits_out_a_box_that_does_not_answer_yet(clock: _Clock) -> Non
     attempts: list[float] = []
 
     def attempt(_address: str, _port: int, _ca: str) -> None:
-        attempts.append(clock.now)
+        attempts.append(clock.read())
         if len(attempts) < 3:
             raise postgres_tls.NotAnswering('connection refused')
 
@@ -1396,10 +1435,13 @@ def test_the_wait_waits_out_a_box_that_does_not_answer_yet(clock: _Clock) -> Non
 
 
 def test_the_wait_gives_up_on_a_box_that_never_answers(clock: _Clock) -> None:
+    attempts: list[float] = []
+
     def attempt(_address: str, _port: int, _ca: str) -> None:
+        attempts.append(clock.read())
         raise postgres_tls.NotAnswering('connection refused')
 
     with pytest.raises(postgres_tls.NotAnswering, match=f'within {postgres_tls.TIMEOUT}s'):
         postgres_tls.wait(LOOPBACK, 5432, 'unused', timeout=postgres_tls.TIMEOUT, attempt=attempt)
 
-    assert clock.now <= postgres_tls.TIMEOUT
+    assert attempts[-1] <= postgres_tls.TIMEOUT < attempts[-1] + postgres_tls.INTERVAL
