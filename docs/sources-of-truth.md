@@ -44,7 +44,7 @@ Column 5 names issues in the ops repository, where the drift is tracked.
 
 | Row | Domain | (1) Live source of truth today | (2) Stack · apply state | (3) Tracker until the flip · what "take" means | (4) Flip → retirement | (5) Known drift |
 |---|---|---|---|---|---|---|
-| R1 | `dns` · the Cloudflare zones: base records, mail with DKIM, the `*.zt` block, `legacy.py`'s application records, anchors, CAA, DNSSEC | DNSControl: Aetf/dns `dnsconfig.js`, whose `push.yml` is active and last applied on 2026-10-04 (G5). Its preview reports no correction on any zone at `e865032` (C1). The ruling that keeps it authoritative is `kluster-ops#177` | `dns` · **imported, never applied.** Its only update is a `resource-import` that succeeded on 2026-08-26, run locally (B2). It holds 139 resources (B1): 123 `DnsRecord`, 6 `Zone`, 6 `ManagedZone`, 2 `ZoneDnssec` (B3). The repository-against-live preview cannot run before `physical` is applied (note N1), and its refresh, run on 2026-10-08 after the state was rebound to the stack's own Cloudflare provider (`kluster-ops#511`), finds `dkim-k8s` in both mail zones behind live, which matches `DKIM_K8S` | Aetf/dns: edit `dnsconfig.js` and merge to `master`, and the merge applies (`push.yml`, no gate). Here: the same edit to `components/dns/`, same sitting, unapplied; the DKIM key change (Aetf/kluster#441) is the shape | `kluster-ops#75`'s `dns` first up, in the order of note N1 → `kluster-ops#7` (the pointer commit, then the archive) | `kluster-ops#510`; `kluster-ops#478` |
+| R1 | `dns` · the Cloudflare zones: base records, mail with DKIM, the `*.zt` block, `legacy.py`'s application records, anchors, CAA, DNSSEC | DNSControl: Aetf/dns `dnsconfig.js`, whose `push.yml` is active and last applied on 2026-10-04 (G5). Its preview reports no correction on any zone at `e865032` (C1). The ruling that keeps it authoritative is `kluster-ops#177` | `dns` · **imported, never applied.** Its only update is a `resource-import` that succeeded on 2026-08-26, run locally (B2). It holds 139 resources (B1): 123 `DnsRecord`, 6 `Zone`, 6 `ManagedZone`, 2 `ZoneDnssec` (B3). The repository-against-live preview cannot run before `physical` is applied (note N1), and its refresh, run on 2026-10-08 after the state was rebound to the stack's own Cloudflare provider (`kluster-ops#511`), finds `dkim-k8s` in both mail zones behind live, which matches `DKIM_K8S` | Aetf/dns: edit `dnsconfig.js` and merge to `master`, and the merge applies (`push.yml`, no gate). Here: the same edit to `components/dns/`, same sitting, unapplied; the DKIM key change (Aetf/kluster#441) is the shape | `kluster-ops#75`'s `dns` first up, in the order of note N1, which names the records it deletes and the ruling that retires each → `kluster-ops#7` (the pointer commit, then the archive) | `kluster-ops#510`; `kluster-ops#478` |
 | R2 | `dns` · the split-horizon answers on alice and bob | alice, by hand. adguardhome-sync, a homelab user unit that is running (H2), copies alice to bob. Both instances answer from `$dnsrewrite` user rules, 18 each, with the rewrite list the stack writes empty and switched off (U3) | `dns` · declares none: B3 lists no rewrite among the stack's types. Its first rows are Aetf/kluster#454, open and held | alice's UI, which the sync carries to bob, and the weekly backup pull records in yadm. Here: every rule the instances answer from, declared in the `user_rules` list of each instance, a list one resource per instance owns whole (`kluster-ops#507`, way (b)), same sitting, unapplied. The `lan.ucw.phd` rules are declared too until their application migrates (rule 4), since the first apply of that list removes every rule it does not declare | Aetf/kluster#454, which declares the user-rules list, merged and applied after R1's flip; adguardhome-sync stopped before it (note N2) → its unit's removal (`kluster-ops#79`) | `kluster-ops#507`; `kluster-ops#482`; `kluster-ops#223`; `kluster-ops#143` |
 | R3 | `physical` · the cloud fleet in compartment `kluster-physical` (network, nodes, load balancer, addresses, volumes, guardrails) and the Talos day-1 chain | none: never applied | `physical` · **no history**: 0 resources, the stack initialized on 2026-08-26 and never updated (B1, B2). The console read of OCI (O1) was not taken | none | `physical`'s run with no targets in `kluster-ops#75` (physical/gateway.md §2.5) → none | none known |
 | R4 | `physical` · the homelab's libvirt objects: the pool on the `nodatacow` subvolume, and the worker's volume, seed and domain | none. The host preparation under them is aconfmgr's, and applied (physical/homelab-host.md, status) | as R3. The host holds one domain, `haos`, and one pool, `images` (H3): no worker and no cluster pool | none for these. The host preparation stays aconfmgr's for good, and a pool defined there would fail the first apply (physical/homelab-host.md §4) | the same run as R3, then the host-side `truncate` and `virsh blockresize` (physical/homelab-host.md §1) → none | none known |
@@ -76,15 +76,54 @@ one landing between the `up` and the retirement would undo the `up`.
 
 The preview is reconciled line by line, as
 `kluster-ops#75` asks: no replace or delete from the type move
-(`kluster-ops#478`), the expected deletes in the parked zones
-(Aetf/kluster#180; `kluster-ops#202`), and the first `up`'s own changes,
-which are CAA and DNSSEC on the zones that lack them, and the anchors.
-The co-host zone's check is negative: its create list holds no `*.zt`
-name and no `archvps.hosts`. CAA is live on `unlimited-code.works` alone, and the
-parents hold DS for `unlimited-code.works` and `unlimitedcodeworks.xyz`
-alone (C2). That preview cannot run before `physical` is applied: the
-program refuses until `physical` publishes the anchors' addresses
-(declarative/dns.md §2).
+(`kluster-ops#478`), the expected deletes below, and the first `up`'s
+own changes, which are CAA and DNSSEC on the zones that lack them, and
+the anchors. The co-host zone's check is negative: its create list holds
+no `*.zt` name and no `archvps.hosts`. CAA is live on
+`unlimited-code.works` alone, and the parents hold DS for
+`unlimited-code.works` and `unlimitedcodeworks.xyz` alone (C2). That
+preview cannot run before `physical` is applied: the program refuses
+until `physical` publishes the anchors' addresses (declarative/dns.md
+§2).
+
+**The first `up`'s expected deletes are the `DnsRecord`s in the `dns`
+state that the program does not declare.** The import took the live
+records, so the state holds what DNSControl published, and what of that
+the declaration leaves out is deleted at Cloudflare by the first `up`
+that completes. Each falls in one of three classes, and each class has
+its ruling. Today's members are C1's live set, Aetf/dns at `e865032`,
+less the declaration, listed by zone and label:
+
+-   **Every record of a parked zone but its apex and `www`**, the copies
+    DNSControl published there: rfc-003 §5.3 and §5.4. In each of
+    `peifeng.phd` and `ucw.phd`:
+    -   the legacy anchor `archvps.hosts`;
+    -   the `*.zt` names of DNSControl's block, which are not the
+        roster's: `Aetf-Arch-XPS.zt`, `OnePlus6T.zt`, `Aetf-Laptop.zt`,
+        `Aetf-Arch-VPS.zt`, `Aetf-Arch-Homelab.zt` and `haos.zt`;
+    -   the application labels `auth`, `k8s`, `mon`, `photos`, `bt`,
+        `files`, `dav`, `mcmap`, `login`, `sync`, `syncapi`, `matrix`,
+        `test`, `haos`, `tube` and `spool`, and the SRV
+        `_matrix-identity._tcp`.
+-   **A primary-zone name no application owns**: rfc-003 §4.5, held by
+    `test_a_name_no_application_owns_is_published_by_nobody` in
+    `tests/test_dns_records.py`. In `unlimited-code.works`: `login`,
+    `k8s`, `test`, `files`, `mcmap` and `archvps.stats`.
+-   **A primary-zone `*.zt` name whose device has no
+    `conventions.overlay.ROSTER` entry**: the overlay block publishes one
+    name per roster member and nothing else (`kluster-ops#510`, ruled on
+    2026-10-08). In `unlimited-code.works`: `Aetf-Laptop.zt`.
+
+**The website co-host, `unlimitedcodeworks.xyz`, has none**
+(`kluster-ops#202`): the overlay block and the legacy anchor rfc-003
+§5.3 keeps out of it were never live there, so its state holds neither.
+
+The list is what the deletes are read against; B6 is what confirms it.
+Run before the `up`, B6 prints every record in the state that the
+declaration lacks. Its lines and the preview's `-` rows are the same
+set, and each belongs to a class above. A line B6 prints that fits no
+class, or a member listed here that B6 does not print, is a finding to
+settle before the `up`, not an expected delete.
 
 **N2. adguardhome-sync may stop at any time** (operator ruling,
 `kluster-ops#505`). It carries more than the rules written by hand, which
@@ -207,6 +246,9 @@ cmp -s <(git show main:"$F") "$F" && echo "the working copy holds main's checkpo
 A="$(mise x uv -- uv run python -c 'from kluster.lib.state_backend import settings as s; print(f"{s.ADDRESS}:{s.PORT}")')"
 openssl s_client -starttls postgres -connect "$A" </dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha256
 mise x uv -- uv run python -c 'import yaml; print(yaml.safe_load(open("Pulumi.state-backend.yaml"))["config"]["kluster-py:serverCertificate"])' | openssl x509 -noout -fingerprint -sha256
+
+# B6 the dns records in state that the program does not declare: the first up's deletes (note N1)
+pq stack export --stack dns | mise x uv -- uv run python -c 'import json, sys; from kluster.conventions import ALL_ZONES; from kluster.components.dns import LEGACY, base, zone_records; b = (*base.blocks(anchors=base.AnchorAddresses("", "", "")), *LEGACY); d = {f"{z}-{r.resource_key}" for z in ALL_ZONES for r in zone_records(z, b)}; s = [(r["urn"].rsplit("::", 1)[1], r.get("inputs", {})) for r in json.load(sys.stdin)["deployment"]["resources"] if r["type"] == "cloudflare:index/dnsRecord:DnsRecord"]; print(*sorted("\t".join((n, i.get("name", "?"), i.get("type", "?"))) for n, i in s if n not in d), sep="\n")'
 ```
 
 -   **B1** lists checkpoints and cannot write. `resourceCount` counts
@@ -242,6 +284,18 @@ mise x uv -- uv run python -c 'import yaml; print(yaml.safe_load(open("Pulumi.st
     the stack's box serves; different ones mean a box serves under a
     certificate the stack's configuration does not hold, as the box the
     appliance's earlier script built did.
+-   **B6** is B3's export, which decrypts nothing, piped into a local
+    parse. The declared set is the program's own derivation: the blocks
+    `stacks/dns.py` declares, `base.blocks` and `LEGACY`, through
+    `zone_records`, each record named as `ManagedZone` names it,
+    `<zone>-<key>`. The anchors' addresses are left empty, because a
+    record's name does not depend on its content. What it prints is one
+    line per record in state outside that set: the state name, then the
+    name and type the state's inputs hold, or `?` where they hold none.
+    It errs loudly rather than quietly: were `ManagedZone`'s naming to
+    move without B6, every record in state would print. It was not among
+    the readings of 2026-10-04: it is taken before the `dns` first up
+    (note N1).
 
 #### C — Cloudflare through DNSControl
 
