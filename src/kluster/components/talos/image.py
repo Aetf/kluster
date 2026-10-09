@@ -70,6 +70,28 @@ HOMELAB_PLATFORM = 'nocloud'
 CLOUD_EXTENSIONS: tuple[str, ...] = ()
 HOMELAB_EXTENSIONS = ('siderolabs/i915',)
 
+GIB = 1 << 30
+
+#: The room the worker's disk has past the end of the Talos image when it is
+#: created, which is the room Talos has to boot into before anything grows it.
+#:
+#: The factory builds `nocloud` at the size Talos's imager gives a metal image,
+#: which holds the boot partitions and META and nothing more: from v1.8 on, a
+#: disk image carries no data partitions, and Talos creates STATE and
+#: EPHEMERAL past the image's last partition at first boot (talos v1.13.0
+#: `cmd/installer/pkg/install/install.go`, `SkipDataPartitions`). EPHEMERAL is
+#: where the kubelet runs from, and Talos will not make it smaller than its
+#: minimum (`pkg/machinery/imager/quirks/partitions.go`, `EphemeralMinSize`), so
+#: a disk at the image's own size boots a node whose kubelet never starts.
+#:
+#: 3 GiB holds STATE and EPHEMERAL's minimum with most of a gigabyte to spare
+#: for partition alignment and the kubelet's own image. It is not the worker's
+#: working size: the libvirt provider uploads every byte of the file it creates
+#: a volume from, zeros included, over the session to the host, so the room is
+#: kept to what the first boot needs, and the disk reaches its working size on
+#: the host afterwards (physical/homelab-host.md §1).
+HOMELAB_DISK_ROOM = 3 * GIB
+
 #: Where a decompressed artifact is kept on the machine running the program.
 #: The path is a constant rather than a home-relative or temporary directory on
 #: purpose: it is an *input* of the libvirt volume, so a workstation and a CI
@@ -211,10 +233,11 @@ class TalosNocloudImage(TalosArtifact, pulumi_type='kluster:talos:TalosNocloudIm
     artifacts is carried by the base's `extensions`, `platform` and
     `architecture`, which is how this artifact differs from the cloud one.
 
-    `path` is what a libvirt volume is created from. The volume's size is then
-    the image's size and cannot be declared — the provider refuses `size`
-    alongside `source` — so the worker's disk reaches its working size through
-    the same host-side step that grows it later (physical/homelab-host.md §1).
+    `path` is what a libvirt volume is created from, and the volume's capacity
+    is that file's length: the provider refuses `size` alongside `source`. So
+    the file carries `HOMELAB_DISK_ROOM` after the image, and the disk is
+    created with the room Talos needs to boot. Its working size is reached on
+    the host afterwards (physical/homelab-host.md §1).
     """
 
     def __init__(
@@ -238,6 +261,7 @@ class TalosNocloudImage(TalosArtifact, pulumi_type='kluster:talos:TalosNocloudIm
             f'{name}-nocloud',
             url=async_output(self._disk_url),
             path=async_output(self._local_path),
+            room=HOMELAB_DISK_ROOM,
             opts=self.child_opts(),
         )
         #: The decompressed image, where a libvirt volume can be created from it.
@@ -246,14 +270,15 @@ class TalosNocloudImage(TalosArtifact, pulumi_type='kluster:talos:TalosNocloudIm
     async def _local_path(self) -> str:
         """Where this artifact lives locally, named by what it contains.
 
-        The schematic id and the Talos version are the artifact's identity, so
-        they are the file name: two schematics never share a file, the same
-        schematic is never fetched twice, and nothing about *when* the program
-        ran enters the name.
+        The schematic id and the Talos version are the artifact's identity, and
+        the room after it is the rest of what the file holds, so they are the
+        file name: two schematics never share a file, the same schematic is
+        never fetched twice, a file made with another room is never reused as
+        this one, and nothing about *when* the program ran enters the name.
         """
         schematic_id = await resolve(self.schematic.id)
         name = f'talos-{self.talos_version}-{self.platform}-{self.architecture}-{schematic_id}'
-        return str(IMAGE_CACHE / f'{name}.raw')
+        return str(IMAGE_CACHE / f'{name}-room{HOMELAB_DISK_ROOM}.raw')
 
 
 @final

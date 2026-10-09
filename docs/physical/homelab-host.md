@@ -32,10 +32,11 @@ a file it is — the shape makes that rational:
     the host fs. The subvolume boundary also keeps the image out of
     any host snapshot/send scope.
 -   **Raw, not qcow2**: with CoW disabled, qcow2's allocation layer
-    buys nothing but indirection. The file is created at the Talos
-    image's own capacity — the volume is created *from* that image
-    (declarative/physical.md §3) — so every size the disk has after
-    that is `truncate` on the file + `virsh blockresize`, the ~60 GB
+    buys nothing but indirection. The file is created as the Talos
+    image followed by the room Talos needs to create STATE and EPHEMERAL
+    at first boot (`components/talos/image.py`, `HOMELAB_DISK_ROOM`) —
+    the volume is created *from* that file (declarative/physical.md §3) —
+    so every size the disk has after that is `truncate` on the file + `virsh blockresize`, the ~60 GB
     bootstrap size as much as the 100+ GB end state reached
     interleaved with reclamation (migration.md §0.4). Talos grows its
     EPHEMERAL partition into the new space on its own, and the

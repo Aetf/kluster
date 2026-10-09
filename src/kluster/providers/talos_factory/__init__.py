@@ -14,6 +14,13 @@ checked for truncation against the length the server declared, it needs neither
 `curl` nor `xz` on the machine running the program, and the seam a test
 replaces is a Python function rather than a shell command.
 
+**The file can be longer than the artifact.** A volume created from a file
+takes the file's length as its capacity, and a Talos disk booted in place
+needs room past the image's last partition for the partitions Talos creates
+there at first boot. So the decompressed artifact is extended by `room` bytes
+of zeros, sparsely: the extension costs the machine running the program no
+space, and how much room a disk needs is the consumer's to say.
+
 What is *done* with an artifact — which schematic it was built from, which
 volume or catalog it feeds — belongs to the components in
 `kluster.components.talos`, not here.
@@ -74,8 +81,8 @@ def fetch(url: str) -> requests.Response:
     return response
 
 
-def materialize(url: str, path: Path) -> None:
-    """Leave the artifact at `url` sitting decompressed at `path`.
+def materialize(url: str, path: Path, *, room: int) -> None:
+    """Leave the artifact at `url` sitting decompressed at `path`, followed by `room` bytes of zeros.
 
     A file already at `path` is the artifact and is reused: the download lands
     under a temporary name in the same directory and is renamed only once the
@@ -85,10 +92,14 @@ def materialize(url: str, path: Path) -> None:
 
     Fetching and decompressing are the same pass. Neither form of the artifact
     is ever held in memory, and a failure removes the partial file rather than
-    leaving something that looks finished. Which of the two it does -- the
-    pass, or reusing the file -- it says first, through `pulumi.log`, which
-    `pulumi` draws on the stack's row as the run goes; the standard `logging`
-    module would reach nobody in the process a dynamic provider runs in.
+    leaving something that looks finished. The room is added before the
+    rename too, so a file under the final name has it, and a consumer that
+    wants another room names another path.
+
+    Which of the two it does -- the pass, or reusing the file -- it says
+    first, through `pulumi.log`, which `pulumi` draws on the stack's row as the
+    run goes; the standard `logging` module would reach nobody in the process a
+    dynamic provider runs in.
     """
     if path.exists():
         pulumi.log.info(f'{path} holds the artifact already: reused, nothing fetched')
@@ -104,14 +115,21 @@ def materialize(url: str, path: Path) -> None:
         with os.fdopen(descriptor, 'wb') as sink, fetch(url) as response:
             for chunk in response.iter_content(CHUNK_BYTES):
                 _ = sink.write(decompressor.decompress(chunk))
-        if not decompressor.eof:
-            raise TruncatedArtifact(url)
+            if not decompressor.eof:
+                raise TruncatedArtifact(url)
+            # Past the end of what was written: on POSIX, growing a file this
+            # way reads back as zeros and allocates nothing.
+            _ = sink.truncate(sink.tell() + room)
         partial.chmod(ARTIFACT_MODE)
         # Atomic, and within one directory so it stays atomic: either the
         # whole artifact is under its final name or nothing is.
         _ = partial.replace(path)
     finally:
         partial.unlink(missing_ok=True)
+
+
+#: Every input, each of which makes the file another file.
+_IDENTITY = ('url', 'path', 'room')
 
 
 def _is_unknown(value: Any) -> bool:
@@ -124,8 +142,8 @@ class FactoryImageProvider(dynamic.ResourceProvider):
     """One factory artifact, decompressed on whatever machine runs the program.
 
     There is no update: the resource *is* a particular artifact at a particular
-    path, so a different schematic or a different Talos version is a different
-    file and a replacement.
+    path with a particular room after it, so a different schematic, a different
+    Talos version or a different room is a different file and a replacement.
 
     **`read` is deliberately the inherited one, which reports no drift.** The
     file is a build artifact rather than managed state — a CI runner is fresh
@@ -135,16 +153,17 @@ class FactoryImageProvider(dynamic.ResourceProvider):
 
     def create(self, props: dict[str, Any]) -> dynamic.CreateResult:
         path = Path(str(props['path']))
-        materialize(str(props['url']), path)
+        # A number crosses the engine as a float, whatever the program declared.
+        materialize(str(props['url']), path, room=int(props['room']))
         return dynamic.CreateResult(id_=str(path), outs=props)
 
     def diff(self, _id: str, olds: dict[str, Any], news: dict[str, Any]) -> dynamic.DiffResult:
-        if any(_is_unknown(news.get(key)) for key in ('url', 'path')):
+        if any(_is_unknown(news.get(key)) for key in _IDENTITY):
             # The schematic has not been created yet, so what the factory will
             # serve is not knowable here; the engine plans on "unknown" rather
             # than on a guess.
             return dynamic.DiffResult(changes=None)
-        replaces = [key for key in ('url', 'path') if olds.get(key) != news.get(key)]
+        replaces = [key for key in _IDENTITY if olds.get(key) != news.get(key)]
         return dynamic.DiffResult(
             changes=bool(replaces),
             replaces=replaces,
@@ -159,10 +178,11 @@ class FactoryImageProvider(dynamic.ResourceProvider):
 
 @final
 class FactoryImage(dynamic.Resource, module='talos_factory', name='FactoryImage'):
-    """A factory artifact, fetched and decompressed at `path`."""
+    """A factory artifact, fetched and decompressed at `path`, with `room` bytes of zeros after it."""
 
     url: pulumi.Output[str]
     path: pulumi.Output[str]
+    room: pulumi.Output[int]
 
     def __init__(
         self,
@@ -170,13 +190,17 @@ class FactoryImage(dynamic.Resource, module='talos_factory', name='FactoryImage'
         *,
         url: pulumi.Input[str],
         path: pulumi.Input[str],
+        room: pulumi.Input[int],
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
-        """Declare that `path` holds the decompressed contents of `url`.
+        """Declare that `path` holds the decompressed contents of `url`, and `room` zero bytes after them.
 
-        `path` is derived from the schematic and the Talos version rather than
-        generated, so the same declaration names the same file on every run and
-        on every machine — which is what lets a consumer take the path as an
-        input without proposing a change each time the program moves.
+        `path` is derived from what the file contains rather than generated, so
+        the same declaration names the same file on every run and on every
+        machine — which is what lets a consumer take the path as an input
+        without proposing a change each time the program moves. The room is
+        part of what it contains: a file already at the path is reused as it
+        is, so a path that did not change with the room would serve a file
+        with the old one.
         """
-        super().__init__(FactoryImageProvider(), name, {'url': url, 'path': path}, opts)
+        super().__init__(FactoryImageProvider(), name, {'url': url, 'path': path, 'room': room}, opts)

@@ -43,10 +43,12 @@ operation:
 -   *Disk* grows on the host — `truncate` plus `virsh blockresize`, and Talos
     extends its EPHEMERAL partition into the new space (homelab-host.md §1).
     The declaration cannot state a size at all: the provider refuses `size`
-    beside `source` and sets the volume's capacity from the image, which is
-    the Talos artifact's own ~1.25 GB. Reaching the worker's working size is
-    therefore the *first* use of that host-side step rather than a later one,
-    and the file and the declaration part company from the moment it runs —
+    beside `source` and sets the volume's capacity from the source file's
+    length. That file is the Talos image followed by the room Talos needs to
+    create its data partitions at first boot
+    (`components/talos/image.py`, `HOMELAB_DISK_ROOM`), so the disk is
+    created bootable and its working size is the host-side step's to reach.
+    The file and the declaration part company from the moment that step runs —
     which is why `size` is ignored here as well. Every field of a libvirt
     volume replaces the volume, so a program insisting on a size would propose
     destroying the worker's disk the first time a refresh read the grown file
@@ -86,7 +88,7 @@ _TEMPLATE_PACKAGE = 'kluster.components.homelab'
 
 #: Memory is quoted in GiB (nodes.md §4.2) and libvirt domains are sized in
 #: MiB. Disk sizes have no counterpart here: a volume created from a source
-#: image takes that image's size, and the rest is host-side growth.
+#: file takes that file's length, and the rest is host-side growth.
 MIB_PER_GIB = 1024
 
 #: Raw, not qcow2: the image lives on a nodatacow subvolume, where qcow2's
@@ -336,7 +338,8 @@ class HomelabHost(Component, pulumi_type='kluster:homelab:HomelabHost'):
             pool=self.pool.name,
             format=DISK_FORMAT,
             # The bytes the worker boots. No `size` beside it: the provider
-            # refuses the pair and takes the volume's capacity from the image.
+            # refuses the pair and takes the volume's capacity from the file,
+            # which is the image and the room Talos boots into after it.
             source=image_path,
             opts=self.child_opts(
                 protect=True,
@@ -344,8 +347,8 @@ class HomelabHost(Component, pulumi_type='kluster:homelab:HomelabHost'):
                 # of a libvirt volume replaces the volume, so neither may
                 # become a diff afterwards:
                 #
-                # -   `size` is the image's at creation and the host's from the
-                #     first `truncate` onwards.
+                # -   `size` is the source file's at creation and the host's
+                #     from the first `truncate` onwards.
                 # -   `source` describes the bytes the disk was written with,
                 #     and stops describing what is on it the moment Talos
                 #     upgrades itself over the machine API. Insisting on it

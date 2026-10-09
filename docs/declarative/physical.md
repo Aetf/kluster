@@ -399,8 +399,10 @@ them for day-2 once v0.12 is stable *and* has reached the Pulumi bridge.
     defines the domains through — so the first boot follows from an
     apply rather than from an operator writing an image by hand. The
     declaration states no disk size: the provider refuses `size` beside
-    `source` and takes the volume's capacity from the image, which
-    makes every size the disk ever has — the bootstrap one included —
+    `source` and takes the volume's capacity from the source file's
+    length. That file is the image followed by the room Talos boots into
+    (`components/talos/image.py`, `HOMELAB_DISK_ROOM`), which makes every
+    size the disk has after its creation — the bootstrap one included —
     the host-side `truncate` + `virsh blockresize` of
     homelab-host.md §1. Both `size` and `source` are then ignored on
     that resource, because a libvirt volume has no update path at all
