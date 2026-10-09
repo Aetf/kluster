@@ -37,7 +37,6 @@ from __future__ import annotations
 import fnmatch
 import json
 import re
-import shutil
 import subprocess
 import tomllib
 from collections.abc import Sequence
@@ -45,6 +44,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, cast
 
+import pinned_tools
 import pytest
 import yaml
 from renovate_text import listed, package_rules, scalar
@@ -154,9 +154,7 @@ def run(argv: Sequence[str], cwd: Path) -> str:
 @pytest.fixture(scope='module')
 def talosctl() -> str:
     """The pinned `talosctl`, refused if it is missing or is some other release."""
-    binary = shutil.which(TOOL)
-    if binary is None:
-        pytest.fail(f'{TOOL} is not on PATH: mise.toml pins it, so run `mise install`, then the suite under `mise x`')
+    binary = pinned_tools.located(TOOL)
     reported = subprocess.run(
         [binary, 'version', '--client', '--short'], capture_output=True, text=True, timeout=TIMEOUT, check=True
     ).stdout

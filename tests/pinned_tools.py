@@ -8,7 +8,11 @@ tool and where it is pinned.
 
 It is a fixture's body (testing.md §2): a module wraps it in a fixture of its
 own and marks the cases that need the tool, so a run without the tool still
-runs that module's other cases.
+runs that module's other cases. `located` is the same refusal for a case that
+runs the tool by the path it resolves to, and hands that path back.
+
+Where `pulumi` is left out rather than refused is testing.md §8's to say; a
+case it lets skip does not come here.
 """
 
 from __future__ import annotations
@@ -24,8 +28,15 @@ from kluster.scripts.credentials import age
 AGE = (age.BINARY, age.KEYGEN)
 
 
+def located(binary: str) -> str:
+    """The path `binary` resolves to on `PATH`; where it resolves to none, fails the calling case naming it."""
+    found = shutil.which(binary)
+    if found is None:
+        pytest.fail(f'{binary} is not on PATH: mise.toml pins it, so run the suite under `mise x`')
+    return found
+
+
 def require(*binaries: str) -> None:
     """Fails the calling case, naming the first of `binaries` that is not on `PATH`."""
     for binary in binaries:
-        if shutil.which(binary) is None:
-            pytest.fail(f'{binary} is not on PATH: mise.toml pins it, so run the suite under `mise x`')
+        _ = located(binary)

@@ -27,7 +27,7 @@ from urllib.parse import unquote
 import pytest
 import requests
 from b2_api import FakeApi
-from credentials_command_tree import commands
+from credentials_command_tree import commands, named_leaves
 from fences import prose
 from memory_kit import MemoryKit
 from section_numbers import sections
@@ -45,12 +45,12 @@ UTC = dt.UTC
 NOW = dt.datetime(2026, 9, 16, 6, 23, tzinfo=UTC)
 SEED_ENTRY = entries.SEEDS['b2'].entry
 PREFIX = b2.DUMP_PREFIX
-#: The command that re-mints the list-only key, as a refusal names it.
-MINT = f'credentials derived {derived.B2_FRESHNESS_DUMPS_ROW} mint'
+#: The leaf that re-mints the list-only key, as the parser reads a refusal naming it.
+MINT = ('derived', derived.B2_FRESHNESS_DUMPS_ROW, 'mint')
 
 
 def test_the_mint_a_refusal_names_is_a_command_of_the_tree() -> None:
-    assert MINT.split()[1:] in commands()
+    assert list(MINT) in commands()
 
 
 # -- the thresholds -----------------------------------------------------------
@@ -462,7 +462,7 @@ def test_a_key_b2_refuses_is_the_dump_probe_s_verdict_naming_no_key_id(api: Fake
 
     assert not verdict.passed
     assert verdict.playbook == probe.KEY_PLAYBOOK
-    assert probe.KEY_ID_ENV in verdict.observed and MINT in verdict.observed
+    assert probe.KEY_ID_ENV in verdict.observed and MINT in named_leaves(verdict.observed)
     assert rejected not in str(verdict)
 
 
@@ -548,7 +548,7 @@ def test_an_empty_slot_is_refused_naming_the_variable_and_the_mint(environ: dict
     with pytest.raises(SlotRefused, match=re.escape(named)) as refusal:
         _ = probe.credential(environ)
 
-    assert MINT in str(refusal.value)
+    assert MINT in named_leaves(str(refusal.value))
 
 
 # -- the run --------------------------------------------------------------------
@@ -678,7 +678,7 @@ def test_a_refusal_from_the_command_is_one_line_and_status_one(caplog: pytest.Lo
         patch.delenv(probe.KEY_ENV, raising=False)
         assert cli.main(['probe', '--only', probe.DUMPS]) == 1
 
-    assert MINT in caplog.text
+    assert MINT in named_leaves(caplog.text)
 
 
 def test_a_probe_the_command_does_not_have_is_refused_by_the_parser(capsys: pytest.CaptureFixture[str]) -> None:

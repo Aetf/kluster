@@ -18,7 +18,7 @@ import re
 from pathlib import Path
 
 import pytest
-from credentials_command_tree import named_commands
+from credentials_command_tree import named_leaves
 from fake_pulumi import RecordedPulumi
 
 from kluster import conventions
@@ -53,11 +53,6 @@ def stack(name: str) -> tuple[pulumi_config.Stack, RecordedPulumi]:
     runner = RecordedPulumi()
     slot = pulumi_config.Stack(name=name, directory=pulumi_config.project_dir(), environment=FULLY_EQUIPPED, run=runner)
     return slot, runner
-
-
-def parsed_commands(message: str) -> list[tuple[str, str, str]]:
-    """Every `credentials …` command a message quotes, as the parser reads it: subject, member, action."""
-    return [(args['subject'], args['member'], args['action']) for _, args in named_commands(message)]
 
 
 @pytest.fixture
@@ -362,7 +357,7 @@ def test_reading_back_a_stack_that_has_no_such_key_names_the_command_that_fills_
     with pytest.raises(pulumi_config.SlotRefused) as refused:
         _ = devices.borrow(GITHUB_ADMIN, stack=slot)
 
-    assert parsed_commands(str(refused.value)) == [('derived', GITHUB_ADMIN.member, 'record')]
+    assert named_leaves(str(refused.value)) == [('derived', GITHUB_ADMIN.member, 'record')]
 
 
 def test_a_row_that_reads_back_empty_is_refused_rather_than_handed_on() -> None:
@@ -415,7 +410,7 @@ def test_a_stack_encrypted_apart_refuses_on_a_machine_that_holds_no_passphrase_f
     with pytest.raises(pulumi_config.PassphraseMissing) as refusal:
         _ = devices.borrow(GITHUB_ADMIN, stack=bare)
 
-    assert ('derived', fills, escrow.rows()[fills].verb) in parsed_commands(str(refusal.value))
+    assert ('derived', fills, escrow.rows()[fills].verb) in named_leaves(str(refusal.value))
 
     # And the stack passphrase is not quietly used instead, which is the whole
     # point: that value is in every Environment a pull request can reach. The refusal says so by the
@@ -440,10 +435,12 @@ def test_a_machine_that_cannot_decrypt_the_stack_is_not_told_the_credential_is_m
         run=RecordedPulumi(),
     )
 
-    with pytest.raises(pulumi_config.SlotRefused) as refusal:
+    # The refusal travels as the type `borrow` lets through unchanged, which
+    # no wrapper naming `record` -- in a code span or in prose -- would be.
+    with pytest.raises(pulumi_config.PassphraseMissing) as refusal:
         _ = devices.borrow(GITHUB_ADMIN, stack=bare)
 
-    assert f'credentials derived {GITHUB_ADMIN.member} record' not in str(refusal.value)
+    assert ('derived', GITHUB_ADMIN.member, 'record') not in named_leaves(str(refusal.value))
 
 
 def test_a_stack_on_the_stack_passphrase_is_handed_that_one() -> None:

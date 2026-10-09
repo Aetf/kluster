@@ -101,8 +101,21 @@ UNUSABLE: dict[str, tuple[str, str]] = {
     'sentinel': (UNKNOWN_SENTINEL, 'unknown sentinel'),
 }
 
-#: The command a refusal sends the operator to, which fills the key.
-FILLED_BY = f'credentials derived sync --only {KUBECONFIG_KEY}'
+#: The command a refusal sends the operator to, which fills the key: the
+#: copy, confined to that key's row, as `filled_by` reads it.
+FILLED_BY = ('derived', 'sync', KUBECONFIG_KEY)
+
+
+def filled_by(message: str) -> list[tuple[str, str, str | None]]:
+    """Each `credentials` command `message` names, as the parser reads it: subject, row, and the row `--only` names.
+
+    The `--only` value is held as well as the leaf: `derived sync` alone
+    copies every row it can, which reads the admin token, and the copy this
+    key needs is the one that reads none.
+    """
+    from credentials_command_tree import named_commands
+
+    return [(args['subject'], args['member'], args.get('only')) for _, args in named_commands(message)]
 
 
 #: What `physical` publishes as its kubeconfig in this suite: a string no other
@@ -214,8 +227,10 @@ async def test_a_stack_with_no_kubeconfig_configured_stops_the_run_naming_the_co
     Not `require_secret`'s refusal, which tells the operator to `pulumi config
     set` a value by hand: the copy is a command, and the refusal names it.
     """
-    with pytest.raises(UnusableKubeconfig, match=FILLED_BY):
+    with pytest.raises(UnusableKubeconfig) as refused:
         _ = await declare(name, kubeconfig=None)
+
+    assert FILLED_BY in filled_by(str(refused.value))
 
 
 @pytest.mark.parametrize('found', UNUSABLE)
@@ -236,7 +251,7 @@ async def test_a_configured_kubeconfig_that_is_not_one_stops_the_run(name: str, 
     with pytest.raises(UnusableKubeconfig, match=named) as refused:
         _ = await declare(name, kubeconfig=value)
 
-    assert FILLED_BY in str(refused.value)
+    assert FILLED_BY in filled_by(str(refused.value))
     assert ('apply physical in full' in str(refused.value).lower()) == (found == 'sentinel')
 
 

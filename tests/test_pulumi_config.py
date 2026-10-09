@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from credentials_command_tree import named_leaves
 from fake_pulumi import RecordedPulumi
 
 from kluster.conventions import identity
@@ -338,10 +339,9 @@ def test_only_physical_is_given_its_own_passphrase() -> None:
 def test_physical_is_refused_where_nothing_gives_its_passphrase() -> None:
     environment = pulumi_config.BackendEnvironment(passphrase='the-stack-passphrase')
 
-    with pytest.raises(
-        pulumi_config.PassphraseMissing, match=f'credentials derived {pulumi_config.PHYSICAL_ROW} generate'
-    ):
+    with pytest.raises(pulumi_config.PassphraseMissing) as refusal:
         _ = environment.variables(pulumi_config.PHYSICAL)
+    assert ('derived', pulumi_config.PHYSICAL_ROW, 'generate') in named_leaves(str(refusal.value))
 
 
 def test_physical_is_refused_with_the_reason_its_finder_gives() -> None:

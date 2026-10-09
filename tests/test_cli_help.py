@@ -25,7 +25,9 @@ is written out by hand, so a row added to a register reaches the tree on its
 own but reaches that order only when someone types it in. The walks below are
 what say so: one over every `derived <row> mint` the tree offers, and one over
 the rows a person makes, which two registers hold and which are run the same
-way.
+way. What the order runs is read by the CLI's own parser rather than matched
+as text, so a leaf renamed in the tree is one the order no longer runs, even
+while its hand-written line still names the old word.
 
 What this cannot check is whether the prose is any good: a help text that says
 nothing at all passes, and one that leans on jargon passes. Comprehensibility
@@ -42,10 +44,10 @@ test from depending on the one it is run in.
 from __future__ import annotations
 
 import argparse
-from collections.abc import Iterator
-from typing import cast
+import re
 
 import pytest
+from credentials_command_tree import Leaf, parse, tree
 
 from kluster.scripts.credentials import cli, derived, devices, escrow
 
@@ -61,26 +63,16 @@ MENTIONS = ('§', '.md')
 SEE_ALSO = 'See also:'
 
 
-def _tree(
-    parser: argparse.ArgumentParser, path: tuple[str, ...] = ()
-) -> Iterator[tuple[tuple[str, ...], argparse.ArgumentParser]]:
-    """Every parser in the tree, keyed by the words that reach it.
-
-    Recursive because the tree is generated from the registers: a row added to
-    one of them arrives here without anyone editing this file, which is the
-    only way an enforcement test stays true.
-    """
-    yield path, parser
-    for action in parser._actions:  # pyright: ignore[reportPrivateUsage]
-        if isinstance(action, argparse._SubParsersAction):  # pyright: ignore[reportPrivateUsage]
-            subparsers = cast('argparse._SubParsersAction[argparse.ArgumentParser]', action)  # pyright: ignore[reportPrivateUsage]
-            for name, sub in subparsers.choices.items():
-                yield from _tree(sub, (*path, name))
-
-
 def _parsers() -> dict[str, argparse.ArgumentParser]:
-    """The whole tree, keyed by the command line that reaches each parser."""
-    return {' '.join(('credentials', *path)): parser for path, parser in _tree(cli.build_parser())}
+    """The whole tree, inner parsers included, keyed by the command line that reaches each.
+
+    Walked because the tree is generated from the registers: a row added to
+    one of them arrives here without anyone editing this file, which is the
+    only way an enforcement test stays true. The walk is `credentials_command_tree`'s
+    `tree`, which yields the inner parsers as well as the leaves: an operator
+    reads their help too.
+    """
+    return {' '.join(('credentials', *path)): parser for path, parser in tree(cli.build_parser())}
 
 
 def commands() -> list[str]:
@@ -131,32 +123,48 @@ def test_a_sealed_row_says_how_its_value_comes_to_exist_and_how_it_is_taken(monk
     assert 'made by a person' not in row
 
 
-def mint_leaves() -> list[str]:
-    """Every `credentials derived <row> mint` the tree offers, found by walking it.
+def runs_of(row: str, order: list[str]) -> list[Leaf]:
+    """Each leaf of `row` the rendered order runs, as the parser reads it: subject, row and verb.
+
+    The order names a command bare on a line of its own, or in a code span in
+    a sentence, so it is read off each line as `credentials derived <row>`
+    and the lower-case words after it, up to an option, a code span's end or
+    the line's. Read by the parser rather than matched as text, so a leaf
+    renamed in the tree fails here while the hand-written order still names it.
+    """
+    command = re.compile(rf'credentials (derived {re.escape(row)}(?![\w-])(?: [a-z][a-z-]*)*)')
+    runs: list[Leaf] = []
+    for line in order:
+        for words in command.findall(line):
+            args = parse(words.split()).args
+            runs.append((args['subject'], args['member'], args['action']))
+    return runs
+
+
+def mint_rows() -> list[str]:
+    """Every row the tree offers a `credentials derived <row> mint` for, found by walking it.
 
     Walked rather than listed, so a mint added to the tree is a case here
     without anyone editing this file.
     """
     return [
-        ' '.join(('credentials', *path))
-        for path, _ in _tree(cli.build_parser())
-        if len(path) == 3 and path[0] == 'derived' and path[2] == 'mint'
+        path[1] for path, _ in tree(cli.build_parser()) if len(path) == 3 and path[0] == 'derived' and path[2] == 'mint'
     ]
 
 
 def test_the_mint_walk_finds_the_mints() -> None:
     # A walk that found nothing would leave the case below with no
     # parameters, which pytest reports as skipped rather than failed.
-    assert f'credentials derived {derived.OCI_PHYSICAL_ROW} mint' in mint_leaves()
+    assert derived.OCI_PHYSICAL_ROW in mint_rows()
 
 
-@pytest.mark.parametrize('command', mint_leaves())
-def test_when_to_run_what_names_every_mint(command: str, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize('row', mint_rows())
+def test_when_to_run_what_names_every_mint(row: str, monkeypatch: pytest.MonkeyPatch) -> None:
     order = _rendered('credentials', monkeypatch)
 
-    assert any(command in line for line in order), (
-        f'`{command}` is in the tree but the order in `credentials --help` never runs it: an operator '
-        'who follows that order would finish with the credential unminted.'
+    assert ('derived', row, 'mint') in runs_of(row, order), (
+        f'`credentials derived {row} mint` is in the tree but the order in `credentials --help` never runs '
+        'it: an operator who follows that order would finish with the credential unminted.'
     )
 
 
@@ -180,7 +188,7 @@ def test_the_bring_up_order_names_every_row_made_by_hand(member: str, monkeypatc
     # from those registers have to agree about how many there are.
     order = _rendered('credentials', monkeypatch)
 
-    assert any(f'credentials derived {member} record' in line for line in order), (
+    assert ('derived', member, 'record') in runs_of(member, order), (
         f'`{member}` is a row a person makes but the bring-up order never runs it: '
         'an operator who follows that order would finish with the credential undelivered.'
     )
@@ -231,7 +239,7 @@ def test_the_help_names_the_operator_passphrase_by_the_registers_term(monkeypatc
     order = flat('credentials')
     own = flat(f'credentials derived {row}')
 
-    assert f'credentials derived {row} generate' in order
+    assert ('derived', row, 'generate') in runs_of(row, _rendered('credentials', monkeypatch))
     assert 'The operator passphrase, which encrypts the operator stacks' in order
     assert 'the operator passphrase, which encrypts the operator stacks' in own
     assert 'github-passphrase' not in order
