@@ -228,6 +228,19 @@ Two things make such an import wrong even where it works:
 `tests/test_suite_imports.py` holds the rule, and the unique names, over every
 module under `tests/`.
 
+**An async fixture scoped wider than a case states its `loop_scope`.** In the
+strict mode the suite runs in, an async fixture is one decorated with
+`pytest_asyncio.fixture`, and `pyproject.toml` sets
+`asyncio_default_fixture_loop_scope` to `function`, so such a fixture runs on
+its case's event loop unless it names another. One whose `scope` is wider,
+such as a module's `applied` run, outlives that loop, so it names its own,
+the same as its scope: `@pytest_asyncio.fixture(scope='module',
+loop_scope='module')`. Without it, `pytest-asyncio` refuses the fixture only
+when a case first asks for it, with a `ScopeMismatch` on
+`_function_scoped_runner` that names neither the fixture's module nor the
+missing argument. `tests/test_suite_fixtures.py` holds the rule over every
+module under `tests/`, a fixture no case uses included.
+
 ### 2.1 Example Test
 
 Create a file named `test_*.py` (e.g., `test_network.py`) in the `tests`

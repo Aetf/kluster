@@ -32,7 +32,7 @@ from kluster.scripts.update_crds.values import SEPARATOR, ValuePaths
 ROOT = Path(__file__).parent.parent
 
 
-@pytest_asyncio.fixture(scope='module', name='applied')
+@pytest_asyncio.fixture(scope='module', loop_scope='module', name='applied')
 async def applied_fixture() -> Run:
     """The whole program against a `physical` that has published every output."""
     return await applied()

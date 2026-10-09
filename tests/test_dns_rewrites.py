@@ -22,7 +22,7 @@ ALICE = f'rewrites-{conventions.gateway.ADGUARD_ALICE.name}'
 BOB = f'rewrites-{conventions.gateway.ADGUARD_BOB.name}'
 
 
-@pytest_asyncio.fixture(scope='module', autouse=True)
+@pytest_asyncio.fixture(scope='module', loop_scope='module', autouse=True)
 async def stack() -> Recorder:
     """One split-horizon route, declared once against each instance."""
     monitor = await run_with(Recorder(), stack='dns')

@@ -76,7 +76,7 @@ class Central(Recorder):
         return {}
 
 
-@pytest_asyncio.fixture(scope='module', autouse=True)
+@pytest_asyncio.fixture(scope='module', loop_scope='module', autouse=True)
 async def stack() -> Central:
     """The network declared once, the way the `physical` stack declares it."""
     pulumi.runtime.set_all_config({f'kluster:{overlay_module.API_TOKEN}': API_TOKEN})

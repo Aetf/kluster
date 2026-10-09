@@ -211,13 +211,13 @@ def _stamp(device: _Device, release: str) -> str:
     return f'{_checksum(device.source)} {release.rstrip()} {_checksum(parser)}\n'
 
 
-@pytest_asyncio.fixture(scope='module', autouse=True)
+@pytest_asyncio.fixture(scope='module', loop_scope='module', autouse=True)
 async def monitor() -> Recorder:
     """What the run registered, for the cases that read declarations directly."""
     return await run_with(Recorder(), stack='physical')
 
 
-@pytest_asyncio.fixture(scope='module', autouse=True)
+@pytest_asyncio.fixture(scope='module', loop_scope='module', autouse=True)
 async def site(monitor: Recorder) -> SiteRouting:
     """The component declared once, the way `Gateway` declares it."""
     connection = Connection(host=HOST, host_key=HOST_KEY, username=conventions.gateway.SSH_USER)

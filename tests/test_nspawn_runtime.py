@@ -72,13 +72,13 @@ class Workload(Component, pulumi_type='test:gateway:Workload'):
         self.register_outputs({})
 
 
-@pytest_asyncio.fixture(scope='module', autouse=True)
+@pytest_asyncio.fixture(scope='module', loop_scope='module', autouse=True)
 async def monitor() -> Recorder:
     """What the run registered, for the cases that read declarations directly."""
     return await run_with(Recorder(), stack='physical')
 
 
-@pytest_asyncio.fixture(scope='module', autouse=True)
+@pytest_asyncio.fixture(scope='module', loop_scope='module', autouse=True)
 async def mechanism(monitor: Recorder) -> DevicePersistence:
     """The layer this one is built on, declared the way `Gateway` declares it."""
     async with declaring():
@@ -90,7 +90,7 @@ async def mechanism(monitor: Recorder) -> DevicePersistence:
     return layer_one
 
 
-@pytest_asyncio.fixture(scope='module', autouse=True)
+@pytest_asyncio.fixture(scope='module', loop_scope='module', autouse=True)
 async def runtime(mechanism: DevicePersistence) -> NspawnRuntime:
     """The runtime on that mechanism, declared once."""
     async with declaring():

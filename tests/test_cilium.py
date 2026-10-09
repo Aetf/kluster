@@ -78,7 +78,7 @@ METADATA_RANGE = '169.254.0.0/16'
 TALOS_HOST_DNS = '169.254.116.108/32'
 
 
-@pytest_asyncio.fixture(scope='module', name='applied')
+@pytest_asyncio.fixture(scope='module', loop_scope='module', name='applied')
 async def applied_fixture() -> Run:
     """The program against a `physical` that has published every output."""
     return await applied()

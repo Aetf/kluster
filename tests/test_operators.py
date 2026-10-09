@@ -63,7 +63,7 @@ NODE_FEATURE_DISCOVERY = 'kluster:gpu:NodeFeatureDiscovery'
 INTEL_GPU_PLUGIN = 'kluster:gpu:IntelGpuPlugin'
 
 
-@pytest_asyncio.fixture(scope='module', name='applied')
+@pytest_asyncio.fixture(scope='module', loop_scope='module', name='applied')
 async def applied_fixture() -> Run:
     """The whole program against a `physical` that has published every output."""
     return await applied()

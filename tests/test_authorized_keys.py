@@ -47,20 +47,20 @@ KEYS = (CI_KEY, OPERATOR_KEY)
 HAND_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIhand operator@recovery'
 
 
-@pytest_asyncio.fixture(scope='module', autouse=True)
+@pytest_asyncio.fixture(scope='module', loop_scope='module', autouse=True)
 async def monitor() -> Recorder:
     """What the run registered, for the cases that read declarations directly."""
     return await run_with(Recorder(), stack='physical')
 
 
-@pytest_asyncio.fixture(scope='module', autouse=True)
+@pytest_asyncio.fixture(scope='module', loop_scope='module', autouse=True)
 async def mechanism(monitor: Recorder) -> DevicePersistence:
     """The persistence layer the component builds on, declared once."""
     async with declaring():
         return DevicePersistence(MECHANISM, connection=CONNECTION, packages=PACKAGES)
 
 
-@pytest_asyncio.fixture(scope='module', autouse=True)
+@pytest_asyncio.fixture(scope='module', loop_scope='module', autouse=True)
 async def access_layer(mechanism: DevicePersistence) -> AuthorizedKeys:
     """The component declared once, the way `Gateway` declares it."""
     async with declaring():

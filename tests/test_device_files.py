@@ -2271,7 +2271,7 @@ def test_a_missing_credential_refuses_by_name() -> None:
         )
 
 
-@pytest_asyncio.fixture(scope='module', autouse=True)
+@pytest_asyncio.fixture(scope='module', loop_scope='module', autouse=True)
 async def stack() -> Recorder:
     """One of each resource, declared the way the gateway's services declare them."""
     connection = provider.Connection(host=HOST, host_key=HOST_KEY)

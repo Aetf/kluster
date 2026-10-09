@@ -69,7 +69,7 @@ async def refusal_of(declare: Callable[[], None]) -> str:
     return str(refused.value)
 
 
-@pytest_asyncio.fixture(scope='module')
+@pytest_asyncio.fixture(scope='module', loop_scope='module')
 async def monitor() -> AsyncGenerator[Recorder]:
     """One run, read by every case below."""
     recorder = await run_with(Recorder(), stack='recorder', project='mock-monitor')

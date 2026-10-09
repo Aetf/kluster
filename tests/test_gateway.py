@@ -43,7 +43,7 @@ def pin(service: conventions.gateway.ContainerService) -> container.Rootfs:
     return container.Rootfs(repository=f'registry.invalid/installation/{service.artifact}', tag='7', digest=DIGEST)
 
 
-@pytest_asyncio.fixture(scope='module', autouse=True)
+@pytest_asyncio.fixture(scope='module', loop_scope='module', autouse=True)
 async def monitor() -> Controller:
     pulumi.runtime.set_all_config({f'kluster:{unifi.API_KEY}': API_KEY})
     return await run_under_backstop(Controller(site=SITE), stack='physical')
@@ -75,7 +75,7 @@ def declare(name: str, host: str) -> Gateway:
     )
 
 
-@pytest_asyncio.fixture(scope='module', autouse=True)
+@pytest_asyncio.fixture(scope='module', loop_scope='module', autouse=True)
 async def gateway(monitor: Controller) -> Gateway:
     """The device every case below reads, declared once."""
     async with declaring():

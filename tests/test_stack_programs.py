@@ -150,7 +150,7 @@ async def declare(name: str, *, kubeconfig: str | None = KUBECONFIG) -> Run:
     return monitor
 
 
-@pytest_asyncio.fixture(scope='module')
+@pytest_asyncio.fixture(scope='module', loop_scope='module')
 async def applied() -> dict[str, Run]:
     """Each program, declared with a kubeconfig in its configuration and a `physical` that has published."""
     return {name: await declare(name) for name in PROGRAMS}
