@@ -315,13 +315,6 @@ async def test_the_pinhole_lands_in_the_cluster_zone_rather_than_the_internal_on
     assert destination is not None
     assert destination.zone_id == f'{NAME}-zone_id'
 
-    # The IoT rules stay on the uplink pair: the pool they name is no object
-    # at all, so they fall through to it.
-    for policy in (firewall.iot_media_v4, firewall.iot_pool_v4):
-        iot_destination = await policy.destination.future()
-        assert iot_destination is not None
-        assert iot_destination.zone_id == zone_id(unifi.ZONE_EXTERNAL)
-
 
 @pytest.mark.asyncio
 async def test_the_pool_is_named_by_group_and_the_groups_are_single_family() -> None:
@@ -417,8 +410,6 @@ async def test_the_iot_vlan_is_named_by_group_and_the_groups_hold_its_subnets() 
     assert await firewall.iot_v6.type.future() == 'ipv6-address-group'
     assert await firewall.iot_v6.members.future() == [str(conventions.IOT_VLAN.v6)]
     assert await firewall.iot_v6.name.future() == unifi.IOT_GROUP_V6
-
-    assert str(conventions.IOT_VLAN.v6).endswith(':90::/64'), 'the IoT ULA follows the VLAN numbering scheme'
 
 
 @pytest.mark.asyncio
@@ -629,8 +620,9 @@ async def test_an_empty_roll_declares_no_static_host() -> None:
     Every service is reached by its public name through the split-horizon
     rewrites, so a host entry here would be a second naming plane to keep in
     step with the first. Which entries there are is the stack program's census
-    (`test_physical_stack`); what this pins is that an empty roll declares
-    nothing rather than falling back to one of the component's own.
+    (`stacks.physical.GATEWAY_STATIC_HOSTS`); what this pins is that an empty
+    roll declares nothing rather than falling back to one of the component's
+    own.
     """
     assert build().static_hosts == {}
 

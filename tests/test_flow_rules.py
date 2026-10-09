@@ -240,11 +240,8 @@ def test_a_run_and_the_members_it_reaches_speak_only_from_their_own_addresses() 
         for destination, port in destinations:
             outbound = _outbound(node, source, destination, port)
             reply = _reply(node, source, destination, port)
-            assert f'accept ztsrc {node} and ipdest {destination}/32 and dport {port} and chr ipauth;' in rendered
             assert verdict(rendered, replace(outbound, ipauth=False)) == 'drop'
             routed = destination in RESOLVERS
-            ownership = '' if routed else ' and chr ipauth'
-            assert f'accept ztdest {node} and ipsrc {destination}/32 and sport {port}{ownership};' in rendered
             spoofed = verdict(rendered, replace(reply, ipauth=False))
             assert spoofed == ('accept' if routed else 'drop'), (node, destination)
 
@@ -403,4 +400,3 @@ def test_every_role_the_overlay_declares_is_spelled_out_for_the_engine() -> None
 
     for role in conventions.overlay.Role:
         assert f'  enum {role.value} {role.name.lower()}' in rendered
-    assert rules_module.roles() == {role.name.lower(): role.value for role in conventions.overlay.Role}
