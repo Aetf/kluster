@@ -51,7 +51,6 @@ and never by its value.
 from __future__ import annotations
 
 import ipaddress
-import logging
 import time
 from collections.abc import Mapping
 from typing import Any, TypedDict, cast, final
@@ -86,8 +85,6 @@ __all__ = (
     'ListenChanged',
     'SetupRefused',
 )
-
-log = logging.getLogger(__name__)
 
 #: The addresses `configure` binds the web server and the DNS server to.
 LISTEN = 'listen'
@@ -225,7 +222,7 @@ class AdGuardSetupProvider(InstanceProvider):
         if self._verdict(props) is Verdict.FIRST_RUN:
             self._configure(props)
         else:
-            log.info('%s is configured with the login already: adopted, nothing written', props[INSTANCE])
+            pulumi.log.info(f'{props[INSTANCE]} is configured with the login already: adopted, nothing written')
         return dynamic.CreateResult(id_=f'{props[INSTANCE]}|{self.kind}', outs=props)
 
     def read(self, id_: str, props: dict[str, Any]) -> dynamic.ReadResult:
@@ -252,7 +249,7 @@ class AdGuardSetupProvider(InstanceProvider):
     def _configure(self, props: Mapping[str, Any]) -> None:
         instance, setup = props[INSTANCE], str(props[SETUP_ENDPOINT]).rstrip('/')
         listen = _listen(props[LISTEN])
-        log.info('configuring %s through its first-run setup at %s, listening on %s', instance, setup, listen)
+        pulumi.log.info(f'configuring {instance} through its first-run setup at {setup}, listening on {listen}')
         body = {**listen, 'username': self.username, 'password': self.password}
         response = Api(setup).answer('POST', 'install/configure', body)
         if response.status_code in (400, 422):
@@ -274,7 +271,7 @@ class AdGuardSetupProvider(InstanceProvider):
             raise SetupRefused(f'{instance}: POST {setup}/control/install/configure answered {described(response)}')
         self._await_login(props)
         configured(self._endpoint(props), self.username, self.password)
-        log.info('%s answers the login at %s: configured', instance, self._endpoint(props))
+        pulumi.log.info(f'{instance} answers the login at {self._endpoint(props)}: configured')
 
     def _await_login(self, props: Mapping[str, Any]) -> None:
         """Wait until `endpoint` answers the login, which it does once the instance has moved its web server there.
@@ -284,11 +281,9 @@ class AdGuardSetupProvider(InstanceProvider):
         instance's limiter.
         """
         endpoint = self._endpoint(props)
-        log.info(
-            'waiting for %s to answer the login: the instance moves its web server there after it answers '
-            'configure, usually within milliseconds; giving up after %ds',
-            endpoint,
-            REBIND_TIMEOUT,
+        pulumi.log.info(
+            f'waiting for {endpoint} to answer the login: the instance moves its web server there after it answers '
+            f'configure, usually within milliseconds; giving up after {REBIND_TIMEOUT}s'
         )
         session = Api(endpoint, self.username, self.password)
         deadline = time.monotonic() + REBIND_TIMEOUT
@@ -301,7 +296,7 @@ class AdGuardSetupProvider(InstanceProvider):
                         f'{props[INSTANCE]} took its configure but {endpoint} did not answer within '
                         f'{REBIND_TIMEOUT}s; last: {exc}'
                     ) from exc
-                log.info('not yet: %s', exc)
+                pulumi.log.info(f'not yet: {exc}')
                 time.sleep(POLL_INTERVAL)
                 continue
             if answered.status_code != 200:

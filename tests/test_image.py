@@ -313,6 +313,40 @@ def test_an_artifact_already_on_disk_is_reused_rather_than_fetched_again(
     assert requested == []
 
 
+@pytest.mark.parametrize('on_disk', [False, True], ids=['fetched', 'reused'])
+def test_the_artifact_says_what_it_does_before_it_does_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, on_disk: bool
+) -> None:
+    # Through the engine's diagnostics, the channel `pulumi` draws while the
+    # run goes: the fetch is about a gigabyte, and the standard `logging`
+    # module's `info` is dropped in the process a dynamic provider runs in.
+    url = 'https://factory.invalid/nocloud-amd64.raw.xz'
+    events: list[tuple[str, str]] = []
+
+    def said(message: str, *_args: object, **_kwargs: object) -> None:
+        events.append(('said', message))
+
+    def fetch(fetched: str) -> requests.Response:
+        events.append(('fetched', fetched))
+        return cast('requests.Response', FakeStream([lzma.compress(PAYLOAD)]))
+
+    monkeypatch.setattr(talos_factory.pulumi.log, 'info', said)
+    monkeypatch.setattr(talos_factory, 'fetch', fetch)
+    path = tmp_path / 'talos.raw'
+    if on_disk:
+        _ = path.write_bytes(PAYLOAD)
+
+    talos_factory.materialize(url, path)
+
+    if on_disk:
+        assert [kind for kind, _ in events] == ['said']
+        assert str(path) in events[0][1] and 'reused' in events[0][1], events
+    else:
+        assert [kind for kind, _ in events] == ['said', 'fetched']
+        assert url in events[0][1] and str(path) in events[0][1], events
+        assert 'decompress' in events[0][1], events
+
+
 def test_a_stream_that_ends_early_leaves_nothing_that_looks_finished(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

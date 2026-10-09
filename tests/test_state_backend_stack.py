@@ -1162,6 +1162,37 @@ def _props(sha256: str) -> dict[str, Any]:
     }
 
 
+def test_the_upload_says_each_long_step_before_it_starts(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Through the engine's diagnostics, the channel `pulumi` draws while the
+    # run goes: the standard `logging` module's `info` is dropped in the
+    # process a dynamic provider runs in.
+    events: list[tuple[str, str]] = []
+
+    def said(message: str, *_args: object, **_kwargs: object) -> None:
+        events.append(('said', message))
+
+    def fetch(url: str) -> _Stream:
+        events.append(('fetched', url))
+        return _Stream(ARTIFACT)
+
+    def upload(_config: object, props: dict[str, Any], _path: Path) -> None:
+        events.append(('uploaded', str(props['object_name'])))
+
+    monkeypatch.setattr(oci_objects.pulumi.log, 'info', said)
+    monkeypatch.setattr(oci_objects, 'fetch', fetch)
+    monkeypatch.setattr(oci_objects, 'upload', upload)
+    props = _props(hashlib.sha256(ARTIFACT).hexdigest())
+
+    _ = _artifact_provider().create(props)
+
+    assert [kind for kind, _ in events] == ['said', 'fetched', 'said', 'said', 'uploaded']
+    fetching, decompressing, uploading = (text for kind, text in events if kind == 'said')
+    assert props['url'] in fetching, fetching
+    assert props['url'] in decompressing, decompressing
+    assert 'decompress' in decompressing, decompressing
+    assert f'{props["object_name"]} to {props["namespace"]}/{props["bucket"]}' in uploading, uploading
+
+
 def test_the_upload_sends_the_decompressed_artifact(uploaded: Callable[[bytes], list[bytes]]) -> None:
     sent = uploaded(ARTIFACT)
 

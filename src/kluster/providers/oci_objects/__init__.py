@@ -34,12 +34,17 @@ object. The tenancy only says which account the session signs into,
 and a change to it, like a rotation, re-stamps the resource and uploads
 nothing. `read` is the inherited one and reports no drift: an object deleted
 behind the state is found by the image import that needs it.
+
+**Each of the three long steps says what it is doing before it starts** --
+the fetch, the decompression, the upload -- through `pulumi.log`, which
+`pulumi` draws on the stack's row as the run goes. The standard `logging`
+module would reach nobody: nothing configures it in the process a dynamic
+provider runs in.
 """
 
 from __future__ import annotations
 
 import hashlib
-import logging
 import lzma
 import tempfile
 from collections.abc import Mapping
@@ -72,8 +77,6 @@ __all__ = (
     'materialize',
     'upload',
 )
-
-log = logging.getLogger(__name__)
 
 #: How long one read from the publisher may stall before the fetch is
 #: abandoned: a bound on a link that has stopped moving, not on the transfer.
@@ -151,6 +154,7 @@ def materialize(url: str, sha256: str, path: Path) -> None:
                 _ = sink.write(chunk)
         if (found := hasher.hexdigest()) != sha256:
             raise DigestMismatch(url, found=found, declared=sha256)
+        pulumi.log.info(f'{url} matches its digest; decompressing it ({_gib(compressed):.1f} GiB compressed)')
         _decompress(url, compressed, path)
     except BaseException:
         path.unlink(missing_ok=True)
@@ -175,7 +179,6 @@ def _decompress(url: str, source: Path, path: Path) -> None:
 def upload(config: Mapping[str, str], props: Mapping[str, Any], path: Path) -> None:
     """Upload the file at `path` as the object `props` names. The seam a test replaces."""
     client = oci.object_storage.ObjectStorageClient(dict(config))
-    log.info('uploading %s to %s/%s (%.1f GiB)', props['object_name'], props['namespace'], props['bucket'], _gib(path))
     _ = oci.object_storage.UploadManager(client, allow_parallel_uploads=True).upload_file(
         str(props['namespace']), str(props['bucket']), str(props['object_name']), str(path)
     )
@@ -241,8 +244,11 @@ class ArtifactObjectProvider(ConfiguredProvider):
     def create(self, props: dict[str, Any]) -> dynamic.CreateResult:
         with tempfile.TemporaryDirectory(prefix='artifact-') as scratch:
             path = Path(scratch) / 'artifact'
-            log.info('fetching %s (about a gigabyte compressed) and checking it against its digest', props['url'])
+            pulumi.log.info(f'fetching {props["url"]} (about a gigabyte compressed) and checking it against its digest')
             materialize(str(props['url']), str(props['sha256']), path)
+            pulumi.log.info(
+                f'uploading {props["object_name"]} to {props["namespace"]}/{props["bucket"]} ({_gib(path):.1f} GiB)'
+            )
             upload(self._signing(props), props, path)
         return dynamic.CreateResult(id_=_object_id(props), outs=props)
 
