@@ -1,10 +1,10 @@
-encryptionsalt: v1:WkIr5Qn+4pI=:v1:dUgXYsKsTuXvjRq1:yO4cFptPIhkqZeN8JxYnACmCddVqKA==
+encryptionsalt: v1:959Zkwkljsg=:v1:UZQHy/vQUb+VJu6Y:oAauIrwNLfEd6/4/fQ2QHgHn6EAx6w==
 config:
   pulumi:disable-default-providers:
     - cloudflare
   kluster-py:cloudflareApiToken:
-    secure: v1:EU9UPId7wz1z0ee4:sgZVNTfvrtA08RVGFvnrLful9epOD/G+C/2epFiqL6nZjw6+ZOkuEZ28dgjrVN8vrFW0fKW/dZnYlJzL8Mn7vC/FIETT
+    secure: v1:kfIab7T9iQv9V2/x:Hwex2rc/v8aOJNyVlnQEuQJJjKmNx0C0C0/Wx0otDUyROrLmASurW//8hjJCPuYCdTt/n/IPSy6XPFxOpJnsNfJXDolh
   kluster-py:adguardUsername:
-    secure: v1:v0S9CXrtbCmD6lIz:j+FA3gz2oL6QK+C+/AA5+2yBpUI=
+    secure: v1:tEtRm0fYletYOIIZ:bAS9EBKYuNjHtOVhoa4hwh8AVrk=
   kluster-py:adguardPassword:
-    secure: v1:x5OIKTOe0PXCHzMU:FpkB38kCKP7Ljk9A5lo3euLCOrRzMC8PcoBTnledyYnPtFXcjbMdBg==
+    secure: v1:F13lwy+P+nopAkkO:43haSFSTpXG/hzt/Xg5zYt0ygsP6ez1z4LgTaHQPq9nDTCPDuQ1LSg==
