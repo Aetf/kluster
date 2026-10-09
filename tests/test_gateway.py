@@ -186,11 +186,16 @@ def test_the_gateway_declares_one_machine_per_service_and_nothing_else(monitor: 
     it is a machine the converger would find and start.
     """
     root = f'{nspawn.MACHINES}/'
-    trees = {str(image.inputs['root']) for image in monitor.of_type(DEVICE_ARTIFACT)}
+    # The module's recorder holds every gateway its cases declared, so this
+    # reads the one the fixture declared, by the name each of its children
+    # carries (style/pulumi.md): a machine missing from it would otherwise be
+    # masked by another case's device that has one.
+    ours = f'{NAME}-'
+    trees = {str(image.inputs['root']) for image in monitor.of_type(DEVICE_ARTIFACT) if image.name.startswith(ours)}
     written = {
         str(declaration.inputs['path']).removeprefix(root).split('/')[0]
         for declaration in monitor.of_type(DEVICE_FILE)
-        if str(declaration.inputs.get('path', '')).startswith(root)
+        if declaration.name.startswith(ours) and str(declaration.inputs.get('path', '')).startswith(root)
     }
 
     assert trees == {nspawn.rootfs_path(service.name) for service in conventions.gateway.SERVICES}

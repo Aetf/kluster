@@ -9,6 +9,8 @@ management port renames nothing that state or the balancer keys on.
 """
 
 import base64
+import hashlib
+import ipaddress
 from collections import Counter
 from itertools import product
 from typing import Any, cast
@@ -31,6 +33,22 @@ SUBNET_ID = 'ocid1.subnet.test'
 def vnic_of(instance_id: str) -> str:
     """The primary VNIC the account reads back for an instance: one of its own, so a lookup that crossed nodes shows."""
     return f'ocid1.vnic.oc1.phx.{instance_id}'
+
+
+#: The prefix every VNIC's GUA is read back from.
+GUA_PREFIX = ipaddress.IPv6Network('2001:db8:1::/64')
+
+
+def gua_of(vnic_id: str) -> str:
+    """The one GUA the account reads back for a VNIC, as a function of the VNIC's id alone.
+
+    Not a counter of the VNICs read so far: the lookups run on the SDK's
+    executor threads, so a count would hand a VNIC a different address on a
+    different run, and two first reads at once could hand two VNICs one. The
+    interface id is the id's digest, which no call order changes.
+    """
+    interface = int.from_bytes(hashlib.sha256(vnic_id.encode()).digest()[:8])
+    return str(GUA_PREFIX.network_address + interface)
 
 
 #: The instance id the mock answers the dedicated VIP's node with.
@@ -76,8 +94,7 @@ class Oci(Recorder):
         #: What every VNIC reads back as its IPv6 addresses, where a case
         #: stands in for one that does not hold exactly its own one.
         self.ipv6_addresses: list[str] | None = ipv6_addresses
-        #: Otherwise each VNIC's one GUA, handed out in the order the VNICs
-        #: are first read, so no two share one.
+        #: Otherwise each VNIC's one GUA (`gua_of`), as each VNIC read it back.
         self.guas: dict[str, str] = {}
 
     def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
@@ -93,7 +110,7 @@ class Oci(Recorder):
                 return {'vnicAttachments': [{'vnicId': vnic_of(instance_id)}]}
             case 'oci:Core/getVnic:getVnic':
                 vnic_id = str(cast('dict[str, Any]', args.args)['vnicId'])
-                gua = self.guas.setdefault(vnic_id, f'2001:db8:1::{len(self.guas) + 1:x}')
+                gua = self.guas.setdefault(vnic_id, gua_of(vnic_id))
                 held = [gua] if self.ipv6_addresses is None else self.ipv6_addresses
                 return {'ipv6addresses': held}
             case 'oci:Identity/getAvailabilityDomains:getAvailabilityDomains':
@@ -322,6 +339,9 @@ async def test_a_backend_reaches_its_node_on_the_family_of_its_set(monitor: Oci,
         _ = await backend.urn.future()
     backends = monitor.of_type(BACKEND)
     assert len(backends) == len(forwarded_names()) * len(nodes.instances) * 2
+    # Two VNICs reading back one address would let a node handed its
+    # neighbor's pass below.
+    assert len(set(monitor.guas.values())) == len(nodes.instances), monitor.guas
     for it in backends:
         node = it.name.rsplit('-', 1)[1]
         instance_id = str(await nodes.instances[node].id.future())
@@ -360,6 +380,9 @@ async def test_each_node_exports_the_gua_its_own_vnic_holds(monitor: Oci, nodes:
     for node, gua in nodes.guas.items():
         instance_id = str(await nodes.instances[node].id.future())
         assert await gua.future() == monitor.guas[vnic_of(instance_id)], node
+    # Two VNICs reading back one address would let a node handed its
+    # neighbor's pass above.
+    assert len(set(monitor.guas.values())) == len(nodes.guas), monitor.guas
 
 
 @pytest.mark.asyncio

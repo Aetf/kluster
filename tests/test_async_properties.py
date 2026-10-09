@@ -203,7 +203,7 @@ async def test_a_dependency_resolved_inside_a_gathered_task_is_still_carried(moc
     async def prepare():
         results = await asyncio.gather(
             resolve_one(vpc.id),
-            asyncio.sleep(0.01),
+            asyncio.sleep(0),
         )
         return f'subnet-for-{results[0]}'
 

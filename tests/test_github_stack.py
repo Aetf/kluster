@@ -311,8 +311,11 @@ async def test_a_run_without_the_token_refuses_by_name_and_names_what_fills_it()
         pulumi.runtime.set_all_config({})
         monitor = await run_under_backstop(Forge(), stack='github')
 
-        with pytest.raises(ValueError, match=program.ADMIN_TOKEN) as refusal:
-            await program.main()
+        # Inside the barrier, so whatever the run scheduled before refusing
+        # has landed by the time the absence is read below.
+        async with declaring():
+            with pytest.raises(ValueError, match=program.ADMIN_TOKEN) as refusal:
+                await program.main()
 
         # Read off the register rather than typed here: renaming the row moves
         # both copies, where a hand-written literal would go on matching a
