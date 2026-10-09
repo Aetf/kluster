@@ -27,12 +27,13 @@ from typing import Any, cast
 import drill_recipient_redirect
 import pinned_tools
 import pytest
+from credentials_command_tree import named_commands
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from memory_kit import MemoryKit
 
 from kluster.lib.state_backend import render, settings
-from kluster.scripts.credentials import age, escrow, pki
+from kluster.scripts.credentials import age, derived, escrow, pki
 from kluster.scripts.state_backend import config
 
 
@@ -162,8 +163,15 @@ def test_a_second_drill_recipient_on_file_is_refused_by_naming_the_rotation(dril
     # hand, and the command that does it properly is named instead.
     _ = drill_recipient_file.write_text(f'{DRILL_RECIPIENT}\nage1another\n')
 
-    with pytest.raises(age.AgeError, match='--rotate'):
+    with pytest.raises(age.AgeError, match='one slot') as refused:
         _ = config.drill_recipient(drill_recipient_file)
+    ((_, args),) = named_commands(str(refused.value))
+    assert (args['subject'], args['member'], args['action'], args['rotate']) == (
+        'derived',
+        derived.DRILL_AGE_IDENTITY_ROW,
+        'generate',
+        True,
+    )
 
 
 @pytest.fixture
@@ -176,8 +184,7 @@ def age_argv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     drill recipient was being checked. The file is absent until the tool is
     started.
     """
-    real = shutil.which(age.BINARY)
-    assert real is not None
+    real = pinned_tools.located(age.BINARY)
     shim = tmp_path / 'bin' / age.BINARY
     shim.parent.mkdir()
     log = tmp_path / 'argv.jsonl'
@@ -505,8 +512,7 @@ def test_the_package_renders_from_an_installed_copy_with_no_checkout_around_it(
     assert bound > BUILD_TIMEOUT + RENDER_TIMEOUT
     if any((level / 'mise.toml').is_file() for level in tmp_path.parents):
         pytest.skip('the temporary directory is itself inside a checkout')
-    uv = os.environ.get('UV') or shutil.which('uv')
-    assert uv is not None, 'uv builds the wheel, and it is not on PATH (mise x uv -- ...)'
+    uv = os.environ.get('UV') or pinned_tools.located('uv')
     root = Path(__file__).parent.parent
     dist = tmp_path / 'dist'
     built = subprocess.run(

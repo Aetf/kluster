@@ -17,9 +17,10 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
+from credentials_command_tree import named_leaves
 from fake_gh import RecordedGh
 
-from kluster.scripts.credentials import github_secrets
+from kluster.scripts.credentials import devices, github_secrets
 from kluster.scripts.credentials.github_secrets import Forge, Slot
 from kluster.scripts.credentials.pulumi_config import SlotRefused
 
@@ -156,8 +157,11 @@ def test_a_token_that_is_not_accepted_is_sent_to_its_rotation(tmp_path: Path, mo
     # permission added to it would help: the repair is a new token.
     _plant(tmp_path, REFUSING_GH.replace('HTTP 404: Not Found', 'HTTP 401: Bad credentials'), monkeypatch)
 
-    with pytest.raises(SlotRefused, match='was not accepted: `credentials derived github-admin record`'):
+    with pytest.raises(SlotRefused, match='was not accepted') as refused:
         _ = github_secrets.run_gh(['secret', 'list', '--repo', REPOSITORY], token='the-admin-token', stdin=None)
+    # The remedy is the admin token's own row, read by the parser: a leaf
+    # renamed in the tree fails here while the message still names the old one.
+    assert named_leaves(str(refused.value)) == [('derived', devices.GITHUB_ADMIN, 'record')]
 
 
 def test_a_missing_tool_says_so_rather_than_raising_an_os_error(

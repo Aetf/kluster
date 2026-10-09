@@ -12,7 +12,6 @@ import contextlib
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -262,8 +261,7 @@ def test_no_line_reaches_the_tools_argv(tmp_path: Path, monkeypatch: pytest.Monk
     while the check ran -- for a line that parses and for every kind that
     does not.
     """
-    real = shutil.which(age.BINARY)
-    assert real is not None
+    real = pinned_tools.located(age.BINARY)
     shim = tmp_path / 'bin' / age.BINARY
     shim.parent.mkdir()
     log = tmp_path / 'argv.jsonl'

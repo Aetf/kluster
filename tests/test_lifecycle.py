@@ -30,6 +30,7 @@ from b2_api import FakeApi as B2Api
 from cloudflare_api import ACCOUNT_ID as CLOUDFLARE_ACCOUNT
 from cloudflare_api import MINTING_POLICY, console_seed
 from cloudflare_api import FakeApi as CloudflareApi
+from credentials_command_tree import named_commands, named_leaves
 from memory_keyring import installed
 from oci_clock import SimulatedClock
 from oci_conventions import with_tenancy_ocid
@@ -790,7 +791,8 @@ def test_a_successor_whose_marker_was_never_written_is_refused_naming_kit_ls(
     with pytest.raises(KdbxError, match='no lineage marker') as refused:
         _ = lifecycle.rotate(kit, _successor(path), prompt=_refuse, registry=registry)
 
-    assert f'--kdbx {path} kit ls' in str(refused.value)
+    ((_, args),) = named_commands(str(refused.value))
+    assert (args['kdbx'], args['subject'], args['member']) == (path, 'kit', 'ls')
     assert whole.tenancy.identity.keys[whole.user_id] == [whole.oci_key]
     assert whole.console_visits == []
 
@@ -914,8 +916,9 @@ def test_an_operator_stack_the_chain_does_not_answer_for_is_refused_naming_recov
 
     assert pulumi_config.APART, 'nothing to exercise: no stack is encrypted apart from the others'
     for stack, row in pulumi_config.APART.items():
-        with pytest.raises(pulumi_config.PassphraseMissing, match=f'credentials derived {row} recover'):
+        with pytest.raises(pulumi_config.PassphraseMissing) as refusal:
             _ = found.variables(stack)
+        assert ('derived', row, 'recover') in named_leaves(str(refusal.value))
 
 
 class _Terminal(io.StringIO):
@@ -994,9 +997,9 @@ def test_physical_with_nothing_escrowed_is_refused_naming_the_command_that_files
     found = lifecycle.environment(kit, tmp_path / 'absent', registry)
 
     assert found.variables(conventions.STACK_NAMES.dns)[pulumi_config.PASSPHRASE_ENV] == stack_passphrase
-    fills = f'credentials derived {pulumi_config.PHYSICAL_ROW} generate'
-    with pytest.raises(pulumi_config.PassphraseMissing, match=re.escape(fills)) as refusal:
+    with pytest.raises(pulumi_config.PassphraseMissing) as refusal:
         _ = found.variables(pulumi_config.PHYSICAL)
+    assert ('derived', pulumi_config.PHYSICAL_ROW, 'generate') in named_leaves(str(refusal.value))
     assert 'The stack passphrase the previewed stacks share is deliberately not used' in str(refusal.value)
 
 

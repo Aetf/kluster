@@ -35,7 +35,7 @@ from typing import Any
 import keyring.backends.fail
 import pinned_tools
 import pytest
-from credentials_command_tree import commands
+from credentials_command_tree import commands, named_leaves
 from memory_keyring import MemoryKeyring, installed
 from memory_kit import MemoryKit
 
@@ -850,7 +850,10 @@ def test_check_fails_while_a_file_the_stack_renders_from_is_absent(
     assert cli.main(['derived', 'check']) == 1
 
     assert f'{absent}.txt' in caplog.text
-    assert 'generate' in caplog.text
+    fills = (
+        cli.derived.STATE_BACKEND_HOST_KEY_ROW if absent == 'host-key' else escrow.row_name(escrow.backup_labels()[0])
+    )
+    assert ('derived', fills, 'generate') in named_leaves(caplog.text)
 
 
 def test_check_fails_on_a_registry_with_nothing_in_it(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
@@ -1124,7 +1127,7 @@ def test_sync_on_a_machine_the_chain_does_not_answer_on_is_refused_naming_recove
 
     assert code != 0
     assert seen == []
-    assert f'credentials derived {stack_environment.OPERATOR_PASSPHRASE_ROW} recover' in caplog.text
+    assert ('derived', stack_environment.OPERATOR_PASSPHRASE_ROW, 'recover') in named_leaves(caplog.text)
 
 
 def test_sync_reads_no_admin_token_for_a_row_that_never_reaches_the_forge(dispatch: Dispatch, tmp_path: Path) -> None:

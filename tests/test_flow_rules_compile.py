@@ -23,13 +23,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import shutil
 import subprocess
 import tomllib
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
+import pinned_tools
 import pytest
 from overlay_flow_rules import NODE_IDS, rules
 
@@ -47,9 +47,7 @@ TIMEOUT = 60
 
 def node() -> str:
     """The `node` the compiler runs on: the one `mise.toml` pins, found on the `PATH` `mise x` builds."""
-    found = shutil.which('node')
-    assert found is not None, 'node is not on PATH; it is pinned in mise.toml, so run the suite through `mise x`'
-    return found
+    return pinned_tools.located('node')
 
 
 def compile_rules(program: str, directory: Path) -> subprocess.CompletedProcess[str]:

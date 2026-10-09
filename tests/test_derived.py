@@ -33,6 +33,7 @@ import oci_clock
 import pinned_tools
 import pytest
 from cloudflare_api import ACCOUNT_ID, FakeApi, console_seed
+from credentials_command_tree import named_leaves
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -1359,7 +1360,7 @@ def test_check_refuses_while_no_recipients_file_exists(vault_in_hand: escrow.Vau
     (problem,) = derived.backup_recipients_problems(vault_in_hand.registry, tmp_path / 'backup-recipients.txt')
 
     assert 'backup-recipients.txt' in problem
-    assert f'credentials derived {escrow.row_name(escrow.backup_labels()[0])} generate' in problem
+    assert ('derived', escrow.row_name(escrow.backup_labels()[0]), 'generate') in named_leaves(problem)
 
 
 def test_check_refuses_while_no_host_key_file_exists(tmp_path: Path) -> None:
@@ -1368,7 +1369,7 @@ def test_check_refuses_while_no_host_key_file_exists(tmp_path: Path) -> None:
     (problem,) = derived.host_key_problems(tmp_path / 'host-key.txt')
 
     assert 'host-key.txt' in problem
-    assert f'credentials derived {derived.STATE_BACKEND_HOST_KEY_ROW} generate' in problem
+    assert ('derived', derived.STATE_BACKEND_HOST_KEY_ROW, 'generate') in named_leaves(problem)
 
 
 def test_check_reads_a_committed_host_key_as_one_ed25519_line(tmp_path: Path) -> None:

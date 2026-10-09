@@ -51,12 +51,13 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from credentials_command_tree import named_leaves
 from memory_keyring import MemoryKeyring, installed
 
 from kluster.conventions import identity
 from kluster.lib import acquisition, bundle, stack_environment
 from kluster.lib.state_backend import permission, settings, state
-from kluster.scripts.credentials import escrow
+from kluster.scripts.credentials import derived, escrow
 from kluster.scripts.credentials import workstation as credential_slots
 from kluster.scripts.operator_stack import appliance, checkpoint, cli, driver
 
@@ -315,12 +316,10 @@ def test_a_machine_without_the_operator_passphrase_is_refused_naming_the_command
     _fill_slots(checkout)
     (checkout / '.credentials' / stack_environment.OPERATOR_PASSPHRASE_SLOT).unlink()
 
-    with pytest.raises(
-        stack_environment.EnvironmentRefused, match='credentials derived operator-passphrase recover'
-    ) as refusal:
+    with pytest.raises(stack_environment.EnvironmentRefused, match='no operator passphrase on this machine') as refusal:
         _ = driver.Run.open('github', checkout, pulumi=FakePulumi(), base=AMBIENT)
 
-    assert 'no operator passphrase on this machine' in str(refusal.value)
+    assert named_leaves(str(refusal.value)) == [('derived', stack_environment.OPERATOR_PASSPHRASE_ROW, 'recover')]
     assert stack_environment.OPERATOR_PASSPHRASE_ENV in str(refusal.value)
 
 
@@ -381,8 +380,10 @@ def test_an_empty_answer_at_the_prompt_is_refused(tmp_path: Path) -> None:
     _fill_slots(checkout)
     (checkout / '.credentials' / stack_environment.OPERATOR_PASSPHRASE_SLOT).unlink()
 
-    with pytest.raises(stack_environment.EnvironmentRefused, match='operator-passphrase recover'):
+    with pytest.raises(stack_environment.EnvironmentRefused, match='nobody answered the prompt') as refusal:
         _ = stack_environment.operator_passphrase(checkout, lambda _question: '  ')
+
+    assert named_leaves(str(refusal.value)) == [('derived', stack_environment.OPERATOR_PASSPHRASE_ROW, 'recover')]
 
 
 class _Terminal(io.StringIO):
@@ -1935,7 +1936,7 @@ def test_an_expiry_inside_the_margin_is_named(
         (message,) = said
         assert named in message
         assert expiry.date().isoformat() in message
-        assert 'credentials derived state-backend-server issue' in message
+        assert ('derived', derived.STATE_BACKEND_SERVER_ROW, 'issue') in named_leaves(message)
 
 
 @pytest.mark.parametrize(

@@ -558,10 +558,15 @@ async def test_a_compartment_that_does_not_exist_yet_names_the_command_that_make
     # compartment is named but has never been created, so there is no OCID to
     # declare anything in. What matters is that the refusal names the command
     # that produces one -- a lookup failure here would say nothing at all.
+    from credentials_command_tree import named_leaves
+
+    from kluster.scripts.credentials import derived
+
     with_compartment(monkeypatch, conventions.Compartment(consumer=conventions.PHYSICAL, name=COMPARTMENT.name))
 
-    with pytest.raises(conventions.CompartmentMissing, match=r'credentials derived oci-physical mint'):
+    with pytest.raises(conventions.CompartmentMissing, match='does not exist yet') as refusal:
         await physical.main()
+    assert named_leaves(str(refusal.value)) == [('derived', derived.OCI_PHYSICAL_ROW, 'mint')]
 
 
 class ExportedPhysical(Recorder):

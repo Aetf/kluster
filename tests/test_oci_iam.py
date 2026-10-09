@@ -12,7 +12,6 @@ because the row shape (§2) is the other half of the same decision.
 from __future__ import annotations
 
 import logging
-import re
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -21,6 +20,7 @@ from typing import Any
 import oci
 import oci_clock
 import pytest
+from credentials_command_tree import named_leaves
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from memory_kit import MemoryKit
@@ -43,7 +43,7 @@ from oci_tenancy import (
 )
 
 from kluster import conventions
-from kluster.scripts.credentials import entries, masters, oci_iam
+from kluster.scripts.credentials import derived, entries, masters, oci_iam
 from kluster.scripts.credentials.delivery import Delivery
 from kluster.scripts.credentials.kdbx import KdbxStore
 
@@ -52,6 +52,8 @@ PASSWORD = 'kit-password'
 #: hold the seed's account against what `conventions` records.
 ELSEWHERE = 'ocid1.tenancy.oc1..elsewhere'
 SEED_ENTRY = entries.SEEDS['oci'].entry
+#: The repair a row written before its identity-domain attribute is sent to.
+DOMAIN_REPAIR = ('seed', entries.OCI, 'domain')
 
 
 def _shim_refusal(endpoint: str) -> oci.exceptions.ServiceError:
@@ -720,9 +722,9 @@ def test_the_drill_compartment_is_recorded_apart_from_every_other() -> None:
     assert drill.name == f'{conventions.CLUSTER_NAME}-{conventions.DRILL}'
     assert drill.name not in {other.name for other in compartments.values() if other is not drill}
     assert drill.ocid is None or drill.ocid not in {other.ocid for other in compartments.values() if other is not drill}
-    assert drill.mint == f'credentials derived {conventions.DRILL}-credentials mint'
-    with pytest.raises(conventions.CompartmentMissing, match=re.escape(drill.mint)):
+    with pytest.raises(conventions.CompartmentMissing, match='does not exist yet') as refusal:
         _ = replace(drill, ocid=None).require()
+    assert named_leaves(str(refusal.value)) == [('derived', derived.DRILL_CREDENTIALS_ROW, 'mint')]
 
 
 def test_the_drill_identity_administers_its_compartment_and_reaches_nothing_outside_it() -> None:
@@ -1215,7 +1217,7 @@ def test_a_domain_that_cannot_be_discovered_names_the_repair(
     # The one thing a rotation must not do is require the account root, so a
     # tenancy that will not answer the seed gets a warning naming the errand
     # rather than a failure -- and the successor still stands.
-    assert 'credentials seed oci domain' in caplog.text
+    assert DOMAIN_REPAIR in named_leaves(caplog.text)
     assert entries.OCI_DOMAIN_ATTRIBUTE not in kit.attributes(SEED_ENTRY)
 
 
@@ -1502,7 +1504,7 @@ def test_a_full_user_no_key_of_which_can_go_names_the_errand(
     # And the errand ends at the repair, not at the symptom: a sweep that could
     # not make room is what a row predating its identity-domain attribute
     # produces, so clearing the strays by hand strands another next rotation.
-    assert 'credentials seed oci domain' in message
+    assert DOMAIN_REPAIR in named_leaves(message)
 
 
 class Interrupted(RuntimeError):

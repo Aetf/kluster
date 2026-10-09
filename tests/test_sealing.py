@@ -26,15 +26,16 @@ import datetime as dt
 import io
 import json
 import logging
-import shutil
 import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+import pinned_tools
 import pytest
 from cloudflare_api import ACCOUNT_ID, FakeApi, console_seed
+from credentials_command_tree import named_leaves
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -67,10 +68,7 @@ class KeyPair:
 @pytest.fixture(scope='module')
 def kubeseal() -> str:
     """The pinned `kubeseal`, refused when it is missing rather than skipped."""
-    binary = shutil.which(sealing.KUBESEAL)
-    if binary is None:
-        pytest.fail(f'{sealing.KUBESEAL} is not on PATH: mise.toml pins it, so run the suite under `mise x`')
-    return binary
+    return pinned_tools.located(sealing.KUBESEAL)
 
 
 @pytest.fixture(scope='module')
@@ -329,8 +327,7 @@ def test_the_write_is_held_to_what_the_real_cli_accepts(
     read-back says. `pulumi config set` also refuses a value that looks like a
     secret unless told which channel it takes.
     """
-    if shutil.which('pulumi') is None:
-        pytest.fail('the pinned pulumi CLI is not on PATH: run the suite under `mise x`')
+    pinned_tools.require('pulumi')
     project = tmp_path / 'project'
     project.mkdir()
     _ = (project / 'Pulumi.yaml').write_text('name: sealing-probe\nruntime: python\n')
@@ -533,7 +530,7 @@ def test_a_password_recorded_before_the_cluster_exists_says_where_its_sealed_cop
 
     assert stacks.runner(PHYSICAL).config == {'gatewayBgpPassword': 'a-drawn-password'}
     assert written(stacks, conventions.sealed.BGP_PASSWORD) == {}
-    assert f'credentials derived {devices.BGP} seal' in caplog.text
+    assert ('derived', devices.BGP, 'seal') in named_leaves(caplog.text)
 
 
 def test_a_seal_that_fails_leaves_the_gateways_end_unwritten(stacks: Stacks, tmp_path: Path) -> None:
@@ -581,8 +578,9 @@ def test_seal_writes_the_worker_s_copy_of_what_the_gateway_s_stack_holds(
 def test_seal_before_the_password_is_recorded_names_the_command_that_records_it(
     stacks: Stacks, sealer: sealing.Sealer
 ) -> None:
-    with pytest.raises(SlotRefused, match=f'credentials derived {devices.BGP} record'):
+    with pytest.raises(SlotRefused, match='is what puts it there') as refused:
         devices.seal(BGP, stack=stacks.open(BGP.stack), sealer=sealer)
+    assert ('derived', devices.BGP, 'record') in named_leaves(str(refused.value))
     assert written(stacks, conventions.sealed.BGP_PASSWORD) == {}
 
 

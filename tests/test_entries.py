@@ -15,6 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from credentials_command_tree import commands
 
 from kluster.scripts.credentials import cloudflare, entries, escrow, masters
 from kluster.scripts.credentials.cli import main
@@ -131,3 +132,11 @@ def test_the_help_says_when_to_run_what(capsys: pytest.CaptureFixture[str]) -> N
     # Each lifecycle verb appears in the ordering, not only in the tree.
     for verb in ('kit bootstrap', 'kit rotate', 'derived <row> generate', 'derived check'):
         assert verb in printed
+    # And each one the ordering spells out whole is a leaf the tree still
+    # carries, so a verb renamed in the parser is red here while the
+    # hand-written ordering still names the old one. `derived <row> generate`
+    # names no row; the help suite holds the order's rows to the tree.
+    leaves = commands()
+    for landmark in ('kit bootstrap', 'kit rotate', 'derived check'):
+        words = landmark.split()
+        assert words in [leaf[: len(words)] for leaf in leaves], landmark

@@ -17,10 +17,10 @@ from __future__ import annotations
 
 import base64
 import os
-import shutil
 import subprocess
 from pathlib import Path
 
+import pinned_tools
 import pytest
 
 #: The sha256 of the bridge plugin's `linux-amd64` archive at the release the
@@ -47,10 +47,7 @@ TIMEOUT = 60
 
 @pytest.fixture
 def pulumi() -> str:
-    found = shutil.which('pulumi')
-    if found is None:
-        pytest.fail('pulumi is not on PATH: mise.toml pins it, so run `mise install`, then the suite under `mise x`')
-    return found
+    return pinned_tools.located('pulumi')
 
 
 def load(pulumi: str, project: str, directory: Path) -> subprocess.CompletedProcess[str]:
