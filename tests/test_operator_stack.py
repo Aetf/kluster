@@ -20,10 +20,12 @@ Three levels, because they answer different questions:
     the events and the state, that no `up` runs over nothing planned, that
     a write over an unchanged deployment keeps the file's bytes, that no
     switch of the caller's moves the state out of the file the checks read,
-    and that the check needing no value finds a secret in the clear at each
-    place the engine marks one. The driver reaches the engine there through
-    `Bounded`, each command in a POSIX session of its own and bounded below
-    the case (framework/testing.md §1.2, §8); a case whose subject is the
+    that the check needing no value finds a secret in the clear at each
+    place the engine marks one, and that a held step is named by the
+    driver's progress lines, in the preview and in an apply under a pipe.
+    The driver reaches the engine there through `Bounded`, each command in
+    a POSIX session of its own and bounded below the case
+    (framework/testing.md §1.2, §8); a case whose subject is the
     production `Cli` runs the driver in a session `started` ends instead.
     Skipped where the pinned CLI or `uv` is not installed.
 
@@ -182,17 +184,23 @@ class FakePulumi:
     streamed: list[list[str]] = field(default_factory=list[list[str]])
     captured: list[list[str]] = field(default_factory=list[list[str]])
     envs: list[dict[str, str]] = field(default_factory=list[dict[str, str]])
+    #: What each streamed command and preview was said to be doing, in order.
+    doings: list[str | None] = field(default_factory=list[str | None])
 
-    def stream(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str]) -> int:
+    def stream(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str], doing: str | None = None) -> int:
         args = list(args)
         self.streamed.append(args)
+        self.doings.append(doing)
         self.envs.append(dict(env))
         self.effect(args)
         return self.code
 
-    def events(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str]) -> tuple[int, str]:
+    def events(
+        self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str], doing: str | None = None
+    ) -> tuple[int, str]:
         args = list(args)
         self.streamed.append(args)
+        self.doings.append(doing)
         self.envs.append(dict(env))
         assert args[:3] == ['preview', '--refresh', '--json'], args
         assert env[driver.STREAMING_JSON_ENV] == 'true'
@@ -610,6 +618,52 @@ def test_up_with_nothing_planned_makes_no_up(tmp_path: Path) -> None:
 
     assert run.up(yes=True) == driver.NOTHING_PLANNED
     assert fake.ups() == []
+
+
+@dataclass
+class Marking(FakePulumi):
+    """A `FakePulumi` that logs a mark as each streamed command or preview starts, so the log orders the runs."""
+
+    def stream(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str], doing: str | None = None) -> int:
+        logging.getLogger(MARKS).info('run')
+        return super().stream(args, cwd=cwd, env=env, doing=doing)
+
+    def events(
+        self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str], doing: str | None = None
+    ) -> tuple[int, str]:
+        logging.getLogger(MARKS).info('run')
+        return super().events(args, cwd=cwd, env=env, doing=doing)
+
+
+#: The logger `Marking` marks each run on.
+MARKS = 'test_operator_stack.runs'
+
+
+def test_a_plan_and_an_up_ask_for_their_runs_progress_and_a_passthrough_for_none(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # What each run is said to be doing is a phrase the driver logged since
+    # the run before it; the narration itself is `Cli`'s (`progress`).
+    checkout = tmp_path / 'kluster'
+    _fill_slots(checkout)
+    fake = Marking(changes={'same': 2, 'update': 1})
+    run = driver.Run.open('github', checkout, pulumi=fake, base=AMBIENT)
+
+    with caplog.at_level(logging.INFO):
+        _ = run.plan()
+        _ = run.up(yes=True)
+        _ = run.passthrough(['stack', 'ls'])
+
+    # The plan's preview, the up's own preview, the apply; then the passthrough.
+    assert [doing is not None for doing in fake.doings] == [True, True, True, False]
+    said: list[list[str]] = [[]]
+    for record in caplog.records:
+        if record.name == MARKS:
+            said.append([])
+        else:
+            said[-1].append(record.getMessage())
+    for doing, before in zip(fake.doings, said, strict=False):
+        assert doing is None or doing in before, (doing, before)
 
 
 @pytest.mark.parametrize(('yes', 'answer', 'ups'), [(True, False, 1), (False, True, 1), (False, False, 0)])
@@ -1171,14 +1225,23 @@ engine_bound = pytest.mark.timeout(ENGINE_CASE_TIMEOUT)
 #: A program with one real resource and no credential: a dynamic resource
 #: whose `gen` input replaces nothing and updates in place, and the stack's
 #: own outputs, one of them secret so that every write re-encrypts something.
+#: Its `update` or its `read`, as the run's environment says, can be held.
 #: What it declares is read from `settings.json` beside it, so a case changes
 #: the program's answer without changing the program.
 PROGRAM = """\
 import json
+import os
 import pathlib
 
 import pulumi
-from pulumi.dynamic import CreateResult, DiffResult, Resource, ResourceProvider, UpdateResult
+from pulumi.dynamic import CreateResult, DiffResult, ReadResult, Resource, ResourceProvider, UpdateResult
+
+
+def held(op):
+    # The operation `PROBE_HOLD_OP` names waits for the case to open the FIFO
+    # `PROBE_HOLD` names: a step held as long as the case needs, as an event.
+    if os.environ.get('PROBE_HOLD_OP') == op:
+        open(os.environ['PROBE_HOLD']).read()
 
 
 class Box(ResourceProvider):
@@ -1189,7 +1252,12 @@ class Box(ResourceProvider):
         return DiffResult(changes=olds.get('gen') != news.get('gen'))
 
     def update(self, _id, _olds, news):
+        held('update')
         return UpdateResult(outs=dict(news))
+
+    def read(self, id_, props):
+        held('read')
+        return ReadResult(id_=id_, outs=props)
 
 
 class BoxResource(Resource):
@@ -1269,19 +1337,22 @@ class Bounded:
     language host, a dynamic provider -- outlives the call. What the driver
     reads it reads the same way: `events` hands back standard output,
     `capture` refuses a failure naming the command and its standard error,
-    and `stream`'s output is the case's.
+    and `stream`'s output is the case's. What each run is said to be doing
+    is taken and left unused: the production `Cli` is what narrates.
     """
 
     def _run(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str]) -> sp.CompletedProcess[str]:
         return process_sessions.run(['pulumi', *args], cwd=cwd, env=env, text=True, timeout=ENGINE_COMMAND_TIMEOUT)
 
-    def stream(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str]) -> int:
+    def stream(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str], doing: str | None = None) -> int:
         ran = self._run(args, cwd=cwd, env=env)
         _ = sys.stdout.write(ran.stdout)
         _ = sys.stderr.write(ran.stderr)
         return ran.returncode
 
-    def events(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str]) -> tuple[int, str]:
+    def events(
+        self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str], doing: str | None = None
+    ) -> tuple[int, str]:
         ran = self._run(args, cwd=cwd, env=env)
         _ = sys.stderr.write(ran.stderr)
         return ran.returncode, ran.stdout
@@ -1442,7 +1513,8 @@ def _drained(reader: int, command: process_sessions.Command) -> bytes:
 
     The bound is on the whole read, `ENGINE_COMMAND_TIMEOUT` from its start,
     not on a silence: a stalled `pulumi` is not silent, since its display
-    redraws at a terminal and prints `@ updating....` under a pipe. The
+    redraws at a terminal, and under a pipe the driver says what is in
+    flight every `progress.INTERVAL`. The
     `started` block the timeout is raised in then ends the run's whole
     session.
     """
@@ -1522,6 +1594,127 @@ def test_a_real_up_hands_pulumi_the_drivers_own_output_and_reads_what_it_needs_f
     assert box['outputs']['gen'] == 'g2'
     assert not checkpoint.record(scratch.checkout, PROBE).exists()
     assert scratch.run.plan() == driver.NOTHING_PLANNED
+
+
+#: The driver's `plan` or `up` in a process of its own, as `UP_IN_A_PROCESS`
+#: runs it, with the production `Cli`, ticking every `PROGRESS_INTERVAL`.
+DRIVEN_IN_A_PROCESS = """\
+import json, logging, sys
+from pathlib import Path
+sys.path.insert(0, {tests!r})
+from memory_keyring import MemoryKeyring, installed
+from kluster.conventions import identity
+from kluster.scripts.operator_stack import driver, progress
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+progress.INTERVAL = {interval!r}
+identity.OPERATOR_STACKS = {{**identity.OPERATOR_STACKS, {stack!r}: identity.StateHome.COMMITTED}}
+with installed(MemoryKeyring()):
+    run = driver.Run.open({stack!r}, Path({checkout!r}), base=json.loads({base!r}))
+    sys.exit(run.up(yes=True) if {how!r} == 'up' else run.plan())
+"""
+
+#: How often the driver in those cases says what is in flight: often, so the
+#: line the case waits for comes soon after the step is held. A display rate,
+#: which nothing asserts on.
+PROGRESS_INTERVAL = 1.0
+
+
+def _read_until(reader: int, wanted: Callable[[bytes], bool], awaited: str, command: process_sessions.Command) -> bytes:
+    """What `reader` gives until a complete line is `wanted`, or a `TimeoutExpired` naming the run.
+
+    `awaited` says what the line is, for the failure. The bound is on the
+    whole read, as in `_drained`.
+    """
+    read = b''
+    deadline = time.monotonic() + ENGINE_COMMAND_TIMEOUT
+    with selectors.DefaultSelector() as selector:
+        _ = selector.register(reader, selectors.EVENT_READ)
+        while not any(wanted(line) for line in read.split(b'\n')[:-1]):
+            left = deadline - time.monotonic()
+            if left <= 0 or not selector.select(timeout=left):
+                expired = sp.TimeoutExpired(command.args, ENGINE_COMMAND_TIMEOUT, output=read)
+                expired.add_note(f'waiting for {awaited}')
+                raise expired
+            chunk = os.read(reader, 65536)
+            assert chunk, f'the driver ended before {awaited}:\n{read.decode()}'
+            read += chunk
+    return read
+
+
+def _held_run(scratch: Scratch, how: str, op: str) -> tuple[int, bytes, bytes]:
+    """The driver's `how` with `op` held: what it said until it named the held step, its code, and the rest.
+
+    The step is named when a line of the driver's log -- `INFO: `, the
+    prefix `DRIVEN_IN_A_PROCESS` gives it -- holds the step's operation and
+    the box's URN as the state records it. The prefix is what tells it from
+    `pulumi`'s own planned-step line, which holds both as well.
+    """
+    (urn,) = [
+        r['urn'] for r in checkpoint.resources(json.loads(scratch.path.read_text())) if r['urn'].endswith('::box')
+    ]
+    step = (b'update' if op == 'update' else b'refresh', urn.encode())
+
+    def named(line: bytes) -> bool:
+        return line.startswith(b'INFO: ') and step[0] in line.split() and step[1] in line
+
+    hold = scratch.checkout.parent / 'hold'
+    os.mkfifo(hold)
+    env = scratch.base | {'PROBE_HOLD': str(hold), 'PROBE_HOLD_OP': op}
+    program = DRIVEN_IN_A_PROCESS.format(
+        tests=str(Path(__file__).parent),
+        interval=PROGRESS_INTERVAL,
+        stack=PROBE,
+        checkout=str(scratch.checkout),
+        base=json.dumps(env),
+        how=how,
+    )
+    with process_sessions.started(
+        [sys.executable, '-c', program],
+        env=env,
+        stdout=process_sessions.PIPE,
+        stderr=process_sessions.STDOUT,
+    ) as command:
+        assert command.stdout is not None
+        reader = command.stdout.fileno()
+        said = _read_until(reader, named, f'a line of the driver naming {step[0].decode()} {urn}', command)
+        # The step has been said; the program's provider waits on the FIFO.
+        with hold.open('w'):
+            pass
+        rest = _drained(reader, command)
+        code = command.wait(timeout=ENGINE_COMMAND_TIMEOUT)
+    return code, said, rest
+
+
+@needs_pulumi
+@engine_bound
+def test_a_real_apply_under_a_pipe_says_which_step_it_waits_on(scratch: Scratch) -> None:
+    # The non-interactive display prints a step when it starts and when it
+    # ends; between, the driver says the step is still in flight, read from
+    # the engine's events, and the display carries no dots. A pulumi bump that
+    # drops `--event-log` or its file form fails here, at the bound, naming the
+    # line it waited for: the apply's narration rests on both
+    # (`progress`, pulumi/pulumi#11139).
+    scratch.settings(gen='g2')
+
+    code, said, rest = _held_run(scratch, 'up', 'update')
+
+    shown = said + rest
+    assert code == 0, shown.decode()
+    assert b'box updating' in shown and b'box updated' in shown, shown.decode()
+    assert b'@ updating' not in shown, shown.decode()
+    assert not checkpoint.record(scratch.checkout, PROBE).exists()
+    (box,) = [r for r in checkpoint.resources(json.loads(scratch.path.read_text())) if r['urn'].endswith('::box')]
+    assert box['outputs']['gen'] == 'g2'
+
+
+@needs_pulumi
+@engine_bound
+def test_a_real_plan_says_which_refresh_it_waits_on_and_then_plans_as_before(scratch: Scratch) -> None:
+    # The preview's standard output is the events the plan is read from, so
+    # pulumi shows nothing of it; the driver says what the refresh is on.
+    code, _, _ = _held_run(scratch, 'plan', 'read')
+
+    assert code == driver.NOTHING_PLANNED
 
 
 @needs_pulumi
@@ -2200,14 +2393,16 @@ class AsTheBox:
     cli: driver.Pulumi = field(default_factory=Bounded)
     printed: list[str] = field(default_factory=list[str])
 
-    def stream(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str]) -> int:
-        return self.cli.stream(args, cwd=cwd, env=env)
+    def stream(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str], doing: str | None = None) -> int:
+        return self.cli.stream(args, cwd=cwd, env=env, doing=doing)
 
     def capture(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str]) -> str:
         return self.cli.capture(args, cwd=cwd, env=env)
 
-    def events(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str]) -> tuple[int, str]:
-        code, printed = self.cli.events(args, cwd=cwd, env=env)
+    def events(
+        self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str], doing: str | None = None
+    ) -> tuple[int, str]:
+        code, printed = self.cli.events(args, cwd=cwd, env=env, doing=doing)
         lines: list[str] = []
         for line in printed.splitlines():
             event = cast('dict[str, Any]', json.loads(line)) if line.strip() else None

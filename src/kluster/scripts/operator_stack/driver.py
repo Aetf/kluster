@@ -35,6 +35,7 @@ import logging
 import os
 import signal
 import subprocess as sp
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -43,7 +44,7 @@ from typing import Any, Protocol, cast
 from kluster.conventions import identity
 from kluster.lib import stack_environment
 from kluster.lib.state_backend import permission
-from kluster.scripts.operator_stack import appliance, checkpoint
+from kluster.scripts.operator_stack import appliance, checkpoint, progress
 
 log = logging.getLogger(__name__)
 
@@ -81,13 +82,21 @@ class Refused(RuntimeError):
 
 
 class Pulumi(Protocol):
-    """How the driver starts `pulumi`. Substituted in tests."""
+    """How the driver starts `pulumi`. Substituted in tests.
 
-    def stream(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str]) -> int:
+    `doing` is what a run the driver composes is doing, the phrase it logs
+    before it starts the run: where it is given, the run's progress is said
+    where `pulumi` does not show it (`progress`). A passed-through command
+    and a query are given none.
+    """
+
+    def stream(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str], doing: str | None = None) -> int:
         """Run `pulumi` with the terminal's own output, returning its exit code."""
         ...
 
-    def events(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str]) -> tuple[int, str]:
+    def events(
+        self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str], doing: str | None = None
+    ) -> tuple[int, str]:
         """Run `pulumi` with its standard output captured and its standard error on the terminal."""
         ...
 
@@ -96,8 +105,16 @@ class Pulumi(Protocol):
         ...
 
 
+@dataclass
 class Cli:
     """The pinned `pulumi` on `PATH`, started with exactly the environment it is handed.
+
+    **A run handed `doing` is observed** (`progress`): the preview always,
+    since its standard output is the events and `pulumi` shows nothing of it;
+    the apply only where `pulumi`'s display is not live, since a line written
+    beside a live display is erased by its redraw. The wait on such a run
+    ticks at `progress.INTERVAL`, on `communicate`'s own timeout, which loses
+    no output when it is retried; `clock` times what the narration says.
 
     **A ^C is `pulumi`'s to answer.** The terminal sends SIGINT to the whole
     foreground process group, `pulumi` included, and `pulumi` answers the
@@ -110,14 +127,44 @@ class Cli:
     is inherited across `exec`.
     """
 
-    def stream(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str]) -> int:
-        return self._run(args, cwd=cwd, env=env, stdout=None)[0]
+    clock: Callable[[], float] = time.time
 
-    def events(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str]) -> tuple[int, str]:
-        return self._run(args, cwd=cwd, env=env, stdout=sp.PIPE)
+    def stream(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str], doing: str | None = None) -> int:
+        if doing is None or progress.live(env):
+            return self._run(args, cwd=cwd, env=env, stdout=None)[0]
+        return self._observed(args, cwd=cwd, env=env, stdout=None, doing=doing, shown=True)[0]
+
+    def events(
+        self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str], doing: str | None = None
+    ) -> tuple[int, str]:
+        if doing is None:
+            return self._run(args, cwd=cwd, env=env, stdout=sp.PIPE)
+        return self._observed(args, cwd=cwd, env=env, stdout=sp.PIPE, doing=doing, shown=False)
+
+    def _observed(
+        self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdout: int | None, doing: str, shown: bool
+    ) -> tuple[int, str]:
+        with progress.observed(doing, shown=shown, clock=self.clock, cwd=cwd) as observation:
+            # Ahead of any `--`, past which a word is not a flag.
+            args = list(args)
+            at = args.index('--') if '--' in args else len(args)
+            return self._run(
+                [*args[:at], *observation.args, *args[at:]],
+                cwd=cwd,
+                env=dict(env) | observation.env,
+                stdout=stdout,
+                beat=observation.beat,
+            )
 
     @staticmethod
-    def _run(args: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdout: int | None) -> tuple[int, str]:
+    def _run(
+        args: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+        stdout: int | None,
+        beat: Callable[[], None] | None = None,
+    ) -> tuple[int, str]:
         previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
         try:
             with sp.Popen(
@@ -128,8 +175,14 @@ class Cli:
                 text=True,
                 preexec_fn=_default_sigint,
             ) as child:
-                printed, _ = child.communicate()
-                return child.returncode, printed or ''
+                while True:
+                    try:
+                        printed, _ = child.communicate(timeout=None if beat is None else progress.INTERVAL)
+                    except sp.TimeoutExpired:
+                        assert beat is not None
+                        beat()
+                        continue
+                    return child.returncode, printed or ''
         finally:
             _ = signal.signal(signal.SIGINT, previous)
 
@@ -480,10 +533,13 @@ class Run:
             return PLANNED
         if not preview.planned:
             log.info('nothing is planned, but %s stands: running up to rewrite the checkpoint and check it', recorded)
-        log.info('applying the %s stack', self.stack)
+        doing = f'applying the {self.stack} stack'
+        log.info('%s', doing)
         granted = {permission.ENV: permission.GRANTED} if force or replace else {}
         replacing = ['--replace', urn] if urn is not None else []
-        return self._settle(self._write(['up', '--refresh', '--yes', '--skip-preview', *replacing], granted=granted))
+        return self._settle(
+            self._write(['up', '--refresh', '--yes', '--skip-preview', *replacing], granted=granted, doing=doing)
+        )
 
     def passthrough(self, args: Sequence[str]) -> int:
         """`pulumi <args>` against this stack, under its environment."""
@@ -546,12 +602,14 @@ class Run:
         (`STREAMING_JSON_ENV`), the documented machine-readable form; the
         engine's own messages, and `pulumi`'s errors, reach the terminal.
         """
-        log.info('previewing the %s stack with a refresh', self.stack)
+        doing = f'previewing the {self.stack} stack with a refresh'
+        log.info('%s', doing)
         replacing = ['--replace', replace] if replace is not None else []
         code, printed = self.pulumi.events(
             self._with_stack(['preview', '--refresh', '--json', *replacing]),
             cwd=self.checkout,
             env=self.env | {STREAMING_JSON_ENV: 'true'},
+            doing=doing,
         )
         if code != 0:
             raise Refused(f'the preview of the {self.stack} stack failed (exit {code})')
@@ -572,7 +630,7 @@ class Run:
     def _query(self, *args: str) -> str:
         return self.pulumi.capture(self._with_stack(args), cwd=self.checkout, env=self.env)
 
-    def _write(self, args: Sequence[str], *, granted: Mapping[str, str] | None = None) -> int:
+    def _write(self, args: Sequence[str], *, granted: Mapping[str, str] | None = None, doing: str | None = None) -> int:
         """Run a command that can write, and hold a committed checkpoint to what it may publish.
 
         **The record goes down before the command and comes off only when the
@@ -583,7 +641,7 @@ class Run:
         """
         env = self.env | dict(granted or {})
         if not self.committed:
-            return self.pulumi.stream(self._with_stack(args), cwd=self.checkout, env=env)
+            return self.pulumi.stream(self._with_stack(args), cwd=self.checkout, env=env, doing=doing)
         record = checkpoint.record(self.checkout, self.stack)
         if not record.is_file():
             _ = record.write_text(f'unchecked: `pulumi {" ".join(args)}` may have written the checkpoint\n')
@@ -592,7 +650,7 @@ class Run:
         if path is not None:
             log.info('reading the %s state before the write, to check the checkpoint against', self.stack)
         started = self._export() if path is not None else None
-        code = self.pulumi.stream(self._with_stack(args), cwd=self.checkout, env=env)
+        code = self.pulumi.stream(self._with_stack(args), cwd=self.checkout, env=env, doing=doing)
         log.info('checking the %s checkpoint', self.stack)
         findings = [
             checkpoint.Finding(
