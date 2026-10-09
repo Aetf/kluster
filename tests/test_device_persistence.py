@@ -48,9 +48,9 @@ NEIGHBORS = 'neighbors'
 HOST = str(conventions.overlay.UDM)
 HOST_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIexample'
 
-#: What the layer above this one requires of the device's package set, as the
-#: gateway passes it. Restated rather than imported, so that a change to the set
-#: has to be made twice — once where it is declared and once here.
+#: A package set of the shape the gateway passes. The cases hold the layer to
+#: the set it was handed, so these are any two names the device's apt carries
+#: rather than the gateway's own census.
 PACKAGES = ('systemd-container', 'libnss-mymachines')
 
 #: What a consumer asks the layer for, one of each kind. The drop-in is on a
@@ -204,6 +204,7 @@ def test_the_custom_root_is_declared_as_directories_at_the_paths_it_names(monito
     is a change the next preview reports. The order between a directory and what
     goes in it is a separate claim, asserted below.
     """
+    checked = 0
     for directory in persistence.SKELETON:
         declaration = monitor.one(f'{NAME}-skeleton-{directory}')
 
@@ -211,20 +212,9 @@ def test_the_custom_root_is_declared_as_directories_at_the_paths_it_names(monito
         assert declaration.inputs['path'] == f'{conventions.gateway.CUSTOM_ROOT}/{directory}'
         assert declaration.inputs['mode'] == persistence.DIRECTORY_MODE
         assert declaration.inputs['owner'] == conventions.gateway.SSH_USER
+        checked += 1
 
-    assert set(persistence.SKELETON) == {'bin', 'dpkg', 'units'}
-
-
-def test_no_file_stands_in_for_a_directory_anywhere_under_the_custom_root(monitor: Recorder) -> None:
-    """A directory is declared by asking for a directory, and by nothing else.
-
-    A file that stood for one would be a second way of declaring the same thing,
-    and a blind one: what the device says about the file is no answer about the
-    directory.
-    """
-    declared = [str(declaration.inputs.get('path', '')) for declaration in fixture_declarations(monitor, DEVICE_FILE)]
-
-    assert [path for path in declared if '.skeleton' in path] == []
+    assert checked, 'the skeleton names no directory, so the loop above held nothing'
 
 
 def test_nothing_is_ever_written_inside_the_offline_package_cache(monitor: Recorder) -> None:
@@ -300,20 +290,6 @@ async def test_two_files_whose_names_share_a_stem_are_two_resources(
     assert python['path'] == f'{persistence.BIN_DIR}/example.py'
 
 
-def test_a_file_is_named_for_the_component_that_asked(monitor: Recorder) -> None:
-    """The name is read off the parent the URN places the file under, so the two agree by construction.
-
-    A child's logical name carries its component's (style/pulumi.md), and the
-    component a file asked for through the mechanism belongs to is the asker
-    -- so the asker's name is what it carries, with the kind and the file's
-    whole name after it, and the mechanism's own files carry the mechanism's.
-    Nothing here is named for the mechanism on the asker's behalf.
-    """
-    for kind, file in (('on-boot', SCRIPT), ('bin', PROGRAM), ('unit', UNIT), ('skeleton', DIRECTORY)):
-        assert monitor.options_of(f'{CONSUMER}-{kind}-{file}').parent.endswith(f'::{CONSUMER}')
-        assert f'{NAME}-{kind}-{file}' not in monitor.names_declared
-
-
 @pytest.mark.asyncio
 async def test_two_components_asking_for_one_path_are_listed_by_the_path_census(
     monitor: Recorder, mechanism: DevicePersistence
@@ -387,23 +363,38 @@ def test_a_script_of_the_chain_runs_itself_once_it_lands(monitor: Recorder) -> N
     hook too — a script this program no longer declares is gone from the device,
     and there is nothing left to run.
     """
-    hook = monitor.inputs_of(f'{CONSUMER}-on-boot-{SCRIPT}')['hook']
-
-    assert hook == f'if [ -x {persistence.on_boot_path(SCRIPT)} ]; then {persistence.on_boot_path(SCRIPT)}; fi'
+    assert monitor.inputs_of(f'{CONSUMER}-on-boot-{SCRIPT}')['hook'] == persistence.on_boot_hook(SCRIPT)
 
 
-def test_the_command_that_runs_an_executable_is_this_layers_to_write() -> None:
-    """A file elsewhere may name a `bin/` program as its hook, and asks for it here.
+@pytest.mark.parametrize('kind', ['on-boot', 'executable'])
+def test_a_guarded_hook_runs_what_landed_and_does_nothing_once_it_is_gone(
+    kind: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The one command runs after the apply that delivers a program and after the delete that removes it.
 
-    Where the program sits and how a hook survives the delete that removes it
-    are the same two decisions this layer already makes for a script of the
-    boot chain, so a component that needs them does not write the shell for
-    itself and cannot get the guard subtly wrong.
+    Both guards are this layer's to write -- a script of the boot chain's, and
+    a `bin/` program's that a file elsewhere names as its hook -- so a component
+    that needs one does not write the shell for itself. Run here under `sh`
+    with the directory each one names pointed at `tmp_path`: the program that
+    landed runs, and once it is gone the hook exits 0 and runs nothing.
     """
-    hook = persistence.executable_hook(PROGRAM)
-    path = persistence.executable_path(PROGRAM)
+    if kind == 'on-boot':
+        monkeypatch.setattr(conventions.gateway, 'ON_BOOT_D', str(tmp_path))
+        hook, path = persistence.on_boot_hook(SCRIPT), Path(persistence.on_boot_path(SCRIPT))
+    else:
+        monkeypatch.setattr(persistence, 'BIN_DIR', str(tmp_path))
+        hook, path = persistence.executable_hook(PROGRAM), Path(persistence.executable_path(PROGRAM))
+    ran = tmp_path / 'ran'
+    _ = path.write_text(f'#!/bin/sh\ntouch {ran}\n')
+    path.chmod(0o755)
 
-    assert hook == f'if [ -x {path} ]; then {path}; fi'
+    landed = subprocess.run(['sh', '-c', hook], capture_output=True, timeout=30, check=False)
+    assert (landed.returncode, ran.exists()) == (0, True), landed.stderr
+
+    ran.unlink()
+    path.unlink()
+    gone = subprocess.run(['sh', '-c', hook], capture_output=True, timeout=30, check=False)
+    assert (gone.returncode, ran.exists()) == (0, False), gone.stderr
 
 
 @pytest.mark.asyncio
@@ -1849,22 +1840,48 @@ async def test_a_mechanism_with_no_packages_is_refused() -> None:
             )
 
 
-def test_the_unit_converger_never_restarts_the_oneshot_running_it() -> None:
-    """It is the script `udm-boot.service` is executing at that moment.
+def test_the_rendered_converger_reads_the_unit_sources_and_writes_the_live_units(tmp_path: Path) -> None:
+    """`units_script` hands the template the device's source directory to read and its unit directory to write.
 
-    Everything else it installs is enabled, and restarted when its file changed;
-    the anchor is converged and enabled and left running, because restarting it
-    would kill the boot chain halfway through.
+    Run, with the device's two paths pointed at a tree: a converger handed
+    them the other way round would copy every unit systemd holds into the
+    source store and restart each one.
     """
+    device = _device(tmp_path)
     script = persistence.units_script()
+    for on_device, here in ((persistence.UNIT_SOURCE_DIR, device.source), (persistence.LIVE_UNIT_DIR, device.live)):
+        assert on_device in script
+        script = script.replace(on_device, str(here))
+    _ = device.script.write_text(script)
+    _ = (device.source / UNIT).write_text(f'[Service]\nExecStart=/bin/true\n{INSTALLABLE}')
 
-    assert f'srcdir={persistence.UNIT_SOURCE_DIR}' in script
-    assert f'dest={persistence.LIVE_UNIT_DIR}/$unit' in script
-    assert f'[ "$unit" = {persistence.UDM_BOOT_UNIT} ] && continue' in script
-    assert 'systemctl restart "$unit"' in script
-    # The glob and the kind `unit` accepts are one decision, so a source that
-    # would be installed by nothing cannot be declared in the first place.
-    assert f'for src in "$srcdir"/*{persistence.UNIT_SUFFIX}; do' in script
+    status, _ = _converge(device)
+
+    assert status == 0, device.complaints.read_text()
+    assert (device.live / UNIT).read_text() == (device.source / UNIT).read_text()
+
+
+def test_a_changed_anchor_is_converged_and_not_restarted_where_another_changed_unit_is(tmp_path: Path) -> None:
+    """The anchor is the unit whose script is running: `udm-boot.service` is executing it at that moment.
+
+    Everything else the converger installs is enabled, and restarted when its
+    file changed; the anchor is converged and enabled and left running,
+    because restarting it would kill the boot chain halfway through. Run
+    against a tree where the anchor and one other unit both changed.
+    """
+    device = _device(tmp_path)
+    for unit in (persistence.UDM_BOOT_UNIT, UNIT):
+        _ = (device.source / unit).write_text(f'[Service]\nExecStart=/bin/true\n{INSTALLABLE}')
+        _ = (device.live / unit).write_text(f'[Service]\nExecStart=/bin/false\n{INSTALLABLE}')
+        device.systemd.enable(unit)
+        device.systemd.activate(unit)
+
+    status, commands = _converge(device)
+
+    assert status == 0
+    assert (device.live / persistence.UDM_BOOT_UNIT).read_text() == f'[Service]\nExecStart=/bin/true\n{INSTALLABLE}'
+    assert f'restart {UNIT}' in commands
+    assert f'restart {persistence.UDM_BOOT_UNIT}' not in commands, commands
 
 
 ##

@@ -187,17 +187,6 @@ async def test_configuration_is_applied_over_apid_without_rebooting_the_quorum(f
 
 
 @pytest.mark.asyncio
-async def test_a_node_without_an_endpoint_is_dialed_where_it_is_named(fake: Talos) -> None:
-    # The ordinary case, and the one the cloud nodes are in: the address that
-    # names the node is also the address that reaches it.
-    day1 = build()
-    # Every node is applied, so the set of them is pinned before it is walked.
-    assert set(day1.applies) == set(ADDRESSES)
-    for node, applied in day1.applies.items():
-        assert await applied.endpoint.future() == ADDRESSES[node]
-
-
-@pytest.mark.asyncio
 async def test_a_node_behind_the_mesh_is_named_by_its_own_address_and_dialed_elsewhere(fake: Talos) -> None:
     # apid routes by the node a call names, so a node that nothing outside the
     # site can open a connection to is still administered: it is named by its

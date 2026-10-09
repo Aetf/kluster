@@ -19,13 +19,16 @@ the run here rather than in `pulumi preview`.
 """
 
 import inspect
+import re
 from collections.abc import AsyncGenerator
-from typing import Any
+from typing import Any, cast
 
 import pulumi
 import pytest
 import pytest_asyncio
+from credentials_command_tree import commands
 from mock_monitor import Recorder, declaring, run_under_backstop
+from workflow_files import github_name, read_workflow, workflow_jobs, workflows_and_actions
 
 from kluster import conventions
 from kluster.components.forge import LABEL_COLOR, ManagedRepository
@@ -87,16 +90,67 @@ async def stack() -> AsyncGenerator[Forge]:
     yield monitor
 
 
-def test_main_requires_the_two_checks_that_always_run(stack: Forge) -> None:
+def test_main_requires_only_checks_that_always_run(stack: Forge) -> None:
     """A required check that only sometimes runs blocks a pull request forever.
 
-    `checks` and `changes` both run on every pull request to main regardless of
-    paths; the `preview` matrix does not, and carries the stack name in its
-    check name besides.
+    Each required context must be one every pull request to the protected
+    branch reports. The `preview` matrix is the case this rules out: it runs
+    only when a stack changed, and carries the stack name in its check name
+    besides.
     """
     protection = stack.by_name(BRANCH_PROTECTION)[PROTECTION]
 
-    assert protection['requiredStatusChecks'] == [{'strict': True, 'contexts': ['checks', 'changes']}]
+    (required,) = protection['requiredStatusChecks']
+    assert required['strict'] is True
+    assert required['contexts'], 'main requires no check at all'
+    always = checks_every_pull_request_reports(str(protection['pattern']))
+    assert set(required['contexts']) <= always, (
+        f'required, and not run on every pull request: {sorted(set(required["contexts"]) - always)}'
+    )
+
+
+#: The activity types a `pull_request` trigger runs for when it names none:
+#: a pull request opened, pushed to, or reopened.
+PULL_REQUEST_TYPES = frozenset({'opened', 'synchronize', 'reopened'})
+
+
+def checks_every_pull_request_reports(branch: str) -> set[str]:
+    """The check name of every job that runs, under that name, on each pull request to `branch`.
+
+    Read off the workflow files. A workflow counts when its `pull_request`
+    trigger has no `paths` or `paths-ignore` filter, names `branch` among its
+    `branches` (or names none, and does not ignore it), and runs for every
+    activity a pull request's commits bring (its `types`, where it names
+    any). A job of it counts when nothing can skip it or expand its name: no
+    `if:`, no `needs:` -- a job is skipped when one it needs fails -- and no
+    matrix. Each such job reports a check under its `name:`, or its id where
+    it has none.
+    """
+    names: set[str] = set()
+    for path in workflows_and_actions():
+        if path.parent.name != 'workflows':
+            continue
+        workflow = read_workflow(path)
+        # YAML 1.1 reads a bare `on` as the boolean `true`, which is how PyYAML keys it.
+        keyed = cast('dict[object, object]', workflow)
+        triggers = keyed.get('on', keyed.get(True))
+        if not isinstance(triggers, dict) or 'pull_request' not in triggers:
+            continue
+        pull_request = cast('dict[str, object] | None', cast('dict[str, object]', triggers)['pull_request']) or {}
+        if 'paths' in pull_request or 'paths-ignore' in pull_request:
+            continue
+        if branch not in cast('list[str]', pull_request.get('branches', [branch])):
+            continue
+        if branch in cast('list[str]', pull_request.get('branches-ignore', [])):
+            continue
+        if not set(cast('list[str]', pull_request.get('types', PULL_REQUEST_TYPES))) >= PULL_REQUEST_TYPES:
+            continue
+        names |= {
+            str(job.get('name', name))
+            for name, job in workflow_jobs(workflow, github_name(path)).items()
+            if not {'if', 'needs'} & job.keys() and 'matrix' not in cast('dict[str, object]', job.get('strategy') or {})
+        }
+    return names
 
 
 def test_the_owner_cannot_walk_around_the_gate(stack: Forge) -> None:
@@ -317,12 +371,12 @@ async def test_a_run_without_the_token_refuses_by_name_and_names_what_fills_it()
             with pytest.raises(ValueError, match=program.ADMIN_TOKEN) as refusal:
                 await program.main()
 
-        # Read off the register rather than typed here: renaming the row moves
-        # both copies, where a hand-written literal would go on matching a
-        # message that had stopped naming a command that exists
-        # (`docs/style/testing.md`).
-        record = f'credentials derived {devices.DEVICES[devices.GITHUB_ADMIN].member} record'
-        assert record in str(refusal.value)
+        # The command the refusal names is one the parser carries, under the
+        # row the device register spells: a renamed leaf or row fails here,
+        # where a message rebuilt by the same formula would match itself.
+        (named,) = re.findall(r'`(credentials [^`]+)`', str(refusal.value))
+        assert named.split() in [['credentials', *argv] for argv in commands()], f'`{named}` is not a command'
+        assert devices.DEVICES[devices.GITHUB_ADMIN].member in named.split()
         assert monitor.declared == [], 'the refusal must come before anything is declared'
     finally:
         pulumi.runtime.set_all_config({f'kluster:{program.ADMIN_TOKEN}': TOKEN})

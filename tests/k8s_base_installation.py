@@ -26,6 +26,7 @@ from mock_monitor import Recorder, declaring, run_under_backstop
 
 from kluster import conventions
 from kluster.lib.k8s import KUBECONFIG_KEY
+from kluster.lib.stack_addresses import UnusableAddressOutput
 from kluster.lib.versions import ManifestPin
 
 OUTPUTS = conventions.PHYSICAL_OUTPUTS
@@ -189,6 +190,10 @@ def release_assets() -> Generator[list[ManifestPin]]:
 #: The type the provider registers a chart under.
 CHART = 'kubernetes:helm.sh/v4:Chart'
 
+#: The suffix `Autonaming` gives a Kubernetes object the program names none
+#: for, as the provider's random one would be: `<logical name>-<suffix>`.
+AUTONAME_SUFFIX = '0a1b2c3d'
+
 
 class Autonaming(Physical):
     """A `physical` whose Kubernetes objects are named the way the provider names one given none.
@@ -202,15 +207,19 @@ class Autonaming(Physical):
         outputs = super().computed(args)
         metadata = cast('dict[str, Any]', args.inputs).get('metadata')
         if args.typ.startswith('kubernetes:') and metadata is not None and 'name' not in metadata:
-            outputs['metadata'] = metadata | {'name': f'{args.name}-0a1b2c3d'}
+            outputs['metadata'] = metadata | {'name': f'{args.name}-{AUTONAME_SUFFIX}'}
         return outputs
 
 
 class Run:
-    """One run of the program: what it registered."""
+    """One run of the program: what it registered, the pins it fetched, and the refusal that stopped it, if one did."""
 
-    def __init__(self, monitor: Recorder) -> None:
+    def __init__(
+        self, monitor: Recorder, fetched: list[ManifestPin], refused: UnusableAddressOutput | None = None
+    ) -> None:
         self.monitor = monitor
+        self.fetched = fetched
+        self.refused = refused
 
     def inputs(self, typ: str, name: str) -> dict[str, Any]:
         return self.monitor.inputs_of(name, typ)
@@ -246,21 +255,32 @@ class Run:
         ]
 
 
+async def declare(physical: Physical, *, preview: bool = False) -> Run:
+    """The whole program against `physical`, a refusal caught and every registration settled."""
+    from kluster.stacks import k8s_base
+
+    config = {f'kluster:{KUBECONFIG_KEY}': 'a-fake-kubeconfig-that-reaches-no-cluster'}
+    pulumi.runtime.set_all_config(config | VERSIONS_CONFIG, secret_keys=list(config))
+    monitor = await run_under_backstop(physical, stack=conventions.STACK_NAMES.k8s_base, preview=preview)
+    before = asyncio.all_tasks()
+    refused = None
+    with release_assets() as fetched:
+        try:
+            async with declaring():
+                await k8s_base.main()
+        except UnusableAddressOutput as error:
+            refused = error
+        _ = await asyncio.gather(*(asyncio.all_tasks() - before - {asyncio.current_task()}), return_exceptions=True)
+    return Run(monitor, fetched, refused)
+
+
 async def applied() -> Run:
-    """The whole program against a `physical` that has published every output.
+    """The whole program against a `physical` that has published every output, which no refusal stops.
 
     A suite's `applied` fixture is this, once per module. The fixture itself
     stays in the suite: one imported by name would be shadowed by every case
     that takes it as an argument, which the linter reports as a redefinition.
     """
-    from kluster.stacks import k8s_base
-
-    config = {f'kluster:{KUBECONFIG_KEY}': 'a-fake-kubeconfig-that-reaches-no-cluster'}
-    pulumi.runtime.set_all_config(config | VERSIONS_CONFIG, secret_keys=list(config))
-    monitor = await run_under_backstop(Autonaming(), stack=conventions.STACK_NAMES.k8s_base)
-    before = asyncio.all_tasks()
-    with release_assets():
-        async with declaring():
-            await k8s_base.main()
-        _ = await asyncio.gather(*(asyncio.all_tasks() - before - {asyncio.current_task()}), return_exceptions=True)
-    return Run(monitor)
+    run = await declare(Autonaming())
+    assert run.refused is None, f'the program refused a physical that published every output: {run.refused}'
+    return run

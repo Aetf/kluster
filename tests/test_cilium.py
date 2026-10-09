@@ -18,7 +18,6 @@ preview`.
 
 from __future__ import annotations
 
-import asyncio
 import ipaddress
 from typing import Any, cast
 
@@ -26,23 +25,21 @@ import pulumi
 import pytest
 import pytest_asyncio
 from k8s_base_installation import (
+    CHART,
     GATEWAY_API_DEFINITIONS,
     OUTPUTS,
     PUBLISHED,
-    VERSIONS_CONFIG,
     Physical,
-    release_assets,
+    Run,
+    applied,
+    declare,
 )
-from mock_monitor import Declaration, declaring, run_under_backstop
+from mock_monitor import Declaration
 from pulumi.output import UNKNOWN
 
 from kluster import conventions
-from kluster.lib.k8s import KUBECONFIG_KEY
-from kluster.lib.stack_addresses import UnusableAddressOutput
-from kluster.lib.versions import ManifestPin, versions
-from kluster.stacks import k8s_base
+from kluster.lib.versions import versions
 
-CHART = 'kubernetes:helm.sh/v4:Chart'
 CONFIG_GROUP = 'kubernetes:yaml/v2:ConfigGroup'
 SERVICE = 'kubernetes:core/v1:Service'
 CLASS_CONFIG = 'crds:cilium.io/v2alpha1:CiliumGatewayClassConfig'
@@ -81,57 +78,10 @@ METADATA_RANGE = '169.254.0.0/16'
 TALOS_HOST_DNS = '169.254.116.108/32'
 
 
-class Run:
-    """One run of the program: what it registered, the pins it fetched, and the refusal that stopped it."""
-
-    def __init__(self, monitor: Physical, fetched: list[ManifestPin], refused: UnusableAddressOutput | None) -> None:
-        self.monitor = monitor
-        self.fetched = fetched
-        self.refused = refused
-
-    def inputs(self, typ: str, name: str) -> dict[str, Any]:
-        return self.monitor.inputs_of(name, typ)
-
-    def values(self) -> dict[str, Any]:
-        return self.inputs(CHART, 'cilium')['values']
-
-    def urn(self, typ: str, name: str) -> str:
-        """The URN of the one registration of this type under this name.
-
-        More than one is refused rather than resolved to whichever registered
-        first: independent registrations are recorded in the order they reach the
-        monitor on the SDK's executor threads, so a first-found answer is a
-        different resource on a different run (`Recorder.one` refuses the same
-        way).
-        """
-        found = [
-            urn for urn, request in self.monitor.registrations.items() if (request.type, request.name) == (typ, name)
-        ]
-        assert len(found) == 1, f'{len(found)} registrations of {typ} answer to {name}: {found}'
-        return found[0]
-
-
-async def declare(physical: Physical, *, preview: bool = False) -> Run:
-    """The whole program against `physical`, a refusal caught and every registration settled."""
-    config = {f'kluster:{KUBECONFIG_KEY}': 'a-fake-kubeconfig-that-reaches-no-cluster'}
-    pulumi.runtime.set_all_config(config | VERSIONS_CONFIG, secret_keys=list(config))
-    monitor = await run_under_backstop(physical, stack=conventions.STACK_NAMES.k8s_base, preview=preview)
-    before = asyncio.all_tasks()
-    refused = None
-    with release_assets() as fetched:
-        try:
-            async with declaring():
-                await k8s_base.main()
-        except UnusableAddressOutput as error:
-            refused = error
-        _ = await asyncio.gather(*(asyncio.all_tasks() - before - {asyncio.current_task()}), return_exceptions=True)
-    return Run(monitor, fetched, refused)
-
-
-@pytest_asyncio.fixture(scope='module')
-async def applied() -> Run:
+@pytest_asyncio.fixture(scope='module', name='applied')
+async def applied_fixture() -> Run:
     """The program against a `physical` that has published every output."""
-    return await declare(Physical())
+    return await applied()
 
 
 # -- The Gateway API definitions and the chart -------------------------------
@@ -156,7 +106,7 @@ def test_the_chart_is_installed_from_its_pin_after_the_definitions(applied: Run)
 
 def test_the_values_both_guides_prescribe_are_set_as_written(applied: Run) -> None:
     """Kubernetes IPAM, the capability lists without `SYS_MODULE`, and Talos' own control groups."""
-    values = applied.values()
+    values = applied.values('cilium')
 
     assert values['ipam'] == {'mode': 'kubernetes'}
     assert values['securityContext']['capabilities'] == {
@@ -168,7 +118,7 @@ def test_the_values_both_guides_prescribe_are_set_as_written(applied: Run) -> No
 
 def test_the_proxy_replacement_is_on_and_reaches_the_api_server_through_kubeprism(applied: Run) -> None:
     """With no kube-proxy, the agent reaches the API server through the node-local front on every node."""
-    values = applied.values()
+    values = applied.values('cilium')
 
     assert values['kubeProxyReplacement'] is True
     assert (values['k8sServiceHost'], values['k8sServicePort']) == KUBEPRISM
@@ -176,8 +126,8 @@ def test_the_proxy_replacement_is_on_and_reaches_the_api_server_through_kubepris
 
 def test_the_mtu_is_kubespans_link(applied: Run) -> None:
     """The underlying network's MTU, which the agent takes the tunnel's overhead off itself."""
-    assert applied.values()['MTU'] == conventions.KUBESPAN_MTU
-    assert applied.values()['routingMode'] == 'tunnel'
+    assert applied.values('cilium')['MTU'] == conventions.KUBESPAN_MTU
+    assert applied.values('cilium')['routingMode'] == 'tunnel'
 
 
 #: The feature switches the design rests on, by their path in the chart's
@@ -200,7 +150,7 @@ FEATURE_SWITCHES: dict[str, tuple[tuple[str, ...], object]] = {
 @pytest.mark.parametrize('switch', FEATURE_SWITCHES)
 def test_each_feature_the_design_rests_on_is_switched_as_it_needs(applied: Run, switch: str) -> None:
     path, expected = FEATURE_SWITCHES[switch]
-    value: object = applied.values()
+    value: object = applied.values('cilium')
     for key in path:
         value = cast('dict[str, object]', value).get(key) if isinstance(value, dict) else None
 
@@ -209,12 +159,12 @@ def test_each_feature_the_design_rests_on_is_switched_as_it_needs(applied: Run, 
 
 def test_hubble_exports_flow_metrics(applied: Run) -> None:
     """Hubble's metrics server, which the node firewall opens to the scraper, serves only when some metric is named."""
-    assert applied.values()['hubble']['metrics']['enabled']
+    assert applied.values('cilium')['hubble']['metrics']['enabled']
 
 
 def test_non_default_deny_policies_and_the_gateways_secret_sync_are_on(applied: Run) -> None:
     """Both are the chart's defaults; the baseline policy and the Gateways' certificates depend on them."""
-    values = applied.values()
+    values = applied.values('cilium')
 
     assert values['enableNonDefaultDenyPolicies'] is True
     assert values['gatewayAPI']['enabled'] is True
@@ -228,7 +178,7 @@ def test_no_bpf_masquerading_no_legacy_routing_switch_and_no_egress_gateway(appl
     state the design describes, and a value set either way is a decision
     nobody wrote down.
     """
-    values = applied.values()
+    values = applied.values('cilium')
 
     assert 'masquerade' not in values.get('bpf', {})
     assert 'hostLegacyRouting' not in values.get('bpf', {})
@@ -260,7 +210,7 @@ def test_the_gateway_class_names_its_configuration_and_the_chart_declares_no_oth
         'name': config['name'],
         'namespace': config['namespace'],
     }
-    assert applied.values()['gatewayAPI']['gatewayClass']['create'] == 'false'
+    assert applied.values('cilium')['gatewayAPI']['gatewayClass']['create'] == 'false'
 
 
 def test_every_service_on_the_node_addresses_states_cluster(applied: Run) -> None:

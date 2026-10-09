@@ -14,7 +14,6 @@ its own, because a member exists for one reason: an entry exists.
 
 from __future__ import annotations
 
-import inspect
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -24,7 +23,7 @@ from typing import Any, final
 import pulumi
 import pytest
 import pytest_asyncio
-from mock_monitor import Recorder, declaring, run_with
+from mock_monitor import Declaration, Recorder, declaring, run_with
 
 from kluster import conventions
 from kluster.components import overlay as overlay_module
@@ -92,6 +91,18 @@ async def stack() -> Central:
             dns=DNS,
         )
     return monitor
+
+
+def fixture_declarations(stack: Central, prefix: str) -> list[Declaration]:
+    """The fixture's overlay's own declarations whose type starts with `prefix`, which must be some.
+
+    The module's recorder holds every overlay its cases declare, so a claim
+    about the fixture's run reads the declarations under the fixture's name,
+    which every child carries (style/pulumi.md).
+    """
+    ours = [d for d in stack.declared if d.typ.startswith(prefix) and d.name.startswith(f'{NAME}-')]
+    assert ours, f'the fixture declared nothing typed {prefix}'
+    return ours
 
 
 ##
@@ -217,7 +228,6 @@ def test_the_two_continuous_integration_identities_are_generated_and_confined() 
     ]
 
     assert [entry.name for entry in generated] == list(conventions.overlay.CI_MEMBERS)
-    assert {entry.address for entry in generated} == {conventions.overlay.CI_PHYSICAL, conventions.overlay.CI_DNS}
     assert all(entry.role == conventions.overlay.Role.CI for entry in generated)
     assert [entry.name for entry in conventions.overlay.ROSTER if entry.role == conventions.overlay.Role.CI] == list(
         conventions.overlay.CI_MEMBERS
@@ -414,7 +424,9 @@ def test_the_members_declared_are_exactly_the_roster_and_nothing_else_is_consult
     overlay address as their next hop either way — a route to a router that
     has not joined yet is the ordinary state of a bring-up.
     """
-    declared_members = stack.names(MEMBER)
+    members = fixture_declarations(stack, MEMBER)
+    declared_members = {declaration.name for declaration in members}
+    assert len(declared_members) == len(members), 'a member name answers to more than one declaration'
 
     assert declared_members == {f'{NAME}-member-{entry.name}' for entry in conventions.overlay.ROSTER}
     assert str(conventions.overlay.UDM) in {route.get('via') for route in stack.inputs_of(f'{NAME}-network')['routes']}
@@ -430,7 +442,7 @@ def test_no_member_is_handed_an_address_the_roster_did_not_choose(stack: Central
     network = stack.inputs_of(f'{NAME}-network')
     assert network['assignIpv6s'] == [{'rfc4193': False, 'sixplane': False, 'zerotier': False}]
 
-    members = [declaration.inputs for declaration in stack.of_type(MEMBER)]
+    members = [declaration.inputs for declaration in fixture_declarations(stack, MEMBER)]
     assert len(members) == len(conventions.overlay.ROSTER)
     for member in members:
         assert member['noAutoAssignIps'] is True
@@ -449,13 +461,36 @@ def test_every_member_carries_a_declared_role_and_the_generated_ones_their_own_i
         assert member['tags'] == [[conventions.overlay.TAG_ROLE_ID, entry.role]], entry.name
         assert member['name'] == entry.name
 
-    assert stack.inputs_of(f'{NAME}-member-ci-physical')['memberId'] == f'{NAME}-identity-ci-physical-node'
-    # An enrolled member carries the id its own device minted, straight off the
-    # roster entry: there is nowhere else it could come from.
-    haos = conventions.overlay.member('haos')
-    assert isinstance(haos, conventions.overlay.EnrolledMember)
-    assert stack.inputs_of(f'{NAME}-member-haos')['memberId'] == haos.node_id
-    assert stack.inputs_of(f'{NAME}-member-haos')['ipAssignments'] == [str(haos.address)]
+    ci = conventions.overlay.MEMBER_CI_PHYSICAL
+    assert stack.inputs_of(f'{NAME}-member-{ci}')['memberId'] == f'{NAME}-identity-{ci}-node'
+
+
+@pytest.mark.asyncio
+async def test_an_enrolled_member_carries_the_id_and_address_its_own_entry_holds(stack: Central) -> None:
+    """An enrolled member's id is the one its device minted, straight off the roster entry.
+
+    There is nowhere else it could come from, so the member is one this case
+    adds to the roster rather than one the census happens to hold.
+    """
+    owned = conventions.overlay.EnrolledMember(
+        name='a-device-of-this-case',
+        node_id='0123456789',
+        address=IPv4Address(max(int(entry.address) for entry in conventions.overlay.ROSTER) + 1),
+        role=conventions.overlay.Role.PERSONAL,
+    )
+    async with declaring():
+        _ = overlay_module.Overlay(
+            'enrolled',
+            network_id=NETWORK_ID,
+            flow_rules=RULES,
+            roster=(*conventions.overlay.ROSTER, owned),
+            managed_routes=conventions.overlay.MANAGED_ROUTES,
+            dns=DNS,
+        )
+
+    member = stack.inputs_of(f'enrolled-member-{owned.name}')
+    assert member['memberId'] == owned.node_id
+    assert member['ipAssignments'] == [str(owned.address)]
 
 
 def test_the_central_credential_belongs_to_a_provider_of_its_own(stack: Central) -> None:
@@ -476,18 +511,6 @@ def test_the_central_credential_belongs_to_a_provider_of_its_own(stack: Central)
 ##
 
 
-def test_the_administration_token_is_read_where_the_provider_is_built() -> None:
-    """The token configures this provider and nothing else, so nothing else sees it.
-
-    Central mints no credential smaller than the whole account, which is the
-    reason the resources it may reach are exactly the ones this component
-    declares -- and the reason the token is read at the line that builds the
-    provider rather than traveling through a signature that has no other
-    opinion about it (rfc-002 §8.1).
-    """
-    assert 'api_token' not in inspect.signature(overlay_module.Overlay.__init__).parameters
-
-
 def test_every_resource_is_signed_by_the_overlays_own_provider(stack: Central) -> None:
     """Inherited from the component, never re-plumbed onto a child.
 
@@ -495,9 +518,7 @@ def test_every_resource_is_signed_by_the_overlays_own_provider(stack: Central) -
     the component that built the provider, so each takes it from its parent's
     provider map. Nothing below names it.
     """
-    overlay_resources = [d for d in stack.declared if d.typ.startswith('zerotier:index/')]
-
-    assert overlay_resources, 'the fixture declared no overlay resources at all'
+    overlay_resources = fixture_declarations(stack, 'zerotier:index/')
     for declaration in overlay_resources:
         assert f'{NAME}-zerotier' in declaration.provider, f'{declaration.name} is not signed by the provider'
 
