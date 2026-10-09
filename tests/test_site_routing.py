@@ -301,6 +301,7 @@ def test_the_session_password_is_in_the_file_and_the_file_is_a_secret(monitor: R
     config = monitor.inputs_of(f'{NAME}-config')
 
     assert f'password {BGP_PASSWORD}' in config['content']
+    assert 'content' in monitor.options_of(f'{NAME}-config').additionalSecretOutputs
     assert config['mode'] == routing.FRR_MODE
     assert config['mode'] != persistence.FILE_MODE, 'the daemon-readable mode is not the ordinary one'
 
