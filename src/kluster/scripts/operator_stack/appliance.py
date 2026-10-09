@@ -9,12 +9,12 @@ things are read off each refreshed preview before anything is applied:
     instance's hooks read (`kluster.lib.state_backend.permission`), and
     `--replace` sets it and replaces the box whether or not anything moved.
 -   **A create beside a held address**: a create of the instance while the
-    refreshed reserved address is assigned to something and the refreshed
-    state holds no instance is refused, with `--force` or without
-    (`creates_beside_held_address`). That is a box another
-    workstation's run launched and has not landed the checkpoint of, or one
-    the stack does not know: a second box beside it would take the address
-    from it.
+    reserved address -- as the refresh reads it, or the import that adopts
+    it -- is assigned to something and the refreshed state holds no instance
+    is refused, with `--force` or without (`creates_beside_held_address`).
+    That is a box another workstation's run launched and has not landed the
+    checkpoint of, or one the stack does not know: a second box beside it
+    would take the address from it.
 -   **A replacement of an adopted resource**: the engine refuses to replace a
     resource whose declaration still carries an import id, and fails the
     `up` at that step, after every step before it has run
@@ -39,6 +39,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+import pulumi
+import pulumi_oci as oci
+
 from kluster import conventions
 from kluster.lib import stack_environment
 from kluster.lib import workstation as lib_workstation
@@ -53,9 +56,21 @@ log = logging.getLogger(__name__)
 #: The stack this gate is for.
 STACK = conventions.STACK_NAMES.state_backend
 
-#: The resource types the gate reads: the box, and the reserved address.
-INSTANCE = 'oci:core/instance:Instance'
-RESERVED_ADDRESS = 'oci:core/publicIp:PublicIp'
+
+def _type_token(klass: type) -> str:
+    """The type token `klass` registers its resources under, which every step event about one names."""
+    token = pulumi.get_type_token(klass)
+    if token is None:
+        raise TypeError(f'{klass.__qualname__} states no type token')
+    return token
+
+
+#: The resource types the gate reads -- the box, and the reserved address --
+#: read off the SDK classes the stack declares them with, so they are the
+#: types the events name: one that differs from those by so much as its case
+#: matches no step, and every guard below would pass in silence.
+INSTANCE = _type_token(oci.core.Instance)
+RESERVED_ADDRESS = _type_token(oci.core.PublicIp)
 
 #: The step operations that create, replace or delete a resource.
 BOX_STEPS = frozenset({'create', 'replace', 'create-replacement', 'delete-replaced', 'delete', 'import-replacement'})
@@ -163,7 +178,13 @@ def instance_urn(preview: Preview) -> str:
 
 
 def _address_outputs(preview: Preview) -> Mapping[str, object] | None:
-    """The reserved address's refreshed outputs: what a refresh or an import read, else the state a step started from."""
+    """The reserved address's outputs as the provider answers them now.
+
+    What a refresh or an import read (`Preview.read`), else the state a step
+    of the address starts from. An import's own `resourcePreEvent` carries no
+    such state -- its read comes after it, on its `resOutputsEvent` -- and an
+    `update` that follows the import starts from what the import read.
+    """
     for step in preview.details:
         if step.type == RESERVED_ADDRESS:
             read = preview.read.get(step.urn)
@@ -175,7 +196,7 @@ def _address_outputs(preview: Preview) -> Mapping[str, object] | None:
 
 
 def held_address(preview: Preview) -> str | None:
-    """What the refreshed reserved address is assigned to, or None while it is assigned to nothing."""
+    """What the reserved address, as the provider answers it now, is assigned to, or None while it is assigned to nothing."""
     outputs = _address_outputs(preview)
     if outputs is None:
         return None
@@ -189,9 +210,10 @@ def creates_beside_held_address(preview: Preview) -> str | None:
     """Why the preview would launch a box beside the one the address points at, or None where it would not.
 
     A create of the instance -- not a replacement, so the refreshed state
-    holds no instance -- while the refreshed address is assigned. On a first
-    launch, or after the box is lost, the address is assigned to nothing: the
-    instance's termination deletes the private address it pointed at.
+    holds no instance -- while the address, refreshed or imported, is
+    assigned. On a first launch, or after the box is lost, the address is
+    assigned to nothing: the instance's termination deletes the private
+    address it pointed at.
     """
     if not any(step.op == 'create' for step in box_steps(preview)):
         return None
