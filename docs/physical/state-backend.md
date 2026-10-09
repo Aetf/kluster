@@ -23,16 +23,15 @@ shape nor the domain, which reads like a permissions problem.
 > (which keeps the *decision* — what the backend is and why it lives
 > here — and points at this document for everything about the box).
 > Why-it-moved-off-the-homelab and the OCI-Container-Instances
-> rejection live there. **The appliance serving state is the one a
-> script built, before the stack existed**; the `state-backend` stack
-> declares it whole (rfc-006 §4) and takes it over by the cutover of
-> rfc-006 §14, slice 6, whose live drill is the operator's: `state-backend
-> adopt` writes the ids of what exists into the stack's configuration,
-> the stack imports them through its program, and the box itself is
-> replaced rather than imported. Until that drill has run, the box
-> serving is the script's, with a server certificate and an SSH host
-> key of its own render rather than the stack's stable ones (§1), so
-> `state-backend ssh` refuses it. `src/kluster/lib/state_backend/machine/`
+> rejection live there. **The appliance serving state is the
+> `state-backend` stack's**, since the replacement of 2026-10-09 that
+> cut it over (rfc-006 §14, slice 6; the drill's record is
+> `kluster-ops#462`). The stack declares it whole (rfc-006 §4), and the
+> box serves the stack's stable server certificate and SSH host key
+> (§1), the ones `state-backend ssh` pins. The stack still carries the
+> adoption, the ids `state-backend adopt` wrote into its configuration
+> as `adopted` for its program to import, until slice 7 removes it.
+> `src/kluster/lib/state_backend/machine/`
 > holds the Butane file, the operator keys, the dump script and the
 > files the `credentials derived` rows commit beside them; the
 > `operator-stack state-backend` driver plans and applies the stack;
@@ -40,9 +39,9 @@ shape nor the domain, which reads like a permissions problem.
 > the pins, writes the client bundle into its workstation slot (§3),
 > logs in for diagnosis, takes and restores dumps (§7), and probes the
 > box from outside (§6). The **drill key** of §5 has its generator
-> (`credentials derived drill-age-identity generate`) and joins the
-> recipients from the replacement that carries its committed public
-> half. The two scheduled probes of §6 — the server certificate's
+> (`credentials derived drill-age-identity generate`), and its
+> committed public half is among the recipients the box encrypts to
+> (`committed.age_recipients`). The two scheduled probes of §6 — the server certificate's
 > expiry, and the age of the newest dump — are `state-backend probe`,
 > built to be run from the ops repository on a schedule; whether that
 > schedule is in place is the ops repository's own record (its README's
@@ -490,8 +489,9 @@ traffic through a network security group and the VCN's default list;
 the stack declares a list of its own instead, because a rule added to a
 group by hand is a resource of its own that no state holds, while one
 added to a list is part of the list's refreshed state (rfc-006 §4.1).
-The group the script made is deleted by hand once the cutover's
-replacement has launched a box outside it.
+The group the script made is gone: the replacement launched its box
+outside it, and the group was deleted by hand (`kluster-ops#462`,
+step 8).
 
 ## 5. Backup
 

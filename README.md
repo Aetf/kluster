@@ -148,9 +148,10 @@ a rebuild from nothing.
 Under construction, in the open. Built and running: the framework (RFC-001
 Rev 3), the stack dispatch, the credential scripts, the state-backend
 appliance — a Fedora CoreOS box in OCI serving Pulumi's Postgres state over
-mutual TLS, declared by the `state-backend` stack, whose cutover from the
-script that built the box is the operator's next step
-(`docs/rfc/rfc-006-state-backend-stack.md` §14)
+mutual TLS, declared by the `state-backend` stack, and serving from that stack's
+own box since the replacement of 2026-10-09
+(`docs/rfc/rfc-006-state-backend-stack.md` §14, slice 6; the record is
+`kluster-ops#462`)
 — and the `dns` stack, which declares this installation's Cloudflare zones
 and records and holds them imported, not yet applied: DNSControl stays
 authoritative until the zones' cutover

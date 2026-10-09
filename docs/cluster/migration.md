@@ -34,11 +34,14 @@ owns sequencing, data movement, and teardown.
     still holds ~16 GiB of the host's 32, so the worker VM **cannot
     start at its 20 GiB end-state size**. It starts at ~60 GB disk /
     **~10 GiB RAM** and grows stepwise: each homelab wave first scales
-    down its legacy apps (rule 1 already does this), then bumps the VM
-    by the freed amount (a config change + VM reboot, scheduled at the
-    head of the wave — 20 GiB must be reached by Wave C's
-    immich/jellyfin move). Homelab waves alternate "migrate → delete
-    legacy data → grow VM disk/RAM".
+    down its legacy apps (rule 1 already does this), then grows the VM
+    by the freed amount, scheduled at the head of the wave — 20 GiB must
+    be reached by Wave C's immich/jellyfin move. RAM grows by a commit
+    to `HOMELAB_MEMORY_GIB` in `kluster.conventions.homelab` and an apply
+    that replaces the domain, stopping it, redefining it and starting it
+    again, so it belongs in a drained window; the disk grows on the host
+    (physical/homelab-host.md §1). Homelab waves alternate "migrate →
+    delete legacy data → grow VM disk/RAM".
 5.  **Sealing key first, then rotated last**: the legacy sealed-secrets
     key is restored into the new cluster before any SealedSecret
     manifest is ported (cluster-infra.md §1); it is regenerated, and
@@ -48,10 +51,11 @@ owns sequencing, data movement, and teardown.
 ## 1. Phase 0 — foundations (before any app moves)
 
 1.  Manual preconditions: OCI tenancy on PAYG (home region choice is
-    permanent), the state-backend micro + Postgres + pg_dump timer
-    (ci.md §1), the homelab host-prep aconfmgr change-set (bridge,
-    subvolume/storage pool, libvirt SSH identity, NFS exports —
-    physical/homelab-host.md §4). The Talos image is not among them:
+    permanent), the homelab host-prep aconfmgr change-set (bridge,
+    subvolume (the pool on it is `physical`'s), libvirt SSH identity,
+    NFS exports — physical/homelab-host.md §4). The state backend is a
+    precondition and not a manual one: the `state-backend` stack applied
+    (physical/state-backend.md). The Talos image is not among them:
     the stack builds it through the Image Factory and imports it itself
     (declarative/physical.md §1). ZeroTier Central config is
     Pulumi-managed (architecture.md §5.3); the
@@ -62,7 +66,8 @@ owns sequencing, data movement, and teardown.
     the flow-rules verification does CI's per-run overlay join become
     load-bearing (physical/gateway.md §2.5).
 2.  `physical` up: 3× A1 (A1 capacity confirmed at creation), worker VM
-    (60 GB), NLB, UDM FRR and container services, B2. The gateway's share of this is
+    (created at the image's size, then grown to ~60 GB on the host,
+    physical/homelab-host.md §1), NLB, UDM FRR and container services, B2. The gateway's share of this is
     **three applies, not one, and operator-local by construction** — CI
     reaches the site over ZeroTier and the gateway is not on ZeroTier
     yet. Set `gatewayBootstrapHost` to a LAN address for the UDM and
@@ -221,9 +226,9 @@ orphans, finishing with the disk-reclaim that feeds rule 0.4.
     worker VM to its 100+ GB target; JuiceFS redis/mount residue gone
     with k3s; `lan.ucw.phd` entries emptied (dns.md §4).
 3.  Trackers: gw-config repo retired (provider owns the device);
-    adguardhome-sync unit removed — whether the sync stops here or at
-    the split-horizon row's flip, as dns.md §3 has it, is an operator
-    ruling pending on `kluster-ops#505` (sources-of-truth.md, row R2);
+    adguardhome-sync unit removed, here at the latest: it may stop at
+    any time and must stop before the `dns` stack first writes bob
+    (operator ruling, sources-of-truth.md note N2);
     qbittorrent/quadlet units removed
     from yadm/aconfmgr; the legacy state backend's Postgres stops last,
     once kluster-code needs no further `pulumi` operations.
