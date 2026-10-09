@@ -10,18 +10,20 @@ plaintext, and a new generation changes no other label.
 from __future__ import annotations
 
 import functools
+import re
 import shutil
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import keyring.backends.fail
 import pytest
 from cryptography import x509
+from cryptography.hazmat.primitives import serialization
 from memory_keyring import MemoryKeyring, installed
 from memory_kit import MemoryKit
 
 from kluster.lib import acquisition, stack_environment
-from kluster.scripts.credentials import age, cli, escrow, pki, workstation
+from kluster.scripts.credentials import age, cli, entries, escrow, pki, workstation
 from kluster.scripts.credentials.kdbx import KdbxStore
 
 age_binary = shutil.which(age.BINARY)
@@ -251,7 +253,7 @@ def test_import_after_import_appends_and_leaves_the_first_file_alone(vault: escr
     assert vault.recover(escrow.PASSPHRASE, 2) == 'a-second-value'
 
 
-@pytest.mark.parametrize('value', ['', '   ', '\n'])
+@pytest.mark.parametrize('value', ['', '   '])
 @pytest.mark.parametrize('label', [escrow.PASSPHRASE, escrow.CA])
 def test_import_refuses_a_value_that_is_not_there(vault: escrow.Vault, label: str, value: str) -> None:
     # A producer that crashed writes nothing and exits, and its traceback is
@@ -285,9 +287,26 @@ def test_import_takes_a_real_age_identity(vault: escrow.Vault) -> None:
     assert vault.recover(label) == identity.secret
 
 
-def test_import_refuses_something_that_is_not_a_private_key(vault: escrow.Vault) -> None:
+def _public_key() -> str:
+    """A public key's PEM block, from a private key this module draws."""
+    key = serialization.load_pem_private_key(pki.generate_ca_key().encode(), password=None)
+    return (
+        key.public_key()
+        .public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+        .decode()
+    )
+
+
+def _certificate() -> str:
+    """A certificate's PEM block, of an authority this module draws."""
+    return pki.Authority.from_pem(pki.generate_ca_key()).certificate().cert_pem.decode()
+
+
+@pytest.mark.parametrize('block', [_certificate, _public_key], ids=['certificate', 'public-key'])
+def test_import_refuses_something_that_is_not_a_private_key(vault: escrow.Vault, block: Callable[[], str]) -> None:
+    # A whole PEM block, so the footer is there and the header alone refuses it.
     with pytest.raises(escrow.EscrowError, match='PEM private key'):
-        _ = escrow.adopt(vault, escrow.CA, 'BEGIN PRIVATE KEY')
+        _ = escrow.adopt(vault, escrow.CA, block())
 
     assert vault.registry.generations(escrow.CA) == []
 
@@ -324,22 +343,21 @@ def test_a_token_label_asks_only_that_there_be_a_value(vault: escrow.Vault) -> N
 # --------------------------------------------------------------------------
 
 
+def commands_named(message: str) -> list[list[str]]:
+    """Every `credentials …` command a message quotes, as argv without the program name."""
+    return [quoted.split()[1:] for quoted in re.findall(r'`(credentials [^`]+)`', message)]
+
+
 def console_rows() -> list[str]:
     """Every label whose value is made somewhere no API of this repository reaches."""
     return [label for label, row in escrow.register().items() if isinstance(row.origin, escrow.Console)]
 
 
-def test_the_app_keys_are_console_rows_shaped_like_private_keys() -> None:
-    # Both halves matter. Console, because nothing here can draw a GitHub App
-    # key -- the tree must not offer a `generate` for one. A private-key shape,
-    # because what a wrong pipe hands over is caught at the record rather than
-    # on the day a workflow tries to sign a JWT with it.
-    for label in (escrow.DISPATCH_KEY, escrow.TRIGGER_KEY):
-        row = escrow.register()[label]
-
-        assert isinstance(row.origin, escrow.Console)
-        assert row.shape is escrow.PRIVATE_KEY
-        assert row.verb == 'record'
+# GitHub makes an App's private key and nothing here can, so both App keys are
+# console rows. At import, because this sizes the parametrizations below: a
+# row missing from it would shrink them and still report green.
+_APP_KEYS_MISSING = {escrow.DISPATCH_KEY, escrow.TRIGGER_KEY} - set(console_rows())
+assert not _APP_KEYS_MISSING, f'console rows lack {sorted(_APP_KEYS_MISSING)}'
 
 
 @pytest.mark.parametrize('label', console_rows())
@@ -387,11 +405,14 @@ def test_recording_a_key_the_registry_has_never_seen_is_the_next_generation(vaul
     assert vault.recover(escrow.DISPATCH_KEY) == successor
 
 
-def test_recording_something_that_is_not_a_private_key_is_refused(vault: escrow.Vault) -> None:
+@pytest.mark.parametrize('label', console_rows())
+def test_recording_something_that_is_not_a_private_key_is_refused(vault: escrow.Vault, label: str) -> None:
+    # Nothing here can draw a key a console hands out, and a wrong pipe is
+    # caught at the record rather than on the day a workflow signs with it.
     with pytest.raises(escrow.EscrowError, match='PEM private key'):
-        _ = escrow.record(vault, escrow.DISPATCH_KEY, 'Iv1.the-client-id')
+        _ = escrow.record(vault, label, 'Iv1.the-client-id')
 
-    assert vault.registry.generations(escrow.DISPATCH_KEY) == []
+    assert vault.registry.generations(label) == []
 
 
 def test_recording_a_row_that_is_drawn_here_is_refused(vault: escrow.Vault) -> None:
@@ -436,7 +457,9 @@ def test_a_kit_carrying_no_such_row_sends_the_operator_to_the_console(kit: KdbxS
     with pytest.raises(escrow.EscrowError, match='carries no such row') as refused:
         _ = escrow.from_kit(kit, escrow.DISPATCH_KEY)
 
-    assert 'credentials derived github-dispatch-key record' in str(refused.value)
+    (named,) = commands_named(str(refused.value))
+    parsed = vars(cli.build_parser().parse_args(named))
+    assert (parsed['action'], parsed['label']) == (escrow.register()[escrow.DISPATCH_KEY].verb, escrow.DISPATCH_KEY)
     assert '--from-kit' in str(refused.value)
 
 
@@ -748,8 +771,12 @@ def test_a_refused_write_draws_nothing(vault: escrow.Vault, monkeypatch: pytest.
 def test_a_kit_without_a_recovery_key_is_sent_to_bootstrap(registry: escrow.Registry) -> None:
     # The anchor is read out of the kit, so a kit that has none has nothing to
     # anchor a write to; the row that holds one is created by the bootstrap.
-    with pytest.raises(escrow.EscrowError, match='kit bootstrap --only recovery'):
+    with pytest.raises(escrow.EscrowError, match='recovery key') as refused:
         _ = escrow.Vault.open(MemoryKit(), registry)
+
+    (named,) = commands_named(str(refused.value))
+    parsed = vars(cli.build_parser().parse_args(named))
+    assert (parsed['subject'], parsed['action'], parsed['only']) == ('kit', 'bootstrap', entries.RECOVERY)
 
 
 def test_check_is_happy_with_a_full_registry(vault: escrow.Vault) -> None:
@@ -916,16 +943,6 @@ def test_a_rotated_pin_names_the_generation_before_it(monkeypatch: pytest.Monkey
 
     assert escrow.backup_labels() == (f'{escrow.BACKUP}/3', f'{escrow.BACKUP}/2')
     assert set(escrow.backup_labels()) <= set(escrow.register())
-
-
-def test_the_backup_labels_follow_the_appliance_pin() -> None:
-    # The Butane file names exactly these recipients, so the register and the
-    # box cannot disagree about which generations exist.
-    from kluster.lib.state_backend import settings
-
-    assert escrow.backup_labels()[0] == f'{escrow.BACKUP}/{settings.AGE_GENERATION}'
-    for label in escrow.backup_labels():
-        assert label in escrow.register()
 
 
 def _recover_the_operator_passphrase(

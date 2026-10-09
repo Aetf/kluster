@@ -9,6 +9,7 @@ written and is not.
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import types
 from collections.abc import Callable
@@ -17,7 +18,7 @@ from pathlib import Path
 import keyring.errors
 import pytest
 
-from kluster.scripts.credentials import workstation
+from kluster.scripts.credentials import cli, workstation
 from kluster.scripts.credentials.kdbx import KEYRING_SERVICE, PATH_ENV, KdbxError, KdbxStore
 
 PASSWORD = 'correct horse battery staple'
@@ -70,7 +71,7 @@ def test_the_kit_defaults_to_the_checkouts_own_directory(tmp_path: Path, monkeyp
     monkeypatch.setattr(workstation, 'directory', lambda: tmp_path / '.credentials')
     _ = KdbxStore.create(workstation.kit_path(), PASSWORD)
 
-    assert KdbxStore.from_env().path == tmp_path / '.credentials' / 'kit.kdbx'
+    assert KdbxStore.from_env().path == workstation.kit_path()
     # Created by the kit itself, and no wider than the operator: everything
     # else in there is a workstation slot.
     assert (tmp_path / '.credentials').stat().st_mode & 0o777 == 0o700
@@ -325,7 +326,9 @@ def test_the_prompt_names_the_command_that_stops_it(
     KdbxStore(path=path).unlock()
 
     assert not secret_store
-    assert 'credentials kit password remember' in caplog.text
+    (quoted,) = re.findall(r'`credentials ([^`]+)`', caplog.text)
+    parsed = vars(cli.build_parser().parse_args(quoted.split()))
+    assert (parsed['subject'], parsed['member'], parsed['action']) == ('kit', 'password', 'remember')
 
 
 def _refuse(_prompt: str) -> str:

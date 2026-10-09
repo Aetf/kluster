@@ -79,7 +79,7 @@ def test_every_field_of_every_account_root_is_masked() -> None:
     assert declared <= root_credentials.MASKED
     # Non-empty, so that a register this stopped being able to read could not
     # satisfy the line above by covering nothing.
-    assert 'KLUSTER_B2_KEY' in declared
+    assert declared
 
 
 def test_every_variable_mise_sets_is_masked_or_deliberately_not() -> None:
@@ -109,7 +109,12 @@ def test_the_variables_left_unmasked_carry_paths_rather_than_values() -> None:
 
 def test_a_fake_credential_names_the_variable_it_stands_in_for() -> None:
     """A value that turns up in a diff should identify itself, and say it opens nothing."""
-    assert root_credentials.fake('KLUSTER_B2_KEY') == 'a-fake-kluster-b2-key-that-opens-nothing'
+    values = {name: root_credentials.fake(name) for name in sorted(root_credentials.MASKED)}
+
+    assert len(set(values.values())) == len(values), 'two variables share a stand-in'
+    for name, value in values.items():
+        assert all(word in value for word in name.lower().split('_')), value
+        assert 'opens-nothing' in value, value
 
 
 def test_a_name_that_carries_no_credential_cannot_be_faked() -> None:

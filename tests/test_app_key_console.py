@@ -65,6 +65,11 @@ def test_the_dispatch_steps_send_the_client_id_to_the_census_not_the_page(caplog
     # operator to copy it off the page by hand is a second, unrecorded copy.
     steps = printed_steps(caplog, escrow.DISPATCH_KEY)
 
-    assert '`conventions.forge.DISPATCH_APP`' in steps
+    # The pointer is resolved, so a census entry renamed under it fails here.
+    (pointer,) = re.findall(r'`conventions\.([\w.]+)`', steps)
+    named: object = conventions
+    for part in pointer.split('.'):
+        named = getattr(named, part)
+    assert named is conventions.forge.DISPATCH_APP, pointer
     assert f'`{conventions.forge.DISPATCH_APP_CLIENT_ID.name}`' in steps
     assert 'read off the page' not in steps
