@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+import pinned_tools
 import pytest
 from workflow_files import GITHUB, mapping, read_workflow, workflow_jobs
 
@@ -121,10 +122,12 @@ def _entry(change: str | Renamed) -> dict[str, str]:
     return {'filename': change, 'status': 'modified'}
 
 
-#: What the step and the fake `gh` run on, as the runner's image carries them,
-#: and which `mise.toml` does not pin. Without one, the step's own failure
-#: would read as the human route, so a case refuses by name instead.
-HOST_TOOLS = ('bash', 'jq')
+#: What the step and the fake `gh` run on. `bash` is the host's, as the
+#: runner's image carries it; `jq` is the one `mise.toml` pins, which these
+#: cases run in place of the runner image's. Without either, the step's own
+#: failure would read as the human route, so a case refuses by name instead.
+HOST_TOOLS = ('bash',)
+PINNED_TOOLS = ('jq',)
 
 
 #: `changed=COUNTED` reports as many changed files as the case lists.
@@ -143,6 +146,7 @@ def _run(
     gh_fails: bool = False,
 ) -> Verdict:
     """Run `classify`'s deciding step the way the runner does, for a pull request changing `files`."""
+    pinned_tools.require(*PINNED_TOOLS)
     missing = [tool for tool in HOST_TOOLS if shutil.which(tool) is None]
     if missing:
         pytest.fail(f'not on PATH: {", ".join(missing)}, which the step and the fake gh run on')

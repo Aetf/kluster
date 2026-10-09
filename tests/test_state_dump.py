@@ -25,6 +25,7 @@ import hashlib
 import os
 import re
 import subprocess as sp
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -247,6 +248,27 @@ def test_the_box_and_the_operator_count_stack_checkpoints_the_same_way(
     """
     assert _count_stacks(data, tmp_path) == counted, what
     assert len(state.checkpoints(data, settings.DATABASE)) == counted, what
+
+
+def test_the_box_tools_a_run_here_reaches_are_the_pinned_releases(tmp_path: Path) -> None:
+    """The parity above judges the box's parser with `mise.toml`'s `gawk`, not a host's `awk`.
+
+    A host's `awk` is whatever its distribution chose, mawk or another gawk,
+    and a parser that only one of them reads the box's way would pass or fail
+    by host. So the stub a run reaches
+    as `awk`, and the `jq` it reaches beside it, report the releases the pins
+    name.
+    """
+    pins = tomllib.loads((Path(__file__).parent.parent / 'mise.toml').read_text())['tools']
+    box_tools(tmp_path)
+    environment = {'PATH': f'{tmp_path}{os.pathsep}{os.environ["PATH"]}'}
+
+    def version(*argv: str) -> str:
+        ran = sp.run(argv, env=environment, capture_output=True, text=True, timeout=30, check=True)
+        return ran.stdout.splitlines()[0]
+
+    assert version(str(tmp_path / 'awk'), '--version').startswith(f'GNU Awk {pins["conda:gawk"]["version"]},')
+    assert version('jq', '--version') == f'jq-{pins["jq"]}'
 
 
 def test_the_script_and_the_operator_name_the_same_table_and_layout() -> None:

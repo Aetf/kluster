@@ -57,6 +57,27 @@ age = "1.3.1"
 # server, even when it was dumped from that server -- a test holds the two
 # majors equal.
 postgres = { version = "17.11", channel = "conda-forge" }
+# The awk the appliance's dump script runs under, so the suite judges the
+# script's parser with the interpreter the box judges it with rather than
+# whichever `awk` a host has. The box's `awk` is Fedora CoreOS's gawk, at the
+# release `FCOS_RELEASE` in `kluster.lib.state_backend.settings` names: 5.3.2
+# there. gawk publishes source alone, so it comes from the `conda-forge`
+# channel like the Postgres client above, whose builds of the 5.3 line stop at
+# 5.3.1. The pin follows the appliance's gawk line rather than gawk's newest
+# release: Fedora CoreOS 44 ships gawk 5.3. Each Fedora major ships its own
+# line, so a bump of the appliance's FCOS major re-checks this pin -- read the
+# new build's gawk off its package list (`rpmostree.rpmdb.pkglist` in the
+# build's `commitmeta.json`) and move the pin to that line.
+"conda:gawk" = { version = "5.3.1", channel = "conda-forge" }
+# jq is what the scripts under test run beside that awk: the dump script on
+# the box, and the workflow steps the suite runs as they are written. Its
+# releases are static binaries.
+jq = "1.8.2"
+# jj is the version control a workstation runs, and the operator-stack driver
+# reads a jj checkout's working copy through it, so the cases that hold that
+# reading run the pinned release here and in CI alike. Its releases are
+# static binaries.
+jj = "0.46.0"
 # talosctl is what the suite asks whether Talos accepts the machine
 # configuration the Talos component renders: `gen config` builds the base the
 # provider builds, and `validate --strict` is the release's own validation of

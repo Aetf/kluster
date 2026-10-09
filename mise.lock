@@ -14,6 +14,10 @@ checksum = "sha256:0a0544cf95f64394fe4959286f5c71f5444ad58feb0602e53becb27448d24
 url = "https://conda.anaconda.org/conda-forge/linux-64/cyrus-sasl-2.1.28-hac629b4_1.conda"
 checksum = "sha256:7684da83306bb69686c0506fb09aa7074e1a55ade50c3a879e4e5df6eebb1009"
 
+[conda-packages.linux-x64."gmp-6.3.0-hfd2156b_3"]
+url = "https://conda.anaconda.org/conda-forge/linux-64/gmp-6.3.0-hfd2156b_3.conda"
+checksum = "sha256:f36c336efc874f346a53a9011f67e997f9faac505562cc18c13b6d399cfe61c7"
+
 [conda-packages.linux-x64."icu-78.3-py310h44b86e0_2"]
 url = "https://conda.anaconda.org/conda-forge/linux-64/icu-78.3-py310h44b86e0_2.conda"
 checksum = "sha256:9f07834f0c546ab14d885ce0366285f61f44e326c0edd1fc63b8294e113ae432"
@@ -26,6 +30,10 @@ checksum = "sha256:dd053c96dcb0dcfd59422aefea9d2fe937a190167f34fba7893ec1e10a7e8
 url = "https://conda.anaconda.org/conda-forge/linux-64/krb5-1.22.2-hbc21106_2.conda"
 checksum = "sha256:2a5c38c85e63df84c4e69ee71439841ce570d259ae3060627bb9a49a938d66f4"
 
+[conda-packages.linux-x64."libasprintf-0.25.1-h0e23cf9_2"]
+url = "https://conda.anaconda.org/conda-forge/linux-64/libasprintf-0.25.1-h0e23cf9_2.conda"
+checksum = "sha256:cd1acde49a1915b7a62a9678bdf42557f083d63f08d4ccc5cd9834553be96eb1"
+
 [conda-packages.linux-x64."libedit-3.1.20260512-pl5321h373387f_0"]
 url = "https://conda.anaconda.org/conda-forge/linux-64/libedit-3.1.20260512-pl5321h373387f_0.conda"
 checksum = "sha256:45301f14f4eb66da57cfaf2d265f3eeee73f8b07e99614ee3afc5b26eea91126"
@@ -33,6 +41,10 @@ checksum = "sha256:45301f14f4eb66da57cfaf2d265f3eeee73f8b07e99614ee3afc5b26eea91
 [conda-packages.linux-x64."libgcc-16.2.0-ha9f2e26_7"]
 url = "https://conda.anaconda.org/conda-forge/linux-64/libgcc-16.2.0-ha9f2e26_7.conda"
 checksum = "sha256:e031634c3a928f9594eba868bc46ef5230d6571a364a0c63215b06c4563bfcea"
+
+[conda-packages.linux-x64."libgettextpo-0.25.1-h0e23cf9_2"]
+url = "https://conda.anaconda.org/conda-forge/linux-64/libgettextpo-0.25.1-h0e23cf9_2.conda"
+checksum = "sha256:58bbdb3ee8ab85fff94435bcf4a335fd5e7b61d4d84f15d9afc8b4207d522ea3"
 
 [conda-packages.linux-x64."libgomp-16.2.0-he0feb66_7"]
 url = "https://conda.anaconda.org/conda-forge/linux-64/libgomp-16.2.0-he0feb66_7.conda"
@@ -81,6 +93,10 @@ checksum = "sha256:eb8a0db0aa570124f7d2a93d7c7f596e3390df5e047818d873baad32985fc
 [conda-packages.linux-x64."lz4-c-1.10.0-hee9eb32_2"]
 url = "https://conda.anaconda.org/conda-forge/linux-64/lz4-c-1.10.0-hee9eb32_2.conda"
 checksum = "sha256:b8c0e930183e6b7f83cd35ace102f2b8c2f0faae41dc05255dc72f247dfc556a"
+
+[conda-packages.linux-x64."mpfr-4.2.2-ha2cb11d_1"]
+url = "https://conda.anaconda.org/conda-forge/linux-64/mpfr-4.2.2-ha2cb11d_1.conda"
+checksum = "sha256:0be79ef2ee536e0c5d3ddb4a52bbae9f26d08560623299f33db2f4c4a17c525a"
 
 [conda-packages.linux-x64."ncurses-6.6-hdb14827_1"]
 url = "https://conda.anaconda.org/conda-forge/linux-64/ncurses-6.6-hdb14827_1.conda"
@@ -131,6 +147,31 @@ checksum = "sha256:53a20d820fbaa7fda4f1afd1814974badc8e448db4c151d3f1ba005dc29bc
 url = "https://github.com/coreos/butane/releases/download/v0.29.0/butane-x86_64-unknown-linux-gnu"
 url_api = "https://api.github.com/repos/coreos/butane/releases/assets/469429058"
 
+[[tools."conda:gawk"]]
+version = "5.3.1"
+backend = "conda:gawk"
+specifiers = ["5.3.1"]
+
+[tools."conda:gawk".options]
+channel = "conda-forge"
+
+[tools."conda:gawk"."platforms.linux-x64"]
+checksum = "sha256:ec4ebb9444dccfcbff8a2d19b2811b48a20a58dcd08b29e3851cb930fc0f00d8"
+url = "https://conda.anaconda.org/conda-forge/linux-64/gawk-5.3.1-hcd3d067_0.conda"
+conda_deps = [
+    "gmp-6.3.0-hfd2156b_3",
+    "libasprintf-0.25.1-h0e23cf9_2",
+    "libgcc-16.2.0-ha9f2e26_7",
+    "libstdcxx-16.2.0-h934c35e_7",
+    "libgettextpo-0.25.1-h0e23cf9_2",
+    "mpfr-4.2.2-ha2cb11d_1",
+    "readline-8.3-hd6e31c0_1",
+    "_openmp_mutex-4.5-20_gnu",
+    "libgomp-16.2.0-he0feb66_7",
+    "libiconv-1.18-h0cb94f2_3",
+    "ncurses-6.6-hdb14827_1",
+]
+
 [[tools."github:ltex-plus/ltex-ls-plus"]]
 version = "18.7.0"
 backend = "github:ltex-plus/ltex-ls-plus"
@@ -143,6 +184,27 @@ version_prefix = ""
 checksum = "sha256:1e16df6c578dc76ff97d644445d126ba6fba5c2e8e174178ab86372652fd7612"
 url = "https://github.com/ltex-plus/ltex-ls-plus/releases/download/18.7.0/ltex-ls-plus-18.7.0-linux-x64.tar.gz"
 url_api = "https://api.github.com/repos/ltex-plus/ltex-ls-plus/releases/assets/446654224"
+
+[[tools.jj]]
+version = "0.46.0"
+backend = "aqua:jj-vcs/jj"
+specifiers = ["0.46.0"]
+
+[tools.jj."platforms.linux-x64"]
+checksum = "sha256:fce0271158e665ceb82dc66c5eb95b1728649094e9133074f3b5baece345fc08"
+url = "https://github.com/jj-vcs/jj/releases/download/v0.46.0/jj-v0.46.0-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/jj-vcs/jj/releases/assets/619869961"
+
+[[tools.jq]]
+version = "1.8.2"
+backend = "aqua:jqlang/jq"
+specifiers = ["1.8.2"]
+
+[tools.jq."platforms.linux-x64"]
+checksum = "sha256:b1c22172dd303f3be49e935aa56aa48a8b7a46e0bc838b4997d3bb451495870f"
+url = "https://github.com/jqlang/jq/releases/download/jq-1.8.2/jq-linux-amd64"
+url_api = "https://api.github.com/repos/jqlang/jq/releases/assets/453012752"
+provenance = "github-attestations"
 
 [[tools.kubeseal]]
 version = "0.39.1"
