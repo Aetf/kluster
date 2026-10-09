@@ -28,7 +28,11 @@ A change is done when every one of these passes. CI runs the same set,
 except where a bullet says otherwise:
 
 * `mise x uv -- uv run ruff check` and `ruff format --check`
-* `mise x uv -- uv run basedpyright` — strict, clean
+* `mise x uv -- uv run basedpyright` — strict, clean, judged by exit
+  status 0 and not by the `0 errors` line: with the environment kept
+  outside the workspace the same line prints beside status 3, and the
+  form that run takes is
+  [dispatch.md](docs/framework/dispatch.md) §1.2
 * `mise x uv -- uv run lint-imports` — the layering contract below
 * `timeout 1200 mise x uv -- uv run pytest` — a per-case bound inside
   the run (`pytest-timeout`, configured in `pyproject.toml`) fails a hung
