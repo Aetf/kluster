@@ -3,9 +3,9 @@
 The acquisition chain's first layer (`kluster.lib.acquisition`) is the
 desktop secret store, and `keyring` resolves the backend the same way whether
 it is the operator's login keyring or one held in memory. `tests/conftest.py`
-installs the store that is not there for every case, so the operator's own is
-never read or written; a case that needs a store installs a `MemoryKeyring`
-over it for its own length. A named module rather than part of `conftest`,
+installs the store that is not there for the whole session, fixtures of every
+scope included, so the operator's own is never read or written; a case that
+needs a store installs a `MemoryKeyring` over it for its own length. A named module rather than part of `conftest`,
 because test modules import from it and `conftest` is not a name an import can
 aim at.
 """
@@ -47,24 +47,29 @@ class MemoryKeyring(keyring.backend.KeyringBackend):
         del self.items[(service, username)]
 
 
-def _current() -> keyring.backend.KeyringBackend:
-    """Whatever backend this machine resolves to, or none at all.
-
-    Resolution itself raises where a Secret Service is configured but not
-    running, which is the state a test runner is usually in.
-    """
-    try:
-        return keyring.get_keyring()
-    except Exception:  # noqa: BLE001 -- an unresolvable backend is "no backend"
-        return keyring.backends.fail.Keyring()
+#: The backends `installed` has put in place, innermost last. What a block
+#: restores is read from here rather than asked of `keyring`, which resolves the
+#: machine's own backend wherever nothing has been set yet.
+_INSTALLED: list[keyring.backend.KeyringBackend] = []
 
 
 @contextmanager
 def installed(backend: keyring.backend.KeyringBackend) -> Generator[keyring.backend.KeyringBackend]:
-    """`backend` as the process's secret store for the block, and the previous one back after it."""
-    previous = _current()
+    """`backend` as the process's secret store for the block, and the previous one back after it.
+
+    The previous one is the one an enclosing block installed. Outside every
+    block it is a store that refuses every call: the machine's own backend is
+    never resolved, so the end of no block can hand it back.
+    """
+    previous = _INSTALLED[-1] if _INSTALLED else keyring.backends.fail.Keyring()
+    _INSTALLED.append(backend)
     keyring.set_keyring(backend)
     try:
         yield backend
     finally:
+        # Blocks end innermost first, as context managers and the fixtures
+        # holding them do; one that did not would restore a stale store. The
+        # store goes back before the check, so a refusal leaves no inner one.
+        ended = _INSTALLED.pop()
         keyring.set_keyring(previous)
+        assert ended is backend, 'a secret store block ended out of order'

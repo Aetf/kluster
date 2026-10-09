@@ -12,7 +12,9 @@ carried the option, and green if only one of them existed.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import AsyncGenerator, Callable
+from typing import Any
 
 import pulumi
 import pytest
@@ -298,3 +300,81 @@ async def test_each_package_registers_under_a_reference_of_its_own() -> None:
     assert extension != bridged
     assert pulumi.runtime.settings.get_base_provider_for_ref(extension) == 'kubernetes'
     assert pulumi.runtime.settings.get_base_provider_for_ref(bridged) is None
+
+
+#: Bounds the wait for the second registration to reach the refusal. A
+#: stop-loss: the case fails if it runs out, and nothing is judged by it.
+ARRIVAL_STOP_LOSS = 30.0
+
+
+class _Race:
+    """Two registrations of one URN, the first held inside the refusal's check until the second arrives.
+
+    It stands in for the recorder's lock and for its index of registrations,
+    so the second registration announces itself wherever it gets to first:
+    asking for the lock, where the check and the insert are one step, or the
+    check itself, where they are two.
+    """
+
+    def __init__(self) -> None:
+        self.inside = threading.Event()
+        self.second = threading.Event()
+        self.lock = threading.Lock()
+
+    def __enter__(self) -> None:
+        # A registration that finds the lock held is the second, wherever the
+        # first has got to inside it.
+        if not self.lock.acquire(blocking=False):
+            self.second.set()
+            _ = self.lock.acquire()
+
+    def __exit__(self, *_: object) -> None:
+        self.lock.release()
+
+
+class _Checked(dict[str, Any]):
+    """The recorder's index, whose first check of a raced URN waits, inside the check, for the second registration.
+
+    Only the raced URN is held: the run's root stack registers first, and the
+    raced resources wait for it.
+    """
+
+    def __init__(self, race: _Race, raced: str) -> None:
+        super().__init__()
+        self.race = race
+        self.raced = raced
+
+    def __contains__(self, key: object) -> bool:
+        if not (isinstance(key, str) and key.endswith(self.raced)):
+            return super().__contains__(key)
+        if self.race.inside.is_set():
+            self.race.second.set()
+            return super().__contains__(key)
+        self.race.inside.set()
+        found = super().__contains__(key)
+        assert self.race.second.wait(ARRIVAL_STOP_LOSS), 'the second registration never reached the refusal'
+        return found
+
+
+@pytest.mark.asyncio
+async def test_two_registrations_of_one_urn_in_flight_at_once_are_refused() -> None:
+    """The refusal's check and its insert are one step, against the SDK's concurrent registrations.
+
+    The SDK registers on its executor threads, several at once, so the two
+    registrations below are in flight together. The first is held between its
+    check and its insert until the second has reached the refusal: a check and
+    an insert that were two steps would let both through, and the second
+    would silently replace the first.
+    """
+    recorder = await run_with(Recorder(), stack='refused', project='mock-monitor')
+    race = _Race()
+    recorder.registering = race
+    recorder.registrations = _Checked(race, f'{LONE}::raced')
+
+    with pytest.raises(AssertionError, match='duplicate resource URN'):
+        async with declaring():
+            for _ in range(2):
+                _ = pulumi.CustomResource(LONE, 'raced', {}, None)
+
+    assert race.second.is_set(), 'the two registrations were never in flight together'
+    assert [request.name for request in recorder.requested if request.type == LONE] == ['raced']

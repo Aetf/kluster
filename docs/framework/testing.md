@@ -140,13 +140,20 @@ credentials.md §2), and a `credentials` command writes the store as well as
 reading it: `generate` and `recover` of the operator passphrase, `root
 remember`, `kit password remember`.
 
--   **The store is closed for every case.** `tests/conftest.py` installs, as
-    a fixture every case gets without asking, a `keyring` backend that
-    refuses every call — what a machine with no store looks like, which
-    every caller already handles. A case run on a workstation can therefore
-    neither read the operator's store nor replace a value in it with a
-    placeholder. A case that needs a store installs the in-memory one from
-    `tests/memory_keyring.py` over it, for its own length.
+-   **The store is closed for the whole session.** `tests/conftest.py`
+    installs a `keyring` backend that refuses every call — what a machine
+    with no store looks like, which every caller already handles — as a
+    session-scoped fixture every case gets without asking. It is in place
+    before any other fixture is set up and until the last is torn down, so a
+    module's fixture that runs between two cases meets it as the cases do. A
+    case run on a workstation can therefore neither read the operator's
+    store nor replace a value in it with a placeholder. A case that needs a
+    store installs the in-memory one from `tests/memory_keyring.py` over it,
+    for its own length, and the end of that block puts back the store the
+    enclosing block installed. No block asks `keyring` which store to put
+    back, since asking resolves the machine's own wherever none has been set:
+    `tests/test_harness_isolation.py` holds both, against a stand-in for that
+    store which records being resolved.
 -   **The file layer is still each suite's to redirect.** `workstation`
     resolves `.credentials/` from its own `__file__`, so on an operator
     workstation the file layer answers with live material without the
@@ -179,8 +186,8 @@ an import can aim at.
     each registration with the resource's own inputs and an id built from its
     logical name, and remembers every declaration -- its type, its inputs and
     the provider instance it was registered against.
--   `run_with` points the runtime at a monitor and hands it back. It also
-    empties the registration queue left behind by whichever run went before.
+-   `run_with` points the runtime at a monitor and hands it back, through
+    `set_mocks`, which builds each run a fresh registration queue.
 -   `declaring` is the barrier. Declaring a resource only schedules its
     registration, so without it the monitor has seen nothing and every
     assertion about it passes vacuously.
@@ -396,19 +403,16 @@ that makes it so.** An unknown nested in a property the program handed over —
 `imageSourceDetails.sourceUri`, say — is read back off the recorder rather
 than off an `Output`: the mock deserializes the registration's inputs, and
 `rpc.deserialize_property` turns an unknown into an `Unknown` under a preview
-and drops the key otherwise. It does that on an executor thread with no
-Python context of its own, where `is_dry_run()` answers with a process-wide
-default the SDK's setter fixes at the first value set in a context. Left to
-the SDK, the second run of a different kind built in one context — two
-`run_with` calls in one case, say — reads a nested unknown back the first
-run's way, with nothing in the failure naming the cause. The test runner hands
-each case a fresh context, which is why two *cases* of different kinds do not
-show it and why the pin, `tests/test_mock_monitor_unknowns.py`, holds both
-runs in one case. `tests/mock_monitor.py` closes it: the patched
-`RegisterResource` runs the SDK's own under the run's flag, on a copy of the
-thread's context, so a preview reads back an `Unknown` and an update a dropped
-key whatever ran before. The assertion that holds under either kind of run
-says what the case means rather than which shape the SDK chose:
+and drops the key otherwise. It does that on an executor thread, which the
+pinned SDK runs under a copy of the registering context
+(`pulumi.runtime._context.wrap_with_context`), so `is_dry_run()` there answers
+for the run that `run_with` set up: a preview reads back an `Unknown` and an
+update a dropped key, whatever ran before in that context. The pin,
+`tests/test_mock_monitor_unknowns.py`, holds two runs of different kinds in
+one case, in each order, because one context is where an answer left by an
+earlier run would show: the test runner hands each case a fresh one. The
+assertion that holds under either kind of run says what the case means
+rather than which shape the SDK chose:
 
 ```python
 assert not isinstance(details.get('sourceUri'), str)
@@ -888,7 +892,7 @@ fix, and the diff is the only artifact that disagrees.
         produce, and one in seconds fails as whatever the deadline cut off.
         A turn bound is sound only for a path the loop alone advances. Under
         the mocks a resource registration crosses the SDK's executor thread
-        (`tests/mock_monitor.py`, `_RunMonitor`), so around anything that
+        (`tests/mock_monitor.py`, `_capture_request`), so around anything that
         awaits a registered resource's output the turns run out in
         microseconds while the thread is still working, and the guard fails
         by how loaded the machine is -- the flake in a new shape. That path
@@ -897,9 +901,11 @@ fix, and the diff is the only artifact that disagrees.
         it fails differently: an order of magnitude above every case it
         bounds, and with the stack the case hung in, which is what tells a
         stall from a hang (§1).
-        The one guard that stays in seconds is the `timeout=` handed to
-        `subprocess.run`, where nothing yields to count -- and it fails as
-        `TimeoutExpired` naming its seconds, which is a failure with a name.
+        A guard that stays in seconds is a wait the loop does not run,
+        where nothing yields to count -- the `timeout=` handed to
+        `subprocess.run` or `Popen.wait`, a thread's wait on an event --
+        and it fails naming what it waited for, which is a failure with a
+        name.
 
 ## 8. Engine Tests
 

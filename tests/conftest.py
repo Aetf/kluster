@@ -3,8 +3,8 @@
 The first is `root_credentials.strip`, called below rather than offered as a
 fixture, so that no suite can be the one that forgot to ask. What it takes is
 that module. Of the two channels it leaves open, the desktop secret store is
-closed here instead, for every case (`secret_store_closed`): the store is read
-and written at test time, never at import, so a fixture reaches it. The file
+closed here instead, for the whole session (`secret_store_closed`): the store
+is read and written at test time, never at import, so a fixture reaches it. The file
 layer stays each suite's own to redirect.
 
 The kit several suites share is `memory_kit.MemoryKit`, a kit that is not a
@@ -20,9 +20,9 @@ keys hundreds of times over, and `keys_from_the_pool` hands each case keys
 generated once per process rather than once per call.
 
 Next is a watch on a process-global the suites share without meaning to:
-`pickler_left_as_found` names the case that changes the pickler, so that the
-residue fails the case that made it rather than whichever case happens to run
-after it.
+`pickler_left_as_found` names the case that changes the pickler, and two hooks
+name a fixture wider than a case that does, so that the residue fails what made
+it rather than whichever case happens to run after it.
 
 The last is a workaround for the Pulumi SDK, kept apart so that it can be
 deleted whole: `mocked_runs_release_their_tasks` drops from the SDK's set of
@@ -39,6 +39,7 @@ from __future__ import annotations
 import asyncio
 import os
 import pickle
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import keyring.backends.fail
@@ -54,7 +55,7 @@ from kluster.scripts.credentials import oci_iam
 from kluster.scripts.credentials.kdbx import KdbxStore
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Callable, Generator, Iterator
     from contextlib import AbstractContextManager
 
 # At import rather than in a fixture, even a session-scoped autouse one: the
@@ -83,9 +84,9 @@ def memory_kit() -> KdbxStore:
     return MemoryKit()
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(autouse=True, scope='session')
 def secret_store_closed() -> Iterator[None]:
-    """A desktop secret store that refuses every call, for every case.
+    """A desktop secret store that refuses every call, for the whole session.
 
     `keyring` resolves the operator's own store unless told otherwise, and a
     `credentials` command writes it (`generate` and `recover` of a row the
@@ -96,6 +97,10 @@ def secret_store_closed() -> Iterator[None]:
     does, which every caller already handles. A case that needs a store
     installs the in-memory one from `memory_keyring` for its own length, over
     this one.
+
+    Session-scoped and autouse, so it is in place before any other fixture of
+    any scope is set up and taken away after the last is torn down: a module's
+    fixture between two cases meets it as the cases do.
     """
     with installed(keyring.backends.fail.Keyring()):
         yield
@@ -218,6 +223,23 @@ class _Absent:
 ABSENT = _Absent()
 
 
+def _pickler() -> dict[str, Any]:
+    """The pickler's attributes, as they are now."""
+    return dict(vars(PICKLER))
+
+
+def _described(changed: list[str], before: dict[str, Any], after: dict[str, Any]) -> str:
+    """A failure message's tail: which attributes changed, from what to what."""
+    return f'left the pickler changed at {changed}: ' + '; '.join(
+        f'{name}: was {before.get(name, ABSENT)!r}, now {after.get(name, ABSENT)!r}' for name in changed
+    )
+
+
+def _differ(before: dict[str, Any], after: dict[str, Any]) -> set[str]:
+    """The attributes `after` holds something else under than `before` does, by identity."""
+    return {name for name in before.keys() | after.keys() if before.get(name, ABSENT) is not after.get(name, ABSENT)}
+
+
 @pytest.fixture(autouse=True)
 def pickler_left_as_found() -> Iterator[None]:
     """A case that leaves the pickler changed fails by its own name.
@@ -231,7 +253,8 @@ def pickler_left_as_found() -> Iterator[None]:
     every case after it in the process. Residue like that fails some later
     case with text naming this one's leftovers, and only in the collection
     orders where that case comes later. Checked after each case, it fails the
-    case that leaked, whatever the order, naming what changed.
+    case that leaked, whatever the order, naming what changed. A fixture wider
+    than a case is held across its own life by the two hooks below.
 
     The whole attribute dict rather than the names the shim restores: what is
     held is that the class is as the case found it, so a method Pulumi starts
@@ -239,14 +262,71 @@ def pickler_left_as_found() -> Iterator[None]:
     comparison is by identity, which is what a leaked wrapper fails and what a
     case that restored the original satisfies.
     """
-    before = dict(vars(PICKLER))
+    before = _pickler()
     yield
-    after = dict(vars(PICKLER))
-    changed = sorted(
-        name for name in before.keys() | after.keys() if before.get(name, ABSENT) is not after.get(name, ABSENT)
-    )
-    assert not changed, f'the case left the pickler changed at {changed}: ' + '; '.join(
-        f'{name}: was {before.get(name, ABSENT)!r}, now {after.get(name, ABSENT)!r}' for name in changed
+    after = _pickler()
+    changed = sorted(_differ(before, after))
+    assert not changed, f'the case {_described(changed, before, after)}'
+
+
+@dataclass
+class _Life:
+    """The pickler at the points of one wider fixture's life that tell its own changes from others'."""
+
+    #: Before its set-up.
+    found: dict[str, Any]
+    #: After its set-up.
+    left: dict[str, Any]
+    #: As its teardown finds it.
+    torn: dict[str, Any] | None = None
+
+
+_LIVES: dict[pytest.FixtureDef[Any], _Life] = {}
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_fixture_setup(fixturedef: pytest.FixtureDef[Any]) -> Generator[None, object, object]:
+    """Take the pickler around the set-up of a fixture wider than a case, and again as its teardown begins.
+
+    Such a fixture is set up before the first case that asks for it, so a
+    serialization it runs then is outside every case's own watch. The
+    finalizer added here runs before the fixture's own teardown, which pytest
+    registered during the set-up, since finalizers run last-added first.
+    """
+    if fixturedef.scope == 'function':
+        return (yield)
+    found = _pickler()
+    result = yield
+    life = _Life(found=found, left=_pickler())
+    _LIVES[fixturedef] = life
+
+    def teardown_begins() -> None:
+        life.torn = _pickler()
+
+    fixturedef.addfinalizer(teardown_begins)
+    return result
+
+
+def pytest_fixture_post_finalizer(fixturedef: pytest.FixtureDef[Any]) -> None:
+    """A fixture wider than a case that leaves the pickler changed fails by its own name, at its teardown.
+
+    What is its own is what its set-up changed and still holds the value the
+    set-up left, and what its teardown changed to anything but what the
+    set-up found. So a fixture that patches for its life and restores at its
+    teardown passes, and a change made inside its life by a case, a narrower
+    fixture, or a wider fixture first set up meanwhile is that one's to answer
+    for, not this one's.
+    """
+    life = _LIVES.pop(fixturedef, None)
+    if life is None:
+        return
+    now = _pickler()
+    torn = life.torn if life.torn is not None else now
+    kept = {name for name in _differ(life.found, life.left) if now.get(name, ABSENT) is life.left.get(name, ABSENT)}
+    torn_down = {name for name in _differ(torn, now) if now.get(name, ABSENT) is not life.found.get(name, ABSENT)}
+    changed = sorted(kept | torn_down)
+    assert not changed, (
+        f'the {fixturedef.scope}-scoped fixture {fixturedef.argname!r} {_described(changed, life.found, now)}'
     )
 
 

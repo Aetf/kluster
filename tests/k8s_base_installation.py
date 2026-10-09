@@ -14,7 +14,6 @@ output holds, so a pool built from the wrong output reads differently.
 
 from __future__ import annotations
 
-import asyncio
 import json
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -262,7 +261,6 @@ async def declare(physical: Physical, *, preview: bool = False) -> Run:
     config = {f'kluster:{KUBECONFIG_KEY}': 'a-fake-kubeconfig-that-reaches-no-cluster'}
     pulumi.runtime.set_all_config(config | VERSIONS_CONFIG, secret_keys=list(config))
     monitor = await run_under_backstop(physical, stack=conventions.STACK_NAMES.k8s_base, preview=preview)
-    before = asyncio.all_tasks()
     refused = None
     with release_assets() as fetched:
         try:
@@ -270,7 +268,6 @@ async def declare(physical: Physical, *, preview: bool = False) -> Run:
                 await k8s_base.main()
         except UnusableAddressOutput as error:
             refused = error
-        _ = await asyncio.gather(*(asyncio.all_tasks() - before - {asyncio.current_task()}), return_exceptions=True)
     return Run(monitor, fetched, refused)
 
 

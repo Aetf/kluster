@@ -20,7 +20,6 @@ Every run is under the parent backstop `kluster.main` installs, so a resource a
 component leaves unparented fails it here as it would fail `pulumi preview`.
 """
 
-import asyncio
 import ipaddress
 from typing import Any
 
@@ -101,23 +100,21 @@ class Run:
 async def declare(published: dict[str, Any], *, preview: bool) -> Run:
     """The whole program against `published`, the refusal caught and every registration settled.
 
-    The refusal fails one record's registration, and the gather that surfaces
-    it does not wait for the rest; they are waited for here, so a case reading
-    the recorder reads the whole run rather than whatever had landed by then.
+    The refusal fails one record's registration, and `declaring` raises it
+    only once the rest have settled, so a case reading the recorder reads the
+    whole run rather than whatever had landed by then.
     """
     from kluster.stacks import dns
     from kluster.stacks.dns import CLOUDFLARE_API_TOKEN
 
     pulumi.runtime.set_all_config({f'kluster:{CLOUDFLARE_API_TOKEN}': 'a-zones-token'})
     monitor = await run_under_backstop(Physical(published), stack='dns', preview=preview)
-    before = asyncio.all_tasks()
     refused = None
     try:
         async with declaring():
             await dns.main()
     except UnusableAnchorAddress as error:
         refused = error
-    _ = await asyncio.gather(*(asyncio.all_tasks() - before - {asyncio.current_task()}), return_exceptions=True)
     return Run(monitor, refused)
 
 

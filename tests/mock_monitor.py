@@ -10,8 +10,8 @@ mocks was re-growing:
     declaration and every function call, so a case can ask what the program
     handed a provider, and through which provider, rather than only that it
     made something;
--   `run_with`, which points the runtime at a monitor and empties the
-    registration queue an earlier run left behind;
+-   `run_with`, which points the runtime at a monitor, through `set_mocks`,
+    which builds each run a fresh registration queue;
 -   `run_under_backstop`, which is `run_with` for a run that also refuses an
     unparented resource the way a real run does;
 -   `declaring`, which waits until the monitor has actually seen the
@@ -37,9 +37,9 @@ computed outputs the provider reads back, and which invokes it answers.
 from __future__ import annotations
 
 import asyncio
-import contextvars
+import threading
 from collections import Counter
-from contextlib import asynccontextmanager
+from contextlib import AbstractContextManager, asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
@@ -166,6 +166,11 @@ class Recorder(pulumi.runtime.Mocks):
         #: name would have collapsed them into one. A repeated URN is refused
         #: rather than overwritten; `_capture_request` is where, and why.
         self.registrations: dict[str, Any] = {}
+        #: Held across the refusal's check and the insert after it. The SDK
+        #: registers on its executor threads, several at once, so the two are
+        #: one step only under a lock: two registrations of one URN would
+        #: otherwise both pass the check, and the second replace the first.
+        self.registering: AbstractContextManager[object] = threading.Lock()
 
     # -- what a suite overrides ---------------------------------------------
 
@@ -392,45 +397,11 @@ class Recorder(pulumi.runtime.Mocks):
         return None
 
 
-class _RunMonitor(pulumi.runtime.mocks.MockMonitor):
-    """Pulumi's mock monitor, carrying which kind of run it was built for.
-
-    The flag is here rather than read off the runtime because of where the
-    monitor runs: the SDK dispatches `RegisterResource` onto an executor thread
-    that has no Python context of its own, and there `is_dry_run()` does not
-    answer for the run in hand (`_capture_request`). `run_with` builds one of
-    these for every run, so the run's own answer travels with the monitor to
-    the thread that needs it.
-    """
-
-    def __init__(self, mocks: pulumi.runtime.Mocks, *, dry_run: bool) -> None:
-        super().__init__(mocks)
-        self.dry_run: bool = dry_run
-
-
 _register_resource = pulumi.runtime.mocks.MockMonitor.RegisterResource
 
 
-def _register_as_the_run(monitor: _RunMonitor, request: Any) -> Any:
-    """The SDK's own registration, deserialized under the run's kind rather than the process's.
-
-    Run inside a copy of the executor thread's context, never on the thread
-    itself, so the thread is left as it was found. The SDK's setter for
-    `dry_run` treats the first value set in a context as the process-wide
-    default for every thread that has none, and a copy starts with none: so
-    the assignment below both answers this registration and leaves the
-    process default at the run most recently registered, and it can never
-    find an earlier run's value already in place, which is the condition
-    under which the setter keeps the earlier one.
-    """
-    # The SDK declares the property without a setter; the descriptor behind
-    # it supplies one, and `set_mocks` assigns through it the same way.
-    pulumi.runtime.settings.SETTINGS.dry_run = monitor.dry_run  # pyright: ignore[reportAttributeAccessIssue]
-    return _register_resource(monitor, request)
-
-
 def _capture_request(self: Any, request: Any) -> Any:
-    """Refuse a repeated identity, keep what the mock drops, and read the inputs under the run's own kind.
+    """Refuse a repeated identity, and keep what the mock drops.
 
     **The refusal.** A URN is a resource's identity, and a program that
     registers one twice is a program the engine stops: `Duplicate resource URN
@@ -458,36 +429,22 @@ def _capture_request(self: Any, request: Any) -> Any:
     per-property dependency edges, which the mock's response leaves empty
     although the request carried them (framework/testing.md §3.1).
 
-    **Which kind of run the inputs are read under.** The SDK runs this method
-    on an executor thread with no Python context, and the runtime's `dry_run`
-    is a context variable whose answer on such a thread is a process-wide
-    default the SDK's setter fixes at the first value set in a context. The
-    mock deserializes the request's inputs right here, and an unknown nested
-    in them becomes an `Unknown` under a preview and a dropped key otherwise
-    -- so, left alone, what a case reads back off the recorder for a nested
-    unknown follows whichever run set the flag first in the context this run
-    shares, not the run in hand (framework/testing.md §3.3). A monitor
-    `run_with` built carries its run's own flag, and the SDK's method runs
-    under it, in a context of its own so the thread is left untouched.
-
-    Patched on the class, once, at import: `run_with` builds a fresh monitor
+    Patched on the class, once, at import: `set_mocks` builds a fresh monitor
     per run, so there is no instance to hook, and the recording lands on
     whichever `Recorder` that monitor was built around rather than on a global.
     """
     if isinstance(self.mocks, Recorder):
         urn = self.make_urn(request.parent, request.type, request.name)
-        if urn in self.mocks.registrations:
-            raise AssertionError(
-                f'duplicate resource URN {urn}; try giving it a unique name. '
-                'The engine refuses a run that registers one identity twice, so a run that '
-                'declares a variant beside its baseline names the variant something else.'
-            )
-        self.mocks.requested.append(request)
-        self.mocks.registrations[urn] = request
-    if isinstance(self, _RunMonitor):
-        response = contextvars.copy_context().run(_register_as_the_run, self, request)
-    else:
-        response = _register_resource(self, request)
+        with self.mocks.registering:
+            if urn in self.mocks.registrations:
+                raise AssertionError(
+                    f'duplicate resource URN {urn}; try giving it a unique name. '
+                    'The engine refuses a run that registers one identity twice, so a run that '
+                    'declares a variant beside its baseline names the variant something else.'
+                )
+            self.mocks.requested.append(request)
+            self.mocks.registrations[urn] = request
+    response = _register_resource(self, request)
     for name, dependencies in request.propertyDependencies.items():
         response.propertyDependencies[name].urns.extend(dependencies.urns)
     return response
@@ -529,19 +486,11 @@ async def run_with[MonitorT: pulumi.runtime.Mocks](
 ) -> MonitorT:
     """Point the runtime at `monitor` and hand it back for the cases to read.
 
-    The monitor is built here rather than left to `set_mocks`, so that it
-    carries `preview` to the thread the mock deserializes on
-    (`_capture_request`).
+    `set_mocks` builds the run's mock monitor and its queue of outstanding
+    registrations afresh, so nothing a previous run left in flight is this
+    run's to wait for.
     """
-    pulumi.runtime.set_mocks(
-        monitor, project=project, stack=stack, preview=preview, monitor=_RunMonitor(monitor, dry_run=preview)
-    )
-    # Registrations are dispatched onto a queue that lives in module state and
-    # so outlives the event loop of whichever test made them. Emptying it as a
-    # run begins is what lets `declaring` mean "what this run declared" rather
-    # than "everything any run ever declared", half of it owned by loops that
-    # are closed.
-    pulumi.runtime.settings._get_rpc_manager().clear()  # pyright: ignore[reportPrivateUsage]
+    pulumi.runtime.set_mocks(monitor, project=project, stack=stack, preview=preview)
     return monitor
 
 
@@ -588,8 +537,11 @@ async def declaring() -> AsyncGenerator[None]:
     one a case's `pytest.raises` around the block waits for; a failure the wait
     meets on that path is added to it as a note instead. Catching the refusal
     inside the block, ``async with declaring(): with pytest.raises(...): ...``,
-    lets the block end normally, so the wait runs as on any other exit and a
-    failure it meets is raised as it is. An exception that is not an
+    lets the block end normally, so the wait runs as on any other exit. On
+    that exit every task the block started settles before anything is raised,
+    and then the first failure is, with the others added to it as notes: a
+    case that catches what is raised and reads the run reads a run with
+    nothing of the block still in flight. An exception that is not an
     `Exception` -- a cancellation, an interrupt, a case's timeout -- leaves at
     once, without the wait.
     """
@@ -606,8 +558,31 @@ async def declaring() -> AsyncGenerator[None]:
             if isinstance(outcome, BaseException):
                 escaped.add_note(f'and the wait for what the block declared failed: {outcome!r}')
         raise
-    _ = await asyncio.gather(*_added_since(before))
-    await wait_for_rpcs(await_all_outstanding_tasks=False)
+    # In the order the tasks finish, which a gather's results do not keep:
+    # the failure raised is the first to happen, as a bare gather raises it.
+    failures: list[Exception] = []
+    for finished in asyncio.as_completed(_added_since(before)):
+        try:
+            _ = await finished
+        except Exception as failure:  # noqa: BLE001 -- kept until every task has settled, then raised
+            failures.append(failure)
+    try:
+        await wait_for_rpcs(await_all_outstanding_tasks=False)
+    except Exception as failure:
+        if not failures:
+            raise
+        failures.append(failure)
+    if failures:
+        first, *others = failures
+        # One exception can reach the list more than once, from several tasks
+        # settling with the same failure, so each other failure is noted once,
+        # by identity, and the first is never noted on itself.
+        noted: list[Exception] = []
+        for other in others:
+            if other is not first and not any(other is seen for seen in noted):
+                noted.append(other)
+                first.add_note(f'and the wait for what the block declared failed too: {other!r}')
+        raise first
 
 
 def _added_since(before: set[asyncio.Task[Any]]) -> set[asyncio.Task[Any]]:

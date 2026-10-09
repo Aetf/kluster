@@ -68,3 +68,68 @@ async def test_the_exception_that_leaves_is_the_blocks_even_when_the_drain_fails
 
     assert [task.done() for task in left_behind] == [True]
     assert any('the task the refused block left behind' in note for note in getattr(refused.value, '__notes__', []))
+
+
+#: How many turns of the event loop the slower task takes to settle: more than
+#: the one a bare gather's failure takes to reach the block's caller. Counted
+#: in turns, which no machine's load changes.
+SLOWER_TURNS = 10
+
+
+@pytest.mark.asyncio
+async def test_a_failure_a_normal_exit_meets_is_raised_once_everything_the_block_started_has_settled() -> None:
+    """A case that catches what the block raised reads a run with nothing of the block still in flight.
+
+    The failure leaves only after every task the block started has settled.
+    A wait that raised the first failure as it happened would leave the
+    slower task still running when the case reads the run.
+    """
+    _ = await run_with(Recorder(), stack='declaring', project='mock-monitor')
+
+    async def fails() -> None:
+        raise DrainFailure('the failure the block meets')
+
+    async def settles_later() -> None:
+        for _ in range(SLOWER_TURNS):
+            await asyncio.sleep(0)
+
+    started: list[asyncio.Task[None]] = []
+    with pytest.raises(DrainFailure):
+        async with declaring():
+            started.append(asyncio.ensure_future(fails()))
+            started.append(asyncio.ensure_future(settles_later()))
+
+    assert [task.done() for task in started] == [True, True]
+
+
+@pytest.mark.asyncio
+async def test_of_two_failures_a_normal_exit_meets_the_first_to_happen_is_raised() -> None:
+    """The raised failure is the first to happen, and the other is a note on it.
+
+    The order is the one the tasks finish in, set here by events: the task
+    started second fails first. An order taken from the tasks themselves
+    rather than from their finishing would raise either.
+    """
+    _ = await run_with(Recorder(), stack='declaring', project='mock-monitor')
+    first_may_fail = asyncio.Event()
+    second_may_fail = asyncio.Event()
+
+    async def fails(may: asyncio.Event, said: str) -> None:
+        await may.wait()
+        raise DrainFailure(said)
+
+    async def in_order(second: asyncio.Task[None]) -> None:
+        second_may_fail.set()
+        while not second.done():
+            await asyncio.sleep(0)
+        first_may_fail.set()
+
+    started: list[asyncio.Task[None]] = []
+    with pytest.raises(DrainFailure) as raised:
+        async with declaring():
+            started.append(asyncio.ensure_future(fails(first_may_fail, 'started first, failed second')))
+            started.append(asyncio.ensure_future(fails(second_may_fail, 'started second, failed first')))
+            started.append(asyncio.ensure_future(in_order(started[1])))
+
+    assert str(raised.value) == 'started second, failed first'
+    assert any('started first, failed second' in note for note in getattr(raised.value, '__notes__', []))
