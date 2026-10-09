@@ -30,8 +30,9 @@ from pathlib import Path
 import process_sessions
 
 #: The project around a program. A `uv` environment has no `pip`, which the
-#: language host asks for unless the toolchain is `uv`, and then it asks for
-#: the lock beside the project (rfc-006 slice 0, X7).
+#: language host asks for unless it runs under `uv` (the `toolchain` option, or
+#: a `uv.lock` above the project), and then it asks for the lock beside the
+#: project (rfc-006 slice 0, X7).
 PROJECT = """\
 name: probe
 runtime:

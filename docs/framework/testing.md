@@ -1029,9 +1029,10 @@ It runs in the suite, under the bounds every real-engine case carries
     `pulumi stack ls --all` back as empty before its first `stack init`.
 -   **The program runs on the locked SDK and fetches nothing.** Its virtual
     environment's `.pth` file reaches the test run's own packages. A `uv`
-    environment carries no `pip`, which the language host asks for unless
-    the project's `toolchain` option is `uv`, and under `uv` it asks for a
-    lock beside the project, which `uv lock --offline` writes.
+    environment carries no `pip`, which the language host asks for unless it
+    runs under `uv` — the project's `toolchain` option set to `uv`, or a
+    `uv.lock` in a directory above the project — and under `uv` it asks for
+    a lock beside the project, which `uv lock --offline` writes.
 -   **Each case is a few commands against a fresh stack**, under the
     real-engine bounds below, and the order the engine ran things in is
     read from a log every provider method and hook appends to, rather than
@@ -1087,7 +1088,10 @@ are:
     CLI: each command it starts, and each `pulumi` and client-tool run of
     the code under test, at its `COMMAND_TIMEOUT`, and each case at its
     `CASE_TIMEOUT`, above every command bound, including the one `render`
-    gives `butane` in the module's set-up.
+    gives `butane` in the module's set-up;
+-   `tests/test_unifi_probe.py`'s
+    `test_the_probes_project_runs_its_program_from_a_checkout`, at its
+    `COMMAND_TIMEOUT` and `CASE_TIMEOUT`.
 
 Others start the CLI and run under the suite's bound, short of the rule
 until the issue named beside each gives them bounds of their own:
