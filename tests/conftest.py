@@ -17,10 +17,14 @@ half of what they check -- and a KDBX4 file is guarded by Argon2 at settings
 chosen to be slow. `cheap_kdbx_kdf` moves that cost to the algorithm's floor
 for the whole session.
 
-The last is a watch on a process-global the suites share without meaning to:
+Next is a watch on a process-global the suites share without meaning to:
 `pickler_left_as_found` names the case that changes the pickler, so that the
 residue fails the case that made it rather than whichever case happens to run
 after it.
+
+The last is a workaround for the Pulumi SDK, kept apart so that it can be
+deleted whole: `mocked_runs_release_their_tasks` drops from the SDK's set of
+tracked outputs every task whose event loop has closed.
 """
 
 # `pykeepass` ships no type information; the store module carries the same
@@ -30,6 +34,7 @@ after it.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import pickle
 from typing import TYPE_CHECKING, Any
@@ -40,12 +45,14 @@ import pytest
 import root_credentials
 from memory_keyring import installed
 from memory_kit import MemoryKit
+from pulumi.runtime.settings import SETTINGS
 from pykeepass import PyKeePass
 
 from kluster.scripts.credentials.kdbx import KdbxStore
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from contextlib import AbstractContextManager
 
 # At import rather than in a fixture, even a session-scoped autouse one: the
 # root `conftest` is imported before any test module, whereas the first
@@ -189,3 +196,38 @@ def pickler_left_as_found() -> Iterator[None]:
     assert not changed, f'the case left the pickler changed at {changed}: ' + '; '.join(
         f'{name}: was {before.get(name, ABSENT)!r}, now {after.get(name, ABSENT)!r}' for name in changed
     )
+
+
+def release_closed_loops_tasks(tracked: set[asyncio.Task[Any]], lock: AbstractContextManager[object]) -> None:
+    """Drop from `tracked`, under `lock`, every task whose event loop has closed, and nothing else."""
+    with lock:
+        tracked.difference_update({task for task in tracked if task.get_loop().is_closed()})
+
+
+@pytest.fixture(autouse=True)
+def mocked_runs_release_their_tasks() -> Iterator[None]:
+    """After each case, the SDK's tracked outputs hold no task of a loop that has closed.
+
+    Every `pulumi.Output` adds the task computing it to `SETTINGS.outputs`,
+    and takes it out again only when it succeeds: a cancelled or failed one
+    is left there for `wait_for_rpcs` to collect when a program exits. A
+    mocked run never exits that way -- its loop closes at the end of the case
+    and cancels whatever was still pending -- and the property resolves to one
+    set for the whole process, so every case's leftovers stay reachable from
+    it for the rest of the run, and `asyncio.all_tasks()` walks them all on
+    every call. A task of a closed loop can never be awaited again, so
+    dropping it is invisible to the SDK; a task of a loop still open, a
+    module's shared run included, is left where it is.
+
+    The layer's boundary is this fixture and `release_closed_loops_tasks`;
+    nothing else in the suite knows the set exists. It comes out whole --
+    both, and the import of `SETTINGS` -- when a locked `pulumi` stops
+    leaving them there, which `tests/test_tracked_outputs.py` shows: its child
+    run passes with this fixture deleted.
+    """
+    yield
+    # Both are declared through the SDK's own `contextproperty` decorator,
+    # which the checker cannot read as an attribute of `Settings`.
+    tracked: set[asyncio.Task[Any]] = SETTINGS.outputs  # pyright: ignore[reportAttributeAccessIssue]
+    lock: AbstractContextManager[object] = SETTINGS.lock  # pyright: ignore[reportAttributeAccessIssue]
+    release_closed_loops_tasks(tracked, lock)
