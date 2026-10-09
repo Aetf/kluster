@@ -134,31 +134,20 @@ repository tracks there, which the workspace checks out like any other
 tracked file — and a tool's config or a dump written there never enters
 the change at all.
 
-**An environment kept outside the workspace takes the type gate's
-out-of-tree form.** uv can keep a workspace's environment in a directory
-of the agent's own elsewhere, with `UV_PROJECT_ENVIRONMENT=<dir>/venv`,
-so that the workspace holds nothing but the checkout. `basedpyright` does
-not follow it there: `pyproject.toml` names the environment as `.venv`
-under the project root, and with none there it logs `venv .venv
-subdirectory not found in venv path <workspace>.` and goes on. Any error
-it logs, this one included, makes it exit 3, its `ConfigFileParseError`,
-while the summary still reads `0 errors`. A type error in such a run
-still exits 3, so the status says nothing about the code. The check
-itself then resolves imports through the first `python` on `PATH`. Under
-`uv run` that is the environment's own, so the run happens to check
-against it. Invoked any other way, it can be a system interpreter, and
-the run reports thousands of errors against the wrong packages, under
-the same status 3. `--pythonpath` does not satisfy the setting, and
-exits 3 the same way. A `.venv` link in the workspace would satisfy it,
-but it is a path in the checkout, which `jj` snapshots into the change.
-So the link goes in the agent's own directory, beside the environment,
-and the run names that directory:
-
-    ln -sfn venv <dir>/.venv
-    UV_PROJECT_ENVIRONMENT=<dir>/venv mise x uv -- uv run basedpyright --venvpath <dir>
-
-**A pass is exit status 0**, not the `0 errors` line. Under `--verbose`
-the search path then names the `site-packages` of `<dir>/.venv`.
+**An environment kept outside the workspace changes no gate command.**
+uv can keep a workspace's environment in a directory of the agent's own
+elsewhere, with `UV_PROJECT_ENVIRONMENT=<dir>/venv`, so that the
+workspace holds nothing but the checkout. `pyproject.toml` names no
+environment for `basedpyright`, which therefore resolves imports
+through the first `python` on `PATH`: under `uv run`, the environment's
+own, in the tree or out of it, so the gate's command is the one AGENTS.md
+gives. Invoked without `uv run`, it can find a system interpreter instead
+and report thousands of errors against the wrong packages. **A pass is
+exit status 0**, not the `0 errors` line: any error `basedpyright` logs
+of its own, such as a configured environment it cannot find, makes it
+exit 3 beside a summary that still reads `0 errors`, and a type error in
+such a run exits 3 too. Under `--verbose` the search path names the
+environment's `site-packages`.
 
 No workspace outlives the dispatch that created it:
 

@@ -205,8 +205,10 @@ allowed-confusables = ["–"]
 [tool.basedpyright]
 typeCheckingMode = "strict"
 pythonVersion = "3.12"
-venvPath = "."
-venv = ".venv"
+# No `venvPath` or `venv`: basedpyright then resolves imports through the
+# first `python` on `PATH`, which `uv run` makes the project environment's
+# wherever uv keeps it, an environment outside the tree included
+# (docs/framework/dispatch.md §1.2).
 include = ["src", "tests", "deploy", "__main__.py"]
 # All of these are workspace packages installed editable, through an import
 # finder the type checker cannot follow; it reads them from the tree instead.
