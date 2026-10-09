@@ -42,6 +42,7 @@ from memory_kit import MemoryKit
 from oci_clock import SimulatedClock
 from oci_conventions import with_recorded_compartment, with_tenancy_ocid, with_unrecorded_compartment
 from oci_tenancy import KEY_LISTINGS, ROOT_USER, TENANCY, Tenancy
+from scratch_projects import cli_directories
 
 from kluster import conventions
 from kluster.lib import config as lib_config
@@ -341,7 +342,8 @@ def live_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[pulum
     # A home of its own, in the ambient environment: it is not part of what a
     # `credentials` run knows, and `run_pulumi` overlays the stack's own
     # variables on whatever is already there.
-    monkeypatch.setenv('PULUMI_HOME', str(tmp_path / 'home'))
+    for variable, directory in cli_directories(tmp_path).items():
+        monkeypatch.setenv(variable, directory)
     monkeypatch.setenv('PULUMI_SKIP_UPDATE_CHECK', 'true')
     stack = pulumi_config.Stack(
         name=STACK,

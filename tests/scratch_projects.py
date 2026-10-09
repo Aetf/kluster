@@ -9,6 +9,13 @@ nothing is fetched; a `file://` backend and a `PULUMI_HOME` under the case's
 temporary directory; and an environment with every `PULUMI_` and `PG`
 variable of the test run's own removed, so nothing steers a command at
 another backend (§5.1).
+
+**The CLI's own directories are the case's** (`cli_directories`): its
+`PULUMI_HOME`, and the `TMPDIR` every process under it makes its temporary
+files in -- a plugin's tarball, a provider's kubeconfig, `uv`'s locks -- so
+pytest's clean-up of the case's directory takes them, a run killed
+mid-download included. Every suite that runs the pinned CLI takes both from
+there.
 """
 
 from __future__ import annotations
@@ -60,6 +67,25 @@ class ScratchProject:
     env: dict[str, str]
 
 
+#: The names the CLI, its plugins and `uv` give the temporary files a run can
+#: leave behind in `TMPDIR`: a plugin's tarball, an unpacked package, a
+#: provider's kubeconfig, a project environment's lock.
+LEFT_BEHIND = ('pulumi-', 'kubeconfig', 'uv-')
+
+
+def cli_directories(root: Path, *, home: Path | None = None) -> dict[str, str]:
+    """The `PULUMI_HOME` and `TMPDIR` of a run of the pinned CLI, both under `root` unless `home` names the home.
+
+    `TMPDIR` is what Go's temporary files and `uv`'s locks follow, in `pulumi`
+    and in every plugin and language host it starts, so whatever a run leaves
+    behind lands under `root`. It is created here: a temporary file in a
+    directory that does not exist fails.
+    """
+    temporary = root / 'tmp'
+    temporary.mkdir(parents=True, exist_ok=True)
+    return {'PULUMI_HOME': str(home or root / 'pulumi-home'), 'TMPDIR': str(temporary)}
+
+
 def scrubbed(environ: Mapping[str, str]) -> dict[str, str]:
     """The test run's environment, without anything that could steer `pulumi` at another backend."""
     return {key: value for key, value in environ.items() if not key.startswith(('PULUMI_', 'PG'))}
@@ -82,11 +108,14 @@ def scratch_project(root: Path, program: str) -> ScratchProject:
     )
     _ = process_sessions.run(['uv', 'lock', '-q', '--offline'], cwd=project, timeout=SETUP_TIMEOUT, check=True)
     (root / 'state').mkdir()
-    env = scrubbed(os.environ) | {
-        'PULUMI_BACKEND_URL': f'file://{root / "state"}',
-        'PULUMI_HOME': str(root / 'pulumi-home'),
-        'PULUMI_CONFIG_PASSPHRASE': PASSPHRASE,
-        'PULUMI_SKIP_UPDATE_CHECK': 'true',
-        'UV_OFFLINE': '1',
-    }
+    env = (
+        scrubbed(os.environ)
+        | cli_directories(root)
+        | {
+            'PULUMI_BACKEND_URL': f'file://{root / "state"}',
+            'PULUMI_CONFIG_PASSPHRASE': PASSPHRASE,
+            'PULUMI_SKIP_UPDATE_CHECK': 'true',
+            'UV_OFFLINE': '1',
+        }
+    )
     return ScratchProject(directory=project, env=env)
