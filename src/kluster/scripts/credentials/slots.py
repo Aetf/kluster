@@ -641,8 +641,9 @@ class Minted(SingleValue):
 
     kind: ClassVar[str] = 'minted'
 
-    #: What mints and delivers it, named in every refusal. Usually a command;
-    #: for two rows it is a program, because the mint happens inside a stack.
+    #: What mints and delivers it, named in every refusal: a `credentials`
+    #: command, or a program -- a stack, or a helper a stack runs -- where the
+    #: mint happens inside one.
     command: str
     #: What stands between the register and that producer existing. Empty when
     #: it is built.
