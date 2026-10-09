@@ -53,9 +53,9 @@ from . import settings
 
 log = logging.getLogger(__name__)
 
-#: The client tools. `pg_dump` and `pg_restore` come from a Postgres client
-#: package rather than from `mise.toml`: they are the one part of this path
-#: the appliance cannot supply, and libpq is what reads the client bundle.
+#: The client tools, from the `postgres` pin in `mise.toml`, whose major is
+#: the appliance's. libpq, which they are linked against, is what reads the
+#: client bundle.
 PG_DUMP = 'pg_dump'
 PG_RESTORE = 'pg_restore'
 
@@ -204,8 +204,8 @@ def _run(
         )
     except FileNotFoundError as exc:
         raise StateError(
-            f'{argv[0]} is not on PATH: {PG_DUMP}/{PG_RESTORE} come from a Postgres client package, '
-            f'and {age.BINARY} is pinned in mise.toml (`mise x -- ...`)'
+            f'{argv[0]} is not on PATH: {PG_DUMP} and {PG_RESTORE} are the `postgres` pin in mise.toml, '
+            f'and {age.BINARY} the `age` pin (`mise x -- ...`)'
         ) from exc
     except sp.TimeoutExpired as exc:
         raise StateError(f'{what} did not finish within {timeout}s') from exc

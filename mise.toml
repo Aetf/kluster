@@ -44,6 +44,19 @@ uv = "0.12.21"
 # that actually runs there -- a test holds the two equal.
 age = "1.3.1"
 "aqua:coreos/butane" = "0.29.0"
+# The Postgres client `state-backend dump` and `restore` run: `pg_dump` and
+# `pg_restore`, and `psql` beside them, linked against the libpq that reads the
+# client bundle's `PGSSL*` paths. mise's registry resolves the name to
+# `conda:postgresql`, prebuilt from the `conda-forge` channel -- mise's default,
+# written out because `mise.lock` records the channel as an option of the
+# entry -- and the lock holds the sum of every conda package the install
+# unpacks, not only this one. The major is
+# the appliance's (`POSTGRES_IMAGE` in `kluster.lib.state_backend.settings`):
+# `pg_dump` refuses a server of a newer major than its own, and what a client
+# of a newer major writes is not guaranteed to load into the appliance's
+# server, even when it was dumped from that server -- a test holds the two
+# majors equal.
+postgres = { version = "17.11", channel = "conda-forge" }
 # talosctl is what the suite asks whether Talos accepts the machine
 # configuration the Talos component renders: `gen config` builds the base the
 # provider builds, and `validate --strict` is the release's own validation of
