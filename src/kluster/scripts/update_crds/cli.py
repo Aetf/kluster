@@ -181,6 +181,19 @@ def console() -> Generator[None]:
     ends. Propagation is off so that a process whose root logger prints does
     not print each line twice. The stream is the `sys.stdout` of the moment
     the run starts, rather than the one the module was imported under.
+
+    Every line printed for the length of the run goes through `tqdm.write`,
+    which clears the progress bars a download draws, prints the line and draws
+    them again; printed straight to the stream, a line lands in the middle of
+    a bar. Two loggers print during a run: the package logger, through the
+    handler attached here, and the root logger, for every record from outside
+    the package -- a library's warning among them -- which a process with no
+    handler of its own prints through `logging.lastResort`. Both are
+    redirected. `logging_redirect_tqdm` swaps each one's console handler for a
+    writer of its own that keeps its formatter and stream, gives a logger that
+    has none a writer to stderr, and puts the handlers back as it exits. Its
+    default is the root logger alone, which the package's records never reach
+    with propagation off, so the package logger is named beside it.
     """
     logger = logging.getLogger(LOG_NAME)
     handler = logging.StreamHandler(sys.stdout)
@@ -190,7 +203,8 @@ def console() -> Generator[None]:
     logger.setLevel(logging.INFO)
     logger.propagate = False
     try:
-        yield
+        with logging_redirect_tqdm(loggers=[logging.root, logger]):
+            yield
     finally:
         logger.removeHandler(handler)
         handler.close()
@@ -233,7 +247,7 @@ def _run(argv: list[str] | None) -> int:
     # Only a run that regenerates needs the CLI, and it is asked for before
     # the render (`find_pulumi`).
     pulumi = find_pulumi() if bundle is None else None
-    with logging_redirect_tqdm(), TemporaryDirectory(prefix='update_crds-') as name:
+    with TemporaryDirectory(prefix='update_crds-') as name:
         workdir = Path(name)
         log.info(f'Working directory: {workdir}')
 

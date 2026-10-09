@@ -21,15 +21,16 @@ import re
 import subprocess
 import sys
 import tarfile
-from collections.abc import Mapping
+from collections.abc import Callable, Iterable, Mapping
 from io import BytesIO
 from pathlib import Path
-from typing import cast
+from typing import TextIO, cast
 
 import pytest
 import requests
 import ruamel.yaml.main as ruamel_yaml_main
 from renovate_text import as_python_spells_it, as_renovate_spells_it, group, listed, package_rules, scalar
+from tqdm import tqdm
 
 from kluster.lib.versions import CHART, MANIFEST, ChartPin, Floor, ProjectFile, Versions
 from kluster.scripts.update_crds import cli, pins, record, sources
@@ -724,6 +725,77 @@ def test_a_run_leaves_the_process_logging_as_it_found_it(
     finally:
         root.removeHandler(kept)
         made_before.disabled = False
+
+
+def written_under_a_bar(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, logged: Callable[[], None]) -> list[str]:
+    """Every line `tqdm.write` was handed during a run in which `logged` ran while a progress bar was drawn.
+
+    `tqdm.write` clears the bars, prints the line and draws them again; a
+    handler that prints to the stream itself puts the line in the middle of
+    the bar. The bar is drawn, and `logged` run, from inside the selection
+    step of a run that reads a rendered bundle and writes nothing else.
+    """
+    _ = stand_ins(tmp_path, monkeypatch)
+    project = project_dir(tmp_path)
+    rendered = tmp_path / 'rendered.yaml'
+    _ = rendered.write_text(CRD)
+    written: list[str] = []
+    write = tqdm.write
+
+    def recording_write(s: str, file: TextIO | None = None, end: str = '\n', nolock: bool = False) -> None:
+        written.append(s)
+        write(s, file=file, end=end, nolock=nolock)
+
+    select_crds = sources.select_crds
+
+    def select_under_a_bar(documents: Iterable[str]) -> list[sources.Definition]:
+        with tqdm(total=1, desc='a bar') as bar:
+            logged()
+            _ = bar.update()
+        return select_crds(documents)
+
+    monkeypatch.setattr(tqdm, 'write', staticmethod(recording_write))
+    monkeypatch.setattr(sources, 'select_crds', select_under_a_bar)
+
+    code = cli.main(
+        ['--project', str(project / 'Pulumi.yaml'), '--from-bundle', str(rendered), '--bundle', str(tmp_path / 'o')]
+    )
+
+    assert code == 0
+    return written
+
+
+def test_a_line_the_package_logs_under_a_progress_bar_goes_through_tqdms_writer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A line a module of the package logs while a bar is drawn is handed to `tqdm.write`, formatted as the console formats it.
+
+    The record is a sibling module's, a child of the package logger, which
+    does not propagate, so redirecting the root logger alone would not reach
+    it.
+    """
+    written = written_under_a_bar(tmp_path, monkeypatch, lambda: sources.log.info('logged under a bar'))
+
+    lines = [line for line in written if 'logged under a bar' in line]
+    assert [line.split(' ', 3)[3] for line in lines] == ['INFO: logged under a bar']
+    assert [line for line in capsys.readouterr().out.splitlines() if 'logged under a bar' in line] == lines
+
+
+def test_a_warning_from_outside_the_package_under_a_progress_bar_goes_through_tqdms_writer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A library's warning logged while a bar is drawn is handed to `tqdm.write` as well.
+
+    The record propagates to the root logger, which the console gives no
+    handler, and which is redirected beside the package logger: in a process
+    with no handler of its own, the record would otherwise print through
+    `logging.lastResort`, straight to stderr.
+    """
+    library = logging.getLogger('a_library_beside_update_crds')
+
+    written = written_under_a_bar(tmp_path, monkeypatch, lambda: library.warning('a library warned under a bar'))
+
+    assert len([line for line in written if 'a library warned under a bar' in line]) == 1
 
 
 def test_a_stack_file_with_no_config_block_overrides_nothing(tmp_path: Path) -> None:
