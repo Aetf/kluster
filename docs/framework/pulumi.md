@@ -496,6 +496,17 @@ through `mise.toml`'s `[env]`, and no `mise` task runs one
 -   **`up` refreshes, previews, asks, and applies**, and `--yes` skips
     the question. With nothing planned it runs no `up` at all and exits
     as `plan` does.
+-   **The apply writes to the driver's own output.** At a terminal,
+    `pulumi`'s live display shows the run as it goes, its elapsed times
+    ticking. Under a pipe, a terminal that reports no dimensions, or an
+    environment that names a CI system, as `GITHUB_ACTIONS` does,
+    `pulumi` falls back to its non-interactive display, which names a
+    step when it starts and when it ends and nothing in between. Nothing
+    the driver acts on is read from either display: the plan comes from
+    the preview's events, and the checks from the state. A test over the
+    pinned CLI runs the driver's `up` both ways. The preview shows no
+    progress of its own, since its standard output is the events
+    (Aetf/kluster-ops#574).
 -   **A ^C is `pulumi`'s to answer.** The terminal sends it to `pulumi` as
     well as to the driver, and `pulumi` answers the first one by
     cancelling gracefully: it finishes the steps in flight and releases

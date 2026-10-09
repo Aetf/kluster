@@ -13,8 +13,9 @@ Three levels, because they answer different questions:
     whose one resource is a dynamic one that needs no credential and so
     reaches no network, says the driver's handling of a committed checkpoint
     holds against what the pinned CLI actually writes: that the preview's
-    plan is read from its streamed events, that no `up` runs over nothing
-    planned, that a write over an unchanged deployment keeps the file's
+    plan is read from its streamed events, that the apply writes to the
+    driver's own output, a terminal's or a pipe's, and is still read from
+    the events and the state, that no `up` runs over nothing planned, that a write over an unchanged deployment keeps the file's
     bytes, that no switch of the caller's moves the state out of the file
     the checks read, and that the check needing no value finds a secret in
     the clear at each place the engine marks one. Skipped where the pinned
@@ -28,15 +29,21 @@ configuration.
 from __future__ import annotations
 
 import datetime as dt
+import fcntl
 import io
 import json
+import logging
 import os
+import pty
 import re
+import selectors
 import shutil
 import signal
 import site
+import struct
 import subprocess as sp
 import sys
+import termios
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -1034,6 +1041,33 @@ def test_a_run_stopped_before_its_checks_leaves_the_record_and_the_next_up_check
     assert not record.exists()
 
 
+def test_each_export_around_a_write_is_announced_before_it_starts(
+    repository: Repository, committed: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Each reads the backend under a network timeout, so a slow one is a
+    # silence the line before it explains.
+    caplog.set_level(logging.INFO)
+    resource = {'urn': 'urn:box', 'inputs': {}, 'outputs': {'plain': 'an identifier'}}
+    _ = _checkpoint(repository.checkout, [resource])
+    fake = FakePulumi(exports=[_export([resource])])
+    answer = fake.capture
+    announced: list[str] = []
+
+    def announcing(args: Sequence[str], *, cwd: Path, env: Mapping[str, str]) -> str:
+        if list(args[:2]) == ['stack', 'export']:
+            announced.append(caplog.messages[-1])
+        return answer(args, cwd=cwd, env=env)
+
+    fake.capture = announcing
+    run = driver.Run.open(committed, repository.checkout, pulumi=fake, base=AMBIENT)
+
+    assert run.passthrough(['state', 'unprotect', 'urn:box', '--yes']) == 0
+    assert announced == [
+        f'reading the {committed} state before the write, to check the checkpoint against',
+        f'checking the {committed} checkpoint',
+    ]
+
+
 def test_one_place_holding_a_secret_is_one_finding_naming_every_source() -> None:
     document = {'checkpoint': {'latest': {'resources': [{'urn': 'urn:box', 'outputs': {'echo': TOKEN}}]}}}
 
@@ -1290,6 +1324,113 @@ def test_a_real_up_over_nothing_planned_runs_while_a_failed_check_is_recorded_an
 
     assert scratch.history() > history
     assert not record.exists()
+
+
+#: The driver's `up`, run from a process of its own whose standard streams
+#: the case chooses: the stack in the census as the fixture `committed` puts
+#: it there, an empty secret store as the fixture `secret_store` installs, and
+#: the driver's log on standard error as `operator-stack` configures it.
+UP_IN_A_PROCESS = """\
+import json, logging, sys
+from pathlib import Path
+sys.path.insert(0, {tests!r})
+from memory_keyring import MemoryKeyring, installed
+from kluster.conventions import identity
+from kluster.scripts.operator_stack import driver
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+identity.OPERATOR_STACKS = {{**identity.OPERATOR_STACKS, {stack!r}: identity.StateHome.COMMITTED}}
+with installed(MemoryKeyring()):
+    sys.exit(driver.Run.open({stack!r}, Path({checkout!r}), base=json.loads({base!r})).up(yes=True))
+"""
+
+#: A cursor moved up a line or more: how `pulumi`'s interactive display
+#: redraws its tree in place, and something its non-interactive display,
+#: which only appends lines, never writes.
+REDRAW = re.compile(rb'\x1b\[\d+A')
+
+#: A colour: what `pulumi` writes only where its standard output is a
+#: terminal, whichever display it then draws. The driver's own lines carry none.
+COLOUR = re.compile(rb'\x1b\[38;5;\d+m')
+
+
+def _drained(reader: int, child: sp.Popen[bytes]) -> bytes:
+    """Everything written to `reader` until its last writer is gone, or a failure naming the run at the bound."""
+    read = b''
+    with selectors.DefaultSelector() as selector:
+        _ = selector.register(reader, selectors.EVENT_READ)
+        while True:
+            if not selector.select(timeout=ENGINE_COMMAND_TIMEOUT):
+                os.killpg(child.pid, signal.SIGKILL)
+                _ = child.wait(timeout=ENGINE_COMMAND_TIMEOUT)
+                raise AssertionError(f'the driver wrote nothing for {ENGINE_COMMAND_TIMEOUT} s:\n{read.decode()}')
+            try:
+                chunk = os.read(reader, 65536)
+            except OSError:  # a pty whose last writer is gone reads as EIO
+                return read
+            if not chunk:
+                return read
+            read += chunk
+
+
+@needs_pulumi
+@engine_bound
+@pytest.mark.parametrize('terminal', [True, False], ids=['terminal', 'pipe'])
+def test_a_real_up_hands_pulumi_the_drivers_own_output_and_reads_what_it_needs_from_the_events(
+    scratch: Scratch, terminal: bool
+) -> None:
+    # Pins what the driver does today, as a tripwire against capturing the
+    # apply's output: with a terminal of real dimensions `pulumi` draws its
+    # interactive display, whose elapsed times tick, and under a pipe its
+    # non-interactive one. Either way the plan, the apply and the checkpoint's
+    # checks are read from the events and the state, never from the display.
+    scratch.settings(gen='g2')
+    # `pulumi` reads a CI system's own variables -- `GITHUB_ACTIONS` on this
+    # repository's runner -- as a reason to draw its non-interactive display
+    # even at a terminal, so the run carries none, as an operator's terminal
+    # does not.
+    env = {name: value for name, value in scratch.base.items() if name != 'GITHUB_ACTIONS'} | {'TERM': 'xterm-256color'}
+    program = UP_IN_A_PROCESS.format(
+        tests=str(Path(__file__).parent), stack=PROBE, checkout=str(scratch.checkout), base=json.dumps(env)
+    )
+    if terminal:
+        reader, writer = pty.openpty()
+        fcntl.ioctl(writer, termios.TIOCSWINSZ, struct.pack('HHHH', 40, 120, 0, 0))
+        child = sp.Popen(
+            [sys.executable, '-c', program], stdin=writer, stdout=writer, stderr=writer, env=env, start_new_session=True
+        )
+        os.close(writer)
+    else:
+        child = sp.Popen(
+            [sys.executable, '-c', program],
+            stdin=sp.DEVNULL,
+            stdout=sp.PIPE,
+            stderr=sp.STDOUT,
+            env=env,
+            start_new_session=True,
+        )
+        assert child.stdout is not None
+        reader = child.stdout.fileno()
+    try:
+        shown = _drained(reader, child)
+        code = child.wait(timeout=ENGINE_COMMAND_TIMEOUT)
+    finally:
+        if terminal:
+            os.close(reader)
+        elif child.stdout is not None:
+            child.stdout.close()
+
+    assert code == 0, shown.decode()
+    assert b'applying the probe stack' in shown, shown.decode()
+    assert bool(COLOUR.search(shown)) is terminal, shown.decode()
+    assert bool(REDRAW.search(shown)) is terminal, shown.decode()
+    (box,) = [
+        r
+        for r in json.loads(scratch.path.read_text())['checkpoint']['latest']['resources']
+        if r['urn'].endswith('::box')
+    ]
+    assert box['outputs']['gen'] == 'g2'
+    assert not checkpoint.record(scratch.checkout, PROBE).exists()
+    assert scratch.run.plan() == driver.NOTHING_PLANNED
 
 
 @needs_pulumi
