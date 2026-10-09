@@ -20,11 +20,13 @@ from pathlib import Path
 from typing import Any
 
 import oci
+import oci_clock
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric.types import PrivateKeyTypes
 from memory_kit import MemoryKit
+from oci_clock import SimulatedClock
 from oci_conventions import with_compartment, with_recorded_compartment, with_tenancy_ocid, with_unrecorded_compartment
 from oci_tenancy import (
     DELETIONS,
@@ -133,22 +135,21 @@ def recorded_tenancy(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
-def unhurried(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every bounded wait in this module happens instantly.
+def unhurried(monkeypatch: pytest.MonkeyPatch) -> SimulatedClock:
+    """Every bounded wait in this module happens instantly, on `oci_clock`'s clock.
 
     What those waits wait for is a remote service catching up, which a fake
-    has no way of not having done. The clock still moves -- one interval per
-    reading -- so a deadline is still reachable and a test can still assert
-    that one was reached; only the sleeping is skipped. A test that cares how
-    many intervals were spent patches `sleep` again on top of this.
+    has no way of not having done. The clock still moves -- by each interval
+    the wait sleeps -- so a deadline is still reachable and a test can still
+    assert that one was reached; only the sleeping is skipped. A test that
+    cares how many intervals were spent reads them off the clock, or patches
+    `sleep` again on top of this.
     """
-    ticks = itertools.count(0.0, oci_iam.PROPAGATION_INTERVAL)
+    return oci_clock.install(monkeypatch)
 
-    def no_nap(_interval: float) -> None:
-        return None
 
-    monkeypatch.setattr(oci_iam.time, 'sleep', no_nap)
-    monkeypatch.setattr(oci_iam.time, 'monotonic', lambda: next(ticks))
+def test_the_propagation_waits_run_on_the_simulated_clock() -> None:
+    assert oci_clock.one_refusal_outwaited() == [oci_iam.PROPAGATION_INTERVAL]
 
 
 @pytest.fixture(autouse=True)
@@ -1635,11 +1636,15 @@ def _calls_made(operation: Callable[[FaultyTenancy, KdbxStore], None], *, prepar
 
     Measured rather than written down, so the sweep below covers exactly the
     calls the operation makes today and widens by itself when it grows one.
+    It runs at import, before any fixture exists, so it puts `oci_iam`'s
+    waits on the simulated clock itself rather than leaving them to
+    `unhurried`.
     """
     tenancy = FaultyTenancy()
     kit = MemoryKit()
     with pytest.MonkeyPatch.context() as patch:
         with_tenancy_ocid(patch, TENANCY)
+        _ = oci_clock.install(patch)
         if prepared:
             _create(tenancy, kit)
         before = tenancy.counted

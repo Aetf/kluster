@@ -25,11 +25,13 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+import oci_clock
 import pytest
 import requests
 from b2_api import FakeApi as B2Api
 from fake_gh import RecordedGh
 from memory_kit import MemoryKit
+from oci_clock import SimulatedClock
 from oci_conventions import with_recorded_compartment, with_tenancy_ocid, with_unrecorded_compartment
 from oci_tenancy import ROOT_USER, TENANCY, Tenancy
 
@@ -54,6 +56,16 @@ DRILL_COMPARTMENT = 'ocid1.compartment.oc1..drill-recorded'
 #: a push against the retirement it precedes is a property of the composite,
 #: and the two fakes have no clock of their own.
 Timeline = list[tuple[str, str]]
+
+
+@pytest.fixture(autouse=True)
+def unhurried(monkeypatch: pytest.MonkeyPatch) -> SimulatedClock:
+    """`oci_iam`'s propagation waits, which every OCI mint here reaches, run on `oci_clock`'s clock."""
+    return oci_clock.install(monkeypatch)
+
+
+def test_the_propagation_waits_run_on_the_simulated_clock() -> None:
+    assert oci_clock.one_refusal_outwaited() == [oci_iam.PROPAGATION_INTERVAL]
 
 
 @pytest.fixture
