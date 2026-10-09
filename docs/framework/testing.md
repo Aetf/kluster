@@ -175,6 +175,81 @@ has to be unusual.
 The masking and the closed store cover the live tier too (§5). A drill reads
 its credentials from the kit, never from the ambient environment.
 
+### 1.2 Nothing a case starts outlives it
+
+**A process a case starts goes through `tests/process_sessions.py`.** It
+starts the command as the leader of a POSIX session of its own, and every
+way out of the call -- a clean exit, a `TimeoutExpired`, an assertion, the
+case bound, a `KeyboardInterrupt` -- kills every process in that POSIX
+session and waits until each is gone. `run` is `subprocess.run` with the
+output captured; `started` is a block that owns the command between its
+start and its end, for a case that reads the command's output as it runs or
+signals it. What the helper bounds is its own waits: `run`, and a
+`Command`'s `wait` and `communicate`, take a `timeout=` with no default, and
+the end waits at most `KILL_TIMEOUT` for each process to go. Setting each
+`timeout=` below the case bound is the caller's part (§8). A read of the
+command's output inside a `started` block is bounded only by the case bound,
+whose failure unwinds through the end, unless the case bounds that read
+itself.
+
+The POSIX session is the unit because it is the one grouping every command
+here keeps. A process group is not: the `pulumi` CLI starts each plugin in a
+group of its own, and only a living `pulumi` closes them, so a `pulumi`
+killed at its bound leaves its language host and its dynamic provider
+running, the provider for good. Nor can the plugins be found as
+descendants: a killed process's children pass at once to a parent the
+case does not hold, so the tree the case started falls apart at the very
+kill that needed it. Nothing leaves a POSIX session except by calling `setsid()`,
+and Linux does not hand a session's id to another process while one member
+lives, so the helper selects by membership alone: never by name, command
+line, user or group. A process outside the POSIX sessions it started --
+another worker's, another agent's gate, the operator's shell -- is never
+signalled. `tests/test_process_sessions.py` holds each way out, the helper's
+precision, and the premise that the CLI's plugins stay in its session, so a
+release that moves them out fails naming the premise.
+
+What it does not reach is, by definition, anything outside the POSIX session
+of a command it started, and anything at all once the test process can no
+longer run a `finally`. Today's instances:
+
+-   **A descendant that calls `setsid()`.** None of the adopting suites'
+    commands has one, and the CLI's plugins do not.
+-   **A process code under test starts through a runner of its own** --
+    `pulumi_cli.run_pulumi`, `github_secrets.run_gh`, the client tools
+    `state` runs. Those keep `subprocess.run`'s kill of the child alone.
+-   **The test process killed outright.** SIGKILL, or the outer `timeout`'s
+    SIGTERM (§1), which Python turns into no exception, runs no clean-up.
+    And because each command leads a group of its own, the outer `timeout`'s
+    signal to the run's process group no longer reaches it, as it reaches a
+    command that shares the run's group: a shell blocked on a FIFO outlives
+    such a kill. That is the price of the per-case guarantee, and the outer
+    `timeout` stays the hang guard for what the per-case bound cannot reach.
+
+**The case bound is one shot.** `pytest-timeout` arms its alarm once per case,
+over set-up, call and teardown, and its handler raises a failure inside
+whatever the case was doing. Landing in a block, that failure unwinds through
+the end, whose waits are bounded, so the case fails by name and the run goes
+on to its summary. The end runs a second time in a `finally` of its own, for
+an alarm that lands inside the first. After the alarm, the rest of the case's
+teardown runs with no bound at all, so a fixture that keeps a process keeps
+it inside `started`, and every other teardown wait carries a `timeout=` of
+its own.
+
+**A command a case starts reads only the stdin the case hands it**, and
+`/dev/null` otherwise: never the test process's own, which under `-s` is a
+terminal. A fake reads its stdin only where the tool it stands in for does.
+
+**A container a case starts carries `--rm`, a `--timeout` at the run's outer
+bound, and the test label**, `--label kluster-test=<module>`. Its processes
+are the container service's rather than the case's, so it is the one kind of
+process that ends by itself however the test process ends, and the label is
+the census of what is left.
+
+A suite that still starts a process through `subprocess` is a finding when
+that process can outlive its own kill: one that starts processes of its own,
+or blocks on a pipe, a FIFO or a service. Each of today's is a slice of
+Aetf/kluster-ops#530's plan, the containers among them.
+
 ## 2. Writing Tests
 
 A suite that declares resources starts from `tests/mock_monitor.py`, which
@@ -916,7 +991,8 @@ fix, and the diff is the only artifact that disagrees.
         stall from a hang (§1).
         A guard that stays in seconds is a wait the loop does not run,
         where nothing yields to count -- the `timeout=` handed to
-        `subprocess.run` or `Popen.wait`, a thread's wait on an event --
+        the helper's `run` and `wait` (§1.2), or to `subprocess.run` or
+        `Popen.wait`, a thread's wait on an event --
         and it fails naming what it waited for, which is a failure with a
         name.
 
@@ -1000,7 +1076,10 @@ are:
     operator driver against a scratch stack;
 -   the cases of `tests/test_pulumi_config.py` that take a real-CLI
     project, and its failing-invocation case;
--   `tests/test_derived.py`'s `test_the_token_lands_where_the_program_reads_it`.
+-   `tests/test_derived.py`'s `test_the_token_lands_where_the_program_reads_it`;
+-   `tests/test_process_sessions.py`'s
+    `test_the_pulumi_clis_plugins_stay_in_its_session_and_go_with_it`, the
+    premise `tests/process_sessions.py` rests on (§1.2).
 
 Three more start the CLI and run under the suite's bound, short of the rule
 until the issue named beside each gives them bounds of their own:
@@ -1027,8 +1106,8 @@ measurement in their comment:
 -   **The command bound** is the `timeout=` of each `pulumi` process, and
     of any wait on one, and sits below the case bound, so a stalled
     command fails as a `TimeoutExpired` naming it before the case's bound
-    fires. A process a case started and stops waiting on is killed, never
-    waited on without a bound.
+    fires. A process a case started and stops waiting on is killed with
+    its POSIX session (§1.2), never waited on without a bound.
 -   **Both are stop-losses.** Each sits several times above the worst
     measured under load, and nothing asserts on elapsed time (§7 item 5).
     A bump that measures a case slower moves the constant and its

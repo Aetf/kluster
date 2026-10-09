@@ -9,7 +9,10 @@ ignored, deleted before it is replaced, a `before_create` and a
 resource with no `diff` whose input is the box's id, replaced on it where the
 case says, with an `after_create` hook. Every provider method and every hook
 appends a line to a log, so the log is the order the engine ran them in; a
-hook raises when `PROBE_FAIL_<hook>` is set on the run.
+hook raises when `PROBE_FAIL_<hook>` is set on the run. The project around
+the program is `scratch_projects`', and every command leads a POSIX session
+of its own that ends with it (`process_sessions`), so a `pulumi` stopped at
+its bound takes its plugins with it.
 
 A pin bump reruns these against the new CLI. What one release does and the
 next stops doing -- the second delete of a resource a failed run left pending
@@ -20,18 +23,16 @@ held.
 from __future__ import annotations
 
 import json
-import os
 import re
 import shutil
-import site
 import subprocess as sp
-import sys
-from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+import process_sessions
 import pytest
+from scratch_projects import scratch_project
 
 #: How long one case may take: its project's set-up and every command it runs
 #: against the engine, set from measured durations rather than from the
@@ -141,38 +142,12 @@ elif settings['delete_hook']:
     hook('before_delete')
 """
 
-#: The project around it: a Python program under the `uv` toolchain, in a
-#: virtual environment of the case's own whose `.pth` file reaches the test
-#: run's packages, so the locked SDK is the one that runs and nothing is
-#: fetched. A `uv` environment has no `pip`, which the language host asks
-#: for unless the toolchain is `uv`, and then it asks for the lock beside the
-#: project (rfc-006 slice 0, X7).
-PROJECT = """\
-name: probe
-runtime:
-  name: python
-  options:
-    toolchain: uv
-    virtualenv: {venv}
-"""
-PYPROJECT = """\
-[project]
-name = "probe"
-version = "0"
-requires-python = ">={major}.{minor}"
-dependencies = []
-
-[tool.uv]
-package = false
-"""
-
 #: How long one `pulumi` command may take before the case fails naming it: a
 #: stop-loss, about six times the slowest whole case measured with four times
 #: as many busy processes as cores (`CASE_TIMEOUT`), and below that case bound.
 COMMAND_TIMEOUT = 120
 
 STACK = 'probe'
-PASSPHRASE = 'a-passphrase-for-a-scratch-stack-that-holds-nothing'
 
 
 @dataclass
@@ -207,14 +182,8 @@ class Engine:
     def pulumi(self, *args: str, fail: tuple[str, ...] = ()) -> sp.CompletedProcess[str]:
         """One `pulumi` command against this case's backend, with each hook named in `fail` raising."""
         env = self.env | {f'PROBE_FAIL_{kind}': '1' for kind in fail}
-        return sp.run(
-            ['pulumi', '--non-interactive', *args],
-            cwd=self.project,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=COMMAND_TIMEOUT,
-            check=False,
+        return process_sessions.run(
+            ['pulumi', '--non-interactive', *args], cwd=self.project, env=env, text=True, timeout=COMMAND_TIMEOUT
         )
 
     def up(self, *args: str, fail: tuple[str, ...] = ()) -> sp.CompletedProcess[str]:
@@ -238,36 +207,11 @@ class Engine:
         return str(self.resources()[name]['urn'])
 
 
-def _scrubbed(environ: Mapping[str, str]) -> dict[str, str]:
-    """The test run's environment, without anything that could steer `pulumi` at another backend."""
-    return {key: value for key, value in environ.items() if not key.startswith(('PULUMI_', 'PG'))}
-
-
 @pytest.fixture
 def engine(tmp_path: Path) -> Engine:
-    project = tmp_path / 'project'
-    project.mkdir()
-    venv = tmp_path / 'venv'
-    _ = sp.run(['uv', 'venv', '-q', '--python', sys.executable, str(venv)], check=True, timeout=120)
-    (site_packages,) = venv.glob('lib/python*/site-packages')
-    _ = (site_packages / 'test_run.pth').write_text('\n'.join(site.getsitepackages()) + '\n')
-    _ = (project / '__main__.py').write_text(PROGRAM)
-    _ = (project / 'Pulumi.yaml').write_text(PROJECT.format(venv=venv))
-    _ = (project / 'pyproject.toml').write_text(
-        PYPROJECT.format(major=sys.version_info.major, minor=sys.version_info.minor)
-    )
-    _ = sp.run(['uv', 'lock', '-q', '--offline'], cwd=project, check=True, timeout=120)
     log_file = tmp_path / 'engine.log'
-    env = _scrubbed(os.environ) | {
-        'PULUMI_BACKEND_URL': f'file://{tmp_path / "state"}',
-        'PULUMI_HOME': str(tmp_path / 'pulumi-home'),
-        'PULUMI_CONFIG_PASSPHRASE': PASSPHRASE,
-        'PULUMI_SKIP_UPDATE_CHECK': 'true',
-        'UV_OFFLINE': '1',
-        'PROBE_LOG': str(log_file),
-    }
-    (tmp_path / 'state').mkdir()
-    made = Engine(project=project, env=env, log_file=log_file)
+    scratch = scratch_project(tmp_path, PROGRAM)
+    made = Engine(project=scratch.directory, env=scratch.env | {'PROBE_LOG': str(log_file)}, log_file=log_file)
     # The backend in hand is the case's own, and holds nothing yet
     # (framework/testing.md §5.1).
     listed = made.pulumi('stack', 'ls', '--all', '--json')

@@ -67,6 +67,11 @@ dev = [
     "import-linter>=2.14",
     "pytest-timeout>=2.4.0",
     "pytest-xdist>=3.8.0",
+    # What `tests/process_sessions.py` finds, signals and waits on the
+    # processes of a case's POSIX sessions with; it ships no annotations, so
+    # typeshed's stubs come with it.
+    "psutil>=7.2.2",
+    "types-psutil>=7.2.2",
 ]
 ##
 ## Project management section
