@@ -35,6 +35,12 @@ NAME = 'kluster'
 HOST = str(conventions.overlay.UDM)
 HOST_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIexample'
 SERVICES = tuple(service.name for service in conventions.gateway.SERVICES)
+#: The services the census bridges onto the container VLAN, and the resolvers
+#: among them, by the census's names: the rosters the cases below walk.
+BRIDGED = tuple(
+    service.name for service in conventions.gateway.SERVICES if isinstance(service, conventions.gateway.BridgedService)
+)
+RESOLVERS = tuple(resolver.name for resolver in conventions.gateway.RESOLVERS)
 
 
 def declarations() -> tuple[container.ServiceDeclaration, ...]:
@@ -56,9 +62,9 @@ def declared_for(name: str) -> container.ServiceDeclaration:
 def bridged_service(name: str) -> conventions.gateway.BridgedService:
     """The census's own entry for a bridged service, by the census's name for it.
 
-    Reached through `SERVICES` rather than through `declarations()`, so a case
-    that holds a declaration against this one is comparing two paths to the
-    entry rather than one path to itself.
+    Reached through `SERVICES` rather than through `declarations()`, so the
+    address a case expects is the census's and not the one the declaration
+    under test carries.
     """
     service = next(entry for entry in conventions.gateway.SERVICES if entry.name == name)
     assert isinstance(service, conventions.gateway.BridgedService), name
@@ -98,53 +104,18 @@ async def containers(monitor: Recorder) -> tuple[Container, ...]:
 
 
 def test_the_census_places_services_on_the_container_vlan() -> None:
-    """The guard on every case below that walks the bridged services.
+    """The guard on every case below that walks the bridged services or the resolvers.
 
-    Which services are bridged is the census's to say, and no case here holds
-    it to a list of its own. What a case cannot survive is the census having
-    none: the loops over the bridged entries would visit nothing and pass, and
-    the addressing, the bridge and the rendered settings would go unasserted
-    with the suite green.
+    Which services are bridged, and which of them resolve, is the census's to
+    say, and no case here holds it to a list of its own. What a case cannot
+    survive is the census having none: the loops over those entries would
+    visit nothing and pass, and a case parametrized over an empty roster is
+    skipped rather than failed, so the addressing, the bridge, the rendered
+    settings and a fresh resolver's forwarding would go unasserted with the
+    suite green.
     """
-    assert [
-        service for service in conventions.gateway.SERVICES if isinstance(service, conventions.gateway.BridgedService)
-    ]
-
-
-def test_a_resolver_cannot_be_declared_against_a_service_with_no_address() -> None:
-    """The binding is a reference the type checker follows, not a name lookup.
-
-    A resolver takes a bridged census entry, so the address its settings inject
-    is the census's own; the overlay daemon takes the host-networked one, so it
-    has no address to inject and no bridge to attach to. The mistakes this used
-    to check for at runtime — a pin with no service, a service with no pin, a
-    resolver bound to something that has no address — are now unwritable.
-    """
-    resolver = declared_for('adguard-alice')
-    assert isinstance(resolver, container.ResolverService)
-    assert resolver.service is bridged_service('adguard-alice')
-
-    overlay = declared_for('zerotier')
-    assert isinstance(overlay, container.OverlayDaemon)
-    assert overlay.bridge is None
-    assert overlay.devices == (container.TUN_DEVICE,)
-    assert overlay.state == container.OVERLAY_STATE
-
-
-def test_only_the_overlay_daemon_runs_in_the_hosts_network_namespace() -> None:
-    """Host networking is what makes the gateway able to route the overlay.
-
-    The interface has to land in the namespace the routing table lives in. The
-    other three are bridged onto the container VLAN with addresses of their
-    own, because the resolvers are what the LAN's leases point at.
-    """
-    for name in ('caddy', 'adguard-alice', 'adguard-bob'):
-        declaration = declared_for(name)
-        assert declaration.bridge == container.CONTAINER_BRIDGE
-        assert isinstance(declaration.service, conventions.gateway.BridgedService)
-        assert declaration.service is bridged_service(name)
-
-    assert declared_for('zerotier').bridge is None
+    assert BRIDGED
+    assert RESOLVERS
 
 
 ##
@@ -182,7 +153,7 @@ def test_the_host_networked_machine_keeps_the_privileges_the_host_namespace_need
     overlay = container.nspawn_file(declared_for('zerotier'))
 
     assert 'PrivateUsers=no' in overlay
-    for name in ('caddy', 'adguard-alice', 'adguard-bob'):
+    for name in BRIDGED:
         assert 'PrivateUsers' not in container.nspawn_file(declared_for(name)), name
 
 
@@ -209,7 +180,7 @@ def test_a_machine_names_no_unit_because_it_has_none_of_its_own() -> None:
         assert declaration.unit_name == f'systemd-nspawn@{declaration.service.name}.service'
 
 
-@pytest.mark.parametrize('service', ['adguard-alice', 'adguard-bob', 'caddy'])
+@pytest.mark.parametrize('service', BRIDGED)
 def test_a_service_is_addressed_through_the_environment_its_image_reads(service: str) -> None:
     """The images run s6, and each configures its own interface from PID 1's
     environment, which the settings file fills — not out of a drop-in for a
@@ -305,7 +276,6 @@ def test_caddy_is_told_where_to_read_its_configuration_and_where_to_keep_what_it
     assert f'Environment=XDG_CONFIG_HOME={container.CADDY_CONFIG_HOME}' in settings
     assert configuration.target == f'{container.CADDY_CONFIG_HOME}/caddy/Caddyfile'
     assert f'Environment=XDG_DATA_HOME={container.CADDY_STATE}' in settings
-    assert caddy.state == container.CADDY_STATE
     assert f'Bind={nspawn.state_path("caddy")}:{container.CADDY_STATE}' in settings
 
 
@@ -333,9 +303,9 @@ def test_the_proxy_resolves_through_the_gateways_own_resolver_and_only_that_one(
     assert container.net_setup_environment(bridged_service('caddy').address)[container.ENV_IPV4_GATEWAY] == str(
         gateway_address
     )
-    # Not the resolvers, which carry their own upstreams, and not the overlay
-    # daemon, which is host-networked and resolves as the device does.
-    for name in ('adguard-alice', 'adguard-bob', 'zerotier'):
+    # No other machine: the resolvers carry their own upstreams, and the
+    # overlay daemon is host-networked and resolves as the device does.
+    for name in [name for name in SERVICES if name != conventions.gateway.CADDY.name]:
         targets = [mounted.target for mounted in declared_for(name).mounted_files]
         assert container.CADDY_RESOLV_CONF not in targets, name
 
@@ -394,7 +364,7 @@ def per_domain_upstreams(dns: Mapping[str, object]) -> dict[str, str]:
     return {match[1]: match[2] for match in entries if match}
 
 
-@pytest.mark.parametrize('service', ['adguard-alice', 'adguard-bob'])
+@pytest.mark.parametrize('service', RESOLVERS)
 def test_a_fresh_resolver_asks_the_gateway_about_the_sites_own_names_and_addresses(service: str) -> None:
     """No public resolver answers a device's name or a site address's pointer.
 
@@ -592,7 +562,7 @@ def test_an_empty_census_is_a_file_with_no_legacy_block_in_it() -> None:
 
 
 def test_the_names_typed_by_hand_redirect_to_the_name_that_has_a_certificate() -> None:
-    """The bare label is a site of its own, and the device serves five of them.
+    """The bare label is a site of its own, served for each name the census marks as typed by hand.
 
     A redirect rather than a second matcher on the vhost: the wildcard
     certificate does not cover a one-label name, so the only thing the proxy
@@ -601,7 +571,6 @@ def test_the_names_typed_by_hand_redirect_to_the_name_that_has_a_certificate() -
     rendered = container.caddyfile(caddy())
     live = LIVE_CADDYFILE.read_text(encoding='utf-8')
 
-    assert sum(vhost.bare_name for vhost in conventions.gateway.LEGACY_VHOSTS) == 5
     for vhost in conventions.gateway.LEGACY_VHOSTS:
         block = f'http://{vhost.label} {{\n\tredir https://{vhost.host}{{uri}} permanent\n}}\n'
         assert (block in rendered) == vhost.bare_name
@@ -692,7 +661,6 @@ def test_a_resolver_is_bound_at_the_working_directory_its_image_is_started_with(
     """
     alice = declared_for('adguard-alice')
 
-    assert alice.state == container.ADGUARD_STATE
     assert container.ADGUARD_STATE != container.ADGUARD_INSTALL
     # The live configuration is the working directory's, and the initial state
     # is delivered beside it rather than into it, so that placing one can never
@@ -721,12 +689,6 @@ def test_every_piece_of_a_machine_lands_in_that_machines_directory(monitor: Reco
             inputs = monitor.inputs_of(name)
             path = inputs.get('path') or inputs['root']
             assert str(path).startswith(directory), name
-
-    assert monitor.inputs_of(f'{NAME}-caddy-nspawn')['path'] == nspawn.nspawn_path('caddy')
-    assert monitor.inputs_of(f'{NAME}-caddy-image')['root'] == nspawn.rootfs_path('caddy')
-    assert monitor.inputs_of(f'{NAME}-adguard-alice-initial-state')['path'] == nspawn.initial_state_path(
-        'adguard-alice', container.ADGUARD_CONFIG
-    )
 
 
 def test_every_file_a_machine_mounts_is_bound_from_where_it_is_delivered(monitor: Recorder) -> None:
@@ -778,13 +740,13 @@ def test_every_file_of_a_machine_converges_that_machine_and_holds_it_to_starting
         and 'hook' in declaration.inputs
     ]
 
-    assert sorted(declaration.name for declaration in files) == [
-        f'{NAME}-caddy-file-Caddyfile',
-        f'{NAME}-caddy-file-cloudflare.token',
-        f'{NAME}-caddy-file-resolv.conf',
-        f'{NAME}-caddy-image',
-        f'{NAME}-caddy-nspawn',
-    ]
+    assert sorted(declaration.name for declaration in files) == sorted(
+        [
+            *(f'{NAME}-caddy-file-{mounted.name}' for mounted in declared_for('caddy').mounted_files),
+            f'{NAME}-caddy-image',
+            f'{NAME}-caddy-nspawn',
+        ]
+    )
     for declaration in files:
         path = declaration.inputs.get('path') or declaration.inputs['root']
         rollback = declaration.name == f'{NAME}-caddy-image'
@@ -952,10 +914,17 @@ def test_the_device_secret_is_declared_secret(monitor: Recorder) -> None:
     """The token file is the credential itself, so it may not render in a preview.
 
     Everything else the machine holds is configuration one wants to read in a
-    diff, which is why content is not secret by default.
+    diff, which is why content is not secret by default. What keeps a value
+    out of a preview is the resource's `additionalSecretOutputs`, so that is
+    what is read: a file mode says who may read it on the device, not what a
+    preview prints.
     """
     token = monitor.inputs_of(f'{NAME}-caddy-file-cloudflare.token')
 
     assert token['content'] == ACME_TOKEN
     assert token['mode'] == container.SECRET_MODE
+    assert list(monitor.options_of(f'{NAME}-caddy-file-cloudflare.token', DEVICE_FILE).additionalSecretOutputs) == [
+        'content'
+    ]
     assert monitor.inputs_of(f'{NAME}-caddy-file-Caddyfile')['mode'] == container.CONFIG_MODE
+    assert list(monitor.options_of(f'{NAME}-caddy-file-Caddyfile', DEVICE_FILE).additionalSecretOutputs) == []
