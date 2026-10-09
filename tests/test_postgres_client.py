@@ -40,9 +40,7 @@ def test_the_local_client_is_on_the_appliance_major() -> None:
     assert isinstance(pin, dict)
     pinned = cast(dict[str, object], pin)['version']
     assert isinstance(pinned, str)
-    _, tag = settings.POSTGRES_IMAGE.rsplit(':', 1)
-
-    assert _major(pinned) == _major(tag)
+    assert _major(pinned) == _major(settings.POSTGRES_TAG)
 
 
 def test_a_missing_client_names_its_pin(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

@@ -473,6 +473,29 @@
       groupSlug: 'state-backend',
     },
     {
+      // The appliance's Postgres image moving under its tag: Docker Hub
+      // rebuilds the major line's tag for every minor release and every new
+      // Debian base, and the pin names the digest (`settings.POSTGRES_IMAGE`).
+      // Each move is a replacement of the box -- a dump, a new box, a restore
+      // -- so the refreshes are taken monthly, on the first of the month as
+      // the self-built image bases are: a Postgres security release reaches
+      // the box within a month, at one replacement a month at most. They stay
+      // in the appliance's group, where the rule above puts every pin of its
+      // file. No release age: the image is one the cluster only pulls, which
+      // the first rule exempts, and CI runs it only in a check holding no
+      // stack's secret (docs/threat-model.md §2.6). Matched by name alone:
+      // nothing else in the repository names this image.
+      matchDepNames: [
+        'docker.io/library/postgres',
+      ],
+      matchUpdateTypes: [
+        'digest',
+      ],
+      schedule: [
+        '* 0-3 1 * *',
+      ],
+    },
+    {
       // The local age, into the appliance's group. `mise.toml` pins the age
       // this repository's tests run, and a test holds it equal to the
       // appliance's `settings.AGE_VERSION`, so a release has to move both
@@ -541,10 +564,11 @@
     },
     {
       // The local Postgres client's major, into the appliance's group. The
-      // appliance pins `POSTGRES_IMAGE` to a major alone, and a test holds the
-      // client's major equal to it: `pg_dump` refuses a server of a newer
-      // major than its own, and what a newer client writes is not guaranteed
-      // to load into an older server. A major release therefore moves both
+      // appliance's `POSTGRES_IMAGE` names a major alone in its tag, beside the
+      // digest it is pinned at, and a test holds the client's major equal to
+      // it: `pg_dump` refuses a server of a newer major than its own, and what
+      // a newer client writes is not guaranteed to load into an older server.
+      // A major release therefore moves both
       // pins in one pull request, the appliance's; apart, each half fails that
       // test on its own. A minor or patch release of the client moves the
       // client alone, in the toolchain group, since the image's tag names no
@@ -794,20 +818,24 @@
       extractVersionTemplate: '^v(?<version>.+)$',
     },
     {
-      // The appliance's Postgres line and age release. AGE_SHA256 is not
-      // renovate's to compute — CI recomputes it from the pinned URL and fails
-      // the PR if the two disagree, so a bump cannot land unverified.
+      // The appliance's Postgres image: the repository, the major line's tag
+      // and the digest it is pinned at, read together so a bump moves the tag
+      // and its digest as one. A digest update is the tag rebuilt -- a minor
+      // release or a new base -- and a major update a new line.
       customType: 'regex',
       managerFilePatterns: [
         '/^src/kluster/lib/state_backend/settings\\.py$/',
       ],
       matchStrings: [
-        "POSTGRES_IMAGE = '(?<depName>[\\w./-]+):(?<currentValue>[\\w.-]+)'",
+        "POSTGRES_REPOSITORY = '(?<depName>[\\w./-]+)'\\nPOSTGRES_TAG = '(?<currentValue>[\\w.-]+)'\\nPOSTGRES_DIGEST = '(?<currentDigest>sha256:[0-9a-f]{64})'",
       ],
       datasourceTemplate: 'docker',
       versioningTemplate: 'docker',
     },
     {
+      // The appliance's age release. AGE_SHA256 is not renovate's to compute
+      // -- CI recomputes it from the pinned URL and fails the PR if the two
+      // disagree, so a bump cannot land unverified.
       customType: 'regex',
       managerFilePatterns: [
         '/^src/kluster/lib/state_backend/settings\\.py$/',

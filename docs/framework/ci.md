@@ -37,7 +37,8 @@ the instance moves from the homelab host to an **OCI VM.Standard.E2.1.Micro**
 -   **The box itself is a designed appliance, not a pet** — Fedora
     CoreOS configured entirely at create time from
     `src/kluster/lib/state_backend/`, replaced rather than changed in
-    place, auto-updating OS and Postgres, externally monitored, every
+    place, an auto-updating OS and a Postgres pinned by digest, externally
+    monitored, every
     alert backed by a playbook. The full design — OS & config management,
     Postgres lifecycle, PKI, network exposure, backup, monitoring,
     playbooks — is
@@ -254,16 +255,15 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     appliance's Postgres in the image the box runs, and skips where no
     copy of it is local rather than fetch one in the middle of a run. A
     runner starts with an empty image store, so without a pull every
-    one of its cases skips. The `Podman` step of `checks` resolves the
-    name `settings.POSTGRES_IMAGE` gives, a tag with no digest (the major
-    line the box's own `podman-auto-update` follows, so CI tests the
-    release a box would be running), to the digest Docker Hub names for
-    it. It pulls that digest from `mirror.gcr.io`, Google's mirror of
-    Docker Hub, and tags it with the program's name. Docker Hub limits
-    anonymous pulls per address, and a runner's address is shared, so a
-    pull from Docker Hub itself fails at random; the digest is read with a
-    `HEAD` request, which that limit does not count, and pulling by it
-    means the mirror serves Docker Hub's image or nothing. The cost is
+    one of its cases skips. The `Podman` step of `checks` pulls the image
+    `settings.POSTGRES_IMAGE` pins -- its tag and the digest the box runs,
+    so CI tests the image a box is running -- by that digest from
+    `mirror.gcr.io`, Google's mirror of Docker Hub, and tags it with the
+    pin's repository and tag, which is what lets the pinned reference
+    resolve to it locally. Docker Hub limits anonymous pulls per address,
+    and a runner's address is shared, so a pull from Docker Hub itself
+    fails at random; pulling by the digest means the mirror serves the
+    pinned image or nothing. The cost is
     small beside what it buys: the pull takes seconds, and the module
     runs in about ten seconds under the suite's four workers, inside a
     `Tests` step of two minutes. Those cases are the only ones

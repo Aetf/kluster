@@ -181,16 +181,16 @@ def ssh(command: Sequence[str]) -> NoReturn:
 DIGEST_HEADER = 'Docker-Content-Digest'
 
 
-def _image_digest(image: str) -> str:
-    """The digest `image`'s tag currently resolves to, via the registry API.
+def _image_digest(repository: str, reference: str) -> str:
+    """The digest `reference` -- a tag, or a digest -- resolves to in `repository`, via the registry API.
 
     Anonymous pull scope is enough to read a manifest, so this needs no
     credential -- which is the point: the check has to run on a PR from a
-    fork's CI as readily as on main.
+    fork's CI as readily as on main. A reference the registry does not serve
+    raises the registry's `HTTPError`.
     """
-    repository, tag = image.rsplit(':', 1)
-    if repository.startswith('docker.io/'):
-        repository = repository.removeprefix('docker.io/')
+    image = f'{repository}@{reference}' if reference.startswith('sha256:') else f'{repository}:{reference}'
+    repository = repository.removeprefix('docker.io/')
     log.info('asking the registry what %s resolves to', image)
 
     token_url = f'https://auth.docker.io/token?service=registry.docker.io&scope=repository:{repository}:pull'
@@ -198,7 +198,7 @@ def _image_digest(image: str) -> str:
         token = _string(json.load(response), 'token', what=f'the registry pull token for {repository}')
 
     request = urllib.request.Request(
-        f'https://registry-1.docker.io/v2/{repository}/manifests/{tag}',
+        f'https://registry-1.docker.io/v2/{repository}/manifests/{reference}',
         method='HEAD',
         headers={
             'Authorization': f'Bearer {token}',
@@ -219,15 +219,41 @@ def _image_digest(image: str) -> str:
     return str(digest)
 
 
+def _postgres_pin_ok() -> bool:
+    """Whether the registry serves the Postgres pin's digest; that the tag has moved past it is said, not failed."""
+    try:
+        pinned = _image_digest(settings.POSTGRES_REPOSITORY, settings.POSTGRES_DIGEST)
+        current = _image_digest(settings.POSTGRES_REPOSITORY, settings.POSTGRES_TAG)
+    except (urllib.error.HTTPError, RuntimeError) as exc:
+        log.error('%s: registry says %s (is the digest published?)', settings.POSTGRES_IMAGE, exc)
+        return False
+    if pinned != settings.POSTGRES_DIGEST:
+        log.error('%s: the registry serves the pin as %s', settings.POSTGRES_IMAGE, pinned)
+        return False
+    if current == pinned:
+        log.info('%s is the tag %s as the registry serves it now', pinned, settings.POSTGRES_TAG)
+    else:
+        # Not a failure: the tag is rebuilt for every minor release and base
+        # image, and renovate's monthly digest update moves the pin
+        # (settings.py). The box runs the pinned image until then.
+        log.info(
+            'the registry serves the pinned %s; the tag %s has since moved to %s',
+            pinned,
+            settings.POSTGRES_TAG,
+            current,
+        )
+    return True
+
+
 def verify_pins() -> bool:
     """Check the pinned artifacts are what settings.py claims they are.
 
-    Renovate can bump a version but cannot compute the tarball's digest or
-    ask a registry whether a tag exists, so this runs in CI on every PR: a
-    bump that leaves AGE_SHA256 stale, or names a Postgres tag that was
-    never published, fails here rather than at first boot -- where the first
-    strands the appliance without an encryptor and the second leaves it
-    without a database.
+    Renovate can bump a version but cannot compute the tarball's digest, and
+    a digest written by hand can name an image nobody published, so this runs
+    in CI on every PR: a bump that leaves AGE_SHA256 stale, or a Postgres pin
+    whose digest the registry does not serve, fails here rather than at first
+    boot -- where the first strands the appliance without an encryptor and
+    the second leaves it without a database.
     """
     ok = True
 
@@ -243,16 +269,7 @@ def verify_pins() -> bool:
     else:
         log.info('age %s matches its pin', settings.AGE_VERSION)
 
-    try:
-        image_digest = _image_digest(settings.POSTGRES_IMAGE)
-    except (urllib.error.HTTPError, RuntimeError) as exc:
-        log.error('%s: registry says %s (does the tag exist?)', settings.POSTGRES_IMAGE, exc)
-        ok = False
-    else:
-        # Logged rather than pinned: the tag is the major line on purpose
-        # (podman-auto-update follows the minor stream, settings.py), so the
-        # digest moving is the design working, not a drift to fail on.
-        log.info('%s resolves to %s', settings.POSTGRES_IMAGE, image_digest)
+    ok = _postgres_pin_ok() and ok
 
     # The stream publishes its current release alone, so the pinned digest is
     # checked against it while the pin is that release; an older pin is held

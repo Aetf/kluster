@@ -202,9 +202,9 @@ storage:
 
 systemd:
   units:
-    # Postgres, pinned to a major line; podman-auto-update follows the minor
-    # stream, safe for the same reason the OS stream is — nothing here
-    # outlives pg_dump plus a replacement.
+    # Postgres, at the image `settings.POSTGRES_IMAGE` pins by digest: the box
+    # runs exactly that image, and nothing on it moves to another. A new
+    # digest reaches the box by pull request and a replacement.
     #
     # `POSTGRES_HOST_AUTH_METHOD=trust` is what lets the image initialize a
     # superuser that has no password. The pg_hba.conf it writes into the data
@@ -222,7 +222,6 @@ systemd:
         RestartSec=10
         ExecStartPre=-/usr/bin/podman rm -f pgstate
         ExecStart=/usr/bin/podman run --replace --name pgstate \
-          --label io.containers.autoupdate=registry \
           --publish 5432:5432 \
           --shm-size 128m \
           --env POSTGRES_DB={{ database }} \
@@ -243,9 +242,6 @@ systemd:
 
         [Install]
         WantedBy=multi-user.target
-
-    - name: podman-auto-update.timer
-      enabled: true
 
     # age is fetched once and pinned by hash: FCOS has no package-manager path
     # this design would accept, and the encryptor must exist before the first

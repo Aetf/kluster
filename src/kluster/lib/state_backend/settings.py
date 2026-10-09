@@ -56,8 +56,17 @@ IMAGE_BUCKET = f'{NAME}-images'
 
 # --- The box --------------------------------------------------------------
 
-#: Pinned to the major line; podman-auto-update follows the minor stream.
-POSTGRES_IMAGE = 'docker.io/library/postgres:17'
+#: The box's Postgres image: the major line's tag, and the digest it named
+#: when the pin last moved, which is what the box pulls and runs. The digest
+#: changes with every rebuild of the tag -- a minor release, or a new Debian
+#: base -- and renovate moves it by pull request, monthly, in the appliance's
+#: group; nothing on the box moves it. The tag is what the local client's
+#: major is held to (`tests/test_postgres_client.py`). The three lines are
+#: one pair for renovate's manager, which reads them in this order.
+POSTGRES_REPOSITORY = 'docker.io/library/postgres'
+POSTGRES_TAG = '17'
+POSTGRES_DIGEST = 'sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3'
+POSTGRES_IMAGE = f'{POSTGRES_REPOSITORY}:{POSTGRES_TAG}@{POSTGRES_DIGEST}'
 
 #: The uid the official image runs Postgres as; the server key is owned by it.
 POSTGRES_UID = 999
