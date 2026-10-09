@@ -250,3 +250,19 @@ egress reachability constrains nothing and placement is free) and
 **stdiscosrv** (syncthing's discovery server — raw TCP via
 `public_port`; it terminates its own TLS on 8443, no gateway
 involvement).
+
+exim's DKIM key is the one thing of exim's that "same SealedSecrets"
+does not carry. The legacy relay signs with a cert-manager key, pinned
+with `rotationPolicy: Never`, which a ported `Certificate` would mint
+afresh, leaving every mail zone's `k8s._domainkey` naming a key nobody
+signs with. So the port carries the key instead, as the sealed value
+`dkim-exim` (`conventions.sealed.DKIM_EXIM`) in the namespace the
+legacy relay already uses. `credentials derived dkim-exim record`
+writes it from the legacy Secret, refusing a key whose public half is
+not `conventions.DKIM_K8S` (credentials.md §4). The component
+declares that SealedSecret and mounts it where exim reads `tls.key`,
+with no `Certificate`, and keeps selector `k8s`, so the zones' TXT and
+`DKIM_K8S` never change. The key is escrowed nowhere: a lost one, or a
+retired one, is replaced by a fresh key minted in the cluster under a
+new selector, published beside `k8s` in every mail zone before any
+mail is signed with it, with `k8s` removed once nothing signs with it.

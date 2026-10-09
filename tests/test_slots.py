@@ -1717,3 +1717,13 @@ def test_alertmanagers_webhook_is_its_own_row_and_its_seal_is_its_only_delivery(
     assert row.targets == (slots.SealedSecret(conventions.sealed.ALERT_WEBHOOK),)
     assert 'credentials derived alert-webhook record' in row.source.describe()
     assert row.register == devices.SEALED_RECORDS['alert-webhook'].register
+
+
+def test_the_dkim_key_is_its_own_row_piped_from_the_legacy_cluster_and_sealed() -> None:
+    """Carried, not made: `derived ls` says the key is piped in, since its command refuses a terminal."""
+    row = slots.ROWS['dkim-exim']
+
+    assert row.targets == (slots.SealedSecret(conventions.sealed.DKIM_EXIM),)
+    assert row.source.describe().startswith('piped in: ')
+    assert 'credentials derived dkim-exim record' in row.source.describe()
+    assert row.register == devices.SEALED_RECORDS['dkim-exim'].register

@@ -38,13 +38,17 @@ from typing import Any, NamedTuple, cast
 
 import pytest
 import yaml
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fences import prose
 from renovate_text import as_python_spells_it, as_renovate_spells_it, listed, package_rules
 from section_numbers import sections
 from workflow_files import GITHUB, github_name, mapping, read_workflow, workflow_jobs, workflows_and_actions
 
 from kluster import conventions
+from kluster.components.dns import base as dns_base
 from kluster.components.dns.base import overlay_records
+from kluster.components.dns.record import zone_records
 from kluster.conventions import backup, identity
 from kluster.lib import k8s as lib_k8s
 from kluster.scripts.credentials import pulumi_config
@@ -2552,8 +2556,32 @@ def test_no_two_sealed_values_share_a_path() -> None:
     paths = [(value.stack, value.path(key)) for value in conventions.sealed.VALUES.values() for key in value.keys]
 
     assert len(paths) == len(set(paths))
-    assert all(path.startswith(f'{conventions.sealed.CONFIG_KEY}.') for _, path in paths)
+    assert all(path.startswith(f'{conventions.sealed.CONFIG_KEY}[') for _, path in paths)
     assert all(value.keys for value in conventions.sealed.VALUES.values())
+
+
+def test_the_dkim_key_every_mail_zone_publishes_is_the_one_conventions_holds() -> None:
+    """One public key, two readers: the `dns` stack publishes it, and `dkim-exim record` holds a private key to it.
+
+    The constant lives here rather than in the `dns` component because a
+    script may not import a component, so this is what keeps the record the
+    zones carry and the key the command checks from being two values.
+    """
+    anchors = dns_base.AnchorAddresses(cluster_v4='203.0.113.10', cluster_v6='2001:db8::10', vip1_v4='203.0.113.20')
+    for zone in dns_base.MAIL_ZONES:
+        published = [
+            record.content
+            for record in zone_records(zone, dns_base.blocks(anchors=anchors))
+            if record.label == 'k8s._domainkey'
+        ]
+        # Quoted as every TXT record is, so the API keeps it one character-string.
+        assert published == [f'"{conventions.DKIM_K8S}"'], zone
+    tags = {
+        name.strip(): value.strip()
+        for name, _, value in (tag.partition('=') for tag in conventions.DKIM_K8S.split(';'))
+    }
+    assert tags['v'] == 'DKIM1'
+    assert isinstance(serialization.load_der_public_key(base64.b64decode(tags['p'])), rsa.RSAPublicKey)
 
 
 def test_a_sealed_values_path_refuses_a_key_it_does_not_carry() -> None:

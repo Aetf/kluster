@@ -1,4 +1,4 @@
-"""The hand-made credentials (docs/credentials.md §3): made by a person, delivered to a stack.
+"""The credentials this system does not produce (docs/credentials.md §3): made by a person, or carried, and delivered.
 
 Some of §3's rows are neither minted from a seed nor generated and escrowed.
 The credential is made by a person — in the console that checks it, the
@@ -59,9 +59,11 @@ configuration alone, and `seal` is the step that writes the sealed copy once
 the cluster's controller runs, reading the value back out of the stack that
 holds it rather than asking for it again.
 
-One row is sealed and nothing else (`SEALED_RECORDS`): alertmanager's webhook,
-whose only consumer is in the cluster, so the seal is the whole of its
-delivery.
+Two rows are sealed and nothing else (`SEALED_RECORDS`): alertmanager's
+webhook and the mail relay's DKIM key, whose only consumers are in the
+cluster, so the seal is the whole of their delivery. The DKIM key is not made
+here at all: it is carried from the legacy cluster, and its row refuses a key
+whose public half is not the one the `dns` stack publishes.
 
 **Which stack takes a row is not an argument.** The credential authenticates
 against one thing, and the stack that talks to that thing is the only consumer
@@ -78,12 +80,17 @@ creates either in a console. The installation's other automation installs them
 
 from __future__ import annotations
 
+import base64
 import getpass
+import hashlib
 import logging
 import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+
+from cryptography.exceptions import UnsupportedAlgorithm
+from cryptography.hazmat.primitives import serialization
 
 from ... import conventions
 from . import derived, pulumi_config, sealing
@@ -150,6 +157,10 @@ class Field:
     #: A secret is encrypted into the committed file and never echoed; a plain
     #: field is an address that file may carry in the clear (§4).
     secret: bool = True
+    #: A value of several lines, such as a PEM key, which a prompt would cut
+    #: at the first: with no file named, it is read whole from standard input,
+    #: which has to be a pipe, since a terminal would echo it.
+    multiline: bool = False
 
     @property
     def flag(self) -> str:
@@ -167,7 +178,14 @@ class Field:
 
     def read(self, prompt: Prompt, title: str) -> str:
         """Ask the operator for it, never echoing a secret."""
-        if self.secret:
+        if self.multiline:
+            if sys.stdin.isatty():
+                raise KdbxError(
+                    f'{title}: {self.describes} is several lines, so it is piped in or named with {self.flag}, '
+                    'never typed at a terminal that would echo it'
+                )
+            value = sys.stdin.read().strip()
+        elif self.secret:
             value = getpass.getpass(f'{title} — {self.describes}: ').strip()
         else:
             value = prompt(f'{title} — {self.describes}: ').strip()
@@ -183,7 +201,9 @@ class Field:
         than absent, and a credential delivered as an empty string fails much
         later, in a stack nobody is watching.
         """
-        if given is None:
+        # A multiline value named `-` is standard input all the same, so it
+        # goes through the one reader that refuses a terminal.
+        if given is None or (self.multiline and given == STDIN):
             return self.read(prompt, title)
         if not self.secret:
             value = given.strip()
@@ -464,11 +484,13 @@ def seal(device: Device, *, stack: pulumi_config.Stack, sealer: sealing.Sealer) 
 
 @dataclass(frozen=True)
 class SealedRecord:
-    """One §3 row made by a person whose only delivery is a value sealed to the cluster.
+    """One §3 row this system does not produce, whose only delivery is a value sealed to the cluster.
 
-    No stack's configuration holds it as a secret: its one consumer is in the
-    cluster, so the seal is the whole of the delivery, written where the
-    stack its sealed value names reads it.
+    A person makes it in a console, or it is carried from the legacy cluster,
+    which generated it; `made` and `taken` say which. No stack's configuration
+    holds it as a secret: its one consumer is in the cluster, so the seal is
+    the whole of the delivery, written where the stack its sealed value names
+    reads it.
     """
 
     #: The `credentials derived <member> record` row name, which is also the
@@ -481,6 +503,58 @@ class SealedRecord:
     #: Each field is sealed under its `key`, a data key of `sealed`.
     fields: tuple[Field, ...]
     sealed: conventions.sealed.SealedValue
+    #: How the value comes to exist, for the command's help.
+    made: str = 'made by a person'
+    #: How `record` takes it, for its help and the slot map's description.
+    taken: str = 'typed in'
+    #: How the value is replaced, for the command's description.
+    rotation: str = 'Rotating it is the same sequence with a fresh value.'
+    #: Checks the values, by data key, before anything is sealed, refusing
+    #: what the row must not carry; a refusal leaves the stack as it was.
+    verify: Callable[[Mapping[str, str]], None] | None = None
+
+
+def matches_published_dkim(published: str, *, key: str) -> Callable[[Mapping[str, str]], None]:
+    """A `SealedRecord.verify` refusing a private key at `key` unless its public half is the one `published` carries.
+
+    `published` is a DKIM TXT record, `v=DKIM1; ...; p=<base64 DER>`, the form
+    `conventions.dns` holds it in. Both halves are compared as the SHA-256 of
+    the DER SubjectPublicKeyInfo, the digest sources-of-truth.md §X takes of
+    the legacy Secret, each zone's TXT and the constant, so a refusal prints
+    two digests of public keys and nothing of the private one.
+    """
+    expected = _spki_digest(_published_key(published))
+
+    def verify(values: Mapping[str, str]) -> None:
+        try:
+            private = serialization.load_pem_private_key(values[key].encode(), password=None)
+        except (ValueError, TypeError, UnsupportedAlgorithm):
+            # `from None`: what the parser says about the input is the
+            # input's business, and the input is the private key.
+            raise pulumi_config.SlotRefused(
+                f'{key} is not an unencrypted PEM private key, so it was not sealed'
+            ) from None
+        der = private.public_key().public_bytes(
+            serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+        actual = _spki_digest(der)
+        if actual != expected:
+            raise pulumi_config.SlotRefused(
+                f"{key}'s public key has the digest {actual}, and the one the mail zones publish has {expected}: "
+                'it is not the key they publish, so it was not sealed'
+            )
+
+    return verify
+
+
+def _published_key(published: str) -> bytes:
+    """The DER public key a DKIM TXT record carries in its `p=` tag."""
+    tags = {name.strip(): value.strip() for name, _, value in (tag.partition('=') for tag in published.split(';'))}
+    return base64.b64decode(tags['p'], validate=True)
+
+
+def _spki_digest(der: bytes) -> str:
+    return hashlib.sha256(der).hexdigest()
 
 
 #: The rows whose delivery is a seal alone, by member.
@@ -505,6 +579,31 @@ SEALED_RECORDS: dict[str, SealedRecord] = {
             fields=(Field('url', 'url', 'the webhook URL'),),
             sealed=conventions.sealed.ALERT_WEBHOOK,
         ),
+        SealedRecord(
+            member='dkim-exim',
+            register='DKIM private key (exim)',
+            title="the mail relay's DKIM private key",
+            console=(
+                'The legacy cluster holds it: the Secret cert-dkim-exim in mail-system,\n'
+                '  minted there by cert-manager and pinned with rotationPolicy: Never.\n'
+                '  Piped straight from it, so it touches no file and no terminal:\n'
+                '    kubectl --context <legacy> -n mail-system get secret cert-dkim-exim \\\n'
+                "      -o jsonpath='{.data.tls\\.key}' | base64 -d \\\n"
+                '      | credentials derived dkim-exim record\n'
+                '  Once, after k8s-base runs the sealed-secrets controller and before\n'
+                '  exim moves to the new cluster. A key whose public half is not the one\n'
+                '  the mail zones publish is refused before anything is sealed.'
+            ),
+            fields=(Field('key', 'tls.key', 'the PEM private key', multiline=True),),
+            sealed=conventions.sealed.DKIM_EXIM,
+            made='carried from the legacy cluster, whose cert-manager generated it',
+            taken='piped in',
+            rotation=(
+                'It is never rotated in place: a new key is minted in the cluster under a new selector, '
+                'published beside `k8s` before any mail is signed with it.'
+            ),
+            verify=matches_published_dkim(conventions.DKIM_K8S, key='tls.key'),
+        ),
     )
 }
 
@@ -516,12 +615,15 @@ def record_sealed(
     given: Mapping[str, str | None] | None = None,
     prompt: Prompt = input,
 ) -> None:
-    """Print the console steps, collect the values, seal them into the stack that declares them."""
+    """Print the console steps, collect the values, check them, seal them into the stack that declares them."""
     log.warning('%s is neither minted nor derived; it comes from here:', record.title)
     for line in record.console.splitlines():
         log.warning('  %s', line)
     values = _collect(record.title, record.fields, given, prompt)
-    sealer.deliver(record.sealed, {field.key: value for field, value in values.items()})
+    data = {field.key: value for field, value in values.items()}
+    if record.verify is not None:
+        record.verify(data)
+    sealer.deliver(record.sealed, data)
 
 
 def borrow(device: Device, *, stack: pulumi_config.Stack) -> str:
@@ -579,6 +681,7 @@ __all__ = (
     'announce',
     'borrow',
     'deliver',
+    'matches_published_dkim',
     'record_sealed',
     'seal',
 )

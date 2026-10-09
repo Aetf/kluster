@@ -214,6 +214,18 @@ _ORDER = """when to run what:
          each to what reads it. Re-running the first rotates the token;
          a `bgp record` from here on seals in the same run.
 
+  carrying the mail relay's DKIM key from the legacy cluster
+    kubectl --context <legacy> -n mail-system get secret cert-dkim-exim \\
+        -o jsonpath='{.data.tls\\.key}' | base64 -d \\
+        | credentials derived dkim-exim record
+         Once, after k8s-base runs the sealed-secrets controller and before
+         exim moves to the new cluster. Takes the key whole on standard
+         input, refuses it unless its public half is the one the mail
+         zones publish, seals it to the cluster, and writes the ciphertext
+         into the apps stack's config; commit Pulumi.apps.yaml. Once the
+         legacy cluster is gone it is held nowhere else; losing it costs a
+         new key under a new selector, and no data.
+
   on a workstation that develops without the kit
     Copy the .credentials directory from a machine that has one: the
     passphrase slot and the client bundle come with it. On a machine that
@@ -756,10 +768,11 @@ def build_parser() -> argparse.ArgumentParser:
             'so re-running one is how it is rotated. `generate`, `import` and `recover` belong to a row '
             'nothing external can mint: it is random, made here, and escrowed -- encrypted to the '
             "recovery key's public half and committed as a ciphertext under escrow/. `record` belongs to "
-            'a row a person makes -- in a console, where no API of that platform makes one, or by drawing '
-            'it, where no console does: it prints the steps and takes what they produce, into the stack '
-            'that authenticates with the value or into the escrow '
-            'where a row whose consumer is not built yet rests. A value the cluster consumes is sealed to the '
+            'a row this system does not produce -- made by a person in a console, where no API of that '
+            'platform makes one, drawn by hand, where no console does, or carried from the legacy cluster: '
+            'it prints the steps and takes what they produce, into the stack that authenticates with the '
+            'value, into the escrow where a row whose consumer is not built yet rests, or sealed to the '
+            'cluster. A value the cluster consumes is sealed to the '
             "cluster's certificate with kubeseal and written, as ciphertext anyone may read, into the "
             'configuration of the stack that declares it; `seal` writes that copy for a row recorded before '
             'the cluster existed. `ls`, `check` and `sync` act on the map rather than on one row.'
@@ -1272,28 +1285,28 @@ def build_parser() -> argparse.ArgumentParser:
             )
             _add_bundle_dir(sealing_verb)
 
-    # The rows a person makes whose one consumer is in the cluster: no stack
-    # holds them as a secret, and `record` seals what it takes.
+    # The rows this system does not produce whose one consumer is in the
+    # cluster: no stack holds them as a secret, and `record` seals what it
+    # takes.
     for sealed_record in devices.SEALED_RECORDS.values():
         sealed_row = rows.add_parser(
             sealed_record.member,
-            help=f'{sealed_record.title}, made by a person and sealed to the cluster',
+            help=f'{sealed_record.title}, {sealed_record.made}, sealed to the cluster',
             description=(
-                f'Nothing here mints {sealed_record.title}: a person makes it, by the steps `record` prints. '
-                'Its one consumer is in the cluster, so this side seals it and writes the ciphertext where the '
+                f'Nothing here mints {sealed_record.title}: it is {sealed_record.made}, by the steps `record` '
+                'prints. Its one consumer is in the cluster, so this side seals it and writes the ciphertext where the '
                 f'{sealed_record.sealed.stack} stack reads it.'
             ),
         )
         sealed_verbs = sealed_row.add_subparsers(dest='action', required=True, metavar='<verb>')
         sealed_take = sealed_verbs.add_parser(
             'record',
-            help=f"take it by hand, sealed, into the {sealed_record.sealed.stack} stack's config",
+            help=f"seal what is {sealed_record.taken} into the {sealed_record.sealed.stack} stack's config",
             description=(
-                "Print the steps that create it, take its value without echoing it, fetch the cluster's "
+                "Print the steps that produce it, take its value without echoing it, fetch the cluster's "
                 "sealing certificate with the kubeconfig in the physical stack's state, seal the value with "
                 f"kubeseal, and write the ciphertext in the clear into the {sealed_record.sealed.stack} stack's "
-                'config, reading it back. Then commit the config. Rotating it is the same sequence with a fresh '
-                'value.'
+                f'config, reading it back. Then commit the config. {sealed_record.rotation}'
             ),
         )
         for field in sealed_record.fields:
@@ -1302,7 +1315,9 @@ def build_parser() -> argparse.ArgumentParser:
                 default=None,
                 metavar='<path>' if field.secret else '<value>',
                 help=(
-                    f'read {field.describes} from a file rather than a prompt (`{devices.STDIN}` reads stdin)'
+                    f'read {field.describes} from a file rather than standard input'
+                    if field.multiline
+                    else f'read {field.describes} from a file rather than a prompt (`{devices.STDIN}` reads stdin)'
                     if field.secret
                     else f'{field.describes}, rather than a prompt'
                 ),

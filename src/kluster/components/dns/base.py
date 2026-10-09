@@ -96,21 +96,6 @@ def overlay_records() -> tuple[Record, ...]:
     )
 
 
-#: The public half of the in-cluster mail relay's DKIM key. The key pair is
-#: a cert-manager certificate's private key in the production cluster
-#: (kluster-code `src/mail`), pinned there with `rotationPolicy: Never`;
-#: re-issuing it means publishing the new public half here.
-DKIM_K8S = (
-    'v=DKIM1; p='
-    'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuj8B2gp8kvvHRtA2KTdu'
-    '0YPxiEd494Sf3JFo8nC25bqR8ceNTXMimfRY/f3+1+hjm34hD2I1WsUy8wjLgyge'
-    'CjpmZ/UJX9xRF6kW/FyHRml12e4eCq3qiN96++YN8LFh0Xi9Pkm/ION8vhLtCHdv'
-    'MFUgp51Dyz8hwVl54Y/5zvGwxim3VvMy/zNmZelbablRB/kDfaR7EPe4r8z5TW2S'
-    'F35VwhRP8ZR6I3tN7C7ivMhedSdj3GlpL3r0FQym0sNxeIsyeWeO4t/oEya0MP7i'
-    'frXXN1+G5a2BnljcgvCdLP+wp6S//9XfrxPFqfXOxcFb483AW+T8zudxxJMjO+NH'
-    'cQIDAQAB'
-)
-
 DKIM_GOOGLE_UCW = (
     'v=DKIM1; k=rsa; p='
     'MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCB9A/w8c0RjwW3q75z2gKp36XdkSJw/76R'
@@ -137,7 +122,7 @@ WORKSPACE_MAIL: tuple[Record, ...] = (
     # One include and no flattening, which is why this is a literal rather
     # than an SPF builder: there is nothing to flatten.
     txt('@', 'v=spf1 include:_spf.google.com ~all', ttl=TTL_HOUR, key='spf'),
-    txt('k8s._domainkey', DKIM_K8S, key='dkim-k8s', comment='DKIM key held by the mail sender in-cluster'),
+    txt('k8s._domainkey', conventions.DKIM_K8S, key='dkim-k8s', comment='DKIM key held by the mail sender in-cluster'),
     txt(
         '_dmarc',
         'v=DMARC1; p=quarantine; adkim=s; aspf=s; rua=mailto:dmarc-reports@unlimited-code.works',

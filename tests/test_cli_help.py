@@ -120,6 +120,17 @@ def test_the_tree_really_does_carry_see_also_lines(monkeypatch: pytest.MonkeyPat
     assert [line for line in every_line if line.strip().startswith(SEE_ALSO)]
 
 
+def test_a_sealed_row_says_how_its_value_comes_to_exist_and_how_it_is_taken(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The DKIM key is carried and piped in; the help says so, not what fits a row a person types."""
+    row = ' '.join(' '.join(_rendered('credentials derived dkim-exim', monkeypatch)).split())
+    listing = ' '.join(' '.join(_rendered('credentials derived', monkeypatch)).split())
+
+    assert 'seal what is piped in' in row
+    assert 'carried from the legacy cluster' in row
+    assert 'carried from the legacy cluster' in listing
+    assert 'made by a person' not in row
+
+
 def mint_leaves() -> list[str]:
     """Every `credentials derived <row> mint` the tree offers, found by walking it.
 

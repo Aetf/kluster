@@ -581,12 +581,19 @@ Consequences, all deliberate:
     state-backend PKI's curve and age's X25519 are each their own
     design's choice (state-backend.md) rather than a consequence of how
     the kit stores them.
--   **The sealed-secrets sealing key is not a recovery root.** It is
-    the controller's own generated RSA key; losing it costs a re-seal,
-    not data, because every sealed value is held where it came from too —
-    escrowed, re-mintable, in the stack configuration it was recorded
-    into, or in the console that made it. Re-sealing is a command, not an
-    archaeology project — which is why no offline export of it exists.
+-   **The sealed-secrets sealing key is not a recovery root.** It is the
+    controller's own generated RSA key; losing it costs a re-seal, not
+    data, because every sealed value except one is held where it came from
+    too — escrowed, re-mintable, in the stack configuration it was
+    recorded into, or in the console that made it. Re-sealing is a
+    command, not an archaeology project — which is why no offline export
+    of it exists. The exception is the mail relay's DKIM key, held nowhere
+    else once the legacy cluster is gone, and escrowed nowhere on
+    purpose: losing it, with the sealing key or alone, costs a rotation
+    and no data, since it guards none. The rotation is a new key minted
+    in the cluster under a new selector, published beside `k8s` before
+    any mail is signed with it
+    ([declarative/workloads.md](declarative/workloads.md) §5).
 -   **A retired recovery key owes nothing forward.** Rotating the kit
     re-encrypts every generation in the registry to the successor
     identity (§4.2), and no secret is a function of the key that
@@ -654,6 +661,7 @@ cell would say `pending` to an operator already being served.
 | Alertmanager read token | generated, escrowed as `alertmanager/read` | `GET /api/v2/alerts` only, by HTTPRoute method+path+header match | escrow · ops-repo secret (pending) · Pulumi config secret (the HTTPRoute's match, rendered with that route; pending) | Issue-sync poller |
 | HA webhook URL/ID | Home Assistant | One notify endpoint, the automation that takes the ops repository's payload | ops-repo secret (`HA_WEBHOOK_URL`) | the ops repo's dispatch handler. Until `deploy.yml`'s `notify-failure` job becomes a caller of the alert producer it reads the legacy `kluster` repository secret `HAOS_DEPLOY_WEBHOOK_URL`, which this register no longer claims and `sync` does not touch; the operator deletes it from the repository with that job's conversion |
 | Alertmanager webhook URL | Home Assistant (`credentials derived alert-webhook record`) | One notify endpoint, a second automation that reads alertmanager's fixed body — the tier, the summary and the playbook off each alert — and pushes under the same title convention (rfc-007 §7.3) | SealedSecret (`k8s-base`, `sealedSecrets.alert-webhook`, in the monitoring namespace) | alertmanager, through the VictoriaMetrics operator's `url_secret` |
+| DKIM private key (exim) | The legacy cluster's `cert-dkim-exim` Secret, carried rather than minted (`credentials derived dkim-exim record`) | Signs mail as every mail zone's `k8s` selector, whose published public half is `conventions.DKIM_K8S` | SealedSecret (`apps`, `sealedSecrets.dkim-exim`, in the mail-system namespace) | exim |
 | Drill-environment credentials | OCI seed key and B2 seed key, one command (`credentials derived drill-credentials mint`) | The OCI key is its own user, group and policy: administrator of the `drill` compartment, which holds the drill's scratch box and nothing else, and a stranger outside it — no `--compartment` on this row, and no quota or budget guardrail on that compartment until `physical` declares one. The B2 key is `listFiles` and `readFiles` on the dump prefix alone, the writer's own prefix and nothing the writer may do | ops-repo Environment (`drill`: `DRILL_OCI_USER_OCID`, `DRILL_OCI_FINGERPRINT`, `DRILL_OCI_PRIVATE_KEY`, `DRILL_B2_KEY_ID`, `DRILL_B2_KEY`) | Quarterly rebuild drill (state-backend.md §7.3) |
 
 Rows whose "From" is a seed rotate by re-running their subcommand.
@@ -685,6 +693,9 @@ state-backend up --force`, which dumps the box, replaces it and restores
 into the new one, and the drill opens the first dump written after it. Between the
 overwrite and that dump the drill cannot open the newest object, which
 is the cost of a one-slot design and is bounded by one nightly.
+The DKIM private key rotates by none of these: it is carried from the
+legacy cluster once and never rotated in place, and a new key goes under
+a new selector (§2.2).
 
 **An ops-repo Environment secret's name carries its Environment as a
 prefix** (`DRILL_AGE_IDENTITY`, and the five the drill-credentials row
@@ -986,6 +997,7 @@ name.
 | `credentials derived bgp record` | The same shape for the BGP session password, into the `physical` stack's config, except that no console makes it: the operator draws it — the command prints `openssl rand -base64 24` as the step — and hands it in. The stack writes it into the routing daemon's configuration on the gateway. The worker's end of the session, Cilium's BGPv2 `authSecretRef`, is the same value sealed into `k8s-base`'s configuration: once a cluster exists, this command seals it in the same run, before it writes either stack, so a cluster that refuses the seal leaves both as they were; before then — the password is recorded before `physical` first brings the cluster up — it says so and writes `physical`'s alone. Between the cluster's first `up` and the controller's, it refuses and writes neither stack; run it again once `k8s-base` runs the controller. Rotating it is a fresh draw and this command again, then both ends re-applied, the session being down from the first apply to the second. |
 | `credentials derived bgp seal` | Once, after `physical` has brought the cluster up and `k8s-base` runs the sealed-secrets controller, for a password recorded before there was a cluster. Reads the password back out of `physical`'s config, seals it with `kubeseal` to the cluster's certificate — fetched from the controller with the kubeconfig in `physical`'s state — strict, for the Secret Cilium reads, and writes the ciphertext in the clear at `sealedSecrets.bgp-password.password` in `k8s-base`'s config, reading it back; the stack file is then committed. Every run writes fresh ciphertext. |
 | `credentials derived alert-webhook record` | After `physical` has brought the cluster up and `k8s-base` runs the sealed-secrets controller, and after the operator has made alertmanager's intake automation in Home Assistant — which the command prints the steps for. Takes the webhook URL without echoing it, seals it with `kubeseal` strict for the Secret alertmanager's receiver reads, and writes the ciphertext in the clear at `sealedSecrets.alert-webhook.url` in `k8s-base`'s config, reading it back; the stack file is then committed. No stack holds the URL as a secret: its one consumer is in the cluster. A new webhook id and this command again is the rotation. |
+| `credentials derived dkim-exim record [--key-file <path>]` | Once, after `k8s-base` runs the sealed-secrets controller and before exim moves in Wave B ([cluster/migration.md](cluster/migration.md) §2). Takes the mail relay's DKIM private key whole on standard input, piped from the legacy cluster's `cert-dkim-exim` Secret by the command it prints, or from the file `--key-file` names, and echoes it nowhere. Before anything is sealed it refuses a key whose public half's SHA-256 over the DER differs from `conventions.DKIM_K8S`'s, the key every mail zone publishes as `k8s._domainkey`, printing the two digests and nothing of the key. Then it seals the key with `kubeseal` strict for the Secret exim reads, and writes the ciphertext in the clear at `sealedSecrets["dkim-exim"]["tls.key"]` in the `apps` stack's config, reading it back; `Pulumi.apps.yaml` is then committed. The key is never rotated in place (§2.2). |
 | `credentials derived github-admin record` | Once per installation, and again on each rotation, for the GitHub admin token — into the `github` stack's config, which is where the stack and every command that pushes a GitHub secret read it. Nothing in this repository can create the value: GitHub publishes no API that makes a personal access token, so a token generated on the account's settings page and recorded here is the whole of a rotation, and the superseded one is deleted on the same page. It runs before `derived sync`, which authenticates as it. |
 | `credentials derived github-dispatch-key record` / `credentials derived github-trigger-key record` | After the kit exists, and after the App's page has generated a private key — which the command prints the steps for. Takes the key on standard input and escrows it as the row's next generation, so a re-run with a key already on file changes nothing and a re-run with a fresh one is the rotation. `--from-kit` reads it out of the entry a kit that still carries the key as a seed row holds, instead of from standard input. A new generation is held to the recipients file as `generate`'s is (§2.2). |
 | `credentials derived ls` | Any time, with or without a kit. Prints the slot map (below): every §3 credential, where its value comes from, and every slot it lands in, the ones still waiting on a consumer included. It reads a checked-in file, so it needs no token, no kit and no network. |

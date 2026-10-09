@@ -125,7 +125,11 @@ the VPS empties progressively):
 -   **Wave B — homelab VM, light**: monitoring (VictoriaMetrics fresh —
     no TSDB migration; legacy prometheus kept read-only until its
     retention ages out), golinks, emailproxy, spoolman, exim
-    (workloads.md §5), the doors static sites (NAS-sourced,
+    (workloads.md §5; its DKIM key is in the `apps` stack's config before the
+    wave, by `credentials derived dkim-exim record`, and once `apps` is
+    up, sources-of-truth.md §X, run against the new cluster's
+    `dkim-exim` Secret, gives the digest the legacy relay's key did,
+    before the legacy relay stops), the doors static sites (NAS-sourced,
     workloads.md §4 — their content moves from the VPS hostPath onto a
     NAS share once), the haos.ucw LAN-device backend (workloads.md §4),
     thread-dashboard (quadlet → cluster).

@@ -285,13 +285,23 @@ for z in $(mise x uv -- uv run python -c 'from kluster.components.dns.base impor
   ns="$(drill NS "$z" | awk '/^;/ {next} $4 == "NS" {print $5; exit}')"
   drill TXT "k8s._domainkey.$z" @"$ns" | awk '/^;/ {next} $4 == "TXT" {$1 = $2 = $3 = $4 = ""; print}' | tr -d '" \n' | sed 's/.*p=//' | base64 -d | sha256sum
 done
-mise x uv -- uv run python -c 'from kluster.components.dns.base import DKIM_K8S as k; print(k.split("p=", 1)[1])' | base64 -d | sha256sum
+mise x uv -- uv run python -c 'from kluster.conventions import DKIM_K8S as k; print(k.split("p=", 1)[1])' | base64 -d | sha256sum
 ```
 
 One digest for the key the legacy relay signs with, one for the TXT in
 each mail zone, and one for `DKIM_K8S`; on 2026-10-04 they were one
 digest, so the DKIM key is in no row's drift. `kubectl get` is a read
 verb, `drill` a query, and the last line a constant.
+
+In the new cluster the key is the Secret `dkim-exim`
+(`conventions.sealed.DKIM_EXIM`), which `credentials derived dkim-exim
+record` seals from the legacy one after refusing any other key. At
+exim's wave (cluster/migration.md §2), with the new cluster's context,
+its line gives the same digest as the legacy Secret's:
+
+```sh
+kubectl get secret -A --field-selector metadata.name=dkim-exim -o jsonpath='{.items[0].data.tls\.key}' | base64 -d | openssl pkey -pubout -outform DER | sha256sum
+```
 
 #### U — the gateway and gw-config
 
