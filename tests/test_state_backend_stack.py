@@ -1432,6 +1432,38 @@ def test_the_wait_waits_out_a_box_that_does_not_answer_yet(clock: _Clock) -> Non
     assert attempts == [0, postgres_tls.INTERVAL, 2 * postgres_tls.INTERVAL]
 
 
+def test_the_wait_says_what_it_waits_on_before_it_starts_and_after_each_attempt_that_finds_no_answer(
+    clock: _Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Through the engine's diagnostics, the channel `pulumi` draws while the
+    # run goes: the standard `logging` module's `info` is dropped in the
+    # process a dynamic provider runs in.
+    events: list[tuple[str, str]] = []
+
+    def said(message: str, *_args: object, **_kwargs: object) -> None:
+        events.append(('said', message))
+
+    def attempt(_address: str, _port: int, _ca: str) -> None:
+        events.append(('attempt', str(clock.read())))
+        if sum(1 for kind, _ in events if kind == 'attempt') < 3:
+            raise postgres_tls.NotAnswering('connection refused')
+
+    monkeypatch.setattr(postgres_tls.pulumi.log, 'info', said)
+
+    postgres_tls.wait(LOOPBACK, 5432, 'unused', timeout=postgres_tls.TIMEOUT, attempt=attempt)
+
+    assert [kind for kind, _ in events] == ['said', 'attempt', 'said', 'attempt', 'said', 'attempt', 'said']
+    said_lines = [text for kind, text in events if kind == 'said']
+    before, *between, answered = said_lines
+    for text in (before, *between, answered):
+        assert f'{LOOPBACK}:5432' in text, text
+    assert f'{postgres_tls.INTERVAL}s' in before, before
+    assert f'{postgres_tls.TIMEOUT}s' in before, before
+    for text in between:
+        assert 'connection refused' in text, text
+    assert 'answered' in answered, answered
+
+
 def test_the_wait_gives_up_on_a_box_that_never_answers(clock: _Clock) -> None:
     attempts: list[float] = []
 
