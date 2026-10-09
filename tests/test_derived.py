@@ -30,6 +30,7 @@ from pathlib import Path
 
 import b2_api
 import oci_clock
+import pinned_tools
 import pytest
 from cloudflare_api import ACCOUNT_ID, FakeApi, console_seed
 from cryptography import x509
@@ -64,7 +65,14 @@ from kluster.scripts.credentials import (
 from kluster.scripts.credentials import slots as slot_map
 from kluster.scripts.credentials.kdbx import KdbxStore
 
-needs_age = pytest.mark.skipif(shutil.which(age.BINARY) is None, reason='age is not on PATH (mise x -- ...)')
+
+@pytest.fixture
+def pinned_age() -> None:
+    """The pinned `age` and `age-keygen`, refused when either is missing rather than skipped."""
+    pinned_tools.require(*pinned_tools.AGE)
+
+
+needs_age = pytest.mark.usefixtures('pinned_age')
 
 STACK = derived.ZONES_STACK
 COMPARTMENT = 'ocid1.compartment.oc1..physical'

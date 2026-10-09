@@ -22,6 +22,7 @@ from uuid import uuid4
 
 import keyring.backends.fail
 import oci_clock
+import pinned_tools
 import pytest
 import requests
 from b2_api import ACCOUNT_ID as B2_ACCOUNT
@@ -53,8 +54,14 @@ from kluster.scripts.credentials.masters import CredentialRejected
 
 PASSWORD = 'kit-password'
 
-age_binary = shutil.which(age.BINARY)
-needs_age = pytest.mark.skipif(age_binary is None, reason='age is not on PATH (mise x -- ...)')
+
+@pytest.fixture
+def pinned_age() -> None:
+    """The pinned `age` and `age-keygen`, refused when either is missing rather than skipped."""
+    pinned_tools.require(*pinned_tools.AGE)
+
+
+needs_age = pytest.mark.usefixtures('pinned_age')
 
 
 def _answers(*values: str) -> Callable[[str], str]:

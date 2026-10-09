@@ -11,11 +11,11 @@ from __future__ import annotations
 
 import functools
 import re
-import shutil
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import keyring.backends.fail
+import pinned_tools
 import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
@@ -26,8 +26,14 @@ from kluster.lib import acquisition, stack_environment
 from kluster.scripts.credentials import age, cli, entries, escrow, pki, workstation
 from kluster.scripts.credentials.kdbx import KdbxStore
 
-age_binary = shutil.which(age.BINARY)
-needs_age = pytest.mark.skipif(age_binary is None, reason='age is not on PATH (mise x -- ...)')
+
+@pytest.fixture
+def pinned_age() -> None:
+    """The pinned `age` and `age-keygen`, refused when either is missing rather than skipped."""
+    pinned_tools.require(*pinned_tools.AGE)
+
+
+needs_age = pytest.mark.usefixtures('pinned_age')
 
 pytestmark = needs_age
 
