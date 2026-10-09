@@ -1,5 +1,8 @@
 encryptionsalt: v1:knGZNXiE+28=:v1:yD5KH2g7BtDQLQVJ:T5S4jxNmnh/QApK4XKgcc/ZqD4wJUQ==
 config:
+  pulumi:disable-default-providers:
+    - oci
+    - b2
   kluster-py:b2ApplicationKeyId:
     secure: v1:OiIKNWrvpchWZLcQ:SR9T/wFZD8cw/c+Pynpyc4SBe7puYq4tMquy4AVDTCcKWdSsg0YV88A=
   kluster-py:b2ApplicationKey:
