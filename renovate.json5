@@ -367,6 +367,61 @@
       enabled: true,
     },
     {
+      // The interpreter every job runs, pinned by `.python-version`: uv
+      // installs a build of that release for the project, and the pyenv
+      // manager reads the pin against the `python` image's tags. Its patches
+      // are re-enabled by the rule below, since a patch release of the line
+      // is its security fixes and the global `patch: enabled: false` would
+      // drop every one; its minor and major moves are unchanged. This rule
+      // gives the patches a bucket of their own: renovate otherwise proposes
+      // one non-major update per dependency, the newest, which for this pin
+      // is a minor move, so the line's patch is never an update at all.
+      matchManagers: [
+        'pyenv',
+      ],
+      separateMinorPatch: true,
+    },
+    {
+      // The interpreter's patches. What uv can install is uv's: it downloads
+      // only a build its compiled-in table names, checked against the sha256
+      // the table carries. A patch the `python` tags carry before the pinned
+      // uv knows a build of it is red at `uv sync`, and a reader leaves it
+      // there: once the toolchain's uv bump that adds the build lands,
+      // renovate rebases this one onto it and it goes green. The two cannot
+      // share a pull request: renovate gives a patch it buckets apart a
+      // branch of its own, its group's slug prefixed `patch-`, so a group
+      // name here would not reach the toolchain's branch. The release age is
+      // uv's for the same reason: the `python` tags are an image data source,
+      // which the first rule takes the age off, but no build reaches a job
+      // except through a uv release, which waits out the age as the
+      // toolchain does.
+      matchManagers: [
+        'pyenv',
+      ],
+      matchUpdateTypes: [
+        'patch',
+      ],
+      enabled: true,
+    },
+    {
+      // uv's patches, inside the toolchain group with its other bumps. A uv
+      // patch release is often the one that adds a CPython build to uv's
+      // download table, the build an interpreter patch above waits red for,
+      // and it carries uv's own fixes; the global `patch: enabled: false`
+      // would otherwise leave both waiting for a uv minor. Both uv pins match
+      // by name -- `mise.toml`'s and `constraints.uv` -- so the two move in
+      // one pull request, as the rules grouping them require.
+      matchDepNames: [
+        'uv',
+      ],
+      matchUpdateTypes: [
+        'patch',
+      ],
+      enabled: true,
+      groupName: 'toolchain',
+      groupSlug: 'toolchain',
+    },
+    {
       // Outside the cluster: Talos, which reimages nodes. `physical` has no PR
       // preview by design (framework/ci.md §3), so this one is read as code
       // and approved before it is opened at all.
