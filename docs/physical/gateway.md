@@ -1561,6 +1561,11 @@ apply is run in two parts around the cutover window:
     the path that is now load-bearing, and it converges only if that
     path carries the whole of it.
 
+What follows the ceremony and is not the gateway's — the bring-up
+verifications that need no network plugin, the `dns` stack's first
+`up`, CI's identities and the zones' DS records — is
+gateway-cutover.md §8.
+
 **Why the window carries only part of step 1.** This is the first
 apply of the whole stack, so the run without targets is also the first
 cloud network and image import, the load balancer, the A1 launches,
@@ -1615,7 +1620,12 @@ Two things that are *not* part of the cycle:
     window.
 -   **CI's per-run overlay join becomes load-bearing only after §2.4
     passes** — until the flow rules and routes are verified,
-    `physical` runs stay operator-local.
+    `physical` runs stay operator-local. What makes it load-bearing is
+    the identity sync, which pushes the two CI identities into their
+    Environments: one `credentials derived sync --only` run per row,
+    after step 4 and §2.4, in one sitting with the `dns` stack's first
+    `up`, with the drift check as its reading and a written way back
+    ([gateway-cutover.md](gateway-cutover.md) §8.3).
 
 There are no ordering edges between the three places the ceremony
 reaches — ZeroTier Central, the device, and this program's dial to it: the

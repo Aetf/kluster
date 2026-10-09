@@ -208,6 +208,40 @@ and not-before dates. It is never resolved by widening the set to fit:
 whether the set is behind who legitimately issues, or the certificate
 is one nobody here asked for, is the issue's question.
 
+### 1.3 A zone's DS, and taking it away
+
+The stack signs each zone (`ZoneDnssec`, in `components/dns/zone.py`);
+what makes the signature count is the DS at the zone's parent, which is
+entered at the registrar by hand and is in no stack. A DS that matches
+the zone's key-signing key makes every answer from the zone validated;
+**a DS that matches no key fails the whole zone for every validating
+resolver**, until it is removed and the parent's TTL for it has run
+out. So the removal is the way back from any DS change, the first
+entry included, and it is also the first step of anything that stops
+signing a zone.
+
+**Removing a DS** is the record deleted in the registrar's DNSSEC
+settings for the domain; for the zones at Namecheap that is the
+domain's Advanced DNS page, its DNSSEC section. The zone stays signed
+and goes back to unvalidated. Validating resolvers recover once the
+parent's TTL for the removed record has run out, which the parent's own
+server prints beside the record:
+
+```sh
+z=<the zone>
+tld=${z##*.}
+pns="$(drill NS "$tld" | awk '/^;/ {next} $4 == "NS" {print $5; exit}')"
+drill DS "$z" @"$pns"      # before: the record and its TTL; after: no DS in the answer
+```
+
+**The order never puts signing first.** A zone whose parent holds a DS
+keeps signing until the removal's TTL has run out: turning DNSSEC off
+at Cloudflare first, which deleting the zone's `ZoneDnssec` does,
+leaves a DS that no key matches, and that is the same outage as a wrong
+one. Entering a DS waits the other way round, for the zone's server to
+answer the key it is for. physical/gateway-cutover.md §8.4 enters the
+first DS of each zone in that order.
+
 ## 2. Naming hierarchy (formalizing the existing conventions)
 
 -   **`*.hosts.<zone>` is the anchor namespace** — already the live

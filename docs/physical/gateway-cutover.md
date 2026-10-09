@@ -6,6 +6,10 @@ by this program. It is the opening of the bring-up ceremony
 ([gateway.md](gateway.md) §2.5) — the first push from this program is
 the push this window prepares for, and what has to happen before it is
 moving the live container state to where the declaration expects it.
+§8 carries the steps of the first milestone's bring-up that follow
+the ceremony and are not the gateway's: the bring-up verifications
+that need no network plugin, the `dns` stack's first `up`, CI's overlay
+identities and the zones' DS records.
 
 Everything below runs as `root` in a LAN session on the device, except
 where a step says otherwise. That is not a preference: there is no
@@ -599,8 +603,33 @@ not moved.
     stack, means the targets do not select what they were derived
     from; the window then runs `pulumi up` with no targets at all and
     takes the risk gateway.md §2.5 sets out.
--   **The two host-side timers are stopped** — see step 0, which is
-    inside the window only because it must not be forgotten.
+-   **The host-side timers are stopped**: `check-gw.timer`,
+    `gw-backup.timer` and `autodeploy-containers.timer` — see step 0,
+    which is inside the window only because it must not be forgotten.
+-   **The window's time limit is written down: `<LIMIT: set by the
+    operator before the window opens>`**, counted from step 1's first
+    stop. From that moment the LAN has no resolver, so the limit is how
+    long the household goes without DNS while a failure is read. When it
+    passes with alice and bob not answering §5's first two readings, the
+    window stops diagnosing and runs §6 (§4 step 4).
+-   **No `pulumi` run of the bring-up overlaps the state backend's
+    update window**: Tuesdays, 04:00 to 05:00 UTC (`REBOOT_DAY`,
+    `REBOOT_TIME` and `REBOOT_WINDOW_MINUTES` in
+    `lib/state_backend/settings.py`, rendered into the Butane file with
+    no time zone, so Zincati reads them as UTC, its default). Zincati
+    reboots the box into each new Fedora CoreOS release at the window
+    after it is published, and Postgres goes down with it. Every run
+    that reads or writes state holds the backend for its whole length:
+    step 3, step 5, the ceremony's applies, and §8's `dns` first `up`.
+    How an update in flight fares when the backend's server restarts
+    is untested here, so the runs are scheduled around the
+    window rather than through it: none starts that could still be
+    running at 04:00 UTC on a Tuesday, and none starts inside the
+    hour. In US Pacific time that is a
+    Monday evening, 21:00 under daylight time and 20:00 outside it.
+    Once CI holds its identities (§8.3), a merge starts a deploy chain
+    that holds the backend too, so the same hour is one to merge
+    nothing in.
 -   **A current UniFi autobackup is in hand** (§7): unrelated to the
     machines, and the cheapest insurance in the window.
 
@@ -627,8 +656,24 @@ fails every pull in this window.
 that owns them:
 
 ```sh
-systemctl --user disable --now check-gw.timer gw-backup.timer
+systemctl --user disable --now check-gw.timer gw-backup.timer autodeploy-containers.timer
+systemctl --user is-enabled check-gw.timer gw-backup.timer autodeploy-containers.timer  # disabled, three times
+systemctl --user is-active check-gw.timer gw-backup.timer autodeploy-containers.timer   # inactive, three times
+systemctl --user is-active autodeploy-containers.service                                # inactive
 ```
+
+Stopping a timer leaves a run it already started alone, and a deploy
+the reconciler is in the middle of would land its stop and its renames
+among step 1's and step 2's. So when the last line prints `activating`,
+step 1 waits until the same line prints `inactive`; it can also print
+`failed`, from a run that has ended, and only `activating` is waited
+out. The run holds a lock
+and ends on its own; killing it partway through its `ssh` to the device
+is worse than the wait.
+
+A window called off after this step and before step 1 has changed
+nothing on the device, and the way back from it is §6's last block
+alone, which brings the timers back.
 
 The daily check runs `gw-config/deploy.sh --check` and mails what it
 finds with the instruction to run `deploy.sh`. The morning after the
@@ -643,6 +688,27 @@ links are gone, and the restored `40-machines.sh` makes one to
 likewise fail from that morning on, its `set -e` tripping over the
 resolver state it can no longer find. They come back when §7's
 replacements exist.
+
+The third timer is the other writer of the machines' trees. Every five
+minutes it runs the homelab-ops script `bin/autodeploy-containers`,
+which fetches the `main` branch of homelab-containers and, for each of
+`adguard-bob`, `caddy` and `adguard-alice` whose paths changed since
+its last run, deploys that
+target to the device with the repository's `just deploy` recipe. The
+recipes assume the layout step 2 moves away from. The proxy's
+validates the new binary against the residue under `/data/caddy`, which
+is still there until §7, then stops the machine, moves
+`/data/custom/machines/caddy` — the declared machine's directory, its
+state and the ACME account included — to `caddy.old`, and starts a
+bare tree in its place. The declared settings bind a state directory
+that is no longer where they name it, so the machine fails to start
+and retries every five seconds, every LAN vhost is down, and with the
+daily check off the reconciler's own failure mail is the only notice. A
+merge that touches only `caddy/`
+takes that path. The resolvers' recipe fails safe at its first copy,
+because their old state directory has moved, and that failure stops
+every target after it. So the reconciler stops with the other two, and
+§7 retires it rather than bringing it back.
 
 **Step 1 — stop the machines.** State directories are moved out from
 under running containers otherwise:
@@ -714,6 +780,14 @@ went to `machines-old` in step 2, and `machine-rollback` says so and
 exits non-zero. A machine that fails to start therefore retries every
 five seconds instead of settling in `failed`, and §6 by hand is the only
 way back.
+
+**The reading has the time limit §3 wrote down**, counted from step 1:
+`<LIMIT: set by the operator before the window opens>`. Once it has
+passed with alice and bob not answering §5's first two readings, the
+window stops diagnosing, takes down whatever it learned, and runs §6.
+A step 3 still running at the limit is let return first rather than
+interrupted, because a cancelled `up` can leave its operations pending
+in state, which §6's state edit would then have to work around.
 
 ## 5. Verification
 
@@ -1017,7 +1091,9 @@ this step boots.
 
 **Nothing in §4 or §5 is irreversible**, step 5 included: what it
 creates is outside everything §6 undoes, and having it in place
-neither closes the rollback nor changes it. The point of no return is
+neither closes the rollback nor changes it. §8's `dns` first `up` has
+a way back of its own that costs what §8.2 says, and leaves this
+section's rollback as it was. The point of no return for the device is
 §7:
 the cleanup deletes the old trees, and the removal commit takes the
 scripts that converge the old layout out of yadm. Neither happens before
@@ -1152,6 +1228,20 @@ serving again with all of it in place:
     identity and the node id read in the ceremony's next step is not the
     one the roster was about to authorize.
 
+**Last, the host-side timers come back**, on the homelab host as the
+user that owns them, because gw-config is the device's tracker again
+and the old layout is what all three were written against:
+
+```sh
+systemctl --user enable --now check-gw.timer gw-backup.timer autodeploy-containers.timer
+systemctl --user list-timers check-gw.timer gw-backup.timer autodeploy-containers.timer
+```
+
+The listing shows the three timers, each with a next run. Without this
+step nothing runs the daily drift check or the weekly pull of the UniFi
+autobackup and the resolver snapshots, and a homelab-containers merge
+reaches the device only when someone deploys it by hand.
+
 ## 7. Cleanup and retirement
 
 Every absorbed resource ends with a removal commit in its old tracker
@@ -1201,9 +1291,10 @@ lets the gw-config directory be deleted whole. Four edits make that true:
     job's own transfer runs on the device end (gateway.md §1.2) —
     and a certificate probe, which now names a declared vhost and reaches
     it with `curl --resolve` rather than through a `lan.ucw.phd` name.
--   **The two timer units** (yadm `##h` alternates on the homelab host)
-    keep their schedules and lose gw-config from their descriptions; both
-    are re-enabled once the scripts above are.
+-   **The timer units of the check and the pull**, `check-gw.timer` and
+    `gw-backup.timer` (yadm `##h` alternates on the homelab host), keep
+    their schedules and lose gw-config from their descriptions; both are
+    re-enabled once the scripts above are.
 -   **The homelab-ops pin** in yadm's mise configuration moves to the
     commit carrying those scripts, which is what puts them on the host.
 
@@ -1213,7 +1304,566 @@ the device pulls itself, so the repository's device-push recipe retires
 with a pointer to that, and the `.old` rollback copies it left beside
 each tree go with it.
 
-**This document retires with the window.** It describes a move that
-happens once; the layout it moves to is described where the device is
-(gateway.md §1), so the change that marks rule 0.3's gw-config row done
-deletes this file as well.
+**The reconciler that calls that recipe retires with it**, and it is
+not one of the timers that come back. `bin/autodeploy-containers` lives
+in homelab-ops and its timer in yadm, so its removal is made of edits
+outside this repository:
+
+-   homelab-ops drops the three gateway targets, `adguard-alice`,
+    `adguard-bob` and `caddy`, from `bin/autodeploy-containers`, and
+    retires the script once no target is left;
+-   the yadm `##h` alternates of `autodeploy-containers.timer` and its
+    service go with the script;
+-   the homelab-ops pin in yadm's mise configuration moves to the commit
+    that carries the change.
+
+**This document retires with the window and §8.** It describes a move
+that happens once and the bring-up steps that follow it once; the layout
+it moves to is described where the device is (gateway.md §1), so the
+change that marks rule 0.3's gw-config row done deletes this file as
+well, once §8 has run. The procedures §8 uses that run again later are
+written where they outlive it, and §8 points at them: replacing CI's
+overlay identities in credentials.md §4.1 (stage 10), re-attaching a
+node volume through the program in declarative/physical.md §6, and
+removing a DS in declarative/dns.md §1.3.
+
+## 8. The rest of the bring-up
+
+The first milestone's steps that follow the ceremony (gateway.md §2.5)
+and are not the gateway's. Each runs from the operator's workstation,
+in the shell that defined `physical()` at the root of the checkout that
+holds `.credentials/`, except where an item says otherwise, and none
+of them touches the device or §6's rollback. §8.1 runs once step 5 has
+passed and the ceremony's step 3 has written the talosconfig; §8.2 and
+§8.3 run in one sitting, after the ceremony's step 4 and after
+gateway.md §2.4 has passed, so that no merge lands between them; §8.4
+follows §8.2 zone by zone. §3's update window holds for every one of
+them.
+
+### 8.1 Verifications that need no network plugin
+
+declarative/physical.md §6 lists the bring-up verifications. Those that
+exercise Cilium wait for `k8s-base` and belong to the verification gate
+after it (cluster/migration.md §1, item 4 of its build order): the
+LB-IPAM pool, the balancer's dual-stack listeners and source
+preservation, the reserved address's NAT, the MTU over KubeSpan, the
+security verifications, and the volume items that need a pod. The rest
+need only the nodes, and run now, while the volumes are empty and a
+failure costs nothing. They share one setup:
+
+```sh
+TC=~/.talos/kluster          # the talosconfig the ceremony's step 3 wrote
+WORKER=192.168.70.10
+ip_of() { physical stack output node_public_ips --json | jq -r --arg n "$1" '.[$n]'; }
+CP=($(physical stack output node_public_ips --json | jq -r '.[]'))
+CPS=$(physical stack output node_public_ips --json | jq -r '[.[]] | join(",")')
+tal() { talosctl --talosconfig "$TC" "$@"; }
+```
+
+The talosconfig's endpoints are the control planes and its nodes are
+the control planes' public addresses and the worker's LAN address, the
+same names step 5's health gate uses (`components/talos/`, `TalosDay1`).
+
+**The launches found capacity, and the machine API reaches the worker
+through the cloud endpoints.**
+
+```sh
+for n in "${CP[@]}" "$WORKER"; do tal -n "$n" version --short; done
+```
+
+It passes when every node answers with a server version, and the
+version is the `versions:talos` pin in `Pulumi.yaml`. Each control
+plane that answers is an A1 launch that found capacity. The worker's
+answer is the proxy path: `talosctl` dials only the talosconfig's
+endpoints, which are the control planes, and names the worker to them,
+so the answer came through whichever control plane it reached.
+
+**etcd's disk.**
+
+```sh
+for n in "${CP[@]}"; do printf '%s: ' "$n"; tal -n "$n" logs etcd | grep -c 'slow fdatasync'; done
+```
+
+It passes when every control plane prints `0`: etcd logs `slow
+fdatasync` for each write-ahead-log sync that takes longer than a
+second. That is a tripwire and not cluster/nodes.md §1's criterion,
+which is under 10 ms and is read off etcd's
+`etcd_disk_wal_fsync_duration_seconds` histogram. No command here reads
+that histogram. etcd serves it on its client listener, behind the
+client-certificate authentication Talos turns on there, and the machine
+configuration's `etcd` block sets no metrics listener of its own
+(`components/talos/`), so a reader needs one of the two: a listener
+declared, or etcd's client certificate.
+
+**The node volumes.** Each row of `conventions.NODE_VOLUMES` names a
+volume and the node it attaches to:
+
+```sh
+mise x uv -- uv run python -c 'from kluster import conventions as c; print(*(f"{v.attached_node} {n}" for n, v in c.NODE_VOLUMES.items()), sep="\n")'
+```
+
+The rest of this item runs once per line of that listing. A volume's
+Talos name is `u-` and the row's name, and each fact is read off the
+resource that holds it, inside its `spec` (the resource's metadata
+carries a `phase` of its own):
+
+```sh
+V=hath-cache; N=$(ip_of cp1)       # one line of the listing above
+H=$(for c in "${CP[@]}"; do [ "$c" != "$N" ] && echo "$c" && break; done)   # a control plane that is not N
+vol()  { tal -n "$N" get volumestatus "u-$V" -o json | jq -r '.spec.phase'; }
+ids()  { tal -n "$N" get discoveredvolumes -o json | jq -r --arg l "u-$V" 'select(.spec.partition_label == $l) | .spec | "\(.name) uuid=\(.uuid) partition_uuid=\(.partition_uuid)"'; }
+mnt()  { tal -n "$N" get mountstatus -o json | jq -r --arg t "/var/mnt/$V" 'select(.spec.target == $t) | .spec | "\(.source) \(.target) \(.filesystem)"'; }
+boot() { tal -n "$N" read /proc/sys/kernel/random/boot_id; }
+vol; ids; mnt; boot
+```
+
+1.  **Talos provisioned the disk.** `vol` prints `ready`, `mnt` prints
+    the mount at `/var/mnt/<name>`, and `ids` prints the partition's
+    filesystem UUID and partition UUID; write both down. Discovery may not have
+    probed the partition again since Talos formatted it, so on the boot
+    that provisioned it `uuid` can be empty; then item 4's reading is the baseline that item 5 compares
+    against.
+2.  **Detach it**, in the OCI console, from the instance's attached
+    block volumes. `ids` then prints nothing, because the partition has
+    left discovery. `vol` still prints `ready`: Talos does not evaluate a
+    ready volume again when its disk goes, and that is not a fault.
+3.  **Reboot the node with the disk gone**, then read the volume and the
+    cluster:
+
+    ```sh
+    tal -n "$N" reboot
+    vol; boot
+    tal -n "$H" health --control-plane-nodes "$CPS" --worker-nodes "$WORKER"
+    ```
+
+    `vol` prints a phase other than `ready`, and the health check
+    passes: **a user volume still waiting for its disk holds up neither
+    the boot nor the health gate.** Write down the boot id.
+4.  **Re-attach it through the program**, with the procedure of
+    declarative/physical.md §6 for this row's `V`, then read it again:
+
+    ```sh
+    vol; ids; mnt; boot
+    ```
+
+    `vol` prints `ready`, `mnt` the same mount, `ids` the two UUIDs of
+    item 1, and `boot` the id of item 3: **the node took the disk up
+    while running, without a reboot, and found its own partition rather
+    than provisioning another.** While the procedure there has not
+    finished, the volume stays detached, which costs nothing while it
+    is empty.
+5.  **Reboot once more**, `tal -n "$N" reboot`, then `vol; ids`: `ready`
+    and the same two UUIDs. **The volume survives a detach, a re-attach
+    and a reboot.** The UUIDs are the reading in place of a sentinel
+    file, because they answer the item's question more strongly: a new
+    partition draws a new GPT GUID and a format a new filesystem UUID,
+    and neither depends on a write having reached the disk before a hot
+    detach of a filesystem Talos cannot unmount. What a file would add
+    is the kubelet's write path through `/var/mnt`, which is the
+    deferred pod item.
+
+**The local-path volume.**
+
+```sh
+for n in "${CP[@]}" "$WORKER"; do tal -n "$n" get volumestatus u-storage -o json | jq -r '.spec.phase'; done
+```
+
+It passes on `ready` from every node.
+
+**The node label**, on the Node object rather than in the machine
+configuration. The kubeconfig is a cluster-admin credential, so it is
+written where the talosconfig is kept and not into a working directory,
+and the API server answers without a network plugin:
+
+```sh
+mkdir -p ~/.kube
+(umask 077; physical stack output kubeconfig --show-secrets > ~/.kube/kluster)
+L=$(mise x uv -- uv run python -c 'from kluster import conventions as c; print(c.NODE_VOLUME_LABEL)')
+kubectl --kubeconfig ~/.kube/kluster get nodes -o wide -L "$L"
+physical stack output node_private_ips --json
+```
+
+It passes when the label's column holds each row's name on the node whose internal address is the private
+address of the row's node, and is empty on every other node.
+
+**The iGPU can be passed through.** This one runs on the homelab host,
+and it costs the household something: from `start` to `destroy` below,
+the host's `i915` driver lets go of the iGPU, so the legacy cluster's
+GPU workloads on that host (immich's machine learning and transcoding,
+jellyfin's hardware transcoding) have no device, and a job running on
+it fails. It takes a minute or two, at an hour when nobody is watching
+anything. The `kubectl` lines run as the operator's own user, whose
+`kubectl` context is the legacy cluster's; the rest run as root.
+
+First the readings the way back is measured against:
+
+```sh
+kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.allocatable.gpu\.intel\.com/i915}{"\n"}{end}'
+kubectl get pods -n intel-gpu -l app=intel-gpu-plugin
+lspci -D -nnk -d 8086::0300          # the iGPU's address, and "Kernel driver in use: i915"
+```
+
+Write down the homelab node's allocatable count, and confirm that the
+device plugin's pod is listed: its namespace and label are what the way
+back selects it by. Then the gate, with `GPU` set to the address `lspci`
+printed, on its own:
+
+```sh
+GPU=0000:00:02.0
+ls /sys/bus/pci/devices/$GPU/iommu_group/devices       # the iGPU's own address, and nothing else
+```
+
+A missing `iommu_group` directory means the host runs with its I/O
+memory management unit off, and a group with other devices in it means
+they would have to be passed through with it. Either is a finding
+against the host preparation, and nothing below runs. Only a group
+holding the iGPU alone goes on to the probe:
+
+```sh
+D=$(mktemp -d)
+cat > "$D/vfio-probe.xml" <<XML
+<domain type='kvm'>
+  <name>kluster-vfio-probe</name>
+  <memory unit='MiB'>256</memory>
+  <vcpu>1</vcpu>
+  <os><type arch='x86_64' machine='q35'>hvm</type></os>
+  <devices>
+    <hostdev mode='subsystem' type='pci' managed='yes'>
+      <source><address domain='0x${GPU:0:4}' bus='0x${GPU:5:2}' slot='0x${GPU:8:2}' function='0x${GPU:11:1}'/></source>
+    </hostdev>
+  </devices>
+</domain>
+XML
+virsh -c qemu:///system define "$D/vfio-probe.xml"
+virsh -c qemu:///system start kluster-vfio-probe
+virsh -c qemu:///system domstate kluster-vfio-probe     # running
+lspci -k -s "$GPU"                                       # Kernel driver in use: vfio-pci
+virsh -c qemu:///system destroy kluster-vfio-probe
+virsh -c qemu:///system undefine kluster-vfio-probe
+rm -rf "$D"
+```
+
+It passes when the domain runs and the device is bound to `vfio-pci`
+while it does. The domain has no disk and boots nothing, and it does not
+need to: a running domain is QEMU holding the device through VFIO,
+which is the host's half of the capability. Whether a guest's `i915`
+drives the device is read in the cutover itself, where the worker gains
+it and the device plugin in the guest reports it (homelab-host.md §3,
+cluster/migration.md Wave C). A `start` that fails is read by its
+message: one naming VFIO or the I/O memory management unit is a finding against the host
+preparation, and one naming the domain's XML is this probe's own shape
+at fault. Either way `undefine`, the `rm` and the way back below still
+run.
+
+**The way back.** The hostdev is `managed`, so the domain's `destroy`
+hands the device back to `i915`. Then:
+
+```sh
+lspci -k -s "$GPU"                                     # Kernel driver in use: i915
+virsh -c qemu:///system nodedev-reattach "pci_$(echo "$GPU" | tr ':.' '__')"   # only if it still says vfio-pci
+ls /dev/dri                                            # the card and render nodes are back
+kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.allocatable.gpu\.intel\.com/i915}{"\n"}{end}'
+```
+
+The way back is complete when the homelab node's allocatable count is
+the one written down. A count of `0` with the device back on `i915` is
+the device plugin not having registered the device again: deleting its
+pod, `kubectl delete pod -n intel-gpu -l app=intel-gpu-plugin`,
+restarts it without evicting the pods that use the GPU, and the count
+returns. If `i915` does not take the device back even after
+`nodedev-reattach`, the last way back is rebooting the homelab host,
+with the legacy cluster and everything else it runs.
+
+### 8.2 The `dns` stack's first `up`
+
+This `up` is the zones' cutover (sources-of-truth.md, row R1): from it
+on, the `dns` stack is what writes every zone, and Aetf/dns takes no
+push (note N1 there). The stack runs under the stack passphrase that
+`mise.toml` hands every run, so it needs no wrapper, and it refuses
+until step 5 has published the anchors' addresses (`stacks/dns.py`,
+`_usable_address`). From the checkout root:
+
+```sh
+mise x -- pulumi preview --stack dns --diff
+```
+
+The preview is also the first read of `physical`'s exports by a stack
+under the other passphrase. A refusal that names a mapping is that read
+failing: it is what a StackReference returns for a secret it cannot
+open.
+
+**What the preview must show** is derived from the census rather than
+counted, because the counts move with every census change:
+
+-   **No replace anywhere**: no `+-` or `-+` row, and nothing from the
+    type move of the zones' component. State holds each zone under the
+    component type it had before `ManagedZone` stated its own, and the
+    alias carries every one across with nothing replaced
+    (Aetf/kluster-ops#478).
+-   **The deletes are the records state holds that `zone_records` no
+    longer derives**, and nothing else. sources-of-truth.md note N1
+    lists them by zone and label, each in a class with the ruling that
+    drops it, and its reading B6 prints them from state, taken before
+    the preview: every `-` row is a line of B6 and fits a class of N1,
+    and every line of B6 is a `-` row.
+-   **No `Zone`, `ManagedZone` or `ZoneDnssec` is deleted.** A `Zone` is
+    protected, so a run that tries fails there. A `ZoneDnssec` is not,
+    and its delete turns DNSSEC off: on a zone whose parent holds a DS,
+    that fails the zone for every validating resolver (declarative/dns.md
+    §1.3). A `-` on one stops the run.
+-   **The co-host has no delete, and its check is negative**, as N1
+    states it: unlimitedcodeworks.xyz's create list holds no `*.zt`
+    name and no `archvps.hosts` (rfc-003 §5.3), and no `-` row names
+    that zone.
+-   **The creates**: the CAA records `ZONE_ISSUERS` implies, in each zone
+    whose state lacks them (`components/dns/base.py`); a `ZoneDnssec` in
+    each zone whose state holds none, which is every zone whose parent
+    holds no DS — peifeng.phd, ucw.phd, jiahui.id and jiahui.love, the
+    last of which Cloudflare already signs (Aetf/kluster-ops#601); the
+    anchors, `kluster.hosts` with an A and an AAAA and `vip1.hosts` with
+    an A, in the primary zone; and any other record the census declares
+    and state lacks, such as the `*.zt` names of roster members the
+    imported block did not carry (Aetf/kluster-ops#510). Beside the
+    records, one `kluster:dns:ResolverRewrites` component per entry of
+    `conventions.gateway.RESOLVERS`, named `rewrites-<name>`, each
+    holding one rewrite per entry that
+    `rewrites(conventions.routes.ROUTES)` derives
+    (`components/dns/rewrites.py`); with no routes, the components hold
+    no rewrite. The one-liner after this list prints what those rows are
+    matched against.
+-   **The updates** are read row by row: the right side of each field
+    is the value of its row in the census.
+-   **The anchors carry `physical`'s addresses**: `physical stack output
+    cluster_endpoint`, `cluster_endpoint_v6` and `vip1` print the values
+    their rows show.
+
+```sh
+mise x uv -- uv run python -c 'from kluster import conventions as c; from kluster.components.dns.rewrites import rewrites; print(*(f"rewrites-{r.name}" for r in c.gateway.RESOLVERS)); print(*rewrites(c.routes.ROUTES), sep="\n")'
+```
+
+A preview that matches all of that is applied, and the `up` shows the
+same plan before it asks:
+
+```sh
+mise x -- pulumi up --stack dns
+```
+
+**It passes on two readings.** The first is the stack against the
+zones:
+
+```sh
+mise x -- pulumi preview --stack dns --refresh --expect-no-changes
+```
+
+It exits zero, or non-zero with `status` on a `ZoneDnssec` as its
+only diff, read back as `pending` against the declared `active`, for a
+zone whose DS is not at its parent yet. The provider reads the status
+Cloudflare reports, so every zone first signed in §8.2 shows it until
+§8.4 has run there. The second is what each
+zone's own server answers:
+
+```sh
+for z in $(mise x uv -- uv run python -c 'from kluster import conventions as c; print(*c.ALL_ZONES)'); do
+  ns="$(drill NS "$z" | awk '/^;/ {next} $4 == "NS" {print $5; exit}')"
+  printf '%s\tMX: %s\tDNSKEY: %s\n' "$z" \
+    "$(drill MX "$z" @"$ns" | awk '/^;/ {next} $4 == "MX" {printf "%s %s;", $5, $6}')" \
+    "$(drill DNSKEY "$z" @"$ns" | awk '/^;/ {next} $4 == "DNSKEY" {printf "%s;", $5}')"
+done
+z=$(mise x uv -- uv run python -c 'from kluster import conventions as c; print(c.ZONE_PRIMARY)')
+ns="$(drill NS "$z" | awk '/^;/ {next} $4 == "NS" {print $5; exit}')"
+drill A "kluster.hosts.$z" @"$ns"
+drill AAAA "kluster.hosts.$z" @"$ns"
+drill A "vip1.hosts.$z" @"$ns"
+```
+
+Each zone answers the MX records its census rows declare, every zone
+answers DNSKEY records with the flags `256` and `257`, and the anchors
+answer the addresses `physical` exports. The DKIM reading, X in
+sources-of-truth.md §4, prints one digest on every line.
+
+**The way back is forward.** A row the `up` got wrong is corrected in
+the census and applied again; that is the ordinary path from here on,
+and it is the only one that keeps the `dns` stack and the zones in
+agreement. The earlier declaration exists only as Aetf/dns's
+`dnsconfig.js`, and a push to its `master` runs DNSControl over every
+zone. It is an emergency measure, and what it costs is the reason it is
+one:
+
+-   it recreates every record the `up` deleted, the list in
+    sources-of-truth.md note N1;
+-   it deletes everything its file does not declare, which includes the
+    CAA records and the anchors this `up` created;
+-   it leaves DNSSEC as it finds it;
+-   and the `dns` stack's state then disagrees with the zones until a
+    refresh, so nothing applies `dns` again until it is reconciled. Once
+    §8.3 has run, a merge does exactly that, so that way back starts
+    with §8.3's own way back.
+
+### 8.3 CI's overlay identities
+
+This is the step that arms CI. Until it runs, no Environment holds a
+ZeroTier identity, so the deploy chain stops at `plan-physical` and
+nothing a merge starts applies `dns` (sources-of-truth.md §3). Once it
+has run, every merge applies `dns` with no reviewer. That is why it
+shares a sitting with §8.2, with no merge between them, and why it
+waits for gateway.md §2.4: the per-run join it hands CI becomes
+load-bearing here (gateway.md §2.5).
+
+The identities are three rows of `credentials derived ls`, and each is
+synced alone. A bare `credentials derived sync` fills every row it can
+obtain, which here would also issue CI a fresh state-backend client
+bundle and write the kubeconfig into `k8s-base`'s and `apps`'s stack
+files. From the checkout root:
+
+```sh
+mise x uv -- uv run credentials derived sync --only zerotier-network
+mise x uv -- uv run credentials derived sync --only zerotier-identity-physical
+mise x uv -- uv run credentials derived sync --only zerotier-identity-dns
+```
+
+The first puts `conventions.overlay.NETWORK_ID` into the
+`ZEROTIER_NETWORK_ID` secret of the `physical-plan`, `physical` and
+`dns` Environments; the second puts the `ci-physical` member's identity,
+out of `physical`'s state, into `ZEROTIER_IDENTITY` in `physical-plan`
+and `physical`; the third puts the `ci-dns` member's into
+`ZEROTIER_IDENTITY` in `dns`. Each resolves, pushes and verifies its
+row.
+
+**The reading is the drift check**, which previews every stack with
+`--refresh --expect-no-changes`, joins the overlay with the identities
+just pushed, and applies nothing (`.github/workflows/drift.yml`):
+
+```sh
+gh workflow run drift.yml --repo Aetf/kluster
+gh run list --workflow drift.yml --repo Aetf/kluster --limit 1 --json databaseId,createdAt,status
+gh run watch <databaseId> --repo Aetf/kluster
+gh run view <databaseId> --repo Aetf/kluster --json jobs --jq '.jobs[] | .name, (.steps[] | "  \(.conclusion)\t\(.name)")'
+gh run view <databaseId> --repo Aetf/kluster --log-failed
+```
+
+It passes when the `physical` job succeeds, and the `dns` job either
+succeeds or fails in its `Refresh and compare` step with §8.2's
+`pending` DNSSEC status as its only diff. The step listing is what
+tells the two kinds of red apart: a `dns` job red at its join step
+failed to install its identity, and one red at `Refresh and compare`
+with that diff alone did not. The `physical` job proves its join: its
+preview dials the device over the overlay. The `dns` job proves less.
+The action is called with no `wait_for`, so its join step returns once
+`zerotier-cli join` does, admitted or not, and while `ROUTES` is empty
+the `dns` preview reaches nothing over the overlay. What it shows is
+that the identity installs and the stack previews. That `ci-dns` is a
+member Central admits is read in Central's member list, which shows it
+seen during the run. Its path to the resolvers is first exercised by
+the first rewrite the stack writes. Until §8.4 has run for every
+zone the `dns` job stays red that way. The `k8s-base` and `apps` jobs
+fail, and go on failing until those stacks hold a copy of the
+kubeconfig (operations.md §2.5); their failure makes the run red and
+starts its alert job, which dispatches into the ops repository, where
+nothing handles it yet (operations.md §4).
+
+**The way back** takes the identities out of the Environments, which
+stops the deploy chain at `plan-physical` again:
+
+```sh
+gh secret delete ZEROTIER_IDENTITY --env dns --repo Aetf/kluster
+gh secret delete ZEROTIER_IDENTITY --env physical --repo Aetf/kluster
+gh secret delete ZEROTIER_IDENTITY --env physical-plan --repo Aetf/kluster
+gh secret list --env dns --repo Aetf/kluster      # and the same for the other two: no ZEROTIER_IDENTITY
+```
+
+The network id stays: it opens nothing without an identity. If the
+identities themselves are in doubt, they are replaced as credentials.md
+§4.1 gives it beside stage 10, which also contains them at Central
+first.
+
+### 8.4 The DS records
+
+A zone signed with no DS at its parent is served unvalidated, which is
+the state of every zone the `dns` stack signs for the first time in
+§8.2. The DS is what validating resolvers then check every answer
+against, so **a wrong DS fails the whole zone for every validating
+resolver** until it is removed and the parent's TTL for it has run out.
+That cost sets the order:
+
+-   unlimited-code.works first, as the control: its parent already
+    holds a DS (sources-of-truth.md, reading C2), so the read below must
+    produce exactly that DS before it is trusted for any other zone;
+-   then peifeng.phd and ucw.phd, the parked zones. This
+    installation serves nothing in them, but ucw.phd is also the zone under which the gateway's
+    proxy holds its `*.lan.ucw.phd` names (`conventions/dns.py`,
+    `PARKED_ZONES`), so a wrong DS there also fails the proxy's DNS-01
+    issuance for as long as it stands;
+-   then jiahui.id, and only once it has passed, jiahui.love: these two
+    carry the family's site and the registrar's mail forwarding.
+
+No DS goes in for a zone whose server does not yet answer its keys.
+Every zone above except the control is registered at Namecheap.
+jiahui.id's registration names no registrar in its public record, so
+if that domain is not in the Namecheap account, its step waits for the
+registrar to be found.
+
+**Read the DS from the zone**, at its own server:
+
+```sh
+z=unlimited-code.works                  # the control first, then one zone at a time
+ns="$(drill NS "$z" | awk '/^;/ {next} $4 == "NS" {print $5; exit}')"
+drill -s DNSKEY "$z" @"$ns"
+mise x -- pulumi stack export --stack dns | jq -r --arg z "$z" '.deployment.resources[] | select(.urn | endswith("::" + $z + "-dnssec")) | .outputs.ds'
+```
+
+`drill -s` prints, after the answer, the DS records equivalent to each
+key. The DS is the `; sha256:` line under the key whose answer line
+carries the flags `257` (`ksk` in `drill`'s comment): key tag,
+algorithm, digest type `2`, digest. The last command prints the DS the
+`dns` stack recorded for the zone's `ZoneDnssec`, read out of state
+without decrypting anything; the two agree, field for field, the
+digest compared without regard to case, since Cloudflare writes it in
+upper-case hexadecimal and `drill` in lower-case. On the
+control zone, both also agree with what the parent already holds:
+
+```sh
+tld=${z##*.}
+pns="$(drill NS "$tld" | awk '/^;/ {next} $4 == "NS" {print $5; exit}')"
+drill DS "$z" @"$pns"
+```
+
+**Enter it at Namecheap**, for every zone but the control: the
+domain's Advanced DNS page, its DNSSEC section, a new DS with the key
+tag, the algorithm, the digest type and the digest above. A domain
+whose page offers no way to add a DS stays signed and unvalidated,
+which is where it was before §8.2, and that is recorded on the bring-up
+issue rather than worked around.
+
+**Check that it took**, with `tld` and `pns` set for this zone as
+above:
+
+```sh
+drill DS "$z" @"$pns"                   # the parent's DS: the record entered, and its TTL
+drill -D SOA "$z" @1.1.1.1              # flags: ... ad
+drill -D SOA "$z" @8.8.8.8              # flags: ... ad
+```
+
+It passes when the parent answers the DS that was entered and both
+validating resolvers answer `NOERROR` with the `ad` flag set, and that
+is what the next zone waits for. The parent can take minutes to publish
+what Namecheap saved, and a resolver that cached the zone's earlier
+unsigned delegation sets `ad` only once that entry has expired, so a
+missing `ad` is waited out. A `SERVFAIL` is not: it is the DS not
+matching the zone's key, and the way back runs at once. Write down the
+TTL the parent's answer carries; it is how long the way back takes.
+
+Cloudflare clears the zone's `pending` status on a schedule of its own,
+usually within the hour, so its DNSSEC panel and the refreshed preview
+are read afterward rather than gated on:
+
+```sh
+mise x -- pulumi preview --stack dns --refresh --expect-no-changes
+```
+
+Once every zone has passed, the panel reads active for each and the
+preview is clean.
+
+**The way back** is the DS removed at Namecheap, as declarative/dns.md
+§1.3 gives it: the zone stays signed and goes back to unvalidated, and
+validating resolvers recover once the parent's TTL for the removed DS
+has run out.
