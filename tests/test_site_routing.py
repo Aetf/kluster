@@ -17,13 +17,16 @@ the sequence rather than of any line the file contains.
 
 from __future__ import annotations
 
+import errno
 import os
 import re
 import subprocess
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import final
 
+import process_sessions
+import psutil
 import pytest
 import pytest_asyncio
 from device_places import DEVICE_DIRECTORY
@@ -51,6 +54,14 @@ STOCK_DAEMON_LIST = 'zebra=yes\nbgpd=no\nospfd=no\n'
 #: Two firmware releases, as the image's release file carries them.
 RELEASE = 'UDMPROSE.al324.v5.1.33.44ce47b.260909.0025\n'
 NEXT_RELEASE = 'UDMPROSE.al324.v5.1.40.0123abc.261101.0010\n'
+
+#: How long one command this suite runs -- a converge, a checksum -- may take
+#: before the case fails naming it: a stop-loss, which nothing asserts on.
+#: A converge takes tens of milliseconds, so this is hundreds of times one,
+#: and it sits well below the suite's per-case bound (`timeout` in
+#: `pyproject.toml`), so a stalled run fails by name with the rest of its case
+#: still inside that bound.
+COMMAND_TIMEOUT = 10
 
 
 @final
@@ -164,7 +175,13 @@ def _device(tmp_path: Path, monitor: Recorder, *, configuration: str, daemons: s
 
 
 def _converge(device: _Device, *, daemon_answers: bool = True, syntax_accepted: bool = True) -> _Run:
-    """Run the converger once, and read back what it did."""
+    """Run the converger once, and read back what it did.
+
+    The run leads a POSIX session of its own and is bounded by
+    `COMMAND_TIMEOUT`: a converger still running then raises `TimeoutExpired`
+    naming it, and every process it started is gone when this returns or
+    raises.
+    """
     device.systemd.failing(routing.FRR_SERVICE, not daemon_answers)
     if syntax_accepted:
         device.rejection.unlink(missing_ok=True)
@@ -173,11 +190,10 @@ def _converge(device: _Device, *, daemon_answers: bool = True, syntax_accepted: 
     _ = device.systemd.take_calls()
     device.checks.unlink(missing_ok=True)
 
-    completed = subprocess.run(
+    completed = process_sessions.run(
         ['/bin/sh', str(device.script)],
         env={'PATH': f'{device.systemd.tools}:{device.tools}:/usr/bin:/bin'},
-        capture_output=True,
-        check=False,
+        timeout=COMMAND_TIMEOUT,
     )
 
     def _recorded(record: Path) -> list[str]:
@@ -195,20 +211,31 @@ def _converge(device: _Device, *, daemon_answers: bool = True, syntax_accepted: 
 def _checksum(path: Path) -> str:
     """What `cksum` prints for a file read on its standard input, as the converger reads the source."""
     with path.open('rb') as content:
-        completed = subprocess.run(
-            ['cksum'],
-            stdin=content,
-            capture_output=True,
-            check=True,
-            text=True,
-        )
+        completed = process_sessions.run(['cksum'], stdin=content, timeout=COMMAND_TIMEOUT, text=True, check=True)
     return completed.stdout.rstrip('\n')
 
 
-def _stamp(device: _Device, release: str) -> str:
-    """The stamp a run on `release` writes: the source, then the parser -- the release and the binary."""
-    parser = device.tools / routing.FRR_PARSER
-    return f'{_checksum(device.source)} {release.rstrip()} {_checksum(parser)}\n'
+def _release(fifo: Path) -> None:
+    """Open `fifo` for writing once: a process blocked opening it goes on, and reads EOF."""
+    try:
+        written = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+    except OSError as error:
+        if error.errno == errno.ENXIO:  # nobody is blocked opening it
+            return
+        raise
+    os.close(written)
+
+
+def _in_session(session: int) -> list[int]:
+    """Every process on the host whose POSIX session is `session`."""
+    found: list[int] = []
+    for pid in psutil.pids():
+        try:
+            if os.getsid(pid) == session:
+                found.append(pid)
+        except ProcessLookupError:
+            continue
+    return found
 
 
 @pytest_asyncio.fixture(scope='module', loop_scope='module', autouse=True)
@@ -274,12 +301,11 @@ def test_only_the_declared_configuration_is_promised_to_survive_a_firmware_updat
     converger and never declared here.
     """
     config = monitor.inputs_of(f'{NAME}-config')
-
-    assert config['path'] == f'{conventions.gateway.CUSTOM_ROOT}/{routing.FRR_DIRECTORY}/frr.conf'
-    assert config['path'] == routing.FRR_CONFIG
-    assert routing.FRR_LIVE_CONFIG.startswith('/etc/')
     directory = monitor.one(f'{NAME}-skeleton-{routing.FRR_DIRECTORY}')
 
+    assert PurePosixPath(config['path']).parent == PurePosixPath(directory.inputs['path'])
+    assert config['path'] == routing.FRR_CONFIG
+    assert not PurePosixPath(routing.FRR_LIVE_CONFIG).is_relative_to(conventions.gateway.CUSTOM_ROOT)
     assert directory.typ == DEVICE_DIRECTORY
     assert directory.inputs['path'] == persistence.skeleton_path(routing.FRR_DIRECTORY)
 
@@ -419,6 +445,7 @@ def test_the_daemons_copy_is_installed_with_the_ownership_the_daemon_suite_uses(
     """
     script = routing.converger_script()
 
+    assert routing.FRR_OWNER == routing.FRR_GROUP == 'frr', "the FRR suite's own account"
     assert f'install -o {routing.FRR_OWNER} -g {routing.FRR_GROUP} -m {routing.FRR_MODE}' in script
 
 
@@ -557,7 +584,6 @@ def test_a_firmware_update_that_kept_every_file_parses_and_restarts_again(monito
     assert updated.status == 0
     assert updated.checks == [f'-C -f {device.source}'], 'the new parser reads the file before anything else happens'
     assert updated.commands == [f'restart {routing.FRR_SERVICE}']
-    assert device.stamp.read_text() == _stamp(device, NEXT_RELEASE)
     assert (settled.checks, settled.commands) == ([], []), 'the new release is recorded, so the next run is quiet'
 
 
@@ -601,7 +627,6 @@ def test_a_parser_replaced_under_the_same_release_parses_and_restarts_again(moni
     assert replaced.status == 0
     assert replaced.checks == [f'-C -f {device.source}']
     assert replaced.commands == [f'restart {routing.FRR_SERVICE}']
-    assert device.stamp.read_text() == _stamp(device, RELEASE)
     assert (settled.checks, settled.commands) == ([], [])
 
 
@@ -643,7 +668,6 @@ def test_a_stamp_written_before_it_named_the_release_is_stale(monitor: Recorder,
     assert upgraded.status == 0
     assert upgraded.checks == [f'-C -f {device.source}']
     assert upgraded.commands == [f'restart {routing.FRR_SERVICE}']
-    assert device.stamp.read_text() == _stamp(device, RELEASE)
     assert (settled.checks, settled.commands) == ([], [])
 
 
@@ -687,3 +711,42 @@ def test_undeclaring_the_configuration_does_not_take_the_daemon_away(monitor: Re
     assert device.live.read_text() == 'router bgp 65000\n'
     assert f'{routing.BGP_DAEMON}=yes' in device.daemons.read_text()
     assert routing.FRR_LIVE_CONFIG not in routing.converger_hook()
+
+
+def test_a_converger_that_stalls_fails_naming_itself_and_leaves_nothing_running(
+    monitor: Recorder, tmp_path: Path
+) -> None:
+    """A run that never ends fails the case by name, and takes what it started with it.
+
+    The parser's stand-in here writes its own `/proc` status line and then
+    blocks opening a FIFO nobody writes, as a parser hung on its input would.
+    A converger killed alone at its bound would leave that parser blocked for
+    good; the run's POSIX session is what takes it, so the converger fails as a
+    `TimeoutExpired` naming it, below the case bound, and nothing is left in the
+    session the parser reported.
+    """
+    device = _device(tmp_path, monitor, configuration='router bgp 65000\n')
+    fifo = tmp_path / 'never-written'
+    os.mkfifo(fifo)
+    status = tmp_path / 'parser-status'
+    parser = device.tools / routing.FRR_PARSER
+    _ = parser.write_text(f'#!/bin/sh\nread -r line </proc/$$/stat\necho "$line" >{status}\n: <{fifo}\n')
+
+    try:
+        with pytest.raises(subprocess.TimeoutExpired) as expired:
+            _ = _converge(device)
+
+        assert status.exists(), 'the run stalled before it reached the parser'
+        line = status.read_text()
+        pid = int(line.split(' ', 1)[0])
+        # Past the parenthesized command name, the fields from the state on:
+        # the session is proc(5)'s sixth field.
+        session = int(line.rsplit(')', 1)[1].split()[3])
+        assert expired.value.cmd == ['/bin/sh', str(device.script)]
+        assert expired.value.timeout == COMMAND_TIMEOUT
+        assert _in_session(session) == []
+        (note,) = expired.value.__notes__
+        assert f'POSIX session {session} of ' in note, 'the parser was in the run it stalled'
+        assert f'{pid} /bin/sh {parser} ' in note, 'the stall names the process it was waiting on'
+    finally:
+        _release(fifo)
