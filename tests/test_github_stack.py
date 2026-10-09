@@ -19,14 +19,13 @@ the run here rather than in `pulumi preview`.
 """
 
 import inspect
-import re
 from collections.abc import AsyncGenerator
 from typing import Any, cast
 
 import pulumi
 import pytest
 import pytest_asyncio
-from credentials_command_tree import commands
+from credentials_command_tree import named_commands
 from mock_monitor import Recorder, declaring, run_under_backstop
 from workflow_files import github_name, read_workflow, workflow_jobs, workflows_and_actions
 
@@ -371,12 +370,13 @@ async def test_a_run_without_the_token_refuses_by_name_and_names_what_fills_it()
             with pytest.raises(ValueError, match=program.ADMIN_TOKEN) as refusal:
                 await program.main()
 
-        # The command the refusal names is one the parser carries, under the
-        # row the device register spells: a renamed leaf or row fails here,
-        # where a message rebuilt by the same formula would match itself.
-        (named,) = re.findall(r'`(credentials [^`]+)`', str(refusal.value))
-        assert named.split() in [['credentials', *argv] for argv in commands()], f'`{named}` is not a command'
-        assert devices.DEVICES[devices.GITHUB_ADMIN].member in named.split()
+        # The command the refusal names is one the parser carries, and the row
+        # the parser reads in it is the one the device register spells: a
+        # renamed leaf or row fails here, where a message rebuilt by the same
+        # formula would match itself, and so does the row named only as an
+        # option's value (`derived sync --only <row>`, which refuses it).
+        ((_, parsed),) = named_commands(str(refusal.value))
+        assert parsed['member'] == devices.DEVICES[devices.GITHUB_ADMIN].member
         assert monitor.declared == [], 'the refusal must come before anything is declared'
     finally:
         pulumi.runtime.set_all_config({f'kluster:{program.ADMIN_TOKEN}': TOKEN})

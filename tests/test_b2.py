@@ -28,12 +28,13 @@ from typing import Any
 import pytest
 import requests
 from b2_api import ACCOUNT_ID, FakeApi
+from credentials_command_tree import named_commands
 from fake_gh import RecordedGh
 from memory_kit import MemoryKit
 
 from kluster import conventions
 from kluster.lib.state_backend import settings as appliance_settings
-from kluster.scripts.credentials import b2, cli, derived, entries, masters, payload
+from kluster.scripts.credentials import b2, derived, entries, masters, payload
 from kluster.scripts.credentials.delivery import Delivery
 from kluster.scripts.credentials.github_secrets import Forge
 from kluster.scripts.credentials.kdbx import KdbxStore
@@ -382,11 +383,6 @@ def test_resuming_a_rotation_in_another_account_deletes_nothing(
     assert memory_kit.get(SEED_ENTRY, attribute='UserName') == stored.key_id
 
 
-def _commands_named(message: str) -> list[list[str]]:
-    """Every `credentials …` command a refusal quotes, as argv without the program name."""
-    return [quoted.split()[1:] for quoted in re.findall(r'`(credentials [^`]+)`', message)]
-
-
 def _conventions_named(message: str) -> list[str]:
     return re.findall(r'`conventions\.(\w+)`', message)
 
@@ -434,11 +430,9 @@ def test_a_refusal_names_both_repairs_and_each_is_a_command_that_exists(
     for name in named:
         assert hasattr(getattr(conventions, name), 'account_id'), f'{name} records no account_id'
 
-    commands = _commands_named(message)
+    commands = named_commands(message)
     assert commands, message
-    parser = cli.build_parser()
-    for argv in commands:
-        parsed = vars(parser.parse_args(argv))
+    for argv, parsed in commands:
         assert [parsed['subject'], parsed['member'], parsed['action']] != refused_command, (
             f'the refusal sends the operator back to the command that refused: {argv}'
         )

@@ -11,9 +11,9 @@ holds the key for, and the private half reaching a file or a log line.
 from __future__ import annotations
 
 import logging
-import shutil
 from pathlib import Path
 
+import pinned_tools
 import pytest
 from fake_gh import RecordedGh
 
@@ -33,9 +33,7 @@ def pinned_age() -> None:
     Refused when either is missing rather than skipped, as the module would
     otherwise pass with nothing run.
     """
-    for binary in (age.KEYGEN, age.BINARY):
-        if shutil.which(binary) is None:
-            pytest.fail(f'{binary} is not on PATH: mise.toml pins it, so run the suite under `mise x`')
+    pinned_tools.require(*pinned_tools.AGE)
 
 
 @pytest.fixture

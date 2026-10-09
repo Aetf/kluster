@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import drill_recipient_redirect
+import pinned_tools
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -35,21 +36,14 @@ from kluster.scripts.credentials import age, escrow, pki
 from kluster.scripts.state_backend import config
 
 
-def _pinned(*binaries: str) -> None:
-    """Refuses a pinned tool that is missing, by name, rather than skipping the cases that need it."""
-    for binary in binaries:
-        if shutil.which(binary) is None:
-            pytest.fail(f'{binary} is not on PATH: mise.toml pins it, so run the suite under `mise x`')
-
-
 @pytest.fixture
 def pinned_age() -> None:
-    _pinned(age.BINARY, age.KEYGEN)
+    pinned_tools.require(*pinned_tools.AGE)
 
 
 @pytest.fixture
 def pinned_butane() -> None:
-    _pinned('butane')
+    pinned_tools.require('butane')
 
 
 needs_age = pytest.mark.usefixtures('pinned_age')

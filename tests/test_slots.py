@@ -27,6 +27,7 @@ from typing import cast, get_args
 import pytest
 import yaml
 from credentials_command_tree import commands as cli_commands
+from credentials_command_tree import named_commands, quoted_commands
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from fake_gh import RecordedGh
@@ -138,10 +139,6 @@ def test_every_register_row_is_in_the_map() -> None:
     assert missing == []
 
 
-#: A `credentials …` command where a line of prose names one, in a code span.
-NAMED_COMMAND = re.compile(r'`(credentials [^`]+)`')
-
-
 def test_a_command_a_row_names_is_one_the_tree_carries() -> None:
     # `derived ls` prints each row's source (`describe()`), which names the
     # commands that produce or deliver it, with an "unbuilt" note where a minted
@@ -170,7 +167,7 @@ def test_a_command_a_row_names_is_one_the_tree_carries() -> None:
             f'{name} names {producer!r} as its producer, which is neither a `credentials` command nor a program'
         )
         unbuilt = bool(getattr(row.source, 'unbuilt', ''))
-        commands = set(NAMED_COMMAND.findall(row.source.describe()))
+        commands = {' '.join(('credentials', *argv)) for argv in quoted_commands(row.source.describe())}
         if producer.startswith('credentials '):
             commands.add(producer)
         named += [(name, command, unbuilt and command == producer) for command in sorted(commands)]
@@ -1405,11 +1402,10 @@ def test_a_minted_row_refuses_by_naming_the_command_that_delivers_it() -> None:
     with pytest.raises(SlotRefused) as refusal:
         _ = slots.ROWS[name].resolve(context(RecordedGh()))
 
-    named = NAMED_COMMAND.findall(str(refusal.value))
+    named = named_commands(str(refusal.value))
     assert named, f'the refusal names no `credentials` command: {refusal.value}'
-    tree = {_command_line(argv) for argv in cli_commands()}
-    assert [command for command in named if command not in tree] == []
-    assert all(name in command.split() for command in named)
+    outside = [argv for argv, parsed in named if parsed['member'] != name]
+    assert outside == [], f'the refusal names a command outside {name}: {refusal.value}'
 
 
 def test_a_minted_row_is_not_this_command_s_business(caplog: pytest.LogCaptureFixture) -> None:

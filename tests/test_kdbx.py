@@ -9,7 +9,6 @@ written and is not.
 from __future__ import annotations
 
 import logging
-import re
 import shutil
 import types
 from collections.abc import Callable
@@ -17,8 +16,9 @@ from pathlib import Path
 
 import keyring.errors
 import pytest
+from credentials_command_tree import named_commands
 
-from kluster.scripts.credentials import cli, workstation
+from kluster.scripts.credentials import workstation
 from kluster.scripts.credentials.kdbx import KEYRING_SERVICE, PATH_ENV, KdbxError, KdbxStore
 
 PASSWORD = 'correct horse battery staple'
@@ -326,8 +326,7 @@ def test_the_prompt_names_the_command_that_stops_it(
     KdbxStore(path=path).unlock()
 
     assert not secret_store
-    (quoted,) = re.findall(r'`credentials ([^`]+)`', caplog.text)
-    parsed = vars(cli.build_parser().parse_args(quoted.split()))
+    ((_, parsed),) = named_commands(caplog.text)
     assert (parsed['subject'], parsed['member'], parsed['action']) == ('kit', 'password', 'remember')
 
 
