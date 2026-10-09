@@ -67,11 +67,6 @@ def test_render_reads_its_names_from_the_parameter_dataclass(package: str) -> No
     assert templates.render(package, 'templates/greeting.txt.j2', Greeting(who='alice')) == 'hello alice\n'
 
 
-def test_a_trailing_newline_survives_rendering(package: str) -> None:
-    """A unit file and a shell script both end in one, and both are compared as text."""
-    assert templates.render(package, 'templates/greeting.txt.j2', Greeting(who='alice')).endswith('\n')
-
-
 def test_a_forgotten_parameter_is_refused_rather_than_rendered_empty(package: str) -> None:
     """`StrictUndefined`, so the failure is here and not in the file's reader.
 
@@ -86,6 +81,18 @@ def test_a_forgotten_parameter_is_refused_rather_than_rendered_empty(package: st
 def test_parameters_are_a_dataclass_rather_than_a_bag_of_names(package: str) -> None:
     with pytest.raises(TypeError, match='frozen dataclass'):
         templates.render(package, 'templates/greeting.txt.j2', {'who': 'alice'})
+
+
+@dataclass
+class Unfrozen:
+    """A template's parameters as a dataclass that can still be changed after the call."""
+
+    who: str
+
+
+def test_parameters_are_a_frozen_dataclass_and_not_merely_a_dataclass(package: str) -> None:
+    with pytest.raises(TypeError, match='Unfrozen is not frozen'):
+        templates.render(package, 'templates/greeting.txt.j2', Unfrozen(who='alice'))
 
 
 def test_the_j2_suffix_decides_that_a_file_is_rendered_and_leaves_the_key_without_it(package: str) -> None:
