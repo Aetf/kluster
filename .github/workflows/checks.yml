@@ -44,9 +44,16 @@ jobs:
           version: 2026.9.14
           experimental: true
 
+      # The log names the interpreter every step after this one runs -- the
+      # build uv installs for `.python-version` -- and the OpenSSL that build
+      # carries, which is what every TLS connection a job's Python makes runs
+      # on.
       - name: Install dependencies
         timeout-minutes: 5
-        run: mise x uv -- uv sync --locked
+        run: |
+          set -euo pipefail
+          mise x uv -- uv sync --locked
+          mise x uv -- uv run python -c 'import ssl, sys; print(sys.version, ssl.OPENSSL_VERSION)'
 
       - name: Format
         timeout-minutes: 5

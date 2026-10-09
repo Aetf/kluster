@@ -172,6 +172,8 @@ file that token can write (cluster/architecture.md §4.3).
 
 Every release the installation runs and did not write:
 
+-   the Python interpreter every job runs, the build uv installs for
+    `.python-version`;
 -   the Python packages in `uv.lock`;
 -   GitHub Actions;
 -   mise, and the tools `mise.toml` pins;
@@ -190,6 +192,10 @@ a digest that the download is checked against, so a release asset
 uploaded again under the same version is refused rather than installed.
 Today:
 
+-   the Python interpreter, by the sha256 the pinned uv carries for each
+    build it can install, which uv checks the download against; uv is a
+    tool `mise.toml` pins, so the table moves only with a uv bump, and a
+    build waits out the release age below as the uv that carries it does;
 -   the Python packages, by the hashes `uv.lock` records;
 -   the Actions, by commit;
 -   the tools `mise.toml` pins, by the sha256 `mise.lock` records for each
