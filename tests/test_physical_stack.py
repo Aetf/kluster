@@ -14,12 +14,17 @@ leave a stack that comes up looking whole.
 Every run here is under the parent backstop `kluster.main` installs before a
 real run declares anything, so a resource a component leaves unparented fails
 the run here rather than in `pulumi preview`.
+
+The program runs once under the configuration as committed (`ran`), and the
+cases about that run read the one recording; a case that needs the program
+under anything else runs it itself (`setup`).
 """
 
 import inspect
 import json
 import traceback
 from collections import Counter
+from dataclasses import dataclass
 from ipaddress import ip_address
 from pathlib import Path
 from typing import Any, cast
@@ -76,8 +81,58 @@ BOOTSTRAP_HOST = '192.0.2.1'
 BOOTSTRAP_NAME = 'gateway.invalid'
 
 
-@pytest_asyncio.fixture(autouse=True)
+@dataclass(frozen=True)
+class Run:
+    """The whole program, run once under the configuration as committed.
+
+    Most cases here hold one property of what that run declared, and the run
+    is the same for every one of them, so it is made once for the module and
+    each of those cases reads it. Reading is all such a case does: the
+    recording is one object every later case reads too, so a case that wrote
+    to it would leave the verdict of whatever runs after it to the collection
+    order. A case that needs the program under anything else -- a knob set, a
+    key removed, an installation that answers differently, a run that is
+    refused -- runs it itself, against `setup`.
+    """
+
+    #: What the run declared and called, as the installation recorded it.
+    recorded: Installation
+    #: The checkout root the run was pointed at, where it wrote the libvirt
+    #: session's files.
+    root: Path
+    #: Every stack export, by name, as the program handed it to `pulumi.export`.
+    exported: dict[str, object]
+
+
+@pytest_asyncio.fixture(scope='module')
+async def ran(tmp_path_factory: pytest.TempPathFactory) -> Run:
+    root = tmp_path_factory.mktemp('checkout')
+    exported: dict[str, object] = {}
+    export = pulumi.export
+
+    def record(name: str, value: object) -> None:
+        exported[name] = value
+        export(name, value)
+
+    # Undone once the run has settled, so a case that runs the program itself
+    # afterwards starts from what its own `setup` installs.
+    with pytest.MonkeyPatch.context() as patch:
+        recorded = await install(patch, root)
+        patch.setattr(physical.pulumi, 'export', record)
+        async with declaring():
+            await physical.main()
+    return Run(recorded=recorded, root=root, exported=exported)
+
+
+#: What a case that awaits one of the run's outputs is marked with: the
+#: outputs were made on the loop the module's run ran on, so the case runs
+#: there too.
+on_the_runs_loop = pytest.mark.asyncio(loop_scope='module')
+
+
+@pytest_asyncio.fixture
 async def setup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Installation:
+    """A fresh installation, for a case that runs the program itself."""
     return await install(monkeypatch, tmp_path)
 
 
@@ -87,17 +142,14 @@ async def setup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Installation
 AREA_PROVIDERS = ('oci', 'talos', 'libvirt', 'b2', 'unifi', 'zerotier')
 
 
-@pytest.mark.asyncio
-async def test_the_stack_declares_every_area_of_the_design(setup: Installation) -> None:
-    # The whole program against the mocks, which is where a wiring mistake
-    # surfaces — an argument the provider would reject, or a dependency that
-    # needs the endpoint before it exists.
-    async with declaring():
-        await physical.main()
-
+def test_the_stack_declares_every_area_of_the_design(ran: Run) -> None:
+    # The whole program against the mocks is where a wiring mistake surfaces —
+    # an argument the provider would reject, or a dependency that needs the
+    # endpoint before it exists — and `ran` is that run, so such a mistake
+    # fails here before any assertion is read.
     # And the inventory property: an area that declared nothing at all would
     # leave a stack that runs clean and comes up one provider short.
-    families = {typ.partition(':')[0] for typ in setup.types}
+    families = {typ.partition(':')[0] for typ in ran.recorded.types}
     assert set(AREA_PROVIDERS) <= families
 
 
@@ -147,8 +199,7 @@ def test_no_census_parameter_carries_a_default() -> None:
         )
 
 
-@pytest.mark.asyncio
-async def test_the_controller_is_dialed_where_the_roster_placed_the_gateway(setup: Installation) -> None:
+def test_the_controller_is_dialed_where_the_roster_placed_the_gateway(ran: Run) -> None:
     """The controller's address is derived, not recorded beside its key.
 
     The gateway's overlay address is handed out by this program's own ZeroTier
@@ -157,13 +208,11 @@ async def test_the_controller_is_dialed_where_the_roster_placed_the_gateway(setu
     and the next hop of every managed route. A value typed in beside the API key would be a second
     copy of that, free to disagree with the roster that decides it.
     """
-    async with declaring():
-        await physical.main()
-
     assert (
-        setup.inputs_of(f'{conventions.CLUSTER_NAME}-firewall-unifi')['apiUrl'] == f'https://{conventions.overlay.UDM}'
+        ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-firewall-unifi')['apiUrl']
+        == f'https://{conventions.overlay.UDM}'
     )
-    assert setup.inputs_of(f'{conventions.CLUSTER_NAME}-routing-config')['host'] == str(conventions.overlay.UDM)
+    assert ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-routing-config')['host'] == str(conventions.overlay.UDM)
     # And nothing supplies it: the stack has no key to read it from, so a
     # `record` command that pushed one would be filling a slot nobody reads.
     assert not [key for key in STACK_CONFIG if 'ApiUrl' in key]
@@ -172,8 +221,7 @@ async def test_the_controller_is_dialed_where_the_roster_placed_the_gateway(setu
     assert f'kluster:{physical.GATEWAY_BOOTSTRAP_HOST}' not in STACK_CONFIG
 
 
-@pytest.mark.asyncio
-async def test_the_cluster_zone_is_opened_to_the_home_with_the_iot_vlan_carved_out(setup: Installation) -> None:
+def test_the_cluster_zone_is_opened_to_the_home_with_the_iot_vlan_carved_out(ran: Run) -> None:
     """The zone matrix as the whole run declares it, not as one component does.
 
     A zone the controller has just been told about is denied against every
@@ -184,19 +232,16 @@ async def test_the_cluster_zone_is_opened_to_the_home_with_the_iot_vlan_carved_o
     hold only if the stack reaches this arm of the gateway at all, which is
     what running the program rather than the component proves.
     """
-    async with declaring():
-        await physical.main()
-
     name = f'{conventions.CLUSTER_NAME}-firewall'
     zone = f'{name}-zone_id'
     internal = zone_id('Internal')
 
-    outward = setup.inputs_of(f'{name}-cluster-internal')
+    outward = ran.recorded.inputs_of(f'{name}-cluster-internal')
     assert outward['action'] == 'ALLOW'
     assert outward['source']['zoneId'] == zone
     assert outward['destination']['zoneId'] == internal
 
-    inward = setup.inputs_of(f'{name}-internal-cluster')
+    inward = ran.recorded.inputs_of(f'{name}-internal-cluster')
     assert inward['action'] == 'ALLOW'
     assert inward['source']['zoneId'] == internal
     assert inward['destination']['zoneId'] == zone
@@ -204,25 +249,28 @@ async def test_the_cluster_zone_is_opened_to_the_home_with_the_iot_vlan_carved_o
     # Two drops, one per family, because the source is the IoT VLAN's address
     # group and a group holds one family.
     for suffix, subnet in (('v4', str(conventions.IOT_VLAN.v4)), ('v6', str(conventions.IOT_VLAN.v6))):
-        drop = setup.inputs_of(f'{name}-iot-cluster-{suffix}')
+        drop = ran.recorded.inputs_of(f'{name}-iot-cluster-{suffix}')
         assert drop['action'] == 'BLOCK'
         assert drop['source']['ipGroupId'] == f'{name}-iot-{suffix}_id'
         assert 'ips' not in drop['source']
-        assert setup.inputs_of(f'{name}-iot-{suffix}', 'unifi:index/firewallGroup:FirewallGroup')['members'] == [subnet]
+        assert ran.recorded.inputs_of(f'{name}-iot-{suffix}', 'unifi:index/firewallGroup:FirewallGroup')['members'] == [
+            subnet
+        ]
         assert drop['destination']['zoneId'] == zone
 
     # The drops first: the allow behind them is the broad one here, so an
     # allow declared ahead of them would answer for the IoT VLAN as well.
-    assert setup.inputs_of(f'{name}-internal-cluster-order')['beforePredefinedIds'] == [
+    assert ran.recorded.inputs_of(f'{name}-internal-cluster-order')['beforePredefinedIds'] == [
         f'{name}-iot-cluster-v4_id',
         f'{name}-iot-cluster-v6_id',
         f'{name}-internal-cluster_id',
     ]
-    assert setup.inputs_of(f'{name}-cluster-internal-order')['beforePredefinedIds'] == [f'{name}-cluster-internal_id']
+    assert ran.recorded.inputs_of(f'{name}-cluster-internal-order')['beforePredefinedIds'] == [
+        f'{name}-cluster-internal_id'
+    ]
 
 
-@pytest.mark.asyncio
-async def test_the_site_resolver_is_given_no_static_host(setup: Installation) -> None:
+def test_the_site_resolver_is_given_no_static_host(ran: Run) -> None:
     """The device name plane is DHCP-derived, so the roll of literal names is empty.
 
     Empty and passed anyway: the component has no roll of its own to fall back
@@ -232,17 +280,10 @@ async def test_the_site_resolver_is_given_no_static_host(setup: Installation) ->
     """
     assert physical.GATEWAY_STATIC_HOSTS == {}
 
-    async with declaring():
-        await physical.main()
-
-    assert [typ for typ in setup.types if 'dnsRecord' in typ] == []
+    assert [typ for typ in ran.recorded.types if 'dnsRecord' in typ] == []
 
 
-@pytest.mark.asyncio
-async def test_the_libvirt_session_is_dialed_where_the_roster_placed_the_host(
-    setup: Installation,
-    tmp_path: Path,
-) -> None:
+def test_the_libvirt_session_is_dialed_where_the_roster_placed_the_host(ran: Run) -> None:
     """The libvirt endpoint is derived from the roster and the checkout.
 
     Nothing about this URI can be recorded in committed configuration. The
@@ -254,10 +295,7 @@ async def test_the_libvirt_session_is_dialed_where_the_roster_placed_the_host(
     """
     address = str(conventions.overlay.member(conventions.overlay.MEMBER_HOMELAB).address)
 
-    async with declaring():
-        await physical.main()
-
-    uri = cast('str', setup.inputs_of(f'{conventions.CLUSTER_NAME}-libvirt')['uri'])
+    uri = cast('str', ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-libvirt')['uri'])
     parts = urlsplit(uri)
     assert parts.scheme == 'qemu+ssh'
     assert parts.netloc == f'{homelab.LIBVIRT_USER}@{address}'
@@ -271,16 +309,15 @@ async def test_the_libvirt_session_is_dialed_where_the_roster_placed_the_host(
     query = parse_qs(parts.query)
     assert query['keyfile'] == [f'{slot}/{homelab.KEYFILE}']
     assert query['knownhosts'] == [f'{slot}/{homelab.KNOWN_HOSTS}']
-    assert (tmp_path / slot / homelab.KEYFILE).read_text() == LIBVIRT_KEY
+    assert (ran.root / slot / homelab.KEYFILE).read_text() == LIBVIRT_KEY
     # The pin is written against the address the URI dials: a `known_hosts`
     # entry keyed on anything else matches nothing the session sees.
-    assert (tmp_path / slot / homelab.KNOWN_HOSTS).read_text() == f'{address} {conventions.HOMELAB_HOST_KEY}\n'
+    assert (ran.root / slot / homelab.KNOWN_HOSTS).read_text() == f'{address} {conventions.HOMELAB_HOST_KEY}\n'
     # And no key holds any of it: what is configured is the credential alone.
     assert not [key for key in STACK_CONFIG if 'libvirtUri' in key]
 
 
-@pytest.mark.asyncio
-async def test_the_overlay_carries_rules_composed_from_the_roster_and_the_resolvers(setup: Installation) -> None:
+def test_the_overlay_carries_rules_composed_from_the_roster_and_the_resolvers(ran: Run) -> None:
     """The policy is composed here, out of the facts the program already holds.
 
     `Overlay` declares none of it (rfc-002 §6), so this is where what each run
@@ -295,10 +332,7 @@ async def test_the_overlay_carries_rules_composed_from_the_roster_and_the_resolv
     """
     homelab_address = conventions.overlay.member(conventions.overlay.MEMBER_HOMELAB).address
 
-    async with declaring():
-        await physical.main()
-
-    rendered = cast('str', setup.inputs_of(f'{conventions.CLUSTER_NAME}-network')['flowRules'])
+    rendered = cast('str', ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-network')['flowRules'])
     minted = {member: f'{conventions.CLUSTER_NAME}-identity-{member}-node' for member in conventions.overlay.CI_MEMBERS}
     ci_physical = minted[conventions.overlay.MEMBER_CI_PHYSICAL]
     ci_dns = minted[conventions.overlay.MEMBER_CI_DNS]
@@ -315,10 +349,7 @@ async def test_the_overlay_carries_rules_composed_from_the_roster_and_the_resolv
         assert f'drop ztdest {node};' in rendered
 
 
-@pytest.mark.asyncio
-async def test_the_overlay_network_is_adopted_by_the_conventions_id_and_is_the_runs_only_adoption(
-    setup: Installation,
-) -> None:
+def test_the_overlay_network_is_adopted_by_the_conventions_id_and_is_the_runs_only_adoption(ran: Run) -> None:
     """One import in the whole program, and it is the network, by the id `conventions` states.
 
     The network is the one resource this stack adopts rather than creates: it
@@ -329,10 +360,7 @@ async def test_the_overlay_network_is_adopted_by_the_conventions_id_and_is_the_r
     §2.5) does not account for. The id is the convention's, not a literal
     here: the stack hands on what `conventions` says the network is.
     """
-    async with declaring():
-        await physical.main()
-
-    adopted = [request for request in setup.requested if request.importId]
+    adopted = [request for request in ran.recorded.requested if request.importId]
 
     assert [request.type for request in adopted] == ['zerotier:index/network:Network']
     (network,) = adopted
@@ -340,8 +368,7 @@ async def test_the_overlay_network_is_adopted_by_the_conventions_id_and_is_the_r
     assert network.importId == conventions.overlay.NETWORK_ID
 
 
-@pytest.mark.asyncio
-async def test_the_overlay_pushes_the_block_domain_and_the_resolvers_it_admits_a_run_to(setup: Installation) -> None:
+def test_the_overlay_pushes_the_block_domain_and_the_resolvers_it_admits_a_run_to(ran: Run) -> None:
     """The managed DNS reaches the network from `conventions`, not composed here.
 
     The domain is the convention's -- the overlay block's name, which
@@ -351,10 +378,7 @@ async def test_the_overlay_pushes_the_block_domain_and_the_resolvers_it_admits_a
     program would be a second spelling of either, free to disagree with the
     block or the census.
     """
-    async with declaring():
-        await physical.main()
-
-    assert setup.inputs_of(f'{conventions.CLUSTER_NAME}-network')['dns'] == [
+    assert ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-network')['dns'] == [
         {
             'domain': conventions.overlay.MANAGED_DNS.domain,
             'servers': [str(resolver.address) for resolver in conventions.gateway.RESOLVERS],
@@ -386,6 +410,7 @@ async def test_the_bootstrap_knob_moves_both_doors_to_the_gateway_at_once(setup:
     assert setup.inputs_of(f'{conventions.CLUSTER_NAME}-routing-config')['port'] == 22
 
 
+@pytest.mark.usefixtures('setup')
 @pytest.mark.asyncio
 async def test_a_bootstrap_host_that_is_a_name_is_refused_before_the_window_opens() -> None:
     """The one apply this knob exists for has no resolver behind it.
@@ -402,8 +427,7 @@ async def test_a_bootstrap_host_that_is_a_name_is_refused_before_the_window_open
         await physical.main()
 
 
-@pytest.mark.asyncio
-async def test_the_pin_a_preview_shows_is_the_constant_the_repository_holds(setup: Installation) -> None:
+def test_the_pin_a_preview_shows_is_the_constant_the_repository_holds(ran: Run) -> None:
     """A pin nobody can read is a pin nobody reviews (rfc-002 §11).
 
     The key the device must present is a public key and a decision of this
@@ -411,16 +435,12 @@ async def test_the_pin_a_preview_shows_is_the_constant_the_repository_holds(setu
     is what puts it in the preview a reviewer reads, in the clear, instead of
     behind the redaction a secret-typed value carries wherever it goes.
     """
-    async with declaring():
-        await physical.main()
-
-    declared = setup.inputs_of(f'{conventions.CLUSTER_NAME}-routing-config')['host_key']
+    declared = ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-routing-config')['host_key']
     assert declared == conventions.gateway.HOST_KEY
     assert not isinstance(declared, dict), 'the pin reached the engine marked secret'
 
 
-@pytest.mark.asyncio
-async def test_the_device_is_told_to_keep_accepting_the_key_this_stack_dials_with(setup: Installation) -> None:
+def test_the_device_is_told_to_keep_accepting_the_key_this_stack_dials_with(ran: Run) -> None:
     """The door this program comes through is one it declares, or an update closes it.
 
     `/root` is off `/data`, so the key that authorizes every push is exactly as
@@ -428,18 +448,14 @@ async def test_the_device_is_told_to_keep_accepting_the_key_this_stack_dials_wit
     half of its own credential, and nothing else: the operator's keys are on
     the device already and the converger takes none of them away.
     """
-    async with declaring():
-        await physical.main()
-
     name = f'{conventions.CLUSTER_NAME}-{conventions.PHYSICAL}'
-    declared = setup.inputs_of(f'{conventions.CLUSTER_NAME}-access-key-{name}')
+    declared = ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-access-key-{name}')
 
     assert declared['content'].strip() == conventions.gateway.CLIENT_KEY
     assert declared['path'] == access.key_path(name)
 
 
-@pytest.mark.asyncio
-async def test_the_device_is_given_the_packages_its_container_runtime_needs(setup: Installation) -> None:
+def test_the_device_is_given_the_packages_its_container_runtime_needs(ran: Run) -> None:
     """The gateway's persistence layer is declared, and with the set as data.
 
     What a firmware update wipes is reinstalled by a script in the device's boot
@@ -447,10 +463,7 @@ async def test_the_device_is_given_the_packages_its_container_runtime_needs(setu
     layers above the mechanism require — passed in rather than written into the
     script, so a requirement is stated by the component that has it.
     """
-    async with declaring():
-        await physical.main()
-
-    script = setup.inputs_of(f'{conventions.CLUSTER_NAME}-persistence-on-boot-{persistence.PACKAGES_SCRIPT}')
+    script = ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-persistence-on-boot-{persistence.PACKAGES_SCRIPT}')
 
     assert script['path'] == f'{conventions.gateway.ON_BOOT_D}/{persistence.PACKAGES_SCRIPT}'
     assert script['host'] == str(conventions.overlay.UDM)
@@ -458,8 +471,7 @@ async def test_the_device_is_given_the_packages_its_container_runtime_needs(setu
         assert package in script['content'], package
 
 
-@pytest.mark.asyncio
-async def test_every_child_carries_its_components_name(setup: Installation) -> None:
+def test_every_child_carries_its_components_name(ran: Run) -> None:
     """The rule, held on the whole program rather than on the census happening not to collide.
 
     The gateway is where it bites: the persistence mechanism declares a file on
@@ -469,14 +481,10 @@ async def test_every_child_carries_its_components_name(setup: Installation) -> N
     `SiteRouting`, one `AuthorizedKeys`, one `NspawnRuntime` -- and collides the
     day a second instance of one of them asks for a file of the same kind.
     """
-    async with declaring():
-        await physical.main()
-
-    assert setup.children_not_named_for_their_component() == {}
+    assert ran.recorded.children_not_named_for_their_component() == {}
 
 
-@pytest.mark.asyncio
-async def test_no_two_resources_claim_one_place_on_the_device(setup: Installation) -> None:
+def test_no_two_resources_claim_one_place_on_the_device(ran: Run) -> None:
     """One path on the device, one resource -- an invariant over the inputs, not over the names.
 
     Two components asking the mechanism for one `bin/` name, or one declaring a
@@ -487,12 +495,9 @@ async def test_no_two_resources_claim_one_place_on_the_device(setup: Installatio
     resource claims. The map is held complete first, since a device type it
     does not name is a type the census cannot see.
     """
-    async with declaring():
-        await physical.main()
-
-    device_types = {typ for typ in setup.types if typ.startswith(DEVICE_TYPE_PREFIX)}
+    device_types = {typ for typ in ran.recorded.types if typ.startswith(DEVICE_TYPE_PREFIX)}
     assert device_types <= set(PLACES), device_types - set(PLACES)
-    assert setup.places_claimed_more_than_once(PLACES) == {}
+    assert ran.recorded.places_claimed_more_than_once(PLACES) == {}
 
 
 @pytest.mark.asyncio
@@ -550,23 +555,20 @@ async def test_the_peer_forward_waits_for_qbittorrent_to_run_on_the_worker(setup
     assert f'{conventions.CLUSTER_NAME}-firewall-network' in declared
 
 
-@pytest.mark.asyncio
-async def test_the_peer_forward_lands_on_the_worker_once_qbittorrent_runs_there(setup: Installation) -> None:
+def test_the_peer_forward_lands_on_the_worker_once_qbittorrent_runs_there(ran: Run) -> None:
     """With the key set, the forward is back and sends the peer port to the worker.
 
     The destination is the worker's node address, which the cluster masquerades
     the application's outbound peer traffic to, on the port the census holds at
     both ends.
     """
-    async with declaring():
-        await physical.main()
-
-    forward = setup.inputs_of(f'{conventions.CLUSTER_NAME}-firewall-peer-v4')
+    forward = ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-firewall-peer-v4')
     assert forward['fwdIp'] == str(conventions.HOMELAB_NODE_IPV4)
     assert forward['dstPort'] == str(conventions.QBITTORRENT_PEER_PORT)
     assert forward['fwdPort'] == str(conventions.QBITTORRENT_PEER_PORT)
 
 
+@pytest.mark.usefixtures('setup')
 @pytest.mark.asyncio
 async def test_a_flag_that_is_not_a_boolean_refuses_the_run() -> None:
     """A misspelled value is not read as absent.
@@ -581,8 +583,7 @@ async def test_a_flag_that_is_not_a_boolean_refuses_the_run() -> None:
         await physical.main()
 
 
-@pytest.mark.asyncio
-async def test_the_pinhole_admits_the_configured_address_once_it_is_known(setup: Installation) -> None:
+def test_the_pinhole_admits_the_configured_address_once_it_is_known(ran: Run) -> None:
     """And with the address configured, the rule is back and carries it.
 
     Step three of the bring-up ceremony is writing the key, so what follows it
@@ -591,14 +592,12 @@ async def test_the_pinhole_admits_the_configured_address_once_it_is_known(setup:
     it: two firewall rules name it and they have to agree, so it sits with the
     public port census in `conventions` (rfc-002 §11).
     """
-    async with declaring():
-        await physical.main()
-
-    destination = setup.inputs_of(f'{conventions.CLUSTER_NAME}-firewall-peer-v6')['destination']
+    destination = ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-firewall-peer-v6')['destination']
     assert destination['ips'] == [WORKER_GUA]
     assert int(destination['port']) == conventions.QBITTORRENT_PEER_PORT
 
 
+@pytest.mark.usefixtures('setup')
 @pytest.mark.asyncio
 async def test_a_compartment_that_does_not_exist_yet_names_the_command_that_makes_it(
     monkeypatch: pytest.MonkeyPatch,
@@ -631,6 +630,7 @@ class ExportedPhysical(Recorder):
         return {}
 
 
+@pytest.mark.usefixtures('setup')
 @pytest.mark.asyncio
 async def test_every_output_dns_reads_across_the_reference_is_one_this_program_exports(
     monkeypatch: pytest.MonkeyPatch,
@@ -674,26 +674,14 @@ async def test_every_output_dns_reads_across_the_reference_is_one_this_program_e
     assert anchors == [LB_ADDRESS, LB_ADDRESS_V6, VIP1_ADDRESS]
 
 
-@pytest.mark.asyncio
-async def test_the_program_exports_every_name_the_structure_carries_and_nothing_else(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_the_program_exports_every_name_the_structure_carries_and_nothing_else(ran: Run) -> None:
     """`PhysicalOutputs` is the contract and the export its implementation, both ways.
 
     A field nothing exports is what its reader receives as `None`; an export
     under a name the structure does not carry is one no reader can ask for.
     Either passes the type checker, so the run is what holds them together.
     """
-    exported: dict[str, object] = {}
-
-    def record(name: str, value: object) -> None:
-        exported[name] = value
-
-    monkeypatch.setattr(physical.pulumi, 'export', record)
-
-    await physical.main()
-
-    assert set(exported) == set(conventions.PHYSICAL_OUTPUTS.names())
+    assert set(ran.exported) == set(conventions.PHYSICAL_OUTPUTS.names())
 
 
 @pytest.mark.asyncio
@@ -741,10 +729,8 @@ async def test_every_cloud_nodes_gua_is_exported_under_its_name(
     }
 
 
-@pytest.mark.asyncio
-async def test_the_ci_join_credentials_are_exported_under_the_names_the_slot_map_reads(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+@on_the_runs_loop
+async def test_the_ci_join_credentials_are_exported_under_the_names_the_slot_map_reads(ran: Run) -> None:
     """The identities CI joins the overlay with, by the names `derived sync` reads.
 
     The slot map's half of that contract is a stack output name
@@ -763,15 +749,6 @@ async def test_the_ci_join_credentials_are_exported_under_the_names_the_slot_map
     """
     from kluster.scripts.credentials import slots
 
-    exported: dict[str, object] = {}
-
-    def record(name: str, value: object) -> None:
-        exported[name] = value
-
-    monkeypatch.setattr(physical.pulumi, 'export', record)
-
-    await physical.main()
-
     contracted = {
         row.source.output
         for row in slots.ROWS.values()
@@ -785,15 +762,13 @@ async def test_the_ci_join_credentials_are_exported_under_the_names_the_slot_map
     assert contracted <= set(conventions.PHYSICAL_OUTPUTS.names())
 
     for member, output in conventions.PHYSICAL_OUTPUTS.ci_identity.items():
-        identity = cast('pulumi.Output[str]', exported[output])
+        identity = cast('pulumi.Output[str]', ran.exported[output])
         assert await identity.is_secret()
         assert await identity.future() == f'{conventions.CLUSTER_NAME}-identity-{member}-secret'
 
 
-@pytest.mark.asyncio
-async def test_the_cluster_credentials_are_exported_and_stay_secret(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+@on_the_runs_loop
+async def test_the_cluster_credentials_are_exported_and_stay_secret(ran: Run) -> None:
     """The two outputs every stack that speaks to the cluster is built on.
 
     They are cluster-admin credentials, so the interesting half of this is not
@@ -801,25 +776,15 @@ async def test_the_cluster_credentials_are_exported_and_stay_secret(
     the stack export — an export that lost it would print the cluster's keys in
     a deployment log.
     """
-    exported: dict[str, object] = {}
-
-    def record(name: str, value: object) -> None:
-        exported[name] = value
-
-    monkeypatch.setattr(physical.pulumi, 'export', record)
-
-    await physical.main()
-
-    kubeconfig = cast('pulumi.Output[str]', exported[conventions.PHYSICAL_OUTPUTS.kubeconfig])
-    talosconfig = cast('pulumi.Output[str]', exported[conventions.PHYSICAL_OUTPUTS.talosconfig])
+    kubeconfig = cast('pulumi.Output[str]', ran.exported[conventions.PHYSICAL_OUTPUTS.kubeconfig])
+    talosconfig = cast('pulumi.Output[str]', ran.exported[conventions.PHYSICAL_OUTPUTS.talosconfig])
     assert await kubeconfig.is_secret()
     assert await talosconfig.is_secret()
     assert await kubeconfig.future() == KUBECONFIG
     assert await talosconfig.future() == TALOSCONFIG
 
 
-@pytest.mark.asyncio
-async def test_the_worker_is_configured_through_the_cluster_endpoint(setup: Installation) -> None:
+def test_the_worker_is_configured_through_the_cluster_endpoint(ran: Run) -> None:
     """The worker's apid is reached without a route to its LAN address.
 
     apid routes by the node a call names, so the worker's configuration apply
@@ -830,21 +795,15 @@ async def test_the_worker_is_configured_through_the_cluster_endpoint(setup: Inst
     is why a continuous-integration run whose flow rules name no Talos node
     can still carry a worker configuration change.
     """
-    async with declaring():
-        await physical.main()
-
-    worker = setup.inputs_of(f'{conventions.CLUSTER_NAME}-{conventions.HOMELAB_NODE}-config')
+    worker = ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-{conventions.HOMELAB_NODE}-config')
     assert worker['node'] == str(conventions.HOMELAB_NODE_IPV4)
     assert worker['endpoint'] == LB_ADDRESS
     # And the balancer forwards the machine API, or the endpoint above is a
     # closed door: the port is one of the two it declared a listener on.
-    assert conventions.MANAGEMENT_PORTS.talos in listener_ports(setup)
+    assert conventions.MANAGEMENT_PORTS.talos in listener_ports(ran.recorded)
 
 
-@pytest.mark.asyncio
-async def test_no_talos_call_is_dialed_into_the_cluster_vlan(
-    setup: Installation, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_no_talos_call_is_dialed_into_the_cluster_vlan(ran: Run) -> None:
     """A run names the worker's address, and dials none on its VLAN.
 
     The overlay routes the cluster VLAN via the gateway for a person off-site,
@@ -857,20 +816,10 @@ async def test_no_talos_call_is_dialed_into_the_cluster_vlan(
     are addresses must lie outside the VLAN, and the worker's apply is among
     them.
     """
-    invoked: list[tuple[str, dict[str, Any]]] = []
-    answer = setup.answer
-
-    def recording(args: pulumi.runtime.MockCallArgs) -> dict[str, Any]:
-        invoked.append((args.token, dict(cast('dict[str, Any]', args.args))))
-        return answer(args)
-
-    monkeypatch.setattr(setup, 'answer', recording)
-    async with declaring():
-        await physical.main()
-
+    invoked = ran.recorded.invoked
     dialed = [
         str(declaration.inputs['endpoint'])
-        for declaration in setup.declared
+        for declaration in ran.recorded.declared
         if declaration.typ.startswith('talos:') and 'endpoint' in declaration.inputs
     ]
     dialed += [
@@ -890,10 +839,7 @@ def listener_ports(setup: Installation) -> set[int]:
     return {int(inputs['port']) for inputs in setup.by_name(LISTENER).values()}
 
 
-@pytest.mark.asyncio
-async def test_the_cluster_endpoint_names_a_port_the_balancer_forwards_and_the_nodes_open(
-    setup: Installation,
-) -> None:
+def test_the_cluster_endpoint_names_a_port_the_balancer_forwards_and_the_nodes_open(ran: Run) -> None:
     """One structure, three declarations: the endpoint, the listener, the opening.
 
     The endpoint every machine configuration names is the balancer's address on
@@ -906,16 +852,13 @@ async def test_the_cluster_endpoint_names_a_port_the_balancer_forwards_and_the_n
     takes an HTTPS URL, and a bare address here is a cluster that never
     forms.
     """
-    async with declaring():
-        await physical.main()
-
-    assert setup.configurations, 'no machine configuration was rendered'
-    for configuration in setup.configurations:
+    assert ran.recorded.configurations, 'no machine configuration was rendered'
+    for configuration in ran.recorded.configurations:
         endpoint = str(configuration['clusterEndpoint'])
         parts = urlsplit(endpoint)
         assert parts.scheme == 'https', endpoint
         assert parts.hostname == LB_ADDRESS, endpoint
-        assert parts.port in listener_ports(setup), endpoint
+        assert parts.port in listener_ports(ran.recorded), endpoint
         assert parts.port in firewall_openings(configuration), endpoint
 
 
@@ -938,8 +881,7 @@ LISTENER = 'oci:NetworkLoadBalancer/listener:Listener'
 INSTANCE_IDS = {node: f'{conventions.CLUSTER_NAME}-{node}_id' for node in conventions.CLOUD_NODES}
 
 
-@pytest.mark.asyncio
-async def test_every_volume_is_attached_to_the_node_the_table_names(setup: Installation) -> None:
+def test_every_volume_is_attached_to_the_node_the_table_names(ran: Run) -> None:
     """A block volume attaches only within its own availability domain.
 
     Both halves come off the instance rather than out of a constant, because
@@ -949,22 +891,18 @@ async def test_every_volume_is_attached_to_the_node_the_table_names(setup: Insta
     instance each one lands on is the table's answer, and for the following
     volume that answer is the node holding the dedicated VIP.
     """
-    async with declaring():
-        await physical.main()
-
     for name, volume in conventions.NODE_VOLUMES.items():
-        declared = setup.inputs_of(f'{conventions.CLUSTER_NAME}-{name}-volume')
-        attachment = setup.inputs_of(f'{conventions.CLUSTER_NAME}-{name}-attachment')
+        declared = ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-{name}-volume')
+        attachment = ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-{name}-attachment')
         assert declared['availabilityDomain'] == AVAILABILITY_DOMAIN
         assert int(declared['sizeInGbs']) == volume.size_gb
         assert attachment['instanceId'] == INSTANCE_IDS[volume.attached_node]
 
-    following = setup.inputs_of(f'{conventions.CLUSTER_NAME}-hath-cache-attachment')
+    following = ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-hath-cache-attachment')
     assert following['instanceId'] == INSTANCE_IDS[conventions.DEDICATED_VIP_NODE]
 
 
-@pytest.mark.asyncio
-async def test_every_volume_the_program_attaches_is_mounted_by_a_machine_configuration(setup: Installation) -> None:
+def test_every_volume_the_program_attaches_is_mounted_by_a_machine_configuration(ran: Run) -> None:
     """One table, two readers: the attachments above, and the configurations the nodes boot.
 
     A volume attached and mounted nowhere leaves the workload that expects the
@@ -973,12 +911,9 @@ async def test_every_volume_the_program_attaches_is_mounted_by_a_machine_configu
     rendering day 1 applies to the dedicated-VIP node included, and each one
     mounts at most one volume and labels its node with that one.
     """
-    async with declaring():
-        await physical.main()
-
     assert conventions.NODE_VOLUMES
     mounted: set[str] = set()
-    for configuration in setup.configurations:
+    for configuration in ran.recorded.configurations:
         documents = [json.loads(str(patch)) for patch in cast('list[Any]', configuration['configPatches'])]
         names = [
             str(document['name'])
@@ -997,24 +932,18 @@ async def test_every_volume_the_program_attaches_is_mounted_by_a_machine_configu
     assert mounted == set(conventions.NODE_VOLUMES)
 
 
-@pytest.mark.asyncio
-async def test_the_volumes_and_the_backup_floor_get_the_fleets_values(setup: Installation) -> None:
+def test_the_volumes_and_the_backup_floor_get_the_fleets_values(ran: Run) -> None:
     """The tier and the retention floor are this program's to pass, so this program is where they are held."""
-    async with declaring():
-        await physical.main()
-
     assert conventions.NODE_VOLUMES
     for volume in conventions.NODE_VOLUMES:
-        inputs = setup.inputs_of(f'{conventions.CLUSTER_NAME}-{volume}-volume', 'oci:Core/volume:Volume')
+        inputs = ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-{volume}-volume', 'oci:Core/volume:Volume')
         assert inputs['vpusPerGb'] == str(conventions.NODE_VOLUME_VPUS)
-    (rule,) = setup.inputs_of(f'{conventions.CLUSTER_NAME}-backup', 'b2:index/bucket:Bucket')['lifecycleRules']
+    (rule,) = ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-backup', 'b2:index/bucket:Bucket')['lifecycleRules']
     assert rule['daysFromHidingToDeleting'] == conventions.BACKUP_VERSION_RETENTION_DAYS
 
 
-@pytest.mark.asyncio
-async def test_the_bucket_census_is_exported_for_the_stacks_that_fill_the_buckets(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+@on_the_runs_loop
+async def test_the_bucket_census_is_exported_for_the_stacks_that_fill_the_buckets(ran: Run) -> None:
     """Names, endpoints and credentials — what configuring a mover takes.
 
     Nothing downstream re-derives a bucket name from a convention and hopes it
@@ -1022,15 +951,7 @@ async def test_the_bucket_census_is_exported_for_the_stacks_that_fill_the_bucket
     classified as a secret is a property of the resource it comes from, and
     is held by the suites for those components.
     """
-    exported: dict[str, object] = {}
-
-    def record(name: str, value: object) -> None:
-        exported[name] = value
-
-    monkeypatch.setattr(physical.pulumi, 'export', record)
-
-    await physical.main()
-
+    exported = ran.exported
     assert exported[conventions.PHYSICAL_OUTPUTS.backup_bucket] == conventions.BUCKET_BACKUP
     assert (
         exported[conventions.PHYSICAL_OUTPUTS.backup_endpoint]
@@ -1043,8 +964,7 @@ async def test_the_bucket_census_is_exported_for_the_stacks_that_fill_the_bucket
     assert await keys['etcd']['id'].future() == 'kluster-backup-etcd-key-id'
 
 
-@pytest.mark.asyncio
-async def test_the_quota_names_the_compartment_this_program_decided(setup: Installation) -> None:
+def test_the_quota_names_the_compartment_this_program_decided(ran: Run) -> None:
     """A quota statement has no OCID form and names its compartment by name.
 
     Which is why that name is a convention rather than something read back from
@@ -1052,16 +972,12 @@ async def test_the_quota_names_the_compartment_this_program_decided(setup: Insta
     beside it targets the same compartment by OCID. The statements' own
     content - deny before allow, every family capped - is `test_guardrails`.
     """
-    async with declaring():
-        await physical.main()
-
-    statements = cast('list[str]', setup.inputs_of(f'{conventions.CLUSTER_NAME}-quota')['statements'])
+    statements = cast('list[str]', ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-quota')['statements'])
     assert statements
     assert all(text.endswith(f'in compartment {COMPARTMENT.name}') for text in statements)
 
 
-@pytest.mark.asyncio
-async def test_the_budget_alerts_reach_the_addresses_configuration_names(setup: Installation) -> None:
+def test_the_budget_alerts_reach_the_addresses_configuration_names(ran: Run) -> None:
     """The only signal this stack raises that does not go through the cluster.
 
     The addresses are the one thing about the guardrails an operator supplies,
@@ -1069,12 +985,9 @@ async def test_the_budget_alerts_reach_the_addresses_configuration_names(setup: 
     are private mailboxes, so the path is a secret one: each rule receives them
     marked, and `_unwrapped` refuses a plaintext value.
     """
-    async with declaring():
-        await physical.main()
-
     alerts = [
         declaration.inputs
-        for declaration in setup.declared
+        for declaration in ran.recorded.declared
         if declaration.name.startswith(f'{conventions.CLUSTER_NAME}-budget-')
     ]
     assert alerts
@@ -1082,6 +995,7 @@ async def test_the_budget_alerts_reach_the_addresses_configuration_names(setup: 
         assert _unwrapped(alert['recipients']) == ','.join(BUDGET_RECIPIENTS)
 
 
+@pytest.mark.usefixtures('setup')
 @pytest.mark.asyncio
 async def test_a_recipient_list_that_is_not_a_list_of_addresses_is_refused() -> None:
     """Named at the boundary, so the operator is told which key to fix, and by its shape alone.
@@ -1101,6 +1015,7 @@ async def test_a_recipient_list_that_is_not_a_list_of_addresses_is_refused() -> 
     assert 'one@example.invalid' not in str(refused.value)
 
 
+@pytest.mark.usefixtures('setup')
 @pytest.mark.asyncio
 async def test_a_recipient_list_that_is_not_json_is_refused_without_its_value() -> None:
     """The value an operator types at `pulumi config set` for two addresses, refused by the key's name.
@@ -1169,6 +1084,7 @@ SITE_FACTS = [
 ]
 
 
+@pytest.mark.usefixtures('setup')
 @pytest.mark.parametrize('key', SITE_FACTS)
 @pytest.mark.asyncio
 async def test_a_site_fact_the_configuration_lacks_refuses_by_name(key: str) -> None:
@@ -1181,6 +1097,7 @@ async def test_a_site_fact_the_configuration_lacks_refuses_by_name(key: str) -> 
         await physical.main()
 
 
+@pytest.mark.usefixtures('setup')
 @pytest.mark.asyncio
 async def test_the_program_never_reads_the_devices_own_credential() -> None:
     """`gatewayPrivateKey` configures a provider, so the provider reads it.
@@ -1200,6 +1117,7 @@ async def test_the_program_never_reads_the_devices_own_credential() -> None:
         physical._gateway(pulumi.Config())  # pyright: ignore[reportPrivateUsage]
 
 
+@pytest.mark.usefixtures('setup')
 @pytest.mark.asyncio
 async def test_the_gateway_arm_reads_the_configuration_its_channels_need() -> None:
     """The gateway, exercised without the rest of the stack.
@@ -1213,6 +1131,7 @@ async def test_the_gateway_arm_reads_the_configuration_its_channels_need() -> No
         physical._gateway(pulumi.Config())  # pyright: ignore[reportPrivateUsage]
 
 
+@pytest.mark.usefixtures('setup')
 def test_a_root_filesystem_pin_is_the_whole_reference_a_push_pulls_by() -> None:
     """The pin carries repository, tag and digest, because that is what an image is.
 
@@ -1232,6 +1151,7 @@ def test_a_root_filesystem_pin_is_the_whole_reference_a_push_pulls_by() -> None:
     assert physical._rootfs(alice).repository == physical._rootfs(bob).repository  # pyright: ignore[reportPrivateUsage]
 
 
+@pytest.mark.usefixtures('setup')
 def test_a_pin_naming_a_repository_that_does_not_publish_the_build_is_refused() -> None:
     """The census says which build a service runs, and one repository publishes it.
 
@@ -1292,8 +1212,7 @@ SIGNED_BY = {
 }
 
 
-@pytest.mark.asyncio
-async def test_every_resource_is_signed_by_the_provider_its_owner_built(setup: Installation) -> None:
+def test_every_resource_is_signed_by_the_provider_its_owner_built(ran: Run) -> None:
     """The whole point of the slice, as one assertion over the whole program.
 
     Every resource in the stack authenticates through a provider some component
@@ -1303,11 +1222,8 @@ async def test_every_resource_is_signed_by_the_provider_its_owner_built(setup: I
     providers instead -- which, with default providers disabled, is nothing at
     all.
     """
-    async with declaring():
-        await physical.main()
-
     checked = Counter[str]()
-    for declaration in setup.declared:
+    for declaration in ran.recorded.declared:
         # A provider resource's own type token is `pulumi:providers:<package>`,
         # so it never matches a package prefix and never checks itself.
         for prefix, provider in SIGNED_BY.items():
@@ -1323,8 +1239,7 @@ async def test_every_resource_is_signed_by_the_provider_its_owner_built(setup: I
     assert set(checked) == set(SIGNED_BY), checked
 
 
-@pytest.mark.asyncio
-async def test_the_cloud_provider_is_the_stack_programs_and_is_shared(setup: Installation) -> None:
+def test_the_cloud_provider_is_the_stack_programs_and_is_shared(ran: Run) -> None:
     """One account, six components, one provider -- built where they meet.
 
     A provider built inside any one of them would be reached into by the other
@@ -1334,10 +1249,7 @@ async def test_the_cloud_provider_is_the_stack_programs_and_is_shared(setup: Ins
     builds it reads exactly the three secrets -- which is also the whole of
     what the committed file has to carry for this account.
     """
-    async with declaring():
-        await physical.main()
-
-    built = setup.inputs_of(f'{conventions.CLUSTER_NAME}-oci')
+    built = ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-oci')
     assert built['region'] == conventions.OCI_TENANCY.region
     # The account's own identifiers arrive in the clear because they identify
     # rather than authenticate.
@@ -1351,30 +1263,25 @@ async def test_the_cloud_provider_is_the_stack_programs_and_is_shared(setup: Ins
     assert _unwrapped(built['fingerprint']) == ACCOUNT_CONFIG['kluster:ociFingerprint']
     assert _unwrapped(built['privateKey']) == ACCOUNT_CONFIG['kluster:ociPrivateKey']
 
-    signed = {d.provider for d in setup.declared if d.typ.startswith('oci:')}
+    signed = {d.provider for d in ran.recorded.declared if d.typ.startswith('oci:')}
     assert len(signed) == 1, 'the cloud account has more than one provider'
 
 
-@pytest.mark.asyncio
-async def test_the_placement_lookups_name_the_provider_they_sign_with(setup: Installation) -> None:
+def test_the_placement_lookups_name_the_provider_they_sign_with(ran: Run) -> None:
     """A stack program's own invoke has no parent to inherit from.
 
     Both regional lookups are made outside any component, so nothing carries a
     provider to them: they name it. With default providers disabled an invoke
     that forgot would fail rather than sign as nobody.
     """
-    async with declaring():
-        await physical.main()
-
     for token in (
         'oci:Identity/getAvailabilityDomains:getAvailabilityDomains',
         'oci:Identity/getFaultDomains:getFaultDomains',
     ):
-        assert f'{conventions.CLUSTER_NAME}-oci' in setup.called_through(token), f'{token} signed as nobody'
+        assert f'{conventions.CLUSTER_NAME}-oci' in ran.recorded.called_through(token), f'{token} signed as nobody'
 
 
-@pytest.mark.asyncio
-async def test_every_talos_call_is_signed_by_the_stack_programs_provider(setup: Installation) -> None:
+def test_every_talos_call_is_signed_by_the_stack_programs_provider(ran: Run) -> None:
     """The Talos chain's invokes inherit its provider through their parents.
 
     The images, the machine configurations and day 1 each carry the provider
@@ -1384,10 +1291,7 @@ async def test_every_talos_call_is_signed_by_the_stack_programs_provider(setup: 
     Every call is checked rather than every token: a token is called once per
     node or per artifact, and one call that lost its parent is the mistake.
     """
-    async with declaring():
-        await physical.main()
-
-    calls = [(token, provider) for token, provider in setup.called if token.startswith('talos:')]
+    calls = [(token, provider) for token, provider in ran.recorded.called if token.startswith('talos:')]
     assert calls, 'the Talos chain made no call at all'
     for token, provider in calls:
         assert f'{conventions.CLUSTER_NAME}-talos' in provider, f'{token} signed as nobody'
@@ -1401,8 +1305,7 @@ async def test_every_talos_call_is_signed_by_the_stack_programs_provider(setup: 
 NOT_PACKAGES = frozenset({'pulumi', 'pulumi-python', 'kluster'})
 
 
-@pytest.mark.asyncio
-async def test_every_package_the_program_uses_has_its_default_disabled(setup: Installation) -> None:
+def test_every_package_the_program_uses_has_its_default_disabled(ran: Run) -> None:
     """The committed configuration turns a missed provider into an error.
 
     A resource or invoke that misses its explicit provider falls back to the
@@ -1417,10 +1320,9 @@ async def test_every_package_the_program_uses_has_its_default_disabled(setup: In
     the program no longer uses is a stale entry, and nothing else would notice
     it.
     """
-    async with declaring():
-        await physical.main()
-
-    used = {typ.partition(':')[0] for typ in setup.types} | {token.partition(':')[0] for token, _ in setup.called}
+    used = {typ.partition(':')[0] for typ in ran.recorded.types} | {
+        token.partition(':')[0] for token, _ in ran.recorded.called
+    }
     # The checkout this file sits in, not `workstation.repo_root()`: the
     # installation points that at a scratch directory.
     committed = Path(__file__).resolve().parents[1] / f'Pulumi.{conventions.PHYSICAL}.yaml'
