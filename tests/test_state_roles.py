@@ -3,7 +3,8 @@
 The rendered Ignition's own files -- `pg_hba.conf`, the init script, the TLS
 material -- go into the pinned image under the Postgres unit's own `podman
 run` arguments. What changes is only what has to: the address the server
-certificate names, the port it is published on, the delivered directories,
+certificate names, the port it is published on and the rootless network it is
+published through, the delivered directories,
 which are copied into the container rather than mounted from a host that does
 not have them, and a data directory on a tmpfs, which starts empty and goes
 away with the container. So what is exercised is the image's own
@@ -174,11 +175,23 @@ class File:
 
 
 def _archive(files: list[File]) -> bytes:
-    """A tar stream of `files`, rooted at `/`, with their parent directories.
+    """A tar stream of `files`, rooted at `/`, with their parent directories, ending at its end-of-archive blocks.
 
     Ownership travels inside the stream, and `podman cp --archive=false`
     keeps it: that is how a server key reaches the uid the image runs
     Postgres as, which refuses a key it does not own.
+
+    **The stream stops at the end-of-archive blocks, without the padding
+    `tarfile` adds up to a whole record: a workaround for
+    containers/buildah#6573.** podman's copier stops reading at those blocks
+    and exits, and podman's write of the padding into its pipe then fails
+    the copy with `passing bulk input to subprocess: write |1: broken pipe`
+    whenever the copier has exited first. On CI's podman 4.9 a stream of one
+    small file, which is mostly padding, fails that way reliably. Its
+    boundary is the slice on the return line, and
+    `test_an_archive_ends_at_its_end_of_archive_blocks` holds it; both go
+    once every podman that runs this module carries buildah 1.44 or later,
+    whose copier drains the stream (containers/buildah#6678).
     """
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode='w') as tar:
@@ -197,7 +210,8 @@ def _archive(files: list[File]) -> bytes:
             entry.uid = file.uid
             entry.gid = file.gid
             tar.addfile(entry, io.BytesIO(file.content))
-    return buffer.getvalue()
+    # Closed, `tar.offset` is where the end-of-archive blocks end.
+    return buffer.getvalue()[: tar.offset]
 
 
 def _delivered(ignition: dict[str, Any]) -> list[File]:
@@ -250,7 +264,7 @@ def _unit_container(ignition: dict[str, Any]) -> tuple[list[str], list[File]]:
 
     Every argument is the unit's except these: `--replace` and the name,
     which the caller gives; the published port, which becomes a free one on
-    the loopback interface; each volume a delivered file sits under, which
+    the loopback interface, published through pasta (`_published`); each volume a delivered file sits under, which
     becomes a copy of those files at the path the volume mounts them on; and
     the one volume nothing is delivered into, which is the box's own state and
     starts here empty, as the tmpfs `_bounded` mounts on the path the image's
@@ -270,7 +284,7 @@ def _unit_container(ignition: dict[str, Any]) -> tuple[list[str], list[File]]:
                 _ = next(rest)
             case '--publish':
                 _ = next(rest)
-                created += ['--publish', f'{ADDRESS}::{settings.PORT}']
+                created += _published()
             case '--volume':
                 host, inside, *_options = next(rest).split(':')
                 under = [file for file in delivered if file.path.is_relative_to(host)]
@@ -351,6 +365,22 @@ def _named(created: list[str], name: str) -> list[str]:
     return [*created[:1], '--name', name, *created[1:]]
 
 
+def _published() -> list[str]:
+    """The arguments that publish a box's port on a free port of `ADDRESS`, through pasta.
+
+    **`--network pasta` is a workaround for podman's rootless default before
+    5.0, slirp4netns**, whose port forwarder stays in the session of the
+    `podman` command that started the container: `process_sessions` ends that
+    session with the command, taking the forwarder with it, and the published
+    port then refuses connections. pasta leaves nothing in that session. On
+    a podman whose rootless network is pasta already, the argument changes
+    nothing; on one without pasta installed, the `podman` command fails
+    naming it. The argument goes once every podman that runs this module
+    defaults to pasta, as podman does from 5.0 on.
+    """
+    return ['--network', 'pasta', '--publish', f'{ADDRESS}::{settings.PORT}']
+
+
 def _client(name: str) -> list[str]:
     """The `podman run` of the container that serves the image's client tools."""
     return _bounded('run', '--detach', '--network', 'host', '--name', name, '--entrypoint', 'sleep', IMAGE, 'infinity')
@@ -360,7 +390,7 @@ def _superusers() -> list[str]:
     """The `podman create` of a box whose image superuser is `ci`, which is a client role's name."""
     return _bounded(
         'create',
-        *('--publish', f'{ADDRESS}::{settings.PORT}'),
+        *_published(),
         *('--env', f'POSTGRES_DB={settings.DATABASE}'),
         *('--env', f'POSTGRES_USER={settings.CI_ROLE}'),
         *('--env', 'POSTGRES_HOST_AUTH_METHOD=trust'),
@@ -536,6 +566,32 @@ def test_every_container_ends_by_itself_and_mounts_no_volume(ignition: dict[str,
     assert made['Config']['Timeout'] == CONTAINER_TIMEOUT
     assert made['HostConfig']['AutoRemove'] is True
     assert LABEL in {f'{key}={value}' for key, value in made['Config']['Labels'].items()}
+
+
+def test_an_archive_ends_at_its_end_of_archive_blocks() -> None:
+    """`_archive`'s stream is a whole tar, and nothing follows its end-of-archive blocks.
+
+    The workaround's own contract (`_archive`): what podman's copier reads up
+    to is the whole stream, so podman has nothing left to write into a pipe
+    the copier has stopped reading. The race the workaround avoids cannot be
+    held still; this is what the workaround promises, read by `tarfile`'s
+    reader, which finds the blocks on its own.
+    """
+    files = [
+        File(PurePosixPath('/etc/kluster/a.conf'), b'one\n', 0o600, 999, 999),
+        File(PurePosixPath('/srv/b'), b'two' * 1000),
+    ]
+    stream = _archive(files)
+
+    with tarfile.open(fileobj=io.BytesIO(stream), mode='r:') as tar:
+        read = {
+            member.name: (member.mode, member.uid, member.gid, extracted.read())
+            for member in tar.getmembers()
+            if member.isfile() and (extracted := tar.extractfile(member)) is not None
+        }
+        end = tar.offset
+    assert read == {str(file.path.relative_to('/')): (file.mode, file.uid, file.gid, file.content) for file in files}
+    assert stream[end:] == bytes(2 * tarfile.BLOCKSIZE)
 
 
 def test_a_box_silent_before_it_serves_fails_the_wait_naming_the_follower() -> None:
