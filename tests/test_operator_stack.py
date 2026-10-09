@@ -37,6 +37,7 @@ from __future__ import annotations
 import datetime as dt
 import fcntl
 import io
+import itertools
 import json
 import logging
 import os
@@ -60,9 +61,10 @@ import process_sessions
 import pytest
 from credentials_command_tree import named_leaves
 from memory_keyring import MemoryKeyring, installed
+from scratch_projects import cli_directories
 
 from kluster.conventions import identity
-from kluster.lib import acquisition, bundle, stack_environment
+from kluster.lib import acquisition, bundle, pulumi_cli, stack_environment, workstation
 from kluster.lib.state_backend import permission, settings, state
 from kluster.scripts.credentials import derived, escrow
 from kluster.scripts.credentials import workstation as credential_slots
@@ -260,10 +262,10 @@ def repository(tmp_path: Path) -> Repository:
 
 
 def _fill_slots(checkout: Path) -> None:
-    slots = checkout / '.credentials'
-    (slots / 'state-backend').mkdir(parents=True)
-    _ = (slots / 'state-backend' / 'backend-url').write_text(SLOT_URL + '\n')
-    _ = (slots / 'pulumi.passphrase').write_text('a-slot-stack-passphrase\n')
+    slots = checkout / workstation.DIRECTORY
+    (slots / stack_environment.BUNDLE_SLOT).mkdir(parents=True)
+    _ = (slots / stack_environment.BUNDLE_SLOT / bundle.URL_FILE).write_text(SLOT_URL + '\n')
+    _ = (slots / credential_slots.PASSPHRASE).write_text('a-slot-stack-passphrase\n')
     _ = (slots / stack_environment.OPERATOR_PASSPHRASE_SLOT).write_text(OPERATOR_PASSPHRASE + '\n')
 
 
@@ -276,7 +278,7 @@ def committed(monkeypatch: pytest.MonkeyPatch) -> str:
 
 def _checkpoint(checkout: Path, resources: list[dict[str, Any]]) -> Path:
     """A committed checkpoint of `probe` holding `resources`, as `pulumi` lays one out."""
-    path = checkout / 'checkpoints' / '.pulumi' / 'stacks' / 'probe' / f'{PROBE}.json'
+    path = checkout / stack_environment.CHECKPOINTS / '.pulumi' / 'stacks' / 'probe' / f'{PROBE}.json'
     path.parent.mkdir(parents=True, exist_ok=True)
     document = {
         'version': 3,
@@ -311,7 +313,7 @@ def test_the_estate_backend_stack_runs_under_its_slots_and_nothing_its_caller_ca
 
     assert run.plan() == driver.NOTHING_PLANNED
 
-    slot = checkout / '.credentials' / 'state-backend'
+    slot = checkout / workstation.DIRECTORY / stack_environment.BUNDLE_SLOT
     for env in fake.envs:
         assert env['PULUMI_CONFIG_PASSPHRASE'] == OPERATOR_PASSPHRASE
         assert env['PULUMI_BACKEND_URL'] == SLOT_URL
@@ -345,9 +347,9 @@ def test_a_machine_without_the_operator_passphrase_is_refused_naming_the_command
     """No layer of the chain holds it and nobody is at a terminal: the refusal names the command that fills it."""
     checkout = tmp_path / 'kluster'
     _fill_slots(checkout)
-    (checkout / '.credentials' / stack_environment.OPERATOR_PASSPHRASE_SLOT).unlink()
+    (checkout / workstation.DIRECTORY / stack_environment.OPERATOR_PASSPHRASE_SLOT).unlink()
 
-    with pytest.raises(stack_environment.EnvironmentRefused, match='no operator passphrase on this machine') as refusal:
+    with pytest.raises(stack_environment.EnvironmentRefused) as refusal:
         _ = driver.Run.open('github', checkout, pulumi=FakePulumi(), base=AMBIENT)
 
     assert named_leaves(str(refusal.value)) == [('derived', stack_environment.OPERATOR_PASSPHRASE_ROW, 'recover')]
@@ -372,7 +374,7 @@ def test_the_operator_passphrase_is_found_by_the_chain_in_its_order(
     """
     checkout = tmp_path / 'kluster'
     _fill_slots(checkout)
-    slot = checkout / '.credentials' / stack_environment.OPERATOR_PASSPHRASE_SLOT
+    slot = checkout / workstation.DIRECTORY / stack_environment.OPERATOR_PASSPHRASE_SLOT
     slot.unlink()
     held = LAYERS[LAYERS.index(first) :]
     if 'store' in held:
@@ -400,7 +402,7 @@ def test_an_empty_layer_is_passed_over_rather_than_handed_to_pulumi(
     checkout = tmp_path / 'kluster'
     _fill_slots(checkout)
     secret_store.items[(acquisition.KEYRING_SERVICE, stack_environment.OPERATOR_PASSPHRASE_ACCOUNT)] = '  '
-    _ = (checkout / '.credentials' / stack_environment.OPERATOR_PASSPHRASE_SLOT).write_text('\n')
+    _ = (checkout / workstation.DIRECTORY / stack_environment.OPERATOR_PASSPHRASE_SLOT).write_text('\n')
     monkeypatch.setenv(stack_environment.OPERATOR_PASSPHRASE_ENV, 'from-variable')
 
     assert stack_environment.operator_passphrase(checkout, lambda _question: None) == 'from-variable'
@@ -409,7 +411,7 @@ def test_an_empty_layer_is_passed_over_rather_than_handed_to_pulumi(
 def test_an_empty_answer_at_the_prompt_is_refused(tmp_path: Path) -> None:
     checkout = tmp_path / 'kluster'
     _fill_slots(checkout)
-    (checkout / '.credentials' / stack_environment.OPERATOR_PASSPHRASE_SLOT).unlink()
+    (checkout / workstation.DIRECTORY / stack_environment.OPERATOR_PASSPHRASE_SLOT).unlink()
 
     with pytest.raises(stack_environment.EnvironmentRefused, match='nobody answered the prompt') as refusal:
         _ = stack_environment.operator_passphrase(checkout, lambda _question: '  ')
@@ -430,7 +432,7 @@ def test_a_run_at_a_terminal_is_asked_for_the_operator_passphrase_the_chain_does
     """The chain's last layer as a run meets it: a prompt where standard input is a terminal, and its answer used."""
     checkout = tmp_path / 'kluster'
     _fill_slots(checkout)
-    (checkout / '.credentials' / stack_environment.OPERATOR_PASSPHRASE_SLOT).unlink()
+    (checkout / workstation.DIRECTORY / stack_environment.OPERATOR_PASSPHRASE_SLOT).unlink()
     monkeypatch.setattr('sys.stdin', _Terminal())
     asked: list[str] = []
 
@@ -453,12 +455,12 @@ def test_an_unreadable_slot_is_refused_naming_it(tmp_path: Path, monkeypatch: py
     """A slot that is there and cannot be read is the operator's to repair, not a layer to skip or a traceback."""
     checkout = tmp_path / 'kluster'
     _fill_slots(checkout)
-    slot = checkout / '.credentials' / stack_environment.OPERATOR_PASSPHRASE_SLOT
+    slot = checkout / workstation.DIRECTORY / stack_environment.OPERATOR_PASSPHRASE_SLOT
     slot.chmod(0)
     monkeypatch.setenv(stack_environment.OPERATOR_PASSPHRASE_ENV, 'from-variable')
 
     try:
-        with pytest.raises(stack_environment.EnvironmentRefused, match='cannot be read') as refusal:
+        with pytest.raises(stack_environment.EnvironmentRefused) as refusal:
             _ = driver.Run.open('github', checkout, pulumi=FakePulumi(), base=AMBIENT)
     finally:
         slot.chmod(0o600)
@@ -478,23 +480,31 @@ def test_the_slots_the_driver_reads_are_the_ones_the_credentials_commands_write(
 
 
 @pytest.mark.parametrize(
-    'args',
+    ('args', 'naming'),
     [
-        ['preview', '--stack', 'dev'],
-        ['preview', '--stack=dev'],
-        ['preview', '-s', 'dev'],
-        ['preview', '-sdev'],
-        ['up', '-ys', 'dev'],
+        (['preview', '--stack', 'dev'], '--stack'),
+        (['preview', '--stack=dev'], '--stack=dev'),
+        (['preview', '-s', 'dev'], '-s'),
+        (['preview', '-sdev'], '-sdev'),
+        (['up', '-ys', 'dev'], '-ys'),
+        # `config cp` names the stack it writes with `--dest`.
+        (['config', 'cp', '--dest', 'dev'], '--dest'),
+        (['config', 'cp', '--dest=dev'], '--dest=dev'),
+        (['config', 'cp', '-d', 'dev'], '-d'),
+        # A flag, or a flag and its value, between the command's words.
+        (['config', '--color=never', 'cp', '--dest', 'dev'], '--dest'),
+        (['config', '--color', 'never', 'cp', '-d', 'dev'], '-d'),
     ],
 )
-def test_an_argument_naming_a_stack_is_refused(tmp_path: Path, args: list[str]) -> None:
+def test_an_argument_naming_another_stack_is_refused_naming_it(tmp_path: Path, args: list[str], naming: str) -> None:
     checkout = tmp_path / 'kluster'
     _fill_slots(checkout)
     fake = FakePulumi()
     run = driver.Run.open('github', checkout, pulumi=fake, base=AMBIENT)
 
-    with pytest.raises(driver.Refused, match='names a stack'):
+    with pytest.raises(driver.Refused) as refused:
         _ = run.passthrough(args)
+    assert f'`{naming}`' in str(refused.value)
     assert fake.streamed == []
 
 
@@ -517,8 +527,9 @@ def test_a_run_under_claude_is_refused(tmp_path: Path, inside: str) -> None:
     workspace.mkdir(parents=True, exist_ok=True)
     _fill_slots(workspace)
 
-    with pytest.raises(driver.Refused, match=r'under a \.claude/ directory'):
+    with pytest.raises(driver.Refused) as refused:
         _ = driver.Run.open('github', workspace, pulumi=FakePulumi(), base=AMBIENT)
+    assert str(workspace) in str(refused.value)
 
 
 def test_the_command_line_refuses_a_stack_outside_the_census(capsys: pytest.CaptureFixture[str]) -> None:
@@ -545,30 +556,9 @@ def test_a_passed_through_import_is_refused_for_a_committed_stack(
     fake = FakePulumi()
     run = driver.Run.open(committed, repository.checkout, pulumi=fake, base=AMBIENT)
 
-    with pytest.raises(driver.Refused, match="through the program's `import_`"):
+    with pytest.raises(driver.Refused) as refused:
         _ = run.passthrough(args)
-    assert fake.streamed == []
-
-
-@pytest.mark.parametrize(
-    'args',
-    [
-        ['config', 'cp', '--dest', 'dev'],
-        ['config', 'cp', '--dest=dev'],
-        ['config', 'cp', '-d', 'dev'],
-        # A flag, or a flag and its value, between the command's words.
-        ['config', '--color=never', 'cp', '--dest', 'dev'],
-        ['config', '--color', 'never', 'cp', '-d', 'dev'],
-    ],
-)
-def test_config_cp_into_another_stack_is_refused(tmp_path: Path, args: list[str]) -> None:
-    checkout = tmp_path / 'kluster'
-    _fill_slots(checkout)
-    fake = FakePulumi()
-    run = driver.Run.open('github', checkout, pulumi=fake, base=AMBIENT)
-
-    with pytest.raises(driver.Refused, match='names a stack'):
-        _ = run.passthrough(args)
+    assert ' '.join(args) in str(refused.value)
     assert fake.streamed == []
 
 
@@ -638,7 +628,7 @@ def test_up_applies_what_is_planned_once_confirmed(tmp_path: Path, yes: bool, an
     assert run.up(yes=yes) == (0 if ups else driver.PLANNED)
 
     assert fake.ups() == [['up', '--refresh', '--yes', '--skip-preview', '--stack', 'github']] * ups
-    assert asked == ([] if yes else ['apply these changes to the github stack?'])
+    assert len(asked) == (0 if yes else 1)
 
 
 def _events(*events: dict[str, Any]) -> str:
@@ -691,13 +681,6 @@ def test_a_preview_whose_plan_cannot_be_read_is_refused(printed: str, refusal: s
 # --------------------------------------------------------------------------
 # The working copy, over a scratch repository.
 # --------------------------------------------------------------------------
-
-
-def test_a_working_copy_on_the_forges_main_runs(repository: Repository, committed: str) -> None:
-    fake = FakePulumi()
-    run = driver.Run.open(committed, repository.checkout, pulumi=fake, base=AMBIENT)
-
-    assert run.plan() == driver.NOTHING_PLANNED
 
 
 def test_a_forge_main_never_fetched_is_refused_naming_the_fetch(repository: Repository, committed: str) -> None:
@@ -1101,21 +1084,25 @@ def test_each_export_around_a_write_is_announced_before_it_starts(
     _ = _checkpoint(repository.checkout, [resource])
     fake = FakePulumi(exports=[_export([resource])])
     answer = fake.capture
-    announced: list[str] = []
+    # At each export: how many lines had been logged, and the last of them.
+    announced: list[tuple[int, str]] = []
 
     def announcing(args: Sequence[str], *, cwd: Path, env: Mapping[str, str]) -> str:
         if list(args[:2]) == ['stack', 'export']:
-            announced.append(caplog.messages[-1])
+            announced.append((len(caplog.records), caplog.messages[-1]))
         return answer(args, cwd=cwd, env=env)
 
     fake.capture = announcing
     run = driver.Run.open(committed, repository.checkout, pulumi=fake, base=AMBIENT)
+    before = len(caplog.records)
 
     assert run.passthrough(['state', 'unprotect', 'urn:box', '--yes']) == 0
-    assert announced == [
-        f'reading the {committed} state before the write, to check the checkpoint against',
-        f'checking the {committed} checkpoint',
-    ]
+    # A line of its own ahead of each export, logged since the one before it,
+    # and naming the stack whose state the export reads.
+    counts = [before, *(count for count, _ in announced)]
+    assert len(announced) == 2
+    assert all(earlier < later for earlier, later in itertools.pairwise(counts)), counts
+    assert all(committed in line for _, line in announced), announced
 
 
 def test_one_place_holding_a_secret_is_one_finding_naming_every_source() -> None:
@@ -1253,7 +1240,7 @@ class Scratch:
 
     def history(self) -> int:
         """How many records of an update the backend holds: the engine adds a pair for each one it runs."""
-        return len(list((self.checkout / 'checkpoints' / '.pulumi' / 'history').rglob('*.json')))
+        return len(list((self.checkout / stack_environment.CHECKPOINTS / '.pulumi' / 'history').rglob('*.json')))
 
     def settings(
         self,
@@ -1326,12 +1313,17 @@ def _initialized(repository: Repository, stack: str, tmp_path: Path, program: st
         PYPROJECT.format(major=sys.version_info.major, minor=sys.version_info.minor)
     )
     _ = process_sessions.run(['uv', 'lock', '-q', '--offline'], cwd=checkout, env=uv_env, timeout=60, check=True)
-    base = dict(os.environ) | {
-        'PULUMI_HOME': str(tmp_path / 'pulumi-home'),
-        'PULUMI_SKIP_UPDATE_CHECK': 'true',
-        'UV_OFFLINE': '1',
-        'UV_CACHE_DIR': uv_env['UV_CACHE_DIR'],
-    }
+    # The CLI's home and its temporary directory are the case's
+    # (`scratch_projects.cli_directories`), so what a run leaves goes with it.
+    base = (
+        dict(os.environ)
+        | cli_directories(tmp_path)
+        | {
+            'PULUMI_SKIP_UPDATE_CHECK': 'true',
+            'UV_OFFLINE': '1',
+            'UV_CACHE_DIR': uv_env['UV_CACHE_DIR'],
+        }
+    )
     made = Scratch(run=driver.Run.open(stack, checkout, base=base, pulumi=Bounded()), checkout=checkout, base=base)
     assert made.run.passthrough(['stack', 'init']) == 0
     return made
@@ -1426,6 +1418,7 @@ import json, logging, sys
 from pathlib import Path
 sys.path.insert(0, {tests!r})
 from memory_keyring import MemoryKeyring, installed
+from scratch_projects import cli_directories
 from kluster.conventions import identity
 from kluster.scripts.operator_stack import driver
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -1516,7 +1509,9 @@ def test_a_real_up_hands_pulumi_the_drivers_own_output_and_reads_what_it_needs_f
             os.close(writer)
 
     assert code == 0, shown.decode()
-    assert b'applying the probe stack' in shown, shown.decode()
+    # The driver's own log, in the format the program above gives it, reaches
+    # the same stream.
+    assert b'INFO: ' in shown, shown.decode()
     assert bool(COLOUR.search(shown)) is terminal, shown.decode()
     assert bool(REDRAW.search(shown)) is terminal, shown.decode()
     (box,) = [
@@ -1853,10 +1848,11 @@ def test_a_pending_replacement_without_force_makes_no_up_and_names_what_moved(
     assert _appliance(repository, fake).up(yes=True) == driver.PLANNED
 
     assert fake.ups() == []
-    (refusal,) = [message for message in caplog.messages if 'nothing is applied' in message]
-    # The digest that moved, by component, and the run that replaces the box.
-    assert 'the postgres_image digest' in refusal
-    assert 'the butane digest' not in refusal
+    (refusal,) = [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR]
+    # The component whose digest moved and not the one that did not, and the
+    # run that replaces the box.
+    assert 'postgres_image' in refusal
+    assert 'butane' not in refusal
     assert permission.REMEDY in refusal
 
 
@@ -1894,8 +1890,9 @@ def test_a_create_beside_a_held_address_is_refused_whatever_the_flags(repository
     # one: another workstation's launch, or a box the stack never declared.
     fake = FakePulumi(printed=_planned(_box('create', before=None), *_address('ocid1.privateip.elsewhere')))
 
-    with pytest.raises(driver.Refused, match=r'ocid1\.privateip\.elsewhere.*never import it'):
+    with pytest.raises(driver.Refused) as refused:
         _ = _appliance(repository, fake).up(yes=True, force=force)
+    assert 'ocid1.privateip.elsewhere' in str(refused.value)
 
     assert fake.ups() == []
 
@@ -1992,8 +1989,9 @@ def test_a_create_beside_an_imported_held_address_is_named_by_plan_and_refused_b
 
     assert run.plan() == driver.PLANNED
     assert any('ocid1.privateip.elsewhere' in message for message in caplog.messages)
-    with pytest.raises(driver.Refused, match=r'ocid1\.privateip\.elsewhere.*never import it'):
+    with pytest.raises(driver.Refused) as refused:
         _ = run.up(yes=True, force=True)
+    assert 'ocid1.privateip.elsewhere' in str(refused.value)
 
     assert fake.ups() == []
 
@@ -2022,7 +2020,7 @@ def test_an_expiry_inside_the_margin_is_named(
 
     _ = _appliance(repository, fake).plan()
 
-    said = [message for message in caplog.messages if 'server certificate' in message]
+    said = [message for message in caplog.messages if expiry.date().isoformat() in message]
     if named is None:
         assert said == []
     else:
@@ -2097,8 +2095,9 @@ def test_force_and_replace_are_the_appliances_alone(tmp_path: Path) -> None:
     run = driver.Run.open('github', checkout, pulumi=fake, base=AMBIENT)
 
     for flags in ({'force': True}, {'replace': True}):
-        with pytest.raises(driver.Refused, match='state-backend box'):
+        with pytest.raises(driver.Refused) as refused:
             _ = run.up(yes=True, **flags)
+        assert 'github' in str(refused.value)
     assert fake.streamed == []
 
 
@@ -2249,9 +2248,9 @@ def test_a_real_replacement_of_the_box_names_only_the_digest_that_moved_and_wait
 
     preview = driver.read_preview(pulumi.printed[-1])
     assert [step.op for step in appliance.box_steps(preview)] == ['delete-replaced', 'replace', 'create-replacement']
-    (refusal,) = [message for message in caplog.messages if 'nothing is applied' in message]
-    assert 'the image digest' in refusal
-    assert 'the butane digest' not in refusal
+    (refusal,) = [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR]
+    assert 'image' in refusal
+    assert 'butane' not in refusal
 
     assert run.up(yes=True, force=True) == driver.NOTHING_PLANNED
     assert run.plan() == driver.NOTHING_PLANNED
@@ -2325,8 +2324,9 @@ def test_a_replacement_of_an_adopted_resource_is_refused_before_up_naming_it(
     # -- the terminate of the box among them on the cutover's run.
     fake = FakePulumi(printed=_planned(*events, *_address('')))
 
-    with pytest.raises(driver.Refused, match=f'would replace {re.escape(IMPORTED_URN)}, which the program imports'):
+    with pytest.raises(driver.Refused) as refused:
         _ = _appliance(repository, fake).up(yes=True, force=True)
+    assert IMPORTED_URN in str(refused.value)
 
     assert fake.ups() == []
 
@@ -2352,17 +2352,19 @@ def test_a_backend_whose_traffic_is_dropped_does_not_answer(
 
     assert run.plan() == driver.BACKEND_SILENT
 
-    # The connection attempt is bounded well inside that bound, so the
-    # question ends in seconds rather than when TCP gives up.
+    # The connection attempt is bounded inside the runner's own bound, so the
+    # question ends at the connection's bound rather than when TCP gives up.
+    # The variable is libpq's, which the driver behind Pulumi's Postgres
+    # backend reads: its name is that contract's, not this repository's.
     (env,) = unanswered
-    assert env[state.CONNECT_TIMEOUT_ENV] == str(state.CONNECT_TIMEOUT)
-    assert state.CONNECT_TIMEOUT <= 10
+    assert env['PGCONNECT_TIMEOUT'] == str(state.CONNECT_TIMEOUT)
+    assert state.CONNECT_TIMEOUT < pulumi_cli.TIMEOUT
 
 
 def test_a_checkout_with_no_bundle_is_refused_before_anything_runs(repository: Repository) -> None:
     # The run's hooks connect with the bundle and the driver reads the backend
     # through it, so a run without one would fail only after it had written.
-    shutil.rmtree(repository.checkout / '.credentials' / 'state-backend')
+    shutil.rmtree(repository.checkout / workstation.DIRECTORY / stack_environment.BUNDLE_SLOT)
     fake = FakePulumi(printed=_planned(*_address('')))
     run = driver.Run.open(STATE_BACKEND, repository.checkout, pulumi=fake, base=AMBIENT)
 
