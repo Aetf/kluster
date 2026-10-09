@@ -83,7 +83,9 @@ def _progress_read(fileobj: IO[bytes], /, *, desc: str, total: int) -> Generator
         yield wrapped
 
 
-#: Wider than any line a definition holds, so the dumper never folds one.
+#: Wider than any line a definition holds, so the dumper never folds one, and
+#: the widest the C emitter takes: it hands the width to libyaml as a C `int`,
+#: and anything wider overflows.
 UNFOLDED = 2**31 - 1
 
 
@@ -91,12 +93,21 @@ def _yaml() -> YAML:
     """A loader that keeps key order and refuses the round-trip machinery, and a dumper that folds nothing.
 
     CRD schemas are large and nothing here edits them in place, so the
-    round-trip representer's comment bookkeeping is pure cost. The width is
-    what keeps a dumped bundle a fixed point of the selection: folding a plain
-    scalar, the dumper breaks a line inside a run of spaces, and the loader
-    reads the spaces left at the end of that line as nothing -- so a
-    description written `from.  Must` would come back `from. Must`, and the
-    bundle would not be the text the script writes from it.
+    round-trip representer's comment bookkeeping is pure cost. Both halves are
+    libyaml's, from `ruamel.yaml.clib` (the `oldlibyaml` extra):
+    `YAML(typ='safe')` uses it when it imports, and falls back to pure Python
+    without a word when it does not. The parser is why: the bundle is several
+    megabytes, which the pure-Python parser takes seconds over. The emitter
+    follows from it: the committed bundle is laid out as the C emitter lays it
+    out -- a multi-line description single-quoted, each line break written as
+    a blank line -- which the pure emitter's layout is not, so a dump without
+    the extension is not the text the script writes. A test holds that both are
+    the C ones, so a missing extension fails by name rather than as a slow run
+    or a bundle that is no longer its own output.
+
+    The width keeps the emitter from folding a scalar at its spaces, so a
+    change to a description is the lines that changed rather than a refolded
+    paragraph.
     """
     yaml = YAML(typ='safe')
     yaml.default_flow_style = False

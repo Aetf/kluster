@@ -1886,10 +1886,14 @@ API_PATH = re.compile(
 
 
 def _bundle_resources(text: str) -> set[tuple[str, str, str]]:
-    """Each served `(group, version, plural)` the CRD bundle defines."""
+    """Each served `(group, version, plural)` the CRD bundle defines.
+
+    Read by libyaml's safe loader rather than PyYAML's pure-Python one, which
+    takes seconds over a bundle of several megabytes.
+    """
     return {
         (document['spec']['group'], version['name'], document['spec']['names']['plural'])
-        for document in yaml.safe_load_all(text)
+        for document in yaml.load_all(text, Loader=yaml.CSafeLoader)
         for version in document['spec']['versions']
         if version['served']
     }
