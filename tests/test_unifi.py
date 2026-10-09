@@ -15,9 +15,11 @@ visible in a rendered resource. So the suite asserts them directly:
     that would otherwise answer for it;
 -   the pool is named through address groups and never as a literal, and the
     only literal in the whole census is the media VIP the design says is one;
--   the IoT rules are sourced from the IoT VLAN alone, not from the internal
-    zone at large, which is what keeps the rest of the internal side's own
-    access to the cluster intact;
+-   no policy hands a subnet to a field that takes single addresses: the
+    provider refuses it at preview, which no mock does;
+-   the IoT rules are sourced from the IoT VLAN alone, through its address
+    groups, not from the internal zone at large, which is what keeps the rest
+    of the internal side's own access to the cluster intact;
 -   the cluster VLAN is a network object with no DHCP server, alone in a zone
     of its own, and everything that names the worker names that zone;
 -   the peer's IPv4 forward exists only once the application runs on the
@@ -29,7 +31,7 @@ answers the zone lookups and hands back the inputs each resource was given.
 
 import inspect
 from collections.abc import Mapping
-from ipaddress import IPv4Address, IPv4Interface, IPv6Address
+from ipaddress import IPv4Address, IPv4Interface, IPv6Address, ip_address
 
 import pulumi
 import pytest
@@ -83,6 +85,8 @@ async def test_the_census_is_exactly_the_designed_set(mocks: Controller) -> None
     by_type = {typ: sorted(mocks.names(typ)) for typ in mocks.types}
 
     assert by_type['unifi:index/firewallGroup:FirewallGroup'] == [
+        f'{NAME}-iot-v4',
+        f'{NAME}-iot-v6',
         f'{NAME}-pool-v4',
         f'{NAME}-pool-v6',
     ]
@@ -275,10 +279,10 @@ async def test_the_iot_vlan_is_carved_out_of_the_way_into_the_cluster() -> None:
     firewall = build()
 
     families = (
-        (firewall.iot_cluster_v4, 'IPV4', str(conventions.IOT_VLAN.v4)),
-        (firewall.iot_cluster_v6, 'IPV6', str(conventions.IOT_VLAN.v6)),
+        (firewall.iot_cluster_v4, 'IPV4', f'{NAME}-iot-v4_id'),
+        (firewall.iot_cluster_v6, 'IPV6', f'{NAME}-iot-v6_id'),
     )
-    for policy, version, expected in families:
+    for policy, version, group in families:
         assert await policy.action.future() == 'BLOCK'
         assert await policy.ip_version.future() == version
         assert await policy.protocol.future() == 'all'
@@ -286,7 +290,8 @@ async def test_the_iot_vlan_is_carved_out_of_the_way_into_the_cluster() -> None:
         destination = await policy.destination.future()
         assert source is not None and destination is not None
         assert source.zone_id == zone_id(unifi.ZONE_INTERNAL)
-        assert source.ips == [expected]
+        assert source.ip_group_id == group
+        assert source.ips is None
         # The whole zone on the far side: the node subnet *is* a network
         # object, so unlike the pool it needs no group to be named.
         assert destination.zone_id == f'{NAME}-zone_id'
@@ -382,17 +387,69 @@ async def test_every_pool_rule_is_sourced_from_the_iot_vlan_alone() -> None:
     firewall = build()
 
     families = (
-        (firewall.iot_media_v4, str(conventions.IOT_VLAN.v4)),
-        (firewall.iot_pool_v4, str(conventions.IOT_VLAN.v4)),
-        (firewall.iot_media_v6, str(conventions.IOT_VLAN.v6)),
-        (firewall.iot_pool_v6, str(conventions.IOT_VLAN.v6)),
+        (firewall.iot_media_v4, f'{NAME}-iot-v4_id'),
+        (firewall.iot_pool_v4, f'{NAME}-iot-v4_id'),
+        (firewall.iot_media_v6, f'{NAME}-iot-v6_id'),
+        (firewall.iot_pool_v6, f'{NAME}-iot-v6_id'),
     )
-    for policy, expected in families:
+    for policy, group in families:
         source = await policy.source.future()
         assert source is not None
-        assert source.ips == [expected]
+        assert source.ip_group_id == group
+        assert source.ips is None
+
+
+@pytest.mark.asyncio
+async def test_the_iot_vlan_is_named_by_group_and_the_groups_hold_its_subnets() -> None:
+    """The groups every IoT rule is sourced from hold the VLAN and nothing else.
+
+    A rule sourced from a group is only as narrow as the group: a member
+    beyond the VLAN would carve the trusted side out with it, and a v4 subnet
+    in the v6 group would leave a family the drop reads as covering
+    unmatched.
+    """
+    firewall = build()
+
+    assert await firewall.iot_v4.type.future() == 'address-group'
+    assert await firewall.iot_v4.members.future() == [str(conventions.IOT_VLAN.v4)]
+    assert await firewall.iot_v4.name.future() == unifi.IOT_GROUP_V4
+
+    assert await firewall.iot_v6.type.future() == 'ipv6-address-group'
+    assert await firewall.iot_v6.members.future() == [str(conventions.IOT_VLAN.v6)]
+    assert await firewall.iot_v6.name.future() == unifi.IOT_GROUP_V6
 
     assert str(conventions.IOT_VLAN.v6).endswith(':90::/64'), 'the IoT ULA follows the VLAN numbering scheme'
+
+
+@pytest.mark.asyncio
+async def test_no_policy_hands_a_subnet_to_a_field_of_single_addresses(mocks: Controller) -> None:
+    """Every `ips` entry, source or destination, is one address.
+
+    The pinned provider validates each entry as a single IPv4 or IPv6 address
+    and refuses the whole resource at preview when one is a CIDR; the mock
+    monitor accepts anything. A subnet goes through an address group instead,
+    and this holds that every policy the census declares, today's and the
+    next one alike, keeps to that.
+    """
+    async with declaring():
+        build()
+
+    policies = mocks.by_name('unifi:index/firewallZonePolicy:FirewallZonePolicy')
+
+    assert policies, 'the build declared no zone policy'
+    checked = 0
+    for name, inputs in policies.items():
+        for side in ('source', 'destination'):
+            entries: list[str] = inputs[side].get('ips') or []
+            for entry in entries:
+                try:
+                    ip_address(entry)
+                except ValueError:
+                    pytest.fail(f'{name} {side}.ips holds {entry!r}, which is not one address')
+                checked += 1
+    # The census does carry literals — the media VIP, the worker's address —
+    # so a pass that read no entry at all is a pass that checked nothing.
+    assert checked, 'no policy carried an ips entry to check'
 
 
 #: Each ordering resource, the zone pair it orders, and the policies it puts

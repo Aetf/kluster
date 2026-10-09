@@ -277,11 +277,12 @@ not moved.
     names none of the addresses the program dials and the provider can
     pin nothing, and what that exposes is recorded in architecture.md
     §4.1. It declares a zone of its own
-    with no network in it; an address group of each family, as the
-    census's pool groups are; policies out of that zone in the shapes the
-    census uses — zone to zone in both families, and per family a
-    subnet source to a literal address with a port and a subnet source
-    to a group; the order on that pair; and a forward of an unused WAN
+    with no network in it; two address groups of each family, one to
+    source from and one to send to, as the census's IoT and pool groups
+    are; policies out of that zone in the shapes the census uses — zone
+    to zone in both families, and per family a subnet source, named
+    through its group, to a literal address with a port and to a group;
+    the order on that pair; and a forward of an unused WAN
     port to the worker's address, each named `kluster-probe` in the
     console. The addresses are the documentation ranges, `192.0.2.0/24`
     and `2001:db8::/32`. A zone holding no network sources no traffic,
@@ -342,6 +343,15 @@ not moved.
         f'{NAME}-group-v6', name=f'{NAME} v6', type='ipv6-address-group', members=['2001:db8::/48'],
         site=site, opts=opts,
     )
+    # A zone policy's `ips` takes single addresses, so a subnet source is a group too.
+    source_v4 = unifi.FirewallGroup(
+        f'{NAME}-source-v4', name=f'{NAME} source v4', type='address-group', members=['192.0.2.0/25'],
+        site=site, opts=opts,
+    )
+    source_v6 = unifi.FirewallGroup(
+        f'{NAME}-source-v6', name=f'{NAME} source v6', type='ipv6-address-group',
+        members=['2001:db8:1::/64'], site=site, opts=opts,
+    )
     Source = unifi.FirewallZonePolicySourceArgs
     Destination = unifi.FirewallZonePolicyDestinationArgs
     wide = unifi.FirewallZonePolicy(
@@ -351,24 +361,24 @@ not moved.
     )
     literal_v4 = unifi.FirewallZonePolicy(
         f'{NAME}-literal-v4', name=f'{NAME} literal v4', description=NAME, action='ALLOW',
-        ip_version='IPV4', protocol='tcp', source=Source(zone_id=zone.id, ips=['192.0.2.0/25']),
+        ip_version='IPV4', protocol='tcp', source=Source(zone_id=zone.id, ip_group_id=source_v4.id),
         destination=Destination(zone_id=external, ips=['192.0.2.200'], port=443),
         auto_allow_return_traffic=True, enabled=True, opts=opts,
     )
     literal_v6 = unifi.FirewallZonePolicy(
         f'{NAME}-literal-v6', name=f'{NAME} literal v6', description=NAME, action='ALLOW',
-        ip_version='IPV6', protocol='tcp', source=Source(zone_id=zone.id, ips=['2001:db8:1::/64']),
+        ip_version='IPV6', protocol='tcp', source=Source(zone_id=zone.id, ip_group_id=source_v6.id),
         destination=Destination(zone_id=external, ips=['2001:db8:2::1'], port=443),
         auto_allow_return_traffic=True, enabled=True, opts=opts,
     )
     grouped_v4 = unifi.FirewallZonePolicy(
         f'{NAME}-grouped-v4', name=f'{NAME} grouped v4', description=NAME, action='BLOCK',
-        ip_version='IPV4', protocol='all', source=Source(zone_id=zone.id, ips=['192.0.2.0/25']),
+        ip_version='IPV4', protocol='all', source=Source(zone_id=zone.id, ip_group_id=source_v4.id),
         destination=Destination(zone_id=external, ip_group_id=group_v4.id), enabled=True, opts=opts,
     )
     grouped_v6 = unifi.FirewallZonePolicy(
         f'{NAME}-grouped-v6', name=f'{NAME} grouped v6', description=NAME, action='BLOCK',
-        ip_version='IPV6', protocol='all', source=Source(zone_id=zone.id, ips=['2001:db8:1::/64']),
+        ip_version='IPV6', protocol='all', source=Source(zone_id=zone.id, ip_group_id=source_v6.id),
         destination=Destination(zone_id=external, ip_group_id=group_v6.id), enabled=True, opts=opts,
     )
     unifi.FirewallZonePolicyOrder(
@@ -410,7 +420,7 @@ not moved.
 
     It passes on three readings. `probe up` plans the stack, its
     provider and one create for each resource the program declares —
-    the zone, both groups, the policies, the order and the forward — and
+    the zone, the groups, the policies, the order and the forward — and
     nothing else, and applies every one. The refreshed preview exits
     zero proposing no change: every field the controller reads back is
     the value declared. And `destroy` deletes every one of them, after
