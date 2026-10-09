@@ -1057,6 +1057,14 @@ def test_a_project_whose_entry_names_no_one_manifest_is_refused_by_name(
         _ = sources.bundle_path(project)
 
 
+#: The whole-bundle case's own bound: it parses and re-dumps the 7.5 MB CRD
+#: bundle in pure Python, which takes 13.7 s on one idle core and has passed
+#: the suite's 60 s on CI's runners under `-n 4`. It goes back to the suite's
+#: bound once the bundle is parsed in C (ops#523).
+BUNDLE_CASE_TIMEOUT = 240
+
+
+@pytest.mark.timeout(BUNDLE_CASE_TIMEOUT)
 def test_the_committed_bundle_is_the_scripts_own_output() -> None:
     """Selecting from the committed bundle and dumping it again gives back the same text.
 
