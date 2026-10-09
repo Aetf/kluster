@@ -28,7 +28,6 @@ waits again.
 
 from __future__ import annotations
 
-import logging
 import socket
 import ssl
 import struct
@@ -51,8 +50,6 @@ __all__ = (
     'handshake',
     'wait',
 )
-
-log = logging.getLogger(__name__)
 
 #: How long a create waits for a box that does not answer yet. A first boot
 #: pulls the Postgres image before it listens, which is minutes.
@@ -117,27 +114,35 @@ def wait(
     timeout: float = TIMEOUT,
     attempt: Callable[[str, int, str], None] = handshake,
 ) -> None:
-    """Attempt the handshake until it succeeds, refusing on the wrong certificate and giving up after `timeout`."""
-    log.info(
-        'waiting for %s:%d to complete a TLS handshake as %s, trying every %ds for up to %ds — a first boot '
-        'pulls the Postgres image before it listens',
-        address,
-        port,
-        address,
-        INTERVAL,
-        int(timeout),
+    """Attempt the handshake until it succeeds, refusing on the wrong certificate and giving up after `timeout`.
+
+    **What it waits on is said through `pulumi.log`**, before the first
+    attempt and after each one that finds no answer: the engine's own
+    diagnostics, which `pulumi` draws on the stack's row as the run goes and
+    lists at its end, at a terminal and under a pipe alike. A line through
+    the standard `logging` module would reach nobody: nothing configures it
+    in the process a dynamic provider runs in, so its `info` is dropped.
+    """
+    pulumi.log.info(
+        f'waiting for {address}:{port} to complete a TLS handshake as {address}, trying every {INTERVAL}s for '
+        f'up to {int(timeout)}s -- a first boot pulls the Postgres image before it listens'
     )
-    deadline = time.monotonic() + timeout
+    started = time.monotonic()
+    deadline = started + timeout
     while True:
         try:
             attempt(address, port, ca_certificate)
         except NotAnswering as exc:
-            if time.monotonic() + INTERVAL > deadline:
+            now = time.monotonic()
+            if now + INTERVAL > deadline:
                 raise NotAnswering(f'{address}:{port} did not answer within {int(timeout)}s; last: {exc}') from exc
-            log.info('not yet: %s', exc)
+            pulumi.log.info(
+                f'still waiting for {address}:{port} after {int(now - started)}s of {int(timeout)}s, trying again '
+                f'in {INTERVAL}s: {exc}'
+            )
             time.sleep(INTERVAL)
             continue
-        log.info('%s:%d answered as %s', address, port, address)
+        pulumi.log.info(f'{address}:{port} answered as {address}')
         return
 
 
