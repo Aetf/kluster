@@ -18,7 +18,10 @@ resource from an extension generated for one throwaway CRD, with the
 explicit provider handed over in one spelling per case. A `preview` is the
 whole run: the provider's kubeconfig names a closed port, so the provider
 previews without a cluster, and the step the engine planned names the
-provider it was given.
+provider it was given. Every command, `pulumi` and `uv` alike, leads a POSIX
+session of its own that ends with it (`process_sessions`), so a `pulumi`
+stopped at its bound takes its plugins with it: the kubernetes provider, and
+in a preview the language host and the program.
 
 Unlike the other engine suites, this one fetches: the extension is the
 kubernetes provider's, so `pulumi package gen-sdk` and the engine both need
@@ -48,6 +51,7 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Any, cast
 
+import process_sessions
 import pytest
 
 pytestmark = pytest.mark.skipif(
@@ -171,6 +175,11 @@ CASE_TIMEOUT = 240
 #: `CASE_TIMEOUT`.
 COMMAND_TIMEOUT = 120
 
+#: How long building a case's virtual environment, or locking its project,
+#: may take before the case fails naming the `uv` command: a stop-loss, below
+#: `CASE_TIMEOUT`.
+SETUP_TIMEOUT = 120
+
 #: The kubernetes plugin the extension is generated with and the previews run
 #: on: the one the locked `pulumi-kubernetes` registers. `gen-sdk` is handed it
 #: as `kubernetes@<version>`, the one spelling of a plugin name it resolves by
@@ -189,15 +198,16 @@ def _scrubbed(environ: Mapping[str, str]) -> dict[str, str]:
 
 
 def _pulumi(*args: str, cwd: Path, env: Mapping[str, str]) -> sp.CompletedProcess[str]:
-    return sp.run(
-        ['pulumi', '--non-interactive', *args],
-        cwd=cwd,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=COMMAND_TIMEOUT,
-        check=False,
+    """One `pulumi` command, its plugins in its POSIX session and gone with it however it ends."""
+    return process_sessions.run(
+        ['pulumi', '--non-interactive', *args], cwd=cwd, env=env, text=True, timeout=COMMAND_TIMEOUT
     )
+
+
+def _uv(*args: str, cwd: Path | None = None) -> None:
+    """One `uv` command that has to succeed, in a POSIX session that ends with it."""
+    done = process_sessions.run(['uv', *args], cwd=cwd, text=True, timeout=SETUP_TIMEOUT)
+    assert done.returncode == 0, f'`uv {" ".join(args)}` failed:\n{done.stderr}'
 
 
 @dataclass
@@ -255,7 +265,7 @@ def preview(extension: Extension, tmp_path: Path, spelling: str) -> sp.Completed
     project = tmp_path / 'project'
     project.mkdir()
     venv = tmp_path / 'venv'
-    _ = sp.run(['uv', 'venv', '-q', '--python', sys.executable, str(venv)], check=True, timeout=120)
+    _uv('venv', '-q', '--python', sys.executable, str(venv))
     (site_packages,) = venv.glob('lib/python*/site-packages')
     # The generated SDK first: the repository's own `pulumi_crds`, `sdks/crds`,
     # is an extension SDK of the same name generated from another manifest,
@@ -272,7 +282,7 @@ def preview(extension: Extension, tmp_path: Path, spelling: str) -> sp.Completed
     _ = (project / 'pyproject.toml').write_text(
         PYPROJECT.format(major=sys.version_info.major, minor=sys.version_info.minor)
     )
-    _ = sp.run(['uv', 'lock', '-q', '--offline'], cwd=project, check=True, timeout=120)
+    _uv('lock', '-q', '--offline', cwd=project)
     (tmp_path / 'state').mkdir()
     env = _scrubbed(os.environ) | {
         'PULUMI_BACKEND_URL': f'file://{tmp_path / "state"}',
