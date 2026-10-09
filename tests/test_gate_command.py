@@ -29,10 +29,12 @@ and every gate launch carries one `<N>`.
 
 from __future__ import annotations
 
+import importlib.util
 import re
 import shlex
 from collections.abc import Iterator
 from pathlib import Path
+from types import ModuleType
 from typing import NamedTuple, cast
 
 import fences
@@ -321,3 +323,30 @@ def test_every_gate_launch_carries_one_outer_bound() -> None:
             bounds.setdefault(launch.bound, []).append(launch.place)
 
     assert len(bounds) == 1, f'the outer bound differs between places: {bounds}'
+
+
+def _drill(path: Path) -> ModuleType:
+    """A drill module, imported by its path: `tests/live` is collected only when the drills run."""
+    spec = importlib.util.spec_from_file_location(f'drill_{path.stem}', path)
+    assert spec is not None and spec.loader is not None, path
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_drills_outer_bound_covers_every_wait_their_deadlines_allow() -> None:
+    """A drill's outer `timeout` is its only bound (testing.md §5), so it sits above the drills' worst case.
+
+    One command runs every drill in turn, so the bound covers their sum. A
+    kill inside a wait a drill still tolerates ends the run with no
+    transcript, which is what the drill exists to produce.
+    """
+    drills = sorted((ROOT / 'tests' / 'live').glob('test_*.py'))
+    worst = sum(float(cast('float', _drill(path).WORST_CASE)) for path in drills)
+    launches = [launch for launch in every_launch() if 'tests/live' in launch.text and launch.bound is not None]
+
+    assert drills and launches
+    for launch in launches:
+        assert float(cast('str', launch.bound)) > worst, (
+            f'{launch.place}: {launch.bound} s, under the {worst:.0f} s the drills can wait'
+        )

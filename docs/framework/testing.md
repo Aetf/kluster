@@ -466,14 +466,20 @@ and change real state. They are not collected at all unless the opt-in is
 present:
 
 ```bash
-RUN_LIVE_DRILLS=1 timeout 600 mise x uv -- uv run pytest tests/live -n 0 -s --log-cli-level=INFO
+RUN_LIVE_DRILLS=1 timeout 2400 mise x uv -- uv run pytest tests/live -n 0 -s --log-cli-level=INFO
 ```
 
 A drill runs under no per-case bound: its duration is the provider's — a
 rotation waits for the tenancy to authenticate the key — so
 `tests/live/conftest.py` marks every item under the directory
 `timeout(0)`, which outranks the bound §1 configures, and the outer
-`timeout` on the command above is the only guard a drill runs under.
+`timeout` on the command above is the only guard a drill runs under. So it
+sits above the longest the drills' waits can take while each is still
+inside its deadline: the OCI seed drill's `WORST_CASE`, derived beside
+its constants, with room above it for the password prompt and the calls
+between the waits. `tests/test_gate_command.py` holds the
+command's bound above that sum, so a deadline that grows fails there
+first.
 
 `tests/live/conftest.py` is the entire mechanism: without `RUN_LIVE_DRILLS=1`
 it declines to collect the directory, so an ordinary `pytest` run neither
