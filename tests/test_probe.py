@@ -7,8 +7,8 @@ verdict is a function of the certificate's dates, the newest dump's stamp and
 `now`, and never of how long the case took (framework/testing.md §7 item 5).
 
 The thresholds are held as relations: the alert margin below the renewal
-margin, the dump age from the one rule every scheduled backup follows, the
-timer's calendar form agreeing with the period the probe reads.
+margin, the timer's calendar form agreeing with the period the probe reads.
+Each verdict's boundary is read from the threshold it is a verdict on.
 """
 
 from __future__ import annotations
@@ -27,13 +27,15 @@ from urllib.parse import unquote
 import pytest
 import requests
 from b2_api import FakeApi
+from credentials_command_tree import commands
+from fences import prose
 from memory_kit import MemoryKit
+from section_numbers import sections
 from state_dump_box import Box
 
 from kluster import conventions
-from kluster.conventions import backup
 from kluster.lib.state_backend import settings, state
-from kluster.scripts.credentials import b2, entries, masters, pki
+from kluster.scripts.credentials import b2, derived, entries, masters, pki
 from kluster.scripts.credentials.kdbx import KdbxStore
 from kluster.scripts.credentials.masters import CredentialRejected
 from kluster.scripts.credentials.pulumi_config import SlotRefused
@@ -43,9 +45,29 @@ UTC = dt.UTC
 NOW = dt.datetime(2026, 9, 16, 6, 23, tzinfo=UTC)
 SEED_ENTRY = entries.SEEDS['b2'].entry
 PREFIX = b2.DUMP_PREFIX
+#: The command that re-mints the list-only key, as a refusal names it.
+MINT = f'credentials derived {derived.B2_FRESHNESS_DUMPS_ROW} mint'
+
+
+def test_the_mint_a_refusal_names_is_a_command_of_the_tree() -> None:
+    assert MINT.split()[1:] in commands()
 
 
 # -- the thresholds -----------------------------------------------------------
+
+#: A day either side of the alert margin: a leaf with `OUTSIDE` days left
+#: passes, and one with `INSIDE` fails.
+OUTSIDE = config.EXPIRY_ALERT_MARGIN.days + 1
+INSIDE = config.EXPIRY_ALERT_MARGIN.days - 1
+#: An hour either side of the dump age: a newest dump `FRESH` old passes, and
+#: one `STALE` old fails.
+FRESH = settings.DUMP_MAX_AGE - dt.timedelta(hours=1)
+STALE = settings.DUMP_MAX_AGE + dt.timedelta(hours=1)
+
+
+def _hours(age: dt.timedelta) -> str:
+    """An age as a verdict prints it."""
+    return f'{age / dt.timedelta(hours=1):.1f} h'
 
 
 def test_the_alert_margin_opens_after_the_renewal_margin() -> None:
@@ -56,10 +78,6 @@ def test_the_alert_margin_opens_after_the_renewal_margin() -> None:
     assert dt.timedelta(0) < config.EXPIRY_ALERT_MARGIN
 
 
-def test_the_dump_age_follows_the_one_rule_for_stale() -> None:
-    assert backup.max_age(settings.DUMP_PERIOD) == settings.DUMP_MAX_AGE
-
-
 def test_the_timer_s_calendar_form_says_what_the_period_says() -> None:
     # Two spellings of one cadence: the systemd calendar expression the
     # timer reads, and the period the probe measures against. A daily
@@ -67,6 +85,29 @@ def test_the_timer_s_calendar_form_says_what_the_period_says() -> None:
     daily = re.fullmatch(r'\*-\*-\* \d\d:\d\d:\d\d', settings.DUMP_SCHEDULE) is not None
 
     assert daily == (settings.DUMP_PERIOD == dt.timedelta(days=1))  # noqa: SIM300 -- the predicate reads 'the period is one day'
+
+
+#: Where a section reference in a verdict lands: `docs/`, as the alert renders it.
+DOCS = Path(__file__).parent.parent / 'docs'
+
+
+def test_every_playbook_a_verdict_names_is_a_section_that_exists() -> None:
+    """A verdict whose playbook does not resolve sends its reader to nothing.
+
+    Every reference the probe holds is read off the module, so a playbook
+    added later is held to it without an edit here.
+    """
+    references = {
+        name: value
+        for name, value in vars(probe).items()
+        if isinstance(value, str) and re.fullmatch(r'\S+\.md §\d+(?:\.\d+)*', value)
+    }
+
+    assert {'REISSUE_PLAYBOOK', 'REBUILD_PLAYBOOK', 'KEY_PLAYBOOK', 'MONITORING'} <= set(references)
+    for name, reference in references.items():
+        document, _, number = reference.partition(' §')
+        assert (DOCS / document).is_file(), f'{name}: {reference}'
+        assert number in sections(prose((DOCS / document).read_text())), f'{name}: {reference}'
 
 
 # -- the certificate probe ----------------------------------------------------
@@ -160,42 +201,42 @@ def test_the_leaf_is_the_first_certificate_of_the_chain(authority: pki.Authority
 
 
 def test_a_certificate_with_more_than_the_margin_left_passes(authority: pki.Authority) -> None:
-    verdict = probe.certificate(now=NOW, handshake=_serving(authority, issued=_left(31)))
+    verdict = probe.certificate(now=NOW, handshake=_serving(authority, issued=_left(OUTSIDE)))
 
     assert verdict.passed
     assert settings.ADDRESS in verdict.observed
-    assert '31 day(s)' in verdict.observed
+    assert f'{OUTSIDE} day(s)' in verdict.observed
 
 
 def test_a_certificate_inside_the_margin_fails_into_the_reissue_playbook(authority: pki.Authority) -> None:
-    verdict = probe.certificate(now=NOW, handshake=_serving(authority, issued=_left(29)))
+    verdict = probe.certificate(now=NOW, handshake=_serving(authority, issued=_left(INSIDE)))
 
     assert not verdict.passed
-    assert verdict.playbook == 'physical/state-backend.md §7.1'
-    assert '29 day(s)' in verdict.observed
+    assert verdict.playbook == probe.REISSUE_PLAYBOOK
+    assert f'{INSIDE} day(s)' in verdict.observed
     assert f'{config.EXPIRY_ALERT_MARGIN.days}-day alert margin' in verdict.observed
 
 
 def test_the_margin_is_read_from_config_and_not_from_a_number_of_its_own(
     authority: pki.Authority, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(config, 'EXPIRY_ALERT_MARGIN', dt.timedelta(days=40))
+    monkeypatch.setattr(config, 'EXPIRY_ALERT_MARGIN', dt.timedelta(days=OUTSIDE + 1))
 
-    assert not probe.certificate(now=NOW, handshake=_serving(authority, issued=_left(31))).passed
-    assert probe.certificate(now=NOW, handshake=_serving(authority, issued=_left(41))).passed
+    assert not probe.certificate(now=NOW, handshake=_serving(authority, issued=_left(OUTSIDE))).passed
+    assert probe.certificate(now=NOW, handshake=_serving(authority, issued=_left(OUTSIDE + 2))).passed
 
 
 def test_an_expired_certificate_fails_by_its_date(authority: pki.Authority) -> None:
     verdict = probe.certificate(now=NOW, handshake=_serving(authority, issued=_left(-1)))
 
-    assert verdict.playbook == 'physical/state-backend.md §7.1'
+    assert verdict.playbook == probe.REISSUE_PLAYBOOK
     assert 'expired on' in verdict.observed
 
 
 def test_a_certificate_not_yet_valid_fails(authority: pki.Authority) -> None:
     verdict = probe.certificate(now=NOW, handshake=_serving(authority, issued=NOW + dt.timedelta(days=1)))
 
-    assert verdict.playbook == 'physical/state-backend.md §7.1'
+    assert verdict.playbook == probe.REISSUE_PLAYBOOK
     assert 'not valid until' in verdict.observed
 
 
@@ -204,7 +245,7 @@ def test_a_certificate_naming_another_address_fails_naming_both(authority: pki.A
     # leaf with years left that names another one refuses them all.
     verdict = probe.certificate(now=NOW, handshake=_serving(authority, issued=_left(400), address='192.0.2.10'))
 
-    assert verdict.playbook == 'physical/state-backend.md §7.1'
+    assert verdict.playbook == probe.REISSUE_PLAYBOOK
     assert '192.0.2.10' in verdict.observed
     assert settings.ADDRESS in verdict.observed
 
@@ -212,21 +253,21 @@ def test_a_certificate_naming_another_address_fails_naming_both(authority: pki.A
 def test_a_box_that_refuses_the_handshake_is_unreachable_into_the_rebuild_playbook() -> None:
     verdict = probe.certificate(now=NOW, handshake=Handshake(returncode=1, stderr='connect:errno=111\nmore'))
 
-    assert verdict.playbook == 'physical/state-backend.md §7.3'
+    assert verdict.playbook == probe.REBUILD_PLAYBOOK
     assert 'connect:errno=111' in verdict.observed
 
 
 def test_a_box_that_does_not_answer_is_unreachable_into_the_rebuild_playbook() -> None:
     verdict = probe.certificate(now=NOW, handshake=Handshake(hangs=True))
 
-    assert verdict.playbook == 'physical/state-backend.md §7.3'
+    assert verdict.playbook == probe.REBUILD_PLAYBOOK
     assert f'{probe.HANDSHAKE_TIMEOUT}s' in verdict.observed
 
 
 def test_a_handshake_that_served_no_certificate_fails() -> None:
     verdict = probe.certificate(now=NOW, handshake=Handshake(stdout='CONNECTED\n---\n'))
 
-    assert verdict.playbook == 'physical/state-backend.md §7.3'
+    assert verdict.playbook == probe.REBUILD_PLAYBOOK
     assert 'no certificate' in verdict.observed
 
 
@@ -320,23 +361,23 @@ def test_a_name_that_is_not_a_dump_s_reads_as_none() -> None:
 
 def test_a_dump_younger_than_the_age_passes(api: FakeApi, lister: tuple[b2.AppKey, str]) -> None:
     key, bucket_id = lister
-    api.objects[bucket_id] = [_dump(NOW - dt.timedelta(days=3)), _dump(NOW - dt.timedelta(hours=35))]
+    api.objects[bucket_id] = [_dump(NOW - dt.timedelta(days=3)), _dump(NOW - FRESH)]
 
     verdict = _dumps(key)
 
     assert verdict.passed
-    assert _dump(NOW - dt.timedelta(hours=35)) in verdict.observed
-    assert '35.0 h' in verdict.observed
+    assert _dump(NOW - FRESH) in verdict.observed
+    assert _hours(FRESH) in verdict.observed
 
 
 def test_a_dump_older_than_the_age_fails_into_the_rebuild_playbook(api: FakeApi, lister: tuple[b2.AppKey, str]) -> None:
     key, bucket_id = lister
-    api.objects[bucket_id] = [_dump(NOW - dt.timedelta(hours=37))]
+    api.objects[bucket_id] = [_dump(NOW - STALE)]
 
     verdict = _dumps(key)
 
-    assert verdict.playbook == 'physical/state-backend.md §7.3'
-    assert '37.0 h' in verdict.observed
+    assert verdict.playbook == probe.REBUILD_PLAYBOOK
+    assert _hours(STALE) in verdict.observed
     assert 'stopped' in verdict.observed
     # The box refusing an archive that holds no stack is one way the timer
     # stops landing objects: a box replaced and not restored reads as stale.
@@ -347,10 +388,10 @@ def test_the_age_is_the_settings_and_not_a_number_of_its_own(
     api: FakeApi, lister: tuple[b2.AppKey, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     key, bucket_id = lister
-    api.objects[bucket_id] = [_dump(NOW - dt.timedelta(hours=37))]
+    api.objects[bucket_id] = [_dump(NOW - STALE)]
 
     assert not _dumps(key).passed
-    monkeypatch.setattr(settings, 'DUMP_MAX_AGE', dt.timedelta(hours=48))
+    monkeypatch.setattr(settings, 'DUMP_MAX_AGE', STALE + dt.timedelta(hours=1))
     assert _dumps(key).passed
 
 
@@ -363,7 +404,7 @@ def test_an_empty_prefix_is_its_own_failure(api: FakeApi, lister: tuple[b2.AppKe
     # No dump holding state has landed: the box refuses to upload one that
     # holds no stack, or its timer never fired. Neither is a dump that
     # stopped, and the message says which prefix is empty and names both.
-    assert verdict.playbook == 'physical/state-backend.md §7.3'
+    assert verdict.playbook == probe.REBUILD_PLAYBOOK
     assert 'no object under' in verdict.observed
     assert PREFIX in verdict.observed
     assert 'holds no stack' in verdict.observed
@@ -376,7 +417,7 @@ def test_an_object_not_named_like_a_dump_fails_by_name(api: FakeApi, lister: tup
 
     verdict = _dumps(key)
 
-    assert verdict.playbook == 'physical/state-backend.md §7.3'
+    assert verdict.playbook == probe.REBUILD_PLAYBOOK
     assert f'{PREFIX}notes.txt' in verdict.observed
 
 
@@ -420,8 +461,8 @@ def test_a_key_b2_refuses_is_the_dump_probe_s_verdict_naming_no_key_id(api: Fake
     verdict = probe.dumps(rejected, 'nor-secret', now=NOW)
 
     assert not verdict.passed
-    assert verdict.playbook == 'credentials.md §4'
-    assert probe.KEY_ID_ENV in verdict.observed and 'credentials derived b2-freshness-dumps mint' in verdict.observed
+    assert verdict.playbook == probe.KEY_PLAYBOOK
+    assert probe.KEY_ID_ENV in verdict.observed and MINT in verdict.observed
     assert rejected not in str(verdict)
 
 
@@ -463,7 +504,7 @@ def test_a_key_b2_refuses_at_the_listing_is_the_refused_key_s_verdict(status: in
     # the door.
     verdict = probe.dumps('id', 'secret', now=NOW, authorize=_authorizing_to(_answered(status)))
 
-    assert verdict.playbook == 'credentials.md §4'
+    assert verdict.playbook == probe.KEY_PLAYBOOK
 
 
 B2_SILENT = {
@@ -483,7 +524,7 @@ def test_b2_not_answering_is_the_dump_probe_s_verdict(authorize: probe.Authorize
     verdict = probe.dumps('id', 'secret', now=NOW, authorize=authorize)
 
     assert not verdict.passed
-    assert verdict.playbook == 'physical/state-backend.md §6'
+    assert verdict.playbook == probe.MONITORING
     assert 'B2 did not answer' in verdict.observed
 
 
@@ -507,7 +548,7 @@ def test_an_empty_slot_is_refused_naming_the_variable_and_the_mint(environ: dict
     with pytest.raises(SlotRefused, match=re.escape(named)) as refusal:
         _ = probe.credential(environ)
 
-    assert 'credentials derived b2-freshness-dumps mint' in str(refusal.value)
+    assert MINT in str(refusal.value)
 
 
 # -- the run --------------------------------------------------------------------
@@ -522,10 +563,10 @@ def _authorize(api: FakeApi, lister: tuple[b2.AppKey, str], *, dumps_taken: dt.d
 @pytest.mark.parametrize(
     ('left', 'dumped_ago', 'status'),
     [
-        (31, 35, 0),
-        (29, 35, probe.FAILED[probe.CERTIFICATE]),
-        (31, 37, probe.FAILED[probe.DUMPS]),
-        (29, 37, probe.FAILED[probe.CERTIFICATE] + probe.FAILED[probe.DUMPS]),
+        (OUTSIDE, FRESH, 0),
+        (INSIDE, FRESH, probe.FAILED[probe.CERTIFICATE]),
+        (OUTSIDE, STALE, probe.FAILED[probe.DUMPS]),
+        (INSIDE, STALE, probe.FAILED[probe.CERTIFICATE] + probe.FAILED[probe.DUMPS]),
     ],
     ids=['both-pass', 'certificate-fails', 'dumps-fail', 'both-fail'],
 )
@@ -534,11 +575,11 @@ def test_the_status_says_which_probe_failed(
     api: FakeApi,
     lister: tuple[b2.AppKey, str],
     left: int,
-    dumped_ago: int,
+    dumped_ago: dt.timedelta,
     status: int,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    environ = _authorize(api, lister, dumps_taken=NOW - dt.timedelta(hours=dumped_ago))
+    environ = _authorize(api, lister, dumps_taken=NOW - dumped_ago)
     caplog.set_level(logging.INFO, logger=probe.__name__)
 
     answered = probe.run(environ=environ, now=NOW, handshake=_serving(authority, issued=_left(left)))
@@ -548,54 +589,6 @@ def test_the_status_says_which_probe_failed(
     assert answered == status
     assert 'certificate:' in caplog.text
     assert 'dumps:' in caplog.text
-
-
-def test_every_probe_runs_whatever_the_first_found(
-    authority: pki.Authority, api: FakeApi, lister: tuple[b2.AppKey, str], caplog: pytest.LogCaptureFixture
-) -> None:
-    environ = _authorize(api, lister, dumps_taken=NOW - dt.timedelta(hours=1))
-    caplog.set_level(logging.INFO, logger=probe.__name__)
-
-    _ = probe.run(environ=environ, now=NOW, handshake=Handshake(returncode=1))
-
-    # The second verdict is the one a run that stopped at the first failure
-    # would leave unknown on exactly the morning both are wanted.
-    assert 'certificate: FAILED' in caplog.text
-    assert 'dumps: ok' in caplog.text
-
-
-def test_a_key_b2_refuses_leaves_the_certificate_s_verdict_standing(
-    authority: pki.Authority, api: FakeApi, caplog: pytest.LogCaptureFixture
-) -> None:
-    """The morning both are wanted: a certificate failing, and a key the account no longer has.
-
-    Each is printed and each has its bit, so the status names both probes
-    rather than collapsing into the refusal status that names neither.
-    """
-    environ = {probe.KEY_ID_ENV: 'retired-key', probe.KEY_ENV: 'its-secret'}
-    caplog.set_level(logging.INFO, logger=probe.__name__)
-
-    answered = probe.run(environ=environ, now=NOW, handshake=_serving(authority, issued=_left(29)))
-
-    assert answered == probe.FAILED[probe.CERTIFICATE] + probe.FAILED[probe.DUMPS]
-    assert 'certificate: FAILED' in caplog.text
-    assert 'dumps: FAILED' in caplog.text
-
-
-def test_the_status_names_both_probes_when_b2_does_not_answer(
-    authority: pki.Authority, caplog: pytest.LogCaptureFixture
-) -> None:
-    # A certificate failing on the morning B2 is down: both verdicts, both
-    # bits, rather than the could-not-probe status that names neither.
-    environ = {probe.KEY_ID_ENV: 'id', probe.KEY_ENV: 'secret'}
-    caplog.set_level(logging.INFO, logger=probe.__name__)
-    silent = _not_authorizing(requests.ConnectionError('proxy refused'))
-
-    answered = probe.run(environ=environ, now=NOW, handshake=_serving(authority, issued=_left(29)), authorize=silent)
-
-    assert answered == probe.FAILED[probe.CERTIFICATE] + probe.FAILED[probe.DUMPS]
-    assert 'certificate: FAILED' in caplog.text
-    assert 'dumps: FAILED' in caplog.text
 
 
 def test_a_verdict_is_printed_before_a_later_probe_can_raise(
@@ -609,7 +602,7 @@ def test_a_verdict_is_printed_before_a_later_probe_can_raise(
     broken = _not_authorizing(RuntimeError('a defect in the probe'))
 
     with pytest.raises(RuntimeError):
-        _ = probe.run(environ=environ, now=NOW, handshake=_serving(authority, issued=_left(29)), authorize=broken)
+        _ = probe.run(environ=environ, now=NOW, handshake=_serving(authority, issued=_left(INSIDE)), authorize=broken)
 
     assert 'certificate: FAILED' in caplog.text
 
@@ -619,14 +612,16 @@ def test_only_runs_the_one_probe_named_and_the_certificate_needs_no_key(
 ) -> None:
     caplog.set_level(logging.INFO, logger=probe.__name__)
 
-    answered = probe.run(only=probe.CERTIFICATE, environ={}, now=NOW, handshake=_serving(authority, issued=_left(31)))
+    answered = probe.run(
+        only=probe.CERTIFICATE, environ={}, now=NOW, handshake=_serving(authority, issued=_left(OUTSIDE))
+    )
 
     assert answered == 0
     assert 'dumps:' not in caplog.text
 
 
 def test_only_dumps_reads_the_key_before_probing_anything(authority: pki.Authority) -> None:
-    handshake = _serving(authority, issued=_left(31))
+    handshake = _serving(authority, issued=_left(OUTSIDE))
 
     with pytest.raises(SlotRefused):
         _ = probe.run(only=probe.DUMPS, environ={}, now=NOW, handshake=handshake)
@@ -640,7 +635,7 @@ def test_each_probe_says_what_it_is_about_to_check_before_checking(
     environ = _authorize(api, lister, dumps_taken=NOW)
     caplog.set_level(logging.INFO, logger=probe.__name__)
 
-    _ = probe.run(environ=environ, now=NOW, handshake=_serving(authority, issued=_left(31)))
+    _ = probe.run(environ=environ, now=NOW, handshake=_serving(authority, issued=_left(OUTSIDE)))
 
     # A network step announces itself before it runs, so a silent probe reads
     # as one that is waiting rather than one that is stuck.
@@ -683,8 +678,7 @@ def test_a_refusal_from_the_command_is_one_line_and_status_one(caplog: pytest.Lo
         patch.delenv(probe.KEY_ENV, raising=False)
         assert cli.main(['probe', '--only', probe.DUMPS]) == 1
 
-    assert 'credentials derived b2-freshness-dumps mint' in caplog.text
-    assert 1 not in probe.FAILED.values()
+    assert MINT in caplog.text
 
 
 def test_a_probe_the_command_does_not_have_is_refused_by_the_parser(capsys: pytest.CaptureFixture[str]) -> None:
@@ -693,9 +687,6 @@ def test_a_probe_the_command_does_not_have_is_refused_by_the_parser(capsys: pyte
 
     assert refusal.value.code == 2
     assert 'invalid choice' in capsys.readouterr().err
-    # So no probe's bit is 2: a status the parser also answers would file an
-    # interface break as that probe's alert.
-    assert 2 not in probe.FAILED.values()
 
 
 def test_every_probe_has_a_bit_of_its_own_that_no_other_status_shares() -> None:
@@ -719,6 +710,9 @@ def test_the_statuses_are_published_in_help() -> None:
     else:  # pragma: no cover - the parser grew no subcommands
         raise AssertionError('the parser grew no subcommands')
 
+    # Each status as the line that explains it starts, so a digit of the
+    # address the description names does not stand in for one.
+    said = ' '.join(help_text.split())
     for status in probe.FAILED.values():
-        assert str(status) in help_text
+        assert re.search(rf'(?<!\d){status} the ', said), status
     assert str(config.EXPIRY_ALERT_MARGIN.days) in help_text

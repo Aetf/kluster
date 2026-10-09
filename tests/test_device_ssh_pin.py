@@ -131,9 +131,14 @@ async def ambient(tmp_path: Path, keys: Keys, monkeypatch: pytest.MonkeyPatch) -
         _ = await reader.readexactly(length)
         writer.close()
 
-    socket = tmp_path / 'agent.sock'
+    # The socket's path goes into a `sockaddr_un`, which stops at 108 bytes,
+    # and a temporary directory is as long as its root makes it. So the path
+    # is relative, and the case runs in the directory holding it: both the
+    # bind here and the client's connect resolve it there.
+    monkeypatch.chdir(tmp_path)
+    socket = 'agent.sock'
     agent = await asyncio.start_unix_server(record, path=socket)
-    monkeypatch.setenv('SSH_AUTH_SOCK', str(socket))
+    monkeypatch.setenv('SSH_AUTH_SOCK', socket)
     try:
         yield found
     finally:

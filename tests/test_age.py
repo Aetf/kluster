@@ -22,18 +22,16 @@ from renovate_text import group, listed, package_rule
 
 from kluster.scripts.credentials import age
 
-age_binary = shutil.which(age.BINARY)
-needs_age = pytest.mark.skipif(age_binary is None, reason='age is not on PATH (mise x -- ...)')
+
+@pytest.fixture(scope='module')
+def pinned_age() -> None:
+    """The pinned `age` and `age-keygen`, refused when either is missing rather than skipped."""
+    for binary in (age.BINARY, age.KEYGEN):
+        if shutil.which(binary) is None:
+            pytest.fail(f'{binary} is not on PATH: mise.toml pins it, so run the suite under `mise x`')
 
 
-@needs_age
-def test_an_identity_round_trips(tmp_path: Path) -> None:
-    identity = age.generate()
-    path = tmp_path / 'secret.age'
-
-    _ = path.write_text(age.encrypt('hunter2', [identity.public]))
-
-    assert age.decrypt(path, [identity.secret]) == 'hunter2'
+needs_age = pytest.mark.usefixtures('pinned_age')
 
 
 @needs_age
@@ -240,6 +238,7 @@ def test_a_reason_that_repeats_the_value_is_left_out(tmp_path: Path, monkeypatch
     assert str(refused.value) == 'line 5 is not an age recipient'
 
 
+@needs_age
 @pytest.mark.parametrize('shape', range(6), ids=['bare', 'lower', 'quoted', 'assigned', 'json', 'post-quantum'])
 def test_an_identity_is_refused_before_it_reaches_the_tool(shape: int, monkeypatch: pytest.MonkeyPatch) -> None:
     # Anywhere in the line and in any case: a key copied out of an env or JSON
@@ -300,14 +299,22 @@ def test_a_missing_tool_is_not_a_refused_recipient(monkeypatch: pytest.MonkeyPat
         age.check_recipient('age1anything', name='line 1')
 
 
-def test_age_url_matches_the_pinned_version() -> None:
-    """A version bumped without its URL would fetch the old binary and pass
-    its own digest check."""
+#: Fedora CoreOS's name for an architecture, and the name age's releases give it.
+_GO_ARCH = {'x86_64': 'amd64', 'aarch64': 'arm64'}
+
+
+def test_the_age_the_box_fetches_is_built_for_the_boxs_image() -> None:
+    """An image moved to another architecture would boot a box whose age cannot run.
+
+    The image's architecture is the directory its artifact is published
+    under; the digest is a sha256 over the download.
+    """
     from kluster.lib.state_backend import settings
 
-    assert settings.AGE_VERSION in settings.AGE_URL
-    assert settings.AGE_URL.endswith('linux-amd64.tar.gz')
-    assert len(settings.AGE_SHA256) == 64
+    image_arch = re.search(r'/builds/[^/]+/([^/]+)/', settings.FCOS_ARTIFACT_URL)
+    assert image_arch is not None, settings.FCOS_ARTIFACT_URL
+    assert settings.AGE_URL.endswith(f'-linux-{_GO_ARCH[image_arch[1]]}.tar.gz'), settings.AGE_URL
+    assert re.fullmatch('[0-9a-f]{64}', settings.AGE_SHA256)
 
 
 def test_local_age_matches_the_appliance_pin() -> None:

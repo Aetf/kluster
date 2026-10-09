@@ -22,7 +22,7 @@ import sys
 import urllib.parse
 from dataclasses import fields
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import drill_recipient_redirect
 import pytest
@@ -34,8 +34,26 @@ from kluster.lib.state_backend import render, settings
 from kluster.scripts.credentials import age, escrow, pki
 from kluster.scripts.state_backend import config
 
-needs_age = pytest.mark.skipif(shutil.which(age.BINARY) is None, reason='age is not on PATH (mise x -- ...)')
-needs_butane = pytest.mark.skipif(shutil.which('butane') is None, reason='butane is not on PATH (mise x -- ...)')
+
+def _pinned(*binaries: str) -> None:
+    """Refuses a pinned tool that is missing, by name, rather than skipping the cases that need it."""
+    for binary in binaries:
+        if shutil.which(binary) is None:
+            pytest.fail(f'{binary} is not on PATH: mise.toml pins it, so run the suite under `mise x`')
+
+
+@pytest.fixture
+def pinned_age() -> None:
+    _pinned(age.BINARY, age.KEYGEN)
+
+
+@pytest.fixture
+def pinned_butane() -> None:
+    _pinned('butane')
+
+
+needs_age = pytest.mark.usefixtures('pinned_age')
+needs_butane = pytest.mark.usefixtures('pinned_butane')
 
 ADDRESS = '192.0.2.10'
 OTHER = '192.0.2.11'
@@ -169,12 +187,15 @@ def age_argv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     shim = tmp_path / 'bin' / age.BINARY
     shim.parent.mkdir()
     log = tmp_path / 'argv.jsonl'
-    _ = shim.write_text(
-        f'#!{sys.executable}\n'
+    # A shell stub rather than a shebang naming the interpreter: the kernel
+    # splits a shebang line at spaces and truncates it, and the path of the
+    # interpreter running this suite is not ours to constrain.
+    program = (
         'import json, os, sys\n'
-        f'with open({str(log)!r}, "a") as f: f.write(json.dumps(sys.argv) + "\\n")\n'
+        f'with open({str(log)!r}, "a") as f: f.write(json.dumps([{real!r}, *sys.argv[1:]]) + "\\n")\n'
         f'os.execv({real!r}, [{real!r}, *sys.argv[1:]])\n'
     )
+    _ = shim.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} -IS -c {shlex.quote(program)} "$@"\n')
     shim.chmod(0o755)
     monkeypatch.setenv('PATH', f'{shim.parent}{os.pathsep}{os.environ["PATH"]}')
     return log
@@ -460,8 +481,15 @@ json.dump(
 """
 
 
+#: Bounds the wheel build, and the render from the unpacked wheel. The case
+#: runs both in sequence, so the two together sit below the case's own bound,
+#: which the case reads back.
+BUILD_TIMEOUT = 30
+RENDER_TIMEOUT = 20
+
+
 def test_the_package_renders_from_an_installed_copy_with_no_checkout_around_it(
-    roots: config.Roots, tmp_path: Path
+    roots: config.Roots, tmp_path: Path, request: pytest.FixtureRequest
 ) -> None:
     """The machine's files travel inside the package, so a render needs no checkout.
 
@@ -474,7 +502,13 @@ def test_the_package_renders_from_an_installed_copy_with_no_checkout_around_it(
     the checkout's. A render that reached for the checkout -- a path found
     from `repo_root`, a file read from outside the package -- fails here,
     because there is none to find.
+
+    The build runs offline: its backend comes from the cache the
+    environment's sync filled, so an unreachable index, or a backend
+    released since, changes nothing here.
     """
+    bound = float(cast(str, request.config.getoption('timeout', None) or request.config.getini('timeout')))
+    assert bound > BUILD_TIMEOUT + RENDER_TIMEOUT
     if any((level / 'mise.toml').is_file() for level in tmp_path.parents):
         pytest.skip('the temporary directory is itself inside a checkout')
     uv = os.environ.get('UV') or shutil.which('uv')
@@ -485,7 +519,8 @@ def test_the_package_renders_from_an_installed_copy_with_no_checkout_around_it(
         [uv, 'build', '--wheel', '--out-dir', str(dist), str(root)],
         capture_output=True,
         text=True,
-        timeout=50,
+        env={**os.environ, 'UV_OFFLINE': '1'},
+        timeout=BUILD_TIMEOUT,
         check=False,
     )
     assert built.returncode == 0, built.stderr
@@ -513,7 +548,7 @@ def test_the_package_renders_from_an_installed_copy_with_no_checkout_around_it(
         text=True,
         cwd=tmp_path,
         env={**os.environ, 'PYTHONPATH': str(site)},
-        timeout=50,
+        timeout=RENDER_TIMEOUT,
         check=False,
     )
     assert rendered.returncode == 0, rendered.stderr

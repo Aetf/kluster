@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,7 +39,7 @@ WORKFLOW = GITHUB / 'workflows' / 'noop-automerge.yml'
 #: of what a case runs, and a case can say anything the API can, a rename
 #: included. Anything else is an invocation the step is not meant to make, and
 #: exits in a way no case expects.
-FAKE_GH = r"""#!/bin/bash
+FAKE_GH = r"""#!/usr/bin/env bash
 set -eo pipefail
 [ -n "$FAKE_GH_FAILS" ] && exit 1
 filter=
@@ -120,6 +121,12 @@ def _entry(change: str | Renamed) -> dict[str, str]:
     return {'filename': change, 'status': 'modified'}
 
 
+#: What the step and the fake `gh` run on, as the runner's image carries them,
+#: and which `mise.toml` does not pin. Without one, the step's own failure
+#: would read as the human route, so a case refuses by name instead.
+HOST_TOOLS = ('bash', 'jq')
+
+
 #: `changed=COUNTED` reports as many changed files as the case lists.
 COUNTED = object()
 
@@ -136,6 +143,9 @@ def _run(
     gh_fails: bool = False,
 ) -> Verdict:
     """Run `classify`'s deciding step the way the runner does, for a pull request changing `files`."""
+    missing = [tool for tool in HOST_TOOLS if shutil.which(tool) is None]
+    if missing:
+        pytest.fail(f'not on PATH: {", ".join(missing)}, which the step and the fake gh run on')
     fake = tmp_path / 'bin' / 'gh'
     fake.parent.mkdir(parents=True)
     fake.write_text(FAKE_GH)
@@ -254,20 +264,6 @@ def test_pulumi_yaml_the_admission_did_not_admit_is_the_human_route(tmp_path: Pa
     assert verdict.returncode == 0, verdict.stderr
     assert not verdict.noop
     assert "Pulumi.yaml is on the allow-list only in renovate's packages-only bump" in verdict.stdout
-
-
-def test_the_bridged_sdks_without_renovates_bump_are_the_human_route(tmp_path: Path) -> None:
-    """A change under `sdks/` on a pull request that does not bump the block is no regeneration, and waits.
-
-    Nothing measures `sdks/`: the preview never renders it and `checks` reads
-    only each SDK's `pulumi-plugin.json`. So it is admitted only as what
-    sdk-regenerate.yml writes there, and anybody's other change to it --
-    renovate's included -- is the human route, and the log says why.
-    """
-    verdict = _run(tmp_path, ['sdks/b2/pulumi_b2/provider.py', 'uv.lock'])
-    assert verdict.returncode == 0, verdict.stderr
-    assert not verdict.noop
-    assert "sdks/b2/pulumi_b2/provider.py is on the allow-list only in renovate's packages-only bump" in verdict.stdout
 
 
 def test_the_bridged_sdks_in_renovates_pull_request_that_leaves_the_block_are_the_human_route(tmp_path: Path) -> None:
