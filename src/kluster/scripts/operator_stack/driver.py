@@ -242,7 +242,11 @@ def _changed_options(metadata: Mapping[str, Any]) -> list[str]:
 STACK_TYPE = 'pulumi:pulumi:Stack'
 
 #: The operations whose outputs are what the provider answers now: a refresh's
-#: read of a resource the state holds, and an import's of one it does not.
+#: read of a resource the state holds, and an import's of one it does not. Each
+#: is on the step's `resOutputsEvent`, which a preview emits for every step once
+#: it has applied (`previewActions.OnResourceStepPost`, pkg/engine/update.go at
+#: 3.267.0); an import's `resourcePreEvent` comes before its read and carries no
+#: outputs (`ImportStep.Apply`, pkg/resource/deploy/step.go).
 READS = frozenset({'refresh', 'import', 'import-replacement'})
 
 

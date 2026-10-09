@@ -1520,8 +1520,18 @@ def test_a_real_operation_left_pending_is_checked_like_a_resource(echo: Scratch,
 # --------------------------------------------------------------------------
 
 STATE_BACKEND = appliance.STACK
-INSTANCE_URN = f'urn:pulumi:{STATE_BACKEND}::kluster-py::kluster:state_backend:StateBackend$oci:core/instance:Instance::state-backend-vm'
-ADDRESS_URN = f'urn:pulumi:{STATE_BACKEND}::kluster-py::kluster:state_backend:StateBackend$oci:core/publicIp:PublicIp::state-backend-ip'
+#: The type tokens the OCI provider registers the box and the reserved address
+#: under, which every step event about them names and the URNs in state are
+#: keyed by: the provider's contract, written here as it spells it rather than
+#: read off the gate's own constants.
+INSTANCE_TYPE = 'oci:Core/instance:Instance'
+ADDRESS_TYPE = 'oci:Core/publicIp:PublicIp'
+INSTANCE_URN = (
+    f'urn:pulumi:{STATE_BACKEND}::kluster-py::kluster:state_backend:StateBackend${INSTANCE_TYPE}::state-backend-vm'
+)
+ADDRESS_URN = (
+    f'urn:pulumi:{STATE_BACKEND}::kluster-py::kluster:state_backend:StateBackend${ADDRESS_TYPE}::state-backend-ip'
+)
 #: The box's bill of materials before a change and after it, one digest moved.
 BEFORE = {'butane': 'aaaa', 'operator_keys': 'bbbb', 'postgres_image': 'cccc'}
 AFTER = {'butane': 'aaaa', 'operator_keys': 'bbbb', 'postgres_image': 'dddd'}
@@ -1532,7 +1542,7 @@ def _box(op: str, *, before: dict[str, str] | None = BEFORE, after: dict[str, st
     metadata: dict[str, Any] = {
         'op': op,
         'urn': INSTANCE_URN,
-        'type': appliance.INSTANCE,
+        'type': INSTANCE_TYPE,
         'new': {'inputs': {appliance.BILL_OF_MATERIALS: after}},
         'diffs': ['metadata', appliance.BILL_OF_MATERIALS],
     }
@@ -1552,7 +1562,7 @@ def _replacement(*, before: dict[str, str] = BEFORE, after: dict[str, str] = AFT
     gone = {
         'op': 'delete-replaced',
         'urn': INSTANCE_URN,
-        'type': appliance.INSTANCE,
+        'type': INSTANCE_TYPE,
         'old': {'inputs': {appliance.BILL_OF_MATERIALS: before}},
         'new': None,
         'diffs': None,
@@ -1567,8 +1577,8 @@ def _replacement(*, before: dict[str, str] = BEFORE, after: dict[str, str] = AFT
 def _address(assigned: str) -> list[dict[str, Any]]:
     """The reserved address, refreshed: assigned to `assigned`, or to nothing where that is empty."""
     outputs = {'ipAddress': settings.ADDRESS, 'assignedEntityId': assigned, 'privateIpId': assigned}
-    refreshed = {'op': 'refresh', 'urn': ADDRESS_URN, 'type': appliance.RESERVED_ADDRESS, 'new': {'outputs': outputs}}
-    same = {'op': 'same', 'urn': ADDRESS_URN, 'type': appliance.RESERVED_ADDRESS, 'old': {'outputs': outputs}}
+    refreshed = {'op': 'refresh', 'urn': ADDRESS_URN, 'type': ADDRESS_TYPE, 'new': {'outputs': outputs}}
+    same = {'op': 'same', 'urn': ADDRESS_URN, 'type': ADDRESS_TYPE, 'old': {'outputs': outputs}}
     return [{'resOutputsEvent': {'metadata': refreshed}}, {'resourcePreEvent': {'metadata': same}}]
 
 
@@ -1696,6 +1706,91 @@ def test_plan_names_a_create_beside_a_held_address_and_applies_nothing(
     assert fake.ups() == []
 
 
+#: What an unknown value serializes as in an event's properties
+#: (`computedValuePlaceholder`, pkg/resource/stack/deployment.go at 3.267.0).
+UNKNOWN = '04da6b54-80e4-46f7-96ec-b56ff0331ba9'
+
+
+def _imported_address(assigned: str, *, repointed: bool) -> list[dict[str, Any]]:
+    """The reserved address imported rather than refreshed, in the events the pinned engine emits for it.
+
+    The state holds no address, so the refresh reads none, and the preview
+    imports it (Pulumi 3.267.0):
+
+    -   The import's `resourcePreEvent` comes before the step applies: `old`
+        is null, and `new` is the program's goal, with no outputs yet
+        (`NewImportStep`, pkg/resource/deploy/step.go; `makeStepEventMetadata`,
+        pkg/engine/events.go).
+    -   Its `resOutputsEvent` comes after: the step's Read has set `new`'s
+        outputs, and an `old` made up with the same ones (`ImportStep.Apply`),
+        and a preview emits that event for every step it applies
+        (`previewActions.OnResourceStepPost`, pkg/engine/update.go).
+    -   Where the program's inputs differ from what was read, an `update`
+        follows, from the imported state to the goal
+        (`continueResourceImportEvent`, pkg/resource/deploy/step_generator.go):
+        re-pointing `privateIpId` at a box being created, which is unknown.
+    """
+    outputs = {'ipAddress': settings.ADDRESS, 'assignedEntityId': assigned, 'privateIpId': assigned}
+    inputs = {'lifetime': 'RESERVED', 'privateIpId': assigned}
+    goal = {'lifetime': 'RESERVED', 'privateIpId': UNKNOWN if repointed else assigned}
+    imported = {'inputs': inputs, 'outputs': outputs}
+    events: list[dict[str, Any]] = [
+        {
+            'resourcePreEvent': {
+                'metadata': {
+                    'op': 'import',
+                    'urn': ADDRESS_URN,
+                    'type': ADDRESS_TYPE,
+                    'old': None,
+                    'new': {'inputs': goal, 'outputs': None},
+                }
+            }
+        },
+        {
+            'resOutputsEvent': {
+                'metadata': {'op': 'import', 'urn': ADDRESS_URN, 'type': ADDRESS_TYPE, 'old': imported, 'new': imported}
+            }
+        },
+    ]
+    if repointed:
+        update = {
+            'op': 'update',
+            'urn': ADDRESS_URN,
+            'type': ADDRESS_TYPE,
+            'old': imported,
+            'new': {'inputs': goal, 'outputs': outputs | {'privateIpId': UNKNOWN}},
+            'diffs': ['privateIpId'],
+        }
+        events += [{'resourcePreEvent': {'metadata': update}}, {'resOutputsEvent': {'metadata': update}}]
+    return events
+
+
+@pytest.mark.parametrize('repointed', [True, False], ids=['import-then-update', 'import-alone'])
+def test_a_create_beside_an_imported_held_address_is_named_by_plan_and_refused_by_up_force(
+    repository: Repository, caplog: pytest.LogCaptureFixture, repointed: bool
+) -> None:
+    # The address is adopted on the run that creates the box: what the import
+    # read is all that says the old box still holds it.
+    events = (_box('create', before=None), *_imported_address('ocid1.privateip.elsewhere', repointed=repointed))
+    fake = FakePulumi(printed=_planned(*events))
+    run = _appliance(repository, fake)
+
+    assert run.plan() == driver.PLANNED
+    assert any('ocid1.privateip.elsewhere' in message for message in caplog.messages)
+    with pytest.raises(driver.Refused, match=r'ocid1\.privateip\.elsewhere.*never import it'):
+        _ = run.up(yes=True, force=True)
+
+    assert fake.ups() == []
+
+
+def test_a_create_beside_an_imported_address_assigned_to_nothing_is_a_launch(repository: Repository) -> None:
+    fake = FakePulumi(printed=_planned(_box('create', before=None), *_imported_address('', repointed=True)))
+
+    assert _appliance(repository, fake).up(yes=True, force=True) == driver.NOTHING_PLANNED
+
+    assert len(fake.ups()) == 1
+
+
 @pytest.mark.parametrize(
     ('expiry', 'named'),
     [
@@ -1758,7 +1853,7 @@ def test_the_callers_permission_never_reaches_a_run(repository: Repository) -> N
             *_address('ocid1.privateip.box'),
             {
                 'resourcePreEvent': {
-                    'metadata': {'op': 'update', 'urn': 'urn:list', 'type': 'oci:core/securityList:SecurityList'}
+                    'metadata': {'op': 'update', 'urn': 'urn:list', 'type': 'oci:Core/securityList:SecurityList'}
                 }
             },
         )
@@ -1905,7 +2000,7 @@ class AsTheBox:
             for kind in ('resourcePreEvent', 'resOutputsEvent'):
                 metadata = cast('dict[str, Any]', (event or {}).get(kind, {}).get('metadata') or {})
                 if str(metadata.get('urn', '')).endswith('::box'):
-                    metadata['type'] = appliance.INSTANCE
+                    metadata['type'] = INSTANCE_TYPE
             lines.append(json.dumps(event) if event is not None else line)
         self.printed.append('\n'.join(lines))
         return code, '\n'.join(lines) + '\n'
@@ -1953,7 +2048,7 @@ def test_a_pending_delete_of_the_box_waits_for_force_and_says_so(
     gone = {
         'op': 'delete',
         'urn': INSTANCE_URN,
-        'type': appliance.INSTANCE,
+        'type': INSTANCE_TYPE,
         'old': {'inputs': {appliance.BILL_OF_MATERIALS: BEFORE}},
         'new': None,
     }
@@ -1978,13 +2073,13 @@ def test_an_up_over_nothing_planned_answers_from_the_estate_backend(repository: 
     assert backend.asked == 1
 
 
-IMPORTED_URN = f'urn:pulumi:{STATE_BACKEND}::kluster-py::kluster:state_backend:StateBackend$oci:core/image:Image::state-backend-image'
+IMPORTED_URN = f'urn:pulumi:{STATE_BACKEND}::kluster-py::kluster:state_backend:StateBackend$oci:Core/image:Image::state-backend-image'
 
 
 def _imported_then_replaced() -> list[dict[str, Any]]:
     """An adopted resource the plan would replace: imported, then replaced, as a preview shows it."""
     return [
-        {'resourcePreEvent': {'metadata': {'op': op, 'urn': IMPORTED_URN, 'type': 'oci:core/image:Image'}}}
+        {'resourcePreEvent': {'metadata': {'op': op, 'urn': IMPORTED_URN, 'type': 'oci:Core/image:Image'}}}
         for op in ('import', 'create-replacement', 'replace')
     ]
 
@@ -2002,7 +2097,7 @@ ENGINE_WARNING = (
     [
         _imported_then_replaced(),
         [
-            {'resourcePreEvent': {'metadata': {'op': 'replace', 'urn': IMPORTED_URN, 'type': 'oci:core/image:Image'}}},
+            {'resourcePreEvent': {'metadata': {'op': 'replace', 'urn': IMPORTED_URN, 'type': 'oci:Core/image:Image'}}},
             {'diagnosticEvent': {'urn': IMPORTED_URN, 'severity': 'warning', 'message': ENGINE_WARNING}},
         ],
     ],
@@ -2073,7 +2168,7 @@ def test_a_replacement_that_names_nothing_moved_says_so_rather_than_inventing_a_
                 'metadata': {
                     'op': op,
                     'urn': INSTANCE_URN,
-                    'type': appliance.INSTANCE,
+                    'type': INSTANCE_TYPE,
                     'old': {'inputs': {appliance.BILL_OF_MATERIALS: BEFORE}},
                     'new': None if op == 'delete-replaced' else {'inputs': {appliance.BILL_OF_MATERIALS: BEFORE}},
                 }
