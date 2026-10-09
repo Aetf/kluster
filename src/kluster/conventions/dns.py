@@ -1,4 +1,4 @@
-"""The zones this installation publishes in, and the anchors app records point at."""
+"""The zones this installation publishes in, the anchors app records point at, and the mail relay's DKIM key."""
 
 from __future__ import annotations
 
@@ -65,3 +65,22 @@ OVERLAY_LABEL = 'zt'
 #: name outside it — every application name — keeps resolving wherever the
 #: device resolved it before, home reachable or not.
 OVERLAY_DOMAIN = f'{OVERLAY_LABEL}.{ZONE_PRIMARY}'
+
+#: The public half of the in-cluster mail relay's DKIM key, published as
+#: `k8s._domainkey` in every mail zone. The private half is exim's, carried
+#: from the legacy cluster as the sealed value `sealed.DKIM_EXIM` and never
+#: minted here, so the key stays the one this record publishes. Two programs
+#: agree on it: the `dns` stack publishes it, and `credentials derived
+#: dkim-exim record` refuses to seal a private key whose public half is not
+#: this one. A new key goes under a new selector, published beside this one
+#: before any mail is signed with it (declarative/workloads.md §5).
+DKIM_K8S = (
+    'v=DKIM1; p='
+    'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuj8B2gp8kvvHRtA2KTdu'
+    '0YPxiEd494Sf3JFo8nC25bqR8ceNTXMimfRY/f3+1+hjm34hD2I1WsUy8wjLgyge'
+    'CjpmZ/UJX9xRF6kW/FyHRml12e4eCq3qiN96++YN8LFh0Xi9Pkm/ION8vhLtCHdv'
+    'MFUgp51Dyz8hwVl54Y/5zvGwxim3VvMy/zNmZelbablRB/kDfaR7EPe4r8z5TW2S'
+    'F35VwhRP8ZR6I3tN7C7ivMhedSdj3GlpL3r0FQym0sNxeIsyeWeO4t/oEya0MP7i'
+    'frXXN1+G5a2BnljcgvCdLP+wp6S//9XfrxPFqfXOxcFb483AW+T8zudxxJMjO+NH'
+    'cQIDAQAB'
+)

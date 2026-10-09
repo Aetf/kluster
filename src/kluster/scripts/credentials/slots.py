@@ -51,8 +51,10 @@ slot and is no business of that command:
     in the console that checks them for the UniFi key, the AdGuard login, the
     ZeroTier Central token, the GitHub admin token and alertmanager's webhook,
     and drawn by the operator for the gateway's BGP session password, which no
-    console makes -- and some are installed by another tracker's automation
-    entirely (the UDM and libvirt SSH identities, §3).
+    console makes -- one is carried from the legacy cluster, piped from the
+    Secret it was generated into (the mail relay's DKIM key), and some are
+    installed by another tracker's automation entirely (the UDM and libvirt
+    SSH identities, §3).
 -   **decided** -- not a credential at all, but a constant this repository
     holds in `conventions` that a continuous-integration job needs beside one.
     There is one: the overlay network's id, which a workflow can only pass as a
@@ -753,10 +755,13 @@ class Manual(SingleValue):
     #: What takes it from them and delivers it, where anything does. Empty for
     #: a row whose only delivery is this map's own sink.
     command: str = ''
+    #: How that command takes it: typed in, or piped in from where it is held
+    #: (`devices.SealedRecord.taken`).
+    taken: str = 'typed in'
 
     def describe(self) -> str:
         by = f', delivered by `{self.command}`' if self.command else ''
-        return f'typed in: {self.describes}{by}'
+        return f'{self.taken}: {self.describes}{by}'
 
     def value(self, context: Context) -> str:
         log.warning('%s is neither minted nor derived; it comes from here:', self.describes)
@@ -906,11 +911,13 @@ def _device(member: str, *, onward: tuple[Channel, ...] = (), pending: Mapping[s
 
 
 def _sealed_record(member: str) -> Row:
-    """A §3 row made by hand whose one delivery is a seal (`devices.SEALED_RECORDS`), built from that table."""
+    """A §3 row this system does not produce whose one delivery is a seal (`devices.SEALED_RECORDS`), from that table."""
     record = devices.SEALED_RECORDS[member]
     return Row(
         register=record.register,
-        source=Manual(record.title, record.console, command=f'credentials derived {record.member} record'),
+        source=Manual(
+            record.title, record.console, command=f'credentials derived {record.member} record', taken=record.taken
+        ),
         targets=(SealedSecret(record.sealed),),
     )
 
@@ -1330,6 +1337,7 @@ ROWS: dict[str, Row] = {
         targets=(Slot(repository=conventions.forge.OPS.full_name, name=HA_WEBHOOK_URL),),
     ),
     'alert-webhook': _sealed_record('alert-webhook'),
+    'dkim-exim': _sealed_record('dkim-exim'),
     derived.DRILL_CREDENTIALS_ROW: Row(
         register='Drill-environment credentials',
         # One row over five secrets, the way each ZeroTier row is one cell

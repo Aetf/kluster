@@ -28,7 +28,16 @@ from types import MappingProxyType
 from kluster.conventions.cluster import BGP_SECRETS_NAMESPACE, CERT_MANAGER_NAMESPACE, MONITORING_NAMESPACE
 from kluster.conventions.identity import STACK_NAMES
 
-__all__ = ('ALERT_WEBHOOK', 'BGP_PASSWORD', 'CONFIG_KEY', 'DNS01_TOKEN', 'VALUES', 'SealedValue', 'SealingScope')
+__all__ = (
+    'ALERT_WEBHOOK',
+    'BGP_PASSWORD',
+    'CONFIG_KEY',
+    'DKIM_EXIM',
+    'DNS01_TOKEN',
+    'VALUES',
+    'SealedValue',
+    'SealingScope',
+)
 
 
 class SealingScope(StrEnum):
@@ -80,12 +89,16 @@ class SealedValue:
     def path(self, key: str) -> str:
         """Where the ciphertext of `key` is, as `pulumi config set --path` names it.
 
-        Refused for a key the value does not carry, which is the one way a
-        writer and a reader of the same row could otherwise name two places.
+        Each segment quoted, because `--path` reads every dot as a level: a
+        data key such as `tls.key` would otherwise land one level below the
+        value's name, where the program, which reads the name and then the
+        data key, finds nothing. Refused for a key the value does not carry,
+        which is the one way a writer and a reader of the same row could
+        otherwise name two places.
         """
         if key not in self.keys:
             raise KeyError(f'{self.name} carries {", ".join(self.keys)}, not {key}')
-        return f'{CONFIG_KEY}.{self.name}.{key}'
+        return f'{CONFIG_KEY}["{self.name}"]["{key}"]'
 
 
 #: The Cloudflare token cert-manager's cluster issuer answers DNS-01 challenges
@@ -118,7 +131,21 @@ ALERT_WEBHOOK = SealedValue(
     stack=STACK_NAMES.k8s_base,
 )
 
+#: The mail relay's DKIM private key, which exim signs every mail zone's `k8s`
+#: selector with and reads as `tls.key`, the key the legacy cluster's
+#: cert-manager Secret holds it under. It is carried from the legacy cluster
+#: rather than minted, so the public half `dns.DKIM_K8S` publishes stays its
+#: own (declarative/workloads.md §5). The namespace is the legacy relay's,
+#: which the ported relay keeps: its other SealedSecrets are sealed
+#: namespace-wide to it.
+DKIM_EXIM = SealedValue(
+    name='dkim-exim',
+    namespace='mail-system',
+    keys=('tls.key',),
+    stack=STACK_NAMES.apps,
+)
+
 #: Every sealed value, by name.
 VALUES: Mapping[str, SealedValue] = MappingProxyType(
-    {value.name: value for value in (DNS01_TOKEN, BGP_PASSWORD, ALERT_WEBHOOK)}
+    {value.name: value for value in (DNS01_TOKEN, BGP_PASSWORD, ALERT_WEBHOOK, DKIM_EXIM)}
 )

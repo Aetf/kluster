@@ -21,7 +21,9 @@ sees it.
 from __future__ import annotations
 
 import base64
+import dataclasses
 import datetime as dt
+import io
 import json
 import logging
 import shutil
@@ -43,7 +45,7 @@ from pulumi.runtime import rpc
 
 from kluster import conventions
 from kluster.scripts.credentials import cloudflare, derived, devices, pulumi_config, sealing
-from kluster.scripts.credentials.kdbx import KdbxStore
+from kluster.scripts.credentials.kdbx import KdbxError, KdbxStore
 from kluster.scripts.credentials.pulumi_config import SlotRefused
 
 #: Bounds one `kubeseal` call: every call here is local.
@@ -266,7 +268,7 @@ def test_the_ciphertext_is_written_in_the_clear_at_its_rows_path_in_its_rows_sta
     # decrypting it: anywhere else is a value nothing reads, and stored as a
     # secret it is a second layer of encryption for no reader.
     runner = stacks.runner(value.stack)
-    assert runner.plain == {f'{conventions.sealed.CONFIG_KEY}.bgp-password.password': 'AgB-sealed-a-password'}
+    assert runner.plain == {f'{conventions.sealed.CONFIG_KEY}["bgp-password"]["password"]': 'AgB-sealed-a-password'}
     assert runner.config == {}
     assert not [args for args in runner.invocations if '--secret' in args]
     assert stacks.runner(PHYSICAL).plain == {}
@@ -315,8 +317,18 @@ def shaped_like_kubeseal(args: Sequence[str], *, stdin: str | None) -> str:
     return SHAPED_LIKE_A_SEAL
 
 
-def test_the_write_is_held_to_what_the_real_cli_accepts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """`pulumi config set` refuses a value that looks like a secret unless told which channel it takes."""
+@pytest.mark.parametrize('value', conventions.sealed.VALUES.values(), ids=conventions.sealed.VALUES)
+def test_the_write_is_held_to_what_the_real_cli_accepts(
+    value: conventions.sealed.SealedValue, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every row lands in the clear under `sealedSecrets`, by its name and then by its data key, as the CLI stores it.
+
+    Read back as the program reads it, the whole structured key at once, so a
+    path the CLI splits somewhere the row did not mean -- a data key with a
+    dot in it -- is a value the program cannot find, whatever the path's own
+    read-back says. `pulumi config set` also refuses a value that looks like a
+    secret unless told which channel it takes.
+    """
     if shutil.which('pulumi') is None:
         pytest.fail('the pinned pulumi CLI is not on PATH: run the suite under `mise x`')
     project = tmp_path / 'project'
@@ -326,18 +338,28 @@ def test_the_write_is_held_to_what_the_real_cli_accepts(tmp_path: Path, monkeypa
     state.mkdir()
     monkeypatch.setenv('PULUMI_HOME', str(tmp_path / 'home'))
     monkeypatch.setenv('PULUMI_SKIP_UPDATE_CHECK', 'true')
-    environment = pulumi_config.BackendEnvironment(passphrase='probe-passphrase', url=state.as_uri())
-    stack = pulumi_config.Stack(name=K8S_BASE, directory=project, environment=environment)
+    environment = pulumi_config.BackendEnvironment(
+        passphrase='probe-passphrase', url=state.as_uri(), physical=lambda: 'probe-physical-passphrase'
+    )
+    stack = pulumi_config.Stack(name=value.stack, directory=project, environment=environment)
     stack.ensure()
-    value = conventions.sealed.DNS01_TOKEN
     sealer = sealing.Sealer(certificate='', open_stack=lambda _name: stack, run=shaped_like_kubeseal)
 
-    sealer.deliver(value, {'api-token': 'a-token'})
+    sealer.deliver(value, dict.fromkeys(value.keys, 'a-value'))
 
-    committed = (project / f'Pulumi.{K8S_BASE}.yaml').read_text()
+    committed = (project / f'Pulumi.{value.stack}.yaml').read_text()
     assert 'sealing-probe:sealedSecrets:' in committed
     assert 'secure:' not in committed
-    assert f'api-token: {SHAPED_LIKE_A_SEAL}' in committed
+    printed = json.loads(
+        pulumi_config.run_pulumi(
+            ['config', 'get', conventions.sealed.CONFIG_KEY, '--json', '--stack', value.stack],
+            cwd=project,
+            env=stack.env,
+            stdin=None,
+        )
+    )
+    held = json.loads(printed['value'])
+    assert held == {value.name: dict.fromkeys(value.keys, SHAPED_LIKE_A_SEAL)}
 
 
 # -- the cluster --------------------------------------------------------------
@@ -578,3 +600,178 @@ def test_alertmanagers_webhook_is_sealed_and_written_nowhere_else(
         'url': 'https://home.example/api/webhook/an-id'
     }
     assert all(not runner.config for runner in stacks.runners.values())
+
+
+# -- the mail relay's DKIM key --------------------------------------------------
+
+DKIM = devices.SEALED_RECORDS['dkim-exim']
+APPS = conventions.STACK_NAMES.apps
+
+
+#: How a PEM private key is encoded: PKCS#1, which cert-manager writes unless a
+#: `Certificate` asks otherwise and the legacy one does not, and PKCS#8.
+ENCODINGS = {
+    'pkcs1': serialization.PrivateFormat.TraditionalOpenSSL,
+    'pkcs8': serialization.PrivateFormat.PKCS8,
+}
+
+
+def _dkim_key(encoding: serialization.PrivateFormat = ENCODINGS['pkcs1']) -> tuple[str, str]:
+    """A DKIM key pair generated here: the private half as PEM, and the TXT record that would publish it.
+
+    PKCS#1 unless asked otherwise, because that is what the legacy Secret holds.
+    """
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pem = key.private_bytes(serialization.Encoding.PEM, encoding, serialization.NoEncryption()).decode()
+    der = key.public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+    return pem, f'v=DKIM1; k=rsa; p={base64.b64encode(der).decode()}'
+
+
+def _published_as(txt: str) -> devices.SealedRecord:
+    """The row as it is, but checked against `txt` rather than the key the mail zones really publish."""
+    return dataclasses.replace(DKIM, verify=devices.matches_published_dkim(txt, key='tls.key'))
+
+
+def _piped(monkeypatch: pytest.MonkeyPatch, text: str) -> None:
+    """Standard input as a pipe carrying `text`, the way the command's printed pipeline hands it the key."""
+    monkeypatch.setattr('sys.stdin', io.StringIO(text))
+
+
+def _body(pem: str) -> list[str]:
+    """The lines of a PEM that are the key itself: any one of them found anywhere is a leak."""
+    return [line for line in pem.splitlines() if line and not line.startswith('-----')]
+
+
+@dataclass
+class RecordedKubeseal:
+    """The pinned `kubeseal`, run as the sealer runs it, with every call's arguments and standard input kept."""
+
+    calls: list[tuple[list[str], str | None]] = field(default_factory=list[tuple[list[str], str | None]])
+
+    def __call__(self, args: Sequence[str], *, stdin: str | None) -> str:
+        self.calls.append((list(args), stdin))
+        return sealing.run_kubeseal(args, stdin=stdin)
+
+    def seals(self) -> list[tuple[list[str], str | None]]:
+        """The calls that sealed a value, as opposed to fetching a certificate."""
+        return [(args, stdin) for args, stdin in self.calls if '--raw' in args]
+
+
+@pytest.fixture
+def recorded(kubeseal: str, key_pair: KeyPair, stacks: Stacks) -> tuple[sealing.Sealer, RecordedKubeseal]:
+    """A sealer over the module's certificate whose every `kubeseal` call is kept."""
+    _ = kubeseal
+    run = RecordedKubeseal()
+    return sealing.Sealer(certificate=key_pair.certificate, open_stack=stacks.open, run=run), run
+
+
+@pytest.fixture
+def apps(stacks: Stacks) -> PathPulumi:
+    """`apps` exists, as it does by the time exim's key is carried."""
+    runner = stacks.runner(APPS)
+    runner.stacks.append(APPS)
+    return runner
+
+
+def test_a_dkim_key_the_mail_zones_do_not_publish_is_refused_before_anything_is_sealed(
+    stacks: Stacks,
+    recorded: tuple[sealing.Sealer, RecordedKubeseal],
+    apps: PathPulumi,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The row as shipped, against `DKIM_K8S`: a key generated here is not the published one."""
+    sealer, run = recorded
+    pem, _ = _dkim_key()
+    key = tmp_path / 'tls.key'
+    _ = key.write_text(pem)
+
+    with (
+        caplog.at_level(logging.DEBUG),
+        pytest.raises(SlotRefused, match='not the key they publish, so it was not sealed') as refused,
+    ):
+        devices.record_sealed(DKIM, sealer=sealer, given={'key': str(key)})
+
+    assert not run.seals()
+    assert written(stacks, conventions.sealed.DKIM_EXIM) == {}
+    assert not apps.invocations
+    assert not any(line in str(refused.value) or line in caplog.text for line in _body(pem))
+
+
+def test_the_dkim_key_is_written_nowhere_but_its_ciphertext(
+    stacks: Stacks,
+    recorded: tuple[sealing.Sealer, RecordedKubeseal],
+    apps: PathPulumi,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Taken on a pipe, as the printed pipeline hands it over: it leaves only as `kubeseal`'s standard input.
+
+    No log line, no output, no stack value, no argument of any `pulumi` or
+    `kubeseal` call holds a line of it, and `kubeseal` reads it from its
+    standard input rather than from a file something wrote it into.
+    """
+    sealer, run = recorded
+    pem, txt = _dkim_key()
+    _piped(monkeypatch, pem)
+
+    with caplog.at_level(logging.DEBUG):
+        devices.record_sealed(_published_as(txt), sealer=sealer, given={'key': None})
+
+    out, err = capsys.readouterr()
+    held = [
+        *out.splitlines(),
+        *err.splitlines(),
+        caplog.text,
+        *(json.dumps(runner.config) for runner in stacks.runners.values()),
+        *(json.dumps(runner.plain) for runner in stacks.runners.values()),
+        *(json.dumps(runner.invocations) for runner in stacks.runners.values()),
+        *(json.dumps(args) for args, _ in run.calls),
+    ]
+    assert written(stacks, conventions.sealed.DKIM_EXIM)
+    assert not [line for line in _body(pem) if any(line in text for text in held)]
+    assert run.seals()
+    assert all('--from-file=/dev/stdin' in args and stdin == pem.strip() for args, stdin in run.seals())
+
+
+@pytest.mark.parametrize('encoding', ENCODINGS.values(), ids=ENCODINGS)
+def test_the_dkim_key_is_sealed_at_its_path_for_exims_secret_and_read_back(
+    stacks: Stacks,
+    sealer: sealing.Sealer,
+    kubeseal: str,
+    key_pair: KeyPair,
+    apps: PathPulumi,
+    tmp_path: Path,
+    encoding: serialization.PrivateFormat,
+) -> None:
+    pem, txt = _dkim_key(encoding)
+    key = tmp_path / 'tls.key'
+    _ = key.write_text(pem)
+
+    devices.record_sealed(_published_as(txt), sealer=sealer, given={'key': str(key)})
+
+    value = conventions.sealed.DKIM_EXIM
+    assert set(apps.plain) == {'sealedSecrets["dkim-exim"]["tls.key"]'}
+    assert unseal(kubeseal, key_pair, value, written(stacks, value)) == {'tls.key': pem.strip()}
+    assert ['config', 'get', '--path', value.path('tls.key'), '--json', '--stack', APPS] in apps.invocations
+
+    apps.misreports = 'value'
+    with pytest.raises(SlotRefused, match='does not read back'):
+        devices.record_sealed(_published_as(txt), sealer=sealer, given={'key': str(key)})
+
+
+@pytest.mark.parametrize('given', [None, devices.STDIN], ids=['no flag', '--key-file -'])
+def test_a_dkim_key_is_never_taken_at_a_terminal(
+    monkeypatch: pytest.MonkeyPatch, sealer: sealing.Sealer, given: str | None
+) -> None:
+    """A terminal would echo it, and a prompt would cut it at its first line: named as `-` or not named at all."""
+
+    class Terminal(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    monkeypatch.setattr('sys.stdin', Terminal('-----BEGIN PRIVATE KEY-----\n'))
+
+    with pytest.raises(KdbxError, match='never typed at a terminal'):
+        devices.record_sealed(DKIM, sealer=sealer, given={'key': given})

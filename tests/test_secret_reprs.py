@@ -247,7 +247,7 @@ CENSUS: dict[type, Census] = {
     slots.DeviceSecret: Census('what'),
     slots.EscrowCopy: Census('label'),
     slots.Issued: Census('role'),
-    slots.Manual: Census('describes console command'),
+    slots.Manual: Census('describes console command taken'),
     slots.Minted: Census('command unbuilt'),
     slots.OnBox: Census('what'),
     slots.PulumiConfig: Census('stack key'),
