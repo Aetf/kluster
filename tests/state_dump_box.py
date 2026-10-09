@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import pinned_tools
 import pytest
 
 from kluster.lib.state_backend import render, settings
@@ -40,22 +41,31 @@ SCRIPT = Path(render.__file__).with_name(render.MACHINE) / render.DUMP_SCRIPT
 #: the box does.
 SHEBANG = SCRIPT.read_text().splitlines()[0].removeprefix('#!')
 
-#: What the box's image carries that the script runs, that no fake here stands
-#: in for, and that a host may lack: the image's set the script's header names,
-#: less `bash`, which `SHEBANG` names by path, and `podman`, `age` and `curl`,
-#: which are faked. Nothing pins them for this suite, so a host without one
-#: fails the run by naming it rather than with the script's own failure.
-#: `gawk` is the box's `awk`, and a run here reaches it under that name,
-#: whichever `awk` the host has.
-HOST_TOOLS = ('jq', 'sha1sum', 'gawk', 'sed')
+#: What the box's image carries that the script runs and that no fake here
+#: stands in for: the image's set the script's header names, less `bash`, which
+#: `SHEBANG` names by path, and `podman`, `age` and `curl`, which are faked.
+#: `mise.toml` pins the two whose behavior is the script's own logic -- `gawk`,
+#: at the appliance's release line, and `jq` -- so a run reaches those and not
+#: a host's; the rest a host is trusted to carry, and a host without one fails
+#: the run by naming it rather than with the script's own failure.
+PINNED_TOOLS = ('jq', 'gawk')
+HOST_TOOLS = ('sha1sum', 'sed')
+
+
+def box_awk() -> str:
+    """The path of the box's `awk` here: the pinned `gawk`, refused by name where it is missing."""
+    return pinned_tools.located('gawk')
 
 
 def box_tools(directory: Path) -> None:
     """Refuse a host missing what the box's image carries, and put the box's `awk` in `directory`.
 
-    The stand-in is a shell stub naming `gawk` by the path found on this
-    host, so it holds however short the `PATH` it is run under.
+    The box's `awk` is `gawk`, and a run here reaches the pinned one under that
+    name, whichever `awk` the host has: the stand-in is a shell stub naming it
+    by the path it resolves to, so it holds however short the `PATH` it is run
+    under.
     """
+    pinned_tools.require(*PINNED_TOOLS)
     missing = [tool for tool in HOST_TOOLS if shutil.which(tool) is None]
     if not os.access(SHEBANG, os.X_OK):
         missing.insert(0, SHEBANG)
@@ -64,7 +74,7 @@ def box_tools(directory: Path) -> None:
             f'not on this host: {", ".join(missing)}, which the box runs the dump script with, as a run here does'
         )
     awk = directory / 'awk'
-    _ = awk.write_text(f'#!/bin/sh\nexec {shlex.quote(str(shutil.which("gawk")))} "$@"\n')
+    _ = awk.write_text(f'#!/bin/sh\nexec {shlex.quote(box_awk())} "$@"\n')
     awk.chmod(0o755)
 
 

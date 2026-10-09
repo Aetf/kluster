@@ -470,9 +470,10 @@ tool `mise.toml` pins may need the API to install; the `ltex-ls-plus`
 pin's comment there says how that one stays off it.
 
 The pinned tools install from three hosts, each tool's URL recorded in
-`mise.lock`: release downloads from `github.com` for every tool but two,
-`nodejs.org` for `node`, and `conda.anaconda.org` for `postgres`, every
-package its `conda` install unpacks included. Full reaches any host, and the
+`mise.lock`: `nodejs.org` for `node`; `conda.anaconda.org` for the tools
+pinned from a `conda` channel, `postgres` and `gawk`, every package a
+`conda` install unpacks included; and release downloads from `github.com`
+for every other tool. Full reaches any host, and the
 Claude Code documentation lists all three among the hosts Trusted allows too
 (its cloud environments page, "Default allowed domains"); it scopes the
 GitHub proxy's repository check to API requests. Release downloads from
