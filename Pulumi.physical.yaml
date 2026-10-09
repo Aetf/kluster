@@ -27,3 +27,7 @@ config:
     secure: v1:I5lHgroKnPxY5fNB:EsSrZDu7CfTjlSMh+aiF1sgVrjpJTPzLrvhj0zQ3rmKgilbhcI6KaIwt4mxA8Jk2
   kluster-py:gatewayAcmeToken:
     secure: v1:ZRwAUd6R77DfZ+0a:Q77o3aecyWR1yoau4uCXYkrZjvVy2OIe4nlZ5E4oxGjPeMVdpL5cC79sz0/DcqvVO2bkcxXmN1kn3CKJmB+SA9npz7On
+  kluster-py:b2ApplicationKeyId:
+    secure: v1:d0DhTGFSMc2jQNN3:DwqrJQGbOfAtjTArX7lFUYDt4rJOe7vDKnRq52F/gidK9uwqyPL0O+I=
+  kluster-py:b2ApplicationKey:
+    secure: v1:z3jr2xeGTmGJsoP9:pFaCX7c0+wzEZkp/jpMhA1D1MOEjUPT2hX8u5YjdtK+1jEUpScEQL9MTBTqSB60=
