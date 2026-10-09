@@ -11,7 +11,6 @@ because the row shape (§2) is the other half of the same decision.
 
 from __future__ import annotations
 
-import itertools
 import logging
 import re
 from collections.abc import Callable
@@ -24,7 +23,6 @@ import oci_clock
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.hazmat.primitives.asymmetric.types import PrivateKeyTypes
 from memory_kit import MemoryKit
 from oci_clock import SimulatedClock
 from oci_conventions import with_compartment, with_recorded_compartment, with_tenancy_ocid, with_unrecorded_compartment
@@ -41,6 +39,7 @@ from oci_tenancy import (
     Response,
     Tenancy,
     named,
+    uploaded_fingerprint,
 )
 
 from kluster import conventions
@@ -152,26 +151,6 @@ def test_the_propagation_waits_run_on_the_simulated_clock() -> None:
     assert oci_clock.one_refusal_outwaited() == [oci_iam.PROPAGATION_INTERVAL]
 
 
-@pytest.fixture(autouse=True)
-def unchecked_keys(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Reading a private key skips the consistency check OpenSSL runs by default.
-
-    A fingerprint is derived from the key on every use rather than stored
-    (§2), so this module loads a PEM dozens of times per test, and OpenSSL's
-    RSA key check is the great majority of what a load costs. Every key
-    involved was minted by `generate_key` seconds earlier in this same
-    process, which leaves the check nothing to find. It stays on everywhere
-    else: a key read outside the suite came off disk, where it could have
-    been truncated or edited.
-    """
-    load = serialization.load_pem_private_key
-
-    def load_unchecked(data: bytes, password: bytes | None = None, *, backend: object = None) -> PrivateKeyTypes:
-        return load(data, password, unsafe_skip_rsa_key_validation=True)
-
-    monkeypatch.setattr(oci_iam.serialization, 'load_pem_private_key', load_unchecked)
-
-
 @pytest.fixture
 def root() -> masters.Credential:
     private_pem = oci_iam.generate_key().private_pem
@@ -195,6 +174,53 @@ def _delivered[T](pending: Delivery[T]) -> T:
     another module.
     """
     return pending.deliver(lambda credential: credential)[0]
+
+
+#: A public key, and the fingerprint the procedure Oracle documents prints for
+#: it: `openssl rsa -pubin -outform DER | openssl md5 -c`. A value OCI computes,
+#: recorded from a source other than this module.
+RECORDED_PUBLIC_KEY = """\
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAi4NDXlM+0E0tykbtG4HM
+Pdv9GY+1JjJQXWhiBXtQ5/UuGukYCivnNeeKMUkaegd8vzlGSGo+GWlZXoJEwoCZ
+DbbzZXX3QQohL4Ge8SOpDIPqkX2LnKet2w/zG2FcBrQ3xQBWejQdZTvZWkPcbWz3
+n8A2hLwkeQSuVTqnmS2wrcFTm1pTcMISN+yZd7XiftjMDOWlz/XlVeSG88ji6Vk5
+5mU4i7TQIDYzobauELRc+2rk6k7aCbb20q610LOczfInECrxcO3+T+XMRKl+4WTl
+6syW9qhhehhcXwOSCUe+j3fU9QPVoZw4H2Yo4hy0qAh+6fuY+aEQsswA0ZmZIeN7
+ZQIDAQAB
+-----END PUBLIC KEY-----
+"""
+RECORDED_FINGERPRINT = 'ce:d0:6c:26:d6:53:9d:9b:96:37:19:3c:ee:77:d7:82'
+
+
+def test_the_fingerprint_of_a_public_key_is_the_one_openssl_prints() -> None:
+    """The module's derivation, and the fake tenancy's own that a mint is checked against."""
+    assert oci_iam.fingerprint_of_public(RECORDED_PUBLIC_KEY) == RECORDED_FINGERPRINT
+    assert uploaded_fingerprint(RECORDED_PUBLIC_KEY) == RECORDED_FINGERPRINT
+
+
+def test_generate_key_makes_a_fresh_key_of_the_production_size(
+    generated_keys: None, key_pool: list[oci_iam.KeyPair]
+) -> None:
+    """Asking for `generated_keys` reaches the real function: none of its keys is one of the pool's."""
+    first, second = oci_iam.generate_key(), oci_iam.generate_key()
+
+    assert first.public_pem != second.public_pem
+    assert {first.public_pem, second.public_pem}.isdisjoint(key.public_pem for key in key_pool)
+    public = serialization.load_pem_public_key(first.public_pem.encode())
+    assert isinstance(public, rsa.RSAPublicKey)
+    assert public.key_size == oci_iam.KEY_SIZE
+
+
+def test_every_key_a_case_draws_is_its_own_past_what_the_pool_holds(key_pool: list[oci_iam.KeyPair]) -> None:
+    """The suite's pool stands in for `generate_key` without changing what a case can tell apart."""
+    keys = [oci_iam.generate_key() for _ in range(len(key_pool) + 2)]
+
+    assert len({key.public_pem for key in keys}) == len(keys)
+    for key in keys:
+        public = serialization.load_pem_public_key(key.public_pem.encode())
+        assert isinstance(public, rsa.RSAPublicKey)
+        assert public.key_size == oci_iam.KEY_SIZE
 
 
 def test_the_fingerprint_is_the_one_oci_computes() -> None:
@@ -1573,44 +1599,6 @@ def _keys_are_bounded(identity: FakeIdentity) -> None:
         assert len(held) <= oci_iam.KEY_QUOTA, f'{user_id} holds {len(held)} keys'
 
 
-def _cheap_key() -> oci_iam.KeyPair:
-    """A key pair the sweep can afford.
-
-    Short, and generated here rather than by `generate_key`, because the
-    sweep's cost is dominated by *reading* a PEM back: the fingerprint is a
-    function of the key and is recomputed on every use (§2), so the sweep
-    parses one a few hundred times. A production key is 2048 bits
-    (`oci_iam.KEY_SIZE`) and that is what the rest of this file mints; what a
-    fault sweep is about is the order of the calls around a key, not the
-    arithmetic inside one.
-    """
-    private = rsa.generate_private_key(public_exponent=65537, key_size=1024)
-    return oci_iam.KeyPair(
-        private_pem=private.private_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PrivateFormat.PKCS8,
-            encryption_algorithm=serialization.NoEncryption(),
-        ).decode(),
-        public_pem=private.public_key()
-        .public_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PublicFormat.SubjectPublicKeyInfo,
-        )
-        .decode(),
-    )
-
-
-#: Generated once and cycled. Eight is more than any single test draws, so
-#: the keys one test sees are all distinct.
-_KEY_POOL = [_cheap_key() for _ in range(8)]
-
-
-@pytest.fixture
-def pooled_keys(monkeypatch: pytest.MonkeyPatch) -> None:
-    keys = itertools.cycle(_KEY_POOL)
-    monkeypatch.setattr(oci_iam, 'generate_key', lambda: next(keys))
-
-
 def _fresh_root() -> masters.Credential:
     private_pem = oci_iam.generate_key().private_pem
     return masters.Credential(
@@ -1674,7 +1662,7 @@ def _survived(tenancy: FaultyTenancy, kit: KdbxStore) -> None:
 
 @pytest.mark.parametrize('when', CRASH_POINTS)
 @pytest.mark.parametrize('failing_call', range(1, CREATE_CALLS + 1))
-def test_creating_the_seed_heals_from_a_failure_at_any_call(failing_call: int, when: str, pooled_keys: None) -> None:
+def test_creating_the_seed_heals_from_a_failure_at_any_call(failing_call: int, when: str) -> None:
     identity = FakeIdentity()
     kit = MemoryKit()
     crashed = FaultyTenancy(identity=identity, fail_at=failing_call, when=when)
@@ -1699,7 +1687,7 @@ def test_creating_the_seed_heals_from_a_failure_at_any_call(failing_call: int, w
 
 @pytest.mark.parametrize('when', CRASH_POINTS)
 @pytest.mark.parametrize('failing_call', range(1, ROTATE_CALLS + 1))
-def test_rotating_the_seed_heals_from_a_failure_at_any_call(failing_call: int, when: str, pooled_keys: None) -> None:
+def test_rotating_the_seed_heals_from_a_failure_at_any_call(failing_call: int, when: str) -> None:
     identity = FakeIdentity()
     kit = MemoryKit()
     _create(FaultyTenancy(identity=identity), kit)
@@ -1738,9 +1726,7 @@ MINTS = frozenset({'create_my_api_key', 'create_api_key', 'upload_api_key'})
 
 @pytest.mark.parametrize('when', CRASH_POINTS)
 @pytest.mark.parametrize('failing_call', range(1, ROTATE_INTO_CALLS + 1))
-def test_rotating_into_a_second_kit_heals_from_a_failure_at_any_call(
-    failing_call: int, when: str, pooled_keys: None
-) -> None:
+def test_rotating_into_a_second_kit_heals_from_a_failure_at_any_call(failing_call: int, when: str) -> None:
     identity = FakeIdentity()
     kit = MemoryKit()
     successor = MemoryKit()
@@ -2017,7 +2003,7 @@ def _survives_a_bring_up_and_a_rotation(tenancy: Tenancy) -> None:
 
 @pytest.mark.parametrize('endpoint', SHIMMED_ENDPOINTS)
 @pytest.mark.parametrize('shape', ('always', 'once'))
-def test_a_refused_shim_endpoint_does_not_stop_the_seed(endpoint: str, shape: str, pooled_keys: None) -> None:
+def test_a_refused_shim_endpoint_does_not_stop_the_seed(endpoint: str, shape: str) -> None:
     """No conversion-shim endpoint is load-bearing while the domain answers.
 
     The scan is over every shim-converted endpoint and both shapes the refusal
@@ -2036,7 +2022,7 @@ def test_a_refused_shim_endpoint_does_not_stop_the_seed(endpoint: str, shape: st
 
 
 @pytest.mark.parametrize('operation', DOMAIN_OPERATIONS)
-def test_a_refused_domain_operation_falls_back_to_the_legacy_call(operation: str, pooled_keys: None) -> None:
+def test_a_refused_domain_operation_falls_back_to_the_legacy_call(operation: str) -> None:
     """The fallback runs the other way too, one domain operation at a time.
 
     Either side has been seen to refuse a call the other then accepted, so the

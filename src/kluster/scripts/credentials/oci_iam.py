@@ -267,8 +267,17 @@ def fingerprint(private_key_pem: str) -> str:
 
     Derived on every use rather than stored (§2): it is a function of the key,
     and the only thing a stored copy can add is the chance of disagreeing.
+
+    The key is loaded without the consistency check `cryptography` runs on an
+    RSA private key by default, which costs tens of milliseconds a load and is
+    paid on every listing a key is compared against. That check is about the
+    private half, which nothing here uses: the key never signs from this load,
+    and only its public half is read off it. The key a client signs with is
+    loaded by the SDK's own signer, which runs the check.
     """
-    private = serialization.load_pem_private_key(private_key_pem.encode(), password=None)
+    private = serialization.load_pem_private_key(
+        private_key_pem.encode(), password=None, unsafe_skip_rsa_key_validation=True
+    )
     return _fingerprint(
         private.public_key().public_bytes(
             encoding=serialization.Encoding.DER,

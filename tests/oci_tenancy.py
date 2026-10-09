@@ -33,6 +33,8 @@ delete refused once and taken the next time.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import inspect
 import re
 from collections.abc import Mapping
@@ -60,6 +62,20 @@ DELETIONS = frozenset({'delete_my_api_key', 'delete_api_key'})
 
 #: Every way a user's keys are read, named the same way.
 KEY_LISTINGS = frozenset({'list_my_api_keys', 'list_api_keys'})
+
+
+def uploaded_fingerprint(public_pem: str) -> str:
+    """The fingerprint the service assigns an uploaded key: MD5 over its SubjectPublicKeyInfo DER, colon-grouped.
+
+    Derived here rather than by `oci_iam`, whose fingerprint is what a mint
+    checks this value against: computed by the code under test, the check
+    would compare that code with itself. The body of a `PUBLIC KEY` PEM block
+    is that DER, base64-encoded.
+    """
+    lines = public_pem.strip().splitlines()
+    assert lines[0] == '-----BEGIN PUBLIC KEY-----' and lines[-1] == '-----END PUBLIC KEY-----', public_pem
+    digest = hashlib.md5(base64.b64decode(''.join(lines[1:-1])), usedforsecurity=False).hexdigest()
+    return ':'.join(digest[index : index + 2] for index in range(0, len(digest), 2))
 
 
 @dataclass
@@ -329,7 +345,7 @@ class FakeIdentity:
                 headers=dict[str, str](),
                 message='You can not create ApiKey as maximum quota limit of 3 has been reached.',
             )
-        assigned = oci_iam.fingerprint_of_public(public_pem)
+        assigned = uploaded_fingerprint(public_pem)
         self.keys.setdefault(user_id, []).append(assigned)
         self.uploaded[assigned] = public_pem
         return assigned
@@ -633,6 +649,10 @@ class Tenancy:
         return user == ROOT_USER or fingerprint in self.identity.keys.get(user, [])
 
     def __call__(self, tenancy: str, user: str, private_key_pem: str, *, domain_url: str | None = None) -> Signed:
+        # What the client names its key by is what the client computes: the
+        # `fingerprint` of the configuration `oci_iam.identity_client` builds,
+        # which the service looks the key up by. A wrong one is a key the
+        # tenancy holds under another fingerprint, refused like any other.
         signed_as = oci_iam.fingerprint(private_key_pem)
         if domain_url is not None:
             self.domain_connections.append((domain_url, user, signed_as))
