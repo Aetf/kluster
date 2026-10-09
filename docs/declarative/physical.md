@@ -565,14 +565,52 @@ same gate confirms them:
     already running, without a reboot.
 -   A user volume still waiting for its disk holds up neither the boot
     nor the health gate.
--   A sentinel file written to the empty volume survives a detach, a
-    re-attach and a reboot — the rebuild path, drilled while the volume
-    holds nothing.
+-   The volume keeps its partition and its filesystem across a detach,
+    a re-attach and a reboot — the rebuild path, drilled while the
+    volume holds nothing. The reading is the partition's GPT GUID and the
+    filesystem's UUID, as `talosctl get discoveredvolumes` reports them
+    for the partition labelled `u-<name>`: a new partition draws a new
+    GUID and a format a new UUID, and neither depends on a write having
+    reached the disk before a hot detach of a filesystem Talos cannot
+    unmount. What a file written there would add is the kubelet's write
+    path through `/var/mnt`, which is an item of its own below. The
+    drill's commands are physical/gateway-cutover.md §8.1.
 -   A pod writes through a `local` PersistentVolume at
     `/var/mnt/<name>/<dir>`, despite the kubelet's read-only view of
     `/var/mnt`.
 -   With the volume unmounted, that pod stays pending (storage.md §6).
 -   The node label appears on the Node object.
+
+**A node volume is re-attached through the program**, not in the
+console, so that state and the cloud agree: after the drill
+above detaches one, and wherever a node's volume has to be attached
+again (operations.md §3.1). From the root of the checkout that holds
+`.credentials/`, under `physical`'s own passphrase (credentials.md
+§4.4), with `V` the row's name in `conventions.NODE_VOLUMES`:
+
+```sh
+physical() {
+    mise x -- env -u PULUMI_CONFIG_PASSPHRASE \
+        PULUMI_CONFIG_PASSPHRASE_FILE=.credentials/physical.passphrase \
+        pulumi "$@" --stack physical
+}
+URN=$(physical stack --show-urns | sed -n "s/.*URN: \(.*::kluster-$V-attachment\)$/\1/p")
+physical refresh --target "$URN"
+physical preview --diff     # one create, of that attachment, and nothing else
+physical up
+```
+
+The refresh drops the detached attachment from state, and the preview
+then plans its create and nothing else. Both pinned releases predict
+the drop, and the first drill is what confirms it: the OCI provider
+voids the state of an attachment that reads `DETACHED`, and the engine
+drops a refreshed resource that comes back without an ID, whatever its
+`protect`. A preview that plans no change at all means the refresh kept
+the attachment; `physical state delete --force "$URN"` then takes it
+out of state, `--force` because the attachment is protected
+(`components/cloud/storage.py`), and the same preview and `up` follow.
+Any other plan is a diff nobody expected, and nothing is applied until
+it has been read.
 
 The local-path volume (§2) is first exercised there as well:
 

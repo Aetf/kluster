@@ -1410,22 +1410,62 @@ operator-passphrase generate` and `recover`.
     escrowed here. No stack authenticates with either, so the ciphertext
     is a file to commit; stage 10 pushes each into the repository secret
     its workflow reads (§3).
-10. `credentials derived sync` — the GitHub secrets CI reads, for the §3
-    rows whose value lives somewhere else (§4), and the kubeconfig's copy
-    in the `k8s-base` and `apps` stacks' configuration. Last, because a
-    row read out of a stack needs that stack to have run; a row it cannot
-    fill yet says which slot is waiting on what, and the same command run
-    again fills it — the kubeconfig after `physical`'s first `up`, by
-    `--only kubeconfig`, with both stack files committed afterward. For
-    every row with a GitHub secret it authenticates as the GitHub admin
-    token stage 8 recorded, read back out of the `github` stack's
-    configuration, so such a run before that stage refuses by naming the
-    command that fills it — and before stage 2, by naming the passphrase
-    that opens it. It
-    pushes the stack passphrase into every Environment but `physical`'s,
+10. `credentials derived sync --only <row>`, one row per run — the
+    GitHub secrets CI reads, for the §3 rows whose value lives somewhere
+    else (§4). Last, because a row read out of a stack needs that stack
+    to have run; a row that cannot be filled yet says which slot is
+    waiting on what. **Bring-up names its rows rather than running the
+    bare form**, which fills every row it can obtain: once `physical` has
+    run, that includes the kubeconfig, copied out of `physical`'s state
+    into the `k8s-base` and `apps` stacks' configuration, and committing
+    those two files starts each stack's first `up` unattended
+    (`kluster-ops#615`). The rows are the ones `credentials derived ls`
+    lists, each synced with `--only`, all but the kubeconfig's. The rows
+    the first milestone's bring-up fills here are the overlay's,
+    `zerotier-network`,
+    `zerotier-identity-physical` and `zerotier-identity-dns`, each in a
+    run of its own, with the reading and the way back
+    physical/gateway-cutover.md §8.3 gives them. The kubeconfig's copy,
+    `--only kubeconfig`, waits for `k8s-base`'s own bring-up, with both
+    stack files committed afterward (operations.md §2.5). For every row
+    with a GitHub secret it authenticates as the GitHub admin token stage
+    8 recorded, read back out of the `github` stack's configuration, so
+    such a run before that stage refuses by naming the command that
+    fills it — and before stage 2, by naming the passphrase that opens
+    it. It pushes the stack passphrase into every Environment but `physical`'s,
     `physical`'s passphrase into `physical-plan` and `physical` alone,
     and the operator passphrase into none, which is the partition ci.md
     §3 rests on.
+
+    **Replacing the overlay CI identities**, for `ci-physical` and
+    `ci-dns`, when either is in doubt. Both are generated inside the
+    `physical` stack (`zerotier.Identity`, in `components/overlay/`), so
+    a new one is that resource replaced, and the two identity rows of
+    stage 10 run again. First the members' authorization is taken away at
+    Central, in the console, which contains a leaked identity at once
+    and lasts only until the next `physical` apply authorizes the roster
+    again. Then, from the root of the checkout that holds
+    `.credentials/`, under `physical`'s own passphrase (§4.4):
+
+    ```sh
+    physical() {
+        mise x -- env -u PULUMI_CONFIG_PASSPHRASE \
+            PULUMI_CONFIG_PASSPHRASE_FILE=.credentials/physical.passphrase \
+            pulumi "$@" --stack physical
+    }
+    physical stack --show-urns | sed -n 's/.*URN: \(.*::kluster-identity-ci-\(physical\|dns\)\)$/\1/p'
+    physical up --replace '<urn>' --replace '<urn>'     # the URNs that printed
+    mise x uv -- uv run credentials derived sync --only zerotier-identity-physical
+    mise x uv -- uv run credentials derived sync --only zerotier-identity-dns
+    ```
+
+    The `up`'s preview is read before it is confirmed: each identity is
+    replaced, and with it the member written on its node id and the flow
+    rules that name its address. A CI job that joins between the `up`
+    and the syncs holds an identity the roster no longer admits, and
+    reaches nothing over the overlay: a `physical` job fails at its first
+    dial of the device, and a `dns` job, while `ROUTES` is empty, does
+    not notice.
 11. `credentials derived cloudflare-dns01 mint`,
     `credentials derived bgp seal` and
     `credentials derived alert-webhook record` — the values the cluster

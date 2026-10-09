@@ -35,7 +35,9 @@ Documents:
 -   **[gateway-cutover.md](gateway-cutover.md)** — the maintenance
     window that hands the device from the retiring tracker to this
     program: what moves, the moves, verification, rollback, and the
-    retirement each old tracker owes. It retires with the window.
+    retirement each old tracker owes, and the first milestone's
+    bring-up steps that follow the ceremony. It retires once the window
+    and those steps have run.
 -   **[gateway.md](gateway.md)** — the UDM as a system: the ZeroTier
     network design (roster, routes, CI-confining flow rules, cutover
     order), recovery playbooks, and the firewall target state
