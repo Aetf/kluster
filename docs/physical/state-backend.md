@@ -798,7 +798,10 @@ fetches once at first boot from `settings.AGE_URL` and verifies against
 equal to `settings.AGE_VERSION`; and the drill workflow's runner, like
 the probe's (§6), installs mise through `jdx/mise-action` inside its
 checkout of this repository at a pinned commit, so its `age` is that
-same `mise.toml` pin as of that commit. Both commands connect over the
+same `mise.toml` pin as of that commit. Their `pg_dump` and `pg_restore`
+are `mise.toml`'s `postgres` pin, whose major
+`tests/test_postgres_client.py::test_the_local_client_is_on_the_appliance_major`
+holds equal to the one `settings.POSTGRES_IMAGE` names. Both commands connect over the
 `operator` client bundle (§3), which is the same connection string
 `pulumi` uses, and both hand `PGSSLROOTCERT`/`PGSSLCERT`/`PGSSLKEY` to the tool they
 run — so a `pg_dump` that is really a wrapper around a container has to
@@ -1033,8 +1036,8 @@ failure is cheap:
     scratch box's rather than the archive's (§7): everything lands
     owned by the role its client roles act as, whichever role the
     archive names.
-7.  **Count the rows.** Point libpq — `psql`, from the same Postgres
-    client package as `pg_restore` — at the same bundle, with
+7.  **Count the rows.** Point libpq — `psql`, which `mise.toml`'s
+    `postgres` pin installs beside `pg_restore` — at the same bundle, with
     `PGSSLROOTCERT`, `PGSSLCERT` and `PGSSLKEY` naming `ca.crt`,
     `client.crt` and `client.key` in that directory (§3), and ask:
 
