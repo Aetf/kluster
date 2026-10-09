@@ -20,7 +20,7 @@ name: images
 # qemu: emulation multiplies the cost of every `RUN` step, while on a native
 # runner the arm64 build costs what the amd64 one does -- the vchord operand
 # installs its two extensions as prebuilt per-architecture packages and
-# compiles nothing. Free `ubuntu-24.04-arm` runners are a public-repo feature,
+# compiles nothing. Free `ubuntu-26.04-arm` runners are a public-repo feature,
 # which this repo has been since 2026-08-25.
 #
 # A run that fails outside a pull request raises an `actionable` alert through
@@ -58,7 +58,7 @@ jobs:
   # this job `changes` too would fill that one required context with a
   # second run on the pull requests that touch `docker/**` alone.
   select-images:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     # The sum of its steps' bounds, a `uses:` step twice, plus five minutes
     # for the runner's own phases: a backstop for what no step bound reaches
     # (framework/ci.md §3).
@@ -143,9 +143,9 @@ jobs:
         image: ${{ fromJSON(needs.select-images.outputs.images) }}
         platform:
           - arch: amd64
-            runner: ubuntu-24.04
+            runner: ubuntu-26.04
           - arch: arm64
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-26.04-arm
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         timeout-minutes: 5
@@ -212,7 +212,7 @@ jobs:
     # PR builds publish nothing, and only `main` publishes (the Publish step
     # above), so there is nothing to stitch anywhere else.
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     # The sum of its steps' bounds, a `uses:` step twice, plus five minutes
     # for the runner's own phases: a backstop for what no step bound reaches
     # (framework/ci.md §3).

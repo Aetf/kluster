@@ -264,15 +264,10 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     that hold the box's roles, its client authentication and its dump
     script to a real server. A pull that fails fails the step rather
     than leaving the module to skip, since a green run that skipped it
-    would read as one that proved it. The same step makes pasta the
-    rootless network, through a `containers.conf` drop-in. The runner's
-    podman predates 5.0, where pasta became the default, and its default
-    is slirp4netns, whose port forwarder stays in the session of the
-    `podman` command that started the container. The module ends each
-    command's session with the command ([testing.md](testing.md) §1.2),
-    which takes the forwarder with it and leaves every published port
-    refusing connections. pasta leaves nothing in that session. The
-    drop-in goes once the runner's podman defaults to pasta by itself.
+    would read as one that proved it. The step's log names the runner's
+    podman, the buildah it carries and its rootless network, which are
+    what the module's own podman workarounds name as the conditions for
+    removing them.
 
 -   **Merge side runs `up` only — except `physical`, which gets a plan
     job** (2026-08-24, superseding the pure-up shape): for
@@ -388,8 +383,8 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     in `checks` holds every such `uses:` to that shape and the ZeroTier
     install to a pinned release and a pinned key fingerprint.
 -   **The runner image is pinned the same way.** Every job that runs
-    steps names its runner by release — `ubuntu-24.04`, and
-    `ubuntu-24.04-arm` for the arm leg of the image builds (§4) — and
+    steps names its runner by release — `ubuntu-26.04`, and
+    `ubuntu-26.04-arm` for the arm leg of the image builds (§4) — and
     never by a `-latest` label. The image is the largest thing CI runs
     on without installing it: every tool a step does not install
     itself, and the preinstalled Java that the prose step in
@@ -405,7 +400,7 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     key, and a package rule matching the data source puts both halves in
     one group, so every job and both architectures move in one pull
     request. Docker versioning, which that data source uses, reads
-    `24.04` to `26.04` as a major, so the bump waits on the dependency
+    a move from one Ubuntu release to the next as a major, so the bump waits on the dependency
     dashboard: it replaces the machine every job runs on. A job that
     calls a reusable workflow names no runner; the called workflow's
     jobs do, and are held instead. A test in `checks` holds every job
@@ -1076,7 +1071,7 @@ Its name is distinct from `preview.yml`'s `changes` on purpose: a job
 name is a check-run name, and `changes` is a required context (§5) that
 this workflow's filtered trigger would otherwise fill a second time on
 the pull requests that touch `docker/**`. **`build`** is a matrix of image × architecture, each
-entry on its native runner (`ubuntu-24.04`, `ubuntu-24.04-arm`),
+entry on its native runner (`ubuntu-26.04`, `ubuntu-26.04-arm`),
 publishing `:<tag>-amd64` / `:<tag>-arm64`. **`manifest`** stitches
 those two into the tag the cluster actually pins. Only a run on `main`
 publishes: a PR builds both architectures and publishes nothing, and so

@@ -628,7 +628,7 @@
       ],
       depNameTemplate: 'zerotier-one',
       datasourceTemplate: 'deb',
-      registryUrlTemplate: 'https://download.zerotier.com/debian/noble?suite=noble&components=main&binaryArch=amd64',
+      registryUrlTemplate: 'https://download.zerotier.com/debian/resolute?suite=resolute&components=main&binaryArch=amd64',
     },
     {
       // A runner label a matrix feeds to `runs-on:` -- the `runner:` key of

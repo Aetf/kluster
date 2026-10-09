@@ -188,7 +188,7 @@ env:
 
 jobs:
   classify:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     outputs:
       noop: ${{ steps.classify.outputs.noop }}
@@ -356,7 +356,7 @@ jobs:
     # path off the allow-list all leave `noop` false, which skips this job and
     # the merge with it.
     if: needs.classify.outputs.noop == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     strategy:
       fail-fast: true
@@ -411,7 +411,7 @@ jobs:
       github.event.pull_request.draft == false
       && needs.classify.outputs.noop == 'true'
       && needs.prove.result == 'success'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     # A required check that never arrives ends the job rather than holding a
     # runner for GitHub's six-hour default.
     timeout-minutes: 60
