@@ -29,6 +29,18 @@ To run the tests:
 timeout 1200 mise x uv -- uv run pytest
 ```
 
+The run is spread over four worker processes by `pytest-xdist`, through
+`addopts` in `pyproject.toml`, so a workstation's gate and CI's run the
+same way. Four because the CI runner has four cores. The count is fixed
+rather than `auto` because a workstation here runs several agents' gates at
+once, and `auto` would start a worker per core for each of them. So a case
+shares the machine with three others of the suite's own, and holds only
+state that is its own: its `tmp_path`, its backend and its `PULUMI_HOME`, a
+container named for the case. A run aimed at one case passes `-n 0`, which
+runs it in the `pytest` process itself. `addopts` also passes `-rfEs`:
+the summary `pytest` gives by default, failures and errors, with every
+skipped case and its reason added.
+
 A coroutine that never resolves its futures hangs forever instead of failing,
 and the run is bounded twice against that, at two scales:
 
@@ -39,22 +51,27 @@ and the run is bounded twice against that, at two scales:
     hung case costs one red line rather than the whole report. The signal
     method is the configured one because it is what lets the run continue;
     the thread method ends the process after a stack dump, with no summary,
-    which is the same blind result as a kill from outside. The bound is an
-    order of magnitude above the slowest case: it is a hang guard, not a
-    budget any case approaches (§7 item 5). A case that runs the real Pulumi
-    engine is the exception: its duration grows with the machine's load, and
-    it carries a bound of its own, set from measurement (§8).
+    which is the same blind result as a kill from outside. A worker runs its
+    cases on its main thread, so the signal reaches them there as it does in
+    a run without workers, and the worker goes on to its next case. The
+    bound is a hang guard, an order of magnitude above every case but
+    three CPU-bound ones: under the four workers,
+    `tests/test_update_crds.py`'s two whole-bundle cases take 20–25 s, and
+    `tests/test_conventions.py`'s CRD-SDK case 9–13 s. So the headroom over
+    the slowest is 2.4–3×, and on a machine loaded four times over those
+    cases reach the bound and fail by it. A case that starts the pinned
+    `pulumi` CLI carries a bound of its own instead, set from measurement,
+    because its duration grows with the machine's load (§8).
 -   **Around the run**, by the outer `timeout` above, for what a per-case
     bound cannot reach: collection, and a process still alive after the
     summary is printed. A kill there ends with status 124 and no summary,
     which is why it is an order of magnitude above the run's duration
     rather than a budget the ordinary run approaches — the suite takes
-    about a minute on an idle many-core workstation and about two on a
-    two-core runner, and it grows with every campaign.
+    about two minutes on four cores, and it grows with every campaign.
 
 The outer number is carried wherever the gate's command is written out,
 and the per-case number lives in `pyproject.toml`, apart from the
-real-engine cases' own, which live beside them (§8).
+real-CLI cases' own, which live beside them (§8).
 `tests/test_gate_command.py` holds every launch of `pytest` it finds to one
 form, timed and through `mise`, and every launch of the whole suite to one
 number. What CI executes it finds by definition: every launch it knows
@@ -449,7 +466,7 @@ and change real state. They are not collected at all unless the opt-in is
 present:
 
 ```bash
-RUN_LIVE_DRILLS=1 timeout 600 mise x uv -- uv run pytest tests/live -s --log-cli-level=INFO
+RUN_LIVE_DRILLS=1 timeout 600 mise x uv -- uv run pytest tests/live -n 0 -s --log-cli-level=INFO
 ```
 
 A drill runs under no per-case bound: its duration is the provider's — a
@@ -460,8 +477,10 @@ rotation waits for the tenancy to authenticate the key — so
 
 `tests/live/conftest.py` is the entire mechanism: without `RUN_LIVE_DRILLS=1`
 it declines to collect the directory, so an ordinary `pytest` run neither
-executes a drill nor reports one as skipped. There is no marker and no
-`addopts` entry to keep in sync.
+executes a drill nor reports one as skipped. There is no marker to keep
+in sync. The command's `-n 0` overrides the workers `addopts` starts
+(§1): a drill runs in the `pytest` process itself, because a worker's
+output and its live log reach no terminal.
 
 A drill reads its credentials from the same store the command-line entry point
 uses — for the credential drills, `KdbxStore.from_env` on `$KLUSTER_KDBX`. It
@@ -848,11 +867,14 @@ fix, and the diff is the only artifact that disagrees.
     nothing is a flake nobody can aim a fix at (Aetf/kluster-ops#243 is the
     record). Two forms replace it:
     -   A **bounded wait** in the code under test gets a clock the wait
-        itself advances: patch `time.monotonic` and `time.sleep` together,
-        so the wait's own sleeps or reads move the clock, and a deadline is
-        still reachable without a second of wall time. `unhurried` in
-        `tests/test_oci_iam.py` is the module-wide form; the readiness-probe
-        case in `tests/test_provision.py` is the inline form.
+        itself advances: the module under test's own `time` name is replaced
+        by a clock whose `sleep` moves its `monotonic`, so the wait's own
+        sleeps move the clock, and a deadline is still reachable without a
+        second of wall time. The name in that module rather than the
+        process-wide `time` module, so that everything else a case runs —
+        a child process's poll loop, the per-case bound — keeps the real clock.
+        `oci_clock`, installed as `unhurried` by every suite that reaches
+        `oci_iam`'s waits, is the form.
     -   A **hang guard** is bounded in turns of the event loop --
         `asyncio.sleep(0)` yields exactly once, whatever the machine is doing
         -- or left to the bounds the gate already runs under (item 3).
@@ -867,8 +889,8 @@ fix, and the diff is the only artifact that disagrees.
         by how loaded the machine is -- the flake in a new shape. That path
         is left to the gate's bounds. The per-case bound among them is the
         one real-clock bound a case runs under, and it is admitted because
-        it fails differently: an order of magnitude above the slowest case,
-        so no ordinary run approaches it, and with the stack the case hung
+        it fails differently: an order of magnitude above every case but
+        the three CPU-bound ones §1 names, and with the stack the case hung
         in, which is what tells a stall from a hang (§1).
         The one guard that stays in seconds is the `timeout=` handed to
         `subprocess.run`, where nothing yields to count -- and it fails as
@@ -935,23 +957,46 @@ It runs as the case above does, except where these say otherwise:
     and previewing it both need the plugin, at the version the locked
     `pulumi-kubernetes` registers, and no stand-in would exercise the
     provider's own handling of its extension.
--   **The plugin is downloaded once per run**, into a `PULUMI_HOME` of the
-    module's own that the module removes when it finishes, rather than into
-    one per case; each case still has a backend of its own.
+-   **The plugin is downloaded once per worker that runs the module's
+    cases**, into a `PULUMI_HOME` of the module's own that the module
+    removes when it finishes, rather than into one per case; each case
+    still has a backend of its own.
 -   **The provider the engine planned is read from `pulumi preview --json`**,
     the step for the resource naming it, rather than from a log.
 
-**A case that runs the real engine carries bounds set from its measured
-duration, not the suite's per-case bound.** Those cases are the two
-modules above and the `real` cases of `tests/test_operator_stack.py`,
-which run the operator driver against a scratch stack. Their durations
-grow with the machine's load far more than a mocked case's duration
-does, because each runs the CLI, a language host and a provider as
-processes of their own. On a four-core machine the slowest took 9 s
-idle, 25 s with twice as many busy processes as cores, and 40 s with
-four times as many. The suite's 60 s is not an order of magnitude above
-that, and a shared CI runner is a loaded machine. Each module states its bounds as named constants, with
-the measurement in their comment:
+**A case that starts the pinned `pulumi` CLI carries bounds set from its
+measured duration, not the suite's per-case bound.** That is the
+definition, so a module that comes to start the CLI is under it without an
+edit here. The census is a run with a `pulumi` first on `PATH` that logs
+the case it was started from and hands over to the pinned one. Today's
+are:
+
+-   the two modules above;
+-   the `real` cases of `tests/test_operator_stack.py`, which run the
+    operator driver against a scratch stack;
+-   the cases of `tests/test_pulumi_config.py` that take a real-CLI
+    project, and its failing-invocation case;
+-   `tests/test_derived.py`'s `test_the_token_lands_where_the_program_reads_it`.
+
+Three more start the CLI and run under the suite's bound, short of the rule
+until the issue named beside each gives them bounds of their own:
+
+-   `tests/test_sealing.py`'s `test_the_write_is_held_to_what_the_real_cli_accepts`
+    (Aetf/kluster-ops#535);
+-   `tests/test_pulumi_package_checksums.py`'s `test_the_entry_without_a_map_loads`
+    and `test_an_entry_carrying_a_sum_is_refused` (Aetf/kluster-ops#535);
+-   `tests/test_state_roles.py`, whose stacks are made and listed with the
+    CLI (Aetf/kluster-ops#560).
+
+Their durations grow with the machine's load far more than a mocked case's
+duration does, because each runs the CLI, and most a language host and a
+provider, as processes of their own. Measured on four cores under the
+suite's own four workers (§1), the slowest real-engine case took 10 s, and
+28 s with twelve busy processes beside the workers, four per core; the
+slowest real-CLI case took 11 s and 39 s. The suite's 60 s is not an order
+of magnitude above that, and a shared CI runner is a loaded machine. A
+module that meets the rule states its bounds as named constants, with the
+measurement in their comment:
 
 -   **The case bound** covers the case's set-up and every command it
     runs: `pytest.mark.timeout` with the module's constant.
@@ -965,6 +1010,8 @@ the measurement in their comment:
     A bump that measures a case slower moves the constant and its
     comment together.
 
-The suite runs one case at a time: no plugin runs cases in parallel. So
-the load such a case meets is the machine's, never the suite's own, and
-there is nothing to keep it from sharing a machine with.
+The load such a case meets is the machine's and the suite's own: three
+other workers (§1), any of which may be running a case of this kind at the
+same moment. That is the load the bounds above are measured under, and
+what keeps the cases apart is that each one's backend, home and project are
+its own.

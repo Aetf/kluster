@@ -104,7 +104,7 @@ class Run:
     exported: dict[str, object]
 
 
-@pytest_asyncio.fixture(scope='module')
+@pytest_asyncio.fixture(scope='module', loop_scope='module')
 async def ran(tmp_path_factory: pytest.TempPathFactory) -> Run:
     root = tmp_path_factory.mktemp('checkout')
     exported: dict[str, object] = {}

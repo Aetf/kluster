@@ -67,6 +67,10 @@ def test_the_example_passes_as_written(tmp_path: Path) -> None:
             str(ROOT / 'pyproject.toml'),
             '-p',
             'no:cacheprovider',
+            # The configuration's `-n 4` would start a pool of workers for one
+            # file of one case; `-n 0` runs it in this child itself.
+            '-n',
+            '0',
             str(tmp_path / 'test_network.py'),
         ],
         cwd=tmp_path,

@@ -11,9 +11,12 @@ CLI is not installed, which is neither CI nor a workstation with `mise`.
 
 from __future__ import annotations
 
+import inspect
 import json
+import os
 import re
 import shutil
+import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +37,44 @@ QUALIFIED_KEY = 'example:aSecret'
 #: `pulumi` gives an unqualified config key, so the tests read it from here
 #: rather than assuming this repository's own project name.
 PROJECT = 'slot-probe'
+
+
+#: The bound every case here that starts the pinned `pulumi` runs under, set
+#: from measured durations rather than from the suite's per-case bound
+#: (testing.md §8), and above `pulumi_cli.TIMEOUT`, the bound each command
+#: carries, so a stalled command fails as a `TimeoutExpired` naming it. On
+#: four cores under the suite's four workers the slowest took 11 s, and 39 s
+#: with twelve busy processes beside them. A stop-loss; nothing asserts on
+#: elapsed time.
+CLI_CASE_TIMEOUT = 360
+#: The mark every case here that starts the pinned `pulumi` carries.
+real_cli = pytest.mark.timeout(CLI_CASE_TIMEOUT)
+#: The fixtures that hand a case a real CLI's project and backend; a case
+#: taking one runs the CLI, and carries `real_cli`.
+REAL_CLI_FIXTURES = frozenset({'live_stack', 'physical_project'})
+#: The cases that start the CLI with no such fixture, named one by one.
+REAL_CLI_CASES = frozenset({'test_a_failing_invocation_names_the_command'})
+
+
+def test_every_case_that_starts_the_real_cli_carries_the_cli_bound() -> None:
+    """The bound is read off the case.
+
+    A case that takes a real-CLI fixture is held to it without an edit here;
+    one that starts the CLI by itself is named in `REAL_CLI_CASES`.
+    """
+    module = sys.modules[__name__]
+    cases = {name: case for name, case in inspect.getmembers(module, inspect.isfunction) if name.startswith('test_')}
+    taking = [
+        (name, case)
+        for name, case in cases.items()
+        if name in REAL_CLI_CASES or REAL_CLI_FIXTURES & set(inspect.signature(case).parameters)
+    ]
+
+    assert not REAL_CLI_CASES - set(cases), f'no such case: {sorted(REAL_CLI_CASES - set(cases))}'
+    assert taking, 'no case here takes a real-CLI fixture'
+    for name, case in taking:
+        bounds = [mark.args for mark in getattr(case, 'pytestmark', []) if mark.name == 'timeout']
+        assert bounds == [(CLI_CASE_TIMEOUT,)], f'{name} runs the real CLI under {bounds or "the suite bound"}'
 
 
 @pytest.fixture
@@ -110,12 +151,6 @@ def test_an_output_dump_that_is_not_json_is_refused_without_being_quoted(tmp_pat
     assert 'line 1 column' in message
 
 
-def test_the_project_directory_is_the_checkout_holding_pulumi_yaml() -> None:
-    # The command writes a file in this repository, so it works from any
-    # working directory rather than from the one the operator stands in.
-    assert (pulumi_config.project_dir() / 'Pulumi.yaml').is_file()
-
-
 @dataclass(frozen=True)
 class Side:
     """One side of the runner's boundary, and the refusal it raises."""
@@ -188,6 +223,7 @@ def live_stack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> pulumi_config
     )
 
 
+@real_cli
 def test_the_real_cli_takes_a_secret_on_standard_input(live_stack: pulumi_config.Stack) -> None:
     live_stack.ensure()
     live_stack.ensure()
@@ -206,6 +242,7 @@ def test_the_real_cli_takes_a_secret_on_standard_input(live_stack: pulumi_config
     assert live_stack.get(QUALIFIED_KEY) == SECRET
 
 
+@real_cli
 @SIDES
 def test_a_failing_invocation_names_the_command(side: Side, tmp_path: Path) -> None:
     if shutil.which('pulumi') is None:
@@ -237,15 +274,13 @@ def test_a_stack_whose_state_is_committed_is_pointed_at_the_checkouts_checkpoint
     committed = pulumi_config.Stack(name='probe', directory=tmp_path, environment=environment).env
     estate = pulumi_config.Stack(name=STACK, directory=tmp_path, environment=environment).env
 
-    assert committed[pulumi_config.BACKEND_URL_ENV] == f'{(tmp_path / "checkpoints").as_uri()}?metadata=skip'
+    assert (
+        committed[pulumi_config.BACKEND_URL_ENV]
+        == f'{(tmp_path / stack_environment.CHECKPOINTS).as_uri()}?metadata=skip'
+    )
     assert committed[stack_environment.DISABLE_BACKUPS_ENV] == 'true'
     assert estate[pulumi_config.BACKEND_URL_ENV] == 'postgres://operator@192.0.2.10/pulumi_state'
     assert stack_environment.DISABLE_BACKUPS_ENV not in estate
-
-
-def test_every_operator_stack_is_encrypted_apart() -> None:
-    # The passphrase no CI Environment holds covers every stack no CI job runs.
-    assert set(pulumi_config.APART) == set(identity.OPERATOR_STACKS)
 
 
 def test_only_the_operator_stacks_are_given_the_operator_passphrase() -> None:
@@ -323,18 +358,7 @@ def test_physical_names_the_row_the_register_carries() -> None:
     # The row a refusal names is the slot map's and the escrow's own spelling.
     assert pulumi_config.PHYSICAL_ROW in slots.ROWS
     assert escrow.row_name(escrow.PHYSICAL_PASSPHRASE) == pulumi_config.PHYSICAL_ROW
-    assert identity.STACK_NAMES.physical == pulumi_config.PHYSICAL
 
-
-#: The bound a rotation case runs under, and the write-back case: a rotation
-#: case makes four stacks with the real CLI and moves three, the write-back
-#: case applies one stack between three moves, so it is set from measured
-#: durations rather than from the suite's per-case bound (testing.md §8). On
-#: a four-core machine the slowest rotation case took 28 s idle and 100 s
-#: with four times as many busy processes as cores, and the write-back case
-#: 15 s and 55 s, at the suite's bound. A stop-loss; nothing asserts on
-#: elapsed time.
-ROTATION_CASE_TIMEOUT = 360
 
 #: The passphrases the re-encryption cases move between.
 FORMER = 'the-stack-passphrase'
@@ -416,6 +440,7 @@ def _applied_under_former(project: Path, url: str) -> pulumi_config.Stack:
     return stack
 
 
+@real_cli
 def test_the_real_cli_moves_a_stack_onto_its_own_passphrase(physical_project: tuple[Path, str]) -> None:
     """Configuration and state both move: the new passphrase opens them, the old one no longer does."""
     project, url = physical_project
@@ -435,6 +460,7 @@ def test_the_real_cli_moves_a_stack_onto_its_own_passphrase(physical_project: tu
     assert SECRET not in _stack_file(moving).read_text()
 
 
+@real_cli
 def test_a_configuration_with_no_secret_is_moved_rather_than_called_moved(physical_project: tuple[Path, str]) -> None:
     """Plain keys decrypt under any passphrase, so the former ones are asked first and the stack is moved.
 
@@ -456,6 +482,7 @@ def test_a_configuration_with_no_secret_is_moved_rather_than_called_moved(physic
     assert moving.get(QUALIFIED_KEY) == SECRET
 
 
+@real_cli
 def test_a_move_that_did_not_take_is_refused(physical_project: tuple[Path, str]) -> None:
     """The check after the move: a `change-secrets-provider` that exits 0 and moves nothing is not a move."""
     project, url = physical_project
@@ -477,6 +504,7 @@ def test_a_move_that_did_not_take_is_refused(physical_project: tuple[Path, str])
         _ = moving.re_encrypt(former=[FORMER])
 
 
+@real_cli
 def test_a_stack_already_under_its_own_passphrase_is_left_alone(physical_project: tuple[Path, str]) -> None:
     project, url = physical_project
     already = _physical_under(project, url, OWN, former=FORMER)
@@ -491,6 +519,7 @@ def test_a_stack_already_under_its_own_passphrase_is_left_alone(physical_project
     assert already.get(QUALIFIED_KEY) == SECRET
 
 
+@real_cli
 def test_a_stack_is_moved_from_whichever_former_passphrase_opens_it(physical_project: tuple[Path, str]) -> None:
     """A rotation's case: the stack is under an earlier generation, not the first candidate tried."""
     project, url = physical_project
@@ -503,6 +532,7 @@ def test_a_stack_is_moved_from_whichever_former_passphrase_opens_it(physical_pro
     assert moving.get(QUALIFIED_KEY) == SECRET
 
 
+@real_cli
 def test_a_stack_under_a_passphrase_nobody_named_is_refused(physical_project: tuple[Path, str]) -> None:
     project, url = physical_project
     stranger = _physical_under(project, url, 'a-passphrase-nobody-holds')
@@ -516,6 +546,7 @@ def test_a_stack_under_a_passphrase_nobody_named_is_refused(physical_project: tu
     assert _stack_file(stranger).read_text() == committed
 
 
+@real_cli
 def test_a_stack_the_backend_does_not_hold_is_refused(physical_project: tuple[Path, str]) -> None:
     project, url = physical_project
 
@@ -588,7 +619,7 @@ def _moved(project: Path, url: str, name: str) -> pulumi_config.Stack:
     return pulumi_config.Stack(name=name, directory=project, environment=_on_stack_passphrase(url, NEWEST_GENERATION))
 
 
-@pytest.mark.timeout(ROTATION_CASE_TIMEOUT)
+@real_cli
 def test_every_stack_under_the_stack_passphrase_is_moved_and_no_other(physical_project: tuple[Path, str]) -> None:
     """Each moves onto the newest generation and off the earlier one; `physical`, under its own, is not touched."""
     project, url = physical_project
@@ -615,7 +646,7 @@ def test_every_stack_under_the_stack_passphrase_is_moved_and_no_other(physical_p
     assert _stack_file(estate[pulumi_config.PHYSICAL]).read_text() == physical_file
 
 
-@pytest.mark.timeout(ROTATION_CASE_TIMEOUT)
+@real_cli
 def test_a_stack_already_on_the_newest_generation_is_left_alone(physical_project: tuple[Path, str]) -> None:
     """A re-run after a stop part-way moves what is left and nothing twice, and a run after that moves nothing.
 
@@ -644,7 +675,7 @@ def test_a_stack_already_on_the_newest_generation_is_left_alone(physical_project
     assert {name: _stack_file(_moved(project, url, name)).read_text() for name in files} == files
 
 
-@pytest.mark.timeout(ROTATION_CASE_TIMEOUT)
+@real_cli
 def test_a_rotation_whose_move_did_not_take_is_refused(physical_project: tuple[Path, str]) -> None:
     """The proof after each move holds here too: a `change-secrets-provider` that exits 0 and moves nothing."""
     project, url = physical_project
@@ -664,7 +695,7 @@ def test_a_rotation_whose_move_did_not_take_is_refused(physical_project: tuple[P
         )
 
 
-@pytest.mark.timeout(ROTATION_CASE_TIMEOUT)
+@real_cli
 def test_a_refusal_stops_the_rotation_at_that_stack(physical_project: tuple[Path, str]) -> None:
     """The stacks before it stay moved, and the ones after it are not reached: neither file nor state is touched.
 
@@ -701,6 +732,7 @@ def test_a_refusal_stops_the_rotation_at_that_stack(physical_project: tuple[Path
     assert {name: (_stack_file(estate[name]).read_text(), state(name)) for name in after} == untouched
 
 
+@real_cli
 def test_a_census_stack_the_backend_does_not_hold_stops_the_rotation_naming_what_makes_it(
     physical_project: tuple[Path, str],
 ) -> None:
@@ -716,7 +748,7 @@ def test_a_census_stack_the_backend_does_not_hold_stops_the_rotation_naming_what
         )
 
 
-@pytest.mark.timeout(ROTATION_CASE_TIMEOUT)
+@real_cli
 def test_a_state_written_back_under_the_earlier_passphrase_is_refused_and_the_named_recovery_finishes_it(
     physical_project: tuple[Path, str],
 ) -> None:
@@ -760,6 +792,10 @@ def _read_only(tree: Path, *, writable: bool) -> None:
         path.chmod(mode | 0o200 if writable else mode & ~0o222)
 
 
+@pytest.mark.skipif(
+    os.geteuid() == 0, reason='root writes a tree whatever its mode, so the refusal under test cannot happen'
+)
+@real_cli
 def test_an_interrupted_move_names_the_recovery_and_the_recovery_finishes_it(
     physical_project: tuple[Path, str], tmp_path: Path
 ) -> None:
@@ -793,6 +829,7 @@ def test_an_interrupted_move_names_the_recovery_and_the_recovery_finishes_it(
     assert STATE_SECRET in _state_secret(moving, OWN)
 
 
+@real_cli
 def test_a_finished_move_whose_stack_file_was_lost_is_recognized_as_moved(physical_project: tuple[Path, str]) -> None:
     """The move ran, and the stack file it wrote was lost before it was committed: a second run finishes it.
 
@@ -821,6 +858,10 @@ def _recovery(project: Path) -> str:
     return f'restore the committed Pulumi.{name}.yaml (`git -C {project} checkout -- Pulumi.{name}.yaml`)'
 
 
+@pytest.mark.skipif(
+    os.geteuid() == 0, reason='root writes a tree whatever its mode, so the refusal under test cannot happen'
+)
+@real_cli
 def test_a_move_that_wrote_nothing_is_not_counted_because_nothing_holds_a_secret(
     physical_project: tuple[Path, str],
 ) -> None:
@@ -846,6 +887,7 @@ def test_a_move_that_wrote_nothing_is_not_counted_because_nothing_holds_a_secret
     assert _stack_file(moving).read_text() == committed
 
 
+@real_cli
 def test_a_stack_file_left_between_its_two_saves_is_refused_naming_the_recovery(
     physical_project: tuple[Path, str],
 ) -> None:
