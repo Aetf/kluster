@@ -537,8 +537,9 @@ Order within the first `pulumi up`: OCI network → instances (user_data
 configs) ∥ libvirt VM → bootstrap (first CP) → health → outputs; the
 NLB and the device's FRR settle in parallel once IPs exist, and the `dns`
 stack's anchors follow from the IP outputs.
-Manual preconditions: OCI tenancy on PAYG, the state-backend micro
-(ci.md §1), and the homelab host-prep change-set (§3). ZeroTier
+Manual preconditions: OCI tenancy on PAYG and the homelab host-prep
+change-set (§3); beside them, the `state-backend` stack applied
+(physical/state-backend.md). ZeroTier
 Central config (managed routes via the UDM member, CI member
 pre-auth, the flow rules, and the managed DNS — physical/gateway.md
 §2) is

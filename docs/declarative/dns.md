@@ -28,7 +28,7 @@ DNS controller (architecture.md §6.4); the standalone DNSControl repo
 > [sources-of-truth.md](../sources-of-truth.md): a change to the zones
 > lands in Aetf/dns first and here second, in the same sitting. That
 > document's row R1 holds the readings, what a change in Aetf/dns takes,
-> and the cutover's steps with the ruling still pending on their order.
+> and the cutover's steps, in the order its note N1 records.
 
 ## 1. Why a fourth stack
 
