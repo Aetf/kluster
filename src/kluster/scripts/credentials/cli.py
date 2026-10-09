@@ -165,9 +165,10 @@ _ORDER = """when to run what:
        credentials derived bgp record
        credentials derived github-admin record
          The credentials no API here mints: each is made in the
-         console that checks it -- or drawn by hand, for the BGP session
-         password no console makes -- so the command prints the steps
-         that create it, takes the value without echoing it, and writes
+         console that checks it -- or drawn by hand, for the AdGuard login
+         and the BGP session password, which no console makes -- so the
+         command prints the steps that create it, takes the value
+         without echoing it, and writes
          it into the stack config that reads it -- physical for the UniFi
          key, the ZeroTier Central token and the BGP session password,
          dns for the AdGuard login, github for the admin token the forge

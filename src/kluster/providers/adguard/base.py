@@ -10,7 +10,10 @@ shape the endpoint that owns it reads and writes. The base turns those into the
 dynamic-provider operations:
 
 -   **`check`** refuses what the kind refuses offline, and stamps `session` and
-    `provider_version` through `kluster.providers.configured`.
+    `provider_version` through `kluster.providers.configured`. A kind that
+    configures a running instance also returns each accepted section in the
+    form `read` reports it (`_reported`), so the inputs state holds are the
+    ones a refresh of an instance holding them reads back.
 -   **`diff`** calls no instance. A value still unknown answers unknown; a
     changed `instance` is a replacement; otherwise it compares each section in
     the kind's comparable form, `endpoint`, `setup_endpoint` and the stamps.
@@ -24,7 +27,12 @@ dynamic-provider operations:
 -   **`create`** writes every section. **`update`** writes only when a section
     differs from the stored outputs; a moved endpoint or stamp alone calls
     nothing and is recorded. Both refuse an instance their setup has not
-    configured yet.
+    configured yet. Both store each section in the form `read` reports it
+    (`_reported`), in the outputs as `check` already has in the inputs. A
+    refreshing preview marks a step `[diff: …]` where the inputs a refresh
+    reads back differ from the stored inputs, and `--diff` prints the outputs
+    that differ beside it, so a refresh of an instance holding what was
+    written shows neither.
 -   **`delete`** calls nothing: an instance's settings have no absent state to
     restore, and a replacement deletes after it creates, so a delete that
     emptied anything would undo the create before it.
@@ -78,7 +86,7 @@ SETUP_ENDPOINT = 'setup_endpoint'
 
 #: This package's version, bumped by hand when an operation's behavior changes
 #: (`configured`). One for the package, since the kinds share the lifecycle.
-VERSION = '2'
+VERSION = '3'
 
 #: The inputs every kind records and never writes.
 RECORDED = (INSTANCE, ENDPOINT, SETUP_ENDPOINT, *STAMPS)
@@ -210,7 +218,28 @@ class AdGuardProvider(InstanceProvider):
 
     @abc.abstractmethod
     def _read(self, api: Api) -> dict[str, Any]:
-        """Every section, as the instance holds it, in the declared shape."""
+        """Every section, as the instance holds it, each in the form `_reported` gives it."""
+
+    def _reported(self, section: str, value: Any) -> object:
+        """`value`, a section as declared or as the instance answers it, in the form `read` reports it.
+
+        The comparable form, unless a kind says otherwise: a kind whose
+        comparable form is not itself what the section is -- a set keyed for
+        comparison -- reports a list in a fixed order instead.
+        """
+        return self._comparable(section, value)
+
+    def _recorded(self, props: Mapping[str, Any]) -> dict[str, Any]:
+        """`props`, with every section in the form a later `read` reports it."""
+        return {**props, **{section: self._reported(section, props.get(section)) for section in self.sections}}
+
+    def check(self, olds: dict[str, Any], news: dict[str, Any]) -> dynamic.CheckResult:
+        result = super().check(olds, news)
+        # A refused or still unknown section is left as declared: the
+        # refusal names it as the caller wrote it, and an unknown has no form.
+        if result.failures or any(unknown_anywhere(news.get(section)) for section in self.sections):
+            return result
+        return dynamic.CheckResult(self._recorded(result.inputs), [])
 
     @abc.abstractmethod
     def _write(self, api: Api, news: Mapping[str, Any], olds: Mapping[str, Any] | None) -> None:
@@ -223,7 +252,7 @@ class AdGuardProvider(InstanceProvider):
         self._write(self._configured(props), props, None)
         # The checked inputs go back out as the outputs, stamps included, so
         # the stored bag records the login that wrote the instance.
-        return dynamic.CreateResult(id_=f'{props[INSTANCE]}|{self.kind}', outs=props)
+        return dynamic.CreateResult(id_=f'{props[INSTANCE]}|{self.kind}', outs=self._recorded(props))
 
     def read(self, id_: str, props: dict[str, Any]) -> dynamic.ReadResult:
         if self._verdict(props) is Verdict.FIRST_RUN:
@@ -239,7 +268,7 @@ class AdGuardProvider(InstanceProvider):
         # The outs replace the stored output bag (framework/pulumi.md §5.3 E9),
         # so what state says about the door the instance was written through
         # stays true.
-        return dynamic.UpdateResult(outs=news)
+        return dynamic.UpdateResult(outs=self._recorded(news))
 
     def _configured(self, props: Mapping[str, Any]) -> Api:
         """The instance opened for a write, which only a configured one takes."""

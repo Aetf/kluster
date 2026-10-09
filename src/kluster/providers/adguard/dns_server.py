@@ -172,10 +172,15 @@ class AdGuardDnsServerProvider(AdGuardProvider):
     def _comparable(self, section: str, value: Any) -> object:
         return _dns(value) if section == DNS else _access(value)
 
+    def _reported(self, section: str, value: Any) -> object:
+        if section == ACCESS:
+            return _access(value)
+        # Every field, the addresses that count only in some modes included.
+        held = cast('Mapping[str, Any]', value or {})
+        return _dns(held) | {key: held.get(key) for key in ('blocking_ipv4', 'blocking_ipv6', 'edns_cs_custom_ip')}
+
     def _read(self, api: Api) -> dict[str, Any]:
-        info = cast('Mapping[str, Any]', api.get('dns_info'))
-        dns = _dns(info) | {key: info.get(key) for key in ('blocking_ipv4', 'blocking_ipv6', 'edns_cs_custom_ip')}
-        return {DNS: dns, ACCESS: _access(api.get('access/list'))}
+        return {DNS: self._reported(DNS, api.get('dns_info')), ACCESS: self._reported(ACCESS, api.get('access/list'))}
 
     def _write(self, api: Api, news: Mapping[str, Any], olds: Mapping[str, Any] | None) -> None:
         declared = _dns(news[DNS])

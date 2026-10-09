@@ -49,12 +49,12 @@ slot and is no business of that command:
 -   **manual** -- a value this system does not produce. Some are pasted from a
     console (the Home Assistant webhook, whose slot is its only storage), some
     are made by hand and delivered by a command of their own (`devices.py`) --
-    in the console that checks them for the UniFi key, the AdGuard login, the
-    ZeroTier Central token, the GitHub admin token and alertmanager's webhook,
-    and drawn by the operator for the gateway's BGP session password, which no
-    console makes -- one is carried from the legacy cluster, piped from the
-    Secret it was generated into (the mail relay's DKIM key), and some are
-    installed by another tracker's automation entirely (the UDM and libvirt
+    in the console that checks them for the UniFi key, the ZeroTier Central
+    token, the GitHub admin token and alertmanager's webhook, and drawn by the
+    operator for the AdGuard login and the gateway's BGP session password,
+    which no console makes -- one is carried from the legacy cluster, piped
+    from the Secret it was generated into (the mail relay's DKIM key), and some
+    are installed by another tracker's automation entirely (the UDM and libvirt
     SSH identities, §3).
 -   **decided** -- not a credential at all, but a constant this repository
     holds in `conventions` that a continuous-integration job needs beside one.

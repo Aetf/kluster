@@ -44,6 +44,7 @@ from credentials_command_tree import tree
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fences import prose
+from gateway_services import caddy, served
 from renovate_text import as_python_spells_it, as_renovate_spells_it, listed, package_rules
 from section_numbers import sections
 from workflow_files import (
@@ -64,6 +65,8 @@ from kluster.components.dns import legacy as dns_legacy
 from kluster.components.dns import record as dns_record
 from kluster.components.dns.base import overlay_records
 from kluster.components.dns.record import Block, zone_records
+from kluster.components.dns.rewrites import gateway_rewrites, legacy_vhost_rewrites
+from kluster.components.gateway import container
 from kluster.conventions import backup, identity, routes, sso
 from kluster.conventions.cluster import Transports
 from kluster.conventions.outputs import BOOT_VOLUME
@@ -337,6 +340,31 @@ def test_every_legacy_name_is_one_label_under_the_retiring_zone() -> None:
     assert len(set(hosts)) == len(conventions.gateway.LEGACY_VHOSTS)
     for host in hosts:
         assert host.partition('.')[2] == conventions.gateway.ZONE_LEGACY, host
+
+
+def test_every_name_the_rendered_caddyfile_serves_is_answered_at_the_proxy() -> None:
+    """A name the proxy serves resolves on the LAN only where a resolver's rule answers it with the proxy's address.
+
+    None of these names has a public record (dns.md §4), so the rule list both
+    resolvers answer from is the only thing that makes them reach the proxy.
+    Held from the rendered file, whose site blocks and bare-name redirects are
+    the side the rule list is not the source of, against what the gateway's
+    and the legacy derivations answer with: a derivation that dropped one of
+    the proxy's names leaves a vhost no client can reach.
+    """
+    rendered = container.caddyfile(caddy())
+    hosts = {*served(rendered), *re.findall(r'^http://(\S+) \{$', rendered, re.MULTILINE)}
+    proxy = conventions.gateway.CADDY
+    answered = {
+        rewrite.domain: rewrite.answer
+        for rewrite in (
+            *gateway_rewrites(conventions.gateway.VHOST_CONTROLLER, conventions.gateway.RESOLVERS, proxy),
+            *legacy_vhost_rewrites(conventions.gateway.LEGACY_VHOSTS, proxy),
+        )
+    }
+
+    assert conventions.gateway.VHOST_CONTROLLER in hosts, 'the render serves no controller; the pattern is what broke'
+    assert {host: answered.get(host) for host in hosts} == dict.fromkeys(hosts, proxy.address)
 
 
 def test_every_service_names_a_build_the_registry_publishes() -> None:
