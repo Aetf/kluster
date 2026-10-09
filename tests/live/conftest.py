@@ -8,13 +8,15 @@ about a tier it did not run, and the opt-in is the whole mechanism — there is
 no marker and no `addopts` entry to keep in sync with it.
 
 The one thing this directory adds on top is the absence of a per-case bound.
-`pyproject.toml` bounds every case with `pytest-timeout`, an order of magnitude
-above the slowest unit case; a drill's duration is the provider's — a rotation
-waits for a tenancy to authenticate a key — and a bound delivered mid-rotation
-against a real account is a hazard rather than a failure. So every item
-collected from under this directory is marked `timeout(0)` here, where the
-opt-in already lives, rather than on a command line the operator has to
-remember: the marker outranks the ini value and a `--timeout` flag alike.
+`pyproject.toml` bounds every case with `pytest-timeout`, a hang guard sized
+for the unit cases under the suite's four workers: an order of magnitude above
+most of them and a few times above the slowest, whose measurements are
+`docs/framework/testing.md` §1. A drill's duration is the provider's — a
+rotation waits for a tenancy to authenticate a key — and a bound delivered
+mid-rotation against a real account is a hazard rather than a failure. So
+every item collected from under this directory is marked `timeout(0)` here,
+where the opt-in already lives, rather than on a command line the operator has
+to remember: the marker outranks the ini value and a `--timeout` flag alike.
 
 How to run a drill, and when one is required, is `docs/framework/testing.md`
 §5.
