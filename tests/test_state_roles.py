@@ -186,7 +186,9 @@ def _unit_container(ignition: dict[str, Any]) -> tuple[list[str], list[File]]:
     the loopback interface; each volume a delivered file sits under, which
     becomes a copy of those files at the path the volume mounts them on; and
     the one volume nothing is delivered into, which is the box's own state and
-    starts here as an anonymous volume that `--rm` removes with the container.
+    starts here as an anonymous volume, on the path the image's own `VOLUME`
+    names. `_remove` takes that volume with the container; `--rm` would too,
+    but only for a container that exits by itself, and these are removed.
     """
     argv = _unit_command(ignition)
     assert argv[:2] == ['/usr/bin/podman', 'run'], argv
@@ -262,6 +264,28 @@ def _await_ready(name: str) -> None:
     raise AssertionError(f'{name} stopped before it served:\n{"".join(seen)}')
 
 
+def _remove(name: str) -> None:
+    """Remove a container these cases started, and the anonymous volumes it mounted.
+
+    `--volumes` is what takes the volumes: a container that `podman rm`
+    removes keeps its anonymous volumes without it, `--rm` notwithstanding,
+    and each one left behind holds one of the host's podman locks.
+    """
+    _ = sp.run(
+        ['podman', 'rm', '--force', '--volumes', '--time', '0', name], capture_output=True, timeout=PODMAN_TIMEOUT
+    )
+
+
+def _named(created: list[str], name: str) -> list[str]:
+    """A `podman create` built without a name, given `name`."""
+    return [*created[:1], '--name', name, *created[1:]]
+
+
+def _client(name: str) -> list[str]:
+    """The `podman run` of the container that serves the image's client tools."""
+    return ['run', '--detach', '--rm', '--network', 'host', '--name', name, '--entrypoint', 'sleep', IMAGE, 'infinity']
+
+
 Start = Callable[[list[str], list[File], str], Box]
 
 
@@ -273,7 +297,7 @@ def start() -> Iterator[Start]:
     def run(created: list[str], copies: list[File], superuser: str) -> Box:
         name = f'kluster-test-pgstate-{uuid.uuid4().hex[:12]}'
         names.append(name)
-        _ = _podman(*created[:1], '--name', name, *created[1:])
+        _ = _podman(*_named(created, name))
         if copies:
             _ = _podman('cp', '--archive=false', '-', f'{name}:/', stdin=_archive(copies))
         _ = _podman('start', name)
@@ -283,7 +307,7 @@ def start() -> Iterator[Start]:
 
     yield run
     for name in names:
-        _ = sp.run(['podman', 'rm', '--force', '--time', '0', name], capture_output=True, timeout=PODMAN_TIMEOUT)
+        _remove(name)
 
 
 @pytest.fixture(scope='module')
@@ -325,9 +349,7 @@ def tools(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
     """
     directory = tmp_path_factory.mktemp('clients')
     name = f'kluster-test-pgclient-{uuid.uuid4().hex[:12]}'
-    _ = _podman(
-        'run', '--detach', '--rm', '--network', 'host', '--name', name, '--entrypoint', 'sleep', IMAGE, 'infinity'
-    )
+    _ = _podman(*_client(name))
     try:
         _ = _podman('exec', name, 'mkdir', '-p', str(directory))
         for tool in ('psql', state.PG_RESTORE):
@@ -340,7 +362,7 @@ def tools(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
             script.chmod(0o755)
         yield directory
     finally:
-        _ = sp.run(['podman', 'rm', '--force', '--time', '0', name], capture_output=True, timeout=PODMAN_TIMEOUT)
+        _remove(name)
 
 
 @pytest.fixture
@@ -398,6 +420,38 @@ def _stack_init(target: state.Connection, project: Path, stack: str, env: dict[s
         },
         stdin=None,
     )
+
+
+@pytest.mark.parametrize('container', ['appliance', 'client'])
+def test_a_removed_container_leaves_none_of_its_volumes(ignition: dict[str, Any], container: str) -> None:
+    """Each container these cases start goes without leaving a volume behind.
+
+    Judged by the volumes this container mounted, by name, rather than by a
+    count of the host's: other containers come and go on the same host while
+    this runs. Whatever survives is removed here once counted, so a failing
+    run adds nothing to the host's volumes either.
+    """
+    name = f'kluster-test-volumes-{uuid.uuid4().hex[:12]}'
+    argv = _named(_unit_container(ignition)[0], name) if container == 'appliance' else _client(name)
+    volumes: list[str] = []
+    try:
+        _ = _podman(*argv)
+        mounts = json.loads(_podman('container', 'inspect', name))[0]['Mounts']
+        volumes = [str(mount['Name']) for mount in mounts if mount['Type'] == 'volume']
+    finally:
+        _remove(name)
+    left = [
+        volume
+        for volume in volumes
+        if sp.run(['podman', 'volume', 'exists', volume], capture_output=True, timeout=PODMAN_TIMEOUT).returncode == 0
+    ]
+    for volume in left:
+        _ = sp.run(['podman', 'volume', 'rm', '--force', volume], capture_output=True, timeout=PODMAN_TIMEOUT)
+
+    # The premise: the container mounted a volume, the image's own `VOLUME`
+    # at least, so an empty `left` is a removal rather than nothing to remove.
+    assert volumes
+    assert left == []
 
 
 def _names(stacks: list[str]) -> list[str]:
