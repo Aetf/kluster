@@ -501,12 +501,33 @@ through `mise.toml`'s `[env]`, and no `mise` task runs one
     ticking. Under a pipe, a terminal that reports no dimensions, or an
     environment that names a CI system, as `GITHUB_ACTIONS` does,
     `pulumi` falls back to its non-interactive display, which names a
-    step when it starts and when it ends and nothing in between. Nothing
-    the driver acts on is read from either display: the plan comes from
-    the preview's events, and the checks from the state. A test over the
-    pinned CLI runs the driver's `up` both ways. The preview shows no
-    progress of its own, since its standard output is the events
-    (Aetf/kluster-ops#574).
+    step when it starts and when it ends and nothing in between
+    (pulumi/pulumi#11139). Nothing the driver acts on is read from either
+    display: the plan comes from the preview's events, and the checks
+    from the state. A test over the pinned CLI runs the driver's `up` both
+    ways.
+-   **What `pulumi` does not show, the driver says.** The preview shows
+    nothing of its own, since its standard output is the events the plan
+    is read from; the apply under the non-interactive display falls silent
+    for as long as a step runs. For each, the driver hands `pulumi`
+    `--event-log` into a temporary directory of its own, outside the
+    checkout, with `PULUMI_DEBUG_COMMANDS=true`, the variable the flag is
+    registered under, and at a display rate (`progress.INTERVAL`) logs on
+    its standard error what the engine's events say is in flight: the
+    custom resources' steps that have run longest, at most
+    `progress.NAMED` of them, each with how long it has run, and a count
+    of the rest; or that the engine has said nothing. The directory goes
+    on every way out the driver lives through; a driver ended by a signal
+    it does not handle (SIGKILL, SIGTERM, a hang-up) leaves it, and the
+    log in it holds every value the program does not mark secret. The
+    apply's narration speaks only
+    when the display has printed nothing since the last line, and the
+    display's dots are suppressed. At a live display the apply is not
+    narrated, since a line written beside it is erased by the redraw. The
+    log reaches nothing the driver acts on, a passed-through command gets
+    neither the flag nor the variable, and the apply's narration is a
+    layer of its own that goes once a pinned release reprints a running
+    step's elapsed time (`operator_stack.progress`).
 -   **A ^C is `pulumi`'s to answer.** The terminal sends it to `pulumi` as
     well as to the driver, and `pulumi` answers the first one by
     cancelling gracefully: it finishes the steps in flight and releases
