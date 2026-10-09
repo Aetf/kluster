@@ -69,6 +69,19 @@
   lockFileMaintenance: {
     enabled: true,
   },
+  // The uv that lock file maintenance and every Python bump's lock run with:
+  // the one `mise.toml` pins, which every other `uv.lock` change is written
+  // with. Renovate reads it from here first and from `[tool.uv]
+  // required-version` second, and with neither it installs the newest uv.
+  // A uv release writes the lock revision it defines, and releases have
+  // moved it, so two uvs rewrite each other's revision on every lock change.
+  // Renovate reads this line as a dependency of its own, and a rule below
+  // reads it from the releases the mise pin is read from and puts it in the
+  // toolchain group, so one release moves both pins in one pull request. A
+  // test holds the two equal.
+  constraints: {
+    uv: '0.12.21',
+  },
   dockerfile: {
     // The self-built images' recipes are `*.Containerfile`, which the
     // dockerfile manager does not look at by default. It reads their `FROM`
@@ -202,6 +215,25 @@
       matchManagers: [
         'mise',
       ],
+      groupName: 'toolchain',
+      groupSlug: 'toolchain',
+    },
+    {
+      // uv's second pin, `constraints.uv` above, beside the first. Renovate's
+      // own `renovate-config` manager reads the constraint as the dependency
+      // `uv`, from PyPI; the mise manager reads `mise.toml`'s `uv` from
+      // `astral-sh/uv`'s GitHub releases. Read from the same releases here, so
+      // both pins see one release at one time under the same release age, and
+      // grouped with the toolchain, so one pull request moves both: apart,
+      // each half fails the test that holds them equal.
+      matchManagers: [
+        'renovate-config',
+      ],
+      matchDepNames: [
+        'uv',
+      ],
+      overrideDatasource: 'github-releases',
+      overridePackageName: 'astral-sh/uv',
       groupName: 'toolchain',
       groupSlug: 'toolchain',
     },
