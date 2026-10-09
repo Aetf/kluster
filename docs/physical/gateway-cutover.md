@@ -310,6 +310,7 @@ not moved.
     runtime:
       name: python
       options:
+        toolchain: uv
         virtualenv: ../../.venv
     EOF
     cat > "$PROBE/__main__.py" <<'EOF'
