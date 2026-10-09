@@ -21,7 +21,7 @@ import pytest
 from fake_pulumi import RecordedPulumi
 
 from kluster import conventions
-from kluster.scripts.credentials import devices, pulumi_config
+from kluster.scripts.credentials import cli, devices, escrow, pulumi_config
 from kluster.scripts.credentials.kdbx import KdbxError
 
 UNIFI = devices.DEVICES['unifi']
@@ -52,6 +52,13 @@ def stack(name: str) -> tuple[pulumi_config.Stack, RecordedPulumi]:
     runner = RecordedPulumi()
     slot = pulumi_config.Stack(name=name, directory=pulumi_config.project_dir(), environment=FULLY_EQUIPPED, run=runner)
     return slot, runner
+
+
+def parsed_commands(message: str) -> list[tuple[str, str, str]]:
+    """Every `credentials …` command a message quotes, as the parser reads it: subject, member, action."""
+    parser = cli.build_parser()
+    parsed = [vars(parser.parse_args(quoted.split())) for quoted in re.findall(r'`credentials ([^`]+)`', message)]
+    return [(argv['subject'], argv['member'], argv['action']) for argv in parsed]
 
 
 @pytest.fixture
@@ -181,15 +188,16 @@ def test_the_console_steps_are_printed_before_the_value_is_asked_for(
     assert runner.config == {'unifiApiKey': 'an-api-key'}
 
 
-def test_the_typed_values_land_in_the_stack_the_row_names(typed: None) -> None:
+def test_every_typed_value_lands_under_its_fields_key(typed: None) -> None:
+    # Which stack is the caller's to pass (the command passes the row's own,
+    # which test_cli holds); what the row decides is the keys its values land
+    # under, one per field, in the row's order.
     slot, runner = stack(ADGUARD.stack)
 
     keys = devices.deliver(ADGUARD, stack=slot)
 
-    # Which stack is a property of the row: the credential authenticates
-    # against one device, and one stack talks to that device.
-    assert keys == ('adguardUsername', 'adguardPassword')
-    assert runner.config == {'adguardUsername': 'a-typed-secret', 'adguardPassword': 'a-typed-secret'}
+    assert keys == tuple(field.key for field in ADGUARD.fields)
+    assert runner.config == {field.key: 'a-typed-secret' for field in ADGUARD.fields}
 
 
 def test_every_delivered_field_takes_the_encrypted_channel(typed: None) -> None:
@@ -271,8 +279,12 @@ def test_a_file_whose_producer_failed_is_refused_by_name(tmp_path: Path, typed: 
     # An empty file is what a failed producer leaves behind, and a credential
     # delivered as an empty string fails much later, in a stack nobody is
     # watching.
-    with pytest.raises(KdbxError, match='came through empty'):
-        _ = devices.deliver(UNIFI, stack=slot, given={'api-key': str(empty)})
+    (field,) = UNIFI.fields
+    with pytest.raises(KdbxError, match='came through empty') as refused:
+        _ = devices.deliver(UNIFI, stack=slot, given={field.name: str(empty)})
+
+    assert UNIFI.title in str(refused.value)
+    assert field.describes in str(refused.value)
 
 
 def test_a_value_handed_in_under_a_name_no_field_has_is_refused() -> None:
@@ -348,8 +360,10 @@ def test_reading_back_a_stack_that_has_no_such_key_names_the_command_that_fills_
     """
     slot, _ = stack(GITHUB_ADMIN.stack)
 
-    with pytest.raises(pulumi_config.SlotRefused, match=f'credentials derived {GITHUB_ADMIN.member} record'):
+    with pytest.raises(pulumi_config.SlotRefused) as refused:
         _ = devices.borrow(GITHUB_ADMIN, stack=slot)
+
+    assert parsed_commands(str(refused.value)) == [('derived', GITHUB_ADMIN.member, 'record')]
 
 
 def test_a_row_that_reads_back_empty_is_refused_rather_than_handed_on() -> None:
@@ -399,8 +413,10 @@ def test_a_stack_encrypted_apart_refuses_on_a_machine_that_holds_no_passphrase_f
     # rename moves both, where a literal would go on matching a message that
     # had stopped naming a command that exists (`docs/style/testing.md`).
     fills = pulumi_config.APART[GITHUB_ADMIN.stack]
-    with pytest.raises(pulumi_config.PassphraseMissing, match=f'credentials derived {fills} generate') as refusal:
+    with pytest.raises(pulumi_config.PassphraseMissing) as refusal:
         _ = devices.borrow(GITHUB_ADMIN, stack=bare)
+
+    assert ('derived', fills, escrow.rows()[fills].verb) in parsed_commands(str(refusal.value))
 
     # And the stack passphrase is not quietly used instead, which is the whole
     # point: that value is in every Environment a pull request can reach. The refusal says so by the

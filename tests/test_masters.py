@@ -12,6 +12,7 @@ desktop session, so the code under test is the code that runs on a workstation
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
@@ -19,7 +20,7 @@ import keyring.backends.fail
 import pytest
 from memory_keyring import MemoryKeyring, installed
 
-from kluster.scripts.credentials import devices, kdbx, masters, workstation
+from kluster.scripts.credentials import cli, devices, kdbx, masters, workstation
 from kluster.scripts.credentials.kdbx import KdbxError
 
 
@@ -70,6 +71,7 @@ def _refuse(_message: str) -> str:
 def test_every_root_has_fields_and_console_steps() -> None:
     # A root with no fields is one the scripts cannot ask for; a root with no
     # console steps is one a headless prompt cannot explain (§2).
+    assert masters.ROOTS
     for root in masters.ROOTS.values():
         assert root.fields
         assert root.console
@@ -79,6 +81,7 @@ def test_every_root_has_fields_and_console_steps() -> None:
 def test_every_field_names_its_file_and_its_variable() -> None:
     # The chain is register-driven: a field with no file name and no variable
     # name has two of its four layers missing, and nothing would say so.
+    assert masters.ROOTS
     files = [field.file for root in masters.ROOTS.values() for field in root.fields]
     variables = [field.env for root in masters.ROOTS.values() for field in root.fields]
 
@@ -96,7 +99,6 @@ def test_a_root_is_only_an_account_a_script_authenticates_as() -> None:
     credential, so it lives in the `github` stack's config and nowhere here --
     and a root re-added for it would give one credential two homes.
     """
-    assert set(masters.ROOTS) == {masters.OCI, masters.B2}
     # Symbolically: the GitHub admin token is a row of the console-made
     # register and not a field of any root. Naming its config key here instead
     # would only restate the line that declares it.
@@ -106,12 +108,12 @@ def test_a_root_is_only_an_account_a_script_authenticates_as() -> None:
 
 def test_a_remembered_root_is_read_without_asking(store: MemoryKeyring, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr('getpass.getpass', _answers('master-key'))
-    _ = masters.remember(masters.ROOTS['b2'], _answers('account-id'))
+    _ = masters.remember(masters.ROOTS[masters.B2], _answers('account-id'))
 
     # Every later use -- bootstrap, a rotation, a minter -- goes through this.
-    credential = masters.load(masters.ROOTS['b2'], _refuse)
+    credential = masters.load(masters.ROOTS[masters.B2], _refuse)
 
-    assert credential['key'] == 'master-key'
+    assert credential[masters.B2_KEY] == 'master-key'
     assert store.items[(kdbx.KEYRING_SERVICE, 'account-root/b2/key')] == 'master-key'
 
 
@@ -120,10 +122,10 @@ def test_a_root_the_store_does_not_have_is_asked_for(headless: None, monkeypatch
     # an error, it is the case the prompt exists for.
     monkeypatch.setattr('getpass.getpass', _answers('master-key'))
 
-    credential = masters.load(masters.ROOTS['b2'], _answers('account-id'))
+    credential = masters.load(masters.ROOTS[masters.B2], _answers('account-id'))
 
-    assert credential['account-id'] == 'account-id'
-    assert credential['key'] == 'master-key'
+    assert credential[masters.B2_ACCOUNT_ID] == 'account-id'
+    assert credential[masters.B2_KEY] == 'master-key'
 
 
 def test_the_fallback_prompt_says_where_the_credential_comes_from(
@@ -131,22 +133,26 @@ def test_the_fallback_prompt_says_where_the_credential_comes_from(
 ) -> None:
     monkeypatch.setattr('getpass.getpass', _answers('master-key'))
 
-    _ = masters.load(masters.ROOTS['b2'], _answers('account-id'))
+    _ = masters.load(masters.ROOTS[masters.B2], _answers('account-id'))
 
     # A headless run is exactly the case where the operator cannot open the
     # app and look, so the console steps travel with the prompt.
-    assert 'Application Keys' in caplog.text
-    assert 'credentials root b2 remember' in caplog.text
+    root = masters.ROOTS[masters.B2]
+    for line in root.console.splitlines():
+        assert line in caplog.text
+    (quoted,) = re.findall(r'`credentials ([^`]+)`', caplog.text)
+    parsed = vars(cli.build_parser().parse_args(quoted.split()))
+    assert (parsed['subject'], parsed['member'], parsed['action']) == ('root', root.member, 'remember')
 
 
 def test_a_half_remembered_root_asks_only_for_the_rest(store: MemoryKeyring, monkeypatch: pytest.MonkeyPatch) -> None:
     store.items[(kdbx.KEYRING_SERVICE, 'account-root/b2/account-id')] = 'stored-account'
     monkeypatch.setattr('getpass.getpass', _answers('master-key'))
 
-    credential = masters.load(masters.ROOTS['b2'], _refuse)
+    credential = masters.load(masters.ROOTS[masters.B2], _refuse)
 
-    assert credential['account-id'] == 'stored-account'
-    assert credential['key'] == 'master-key'
+    assert credential[masters.B2_ACCOUNT_ID] == 'stored-account'
+    assert credential[masters.B2_KEY] == 'master-key'
 
 
 def test_the_secret_store_wins_over_the_file_and_the_file_over_the_variable(
@@ -161,10 +167,10 @@ def test_the_secret_store_wins_over_the_file_and_the_file_over_the_variable(
     monkeypatch.setenv('KLUSTER_B2_ACCOUNT_ID', 'from-the-environment')
     monkeypatch.setenv('KLUSTER_B2_KEY', 'from-the-environment')
 
-    credential = masters.load(masters.ROOTS['b2'], _refuse)
+    credential = masters.load(masters.ROOTS[masters.B2], _refuse)
 
-    assert credential['account-id'] == 'from-the-store'
-    assert credential['key'] == 'from-the-file'
+    assert credential[masters.B2_ACCOUNT_ID] == 'from-the-store'
+    assert credential[masters.B2_KEY] == 'from-the-file'
 
 
 def test_the_variable_answers_when_neither_the_store_nor_the_file_does(
@@ -174,9 +180,9 @@ def test_the_variable_answers_when_neither_the_store_nor_the_file_does(
     monkeypatch.setenv('KLUSTER_B2_ACCOUNT_ID', 'from-the-environment')
     monkeypatch.setenv('KLUSTER_B2_KEY', 'from-the-environment')
 
-    credential = masters.load(masters.ROOTS['b2'], _refuse)
+    credential = masters.load(masters.ROOTS[masters.B2], _refuse)
 
-    assert credential['key'] == 'from-the-environment'
+    assert credential[masters.B2_KEY] == 'from-the-environment'
 
 
 def test_a_root_half_held_by_two_layers_asks_for_nothing(
@@ -190,11 +196,11 @@ def test_a_root_half_held_by_two_layers_asks_for_nothing(
     _ = workstation.write(local / 'roots' / 'oci.private-key', pem)
     monkeypatch.setattr('getpass.getpass', _refuse)
 
-    credential = masters.load(masters.ROOTS['oci'], _refuse)
+    credential = masters.load(masters.ROOTS[masters.OCI], _refuse)
 
     # A PEM's line structure is the value, so the file layer hands it back
     # exactly as written rather than stripped like a pasted token.
-    assert credential['private-key'] == pem
+    assert credential[masters.OCI_PRIVATE_KEY] == pem
 
 
 def test_a_half_written_file_is_treated_as_absent(headless: None, monkeypatch: pytest.MonkeyPatch, local: Path) -> None:
@@ -203,9 +209,9 @@ def test_a_half_written_file_is_treated_as_absent(headless: None, monkeypatch: p
     _ = workstation.write(local / 'roots' / 'b2.key', '\n')
     monkeypatch.setattr('getpass.getpass', _answers('master-key'))
 
-    credential = masters.load(masters.ROOTS['b2'], _answers('account-id'))
+    credential = masters.load(masters.ROOTS[masters.B2], _answers('account-id'))
 
-    assert credential['key'] == 'master-key'
+    assert credential[masters.B2_KEY] == 'master-key'
 
 
 def test_remember_falls_back_to_the_file_where_there_is_no_secret_store(
@@ -215,11 +221,11 @@ def test_remember_falls_back_to_the_file_where_there_is_no_secret_store(
     # is the one place such a machine can keep a root at all.
     monkeypatch.setattr('getpass.getpass', _answers('master-key'))
 
-    _ = masters.remember(masters.ROOTS['b2'], _answers('account-id'))
+    _ = masters.remember(masters.ROOTS[masters.B2], _answers('account-id'))
 
     assert (local / 'roots' / 'b2.key').read_text() == 'master-key\n'
     assert 'no desktop secret store' in caplog.text
-    assert masters.load(masters.ROOTS['b2'], _refuse)['key'] == 'master-key'
+    assert masters.load(masters.ROOTS[masters.B2], _refuse)[masters.B2_KEY] == 'master-key'
 
 
 def test_remember_keeps_a_root_in_the_secret_store_alone_where_there_is_one(
@@ -227,7 +233,7 @@ def test_remember_keeps_a_root_in_the_secret_store_alone_where_there_is_one(
 ) -> None:
     # One layer, not two: the store is the one a backup cannot copy, so a
     # plaintext file written beside it would undo the reason for using it.
-    root = masters.ROOTS['b2']
+    root = masters.ROOTS[masters.B2]
     monkeypatch.setattr('getpass.getpass', _answers('master-key'))
 
     _ = masters.remember(root, _answers('account-id'))
@@ -240,13 +246,13 @@ def test_forget_removes_the_token_file_as_well_as_the_store_entry(
     store: MemoryKeyring, local: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr('getpass.getpass', _answers('master-key'))
-    _ = masters.remember(masters.ROOTS['b2'], _answers('account-id'))
+    _ = masters.remember(masters.ROOTS[masters.B2], _answers('account-id'))
     # Both writable layers carry something, which is what makes the assertions
     # below distinguish a `forget` that clears one from a `forget` that clears
     # the machine: `remember` used the store, so the file is written here.
     _ = workstation.write(workstation.root_path('b2.key'), 'master-key')
 
-    masters.forget(masters.ROOTS['b2'])
+    masters.forget(masters.ROOTS[masters.B2])
 
     # Forgetting a root leaves nothing behind on the machine; the environment
     # layer is the caller's shell and not this command's to unset.
@@ -261,14 +267,16 @@ def test_a_file_field_is_read_from_the_path_it_is_given(
     _ = pem.write_text('-----BEGIN PRIVATE KEY-----\n')
     monkeypatch.setattr('getpass.getpass', _refuse)
 
-    _ = masters.remember(masters.ROOTS['oci'], _answers('ocid1.tenancy.oc1..aaa', 'ocid1.user.oc1..bbb', str(pem)))
+    _ = masters.remember(
+        masters.ROOTS[masters.OCI], _answers('ocid1.tenancy.oc1..aaa', 'ocid1.user.oc1..bbb', str(pem))
+    )
 
     # A PEM is not something anyone pastes into a prompt; what is stored is
     # its content, so the file is needed once and never again.
-    credential = masters.load(masters.ROOTS['oci'], _refuse)
-    assert credential['private-key'].startswith('-----BEGIN')
-    assert credential['tenancy'] == 'ocid1.tenancy.oc1..aaa'
-    assert credential['user'] == 'ocid1.user.oc1..bbb'
+    credential = masters.load(masters.ROOTS[masters.OCI], _refuse)
+    assert credential[masters.OCI_PRIVATE_KEY].startswith('-----BEGIN')
+    assert credential[masters.OCI_TENANCY] == 'ocid1.tenancy.oc1..aaa'
+    assert credential[masters.OCI_USER] == 'ocid1.user.oc1..bbb'
 
 
 def test_stored_reports_the_layer_of_each_field_without_disclosing_it(
@@ -281,26 +289,27 @@ def test_stored_reports_the_layer_of_each_field_without_disclosing_it(
     # Which layer answered is the useful half of "will this run ask me
     # anything": a field the environment is holding up is one that disappears
     # with the shell it was exported in.
-    assert masters.stored(masters.ROOTS['oci']) == {
-        'tenancy': masters.STORE,
-        'user': masters.FILE,
-        'private-key': masters.ENVIRONMENT,
+    assert masters.stored(masters.ROOTS[masters.OCI]) == {
+        masters.OCI_TENANCY: masters.STORE,
+        masters.OCI_USER: masters.FILE,
+        masters.OCI_PRIVATE_KEY: masters.ENVIRONMENT,
     }
-    assert masters.stored(masters.ROOTS['b2']) == {'account-id': None, 'key': None}
+    b2 = masters.ROOTS[masters.B2]
+    assert masters.stored(b2) == {field.name: None for field in b2.fields}
 
 
 def test_forget_removes_every_field(store: MemoryKeyring, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr('getpass.getpass', _answers('master-key'))
-    _ = masters.remember(masters.ROOTS['b2'], _answers('account-id'))
+    _ = masters.remember(masters.ROOTS[masters.B2], _answers('account-id'))
 
-    masters.forget(masters.ROOTS['b2'])
+    masters.forget(masters.ROOTS[masters.B2])
 
     assert store.items == {}
 
 
 def test_forgetting_a_root_that_is_not_there_says_so(store: MemoryKeyring) -> None:
     with pytest.raises(KdbxError, match='not in the secret store'):
-        masters.forget(masters.ROOTS['b2'])
+        masters.forget(masters.ROOTS[masters.B2])
 
 
 def test_an_empty_answer_is_refused(headless: None, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -309,7 +318,7 @@ def test_an_empty_answer_is_refused(headless: None, monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr('getpass.getpass', _answers(''))
 
     with pytest.raises(KdbxError, match='required'):
-        _ = masters.load(masters.ROOTS['b2'], _answers('account-id'))
+        _ = masters.load(masters.ROOTS[masters.B2], _answers('account-id'))
 
 
 def test_the_kit_password_and_the_roots_share_one_store(store: MemoryKeyring) -> None:
