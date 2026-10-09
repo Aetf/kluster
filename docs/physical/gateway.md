@@ -1868,6 +1868,20 @@ Then the rules. Every zone pair that carries a policy also carries a
 creation happened to produce is a policy the design does not own, and
 on a pair holding both a drop and an allow the position *is* the rule.
 
+**A policy names a subnet through an address group, and a single
+host as a literal.** A zone policy's `ips` field holds single
+addresses: the pinned provider validates each entry as one IPv4 or
+IPv6 address and refuses a CIDR at preview, and the controller's own
+field specification, which the provider's client library is generated
+from, defines each entry as one address. So the IoT VLAN, wherever it
+is a source, is named by a group pair holding its v4 subnet and its
+ULA /64, as the pool is named as a destination. The IoT VLAN is a
+network object and could be matched as one, but the `physical` stack
+neither declares that network nor records the identity it would be
+looked up by, while the site's address plan does state its subnets.
+The cluster VLAN needs neither: it is alone in its zone, and a policy
+names it by naming the zone.
+
 1.  **IoT → `lan` pool: default drop with one enumerated allow**
     (audit M2, amended 2026-08-24; ships with the cluster). The
     allow precedes the drop: **IoT → the media VIP, port 443** —
@@ -1876,7 +1890,8 @@ on a pair holding both a drop and an allow the position *is* the rule.
     legitimately consume (smart TVs and streamers → jellyfin, the
     first member). Then the drop: IoT → the rest of the pool
     (admin UIs — immich, qbittorrent, grafana — stay unreachable
-    from the LAN's least-trusted population). Address groups are
+    from the LAN's least-trusted population). Both rules take the IoT
+    VLAN's address groups as their source, and address groups are
     single-family, so both rules come in v4-CIDR and ULA pairs.
     **The firewall names only the stable media VIP** (a
     `conventions` literal): which apps are IoT-reachable is decided
@@ -1906,7 +1921,7 @@ on a pair holding both a drop and an allow the position *is* the rule.
     of it.** The allow gives the trusted VLANs the reach they have to
     every host of the Internal zone — debugging straight at a node, a
     ping, a host path that hairpins. The drop is a v4-CIDR/ULA pair
-    naming the IoT VLAN as the source, ordered **before** the allow
+    sourced from the IoT VLAN's address groups, ordered **before** the allow
     because here the allow is the broad rule: declared after it, the
     drop would match nothing while reading as if it were in force.
     Talos apid, the kubelet and BGP are off the table for the LAN's

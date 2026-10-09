@@ -201,11 +201,14 @@ async def test_the_cluster_zone_is_opened_to_the_home_with_the_iot_vlan_carved_o
     assert inward['source']['zoneId'] == internal
     assert inward['destination']['zoneId'] == zone
 
-    # Two drops, one per family, because the source is a literal subnet.
-    for suffix, source in (('v4', str(conventions.IOT_VLAN.v4)), ('v6', str(conventions.IOT_VLAN.v6))):
+    # Two drops, one per family, because the source is the IoT VLAN's address
+    # group and a group holds one family.
+    for suffix, subnet in (('v4', str(conventions.IOT_VLAN.v4)), ('v6', str(conventions.IOT_VLAN.v6))):
         drop = setup.inputs_of(f'{name}-iot-cluster-{suffix}')
         assert drop['action'] == 'BLOCK'
-        assert drop['source']['ips'] == [source]
+        assert drop['source']['ipGroupId'] == f'{name}-iot-{suffix}_id'
+        assert 'ips' not in drop['source']
+        assert setup.inputs_of(f'{name}-iot-{suffix}', 'unifi:index/firewallGroup:FirewallGroup')['members'] == [subnet]
         assert drop['destination']['zoneId'] == zone
 
     # The drops first: the allow behind them is the broad one here, so an

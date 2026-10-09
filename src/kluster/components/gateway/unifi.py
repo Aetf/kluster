@@ -60,8 +60,8 @@ Every zone pair that carries a policy also carries a
 position creation happened to produce, and on a pair with both a drop and an
 allow that is the difference between the design and its opposite.
 
-Two facts about the device shape the whole module (physical/gateway.md §4.1,
-measured):
+Three facts about the device shape the whole module (physical/gateway.md
+§4.1, measured, and §4.2):
 
 -   **The zone firewall classifies forwarded traffic by destination ipset.**
     The home VLANs sit in the internal zone, so IoT → server-LAN is an
@@ -69,13 +69,21 @@ measured):
     (it would fight the host routes the cluster advertises), so it lands in
     no zone ipset at all and pool-bound traffic falls through to the
     internal → external pair. That is why rules about the pool are declared
-    on that pair and why they name the pool through **address groups** — the
-    one way to name a subnet the controller has no object for. The cluster
-    VLAN is the deliberate opposite: it *is* an object, and so it is named
-    directly.
--   **Address groups are single-family.** One group cannot hold both the
-    pool's IPv4 CIDR and its unique-local IPv6 prefix, so every rule about
-    the pool comes as a pair, and the two groups are two resources.
+    on that pair. The cluster VLAN is the deliberate opposite: it *is* an
+    object, and alone in its zone, so a policy names it by naming the zone.
+-   **A zone policy's `ips` holds single addresses, never a subnet.** The
+    pinned provider validates every entry as one IPv4 or IPv6 address and
+    refuses a CIDR at preview, and the controller's field specification,
+    which the provider's client library is generated from, defines each
+    entry as one address. A subnet a policy names is therefore an **address
+    group**, through `ip_group_id`: the pool, because the controller has no
+    object for it, and the IoT VLAN as a source, because this program holds
+    the VLAN's addresses and not its controller-side identity — it neither
+    declares that network nor records the name it could be looked up by, so
+    a `network_ids` match would rest on a value nothing here states.
+-   **Address groups are single-family.** One group cannot hold both an IPv4
+    CIDR and its unique-local IPv6 prefix, so every rule naming a subnet
+    comes as a pair, and each subnet's two groups are two resources.
 
 Authentication is an API key belonging to a dedicated local administrator,
 carried by a provider instance that exists only for these resources. It is
@@ -111,6 +119,12 @@ ZONE_EXTERNAL = 'External'
 #: The port the media Gateway serves. The one thing the IoT VLAN may reach in
 #: the pool, and it is HTTPS because everything behind that Gateway is.
 MEDIA_PORT = 443
+
+#: The controller-side address groups that name the IoT VLAN, one per family.
+#: Only this component reads them, so they are spelled here, in the same
+#: form as the pool's groups beside them on the console.
+IOT_GROUP_V4 = f'{conventions.CLUSTER_NAME}-iot-v4'
+IOT_GROUP_V6 = f'{conventions.CLUSTER_NAME}-iot-v6'
 
 #: What the controller calls a routed LAN whose gateway holds an address on
 #: it. `vlan-only` is the other candidate and the wrong one: it describes a
@@ -300,8 +314,30 @@ class SiteFirewall(Component, pulumi_type='kluster:gateway:SiteFirewall'):
             opts=child,
         )
 
-        # Family by family: the allow names the media VIP as a literal, the
-        # drop names the whole pool through its group.
+        # The IoT VLAN, as the source of every rule that carves it out. A
+        # network object on the controller, but not one this program declares
+        # or holds the identity of, so it is named by the addresses the site's
+        # plan gives it — and a policy names a subnet only through a group.
+        self.iot_v4 = unifi.FirewallGroup(
+            f'{name}-iot-v4',
+            name=IOT_GROUP_V4,
+            type='address-group',
+            members=[str(conventions.IOT_VLAN.v4)],
+            site=site,
+            opts=child,
+        )
+        self.iot_v6 = unifi.FirewallGroup(
+            f'{name}-iot-v6',
+            name=IOT_GROUP_V6,
+            type='ipv6-address-group',
+            members=[str(conventions.IOT_VLAN.v6)],
+            site=site,
+            opts=child,
+        )
+
+        # Family by family, each sourced from the IoT VLAN's group of that
+        # family: the allow names the media VIP as a literal, the drop names
+        # the whole pool through its group.
         self.iot_media_v4 = unifi.FirewallZonePolicy(
             f'{name}-iot-media-v4',
             name=f'{conventions.CLUSTER_NAME} IoT to media VIP (v4)',
@@ -309,7 +345,7 @@ class SiteFirewall(Component, pulumi_type='kluster:gateway:SiteFirewall'):
             action='ALLOW',
             ip_version='IPV4',
             protocol='tcp',
-            source=unifi.FirewallZonePolicySourceArgs(zone_id=internal, ips=[str(conventions.IOT_VLAN.v4)]),
+            source=unifi.FirewallZonePolicySourceArgs(zone_id=internal, ip_group_id=self.iot_v4.id),
             destination=unifi.FirewallZonePolicyDestinationArgs(
                 zone_id=external,
                 ips=[str(conventions.LAN_POOL.media_vip.v4)],
@@ -328,7 +364,7 @@ class SiteFirewall(Component, pulumi_type='kluster:gateway:SiteFirewall'):
             action='ALLOW',
             ip_version='IPV6',
             protocol='tcp',
-            source=unifi.FirewallZonePolicySourceArgs(zone_id=internal, ips=[str(conventions.IOT_VLAN.v6)]),
+            source=unifi.FirewallZonePolicySourceArgs(zone_id=internal, ip_group_id=self.iot_v6.id),
             destination=unifi.FirewallZonePolicyDestinationArgs(
                 zone_id=external,
                 ips=[str(conventions.LAN_POOL.media_vip.v6)],
@@ -345,7 +381,7 @@ class SiteFirewall(Component, pulumi_type='kluster:gateway:SiteFirewall'):
             action='BLOCK',
             ip_version='IPV4',
             protocol='all',
-            source=unifi.FirewallZonePolicySourceArgs(zone_id=internal, ips=[str(conventions.IOT_VLAN.v4)]),
+            source=unifi.FirewallZonePolicySourceArgs(zone_id=internal, ip_group_id=self.iot_v4.id),
             destination=unifi.FirewallZonePolicyDestinationArgs(zone_id=external, ip_group_id=self.pool_v4.id),
             enabled=True,
             opts=child,
@@ -357,7 +393,7 @@ class SiteFirewall(Component, pulumi_type='kluster:gateway:SiteFirewall'):
             action='BLOCK',
             ip_version='IPV6',
             protocol='all',
-            source=unifi.FirewallZonePolicySourceArgs(zone_id=internal, ips=[str(conventions.IOT_VLAN.v6)]),
+            source=unifi.FirewallZonePolicySourceArgs(zone_id=internal, ip_group_id=self.iot_v6.id),
             destination=unifi.FirewallZonePolicyDestinationArgs(zone_id=external, ip_group_id=self.pool_v6.id),
             enabled=True,
             opts=child,
@@ -442,8 +478,8 @@ class SiteFirewall(Component, pulumi_type='kluster:gateway:SiteFirewall'):
         # dropped ahead of the allow because the node subnet is where apid,
         # the kubelet and the BGP session live, and the only recorded
         # IoT-originated dependency — a television reaching the media VIP —
-        # targets the pool instead. Family by family, because the source is a
-        # literal subnet and a literal belongs to one family.
+        # targets the pool instead. Family by family, because the source is
+        # the VLAN's address group and a group holds one family.
         self.iot_cluster_v4 = unifi.FirewallZonePolicy(
             f'{name}-iot-cluster-v4',
             name=f'{conventions.CLUSTER_NAME} IoT to cluster nodes (v4)',
@@ -451,7 +487,7 @@ class SiteFirewall(Component, pulumi_type='kluster:gateway:SiteFirewall'):
             action='BLOCK',
             ip_version='IPV4',
             protocol='all',
-            source=unifi.FirewallZonePolicySourceArgs(zone_id=internal, ips=[str(conventions.IOT_VLAN.v4)]),
+            source=unifi.FirewallZonePolicySourceArgs(zone_id=internal, ip_group_id=self.iot_v4.id),
             destination=unifi.FirewallZonePolicyDestinationArgs(zone_id=self.zone.id),
             enabled=True,
             opts=child,
@@ -463,7 +499,7 @@ class SiteFirewall(Component, pulumi_type='kluster:gateway:SiteFirewall'):
             action='BLOCK',
             ip_version='IPV6',
             protocol='all',
-            source=unifi.FirewallZonePolicySourceArgs(zone_id=internal, ips=[str(conventions.IOT_VLAN.v6)]),
+            source=unifi.FirewallZonePolicySourceArgs(zone_id=internal, ip_group_id=self.iot_v6.id),
             destination=unifi.FirewallZonePolicyDestinationArgs(zone_id=self.zone.id),
             enabled=True,
             opts=child,
