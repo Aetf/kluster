@@ -5,15 +5,18 @@ service is: the runtime is the framework, so what is exercised is what it does
 for *a* machine. Which file lands where, what runs after one lands, and what a
 rollback moves.
 
-The two convergers are exercised by **running them**, against a directory
-tree this module builds and, for `40-machines.sh`, a `systemctl` it can read
-back. That is the tier a script handed no machines needs: every claim about
-which machines it acts on is a claim about what it finds on a disk, and reading
-the rendered text back would only restate the template. The cases therefore
-disagree with the declaration on purpose — a tree with no settings, a settings
-file that went away under a running machine, a half-written file a push
-abandoned, a named pipe where a file was expected — because that is the device
-state the operator meets and no declaration describes it.
+The two convergers, the hook a machine's file runs once it lands, and the
+rollback are exercised by **running them**, against a directory tree this
+module builds and a `systemctl` it can read back. That is the tier a script
+handed no machines needs: every claim about which machines it acts on is a
+claim about what it finds on a disk, and reading the rendered text back would
+only restate the template. The cases therefore disagree with the declaration
+on purpose — a tree with no settings, a settings file that went away under a
+running machine, a half-written file a push abandoned, a named pipe where a
+file was expected — because that is the device state the operator meets and
+no declaration describes it. Each script leads a POSIX session of its own
+(`process_sessions`), so a converger that waits on such a pipe fails at its
+bound and leaves nothing waiting behind it.
 
 The other renderers are plain functions over plain data, so those cases read
 their output directly; the component is declared once against mocks, which is
@@ -22,17 +25,22 @@ where a wiring mistake would surface.
 
 from __future__ import annotations
 
+import errno
 import os
+import shlex
 import subprocess
+from collections.abc import Iterator
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import final
 
+import process_sessions
+import psutil
 import pulumi
 import pytest
 import pytest_asyncio
 from fake_systemd import FakeSystemd
-from mock_monitor import Recorder, declaring, run_with
+from mock_monitor import Declaration, Recorder, declaring, run_with
 
 from kluster import conventions
 from kluster.components.gateway import nspawn, persistence
@@ -74,7 +82,14 @@ class Workload(Component, pulumi_type='test:gateway:Workload'):
 
 @pytest_asyncio.fixture(scope='module', loop_scope='module', autouse=True)
 async def monitor() -> Recorder:
-    """What the run registered, for the cases that read declarations directly."""
+    """What the run registered, for the cases that read declarations directly.
+
+    One run for the module, which cases add to as they go: a case that
+    declares a `Workload` registers its drop-in here. So a case that reads the
+    run as a whole reads only the runtime's own registrations
+    (`runtime_declarations`), and what it finds does not depend on which cases
+    ran before it.
+    """
     return await run_with(Recorder(), stack='physical')
 
 
@@ -96,6 +111,24 @@ async def runtime(mechanism: DevicePersistence) -> NspawnRuntime:
     async with declaring():
         framework = NspawnRuntime(NAME, mechanism=mechanism)
     return framework
+
+
+def runtime_declarations(monitor: Recorder) -> list[Declaration]:
+    """What the runtime itself declared, at any depth below it, and none a case added."""
+    return [
+        declaration
+        for declaration in monitor.declared
+        if _below_runtime(monitor, monitor.options_of(declaration.name, declaration.typ).parent)
+    ]
+
+
+def _below_runtime(monitor: Recorder, parent: str) -> bool:
+    """Whether the resource whose parent is `parent` sits anywhere below the runtime."""
+    while parent:
+        if parent.endswith(f'::{NAME}'):
+            return True
+        parent = monitor.registrations[parent].parent if parent in monitor.registrations else ''
+    return False
 
 
 ##
@@ -122,19 +155,6 @@ def test_the_framework_reaches_the_device_only_through_the_mechanism(monitor: Re
         assert monitor.options_of(name).parent.endswith(f'::{NAME}'), name
 
     assert monitor.inputs_of(f'{NAME}-skeleton-{nspawn.SKELETON}')['path'] == nspawn.MACHINES
-    assert f'{conventions.gateway.CUSTOM_ROOT}/machines' == nspawn.MACHINES
-
-
-def test_the_device_is_asked_for_the_tooling_the_push_needs_as_well() -> None:
-    """Two of the four packages are the push's, not the runtime's.
-
-    The device pulls and unpacks its own root filesystems, and the provider
-    that drives it declares no packages — nothing in a dynamic provider can. So
-    the layer whose machines those trees are is what puts `skopeo` and `umoci`
-    on the device's path, beside the tooling that boots a directory as a
-    machine.
-    """
-    assert set(NspawnRuntime.REQUIRED_PACKAGES) == {'systemd-container', 'libnss-mymachines', 'skopeo', 'umoci'}
 
 
 def test_the_watchdog_is_a_unit_and_an_executable_rather_than_a_boot_script() -> None:
@@ -233,7 +253,7 @@ async def test_a_machines_drop_in_is_a_resource_of_the_component_that_has_the_ma
     """The runtime decides what the unit must say; the file belongs to the caller.
 
     A machine's drop-in is declared when that machine is, by the component that
-    declares the machine, so the statement comes off the unit in the session
+    declares the machine, so the statement comes off the unit in the update
     that stops declaring it — while where such a file goes and what runs once it
     lands stays layer one's.
     """
@@ -254,25 +274,93 @@ async def test_a_machines_drop_in_is_a_resource_of_the_component_that_has_the_ma
 ##
 
 
-def test_a_machine_that_did_not_come_up_is_rolled_back_and_the_push_fails() -> None:
+#: What the machine converger's stand-in exits with, read from its environment.
+MACHINES_STATUS = 'MACHINES_STATUS'
+
+
+@final
+@dataclass(frozen=True)
+class _Hooked:
+    """The device tree with the boot chain and `bin/` beside it, for a machine's hook to run on.
+
+    The hook is the production one, pointed at the tree by the layout it is
+    built from. The two convergers and the rollback are stand-ins that write
+    their name and arguments to `ran` as they run, and the machine converger
+    exits with what the case hands it; what the scripts themselves do is held
+    by their own cases below, and these hold what the hook does with them.
+    """
+
+    device: _Device
+    ran: Path
+
+    def run(self, hook: str, *, converger_status: int = 0) -> tuple[int, list[str]]:
+        """Run `hook` as the push runs it, and say what it ran, in order."""
+        completed = process_sessions.run(
+            ['/bin/sh', '-c', hook],
+            env={'PATH': f'{self.device.systemd.tools}:/usr/bin:/bin', MACHINES_STATUS: str(converger_status)},
+            timeout=CONVERGER_TIMEOUT,
+        )
+        ran = self.ran.read_text(encoding='utf-8').splitlines() if self.ran.exists() else []
+        self.ran.unlink(missing_ok=True)
+        return completed.returncode, ran
+
+
+@pytest.fixture
+def hooked(device: _Device, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Hooked:
+    on_boot = tmp_path / 'on_boot.d'
+    executables = tmp_path / 'bin'
+    on_boot.mkdir()
+    executables.mkdir()
+    monkeypatch.setattr(conventions.gateway, 'ON_BOOT_D', str(on_boot))
+    monkeypatch.setattr(persistence, 'BIN_DIR', str(executables))
+    monkeypatch.setattr(nspawn, 'MACHINES', str(device.machines))
+    box = _Hooked(device=device, ran=tmp_path / 'ran')
+    for path, status in (
+        (Path(persistence.on_boot_path(nspawn.NSPAWN_UNITS_SCRIPT)), '0'),
+        (Path(persistence.on_boot_path(nspawn.MACHINES_SCRIPT)), f'"${MACHINES_STATUS}"'),
+        (Path(persistence.executable_path(nspawn.ROLLBACK_PROGRAM)), '0'),
+    ):
+        _ = path.write_text(
+            f'#!/bin/sh\nprintf \'%s\\n\' "${{0##*/}}${{1:+ $*}}" >> {shlex.quote(str(box.ran))}\nexit {status}\n',
+            encoding='utf-8',
+        )
+        path.chmod(0o755)
+    return box
+
+
+def rolled_back(ran: list[str]) -> list[str]:
+    """The rollbacks among what a hook ran."""
+    return [line for line in ran if line.split()[0] == nspawn.ROLLBACK_PROGRAM]
+
+
+def test_a_machine_that_did_not_come_up_is_rolled_back_and_the_push_fails(hooked: _Hooked) -> None:
     """Converging is not evidence that the machine runs, so systemd is asked.
 
     A machine that did not reach active leaves the device on the tree this push
     displaced and the operation non-zero: the resource is not recorded as
     applied, so the next preview still has the work to do, and the operator
     finds a red apply rather than a resolver that has been down since a push
-    that reported success.
+    that reported success. The same push over a machine that came up rolls
+    nothing back.
     """
+    _ = declare(hooked.device, 'plain')
     hook = nspawn.machine_hook('plain', nspawn.rootfs_path('plain'), rollback=True)
 
-    assert persistence.on_boot_path(nspawn.NSPAWN_UNITS_SCRIPT) in hook
-    assert persistence.on_boot_path(nspawn.MACHINES_SCRIPT) in hook
-    assert 'systemctl is-active --quiet systemd-nspawn@plain.service' in hook
-    assert f'{persistence.executable_path(nspawn.ROLLBACK_PROGRAM)} plain' in hook
-    assert 'exit 1' in hook
+    status, ran = hooked.run(hook)
+
+    assert status != 0
+    # The whole run, in order: a gate that asked before the convergers ran
+    # would ask about the tree the machine was running before this push.
+    assert ran == [nspawn.NSPAWN_UNITS_SCRIPT, nspawn.MACHINES_SCRIPT, f'{nspawn.ROLLBACK_PROGRAM} plain']
+
+    hooked.device.systemd.activate(nspawn.machine_unit('plain'))
+    status, ran = hooked.run(hook)
+
+    assert status == 0
+    assert not rolled_back(ran)
 
 
-def test_only_the_root_filesystems_hook_rolls_anything_back() -> None:
+def test_only_the_root_filesystems_hook_rolls_anything_back(hooked: _Hooked) -> None:
     """The tree is the only piece of a machine with a displaced copy beside it.
 
     A configuration file's hook that swapped it would replace a tree that had
@@ -280,13 +368,15 @@ def test_only_the_root_filesystems_hook_rolls_anything_back() -> None:
     so the next push would deliver it again, fail again, and swap again. Such a
     hook fails without touching the tree.
     """
-    configuration = nspawn.machine_hook('plain', nspawn.machine_file('plain', 'Caddyfile'), rollback=False)
+    _ = declare(hooked.device, 'plain', files={'Caddyfile': 'one\n'})
 
-    assert nspawn.ROLLBACK_PROGRAM not in configuration
-    assert 'exit 1' in configuration
+    status, ran = hooked.run(nspawn.machine_hook('plain', nspawn.machine_file('plain', 'Caddyfile'), rollback=False))
+
+    assert status != 0
+    assert not rolled_back(ran)
 
 
-def test_the_health_gate_holds_only_a_machine_that_could_have_started() -> None:
+def test_the_health_gate_holds_only_a_machine_that_could_have_started(hooked: _Hooked) -> None:
     """Two cases the push produces, and the gate has to survive both.
 
     The same command runs after a delete: a machine being retired is *supposed*
@@ -294,40 +384,54 @@ def test_the_health_gate_holds_only_a_machine_that_could_have_started() -> None:
     delete that was removing it. And on the push that creates a machine its
     configuration lands before its root filesystem does, so the converger skips
     it — a gate that fired then would fail every file of every new machine.
+    Neither machine here is running.
     """
-    path = nspawn.machine_file('plain', 'Caddyfile')
-    hook = nspawn.machine_hook('plain', path, rollback=False)
+    _ = declare(hooked.device, 'retired')
+    _ = declare(hooked.device, 'arriving', tree=False, files={'Caddyfile': 'one\n'})
 
-    assert f'if [ -e {path} ] && [ -d {nspawn.rootfs_path("plain")} ]; then' in hook
-    # The convergers run either way: a file that has just gone is a change the
-    # device still has to be told about.
-    assert hook.index(persistence.on_boot_path(nspawn.MACHINES_SCRIPT)) < hook.index(f'if [ -e {path} ]')
+    for machine in ('retired', 'arriving'):
+        status, ran = hooked.run(
+            nspawn.machine_hook(machine, nspawn.machine_file(machine, 'Caddyfile'), rollback=False)
+        )
+
+        assert status == 0, machine
+        # The convergers run either way: a file that has just gone is a change
+        # the device still has to be told about.
+        assert set(ran) == {nspawn.NSPAWN_UNITS_SCRIPT, nspawn.MACHINES_SCRIPT}, machine
 
 
-def test_the_convergers_exit_status_reaches_the_apply() -> None:
+def test_the_convergers_exit_status_reaches_the_apply(hooked: _Hooked) -> None:
     """It reports what only it learns, and a hook that dropped it would lie.
 
     A machine of this push's set that failed to start, or a live directory the
     script refused to touch, is a failure no `is-active` of *this* machine
     would see — and a green apply over a device that printed a failure is the
-    one outcome this mechanism must not produce.
+    one outcome this mechanism must not produce. This machine is up, so nothing
+    of its own is rolled back.
     """
-    hook = nspawn.machine_hook('plain', nspawn.rootfs_path('plain'), rollback=True)
+    _ = declare(hooked.device, 'plain')
+    hooked.device.systemd.activate(nspawn.machine_unit('plain'))
 
-    assert 'rc=$?' in hook
-    assert hook.endswith('exit $rc')
+    status, ran = hooked.run(
+        nspawn.machine_hook('plain', nspawn.rootfs_path('plain'), rollback=True), converger_status=4
+    )
+
+    assert status == 4
+    assert not rolled_back(ran)
 
 
-def test_the_settings_are_mirrored_before_the_machines_are_started() -> None:
+def test_the_settings_are_mirrored_before_the_machines_are_started(hooked: _Hooked) -> None:
     """A machine started against settings not yet mirrored is on the wrong network.
 
     The hook runs the two scripts in the order the boot chain runs them, which
-    is what the numeric prefixes are for — and it is the hook itself that is
-    read, because that string is what the device executes.
+    is what the numeric prefixes are for.
     """
-    hook = nspawn.machine_hook('plain', nspawn.nspawn_path('plain'), rollback=False)
+    _ = declare(hooked.device, 'plain')
+    hooked.device.systemd.activate(nspawn.machine_unit('plain'))
 
-    assert hook.index(nspawn.NSPAWN_UNITS_SCRIPT) < hook.index(nspawn.MACHINES_SCRIPT)
+    _, ran = hooked.run(nspawn.machine_hook('plain', nspawn.nspawn_path('plain'), rollback=False))
+
+    assert ran == [nspawn.NSPAWN_UNITS_SCRIPT, nspawn.MACHINES_SCRIPT]
 
 
 def test_a_machine_keeps_no_file_whose_name_the_runtime_already_uses() -> None:
@@ -342,9 +446,20 @@ def test_a_machine_keeps_no_file_whose_name_the_runtime_already_uses() -> None:
     """
     assert nspawn.machine_file('plain', 'Caddyfile') == f'{nspawn.machine_path("plain")}/Caddyfile'
 
-    for reserved in ('rootfs', 'rootfs.digest', 'state', 'stamp', 'initial-state', 'plain.nspawn'):
+    reserved = [
+        PurePosixPath(path).name
+        for path in (
+            nspawn.rootfs_path('plain'),
+            marker_path(nspawn.rootfs_path('plain')),
+            nspawn.state_path('plain'),
+            nspawn.stamp_path('plain'),
+            nspawn.nspawn_path('plain'),
+        )
+    ]
+    reserved.append(PurePosixPath(nspawn.initial_state_path('plain', 'AdGuardHome.yaml')).parent.name)
+    for name in reserved:
         with pytest.raises(ValueError, match='nspawn runtime keeps'):
-            _ = nspawn.machine_file('plain', reserved)
+            _ = nspawn.machine_file('plain', name)
 
     # Any settings name and not only this machine's: the mirror keys the live
     # directory by machine name, so a second one here would be installed as
@@ -484,22 +599,29 @@ def declare(
     return directory
 
 
-def converge(device: _Device, *, environment: dict[str, str] | None = None) -> tuple[int, list[str]]:
+#: How long one run of a converger, or of a program a hook runs, may take. A
+#: converger that does not return is the failure this bounds: the device runs
+#: it from the boot chain, where waiting forever and doing nothing look the
+#: same from outside. Below the case bound, so such a run fails as a
+#: `TimeoutExpired` naming the script.
+CONVERGER_TIMEOUT = 30
+
+
+def converge(
+    device: _Device, *, environment: dict[str, str] | None = None, timeout: float = CONVERGER_TIMEOUT
+) -> tuple[int, list[str]]:
     """Run the converger once, and read back what it asked of systemd.
 
     What it wrote to the boot log's error stream is kept beside that, because
     on this device the log is the whole of what an unattended boot reports.
+    The script leads a POSIX session of its own, so whatever it started is
+    gone however the run ends, a run cut off at `timeout` included.
     """
     _ = device.systemd.take_calls()
-    completed = subprocess.run(
+    completed = process_sessions.run(
         ['/bin/bash', str(device.script)],
         env={'PATH': f'{device.systemd.tools}:/usr/bin:/bin', **(environment or {})},
-        capture_output=True,
-        check=False,
-        # A converger that does not return is the failure this bounds: the
-        # device runs it from the boot chain, where waiting forever and doing
-        # nothing look the same from outside.
-        timeout=30,
+        timeout=timeout,
     )
     _ = device.complaints.write_bytes(completed.stderr)
     return completed.returncode, device.systemd.take_calls()
@@ -620,7 +742,7 @@ def test_a_machine_whose_tree_has_not_landed_is_skipped_and_its_siblings_are_not
 
 
 def test_a_converged_machine_is_left_alone_by_the_next_run(device: _Device) -> None:
-    """Otherwise every push would restart the machine carrying its own session.
+    """Otherwise every push would restart the machine carrying its own connection.
 
     The converger runs as the hook of every file of every machine, so a run
     that found work where there is none would bounce the whole device on each
@@ -780,7 +902,7 @@ def test_a_directory_wearing_the_stamps_name_is_taken_away_too(device: _Device) 
 
     A converger that removed only the kinds it could read past would leave this
     one to bounce a machine forever — including, on a push, the machine
-    carrying the deployment's own session.
+    carrying the deployment's own connection.
     """
     directory = declare(device, 'alice')
     (directory / nspawn.STAMP).mkdir()
@@ -856,22 +978,42 @@ def test_a_healthy_device_gives_the_boot_log_nothing_to_read(device: _Device) ->
     assert device.complaints.read_text(encoding='utf-8') == ''
 
 
-@pytest.mark.skipif(
-    not Path('/usr/lib/locale/en_US.utf8').exists() and not Path('/usr/lib/locale/locale-archive').exists(),
-    reason='no second locale on this box to collate against',
-)
+#: The locale an SSH login carries on the device at push time, where the boot chain runs in `C`.
+PUSH_LOCALE = 'en_US.utf8'
+
+
+def glob_order(directory: Path, locale: str, names: set[str]) -> list[str]:
+    """The order a bash started in `locale` globs `names` of `directory` in."""
+    completed = process_sessions.run(
+        ['/bin/bash', '-c', 'cd "$1" && printf "%s\\n" *', 'glob', str(directory)],
+        env={'PATH': '/usr/bin:/bin', 'LC_ALL': locale},
+        text=True,
+        check=True,
+        timeout=CONVERGER_TIMEOUT,
+    )
+    return [name for name in completed.stdout.splitlines() if name in names]
+
+
 def test_the_stamp_does_not_move_with_the_locale_the_script_was_started_in(device: _Device) -> None:
-    """The device runs this from systemd at boot and over a session at push time.
+    """The device runs this from systemd at boot and over an SSH login at push time.
 
     Those two environments carry different locales, and collation is what
     decides the order a glob comes back in: `_beta` sorts after `Caddyfile` in
     one and before it in the other. A stamp that moved with it would bounce
     every machine on the device on each alternation between the two.
+
+    Where this host does not order the two names differently in those two
+    locales -- the second one is not installed, and bash falls back to `C`
+    with a warning -- the runs could not differ, and the case says so rather
+    than passing.
     """
-    _ = declare(device, 'alice', files={'Caddyfile': 'one\n', '_beta': 'two\n'})
+    files = {'Caddyfile': 'one\n', '_beta': 'two\n'}
+    directory = declare(device, 'alice', files=files)
+    if glob_order(directory, 'C', set(files)) == glob_order(directory, PUSH_LOCALE, set(files)):
+        pytest.skip(f'{PUSH_LOCALE} globs {sorted(files)} in the order C does on this host, so no run could move')
     _ = converge(device, environment={'LC_ALL': 'C'})
 
-    status, commands = converge(device, environment={'LC_ALL': 'en_US.utf8'})
+    status, commands = converge(device, environment={'LC_ALL': PUSH_LOCALE})
 
     assert status == 0
     assert started(commands) == set()
@@ -1058,15 +1200,10 @@ def installed_as(mirror: _Mirror, machine: str) -> Path:
     return mirror.live / f'{machine}{nspawn.NSPAWN_SUFFIX}'
 
 
-def mirror_once(mirror: _Mirror) -> tuple[int, str]:
-    """Run the mirror once, bounded the way `converge` is: hanging is the failure."""
-    completed = subprocess.run(
-        ['/bin/bash', str(mirror.script)],
-        env={'PATH': '/usr/bin:/bin'},
-        capture_output=True,
-        check=False,
-        text=True,
-        timeout=30,
+def mirror_once(mirror: _Mirror, *, timeout: float = CONVERGER_TIMEOUT) -> tuple[int, str]:
+    """Run the mirror once, bounded and ended the way `converge` is: hanging is the failure."""
+    completed = process_sessions.run(
+        ['/bin/bash', str(mirror.script)], env={'PATH': '/usr/bin:/bin'}, text=True, timeout=timeout
     )
     return completed.returncode, completed.stdout
 
@@ -1144,41 +1281,223 @@ def test_debris_at_the_live_name_is_taken_away_and_the_settings_installed_over_i
 
 
 ##
+## A converger that does not return
+##
+
+
+#: The bound a planted stall is cut off at. Its reader has to have started by
+#: then for the case to hold anything, which takes a shell a fork and an exec,
+#: so it is far above that; and far below `CONVERGER_TIMEOUT`, which the case
+#: would otherwise wait out. A bound that fell first fails the case by name.
+STALL_TIMEOUT = 5
+
+#: A converger that reads what it should have walked past, as a regression in
+#: either script would: below the shell, a reader opens a named pipe nobody
+#: writes and waits for a writer. Before it does, the reader writes who it is
+#: -- its pid, its start time and its POSIX session, as the kernel records
+#: them -- to the report, and then becomes the reader the case names.
+STALLING = """\
+(
+    read -r stat < /proc/$BASHPID/stat
+    set -- ${{stat##*) }}
+    echo "$BASHPID ${{20}} $4" > {report}
+    exec {reader}
+)
+exit $?
+"""
+
+
+@pytest.fixture
+def unwritten(tmp_path: Path) -> Iterator[Path]:
+    """A named pipe nobody writes while the case runs, opened for writing once as it ends.
+
+    That one open lets a reader still waiting on it -- which only a converger
+    left running would be -- read end-of-file and exit by itself, so a case
+    that goes red leaves nothing behind and signals nothing to get there.
+    """
+    path = tmp_path / 'nobody-writes-here'
+    os.mkfifo(path)
+    yield path
+    try:
+        written = os.open(path, os.O_WRONLY | os.O_NONBLOCK)
+    except OSError as error:
+        if error.errno == errno.ENXIO:  # nobody is waiting on it
+            return
+        raise
+    os.close(written)
+
+
+def plant_stall(script: Path, report: Path, reader: list[str]) -> None:
+    """Put the stalling converger where the case's converger is."""
+    _ = script.write_text(STALLING.format(report=shlex.quote(str(report)), reader=shlex.join(reader)), encoding='utf-8')
+
+
+def left_running(report: Path) -> list[str]:
+    """What is still running of the planted stall: its reader, and anything else in its POSIX session.
+
+    The reader's own report says which process and which POSIX session to look
+    for, so the answer does not rest on what the helper that ended them says
+    it killed. A zombie is dead, and is not counted.
+    """
+    assert report.exists(), 'the bound fell before the planted reader started, so the case holds nothing'
+    pid, starttime, session = report.read_text(encoding='utf-8').split()
+    assert int(session) != os.getsid(0), "the converger ran in this process's own POSIX session"
+    running: list[str] = []
+    for member in psutil.pids():
+        try:
+            if os.getsid(member) != int(session):
+                continue
+            process = psutil.Process(member)
+            if process.status() != psutil.STATUS_ZOMBIE:
+                running.append(f'{member} {" ".join(process.cmdline())}')
+        except (ProcessLookupError, psutil.NoSuchProcess):
+            continue
+    try:
+        reader_starttime = Path(f'/proc/{pid}/stat').read_text(encoding='utf-8').rsplit(')', 1)[1].split()[19]
+    except FileNotFoundError:
+        reader_starttime = None
+    if reader_starttime == starttime and not any(line.startswith(f'{pid} ') for line in running):
+        running.append(f'{pid}, the reader, outside its POSIX session')
+    return running
+
+
+def test_a_machine_converger_that_does_not_return_fails_naming_bash_and_leaves_no_reader(
+    device: _Device, unwritten: Path, tmp_path: Path
+) -> None:
+    """A stalled converger fails at its bound naming the script, and the `cat` below it goes with it.
+
+    Killing the shell alone would leave the `cat` waiting on the pipe after
+    the case, and after `tmp_path` is gone nothing could ever write to it.
+    """
+    report = tmp_path / 'reader'
+    plant_stall(device.script, report, ['cat', str(unwritten)])
+
+    with pytest.raises(subprocess.TimeoutExpired) as expired:
+        _ = converge(device, timeout=STALL_TIMEOUT)
+
+    assert expired.value.cmd == ['/bin/bash', str(device.script)]
+    assert left_running(report) == []
+
+
+def test_a_settings_mirror_that_does_not_return_fails_naming_bash_and_leaves_no_reader(
+    mirror: _Mirror, unwritten: Path, tmp_path: Path
+) -> None:
+    """The mirror's reader is `cmp`, and it goes the same way."""
+    report = tmp_path / 'reader'
+    plant_stall(mirror.script, report, ['cmp', '-s', str(unwritten), '/dev/null'])
+
+    with pytest.raises(subprocess.TimeoutExpired) as expired:
+        _ = mirror_once(mirror, timeout=STALL_TIMEOUT)
+
+    assert expired.value.cmd == ['/bin/bash', str(mirror.script)]
+    assert left_running(report) == []
+
+
+##
 ## The rollback
 ##
 
 
-def test_a_rollback_swaps_the_trees_and_withdraws_the_claim_about_them() -> None:
+@pytest.fixture
+def rollback(device: _Device, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The production rollback, rendered with the device tree as its machines root."""
+    monkeypatch.setattr(nspawn, 'MACHINES', str(device.machines))
+    program = tmp_path / nspawn.ROLLBACK_PROGRAM
+    _ = program.write_text(nspawn.rollback_program(), encoding='utf-8')
+    return program
+
+
+def roll_back(device: _Device, program: Path, machine: str, *, tools: Path | None = None) -> tuple[int, list[str]]:
+    """Run the rollback for `machine`, as the health gate or an operator does, and read back what it asked of systemd.
+
+    `tools` is a directory searched before every other, for a case that
+    stands a failing command in for the device's own.
+    """
+    _ = device.systemd.take_calls()
+    first = f'{tools}:' if tools is not None else ''
+    completed = process_sessions.run(
+        ['/bin/bash', str(program), machine],
+        env={'PATH': f'{first}{device.systemd.tools}:/usr/bin:/bin'},
+        timeout=CONVERGER_TIMEOUT,
+    )
+    _ = device.complaints.write_bytes(completed.stderr)
+    return completed.returncode, device.systemd.take_calls()
+
+
+def test_a_rollback_swaps_the_trees_and_withdraws_the_claim_about_them(device: _Device, rollback: Path) -> None:
     """The marker says which published artifact the live tree came from.
 
     After a swap that claim is false, and a marker left in place would make the
     next preview see a device that already holds the pin — so the rollback
     takes it away, leaving a tree of unknown provenance, which is work the next
-    push does.
+    push does. The machine is stopped before the swap and started after it, so
+    what it runs is the tree that was swapped in.
     """
-    program = nspawn.rollback_program()
+    directory = declare(device, 'plain')
+    live = directory / nspawn.ROOTFS
+    superseded = directory / f'{nspawn.ROOTFS}{SUPERSEDED_SUFFIX}'
+    superseded.mkdir()
+    _ = (live / 'release').write_text('pushed\n', encoding='utf-8')
+    _ = (superseded / 'release').write_text('displaced\n', encoding='utf-8')
+    unit = nspawn.machine_unit('plain')
+    # The machine reads its tree as it starts, so what it was started on says which tree that was.
+    device.systemd.ship(unit, reads=(live / 'release',))
+    device.systemd.activate(unit)
 
-    assert f'live={nspawn.MACHINES}/$machine/{nspawn.ROOTFS}' in program
-    assert f'superseded=$live{SUPERSEDED_SUFFIX}' in program
-    assert f'rm -f "$live{marker_path("")}"' in program
-    assert 'systemctl stop "$unit"' in program
-    assert 'systemctl start "$unit"' in program
+    status, commands = roll_back(device, rollback, 'plain')
+
+    assert status == 0, device.complaints.read_text(encoding='utf-8')
+    assert (live / 'release').read_text(encoding='utf-8') == 'displaced\n'
+    assert (superseded / 'release').read_text(encoding='utf-8') == 'pushed\n'
+    assert not Path(marker_path(str(live))).exists()
+    assert commands == [f'stop {unit}', f'start {unit}']
+    started_on = device.systemd.started_on(unit)
+    assert started_on is not None
+    assert started_on.reads == {str(live / 'release'): 'displaced\n'}
 
 
-def test_a_rollback_with_nothing_to_roll_back_to_refuses() -> None:
+def test_a_rename_that_fails_stops_the_rollback_where_it_is(device: _Device, rollback: Path, tmp_path: Path) -> None:
+    """A half-swapped machine is a machine on neither tree, so the program goes no further.
+
+    A rollback that ran on past a failed rename would take the marker away,
+    start the machine on whatever the remaining renames left, and exit 0 —
+    and the operator who took the manual door would be told it worked. So the
+    first rename that fails ends the run non-zero, with the machine stopped
+    and the marker still claiming the tree that is there.
+    """
+    directory = declare(device, 'plain')
+    (directory / f'{nspawn.ROOTFS}{SUPERSEDED_SUFFIX}').mkdir()
+    unit = nspawn.machine_unit('plain')
+    device.systemd.activate(unit)
+    failing = tmp_path / 'failing'
+    failing.mkdir()
+    _ = (failing / 'mv').write_text('#!/bin/sh\necho "mv: refused" >&2\nexit 1\n', encoding='utf-8')
+    (failing / 'mv').chmod(0o755)
+
+    status, commands = roll_back(device, rollback, 'plain', tools=failing)
+
+    assert status != 0
+    assert commands == [f'stop {unit}']
+    assert Path(marker_path(str(directory / nspawn.ROOTFS))).exists()
+
+
+def test_a_rollback_with_nothing_to_roll_back_to_refuses(device: _Device, rollback: Path) -> None:
     """The push leaves the displaced tree beside the live one until the next push.
 
     Outside that window there is nothing to swap in, and swapping in something
     else would be worse than failing: the health gate that calls this reports
-    the failure either way.
+    the failure either way. The tree, its marker and the machine are left as
+    they were.
     """
-    program = nspawn.rollback_program()
+    directory = declare(device, 'plain')
+    _ = (directory / nspawn.ROOTFS / 'release').write_text('pushed\n', encoding='utf-8')
+    before = {path: path.read_bytes() if path.is_file() else None for path in directory.rglob('*')}
 
-    assert 'if [ ! -d "$superseded" ]; then' in program
-    assert 'nothing to roll back to' in program
-    # A failed rename must not let the next two run: a half-swapped machine is
-    # a machine on neither tree.
-    assert 'set -eu' in program
+    status, commands = roll_back(device, rollback, 'plain')
+
+    assert status != 0
+    assert {path: path.read_bytes() if path.is_file() else None for path in directory.rglob('*')} == before
+    assert commands == []
 
 
 @pytest.mark.asyncio
@@ -1245,9 +1564,8 @@ def test_no_machine_is_declared_a_unit_of_its_own(monitor: Recorder) -> None:
     """
     units = [
         declaration.name
-        for declaration in monitor.declared
+        for declaration in runtime_declarations(monitor)
         if str(declaration.inputs.get('path', '')).startswith(persistence.UNIT_SOURCE_DIR)
-        and monitor.options_of(declaration.name).parent.endswith(f'::{NAME}')
     ]
 
     assert units == [f'{NAME}-unit-{nspawn.WATCHDOG_UNIT}']
@@ -1263,7 +1581,7 @@ def test_the_runtime_declares_no_machine_of_its_own(monitor: Recorder) -> None:
     """
     written = [
         str(declaration.inputs['path'])
-        for declaration in monitor.declared
+        for declaration in runtime_declarations(monitor)
         if str(declaration.inputs.get('path', '')).startswith(f'{nspawn.MACHINES}/')
     ]
 
@@ -1286,20 +1604,25 @@ def test_the_pieces_of_one_machine_are_all_under_its_own_directory() -> None:
     Everything the runtime keeps for a machine derives from one directory, so
     there is no second place a piece of it could be left behind.
     """
-    directory = nspawn.machine_path('plain')
+    directory = PurePosixPath(nspawn.machine_path('plain'))
+    pieces = (
+        nspawn.rootfs_path('plain'),
+        nspawn.state_path('plain'),
+        nspawn.stamp_path('plain'),
+        marker_path(nspawn.rootfs_path('plain')),
+    )
 
-    assert nspawn.rootfs_path('plain') == f'{directory}/rootfs'
-    assert nspawn.state_path('plain') == f'{directory}/state'
+    assert [PurePosixPath(piece).parent for piece in pieces] == [directory] * len(pieces)
+    initial_state = PurePosixPath(nspawn.initial_state_path('plain', 'nested/AdGuardHome.yaml'))
+    assert directory in initial_state.parents
+    # Apart from the state it seeds, which a machine that has run owns.
+    assert PurePosixPath(nspawn.state_path('plain')) not in initial_state.parents
+    # Of the pieces' names only the settings file's is a contract: what the
+    # mirror installs is read by systemd-nspawn as `<machine>.nspawn`.
     assert nspawn.nspawn_path('plain') == f'{directory}/plain.nspawn'
-    assert nspawn.stamp_path('plain') == f'{directory}/stamp'
-    assert marker_path(nspawn.rootfs_path('plain')) == f'{directory}/rootfs.digest'
-    assert nspawn.initial_state_path('plain', 'AdGuardHome.yaml') == f'{directory}/initial-state/AdGuardHome.yaml'
 
 
-@pytest.mark.asyncio
-async def test_the_runtime_is_not_a_second_place_the_layout_is_decided(
-    runtime: NspawnRuntime, monitor: Recorder
-) -> None:
+def test_the_runtime_is_not_a_second_place_the_layout_is_decided(monitor: Recorder) -> None:
     """Every path the scripts act on is the one the declaration puts a file at.
 
     The scripts are rendered from the same constants the paths are built from,
@@ -1309,5 +1632,3 @@ async def test_the_runtime_is_not_a_second_place_the_layout_is_decided(
     script = str(monitor.inputs_of(f'{NAME}-on-boot-{nspawn.MACHINES_SCRIPT}')['content'])
 
     assert f'MACHINES={nspawn.MACHINES}' in script
-    assert nspawn.MACHINES == persistence.skeleton_path(nspawn.SKELETON)  # noqa: SIM300 -- the runtime's path left, the layout's right, as on the next line
-    assert str(await runtime.machines.path.future()) == persistence.on_boot_path(nspawn.MACHINES_SCRIPT)

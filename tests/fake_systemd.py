@@ -2,7 +2,7 @@
 
 The device's boot-chain scripts are run by the suites, against temporary trees,
 and every one of them asks systemd something: whether a unit is enabled or
-running, to enable, start or restart one, to read its unit files again. This
+running, to enable, start, stop or restart one, to read its unit files again. This
 is the one stand-in all of them run against, so a converger's conditions are
 reachable — a unit the case left disabled, stopped, or failing is answered as
 such, and whatever the script does about it shows in the state afterwards.
@@ -23,7 +23,7 @@ It keeps what systemd keeps, and no more than the convergers ask about:
 
 It refuses what the real one refuses, with the exit status the device's
 systemd gives and the substance of its message: a unit with no unit file to
-enable, disable, start or ask the enablement of; a start whose unit fails. A
+enable, disable, start, stop or ask the enablement of; a start whose unit fails. A
 unit with no `[Install]` section is `static` and is not enabled by asking. Of
 what `systemctl` prints when it succeeds, it prints what reaches a boot log:
 the links `enable` and `disable` make and remove, unless `--quiet`, and the
@@ -68,7 +68,7 @@ _PART = '\x1e'
 
 #: What `is-active` exits with for a unit that is not running.
 _INACTIVE = 3
-#: What `start` and `restart` exit with for a unit systemd has no file for.
+#: What `start`, `stop` and `restart` exit with for a unit systemd has no file for.
 _NOT_FOUND = 5
 
 _OPTIONS = {
@@ -210,7 +210,7 @@ def systemctl(state: str, search: tuple[str, ...], argv: list[str]) -> int:
     if verb == 'daemon-reload':
         _reload(state, search)
         return 0
-    if verb not in {'is-active', 'is-enabled', 'enable', 'disable', 'start', 'restart'}:
+    if verb not in {'is-active', 'is-enabled', 'enable', 'disable', 'start', 'stop', 'restart'}:
         return _refuse(f'fake systemctl: the verb {verb!r} is not modeled')
     if len(units) != 1:
         return _refuse(f'fake systemctl: {verb} is modeled for one unit at a time, not {units}')
@@ -255,6 +255,14 @@ def systemctl(state: str, search: tuple[str, ...], argv: list[str]) -> int:
             )
         if '--now' in options:
             _set(state, _ACTIVE, unit, False)
+        return 0
+
+    if verb == 'stop':
+        # Stopping a unit that is not running is not an error; naming one
+        # systemd has no file for is.
+        if unit_file is None:
+            return _refuse(f'Failed to stop {unit}: Unit {unit} not loaded.', _NOT_FOUND)
+        _set(state, _ACTIVE, unit, False)
         return 0
 
     # start and restart
