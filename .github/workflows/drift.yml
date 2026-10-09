@@ -30,7 +30,7 @@ permissions:
 
 jobs:
   drift:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     # The sum of its steps' bounds, a `uses:` step twice, plus five minutes
     # for the runner's own phases: a backstop for what no step bound reaches
     # (framework/ci.md §3).

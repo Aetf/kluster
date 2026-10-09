@@ -26,7 +26,7 @@ permissions:
 
 jobs:
   plan-physical:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     # The sum of its steps' bounds, a `uses:` step twice, plus five minutes
     # for the runner's own phases: a backstop for what no step bound reaches
     # (framework/ci.md §3).
@@ -85,7 +85,7 @@ jobs:
   up-physical:
     needs: plan-physical
     if: needs.plan-physical.outputs.diff == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     # The sum of its steps' bounds, a `uses:` step twice, plus five minutes
     # for the runner's own phases: a backstop, since the `Up` step's bound
     # fires first and fails the job (framework/ci.md §3).
@@ -139,7 +139,7 @@ jobs:
     if: >-
       always() && needs.plan-physical.result == 'success'
       && (needs.up-physical.result == 'success' || needs.up-physical.result == 'skipped')
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     # The sum of its steps' bounds, a `uses:` step twice, plus five minutes
     # for the runner's own phases: a backstop, since the `Up` step's bound
     # fires first and fails the job (framework/ci.md §3).
@@ -192,7 +192,7 @@ jobs:
     if: >-
       always() && needs.plan-physical.result == 'success'
       && (needs.up-physical.result == 'success' || needs.up-physical.result == 'skipped')
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     # The sum of its steps' bounds, a `uses:` step twice, plus five minutes
     # for the runner's own phases: a backstop, since the `Up` step's bound
     # fires first and fails the job (framework/ci.md §3).
@@ -231,7 +231,7 @@ jobs:
   up-apps:
     needs: up-k8s-base
     if: always() && needs.up-k8s-base.result == 'success'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     # The sum of its steps' bounds, a `uses:` step twice, plus five minutes
     # for the runner's own phases: a backstop, since the `Up` step's bound
     # fires first and fails the job (framework/ci.md §3).
@@ -282,7 +282,7 @@ jobs:
     # directly, exactly as the legacy repository did.
     needs: [plan-physical, up-physical, up-dns, up-k8s-base, up-apps]
     if: always() && contains(needs.*.result, 'failure')
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
       - name: Push a Home Assistant notification

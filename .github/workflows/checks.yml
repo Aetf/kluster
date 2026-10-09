@@ -21,7 +21,7 @@ permissions:
 
 jobs:
   checks:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     # Every step carries a bound of its own, so a hung step fails by name and
     # the alert below fires for it. This one is the sum of theirs, a `uses:`
     # step twice for its `post` phase, plus five minutes for the runner's own
@@ -75,20 +75,14 @@ jobs:
       # tag with no digest -- the major line the box's own podman-auto-update
       # follows -- so the pull is by tag.
       #
-      # The drop-in makes pasta the rootless network, as podman's own default
-      # is from 5.0 on. This runner's podman is older and defaults to
-      # slirp4netns, whose port forwarder stays in the session of the
-      # `podman` command that started the container; the module ends each
-      # command's session with the command (framework/testing.md §1.2), which
-      # takes the forwarder with it and leaves the published port refusing
-      # connections. pasta leaves nothing in that session. The drop-in goes
-      # when the runner's podman defaults to pasta by itself.
+      # The log names the podman the module runs on and the buildah it
+      # carries, which is what the module's podman workarounds name as their
+      # removal conditions.
       - name: Podman
         timeout-minutes: 5
         run: |
           set -euo pipefail
-          mkdir -p ~/.config/containers/containers.conf.d
-          printf '[network]\ndefault_rootless_network_cmd = "pasta"\n' >~/.config/containers/containers.conf.d/pasta.conf
+          podman info --format 'podman {{.Version.Version}}, buildah {{.Host.BuildahVersion}}, rootless network {{.Host.RootlessNetworkCmd}}'
           image=$(mise x uv -- uv run python -c 'from kluster.lib.state_backend import settings; print(settings.POSTGRES_IMAGE)')
           podman pull --quiet "$image"
 
