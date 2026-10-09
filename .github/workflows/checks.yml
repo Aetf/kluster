@@ -73,7 +73,14 @@ jobs:
       # on every event (framework/ci.md §3). The name is read from
       # `settings.POSTGRES_IMAGE`, the one place it is pinned. That pin is a
       # tag with no digest -- the major line the box's own podman-auto-update
-      # follows -- so the pull is by tag.
+      # follows -- so the tag is resolved to its digest here.
+      #
+      # Docker Hub limits anonymous pulls per address, and a runner's address
+      # is shared, so the image is pulled from Google's mirror of Docker Hub
+      # instead: by the digest Docker Hub itself names for the tag, read with
+      # a HEAD request, which Docker Hub does not count against the limit.
+      # The mirror therefore serves exactly Docker Hub's image or the pull
+      # fails, and the image is then tagged with the name the program uses.
       #
       # The log names the podman the module runs on and the buildah it
       # carries, which is what the module's podman workarounds name as their
@@ -84,7 +91,15 @@ jobs:
           set -euo pipefail
           podman info --format 'podman {{.Version.Version}}, buildah {{.Host.BuildahVersion}}, rootless network {{.Host.RootlessNetworkCmd}}'
           image=$(mise x uv -- uv run python -c 'from kluster.lib.state_backend import settings; print(settings.POSTGRES_IMAGE)')
-          podman pull --quiet "$image"
+          repository=${image#docker.io/}; repository=${repository%:*}; tag=${image##*:}
+          token=$(curl -fsS "https://auth.docker.io/token?service=registry.docker.io&scope=repository:$repository:pull" | mise x -- jq -r .token)
+          digest=$(curl -fsSI -H "Authorization: Bearer $token" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' \
+            "https://registry-1.docker.io/v2/$repository/manifests/$tag" | tr -d '\r' | awk 'tolower($1) == "docker-content-digest:" {print $2}')
+          test -n "$digest"
+          echo "$image is $digest on Docker Hub; pulling it from mirror.gcr.io"
+          id=$(podman pull --quiet "mirror.gcr.io/$repository@$digest")
+          podman tag "$id" "$image"
 
       # A hung case fails by name under the per-case bound `pyproject.toml`
       # configures; the outer `timeout` is the hang guard for what that
