@@ -44,6 +44,19 @@ SEED_ENTRY = entries.SEEDS['oci'].entry
 #: that starts from a state a rotation produced rather than from a bring-up.
 ROUNDS = 2
 
+#: The longest one run's rotations can take with every wait still inside its
+#: deadline, in seconds. Each round of `oci_iam.rotate_seed` sweeps before the
+#: mint, verifies the new key, and sweeps after. A sweep retires every key but
+#: the one it keeps, at most `KEY_QUOTA - 1`, and each retire, like the
+#: verify, may keep being refused until `PROPAGATION_DEADLINE` has passed and
+#: one `PROPAGATION_INTERVAL` more. So a round is `2 * (KEY_QUOTA - 1) + 1`
+#: such waits, 5 x 185 s today, and a run is `ROUNDS` rounds: 1850 s. The
+#: drill's outer `timeout` (testing.md §5) is its only bound, and
+#: `tests/test_gate_command.py` holds it above this: a kill inside a wait the
+#: rotation still tolerates loses the transcript, and inside the verify it
+#: can leave an uploaded key whose private half existed only in memory.
+WORST_CASE = ROUNDS * (2 * (oci_iam.KEY_QUOTA - 1) + 1) * (oci_iam.PROPAGATION_DEADLINE + oci_iam.PROPAGATION_INTERVAL)
+
 
 @pytest.fixture(scope='module')
 def kit() -> KdbxStore:
