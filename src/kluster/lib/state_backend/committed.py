@@ -18,7 +18,7 @@ likeliest wrong line is a private half pasted where the public one goes.
 **Absent is a refusal here.** The stack renders the box from these files, and
 a box rendered without its host key's pin or its backup recipients is one
 nobody can reach or one whose dumps nobody can open, so the reader names the
-command that writes the file instead of answering empty. The writers' own
+commands that write the file instead of answering empty. The writers' own
 reading of an absent file as "nothing on file yet" is theirs to make
 (`kluster.scripts.credentials.derived`).
 """
@@ -146,10 +146,17 @@ def backup_recipients(path: Path | None = None, *, check: Check = form_only) -> 
 
     Each line is a backup label and the recipient of the identity it holds,
     `#` comments and blank lines aside. Every recipient passes `check`, and
-    the form `native` holds it to besides.
+    the form `native` holds it to besides. An absent file is refused naming
+    the row of each generation in `backup_window()`, the current one first,
+    since each writes its own line.
     """
     path = BACKUP_RECIPIENTS if path is None else path
-    _require(path, backup_row(f'{BACKUP_LABEL_PREFIX}/<N>'))
+    if not path.is_file():
+        rows = ', '.join(f'`credentials derived {backup_row(label)} generate`' for label in backup_window())
+        raise Refused(
+            f'no {path}: it is committed, a line per generation the box encrypts to, '
+            f"and each generation's row writes its line: {rows}"
+        )
     found: dict[str, str] = {}
     for number, line in enumerate(path.read_text().splitlines(), start=1):
         stripped = line.strip()
