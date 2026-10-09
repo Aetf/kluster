@@ -19,6 +19,7 @@ from ipaddress import IPv4Address
 from typing import ClassVar
 
 from kluster.conventions.dns import ZONE_PRIMARY, ZONE_SHORT
+from kluster.conventions.homelab import HOMELAB_HOST_NAME
 from kluster.conventions.identity import CLUSTER_NAME
 from kluster.conventions.site import CONTAINER_VLAN
 
@@ -69,12 +70,13 @@ CUSTOM_ROOT = f'{DATA_ROOT}/custom'
 #: The port a resolver's interface and API answer on. Every declaration naming
 #: that interface meets here: the caddy vhost that proxies each instance's
 #: interface, the three legacy names the census below transcribes, the initial
-#: state that tells an instance where to listen, the overlay flow rule that
-#: admits a continuous-integration member to exactly that port, and
-#: `resolver_api_url`, which is the address the `dns` stack writes its rewrites
-#: to through that rule. It is a convention rather than a constant each of them
-#: keeps, because they are free to disagree and the failure is a resolver that
-#: answers nothing anyone asked it.
+#: state that tells an instance where to listen, the first-run setup the `dns`
+#: stack configures an instance with, the overlay flow rule that admits a
+#: continuous-integration member to exactly that port, and `resolver_api_url`,
+#: which is the address the `dns` stack configures each instance at through
+#: that rule. It is a convention rather than a constant each of them keeps,
+#: because they are free to disagree and the failure is a resolver that answers
+#: nothing anyone asked it.
 #:
 #: **The value is the appliance's, and the declaration follows it.** Both
 #: instances bind their interface to 80. The cutover carries each instance's
@@ -236,8 +238,8 @@ RESOLVERS: tuple[BridgedService, ...] = (ADGUARD_ALICE, ADGUARD_BOB)
 def resolver_api_url(resolver: BridgedService) -> str:
     """Where a program writes to one resolver's administration API.
 
-    The one spelling of that address, so a rewrite cannot be aimed somewhere
-    the port above does not describe. It is derived from the census entry
+    The one spelling of that address, so no resource configuring an instance
+    can be aimed somewhere the port above does not describe. It is derived from the census entry
     rather than configured, which is what leaves the `dns` stack no endpoint
     key to set and nothing for a stale one to disagree with.
 
@@ -248,6 +250,23 @@ def resolver_api_url(resolver: BridgedService) -> str:
     is declaring.
     """
     return f'http://{resolver.address}:{ADGUARD_API_PORT}'
+
+
+#: The port an instance in first run serves its setup wizard on, and nothing
+#: else: it answers no DNS and its API port is closed until the setup has run.
+#: The value is the appliance's own default web address, which the image's
+#: arguments do not move and no environment variable does either, so a value
+#: here other than 3000 names a port nothing listens on.
+ADGUARD_SETUP_PORT = 3000
+
+
+def resolver_setup_url(resolver: BridgedService) -> str:
+    """Where a program reaches one resolver's setup wizard, which answers only while the instance is in first run.
+
+    The `dns` stack asks it only when the instance's API port does not
+    answer, and configures the instance through it only when it answers.
+    """
+    return f'http://{resolver.address}:{ADGUARD_SETUP_PORT}'
 
 
 #: The overlay daemon: the one service in the host's own network namespace,
@@ -282,12 +301,13 @@ ACME_CONTACT = 'aetf@unlimited-code.works'
 #: `derived.GATEWAY_ACME_ZONES` says and `test_derived` holds it to.
 ZONE_LEGACY = f'lan.{ZONE_SHORT}'
 
-#: The homelab host as the device plane names it: a DHCP-derived name the
-#: device's own resolver answers and no public one does (dns.md §4.1), which is
-#: why the proxy resolves through that resolver. Most of the census below
-#: proxies to a port on this one host, and it is spelled once so that no two
-#: rows can disagree about it.
-LEGACY_UPSTREAM_HOST = 'aetf-arch-homelab.home.arpa'
+#: The host most of the census below proxies to a port on: the homelab host,
+#: by its device-plane name, which the device's own resolver answers and no
+#: public one does, which is why the proxy resolves through that resolver. It
+#: is spelled once so that no two rows can disagree about it, and it is
+#: `conventions.homelab`'s name because the `dns` stack aliases the same host
+#: by it after this census has emptied.
+LEGACY_UPSTREAM_HOST = HOMELAB_HOST_NAME
 
 
 class RetirementWave(Enum):

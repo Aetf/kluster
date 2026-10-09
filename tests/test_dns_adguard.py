@@ -1,4 +1,4 @@
-"""The AdGuard providers, against a stand-in for one AdGuard Home v0.107.79 instance.
+"""The AdGuard provider, against a stand-in for one AdGuard Home v0.107.79 instance.
 
 **A provider under test is configured first**, because a provider in production
 is: the plugin deserializes it out of a resource's `__provider` property and
@@ -84,7 +84,7 @@ from pulumi.runtime import rpc
 from requests.auth import AuthBase, HTTPBasicAuth
 from shimmed_serialization import serialized
 
-from kluster.providers import adguard, adguard_rewrites, configured
+from kluster.providers import adguard, configured
 from kluster.providers.adguard import (
     api,
     base,
@@ -616,14 +616,8 @@ class Instance:
             self._clients_delete(body)
         elif path in ('querylog/config/update', 'stats/config/update'):
             self._log_config(path.split('/', 1)[0], body)
-        elif path == 'rewrite/add':
-            self.entries.append(body)
         elif path == 'rewrite/settings/update':
             self.rewrites_enabled = bool(body.get('enabled'))
-        elif path == 'rewrite/delete':
-            # AdGuard removes every entry equal to the pair, and answers a
-            # pair it does not hold with success all the same.
-            self.entries = [entry for entry in self.entries if entry != body]
         else:
             raise AssertionError(f'the instance serves no {method} {path}')
         return None
@@ -1052,9 +1046,10 @@ KINDS = (
     Kind(
         filter_lists.AdGuardFilterListsProvider,
         {
+            # Out of URL order, which is the order the instance is read in.
             'filters': [
-                {'url': DNS_FILTER, 'name': 'AdGuard DNS filter, declared', 'enabled': True},
                 {'url': LIST_ONE, 'name': 'one', 'enabled': False},
+                {'url': DNS_FILTER, 'name': 'AdGuard DNS filter, declared', 'enabled': True},
             ],
             'whitelist_filters': [{'url': ALLOW, 'name': 'allow', 'enabled': True}],
         },
@@ -1190,8 +1185,34 @@ def test_a_moved_stamp_updates_with_no_write(kind: Kind, instance: Instance) -> 
 
         assert operations.diff('an-id', olds, news).changes is True
         assert operations.diff('an-id', olds, news).replaces == []
-        assert operations.update('an-id', olds, news).outs == news
+        recorded = operations.update('an-id', olds, news).outs or {}
+        assert {key: recorded[key] for key in base.RECORDED} == {key: news[key] for key in base.RECORDED}
     assert instance.opened == []
+
+
+@EVERY_KIND
+def test_a_refresh_after_a_write_reads_back_the_inputs_and_the_outputs_state_holds(
+    kind: Kind, instance: Instance
+) -> None:
+    """A refreshing preview of an instance that holds what was written marks nothing.
+
+    The `[diff: …]` beside a refresh step compares the inputs state holds
+    with the inputs `read` returns, and `--diff` prints the outputs that
+    differ beside it. So both bags are held to what a refresh reads back: a
+    section stored as declared rather than as the instance reports it -- the
+    rewrite list absent, a client's identifiers or the lists in the
+    declaration's order -- makes a clean refresh read as drift. Held after a
+    create, and after a rotation's update that wrote nothing.
+    """
+    news = checked(kind.provider, kind.declared)
+    stored = dict(configured_provider(kind.provider).create(news).outs or {})
+    rotated_news = checked(kind.provider, kind.declared, password='rotated')
+    rotated = dict(configured_provider(kind.provider).update('an-id', stored, rotated_news).outs or {})
+
+    for inputs, outputs in ((news, stored), (rotated_news, rotated)):
+        result = configured_provider(kind.provider).read(f'{INSTANCE}|{kind.provider.kind}', outputs)
+        assert result.inputs == inputs
+        assert result.outs == outputs
 
 
 @EVERY_KIND
@@ -2239,310 +2260,3 @@ async def test_every_kind_declares_through_the_engine_and_resolves_its_outputs(
     for section, value in sections.items():
         output = getattr(declared, section)
         assert await output.future() == as_engine(value)
-
-
-# --------------------------------------------------------------------------
-# AdGuardRewrite: the rewrite-list provider, which the `dns` stack still
-# declares until its component moves onto the kinds above.
-
-
-PROPS: dict[str, Any] = {
-    'instance': INSTANCE,
-    'endpoint': ENDPOINT,
-    'domain': 'photos.ucw.phd',
-    'answer': '192.168.71.1',
-}
-
-
-def provider(password: str = PASSWORD) -> adguard_rewrites.AdGuardRewriteProvider:
-    """A rewrite provider as an operation receives one: revived, then handed the config."""
-    revived = adguard_rewrites.AdGuardRewriteProvider()
-    revived.configure(
-        dynamic.ConfigureRequest(
-            config=dynamic.Config(
-                {
-                    f'{PROJECT}:{adguard_rewrites.USERNAME_CONFIG}': USERNAME,
-                    f'{PROJECT}:{adguard_rewrites.PASSWORD_CONFIG}': password,
-                },
-                PROJECT,
-            )
-        )
-    )
-    return revived
-
-
-def rewrite_checked(props: dict[str, Any], password: str = PASSWORD) -> dict[str, Any]:
-    """The inputs as the engine stores and compares them: what `check` returned."""
-    return provider(password).check({}, props).inputs
-
-
-def test_create_adds_the_pair_and_ids_it_by_instance(instance: Instance) -> None:
-    """The id names the instance rather than the address it was written at.
-
-    The same rewrite on alice and on bob are two resources, because they are
-    two writes; and re-addressing alice leaves this id untouched, which is what
-    makes the move an update instead of a delete and a create.
-    """
-    result = provider().create(dict(PROPS))
-
-    assert instance.entries == [{'domain': 'photos.ucw.phd', 'answer': '192.168.71.1'}]
-    assert result.id == f'{INSTANCE}|photos.ucw.phd|192.168.71.1'
-    assert ENDPOINT not in str(result.id)
-
-
-def test_create_adopts_an_identical_entry_rather_than_duplicating_it(instance: Instance) -> None:
-    """AdGuard stores duplicates, and duplicates cannot be deleted apart.
-
-    Which is what a retried `up` after a partial failure would produce.
-    """
-    instance.entries = [{'domain': 'photos.ucw.phd', 'answer': '192.168.71.1'}]
-
-    _ = provider().create(dict(PROPS))
-
-    assert instance.posts == []
-
-
-def test_a_rewrite_authenticates_as_the_configured_login(instance: Instance) -> None:
-    """The instance is declared; the login that answers it is not.
-
-    It comes from `configure`, so no property bag carries it and no caller
-    could have passed a different one.
-    """
-    _ = provider().create(dict(PROPS))
-
-    assert [opened.auth for opened in instance.opened] == [(USERNAME, PASSWORD)]
-
-
-def test_read_reports_a_hand_removed_rewrite_as_gone() -> None:
-    # Which is how a rewrite deleted in the UI is restored by the next up
-    # instead of drifting unnoticed.
-    result = provider().read('any', dict(PROPS))
-
-    assert result.id is None
-    # The provider host writes its own key into the outs and mutates the
-    # dict, so gone must come back as a fresh empty dict, never None.
-    assert result.outs == {}
-
-
-def test_read_keeps_a_rewrite_that_is_still_there(instance: Instance) -> None:
-    instance.entries = [{'domain': 'photos.ucw.phd', 'answer': '192.168.71.1'}]
-
-    assert provider().read('an-id', dict(PROPS)).id == 'an-id'
-
-
-def test_a_changed_answer_replaces_without_a_gap() -> None:
-    """There is no update endpoint, and deleting first is a LAN outage.
-
-    Two rewrites for one name coexist harmlessly for the instant between the
-    create and the delete; no answer at all does not.
-    """
-    changed = rewrite_checked(dict(PROPS) | {'answer': '192.168.71.2'})
-
-    result = provider().diff('an-id', rewrite_checked(dict(PROPS)), changed)
-
-    assert result.changes is True
-    assert result.replaces == ['answer']
-    assert result.delete_before_replace is False
-
-
-def test_an_input_that_is_still_unknown_is_an_unknown_diff_and_plans_no_replacement(instance: Instance) -> None:
-    """Every declared property is a replacement, so an unknown one must not be read.
-
-    During a preview an answer may be another resource's unresolved output. A
-    placeholder compared as a value differs from whatever is stored, which here
-    would plan a delete and a create of a row about to be identical.
-    """
-    news = rewrite_checked(dict(PROPS) | {'answer': rpc.UNKNOWN})
-
-    result = provider().diff('an-id', rewrite_checked(dict(PROPS)), news)
-
-    assert result.changes is None
-    assert not result.replaces
-    assert instance.opened == []
-
-
-def test_a_rotated_login_is_a_change_nobody_declared() -> None:
-    """The point of the session stamp: a rotation is a diff with no program in it.
-
-    No caller mentions the login, so the only thing that can carry a rotation
-    into a preview is a property the provider adds to the checked inputs
-    itself. It is the same row on the same instance, so it is not a replace.
-    """
-    olds = rewrite_checked(dict(PROPS))
-    news = rewrite_checked(dict(PROPS), password='rotated')
-
-    result = provider().diff('an-id', olds, news)
-
-    assert result.changes is True
-    assert result.replaces == []
-
-
-def test_a_re_stamp_records_the_new_login_and_calls_the_instance_not_at_all(instance: Instance) -> None:
-    """A rotation must not rewrite every row on both instances.
-
-    The row the instance holds is the row the resource declares, so there is
-    nothing to write; what the update does is record which login the resource
-    is now written through.
-    """
-    olds = rewrite_checked(dict(PROPS))
-    news = rewrite_checked(dict(PROPS), password='rotated')
-
-    result = provider().update('an-id', olds, news)
-
-    assert result.outs == news
-    assert instance.opened == []
-
-
-def test_a_moved_instance_converges_without_replacing_a_single_row(instance: Instance) -> None:
-    """Re-addressing an instance is an update: same instance, same rows.
-
-    The endpoint is where this run reaches the instance and never part of what
-    identifies a row, so nothing is deleted at the old address and nothing is
-    created at the new one. What the update does is record the door the row is
-    now written through — it calls neither address.
-    """
-    olds = rewrite_checked(dict(PROPS))
-    news = rewrite_checked(dict(PROPS) | {'endpoint': MOVED})
-
-    result = provider().diff('an-id', olds, news)
-
-    assert result.changes is True
-    assert result.replaces == []
-    assert provider().update('an-id', olds, news).outs == news
-    assert instance.opened == []
-
-
-def test_a_changed_instance_replaces_the_row(instance: Instance) -> None:
-    """The same name on the other resolver is a different row, not a moved one.
-
-    Which is the other half of naming the instance: it identifies the write, so
-    a row that changes instances is deleted where it was and created where it
-    now belongs.
-    """
-    changed = rewrite_checked(dict(PROPS) | {'instance': 'adguard-bob'})
-
-    result = provider().diff('an-id', rewrite_checked(dict(PROPS)), changed)
-
-    assert result.replaces == ['instance']
-    assert instance.opened == []
-
-
-def test_a_rewrite_session_stamp_names_the_door_and_fingerprints_the_login() -> None:
-    """`http://10.0.5.3:80#<12 hex>` — the door, and which login opens it.
-
-    The digest is what a preview shows on a rotation, so it is stored in the
-    clear: a truncated digest of a login is not the login, and a redacted one
-    would say only that something opaque changed.
-    """
-    session = rewrite_checked(dict(PROPS))[configured.SESSION]
-    endpoint, _, fingerprint = session.partition('#')
-
-    assert endpoint == ENDPOINT
-    assert fingerprint == hashlib.sha256(f'{USERNAME}:{PASSWORD}'.encode()).hexdigest()[: configured.FINGERPRINT_LENGTH]
-    assert PASSWORD not in session
-
-
-def test_a_change_to_this_module_is_a_change_a_reader_can_see(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A provider is pickled by reference, so editing an operation moves nothing.
-
-    The version constant is what makes such an edit an update instead of a
-    silent no-op that leaves every resource's outputs as the old code left them.
-    """
-    shipped = adguard_rewrites.VERSION
-    olds = rewrite_checked(dict(PROPS))
-    monkeypatch.setattr(adguard_rewrites, 'VERSION', f'{shipped}-next')
-    news = rewrite_checked(dict(PROPS))
-
-    assert olds[configured.PROVIDER_VERSION] == shipped
-    assert news[configured.PROVIDER_VERSION] == f'{shipped}-next'
-    assert provider().diff('an-id', olds, news).changes is True
-
-
-def test_what_lands_in_state_for_a_rewrite_is_a_provider_with_nothing_in_it() -> None:
-    """Every resource stores a pickle of its provider; this one is a name.
-
-    Serialized through the engine's own function, so what is asserted is what a
-    `__provider` property would actually hold. A class imported from a module is
-    pickled by reference and `__getstate__` returns an empty bag, so state
-    carries something inert: identical for every rewrite, identical across a
-    rotation, and holding nothing that a rotation would have to reach into.
-    """
-    one = serialized(provider())
-    rotated = serialized(provider('rotated'))
-
-    assert provider().__getstate__() == {}
-    assert one == rotated
-    assert PASSWORD not in one
-    assert len(one) < 256
-
-
-def test_a_rewrite_provider_that_was_never_configured_has_no_login_to_dial_with() -> None:
-    """The attributes exist only after `configure`, and that is the design.
-
-    A default would not make an unconfigured provider safe; it would make one
-    that dials with the wrong login. The plugin configures before the first
-    operation, so nothing in production sees this state.
-    """
-    with pytest.raises(AttributeError):
-        _ = adguard_rewrites.AdGuardRewriteProvider().password
-
-
-def test_a_missing_half_of_the_rewrite_login_refuses_by_name() -> None:
-    """A half-filled configuration stops the run rather than the session."""
-    half = dynamic.Config({f'{PROJECT}:{adguard_rewrites.USERNAME_CONFIG}': USERNAME}, PROJECT)
-
-    with pytest.raises(ValueError, match=adguard_rewrites.PASSWORD_CONFIG):
-        adguard_rewrites.AdGuardRewriteProvider().configure(dynamic.ConfigureRequest(config=half))
-
-
-def test_delete_removes_exactly_the_declared_pair(instance: Instance) -> None:
-    instance.entries = [
-        {'domain': 'photos.ucw.phd', 'answer': '192.168.71.1'},
-        {'domain': 'tube.ucw.phd', 'answer': '192.168.71.1'},
-    ]
-
-    provider().delete('an-id', dict(PROPS))
-
-    assert instance.entries == [{'domain': 'tube.ucw.phd', 'answer': '192.168.71.1'}]
-    assert instance.posts[0][0] == 'delete'
-
-
-def test_a_refused_add_fails_the_create_rather_than_recording_a_row(instance: Instance) -> None:
-    """A create that reports success is a row state records and the instance lacks.
-
-    LAN clients would then take the public answer for a name every preview
-    shows as rewritten.
-    """
-    instance.refusing = {'rewrite/add'}
-
-    with pytest.raises(requests.HTTPError):
-        _ = provider().create(dict(PROPS))
-
-    assert instance.posts == [('add', {'domain': 'photos.ucw.phd', 'answer': '192.168.71.1'})]
-
-
-def test_a_refused_delete_fails_the_delete(instance: Instance) -> None:
-    """A delete that reports success drops the row from state while the instance still answers it.
-
-    The rewrite would then stay live with nothing declaring it, and no later
-    run would ever look for it again.
-    """
-    instance.entries = [{'domain': 'photos.ucw.phd', 'answer': '192.168.71.1'}]
-    instance.refusing = {'rewrite/delete'}
-
-    with pytest.raises(requests.HTTPError):
-        provider().delete('an-id', dict(PROPS))
-
-
-def test_a_refused_list_fails_the_read_rather_than_reporting_the_row_gone(instance: Instance) -> None:
-    """A refusal says nothing about what the instance holds.
-
-    Read as an empty list, it would report a row that is still there as
-    deleted, and the next up would plan a create for it. The error the read
-    raises is the instance's refusal, not a failure to parse its body.
-    """
-    instance.entries = [{'domain': 'photos.ucw.phd', 'answer': '192.168.71.1'}]
-    instance.refusing = {'rewrite/list'}
-
-    with pytest.raises(requests.HTTPError):
-        _ = provider().read('an-id', dict(PROPS))

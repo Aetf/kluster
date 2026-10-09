@@ -647,7 +647,7 @@ cell would say `pending` to an operator already being served.
 | kubeconfig | `physical` output | cluster-admin | Pulumi state · Pulumi config secret (`k8s-base`, `apps`, copied in by `credentials derived sync --only kubeconfig`) | `k8s-base` and `apps`, each opening its Kubernetes provider with the copy in its own configuration |
 | UDM SSH key, libvirt SSH identity | installed by automation on each side: the gateway's `AuthorizedKeys` keeps the UDM key on the device (physical/gateway.md §1.4), aconfmgr provisions the homelab host's dedicated service user together with its key (physical/homelab-host.md §4) | device-file push (host key pinned) / `virsh` as a `libvirt`-group user | Pulumi config secret; the UDM key's public half is a constant | `physical` |
 | UniFi API key | Dedicated local admin | Network API | Pulumi config secret | `physical` |
-| AdGuard API credentials | AdGuard admin (no scoped API — audit M6) | alice/bob rewrite API | Pulumi config secret | `dns` rewrites |
+| AdGuard API credentials | Drawn by the operator (no console makes it; `credentials derived adguard record` delivers it), and made each instance's account by the first-run setup the `dns` stack runs on it | The admin account of both instances, and with it their whole configuration: AdGuard Home has no scoped API (audit M6) | Pulumi config secret (`adguardUsername`, `adguardPassword`) | `dns`, which sets each instance up with it and configures both |
 | ZeroTier Central API token | Made in the Central console (no token API) | The whole Central account: the installation's network, its members and its flow rules | Pulumi config secret (`zerotierApiToken`; the network id beside it is a constant in `conventions`, not a secret) | `physical` |
 | GitHub admin token | Made in the GitHub UI (no token API) | A fine-grained token on the account, confined to the repositories `conventions.forge` declares and to the repository permissions the calls made as it need (the set is below the table) | Pulumi config secret (`githubAdminToken`) | `github`, and every `credentials` command that pushes a GitHub secret as it: `derived sync`, `derived drill-age-identity generate`, and the mints that push their own carriers |
 | BGP session password | Drawn by the operator (no console makes it; `credentials derived bgp record` delivers it) | One BGP session, the gateway↔worker peering (cluster-infra.md §2): an MD5 password both ends are configured with | Pulumi config secret (`gatewayBgpPassword`) · device secret (the routing daemon's configuration) · SealedSecret (`k8s-base`, `sealedSecrets.bgp-password`, Cilium's `authSecretRef`) | `physical`, which writes it onto the device; Cilium BGPv2 on the worker |
@@ -770,20 +770,12 @@ service user — so the only act on this side is the paste into
 the public half where that automation reads it, and that paste.
 
 **Some are made in the console that checks them.** The UniFi API
-key and the AdGuard admin login belong to the appliances themselves: the
-controller mints a key for a dedicated local admin and shows it once,
-and AdGuard Home has no scoped API at all, so its admin account *is* the
-API credential — the residual the security audit records as M6. Both
-instances answer to the same login, because a rewrite is written to
-alice and bob directly rather than synchronized (declarative/dns.md §3),
-and that account lives in each instance's own `AdGuardHome.yaml`, state
-the device keeps: the `physical` stack installs an initial state only
-where an instance has never had one, and that initial state names no
-account (physical/gateway.md §1.1). The ZeroTier Central token is the
+key belongs to the appliance itself: the controller mints a key for a
+dedicated local admin and shows it once. The ZeroTier Central token is the
 same shape one layer out: Central publishes no token API, so an account
 token made in its web console is what `physical` authenticates with,
 as broad as the account it belongs to because Central offers nothing
-narrower. **The GitHub admin token is the fourth**, and the same shape
+narrower. **The GitHub admin token is another**, and the same shape
 again: GitHub publishes no API that creates a personal access token, so
 one made on the account's own settings page is what the `github` stack
 declares the forge with. It is a **fine-grained** token whose resource
@@ -834,8 +826,8 @@ None of these console-made credentials is minted here, so
 `credentials derived <row> record` (§4) is the delivery alone: the
 console steps, the value, the stack config that reads it. The
 consumer decides which stack — `physical` drives the UDM's Network API
-and the overlay's Central account, `dns` writes the AdGuard rewrites,
-`github` declares the forge — and nothing is recorded beside the token.
+and the overlay's Central account, `github` declares the forge — and
+nothing is recorded beside the token.
 Which network the account administers here is an identity rather than a
 setting, so it is a constant in `conventions`; the controller's own
 address is not recorded either, because it is the overlay address the
@@ -854,9 +846,9 @@ configuration and decrypts it again to show the slot holds what was
 handed over. Of the three steps a minted row's `mint` performs, it does
 none — and the reasons differ, which matters because only one of them is
 a wall. **Creating and retiring are API absences**: no endpoint of
-these platforms makes a personal access token, a UniFi key, a Central
-token or an AdGuard login, or deletes one, so a console visit is the
-whole of both. **Verifying is a decision.** Any authenticated call
+these platforms makes a personal access token, a UniFi key or a
+Central token, or deletes one, so a console visit is the whole of
+both. **Verifying is a decision.** Any authenticated call
 verifies that a credential opens something, and for most of these rows
 that is the whole question. For the GitHub row it is not: no endpoint a
 fine-grained token can call lists its own permissions, and a read
@@ -868,8 +860,28 @@ anyway. That the platforms mint nothing is also why none of them is a
 seed: they mint nothing, so there is nothing for the kit to hold or to
 reproduce. What guarantees a lost one can be replaced is the account
 or appliance behind it — the Central and GitHub accounts are among the
-account roots §2 keeps out of the kit, and the two appliances are the
+account roots §2 keeps out of the kit, and the controller is the
 installation's own.
+
+**The AdGuard login is drawn, and each instance gets it from its
+first-run setup.** AdGuard Home has no scoped API, so its admin account
+*is* the API credential — the residual the security audit records as
+M6 — and no endpoint of it makes, changes or deletes an account. The
+operator draws the login, `credentials derived adguard record`
+delivers it into the `dns` stack's configuration, and the stack's
+`AdGuardSetup` makes it the account of an instance started with no
+configuration file, through that instance's own first-run setup, which
+computes the hash itself (declarative/dns.md §3). Both instances
+answer to the same login, because the stack configures alice and bob
+directly rather than through a synchronizer. The account then lives in
+each instance's own `AdGuardHome.yaml`, state the device keeps, and in
+no second store: the initial state `physical` installs names none
+(physical/gateway.md §1.1). So a rotation is the command and then a
+reset of each instance in turn, in the passes physical/gateway.md §3
+gives, with the new stack file kept off `main` until the last of them:
+no `up` may record the new login before then. A login recorded without
+the reset is refused at each instance's setup, one refused login per
+instance, and nothing is written.
 
 **The GitHub admin token is read back as well as read.** It is the one
 row of this shape with consumers beyond its stack: every `credentials`
@@ -981,7 +993,7 @@ name.
 | `credentials derived drill-age-identity generate [--rotate]` | After `derived github-admin record`, whose token it pushes as, and before the rebuild drill first runs. Draws a fresh age identity and pushes its private half into the ops repository's `drill` Environment as `DRILL_AGE_IDENTITY`; once the listing shows the push landed, it writes the public half to `src/kluster/lib/state_backend/machine/drill-recipient.txt`, a file to commit. The private half never touches a disk. A recipient already on file refuses a second run, the file being the one durable trace of a key in service; `--rotate` draws the successor over both. A run without `--rotate` reads a recipient on file the way `derived check` reads `escrow/RECIPIENTS` — it must be a recipient the pinned `age` parses, and a line holding a private key is refused before `age` sees it, its content never printed — and it must be a native `age1…` one besides; a refusal names `--rotate`. `--rotate` asks only whether the file is there, so it also replaces a file that check refuses, which is the repair for a hand edit or a truncated write. So drawing needs `age-keygen` on `PATH`, and a run without `--rotate` over a recipient on file needs `age` beside it. The appliance encrypts to a new recipient only after `operator-stack state-backend up --force`, which dumps the box, replaces it and restores into the new one (§3). |
 | `credentials derived drill-credentials mint [--only <half>]` | After the state backend exists — its bucket is what confines the B2 key, and the key is proven by listing the dump prefix as itself — and beside the drill age identity, which the same Environment holds. Mints the rebuild drill's two provider keys (§3) and pushes their five carriers into the ops repository's `drill` Environment as the GitHub admin token, each verified through the listing before the key it supersedes is retired. The OCI half creates the `drill` compartment where the tenancy has none and prints the `OCID` to record in `conventions` and commit; it takes no `--compartment`, because the drill compartment is a recorded name in the recorded tenancy and the mint is held to it. Re-running it rotates both keys; `--only oci` or `--only b2` rotates one. |
 | `credentials derived unifi record` | After the state backend exists, and after the controller has minted a key for its dedicated local admin — which the command prints the steps for. Takes the key without echoing it, into the `physical` stack's config; the stack file is then committed. The controller's address is not recorded beside it, being the overlay address `conventions` assigns. Re-running it is how a replaced key is delivered. |
-| `credentials derived adguard record` | The same, for the admin login both AdGuard instances answer to, into the `dns` stack's config — the stack that writes the split-horizon rewrites. |
+| `credentials derived adguard record` | The same shape for the admin login both AdGuard instances answer to, into the `dns` stack's config, except that no console makes it: the operator draws it — a username with no colon in it and a password of at least eight characters, the command printing `openssl rand -base64 24` as the step — and hands it in. The stack makes it each instance's account through the instance's first-run setup, and configures both with it. Rotating it is this command, then a reset of each instance in turn in the passes physical/gateway.md §3 gives, with no `up` recording the new login before the last of them. |
 | `credentials derived zerotier record` | The same again, for the ZeroTier Central API token, into the `physical` stack's config — which network of that account is this installation's overlay is a constant in `conventions` rather than a value recorded beside the token. Central publishes no token API, so a token created in its web console and re-recorded here is the whole of a rotation; the superseded one is deleted in the same console. |
 | `credentials derived bgp record` | The same shape for the BGP session password, into the `physical` stack's config, except that no console makes it: the operator draws it — the command prints `openssl rand -base64 24` as the step — and hands it in. The stack writes it into the routing daemon's configuration on the gateway. The worker's end of the session, Cilium's BGPv2 `authSecretRef`, is the same value sealed into `k8s-base`'s configuration: once a cluster exists, this command seals it in the same run, before it writes either stack, so a cluster that refuses the seal leaves both as they were; before then — the password is recorded before `physical` first brings the cluster up — it says so and writes `physical`'s alone. Between the cluster's first `up` and the controller's, it refuses and writes neither stack; run it again once `k8s-base` runs the controller. Rotating it is a fresh draw and this command again, then both ends re-applied, the session being down from the first apply to the second. |
 | `credentials derived bgp seal` | Once, after `physical` has brought the cluster up and `k8s-base` runs the sealed-secrets controller, for a password recorded before there was a cluster. Reads the password back out of `physical`'s config, seals it with `kubeseal` to the cluster's certificate — fetched from the controller with the kubeconfig in `physical`'s state — strict, for the Secret Cilium reads, and writes the ciphertext in the clear at `sealedSecrets.bgp-password.password` in `k8s-base`'s config, reading it back; the stack file is then committed. Every run writes fresh ciphertext. |
@@ -1384,9 +1396,9 @@ operator-passphrase generate` and `recover`.
     `credentials derived zerotier record`,
     `credentials derived bgp record` and
     `credentials derived github-admin record` — the §3 rows whose
-    credential is made in the console that checks it — or, for the BGP
-    session password, drawn by the operator, no console making one —
-    rather than minted here. Each prints the steps that create it, takes
+    credential is made in the console that checks it — or, for the
+    AdGuard login and the BGP session password, drawn by the operator,
+    no console making one — rather than minted here. Each prints the steps that create it, takes
     the value, and writes it into the config of the stack that reads it,
     which is then committed like the rows above. The GitHub one is last of these
     because stage 10 authenticates as it, and it needs stage 2 to have

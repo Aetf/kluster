@@ -9,8 +9,9 @@ and its WHOIS data, and the deprecated `safesearch_enabled`, which repeats
 **Identifiers compare in the order the instance keeps them.** It parses each
 identifier into one kind and reports them by kind -- addresses, then subnets,
 then MAC addresses, then ClientIDs -- each kind sorted, so a declaration's own
-order is not drift; tags it sorts too. `check` refuses an identifier that parses
-as no kind, and one two clients share.
+order is not drift; tags it sorts too. The set is read and recorded in name
+order. `check` refuses an identifier that parses as no kind, and one two
+clients share.
 
 **Each endpoint addresses one client, so a write reconciles against a fresh
 read**, never against the stored outputs:
@@ -194,9 +195,12 @@ class AdGuardClientsProvider(AdGuardProvider):
     def _comparable(self, section: str, value: Any) -> object:
         return _clients(value)
 
+    def _reported(self, section: str, value: Any) -> object:
+        return [client for _name, client in sorted(_clients(value).items())]
+
     def _read(self, api: Api) -> dict[str, Any]:
         listed = cast('Mapping[str, Any]', api.get('clients'))
-        return {CLIENTS: list(_clients(listed.get('clients')).values())}
+        return {CLIENTS: self._reported(CLIENTS, listed.get('clients'))}
 
     def _write(self, api: Api, news: Mapping[str, Any], olds: Mapping[str, Any] | None) -> None:
         live = _clients(self._read(api)[CLIENTS])

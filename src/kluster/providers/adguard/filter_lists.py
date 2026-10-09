@@ -4,8 +4,8 @@
 `whitelist_filters` allow lists, each `{url, name, enabled}` as `GET
 /control/filtering/status` reports them; the instance keeps a URL unique across
 both, so the set is compared by URL, and order is not compared, since matching
-does not depend on it. The instance's own `id`, `rules_count` and
-`last_updated` are not read.
+does not depend on it: a kind is read and recorded in URL order. The
+instance's own `id`, `rules_count` and `last_updated` are not read.
 
 **Each endpoint addresses one list, so a write reconciles against a fresh
 read**, never against the stored outputs:
@@ -93,9 +93,13 @@ class AdGuardFilterListsProvider(AdGuardProvider):
     def _comparable(self, section: str, value: Any) -> object:
         return _lists(value)
 
+    def _reported(self, section: str, value: Any) -> object:
+        # By URL, since the instance's order is the order lists were added in.
+        return [each for _url, each in sorted(_lists(value).items())]
+
     def _read(self, api: Api) -> dict[str, Any]:
         status = cast('Mapping[str, Any]', api.get('filtering/status'))
-        return {section: list(_lists(status.get(section)).values()) for section in self.sections}
+        return {section: self._reported(section, status.get(section)) for section in self.sections}
 
     def _write(self, api: Api, news: Mapping[str, Any], olds: Mapping[str, Any] | None) -> None:
         held = self._read(api)

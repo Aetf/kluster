@@ -295,8 +295,8 @@ criterion.
 ### M6 — AdGuard credential in the `dns` CI environment is LAN-wide DNS control
 
 **Attack.** AdGuard Home has no scoped API, so the credential the
-split-horizon rewrites are written with (dns.md §3; `adguardUsername` /
-`adguardPassword` on the `dns` stack) is the admin account of both
+resolvers' configuration is written with (dns.md §3; `adguardUsername`
+/ `adguardPassword` on the `dns` stack) is the admin account of both
 instances. That pair is the home network's resolver, so holding it means
 forging any LAN name for every client on it — hosts with no relation to
 the cluster — retargeting the upstreams behind them, and reading the
@@ -312,14 +312,21 @@ Python with it, and noop-automerge's path classifier routes a dependency
 bump into `prove`.
 
 **Fix.** None at the credential: an admin login is the whole of what the
-appliance offers, and the rewrites are what makes LAN clients resolve
-split-horizon apps to their `lan` VIPs at all. The containment is
-positional — Central flow rules confine the `dns` stack's CI identity to
-the AdGuard APIs alone (L5), so the login is usable only from a joined
-member, and previews run for same-repo branches only, never a
-fork's. Accepted residual, and its detection gap is part of what is
-accepted: a refresh reads back the rewrites the stack declares, so one
-added beside them is not something the weekly drift run compares.
+appliance offers, and the rule list it writes is what makes LAN clients
+resolve split-horizon apps to their `lan` VIPs at all. The containment
+is positional — Central flow rules confine the `dns` stack's CI identity
+to the AdGuard APIs alone (L5), so the login is usable only from a
+joined member, and previews run for same-repo branches only, never a
+fork's. Accepted residual. **What it does is detected where it touches a
+declared setting**: the stack declares every key the API sets but
+those declarative/dns.md §3 leaves undeclared — the whole rule list,
+the upstreams, the lists, the clients and the rest — and a refresh reads
+each back whole, so a forged rule, a retargeted upstream or an added
+client is drift in the weekly drift run's comparison. What stays outside
+it is what the stack does not declare (declarative/dns.md §3) — TLS,
+DHCP and the UI's presentation among it — and what leaves no setting
+behind: reading the query log, clearing it or the statistics, and the
+account itself, which no endpoint lists.
 
 **Lives in.** ci.md §3 (which Environment holds it), §2 (the residual on
 record), declarative/dns.md §3 (the writer), credentials.md §3 (the

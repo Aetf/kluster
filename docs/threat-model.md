@@ -359,6 +359,27 @@ Grouped by who controls their software:
     what can be restored: off-platform backups that no automation key can
     delete, versioned state, and the kit.
 
+**One gap in the network boundary is accepted: a resolver in first
+run.** From a resolver machine's first start with no configuration
+file to the `dns` run that sets it up
+([declarative/dns.md](declarative/dns.md) §3), the instance answers no
+DNS and serves an unauthenticated setup wizard on port 3000, and its
+port 80 opens once it is set up. IoT devices and the cluster VLAN
+(§2.10) reach the container VLAN's ports 3000 and 80 throughout, each
+by its own path: IoT devices through the zone matrix's LAN-to-LAN
+accept, whose IoT drop is a later phase
+([physical/gateway.md](physical/gateway.md) §4.3), and the cluster
+VLAN through census rule 3 of physical/gateway.md §4.2, which allows
+it every protocol to the internal zone. Whoever calls
+the wizard's `configure` first holds that resolver until the instance
+is reset, and the stack's run then fails on its login rather than
+writing anything, so a claim does not pass unnoticed. It fails the
+third clause of §4: the window comes only with a rebuild or a reset, is
+attended by the operator and lasts minutes, while closing it takes zone
+policies dropping each of the two to the resolvers' setup port, ahead of
+the accept and of rule 3 respectively, in two families, guarding this
+window alone.
+
 The first half of the merge boundary holds for the operator stacks'
 credentials, and for `physical`'s once it has moved and the stack passphrase it was under has been rotated out of every Environment (§3.1). The forge does not enforce the second half today (§3.2).
 The workstation is outside the boundary by construction (§3.3).
