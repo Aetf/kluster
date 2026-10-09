@@ -29,6 +29,7 @@ import shutil
 from pathlib import Path
 
 import b2_api
+import oci_clock
 import pytest
 from cloudflare_api import ACCOUNT_ID, FakeApi, console_seed
 from cryptography import x509
@@ -36,12 +37,13 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fake_pulumi import RecordedPulumi
 from memory_kit import MemoryKit
+from oci_clock import SimulatedClock
 from oci_conventions import with_recorded_compartment, with_tenancy_ocid, with_unrecorded_compartment
 from oci_tenancy import KEY_LISTINGS, ROOT_USER, TENANCY, Tenancy
 
 from kluster import conventions
 from kluster.lib import config as lib_config
-from kluster.lib import stack_environment
+from kluster.lib import pulumi_cli, stack_environment
 from kluster.lib import workstation as lib_workstation
 from kluster.lib.state_backend import settings as appliance_settings
 from kluster.scripts.credentials import (
@@ -86,6 +88,16 @@ def _with_cloudflare_account(monkeypatch: pytest.MonkeyPatch, account_id: str) -
     another state.
     """
     monkeypatch.setattr(conventions, 'CLOUDFLARE_ACCOUNT', conventions.CloudflareAccount(account_id=account_id))
+
+
+@pytest.fixture(autouse=True)
+def unhurried(monkeypatch: pytest.MonkeyPatch) -> SimulatedClock:
+    """`oci_iam`'s propagation waits, which every OCI mint here reaches, run on `oci_clock`'s clock."""
+    return oci_clock.install(monkeypatch)
+
+
+def test_the_propagation_waits_run_on_the_simulated_clock() -> None:
+    assert oci_clock.one_refusal_outwaited() == [oci_iam.PROPAGATION_INTERVAL]
 
 
 @pytest.fixture(autouse=True)
@@ -333,6 +345,16 @@ def live_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[pulum
     return stack, name
 
 
+#: The bound the real-CLI case below runs under. Each `pulumi` command it
+#: starts is bounded by `pulumi_cli.TIMEOUT`, so the case's own bound sits
+#: above that rather than at the suite's, and a stalled command fails as a
+#: `TimeoutExpired` naming it (testing.md §8). On a four-core machine the
+#: case took 0.6 s idle and 1.4 s with four times as many busy processes as
+#: cores. A stop-loss; nothing asserts on elapsed time.
+REAL_CLI_CASE_TIMEOUT = 2 * pulumi_cli.TIMEOUT
+
+
+@pytest.mark.timeout(REAL_CLI_CASE_TIMEOUT)
 def test_the_token_lands_where_the_program_reads_it(
     kit: KdbxStore, live_project: tuple[pulumi_config.Stack, str]
 ) -> None:

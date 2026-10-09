@@ -21,6 +21,7 @@ from typing import Any
 from uuid import uuid4
 
 import keyring.backends.fail
+import oci_clock
 import pytest
 import requests
 from b2_api import ACCOUNT_ID as B2_ACCOUNT
@@ -29,6 +30,7 @@ from cloudflare_api import ACCOUNT_ID as CLOUDFLARE_ACCOUNT
 from cloudflare_api import MINTING_POLICY, console_seed
 from cloudflare_api import FakeApi as CloudflareApi
 from memory_keyring import installed
+from oci_clock import SimulatedClock
 from oci_conventions import with_tenancy_ocid
 from oci_tenancy import ROOT_USER, TENANCY, Tenancy
 
@@ -84,6 +86,16 @@ def _pastes(*values: str | type[BaseException]) -> Callable[[str], str]:
 
 def _refuse(_message: str) -> str:
     raise AssertionError('the run prompted when it should not have')
+
+
+@pytest.fixture(autouse=True)
+def unhurried(monkeypatch: pytest.MonkeyPatch) -> SimulatedClock:
+    """`oci_iam`'s propagation waits, which every OCI mint here reaches, run on `oci_clock`'s clock."""
+    return oci_clock.install(monkeypatch)
+
+
+def test_the_propagation_waits_run_on_the_simulated_clock() -> None:
+    assert oci_clock.one_refusal_outwaited() == [oci_iam.PROPAGATION_INTERVAL]
 
 
 @pytest.fixture
@@ -156,10 +168,14 @@ def test_a_console_only_seed_is_stored_from_what_the_operator_pastes(
     assert kit.get(seed.entry, attribute='UserName') == 'an-identifier'
 
 
+@pytest.mark.usefixtures('slots')
 def test_an_account_root_is_read_at_the_moment_it_is_needed(monkeypatch: pytest.MonkeyPatch) -> None:
     # A mint borrows its account root from the desktop secret store, or from
     # the operator when there is none (§2). No database but the kit is opened
     # for it, and nothing is read before the row that needs it is reached.
+    # The chain's file layer is `slots`', under `tmp_path`: in a checkout
+    # whose own `.credentials/roots/` holds this account's root, the chain
+    # would answer from there, and the assertion below would print it.
     def nothing_remembered(_account: str) -> str | None:
         return None
 
