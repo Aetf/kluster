@@ -6,8 +6,9 @@ which piece of the persistence layer each part of the component arrives
 through, and what the converger does at boot, after a push, and after the
 configuration is undeclared.
 
-**The converger is also run**, against a temporary tree with a `systemctl` and
-a `vtysh` that record what they were asked to do, because the properties that
+**The converger is also run**: the script the component registers, under `sh`,
+against a temporary tree laid out as the device's, with a `systemctl` and a
+`vtysh` that record what they were asked to do, because the properties that
 matter most about it -- that a step which failed is retried, that the daemon is
 switched on again after a firmware update put the stock daemon list back, and
 that the first run on a new firmware parses the file again -- are properties of
@@ -17,6 +18,7 @@ the sequence rather than of any line the file contains.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,7 +34,6 @@ from kluster import conventions
 from kluster.components.gateway import persistence, routing
 from kluster.components.gateway.persistence import DevicePersistence
 from kluster.components.gateway.routing import RoutingSession, SiteRouting
-from kluster.lib import templates
 from kluster.providers.device_files.provider import Connection
 
 MECHANISM = 'mechanism'
@@ -57,7 +58,8 @@ NEXT_RELEASE = 'UDMPROSE.al324.v5.1.40.0123abc.261101.0010\n'
 class _Device:
     """One temporary stand-in for the device the converger runs on."""
 
-    #: The rendered converger, and the five files it works between.
+    #: The converger the component registers, and the five files it works
+    #: between, each where the device holds it under the temporary tree.
     script: Path
     source: Path
     live: Path
@@ -89,30 +91,52 @@ class _Run:
     stamped: bool
 
 
-def _device(tmp_path: Path, *, configuration: str, daemons: str = STOCK_DAEMON_LIST) -> _Device:
-    """The converger rendered against a temporary tree, ready to run.
+def _at(root: Path, path: str) -> Path:
+    """`path` on the device, as it sits in the temporary tree under `root`."""
+    return root / path.lstrip('/')
 
-    The template is rendered here rather than through `converger_script`
-    because the paths it carries are the device's absolute ones, and because
-    ownership on the device is a user this suite is not; everything else about
-    the file — the toggle, the syntax check, the restart — is what the
-    component ships.
+
+def _device(tmp_path: Path, monitor: Recorder, *, configuration: str, daemons: str = STOCK_DAEMON_LIST) -> _Device:
+    """The converger the component registers, under a temporary tree laid out as the device's.
+
+    The script is the content registered for the converger's executable, with
+    every device path it acts on moved under the tree: the configuration's
+    source, at the path its resource was registered with, and the four files
+    the device holds of its own — the daemon's copy, the stamp beside it, the
+    firmware release and the daemon list. Each is asserted present as a whole
+    path before it is moved, so a converger that names another place for any
+    of them fails here rather than running against the device's own. The one
+    other edit is the install's ownership: the daemon suite's user is not one
+    an unprivileged runner can install as, so its owner and group become the
+    runner's own, asserted present the same way.
+
+    What the source holds is the case's own `configuration`: the parser's
+    stand-in reads none of it, and what the component renders into it is
+    asserted from its registration by the cases above.
     """
+    root = tmp_path / 'device'
+    source = str(monitor.inputs_of(f'{NAME}-config')['path'])
+    on_device = (
+        source,
+        routing.FRR_LIVE_CONFIG,
+        routing.FRR_APPLIED,
+        persistence.FIRMWARE_RELEASE,
+        routing.FRR_DAEMON_LIST,
+    )
     device = _Device(
-        script=tmp_path / 'frr-config.sh',
-        source=tmp_path / 'source' / 'frr.conf',
-        live=tmp_path / 'live' / 'frr.conf',
-        stamp=tmp_path / 'live' / f'frr.conf.{conventions.CLUSTER_NAME}-applied',
-        firmware=tmp_path / 'image' / 'version',
-        daemons=tmp_path / 'live' / 'daemons',
+        script=tmp_path / routing.CONVERGER,
+        source=_at(root, source),
+        live=_at(root, routing.FRR_LIVE_CONFIG),
+        stamp=_at(root, routing.FRR_APPLIED),
+        firmware=_at(root, persistence.FIRMWARE_RELEASE),
+        daemons=_at(root, routing.FRR_DAEMON_LIST),
         systemd=FakeSystemd(tmp_path / 'systemd'),
         checks=tmp_path / 'checks',
         rejection=tmp_path / 'rejects',
         tools=tmp_path / 'tools',
     )
-    device.source.parent.mkdir()
-    device.live.parent.mkdir()
-    device.firmware.parent.mkdir()
+    for directory in {device.source.parent, device.live.parent, device.firmware.parent, device.daemons.parent}:
+        directory.mkdir(parents=True, exist_ok=True)
     device.tools.mkdir()
     _ = device.source.write_text(configuration)
     _ = device.firmware.write_text(RELEASE)
@@ -125,49 +149,18 @@ def _device(tmp_path: Path, *, configuration: str, daemons: str = STOCK_DAEMON_L
     _ = vtysh.write_text(f'#!/bin/sh\necho "$*" >>{device.checks}\n[ -e {device.rejection} ] && exit 1\nexit 0\n')
     vtysh.chmod(0o755)
 
-    _ = device.script.write_text(
-        templates.render(
-            persistence.TEMPLATE_PACKAGE,
-            f'templates/{routing.CONVERGER}.j2',
-            _Rendering(
-                cluster=conventions.CLUSTER_NAME,
-                source=str(device.source),
-                live=str(device.live),
-                stamp=str(device.stamp),
-                firmware=str(device.firmware),
-                parser=routing.FRR_PARSER,
-                daemons=str(device.daemons),
-                daemon=routing.BGP_DAEMON,
-                # The only owner an unprivileged runner can install as.
-                owner=str(os.getuid()),
-                group=str(os.getgid()),
-                mode=routing.FRR_MODE,
-                check=routing.FRR_SYNTAX_CHECK,
-                restart=routing.FRR_RESTART,
-            ),
-        )
-    )
+    script = str(monitor.inputs_of(f'{NAME}-bin-{routing.CONVERGER}')['content'])
+    # One pass, longest path first: the stamp's path begins with the daemon's
+    # copy's, so moving them one at a time would move the stamp's twice.
+    paths = re.compile('|'.join(re.escape(path) for path in sorted(on_device, key=len, reverse=True)))
+    missing = set(on_device) - {found.group() for found in paths.finditer(script)}
+    assert not missing, f'the converger does not act on {sorted(missing)}'
+    script = paths.sub(lambda found: str(_at(root, found.group())), script)
+    ownership = f'-o {routing.FRR_OWNER} -g {routing.FRR_GROUP} '
+    assert ownership in script, 'the converger does not install the daemon suite as its owner'
+    script = script.replace(ownership, f'-o {os.getuid()} -g {os.getgid()} ')
+    _ = device.script.write_text(script)
     return device
-
-
-@final
-@dataclass(frozen=True)
-class _Rendering:
-    """The converger template's parameters, pointed at a temporary tree."""
-
-    cluster: str
-    source: str
-    live: str
-    stamp: str
-    firmware: str
-    parser: str
-    daemons: str
-    daemon: str
-    owner: str
-    group: str
-    mode: str
-    check: str
-    restart: str
 
 
 def _converge(device: _Device, *, daemon_answers: bool = True, syntax_accepted: bool = True) -> _Run:
@@ -429,7 +422,9 @@ def test_the_daemons_copy_is_installed_with_the_ownership_the_daemon_suite_uses(
     assert f'install -o {routing.FRR_OWNER} -g {routing.FRR_GROUP} -m {routing.FRR_MODE}' in script
 
 
-def test_a_run_that_finds_the_daemon_switched_on_and_holding_the_configuration_does_nothing(tmp_path: Path) -> None:
+def test_a_run_that_finds_the_daemon_switched_on_and_holding_the_configuration_does_nothing(
+    monitor: Recorder, tmp_path: Path
+) -> None:
     """The converger runs at every boot and after every push of the file.
 
     A restart the daemon did not need drops the session for no reason, so a run
@@ -437,7 +432,7 @@ def test_a_run_that_finds_the_daemon_switched_on_and_holding_the_configuration_d
     live copy that matches, with the toggle already switched on, leaves the
     daemon alone.
     """
-    device = _device(tmp_path, configuration='router bgp 65000\n')
+    device = _device(tmp_path, monitor, configuration='router bgp 65000\n')
 
     first = _converge(device)
     second = _converge(device)
@@ -449,7 +444,9 @@ def test_a_run_that_finds_the_daemon_switched_on_and_holding_the_configuration_d
     assert f'{routing.BGP_DAEMON}=yes' in device.daemons.read_text()
 
 
-def test_a_daemons_copy_that_no_longer_matches_is_put_back_though_the_stamp_does(tmp_path: Path) -> None:
+def test_a_daemons_copy_that_no_longer_matches_is_put_back_though_the_stamp_does(
+    monitor: Recorder, tmp_path: Path
+) -> None:
     """The stamp records what the daemon was restarted onto, not what it will read next.
 
     The daemon's copy is off the custom root and anyone on the device can
@@ -458,7 +455,7 @@ def test_a_daemons_copy_that_no_longer_matches_is_put_back_though_the_stamp_does
     matches it, and a converger that trusted the stamp alone would leave the
     daemon to load somebody else's file at its next start.
     """
-    device = _device(tmp_path, configuration='router bgp 65000\n')
+    device = _device(tmp_path, monitor, configuration='router bgp 65000\n')
     _ = _converge(device)
 
     _ = device.live.write_text('router bgp 65000\n neighbor 192.0.2.1 remote-as 65001\n')
@@ -475,7 +472,7 @@ def test_a_daemons_copy_that_no_longer_matches_is_put_back_though_the_stamp_does
     )
 
 
-def test_a_daemon_list_a_firmware_update_restored_is_switched_on_again(tmp_path: Path) -> None:
+def test_a_daemon_list_a_firmware_update_restored_is_switched_on_again(monitor: Recorder, tmp_path: Path) -> None:
     """The list is the firmware's own file, so the toggle is a converged fact.
 
     A firmware update may put the stock list back, and so may anything that
@@ -485,7 +482,7 @@ def test_a_daemon_list_a_firmware_update_restored_is_switched_on_again(tmp_path:
     is therefore checked before them, and a switch that had to be flipped is
     itself a reason to restart.
     """
-    device = _device(tmp_path, configuration='router bgp 65000\n')
+    device = _device(tmp_path, monitor, configuration='router bgp 65000\n')
     _ = _converge(device)
 
     _ = device.daemons.write_text(STOCK_DAEMON_LIST)
@@ -496,7 +493,7 @@ def test_a_daemon_list_a_firmware_update_restored_is_switched_on_again(tmp_path:
     assert f'{routing.BGP_DAEMON}=yes' in device.daemons.read_text()
 
 
-def test_a_daemon_list_carrying_neither_toggle_line_fails_the_run(tmp_path: Path) -> None:
+def test_a_daemon_list_carrying_neither_toggle_line_fails_the_run(monitor: Recorder, tmp_path: Path) -> None:
     """A file reshaped past what this program understands must not pass silently.
 
     The substitution matches nothing there, so a converger that only edited
@@ -504,7 +501,7 @@ def test_a_daemon_list_carrying_neither_toggle_line_fails_the_run(tmp_path: Path
     that never starts the protocol. Asserting the line afterwards is what turns
     that into a failed apply an operator sees.
     """
-    device = _device(tmp_path, configuration='router bgp 65000\n', daemons='zebra=yes\n')
+    device = _device(tmp_path, monitor, configuration='router bgp 65000\n', daemons='zebra=yes\n')
 
     run = _converge(device)
 
@@ -513,7 +510,9 @@ def test_a_daemon_list_carrying_neither_toggle_line_fails_the_run(tmp_path: Path
     assert not run.stamped
 
 
-def test_a_configuration_the_parser_rejects_is_never_installed_and_is_retried(tmp_path: Path) -> None:
+def test_a_configuration_the_parser_rejects_is_never_installed_and_is_retried(
+    monitor: Recorder, tmp_path: Path
+) -> None:
     """The supervisor pushes the file into the daemons after the unit returns.
 
     Its rejection of a line fails nothing, so an installed file and a stamp
@@ -522,7 +521,7 @@ def test_a_configuration_the_parser_rejects_is_never_installed_and_is_retried(tm
     into a failed converge instead of a peer that never establishes — and
     because the failure lands before the write, the retry is a full attempt.
     """
-    device = _device(tmp_path, configuration='router bgp 65000\n')
+    device = _device(tmp_path, monitor, configuration='router bgp 65000\n')
 
     rejected = _converge(device, syntax_accepted=False)
     nothing_installed = not device.live.exists()
@@ -538,7 +537,7 @@ def test_a_configuration_the_parser_rejects_is_never_installed_and_is_retried(tm
     assert retried.stamped
 
 
-def test_a_firmware_update_that_kept_every_file_parses_and_restarts_again(tmp_path: Path) -> None:
+def test_a_firmware_update_that_kept_every_file_parses_and_restarts_again(monitor: Recorder, tmp_path: Path) -> None:
     """The stamp vouches for a parse, and a parse vouches only for its parser.
 
     Every file here is off `/data`, and nothing promises that an update takes
@@ -548,7 +547,7 @@ def test_a_firmware_update_that_kept_every_file_parses_and_restarts_again(tmp_pa
     peer that never establishes. The release in the stamp is what makes the new
     firmware's first run a full one.
     """
-    device = _device(tmp_path, configuration='router bgp 65000\n')
+    device = _device(tmp_path, monitor, configuration='router bgp 65000\n')
     _ = _converge(device)
 
     _ = device.firmware.write_text(NEXT_RELEASE)
@@ -562,14 +561,16 @@ def test_a_firmware_update_that_kept_every_file_parses_and_restarts_again(tmp_pa
     assert (settled.checks, settled.commands) == ([], []), 'the new release is recorded, so the next run is quiet'
 
 
-def test_a_firmware_release_the_converger_cannot_read_fails_the_run_before_it_touches_anything(tmp_path: Path) -> None:
+def test_a_firmware_release_the_converger_cannot_read_fails_the_run_before_it_touches_anything(
+    monitor: Recorder, tmp_path: Path
+) -> None:
     """Without the release the stamp cannot say which parser it means.
 
     Deciding without it would mean either restarting on every run or trusting
     a stamp that might name a parser the device no longer has; failing the run
     is the outcome an operator sees.
     """
-    device = _device(tmp_path, configuration='router bgp 65000\n')
+    device = _device(tmp_path, monitor, configuration='router bgp 65000\n')
     device.firmware.unlink()
 
     run = _converge(device)
@@ -581,7 +582,7 @@ def test_a_firmware_release_the_converger_cannot_read_fails_the_run_before_it_to
     assert device.daemons.read_text() == STOCK_DAEMON_LIST, 'the daemon list is left as the firmware shipped it'
 
 
-def test_a_parser_replaced_under_the_same_release_parses_and_restarts_again(tmp_path: Path) -> None:
+def test_a_parser_replaced_under_the_same_release_parses_and_restarts_again(monitor: Recorder, tmp_path: Path) -> None:
     """The release is how a new parser ordinarily arrives, not the only way.
 
     A suite installed outside the image replaces the parser's binary and
@@ -589,7 +590,7 @@ def test_a_parser_replaced_under_the_same_release_parses_and_restarts_again(tmp_
     too: a run that finds a different binary from the one the stamp names
     parses before it trusts anything else.
     """
-    device = _device(tmp_path, configuration='router bgp 65000\n')
+    device = _device(tmp_path, monitor, configuration='router bgp 65000\n')
     _ = _converge(device)
 
     vtysh = device.tools / routing.FRR_PARSER
@@ -604,7 +605,7 @@ def test_a_parser_replaced_under_the_same_release_parses_and_restarts_again(tmp_
     assert (settled.checks, settled.commands) == ([], [])
 
 
-def test_a_firmware_release_file_that_names_nothing_fails_the_run(tmp_path: Path) -> None:
+def test_a_firmware_release_file_that_names_nothing_fails_the_run(monitor: Recorder, tmp_path: Path) -> None:
     """An empty release would stamp every firmware alike.
 
     A stamp whose release is empty matches the next empty read on any
@@ -612,7 +613,7 @@ def test_a_firmware_release_file_that_names_nothing_fails_the_run(tmp_path: Path
     empty read fails the run as an unreadable one does, before anything is
     touched.
     """
-    device = _device(tmp_path, configuration='router bgp 65000\n')
+    device = _device(tmp_path, monitor, configuration='router bgp 65000\n')
     _ = device.firmware.write_text('')
 
     run = _converge(device)
@@ -624,7 +625,7 @@ def test_a_firmware_release_file_that_names_nothing_fails_the_run(tmp_path: Path
     assert device.daemons.read_text() == STOCK_DAEMON_LIST
 
 
-def test_a_stamp_written_before_it_named_the_release_is_stale(tmp_path: Path) -> None:
+def test_a_stamp_written_before_it_named_the_release_is_stale(monitor: Recorder, tmp_path: Path) -> None:
     """The converger that deploys this format finds the old one on a device that ran it.
 
     The old stamp was the source's checksum alone. Read as current it would
@@ -632,7 +633,7 @@ def test_a_stamp_written_before_it_named_the_release_is_stale(tmp_path: Path) ->
     so it must compare unequal: that run parses and restarts once, and the run
     after it is quiet again.
     """
-    device = _device(tmp_path, configuration='router bgp 65000\n')
+    device = _device(tmp_path, monitor, configuration='router bgp 65000\n')
     _ = _converge(device)
     _ = device.stamp.write_text(f'{_checksum(device.source)}\n')
 
@@ -646,7 +647,7 @@ def test_a_stamp_written_before_it_named_the_release_is_stale(tmp_path: Path) ->
     assert (settled.checks, settled.commands) == ([], [])
 
 
-def test_a_restart_that_failed_is_retried_by_the_next_run(tmp_path: Path) -> None:
+def test_a_restart_that_failed_is_retried_by_the_next_run(monitor: Recorder, tmp_path: Path) -> None:
     """The installed file cannot say whether the daemon came back onto it.
 
     The write succeeds before the restart is attempted, so a run that fails at
@@ -655,7 +656,7 @@ def test_a_restart_that_failed_is_retried_by_the_next_run(tmp_path: Path) -> Non
     successfully having told the daemon nothing, and the session would stay on
     the old configuration under a green apply.
     """
-    device = _device(tmp_path, configuration='router bgp 65000\n')
+    device = _device(tmp_path, monitor, configuration='router bgp 65000\n')
 
     failed = _converge(device, daemon_answers=False)
     retried = _converge(device)
@@ -668,14 +669,14 @@ def test_a_restart_that_failed_is_retried_by_the_next_run(tmp_path: Path) -> Non
     assert retried.stamped
 
 
-def test_undeclaring_the_configuration_does_not_take_the_daemon_away(tmp_path: Path) -> None:
+def test_undeclaring_the_configuration_does_not_take_the_daemon_away(monitor: Recorder, tmp_path: Path) -> None:
     """The hook runs after the delete too, and what it must not do then is act.
 
     The daemon is the device's own and it is running on the configuration it
     has; this program ceasing to declare one is not a reason to leave the
     router with none, nor to switch the protocol off again.
     """
-    device = _device(tmp_path, configuration='router bgp 65000\n')
+    device = _device(tmp_path, monitor, configuration='router bgp 65000\n')
     _ = _converge(device)
     device.source.unlink()
 
