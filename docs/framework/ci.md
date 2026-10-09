@@ -249,6 +249,31 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     runs the step against a stand-in checker and holds each annotation
     whole.
 
+-   **The Postgres image the appliance's roles are tested in is on the
+    runner before the tests start.** `tests/test_state_roles.py` runs the
+    appliance's Postgres in the image the box runs, and skips where no
+    copy of it is local rather than fetch one in the middle of a run. A
+    runner starts with an empty image store, so without a pull every
+    one of its cases skips. The `Podman` step of `checks` pulls the image
+    by the name `settings.POSTGRES_IMAGE` gives, which is a tag and
+    carries no digest: the major line the box's own `podman-auto-update`
+    follows, so CI tests the release a box would be running. The cost is
+    small beside what it buys: the pull takes seconds, and the module
+    runs in about ten seconds under the suite's four workers, inside a
+    `Tests` step of two minutes. Those cases are the only ones
+    that hold the box's roles, its client authentication and its dump
+    script to a real server. A pull that fails fails the step rather
+    than leaving the module to skip, since a green run that skipped it
+    would read as one that proved it. The same step makes pasta the
+    rootless network, through a `containers.conf` drop-in. The runner's
+    podman predates 5.0, where pasta became the default, and its default
+    is slirp4netns, whose port forwarder stays in the session of the
+    `podman` command that started the container. The module ends each
+    command's session with the command ([testing.md](testing.md) §1.2),
+    which takes the forwarder with it and leaves every published port
+    refusing connections. pasta leaves nothing in that session. The
+    drop-in goes once the runner's podman defaults to pasta by itself.
+
 -   **Merge side runs `up` only — except `physical`, which gets a plan
     job** (2026-08-24, superseding the pure-up shape): for
     dns/k8s-base/apps, `pulumi up --yes` performs its own preview as
