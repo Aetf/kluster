@@ -589,6 +589,8 @@ class Run:
             _ = record.write_text(f'unchecked: `pulumi {" ".join(args)}` may have written the checkpoint\n')
         path = stack_environment.checkpoint(self.checkout, self.stack)
         before = path.read_bytes() if path is not None else None
+        if path is not None:
+            log.info('reading the %s state before the write, to check the checkpoint against', self.stack)
         started = self._export() if path is not None else None
         code = self.pulumi.stream(self._with_stack(args), cwd=self.checkout, env=env)
         log.info('checking the %s checkpoint', self.stack)
