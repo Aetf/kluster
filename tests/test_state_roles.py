@@ -5,17 +5,21 @@ material -- go into the pinned image under the Postgres unit's own `podman
 run` arguments. What changes is only what has to: the address the server
 certificate names, the port it is published on, the delivered directories,
 which are copied into the container rather than mounted from a host that does
-not have them, and a data directory that starts empty and goes away with the
-container. So what is exercised is the image's own initialization mechanism
-(`/docker-entrypoint-initdb.d`), the server's own authentication, and real
-clients: `pulumi` from this workstation, and the Postgres client tools from the
-same image, which are the server's own release. The workstation's client,
-`mise.toml`'s `postgres` pin, is held only to the server's major
-(`tests/test_postgres_client.py`).
+not have them, and a data directory on a tmpfs, which starts empty and goes
+away with the container. So what is exercised is the image's own
+initialization mechanism (`/docker-entrypoint-initdb.d`), the server's own
+authentication, and real clients: `pulumi` from this workstation, and the
+Postgres client tools from the same image, which are the server's own
+release. The workstation's client, `mise.toml`'s `postgres` pin, is held only
+to the server's major (`tests/test_postgres_client.py`).
 
 Nothing here mounts a host path. A remote `podman` -- one whose service runs
 in another mount namespace than this process -- sees none of this process's
 temporary files, and `podman cp` is the channel that reaches it either way.
+
+Every container here ends by itself (`_bounded`), and every command a case
+starts -- `podman`, the client tools, the log follower -- runs through
+`process_sessions` under a bound below the case's (framework/testing.md §1.2).
 
 The properties held here are the ones the box's roles exist for: the bootstrap
 superuser answers on the container's local socket and to no certificate, the
@@ -50,9 +54,11 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+import process_sessions
 import pytest
 from root_credentials import fake
 
+from kluster.lib import pulumi_cli
 from kluster.lib.bundle import CA_ENV, CERT_ENV, KEY_ENV, ssl_env
 from kluster.lib.state_backend import render, settings, state
 from kluster.scripts.credentials import pki, pulumi_config
@@ -62,9 +68,39 @@ ADDRESS = '127.0.0.1'
 IMAGE = settings.POSTGRES_IMAGE
 CLIENT_ROLES = (settings.CI_ROLE, settings.OPERATOR_ROLE)
 
-#: Stop-losses for a subprocess that never answers, not budgets: every call
-#: here is local, and the slowest is a container's first start.
-PODMAN_TIMEOUT = 120
+#: The bound on each command a case starts, and on each one the code under
+#: test starts for it -- `pulumi`, and the client tools `state` runs, whose
+#: own bounds `clients` lowers to this one. Every call is local. With the
+#: module's cases spread over four workers held to four cores beside twelve
+#: busy processes, the slowest -- a box's wait from its start to serving, and
+#: `pulumi stack init` -- took under a second, and the slowest case 5 s. That
+#: load reaches the clients and not the container service, which is why the
+#: bound sits so far above it. A stop-loss; nothing asserts on elapsed time.
+COMMAND_TIMEOUT = 60
+
+#: The bound on a case, its share of the module's set-up included: above
+#: every command bound, so a stalled command fails as a `TimeoutExpired`
+#: naming it rather than as the case's bound (framework/testing.md §8). The
+#: largest command bound is not this module's: `render` gives `butane` 120 s
+#: of its own, in `ignition`'s set-up. A stop-loss; nothing asserts on
+#: elapsed time.
+CASE_TIMEOUT = 240
+
+#: How long a container these cases start may run: the run's outer bound
+#: (framework/testing.md §1). One worker's cases share the module's
+#: containers for as long as that worker runs them, and none is wanted past
+#: the longest run the gate admits.
+CONTAINER_TIMEOUT = 1200
+
+#: The label every container these cases start carries, and so the census of
+#: what a run has left: `podman ps --all --filter label=kluster-test=<module>`.
+LABEL = f'kluster-test={Path(__file__).stem}'
+
+#: The image's own `VOLUME`s. A container is given an anonymous volume for
+#: each one nothing is mounted on, so each is mounted as a tmpfs instead;
+#: `test_every_container_ends_by_itself_and_mounts_no_volume` holds this to
+#: the image.
+IMAGE_VOLUMES = (PurePosixPath('/var/lib/postgresql/data'),)
 
 #: The unit whose `podman run` this repeats.
 UNIT = 'pgstate.service'
@@ -93,23 +129,33 @@ RECIPIENT = 'age1exampleexampleexampleexampleexampleexampleexampleexamplezzzz'
 #: The stack a first client role writes and the other must then read.
 STACK = 'roles'
 
-
-def _image_is_local() -> bool:
-    if shutil.which('podman') is None:
-        return False
-    found = sp.run(['podman', 'image', 'exists', IMAGE], capture_output=True, timeout=PODMAN_TIMEOUT, check=False)
-    return found.returncode == 0
+#: The status coreutils `timeout` exits with when its command ran out of time.
+TIMED_OUT = 124
 
 
 pytestmark = [
     pytest.mark.skipif(shutil.which('butane') is None, reason='butane is not on PATH (mise x -- ...)'),
     pytest.mark.skipif(shutil.which('pulumi') is None, reason='pulumi is not on PATH (mise x -- ...)'),
-    pytest.mark.skipif(not _image_is_local(), reason=f'podman, or a local copy of {IMAGE}, is missing'),
+    pytest.mark.timeout(CASE_TIMEOUT),
 ]
 
 
+@pytest.fixture(scope='module', autouse=True)
+def image_is_local() -> None:
+    """Skip the module where the image cannot be run without fetching it.
+
+    Asked here rather than at import, so that collecting the suite never
+    waits on `podman`.
+    """
+    if shutil.which('podman') is None:
+        pytest.skip('podman is not on PATH')
+    found = process_sessions.run(['podman', 'image', 'exists', IMAGE], timeout=COMMAND_TIMEOUT)
+    if found.returncode != 0:
+        pytest.skip(f'there is no local copy of {IMAGE}')
+
+
 def _podman(*args: str, stdin: bytes | None = None) -> bytes:
-    done = sp.run(['podman', *args], input=stdin, capture_output=True, timeout=PODMAN_TIMEOUT, check=False)
+    done = process_sessions.run(['podman', *args], input=stdin, timeout=COMMAND_TIMEOUT)
     if done.returncode != 0:
         raise AssertionError(f'podman {" ".join(args[:2])} failed: {done.stderr.decode().strip()}')
     return done.stdout
@@ -180,6 +226,24 @@ def _unit_env(ignition: dict[str, Any]) -> dict[str, str]:
     return dict(pairs)
 
 
+def _bounded(verb: str, *args: str) -> list[str]:
+    """`podman <verb>` of a container that ends and goes by itself, and is given no volume.
+
+    `--timeout` has conmon end the container at `CONTAINER_TIMEOUT` and
+    `--rm` removes it then. conmon runs under the container service, not
+    under the test process, so this holds however the test process ended,
+    an outright kill that runs no teardown included; until then the label
+    lists it. A container created and never started is not reached: conmon
+    counts from the start.
+
+    Each of the image's `VOLUME`s is a tmpfs. Otherwise each would be an
+    anonymous volume, which holds one of the host's podman locks and
+    outlives a container `podman rm` removes without `--volumes`.
+    """
+    tmpfs = [f'--tmpfs={volume}' for volume in IMAGE_VOLUMES]
+    return [verb, '--rm', '--timeout', str(CONTAINER_TIMEOUT), '--label', LABEL, *tmpfs, *args]
+
+
 def _unit_container(ignition: dict[str, Any]) -> tuple[list[str], list[File]]:
     """The Postgres unit's `podman run` as a `podman create`, and what to copy in.
 
@@ -188,14 +252,13 @@ def _unit_container(ignition: dict[str, Any]) -> tuple[list[str], list[File]]:
     the loopback interface; each volume a delivered file sits under, which
     becomes a copy of those files at the path the volume mounts them on; and
     the one volume nothing is delivered into, which is the box's own state and
-    starts here as an anonymous volume, on the path the image's own `VOLUME`
-    names. `_remove` takes that volume with the container; `--rm` would too,
-    but only for a container that exits by itself, and these are removed.
+    starts here empty, as the tmpfs `_bounded` mounts on the path the image's
+    own `VOLUME` names. `_bounded`'s arguments are added.
     """
     argv = _unit_command(ignition)
     assert argv[:2] == ['/usr/bin/podman', 'run'], argv
     delivered = _delivered(ignition)
-    created = ['create', '--rm']
+    created = _bounded('create')
     copies: list[File] = []
     rest = iter(argv[2:])
     for arg in rest:
@@ -211,7 +274,7 @@ def _unit_container(ignition: dict[str, Any]) -> tuple[list[str], list[File]]:
                 host, inside, *_options = next(rest).split(':')
                 under = [file for file in delivered if file.path.is_relative_to(host)]
                 if not under:
-                    created += ['--volume', inside]
+                    assert PurePosixPath(inside) in IMAGE_VOLUMES, (inside, IMAGE_VOLUMES)
                 copies += [
                     File(
                         PurePosixPath(inside) / file.path.relative_to(host), file.content, file.mode, file.uid, file.gid
@@ -233,49 +296,53 @@ class Box:
 
     def local(self, sql: str) -> str:
         """SQL as the superuser on the container's local socket: the dump timer's way in."""
-        done = sp.run(
+        done = process_sessions.run(
             ['podman', 'exec', self.name, 'psql', '--no-psqlrc', '-v', 'ON_ERROR_STOP=1', '-At']  # noqa: RUF005 -- keeps -U, -d and -c beside their values
             + ['-U', self.superuser, '-d', settings.DATABASE, '-c', sql],
-            capture_output=True,
             text=True,
-            timeout=PODMAN_TIMEOUT,
-            check=False,
+            timeout=COMMAND_TIMEOUT,
         )
         if done.returncode != 0:
             raise state.StateError(done.stderr.strip())
         return done.stdout.strip()
 
 
-def _await_ready(name: str) -> None:
+def _await_ready(name: str, *, timeout: float = COMMAND_TIMEOUT) -> None:
     """Follow the container's log until the serving Postgres says it is up.
 
     The log is the event: the entrypoint prints each stage as it reaches it,
     and a container that dies ends the stream, which ends the wait with the
-    log in hand rather than with a timeout.
+    log in hand. A container that stays up and goes silent is ended by the
+    follower's own bound, coreutils `timeout`, whose exit status 124 is
+    raised as a `TimeoutExpired` naming the follower. Leaving the block
+    kills the follower whichever way it is left.
     """
     seen: list[str] = []
-    with sp.Popen(['podman', 'logs', '--follow', name], stdout=sp.PIPE, stderr=sp.STDOUT, text=True) as follow:
+    follower = ['timeout', str(timeout), 'podman', 'logs', '--follow', name]
+    with process_sessions.started(
+        follower, stdout=process_sessions.PIPE, stderr=process_sessions.STDOUT, text=True
+    ) as follow:
         assert follow.stdout is not None
         initialized = False
         for text in follow.stdout:
             seen.append(text)
             initialized = initialized or INIT_DONE in text
             if initialized and READY in text:
-                follow.terminate()
                 return
-    raise AssertionError(f'{name} stopped before it served:\n{"".join(seen)}')
+        if follow.wait(timeout=COMMAND_TIMEOUT) == TIMED_OUT:
+            raise sp.TimeoutExpired(follower, timeout, output=''.join(seen))
+        raise AssertionError(f'{name} stopped before it served:\n{"".join(seen)}')
 
 
 def _remove(name: str) -> None:
-    """Remove a container these cases started, and the anonymous volumes it mounted.
+    """Remove a container these cases started, and any anonymous volume it mounted.
 
-    `--volumes` is what takes the volumes: a container that `podman rm`
-    removes keeps its anonymous volumes without it, `--rm` notwithstanding,
-    and each one left behind holds one of the host's podman locks.
+    `_bounded` gives a container none, and `--volumes` is the guard for one
+    the image's `VOLUME`s would add if `IMAGE_VOLUMES` fell behind them: a
+    container that `podman rm` removes keeps its anonymous volumes without
+    it, `--rm` notwithstanding.
     """
-    _ = sp.run(
-        ['podman', 'rm', '--force', '--volumes', '--time', '0', name], capture_output=True, timeout=PODMAN_TIMEOUT
-    )
+    _ = process_sessions.run(['podman', 'rm', '--force', '--volumes', '--time', '0', name], timeout=COMMAND_TIMEOUT)
 
 
 def _named(created: list[str], name: str) -> list[str]:
@@ -285,7 +352,19 @@ def _named(created: list[str], name: str) -> list[str]:
 
 def _client(name: str) -> list[str]:
     """The `podman run` of the container that serves the image's client tools."""
-    return ['run', '--detach', '--rm', '--network', 'host', '--name', name, '--entrypoint', 'sleep', IMAGE, 'infinity']
+    return _bounded('run', '--detach', '--network', 'host', '--name', name, '--entrypoint', 'sleep', IMAGE, 'infinity')
+
+
+def _superusers() -> list[str]:
+    """The `podman create` of a box whose image superuser is `ci`, which is a client role's name."""
+    return _bounded(
+        'create',
+        *('--publish', f'{ADDRESS}::{settings.PORT}'),
+        *('--env', f'POSTGRES_DB={settings.DATABASE}'),
+        *('--env', f'POSTGRES_USER={settings.CI_ROLE}'),
+        *('--env', 'POSTGRES_HOST_AUTH_METHOD=trust'),
+        IMAGE,
+    )
 
 
 Start = Callable[[list[str], list[File], str], Box]
@@ -374,9 +453,14 @@ def clients(tools: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Pat
     `state` runs the image's `pg_restore`. `pulumi` gets a home of its own,
     and none of the operator's `PGSSL*` variables: a case names its bundle's
     files or connects without TLS, never through what the operator's shell
-    happened to hold.
+    happened to hold. Each command either one starts is bounded by
+    `COMMAND_TIMEOUT` rather than by its runner's own bound, which is set for
+    a transfer over the network and, for `state`'s, sits above the run's.
     """
     monkeypatch.setattr(state, 'PG_RESTORE', str(tools / state.PG_RESTORE))
+    monkeypatch.setattr(pulumi_cli, 'TIMEOUT', COMMAND_TIMEOUT)
+    monkeypatch.setattr(state, 'LISTING_TIMEOUT', COMMAND_TIMEOUT)
+    monkeypatch.setattr(state, 'TRANSFER_TIMEOUT', COMMAND_TIMEOUT)
     monkeypatch.setenv('PULUMI_HOME', str(tmp_path / 'pulumi-home'))
     monkeypatch.setenv('PULUMI_SKIP_UPDATE_CHECK', 'true')
     for variable in (CA_ENV, CERT_ENV, KEY_ENV):
@@ -394,13 +478,11 @@ def _bundle(roots: config.Roots, box: Box, clients: Path, role: str) -> state.Co
 
 
 def _psql(clients: Path, target: state.Connection, sql: str) -> str:
-    done = sp.run(
+    done = process_sessions.run(
         [str(clients / 'psql'), '--no-psqlrc', '-v', 'ON_ERROR_STOP=1', '-At', f'--dbname={target.url}', '-c', sql],
         env={**os.environ, **target.env},
-        capture_output=True,
         text=True,
-        timeout=PODMAN_TIMEOUT,
-        check=False,
+        timeout=COMMAND_TIMEOUT,
     )
     if done.returncode != 0:
         raise state.StateError(done.stderr.strip())
@@ -424,36 +506,51 @@ def _stack_init(target: state.Connection, project: Path, stack: str, env: dict[s
     )
 
 
-@pytest.mark.parametrize('container', ['appliance', 'client'])
-def test_a_removed_container_leaves_none_of_its_volumes(ignition: dict[str, Any], container: str) -> None:
-    """Each container these cases start goes without leaving a volume behind.
+@pytest.mark.parametrize('container', ['appliance', 'superusers', 'client'])
+def test_every_container_ends_by_itself_and_mounts_no_volume(ignition: dict[str, Any], container: str) -> None:
+    """Each container these cases start is bounded, removed when it ends, labelled, and given no volume.
 
-    Judged by the volumes this container mounted, by name, rather than by a
-    count of the host's: other containers come and go on the same host while
-    this runs. Whatever survives is removed here once counted, so a failing
-    run adds nothing to the host's volumes either.
+    Read from the container podman made of the arguments rather than from
+    the arguments: what podman does with them is what leaves a lock or a
+    volume behind.
     """
     name = f'kluster-test-volumes-{uuid.uuid4().hex[:12]}'
-    argv = _named(_unit_container(ignition)[0], name) if container == 'appliance' else _client(name)
-    volumes: list[str] = []
+    argv = {
+        'appliance': lambda: _named(_unit_container(ignition)[0], name),
+        'superusers': lambda: _named(_superusers(), name),
+        'client': lambda: _client(name),
+    }[container]()
     try:
         _ = _podman(*argv)
-        mounts = json.loads(_podman('container', 'inspect', name))[0]['Mounts']
-        volumes = [str(mount['Name']) for mount in mounts if mount['Type'] == 'volume']
+        made = json.loads(_podman('container', 'inspect', name))[0]
     finally:
         _remove(name)
-    left = [
-        volume
-        for volume in volumes
-        if sp.run(['podman', 'volume', 'exists', volume], capture_output=True, timeout=PODMAN_TIMEOUT).returncode == 0
-    ]
-    for volume in left:
-        _ = sp.run(['podman', 'volume', 'rm', '--force', volume], capture_output=True, timeout=PODMAN_TIMEOUT)
+    declared: dict[str, Any] = json.loads(_podman('image', 'inspect', IMAGE))[0]['Config'].get('Volumes') or {}
 
-    # The premise: the container mounted a volume, the image's own `VOLUME`
-    # at least, so an empty `left` is a removal rather than nothing to remove.
-    assert volumes
-    assert left == []
+    # The premise: the image declares volumes, so a container given none is
+    # one whose tmpfs covers each, and `IMAGE_VOLUMES` names them all.
+    assert sorted(declared) == sorted(str(volume) for volume in IMAGE_VOLUMES)
+    assert [mount['Destination'] for mount in made['Mounts'] if mount['Type'] == 'volume'] == []
+    assert made['Config']['Timeout'] == CONTAINER_TIMEOUT
+    assert made['HostConfig']['AutoRemove'] is True
+    assert LABEL in {f'{key}={value}' for key, value in made['Config']['Labels'].items()}
+
+
+def test_a_box_silent_before_it_serves_fails_the_wait_naming_the_follower() -> None:
+    """A container that stays up and prints nothing ends the readiness wait at the follower's bound.
+
+    The client container is that container: it sleeps and never writes its
+    log. The bound is the event here, since nothing else ends the follow.
+    """
+    name = f'kluster-test-silent-{uuid.uuid4().hex[:12]}'
+    try:
+        _ = _podman(*_client(name))
+        with pytest.raises(sp.TimeoutExpired) as stalled:
+            _await_ready(name, timeout=1)
+    finally:
+        _remove(name)
+
+    assert stalled.value.cmd == ['timeout', '1', 'podman', 'logs', '--follow', name]
 
 
 def _names(stacks: list[str]) -> list[str]:
@@ -534,9 +631,7 @@ def test_a_dump_from_a_box_whose_client_roles_are_superusers_restores(
     """
     box = _appliance(start, ignition)
     before = start(
-        ['create', '--rm', '--publish', f'{ADDRESS}::{settings.PORT}']  # noqa: RUF005 -- keeps --publish and each --env beside their values
-        + ['--env', f'POSTGRES_DB={settings.DATABASE}', '--env', f'POSTGRES_USER={settings.CI_ROLE}']
-        + ['--env', 'POSTGRES_HOST_AUTH_METHOD=trust', IMAGE],
+        _superusers(),
         [
             File(
                 PurePosixPath('/docker-entrypoint-initdb.d/00-roles.sql'),
@@ -551,8 +646,8 @@ def test_a_dump_from_a_box_whose_client_roles_are_superusers_restores(
     _stack_init(written, tmp_path / 'before', STACK)
     archive = clients / 'before.dump'
     _ = archive.write_bytes(_podman('exec', before.name, 'pg_dump', '-Fc', '-U', settings.CI_ROLE, settings.DATABASE))
-    listing = sp.run(
-        [state.PG_RESTORE, '--list', str(archive)], capture_output=True, text=True, timeout=PODMAN_TIMEOUT, check=True
+    listing = process_sessions.run(
+        [state.PG_RESTORE, '--list', str(archive)], text=True, timeout=COMMAND_TIMEOUT, check=True
     )
     # The premise: the archive hands the table to a role the restoring one
     # cannot become.
@@ -597,13 +692,11 @@ def _box_count(box: Box, archive: Path, env: dict[str, str]) -> int:
         '--file=-',
         stdin=archive.read_bytes(),
     )
-    counted = sp.run(
+    counted = process_sessions.run(
         [str(DUMP_SCRIPT), 'count-stacks'],
         input=printed,
         env={'PATH': os.environ['PATH'], 'PG_DATABASE': env['PG_DATABASE']},
-        capture_output=True,
-        timeout=PODMAN_TIMEOUT,
-        check=False,
+        timeout=COMMAND_TIMEOUT,
     )
     assert counted.returncode == 0, counted.stderr.decode()
     return int(counted.stdout)

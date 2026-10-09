@@ -248,7 +248,7 @@ the census of what is left.
 A suite that still starts a process through `subprocess` is a finding when
 that process can outlive its own kill: one that starts processes of its own,
 or blocks on a pipe, a FIFO or a service. Each of today's is a slice of
-Aetf/kluster-ops#530's plan, the containers among them.
+Aetf/kluster-ops#530's plan.
 
 ## 2. Writing Tests
 
@@ -1079,17 +1079,20 @@ are:
 -   `tests/test_derived.py`'s `test_the_token_lands_where_the_program_reads_it`;
 -   `tests/test_process_sessions.py`'s
     `test_the_pulumi_clis_plugins_stay_in_its_session_and_go_with_it`, the
-    premise `tests/process_sessions.py` rests on (§1.2).
+    premise `tests/process_sessions.py` rests on (§1.2);
+-   `tests/test_state_roles.py`, whose stacks are made and listed with the
+    CLI: each command it starts, and each `pulumi` and client-tool run of
+    the code under test, at its `COMMAND_TIMEOUT`, and each case at its
+    `CASE_TIMEOUT`, above every command bound, including the one `render`
+    gives `butane` in the module's set-up.
 
-Three more start the CLI and run under the suite's bound, short of the rule
+Others start the CLI and run under the suite's bound, short of the rule
 until the issue named beside each gives them bounds of their own:
 
 -   `tests/test_sealing.py`'s `test_the_write_is_held_to_what_the_real_cli_accepts`
     (Aetf/kluster-ops#535);
 -   `tests/test_pulumi_package_checksums.py`'s `test_the_entry_without_a_map_loads`
-    and `test_an_entry_carrying_a_sum_is_refused` (Aetf/kluster-ops#535);
--   `tests/test_state_roles.py`, whose stacks are made and listed with the
-    CLI (Aetf/kluster-ops#560).
+    and `test_an_entry_carrying_a_sum_is_refused` (Aetf/kluster-ops#535).
 
 Their durations grow with the machine's load far more than a mocked case's
 duration does, because each runs the CLI, and most a language host and a
