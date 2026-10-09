@@ -10,48 +10,58 @@ license = "MIT OR Apache-2.0"
 license-files = ["LICENSE-MIT", "LICENSE-APACHE"]
 requires-python = ">= 3.12"
 
+# Every requirement of a package from outside this repository, here and in the
+# dependency groups below, admits one compatible line and no more: it is
+# bounded below the next major of the release `uv.lock` holds, or for a 0.x
+# release below its next minor, the line SemVer gives a 0.x release. Lock file
+# maintenance relocks inside the bounds, so a release past one reaches the
+# lock only through a pull request that moves the bound -- renovate's
+# `rangeStrategy` in `renovate.json5` -- and not with the routine relock. A
+# test holds every such requirement to that (`tests/test_dependency_bounds.py`).
+# The workspace members under `[tool.uv.sources]` are this repository's own and
+# carry no range.
 dependencies = [
     # The first release whose SDK gives a resource of an extension package --
     # a `crds:` resource of the kubernetes provider's CRD extension -- the
     # explicit provider it is handed (pulumi/pulumi#24702, in 3.266.0);
     # `tests/test_extension_provider.py` holds it against the engine.
-    "pulumi>=3.266.0",
-    # Exact, unlike every other floor here: `sdks/crds` is generated against
+    "pulumi>=3.266.0,<4",
+    # Exact, unlike every other range here: `sdks/crds` is generated against
     # one provider version and registers each of its resources at that version,
     # so the program has to install the same one -- two versions would be two
-    # kubernetes plugins and two default providers. A floor would let
-    # `lockFileMaintenance` move the resolved version in `uv.lock` alone, which
-    # no regeneration follows. A test holds the `packages:` entry in
+    # kubernetes plugins and two default providers. A range, even one held to
+    # the major, would let `lockFileMaintenance` move the resolved version in
+    # `uv.lock` alone, which no regeneration follows. A test holds the `packages:` entry in
     # `Pulumi.yaml` and the generated SDK to this pin; renovate moves the pin
     # and the entry together, apart from the python group, and a workflow
     # regenerates on its branch (framework/pulumi.md §4).
     "pulumi-kubernetes==4.34.2",
-    "requests>=2.32.3",
-    "jinja2>=3.1.4",
+    "requests>=2.32.3,<3",
+    "jinja2>=3.1.4,<4",
     "pulumi-crds",
-    "pulumi-github>=6.4.0",
-    "pulumi-kubernetes-cert-manager>=0.2.0",
-    "cryptography>=50.0.0",
-    "oci>=2.184.2",
-    "pulumi-oci>=4.20.0",
-    "pulumiverse-talos>=0.8.1",
-    "pykeepass>=4.2.0",
-    "keyring>=25.7.0",
-    "pulumi-cloudflare>=6.11.0",
-    "pulumi-libvirt>=0.5.4",
+    "pulumi-github>=6.4.0,<7",
+    "pulumi-kubernetes-cert-manager>=0.2.0,<0.3",
+    "cryptography>=50.0.0,<51",
+    "oci>=2.184.2,<3",
+    "pulumi-oci>=5.1.0,<6",
+    "pulumiverse-talos>=0.8.1,<0.9",
+    "pykeepass>=4.2.0,<5",
+    "keyring>=25.7.0,<26",
+    "pulumi-cloudflare>=6.11.0,<7",
+    "pulumi-libvirt>=0.5.4,<0.6",
     "pulumi-b2",
     "pulumi-unifi",
     "pulumi-zerotier",
-    "asyncssh>=2.24.0",
+    "asyncssh>=2.24.0,<3",
     # `update_crds`'s, a console script like the others below, so what it
     # imports is installed wherever the package is, as `tests/test_script_imports.py`
     # holds of every script. Its progress bars:
-    "tqdm>=4.67.1",
+    "tqdm>=4.67.1,<5",
     # and libyaml's parser and emitter, which it reads and writes the CRD bundle
     # with (`sources._yaml`). The `oldlibyaml` extra rather than `libyaml`:
     # `YAML()` imports only the extension this one installs, and without it runs
     # in pure Python.
-    "ruamel-yaml[oldlibyaml]>=0.19.1",
+    "ruamel-yaml[oldlibyaml]>=0.19.1,<0.20",
 ]
 
 [project.scripts]
@@ -62,19 +72,22 @@ operator-stack = 'kluster.scripts.operator_stack.cli:main'
 
 [dependency-groups]
 dev = [
-    "ipython>=8.30.0",
-    "pytest>=8.0.0",
-    "pytest-asyncio>=0.23.0",
-    "ruff>=0.15.11",
-    "basedpyright>=1.39.10",
-    "import-linter>=2.14",
-    "pytest-timeout>=2.4.0",
-    "pytest-xdist>=3.8.0",
+    "ipython>=9.17.1,<10",
+    "pytest>=9.1.1,<10",
+    "pytest-asyncio>=1.4.0,<2",
+    "ruff>=0.16.9,<0.17",
+    "basedpyright>=1.39.10,<2",
+    "import-linter>=2.14,<3",
+    "pytest-timeout>=2.4.0,<3",
+    "pytest-xdist>=3.8.0,<4",
+    # What `tests/test_dependency_bounds.py` reads a requirement's range and
+    # a locked version with: PEP 440 as pip reads it.
+    "packaging>=26.3,<27",
     # What `tests/process_sessions.py` finds, signals and waits on the
     # processes of a case's POSIX sessions with; it ships no annotations, so
     # typeshed's stubs come with it.
-    "psutil>=7.2.2",
-    "types-psutil>=7.2.2",
+    "psutil>=7.2.2,<8",
+    "types-psutil>=7.2.2,<8",
 ]
 ##
 ## Project management section
@@ -89,13 +102,6 @@ default-groups = ["dev"]
 # `minimumReleaseAge`, and a test holds the two equal. A relative value, so
 # `uv.lock` records the span, not a date.
 exclude-newer = "7 days"
-# The one release admitted younger than that, by the operator's decision of
-# 2026-10-01: `pulumi` 3.267.0, the newest release carrying the SDK fix the
-# `pulumi` floor above names, taken rather than waited for. A cutoff rather
-# than `false`, so the entry admits nothing uploaded after the decision. From
-# 2026-10-08T12:00:00Z the span admits everything the entry does, and from
-# then on the entry only holds `pulumi` back, silently: it is removed then.
-exclude-newer-package = { pulumi = "2026-10-01T12:00:00Z" }
 
 # Pin the package index so locking doesn't pick up ambient registry settings
 # (e.g. UV_INDEX_URL pointing at a private mirror). Note CLI flags and env

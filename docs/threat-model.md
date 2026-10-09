@@ -254,8 +254,7 @@ with no age and no merge. These await the operator's ruling too
 installs it, has usually been caught upstream. Every route CI executes
 waits a week after a release is published, or, where its source reports
 no release time, for a person on the dependency dashboard; uv holds what it resolves
-to the same week, save a release the operator admits by name
-(`exclude-newer-package` in `pyproject.toml`). The container images and
+to the same week. The container images and
 the Helm charts, which the cluster only pulls, wait for none, and that is
 an accepted residual: the cluster runs what it pulls with whatever the
 workload holds, so a poisoned image or chart release reaches it the day
