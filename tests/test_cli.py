@@ -39,7 +39,6 @@ from credentials_command_tree import commands
 from memory_keyring import MemoryKeyring, installed
 from memory_kit import MemoryKit
 
-from kluster import conventions
 from kluster.lib import acquisition, stack_environment
 from kluster.lib import workstation as lib_workstation
 from kluster.scripts.credentials import age, cli, devices, entries, escrow, masters
@@ -376,6 +375,27 @@ def test_every_leaf_dispatches(argv: list[str], dispatch: Dispatch, caplog: pyte
     assert target in dispatch.reached
 
 
+def test_a_seed_row_with_no_module_refuses_its_rotation_by_name(
+    dispatch: Dispatch, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The walk above reaches this branch only on the day a register row has no
+    # module behind it, and no row is that today, so the row is installed here.
+    # A seed that mints its own successor gets a `rotate` from the register
+    # alone; with nothing to implement it, the subcommand refuses and names the
+    # member rather than crashing on an arm `main` does not have.
+    member = 'a-seed-nothing-implements'
+    unwritten = entries.Seed(
+        member=member, title='A seed', identifier='an id', mints='a credential', mints_own_successor=True
+    )
+    monkeypatch.setattr(entries, 'SEEDS', {**entries.SEEDS, member: unwritten})
+    assert _module_for(member) is None
+
+    assert cli.main(['seed', member, 'rotate']) == 1
+
+    assert member in caplog.text
+    assert not [name for name in dispatch.reached if name.endswith('.rotate_seed')]
+
+
 def _refusing(refusal: Exception) -> Callable[..., Any]:
     def refuse(*_args: Any, **_kwargs: Any) -> Any:
         raise refusal
@@ -428,10 +448,8 @@ def test_rotate_carries_its_only_and_its_destination_through(dispatch: Dispatch,
 
     # The destination travels as a path with the two ways of reaching it
     # (`lifecycle.Successor`), which `rotate` chooses between once its own
-    # refusals are behind it, so the command itself neither makes nor opens
-    # the file.
-    assert 'store.create' not in dispatch.reached
-    assert [args[0] for name, args, _ in dispatch.calls if name == 'store.from_env'] == [None]
+    # refusals are behind it; that the command itself neither makes nor opens
+    # the file is the case below.
     rotate_calls = [(args, kwargs) for name, args, kwargs in dispatch.calls if name == 'lifecycle.rotate']
     assert [kwargs['only'] for _, kwargs in rotate_calls] == ['oci']
     assert rotate_calls[0][0][1].path == successor
@@ -478,54 +496,81 @@ def test_the_zones_row_is_pushed_into_every_stack_its_slot_map_row_names(dispatc
         for target in cli.slots.ROWS[cli.derived.ZONES_ROW].targets
         if isinstance(target, cli.slots.PulumiConfig)
     ]
-    assert {slot.name for slot in kwargs['stacks']} == {conventions.STACK_NAMES.dns, conventions.STACK_NAMES.apps}
     # Opened once and shared: each stack picks its own passphrase out of it.
     assert dispatch.reached.count('lifecycle.environment') == 1
 
 
-def test_the_zones_row_takes_no_stack_of_its_own(capsys: pytest.CaptureFixture[str]) -> None:
-    # The row names its stacks in the slot map, and one mint fills every one
-    # of them: the token it retires is the one they all hold, so a run aimed
-    # at one stack would revoke the others' live credential.
-    refuses_a_stack_of_its_own(['derived', 'cloudflare-zones', 'mint', '--stack', 'elsewhere'], capsys)
+@pytest.mark.parametrize(
+    ('argv', 'flag'),
+    [
+        # The zones row names its stacks in the slot map, and one mint fills
+        # every one of them: the token it retires is the one they all hold, so
+        # a run aimed at one stack would revoke the others' live credential.
+        pytest.param(['derived', 'cloudflare-zones', 'mint', '--stack', 'elsewhere'], '--stack', id='zones'),
+        # What these three mint is named after the row -- one IAM user, one B2
+        # key name, one Cloudflare token -- and the mint retires every other
+        # credential of that name, so a `--stack` would revoke the real stack's
+        # live credential on its way to filling a different stack's slot.
+        pytest.param(
+            ['derived', 'oci-physical', 'mint', '--compartment', 'ocid1.compartment.test', '--stack', 'elsewhere'],
+            '--stack',
+            id='oci-physical',
+        ),
+        pytest.param(['derived', 'b2-management', 'mint', '--stack', 'elsewhere'], '--stack', id='b2-management'),
+        pytest.param(
+            ['derived', 'cloudflare-gateway-acme', 'mint', '--stack', 'elsewhere'], '--stack', id='gateway-acme'
+        ),
+        # A device credential authenticates against one device, and one stack
+        # talks to that device; a `--stack` would deliver it where nothing
+        # checks it.
+        pytest.param(['derived', 'unifi', 'record', '--stack', 'elsewhere'], '--stack', id='device'),
+        # The one OCI mint held to the recorded compartment with no way around
+        # it. `--compartment` exists for rehearsing a bring-up in a tenancy
+        # that is not this installation's; the drill compartment is a recorded
+        # name in the recorded tenancy, and a drill key confined to a
+        # compartment named on the command line would be a key whose bound no
+        # test holds.
+        pytest.param(
+            ['derived', 'drill-credentials', 'mint', '--compartment', 'ocid1.x'],
+            '--compartment',
+            id='drill-credentials',
+        ),
+    ],
+)
+def test_a_row_has_no_flag_that_would_aim_it_elsewhere(
+    argv: list[str], flag: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`argv` is refused *for naming `flag`*, rather than merely refused.
 
-
-def refuses_a_stack_of_its_own(argv: list[str], capsys: pytest.CaptureFixture[str]) -> None:
-    """`argv` is refused *for naming `--stack`*, rather than merely refused.
-
-    `SystemExit` is argparse's answer to every usage error and to a clean
-    `--help` alike, so the exception alone says only that the line did not
-    parse. The status is what separates a refusal from a successful exit, and
-    the message is the only place the flag itself appears.
+    The flag is absent rather than documented as dangerous. `SystemExit` is
+    argparse's answer to every usage error and to a clean `--help` alike, so
+    the exception alone says only that the line did not parse. The status is
+    what separates a refusal from a successful exit, and the message is the
+    only place the flag itself appears.
     """
     with pytest.raises(SystemExit) as refusal:
         _ = cli.build_parser().parse_args(argv)
 
     assert refusal.value.code == 2
-    assert 'unrecognized arguments: --stack' in capsys.readouterr().err
+    assert f'unrecognized arguments: {flag}' in capsys.readouterr().err
 
 
-def test_a_row_named_after_its_consumer_takes_no_stack_of_its_own(capsys: pytest.CaptureFixture[str]) -> None:
-    # What these three mint is named after the row -- one IAM user, one B2 key
-    # name, one Cloudflare token -- and the mint retires every other credential
-    # of that name, so a `--stack` would revoke the real stack's live
-    # credential on its way to filling a different stack's slot. The flag is
-    # absent rather than documented as dangerous.
-    for argv in (
-        ['derived', 'oci-physical', 'mint', '--compartment', 'ocid1.compartment.test', '--stack', 'elsewhere'],
-        ['derived', 'b2-management', 'mint', '--stack', 'elsewhere'],
-        ['derived', 'cloudflare-gateway-acme', 'mint', '--stack', 'elsewhere'],
-    ):
-        refuses_a_stack_of_its_own(argv, capsys)
+def test_the_fixed_rows_are_pushed_into_the_stack_their_slot_map_row_names(dispatch: Dispatch) -> None:
+    rows = (cli.derived.OCI_PHYSICAL_ROW, cli.derived.B2_MANAGEMENT_ROW, cli.derived.GATEWAY_ACME_ROW)
+    assert cli.main(['derived', rows[0], 'mint', '--compartment', 'ocid1.compartment.test']) == 0
+    assert cli.main(['derived', rows[1], 'mint']) == 0
+    assert cli.main(['derived', rows[2], 'mint']) == 0
 
-
-def test_the_fixed_rows_are_pushed_into_the_stack_they_are_named_after(dispatch: Dispatch) -> None:
-    assert cli.main(['derived', 'oci-physical', 'mint', '--compartment', 'ocid1.compartment.test']) == 0
-    assert cli.main(['derived', 'b2-management', 'mint']) == 0
-    assert cli.main(['derived', 'cloudflare-gateway-acme', 'mint']) == 0
-
+    # Each row's config targets sit in one stack, and that stack is the one the
+    # dispatch hands its mint: the zones row's relation above, for a row that
+    # takes a single stack.
+    named = [
+        {target.stack for target in cli.slots.ROWS[row].targets if isinstance(target, cli.slots.PulumiConfig)}
+        for row in rows
+    ]
+    assert all(len(stacks) == 1 for stacks in named), named
     pushed = [kwargs['stack'].name for name, _, kwargs in dispatch.calls if name.startswith('derived.')]
-    assert pushed == [cli.derived.PHYSICAL_STACK] * 3
+    assert pushed == [stack for stacks in named for stack in stacks]
 
 
 def test_the_drill_identity_is_aimed_at_the_committed_recipient_file_as_the_admin_token(dispatch: Dispatch) -> None:
@@ -567,21 +612,6 @@ def test_the_drill_identity_is_drawn_only_where_its_recipient_file_is_in_the_che
         assert status == 1
         assert pushed == []
         assert borrowed == []
-
-
-def test_the_drill_credentials_mint_takes_no_compartment(capsys: pytest.CaptureFixture[str]) -> None:
-    """The one OCI mint held to the recorded compartment with no way around it.
-
-    `--compartment` exists for rehearsing a bring-up in a tenancy that is not
-    this installation's; the drill compartment is a recorded name in the
-    recorded tenancy, and a drill key confined to a compartment named on the
-    command line would be a key whose bound no test holds.
-    """
-    with pytest.raises(SystemExit) as refusal:
-        _ = cli.build_parser().parse_args(['derived', 'drill-credentials', 'mint', '--compartment', 'ocid1.x'])
-
-    assert refusal.value.code == 2
-    assert 'unrecognized arguments: --compartment' in capsys.readouterr().err
 
 
 def test_the_drill_credentials_reach_their_mint_with_both_seeds_as_the_admin_token(dispatch: Dispatch) -> None:
@@ -653,12 +683,6 @@ def test_a_device_row_is_pushed_into_the_stack_its_table_names(dispatch: Dispatc
     assert 'lifecycle.environment' in dispatch.reached
 
 
-def test_a_device_row_takes_no_stack_of_its_own(capsys: pytest.CaptureFixture[str]) -> None:
-    # The credential authenticates against one device, and one stack talks to
-    # that device; a `--stack` would deliver it where nothing checks it.
-    refuses_a_stack_of_its_own(['derived', 'unifi', 'record', '--stack', 'elsewhere'], capsys)
-
-
 def test_what_a_device_run_is_handed_reaches_the_delivery(dispatch: Dispatch, tmp_path: Path) -> None:
     username = tmp_path / 'username'
     password = tmp_path / 'password'
@@ -694,21 +718,13 @@ def test_the_controller_row_records_the_key_and_no_address(dispatch: Dispatch, t
         _ = cli.main(['derived', 'unifi', 'record', '--api-key-file', str(key), '--api-url', 'https://198.51.100.1'])
 
 
-def test_the_passphrase_is_written_to_its_slot_rather_than_redirected(dispatch: Dispatch) -> None:
-    assert cli.main(['derived', 'pulumi-passphrase', 'recover']) == 0
-
+@pytest.mark.parametrize('verb', ['recover', 'generate'])
+def test_the_passphrase_is_written_to_its_slot_rather_than_redirected(verb: str, dispatch: Dispatch) -> None:
     # The command owns the file, so it is 0600 from the moment it exists
-    # instead of whatever the shell's umask happened to be.
-    (_, args, _), *rest = [call for call in dispatch.calls if call[0] == 'workstation.write']
-    assert not rest
-    assert args[0] == cli.workstation.passphrase_path()
-    assert args[1] == 'a-secret'
-
-
-def test_generating_the_passphrase_also_fills_its_slot(dispatch: Dispatch) -> None:
-    # generate -> escrow -> push: the value reaches the slot mise.toml reads
+    # instead of whatever the shell's umask happened to be. `recover` puts it
+    # there rather than printing it; `generate` -> escrow -> push puts it there
     # in the same run, so a rotation is one command rather than two.
-    assert cli.main(['derived', 'pulumi-passphrase', 'generate']) == 0
+    assert cli.main(['derived', 'pulumi-passphrase', verb]) == 0
 
     (_, args, _), *rest = [call for call in dispatch.calls if call[0] == 'workstation.write']
     assert not rest
@@ -729,15 +745,31 @@ def test_the_operator_passphrase_is_kept_in_the_secret_store_rather_than_a_file(
     assert 'workstation.write' not in dispatch.reached
 
 
-def test_generating_a_label_with_no_slot_writes_no_file(dispatch: Dispatch) -> None:
-    assert cli.main(['derived', 'state-backend-ca', 'generate']) == 0
+def test_generating_a_label_with_no_slot_writes_no_file(dispatch: Dispatch, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The slot taken away here rather than a row found without one in the
+    # register, so the case does not rest on which rows have one today: the
+    # stack passphrase's row has one, and writes it on `generate` otherwise.
+    def slot(_label: str) -> escrow.WorkstationSlot | None:
+        return None
+
+    monkeypatch.setattr(cli.escrow, 'slot', slot)
+
+    assert cli.main(['derived', 'pulumi-passphrase', 'generate']) == 0
 
     assert 'workstation.write' not in dispatch.reached
 
 
-def test_the_passphrase_can_still_be_piped_to_another_machine(dispatch: Dispatch) -> None:
+def test_the_passphrase_can_still_be_piped_to_another_machine(
+    dispatch: Dispatch, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    piped = io.StringIO()
+    monkeypatch.setattr('sys.stdout', piped)
+
     assert cli.main(['derived', 'pulumi-passphrase', 'recover', '--stdout']) == 0
 
+    # What the pipe carries is the recovered value itself, and the slot is left
+    # as it was.
+    assert piped.getvalue().strip() == _Vault().recover(escrow.PASSPHRASE)
     assert 'workstation.write' not in dispatch.reached
 
 

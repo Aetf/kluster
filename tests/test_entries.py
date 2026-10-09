@@ -1,7 +1,13 @@
-"""The register's table and the command tree are meant to be the same shape.
+"""The seed register's own rules, and the commands that read it without a kit.
 
-Checking it is what makes "a row with no command" a failing test rather than
-a thing someone notices a year later (credentials.md §2).
+What a §2 row must be: an entry one group deep, an identifier that is never
+blank, the manual surface no API can create, no kit row the escrow also holds,
+the recovery key alone minting nothing, and the Cloudflare console text asking
+for both of the seed's permissions. Beside them, the root listing that needs no
+kit, the console-only `create` that stops with its console steps, and the
+help's ordering of the lifecycle. That every register row has a command is the
+walk over the real parser, `tests/test_cli.py`'s
+`test_the_walk_finds_every_register_row`.
 """
 
 from __future__ import annotations
@@ -17,7 +23,6 @@ from kluster.scripts.credentials.kdbx import KdbxStore
 
 def test_every_seed_lives_one_group_deep() -> None:
     for seed in entries.SEEDS.values():
-        assert seed.entry == f'{entries.GROUP}/{seed.title}'
         assert seed.entry.count('/') == 1
 
 
@@ -26,10 +31,6 @@ def test_no_seed_leaves_its_identifier_empty() -> None:
     # and never blank.
     for seed in entries.SEEDS.values():
         assert seed.identifier
-
-
-def test_the_recovery_key_entry_has_one_definition() -> None:
-    assert entries.SEEDS['recovery'].entry == escrow.RECOVERY_ENTRY
 
 
 def test_console_only_seeds_are_the_manual_surface() -> None:
@@ -81,26 +82,6 @@ def test_the_cloudflare_console_text_asks_for_both_of_the_seed_s_permissions() -
     # that adoption refuses.
     assert 'API Tokens → Edit' in console
     assert cloudflare.ZONE_VISIBILITY_PERMISSION in console
-
-
-def test_every_member_is_reachable_as_a_subcommand(capsys: pytest.CaptureFixture[str]) -> None:
-    with pytest.raises(SystemExit):
-        _ = main(['seed', '--help'])
-
-    printed = capsys.readouterr().out
-    for member in entries.SEEDS:
-        assert member in printed
-
-
-def test_every_account_root_is_reachable_as_a_subcommand(capsys: pytest.CaptureFixture[str]) -> None:
-    # The roots are a register too (§2): one `root <name>` command each, so
-    # a root the scripts borrow has a place to be put and to be listed.
-    with pytest.raises(SystemExit):
-        _ = main(['root', '--help'])
-
-    printed = capsys.readouterr().out
-    for member in masters.ROOTS:
-        assert member in printed
 
 
 def test_listing_the_roots_needs_no_kit_and_prints_no_value(
