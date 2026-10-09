@@ -21,7 +21,7 @@ from typing import Any, cast
 import pulumi
 import pytest
 import pytest_asyncio
-from mock_monitor import Recorder, run_with
+from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
 from kluster.components.talos import TalosCluster, TalosDay1
@@ -165,8 +165,11 @@ async def test_day_one_needs_an_address_for_every_node(fake: Talos) -> None:
 async def test_day_zero_stands_on_its_own(fake: Talos) -> None:
     # Day 0 delivers the configuration out of band (instance metadata, a seed
     # ISO); day 1 needs machines that answer, which the stack only has later.
-    cluster = build_cluster()
-    await asyncio.gather(*(config.future() for config in cluster.machine_configs.values()))
+    # Every registration the build scheduled has landed once the barrier
+    # exits, so an absence read below is one the run left, not one it had
+    # not reached yet.
+    async with declaring():
+        _ = build_cluster()
     assert 'kluster-bootstrap' not in fake.names_declared
     assert not [name for name in fake.names_declared if name.endswith('-config')]
 

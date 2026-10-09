@@ -219,9 +219,19 @@ class Run:
         return self.inputs(CHART, chart)['values']
 
     def urn(self, typ: str, name: str) -> str:
-        return next(
+        """The URN of the one registration of this type under this name.
+
+        More than one is refused rather than resolved to whichever registered
+        first: independent registrations are recorded in the order they reach the
+        monitor on the SDK's executor threads, so a first-found answer is a
+        different resource on a different run (`Recorder.one` refuses the same
+        way).
+        """
+        found = [
             urn for urn, request in self.monitor.registrations.items() if (request.type, request.name) == (typ, name)
-        )
+        ]
+        assert len(found) == 1, f'{len(found)} registrations of {typ} answer to {name}: {found}'
+        return found[0]
 
     def dependencies(self, typ: str, name: str) -> list[str]:
         return list(self.monitor.registrations[self.urn(typ, name)].dependencies)

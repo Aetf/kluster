@@ -33,7 +33,7 @@ import pytest
 import pytest_asyncio
 from device_places import DEVICE_DIRECTORY, DEVICE_FILE, PLACES
 from fake_systemd import INSTALLABLE, FakeSystemd
-from mock_monitor import Recorder, declaring, run_with
+from mock_monitor import Declaration, Recorder, declaring, run_with
 
 from kluster import conventions
 from kluster.components.gateway import persistence
@@ -135,6 +135,25 @@ async def mechanism(monitor: Recorder) -> DevicePersistence:
     return layer_one
 
 
+#: The names the `mechanism` fixture's registrations carry: the mechanism's
+#: and its consumer's (style/pulumi.md). Every case shares the module's
+#: recorder and some declare more into it (`Neighbors`, `Claimant`,
+#: `OtherClaimant`), so a claim about the fixture's run reads the
+#: registrations under these.
+FIXTURE_NAMES = (f'{NAME}-', f'{CONSUMER}-')
+
+
+def fixture_declarations(monitor: Recorder, typ: str) -> list[Declaration]:
+    """The `mechanism` fixture's own declarations of `typ`, which must be some.
+
+    The one reader of the fixture's scope, so a case reading it cannot pass
+    on an empty one.
+    """
+    ours = [declaration for declaration in monitor.of_type(typ) if declaration.name.startswith(FIXTURE_NAMES)]
+    assert ours, f'no {typ} carries {FIXTURE_NAMES}'
+    return ours
+
+
 ##
 ## What the layer puts on the device
 ##
@@ -203,7 +222,7 @@ def test_no_file_stands_in_for_a_directory_anywhere_under_the_custom_root(monito
     and a blind one: what the device says about the file is no answer about the
     directory.
     """
-    declared = [str(declaration.inputs.get('path', '')) for declaration in monitor.of_type(DEVICE_FILE)]
+    declared = [str(declaration.inputs.get('path', '')) for declaration in fixture_declarations(monitor, DEVICE_FILE)]
 
     assert [path for path in declared if '.skeleton' in path] == []
 
@@ -218,7 +237,7 @@ def test_nothing_is_ever_written_inside_the_offline_package_cache(monitor: Recor
     """
     written = [
         declaration.inputs['path']
-        for declaration in monitor.of_type(DEVICE_FILE)
+        for declaration in fixture_declarations(monitor, DEVICE_FILE)
         if str(declaration.inputs.get('path', '')).startswith(f'{persistence.DPKG_DIR}/')
     ]
 
@@ -313,10 +332,18 @@ async def test_two_components_asking_for_one_path_are_listed_by_the_path_census(
         second = OtherClaimant('second', mechanism=mechanism)
 
     contested = persistence.executable_path(CONTESTED)
+    claimants = sorted([str(await first.program.urn.future()), str(await second.program.urn.future())])
     listed = monitor.places_claimed_more_than_once(PLACES)
 
-    assert set(listed) == {contested}
-    assert listed[contested] == sorted([str(await first.program.urn.future()), str(await second.program.urn.future())])
+    # The census reads the module's whole recorder, which other cases declare
+    # into too, so each claim is read about the registrations it concerns:
+    # the two askers' one place is listed, naming both, and nothing the
+    # fixture declared is listed at all.
+    assert listed[contested] == claimants
+    _ = fixture_declarations(monitor, DEVICE_FILE)
+    assert [
+        place for place, urns in listed.items() if any(urn.rsplit('::', 1)[1].startswith(FIXTURE_NAMES) for urn in urns)
+    ] == []
 
 
 @pytest.mark.asyncio
@@ -331,12 +358,13 @@ async def test_an_asker_that_is_not_a_component_is_refused_before_anything_is_re
     registration: the run has no such file afterwards.
     """
     before = set(monitor.registrations)
-    for opts in (pulumi.ResourceOptions(), pulumi.ResourceOptions(parent=mechanism.units)):
-        with pytest.raises(ValueError, match='named for the component the URN places it under'):
-            _ = mechanism.executable('orphan.sh', '#!/bin/sh\nexit 0\n', opts=opts)
-
+    # The refused calls inside the barrier, which drains only what its own
+    # block scheduled: a registration either call made before refusing has
+    # landed by the time the record is read below.
     async with declaring():
-        pass
+        for opts in (pulumi.ResourceOptions(), pulumi.ResourceOptions(parent=mechanism.units)):
+            with pytest.raises(ValueError, match='named for the component the URN places it under'):
+                _ = mechanism.executable('orphan.sh', '#!/bin/sh\nexit 0\n', opts=opts)
     assert set(monitor.registrations) == before
 
 
@@ -1013,6 +1041,11 @@ def _install(
         capture_output=True,
         text=True,
         check=False,
+        # A script that does not return is a failure with a name this way,
+        # `TimeoutExpired` below the case's bound, rather than the case's
+        # timeout: the device runs it from the boot chain, where waiting
+        # forever and doing nothing look the same from outside.
+        timeout=30,
     )
     calls = device.calls.read_text().splitlines() if device.calls.exists() else []
     return _Run(
@@ -1991,6 +2024,8 @@ def _converge(device: _Device) -> tuple[int, list[str]]:
         env={'PATH': f'{device.systemd.tools}:/usr/bin:/bin'},
         capture_output=True,
         check=False,
+        # As `_install`'s: a converger that does not return fails by name.
+        timeout=30,
     )
     _ = device.complaints.write_bytes(completed.stderr)
     return completed.returncode, device.systemd.take_calls()

@@ -362,7 +362,8 @@ def test_the_network_carries_the_rules_it_was_handed_and_composes_none(stack: Ce
     )
 
 
-def test_a_program_naming_a_member_the_roster_lacks_is_refused_before_anything_is_declared(
+@pytest.mark.asyncio
+async def test_a_program_naming_a_member_the_roster_lacks_is_refused_before_anything_is_declared(
     stack: Central,
 ) -> None:
     """A member with no node address would render as a member with no rules.
@@ -371,18 +372,21 @@ def test_a_program_naming_a_member_the_roster_lacks_is_refused_before_anything_i
     refuses the program by the name it could not place, and does so before its
     first resource: a refused network leaves nothing half-declared behind.
     """
-    declared = len(stack.names_declared)
+    declared = len(stack.declared)
 
-    with pytest.raises(ValueError, match='nobody-at-all'):
-        _ = overlay_module.Overlay(
-            'refused',
-            network_id=NETWORK_ID,
-            flow_rules=Program(members=('nobody-at-all',)),
-            roster=conventions.overlay.ROSTER,
-            managed_routes=conventions.overlay.MANAGED_ROUTES,
-            dns=DNS,
-        )
-    assert len(stack.names_declared) == declared
+    # Inside the barrier, so whatever the component scheduled before refusing
+    # has landed by the time the count is read below.
+    async with declaring():
+        with pytest.raises(ValueError, match='nobody-at-all'):
+            _ = overlay_module.Overlay(
+                'refused',
+                network_id=NETWORK_ID,
+                flow_rules=Program(members=('nobody-at-all',)),
+                roster=conventions.overlay.ROSTER,
+                managed_routes=conventions.overlay.MANAGED_ROUTES,
+                dns=DNS,
+            )
+    assert len(stack.declared) == declared
 
 
 def test_the_network_carries_the_managed_dns_it_was_handed_and_composes_none(stack: Central) -> None:
