@@ -467,12 +467,17 @@ the failure the script's line names. Full does not open the GitHub API:
 the session's GitHub proxy answers `api.github.com` only for
 repositories attached to the session, whatever the network access. So no
 tool `mise.toml` pins may need the API to install; the `ltex-ls-plus`
-pin's comment there says how that one stays off it. Release downloads
-from `github.com`, which every pinned tool installs from, pass at Full
-as measured in a cloud session, although the Claude Code documentation
-says the proxy serves release assets only from repositories attached to
-the session. If the proxy comes to enforce that, the install fails for
-every pinned tool, not for the prose checker alone.
+pin's comment there says how that one stays off it.
+
+The pinned tools install from three hosts, each tool's URL recorded in
+`mise.lock`: release downloads from `github.com` for every tool but two,
+`nodejs.org` for `node`, and `conda.anaconda.org` for `postgres`, every
+package its `conda` install unpacks included. Full reaches any host, and the
+Claude Code documentation lists all three among the hosts Trusted allows too
+(its cloud environments page, "Default allowed domains"); it scopes the
+GitHub proxy's repository check to API requests. Release downloads from
+`github.com` pass at Full as measured in a cloud session. The other two
+hosts have not been measured from one.
 
 ## 2. Concurrent dispatchers
 

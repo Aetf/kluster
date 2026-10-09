@@ -9,7 +9,9 @@ not have them, and a data directory that starts empty and goes away with the
 container. So what is exercised is the image's own initialization mechanism
 (`/docker-entrypoint-initdb.d`), the server's own authentication, and real
 clients: `pulumi` from this workstation, and the Postgres client tools from the
-same image, since a workstation need not carry them.
+same image, which are the server's own release. The workstation's client,
+`mise.toml`'s `postgres` pin, is held only to the server's major
+(`tests/test_postgres_client.py`).
 
 Nothing here mounts a host path. A remote `podman` -- one whose service runs
 in another mount namespace than this process -- sees none of this process's

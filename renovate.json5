@@ -211,7 +211,8 @@
       // permits it to run mise (its `allowedUnsafeExecutions`); where it does
       // not, the pull request arrives without the entry and a person runs
       // `mise lock <tool>` onto it. The same holds for every mise pin a rule
-      // below takes out of this group (`kubeseal`, `talosctl`, `age`).
+      // below takes out of this group, today `kubeseal`, `talosctl`, `age`
+      // and a major release of `postgres`.
       matchManagers: [
         'mise',
       ],
@@ -447,6 +448,54 @@
         'age',
       ],
       overrideDatasource: 'github-releases',
+      groupName: 'state-backend appliance',
+      groupSlug: 'state-backend',
+    },
+    {
+      // The local Postgres client's lookup. The mise manager resolves
+      // `mise.toml`'s `postgres` through mise's registry to the conda backend's
+      // `postgresql` and reads it from the conda datasource under that bare
+      // name, dropping the pin's `channel`. The datasource reads a package as
+      // `<channel>/<name>` from api.anaconda.org, so the bare name finds
+      // nothing, and the pin never moves. The name is the channel's here,
+      // `conda-forge/postgresql`, which is the channel `mise.toml` writes and a
+      // test holds the two equal. This rule goes once the mise manager passes
+      // the channel on: a lookup with it removed then finds the package.
+      //
+      // Matched by datasource rather than manager: the conda datasource reaches
+      // this repository only through that pin.
+      matchDatasources: [
+        'conda',
+      ],
+      matchDepNames: [
+        'postgres',
+      ],
+      overridePackageName: 'conda-forge/postgresql',
+    },
+    {
+      // The local Postgres client's major, into the appliance's group. The
+      // appliance pins `POSTGRES_IMAGE` to a major alone, and a test holds the
+      // client's major equal to it: `pg_dump` refuses a server of a newer
+      // major than its own, and what a newer client writes is not guaranteed
+      // to load into an older server. A major release therefore moves both
+      // pins in one pull request, the appliance's; apart, each half fails that
+      // test on its own. A minor or patch release of the client moves the
+      // client alone, in the toolchain group, since the image's tag names no
+      // minor.
+      //
+      // Position is load-bearing, as for the age rule above: this sits after
+      // the rule grouping the whole mise manager as the toolchain, so its
+      // group wins, and its name and slug are the appliance rule's, which a
+      // test holds equal.
+      matchDatasources: [
+        'conda',
+      ],
+      matchDepNames: [
+        'postgres',
+      ],
+      matchUpdateTypes: [
+        'major',
+      ],
       groupName: 'state-backend appliance',
       groupSlug: 'state-backend',
     },
