@@ -26,7 +26,7 @@ jobs:
     # the alert below fires for it. This one is the sum of theirs, a `uses:`
     # step twice for its `post` phase, plus five minutes for the runner's own
     # phases -- a backstop for what no step bound reaches (framework/ci.md §3).
-    timeout-minutes: 150
+    timeout-minutes: 155
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         timeout-minutes: 5
@@ -66,6 +66,31 @@ jobs:
       - name: Imports
         timeout-minutes: 5
         run: mise x uv -- uv run lint-imports
+
+      # `tests/test_state_roles.py` runs the appliance's Postgres roles in the
+      # image the box runs, and skips where no copy of it is local rather
+      # than fetch one mid-run; this step makes it local, so those cases run
+      # on every event (framework/ci.md §3). The name is read from
+      # `settings.POSTGRES_IMAGE`, the one place it is pinned. That pin is a
+      # tag with no digest -- the major line the box's own podman-auto-update
+      # follows -- so the pull is by tag.
+      #
+      # The drop-in makes pasta the rootless network, as podman's own default
+      # is from 5.0 on. This runner's podman is older and defaults to
+      # slirp4netns, whose port forwarder stays in the session of the
+      # `podman` command that started the container; the module ends each
+      # command's session with the command (framework/testing.md §1.2), which
+      # takes the forwarder with it and leaves the published port refusing
+      # connections. pasta leaves nothing in that session. The drop-in goes
+      # when the runner's podman defaults to pasta by itself.
+      - name: Podman
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.config/containers/containers.conf.d
+          printf '[network]\ndefault_rootless_network_cmd = "pasta"\n' >~/.config/containers/containers.conf.d/pasta.conf
+          image=$(mise x uv -- uv run python -c 'from kluster.lib.state_backend import settings; print(settings.POSTGRES_IMAGE)')
+          podman pull --quiet "$image"
 
       # A hung case fails by name under the per-case bound `pyproject.toml`
       # configures; the outer `timeout` is the hang guard for what that

@@ -39,7 +39,10 @@ state that is its own: its `tmp_path`, its backend and its `PULUMI_HOME`, a
 container named for the case. A run aimed at one case passes `-n 0`, which
 runs it in the `pytest` process itself. `addopts` also passes `-rfEs`:
 the summary `pytest` gives by default, failures and errors, with every
-skipped case and its reason added.
+skipped case and its reason added. `tests/test_state_roles.py` skips
+where the Postgres image it runs is not local, and runs on CI as it does
+on a workstation, because `checks` pulls that image before the tests
+([ci.md](ci.md) §3).
 
 A coroutine that never resolves its futures hangs forever instead of failing,
 and the run is bounded twice against that, at two scales:
