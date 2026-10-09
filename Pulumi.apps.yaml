@@ -1,7 +1,7 @@
-encryptionsalt: v1:S81OSGVDn+k=:v1:oLojhhgIEyHmnFj9:ZxQxETs43p/3lKZFetK8GhVdDfnysg==
+encryptionsalt: v1:TTYw13hVXMo=:v1:PsAQOnVlBGuUQq/0:jWnjtmpm369PLNIBXzqEArN+3ClU1w==
 config:
   pulumi:disable-default-providers:
     - kubernetes
     - cloudflare
   kluster-py:cloudflareApiToken:
-    secure: v1:kIs28xULrXkAR2t5:SfYgscjnYanDAnAOI8HV1SnYlweBUGW5BkHKUr0H4IB/tt2pLHZNfHO/Co9M2Dmqg6lWMC/OyHKBoKTYNI2WtcstOqwI
+    secure: v1:y+lyflqEq0sV4qy9:jCRskloUnGRAZ67/sdYBnGR04gHJTFwCk+gxiJs/blJMNqu7ze9DAD8RAmr5eR9S6vYttgnDqRrDeKgGyDPaesoy8dUV
