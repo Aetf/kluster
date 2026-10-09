@@ -6,8 +6,8 @@ rather than in any one of those suites (framework/testing.md §2).
 `test_physical_stack.py` holds the stack's cases against them and
 `test_physical_links.py` its link invariant.
 
-`install` is what each of those suites' own autouse fixture awaits: the
-fixture stays in the suite, where the cases that take it are.
+`install` is what each of those suites' own fixtures await: the fixtures
+stay in the suite, where the cases that take them are.
 """
 
 from __future__ import annotations
@@ -110,6 +110,11 @@ class Installation(Controller):
         #: back: the cluster endpoint, the one place the Kubernetes API port is
         #: written as a URL, and the patches carrying the firewall's openings.
         self.configurations: list[dict[str, Any]] = []
+        #: Every invoke the run made, with the arguments it was made with, in
+        #: the order the monitor received them. `called` keeps each one's
+        #: token and provider; the arguments are what a case about where a
+        #: call was dialed reads.
+        self.invoked: list[tuple[str, dict[str, Any]]] = []
 
     def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
         match args.typ:
@@ -145,6 +150,7 @@ class Installation(Controller):
                 return {}
 
     def answer(self, args: pulumi.runtime.MockCallArgs) -> dict[str, Any]:
+        self.invoked.append((args.token, dict(cast('dict[str, Any]', args.args))))
         match args.token:
             case 'oci:Core/getServices:getServices':
                 return {'services': [{'id': 'ocid1.service.os', 'name': 'Object Storage', 'cidrBlock': 'oci-os'}]}
