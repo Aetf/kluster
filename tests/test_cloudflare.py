@@ -393,23 +393,14 @@ def test_a_seed_without_zone_read_says_so_rather_than_minting_an_empty_scope(api
         _ = cloudflare.mint_zone_token(session, role=STACK_ROLE, zones=conventions.ALL_ZONES)
 
 
-def test_a_token_narrower_than_it_was_asked_for_never_reaches_a_slot(api: FakeApi) -> None:
-    zone_ids = _installation(api)
-    api.withholds_zone = zone_ids[conventions.ZONE_PRIMARY]
-    session = cloudflare.Session.authorize(_seed(api))
-
-    # The mint call reports what it created; the check asks the credential
-    # itself what it can reach, which is the thing the consumer depends on.
-    with pytest.raises(CredentialRejected, match=conventions.ZONE_PRIMARY):
-        _ = cloudflare.mint_zone_token(session, role=STACK_ROLE, zones=conventions.ALL_ZONES)
-
-
 def test_a_wrong_scope_mint_leaves_the_working_predecessor_standing(api: FakeApi) -> None:
     zone_ids = _installation(api)
     session = cloudflare.Session.authorize(_seed(api))
     working = _delivered(cloudflare.mint_zone_token(session, role=STACK_ROLE, zones=conventions.ALL_ZONES))
     api.withholds_zone = zone_ids[conventions.ZONE_PRIMARY]
 
+    # The mint call reports what it created; the check asks the credential
+    # itself what it can reach, which is the thing the consumer depends on.
     with pytest.raises(CredentialRejected, match=conventions.ZONE_PRIMARY):
         _ = cloudflare.mint_zone_token(session, role=STACK_ROLE, zones=conventions.ALL_ZONES)
 

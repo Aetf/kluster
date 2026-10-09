@@ -21,13 +21,24 @@ test is about:
     the bucket such a key is confined to — which is what makes "verified by
     listing the prefix as itself" a proof of the grant rather than of the
     key's existence, and what lets a key with no `listBuckets` learn its
-    bucket's id.
+    bucket's id;
+-   `b2_create_key` refuses a capability name B2 does not have, so a
+    misspelled capability is a refused mint rather than a key that quietly
+    lacks the grant. The answer is the call's documented generic refusal,
+    `400 bad_request`.
 
-The capability table comes from the API reference. The other two are what the
-first live run against the account has to confirm; they are written down here
-rather than left out because a fake that is silent about them lets the code
+The capability names, and which endpoint needs which, come from the API
+reference. Everything else above is what the first live run against the
+account has to confirm; it is written down here
+rather than left out because a fake that is silent about it lets the code
 come to depend on the opposite, and the ratchet only tightens
 (`docs/framework/testing.md` §4).
+
+Every contract value the fake checks a caller against — the authorization URL,
+the capability names — is written here as Backblaze writes it, and none is
+imported from the module under test: a fake that took them from `b2` would
+agree with a misspelling of either, and every suite minting against it would
+stay green.
 """
 
 from __future__ import annotations
@@ -41,6 +52,10 @@ from urllib.parse import urlparse
 import requests
 
 from kluster.scripts.credentials import b2
+
+#: Where `b2_authorize_account` answers for version 3 of the native API: the one
+#: fixed host, before the account's own `apiUrl` is known.
+AUTHORIZE_URL = 'https://api.backblazeb2.com/b2api/v3/b2_authorize_account'
 
 ACCOUNT_ID = 'account-1'
 
@@ -62,15 +77,40 @@ REQUIRED: dict[str, str] = {
     'b2_list_file_names': 'listFiles',
 }
 
-#: What the account master key carries: everything, including the file
-#: capabilities the account-wide rows of the register never carry.
+#: What the account master key carries: "all capabilities", in the words of
+#: backblaze.com/docs/cloud-storage-application-keys, which is every row of the
+#: table at backblaze.com/docs/cloud-storage-application-key-capabilities, in
+#: that table's order -- the file capabilities the account-wide rows of the
+#: register never carry included.
 MASTER_CAPABILITIES: tuple[str, ...] = (
-    *b2.CAPABILITIES,
-    *b2.DUMP_CAPABILITIES,
+    'listKeys',
+    'writeKeys',
+    'deleteKeys',
+    'listBuckets',
+    'listAllBucketNames',
+    'readBuckets',
+    'writeBuckets',
+    'deleteBuckets',
+    'readBucketRetentions',
+    'writeBucketRetentions',
+    'readBucketEncryption',
+    'writeBucketEncryption',
     'listFiles',
     'readFiles',
-    'deleteFiles',
     'shareFiles',
+    'writeFiles',
+    'deleteFiles',
+    'readFileLegalHolds',
+    'writeFileLegalHolds',
+    'readFileRetentions',
+    'writeFileRetentions',
+    'bypassGovernance',
+    'readBucketReplications',
+    'writeBucketReplications',
+    'readBucketNotifications',
+    'writeBucketNotifications',
+    'readBucketLogging',
+    'writeBucketLogging',
 )
 
 
@@ -183,7 +223,7 @@ class FakeApi:
 
     def get(self, url: str, *, auth: tuple[str, str], timeout: int) -> requests.Response:
         """`b2_authorize_account`, the one call that is not a POST."""
-        assert url == b2.AUTHORIZE_URL, f'unexpected GET {url}'
+        assert url == AUTHORIZE_URL, f'unexpected GET {url}'
         self.calls.append('b2_authorize_account')
         key_id, secret = auth
         key = self.keys.get(key_id)
@@ -245,6 +285,13 @@ class FakeApi:
                 raise AssertionError(f'unexpected call {api}')
 
     def _create_key(self, caller: Key, body: dict[str, Any]) -> dict[str, Any]:
+        # Held to the 28-row capability table rather than to the list of legal
+        # values on `b2_create_key`'s own page, which omits the two bucket
+        # replication capabilities the table and the account-wide roles carry.
+        # That the live call accepts those two is unproven live.
+        unknown = sorted({str(capability) for capability in body['capabilities']} - set(MASTER_CAPABILITIES))
+        if unknown:
+            raise Refused(400, 'bad_request', f'unknown capabilities: {", ".join(unknown)}')
         key = self.add_key(
             str(body['keyName']),
             tuple(str(capability) for capability in body['capabilities']),

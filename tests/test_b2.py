@@ -39,6 +39,7 @@ from kluster.scripts.credentials.github_secrets import Forge
 from kluster.scripts.credentials.kdbx import KdbxStore
 from kluster.scripts.credentials.masters import CredentialRejected
 from kluster.scripts.credentials.pulumi_config import SlotRefused
+from kluster.scripts.state_backend import probe
 
 PASSWORD = 'kit-password'
 SEED_ENTRY = entries.SEEDS['b2'].entry
@@ -151,7 +152,13 @@ def test_the_seed_carries_bucket_administration_and_no_file_capability(api: Fake
     # The credential that administers the backup buckets cannot read a byte
     # out of them, and can replace itself: that pair is the whole design.
     assert set(body['capabilities']) == set(b2.CAPABILITIES)
-    assert not set(body['capabilities']) & {'readFiles', 'writeFiles', 'listFiles', 'deleteFiles'}
+    # B2 puts `File` in the name of every capability that lists, reads,
+    # shares, writes or deletes a file, or reads or sets its retention or legal
+    # hold, so the rule also covers one B2 adds to that family.
+    # `bypassGovernance` is the exception: it acts on files without the word
+    # in its name, and is excluded by name.
+    assert not [capability for capability in body['capabilities'] if 'File' in capability]
+    assert 'bypassGovernance' not in body['capabilities']
     assert {'writeKeys', 'deleteKeys'} <= set(body['capabilities'])
 
 
@@ -395,8 +402,8 @@ def _create_seed_as_root(kit: KdbxStore, api: FakeApi) -> object:
 @pytest.mark.parametrize(
     ('refused_by', 'refused_command'),
     [
-        pytest.param(_mint_management_as_seed, ['derived', 'b2-management', 'mint'], id='seed'),
-        pytest.param(_create_seed_as_root, ['seed', 'b2', 'create'], id='root'),
+        pytest.param(_mint_management_as_seed, ['derived', derived.B2_MANAGEMENT_ROW, 'mint'], id='seed'),
+        pytest.param(_create_seed_as_root, ['seed', masters.B2, 'create'], id='root'),
     ],
 )
 def test_a_refusal_names_both_repairs_and_each_is_a_command_that_exists(
@@ -552,7 +559,9 @@ def test_the_drill_reader_is_confined_to_the_prefix_the_uploader_writes() -> Non
 def test_the_drill_reader_may_do_nothing_the_uploader_may_and_nothing_administrative() -> None:
     reader = b2.drill_reads('bucket-x')
 
-    assert reader.capabilities == ('listFiles', 'readFiles')
+    # Enough for the drill's one act, in B2's own terms: `b2_list_file_names`
+    # takes `listFiles`, and downloading a file takes `readFiles`.
+    assert {'listFiles', 'readFiles'} <= set(reader.capabilities)
     # Disjoint from the writer's and from the administrative set: a key that
     # could write would be a second uploader, one that could administer would
     # be a second management key, and neither is what an exposed drill buys.
@@ -636,14 +645,16 @@ def test_minting_the_drill_key_retires_its_predecessor(api: FakeApi, kit: KdbxSt
     _ = _seeded(api, kit)
     session, bucket_id = _bucket(api, kit)
     previous = _delivered(b2.mint_drill_read_key(session, bucket_id=bucket_id)).key_id
+    freshness = _delivered(b2.mint_freshness_dumps_key(session, bucket_id=bucket_id)).key_id
 
     key_id = _delivered(b2.mint_drill_read_key(session, bucket_id=bucket_id)).key_id
 
     # Re-running is the rotation: one live key of the name afterwards, and the
-    # uploader beside it untouched -- the two roles retire by name, and the
-    # names differ.
+    # freshness probe's key on the same prefix untouched -- the roles retire by
+    # name, and the names differ.
     assert api.named(b2.DRILL_READ_NAME) == [key_id]
     assert previous not in api.keys
+    assert api.named(b2.FRESHNESS_DUMPS_NAME) == [freshness]
 
 
 def test_the_drill_key_retires_nothing_until_the_credential_has_been_delivered(api: FakeApi, kit: KdbxStore) -> None:
@@ -703,7 +714,9 @@ def test_the_freshness_key_is_confined_to_the_prefix_the_uploader_writes() -> No
 def test_the_freshness_key_may_list_and_nothing_more() -> None:
     lister = b2.freshness_dumps('bucket-x')
 
-    assert lister.capabilities == ('listFiles',)
+    # Enough for the probe's one act, in B2's own terms: `b2_list_file_names`
+    # takes `listFiles`.
+    assert 'listFiles' in lister.capabilities
     # Narrower than the drill's reader and disjoint from the writer: the probe
     # asks what the newest object is called, so a key that could read one
     # would be a second drill reader held where only a listing is needed, and
@@ -850,15 +863,21 @@ def test_the_freshness_row_pushes_both_halves_as_repository_secrets_of_the_ops_r
     # The addresses are the slot map's own: two repository secrets of the ops
     # repository, no `--env`, holding the key the account now lists under the
     # role -- and that key is the minted one, confined as the role says.
-    assert list(gh.values) == [
-        (OPS_REPOSITORY, None, 'B2_FRESHNESS_DUMPS_KEY_ID'),
-        (OPS_REPOSITORY, None, 'B2_FRESHNESS_DUMPS_KEY'),
-    ]
-    assert gh.values[(OPS_REPOSITORY, None, 'B2_FRESHNESS_DUMPS_KEY_ID')] == key_id
-    assert gh.values[(OPS_REPOSITORY, None, 'B2_FRESHNESS_DUMPS_KEY')] == api.keys[key_id].secret
+    # The names are the ones the probe reads its key from, which is the other
+    # program's own spelling of the same two secrets.
+    assert set(gh.values) == {
+        (OPS_REPOSITORY, None, probe.KEY_ID_ENV),
+        (OPS_REPOSITORY, None, probe.KEY_ENV),
+    }
+    assert gh.values[(OPS_REPOSITORY, None, probe.KEY_ID_ENV)] == key_id
+    assert gh.values[(OPS_REPOSITORY, None, probe.KEY_ENV)] == api.keys[key_id].secret
     assert all(['secret', 'set', name, '--repo', OPS_REPOSITORY] in gh.invocations for _, _, name in gh.values)
     minted = api.keys[key_id]
-    assert (minted.capabilities, minted.bucket_id, minted.name_prefix) == (('listFiles',), bucket_id, f'{PREFIX}/')
+    assert (minted.capabilities, minted.bucket_id, minted.name_prefix) == (
+        b2.FRESHNESS_CAPABILITIES,
+        bucket_id,
+        f'{PREFIX}/',
+    )
 
 
 def test_the_freshness_row_retires_its_predecessor_only_after_both_carriers_landed(
@@ -886,8 +905,12 @@ def test_the_freshness_row_retires_its_predecessor_only_after_both_carriers_land
         current = derived.b2_freshness_dumps(kit, Forge(token='admin-token', run=timed))
 
     # The order every mint in this package has, held across the sink: both
-    # pushes, then the deletion of the key the workflow held before.
-    assert order == ['push B2_FRESHNESS_DUMPS_KEY_ID', 'push B2_FRESHNESS_DUMPS_KEY', 'retire']
+    # pushes, in whichever order, then the deletion of the key the workflow
+    # held before.
+    pushes = {f'push {probe.KEY_ID_ENV}', f'push {probe.KEY_ENV}'}
+    assert len(order) == len(pushes) + 1
+    assert set(order[:-1]) == pushes
+    assert order[-1] == 'retire'
     assert api.named(b2.FRESHNESS_DUMPS_NAME) == [current]
     assert previous not in api.keys
 

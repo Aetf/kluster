@@ -18,9 +18,6 @@ from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
 from kluster.components.backup import (
-    FORBIDDEN_CAPABILITY,
-    UNFINISHED_UPLOAD_DAYS,
-    WRITER_CAPABILITIES,
     BackupBucket,
     Scope,
     barman_scope,
@@ -90,7 +87,9 @@ async def test_no_key_can_delete_a_file() -> None:
         assert capabilities is not None
         # This is the rule the whole backup-integrity design rests on: without
         # the capability a deletion is a hide, and a hide is recoverable.
-        assert FORBIDDEN_CAPABILITY not in capabilities
+        # Written as B2 spells it, so a constant that misspelled it could not
+        # wave the real capability through.
+        assert 'deleteFiles' not in capabilities
 
 
 @pytest.mark.asyncio
@@ -102,32 +101,31 @@ async def test_a_writer_key_can_still_read_its_own_index() -> None:
         capabilities = await key.capabilities.future()
         assert capabilities is not None
         # A literally write-only key cannot back anything up: restic and
-        # barman read their own index before they write.
-        assert set(capabilities) == set(WRITER_CAPABILITIES)
+        # barman list and read their own index before they write. B2's names
+        # for the three, so the requirement is held against what a mover does
+        # rather than against the component's own tuple.
+        assert {'listFiles', 'readFiles', 'writeFiles'} <= set(capabilities)
 
 
 @pytest.mark.asyncio
 async def test_each_key_reaches_one_prefix_and_one_bucket() -> None:
-    bucket = build([etcd_scope(), volsync_scope('immich'), barman_scope('immich')])
+    etcd, volsync, barman = etcd_scope(), volsync_scope('immich'), barman_scope('immich')
+    bucket = build([etcd, volsync, barman])
 
+    # Each key guards the directory its mover writes, from the one bucket
+    # layout: if `conventions` moves a repository path, the key moves with it
+    # rather than silently guarding a directory nothing writes to any more.
     prefixes = {name: await key.name_prefix.future() for name, key in bucket.keys.items()}
     assert prefixes == {
-        'etcd': f'{conventions.ETCD_SNAPSHOT_PREFIX}/',
-        'volsync-immich': conventions.volsync_repo_path('immich', ''),
-        'cnpg-immich': conventions.barman_repo_path('immich', ''),
+        etcd.name: f'{conventions.ETCD_SNAPSHOT_PREFIX}/',
+        volsync.name: conventions.volsync_repo_path('immich', ''),
+        barman.name: conventions.barman_repo_path('immich', ''),
     }
 
     for key in bucket.keys.values():
         # Scoped to this bucket, not to the account: a key that could reach
         # another bucket is not prefix-scoped, it is merely prefix-flavored.
         assert await key.bucket_ids.future() == [BUCKET_ID]
-
-
-def test_the_prefixes_come_from_the_one_bucket_layout() -> None:
-    # Not a restatement of the layout: if `conventions` moves the repository
-    # path, the key that guards it moves with it rather than silently guarding
-    # a directory nothing writes to any more.
-    assert volsync_scope('media').prefix == conventions.volsync_repo_path('media', '')
 
 
 @pytest.mark.asyncio
@@ -154,8 +152,15 @@ async def test_abandoned_multipart_uploads_are_canceled() -> None:
     bucket = build()
     rules = await bucket.bucket.lifecycle_rules.future()
     assert rules is not None
-    # Parts of a killed upload bill forever and show up in no listing.
-    assert rules[0].days_from_starting_to_canceling_unfinished_large_files == UNFINISHED_UPLOAD_DAYS
+    # Parts of a killed upload bill forever and show up in no listing. How
+    # soon is the component's to choose; the rule is that a cancellation is
+    # scheduled at all, a positive number of days after the upload started.
+    # Whole days, compared by value: the mock monitor hands numbers back as
+    # floats.
+    days = rules[0].days_from_starting_to_canceling_unfinished_large_files
+    assert days is not None
+    assert days > 0
+    assert days == int(days)
 
 
 @pytest.mark.asyncio

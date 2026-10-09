@@ -9,6 +9,15 @@ permissions, and a token without them is refused every call that lists or
 deletes tokens — and it answers zone listings *as the calling token*, which is
 what makes a scope check meaningful: a minted token sees the zones its policies
 name, and nothing else.
+
+Every contract value it checks a caller against is written here as Cloudflare
+writes it, and none is imported from the module under test: a fake that took
+the permission name or the resource prefix from `cloudflare` would agree with
+a misspelling of either, and every suite minting against it would stay green.
+The sources are Cloudflare's own references — the permission groups and their
+scopes at developers.cloudflare.com/fundamentals/api/reference/permissions/,
+the base URL and the policy resource keys at
+developers.cloudflare.com/fundamentals/api/how-to/create-via-api/.
 """
 
 from __future__ import annotations
@@ -21,16 +30,28 @@ from urllib.parse import parse_qs, urlparse
 
 import requests
 
-from kluster.scripts.credentials import cloudflare
+#: Where every call goes: the API's base as the reference writes its requests.
+API = 'https://api.cloudflare.com/client/v4'
+
+#: The user-scoped permission group that creates, lists and deletes the user's
+#: tokens, under the name the API gives it: the API tab of the permissions
+#: reference, which the permission-group listing answers with. Its Dashboard
+#: tab calls the same group API Tokens Edit.
+MINTING_PERMISSION = 'API Tokens Write'
+
+#: The scope of a user-level permission group, and the resource-key prefix a
+#: policy names one zone under (`com.cloudflare.api.account.zone.<ZONE_ID>`).
+USER_SCOPE = 'com.cloudflare.api.user'
+ZONE_RESOURCE = 'com.cloudflare.api.account.zone'
 
 #: The permission groups the fake account offers, by id. Two zone-scoped ones,
 #: because that is what a §3 token carries, and the user-scoped minting one the
 #: seed carries and no sub-token may.
 GROUPS: dict[str, dict[str, Any]] = {
-    'group-1': {'name': cloudflare.MINTING_PERMISSION, 'scopes': ['com.cloudflare.api.user']},
-    'dns-write': {'name': 'DNS Write', 'scopes': [cloudflare.ZONE_RESOURCE]},
-    'zone-read': {'name': 'Zone Read', 'scopes': [cloudflare.ZONE_RESOURCE]},
-    'g': {'name': 'Zone Settings Read', 'scopes': [cloudflare.ZONE_RESOURCE]},
+    'group-1': {'name': MINTING_PERMISSION, 'scopes': [USER_SCOPE]},
+    'dns-write': {'name': 'DNS Write', 'scopes': [ZONE_RESOURCE]},
+    'zone-read': {'name': 'Zone Read', 'scopes': [ZONE_RESOURCE]},
+    'g': {'name': 'Zone Settings Read', 'scopes': [ZONE_RESOURCE]},
 }
 
 #: What the seed carries, and the only template that can mint anything.
@@ -38,7 +59,7 @@ MINTING_POLICY: dict[str, Any] = {
     'id': 'policy-1',
     'effect': 'allow',
     'resources': {'com.cloudflare.api.user.deadbeef': '*'},
-    'permission_groups': [{'id': 'group-1', 'name': cloudflare.MINTING_PERMISSION}],
+    'permission_groups': [{'id': 'group-1', 'name': MINTING_PERMISSION}],
 }
 
 #: What a §3 token carries: zone work and no token permissions, which is the
@@ -118,19 +139,19 @@ class FakeApi:
         The same permission governs both, and a minted §3 token may not carry
         it at all, so every token-management call it makes is refused.
         """
-        return cloudflare.MINTING_PERMISSION in self._carried(token)
+        return MINTING_PERMISSION in self._carried(token)
 
     def _visible_zones(self, token: dict[str, Any]) -> list[dict[str, Any]]:
         """The zones this token may list — the API's own answer, per credential."""
         policies = list[dict[str, Any]](token.get('policies') or [])
         carried = self._carried(token)
-        if cloudflare.MINTING_PERMISSION in carried:
+        if MINTING_PERMISSION in carried:
             return list(self.zones.values()) if self.seed_sees_zones else []
         scoped = {
-            resource.removeprefix(f'{cloudflare.ZONE_RESOURCE}.')
+            resource.removeprefix(f'{ZONE_RESOURCE}.')
             for policy in policies
             for resource in list[str](policy['resources'])
-            if resource.startswith(f'{cloudflare.ZONE_RESOURCE}.')
+            if resource.startswith(f'{ZONE_RESOURCE}.')
         }
         return [zone for zone in self.zones.values() if str(zone['id']) in scoped]
 
@@ -176,7 +197,8 @@ class FakeApi:
     def request(
         self, method: str, url: str, *, headers: dict[str, str], timeout: int, json: dict[str, Any] | None
     ) -> requests.Response:
-        parts = urlparse(url.removeprefix(cloudflare.API))
+        assert url.startswith(f'{API}/'), f'a call outside the API: {url}'
+        parts = urlparse(url.removeprefix(API))
         path = parts.path
         token = self._bearer(headers)
         self.calls.append((method, path))
@@ -199,13 +221,13 @@ class FakeApi:
                 # permissions to manage other tokens". It is why there is no
                 # account root and no self-reproducing seed.
                 if any(
-                    self._name_of(str(group['id'])) == cloudflare.MINTING_PERMISSION
+                    self._name_of(str(group['id'])) == MINTING_PERMISSION
                     for policy in policies
                     for group in list[dict[str, Any]](policy['permission_groups'])
                 ):
                     return self._refusal('sub-token is not allowed to have permissions to manage other tokens')
                 if self.withholds_zone is not None:
-                    withheld = f'{cloudflare.ZONE_RESOURCE}.{self.withholds_zone}'
+                    withheld = f'{ZONE_RESOURCE}.{self.withholds_zone}'
                     policies = [
                         {**policy, 'resources': {k: v for k, v in policy['resources'].items() if k != withheld}}
                         for policy in policies
