@@ -62,6 +62,7 @@ dev = [
     "basedpyright>=1.39.10",
     "import-linter>=2.14",
     "pytest-timeout>=2.4.0",
+    "pytest-xdist>=3.8.0",
 ]
 ##
 ## Project management section
@@ -124,7 +125,7 @@ pulumi-zerotier = { workspace = true }
 members = ["sdks/*"]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling==1.32.4"]
 build-backend = "hatchling.build"
 
 [tool.hatch.metadata]
@@ -137,14 +138,24 @@ packages = ["src/kluster", "src/putils"]
 ## Test runner
 ##
 [tool.pytest.ini_options]
-# A per-case hang guard, an order of magnitude above the slowest case: a
-# case that hangs fails by name with the stack it hung in, and the run goes
-# on to a summary. The outer `timeout` the gate wraps the run in
-# (docs/framework/testing.md §1) guards what this cannot reach -- collection,
-# and a process that will not exit. The signal method is what keeps the run
-# going past the failed case; the thread method ends the process instead.
+# A per-case hang guard: a case that hangs fails by name with the stack it
+# hung in, and the run goes on to a summary. The outer `timeout` the gate
+# wraps the run in (docs/framework/testing.md §1) guards what this cannot
+# reach -- collection, and a process that will not exit. The signal method is
+# what keeps the run going past the failed case; the thread method ends the
+# process instead. The bound is not an order of magnitude above every case:
+# under the four workers, test_update_crds' whole-bundle cases take 20-25 s,
+# 2.4-3x below it, and a machine loaded four times over brings them to it.
 timeout = 60
 timeout_method = "signal"
+# The suite runs on four workers, here and in CI alike, so a case that is not
+# isolated from its neighbors fails before a push rather than after it. Four
+# because the CI runner has four cores, and a fixed count rather than `auto`
+# because a workstation here runs several agents' gates at once: `auto` would
+# start a worker per core for each of them. `-rfEs` is pytest's own summary,
+# failures and errors, with every skipped case and its reason added, so a
+# skip is read rather than counted.
+addopts = "-n 4 -rfEs"
 
 ##
 ## Formatter and linter
