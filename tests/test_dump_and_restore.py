@@ -19,13 +19,13 @@ import json
 import logging
 import os
 import re
-import shutil
 import subprocess as sp
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 import drill_recipient_redirect
+import pinned_tools
 import pytest
 from memory_kit import MemoryKit
 from state_dump_box import CHECKPOINT, CHECKPOINT_BAK, META, OPENED, SERVING, UNOPENED, rows
@@ -36,8 +36,14 @@ from kluster.scripts.credentials import age, escrow
 from kluster.scripts.credentials.kdbx import PATH_ENV, KdbxStore
 from kluster.scripts.state_backend import cli
 
-age_binary = shutil.which(age.BINARY)
-needs_age = pytest.mark.skipif(age_binary is None, reason='age is not on PATH (mise x -- ...)')
+
+@pytest.fixture
+def pinned_age() -> None:
+    """The pinned `age` and `age-keygen`, refused when either is missing rather than skipped."""
+    pinned_tools.require(*pinned_tools.AGE)
+
+
+needs_age = pytest.mark.usefixtures('pinned_age')
 
 pytestmark = needs_age
 

@@ -27,13 +27,13 @@ from __future__ import annotations
 
 import inspect
 import io
-import shutil
 import types
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
 import keyring.backends.fail
+import pinned_tools
 import pytest
 from credentials_command_tree import commands
 from memory_keyring import MemoryKeyring, installed
@@ -49,7 +49,14 @@ PASSWORD = 'kit-password'
 #: The refusal a seed row with no implementation produces (`cli.main`).
 REFUSAL = 'not yet implemented'
 
-needs_age = pytest.mark.skipif(shutil.which(age.BINARY) is None, reason='age is not on PATH (mise x -- ...)')
+
+@pytest.fixture
+def pinned_age() -> None:
+    """The pinned `age` and `age-keygen`, refused when either is missing rather than skipped."""
+    pinned_tools.require(*pinned_tools.AGE)
+
+
+needs_age = pytest.mark.usefixtures('pinned_age')
 
 
 def _module_for(member: str) -> types.ModuleType | None:
