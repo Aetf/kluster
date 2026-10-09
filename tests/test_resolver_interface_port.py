@@ -31,13 +31,16 @@ from kluster.components.gateway import container
 
 
 def test_every_declaration_of_the_resolvers_interface_names_the_port_the_appliance_answers_on() -> None:
-    """The two vhosts, the initial state, the flow rule and the rewrite endpoint."""
+    """The resolvers' vhosts, the initial state, the flow rule and the rewrite endpoint."""
     port = conventions.gateway.ADGUARD_API_PORT
 
     vhosts = served(container.caddyfile(caddy()))
-    for resolver in conventions.gateway.RESOLVERS:
-        assert resolver.vhost is not None
-        assert vhosts[resolver.vhost] == (f'reverse_proxy http://{resolver.address}:{port}',)
+    # A resolver's vhost is optional, so the ones read are the ones the census
+    # proxies, and a census that proxied none would leave nothing to read.
+    proxied = [(resolver.vhost, resolver) for resolver in conventions.gateway.RESOLVERS if resolver.vhost is not None]
+    assert proxied, 'no resolver in the census is proxied by a vhost'
+    for vhost, resolver in proxied:
+        assert vhosts[vhost] == (f'reverse_proxy http://{resolver.address}:{port}',)
 
     address = conventions.gateway.ADGUARD_ALICE.address
     assert f'address: {address}:{port}\n' in container.adguard_initial_state(address)

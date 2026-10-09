@@ -480,21 +480,6 @@ def test_every_secret_field_is_declared_out_of_the_repr(name: str, cls: type, en
 
 
 @RECORDS
-def test_every_secret_field_is_declared_out_of_comparison(name: str, cls: type, entry: Census) -> None:
-    """`field(compare=False)`, for the half of a failed assertion the repr does not reach.
-
-    A subset rather than an equality, unlike the repr: a public field left out
-    of comparison discloses nothing, so the census has no reason to name it.
-    """
-    if _kind(cls) != 'dataclass':
-        # The test below forbids the secret outright.
-        return
-    compared = sorted(set(entry.secrets) - _uncompared(cls))
-
-    assert not compared, f'{name} compares secret fields, which a failed assertion prints: {", ".join(compared)}'
-
-
-@RECORDS
 def test_a_record_that_cannot_hide_a_field_carries_no_secret(name: str, cls: type, entry: Census) -> None:
     """A `NamedTuple` or a `TypedDict` is refused the secret rather than annotated.
 

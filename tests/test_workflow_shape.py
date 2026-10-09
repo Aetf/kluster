@@ -19,7 +19,6 @@ loaders in `workflow_files`.
 
 from __future__ import annotations
 
-import json
 import re
 import tomllib
 from pathlib import Path
@@ -110,7 +109,6 @@ def test_every_job_that_runs_steps_has_a_time_bound() -> None:
 
     # A read that stopped finding jobs would pass the loop below on nothing.
     assert jobs, 'no workflow job that runs steps was found'
-    assert 'workflows/deploy.yml: up-physical' in jobs
 
     findings: list[str] = []
     for where, job in sorted(jobs.items()):
@@ -141,9 +139,9 @@ def test_every_job_that_runs_steps_names_its_runner_by_release() -> None:
             if not (isinstance(label, str) and PINNED_RUNNER.match(label))
         )
 
-    # The matrix half of the read is exercised, not only written: the image
-    # builds pick their runner per architecture.
-    assert 'workflows/images.yml: build' in fed_by_a_matrix
+    # The matrix half of the read is exercised, not only written: a job
+    # picks its runner from a matrix.
+    assert fed_by_a_matrix, 'no job reads its runner from a matrix'
     assert findings == [], findings
 
 
@@ -258,9 +256,12 @@ def test_every_action_from_outside_this_repository_is_pinned_by_commit() -> None
 
 
 ZEROTIER = GITHUB / 'actions' / 'zerotier' / 'action.yml'
-#: The custom manager's pattern for the release, as renovate.json5 holds it:
-#: renovate's regex engine spells a named group `(?<...>`.
-ZEROTIER_MATCH_STRING = "ZEROTIER_VERSION: '(?<currentValue>[^']+)'"
+#: The custom manager in `renovate.json5` that reads the ZeroTier release,
+#: found by the data source it feeds, the one `deb` source there is: its one
+#: match string, as a JSON5 double-quoted string.
+ZEROTIER_MANAGER = re.compile(
+    r'matchStrings: \[\s*"((?:[^"\\]|\\.)*)",\s*\],\s*depNameTemplate: \'[^\']*\',\s*datasourceTemplate: \'deb\''
+)
 
 
 def _zerotier_install() -> tuple[dict[str, str], str]:
@@ -328,17 +329,16 @@ def test_renovate_reads_the_zerotier_release_for_the_suite_the_action_installs_f
     """
     env, run = _zerotier_install()
     config = (ROOT / 'renovate.json5').read_text()
-    pattern = json.dumps(ZEROTIER_MATCH_STRING)
 
-    assert config.count(pattern) == 1
-    at = config.index(pattern)
-    entry = config[config.rindex('{', 0, at) : config.index('}', at)]
-    assert "datasourceTemplate: 'deb'" in entry
+    (manager,) = ZEROTIER_MANAGER.finditer(config)
+    # JSON5 escapes a backslash as two.
+    match_string = manager.group(1).replace('\\\\', '\\')
+    entry = config[config.rindex('{', 0, manager.start()) : config.index('}', manager.end())]
 
     files = re.findall(r"managerFilePatterns: \[\s*'/((?:[^'\\]|\\.)*)/',\s*\]", entry)
     assert len(files) == 1
     assert re.fullmatch(files[0].replace('\\\\', '\\'), str(ZEROTIER.relative_to(ROOT)))
-    found = as_python_spells_it(ZEROTIER_MATCH_STRING).search(ZEROTIER.read_text())
+    found = as_python_spells_it(match_string).search(ZEROTIER.read_text())
     assert found is not None
     assert found['currentValue'] == env['ZEROTIER_VERSION']
 

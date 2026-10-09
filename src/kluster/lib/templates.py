@@ -109,4 +109,10 @@ def _parameters(params: object | None) -> Mapping[str, object]:
         return {}
     if not is_dataclass(params) or isinstance(params, type):
         raise TypeError(f'template parameters are an instance of a frozen dataclass, not {type(params).__name__}')
+    # `frozen` is an option the decorator records on the class, under a name
+    # the standard library types nowhere.
+    if not type(params).__dataclass_params__.frozen:  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+        raise TypeError(
+            f'template parameters are an instance of a frozen dataclass, and {type(params).__name__} is not frozen'
+        )
     return {field.name: getattr(params, field.name) for field in fields(params)}

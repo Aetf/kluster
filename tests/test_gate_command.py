@@ -174,17 +174,19 @@ def every_launch() -> list[Launch]:
         ("bash -c 'pytest -q'", True, None, True),
         # An argument that is an option's value, that names the whole suite,
         # or that is not a test path at all leaves the launch the gate, and so
-        # does anything after the command ends.
+        # does anything after the command ends. The values and the words after
+        # the end are test paths, so that each row fails if the reading it
+        # names stops holding.
         ('timeout 300 mise x -- uv run pytest tests -q', True, '300', True),
         ('timeout 300 mise x -- uv run pytest tests/ -q', True, '300', True),
         ('timeout 300 mise x -- uv run pytest . -q', True, '300', True),
         ('timeout 300 mise x -- uv run pytest -q --ignore tests/live', True, '300', True),
         ('timeout 300 mise x -- uv run pytest --deselect tests/test_b2.py::test_one', True, '300', True),
-        ('timeout 300 mise x -- uv run pytest -p tests.plugin', True, '300', True),
+        ('timeout 300 mise x -- uv run pytest -p tests/plugin.py', True, '300', True),
         ('timeout 300 mise x -- uv run pytest -q --durations 10', True, '300', True),
-        ('timeout 300 mise x -- uv run pytest -q -k "not live"', True, '300', True),
-        ('timeout 300 mise x -- uv run pytest -q 2>&1 | tee pytest.log', True, '300', True),
-        ('timeout 300 mise x -- uv run pytest -q && echo ok', True, '300', True),
+        ('timeout 300 mise x -- uv run pytest -q -k tests/test_b2.py', True, '300', True),
+        ('timeout 300 mise x -- uv run pytest -q | tee tests/live.log', True, '300', True),
+        ('timeout 300 mise x -- uv run pytest -q && ls tests/live', True, '300', True),
         # Part of the suite is not the gate, and is held to the form all the same.
         ('RUN_LIVE_DRILLS=1 timeout 600 mise x uv -- uv run pytest tests/live -s', True, '600', False),
         ('uv run pytest tests/live', True, None, False),
