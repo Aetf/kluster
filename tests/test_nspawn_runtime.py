@@ -46,7 +46,6 @@ from kluster import conventions
 from kluster.components.gateway import nspawn, persistence
 from kluster.components.gateway.nspawn import NspawnRuntime
 from kluster.components.gateway.persistence import DevicePersistence
-from kluster.lib import templates
 from kluster.providers.device_files.provider import SUPERSEDED_SUFFIX, Connection, DeviceFile, marker_path
 from kluster.providers.device_files.ssh import STAGING_SUFFIX
 from putils import Component
@@ -490,29 +489,6 @@ def test_a_machine_keeps_no_file_the_content_stamp_cannot_see() -> None:
 
 @final
 @dataclass(frozen=True)
-class _MachinesRendering:
-    """What `40-machines.sh.j2` reads, spelled again so a test can aim it at a tree.
-
-    The production renderer points every one of these at the device's own
-    paths; a case here points them at a temporary directory instead, which is
-    what makes running the real script possible without a device.
-    """
-
-    cluster: str
-    machines_root: str
-    live_machines_dir: str
-    unit_template: str
-    rootfs: str
-    state: str
-    stamp: str
-    initial_state: str
-    nspawn_suffix: str
-    marker_suffix: str
-    staging_suffix: str
-
-
-@final
-@dataclass(frozen=True)
 class _Device:
     """A device the converger can be run against: its two directories and a systemd.
 
@@ -531,8 +507,8 @@ class _Device:
 
 
 @pytest.fixture
-def device(tmp_path: Path) -> _Device:
-    """The converger rendered against a tree, with a systemd that can be read back."""
+def device(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Device:
+    """The production converger, rendered with a tree as its two roots, and a systemd that can be read back."""
     box = _Device(
         script=tmp_path / nspawn.MACHINES_SCRIPT,
         machines=tmp_path / 'machines',
@@ -544,26 +520,9 @@ def device(tmp_path: Path) -> _Device:
     box.systemd.ship('machines.target')
     box.systemd.ship(f'{nspawn.UNIT_TEMPLATE}.service', '[Install]\nWantedBy=machines.target\n')
 
-    _ = box.script.write_text(
-        templates.render(
-            persistence.TEMPLATE_PACKAGE,
-            f'templates/{nspawn.MACHINES_SCRIPT}.j2',
-            _MachinesRendering(
-                cluster=conventions.CLUSTER_NAME,
-                machines_root=str(box.machines),
-                live_machines_dir=str(box.live),
-                unit_template=nspawn.UNIT_TEMPLATE,
-                rootfs=nspawn.ROOTFS,
-                state=nspawn.STATE,
-                stamp=nspawn.STAMP,
-                initial_state=nspawn.INITIAL_STATE,
-                nspawn_suffix=nspawn.NSPAWN_SUFFIX,
-                marker_suffix=nspawn.MARKER_SUFFIX,
-                staging_suffix=STAGING_SUFFIX,
-            ),
-        ),
-        encoding='utf-8',
-    )
+    monkeypatch.setattr(nspawn, 'MACHINES', str(box.machines))
+    monkeypatch.setattr(nspawn, 'LIVE_MACHINES_DIR', str(box.live))
+    _ = box.script.write_text(nspawn.machines_script(), encoding='utf-8')
     return box
 
 
@@ -1150,17 +1109,6 @@ def test_the_settings_mirror_is_rendered_against_the_devices_own_directories() -
 
 @final
 @dataclass(frozen=True)
-class _NspawnUnitsRendering:
-    """What `30-nspawn-units.sh.j2` reads, spelled again so a test can aim it at a tree."""
-
-    cluster: str
-    machines_root: str
-    live_nspawn_dir: str
-    suffix: str
-
-
-@final
-@dataclass(frozen=True)
 class _Mirror:
     """The settings mirror rendered against two directories of a temporary tree."""
 
@@ -1170,22 +1118,13 @@ class _Mirror:
 
 
 @pytest.fixture
-def mirror(tmp_path: Path) -> _Mirror:
+def mirror(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Mirror:
+    """The production settings mirror, rendered with a tree as its two roots."""
     box = _Mirror(script=tmp_path / nspawn.NSPAWN_UNITS_SCRIPT, machines=tmp_path / 'machines', live=tmp_path / 'live')
     box.machines.mkdir()
-    _ = box.script.write_text(
-        templates.render(
-            persistence.TEMPLATE_PACKAGE,
-            f'templates/{nspawn.NSPAWN_UNITS_SCRIPT}.j2',
-            _NspawnUnitsRendering(
-                cluster=conventions.CLUSTER_NAME,
-                machines_root=str(box.machines),
-                live_nspawn_dir=str(box.live),
-                suffix=nspawn.NSPAWN_SUFFIX,
-            ),
-        ),
-        encoding='utf-8',
-    )
+    monkeypatch.setattr(nspawn, 'MACHINES', str(box.machines))
+    monkeypatch.setattr(nspawn, 'LIVE_NSPAWN_DIR', str(box.live))
+    _ = box.script.write_text(nspawn.nspawn_units_script(), encoding='utf-8')
     return box
 
 
