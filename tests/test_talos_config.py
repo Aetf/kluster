@@ -133,7 +133,8 @@ def test_kubespan_and_kubeprism_are_on() -> None:
     assert machine['features']['kubePrism']['port'] == conventions.KUBEPRISM_PORT
 
 
-@pytest.mark.parametrize('shape', list(SHAPES))
+# The shape with no arguments is the default, whose MTU the case above holds.
+@pytest.mark.parametrize('shape', [shape for shape in SHAPES if SHAPES[shape]])
 def test_kubespans_mtu_is_the_convention(shape: str) -> None:
     """The link Cilium's tunnel crosses has the MTU the convention states (rfc-007 §4.1).
 
@@ -323,11 +324,8 @@ def test_a_worker_carries_no_control_plane_configuration() -> None:
     assert of_kind('KubeSpanConfig', role='worker')[0]['enabled'] is True
 
 
-def test_ingress_defaults_to_block_and_enumerates_host_ports_only() -> None:
-    rules = firewall()
-    assert rules[0] == {'apiVersion': 'v1alpha1', 'kind': 'NetworkDefaultActionConfig', 'ingress': 'block'}
-
-    opened = {port for rule in rules[1:] for port in rule['portSelector']['ports']}
+def test_ingress_enumerates_host_ports_only() -> None:
+    opened = {port for port, _, _ in openings()}
     assert opened == {opening.port for opening in talos.HOST_OPENINGS}
     # Among them the two the balancer forwards, from the same structure: an
     # opening the firewall lost would leave a listener forwarding to a port

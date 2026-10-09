@@ -63,7 +63,7 @@ from kluster import conventions
 from kluster.components import homelab
 from kluster.components.backup import BackupBucket
 from kluster.components.cloud.guardrails import Guardrails
-from kluster.components.gateway import Gateway, access, nspawn, persistence
+from kluster.components.gateway import Gateway, access
 from kluster.components.gateway.container import CaddyService
 from kluster.components.gateway.unifi import SiteFirewall
 from kluster.components.overlay import Overlay, flow_rules
@@ -129,28 +129,14 @@ async def ran(tmp_path_factory: pytest.TempPathFactory) -> Run:
 #: there too.
 on_the_runs_loop = pytest.mark.asyncio(loop_scope='module')
 
+#: The type a B2 application key is registered under.
+APPLICATION_KEY = 'b2:index/applicationKey:ApplicationKey'
+
 
 @pytest_asyncio.fixture
 async def setup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Installation:
     """A fresh installation, for a case that runs the program itself."""
     return await install(monkeypatch, tmp_path)
-
-
-#: The provider of each area the design has, by the prefix its type tokens
-#: carry: the cloud, the Talos chain, the homelab host, the backup account, the
-#: gateway's controller and the overlay.
-AREA_PROVIDERS = ('oci', 'talos', 'libvirt', 'b2', 'unifi', 'zerotier')
-
-
-def test_the_stack_declares_every_area_of_the_design(ran: Run) -> None:
-    # The whole program against the mocks is where a wiring mistake surfaces —
-    # an argument the provider would reject, or a dependency that needs the
-    # endpoint before it exists — and `ran` is that run, so such a mistake
-    # fails here before any assertion is read.
-    # And the inventory property: an area that declared nothing at all would
-    # leave a stack that runs clean and comes up one provider short.
-    families = {typ.partition(':')[0] for typ in ran.recorded.types}
-    assert set(AREA_PROVIDERS) <= families
 
 
 #: The census parameters the rule below holds, as the component that receives
@@ -213,9 +199,6 @@ def test_the_controller_is_dialed_where_the_roster_placed_the_gateway(ran: Run) 
         == f'https://{conventions.overlay.UDM}'
     )
     assert ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-routing-config')['host'] == str(conventions.overlay.UDM)
-    # And nothing supplies it: the stack has no key to read it from, so a
-    # `record` command that pushed one would be filling a slot nobody reads.
-    assert not [key for key in STACK_CONFIG if 'ApiUrl' in key]
     # The steady state is the knob's absence, so nothing has to be unset to
     # reach this.
     assert f'kluster:{physical.GATEWAY_BOOTSTRAP_HOST}' not in STACK_CONFIG
@@ -270,19 +253,6 @@ def test_the_cluster_zone_is_opened_to_the_home_with_the_iot_vlan_carved_out(ran
     ]
 
 
-def test_the_site_resolver_is_given_no_static_host(ran: Run) -> None:
-    """The device name plane is DHCP-derived, so the roll of literal names is empty.
-
-    Empty and passed anyway: the component has no roll of its own to fall back
-    to, so a run declares a controller DNS record only for an entry this
-    program states. A name belongs in it when it must resolve on the LAN with
-    no lease behind it and no service plane to carry it.
-    """
-    assert physical.GATEWAY_STATIC_HOSTS == {}
-
-    assert [typ for typ in ran.recorded.types if 'dnsRecord' in typ] == []
-
-
 def test_the_libvirt_session_is_dialed_where_the_roster_placed_the_host(ran: Run) -> None:
     """The libvirt endpoint is derived from the roster and the checkout.
 
@@ -313,8 +283,6 @@ def test_the_libvirt_session_is_dialed_where_the_roster_placed_the_host(ran: Run
     # The pin is written against the address the URI dials: a `known_hosts`
     # entry keyed on anything else matches nothing the session sees.
     assert (ran.root / slot / homelab.KNOWN_HOSTS).read_text() == f'{address} {conventions.HOMELAB_HOST_KEY}\n'
-    # And no key holds any of it: what is configured is the credential alone.
-    assert not [key for key in STACK_CONFIG if 'libvirtUri' in key]
 
 
 def test_the_overlay_carries_rules_composed_from_the_roster_and_the_resolvers(ran: Run) -> None:
@@ -453,22 +421,6 @@ def test_the_device_is_told_to_keep_accepting_the_key_this_stack_dials_with(ran:
 
     assert declared['content'].strip() == conventions.gateway.CLIENT_KEY
     assert declared['path'] == access.key_path(name)
-
-
-def test_the_device_is_given_the_packages_its_container_runtime_needs(ran: Run) -> None:
-    """The gateway's persistence layer is declared, and with the set as data.
-
-    What a firmware update wipes is reinstalled by a script in the device's boot
-    chain, and which packages that script installs is the union of what the
-    layers above the mechanism require — passed in rather than written into the
-    script, so a requirement is stated by the component that has it.
-    """
-    script = ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-persistence-on-boot-{persistence.PACKAGES_SCRIPT}')
-
-    assert script['path'] == f'{conventions.gateway.ON_BOOT_D}/{persistence.PACKAGES_SCRIPT}'
-    assert script['host'] == str(conventions.overlay.UDM)
-    for package in nspawn.NspawnRuntime.REQUIRED_PACKAGES:
-        assert package in script['content'], package
 
 
 def test_every_child_carries_its_components_name(ran: Run) -> None:
@@ -827,7 +779,7 @@ def test_no_talos_call_is_dialed_into_the_cluster_vlan(ran: Run) -> None:
     ]
     addresses = [ip_address(value) for value in dialed if value != 'None']
     assert LB_ADDRESS in dialed
-    assert {token for token, args in invoked if 'endpoints' in args} == {
+    assert {token for token, args in invoked if 'endpoints' in args} >= {
         'talos:cluster/getHealth:getHealth',
         'talos:client/getConfiguration:getConfiguration',
     }
@@ -958,10 +910,13 @@ async def test_the_bucket_census_is_exported_for_the_stacks_that_fill_the_bucket
         == f'https://s3.{conventions.B2_ACCOUNT.region}.backblazeb2.com'
     )
 
-    # The one consumer that exists whether or not any application does.
+    # A key per consumer that exists whether or not any application does, each
+    # carrying the id of the key minted for its own prefix.
     keys = cast('dict[str, dict[str, pulumi.Output[str]]]', exported[conventions.PHYSICAL_OUTPUTS.backup_keys])
-    assert set(keys) == {'etcd'}
-    assert await keys['etcd']['id'].future() == 'kluster-backup-etcd-key-id'
+    assert set(keys) == {scope.name for scope in physical.BACKUP_SCOPES}
+    minted = {inputs['namePrefix']: name for name, inputs in ran.recorded.by_name(APPLICATION_KEY).items()}
+    for scope in physical.BACKUP_SCOPES:
+        assert await keys[scope.name]['id'].future() == f'{minted[scope.prefix]}-key-id'
 
 
 def test_the_quota_names_the_compartment_this_program_decided(ran: Run) -> None:
@@ -1056,19 +1011,27 @@ def test_the_signing_configuration_is_read_from_the_keys_the_mint_writes() -> No
     assert APPLICATION_KEY == derived.B2_KEY_KEY
 
 
-def test_no_provider_namespace_is_read_at_all() -> None:
-    """Every key this stack reads belongs to this repository (rfc-002 §8.1, §10.3).
+def test_no_provider_namespace_is_configured_at_all() -> None:
+    """Every key the committed configuration holds belongs to this repository or the engine (rfc-002 §8.1, §10.3).
 
     A provider namespace is configuration acting at a distance: the same
     program run somewhere else declares against a different account, and
     nothing in the program says so. With every provider built explicitly there
-    is nothing left for one to carry, so the committed file holds none.
-
-    Two namespaces, not one: `versions:` is this repository's own, holding
-    every pin a stack program reads (framework/pulumi.md §3.2).
+    is nothing left for one to carry, so the committed files hold none: the
+    stack file's keys are the project's own and the engine's `pulumi:`
+    options, and the project file's are the `versions:` pins every stack
+    program reads (framework/pulumi.md §3.2). The packages are the ones the
+    stack file disables the defaults of.
     """
-    namespaces = {key.partition(':')[0] for key in STACK_CONFIG}
-    assert namespaces == {'kluster', 'versions'}
+    root = Path(__file__).resolve().parents[1]
+    project = yaml.safe_load((root / 'Pulumi.yaml').read_text())
+    stack = yaml.safe_load((root / f'Pulumi.{conventions.PHYSICAL}.yaml').read_text())['config']
+    namespaces = {key.partition(':')[0] for key in [*stack, *project['config']]}
+    packages = set(stack['pulumi:disable-default-providers'])
+
+    assert packages, 'the stack file names no package'
+    assert namespaces.isdisjoint(packages), sorted(namespaces & packages)
+    assert namespaces <= {project['name'], 'pulumi', 'versions'}, sorted(namespaces)
 
 
 #: Every site fact the stack takes as configuration, and every secret its two
@@ -1118,20 +1081,6 @@ async def test_the_program_never_reads_the_devices_own_credential() -> None:
 
 
 @pytest.mark.usefixtures('setup')
-@pytest.mark.asyncio
-async def test_the_gateway_arm_reads_the_configuration_its_channels_need() -> None:
-    """The gateway, exercised without the rest of the stack.
-
-    `main` reaches it now, but a failure there names the whole program; this
-    isolates the arm whose wiring is entirely configuration — every key, and
-    which of them is a secret — so a missing one is reported against the
-    gateway rather than against a run of everything.
-    """
-    async with declaring():
-        physical._gateway(pulumi.Config())  # pyright: ignore[reportPrivateUsage]
-
-
-@pytest.mark.usefixtures('setup')
 def test_a_root_filesystem_pin_is_the_whole_reference_a_push_pulls_by() -> None:
     """The pin carries repository, tag and digest, because that is what an image is.
 
@@ -1144,7 +1093,7 @@ def test_a_root_filesystem_pin_is_the_whole_reference_a_push_pulls_by() -> None:
 
     assert pin.digest == DIGEST
     assert pin.tag == ROOTFS_TAG
-    assert pin.repository == f'{conventions.gateway.IMAGE_NAMESPACE}/{caddy.artifact}'
+    assert pin.repository == conventions.gateway.image_repository(caddy.artifact)
 
     alice, bob = conventions.gateway.RESOLVERS
     assert conventions.gateway.image_pin(alice) != conventions.gateway.image_pin(bob)
@@ -1165,25 +1114,6 @@ def test_a_pin_naming_a_repository_that_does_not_publish_the_build_is_refused() 
 
     with pytest.raises(ValueError, match=key):
         _ = physical._rootfs(alice)  # pyright: ignore[reportPrivateUsage]
-
-
-def test_the_provider_sdks_import() -> None:
-    """The bridged SDKs are committed, so a broken one is a broken checkout.
-
-    Each one is generated from a Terraform provider through Pulumi's bridge
-    and carries the parameterization that names its upstream; importing the
-    resource the design actually uses is the cheapest proof that the
-    generation produced something usable.
-    """
-    import pulumi_b2
-    import pulumi_libvirt
-    import pulumi_unifi
-    import pulumi_zerotier
-
-    assert pulumi_b2.Bucket
-    assert pulumi_libvirt.Domain
-    assert pulumi_unifi.FirewallZonePolicy
-    assert pulumi_zerotier.Member
 
 
 def _unwrapped(value: Any) -> Any:

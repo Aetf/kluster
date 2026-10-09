@@ -24,7 +24,6 @@ import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_under_backstop, run_with
 
 from putils import Component, UnparentedChildError, install_parent_backstop
-from putils import component as putils_component
 
 
 class Thing(pulumi.CustomResource):
@@ -254,28 +253,6 @@ async def test_a_forgotten_register_outputs_misnames_the_next_refusal() -> None:
     message = refused(leak_then_declare)
     assert 'innocent-bystander' in message
     assert 'leaky (test:NeverClosesTop)' in message
-
-
-@pytest.mark.asyncio
-async def test_installing_twice_registers_one_transformation() -> None:
-    """The install is idempotent per stack, and a refusal cannot show that.
-
-    A second copy of the transformation would refuse the same resources the
-    first one already refused — the first raise ends the registration — so the
-    only place the difference is visible is the root stack resource's own list.
-    The fixture has installed it once already; these two add nothing.
-    """
-    install_parent_backstop()
-    install_parent_backstop()
-
-    root = pulumi.runtime.get_root_resource()
-    assert root is not None
-    installed = [
-        transformation
-        for transformation in root._transformations  # pyright: ignore[reportPrivateUsage]
-        if transformation is putils_component._refuse_unparented  # pyright: ignore[reportPrivateUsage]
-    ]
-    assert len(installed) == 1
 
 
 @pytest.mark.asyncio

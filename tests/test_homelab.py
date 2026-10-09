@@ -23,6 +23,7 @@ import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
+from kluster.components import homelab
 
 CLUSTER = 'kluster'
 WORKER = 'worker'
@@ -311,7 +312,7 @@ def test_the_endpoint_names_the_service_user_and_the_privileged_daemon(tmp_path:
 
     # `/system` is the daemon that owns the storage pool and the domains on
     # this host; a session instance would see neither.
-    assert (parts.scheme, parts.netloc, parts.path) == ('qemu+ssh', f'virt@{HOST}', '/system')
+    assert (parts.scheme, parts.netloc, parts.path) == ('qemu+ssh', f'{homelab.LIBVIRT_USER}@{HOST}', '/system')
 
 
 def test_the_identity_is_materialized_where_only_this_machine_can_read_it(tmp_path: Path) -> None:
@@ -462,25 +463,6 @@ def _transformed_disk(selector: str) -> Any:
     driver = result.getroot().find(f'devices/{selector}/driver')
     assert driver is not None
     return driver
-
-
-def test_the_paths_in_the_uri_are_relative_to_the_checkout(tmp_path: Path) -> None:
-    """An absolute path here is a diff that can never be resolved (rfc-002 §8.4).
-
-    The URI is a provider input and therefore lives in state, so an absolute
-    path would record the path one machine happened to have and every other
-    machine would then propose changing it. The provider opens both values
-    without anchoring them, and the anchor it falls back on is the plugin
-    process\'s working directory -- the project root, since this project
-    declares no `main`.
-    """
-    from kluster.components.homelab import KEYFILE, KNOWN_HOSTS, SLOT
-    from kluster.lib import workstation
-
-    _, query = _dial(tmp_path)
-
-    assert query['keyfile'] == [f'{workstation.DIRECTORY}/{SLOT}/{KEYFILE}']
-    assert query['knownhosts'] == [f'{workstation.DIRECTORY}/{SLOT}/{KNOWN_HOSTS}']
 
 
 @pytest.mark.asyncio

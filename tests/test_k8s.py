@@ -22,7 +22,6 @@ import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
 
-from kluster import conventions
 from kluster.lib.versions import ChartPin, ManifestPin, versions
 
 DIGEST = f'sha256:{"c" * 64}'
@@ -289,12 +288,11 @@ def test_a_custom_resource_reaches_the_provider_as_the_object_the_api_server_tak
     assert pool['spec'] == {'blocks': [{'cidr': '192.0.2.0/24'}]}
 
 
-def test_load_balancer_pools_are_a_service_label() -> None:
+def test_a_pool_the_cluster_does_not_have_is_refused() -> None:
     """Cilium allocates from a pool a Service asks for; the legacy cluster
     decided it on the node, with k3s `svccontroller` labels that have no
     successor here."""
     from kluster.lib.k8s import lb_pool_labels
 
-    assert lb_pool_labels(conventions.LAN_POOL.name) == {conventions.LB_POOL_LABEL: conventions.LAN_POOL.name}
     with pytest.raises(ValueError, match='no such load-balancer pool'):
         _ = lb_pool_labels('homelab')

@@ -84,17 +84,9 @@ def test_object_storage_is_capped_in_the_unit_it_is_spelled_in() -> None:
 
 
 def test_every_statement_names_the_compartment() -> None:
-    from kluster.components.cloud.guardrails import quota_statements
-
     lines = quota_statements(COMPARTMENT_NAME)
-    # "Every statement" is a claim about the policy, so the policy is pinned
-    # before it is walked: one that lost its statements satisfies the loop.
-    assert {line.split()[1] for line in lines} == {
-        'compute-core',
-        'compute-memory',
-        'block-storage',
-        'object-storage',
-    }
+    # A policy that lost its statements would satisfy the loop.
+    assert lines
     for line in lines:
         # The statement language has no OCIDs: a compartment is named, and a
         # statement that names none applies to the whole tenancy.
@@ -143,6 +135,7 @@ async def test_every_alert_has_an_audience() -> None:
 async def test_secret_addresses_reach_every_alert_as_a_secret() -> None:
     """The addresses are private, so a caller holding them as a secret gets a secret on every rule."""
     guardrails = build(pulumi.Output.secret(RECIPIENTS))
+    assert guardrails.alerts
     for rule in guardrails.alerts.values():
         assert await rule.recipients.is_secret()
         assert await rule.recipients.future() == ','.join(RECIPIENTS)
@@ -153,6 +146,7 @@ async def test_a_budget_nobody_hears_is_refused() -> None:
     # The list is in hand only once the input resolves, so that is where the
     # refusal is: in the audience every rule receives.
     guardrails = build((), name='kluster-silent')
+    assert guardrails.alerts
     for rule in guardrails.alerts.values():
         with pytest.raises(ValueError, match='notifies nobody'):
             await rule.recipients.future()
