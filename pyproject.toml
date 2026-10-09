@@ -43,6 +43,15 @@ dependencies = [
     "pulumi-unifi",
     "pulumi-zerotier",
     "asyncssh>=2.24.0",
+    # `update_crds`'s, a console script like the others below, so what it
+    # imports is installed wherever the package is, as `tests/test_script_imports.py`
+    # holds of every script. Its progress bars:
+    "tqdm>=4.67.1",
+    # and libyaml's parser and emitter, which it reads and writes the CRD bundle
+    # with (`sources._yaml`). The `oldlibyaml` extra rather than `libyaml`:
+    # `YAML()` imports only the extension this one installs, and without it runs
+    # in pure Python.
+    "ruamel-yaml[oldlibyaml]>=0.19.1",
 ]
 
 [project.scripts]
@@ -54,14 +63,8 @@ operator-stack = 'kluster.scripts.operator_stack.cli:main'
 [dependency-groups]
 dev = [
     "ipython>=8.30.0",
-    "tqdm>=4.67.1",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
-    # With libyaml's parser and emitter, which `update_crds` reads and writes the
-    # CRD bundle with (`sources._yaml`). The `oldlibyaml` extra rather than
-    # `libyaml`: `YAML()` imports only the extension this one installs, and
-    # without it runs in pure Python.
-    "ruamel-yaml[oldlibyaml]>=0.19.1",
     "ruff>=0.15.11",
     "basedpyright>=1.39.10",
     "import-linter>=2.14",
