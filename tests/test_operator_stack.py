@@ -1320,14 +1320,13 @@ def test_a_real_run_under_a_callers_state_switch_writes_the_checkpoint_the_check
 #: secret placed where `settings.json`'s `shape` says: inside an object; as
 #: an array inside an object; inside an object the provider hands back as a
 #: string; or as the input of a property `additional_secret_outputs` names,
-#: plain or, as `marked`, secret. Where `hold` names a FIFO, the create waits
-#: on it for one byte, so the operation stays pending until the case writes
-#: `RELEASE` into it; `hold_delay` seconds pass before the create opens it,
-#: standing in for a create the engine reaches late.
+#: plain or, as `marked`, secret. Where `copy` names a path, the create copies
+#: the stack's checkpoint file, `checkpoint`, there before it returns: the file
+#: the engine wrote for that create in flight.
 ECHO = """\
 import json
 import pathlib
-import time
+import shutil
 
 import pulumi
 from pulumi.dynamic import CreateResult, Resource, ResourceProvider
@@ -1335,10 +1334,8 @@ from pulumi.dynamic import CreateResult, Resource, ResourceProvider
 
 class Echo(ResourceProvider):
     def create(self, props):
-        if props.get('hold'):
-            time.sleep(props['hold_delay'])
-            with open(props['hold'], 'rb') as fifo:
-                fifo.read(1)
+        if props.get('copy'):
+            shutil.copyfile(props['checkpoint'], props['copy'])
         outs = dict(props)
         if props.get('reshape'):
             outs['deep'] = json.dumps(props['deep'], sort_keys=True)
@@ -1361,14 +1358,11 @@ elif settings['shape'] == 'additional':
     props, names = {'x': settings['secret']}, ['x']
 else:
     props, names = {'x': secret}, ['x']
-props['hold'] = settings['hold']
-if settings['hold']:
-    props['hold_delay'] = settings['hold_delay']
+if settings['copy']:
+    props['checkpoint'], props['copy'] = settings['checkpoint'], settings['copy']
 EchoResource('echo', props, pulumi.ResourceOptions(additional_secret_outputs=names))
 """
 ECHOED = 'a-secret-the-echo-carries'
-#: The one byte `ECHO`'s create reads off its FIFO before it returns.
-RELEASE = b'.'
 
 
 @pytest.fixture
@@ -1376,9 +1370,16 @@ def echo(repository: Repository, committed: str, tmp_path: Path) -> Scratch:
     return _initialized(repository, committed, tmp_path, ECHO)
 
 
-def _echo_settings(scratch: Scratch, shape: str, hold: Path | None = None, hold_delay: float = 0) -> None:
+def _echo_settings(scratch: Scratch, shape: str, copy: Path | None = None) -> None:
     _ = (scratch.checkout / 'settings.json').write_text(
-        json.dumps({'shape': shape, 'secret': ECHOED, 'hold': str(hold) if hold else None, 'hold_delay': hold_delay})
+        json.dumps(
+            {
+                'shape': shape,
+                'secret': ECHOED,
+                'checkpoint': str(scratch.path),
+                'copy': str(copy) if copy else None,
+            }
+        )
     )
 
 
@@ -1387,9 +1388,9 @@ def _echo_settings(scratch: Scratch, shape: str, hold: Path | None = None, hold_
 UP = ('pulumi', 'up', '--yes', '--skip-preview', '--non-interactive', '--stack', PROBE)
 
 
-def _echo_up(scratch: Scratch, shape: str) -> tuple[dict[str, Any], dict[str, Any]]:
+def _echo_up(scratch: Scratch, shape: str, copy: Path | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
     """The checkpoint the engine writes for `shape`, and the echo resource in it."""
-    _echo_settings(scratch, shape)
+    _echo_settings(scratch, shape, copy)
     up = sp.run(
         UP, cwd=scratch.checkout, env=scratch.run.env, capture_output=True, text=True, timeout=ENGINE_COMMAND_TIMEOUT
     )
@@ -1468,48 +1469,27 @@ def test_the_real_engine_leaves_an_additional_secret_outputs_input_in_the_clear_
 
 @needs_pulumi
 @engine_bound
-@pytest.mark.parametrize('hold_delay', [0, 2], ids=['prompt', 'late'])
-def test_a_real_operation_left_pending_is_checked_like_a_resource(echo: Scratch, hold_delay: float) -> None:
-    hold = echo.checkout.parent / 'hold'
-    os.mkfifo(hold)
-    _echo_settings(echo, 'additional', hold, hold_delay)
-    # The FIFO is held open from before the run starts -- for reading and
-    # writing, which never blocks on Linux -- so the release waits in the pipe
-    # for a create that opens it late, where a non-blocking open for writing
-    # alone fails while nothing has it open for reading and loses the release.
-    # The `late` case is that create. A run that outlasts its bound is killed
-    # rather than waited on.
-    release = os.open(hold, os.O_RDWR)
-    pending: dict[str, Any] | None = None
-    try:
-        with sp.Popen(UP, cwd=echo.checkout, env=echo.run.env, stdout=sp.DEVNULL, stderr=sp.DEVNULL) as up:
-            try:
-                # The engine records the operation before it starts it, and
-                # the create does not end until the release is written: the
-                # file read here is the one a run killed at this moment would
-                # leave. The deadline is a stop-loss, under the case's own.
-                deadline = time.monotonic() + ENGINE_COMMAND_TIMEOUT
-                while pending is None and up.poll() is None and time.monotonic() < deadline:
-                    document = cast('dict[str, Any]', json.loads(echo.path.read_text()))
-                    if document['checkpoint']['latest'].get('pending_operations'):
-                        pending = document
-                    else:
-                        time.sleep(0.1)
-            finally:
-                _ = os.write(release, RELEASE)
-                try:
-                    _ = up.wait(timeout=ENGINE_COMMAND_TIMEOUT)
-                except sp.TimeoutExpired:
-                    up.kill()
-                    raise
-    finally:
-        os.close(release)
+def test_a_real_operation_left_pending_is_checked_like_a_resource(echo: Scratch, tmp_path: Path) -> None:
+    # The copy the echo's create takes is the file a run killed at that moment
+    # would leave. The engine saves a step's begin mutation, which records the
+    # operation as pending, before it calls the provider, and saves each
+    # earlier step's end before the steps that wait on it begin, so the copy
+    # holds the echo's create pending and nothing else -- not the stack's, nor
+    # the default provider's, each of which the file holds pending for a while
+    # earlier in the run. `check` and `diff` run before the begin mutation is
+    # saved, which is why the copy is taken in `create`. The run's environment
+    # carries no `PULUMI_SKIP_CHECKPOINTS`, which would hold every write back
+    # until the run ends. A release that stopped writing the file before each
+    # provider call fails here, and should: the driver's checks read that file.
+    copy = tmp_path / 'pending.json'
+    _, resource = _echo_up(echo, 'additional', copy)
+    pending = json.loads(copy.read_text())
 
-    assert pending is not None
-    assert not [r for r in checkpoint.resources(pending) if r['urn'].endswith('::echo')]
-    (operation,) = pending['checkpoint']['latest']['pending_operations']
+    operations = pending['checkpoint']['latest']['pending_operations']
+    assert [operation['resource']['urn'] for operation in operations] == [resource['urn']]
+    assert not [r for r in checkpoint.resources(pending) if r['urn'] == resource['urn']]
     assert [str(finding) for finding in checkpoint.undeclared(pending)] == [
-        f'pending_operations[0] {operation["resource"]["urn"]} inputs.x: '
+        f'pending_operations[0] {resource["urn"]} inputs.x: '
         'is named in additionalSecretOutputs and is not ciphertext; '
         'pass the input `x` whole as `pulumi.Output.secret(...)`'
     ]
