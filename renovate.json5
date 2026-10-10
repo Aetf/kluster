@@ -80,7 +80,7 @@
   // toolchain group, so one release moves both pins in one pull request. A
   // test holds the two equal.
   constraints: {
-    uv: '0.12.21',
+    uv: '0.12.22',
   },
   dockerfile: {
     // The self-built images' recipes are `*.Containerfile`, which the
