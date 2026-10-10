@@ -34,9 +34,11 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Annotated, Any
 
 import requests
+
+from kluster.lib.secret import Secret
 
 from ... import conventions
 from . import masters, payload
@@ -235,7 +237,7 @@ class AppKey:
     """
 
     key_id: str
-    key: str = field(repr=False, compare=False)
+    key: Annotated[str, Secret] = field(repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -364,7 +366,7 @@ class Session:
 
     account_id: str
     api_url: str
-    token: str = field(repr=False, compare=False)
+    token: Annotated[str, Secret] = field(repr=False, compare=False)
 
     @classmethod
     def authorize(cls, key_id: str, key: str) -> Session:

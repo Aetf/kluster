@@ -33,11 +33,14 @@ from __future__ import annotations
 import datetime as dt
 import ipaddress
 from dataclasses import dataclass, field
+from typing import Annotated
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
+
+from kluster.lib.secret import Secret
 
 CURVE = ec.SECP256R1()
 
@@ -59,7 +62,7 @@ class Credential:
     The key does not print; the certificate is public and does.
     """
 
-    key_pem: bytes = field(repr=False, compare=False)
+    key_pem: Annotated[bytes, Secret] = field(repr=False, compare=False)
     cert_pem: bytes
 
 
@@ -113,7 +116,7 @@ class Authority:
     this record, and what the field holds is the escrowed private key.
     """
 
-    key: ec.EllipticCurvePrivateKey = field(repr=False, compare=False)
+    key: Annotated[ec.EllipticCurvePrivateKey, Secret] = field(repr=False, compare=False)
 
     @classmethod
     def from_pem(cls, pem: str | bytes) -> Authority:

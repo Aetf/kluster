@@ -112,17 +112,13 @@ from kluster.lib.secret import Secret
 from kluster.lib.state_backend import render
 from kluster.providers.device_files import ssh
 from kluster.scripts.credentials import (
-    age,
     b2,
-    cloudflare,
-    delivery,
     escrow,
     github_secrets,
     kdbx,
     masters,
     oci_iam,
     payload,
-    pki,
     pulumi_config,
     slots,
 )
@@ -168,17 +164,11 @@ class Census:
 #: The modules whose records this census covers: the ones whose secret fields
 #: do not carry the marker yet.
 MODULES: tuple[ModuleType, ...] = (
-    age,
-    b2,
-    cloudflare,
-    delivery,
     escrow,
-    github_secrets,
     kdbx,
     masters,
     oci_iam,
     payload,
-    pki,
     pulumi_config,
     slots,
     config,
@@ -190,26 +180,6 @@ MODULES: tuple[ModuleType, ...] = (
 )
 
 CENSUS: dict[type, Census] = {
-    age.Identity: Census('secret public', secret='secret'),
-    b2.AppKey: Census('key_id key', secret='key'),
-    b2.Bucket: Census('bucket_id'),
-    b2.FilePage: Census('names next_file_name'),
-    b2.KeyPage: Census('keys next_key_id'),
-    b2.ListedKey: Census('key_id name capabilities bucket_id name_prefix'),
-    b2.MintedKey: Census('session app_key'),
-    b2.Role: Census('name capabilities bucket_id name_prefix'),
-    b2.Session: Census('account_id api_url token', secret='token'),
-    cloudflare.PermissionGroup: Census('group_id name scopes'),
-    cloudflare.Role: Census('name permissions'),
-    cloudflare.Session: Census('token token_id', secret='token'),
-    cloudflare.Token: Census('token_id value', secret='value'),
-    cloudflare.TokenSummary: Census('token_id name'),
-    cloudflare.VerifiedToken: Census('token_id status'),
-    cloudflare.Zone: Census('zone_id name account_id'),
-    cloudflare.ZoneToken: Census('token_id value account_id zone_ids', secret='value'),
-    # What a mint created, carried until it is pushed; the retirement is a
-    # closure and prints as a function.
-    delivery.Delivery: Census('_credential _retire', secret='_credential'),
     escrow.Console: Census('steps kit'),
     escrow.Generated: Census('mint'),
     escrow.KitAttachment: Census('entry filename'),
@@ -218,8 +188,6 @@ CENSUS: dict[type, Census] = {
     escrow.Shape: Census('looks_like matches'),
     escrow.Vault: Census('registry identity', secret='identity'),
     escrow.WorkstationSlot: Census('path read_by store'),
-    github_secrets.Forge: Census('token run', secret='token'),
-    github_secrets.Slot: Census('repository name environment'),
     # The unlocked database, which holds the master password as `.password`.
     # Hidden for what it holds rather than for how `PyKeePass` prints, as
     # `pki.Authority`'s key is; `SHAPED` says why it is filled with the bare sentinel.
@@ -242,10 +210,6 @@ CENSUS: dict[type, Census] = {
     # The raw answer, which for a mint carries the credential the provider
     # discloses once.
     payload.Payload: Census('where fields', secret='fields'),
-    # The CA key is hidden for what it is, not for how its type happens to
-    # print (`pki.Authority`).
-    pki.Authority: Census('key', secret='key'),
-    pki.Credential: Census('key_pem cert_pem', secret='key_pem'),
     # `operator` and `physical` are where the operator passphrase and
     # `physical`'s are found, functions, which hold no value to print.
     pulumi_config.BackendEnvironment: Census('passphrase url operator physical', secret='passphrase'),

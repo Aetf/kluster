@@ -10,6 +10,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Annotated
+
+from kluster.lib.secret import Secret
 
 
 @dataclass(frozen=True)
@@ -33,7 +36,7 @@ class Delivery[T]:
     #: printed in a log line, or compared in a failed assertion -- which prints
     #: the fields that took part in the comparison -- would otherwise print the
     #: credential it carries.
-    _credential: T = field(repr=False, compare=False)
+    _credential: Annotated[T, Secret] = field(repr=False, compare=False)
     _retire: Callable[[], None]
 
     @staticmethod

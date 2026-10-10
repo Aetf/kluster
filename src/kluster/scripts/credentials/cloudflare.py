@@ -32,10 +32,12 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, cast
+from typing import Annotated, Any, cast
 from urllib.parse import urlencode
 
 import requests
+
+from kluster.lib.secret import Secret
 
 from ... import conventions
 from . import payload
@@ -167,7 +169,7 @@ class Token:
     """
 
     token_id: str
-    value: str = field(repr=False, compare=False)
+    value: Annotated[str, Secret] = field(repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -290,7 +292,7 @@ class Session:
     token in a transcript is live until somebody retires it.
     """
 
-    token: str = field(repr=False, compare=False)
+    token: Annotated[str, Secret] = field(repr=False, compare=False)
     token_id: str
 
     @classmethod
@@ -511,7 +513,7 @@ class ZoneToken:
     token_id: str
     #: Not in the repr, for the reason `Token.value` is not: this is the same
     #: credential, on its way to the slot that will hold it.
-    value: str = field(repr=False, compare=False)
+    value: Annotated[str, Secret] = field(repr=False, compare=False)
     account_id: str
     zone_ids: dict[str, str]
 
