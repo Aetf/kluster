@@ -106,14 +106,14 @@ config:
   versions:chart-plugin-barman-cloud:
     value:
       repository: oci://ghcr.io/cloudnative-pg/charts
-      version: 0.7.1
-      digest: sha256:fc5683ec655b140e2f82219ffc9ae468e9cf2c0f204251b7da2294e5ce52b625
+      version: 0.8.1
+      digest: sha256:b48511269e2c75603ee2f06f6c5444e8154542103a3c3b9d692344725bac37b7
       definitions: true
   versions:chart-victoria-metrics-k8s-stack:
     value:
       repository: oci://ghcr.io/victoriametrics/helm-charts
-      version: 0.91.2
-      digest: sha256:9783c9b651fdece12a03ba4c62b84689b6df6c6e7c92d4f4949b3bc4114020a5
+      version: 0.95.2
+      digest: sha256:e4901e7ffbecc89db34cffc785d646b02b8b2d7d2cab546aeabf3e9bd821b0f8
       definitions: true
   versions:chart-node-feature-discovery:
     value:
@@ -131,20 +131,20 @@ config:
   versions:chart-sealed-secrets:
     value:
       repository: oci://registry-1.docker.io/bitnamicharts
-      version: 2.19.3
-      digest: sha256:0a22f95d56c30e5e9778bf887ba7e3e68b6570356c3d9de4921f3816edf098f5
+      version: 2.20.0
+      digest: sha256:9e60fff9c99e22028d5b2cdc223bc669709cdd7447b9aef76714146a40932eec
       definitions: true
   versions:chart-intel-device-plugins-operator:
     value:
       repository: oci://ghcr.io/intel/helm-charts
-      version: 0.36.0
-      digest: sha256:24ec70426a851c04e97efb61a4664479fbe1986ac74e39f497c03cce9b7bc282
+      version: 0.37.1
+      digest: sha256:97008939007a281496381b58088229744a74618fdf6cd416742daa197cd98edd
       definitions: true
   versions:chart-intel-device-plugins-gpu:
     value:
       repository: oci://ghcr.io/intel/helm-charts
-      version: 0.36.0
-      digest: sha256:6f09a445227e1bec9d625f0c384182480ce7fc3c63c634549c8f813f1a77a3d0
+      version: 0.37.1
+      digest: sha256:35195c40cbae8991d82ed16c0df85414f387a777240e220d61b3f294b6b1eed6
       # The `GpuDevicePlugin` object it creates is defined by the operator
       # chart above; this one is a plain workload.
       definitions: false
