@@ -93,7 +93,7 @@ talosctl = "1.13.9"
 # rather than a reimplementation that could disagree with the controller. The
 # suite opens what it seals with `--recovery-unseal` and a key pair of its own.
 # This version is the controller's release (rfc-007 §6.1).
-kubeseal = "0.39.1"
+kubeseal = "0.40.0"
 # node runs ZeroTier's own rule compiler, which the suite asks whether Central
 # would accept the overlay's rendered flow rules. The compiler is JavaScript
 # with no dependencies, vendored at the release the CI member runs
