@@ -16,13 +16,24 @@ of one type by drilling into every field that takes part in the comparison —
 differs as `field: <left> != <right>`. `field(compare=False)` is what keeps a
 secret out of that half.
 
-Both are annotations and therefore forgettable. This is the census that makes
-forgetting either fail: it pins, for every record in the modules below, which
-of its fields carry secrets and which do not, and then holds both halves
-against the classes themselves. A field added to any of them fails here until
-its author has said which half it is in — which is the point, because the
-failure mode being guarded is a field added later to a class that was safe
-when it was written.
+Both are annotations and therefore forgettable. What makes forgetting either
+fail is the marker a secret field is declared with, `Annotated[<its type>,
+Secret]` (`kluster.lib.secret`): every marked field of every record in the
+package is held to both here, the fields read off the marker rather than off a
+list, and the leak checks below put the secret sentinel in exactly those
+fields before printing the record. What the marker cannot catch is a
+credential in a field nobody marked, and that residual is stated where the
+marker is declared.
+
+**The modules `MODULES` names do not carry the marker yet, and a census holds
+them instead**: it pins, for every record in them, which of its fields carry
+secrets and which do not, and then holds both halves against the classes
+themselves. A field added to any of them fails here until its author has said
+which half it is in — the failure mode being guarded is a field added later to
+a class that was safe when it was written. A module leaves the census on the
+commit that marks its secret fields (the remaining modules are queued on
+kluster-ops#587), and from then on it is the marker's residual that applies to
+it: a new field there is held to nothing until it is marked.
 
 **Out of comparison means that two records differing only in a secret are
 equal and hash alike**: a set or a mapping keyed by them keeps one of two
@@ -40,25 +51,23 @@ dataclass whose `__eq__` is `object`'s exactly as into a generated one.
 of constructs that print their contents: everything else inherits `object`'s
 repr and discloses nothing but a type and an address. Only the first of the
 three can hide a field, so the rule for the other two is not an annotation but
-a prohibition — a `NamedTuple` or a `TypedDict` in these modules may carry no
-secret at all, and the census refuses one that says it does.
+a prohibition — a `NamedTuple` or a `TypedDict` may carry no secret at all, and
+both the marker's case and the census refuse one that says it does.
 
-**The modules are the ones that hold credentials**, and a module that grows a
-record carrying one joins the list — a component's module as readily as a
-script's, which is how `routing` is here: it holds the BGP session password
-both as the stack's input and resolved for the daemon's configuration. The
-boundary is deliberate rather than exhaustive: this proves nothing about a
-class in a module it does not name, and a module is covered whole or not at
-all, because a record censused by class alone leaves the next record in the
-same module uncaught.
+**The census's modules are the ones that hold credentials**, a component's
+module as readily as a script's. Its boundary is deliberate rather than
+exhaustive: it proves nothing about a class in a module it does not name, and
+a module is covered whole or not at all, because a record censused by class
+alone leaves the next record in the same module uncaught. The marker has no
+such boundary: the package is walked whole.
 
 **A field typed `pulumi.Input[str]` is classified by what it holds, not by the
 `Output` it holds in production.** An `Output`'s repr discloses nothing, but
 the type promises nothing about arriving as one — a test hands over the
 literal — so a field of that type carrying a credential is hidden like any
-other. `container` and `k8s` are here for that class of field: a mounted
-file's contents, an initial state's contents, the ACME token, and a produced
-Secret's own data.
+other. `routing`'s session password is one, marked; `container` and `k8s` are
+censused for that class of field: a mounted file's contents, an initial
+state's contents, the ACME token, and a produced Secret's own data.
 
 **A field that holds a library's object is classified by what the object
 holds, not by what it prints**, as `pki.Authority`'s key is. `kdbx` and
@@ -66,7 +75,7 @@ holds, not by what it prints**, as `pki.Authority`'s key is. `kdbx` and
 master password and prints only its type and address, and an OCI client holds
 the configuration it was built from, the API key inside it. Such a field is
 filled with the kind of value it holds in production wherever that value
-prints what it carries, and with the bare marker where it does not
+prints what it carries, and with the bare sentinel where it does not
 (`SHAPED`).
 
 **A field that holds a record is classified by what that record prints**, in
@@ -83,16 +92,23 @@ name.
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Callable
+import importlib
+import inspect
+import pkgutil
+import sys
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
-from typing import Any, cast, final, is_typeddict
+from typing import Annotated, Any, ForwardRef, NamedTuple, TypedDict, cast, final, get_args, get_origin, is_typeddict
 
+import pulumi
 import pytest
 
-from kluster.components.gateway import container, routing
+import kluster
+from kluster.components.gateway import container
 from kluster.lib import k8s
+from kluster.lib.secret import Secret
 from kluster.lib.state_backend import render
 from kluster.providers.device_files import ssh
 from kluster.scripts.credentials import (
@@ -112,7 +128,7 @@ from kluster.scripts.credentials import (
 )
 from kluster.scripts.state_backend import adopt, config
 
-#: Written into every secret field of every record built below, and looked for
+#: The sentinel written into every secret field of every record built below, and looked for
 #: in the repr. Distinctive because the assertion that it is *absent* is only
 #: worth anything if a value that shape could not have arrived by accident.
 SECRET = 'SECRET-fbb1a7-MUST-NOT-BE-PRINTED'
@@ -149,7 +165,8 @@ class Census:
         return tuple(self.secret.split())
 
 
-#: The modules whose records this census covers.
+#: The modules whose records this census covers: the ones whose secret fields
+#: do not carry the marker yet.
 MODULES: tuple[ModuleType, ...] = (
     age,
     b2,
@@ -168,7 +185,6 @@ MODULES: tuple[ModuleType, ...] = (
     render,
     adopt,
     ssh,
-    routing,
     container,
     k8s,
 )
@@ -206,7 +222,7 @@ CENSUS: dict[type, Census] = {
     github_secrets.Slot: Census('repository name environment'),
     # The unlocked database, which holds the master password as `.password`.
     # Hidden for what it holds rather than for how `PyKeePass` prints, as
-    # `pki.Authority`'s key is; `SHAPED` says why it is filled with the marker.
+    # `pki.Authority`'s key is; `SHAPED` says why it is filled with the bare sentinel.
     kdbx.KdbxStore: Census('path _db', secret='_db'),
     masters.Credential: Census('root values', secret='values'),
     masters.Field: Census('name describes file env kind'),
@@ -257,15 +273,6 @@ CENSUS: dict[type, Census] = {
     slots.StateRead: Census('stack output'),
     slots.SecretStore: Census('key'),
     slots.WorkstationSlot: Census('name'),
-    routing.RoutingSession: Census('neighbor password', secret='password'),
-    routing._ConvergerParams: Census(  # pyright: ignore[reportPrivateUsage]
-        'cluster source live stamp firmware parser daemons daemon owner group mode check restart'
-    ),
-    routing._FrrParams: Census(  # pyright: ignore[reportPrivateUsage]
-        'cluster peer peer_description password local_asn peer_asn pool_v4 pool_v6 v4_list v6_list max_prefixes',
-        secret='password',
-    ),
-    routing._UnitParams: Census('cluster daemon_unit executable'),  # pyright: ignore[reportPrivateUsage]
     config.ClientBundle: Census('name address ca_cert cert key', secret='key'),
     render.Machine: Census(
         'operator_keys postgres_uid postgres_image database ci_role operator_role ca_cert server_cert '
@@ -314,14 +321,26 @@ CENSUS: dict[type, Census] = {
     k8s.SecretTemplate: Census('data type immutable labels annotations', secret='data'),
 }
 
-CENSUSED: list[tuple[str, type, Census]] = sorted(
-    ((f'{cls.__module__.rsplit(".", 1)[1]}.{cls.__name__}', cls, entry) for cls, entry in CENSUS.items()),
-    key=lambda row: row[0],
-)
 
-#: The parameter list every per-record test below is driven by, so that a
-#: failure names the record rather than a row number.
-RECORDS = pytest.mark.parametrize(('name', 'cls', 'entry'), CENSUSED, ids=[row[0] for row in CENSUSED])
+@final
+@dataclass(frozen=True)
+class Record:
+    """One record under test: every field it has, and the subset it may not print.
+
+    Built from a census row for a module the census holds, and from the marker
+    for every other record that carries one.
+    """
+
+    cls: type
+    #: Every field of the record, in declaration order.
+    names: tuple[str, ...]
+    #: The subset that carries credential material.
+    secrets: tuple[str, ...]
+
+    @property
+    def id(self) -> str:
+        """The record's dotted path under `kluster`, which is what a failure names."""
+        return f'{self.cls.__module__.removeprefix(f"{kluster.__name__}.")}.{self.cls.__qualname__}'
 
 
 def _kind(cls: type) -> str:
@@ -362,6 +381,47 @@ def _field_names(cls: type) -> tuple[str, ...]:
             return tuple(spec.name for spec in dataclasses.fields(cls))  # pyright: ignore[reportArgumentType]
 
 
+def _declared_types(cls: type) -> dict[str, object]:
+    """Each field's declared type, evaluated as far as its outermost layer.
+
+    Evaluated in the namespace of the class that declares the field, which for
+    an inherited field is a base's, and no further than the annotation's own
+    text: the marker sits in that text, while resolving the whole type would
+    also have to resolve `pulumi.Input`, whose definition names `Output` by a
+    string only Pulumi's own module can evaluate. A `NamedTuple` or a
+    `TypedDict` keeps each annotation as a forward reference instead of a
+    string, so that is evaluated the same way.
+    """
+    declared: dict[str, object] = {}
+    for base in reversed(cls.__mro__):
+        for name, annotation in inspect.get_annotations(base, eval_str=True).items():
+            if isinstance(annotation, ForwardRef):
+                module = annotation.__forward_module__ or base.__module__
+                annotation = eval(annotation.__forward_arg__, vars(sys.modules[module]))
+            declared[name] = annotation
+    return declared
+
+
+def _carries_marker(annotation: object) -> bool:
+    """Whether a declared type names `Secret` as `Annotated` metadata, at any depth.
+
+    Any depth, because a marked type wrapped again is still marked:
+    `Annotated[str, Secret] | None` is a secret field that may be absent, and a
+    mapping of marked values is a field of secrets.
+    """
+    if get_origin(annotation) is Annotated:
+        metadata = cast('tuple[object, ...]', getattr(annotation, '__metadata__', ()))
+        if Secret in metadata:
+            return True
+    return any(_carries_marker(argument) for argument in get_args(annotation))
+
+
+def _marked(cls: type) -> tuple[str, ...]:
+    """The fields of a record that carry the marker, in declaration order."""
+    declared = _declared_types(cls)
+    return tuple(name for name in _field_names(cls) if _carries_marker(declared[name]))
+
+
 def _hidden(cls: type) -> set[str]:
     """The fields a record keeps out of its repr.
 
@@ -380,6 +440,44 @@ def _uncompared(cls: type) -> set[str]:
     return {spec.name for spec in dataclasses.fields(cls) if not spec.compare}  # pyright: ignore[reportArgumentType]
 
 
+def _package() -> tuple[ModuleType, ...]:
+    """Every module of `kluster`, imported.
+
+    Imported by name rather than through the walk's own import, which drops a
+    subpackage that fails to import without a word: a module that does not
+    import fails here, by name, instead of leaving its records unchecked. A
+    `__main__` would run its program on import, and is left out.
+    """
+    return tuple(
+        importlib.import_module(info.name)
+        for info in pkgutil.walk_packages(kluster.__path__, f'{kluster.__name__}.')
+        if info.name.rsplit('.', 1)[1] != '__main__'
+    )
+
+
+#: Every record in the package that carries the marker on at least one field,
+#: with the marked fields as its secrets.
+MARKED: list[Record] = sorted(
+    (
+        Record(cls, _field_names(cls), secrets)
+        for module in _package()
+        for cls in _declared(module)
+        if (secrets := _marked(cls))
+    ),
+    key=lambda record: record.id,
+)
+
+#: Every record the census holds, with its secrets as the census lists them.
+CENSUSED: list[Record] = sorted(
+    (Record(cls, entry.names, entry.secrets) for cls, entry in CENSUS.items()), key=lambda record: record.id
+)
+
+
+def _records(records: list[Record]) -> pytest.MarkDecorator:
+    """Drive a per-record test over `records`, so that a failure names the record rather than a row number."""
+    return pytest.mark.parametrize('record', records, ids=[record.id for record in records])
+
+
 def _signing_configuration(key: str) -> dict[str, object]:
     """What an OCI client holds as `adopt` builds one: a configuration, its key's content inside it."""
     return {
@@ -392,12 +490,12 @@ def _signing_configuration(key: str) -> dict[str, object]:
 
 
 #: The secret fields filled with the kind of value they hold in production, the
-#: marker inside it, rather than with the bare marker. What the tests that fill
-#: a record measure is whether the annotations keep a field's printed form out,
-#: so a field is filled this way when its production value prints what it
+#: sentinel inside it, rather than with the bare sentinel. What the tests that
+#: fill a record measure is whether the annotations keep a field's printed form
+#: out, so a field is filled this way when its production value prints what it
 #: carries: a dict prints every entry, and an SDK model prints every attribute.
 #:
-#: `KdbxStore._db` is the field that keeps the bare marker, and the reason is
+#: `KdbxStore._db` is the field that keeps the bare sentinel, and the reason is
 #: the same measurement. Its production value is a `PyKeePass`, which prints a
 #: type and an address, and pytest explains a differing field holding one by
 #: that repr alone: it reads the attributes of dataclasses, attrs classes and
@@ -408,34 +506,34 @@ def _signing_configuration(key: str) -> dict[str, object]:
 #: a real unlocked store and holds what this row rests on, that the store keeps
 #: the password as `.password`; it passes with both of `_db`'s annotations
 #: removed, because the real object prints no password either way, so the row
-#: filled with the bare marker is what fails when either annotation is dropped.
+#: filled with the bare sentinel is what fails when either annotation is dropped.
 SHAPED: dict[tuple[type, str], Callable[[str], object]] = {
     (adopt.Clients, 'network'): _signing_configuration,
     (adopt.Clients, 'object_storage'): _signing_configuration,
 }
 
 
-def _filled(cls: type, entry: Census, side: str = '') -> object:
-    """One instance of `cls` with a marker in every field, built past its constructor.
+def _filled(record: Record, side: str = '') -> object:
+    """One instance of the record with a sentinel in every field, built past its constructor.
 
     Assigned rather than constructed because what is under test is the repr
     and pytest's explanation of a comparison, which read attributes and
     nothing else: a constructor would demand certificates, sessions and OCIDs
-    of the right shape from every record in the census, and none of that would
-    make the assertion stronger.
+    of the right shape from every record here, and none of that would make the
+    assertion stronger.
 
-    `side` is appended to every marker, so that two instances built with two
+    `side` is appended to every sentinel, so that two instances built with two
     sides differ in every field and a comparison of them has something to
-    report in each. A field `SHAPED` names gets its marker inside the value
+    report in each. A field `SHAPED` names gets its sentinel inside the value
     that table builds.
     """
     # `cast` because `object.__new__` is typed against `type[Self]`, and the
-    # census holds plain `type`: what comes back is an instance either way.
-    instance = cast('object', object.__new__(cls))
-    for field_name in entry.names:
-        marker = (SECRET if field_name in entry.secrets else PUBLIC) + side
-        shape = SHAPED.get((cls, field_name))
-        object.__setattr__(instance, field_name, marker if shape is None else shape(marker))
+    # record holds plain `type`: what comes back is an instance either way.
+    instance = cast('object', object.__new__(record.cls))
+    for field_name in record.names:
+        sentinel = (SECRET if field_name in record.secrets else PUBLIC) + side
+        shape = SHAPED.get((record.cls, field_name))
+        object.__setattr__(instance, field_name, sentinel if shape is None else shape(sentinel))
     return instance
 
 
@@ -453,6 +551,88 @@ def _explained(config: pytest.Config, left: object, right: object) -> str:
     return '\n'.join(line for answer in answers for line in answer)
 
 
+@final
+@dataclass(frozen=True)
+class _MarkedRecord:
+    """A dataclass declaring the marker in each form the reader has to find it in, beside a field without it."""
+
+    plain: str
+    outermost: Annotated[str, Secret]
+    pulumi_facing: Annotated[pulumi.Input[str], Secret]
+    optional: Annotated[str, Secret] | None
+    nested: Mapping[str, Annotated[str, Secret]]
+
+
+class _MarkedTuple(NamedTuple):
+    """A `NamedTuple` declaring the marker, which keeps its annotations as forward references."""
+
+    plain: str
+    outermost: Annotated[str, Secret]
+
+
+class _MarkedDict(TypedDict):
+    """A `TypedDict` declaring the marker, which keeps its annotations as forward references."""
+
+    plain: str
+    outermost: Annotated[str, Secret]
+
+
+@pytest.mark.parametrize(
+    ('cls', 'marked'),
+    [
+        (_MarkedRecord, ('outermost', 'pulumi_facing', 'optional', 'nested')),
+        (_MarkedTuple, ('outermost',)),
+        (_MarkedDict, ('outermost',)),
+    ],
+    ids=['dataclass', 'NamedTuple', 'TypedDict'],
+)
+def test_the_marker_is_read_wherever_a_field_declares_it(cls: type, marked: tuple[str, ...]) -> None:
+    """The reader every case below is driven by, on records declaring the marker in every form it takes.
+
+    A form the reader missed would drop its fields out of `MARKED` without a
+    word, and every case over `MARKED` would then pass by never seeing them.
+    """
+    assert _marked(cls) == marked
+
+
+def test_the_package_has_marked_records() -> None:
+    """The walk reached the package's modules: an empty `MARKED` would pass every case over it."""
+    assert MARKED, 'no record in the package carries the marker'
+
+
+@_records(MARKED)
+def test_every_marked_field_is_out_of_the_repr_and_out_of_comparison(record: Record) -> None:
+    """The relation the marker exists for, held against every marked field in the package.
+
+    The fields come off the marker, so there is no list to keep: a field is
+    held here from the commit that marks it. A `NamedTuple` or a `TypedDict`
+    has no per-field repr control, so one that marks a field is refused the
+    field rather than held to annotations it cannot carry.
+    """
+    kind = _kind(record.cls)
+    assert kind == 'dataclass', (
+        f'{record.id} is a {kind} and cannot keep a field out of its repr: '
+        f'carry {", ".join(record.secrets)} in a dataclass instead'
+    )
+    printed = sorted(set(record.secrets) - _hidden(record.cls))
+    compared = sorted(set(record.secrets) - _uncompared(record.cls))
+
+    assert not printed, f'{record.id} prints {", ".join(printed)}: declare it field(repr=False)'
+    assert not compared, f'{record.id} compares {", ".join(compared)}: declare it field(compare=False)'
+
+
+@pytest.mark.parametrize('module', MODULES, ids=[module.__name__.rsplit('.', 1)[1] for module in MODULES])
+def test_a_censused_module_carries_no_marker(module: ModuleType) -> None:
+    """A module is held by the census or by the marker, so that the two never disagree about one record.
+
+    The commit that marks a module's secret fields takes the module out of
+    `MODULES` and its rows out of `CENSUS` in the same change.
+    """
+    marked = sorted(record.id for record in MARKED if record.cls.__module__ == module.__name__)
+
+    assert not marked, f'{module.__name__} carries the marker, so it leaves the census: {", ".join(marked)}'
+
+
 @pytest.mark.parametrize('module', MODULES, ids=[module.__name__.rsplit('.', 1)[1] for module in MODULES])
 def test_every_record_in_these_modules_is_censused(module: ModuleType) -> None:
     """A new record joins the census, rather than arriving unclassified.
@@ -466,21 +646,21 @@ def test_every_record_in_these_modules_is_censused(module: ModuleType) -> None:
     assert not missing, f'{module.__name__} declares records this census does not classify: {", ".join(missing)}'
 
 
-@RECORDS
-def test_the_census_names_exactly_the_fields_the_record_has(name: str, cls: type, entry: Census) -> None:
+@_records(CENSUSED)
+def test_the_census_names_exactly_the_fields_the_record_has(record: Record) -> None:
     """And so a field added to a censused record fails until it is classified."""
-    assert _field_names(cls) == entry.names, name
-    assert set(entry.secrets) <= set(entry.names), f'{name} calls a field secret that it does not have'
+    assert _field_names(record.cls) == record.names, record.id
+    assert set(record.secrets) <= set(record.names), f'{record.id} calls a field secret that it does not have'
 
 
-@RECORDS
-def test_every_secret_field_is_declared_out_of_the_repr(name: str, cls: type, entry: Census) -> None:
+@_records(CENSUSED)
+def test_every_secret_field_is_declared_out_of_the_repr(record: Record) -> None:
     """`field(repr=False)`, held against the census rather than against a reading of the file."""
-    assert _hidden(cls) == set(entry.secrets), name
+    assert _hidden(record.cls) == set(record.secrets), record.id
 
 
-@RECORDS
-def test_a_record_that_cannot_hide_a_field_carries_no_secret(name: str, cls: type, entry: Census) -> None:
+@_records(CENSUSED)
+def test_a_record_that_cannot_hide_a_field_carries_no_secret(record: Record) -> None:
     """A `NamedTuple` or a `TypedDict` is refused the secret rather than annotated.
 
     Neither construct has a per-field repr control, so there is nothing to set
@@ -488,52 +668,52 @@ def test_a_record_that_cannot_hide_a_field_carries_no_secret(name: str, cls: typ
     left is to keep credential material out of them, which is a design rule and
     is held here.
     """
-    kind = _kind(cls)
+    kind = _kind(record.cls)
     if kind == 'dataclass':
         return
-    assert not entry.secrets, (
-        f'{name} is a {kind} and cannot keep a field out of its repr: '
-        f'carry {", ".join(entry.secrets)} in a dataclass instead'
+    assert not record.secrets, (
+        f'{record.id} is a {kind} and cannot keep a field out of its repr: '
+        f'carry {", ".join(record.secrets)} in a dataclass instead'
     )
 
 
-@RECORDS
-def test_a_filled_record_prints_none_of_its_secrets(name: str, cls: type, entry: Census) -> None:
+@_records(CENSUSED + MARKED)
+def test_a_filled_record_prints_none_of_its_secrets(record: Record) -> None:
     """The property itself, measured on a repr rather than inferred from an annotation."""
-    if _kind(cls) != 'dataclass':
-        # Nothing to measure: the test above forbids the secret outright, and
+    if _kind(record.cls) != 'dataclass':
+        # Nothing to measure: the cases above forbid the secret outright, and
         # neither of the other two constructs can be built past its constructor
         # the way `_filled` builds a dataclass.
         return
-    instance = _filled(cls, entry)
+    instance = _filled(record)
     printed = repr(instance)
 
     # The record was actually filled, with a value that prints its secret: an
-    # assertion that a marker is absent from a repr proves nothing if the
-    # marker never reached the object, or reached it in a form that prints
+    # assertion that a sentinel is absent from a repr proves nothing if the
+    # sentinel never reached the object, or reached it in a form that prints
     # nothing.
-    for field_name in entry.secrets:
-        assert SECRET in repr(getattr(instance, field_name)), f'{name}.{field_name} was not filled'
-    assert SECRET not in printed, f'{name} prints a secret: {printed}'
-    if entry.names:
-        assert PUBLIC in printed or not set(entry.names) - set(entry.secrets), (
-            f'{name} prints nothing at all, so the assertion above is vacuous'
+    for field_name in record.secrets:
+        assert SECRET in repr(getattr(instance, field_name)), f'{record.id}.{field_name} was not filled'
+    assert SECRET not in printed, f'{record.id} prints a secret: {printed}'
+    if record.names:
+        assert PUBLIC in printed or not set(record.names) - set(record.secrets), (
+            f'{record.id} prints nothing at all, so the assertion above is vacuous'
         )
 
 
-@RECORDS
+@_records(CENSUSED + MARKED)
 def test_a_failed_comparison_of_two_filled_records_prints_none_of_their_secrets(
-    pytestconfig: pytest.Config, name: str, cls: type, entry: Census
+    pytestconfig: pytest.Config, record: Record
 ) -> None:
     """The property itself, measured on pytest's explanation rather than inferred from an annotation."""
-    if _kind(cls) != 'dataclass':
+    if _kind(record.cls) != 'dataclass':
         return
-    explained = _explained(pytestconfig, _filled(cls, entry, '-left'), _filled(cls, entry, '-right'))
+    explained = _explained(pytestconfig, _filled(record, '-left'), _filled(record, '-right'))
 
-    assert SECRET not in explained, f'{name} prints a secret in a failed comparison:\n{explained}'
-    if set(entry.names) - set(entry.secrets) - _uncompared(cls):
+    assert SECRET not in explained, f'{record.id} prints a secret in a failed comparison:\n{explained}'
+    if set(record.names) - set(record.secrets) - _uncompared(record.cls):
         assert f'{PUBLIC}-left' in explained, (
-            f'{name} explains no differing field at all, so the assertion above is vacuous:\n{explained}'
+            f'{record.id} explains no differing field at all, so the assertion above is vacuous:\n{explained}'
         )
 
 

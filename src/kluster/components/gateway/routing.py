@@ -53,7 +53,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from ipaddress import IPv4Address, IPv4Network, IPv6Network
-from typing import final
+from typing import Annotated, final
 
 import pulumi
 
@@ -67,6 +67,7 @@ from kluster.components.gateway.persistence import (
     skeleton_path,
 )
 from kluster.lib import templates
+from kluster.lib.secret import Secret
 from kluster.providers.device_files.provider import Connection, DeviceDirectory, DeviceFile
 from putils import Component
 
@@ -201,14 +202,14 @@ class RoutingSession:
     configuration names. That address is a constant rather than another
     resource's output on purpose — the session must not depend on a lease.
     `password` authenticates the session, so that claiming the peer's address is
-    not enough to become the peer. It does not print: the stack hands it over
-    as an `Output`, which discloses nothing, but a test hands over the literal,
-    and the field is hidden for what it holds rather than for how one of its
-    types prints.
+    not enough to become the peer. It is a `Secret`, and does not print: the
+    stack hands it over as an `Output`, which discloses nothing, but a test
+    hands over the literal, and the field is hidden for what it holds rather
+    than for how one of its types prints.
     """
 
     neighbor: IPv4Address
-    password: pulumi.Input[str] = field(repr=False, compare=False)
+    password: Annotated[pulumi.Input[str], Secret] = field(repr=False, compare=False)
 
 
 @final
@@ -225,7 +226,7 @@ class _FrrParams:
     cluster: str
     peer: str
     peer_description: str
-    password: str = field(repr=False, compare=False)
+    password: Annotated[str, Secret] = field(repr=False, compare=False)
     local_asn: int
     peer_asn: int
     pool_v4: IPv4Network
