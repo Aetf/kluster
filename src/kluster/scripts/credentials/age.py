@@ -37,8 +37,10 @@ import subprocess as sp
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Annotated
 
 from kluster.lib.age import ARMOR_BEGIN, ARMOR_END, BINARY
+from kluster.lib.secret import Secret
 
 #: The pinned key generator. Named rather than inlined so a failure can say
 #: which tool was missing and where it is pinned; `age` itself is `BINARY`,
@@ -76,7 +78,7 @@ class Identity:
     transcript.
     """
 
-    secret: str = field(repr=False, compare=False)
+    secret: Annotated[str, Secret] = field(repr=False, compare=False)
     public: str
 
 

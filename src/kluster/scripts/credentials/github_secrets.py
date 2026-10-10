@@ -56,7 +56,9 @@ import os
 import subprocess as sp
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Protocol, cast
+from typing import Annotated, Protocol, cast
+
+from kluster.lib.secret import Secret
 
 from .pulumi_config import SlotRefused
 
@@ -181,7 +183,7 @@ class Forge:
     from a transcript.
     """
 
-    token: str = field(repr=False, compare=False)
+    token: Annotated[str, Secret] = field(repr=False, compare=False)
     run: Runner = run_gh
 
     def listing(self, slot: Slot) -> dict[str, str]:
