@@ -35,7 +35,7 @@ locked = true
 # written out.
 [tools]
 pulumi = "3.267.0"
-uv = "0.12.21"
+uv = "0.12.22"
 # age is the tool this repository escrows with rather than a format it
 # reimplements: `age`/`age-keygen` write and open every ciphertext under
 # `escrow/`, and the box's dumps are age-encrypted too; butane renders the

@@ -52,7 +52,7 @@ step() {
 # is replaced. CI also sets `experimental: true`, which this script does not:
 # nothing `mise.toml` declares resolves differently under it -- `mise env`,
 # `tasks ls`, `ls --current` and `config ls` print the same either way.
-mise_version=2026.9.14
+mise_version=2026.10.1
 bin=$HOME/.local/bin
 export PATH=$bin:$PATH
 
