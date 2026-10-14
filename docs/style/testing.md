@@ -109,8 +109,20 @@ the edit under review cannot move. Three sides qualify:
     decision. Those can drift from the declaration, which is exactly
     what lets the comparison fail for someone other than the editor.
 -   **The literal transcribes a contract a third party holds** — a wire
-    format, an upstream parser's parameter names, a resource type token
-    the URNs in state are keyed by.
+    format, an upstream parser's parameter names.
+
+**A name that state or the outside world keys on is protected at its
+declaration, and is not restated in a test.** What is keyed on it —
+a stack's resources, a credential in a cloud account, an entry in a
+keyring — is orphaned by a rename, so the declaration says that a
+rename carries its migration or alias, or the code carries the
+migration itself; a test of the code that uses the name uses the
+constant, or a fake name, and holds a relation such as minting and
+retirement addressing the same one. A literal copy fails only for
+whoever renames the constant, and that rename is correct when it brings
+its migration. Today's instances are the type tokens a stack's URNs are
+keyed by (style/pulumi.md, "A type token is chosen too"), the names of
+keys minted in a cloud account, and keyring accounts.
 
 A literal copied from a constant typed at its own declaration is a
 **mirror**. Every event that can redden it is a deliberate edit already
@@ -118,9 +130,7 @@ visible in the constant's own diff; the same hand updates both copies
 in the same change; a right new value and a wrong one pass equally. It
 detects edits rather than defects, and charges a fix cycle for every
 legitimate change. The mechanical test is **whether the check can fail
-for anybody other than the person editing the value**. No edit to the
-program moves the type a stack's state holds a component under, so a
-literal of that type catches a token changed without its alias. A
+for anybody other than the person editing the value**. A
 table row's field is edited at the field, under that field's own
 documentation — a literal beside it only says the same thing twice.
 A census row's **state** is a value like any other: recorded or not
@@ -139,10 +149,10 @@ the definition — both sides still move in one edit by one person, and a
 right new body and a wrong one pass equally. What qualifies an expected
 side is that it is **independently derivable**: from what the outside
 party does, from an artifact of its own origin, or from a requirement
-stated somewhere the code under test is not. A value merely written a
-second time is not that. The resolvers' interface endpoint is one
-assertion carrying both: the address and the port halves of
-`f'http://{address}:{port}'` are the accessor's own body written again,
+stated somewhere the code under test is not and that the case reads. A
+value merely written a second time is not that. The resolvers' interface
+endpoint is one assertion carrying both: the address and the port halves
+of `f'http://{address}:{port}'` are the accessor's own body written again,
 symbolic on both sides, so they hold the accessor to the census's
 constants and would pass any value those constants took; while the
 scheme and the shape — plain HTTP, the census address rather than the
