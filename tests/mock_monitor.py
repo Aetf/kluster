@@ -126,6 +126,10 @@ class Call(NamedTuple):
     provider: str
 
 
+class PlaceMissing(AssertionError):
+    """A registration of a type the place map lists carries no place input, so the census cannot count it."""
+
+
 class Recorder(pulumi.runtime.Mocks):
     """A monitor that invents nothing and remembers every declaration and every call.
 
@@ -377,7 +381,7 @@ class Recorder(pulumi.runtime.Mocks):
             if place is None:
                 continue
             if place not in request.object:
-                raise AssertionError(f'{urn} is a {request.type} with no {place!r} input, so it claims no place')
+                raise PlaceMissing(f'{urn} is a {request.type} with no {place!r} input, so it claims no place')
             value = request.object[place]
             if not isinstance(value, str):
                 raise AssertionError(f'{urn} claims {place!r} {value!r}, which is not a place')

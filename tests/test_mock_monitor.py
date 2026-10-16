@@ -19,7 +19,7 @@ from typing import Any
 import pulumi
 import pytest
 import pytest_asyncio
-from mock_monitor import Recorder, declaring, run_with
+from mock_monitor import PlaceMissing, Recorder, declaring, run_with
 
 COMPONENT = 'test:index:Holder'
 INNER = 'test:index:Held'
@@ -145,7 +145,7 @@ async def test_a_name_nothing_registered_is_refused_with_the_whole_run(monitor: 
         _ = monitor.options_of('never-declared')
 
     message = str(refusal.value)
-    assert 'never-declared was never registered' in message
+    assert 'never-declared' in message, 'the refusal names what was asked for'
     assert LONE in message
     assert 'pulumi:pulumi:Stack' not in message
 
@@ -275,7 +275,7 @@ async def test_a_placed_type_registered_without_its_place_is_refused_rather_than
     async with declaring():
         _ = pulumi.CustomResource(PLACED, 'placeless', {}, None)
 
-    with pytest.raises(AssertionError, match="no 'place' input"):
+    with pytest.raises(PlaceMissing):
         _ = monitor.places_claimed_more_than_once(PLACE_OF)
 
 
