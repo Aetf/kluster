@@ -136,7 +136,7 @@ def build(**kwargs: Any) -> Any:
 async def test_the_worker_disk_is_a_raw_image_in_its_own_pool() -> None:
     host = build()
 
-    assert await host.volume.format.future() == 'raw'
+    assert await host.volume.format.future() == homelab.DISK_FORMAT
     # Not the host's existing image pool: this one points at the nodatacow
     # subvolume, which is what makes a VM image on btrfs behave.
     assert await host.volume.pool.future() == await host.pool.name.future()
@@ -427,7 +427,7 @@ def test_the_data_disk_returns_freed_space_to_the_host() -> None:
     # `cache=none` keeps guest I/O out of the host page cache, which would
     # otherwise cache it a second time.
     assert disk.attrib['cache'] == 'none'
-    assert disk.attrib['type'] == 'raw'
+    assert disk.attrib['type'] == DISK_FORMAT
     # The stylesheet is read verbatim, so the format it writes is a literal in
     # the file rather than something the volume hands it. The two must agree:
     # a driver naming a format the volume was not created with is a domain that
@@ -501,7 +501,8 @@ async def test_every_domain_and_volume_is_signed_by_the_hosts_own_provider(monit
     async with declaring():
         _ = build()
 
+    (provider,) = [d.name for d in monitor.declared if d.typ == 'pulumi:providers:libvirt']
     libvirt = [d for d in monitor.declared if d.typ.startswith('libvirt:')]
     assert libvirt, 'the build declared no libvirt resources at all'
     for declaration in libvirt:
-        assert f'{CLUSTER}-libvirt' in declaration.provider, f'{declaration.name} is not signed by the host provider'
+        assert f'::{provider}::' in declaration.provider, f'{declaration.name} is not signed by the host provider'

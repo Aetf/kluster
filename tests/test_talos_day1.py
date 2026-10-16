@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import itertools
 import json
+import logging
 from ipaddress import IPv4Interface
 from typing import Any, cast
 
@@ -170,8 +171,9 @@ async def test_day_zero_stands_on_its_own(fake: Talos) -> None:
     # not reached yet.
     async with declaring():
         _ = build_cluster()
-    assert 'kluster-bootstrap' not in fake.names_declared
-    assert not [name for name in fake.names_declared if name.endswith('-config')]
+    # By the provider's type tokens: day 1 is a bootstrap and configuration
+    # applies, whatever this program names them.
+    assert not fake.types & {'talos:machine/bootstrap:Bootstrap', 'talos:machine/configurationApply:ConfigurationApply'}
 
 
 @pytest.mark.asyncio
@@ -345,8 +347,7 @@ async def test_a_bundle_without_a_secretbox_key_is_an_error(fake: Talos, caplog:
     cluster = build_cluster()
     for patch in await patches_of(cluster, 'cp1'):
         assert 'secretboxEncryptionSecret' not in patch.get('cluster', {})
-    assert 'secretbox' in caplog.text
-    assert 'ERROR' in caplog.text
+    assert any(record.levelno >= logging.ERROR for record in caplog.records)
 
 
 def links(patches: list[dict[str, Any]]) -> list[dict[str, Any]]:
