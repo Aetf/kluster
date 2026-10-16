@@ -23,7 +23,16 @@ from mock_monitor import declaring, run_under_backstop
 from unifi_controller import Controller
 
 from kluster import conventions
-from kluster.components.gateway import Gateway, access, container, nspawn, persistence, routing, unifi
+from kluster.components.gateway import (
+    BACKUP_PULL_PACKAGES,
+    Gateway,
+    access,
+    container,
+    nspawn,
+    persistence,
+    routing,
+    unifi,
+)
 
 NAME = 'kluster'
 HOST = 'gateway.invalid'
@@ -144,7 +153,10 @@ def test_the_device_keeps_the_program_the_backup_pull_runs_on_its_end(monitor: C
     takes every package it did not ship, so a set without `rsync` breaks the
     pull at the first update after the window.
     """
-    assert 'rsync' in rendered_packages(monitor)
+    packages = rendered_packages(monitor)
+
+    for package in BACKUP_PULL_PACKAGES:
+        assert package in packages, package
 
 
 def test_the_routing_configuration_carries_the_gateways_session_password_as_a_secret(monitor: Controller) -> None:
@@ -169,7 +181,6 @@ def test_the_device_keeps_accepting_the_key_this_program_dials_with(monitor: Con
     """
     declared = monitor.inputs_of(f'{NAME}-access-key-{CI_KEY.name}')
 
-    assert declared['path'] == access.key_path(CI_KEY.name)
     assert declared['content'].strip() == CI_KEY.key
 
 

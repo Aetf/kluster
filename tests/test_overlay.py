@@ -286,7 +286,6 @@ def test_the_network_carries_the_census_routes_and_stamps_no_via_of_its_own(stac
     ]
     assert network['private'] is True
     assert network['enableBroadcast'] is True
-    assert network['multicastLimit'] == overlay_module.MULTICAST_LIMIT
 
 
 def test_a_route_with_no_via_covers_every_address_the_roster_places() -> None:

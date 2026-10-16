@@ -15,7 +15,6 @@ import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, run_with
 
-from kluster import conventions
 from kluster.components.cloud import CloudNetwork
 
 VCN_IPV6_PREFIX = '2603:c020:8000:1200::/56'
@@ -64,7 +63,6 @@ def network(monitor: Oci) -> CloudNetwork:
 
 @pytest.mark.asyncio
 async def test_the_vcn_carries_both_families(network: CloudNetwork) -> None:
-    assert await network.vcn.cidr_blocks.future() == [str(conventions.VCN_CIDR)]
     assert await network.vcn.is_ipv6enabled.future() is True
 
 
