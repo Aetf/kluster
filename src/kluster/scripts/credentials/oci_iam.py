@@ -73,11 +73,13 @@ import hashlib
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Annotated, Any, Protocol
 
 import oci
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+
+from kluster.lib.secret import Secret
 
 from ... import conventions
 from ...conventions import CLUSTER_NAME, OCI_SEED_USER_EMAIL, Compartment
@@ -310,7 +312,7 @@ class KeyPair:
     The same asymmetry decides what prints: the public half, and not the other.
     """
 
-    private_pem: str = field(repr=False, compare=False)
+    private_pem: Annotated[str, Secret] = field(repr=False, compare=False)
     public_pem: str
 
 
@@ -1206,7 +1208,7 @@ class SeedRow:
 
     tenancy: str
     user: str
-    private_key: str = field(repr=False, compare=False)
+    private_key: Annotated[str, Secret] = field(repr=False, compare=False)
 
 
 def load_seed(store: KdbxStore, entry: str) -> SeedRow:
@@ -1487,7 +1489,7 @@ class ApiKey:
     #: The PEM, which exists here and in the slot this is delivered to, and
     #: nowhere else -- never in the kit (§1 rule 2). Not in the repr either,
     #: which is the same rule applied to a transcript.
-    private_key: str = field(repr=False, compare=False)
+    private_key: Annotated[str, Secret] = field(repr=False, compare=False)
 
     @property
     def region(self) -> str:

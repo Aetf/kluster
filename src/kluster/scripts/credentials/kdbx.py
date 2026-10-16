@@ -39,7 +39,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Annotated, cast
 from uuid import uuid4
 
 from pykeepass import PyKeePass, create_database
@@ -47,6 +47,7 @@ from pykeepass.exceptions import CredentialsError
 
 from kluster.lib import acquisition
 from kluster.lib.acquisition import remembered
+from kluster.lib.secret import Secret
 
 if TYPE_CHECKING:
     from pykeepass.entry import Entry
@@ -141,7 +142,7 @@ class KdbxStore:
     #: The unlocked database, which holds the master password as `.password`.
     #: Out of the repr and out of comparison for that, whatever `PyKeePass`
     #: itself prints; `path` is what tells two stores apart.
-    _db: PyKeePass | None = field(default=None, repr=False, compare=False)
+    _db: Annotated[PyKeePass | None, Secret] = field(default=None, repr=False, compare=False)
 
     @classmethod
     def from_env(cls, path: Path | None = None) -> KdbxStore:

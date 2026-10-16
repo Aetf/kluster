@@ -33,12 +33,13 @@ import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 import oci
 
 from kluster import conventions
 from kluster.lib import stack_environment
+from kluster.lib.secret import Secret
 from kluster.lib.state_backend import adoption, settings
 
 from ..credentials import b2, derived, pulumi_config
@@ -85,8 +86,8 @@ class Clients:
     a configuration carrying the stack's OCI key.
     """
 
-    network: Any = field(repr=False, compare=False)
-    object_storage: Any = field(repr=False, compare=False)
+    network: Annotated[Any, Secret] = field(repr=False, compare=False)
+    object_storage: Annotated[Any, Secret] = field(repr=False, compare=False)
     #: The dump buckets called by a name.
     buckets: Callable[[str], Sequence[b2.Bucket]]
 

@@ -48,9 +48,11 @@ import textwrap
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Annotated
 
 from kluster import conventions
 from kluster.lib import config, stack_environment
+from kluster.lib.secret import Secret
 from kluster.lib.state_backend import settings as appliance_settings
 
 from . import age, entries, pki, workstation
@@ -1100,7 +1102,7 @@ class Vault:
     """
 
     registry: Registry
-    identity: str = field(repr=False, compare=False)
+    identity: Annotated[str, Secret] = field(repr=False, compare=False)
 
     @classmethod
     def open(cls, kit: KdbxStore, registry: Registry | None = None, *, entry: str = RECOVERY_ENTRY) -> Vault:

@@ -19,6 +19,7 @@ import datetime as dt
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Annotated
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -26,6 +27,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from kluster.lib import config as lib_config
 from kluster.lib import workstation
 from kluster.lib.bundle import CA_FILE, CERT_FILE, KEY_FILE, URL_FILE
+from kluster.lib.secret import Secret
 from kluster.lib.state_backend import render, settings
 from kluster.scripts.credentials import age, escrow, pki
 
@@ -187,7 +189,7 @@ class ClientBundle:
     address: str
     ca_cert: bytes
     cert: bytes
-    key: bytes = field(repr=False, compare=False)
+    key: Annotated[bytes, Secret] = field(repr=False, compare=False)
 
     def url(self) -> str:
         """The connection string: everything about the backend, nothing about this machine.
