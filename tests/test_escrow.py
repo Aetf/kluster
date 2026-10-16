@@ -460,7 +460,7 @@ def test_a_kit_carrying_no_such_row_sends_the_operator_to_the_console(kit: KdbxS
 
     ((_, parsed),) = named_commands(str(refused.value))
     assert (parsed['action'], parsed['label']) == (escrow.register()[escrow.DISPATCH_KEY].verb, escrow.DISPATCH_KEY)
-    assert '--from-kit' in str(refused.value)
+    assert not parsed.get('from_kit'), 'the console path is the record without the kit'
 
 
 def test_an_unregistered_label_is_refused(vault: escrow.Vault) -> None:
