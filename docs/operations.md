@@ -152,9 +152,9 @@ from an HTTP repository, which offers nothing to check a download against
     A1 capacity at re-create is the known risk (the standing quorum
     holds capacity; rebuild promptly), NLB backends follow from
     `physical` automatically; a node carrying a **block volume** needs
-    it reattached, and the node holding the **dedicated VIP** needs the
-    secondary private IP and the reserved-IP NAT re-pointed
-    (architecture.md §3.2).
+    it reattached, through the program (declarative/physical.md §6),
+    and the node holding the **dedicated VIP** needs the secondary
+    private IP and the reserved-IP NAT re-pointed (architecture.md §3.2).
 -   **§3.2 Homelab worker VM.** Trigger: VM/disk loss or rebuild.
     Gist: re-create from machine config (nocloud seed); local-path
     data returns via VolSync restore (that's the designed move-path,
