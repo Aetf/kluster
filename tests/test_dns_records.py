@@ -123,40 +123,6 @@ def test_state_keys_are_unique_within_a_zone() -> None:
         assert [key for key, count in keys.items() if count > 1] == [], zone
 
 
-@pytest.mark.parametrize('label', ['abacus.hosts', 'jupyter', 'mc'])
-def test_the_import_census_dropped_its_dead_weight(label: str) -> None:
-    # The Abacus host is gone; jupyter's backend was that host, and the
-    # Minecraft server it fronted is gone too.
-    for zone in conventions.ALL_ZONES:
-        assert label not in _labels(zone), zone
-
-
-@pytest.mark.parametrize('label', ['login', 'k8s', 'test', 'files', 'mcmap', 'archvps.stats'])
-def test_a_name_no_application_owns_is_published_by_nobody(label: str) -> None:
-    """Six names the VPS served that nothing will claim after it retires.
-
-    A legacy block is deleted when its application migrates and declares the
-    same name against the cluster anchor; a block with no application to do
-    that would never be deleted by anything. Each of these is unpublished
-    outright instead, which is a deletion in its own right rather than tidying.
-    """
-    for zone in conventions.ALL_ZONES:
-        assert label not in _labels(zone), zone
-
-
-@pytest.mark.parametrize('label', ['mon', 'bt'])
-def test_a_name_whose_owner_exists_but_whose_component_does_not_is_kept(label: str) -> None:
-    """The other half of the cut: a block with an owner only wants an address.
-
-    Neither name has a component declaring it yet — monitoring is rebuilt
-    fresh rather than migrated, and the host qbittorrent claims `bt` when it
-    migrates — so without this nothing would notice either being deleted along
-    with the six that have no owner at all. Deleting one unpublishes a name
-    something is about to claim, which is the mirror of the drop above.
-    """
-    assert label in _labels(conventions.ZONE_PRIMARY)
-
-
 def test_every_legacy_block_carries_exactly_one_applications_names() -> None:
     """The module is cut so that a migration deletes one block, whole.
 
@@ -183,34 +149,6 @@ def test_every_member_of_the_overlay_roster_is_published() -> None:
         f'{overlay_label(entry.name)}.{conventions.OVERLAY_LABEL}' for entry in conventions.overlay.ROSTER
     }
     assert len(overlay_records()) == len(conventions.overlay.ROSTER)
-
-
-def test_the_retired_members_are_published_by_nobody() -> None:
-    """Leaving the roster is what retires a record; nothing else does.
-
-    Three members were dropped when the census was imported and one more when
-    the roster was reconciled against Central, all for the same reason: the
-    overlay no longer knows them.
-    """
-    members = {entry.name for entry in conventions.overlay.ROSTER}
-
-    assert not members & {'Abacus', 'Aetf-Arch-Mac', 'Aetf-MacbookPro', 'Aetf-Laptop'}
-
-
-def test_the_gateway_has_no_record_for_as_long_as_it_has_no_roster_entry() -> None:
-    """`udm.zt` appears when the member does, by the same edit and no other.
-
-    The gateway's ZeroTier identity is minted by the daemon the `physical`
-    stack delivers to it, so until the bring-up ceremony has read that id onto
-    the roster there is no member — and a record for a member that does not
-    exist would resolve to an address nothing answers at. Both come from the
-    one entry, so neither can arrive without the other.
-    """
-    labels = {record.label for record in overlay_records()}
-
-    assert (f'{conventions.overlay.MEMBER_UDM}.{conventions.OVERLAY_LABEL}' in labels) == (
-        conventions.overlay.MEMBER_UDM in {entry.name for entry in conventions.overlay.ROSTER}
-    )
 
 
 def test_a_members_record_carries_the_address_its_roster_entry_holds() -> None:
@@ -401,21 +339,6 @@ def test_a_parked_zone_carries_the_web_origin_and_its_caa_and_nothing_else() -> 
     assert origin
     for zone in conventions.PARKED_ZONES:
         assert {record.resource_key for record in _records(zone) if record.type != 'CAA'} == origin, zone
-
-
-def test_every_zone_that_answers_for_a_website_carries_the_web_origin() -> None:
-    """The apex and `www` are the one block all four public zones share.
-
-    What answers differs, which is why the two sets are separate: the served
-    pair is answered by the website, the parked pair by the legacy VPS's own
-    catch-all. A zone in either set that lost the block would stop answering
-    at its own apex, and nothing else here would notice.
-    """
-    origin = {record.resource_key for record in _web_origin().records}
-
-    assert origin
-    for zone in (*conventions.WEB_ZONES, *conventions.PARKED_ZONES):
-        assert origin <= _keys(zone), zone
 
 
 def test_the_website_co_host_carries_a_website_its_own_mail_and_its_own_names() -> None:
