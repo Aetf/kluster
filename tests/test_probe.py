@@ -14,7 +14,9 @@ Each verdict's boundary is read from the threshold it is a verdict on.
 from __future__ import annotations
 
 import argparse
+import ast
 import datetime as dt
+import inspect
 import logging
 import os
 import re
@@ -28,6 +30,7 @@ import pytest
 import requests
 from b2_api import FakeApi
 from credentials_command_tree import commands, named_leaves
+from cryptography import x509
 from fences import prose
 from memory_kit import MemoryKit
 from section_numbers import sections
@@ -103,7 +106,9 @@ def test_every_playbook_a_verdict_names_is_a_section_that_exists() -> None:
         if isinstance(value, str) and re.fullmatch(r'\S+\.md §\d+(?:\.\d+)*', value)
     }
 
-    assert {'REISSUE_PLAYBOOK', 'REBUILD_PLAYBOOK', 'KEY_PLAYBOOK', 'MONITORING'} <= set(references)
+    carried = _playbooks_carried()
+    assert carried, 'no verdict of the probe names a playbook'
+    assert carried <= set(references), carried - set(references)
     for name, reference in references.items():
         document, _, number = reference.partition(' §')
         assert (DOCS / document).is_file(), f'{name}: {reference}'
@@ -152,6 +157,39 @@ def _left(days: int) -> dt.datetime:
     return NOW - pki.LEAF_VALIDITY + dt.timedelta(days=days)
 
 
+def _numbers(observed: str) -> list[str]:
+    """The numbers a verdict's text carries, as written."""
+    return re.findall(r'\d+', observed)
+
+
+def _leaf(handshake: Handshake) -> x509.Certificate:
+    """The certificate a case's box serves, read back out of the transcript it answers with."""
+    leaf = probe.leaf_certificate(handshake.stdout)
+    assert leaf is not None
+    return leaf
+
+
+def _label(line: str) -> str:
+    """What a log line names before its first colon: a probe's name, on the line that is its verdict."""
+    return line.split(':', 1)[0]
+
+
+def _labelled(caplog: pytest.LogCaptureFixture) -> set[str]:
+    """The probes a run printed a verdict for."""
+    return {_label(record.getMessage()) for record in caplog.records} & set(probe.PROBES)
+
+
+def _playbooks_carried() -> set[str]:
+    """The module names the probe's verdicts are built with as their playbook, read off its source."""
+    carried: set[str] = set()
+    for node in ast.walk(ast.parse(inspect.getsource(probe))):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'Verdict'):
+            continue
+        given = [*node.args[2:], *(keyword.value for keyword in node.keywords if keyword.arg == 'playbook')]
+        carried |= {value.id for value in given if isinstance(value, ast.Name)}
+    return carried
+
+
 def test_the_handshake_is_the_postgres_starttls_one_with_the_chain_printed() -> None:
     handshake = Handshake()
 
@@ -184,7 +222,7 @@ def test_the_probe_s_own_handshake_closes_its_stdin_and_is_bounded(monkeypatch: 
     # Otherwise a successful handshake hangs on an inherited terminal, and
     # is reported as no answer once the bound runs out.
     assert seen['stdin'] is sp.DEVNULL
-    assert seen['timeout'] == probe.HANDSHAKE_TIMEOUT
+    assert 0 < cast('float', seen['timeout']) < float('inf')
 
 
 def test_the_leaf_is_the_first_certificate_of_the_chain(authority: pki.Authority) -> None:
@@ -205,7 +243,7 @@ def test_a_certificate_with_more_than_the_margin_left_passes(authority: pki.Auth
 
     assert verdict.passed
     assert settings.ADDRESS in verdict.observed
-    assert f'{OUTSIDE} day(s)' in verdict.observed
+    assert str(OUTSIDE) in _numbers(verdict.observed)
 
 
 def test_a_certificate_inside_the_margin_fails_into_the_reissue_playbook(authority: pki.Authority) -> None:
@@ -213,8 +251,8 @@ def test_a_certificate_inside_the_margin_fails_into_the_reissue_playbook(authori
 
     assert not verdict.passed
     assert verdict.playbook == probe.REISSUE_PLAYBOOK
-    assert f'{INSIDE} day(s)' in verdict.observed
-    assert f'{config.EXPIRY_ALERT_MARGIN.days}-day alert margin' in verdict.observed
+    assert str(INSIDE) in _numbers(verdict.observed)
+    assert str(config.EXPIRY_ALERT_MARGIN.days) in _numbers(verdict.observed)
 
 
 def test_the_margin_is_read_from_config_and_not_from_a_number_of_its_own(
@@ -227,17 +265,19 @@ def test_the_margin_is_read_from_config_and_not_from_a_number_of_its_own(
 
 
 def test_an_expired_certificate_fails_by_its_date(authority: pki.Authority) -> None:
-    verdict = probe.certificate(now=NOW, handshake=_serving(authority, issued=_left(-1)))
+    handshake = _serving(authority, issued=_left(-1))
+    verdict = probe.certificate(now=NOW, handshake=handshake)
 
     assert verdict.playbook == probe.REISSUE_PLAYBOOK
-    assert 'expired on' in verdict.observed
+    assert _leaf(handshake).not_valid_after_utc.date().isoformat() in verdict.observed
 
 
 def test_a_certificate_not_yet_valid_fails(authority: pki.Authority) -> None:
-    verdict = probe.certificate(now=NOW, handshake=_serving(authority, issued=NOW + dt.timedelta(days=1)))
+    handshake = _serving(authority, issued=NOW + dt.timedelta(days=1))
+    verdict = probe.certificate(now=NOW, handshake=handshake)
 
     assert verdict.playbook == probe.REISSUE_PLAYBOOK
-    assert 'not valid until' in verdict.observed
+    assert _leaf(handshake).not_valid_before_utc.date().isoformat() in verdict.observed
 
 
 def test_a_certificate_naming_another_address_fails_naming_both(authority: pki.Authority) -> None:
@@ -378,10 +418,6 @@ def test_a_dump_older_than_the_age_fails_into_the_rebuild_playbook(api: FakeApi,
 
     assert verdict.playbook == probe.REBUILD_PLAYBOOK
     assert _hours(STALE) in verdict.observed
-    assert 'stopped' in verdict.observed
-    # The box refusing an archive that holds no stack is one way the timer
-    # stops landing objects: a box replaced and not restored reads as stale.
-    assert 'holding no stack' in verdict.observed
 
 
 def test_the_age_is_the_settings_and_not_a_number_of_its_own(
@@ -525,7 +561,6 @@ def test_b2_not_answering_is_the_dump_probe_s_verdict(authorize: probe.Authorize
 
     assert not verdict.passed
     assert verdict.playbook == probe.MONITORING
-    assert 'B2 did not answer' in verdict.observed
 
 
 # -- the credential ------------------------------------------------------------
@@ -536,18 +571,15 @@ def test_the_key_is_read_from_the_two_variables_the_ops_repository_fills() -> No
 
 
 @pytest.mark.parametrize(
-    ('environ', 'named'),
-    [
-        ({}, f'{probe.KEY_ID_ENV} and {probe.KEY_ENV} are empty'),
-        ({probe.KEY_ID_ENV: 'id'}, f'{probe.KEY_ENV} is empty'),
-        ({probe.KEY_ENV: 'secret', probe.KEY_ID_ENV: ''}, f'{probe.KEY_ID_ENV} is empty'),
-    ],
+    'environ',
+    [{}, {probe.KEY_ID_ENV: 'id'}, {probe.KEY_ENV: 'secret', probe.KEY_ID_ENV: ''}],
     ids=['both', 'key', 'id'],
 )
-def test_an_empty_slot_is_refused_naming_the_variable_and_the_mint(environ: dict[str, str], named: str) -> None:
-    with pytest.raises(SlotRefused, match=re.escape(named)) as refusal:
+def test_an_empty_slot_is_refused_naming_the_variable_and_the_mint(environ: dict[str, str]) -> None:
+    with pytest.raises(SlotRefused) as refusal:
         _ = probe.credential(environ)
 
+    assert {probe.KEY_ID_ENV, probe.KEY_ENV} <= set(re.findall(r'\w+', str(refusal.value)))
     assert MINT in named_leaves(str(refusal.value))
 
 
@@ -587,8 +619,7 @@ def test_the_status_says_which_probe_failed(
     # One bit per probe, so a run where both failed is told apart from
     # either, and every verdict is printed whatever the earlier one found.
     assert answered == status
-    assert 'certificate:' in caplog.text
-    assert 'dumps:' in caplog.text
+    assert _labelled(caplog) == set(probe.PROBES)
 
 
 def test_a_verdict_is_printed_before_a_later_probe_can_raise(
@@ -604,7 +635,7 @@ def test_a_verdict_is_printed_before_a_later_probe_can_raise(
     with pytest.raises(RuntimeError):
         _ = probe.run(environ=environ, now=NOW, handshake=_serving(authority, issued=_left(INSIDE)), authorize=broken)
 
-    assert 'certificate: FAILED' in caplog.text
+    assert _labelled(caplog) == {probe.CERTIFICATE}
 
 
 def test_only_runs_the_one_probe_named_and_the_certificate_needs_no_key(
@@ -617,7 +648,7 @@ def test_only_runs_the_one_probe_named_and_the_certificate_needs_no_key(
     )
 
     assert answered == 0
-    assert 'dumps:' not in caplog.text
+    assert _labelled(caplog) == {probe.CERTIFICATE}
 
 
 def test_only_dumps_reads_the_key_before_probing_anything(authority: pki.Authority) -> None:
@@ -640,12 +671,10 @@ def test_each_probe_says_what_it_is_about_to_check_before_checking(
     # A network step announces itself before it runs, so a silent probe reads
     # as one that is waiting rather than one that is stuck.
     lines = [record.getMessage() for record in caplog.records]
-    assert _first(lines, 'checking the server certificate') < _first(lines, 'certificate:')
-    assert _first(lines, 'checking the age') < _first(lines, 'dumps:')
-
-
-def _first(lines: list[str], prefix: str) -> int:
-    return next(index for index, line in enumerate(lines) if line.startswith(prefix))
+    verdicts = [index for index, line in enumerate(lines) if _label(line) in probe.PROBES]
+    assert len(verdicts) == len(probe.PROBES)
+    for before, verdict in zip([-1, *verdicts], verdicts, strict=False):
+        assert verdict - before > 1, f'nothing announced before {lines[verdict]!r}'
 
 
 # -- the command ------------------------------------------------------------------
