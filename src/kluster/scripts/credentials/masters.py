@@ -75,6 +75,14 @@ Prompt = Callable[[str], str]
 
 #: Secret-store keys are namespaced so an account root can never collide with
 #: a remembered database password, whose key is a filesystem path.
+#:
+#: Every name a root is kept under is held outside this program once a root
+#: has been remembered: the secret-store key `<prefix>/<member>/<field>`
+#: (`_account`), each `Field`'s `file` and its `env`. Changing any of them —
+#: this prefix, a member, a field's name, file or variable — is therefore a
+#: migration for every machine and job already holding a root under the old
+#: one, not an edit: a root kept under the old name is no longer found, and
+#: the run asks for it as though it had never been remembered.
 ACCOUNT_PREFIX = 'account-root'
 
 #: The chain's layers, as they are reported by `stored` and printed by
