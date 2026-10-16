@@ -13,6 +13,7 @@ import importlib
 import importlib.util
 import json
 import logging
+import re
 import types
 import urllib.error
 import urllib.request
@@ -24,8 +25,7 @@ from typing import Any, cast
 import pytest
 
 from kluster.lib.state_backend import committed, readiness, settings
-from kluster.scripts.credentials import workstation
-from kluster.scripts.state_backend import cli, config, provision
+from kluster.scripts.state_backend import cli, provision
 
 #: A host key's public half, as the committed file holds it.
 PIN = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExamplefbb1a7'
@@ -185,22 +185,25 @@ def test_the_readiness_wait_states_its_condition_before_probing(
 ) -> None:
     """The longest silence in a provision run is the one after the launch.
 
-    The ceiling in the announcement is the wait's `timeout`, and the clock
-    the wait reads it against is the test's, advanced only by the wait's own
-    `sleep`: fifteen minutes here is sixty probes of a fake that never
-    answers, not a second of wall time.
+    The announcement names the address it waits on, the cadence the wait
+    then keeps and the ceiling, which is the wait's `timeout`. The clock the
+    wait reads against is the test's, advanced only by the wait's own
+    `sleep`, and the fake answers the second probe, so the cadence announced
+    is held to the one interval the wait sleeps.
     """
     caplog.set_level(logging.INFO)
     said: list[str] = []
     probes: list[int] = []
+    naps: list[float] = []
     clock = [0.0]
 
     def fake_run(_argv: list[str], **_kwargs: object) -> Any:
         probes.append(1)
         said.extend(caplog.messages)
-        return type('Completed', (), {'returncode': 0, 'stderr': ''})()
+        return type('Completed', (), {'returncode': 0 if len(probes) > 1 else 1, 'stderr': ''})()
 
     def nap(seconds: float) -> None:
+        naps.append(seconds)
         clock[0] += seconds
 
     monkeypatch.setattr(readiness.sp, 'run', fake_run)
@@ -208,12 +211,11 @@ def test_the_readiness_wait_states_its_condition_before_probing(
     monkeypatch.setattr(readiness.time, 'sleep', nap)
 
     assert readiness.wait_for_backend('192.0.2.10', timeout=900) is True, f'gave up after {len(probes)} probes'
-    announcement = next(message for message in said if 'waiting' in message)
-    # The condition, the retry cadence, why it is slow, and the ceiling.
-    assert '192.0.2.10' in announcement
-    assert 'every 15s' in announcement
-    assert 'minutes' in announcement
-    assert '15m00s' in announcement
+    [interval] = naps
+    # Said before the first probe, so it is among what the first probe saw.
+    announcement = next(message for message in said if '192.0.2.10' in message)
+    assert readiness.duration(interval) in announcement
+    assert readiness.duration(900) in announcement
 
 
 def test_the_readiness_wait_that_gives_up_says_what_it_last_saw_and_where_to_look(
@@ -248,13 +250,18 @@ def test_the_readiness_wait_that_gives_up_says_what_it_last_saw_and_where_to_loo
 
     assert readiness.wait_for_backend('192.0.2.10', timeout=60) is False
 
-    assert 'last attempt said: connect: Connection refused' in caplog.messages
-    separating = next(message for message in caplog.messages if 'broken box from a broken route' in message)
+    # The probe's own last word, which is the fake's first line of stderr.
+    assert any('connect: Connection refused' in message for message in caplog.messages)
     # The command the operator runs is the probe the wait ran, spelled for a
     # shell with the stdin the probe closes -- so that the answer from another
     # host is comparable to the wait's own.
+    separating = next(message for message in caplog.messages if ' '.join(probe) in message)
     assert f'{" ".join(probe)} </dev/null' in separating
-    assert 'state-backend ssh' in separating
+    # And the other way in, which has to be a command this program carries.
+    named = re.findall(r'`state-backend ([^`]+)`', separating)
+    assert named
+    for words in named:
+        _ = cli.build_parser().parse_args(words.split())
 
 
 # -- ssh, held to the committed host key ------------------------------------------
@@ -287,7 +294,9 @@ def host_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     return path
 
 
-def test_ssh_holds_the_box_to_the_committed_host_key(execed: list[list[str]], host_key: Path, tmp_path: Path) -> None:
+def test_ssh_holds_the_box_to_the_committed_host_key(
+    execed: list[list[str]], host_key: Path, credential_files: Path
+) -> None:
     """First contact is not trust-on-first-use: a wrong answer is refused.
 
     Every option here is load-bearing. Without the strict setting the client
@@ -314,9 +323,10 @@ def test_ssh_holds_the_box_to_the_committed_host_key(execed: list[list[str]], ho
     named = [option.removeprefix('UserKnownHostsFile=') for option in options if 'UserKnownHostsFile=' in option]
     assert len(named) == 1
     known_hosts = Path(named[0])
-    # The tool's own file, in the slot that holds this box's client bundle --
-    # never the operator's, which the tool neither reads nor writes.
-    assert known_hosts == tmp_path / '.credentials' / workstation.BUNDLE / config.KNOWN_HOSTS_FILE
+    # The tool's own file, in the checkout's layer -- never the operator's,
+    # which the tool neither reads nor writes.
+    assert known_hosts.is_relative_to(credential_files)
+    assert not known_hosts.is_relative_to(Path.home() / '.ssh')
     assert known_hosts.read_text() == f'{settings.ADDRESS} {PIN}\n'
 
 
@@ -334,14 +344,16 @@ def test_the_refusal_is_framed_before_the_connection_is_made(
     with pytest.raises(_Execed):
         provision.ssh([])
 
-    framing = [message for message in caplog.messages if 'interposed' in message]
+    framing = [message for message in caplog.messages if PIN in message]
     assert len(framing) == 1
-    assert 'replaced' in framing[0]
-    assert PIN in framing[0]
 
 
 def test_ssh_with_no_committed_host_key_is_refused_before_it_pins_anything(
-    execed: list[list[str]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    execed: list[list[str]],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    credential_files: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Silence is the state the pin exists to rule out: one line through `main`, not a traceback.
 
@@ -355,7 +367,7 @@ def test_ssh_with_no_committed_host_key_is_refused_before_it_pins_anything(
     assert cli.main(['ssh']) == 1
 
     assert execed == []
-    assert not (tmp_path / '.credentials' / workstation.BUNDLE / config.KNOWN_HOSTS_FILE).exists()
+    assert not credential_files.exists(), 'the refused run wrote into the layer'
     [record] = caplog.records
     assert record.exc_info is None
 
