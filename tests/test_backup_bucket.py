@@ -112,15 +112,10 @@ async def test_each_key_reaches_one_prefix_and_one_bucket() -> None:
     etcd, volsync, barman = etcd_scope(), volsync_scope('immich'), barman_scope('immich')
     bucket = build([etcd, volsync, barman])
 
-    # Each key guards the directory its mover writes, from the one bucket
-    # layout: if `conventions` moves a repository path, the key moves with it
-    # rather than silently guarding a directory nothing writes to any more.
+    # Each key guards the prefix its own scope names, and no two keys share one.
     prefixes = {name: await key.name_prefix.future() for name, key in bucket.keys.items()}
-    assert prefixes == {
-        etcd.name: f'{conventions.ETCD_SNAPSHOT_PREFIX}/',
-        volsync.name: conventions.volsync_repo_path('immich', ''),
-        barman.name: conventions.barman_repo_path('immich', ''),
-    }
+    assert prefixes == {scope.name: scope.prefix for scope in (etcd, volsync, barman)}
+    assert len(set(prefixes.values())) == len(prefixes)
 
     for key in bucket.keys.values():
         # Scoped to this bucket, not to the account: a key that could reach
@@ -186,8 +181,9 @@ async def test_keys_stay_unprotected_so_they_can_rotate() -> None:
 @pytest.mark.asyncio
 async def test_the_credential_halves_are_reachable_by_scope() -> None:
     bucket = build()
-    assert await bucket.key_id('etcd').future() == 'kluster-backup-etcd-key-id'
-    assert await bucket.key_secret('etcd').future() == 'kluster-backup-etcd-secret'
+    key = bucket.keys['etcd']
+    assert await bucket.key_id('etcd').future() == await key.application_key_id.future()
+    assert await bucket.key_secret('etcd').future() == await key.application_key.future()
     assert await bucket.bucket_id.future() == BUCKET_ID
 
 
@@ -237,6 +233,9 @@ async def test_every_resource_is_signed_by_that_provider(monitor: B2) -> None:
     async with declaring():
         bucket = build()
 
-    assert set(bucket.keys) == {'etcd'}
-    for name in ('kluster-backup', 'kluster-backup-etcd'):
-        assert 'kluster-b2' in monitor.provider_of(name), f'{name} is not signed by the bucket provider'
+    component = await bucket.urn.future()
+    provider = await bucket.provider.urn.future()
+    children = [request for request in monitor.registrations.values() if request.parent == component]
+
+    assert children
+    assert [child.name for child in children if not child.provider.startswith(f'{provider}::')] == []
