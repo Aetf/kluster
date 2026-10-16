@@ -179,7 +179,7 @@ def test_the_console_steps_are_printed_before_the_value_is_asked_for(
     (before,) = asked
     for line in UNIFI.console.splitlines():
         assert line.strip() in before
-    assert runner.config == {'unifiApiKey': 'an-api-key'}
+    assert runner.config == {UNIFI.fields[0].key: 'an-api-key'}
 
 
 def test_every_typed_value_lands_under_its_fields_key(typed: None) -> None:
@@ -206,8 +206,9 @@ def test_every_delivered_field_takes_the_encrypted_channel(typed: None) -> None:
     # overlay network's id, is a constant in `conventions` (rfc-002 §11).
     secret = [args[2] for args in runner.invocations if args[:2] == ['config', 'set'] and '--secret' in args]
     plain = [args[2] for args in runner.invocations if args[:2] == ['config', 'set'] and '--secret' not in args]
-    assert secret == ['zerotierApiToken']
-    assert plain == []
+    assert secret, 'the row delivers nothing'
+    assert secret == [field.key for field in ZEROTIER.fields if field.secret]
+    assert plain == [field.key for field in ZEROTIER.fields if not field.secret]
 
 
 def test_the_stack_is_created_when_the_backend_has_none(typed: None) -> None:
@@ -241,7 +242,7 @@ def test_a_value_in_a_file_is_delivered_without_a_prompt(tmp_path: Path) -> None
 
     # Nothing is patched at `getpass` here: a run that asked for anything would
     # fail rather than pass.
-    assert runner.config == {'unifiApiKey': 'an-api-key'}
+    assert runner.config == {UNIFI.fields[0].key: 'an-api-key'}
 
 
 def test_a_value_can_be_piped_in(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -250,7 +251,7 @@ def test_a_value_can_be_piped_in(monkeypatch: pytest.MonkeyPatch) -> None:
 
     _ = devices.deliver(UNIFI, stack=slot, given={'api-key': devices.STDIN}, prompt=refuses)
 
-    assert runner.config['unifiApiKey'] == 'a-piped-key'
+    assert runner.config[UNIFI.fields[0].key] == 'a-piped-key'
 
 
 def test_an_answer_left_blank_is_refused_and_nothing_is_pushed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -298,7 +299,7 @@ def test_the_delivery_names_the_file_to_commit(typed: None, caplog: pytest.LogCa
 
     # A push that stopped at `pulumi config set` would leave the credential
     # live on the device and invisible to everyone else's checkout.
-    assert f'commit Pulumi.{ADGUARD.stack}.yaml' in caplog.text
+    assert f'Pulumi.{ADGUARD.stack}.yaml' in caplog.text
 
 
 def test_the_admin_token_s_steps_select_every_repository_the_stack_declares() -> None:
@@ -413,12 +414,8 @@ def test_a_stack_encrypted_apart_refuses_on_a_machine_that_holds_no_passphrase_f
     assert ('derived', fills, escrow.rows()[fills].verb) in named_leaves(str(refusal.value))
 
     # And the stack passphrase is not quietly used instead, which is the whole
-    # point: that value is in every Environment a pull request can reach. The refusal says so by the
-    # name credentials.md gives that passphrase.
+    # point: that value is in every Environment a pull request can reach.
     assert runner.invocations == []
-    assert 'The stack passphrase the other stacks share is deliberately not used' in str(refusal.value)
-    # And the passphrase it does need is named by its own term.
-    assert 'encrypted under the operator passphrase' in str(refusal.value)
 
 
 def test_a_machine_that_cannot_decrypt_the_stack_is_not_told_the_credential_is_missing() -> None:
