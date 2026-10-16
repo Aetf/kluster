@@ -84,6 +84,31 @@ class KdbxError(RuntimeError):
     pass
 
 
+class DatabaseExists(KdbxError):
+    """A kit created over a file that is already there: rotation writes a new file rather than replacing one."""
+
+    def __init__(self, message: str, *, path: Path) -> None:
+        super().__init__(message)
+        self.path: Path = path
+
+
+class WrongPassword(KdbxError):
+    """A kit the password given does not unlock."""
+
+    def __init__(self, message: str, *, path: Path) -> None:
+        super().__init__(message)
+        self.path: Path = path
+
+
+class NoEntry(KdbxError):
+    """An entry the kit does not hold."""
+
+    def __init__(self, message: str, *, path: Path, entry: str) -> None:
+        super().__init__(message)
+        self.path: Path = path
+        self.entry: str = entry
+
+
 def store(account: str, secret: str) -> None:
     """Put a secret in the desktop store under `account` (`acquisition.store`).
 
@@ -171,7 +196,9 @@ class KdbxStore:
         from . import workstation
 
         if path.exists():
-            raise KdbxError(f'{path} already exists; rotation writes a new file rather than replacing one')
+            raise DatabaseExists(
+                f'{path} already exists; rotation writes a new file rather than replacing one', path=path
+            )
         # A directory this makes is the operator's alone. One that already
         # exists is left as the operator set it up, unless it is
         # `.credentials/` or lies under it, which `secret_dir` narrows.
@@ -247,7 +274,7 @@ class KdbxStore:
         try:
             self._db = PyKeePass(str(self.path), password=password)
         except CredentialsError as exc:
-            raise KdbxError(f'could not unlock {self.path}') from exc
+            raise WrongPassword(f'could not unlock {self.path}', path=self.path) from exc
 
     @property
     def _open(self) -> PyKeePass:
@@ -287,7 +314,7 @@ class KdbxStore:
     def _entry(self, entry: str) -> Entry:
         found = _first(cast('Entry | list[Entry] | None', self._open.find_entries(path=_path(entry))))
         if found is None:
-            raise KdbxError(f'no entry {entry!r} in {self.path} (try: credentials kit ls)')
+            raise NoEntry(f'no entry {entry!r} in {self.path} (try: credentials kit ls)', path=self.path, entry=entry)
         return found
 
     def entries(self, group: str = '/') -> list[str]:

@@ -168,7 +168,7 @@ def test_a_seed_from_another_account_is_refused_before_anything_is_minted(
     slot, runner = stack
     _with_cloudflare_account(monkeypatch, 'some-other-account')
 
-    with pytest.raises(masters.CredentialRejected, match='CLOUDFLARE_ACCOUNT'):
+    with pytest.raises(cloudflare.AccountMismatch):
         derived.cloudflare_zones(kit, stacks=[slot])
 
     # A kit re-seeded from another Cloudflare account, or an identifier written
@@ -282,10 +282,10 @@ def test_a_stack_that_does_not_exist_refuses_the_mint_before_anything_is_created
     runner = RecordedPulumi()
     slot = pulumi_config.Stack(name=APPS, directory=pulumi_config.project_dir(), run=runner)
 
-    with pytest.raises(pulumi_config.SlotRefused) as refusal:
+    with pytest.raises(pulumi_config.StackMissing) as refusal:
         derived.cloudflare_zones(kit, stacks=[dns_slot, slot])
 
-    assert APPS in str(refusal.value)
+    assert refusal.value.stack == APPS
 
     # The row's own stack is created by its first mint, which is bring-up;
     # any other stack is brought up on its own, and a mint aimed there fills
@@ -500,7 +500,7 @@ def test_the_gateway_row_is_refused_in_another_account_before_anything_is_minted
     slot, runner = physical_stack
     _with_cloudflare_account(monkeypatch, 'some-other-account')
 
-    with pytest.raises(masters.CredentialRejected, match='CLOUDFLARE_ACCOUNT'):
+    with pytest.raises(cloudflare.AccountMismatch):
         _ = derived.cloudflare_gateway_acme(kit, stack=slot)
 
     # This row delivers no account identifier and its consumer names none, but
@@ -1407,8 +1407,10 @@ def test_a_value_in_the_clear_that_does_not_read_back_is_refused(tmp_path: Path)
     slot, runner = _state_backend_stack(tmp_path)
     runner.corrupts = True
 
-    with pytest.raises(pulumi_config.SlotRefused, match='does not read back'):
+    with pytest.raises(pulumi_config.ReadBackRefused) as refused:
         slot.set(derived.CA_CERT_KEY, '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----')
+    assert refused.value.read_back is pulumi_config.ReadBack.DIFFERENT
+    assert refused.value.key == derived.CA_CERT_KEY
 
 
 def test_a_file_to_commit_outside_the_checkout_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

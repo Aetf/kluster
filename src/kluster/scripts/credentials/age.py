@@ -68,6 +68,21 @@ class AgeMissing(AgeError):
     """The tool is not there to ask, which says nothing about what it was asked."""
 
 
+class RecipientRefused(AgeError):
+    """A value refused as a recipient. `subject` is the name it was asked under, never the value.
+
+    `identity` is true where it holds the private half, refused before the tool
+    is asked; `reason` is the tool's verdict on the line where it gave one that
+    does not repeat the value, and `None` otherwise.
+    """
+
+    def __init__(self, message: str, *, subject: str, identity: bool, reason: str | None) -> None:
+        super().__init__(message)
+        self.subject: str = subject
+        self.identity: bool = identity
+        self.reason: str | None = reason
+
+
 @dataclass(frozen=True)
 class Identity:
     """One age key pair. The secret is uppercase, as age writes it.
@@ -155,15 +170,25 @@ def check_recipient(value: str, *, name: str) -> None:
     the plugin, which is a piece of the line -- is the bare refusal.
     """
     if SECRET_STEM in value.upper():
-        raise AgeError(f'{name} holds an age identity, the private half, where a recipient goes')
+        raise RecipientRefused(
+            f'{name} holds an age identity, the private half, where a recipient goes',
+            subject=name,
+            identity=True,
+            reason=None,
+        )
     try:
         _ = _run([BINARY, '--encrypt', '--armor', '--recipients-file', '-', os.devnull], stdin=f'{value}\n')
     except AgeMissing:
         raise
     except AgeError as exc:
         reason = _reason(str(exc))
-        said = reason if reason and value not in reason and json.dumps(value)[1:-1] not in reason else ''
-        raise AgeError(f'{name} is not an age recipient{f" ({said})" if said else ""}') from None
+        said = reason if reason and value not in reason and json.dumps(value)[1:-1] not in reason else None
+        raise RecipientRefused(
+            f'{name} is not an age recipient{f" ({said})" if said else ""}',
+            subject=name,
+            identity=False,
+            reason=said,
+        ) from None
 
 
 #: How the tool names a line of the recipients file it read from standard

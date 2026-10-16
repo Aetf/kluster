@@ -21,7 +21,6 @@ from credentials_command_tree import named_commands
 from memory_keyring import MemoryKeyring, installed
 
 from kluster.scripts.credentials import devices, kdbx, masters, workstation
-from kluster.scripts.credentials.kdbx import KdbxError
 
 
 @pytest.fixture(autouse=True)
@@ -321,8 +320,9 @@ def test_forget_removes_every_field(store: MemoryKeyring, monkeypatch: pytest.Mo
 
 
 def test_forgetting_a_root_that_is_not_there_says_so(store: MemoryKeyring) -> None:
-    with pytest.raises(KdbxError, match='not in the secret store'):
+    with pytest.raises(masters.RootNotHeld) as refused:
         masters.forget(masters.ROOTS[masters.B2])
+    assert refused.value.title == masters.ROOTS[masters.B2].title
 
 
 def test_an_empty_answer_is_refused(headless: None, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -330,8 +330,9 @@ def test_an_empty_answer_is_refused(headless: None, monkeypatch: pytest.MonkeyPa
     # fail against the provider instead.
     monkeypatch.setattr('getpass.getpass', _answers(''))
 
-    with pytest.raises(KdbxError, match='required'):
+    with pytest.raises(masters.AnswerRequired) as refused:
         _ = masters.load(masters.ROOTS[masters.B2], _answers('account-id'))
+    assert refused.value.field in {field.name for field in masters.ROOTS[masters.B2].fields}
 
 
 def test_the_kit_password_and_the_roots_share_one_store(store: MemoryKeyring) -> None:

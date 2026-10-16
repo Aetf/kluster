@@ -150,8 +150,9 @@ def test_a_seed_that_sees_only_another_account_is_refused_before_the_kit_records
     # Both accounts are named, because which of the two is stale -- a token
     # made in the wrong account, or an identifier written down wrong -- is the
     # operator's question and neither one alone answers it.
-    with pytest.raises(CredentialRejected, match=f'some-other-account.*{ACCOUNT_ID}'):
+    with pytest.raises(cloudflare.AccountMismatch) as refused:
         _ = cloudflare.adopt_seed(token=value, seeds=kit, seed_entry=SEED_ENTRY)
+    assert ('some-other-account' in refused.value.seen, refused.value.recorded) == (True, ACCOUNT_ID)
 
     # And the kit does not record it. A seed adopted from an account
     # `conventions` does not name would mint every later credential there,
@@ -346,8 +347,9 @@ def test_a_seed_in_another_account_mints_nothing_at_all(api: FakeApi, monkeypatc
     # Both accounts are named, because which of the two is stale -- a kit
     # re-seeded elsewhere, or an identifier written down wrong -- is the
     # operator's question and neither one alone answers it.
-    with pytest.raises(CredentialRejected, match=f'{ACCOUNT_ID}.*some-other-account'):
+    with pytest.raises(cloudflare.AccountMismatch) as refused:
         _ = cloudflare.mint_zone_token(session, role=STACK_ROLE, zones=conventions.ALL_ZONES)
+    assert (refused.value.seen, refused.value.recorded) == ((ACCOUNT_ID,), 'some-other-account')
 
     # The account is knowable from the zone listing, which writes nothing, so
     # the refusal costs nothing. Held against `conventions` after the mint
@@ -388,8 +390,9 @@ def test_a_seed_without_zone_read_says_so_rather_than_minting_an_empty_scope(api
     api.seed_sees_zones = False
     session = cloudflare.Session.authorize(_seed(api))
 
-    with pytest.raises(CredentialRejected, match='no zone read permission'):
+    with pytest.raises(cloudflare.ZoneNotVisible) as refused:
         _ = cloudflare.mint_zone_token(session, role=STACK_ROLE, zones=conventions.ALL_ZONES)
+    assert refused.value.zone in conventions.ALL_ZONES
 
 
 def test_a_wrong_scope_mint_leaves_the_working_predecessor_standing(api: FakeApi) -> None:
@@ -449,13 +452,16 @@ def test_a_zone_without_an_account_is_refused_naming_the_entry() -> None:
 
     # Which call, which row, which field: the account id is what the mint is
     # held to, so the entry that lacks one is named.
-    with pytest.raises(payload.ResponseRejected, match=r'GET /zones\[1\]\.account: the answer carries no id'):
+    with pytest.raises(payload.ResponseRejected) as refused:
         _ = cloudflare._listed_zones(answer)  # pyright: ignore[reportPrivateUsage]
+    assert refused.value.where.endswith('[1].account')
+    assert (refused.value.field, refused.value.expected) == ('id', payload.Expected.PRESENT)
 
 
 def test_a_token_listing_that_is_not_a_list_is_refused_rather_than_iterated() -> None:
-    with pytest.raises(payload.ResponseRejected, match='GET /user/tokens: expected a list'):
+    with pytest.raises(payload.ResponseRejected) as refused:
         _ = cloudflare._listed_tokens({'id': 'token-1', 'name': STACK_TOKEN})  # pyright: ignore[reportPrivateUsage]
+    assert (refused.value.field, refused.value.expected) == (None, payload.Expected.LIST)
 
 
 def test_a_permission_group_without_a_name_is_skipped_rather_than_refusing_the_token() -> None:
@@ -495,15 +501,17 @@ def test_a_catalog_entry_whose_scopes_are_not_a_list_is_refused_by_name() -> Non
 
     # Optional is not "anything": a field that is there says what it says, and
     # a scope catalog read as the characters of one string grants nothing.
-    with pytest.raises(payload.ResponseRejected, match='scopes is'):
+    with pytest.raises(payload.ResponseRejected) as refused:
         _ = cloudflare._permission_groups(catalog)  # pyright: ignore[reportPrivateUsage]
+    assert (refused.value.field, refused.value.expected) == ('scopes', payload.Expected.LIST)
 
 
 def test_a_verification_without_a_status_is_refused_rather_than_read_as_inactive() -> None:
     # "Not active" and "the platform stopped saying" are different answers,
     # and only the first one is about the token in hand.
-    with pytest.raises(payload.ResponseRejected, match='carries no status'):
+    with pytest.raises(payload.ResponseRejected) as refused:
         _ = cloudflare._verified({'id': 'token-1'})  # pyright: ignore[reportPrivateUsage]
+    assert (refused.value.field, refused.value.expected) == ('status', payload.Expected.PRESENT)
 
 
 class Interrupted(RuntimeError):

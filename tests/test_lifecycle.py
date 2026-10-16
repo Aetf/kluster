@@ -51,7 +51,7 @@ from kluster.scripts.credentials import (
     pulumi_config,
     workstation,
 )
-from kluster.scripts.credentials.kdbx import KdbxError, KdbxStore
+from kluster.scripts.credentials.kdbx import KdbxStore
 from kluster.scripts.credentials.masters import CredentialRejected
 
 PASSWORD = 'kit-password'
@@ -206,8 +206,9 @@ def test_every_seed_that_needs_a_root_has_one_registered() -> None:
 
 
 def test_an_unknown_member_is_refused(kit: KdbxStore) -> None:
-    with pytest.raises(KdbxError, match='no seed named'):
+    with pytest.raises(lifecycle.UnknownMember) as refused:
         _ = lifecycle.bootstrap(kit, prompt=_refuse, only='nonesuch')
+    assert refused.value.member == 'nonesuch'
 
 
 def _never(_path: Path) -> KdbxStore:
@@ -219,8 +220,9 @@ def test_an_unknown_member_is_refused_before_the_successor_is_written(kit: KdbxS
     # finished run, leaving a successor kit with nothing in it.
     untouched = lifecycle.Successor(path=tmp_path / 'successor.kdbx', open=_never, create=_never)
 
-    with pytest.raises(KdbxError, match='no seed named'):
+    with pytest.raises(lifecycle.UnknownMember) as refused:
         _ = lifecycle.rotate(kit, untouched, prompt=_refuse, only='nonesuch')
+    assert refused.value.member == 'nonesuch'
 
 
 @needs_age
@@ -501,18 +503,18 @@ def test_stopping_at_the_paste_says_what_each_kit_holds(
     whole = whole_kit(kit, registry, monkeypatch)
     monkeypatch.setattr('getpass.getpass', _pastes(_wrong_template(whole.dashboard), '', stop))
 
-    with pytest.raises(KdbxError, match=r'holds recovery, oci.*does not hold cloudflare.*no row after it') as caught:
+    with pytest.raises(lifecycle.RotationStopped) as caught:
         _ = lifecycle.rotate(kit, _successor(tmp_path / 'successor.kdbx'), prompt=_refuse, registry=registry)
 
     successor = _unlocked(tmp_path / 'successor.kdbx')
     assert isinstance(caught.value.__cause__, stop)
-    # The consequences §4.2 promises the message says, held word for word:
-    # what the retired kit can no longer do, what was not done, and how the
-    # run goes on.
-    assert 'holds recovery, oci, whose predecessors in the retired kit no longer work' in str(caught.value)
-    assert 'does not hold cloudflare, whose row in the retired kit this run did not touch' in str(caught.value)
-    assert 'no row after it was rotated' in str(caught.value)
-    assert 're-run the same command with the same `--into` to resume' in str(caught.value)
+    # Where the run stopped, and what the successor holds: every row before
+    # the console one, in the register's order, and none from it on.
+    members = list(entries.SEEDS)
+    console = next(member for member, seed in entries.SEEDS.items() if seed.console)
+    assert caught.value.stopped_at == console
+    assert list(caught.value.rotated) == members[: members.index(console)]
+    assert caught.value.successor == tmp_path / 'successor.kdbx'
     # Before the row: rotated, with the OCI user's one key the successor's.
     assert successor.has(entries.SEEDS['recovery'].entry)
     assert whole.tenancy.identity.keys[whole.user_id] == [
@@ -726,9 +728,23 @@ def _not_this_kits_successor(which: str, kit: KdbxStore, tmp_path: Path) -> Path
 
 
 @needs_age
-@pytest.mark.parametrize('which', ['the-kit-itself', 'a-copy', 'a-bootstrapped-kit', 'another-kits-successor'])
+@pytest.mark.parametrize(
+    ('which', 'lineage'),
+    [
+        ('the-kit-itself', lifecycle.Lineage.SAME_KIT),
+        ('a-copy', lifecycle.Lineage.SAME_KIT),
+        ('a-bootstrapped-kit', lifecycle.Lineage.UNMARKED),
+        ('another-kits-successor', lifecycle.Lineage.OTHER_KIT),
+    ],
+    ids=['the-kit-itself', 'a-copy', 'a-bootstrapped-kit', 'another-kits-successor'],
+)
 def test_an_existing_into_that_is_not_this_kits_successor_is_refused_before_anything(
-    kit: KdbxStore, registry: escrow.Registry, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, which: str
+    kit: KdbxStore,
+    registry: escrow.Registry,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    which: str,
+    lineage: lifecycle.Lineage,
 ) -> None:
     """The successor file names its predecessor, and `--into` is refused where it names another (§4.2).
 
@@ -742,13 +758,10 @@ def test_an_existing_into_that_is_not_this_kits_successor_is_refused_before_anyt
     path = _not_this_kits_successor(which, kit, tmp_path)
     before = path.read_bytes()
 
-    with pytest.raises(KdbxError, match=re.escape(str(path))) as refused:
+    with pytest.raises(lifecycle.NotTheSuccessor) as refused:
         _ = lifecycle.rotate(kit, _successor(path), prompt=_refuse, registry=registry)
 
-    assert 'resumes only into the' in str(refused.value) or 'is not the successor of' in str(refused.value)
-    if which == 'another-kits-successor':
-        # The one refusal that names what such a file is likely to be.
-        assert 'a retired kit of this installation' in str(refused.value)
+    assert (refused.value.path, refused.value.lineage) == (path, lineage)
     assert path.read_bytes() == before
     assert whole.tenancy.identity.keys[whole.user_id] == [whole.oci_key]
     assert whole.b2_api.named(b2.SEED.name) == [whole.b2_key]
@@ -793,8 +806,9 @@ def test_a_successor_whose_marker_was_never_written_is_refused_naming_kit_ls(
     path = tmp_path / 'successor.kdbx'
     _ = KdbxStore.create(path, PASSWORD)
 
-    with pytest.raises(KdbxError, match='no lineage marker') as refused:
+    with pytest.raises(lifecycle.NotTheSuccessor) as refused:
         _ = lifecycle.rotate(kit, _successor(path), prompt=_refuse, registry=registry)
+    assert refused.value.lineage is lifecycle.Lineage.UNMARKED
 
     ((_, args),) = named_commands(str(refused.value))
     assert (args['kdbx'], args['subject'], args['member']) == (path, 'kit', 'ls')
@@ -824,8 +838,9 @@ def test_a_self_reproducing_family_with_no_account_check_is_refused_before_the_w
         console='the provider console → API tokens → New token.',
     )
 
-    with pytest.raises(KdbxError, match=r'example.*not in the pre-flight'):
+    with pytest.raises(lifecycle.NoAccountCheck) as refused:
         lifecycle.prove_account(kit, minting)
+    assert refused.value.member == 'example'
     lifecycle.prove_account(kit, console_made)
 
 

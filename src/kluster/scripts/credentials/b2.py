@@ -43,10 +43,31 @@ from kluster.lib.secret import Secret
 from ... import conventions
 from . import masters, payload
 from .delivery import Delivery
-from .kdbx import KdbxStore
+from .kdbx import KdbxError, KdbxStore
 from .masters import CredentialRejected
 
 log = logging.getLogger(__name__)
+
+
+class EntryIncomplete(KdbxError, ValueError):
+    """A kit entry missing a half of the B2 key it holds: `missing` names the empty attributes.
+
+    A `KdbxError`, as every refusal of what the kit holds is, so a command
+    reports it in one line; and still the `ValueError` it was before.
+    """
+
+    def __init__(self, message: str, *, entry: str, missing: tuple[str, ...]) -> None:
+        super().__init__(message)
+        self.entry: str = entry
+        self.missing: tuple[str, ...] = missing
+
+
+class Unconfined(CredentialRejected):
+    """A key handed over as a prefix-scoped one that B2 confines to no bucket."""
+
+    def __init__(self, message: str, *, key_id: str) -> None:
+        super().__init__(message)
+        self.key_id: str = key_id
 
 
 AUTHORIZE_URL = 'https://api.backblazeb2.com/b2api/v3/b2_authorize_account'
@@ -386,9 +407,10 @@ class Session:
         storage = payload.Payload.of(answer, 'b2_authorize_account').nested('apiInfo').nested('storageApi')
         confined = storage.optional_text('bucketId')
         if confined is None:
-            raise CredentialRejected(
+            raise Unconfined(
                 f'B2 key {key_id!r} is confined to no bucket, so it is not a prefix-scoped key of this '
-                'installation: `credentials derived ls` names the command that mints the intended one'
+                'installation: `credentials derived ls` names the command that mints the intended one',
+                key_id=key_id,
             )
         return cls._authorized(answer), confined
 
@@ -415,8 +437,13 @@ class Session:
         """
         key_id = store.get(entry, attribute='UserName')
         key = store.get(entry)
-        if not key_id or not key:
-            raise ValueError(f'{entry!r} must hold the key id as its username and the key as its password')
+        missing = tuple(name for name, value in (('UserName', key_id), ('Password', key)) if not value)
+        if missing:
+            raise EntryIncomplete(
+                f'{entry!r} must hold the key id as its username and the key as its password',
+                entry=entry,
+                missing=missing,
+            )
         return cls.authorize(key_id, key)
 
     def post(self, api: str, body: dict[str, Any]) -> object:
