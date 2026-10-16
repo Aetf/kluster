@@ -69,6 +69,7 @@ from kluster.components.gateway.unifi import SiteFirewall
 from kluster.components.overlay import Overlay, flow_rules
 from kluster.components.talos import TalosCluster
 from kluster.components.talos.image import TalosArtifact
+from kluster.lib import config as lib_config
 from kluster.stacks import physical
 
 #: A LAN address for the gateway, as the first-bring-up knob carries one. It is
@@ -389,7 +390,7 @@ async def test_a_bootstrap_host_that_is_a_name_is_refused_before_the_window_open
     """
     pulumi.runtime.set_all_config(dict(STACK_CONFIG) | {f'kluster:{physical.GATEWAY_BOOTSTRAP_HOST}': BOOTSTRAP_NAME})
 
-    with pytest.raises(ValueError, match='not a literal IP address'):
+    with pytest.raises(physical.BootstrapHostRefused):
         await physical.main()
 
 
@@ -948,9 +949,12 @@ async def test_a_recipient_list_that_is_not_a_list_of_addresses_is_refused() -> 
         dict(STACK_CONFIG) | {'kluster:budgetAlertRecipients': json.dumps('one@example.invalid')}
     )
 
-    with pytest.raises(TypeError, match='budgetAlertRecipients must be a list') as refused:
+    with pytest.raises(lib_config.ShapeRefused) as refused:
         async with declaring():
             await physical.main()
+    assert refused.value.what == physical.BUDGET_ALERT_RECIPIENTS
+    assert refused.value.shape is lib_config.Shape.WRONG_TYPE
+    assert refused.value.entry is None
     assert 'one@example.invalid' not in str(refused.value)
 
 
@@ -968,8 +972,10 @@ async def test_a_recipient_list_that_is_not_json_is_refused_without_its_value() 
         dict(STACK_CONFIG) | {'kluster:budgetAlertRecipients': 'one@example.invalid,two@example.invalid'}
     )
 
-    with pytest.raises(TypeError, match='budgetAlertRecipients must be a JSON list') as refused:
+    with pytest.raises(lib_config.ShapeRefused) as refused:
         await physical.main()
+    assert refused.value.what == physical.BUDGET_ALERT_RECIPIENTS
+    assert refused.value.shape is lib_config.Shape.NOT_JSON
     printed = ''.join(traceback.format_exception(refused.value))
     assert 'one@example.invalid' not in printed
     assert 'two@example.invalid' not in printed

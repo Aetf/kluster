@@ -450,7 +450,7 @@ def test_main_turns_every_refusal_the_program_can_raise_into_one_line() -> None:
     Backward: every member of the tuple is raised somewhere in that closure,
     so no member is a name nothing raises. The closure is the import graph
     rather than a call graph, which is what lets the test be written; the
-    two members that over-approximation adds are named at the tuple.
+    members that over-approximation adds are named at the tuple.
     """
     raised = _raised(_closure(cli.__name__))
     assert raised, 'the walk found no raise of a repository exception, so it walked nothing'

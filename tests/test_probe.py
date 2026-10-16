@@ -115,6 +115,20 @@ def test_every_playbook_a_verdict_names_is_a_section_that_exists() -> None:
         assert number in sections(prose((DOCS / document).read_text())), f'{name}: {reference}'
 
 
+def test_a_failed_verdict_carries_a_finding_and_a_passed_one_carries_none() -> None:
+    """A playbook without a finding, or the reverse, is refused when the verdict is made.
+
+    Several findings share a playbook, so a failure that carried no code could
+    be told apart from its neighbors only by its wording.
+    """
+    with pytest.raises(ValueError):
+        _ = probe.Verdict(probe.DUMPS, 'observed', probe.REBUILD_PLAYBOOK)
+    with pytest.raises(ValueError):
+        _ = probe.Verdict(probe.DUMPS, 'observed', finding=probe.Finding.STALE)
+
+    assert probe.Verdict(probe.DUMPS, 'observed').passed
+
+
 # -- the certificate probe ----------------------------------------------------
 
 
@@ -251,6 +265,7 @@ def test_a_certificate_inside_the_margin_fails_into_the_reissue_playbook(authori
 
     assert not verdict.passed
     assert verdict.playbook == probe.REISSUE_PLAYBOOK
+    assert verdict.finding is probe.Finding.EXPIRING
     assert str(INSIDE) in _numbers(verdict.observed)
     assert str(config.EXPIRY_ALERT_MARGIN.days) in _numbers(verdict.observed)
 
@@ -269,6 +284,7 @@ def test_an_expired_certificate_fails_by_its_date(authority: pki.Authority) -> N
     verdict = probe.certificate(now=NOW, handshake=handshake)
 
     assert verdict.playbook == probe.REISSUE_PLAYBOOK
+    assert verdict.finding is probe.Finding.EXPIRED
     assert _leaf(handshake).not_valid_after_utc.date().isoformat() in verdict.observed
 
 
@@ -277,6 +293,7 @@ def test_a_certificate_not_yet_valid_fails(authority: pki.Authority) -> None:
     verdict = probe.certificate(now=NOW, handshake=handshake)
 
     assert verdict.playbook == probe.REISSUE_PLAYBOOK
+    assert verdict.finding is probe.Finding.NOT_YET_VALID
     assert _leaf(handshake).not_valid_before_utc.date().isoformat() in verdict.observed
 
 
@@ -286,6 +303,7 @@ def test_a_certificate_naming_another_address_fails_naming_both(authority: pki.A
     verdict = probe.certificate(now=NOW, handshake=_serving(authority, issued=_left(400), address='192.0.2.10'))
 
     assert verdict.playbook == probe.REISSUE_PLAYBOOK
+    assert verdict.finding is probe.Finding.WRONG_ADDRESS
     assert '192.0.2.10' in verdict.observed
     assert settings.ADDRESS in verdict.observed
 
@@ -294,6 +312,7 @@ def test_a_box_that_refuses_the_handshake_is_unreachable_into_the_rebuild_playbo
     verdict = probe.certificate(now=NOW, handshake=Handshake(returncode=1, stderr='connect:errno=111\nmore'))
 
     assert verdict.playbook == probe.REBUILD_PLAYBOOK
+    assert verdict.finding is probe.Finding.NO_HANDSHAKE
     assert 'connect:errno=111' in verdict.observed
 
 
@@ -301,6 +320,7 @@ def test_a_box_that_does_not_answer_is_unreachable_into_the_rebuild_playbook() -
     verdict = probe.certificate(now=NOW, handshake=Handshake(hangs=True))
 
     assert verdict.playbook == probe.REBUILD_PLAYBOOK
+    assert verdict.finding is probe.Finding.UNANSWERED
     assert f'{probe.HANDSHAKE_TIMEOUT}s' in verdict.observed
 
 
@@ -308,7 +328,7 @@ def test_a_handshake_that_served_no_certificate_fails() -> None:
     verdict = probe.certificate(now=NOW, handshake=Handshake(stdout='CONNECTED\n---\n'))
 
     assert verdict.playbook == probe.REBUILD_PLAYBOOK
-    assert 'no certificate' in verdict.observed
+    assert verdict.finding is probe.Finding.NO_CERTIFICATE
 
 
 # -- the dump-age probe -------------------------------------------------------
@@ -417,6 +437,7 @@ def test_a_dump_older_than_the_age_fails_into_the_rebuild_playbook(api: FakeApi,
     verdict = _dumps(key)
 
     assert verdict.playbook == probe.REBUILD_PLAYBOOK
+    assert verdict.finding is probe.Finding.STALE
     assert _hours(STALE) in verdict.observed
 
 
@@ -439,12 +460,10 @@ def test_an_empty_prefix_is_its_own_failure(api: FakeApi, lister: tuple[b2.AppKe
 
     # No dump holding state has landed: the box refuses to upload one that
     # holds no stack, or its timer never fired. Neither is a dump that
-    # stopped, and the message says which prefix is empty and names both.
+    # stopped, so the finding is its own, and the message says which prefix.
     assert verdict.playbook == probe.REBUILD_PLAYBOOK
-    assert 'no object under' in verdict.observed
+    assert verdict.finding is probe.Finding.NO_DUMP
     assert PREFIX in verdict.observed
-    assert 'holds no stack' in verdict.observed
-    assert 'never fired' in verdict.observed
 
 
 def test_an_object_not_named_like_a_dump_fails_by_name(api: FakeApi, lister: tuple[b2.AppKey, str]) -> None:
@@ -454,6 +473,7 @@ def test_an_object_not_named_like_a_dump_fails_by_name(api: FakeApi, lister: tup
     verdict = _dumps(key)
 
     assert verdict.playbook == probe.REBUILD_PLAYBOOK
+    assert verdict.finding is probe.Finding.STRANGER
     assert f'{PREFIX}notes.txt' in verdict.observed
 
 
@@ -498,6 +518,7 @@ def test_a_key_b2_refuses_is_the_dump_probe_s_verdict_naming_no_key_id(api: Fake
 
     assert not verdict.passed
     assert verdict.playbook == probe.KEY_PLAYBOOK
+    assert verdict.finding is probe.Finding.KEY_REFUSED
     assert probe.KEY_ID_ENV in verdict.observed and MINT in named_leaves(verdict.observed)
     assert rejected not in str(verdict)
 
@@ -541,6 +562,7 @@ def test_a_key_b2_refuses_at_the_listing_is_the_refused_key_s_verdict(status: in
     verdict = probe.dumps('id', 'secret', now=NOW, authorize=_authorizing_to(_answered(status)))
 
     assert verdict.playbook == probe.KEY_PLAYBOOK
+    assert verdict.finding is probe.Finding.KEY_REFUSED
 
 
 B2_SILENT = {
@@ -561,6 +583,7 @@ def test_b2_not_answering_is_the_dump_probe_s_verdict(authorize: probe.Authorize
 
     assert not verdict.passed
     assert verdict.playbook == probe.MONITORING
+    assert verdict.finding is probe.Finding.B2_UNANSWERED
 
 
 # -- the credential ------------------------------------------------------------
@@ -571,15 +594,22 @@ def test_the_key_is_read_from_the_two_variables_the_ops_repository_fills() -> No
 
 
 @pytest.mark.parametrize(
-    'environ',
-    [{}, {probe.KEY_ID_ENV: 'id'}, {probe.KEY_ENV: 'secret', probe.KEY_ID_ENV: ''}],
+    ('environ', 'empty'),
+    [
+        ({}, {probe.KEY_ID_ENV, probe.KEY_ENV}),
+        ({probe.KEY_ID_ENV: 'id'}, {probe.KEY_ENV}),
+        ({probe.KEY_ENV: 'secret', probe.KEY_ID_ENV: ''}, {probe.KEY_ID_ENV}),
+    ],
     ids=['both', 'key', 'id'],
 )
-def test_an_empty_slot_is_refused_naming_the_variable_and_the_mint(environ: dict[str, str]) -> None:
-    with pytest.raises(SlotRefused) as refusal:
+def test_an_empty_slot_is_refused_naming_the_variable_and_the_mint(environ: dict[str, str], empty: set[str]) -> None:
+    # A `SlotRefused`, which is what `cli.main` turns into one line, carrying
+    # the variables that were empty in the environment it was handed.
+    with pytest.raises(probe.KeyMissing) as refusal:
         _ = probe.credential(environ)
 
-    assert {probe.KEY_ID_ENV, probe.KEY_ENV} <= set(re.findall(r'\w+', str(refusal.value)))
+    assert isinstance(refusal.value, SlotRefused)
+    assert set(refusal.value.empty) == empty
     assert MINT in named_leaves(str(refusal.value))
 
 

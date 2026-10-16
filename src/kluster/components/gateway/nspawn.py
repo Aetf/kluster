@@ -117,6 +117,8 @@ __all__ = (
     'WATCHDOG_UNIT',
     'WATCHDOG_WORKER',
     'NspawnRuntime',
+    'ReservedName',
+    'UnstampedName',
     'initial_state_path',
     'interface_device_unit',
     'machine_dropin',
@@ -296,6 +298,14 @@ def interface_device_unit(interface: str) -> str:
     return f'{_NET_DEVICE_UNIT_PREFIX}-{escaped}.device'
 
 
+class ReservedName(ValueError):
+    """A machine file named like a piece the runtime keeps in the machine's directory."""
+
+
+class UnstampedName(ValueError):
+    """A machine file whose leading dot hides it from the content stamp."""
+
+
 def machine_file(machine: str, name: str) -> str:
     """One file of the machine's own, beside the pieces the runtime keeps.
 
@@ -320,13 +330,13 @@ def machine_file(machine: str, name: str) -> str:
     at all.
     """
     if name.startswith('.'):
-        raise ValueError(
+        raise UnstampedName(
             f'{name!r} would sit in {machine_path(machine)} where the content stamp cannot see it: '
             f'the converger walks that directory with a glob, which skips leading-dot names, so the file '
             f'would be delivered and would never restart the machine that reads it'
         )
     if any(fnmatch.fnmatchcase(name, pattern) for pattern in RESERVED_NAMES):
-        raise ValueError(
+        raise ReservedName(
             f'{name!r} is a name the nspawn runtime keeps under {machine_path(machine)}: '
             f'{", ".join(RESERVED_NAMES)} are the machine itself, not files it reads'
         )
