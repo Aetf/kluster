@@ -30,7 +30,7 @@ from mock_monitor import Recorder, declaring, run_with
 from renovate_text import as_python_spells_it, as_renovate_spells_it, listed, package_rules
 
 from kluster import conventions
-from kluster.components import local_path, reloader
+from kluster.components import local_path, reloader, talos
 from kluster.lib.k8s import PodSecurity, namespace
 from kluster.lib.versions import versions
 
@@ -151,8 +151,12 @@ def test_local_paths_configuration_hands_its_class_the_user_volume(applied: Run)
     configuration = json.loads(local_path_configuration(applied)['config.json'])
 
     assert configuration['nodePathMap'] == []
+    # Keyed by the class the component declares, at the path Talos mounts the
+    # user volume its machine configuration declares.
+    storage_class = applied.inputs(STORAGE_CLASS, LOCAL_PATH)['metadata']['name']
+    mounted = conventions.node_volume_mount(talos.local_path_volume_document()['name'])
     assert configuration['storageClassConfigs'] == {
-        conventions.SC_LOCAL_PATH: {'nodePathMap': [{'node': EVERY_NODE, 'paths': [conventions.LOCAL_PATH_ROOT]}]}
+        storage_class: {'nodePathMap': [{'node': EVERY_NODE, 'paths': [mounted]}]}
     }
 
 
@@ -160,7 +164,6 @@ def test_local_path_is_the_default_class_reclaims_delete_and_binds_on_scheduling
     """The class the configuration names, served by the provisioner the Deployment runs."""
     storage_class = applied.inputs(STORAGE_CLASS, LOCAL_PATH)
 
-    assert storage_class['metadata']['name'] == conventions.SC_LOCAL_PATH
     assert storage_class['metadata']['annotations'] == {DEFAULT_CLASS: 'true'}
     assert storage_class['reclaimPolicy'] == 'Delete'
     assert storage_class['volumeBindingMode'] == 'WaitForFirstConsumer'
@@ -204,7 +207,10 @@ def test_the_helper_pods_run_under_the_account_the_component_declares(applied: R
 
     assert told == {'name': 'SERVICE_ACCOUNT_NAME', 'valueFrom': {'fieldRef': {'fieldPath': 'spec.serviceAccountName'}}}
     assert pod['serviceAccountName'] == account['name']
-    assert account['namespace'] == local_path.NAMESPACE
+    (namespace,) = [
+        it.inputs['metadata']['name'] for it in applied.monitor.of_type(NAMESPACE) if it.name.startswith(LOCAL_PATH)
+    ]
+    assert account['namespace'] == namespace
 
 
 @pytest.mark.parametrize(
@@ -313,31 +319,53 @@ def test_the_sealing_controller_creates_no_namespace(applied: Run) -> None:
 # -- Order --------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ('component', 'after'),
-    [
-        ('kluster:sealing:SealedSecretsController', CILIUM),
-        ('kluster:certificates:CertManager', SEALING),
-        ('kluster:local_path:LocalPathProvisioner', CILIUM),
-        ('kluster:reloader:Reloader', CILIUM),
-    ],
-    ids=[SEALING, CERT_MANAGER, LOCAL_PATH, RELOADER],
-)
-def test_every_child_is_installed_behind_what_cluster_infra_orders_its_component_after(
-    applied: Run, component: str, after: str
-) -> None:
-    """Nothing schedules before the CNI, and cert-manager's solver credential is a sealed value.
+def _behind(run: Run, urn: str) -> set[str]:
+    """Every resource `urn` waits for, through the dependencies of what it depends on."""
+    registrations = run.monitor.registrations
+    reached: set[str] = set()
+    frontier = list(registrations[urn].dependencies)
+    while frontier:
+        dependency = frontier.pop()
+        if dependency in reached:
+            continue
+        reached.add(dependency)
+        if dependency in registrations:
+            frontier.extend(registrations[dependency].dependencies)
+    return reached
 
-    Held on every resource the component registers, since a component's own
-    `depends_on` reaches none of its children; the chart is what the preceding
-    entry installs.
+
+def test_every_child_of_every_component_is_installed_behind_the_cni(applied: Run) -> None:
+    """Nothing schedules before the CNI (cluster-infra.md §1).
+
+    Held on every resource each component registers, since a component's own
+    `depends_on` reaches none of its children, and through the chain the
+    standing set is installed in: a component ordered after another waits for
+    the CNI by way of it.
     """
-    (parent,) = [urn for urn, request in applied.monitor.registrations.items() if request.type == component]
-    children = [request for request in applied.monitor.registrations.values() if request.parent == parent]
-    behind = applied.urn(CHART, after)
+    registrations = applied.monitor.registrations
+    cni = applied.urn(CHART, CILIUM)
+    components = [
+        urn
+        for urn, request in registrations.items()
+        if request.type.startswith('kluster:') and urn != registrations[cni].parent
+    ]
+
+    assert components
+    for component in components:
+        children = [urn for urn, request in registrations.items() if request.parent == component]
+        assert children, component
+        assert [urn for urn in children if cni not in _behind(applied, urn)] == []
+
+
+def test_cert_managers_children_are_installed_behind_the_sealing_controller(applied: Run) -> None:
+    """Its solver credential is a sealed value, which only the controller can open (cluster-infra.md §1)."""
+    registrations = applied.monitor.registrations
+    parent = registrations[applied.urn(CHART, CERT_MANAGER)].parent
+    children = [urn for urn, request in registrations.items() if request.parent == parent]
+    sealing = applied.urn(CHART, SEALING)
 
     assert children
-    assert [(it.type, it.name) for it in children if behind not in it.dependencies] == []
+    assert [urn for urn in children if sealing not in _behind(applied, urn)] == []
 
 
 def test_every_child_carries_its_components_name(applied: Run) -> None:
