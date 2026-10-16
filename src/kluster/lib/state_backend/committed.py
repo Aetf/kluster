@@ -78,6 +78,14 @@ class Refused(ValueError):
     """A committed file is absent, or holds something its writer does not write."""
 
 
+class CurrentMissing(Refused):
+    """The recipients file names no recipient for `label`, the generation the box encrypts to."""
+
+    def __init__(self, message: str, *, label: str) -> None:
+        super().__init__(message)
+        self.label: str = label
+
+
 def backup_row(label: str) -> str:
     """The `credentials derived` row that writes `label`'s line: `backup-age-<N>`."""
     return label.replace('/', '-')
@@ -213,9 +221,10 @@ def age_recipients(
     window = backup_window()
     current = window[0]
     if current not in on_file:
-        raise Refused(
+        raise CurrentMissing(
             f'{backup} names no recipient for {current}, the generation the box encrypts to: '
-            f'`credentials derived {backup_row(current)} generate` writes it'
+            f'`credentials derived {backup_row(current)} generate` writes it',
+            label=current,
         )
     outside = sorted(set(on_file) - set(window))
     if outside:

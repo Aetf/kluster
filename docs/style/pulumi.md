@@ -403,8 +403,10 @@ holds one as a secret, the program reads it as one.
 only when it is created, is never left to be updated in place** — boot
 configuration, a boot image. It is declared `replace_on_changes` where a
 change must rebuild the target, or `ignore_changes` where another owner
-keeps the running target current, and a test holds each such option on
-the resource. The `state-backend` instance carries both: its `metadata`,
+keeps the running target current, and the option carries its reason
+beside it at the declaration. What the option makes the engine do is
+held by an engine case (`tests/test_state_backend_engine.py`), not by a
+test that restates the option. The `state-backend` instance carries both: its `metadata`,
 the Ignition, replaces the box, and its image is ignored once launched,
 since Zincati keeps the running box current; updated in place, the first
 would be written into a box Ignition never reads again, and the second
