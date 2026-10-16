@@ -51,7 +51,6 @@ from kluster import conventions
 from kluster.components import state_backend as component
 from kluster.components.state_backend import hooks
 from kluster.lib import stack_environment
-from kluster.lib import workstation as lib_workstation
 from kluster.lib.state_backend import committed, permission, render, settings, state
 from kluster.providers import oci_objects, postgres_tls
 from kluster.scripts.credentials import derived, escrow, pki
@@ -957,18 +956,16 @@ class Wired:
 
 
 @pytest_asyncio.fixture
-async def wired(tools: Tools, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Wired:
+async def wired(tools: Tools, tmp_path: Path, credential_files: Path, monkeypatch: pytest.MonkeyPatch) -> Wired:
     machine = _machine(tmp_path / 'machine')
-    slots = tmp_path / 'credentials'
     work = tmp_path / 'work'
     work.mkdir()
-    monkeypatch.setattr(lib_workstation, 'directory', lambda: slots)
     monkeypatch.chdir(work)
     monkeypatch.delenv(permission.ENV, raising=False)
     with _files_in(monkeypatch, machine.directory):
         run = await _run(Appliance(), machine)
     assert tools.calls == []
-    return Wired(run=run, bundle=slots / stack_environment.BUNDLE_SLOT, work=work)
+    return Wired(run=run, bundle=credential_files / stack_environment.BUNDLE_SLOT, work=work)
 
 
 async def _call(wired: Wired, hook: str, typ: str) -> None:

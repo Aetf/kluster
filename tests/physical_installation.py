@@ -218,9 +218,10 @@ async def install(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Installati
     with_compartment(monkeypatch, COMPARTMENT)
     with_tenancy_ocid(monkeypatch, TENANCY_ID)
     # The run materializes the libvirt session's credential into the checkout's
-    # `.credentials/`, so every run is pointed at a directory of its own:
-    # a test suite that wrote into the tree it runs from would leave a key
-    # behind and, worse, overwrite the operator's.
+    # `.credentials/` and names both files relative to the checkout in the
+    # connection URI, so every run is pointed at a checkout of its own rather
+    # than at a layer alone: the running checkout's layer is closed, and a
+    # write into it is refused (framework/testing.md §1.1).
     monkeypatch.setattr(workstation, 'repo_root', lambda: tmp_path)
     pulumi.runtime.set_all_config(dict(STACK_CONFIG))
     return await run_under_backstop(Installation(), stack='physical')

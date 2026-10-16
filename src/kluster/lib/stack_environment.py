@@ -37,8 +37,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from kluster.conventions import identity
-from kluster.lib import acquisition, bundle, pulumi_cli
-from kluster.lib.workstation import DIRECTORY
+from kluster.lib import acquisition, bundle, pulumi_cli, workstation
 
 BACKEND_URL_ENV = 'PULUMI_BACKEND_URL'
 PASSPHRASE_ENV = 'PULUMI_CONFIG_PASSPHRASE'
@@ -207,7 +206,7 @@ def operator_passphrase(checkout: Path, ask: Ask = ask_on_a_terminal) -> str:
     or, in a file that has lost its salt, adopted as the new key
     (credentials.md §4.2).
     """
-    slot = checkout / DIRECTORY / OPERATOR_PASSPHRASE_SLOT
+    slot = workstation.slots(checkout) / OPERATOR_PASSPHRASE_SLOT
     try:
         found = acquisition.find(OPERATOR_PASSPHRASE_ACCOUNT, slot, OPERATOR_PASSPHRASE_ENV)
     except OSError as exc:
@@ -247,7 +246,7 @@ def operator_variables(stack: str, checkout: Path) -> dict[str, str]:
     variables = {PASSPHRASE_ENV: operator_passphrase(checkout)}
     if where is identity.StateHome.COMMITTED:
         return variables | backend_variables(stack, checkout=checkout, estate_url=None)
-    slot = checkout / DIRECTORY / BUNDLE_SLOT
+    slot = workstation.slots(checkout) / BUNDLE_SLOT
     url = bundle.backend_url_file(slot)
     if url is None:
         raise EnvironmentRefused(

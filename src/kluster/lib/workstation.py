@@ -35,6 +35,12 @@ which is the same directory mise calls `config_root` — so a path written here
 and a path read by a mise template cannot drift apart. `repo_root` is the one
 place that walk is written: every reader of the checkout in this package
 derives from it rather than finding the root its own way.
+
+`slots` is the one place a checkout's `.credentials/` is formed from the
+checkout: `directory` goes through it, and so does every reader handed a
+checkout rather than finding its own. That is a property of this package
+rather than a style, because the test harness closes the layer by replacing
+that one function (framework/testing.md §1.1).
 """
 
 from __future__ import annotations
@@ -71,9 +77,19 @@ def repo_root(module: Path = Path(__file__)) -> Path:
     raise WorkstationError(f'no mise.toml above {module}: the workstation slots are relative to a checkout')
 
 
+def slots(checkout: Path) -> Path:
+    """`checkout`'s `.credentials/`. Not created by looking at it.
+
+    Reached as an attribute of this module, never bound by name elsewhere:
+    the test harness replaces this attribute for the life of its process,
+    and a copy bound by `from`-import is one the replacement never reaches.
+    """
+    return checkout / DIRECTORY
+
+
 def directory() -> Path:
-    """`.credentials/` in the checkout. Not created by looking at it."""
-    return repo_root() / DIRECTORY
+    """`.credentials/` in the checkout this package runs from. Not created by looking at it."""
+    return slots(repo_root())
 
 
 def secret_dir(path: Path) -> Path:

@@ -1,11 +1,14 @@
-"""What every suite in this process shares: an empty environment, and a cheap KDF.
+"""What every suite in this process shares: no credential channel open, and a cheap KDF.
 
 The first is `root_credentials.strip`, called below rather than offered as a
 fixture, so that no suite can be the one that forgot to ask. What it takes is
-that module. Of the two channels it leaves open, the desktop secret store is
-closed here instead, for the whole session (`secret_store_closed`): the store
-is read and written at test time, never at import, so a fixture reaches it. The file
-layer stays each suite's own to redirect.
+that module. The two channels it leaves open are closed here as well, each
+where it is first reached. The credential file layer is closed for the whole
+process from `pytest_configure`, before any test module is collected
+(`file_layer.close`), and a case that needs a layer asks for
+`credential_files`. The desktop secret store is closed for the whole session
+(`secret_store_closed`): the store is read and written at test time, never at
+import or collection, so a fixture reaches it.
 
 The kit several suites share is `memory_kit.MemoryKit`, a kit that is not a
 file; it lives in its own module because test modules import the class
@@ -42,6 +45,7 @@ import pickle
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+import file_layer
 import pykeepass.pykeepass as pykeepass_module
 import pytest
 import root_credentials
@@ -51,12 +55,14 @@ from memory_kit import MemoryKit
 from pulumi.runtime.settings import SETTINGS
 from pykeepass import PyKeePass
 
+from kluster.lib import workstation
 from kluster.scripts.credentials import oci_iam
 from kluster.scripts.credentials.kdbx import KdbxStore
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator, Iterator
     from contextlib import AbstractContextManager
+    from pathlib import Path
 
 # At import rather than in a fixture, even a session-scoped autouse one: the
 # root `conftest` is imported before any test module, whereas the first
@@ -77,6 +83,43 @@ root_credentials.strip(os.environ)
 #: library's own template asks for 14 passes over 64 MiB in 2 lanes, which is
 #: a fifth of a second per derivation.
 FLOOR = {'I': 1, 'M': 8192, 'P': 1}
+
+
+#: Where the patch that closes the file layer is kept between the two hooks below.
+FILE_LAYER = pytest.StashKey[pytest.MonkeyPatch]()
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Close the credential file layer for the process, before any test module is collected.
+
+    In a hook rather than a fixture because collection resolves slots before
+    any fixture exists: building the `credentials` parser, as a
+    parametrization over its commands does, computes the client bundle's
+    directory for an option's default. After the environment is stripped at
+    import, so the path variables are removed from what that left.
+    """
+    patch = pytest.MonkeyPatch()
+    config.stash[FILE_LAYER] = patch
+    file_layer.close(patch)
+
+
+def pytest_unconfigure(config: pytest.Config) -> None:
+    """Open the file layer again, as the process was before `pytest_configure`."""
+    patch = config.stash.get(FILE_LAYER, None)
+    if patch is not None:
+        patch.undo()
+
+
+@pytest.fixture
+def credential_files(tmp_path: Path) -> Iterator[Path]:
+    """The running checkout's `.credentials/` as `tmp_path / '.credentials'`, for every reader, for the case.
+
+    Not created by asking for it, as `workstation.directory()` creates
+    nothing. A fixture wider than a case opens the same block,
+    `file_layer.opened`, on a directory from `tmp_path_factory`.
+    """
+    with file_layer.opened(tmp_path / workstation.DIRECTORY) as directory:
+        yield directory
 
 
 @pytest.fixture

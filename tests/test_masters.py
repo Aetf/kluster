@@ -24,18 +24,15 @@ from kluster.scripts.credentials import devices, kdbx, masters, workstation
 
 
 @pytest.fixture(autouse=True)
-def local(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """The file layer, moved out of the checkout.
+def local(credential_files: Path) -> Path:
+    """A file layer of the case's own, where the running checkout's is closed.
 
-    `workstation` resolves `.credentials/` from its own `__file__`, so without
-    this a test would read — and `forget` would delete — whatever the operator
-    running it happens to keep there. The environment layer needs nothing here:
-    `root_credentials` empties it for the whole process, which is why the cases
-    below that want a variable set it themselves.
+    The cases below write roots and `forget` deletes them, so each needs a
+    layer that holds what it put there. The environment layer needs nothing
+    here: `root_credentials` empties it for the whole process, which is why the
+    cases below that want a variable set it themselves.
     """
-    directory = tmp_path / '.credentials'
-    monkeypatch.setattr(workstation, 'directory', lambda: directory)
-    return directory
+    return credential_files
 
 
 @pytest.fixture

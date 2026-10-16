@@ -23,7 +23,7 @@ from memory_keyring import MemoryKeyring, installed
 from memory_kit import MemoryKit
 
 from kluster.lib import acquisition, stack_environment
-from kluster.scripts.credentials import age, cli, entries, escrow, pki, workstation
+from kluster.scripts.credentials import age, cli, entries, escrow, pki
 from kluster.scripts.credentials.kdbx import KdbxStore
 
 
@@ -997,16 +997,14 @@ def test_a_rotated_pin_names_the_generation_before_it(monkeypatch: pytest.Monkey
 
 
 def _recover_the_operator_passphrase(
-    kit: KdbxStore, vault: escrow.Vault, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    kit: KdbxStore, vault: escrow.Vault, directory: Path, monkeypatch: pytest.MonkeyPatch
 ) -> tuple[str, Path]:
     """`derived operator-passphrase recover` against this kit and escrow; the value filed, and its slot.
 
-    The slot directory is moved under `tmp_path`, so the run writes nothing
-    into the checkout the suite runs from.
+    `directory` is the case's `credential_files`, the layer the run writes
+    the slot into where the running checkout's is closed.
     """
     filed = escrow.generate(vault, escrow.OPERATOR_PASSPHRASE)
-    directory = tmp_path / '.credentials'
-    monkeypatch.setattr(workstation, 'directory', lambda: directory)
 
     def opened(_cls: type[KdbxStore], _path: Path | None = None) -> KdbxStore:
         return kit
@@ -1020,11 +1018,11 @@ def _recover_the_operator_passphrase(
 
 
 def test_the_operator_passphrase_is_recovered_into_the_secret_store(
-    kit: KdbxStore, vault: escrow.Vault, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    kit: KdbxStore, vault: escrow.Vault, credential_files: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The store is the chain's first layer, so a machine that has one keeps the passphrase there and nowhere else."""
     with installed(MemoryKeyring()) as store:
-        filed, slot = _recover_the_operator_passphrase(kit, vault, tmp_path, monkeypatch)
+        filed, slot = _recover_the_operator_passphrase(kit, vault, credential_files, monkeypatch)
 
     assert isinstance(store, MemoryKeyring)
     assert store.items == {(acquisition.KEYRING_SERVICE, stack_environment.OPERATOR_PASSPHRASE_ACCOUNT): filed}
@@ -1032,11 +1030,11 @@ def test_the_operator_passphrase_is_recovered_into_the_secret_store(
 
 
 def test_the_operator_passphrase_goes_to_its_slot_on_a_machine_with_no_store(
-    kit: KdbxStore, vault: escrow.Vault, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    kit: KdbxStore, vault: escrow.Vault, credential_files: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The slot is the chain's file layer: where the value lives when the store is not there to take it."""
     with installed(fail_keyring.Keyring()):
-        filed, slot = _recover_the_operator_passphrase(kit, vault, tmp_path, monkeypatch)
+        filed, slot = _recover_the_operator_passphrase(kit, vault, credential_files, monkeypatch)
 
     assert slot.read_text() == filed + '\n'
     assert slot.stat().st_mode & 0o777 == 0o600

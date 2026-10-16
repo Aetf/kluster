@@ -7,9 +7,9 @@ process the suite is running in, which is why one case reads `os.environ`
 directly rather than a copy of it.
 
 What is *not* here is the file layer and the secret store, which the same
-credentials arrive through and which this mechanism does not close;
-`root_credentials` and `docs/framework/testing.md` §1.1 say why and what
-stands in for it.
+credentials arrive through and which this mechanism does not close; each is
+closed where it is first reached, and held by `test_harness_isolation.py`.
+`root_credentials` and `docs/framework/testing.md` §1.1 say why.
 """
 
 from __future__ import annotations
@@ -88,8 +88,8 @@ def test_every_variable_mise_sets_is_masked_or_deliberately_not() -> None:
     Read against `[env]` rather than against the `redactions` list beside it:
     that list is maintained by hand, so a secret added to `[env]` and
     forgotten there would be both un-redacted by mise and unmasked here, with
-    nothing red. Every key has to land in one of the two sets, which makes a
-    new one a decision somebody takes rather than an omission.
+    nothing red. Every key has to land in one of `root_credentials`' verdicts,
+    which makes a new one a decision somebody takes rather than an omission.
     """
     materialized = set(tomllib.loads(MISE.read_text())['env'])
 
@@ -104,8 +104,8 @@ def test_the_variables_left_unmasked_carry_paths_rather_than_values() -> None:
     A path in a failed assertion discloses where key material lives, not the
     material; a value would be the disclosure this module exists to prevent.
     So neither exempt set may overlap the masked one: the paths are the ones
-    the suites redirect rather than blank, and the settings carry no secret
-    at all.
+    the file layer's closure removes rather than blanks, and the settings
+    carry no secret at all.
     """
     assert root_credentials.MASKED & root_credentials.UNMASKED_PATHS == frozenset()  # noqa: SIM300 -- the overlap is the subject
     assert root_credentials.MASKED & root_credentials.UNMASKED_SETTINGS == frozenset()  # noqa: SIM300 -- the overlap is the subject
