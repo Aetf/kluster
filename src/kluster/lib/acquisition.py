@@ -88,11 +88,11 @@ def store(account: str, secret: str) -> None:
 def unstore(account: str) -> bool:
     """Remove what the store holds under `account`; whether it held anything there to remove."""
     import keyring
-    import keyring.errors
+    from keyring import errors as keyring_errors
 
     try:
         keyring.delete_password(KEYRING_SERVICE, account)
-    except keyring.errors.PasswordDeleteError:
+    except keyring_errors.PasswordDeleteError:
         return False
     log.info('removed %s from the secret store', account)
     return True

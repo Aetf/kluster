@@ -14,9 +14,9 @@ import types
 from collections.abc import Callable
 from pathlib import Path
 
-import keyring.errors
 import pytest
 from credentials_command_tree import named_commands
+from keyring import errors as keyring_errors
 
 from kluster.scripts.credentials import kdbx, workstation
 from kluster.scripts.credentials.kdbx import KEYRING_SERVICE, PATH_ENV, KdbxStore
@@ -47,7 +47,7 @@ def secret_store(monkeypatch: pytest.MonkeyPatch) -> dict[tuple[str, str], str]:
 
     def delete_password(service: str, account: str) -> None:
         if stored.pop((service, account), None) is None:
-            raise keyring.errors.PasswordDeleteError(account)
+            raise keyring_errors.PasswordDeleteError(account)
 
     monkeypatch.setattr('keyring.get_password', get_password)
     monkeypatch.setattr('keyring.set_password', set_password)
