@@ -26,6 +26,7 @@ import datetime as dt
 import io
 import json
 import logging
+import os
 import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -43,9 +44,10 @@ from cryptography.x509.oid import NameOID
 from fake_pulumi import RecordedPulumi
 from memory_kit import MemoryKit
 from pulumi.runtime import rpc
-from scratch_projects import cli_directories
+from scratch_projects import cli_directories, scrubbed
 
 from kluster import conventions
+from kluster.lib import pulumi_cli
 from kluster.scripts.credentials import cloudflare, derived, devices, pulumi_config, sealing
 from kluster.scripts.credentials.kdbx import KdbxStore
 from kluster.scripts.credentials.pulumi_config import SlotRefused
@@ -246,7 +248,7 @@ def test_a_seal_refuses_data_whose_keys_are_not_the_rows(sealer: sealing.Sealer)
     value = conventions.sealed.DNS01_TOKEN
 
     with pytest.raises(SlotRefused, match=value.name):
-        _ = sealer.seal(value, {'token': 'a-value'})
+        _ = sealer.seal(value, {f'not-{key}': 'a-value' for key in value.keys})
 
 
 # -- writing ------------------------------------------------------------------
@@ -320,6 +322,16 @@ def shaped_like_kubeseal(args: Sequence[str], *, stdin: str | None) -> str:
     return SHAPED_LIKE_A_SEAL
 
 
+#: The bound the real-CLI case below runs under. Each `pulumi` command it
+#: starts is bounded by `pulumi_cli.TIMEOUT`, so the case's own bound sits
+#: above that rather than at the suite's, and a stalled command fails as a
+#: `TimeoutExpired` naming it (testing.md §8). Each row took 0.4 to 0.5 s
+#: under the suite's four workers, and 2.5 s on a loaded machine. A
+#: stop-loss; nothing asserts on elapsed time.
+REAL_CLI_CASE_TIMEOUT = 2 * pulumi_cli.TIMEOUT
+
+
+@pytest.mark.timeout(REAL_CLI_CASE_TIMEOUT)
 @pytest.mark.parametrize('value', conventions.sealed.VALUES.values(), ids=conventions.sealed.VALUES)
 def test_the_write_is_held_to_what_the_real_cli_accepts(
     value: conventions.sealed.SealedValue, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -338,6 +350,11 @@ def test_the_write_is_held_to_what_the_real_cli_accepts(
     _ = (project / 'Pulumi.yaml').write_text('name: sealing-probe\nruntime: python\n')
     state = tmp_path / 'state'
     state.mkdir()
+    # The CLI's environment is the stack's overlaid on the caller's, so the
+    # run's own `PULUMI_`/`PG` variables are taken out of the caller's first:
+    # the CLI sees only what this case sets (testing.md §8).
+    for name in set(os.environ) - set(scrubbed(os.environ)):
+        monkeypatch.delenv(name)
     for variable, directory in cli_directories(tmp_path).items():
         monkeypatch.setenv(variable, directory)
     monkeypatch.setenv('PULUMI_SKIP_UPDATE_CHECK', 'true')
@@ -351,7 +368,7 @@ def test_the_write_is_held_to_what_the_real_cli_accepts(
     sealer.deliver(value, dict.fromkeys(value.keys, 'a-value'))
 
     committed = (project / f'Pulumi.{value.stack}.yaml').read_text()
-    assert 'sealing-probe:sealedSecrets:' in committed
+    assert f'sealing-probe:{conventions.sealed.CONFIG_KEY}:' in committed
     assert 'secure:' not in committed
     printed = json.loads(
         pulumi_config.run_pulumi(
@@ -432,8 +449,19 @@ def _dns01_live(api: FakeApi) -> list[str]:
 
 
 def test_the_dns01_token_is_scoped_to_the_served_zones_and_sealed_for_the_issuer(
-    api: FakeApi, kit: KdbxStore, sealer: sealing.Sealer, stacks: Stacks, kubeseal: str, key_pair: KeyPair
+    api: FakeApi,
+    kit: KdbxStore,
+    sealer: sealing.Sealer,
+    stacks: Stacks,
+    kubeseal: str,
+    key_pair: KeyPair,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # One route, in one zone of several: the census this case reads is the
+    # one it sets up, so a route added elsewhere is not its premise.
+    monkeypatch.setattr(
+        conventions.routes, 'ROUTES', (conventions.routes.Route(host='www', zones=(conventions.ZONE_PRIMARY,)),)
+    )
     value = conventions.sealed.DNS01_TOKEN
 
     token_id = derived.cloudflare_dns01(kit, sealer=sealer)
@@ -458,7 +486,7 @@ def test_a_route_in_another_zone_widens_the_dns01_token_to_it(
     key_pair: KeyPair,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    second = 'unlimitedcodeworks.xyz'
+    second = next(zone for zone in conventions.ALL_ZONES if zone != conventions.ZONE_PRIMARY)
     monkeypatch.setattr(conventions.routes, 'ROUTES', (conventions.routes.Route(host='www', zones=(second,)),))
     value = conventions.sealed.DNS01_TOKEN
 
@@ -596,7 +624,7 @@ def test_seal_before_the_password_is_recorded_names_the_command_that_records_it(
 def test_alertmanagers_webhook_is_sealed_and_written_nowhere_else(
     stacks: Stacks, sealer: sealing.Sealer, kubeseal: str, key_pair: KeyPair, tmp_path: Path
 ) -> None:
-    record = devices.SEALED_RECORDS['alert-webhook']
+    (record,) = [row for row in devices.SEALED_RECORDS.values() if row.sealed == conventions.sealed.ALERT_WEBHOOK]
     url = tmp_path / 'url'
     _ = url.write_text('https://home.example/api/webhook/an-id\n')
 
@@ -611,7 +639,7 @@ def test_alertmanagers_webhook_is_sealed_and_written_nowhere_else(
 
 # -- the mail relay's DKIM key --------------------------------------------------
 
-DKIM = devices.SEALED_RECORDS['dkim-exim']
+(DKIM,) = [row for row in devices.SEALED_RECORDS.values() if row.sealed == conventions.sealed.DKIM_EXIM]
 APPS = conventions.STACK_NAMES.apps
 
 
