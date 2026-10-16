@@ -66,8 +66,8 @@ that speaks the k8s API, consumed by `apps`.
     context, empty at its pin, is the instance, and the component sets
     it), and takes `baseline`, with the reason, only where the chart
     does not (rfc-007 §8). Every such namespace is created through
-    `kluster.lib.k8s.namespace`, which takes the level as a required
-    argument.
+    `kluster.lib.k8s.namespace`, which gives it `restricted` unless the
+    declaration names a looser level with its reason (`LooserLevel`).
 
 ## 1. Install order
 

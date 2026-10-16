@@ -16,7 +16,7 @@ from collections.abc import Sequence
 
 import pulumi
 
-from kluster.lib.k8s import PodSecurity, helm_chart, namespace
+from kluster.lib.k8s import helm_chart, namespace
 from kluster.lib.versions import ChartPin
 from putils import Component
 
@@ -46,9 +46,7 @@ class VolSync(Component, pulumi_type='kluster:backup:VolSync'):
         super().__init__(name, opts=opts)
         behind = self.child_opts(depends_on=list(after))
 
-        self.namespace = namespace(
-            f'{name}-namespace', name=NAMESPACE, pod_security=PodSecurity.RESTRICTED, opts=behind
-        )
+        self.namespace = namespace(f'{name}-namespace', name=NAMESPACE, opts=behind)
         self.chart = helm_chart(name, pin=chart, namespace=self.namespace.metadata.name, opts=behind)
 
         self.register_outputs({})

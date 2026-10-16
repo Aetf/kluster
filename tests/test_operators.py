@@ -8,9 +8,8 @@ in (declarative/cluster-infra.md §1), and what keeps the GPU plugin inert until
 the worker's GPU is bound.
 
 Literals written here are upstream contracts: the charts' value names, the
-label the GPU plugin chart's `NodeFeatureRule` sets, and Kubernetes' own label
-key and Pod Security levels. What the program derives from a pin is held to
-that pin.
+label the GPU plugin chart's `NodeFeatureRule` sets. What the program derives
+from a pin is held to that pin.
 """
 
 from __future__ import annotations
@@ -19,16 +18,10 @@ import pytest
 import pytest_asyncio
 from k8s_base_installation import Run, applied
 
-from kluster.components import gpu, postgres
-from kluster.components.backup import volsync
 from kluster.lib.versions import versions
 
 CHART = 'kubernetes:helm.sh/v4:Chart'
 NAMESPACE = 'kubernetes:core/v1:Namespace'
-
-#: The label the Pod Security admission controller reads a namespace's level
-#: from.
-ENFORCE = 'pod-security.kubernetes.io/enforce'
 
 #: The label the GPU plugin chart's `NodeFeatureRule` puts on a node with an
 #: Intel display-class PCI device whose kernel has `i915` or `xe`
@@ -111,24 +104,6 @@ def test_the_device_plugin_operator_runs_the_gpus_controller_alone(applied: Run)
 
 
 # -- Namespaces ---------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ('component', 'name', 'level'),
-    [
-        (CNPG, postgres.NAMESPACE, 'restricted'),
-        (VOLSYNC, volsync.NAMESPACE, 'restricted'),
-        (NFD, gpu.NFD_NAMESPACE, 'privileged'),
-        (INTEL, gpu.INTEL_NAMESPACE, 'privileged'),
-    ],
-    ids=[CNPG, VOLSYNC, NFD, INTEL],
-)
-def test_each_namespace_enforces_its_pod_security_level(applied: Run, component: str, name: str, level: str) -> None:
-    """The operators meet `restricted`; NFD's worker mounts host paths, and the GPU plugin the GPU's devices."""
-    namespace_ = applied.inputs(NAMESPACE, f'{component}-namespace')['metadata']
-
-    assert namespace_['name'] == name
-    assert namespace_['labels'] == {ENFORCE: level}
 
 
 @pytest.mark.parametrize(

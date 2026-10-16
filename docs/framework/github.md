@@ -214,14 +214,24 @@ identity — slug and client id, `conventions.forge.App` — and which
 repositories it is installed on, recorded on each repository's row: a
 variable that hands an App's client id to a token mint is a mint that
 fails unless the App is installed there, and a test holds the two
-fields of the row to each other.
+fields of the row to each other. And a row says whether a workflow
+merges its pull requests with nobody there — today `noop-automerge`
+on `kluster` (ci.md §3) — as `unattended_merges`: the reason, or none
+where every merge is a person's. A repository whose row gives a
+reason is offered auto-merge, which queues a merge behind the checks,
+and branch updating, which brings a pull request up to date without a
+human; one whose row gives none is offered neither.
 
 **A row carries what defines the entry, not what GitHub stores about
 it.** The credential partition is defined in exactly these terms
 (ci.md §3), which is why the branch policy and the gate are census
 fields; what the stack program keeps is the repositories' own settings,
 which define no entry and which nothing else reads — the required check
-names, the descriptions, and the merge-strategy flags.
+names and the descriptions — and the posture every repository shares.
+That posture is written refusing in `components/forge`: a merge method,
+a bypass, a force push or a deletion is allowed only where the
+component's `ALLOWED` table names it beside its reason, so a loosening
+is one line in that table.
 
 Two things follow from the table's shape. Whether the plan offers a
 repository the public-only features of §2 is *derived* from its
