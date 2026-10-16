@@ -30,6 +30,7 @@ can once it is removed rather than overridden.
 
 from __future__ import annotations
 
+import enum
 import getpass
 import sys
 from collections.abc import Callable, Mapping
@@ -109,6 +110,28 @@ class EnvironmentRefused(pulumi_cli.PulumiRefused):
     start, so a caller that already turns that one into its own terms turns
     this one too.
     """
+
+
+class Unanswered(enum.Enum):
+    """How the prompt for the operator passphrase went, when no layer of the chain held it."""
+
+    #: Nobody was at a terminal to ask.
+    NOBODY = 'nobody'
+    #: The prompt was answered with nothing.
+    EMPTY = 'empty'
+
+
+class NoOperatorPassphrase(EnvironmentRefused):
+    """No layer of the chain holds the operator passphrase, and the prompt brought none.
+
+    `asked` says how the prompt went: an empty answer is refused rather than
+    handed to `pulumi`, which would refuse it by the stack file's salt or, in a
+    file that has lost its salt, adopt it as the new key (credentials.md §4.2).
+    """
+
+    def __init__(self, message: str, *, asked: Unanswered) -> None:
+        super().__init__(message)
+        self.asked: Unanswered = asked
 
 
 def home(stack: str) -> identity.StateHome | None:
@@ -197,11 +220,14 @@ def operator_passphrase(checkout: Path, ask: Ask = ask_on_a_terminal) -> str:
     answer = ask('the operator passphrase, which no layer of the chain holds on this machine: ')
     if answer is not None and answer.strip():
         return answer.strip()
-    raise EnvironmentRefused(
+    asked = Unanswered.NOBODY if answer is None else Unanswered.EMPTY
+    prompt = 'nobody answered the prompt' if asked is Unanswered.NOBODY else 'the prompt was answered with nothing'
+    raise NoOperatorPassphrase(
         f'no operator passphrase on this machine: not in the desktop secret store, not in {slot}, not in '
-        f'{OPERATOR_PASSPHRASE_ENV}, and nobody answered the prompt. `credentials derived '
+        f'{OPERATOR_PASSPHRASE_ENV}, and {prompt}. `credentials derived '
         f'{OPERATOR_PASSPHRASE_ROW} recover` puts it in the store, or in the slot where there is no store, '
-        'on a machine that holds the kit'
+        'on a machine that holds the kit',
+        asked=asked,
     )
 
 

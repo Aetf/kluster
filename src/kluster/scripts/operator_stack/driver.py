@@ -30,6 +30,7 @@ What every run shares (framework/pulumi.md §3.3):
 
 from __future__ import annotations
 
+import enum
 import json
 import logging
 import os
@@ -77,8 +78,60 @@ NO_CHANGE = frozenset({'same', 'read', 'discard', 'read-replacement'})
 STREAMING_JSON_ENV = 'PULUMI_ENABLE_STREAMING_JSON_PREVIEW'
 
 
+#: The attribute of the log record that holds a box back: the movements it
+#: would make, as `appliance.Movement`s.
+HELD = 'held'
+
+#: The attribute of the log record that reports a finding: the
+#: `checkpoint.Finding` itself.
+FOUND = 'found'
+
+
+class Why(enum.Enum):
+    """Why the driver refused a run."""
+
+    #: A `pulumi` query the driver needed an answer from failed.
+    PULUMI_FAILED = 'pulumi failed'
+    #: The preview itself exited non-zero.
+    PREVIEW_FAILED = 'preview failed'
+    #: A line of the preview is not an engine event.
+    PREVIEW_NOT_EVENTS = 'preview not events'
+    #: The preview recorded no summary of its steps.
+    PREVIEW_UNSUMMARIZED = 'preview unsummarized'
+    #: The preview's summary is not a count by operation.
+    PREVIEW_UNCOUNTED = 'preview uncounted'
+    #: The preview's summary counts no step at all.
+    PREVIEW_COUNTS_NOTHING = 'preview counts nothing'
+    #: The preview names changing steps that its summary does not count.
+    PREVIEW_DISAGREES = 'preview disagrees'
+    #: The run was started under a `.claude/` directory, where workspaces live.
+    UNDER_WORKSPACES = 'under workspaces'
+    #: `--force` or `--replace` was given for a stack that holds no box.
+    NO_BOX = 'no box'
+    #: The preview creates a box beside a reserved address the state does not hold.
+    BESIDE_HELD_ADDRESS = 'beside held address'
+    #: The preview replaces a resource the program imports by id.
+    REPLACES_AN_IMPORT = 'replaces an import'
+    #: A passthrough named no `pulumi` command first.
+    NO_COMMAND = 'no command'
+    #: A passthrough named a stack, or may have.
+    NAMES_A_STACK = 'names a stack'
+    #: A passthrough would import into a stack whose state is committed.
+    IMPORTS_UNMARKED = 'imports unmarked'
+
+
 class Refused(RuntimeError):
-    """The run would not start, or `pulumi` failed where the driver needed an answer."""
+    """The run would not start, or `pulumi` failed where the driver needed an answer.
+
+    `why` says which: one of the driver's own reasons, or, for a working copy
+    a run may not start from, the checkpoint check's, with its `remedy` as
+    the commands that clear it.
+    """
+
+    def __init__(self, message: str, *, why: Why | checkpoint.Unready, remedy: checkpoint.Remedy = ()) -> None:
+        super().__init__(message)
+        self.why: Why | checkpoint.Unready = why
+        self.remedy: checkpoint.Remedy = remedy
 
 
 class Pulumi(Protocol):
@@ -199,7 +252,10 @@ class Cli:
         if completed.returncode != 0:
             # Standard error, never standard output: every query here is one
             # whose output carries secrets.
-            raise Refused(f'`pulumi {" ".join(args[:2])}` failed: {completed.stderr.strip() or completed.returncode}')
+            raise Refused(
+                f'`pulumi {" ".join(args[:2])}` failed: {completed.stderr.strip() or completed.returncode}',
+                why=Why.PULUMI_FAILED,
+            )
         return completed.stdout
 
 
@@ -329,7 +385,8 @@ def read_preview(printed: str) -> Preview:
             event = cast('dict[str, Any]', json.loads(line))
         except ValueError as exc:
             raise Refused(
-                f'line {number} of the preview is not an engine event, so what it planned is unknown'
+                f'line {number} of the preview is not an engine event, so what it planned is unknown',
+                why=Why.PREVIEW_NOT_EVENTS,
             ) from exc
         if (pre := event.get('resourcePreEvent')) is not None:
             metadata = cast('dict[str, Any]', pre.get('metadata') or {})
@@ -363,14 +420,22 @@ def read_preview(printed: str) -> Preview:
         if (ended := event.get('summaryEvent')) is not None:
             summary = cast('dict[str, Any]', ended).get('resourceChanges')
     if summary is None:
-        raise Refused('the preview recorded no summary of its steps, so what it planned is unknown')
+        raise Refused(
+            'the preview recorded no summary of its steps, so what it planned is unknown', why=Why.PREVIEW_UNSUMMARIZED
+        )
     if not isinstance(summary, dict) or not all(
         isinstance(count, int) for count in cast('dict[str, object]', summary).values()
     ):
-        raise Refused(f'the preview summarized its steps as {summary!r}, which is not a count by operation')
+        raise Refused(
+            f'the preview summarized its steps as {summary!r}, which is not a count by operation',
+            why=Why.PREVIEW_UNCOUNTED,
+        )
     changes = cast('dict[str, int]', summary)
     if sum(changes.values()) == 0:
-        raise Refused('the preview counted no step at all, not even the stack, so what it planned is unknown')
+        raise Refused(
+            'the preview counted no step at all, not even the stack, so what it planned is unknown',
+            why=Why.PREVIEW_COUNTS_NOTHING,
+        )
     preview = Preview(
         changes=changes,
         steps=tuple(steps),
@@ -384,7 +449,9 @@ def read_preview(printed: str) -> Preview:
     )
     changing = [step for step in steps if step[0] not in NO_CHANGE]
     if changing and not any(count for op, count in changes.items() if op not in NO_CHANGE):
-        raise Refused(f'the preview names {len(changing)} changing steps and its summary counts none')
+        raise Refused(
+            f'the preview names {len(changing)} changing steps and its summary counts none', why=Why.PREVIEW_DISAGREES
+        )
     return preview
 
 
@@ -429,7 +496,8 @@ class Run:
         if '.claude' in checkout.absolute().parts:
             raise Refused(
                 f'{checkout} is under a .claude/ directory, which is where jj workspaces live: the slots do not '
-                'answer there. Run from the checkout that holds .credentials/.'
+                'answer there. Run from the checkout that holds .credentials/.',
+                why=Why.UNDER_WORKSPACES,
             )
         if stack == appliance.STACK and 'gate' not in overrides:
             overrides['gate'] = appliance.Gate.for_checkout(checkout)
@@ -497,7 +565,8 @@ class Run:
         """
         if (force or replace) and self.gate is None:
             raise Refused(
-                f'--force and --replace hold a replacement of the state-backend box; the {self.stack} stack has none'
+                f'--force and --replace hold a replacement of the state-backend box; the {self.stack} stack has none',
+                why=Why.NO_BOX,
             )
         self._require_current()
         if self.gate is not None:
@@ -511,18 +580,22 @@ class Run:
         recorded = self._recorded()
         if self.gate is not None:
             if (beside := appliance.creates_beside_held_address(preview)) is not None:
-                raise Refused(beside)
+                raise Refused(beside, why=Why.BESIDE_HELD_ADDRESS)
             if refused := appliance.imported_replacements(preview):
-                raise Refused(appliance.refuse_imported_replacements(refused))
+                raise Refused(appliance.refuse_imported_replacements(refused), why=Why.REPLACES_AN_IMPORT)
             self.gate.report(preview)
             box = appliance.box_steps(preview)
             if box and not (force or replace):
+                movements = appliance.moved(box)
+                # The record carries what the box would move for, as well as
+                # saying it: a reader acts on the kind, not on the words.
                 log.error(
                     'this run would create, replace or delete the %s box, for %s; nothing is applied. `%s` is the run '
                     'that does, dumping the box before it goes and restoring into the new one',
                     self.stack,
-                    ', '.join(appliance.moved(box)),
+                    ', '.join(map(str, movements)),
                     permission.REMEDY,
+                    extra={HELD: tuple(movements)},
                 )
                 return PLANNED
         if not preview.planned and recorded is None:
@@ -545,20 +618,24 @@ class Run:
         """`pulumi <args>` against this stack, under its environment."""
         if not args or args[0].startswith('-'):
             raise Refused(
-                f'name the pulumi command first, as in `operator-stack {self.stack} pulumi stack --show-urns`'
+                f'name the pulumi command first, as in `operator-stack {self.stack} pulumi stack --show-urns`',
+                why=Why.NO_COMMAND,
             )
         flags = _flags(args)
         words = _words(args)
         copies = words[0] == 'config' and 'cp' in words[1:]
         for arg in flags:
             if _names_a_stack(arg) or (copies and _names_a_destination(arg)):
-                raise Refused(f'`{arg}` names a stack, or may: this run is against {self.stack} alone')
+                raise Refused(
+                    f'`{arg}` names a stack, or may: this run is against {self.stack} alone', why=Why.NAMES_A_STACK
+                )
         imports = words[0] == 'import' or (words[0] == 'stack' and 'import' in words[1:])
         if self.committed and imports:
             raise Refused(
                 f'the {self.stack} stack keeps its state in this repository, and `pulumi {" ".join(args)}` '
                 "would record what it brings in without the program's secret markings: import through the "
-                "program's `import_` option"
+                "program's `import_` option",
+                why=Why.IMPORTS_UNMARKED,
             )
         self._require_current()
         return self._write(list(args))
@@ -577,7 +654,7 @@ class Run:
             try:
                 checkpoint.require_current(self.checkout, stack_environment.checkpoint(self.checkout, self.stack))
             except checkpoint.CheckRefused as exc:
-                raise Refused(str(exc)) from exc
+                raise Refused(str(exc), why=exc.why, remedy=exc.remedy) from exc
 
     def _settle(self, code: int) -> int:
         """`code`, unless the gate reads the estate's backend as owed a restore or not answering.
@@ -612,7 +689,7 @@ class Run:
             doing=doing,
         )
         if code != 0:
-            raise Refused(f'the preview of the {self.stack} stack failed (exit {code})')
+            raise Refused(f'the preview of the {self.stack} stack failed (exit {code})', why=Why.PREVIEW_FAILED)
         preview = read_preview(printed)
         show(preview)
         return preview
@@ -653,9 +730,7 @@ class Run:
         code = self.pulumi.stream(self._with_stack(args), cwd=self.checkout, env=env, doing=doing)
         log.info('checking the %s checkpoint', self.stack)
         findings = [
-            checkpoint.Finding(
-                str(stray.relative_to(self.checkout)), 'is not a file the checks read, and must not be pushed'
-            )
+            checkpoint.Finding(str(stray.relative_to(self.checkout)), checkpoint.Kind.STRAY)
             for stray in checkpoint.strays(self.checkout, self.stack)
         ]
         path = stack_environment.checkpoint(self.checkout, self.stack)
@@ -669,7 +744,7 @@ class Run:
         if findings:
             _ = record.write_text(''.join(f'{finding}\n' for finding in findings))
             for finding in findings:
-                log.error('%s', finding)
+                log.error('%s', finding, extra={FOUND: finding})
             log.error(
                 'the %s checkpoint must not be pushed as it stands. Mark each property above secret in the program, '
                 'remove each stray file, and run `operator-stack %s up`: it checks again even with nothing planned '
