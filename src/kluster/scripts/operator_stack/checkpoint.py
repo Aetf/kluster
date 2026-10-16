@@ -26,7 +26,9 @@ file is still private:
 from __future__ import annotations
 
 import copy
+import enum
 import json
+import shlex
 import subprocess as sp
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -56,16 +58,93 @@ SHORTEST = 8
 TIMEOUT = 60
 
 
+class Unready(enum.Enum):
+    """Why a working copy is not one a run of this stack may start from."""
+
+    #: The forge's `main` answered with no commit.
+    NO_MAIN = 'no main'
+    #: The forge's `main` is not in this repository.
+    MAIN_NOT_FETCHED = 'main not fetched'
+    #: The forge's `main` is fetched and the working copy is not on it.
+    BEHIND_MAIN = 'behind main'
+    #: The checkpoint holds conflict markers.
+    CONFLICTED = 'conflicted'
+    #: A `git` or `jj` query failed, a stale working copy among them.
+    UNREADABLE = 'unreadable'
+
+
+#: A remedy: the commands that clear a refusal, in the order they run.
+Remedy = tuple[tuple[str, ...], ...]
+
+
+def spelled(remedy: Remedy) -> str:
+    """`remedy` as a refusal's sentence names it: each command in backticks, in order."""
+    return ', then '.join(f'`{shlex.join(command)}`' for command in remedy)
+
+
 class CheckRefused(RuntimeError):
-    """The working copy is not one a run of this stack may start from."""
+    """The working copy is not one a run of this stack may start from.
+
+    `why` says which, and `remedy` is what clears it, as commands rather than
+    words, so a reader can run them and a case can hold them to the tool's own
+    grammar. The message names the same commands, spelled from `remedy`.
+    """
+
+    def __init__(self, message: str, *, why: Unready, remedy: Remedy = ()) -> None:
+        super().__init__(message)
+        self.why: Unready = why
+        self.remedy: Remedy = remedy
+
+
+class Kind(enum.Enum):
+    """What a finding says the checkpoint would publish."""
+
+    #: A secret's value, outside any ciphertext envelope.
+    CLEARTEXT = 'cleartext'
+    #: An input named in `additionalSecretOutputs` that is not ciphertext.
+    DECLARED_INPUT = 'declared input'
+    #: An output named in `additionalSecretOutputs` that is not ciphertext.
+    DECLARED_OUTPUT = 'declared output'
+    #: An output whose input of the same name holds ciphertext, and which does not.
+    CARRIED = 'carried'
+    #: A secret envelope holding its plaintext rather than a ciphertext.
+    PLAINTEXT = 'plaintext'
+    #: A file for the stack the checks do not read.
+    STRAY = 'stray'
 
 
 @dataclass(frozen=True)
 class Finding:
-    """A property of the checkpoint that must not be published as it stands."""
+    """A property of the checkpoint that must not be published as it stands.
+
+    `where` names the place; `sources`, for cleartext, names whose values are
+    there; `input_to_mark` names the program's input that clears it, passed
+    whole as a secret: that input is one envelope at the next write, and the
+    engine then wraps the output of its name too (framework/pulumi.md §3.3).
+    """
 
     where: str
-    what: str
+    kind: Kind
+    sources: tuple[str, ...] = ()
+    input_to_mark: str | None = None
+
+    @property
+    def what(self) -> str:
+        """The finding as the operator reads it."""
+        match self.kind:
+            case Kind.CLEARTEXT:
+                said = f'holds the value of {", ".join(self.sources)} in the clear'
+            case Kind.DECLARED_INPUT | Kind.DECLARED_OUTPUT:
+                said = 'is named in additionalSecretOutputs and is not ciphertext'
+            case Kind.CARRIED:
+                said = 'holds ciphertext as an input and is not ciphertext as an output'
+            case Kind.PLAINTEXT:
+                said = 'is a secret envelope holding its plaintext'
+            case Kind.STRAY:
+                said = 'is not a file the checks read, and must not be pushed'
+        if self.input_to_mark is not None:
+            said += f'; pass the input `{self.input_to_mark}` whole as `pulumi.Output.secret(...)`'
+        return said
 
     def __str__(self) -> str:
         return f'{self.where}: {self.what}'
@@ -88,11 +167,14 @@ def require_current(checkout: Path, checkpoint: Path | None) -> None:
     """
     _require_ancestry(checkout)
     if checkpoint is not None and conflicted(checkpoint):
+        remedy: Remedy = (('jj', 'restore', '--from', 'main', str(checkpoint.relative_to(checkout))),)
         raise CheckRefused(
             f"{checkpoint} is conflicted: two runs wrote it from one base. Keep main's side "
-            f'(`jj restore --from main {checkpoint.relative_to(checkout)}`), run a refreshed `plan`, and bring in '
+            f'({spelled(remedy)}), run a refreshed `plan`, and bring in '
             "through the program's `import_` what the other run created, or delete it by hand. An instance "
-            'the other run created is terminated by hand, never imported.'
+            'the other run created is terminated by hand, never imported.',
+            why=Unready.CONFLICTED,
+            remedy=remedy,
         )
 
 
@@ -107,7 +189,9 @@ def _require_ancestry(checkout: Path) -> None:
     listed = _run(['git', 'ls-remote', REMOTE, MAIN], checkout, what="reading the forge's main")
     fields = listed.split()
     if not fields:
-        raise CheckRefused(f'`git ls-remote {REMOTE} {MAIN}` names no commit, so there is no main to start from')
+        raise CheckRefused(
+            f'`git ls-remote {REMOTE} {MAIN}` names no commit, so there is no main to start from', why=Unready.NO_MAIN
+        )
     forge_main = fields[0]
     head = working_copy(checkout)
     answer = sp.run(
@@ -118,15 +202,24 @@ def _require_ancestry(checkout: Path) -> None:
         timeout=TIMEOUT,
         check=False,
     )
+    # Onto the forge's main as the remote bookmark names it, which is what was
+    # checked: a local `main` that does not track it would leave the working
+    # copy where it is.
+    rebase = ('jj', 'rebase', '-b', '@', '-d', f'main@{REMOTE}')
     if answer.returncode == 1:
+        remedy: Remedy = (rebase,)
         raise CheckRefused(
             f"the forge's main ({forge_main[:12]}) is fetched but the working copy is not on it: "
-            '`jj rebase -b @ -d main`, then run again'
+            f'{spelled(remedy)}, then run again',
+            why=Unready.BEHIND_MAIN,
+            remedy=remedy,
         )
     if answer.returncode != 0:
+        remedy = (('jj', 'git', 'fetch'), rebase)
         raise CheckRefused(
-            f"the forge's main ({forge_main[:12]}) is not in this repository: `jj git fetch`, "
-            'then `jj rebase -b @ -d main`, then run again'
+            f"the forge's main ({forge_main[:12]}) is not in this repository: {spelled(remedy)}, then run again",
+            why=Unready.MAIN_NOT_FETCHED,
+            remedy=remedy,
         )
 
 
@@ -160,7 +253,10 @@ def conflicted(checkpoint: Path) -> bool:
 def _run(command: Sequence[str], cwd: Path, *, what: str) -> str:
     completed = sp.run(list(command), cwd=cwd, capture_output=True, text=True, timeout=TIMEOUT, check=False)
     if completed.returncode != 0:
-        raise CheckRefused(f'{what} failed: `{" ".join(command)}`: {completed.stderr.strip() or completed.returncode}')
+        raise CheckRefused(
+            f'{what} failed: `{" ".join(command)}`: {completed.stderr.strip() or completed.returncode}',
+            why=Unready.UNREADABLE,
+        )
     return completed.stdout
 
 
@@ -274,7 +370,7 @@ def cleartext(document: Mapping[str, Any], secrets: Mapping[str, str]) -> list[F
         for needle, source in searched:
             if needle in text:
                 sources.setdefault(where, {})[source] = None
-    return [Finding(where, f'holds the value of {", ".join(found)} in the clear') for where, found in sources.items()]
+    return [Finding(where, Kind.CLEARTEXT, sources=tuple(found)) for where, found in sources.items()]
 
 
 def undeclared(document: Mapping[str, Any]) -> list[Finding]:
@@ -316,31 +412,18 @@ def undeclared(document: Mapping[str, Any]) -> list[Finding]:
         found: list[Finding] = []
         for key in cast('list[str]', resource.get('additionalSecretOutputs') or []):
             if key in inputs and _clear(inputs[key]):
-                found.append(
-                    Finding(
-                        f'{owner} inputs.{key}',
-                        f'is named in additionalSecretOutputs and is not ciphertext; {_REMEDY.format(key=key)}',
-                    )
-                )
+                found.append(Finding(f'{owner} inputs.{key}', Kind.DECLARED_INPUT, input_to_mark=key))
             if key in outputs and _clear(outputs[key]):
-                found.append(
-                    Finding(f'{owner} outputs.{key}', 'is named in additionalSecretOutputs and is not ciphertext')
-                )
+                found.append(Finding(f'{owner} outputs.{key}', Kind.DECLARED_OUTPUT))
         found.extend(_carried(inputs, outputs, f'{owner} outputs', None))
         found.extend(
-            Finding(where, 'is a secret envelope holding its plaintext')
+            Finding(where, Kind.PLAINTEXT)
             for where, value in _envelopes(resource, owner, '')
             if 'plaintext' in cast('dict[str, object]', value)
         )
         for finding in found:
             _ = findings.setdefault(finding.where, finding)
     return list(findings.values())
-
-
-#: How an input refusal is cleared: the input passed whole as a secret is one
-#: envelope at the next write, and the engine then wraps the output of that
-#: name too (framework/pulumi.md §3.3).
-_REMEDY = 'pass the input `{key}` whole as `pulumi.Output.secret(...)`'
 
 
 def recorded(document: Mapping[str, Any]) -> Iterator[tuple[str, dict[str, Any]]]:
@@ -371,9 +454,10 @@ def _carried(
     the same again one level down; otherwise, where the input holds
     ciphertext anywhere — an array one element of which is secret, an
     object one member of which is — the whole output is ciphertext. `top`
-    is the resource's input the walk is under, which the remedy names: the
-    engine wraps an output whole for an input of its name that is wholly
-    secret, at the top of the resource, whichever provider wrote it.
+    is the resource's input the walk is under, which the finding names as
+    its input to mark: the engine wraps an output whole for an input of its
+    name that is wholly secret, at the top of the resource, whichever
+    provider wrote it.
     """
     for key, given in inputs.items():
         if key not in outputs:
@@ -384,10 +468,7 @@ def _carried(
                 cast('dict[str, object]', given), cast('dict[str, object]', held), f'{where}.{key}', top or key
             )
         elif _clear(held) and next(_envelopes(given, '', ''), None) is not None:
-            yield Finding(
-                f'{where}.{key}',
-                'holds ciphertext as an input and is not ciphertext as an output; ' + _REMEDY.format(key=top or key),
-            )
+            yield Finding(f'{where}.{key}', Kind.CARRIED, input_to_mark=top or key)
 
 
 def _object(value: object) -> bool:

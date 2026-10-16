@@ -219,7 +219,9 @@ class FakePulumi:
         self.envs.append(dict(env))
         if args[:2] == ['stack', 'export']:
             if sum(1 for call in self.captured if call[:2] == ['stack', 'export']) == self.failing_export:
-                raise driver.Refused('`pulumi stack export` failed: the backend did not answer')
+                raise driver.Refused(
+                    '`pulumi stack export` failed: the backend did not answer', why=driver.Why.PULUMI_FAILED
+                )
             return json.dumps(self.exports.pop(0) if len(self.exports) > 1 else self.exports[0])
         if args[0] == 'config':
             return json.dumps(self.config)
@@ -378,9 +380,10 @@ def test_a_machine_without_the_operator_passphrase_is_refused_naming_the_command
     _fill_slots(checkout)
     (checkout / workstation.DIRECTORY / stack_environment.OPERATOR_PASSPHRASE_SLOT).unlink()
 
-    with pytest.raises(stack_environment.EnvironmentRefused) as refusal:
+    with pytest.raises(stack_environment.NoOperatorPassphrase) as refusal:
         _ = driver.Run.open('github', checkout, pulumi=FakePulumi(), base=AMBIENT)
 
+    assert refusal.value.asked is stack_environment.Unanswered.NOBODY
     assert named_leaves(str(refusal.value)) == [('derived', stack_environment.OPERATOR_PASSPHRASE_ROW, 'recover')]
     assert stack_environment.OPERATOR_PASSPHRASE_ENV in str(refusal.value)
 
@@ -442,9 +445,10 @@ def test_an_empty_answer_at_the_prompt_is_refused(tmp_path: Path) -> None:
     _fill_slots(checkout)
     (checkout / workstation.DIRECTORY / stack_environment.OPERATOR_PASSPHRASE_SLOT).unlink()
 
-    with pytest.raises(stack_environment.EnvironmentRefused, match='nobody answered the prompt') as refusal:
+    with pytest.raises(stack_environment.NoOperatorPassphrase) as refusal:
         _ = stack_environment.operator_passphrase(checkout, lambda _question: '  ')
 
+    assert refusal.value.asked is stack_environment.Unanswered.EMPTY
     assert named_leaves(str(refusal.value)) == [('derived', stack_environment.OPERATOR_PASSPHRASE_ROW, 'recover')]
 
 
@@ -736,21 +740,23 @@ def test_a_same_step_whose_options_change_is_planned(
 
 
 @pytest.mark.parametrize(
-    ('printed', 'refusal'),
+    ('printed', 'why'),
     [
-        (_events(_step('same')), 'no summary'),
-        (_events(_step('same'), {'summaryEvent': {'result': 'succeeded'}}), 'no summary'),
-        (_events({'summaryEvent': {'resourceChanges': {}}}), 'no step at all'),
-        (_events({'summaryEvent': {'resourceChanges': ['same']}}), 'not a count by operation'),
-        (_events(_step('update'), {'summaryEvent': {'resourceChanges': {'same': 2}}}), 'summary counts none'),
-        ('Previewing update (probe):\n', 'not an engine event'),
+        (_events(_step('same')), driver.Why.PREVIEW_UNSUMMARIZED),
+        (_events(_step('same'), {'summaryEvent': {'result': 'succeeded'}}), driver.Why.PREVIEW_UNSUMMARIZED),
+        (_events({'summaryEvent': {'resourceChanges': {}}}), driver.Why.PREVIEW_COUNTS_NOTHING),
+        (_events({'summaryEvent': {'resourceChanges': ['same']}}), driver.Why.PREVIEW_UNCOUNTED),
+        (_events(_step('update'), {'summaryEvent': {'resourceChanges': {'same': 2}}}), driver.Why.PREVIEW_DISAGREES),
+        ('Previewing update (probe):\n', driver.Why.PREVIEW_NOT_EVENTS),
     ],
 )
-def test_a_preview_whose_plan_cannot_be_read_is_refused(printed: str, refusal: str) -> None:
+def test_a_preview_whose_plan_cannot_be_read_is_refused(printed: str, why: driver.Why) -> None:
     # "Nothing planned" is the answer that stays quiet, so every way the
     # events stop saying what was planned refuses instead.
-    with pytest.raises(driver.Refused, match=refusal):
+    with pytest.raises(driver.Refused) as refused:
         _ = driver.read_preview(printed)
+
+    assert refused.value.why is why
 
 
 # --------------------------------------------------------------------------
@@ -763,8 +769,10 @@ def test_a_forge_main_never_fetched_is_refused_naming_the_fetch(repository: Repo
     fake = FakePulumi()
     run = driver.Run.open(committed, repository.checkout, pulumi=fake, base=AMBIENT)
 
-    with pytest.raises(driver.Refused, match='not in this repository: `jj git fetch`'):
+    with pytest.raises(driver.Refused) as refused:
         _ = run.plan()
+    assert refused.value.why is checkpoint.Unready.MAIN_NOT_FETCHED
+    assert checkpoint.spelled(refused.value.remedy) in str(refused.value)
     assert fake.streamed == []
 
 
@@ -776,8 +784,10 @@ def test_a_forge_main_fetched_but_not_under_the_working_copy_is_refused_naming_t
     fake = FakePulumi()
     run = driver.Run.open(committed, repository.checkout, pulumi=fake, base=AMBIENT)
 
-    with pytest.raises(driver.Refused, match=r'fetched but the working copy is not on it: `jj rebase -b @ -d main`'):
+    with pytest.raises(driver.Refused) as refused:
         _ = run.plan()
+    assert refused.value.why is checkpoint.Unready.BEHIND_MAIN
+    assert checkpoint.spelled(refused.value.remedy) in str(refused.value)
     assert fake.streamed == []
 
 
@@ -790,8 +800,13 @@ def test_a_conflicted_checkpoint_is_refused_naming_the_reconcile(repository: Rep
     fake = FakePulumi()
     run = driver.Run.open(committed, repository.checkout, pulumi=fake, base=AMBIENT)
 
-    with pytest.raises(driver.Refused, match=r'is conflicted.*jj restore --from main checkpoints/'):
+    with pytest.raises(driver.Refused) as refused:
         _ = run.plan()
+    assert refused.value.why is checkpoint.Unready.CONFLICTED
+    # Keeping main's side of the one file that is conflicted.
+    ((*_, restored),) = refused.value.remedy
+    assert restored == str(path.relative_to(repository.checkout))
+    assert checkpoint.spelled(refused.value.remedy) in str(refused.value)
     assert fake.streamed == []
 
 
@@ -804,9 +819,9 @@ def test_behind_the_forge_and_conflicted_the_ancestry_is_what_is_refused(
     repository.fetch()
     run = driver.Run.open(committed, repository.checkout, pulumi=FakePulumi(), base=AMBIENT)
 
-    with pytest.raises(driver.Refused, match='jj rebase') as refused:
+    with pytest.raises(driver.Refused) as refused:
         _ = run.plan()
-    assert 'conflicted' not in str(refused.value)
+    assert refused.value.why is checkpoint.Unready.BEHIND_MAIN
 
 
 @pytest.fixture(scope='module')
@@ -839,10 +854,19 @@ def test_in_a_jj_checkout_the_working_copy_is_jjs(repository: Repository, commit
     assert checkpoint.working_copy(repository.checkout) == at
     assert driver.Run.open(committed, repository.checkout, pulumi=FakePulumi(), base=AMBIENT).plan() == 0
 
+    # Fetched as an operator fetches in a jj checkout, which moves the main
+    # bookmark the remedy rebases onto.
     repository.advance_the_forge()
-    repository.fetch()
-    with pytest.raises(driver.Refused, match='jj rebase'):
+    _ = process_sessions.run(['jj', 'git', 'fetch'], cwd=repository.checkout, env=jj_env, check=True, timeout=60)
+    with pytest.raises(driver.Refused) as refused:
         _ = driver.Run.open(committed, repository.checkout, pulumi=FakePulumi(), base=AMBIENT).plan()
+    assert refused.value.why is checkpoint.Unready.BEHIND_MAIN
+
+    # The remedy is commands this checkout's jj runs as written, and once they
+    # have run the working copy is one a run starts from.
+    for command in refused.value.remedy:
+        _ = process_sessions.run(command, cwd=repository.checkout, env=jj_env, check=True, timeout=60)
+    assert driver.Run.open(committed, repository.checkout, pulumi=FakePulumi(), base=AMBIENT).plan() == 0
 
 
 def _jj(*args: str, cwd: Path) -> str:
@@ -879,8 +903,10 @@ def test_a_primary_working_copy_another_workspace_rewrote_is_refused(
     _ = _jj('workspace', 'add', str(second), cwd=primary)
     _ = _jj('rebase', '-b', 'default@', '-d', 'main@origin', cwd=second)
 
-    with pytest.raises(checkpoint.CheckRefused, match='stale'):
+    with pytest.raises(checkpoint.CheckRefused) as refused:
         checkpoint.require_current(primary, ours)
+
+    assert refused.value.why is checkpoint.Unready.UNREADABLE
 
 
 #: How long the stand-in below runs before it ends by itself: a bound on a
@@ -1006,7 +1032,21 @@ def test_a_secret_value_in_the_clear_fails_the_run_naming_the_property(
     assert KEY.splitlines()[1] not in record + caplog.text
 
 
-def test_a_secret_value_from_the_state_is_searched_for_too(repository: Repository, committed: str) -> None:
+def _found(caplog: pytest.LogCaptureFixture, committed: str, checkout: Path) -> list[checkpoint.Finding]:
+    """The findings a run reported, each read off its own log record, and each one the record file holds."""
+    found = [
+        cast('checkpoint.Finding', getattr(record, driver.FOUND))
+        for record in caplog.records
+        if hasattr(record, driver.FOUND)
+    ]
+    recorded = checkpoint.record(checkout, committed).read_text()
+    assert all(str(finding) in recorded for finding in found), recorded
+    return found
+
+
+def test_a_secret_value_from_the_state_is_searched_for_too(
+    repository: Repository, committed: str, caplog: pytest.LogCaptureFixture
+) -> None:
     resource = {
         'urn': 'urn:key',
         'inputs': {},
@@ -1020,27 +1060,30 @@ def test_a_secret_value_from_the_state_is_searched_for_too(repository: Repositor
     assert run.passthrough(['refresh', '--yes']) == driver.FAILED
     path = stack_environment.checkpoint(repository.checkout, committed)
     assert path is not None
-    assert (
-        'urn:key outputs.copy: holds the value of urn:key outputs.secret in the clear'
-        in checkpoint.record(repository.checkout, committed).read_text()
-    )
+    assert checkpoint.Finding(
+        'urn:key outputs.copy', checkpoint.Kind.CLEARTEXT, sources=('urn:key outputs.secret',)
+    ) in (_found(caplog, committed, repository.checkout))
 
 
 @pytest.mark.parametrize(
-    ('resource', 'property_'),
+    ('resource', 'found'),
     [
         (
             {'urn': 'urn:key', 'additionalSecretOutputs': ['secret'], 'inputs': {}, 'outputs': {'secret': 'k'}},
-            'urn:key outputs.secret: is named in additionalSecretOutputs',
+            checkpoint.Finding('urn:key outputs.secret', checkpoint.Kind.DECLARED_OUTPUT),
         ),
         (
             {'urn': 'urn:box', 'inputs': {'metadata': _ciphertext('m')}, 'outputs': {'metadata': 'm'}},
-            'urn:box outputs.metadata: holds ciphertext as an input',
+            checkpoint.Finding('urn:box outputs.metadata', checkpoint.Kind.CARRIED, input_to_mark='metadata'),
         ),
     ],
 )
 def test_a_declared_secret_property_in_the_clear_fails_the_run_naming_it(
-    repository: Repository, committed: str, resource: dict[str, Any], property_: str
+    repository: Repository,
+    committed: str,
+    caplog: pytest.LogCaptureFixture,
+    resource: dict[str, Any],
+    found: checkpoint.Finding,
 ) -> None:
     fake = FakePulumi(exports=[_export([resource])])
     fake.effect = _write_run(repository.checkout, fake, [resource])
@@ -1049,7 +1092,7 @@ def test_a_declared_secret_property_in_the_clear_fails_the_run_naming_it(
     assert run.passthrough(['refresh', '--yes']) == driver.FAILED
     path = stack_environment.checkpoint(repository.checkout, committed)
     assert path is not None
-    assert property_ in checkpoint.record(repository.checkout, committed).read_text()
+    assert found in _found(caplog, committed, repository.checkout)
 
 
 def test_a_checkpoint_holding_its_secrets_as_ciphertext_passes(repository: Repository, committed: str) -> None:
@@ -1098,7 +1141,9 @@ def test_a_write_over_an_unchanged_deployment_keeps_the_files_bytes(repository: 
     assert path.read_bytes() == before
 
 
-def test_a_secret_that_lost_its_marking_in_the_run_fails_it(repository: Repository, committed: str) -> None:
+def test_a_secret_that_lost_its_marking_in_the_run_fails_it(
+    repository: Repository, committed: str, caplog: pytest.LogCaptureFixture
+) -> None:
     # A generated secret with no input of the same name: once the command
     # drops its only marking, only the state before the command says it was
     # secret.
@@ -1110,15 +1155,18 @@ def test_a_secret_that_lost_its_marking_in_the_run_fails_it(repository: Reposito
     run = driver.Run.open(committed, repository.checkout, pulumi=fake, base=AMBIENT)
 
     assert run.passthrough(['up', '--yes', '--skip-preview']) == driver.FAILED
-    assert (
-        'urn:dumpkey outputs.key: holds the value of urn:dumpkey outputs.key before the command in the clear'
-        in checkpoint.record(repository.checkout, committed).read_text()
-    )
+    # The one source is the place's own value, read from the state before
+    # the command: the only marking that said it was secret.
+    ((place, kind, (source,)),) = [
+        (finding.where, finding.kind, finding.sources) for finding in _found(caplog, committed, repository.checkout)
+    ]
+    assert (place, kind) == ('urn:dumpkey outputs.key', checkpoint.Kind.CLEARTEXT)
+    assert source.startswith(place) and source != place
 
 
 @pytest.mark.parametrize('stray', ['probe.json.gz', 'probe.json.zst', 'probe.json.1790591454000000000'])
 def test_a_file_for_the_stack_beside_its_checkpoint_fails_the_run_naming_it(
-    repository: Repository, committed: str, stray: str
+    repository: Repository, committed: str, caplog: pytest.LogCaptureFixture, stray: str
 ) -> None:
     resource = {'urn': 'urn:box', 'inputs': {}, 'outputs': {'plain': 'an identifier'}}
     fake = FakePulumi(exports=[_export([resource])])
@@ -1131,10 +1179,10 @@ def test_a_file_for_the_stack_beside_its_checkpoint_fails_the_run_naming_it(
     run = driver.Run.open(committed, repository.checkout, pulumi=fake, base=AMBIENT)
 
     assert run.passthrough(['up', '--yes', '--skip-preview']) == driver.FAILED
-    assert (
-        f'checkpoints/.pulumi/stacks/probe/{stray}: is not a file the checks read'
-        in checkpoint.record(repository.checkout, committed).read_text()
-    )
+    written = stack_environment.checkpoint(repository.checkout, committed)
+    assert written is not None
+    beside = str((written.parent / stray).relative_to(repository.checkout))
+    assert checkpoint.Finding(beside, checkpoint.Kind.STRAY) in _found(caplog, committed, repository.checkout)
 
 
 def test_a_run_stopped_before_its_checks_leaves_the_record_and_the_next_up_checks_again(
@@ -1147,8 +1195,9 @@ def test_a_run_stopped_before_its_checks_leaves_the_record_and_the_next_up_check
     fake.effect = _write_run(repository.checkout, fake, [resource])
     run = driver.Run.open(committed, repository.checkout, pulumi=fake, base=AMBIENT)
 
-    with pytest.raises(driver.Refused, match='stack export'):
+    with pytest.raises(driver.Refused) as refused:
         _ = run.passthrough(['refresh', '--yes'])
+    assert refused.value.why is driver.Why.PULUMI_FAILED
 
     record = checkpoint.record(repository.checkout, committed)
     assert ' '.join(['refresh', '--yes']) in record.read_text().splitlines()[0]
@@ -1192,18 +1241,20 @@ def test_each_export_around_a_write_is_announced_before_it_starts(
 def test_one_place_holding_a_secret_is_one_finding_naming_every_source() -> None:
     document = {'checkpoint': {'latest': {'resources': [{'urn': 'urn:box', 'outputs': {'echo': TOKEN}}]}}}
 
-    findings = checkpoint.cleartext(document, {'config probe:token': TOKEN, 'urn:key outputs.secret': TOKEN})
+    secrets = {'config probe:token': TOKEN, 'urn:key outputs.secret': TOKEN}
 
-    assert [str(finding) for finding in findings] == [
-        'urn:box outputs.echo: holds the value of config probe:token, urn:key outputs.secret in the clear'
-    ]
+    findings = checkpoint.cleartext(document, secrets)
+
+    assert findings == [checkpoint.Finding('urn:box outputs.echo', checkpoint.Kind.CLEARTEXT, sources=tuple(secrets))]
 
 
 def test_a_failed_git_is_quoted_whole(tmp_path: Path) -> None:
     # Outside a repository `git ls-remote` explains itself over several lines,
     # and the one that says what failed is the first.
-    with pytest.raises(checkpoint.CheckRefused, match=r'fatal: .*\n'):
+    with pytest.raises(checkpoint.CheckRefused, match=r'fatal: .*\n') as refused:
         checkpoint.require_current(tmp_path, None)
+
+    assert refused.value.why is checkpoint.Unready.UNREADABLE
 
 
 # --------------------------------------------------------------------------
@@ -1390,7 +1441,10 @@ class Bounded:
     def capture(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str]) -> str:
         ran = self._run([*args, '--non-interactive'], cwd=cwd, env=env)
         if ran.returncode != 0:
-            raise driver.Refused(f'`pulumi {" ".join(args[:2])}` failed: {ran.stderr.strip() or ran.returncode}')
+            raise driver.Refused(
+                f'`pulumi {" ".join(args[:2])}` failed: {ran.stderr.strip() or ran.returncode}',
+                why=driver.Why.PULUMI_FAILED,
+            )
         return ran.stdout
 
 
@@ -1890,9 +1944,8 @@ def test_a_marking_the_real_engine_makes_below_the_top_is_found_once_lost(
 
     # The remedy names the resource's input the place is under.
     top = place.split('.')[1]
-    assert [str(finding) for finding in checkpoint.undeclared(document)] == [
-        f'{resource["urn"]} {place}: holds ciphertext as an input and is not ciphertext as an output; '
-        f'pass the input `{top}` whole as `pulumi.Output.secret(...)`'
+    assert checkpoint.undeclared(document) == [
+        checkpoint.Finding(f'{resource["urn"]} {place}', checkpoint.Kind.CARRIED, input_to_mark=top)
     ]
 
 
@@ -1907,9 +1960,8 @@ def test_the_real_engine_leaves_an_additional_secret_outputs_input_in_the_clear_
     # marked, the input of the same name as the program passed it.
     assert checkpoint.envelope(resource['outputs']['x'])
     assert resource['inputs']['x'] == ECHOED
-    assert [str(finding) for finding in checkpoint.undeclared(document)] == [
-        f'{resource["urn"]} inputs.x: is named in additionalSecretOutputs and is not ciphertext; '
-        'pass the input `x` whole as `pulumi.Output.secret(...)`'
+    assert checkpoint.undeclared(document) == [
+        checkpoint.Finding(f'{resource["urn"]} inputs.x', checkpoint.Kind.DECLARED_INPUT, input_to_mark='x')
     ]
 
     # The way on: the program marks the input secret as well, and the next
@@ -1941,10 +1993,10 @@ def test_a_real_operation_left_pending_is_checked_like_a_resource(echo: Scratch,
     operations = pending['checkpoint']['latest']['pending_operations']
     assert [operation['resource']['urn'] for operation in operations] == [resource['urn']]
     assert not [r for r in checkpoint.resources(pending) if r['urn'] == resource['urn']]
-    assert [str(finding) for finding in checkpoint.undeclared(pending)] == [
-        f'pending_operations[0] {resource["urn"]} inputs.x: '
-        'is named in additionalSecretOutputs and is not ciphertext; '
-        'pass the input `x` whole as `pulumi.Output.secret(...)`'
+    assert checkpoint.undeclared(pending) == [
+        checkpoint.Finding(
+            f'pending_operations[0] {resource["urn"]} inputs.x', checkpoint.Kind.DECLARED_INPUT, input_to_mark='x'
+        )
     ]
 
 
@@ -2219,6 +2271,15 @@ def test_a_create_beside_an_imported_held_address_is_named_by_plan_and_refused_b
     assert fake.ups() == []
 
 
+def _held(caplog: pytest.LogCaptureFixture) -> list[tuple[appliance.Movement, ...]]:
+    """What each hold the run logged would have moved the box for, read off the record."""
+    return [
+        cast('tuple[appliance.Movement, ...]', getattr(record, driver.HELD))
+        for record in caplog.records
+        if hasattr(record, driver.HELD)
+    ]
+
+
 def test_a_create_beside_an_imported_address_assigned_to_nothing_is_a_launch(repository: Repository) -> None:
     fake = FakePulumi(printed=_planned(_box('create', before=None), *_imported_address('', repointed=True)))
 
@@ -2228,27 +2289,32 @@ def test_a_create_beside_an_imported_address_assigned_to_nothing_is_a_launch(rep
 
 
 @pytest.mark.parametrize(
-    ('expiry', 'named'),
+    ('expiry', 'state'),
     [
-        (NOW + settings.RENEWAL_MARGIN - dt.timedelta(days=1), 'expires on'),
-        (NOW - dt.timedelta(days=1), 'expired on'),
+        (NOW + settings.RENEWAL_MARGIN - dt.timedelta(days=1), appliance.Expiry.EXPIRING),
+        (NOW - dt.timedelta(days=1), appliance.Expiry.EXPIRED),
         (LATER, None),
     ],
     ids=['inside-the-margin', 'expired', 'outside-the-margin'],
 )
 def test_an_expiry_inside_the_margin_is_named(
-    repository: Repository, caplog: pytest.LogCaptureFixture, expiry: dt.datetime, named: str | None
+    repository: Repository, caplog: pytest.LogCaptureFixture, expiry: dt.datetime, state: appliance.Expiry | None
 ) -> None:
     fake = FakePulumi(printed=_planned(*_address('ocid1.privateip.box'), expiry=expiry))
 
     _ = _appliance(repository, fake).plan()
 
-    said = [message for message in caplog.messages if expiry.date().isoformat() in message]
-    if named is None:
-        assert said == []
+    due = [
+        (cast('appliance.Renewal', getattr(record, appliance.DUE)), record.getMessage())
+        for record in caplog.records
+        if hasattr(record, appliance.DUE)
+    ]
+    if state is None:
+        assert due == []
     else:
-        (message,) = said
-        assert named in message
+        ((renewal, message),) = due
+        assert renewal.state is state
+        assert renewal.expires.date() == expiry.date()
         assert expiry.date().isoformat() in message
         assert ('derived', derived.STATE_BACKEND_SERVER_ROW, 'issue') in named_leaves(message)
 
@@ -2497,8 +2563,8 @@ def test_a_pending_delete_of_the_box_waits_for_force_and_says_so(
     assert _appliance(repository, fake).up(yes=True) == driver.PLANNED
 
     assert fake.ups() == []
-    (refusal,) = [message for message in caplog.messages if 'nothing is applied' in message]
-    assert 'the program no longer declares the box' in refusal
+    (held,) = _held(caplog)
+    assert [movement.kind for movement in held] == [appliance.Moved.DELETE]
 
 
 def test_an_up_over_nothing_planned_answers_from_the_estate_backend(repository: Repository) -> None:
@@ -2624,6 +2690,5 @@ def test_a_replacement_that_names_nothing_moved_says_so_rather_than_inventing_a_
 
     assert _appliance(repository, fake).up(yes=True) == driver.PLANNED
 
-    (refusal,) = [message for message in caplog.messages if 'nothing is applied' in message]
-    assert appliance.NOTHING_NAMED in refusal
-    assert 'asked for' not in refusal
+    (held,) = _held(caplog)
+    assert [movement.kind for movement in held] == [appliance.Moved.UNNAMED]

@@ -34,6 +34,7 @@ from __future__ import annotations
 import datetime as dt
 import enum
 import logging
+import shlex
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -123,13 +124,49 @@ def _inputs(recorded: Mapping[str, Any], key: str) -> Mapping[str, object]:
     return cast('Mapping[str, object]', found) if isinstance(found, dict) else {}
 
 
-#: What `moved` answers for a replacement the preview plans while naming no
-#: digest and no input as changed: the provider replaces the box for a reason
-#: the events do not carry, and the plan's own diff is where to read it.
+#: How `moved` words a replacement the preview plans while naming no digest
+#: and no input as changed: the provider replaces the box for a reason the
+#: events do not carry, and the plan's own diff is where to read it.
 NOTHING_NAMED = 'a replacement the preview plans without naming a digest or an input that moved; read the plan'
 
 
-def moved(steps: Sequence[Step]) -> list[str]:
+class Moved(enum.Enum):
+    """What a pending create, replacement or delete of the box is for."""
+
+    #: No box in the state: a create.
+    CREATE = 'create'
+    #: The program no longer declares the box: a delete.
+    DELETE = 'delete'
+    #: A digest of the bill of materials moved.
+    DIGEST = 'digest'
+    #: Another input the provider names as different.
+    INPUT = 'input'
+    #: A replacement whose events name nothing that moved.
+    UNNAMED = 'unnamed'
+
+
+@dataclass(frozen=True)
+class Movement:
+    """One reason the box would be created, replaced or deleted: its kind, and the digest or input it names."""
+
+    kind: Moved
+    name: str | None = None
+
+    def __str__(self) -> str:
+        match self.kind:
+            case Moved.CREATE:
+                return 'no box in the state: a create'
+            case Moved.DELETE:
+                return 'the program no longer declares the box: a delete'
+            case Moved.DIGEST:
+                return f'the {self.name} digest'
+            case Moved.INPUT:
+                return f'the {self.name} input'
+            case Moved.UNNAMED:
+                return NOTHING_NAMED
+
+
+def moved(steps: Sequence[Step]) -> list[Movement]:
     """What the box's pending create, replacement or delete is for, as the operator reads it.
 
     A replacement is read off the steps that carry both sides -- `replace` and
@@ -140,19 +177,21 @@ def moved(steps: Sequence[Step]) -> list[str]:
     with, and a lone delete no new one, and each says so.
     """
     ops = {step.op for step in steps}
-    reasons: list[str] = []
+    reasons: list[Movement] = []
     for step in steps:
         if step.op == 'create':
-            reasons.append('no box in the state: a create')
+            reasons.append(Movement(Moved.CREATE))
         elif step.op == 'delete' or (step.op == 'delete-replaced' and ops <= {'delete-replaced'}):
-            reasons.append('the program no longer declares the box: a delete')
+            reasons.append(Movement(Moved.DELETE))
         elif step.old and step.new:
             before, after = _inputs(step.old, BILL_OF_MATERIALS), _inputs(step.new, BILL_OF_MATERIALS)
             reasons += [
-                f'the {key} digest' for key in sorted(before.keys() | after.keys()) if before.get(key) != after.get(key)
+                Movement(Moved.DIGEST, key)
+                for key in sorted(before.keys() | after.keys())
+                if before.get(key) != after.get(key)
             ]
-            reasons += [f'the {key} input' for key in step.diffs if key != BILL_OF_MATERIALS]
-    return sorted(set(reasons), key=reasons.index) or [NOTHING_NAMED]
+            reasons += [Movement(Moved.INPUT, key) for key in step.diffs if key != BILL_OF_MATERIALS]
+    return sorted(set(reasons), key=reasons.index) or [Movement(Moved.UNNAMED)]
 
 
 def imported_replacements(preview: Preview) -> list[str]:
@@ -237,7 +276,43 @@ def refuse_imported_replacements(urns: Sequence[str]) -> str:
     )
 
 
-def renewal(preview: Preview, now: dt.datetime) -> str | None:
+#: The attribute of the log record that says a renewal is due: the `Renewal`.
+DUE = 'due'
+
+
+class Expiry(enum.Enum):
+    """Where the server certificate stands against its renewal margin, once inside it."""
+
+    #: Still valid, and inside the margin.
+    EXPIRING = 'expiring'
+    #: Past its expiry.
+    EXPIRED = 'expired'
+
+
+@dataclass(frozen=True)
+class Renewal:
+    """A reissue the server certificate is due for: where it stands, when it expires, and the commands that renew it.
+
+    `remedy` is the issue of a new certificate, then the run that replaces the
+    box with one carrying it.
+    """
+
+    state: Expiry
+    expires: dt.datetime
+    remaining: dt.timedelta
+    remedy: tuple[tuple[str, ...], ...]
+
+    def __str__(self) -> str:
+        reissue = f'{", then ".join(f"`{shlex.join(command)}`" for command in self.remedy)}, which replaces the box with one carrying it'
+        if self.state is Expiry.EXPIRED:
+            return f'the server certificate expired on {self.expires.date().isoformat()}: {reissue}'
+        return (
+            f'the server certificate expires on {self.expires.date().isoformat()}, {self.remaining.days} day(s) from now '
+            f'and inside the {settings.RENEWAL_MARGIN.days}-day renewal margin: {reissue}'
+        )
+
+
+def renewal(preview: Preview, now: dt.datetime) -> Renewal | None:
     """The reissue the server certificate is due for, or None while it has more life than the margin."""
     exported = preview.stack_outputs.get(settings.CERTIFICATE_EXPIRY_OUTPUT)
     if not isinstance(exported, str):
@@ -246,15 +321,14 @@ def renewal(preview: Preview, now: dt.datetime) -> str | None:
     remaining = expiry - now
     if remaining > settings.RENEWAL_MARGIN:
         return None
-    reissue = (
-        f'`credentials derived {derived.STATE_BACKEND_SERVER_ROW} issue`, then `{permission.REMEDY}`, which replaces the box '
-        'with one carrying it'
-    )
-    if remaining.total_seconds() < 0:
-        return f'the server certificate expired on {expiry.date().isoformat()}: {reissue}'
-    return (
-        f'the server certificate expires on {expiry.date().isoformat()}, {remaining.days} day(s) from now and '
-        f'inside the {settings.RENEWAL_MARGIN.days}-day renewal margin: {reissue}'
+    return Renewal(
+        state=Expiry.EXPIRED if remaining.total_seconds() < 0 else Expiry.EXPIRING,
+        expires=expiry,
+        remaining=remaining,
+        remedy=(
+            ('credentials', 'derived', derived.STATE_BACKEND_SERVER_ROW, 'issue'),
+            tuple(shlex.split(permission.REMEDY)),
+        ),
     )
 
 
@@ -305,7 +379,7 @@ class Gate:
         if refused := imported_replacements(preview):
             log.warning('%s', refuse_imported_replacements(refused))
         if (due := renewal(preview, self.now())) is not None:
-            log.warning('%s', due)
+            log.warning('%s', due, extra={DUE: due})
 
     def backend(self) -> Backend:
         """What the estate's backend answers, said in the terms the operator acts on."""
