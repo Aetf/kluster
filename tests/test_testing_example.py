@@ -55,7 +55,12 @@ def test_the_example_is_read_out_of_the_document() -> None:
 
 
 def test_the_example_passes_as_written(tmp_path: Path) -> None:
-    (tmp_path / 'test_network.py').write_text(the_example())
+    example = tmp_path / 'example'
+    example.mkdir()
+    _ = (example / 'test_network.py').write_text(the_example())
+    # A conftest above the example's directory, as a shared `/tmp` can hold
+    # one: the child runs the example and nothing it would import from there.
+    _ = (tmp_path / 'conftest.py').write_text("raise RuntimeError('a conftest outside the example was imported')\n")
     environment = {**os.environ, 'PYTHONPATH': str(ROOT / 'tests')}
 
     run = subprocess.run(
@@ -71,9 +76,13 @@ def test_the_example_passes_as_written(tmp_path: Path) -> None:
             # file of one case; `-n 0` runs it in this child itself.
             '-n',
             '0',
-            str(tmp_path / 'test_network.py'),
+            # The configuration's checkout is where pytest would otherwise stop
+            # looking for conftests, and every directory above the example up to
+            # it would be read.
+            f'--confcutdir={example}',
+            str(example / 'test_network.py'),
         ],
-        cwd=tmp_path,
+        cwd=example,
         env=environment,
         capture_output=True,
         text=True,
