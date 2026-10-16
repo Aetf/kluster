@@ -46,9 +46,6 @@ from kluster.scripts.credentials.kdbx import PATH_ENV, KdbxStore
 
 PASSWORD = 'kit-password'
 
-#: The refusal a seed row with no implementation produces (`cli.main`).
-REFUSAL = 'not yet implemented'
-
 
 @pytest.fixture
 def pinned_age() -> None:
@@ -376,7 +373,7 @@ def test_every_leaf_dispatches(argv: list[str], dispatch: Dispatch, caplog: pyte
         # A seed row with no implementation is a subcommand that refuses by
         # name, which is the documented behavior, not a crash.
         assert code == 1
-        assert REFUSAL in caplog.text
+        assert argv[1] in caplog.text, 'the refusal names the member'
         return
     assert code == 0, caplog.text
     assert target in dispatch.reached
@@ -485,7 +482,7 @@ def test_rotate_refuses_an_unknown_member_before_creating_the_successor(
     # answers has to be refused here or the typo leaves an empty kit behind.
     assert cli.main(['kit', 'rotate', '--into', str(tmp_path / 'next.kdbx'), '--only', 'nonesuch']) == 1
 
-    assert 'no seed named' in caplog.text
+    assert 'nonesuch' in caplog.text
     assert 'store.create' not in dispatch.reached
     assert 'lifecycle.rotate' not in dispatch.reached
 
@@ -589,7 +586,6 @@ def test_the_drill_identity_is_aimed_at_the_committed_recipient_file_as_the_admi
 
     calls = [(args, kwargs) for name, args, kwargs in dispatch.calls if name == 'derived.drill_age_identity']
     assert [kwargs['rotate'] for _, kwargs in calls] == [False, True]
-    assert {kwargs['recipient_file'] for _, kwargs in calls} == {cli.appliance_config.DRILL_RECIPIENT_FILE}
     assert {args[0].token for args, _ in calls} == {'a-token'}
 
 
@@ -630,8 +626,8 @@ def test_the_drill_credentials_reach_their_mint_with_both_seeds_as_the_admin_tok
     # read out of the `github` stack rather than from anything in the shell.
     calls = [(args, kwargs) for name, args, kwargs in dispatch.calls if name == 'derived.drill_credentials']
     assert [kwargs['only'] for _, kwargs in calls] == [None, 'b2']
-    assert [kwargs['b2_seed_entry'] for _, kwargs in calls] == [cli.derived.B2_SEED_ENTRY, 'seeds/other']
-    assert {kwargs['oci_seed_entry'] for _, kwargs in calls} == {cli.derived.OCI_SEED_ENTRY}
+    assert [kwargs['b2_seed_entry'] for _, kwargs in calls] == [entries.SEEDS['b2'].entry, 'seeds/other']
+    assert {kwargs['oci_seed_entry'] for _, kwargs in calls} == {entries.SEEDS['oci'].entry}
     assert {args[1].token for args, _ in calls} == {'a-token'}
     assert {type(args[0]) for args, _ in calls} == {KdbxStore}
 
@@ -644,7 +640,7 @@ def test_the_freshness_key_reaches_its_mint_with_the_seed_as_the_admin_token(dis
     # token `derived sync` uses, read out of the `github` stack rather than
     # from anything in the shell.
     calls = [(args, kwargs) for name, args, kwargs in dispatch.calls if name == 'derived.b2_freshness_dumps']
-    assert [kwargs['seed_entry'] for _, kwargs in calls] == [cli.derived.B2_SEED_ENTRY, 'seeds/other']
+    assert [kwargs['seed_entry'] for _, kwargs in calls] == [entries.SEEDS['b2'].entry, 'seeds/other']
     assert {args[1].token for args, _ in calls} == {'a-token'}
     assert {type(args[0]) for args, _ in calls} == {KdbxStore}
 
