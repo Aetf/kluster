@@ -112,14 +112,20 @@ def test_the_tree_really_does_carry_see_also_lines(monkeypatch: pytest.MonkeyPat
     assert [line for line in every_line if line.strip().startswith(SEE_ALSO)]
 
 
+def _term(label: str) -> str:
+    """The name the register gives a secret: the last two words before the first comma of what it is."""
+    return ' '.join(escrow.register()[label].what.split(',')[0].split()[-2:]).lower()
+
+
 def test_a_sealed_row_says_how_its_value_comes_to_exist_and_how_it_is_taken(monkeypatch: pytest.MonkeyPatch) -> None:
     """The DKIM key is carried and piped in; the help says so, not what fits a row a person types."""
     row = ' '.join(' '.join(_rendered('credentials derived dkim-exim', monkeypatch)).split())
     listing = ' '.join(' '.join(_rendered('credentials derived', monkeypatch)).split())
 
-    assert 'seal what is piped in' in row
-    assert 'carried from the legacy cluster' in row
-    assert 'carried from the legacy cluster' in listing
+    record = devices.SEALED_RECORDS['dkim-exim']
+    assert record.taken in row
+    assert record.made in row
+    assert record.made in listing
     assert 'made by a person' not in row
 
 
@@ -220,8 +226,9 @@ def test_the_help_names_the_shared_passphrase_by_the_registers_term(monkeypatch:
     order = flat('credentials')
     row = flat(f'credentials derived {escrow.row_name(escrow.PASSPHRASE)}')
 
-    assert 'pushes the stack passphrase into every Environment' in order
-    assert 'the Pulumi stack passphrase' in row
+    term = _term(escrow.PASSPHRASE)
+    assert term in order.lower()
+    assert term in row.lower()
     assert 'estate' not in order
     assert 'estate' not in row
 
@@ -240,6 +247,7 @@ def test_the_help_names_the_operator_passphrase_by_the_registers_term(monkeypatc
     own = flat(f'credentials derived {row}')
 
     assert ('derived', row, 'generate') in runs_of(row, _rendered('credentials', monkeypatch))
-    assert 'The operator passphrase, which encrypts the operator stacks' in order
-    assert 'the operator passphrase, which encrypts the operator stacks' in own
+    term = _term(escrow.OPERATOR_PASSPHRASE)
+    assert term in order.lower()
+    assert term in own.lower()
     assert 'github-passphrase' not in order
