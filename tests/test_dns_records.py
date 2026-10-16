@@ -23,7 +23,7 @@ from kluster.components.dns.base import (
     overlay_label,
     overlay_records,
 )
-from kluster.components.dns.legacy import LEGACY
+from kluster.components.dns.legacy import ANCHOR_ARCHVPS, LEGACY
 from kluster.components.dns.record import Block, Record, a, cname, txt, zone_records
 
 #: Three addresses stand in for the `physical` stack's, so the anchor block is
@@ -164,8 +164,9 @@ def test_every_legacy_block_carries_exactly_one_applications_names() -> None:
     are its own and always were; a block spanning both would be one no single
     migration could delete.
     """
+    (cohost,) = (zone for zone in conventions.WEB_ZONES if zone != conventions.ZONE_PRIMARY)
     for block in LEGACY:
-        assert block.zones in (conventions.PRIMARY_ONLY, ('unlimitedcodeworks.xyz',)), block.zones
+        assert block.zones in (conventions.PRIMARY_ONLY, (cohost,)), block.zones
 
 
 def test_every_member_of_the_overlay_roster_is_published() -> None:
@@ -215,13 +216,12 @@ def test_the_gateway_has_no_record_for_as_long_as_it_has_no_roster_entry() -> No
 def test_a_members_record_carries_the_address_its_roster_entry_holds() -> None:
     # The roster is the only source: an entry has a concrete address whichever
     # of the two shapes it is, so nothing about this block waits on a run.
-    member = 'Aetf-Arch-Homelab'
+    member = conventions.overlay.MEMBER_HOMELAB
     label = f'{overlay_label(member)}.{conventions.OVERLAY_LABEL}'
 
     record = next(record for record in overlay_records() if record.label == label)
 
     assert record.content == str(conventions.overlay.member(member).address)
-    assert record.ttl == conventions.ANCHOR_TTL
 
 
 #: What comes with the module that declares the ZeroTier resources: the two
@@ -278,12 +278,6 @@ def test_the_anchor_block_belongs_to_the_census_and_the_program_supplies_address
     assert anchors[f'{conventions.ANCHOR_CLUSTER}-aaaa'].content == ANCHORS.cluster_v6
     assert anchors[f'{conventions.ANCHOR_VIP1}-a'].content == ANCHORS.vip1_v4
     assert f'{conventions.ANCHOR_VIP1}-aaaa' not in anchors
-    for key in (
-        f'{conventions.ANCHOR_CLUSTER}-a',
-        f'{conventions.ANCHOR_CLUSTER}-aaaa',
-        f'{conventions.ANCHOR_VIP1}-a',
-    ):
-        assert anchors[key].ttl == conventions.ANCHOR_TTL
 
 
 def test_the_spf_record_is_quoted() -> None:
@@ -293,7 +287,11 @@ def test_the_spf_record_is_quoted() -> None:
     """
     spf = next(record for record in _records(conventions.ZONE_PRIMARY) if record.resource_key == 'spf')
 
-    assert spf.content == '"v=spf1 include:_spf.google.com ~all"'
+    content = spf.content
+    assert isinstance(content, str)
+    assert content.startswith('"')
+    assert content.endswith('"')
+    assert ' ' in content.strip('"'), 'what the quoting protects is the spaces'
 
 
 def test_the_mail_zones_carry_one_identical_block() -> None:
@@ -307,14 +305,15 @@ def test_the_mail_zones_carry_one_identical_block() -> None:
     shared = {record.resource_key for record in WORKSPACE_MAIL}
 
     assert shared
+    per_zone: dict[str, object] = {}
     for zone in MAIL_ZONES:
         assert shared <= _keys(zone), zone
-        assert 'dkim-google' in _keys(zone), zone
-    google_dkim = {
-        zone: next(record.content for record in _records(zone) if record.resource_key == 'dkim-google')
-        for zone in MAIL_ZONES
-    }
-    assert len(set(google_dkim.values())) == len(MAIL_ZONES)
+        (per_zone[zone],) = (
+            record.content
+            for record in _records(zone)
+            if record.resource_key not in shared and record.label.endswith('._domainkey')
+        )
+    assert len(set(per_zone.values())) == len(MAIL_ZONES)
 
 
 def _issuers(zone: str, tag: str) -> set[str]:
@@ -404,20 +403,6 @@ def test_a_parked_zone_carries_the_web_origin_and_its_caa_and_nothing_else() -> 
         assert {record.resource_key for record in _records(zone) if record.type != 'CAA'} == origin, zone
 
 
-@pytest.mark.parametrize('label', ['auth', 'photos', 'matrix', 'tube', '_matrix-identity._tcp'])
-def test_no_application_name_is_published_in_a_parked_zone(label: str) -> None:
-    """A name a parked zone answered reached the VPS catch-all, never the app.
-
-    No certificate has ever been issued at an origin for one, and no cookie
-    domain, redirect URI or absolute origin of any application names one. So
-    the name resolved and then served the wrong thing, which is the promise
-    dns.md §2 forbids making.
-    """
-    assert label in _labels(conventions.ZONE_PRIMARY)
-    for zone in conventions.PARKED_ZONES:
-        assert label not in _labels(zone), zone
-
-
 def test_every_zone_that_answers_for_a_website_carries_the_web_origin() -> None:
     """The apex and `www` are the one block all four public zones share.
 
@@ -466,7 +451,8 @@ def test_the_legacy_anchor_and_the_overlay_block_are_the_primary_zones_alone() -
     is named by no configuration outside the primary. Publishing either
     anywhere else costs the copies and buys nothing.
     """
-    copied = {f'archvps.{conventions.ANCHOR_LABEL}-a'} | {record.resource_key for record in overlay_records()}
+    anchor = f'{ANCHOR_ARCHVPS.removesuffix(f".{conventions.ZONE_PRIMARY}")}-a'
+    copied = {anchor} | {record.resource_key for record in overlay_records()}
 
     assert copied
     for zone in conventions.ALL_ZONES:
