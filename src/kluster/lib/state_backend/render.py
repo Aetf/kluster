@@ -22,13 +22,14 @@ import logging
 import subprocess as sp
 from dataclasses import dataclass, field, fields
 from importlib import resources
-from typing import Any
+from typing import Annotated, Any
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from kluster.lib import config as lib_config
 from kluster.lib import templates
+from kluster.lib.secret import Secret
 
 from . import settings
 
@@ -91,6 +92,11 @@ def _digested(how: Digested = Digested.VALUE) -> Any:
     the one thing its author has to say anyway rather than by remembering two
     more annotations. Comparison is the half a failed assertion reads: pytest
     prints every compared field that differs, repr or no repr.
+
+    The field's type carries the `Secret` marker as well, which is what the
+    repr checks find it by (`kluster.lib.secret`). The two say one thing
+    twice, and the checks hold the direction that matters: a marked field
+    declared anything but `NEVER` keeps its repr and fails there.
     """
     secret = how is Digested.NEVER
     return field(metadata={'digest': how}, repr=not secret, compare=not secret)
@@ -119,18 +125,18 @@ class Machine:
     #: key below with it, is a reissue into the stack's configuration and then
     #: the replacement `--force` asks for.
     server_cert: str = _digested()
-    server_key: str = _digested(Digested.NEVER)
+    server_key: Annotated[str, Secret] = _digested(Digested.NEVER)
     #: The box's SSH identity, in OpenSSH's own private-key format. Its public
     #: half is what `state-backend ssh` pins the connection against, committed
     #: beside the template.
-    ssh_host_key: str = _digested(Digested.NEVER)
+    ssh_host_key: Annotated[str, Secret] = _digested(Digested.NEVER)
     age_recipients: tuple[str, ...] = _digested()
     age_url: str = _digested()
     age_sha256: str = _digested()
     b2_dump_key_id: str = _digested()
     #: A credential. Its identity is `b2_dump_key_id`, which moves with it;
     #: hashing the secret into cloud metadata buys nothing.
-    b2_dump_key: str = _digested(Digested.NEVER)
+    b2_dump_key: Annotated[str, Secret] = _digested(Digested.NEVER)
     b2_bucket_id: str = _digested()
     b2_prefix: str = _digested()
     dump_script: str = _digested()

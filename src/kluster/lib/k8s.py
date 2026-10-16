@@ -22,7 +22,7 @@ import fnmatch
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
 import pulumi
 import pulumi_crds as crds
@@ -31,6 +31,7 @@ from pulumi.runtime.rpc import UNKNOWN as UNKNOWN_SENTINEL
 
 from kluster import conventions
 from kluster.conventions.sealed import SealingScope
+from kluster.lib.secret import Secret
 from kluster.lib.versions import ChartPin
 
 __all__ = (
@@ -292,7 +293,7 @@ class SecretTemplate:
     its types prints.
     """
 
-    data: Mapping[str, pulumi.Input[str]] | None = field(default=None, repr=False, compare=False)
+    data: Annotated[Mapping[str, pulumi.Input[str]] | None, Secret] = field(default=None, repr=False, compare=False)
     type: str | None = None
     immutable: bool | None = None
     labels: Mapping[str, str] | None = None

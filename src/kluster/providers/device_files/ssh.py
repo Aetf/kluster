@@ -58,11 +58,12 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import IntEnum, unique
-from typing import Protocol, cast, final
+from typing import Annotated, Protocol, cast, final
 
 import asyncssh
 from asyncssh.known_hosts import KnownHostsArg
 
+from kluster.lib.secret import Secret
 from kluster.providers.device_files import paths
 
 __all__ = (
@@ -249,7 +250,7 @@ class Device:
 
     host: str
     username: str
-    private_key: str = field(repr=False, compare=False)
+    private_key: Annotated[str, Secret] = field(repr=False, compare=False)
     host_key: str
     port: int = 22
 
