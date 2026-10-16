@@ -16,7 +16,7 @@ import os
 import subprocess
 import sys
 import tomllib
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import cast
 
 import pytest
@@ -116,10 +116,12 @@ def test_the_prose_step_checks_authored_markdown_and_not_a_generated_sdks(tmp_pa
     assert GENERATED not in files
 
 
-def test_the_tree_the_prose_step_skips_is_one_basedpyright_excludes() -> None:
+def test_the_tree_the_prose_step_skips_is_one_basedpyright_excludes(tmp_path: Path) -> None:
     """The generated SDKs are one directory, named alike wherever a check steps around them."""
     pyright = cast('dict[str, object]', tomllib.loads((ROOT / 'pyproject.toml').read_text())['tool'])['basedpyright']
     excluded = cast('dict[str, list[str]]', pyright)['exclude']
 
-    assert "generated=(':(exclude)sdks/')" in prose_run()
-    assert 'sdks' in excluded
+    # The tree the step skips, as running it shows: the generated file's top
+    # directory.
+    assert GENERATED not in checked(tmp_path, whole_tree=True)
+    assert PurePosixPath(GENERATED).parts[0] in excluded
