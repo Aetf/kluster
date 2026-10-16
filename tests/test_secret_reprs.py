@@ -70,11 +70,9 @@ mounted file's contents, an initial state's contents, the ACME token, and a
 produced Secret's own data.
 
 **A field that holds a library's object is classified by what the object
-holds, not by what it prints**, as `pki.Authority`'s key is. `kdbx` and
-`adopt` are here for that class of field: an unlocked `PyKeePass` holds the
-master password and prints only its type and address, and an OCI client holds
-the configuration it was built from, the API key inside it. Such a field is
-filled with the kind of value it holds in production wherever that value
+holds, not by what it prints**, as `pki.Authority`'s key is. `kdbx` is here
+for that class of field: an unlocked `PyKeePass` holds the master password and
+prints only its type and address. Such a field is filled with the kind of value it holds in production wherever that value
 prints what it carries, and with the bare sentinel where it does not
 (`SHAPED`).
 
@@ -116,7 +114,6 @@ from kluster.scripts.credentials import (
     pulumi_config,
     slots,
 )
-from kluster.scripts.state_backend import adopt
 
 #: The sentinel written into every secret field of every record built below, and looked for
 #: in the repr. Distinctive because the assertion that it is *absent* is only
@@ -342,17 +339,6 @@ def _records(records: list[Record]) -> pytest.MarkDecorator:
     return pytest.mark.parametrize('record', records, ids=[record.id for record in records])
 
 
-def _signing_configuration(key: str) -> dict[str, object]:
-    """What an OCI client holds as `adopt` builds one: a configuration, its key's content inside it."""
-    return {
-        'user': 'ocid1.user.oc1..census',
-        'fingerprint': '00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff',
-        'key_content': key,
-        'tenancy': 'ocid1.tenancy.oc1..census',
-        'region': 'us-ashburn-1',
-    }
-
-
 #: The secret fields filled with the kind of value they hold in production, the
 #: sentinel inside it, rather than with the bare sentinel. What the tests that
 #: fill a record measure is whether the annotations keep a field's printed form
@@ -371,10 +357,7 @@ def _signing_configuration(key: str) -> dict[str, object]:
 #: the password as `.password`; it passes with both of `_db`'s annotations
 #: removed, because the real object prints no password either way, so the row
 #: filled with the bare sentinel is what fails when either annotation is dropped.
-SHAPED: dict[tuple[type, str], Callable[[str], object]] = {
-    (adopt.Clients, 'network'): _signing_configuration,
-    (adopt.Clients, 'object_storage'): _signing_configuration,
-}
+SHAPED: dict[tuple[type, str], Callable[[str], object]] = {}
 
 
 def _filled(record: Record, side: str = '') -> object:

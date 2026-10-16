@@ -8,8 +8,7 @@ backend it declares cannot hold its own state, so the checkpoint lives under
 
 **This program is wiring** (style/pulumi.md): it builds the stack's two
 providers from its configuration, reads the stable keys the box is rendered
-from and the ids of what the cutover adopts, declares the appliance as one
-component, and exports when the server certificate expires, which the driver
+from, declares the appliance as one component, and exports when the server certificate expires, which the driver
 holds against the renewal margin.
 """
 
@@ -25,7 +24,7 @@ from kluster import conventions
 from kluster.components.state_backend import Keys, StateBackend
 from kluster.lib import stack_environment
 from kluster.lib import workstation as lib_workstation
-from kluster.lib.state_backend import adoption, settings
+from kluster.lib.state_backend import settings
 
 #: Where this stack's configuration holds what this program reads. Bare, and
 #: so in this project's namespace, for the reason every stack's provider keys
@@ -105,9 +104,6 @@ async def main() -> None:
         # A run starts in the checkout, where `state-backend dump` writes a
         # dump too; `.gitignore` names the file.
         dump_directory=Path.cwd(),
-        # What already exists, written once by `state-backend adopt`, in the
-        # clear: ids, which authorize nothing (rfc-006 §3.3).
-        adopted=adoption.read(config.get_object(adoption.KEY)),
         opts=pulumi.ResourceOptions(providers=[cloud, backups]),
     )
     pulumi.export(settings.CERTIFICATE_EXPIRY_OUTPUT, appliance.certificate_expiry)

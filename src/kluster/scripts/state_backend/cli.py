@@ -1,4 +1,4 @@
-"""`state-backend` -- inspect, dump, restore, adopt and probe the appliance.
+"""`state-backend` -- inspect, dump, restore and probe the appliance.
 
 The appliance itself is the `state-backend` stack's, created, converged and
 replaced by `operator-stack state-backend up` (physical/state-backend.md §1);
@@ -7,9 +7,7 @@ are the standalone moves of the playbooks (physical/state-backend.md §7), each
 of which verifies rather than reports, and the restore a run of the stack
 owes after a replacement it took no dump for. `render` renders a scratch box
 for the rebuild drill, `ssh` logs in for diagnosis, `bundle` writes a client
-bundle, and `pins` checks the pinned artifacts. `adopt` is the cutover's one
-write: the ids of what already exists, into the stack's configuration.
-`probe` is the one command written to run somewhere other than a workstation:
+bundle, and `pins` checks the pinned artifacts. `probe` is the one command written to run somewhere other than a workstation:
 the scheduled checks on the certificate and the dumps (`probe.py`).
 """
 
@@ -22,11 +20,10 @@ import sys
 import tempfile
 from pathlib import Path
 
-from kluster import conventions
 from kluster.conventions import CompartmentMissing
 from kluster.lib import stack_environment
 from kluster.lib.pulumi_cli import PulumiRefused
-from kluster.lib.state_backend import adoption, committed, render, settings, state
+from kluster.lib.state_backend import committed, render, settings, state
 from kluster.lib.state_backend.state import StateError
 from kluster.scripts.credentials import escrow, pki, workstation
 from kluster.scripts.credentials.age import AgeError
@@ -36,7 +33,7 @@ from kluster.scripts.credentials.masters import CredentialRejected
 from kluster.scripts.credentials.pulumi_config import SlotRefused
 from kluster.scripts.credentials.workstation import WorkstationError
 
-from . import adopt, config, probe, provision
+from . import config, probe, provision
 
 log = logging.getLogger(__name__)
 
@@ -61,8 +58,6 @@ REFUSALS = (
     SlotRefused,
     StateError,
     WorkstationError,
-    adopt.Refused,
-    adoption.Refused,
     committed.Refused,
     stack_environment.EnvironmentRefused,
 )
@@ -129,19 +124,6 @@ def build_parser() -> argparse.ArgumentParser:
         '--force',
         action='store_true',
         help='restore even though the target backend already serves stacks',
-    )
-
-    _ = actions.add_parser(
-        'adopt',
-        help="write the ids of the appliance's existing resources into the state-backend stack's configuration",
-        description=(
-            'Look up every resource the state-backend stack keeps but the box, the image and the dump key -- '
-            'the VCN, its gateway and subnet, the reserved address, the image bucket and the dump bucket -- '
-            "under the names the stack declares, signed with the stack's own OCI key and B2 "
-            'management key, and write their ids into its configuration in the clear. The stack imports each '
-            "through its program on its next run. Run once, before the cutover's first plan; it writes "
-            'nothing to OCI or B2.'
-        ),
     )
 
     # What the ops repository's scheduled workflow runs (state-backend.md §6):
@@ -259,7 +241,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
     # One dispatch, and the kit is opened by the arms that need it rather than
-    # before them: `pins`, `ssh`, `probe`, `adopt` and a drill's `restore
+    # before them: `pins`, `ssh`, `probe` and a drill's `restore
     # --identity-file` run on machines that have no offline database, and
     # asking for one would fail before the command started.
     def kit() -> KdbxStore:
@@ -321,14 +303,6 @@ def main(argv: list[str] | None = None) -> int:
                     identity=None,
                     force=args.force,
                 )
-            case 'adopt':
-                configuration = adopt.stack(workstation.repo_root())
-                _ = adopt.adopt(
-                    configuration,
-                    adopt.clients(configuration),
-                    conventions.OCI_TENANCY.compartments[conventions.STATE_BACKEND].require(),
-                )
-                return 0
             case _:  # pragma: no cover - argparse rejects everything else
                 raise ValueError(f'unhandled action {args.action}')
     except REFUSALS as exc:

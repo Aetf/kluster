@@ -21,7 +21,6 @@ import hashlib
 import importlib
 import inspect
 import ipaddress
-import json
 import lzma
 import socket
 import ssl
@@ -50,7 +49,7 @@ from kluster.components import state_backend as component
 from kluster.components.state_backend import hooks
 from kluster.lib import stack_environment
 from kluster.lib import workstation as lib_workstation
-from kluster.lib.state_backend import adoption, committed, permission, render, settings, state
+from kluster.lib.state_backend import committed, permission, render, settings, state
 from kluster.providers import oci_objects, postgres_tls
 from kluster.scripts.credentials import derived, escrow, pki
 from kluster.stacks import state_backend as program
@@ -207,12 +206,8 @@ def _hooks_accepted(monitor: Appliance) -> Generator[_Callbacks]:
         settings_.callbacks = before  # pyright: ignore[reportAttributeAccessIssue]
 
 
-async def _run(
-    monitor: Appliance, machine: Machine, *, adopted: dict[str, str] | None = None, generation: int | None = None
-) -> Appliance:
+async def _run(monitor: Appliance, machine: Machine, *, generation: int | None = None) -> Appliance:
     config = _config(machine.keys)
-    if adopted is not None:
-        config[f'kluster:{adoption.KEY}'] = json.dumps(adopted)
     if generation is not None:
         config[f'kluster:{program.DUMP_KEY_GENERATION}'] = str(generation)
     pulumi.runtime.set_all_config(config)
@@ -349,57 +344,22 @@ def test_nothing_else_is_protected(run: Appliance) -> None:
 
 
 # --------------------------------------------------------------------------
-# What the cutover adopts.
+# What the program brings in.
 # --------------------------------------------------------------------------
 
-#: Each resource the stack adopts, by the type it is declared as. The instance,
-#: the image and the dump key are not among them: the stack makes its own.
-ADOPTED = {
-    adoption.VCN: 'oci:Core/vcn:Vcn',
-    adoption.GATEWAY: 'oci:Core/internetGateway:InternetGateway',
-    adoption.SUBNET: SUBNET,
-    adoption.IMAGE_BUCKET: IMAGE_BUCKET,
-    adoption.ADDRESS: PUBLIC_IP,
-    adoption.DUMP_BUCKET: DUMP_BUCKET,
-}
 
+def test_no_resource_the_program_declares_is_imported(run: Appliance) -> None:
+    """Every resource is the program's own: none carries an import id.
 
-def test_every_adoptable_resource_is_named_once() -> None:
-    assert set(ADOPTED) == set(adoption.ADOPTABLE)
-
-
-@pytest.mark.asyncio
-async def test_each_adopted_id_is_its_resources_import(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The configuration's ids reach their resources as the program's import, and reach nothing else.
-
-    Through the program, so each imported resource is recorded with this
-    program's secret markings (framework/pulumi.md §3.3).
+    An import is a lost state's repair, made as a change of its own and taken
+    out once applied (physical/state-backend.md §7.5, "Losing it"). A
+    declaration that keeps one is a resource the engine refuses to replace, so
+    the driver refuses every run that would replace it.
     """
-    machine = _machine(tmp_path)
-    ids = {name: f'an-id-for-{name}' for name in adoption.ADOPTABLE}
+    imported = sorted(request.type for request in run.requested if request.importId)
 
-    with _files_in(monkeypatch, machine.directory):
-        run = await _run(Appliance(), machine, adopted=ids)
-
-    imported = {request.type: request.importId for request in run.requested if request.importId}
-    assert imported == {ADOPTED[name]: ids[name] for name in adoption.ADOPTABLE}
-
-
-def test_with_nothing_adopted_nothing_is_imported(run: Appliance) -> None:
-    assert [request.type for request in run.requested if request.importId] == []
-
-
-@pytest.mark.asyncio
-async def test_an_adopted_name_the_stack_does_not_keep_is_refused(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    machine = _machine(tmp_path)
-
-    with (
-        _files_in(monkeypatch, machine.directory),
-        pytest.raises(adoption.Refused, match="names 'instance'"),
-    ):
-        _ = await _run(Appliance(), machine, adopted={'instance': 'ocid1.instance.oc1..box'})
+    assert run.requested, 'the program declared nothing, so the assertion below is vacuous'
+    assert not imported, f'declared with an import id: {", ".join(imported)}'
 
 
 # --------------------------------------------------------------------------

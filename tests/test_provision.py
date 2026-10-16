@@ -1,15 +1,9 @@
 """The `state-backend` console script: what is left of it once the stack declares the appliance.
 
 The pins check and the pinned SSH login, which make no OCI call; the
-readiness wait the playbooks lean on; `adopt`, the cutover's one write into
-the stack's configuration, driven against fakes of the OCI SDK's listings and
-of B2's bucket listing; the dump that needs no kit; and `main`, which turns
-every refusal the program can raise into one line.
+readiness wait the playbooks lean on; the dump that needs no kit; and
+`main`, which turns every refusal the program can raise into one line.
 """
-
-# The OCI SDK ships no stubs; the same waiver `adopt.py` itself carries. The
-# fakes below answer its listings with its own `Response`.
-# pyright: reportMissingTypeStubs=false
 
 from __future__ import annotations
 
@@ -22,35 +16,19 @@ import logging
 import types
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Iterator, Sequence
 from email.message import Message
 from pathlib import Path
 from typing import Any, cast
 
-import oci
 import pytest
-from fake_pulumi import RecordedPulumi
 
-from kluster.lib import stack_environment
-from kluster.lib.state_backend import adoption, committed, readiness, settings
-from kluster.scripts.credentials import b2, derived, pulumi_config, workstation
-from kluster.scripts.state_backend import adopt, cli, config, provision
+from kluster.lib.state_backend import committed, readiness, settings
+from kluster.scripts.credentials import workstation
+from kluster.scripts.state_backend import cli, config, provision
 
 #: A host key's public half, as the committed file holds it.
 PIN = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExamplefbb1a7'
-
-#: An address that is not the one the repository records.
-ELSEWHERE = '192.0.2.99'
-
-
-def _returning(value: Any) -> Callable[..., Any]:
-    """A typed stand-in: a bare lambda leaves its parameters unannotated."""
-
-    def stub(*_args: object, **_kwargs: object) -> Any:
-        return value
-
-    return stub
-
 
 # -- the pins ------------------------------------------------------------------
 
@@ -381,172 +359,6 @@ def test_ssh_with_no_committed_host_key_is_refused_before_it_pins_anything(
     assert not (tmp_path / '.credentials' / workstation.BUNDLE / config.KNOWN_HOSTS_FILE).exists()
     [record] = caplog.records
     assert record.exc_info is None
-
-
-# -- adopt ------------------------------------------------------------------------
-
-
-COMPARTMENT = 'ocid1.compartment.oc1..appliance'
-NAMESPACE = 'the-namespace'
-
-
-def _resource(kind: str, name: str, *, state: str = 'AVAILABLE', **fields: object) -> Any:
-    """One listed resource: what `adopt` reads off a listing, and nothing more."""
-    return types.SimpleNamespace(
-        id=f'ocid1.{kind}.oc1..{name}-{state.lower()}', display_name=name, lifecycle_state=state, **fields
-    )
-
-
-class _Listing:
-    """A list call of the SDK's shape, answering one page per call and the cursor to the next."""
-
-    def __init__(self, *pages: list[Any]) -> None:
-        self.pages: list[list[Any]] = list(pages)
-        self.asked: list[dict[str, object]] = []
-        # The pagination helper names the call it follows in its log line.
-        self.__name__ = 'list_call'
-
-    def __call__(self, *args: object, page: str | None = None, **kwargs: object) -> oci.response.Response:
-        self.asked.append({'args': args, **kwargs})
-        index = int(page or 0)
-        headers = {'opc-next-page': str(index + 1)} if index + 1 < len(self.pages) else {}
-        return oci.response.Response(200, headers, self.pages[index], None)
-
-
-@pytest.fixture
-def existing() -> adopt.Clients:
-    """What the appliance's script built, under the names the stack declares, beside what it terminated."""
-    vcn = _resource('vcn', f'{settings.NAME}-vcn')
-    network = types.SimpleNamespace(
-        # A listing keeps what was terminated: a page of them ahead of the
-        # one that serves.
-        list_vcns=_Listing([_resource('vcn', f'{settings.NAME}-vcn', state='TERMINATED') for _ in range(2)], [vcn]),
-        list_internet_gateways=_Listing([_resource('internetgateway', f'{settings.NAME}-igw')]),
-        list_subnets=_Listing([_resource('subnet', f'{settings.NAME}-subnet')]),
-        list_public_ips=_Listing(
-            [_resource('publicip', f'{settings.NAME}-ip', ip_address=settings.ADDRESS)],
-        ),
-    )
-    buckets: list[str] = []
-
-    def get_bucket(namespace: str, name: str) -> object:
-        buckets.append(f'{namespace}/{name}')
-        return object()
-
-    storage = types.SimpleNamespace(
-        get_namespace=_returning(types.SimpleNamespace(data=NAMESPACE)),
-        get_bucket=get_bucket,
-    )
-    return adopt.Clients(
-        network=network,
-        object_storage=storage,
-        buckets=lambda name: [b2.Bucket(bucket_id='bucket-dumps')] if name == settings.B2_BUCKET else [],
-    )
-
-
-def test_adopt_finds_every_resource_the_stack_keeps_but_the_box_and_the_image(existing: adopt.Clients) -> None:
-    found = adopt.find(existing, COMPARTMENT)
-
-    assert set(found) == set(adoption.ADOPTABLE)
-    assert found == {
-        adoption.VCN: f'ocid1.vcn.oc1..{settings.NAME}-vcn-available',
-        adoption.GATEWAY: f'ocid1.internetgateway.oc1..{settings.NAME}-igw-available',
-        adoption.SUBNET: f'ocid1.subnet.oc1..{settings.NAME}-subnet-available',
-        # The id the bucket's importer takes, not an OCID.
-        adoption.IMAGE_BUCKET: f'n/{NAMESPACE}/b/{settings.IMAGE_BUCKET}',
-        adoption.ADDRESS: f'ocid1.publicip.oc1..{settings.NAME}-ip-available',
-        adoption.DUMP_BUCKET: 'bucket-dumps',
-    }
-    # Every lookup is confined to the appliance's compartment.
-    assert existing.network.list_vcns.asked[0]['args'] == (COMPARTMENT,)
-    assert existing.network.list_public_ips.asked[0]['compartment_id'] == COMPARTMENT
-
-
-def test_adopt_reads_each_id_the_component_imports(existing: adopt.Clients) -> None:
-    # What `adopt` writes is what the component reads: the configuration's
-    # object names each resource the way `adoption.read` takes it.
-    assert adoption.read(adopt.find(existing, COMPARTMENT)) == adopt.find(existing, COMPARTMENT)
-
-
-@pytest.mark.parametrize('left_out', adoption.ADOPTABLE)
-def test_a_partial_adoption_is_refused_naming_what_is_missing(left_out: str) -> None:
-    # A name left out is a resource the program would create beside the one
-    # that exists: a second VCN, or a second reserved address the gate cannot
-    # see, since a create has no refreshed state to read.
-    partial = {name: f'an-id-for-{name}' for name in adoption.ADOPTABLE if name != left_out}
-
-    with pytest.raises(adoption.Refused, match=f'no id for {left_out}:'):
-        _ = adoption.read(partial)
-
-
-def test_the_image_and_the_box_are_never_adopted() -> None:
-    # The engine refuses to replace a resource whose declaration still
-    # carries an import id, and an imported image differs from its
-    # declaration; an imported box would record its keys in the clear.
-    assert 'image' not in adoption.ADOPTABLE
-    with pytest.raises(adoption.Refused, match="names 'image'"):
-        _ = adoption.read({**dict.fromkeys(adoption.ADOPTABLE, 'an-id'), 'image': 'ocid1.image.oc1..fcos'})
-
-
-def test_two_live_holders_of_a_name_are_refused_naming_both(existing: adopt.Clients) -> None:
-    existing.network.list_subnets.pages = [
-        [
-            _resource('subnet', f'{settings.NAME}-subnet'),
-            _resource('subnet', f'{settings.NAME}-subnet', state='UPDATING'),
-        ]
-    ]
-
-    with pytest.raises(
-        adopt.Refused, match=rf'2 live resources carry the name {settings.NAME}-subnet \(.*-available, .*-updating\)'
-    ):
-        _ = adopt.find(existing, COMPARTMENT)
-
-
-def test_a_name_nothing_live_carries_is_refused(existing: adopt.Clients) -> None:
-    existing.network.list_internet_gateways.pages = [
-        [_resource('internetgateway', f'{settings.NAME}-igw', state='TERMINATED')]
-    ]
-
-    with pytest.raises(adopt.Refused, match=f'no live internet gateway carries the name {settings.NAME}-igw'):
-        _ = adopt.find(existing, COMPARTMENT)
-
-
-def test_a_reservation_at_another_address_is_refused_naming_both(existing: adopt.Clients) -> None:
-    # The address every bundle and the certificate name is recorded, not
-    # looked up: a reservation elsewhere is a decision for the repository.
-    existing.network.list_public_ips.pages = [[_resource('publicip', f'{settings.NAME}-ip', ip_address=ELSEWHERE)]]
-
-    with pytest.raises(adopt.Refused, match=f'{ELSEWHERE}.*{settings.ADDRESS}'):
-        _ = adopt.find(existing, COMPARTMENT)
-
-
-def _initialized(checkout: Path) -> pulumi_config.Stack:
-    path = checkout / stack_environment.CHECKPOINTS / '.pulumi' / 'stacks' / 'kluster-py'
-    path.mkdir(parents=True)
-    _ = (path / f'{derived.STATE_BACKEND_STACK}.json').write_text('{}')
-    return adopt.stack(checkout)
-
-
-def test_adopt_writes_the_ids_in_the_clear_under_one_key(existing: adopt.Clients, tmp_path: Path) -> None:
-    runner = RecordedPulumi(stacks=[derived.STATE_BACKEND_STACK])
-    configuration = pulumi_config.Stack(
-        name=derived.STATE_BACKEND_STACK,
-        directory=_initialized(tmp_path).directory,
-        environment=pulumi_config.BackendEnvironment(operator=lambda: 'an-operator-passphrase'),
-        run=runner,
-    )
-
-    ids = adopt.adopt(configuration, existing, COMPARTMENT)
-
-    assert json.loads(runner.config[adoption.KEY]) == ids
-    # Ids authorize nothing, so they are plain: a reviewer reads them in the
-    # committed file.
-    assert not [args for args in runner.invocations if '--secret' in args]
-
-
-def test_adopt_is_refused_before_the_stack_has_a_checkpoint(tmp_path: Path) -> None:
-    with pytest.raises(adopt.Refused, match=f'operator-stack {derived.STATE_BACKEND_STACK} pulumi stack init'):
-        _ = adopt.stack(tmp_path)
 
 
 # -- main ---------------------------------------------------------------------------
