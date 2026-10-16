@@ -54,16 +54,47 @@ AUTHORED = 'docs/notes.md'
 GENERATED = 'sdks/probe/pulumi_probe/README.md'
 
 
+#: Each git call's bound, and the step's. Summed over a case they stay below
+#: its 60 s bound, so whichever hangs is named by its own timeout.
+GIT_TIMEOUT = 5
+STEP_TIMEOUT = 20
+
+
+def _environment(home: Path) -> dict[str, str]:
+    """The scratch repository's environment: the caller's `PATH` and none of their git.
+
+    No `GIT_*` variable of the caller's reaches git -- an inherited `GIT_DIR`
+    would point it at another repository -- and neither does their global or
+    system configuration, where a signing helper or an excludes file would
+    decide what these cases see.
+    """
+    return {
+        'PATH': os.environ['PATH'],
+        'HOME': str(home),
+        'GIT_CONFIG_GLOBAL': os.devnull,
+        'GIT_CONFIG_NOSYSTEM': '1',
+    }
+
+
+def _git(repo: Path, *args: str) -> str:
+    done = subprocess.run(
+        ['git', *args],
+        cwd=repo,
+        env=_environment(repo.parent),
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=GIT_TIMEOUT,
+    )
+    return done.stdout
+
+
 def _commit(repo: Path, files: list[str], message: str) -> None:
     for file in files:
         (repo / file).parent.mkdir(parents=True, exist_ok=True)
         _ = (repo / file).write_text('# A document\n')
-    subprocess.run(['git', 'add', '.'], cwd=repo, check=True)
-    subprocess.run(
-        ['git', '-c', 'user.name=probe', '-c', 'user.email=probe@example.invalid', 'commit', '-q', '-m', message],
-        cwd=repo,
-        check=True,
-    )
+    _ = _git(repo, 'add', '.')
+    _ = _git(repo, '-c', 'user.name=probe', '-c', 'user.email=probe@example.invalid', 'commit', '-q', '-m', message)
 
 
 def checked(tmp_path: Path, *, whole_tree: bool) -> list[str]:
@@ -74,11 +105,9 @@ def checked(tmp_path: Path, *, whole_tree: bool) -> list[str]:
         _ = (repo / '.vscode' / f'ltex.{name}.en-US.txt').write_bytes(
             (ROOT / '.vscode' / f'ltex.{name}.en-US.txt').read_bytes()
         )
-    subprocess.run(['git', 'init', '-q'], cwd=repo, check=True)
+    _ = _git(repo, 'init', '-q')
     _commit(repo, ['README.md'], 'base')
-    base = subprocess.run(
-        ['git', 'rev-parse', 'HEAD'], cwd=repo, check=True, capture_output=True, text=True
-    ).stdout.strip()
+    base = _git(repo, 'rev-parse', 'HEAD').strip()
     _commit(repo, [AUTHORED, GENERATED], 'change')
 
     bin_dir = tmp_path / 'bin'
@@ -89,7 +118,7 @@ def checked(tmp_path: Path, *, whole_tree: bool) -> list[str]:
     log.touch()
 
     env = {
-        **os.environ,
+        **_environment(tmp_path),
         'PATH': f'{bin_dir}{os.pathsep}{os.environ["PATH"]}',
         'BASE': '' if whole_tree else base,
         'JAVA_HOME': '',
@@ -102,7 +131,7 @@ def checked(tmp_path: Path, *, whole_tree: bool) -> list[str]:
         env=env,
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=STEP_TIMEOUT,
     )
     assert done.returncode == 0, done.stdout + done.stderr
     return log.read_text().splitlines()
