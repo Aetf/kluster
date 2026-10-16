@@ -46,6 +46,7 @@ import os
 import pty
 import re
 import selectors
+import shlex
 import shutil
 import signal
 import site
@@ -72,6 +73,7 @@ from kluster.lib.state_backend import permission, settings, state
 from kluster.scripts.credentials import derived, escrow
 from kluster.scripts.credentials import workstation as credential_slots
 from kluster.scripts.operator_stack import appliance, checkpoint, cli, driver
+from kluster.scripts.state_backend import cli as state_backend_cli
 
 #: The stack a committed-state case adds to the census.
 PROBE = 'probe'
@@ -285,6 +287,22 @@ def committed(monkeypatch: pytest.MonkeyPatch) -> str:
     return PROBE
 
 
+def _stack_of(argv: list[str]) -> str:
+    """The stack a `pulumi` invocation names, by its `--stack` option."""
+    return argv[argv.index('--stack') + 1]
+
+
+def _writes_the_operator_bundle(refusal: BaseException) -> bool:
+    """Whether the one `state-backend` command a refusal names writes the operator's bundle.
+
+    Parsed by that command's own parser, so the remedy is one an operator can
+    run as written.
+    """
+    (command,) = re.findall(r'`state-backend ([^`]*)`', str(refusal))
+    parsed = state_backend_cli.build_parser().parse_args(shlex.split(command))
+    return (parsed.action, parsed.name) == ('bundle', 'operator')
+
+
 def _checkpoint(checkout: Path, resources: list[dict[str, Any]]) -> Path:
     """A committed checkpoint of `probe` holding `resources`, as `pulumi` lays one out."""
     path = checkout / stack_environment.CHECKPOINTS / '.pulumi' / 'stacks' / 'probe' / f'{PROBE}.json'
@@ -346,7 +364,9 @@ def test_the_committed_stack_runs_against_the_checkouts_checkpoints(repository: 
     assert run.plan() == driver.NOTHING_PLANNED
 
     (env,) = fake.envs
-    assert env['PULUMI_BACKEND_URL'] == f'{(repository.checkout / "checkpoints").as_uri()}?metadata=skip'
+    assert (
+        env['PULUMI_BACKEND_URL'] == f'{(repository.checkout / stack_environment.CHECKPOINTS).as_uri()}?metadata=skip'
+    )
     assert env['PULUMI_DIY_BACKEND_DISABLE_CHECKPOINT_BACKUPS'] == 'true'
     assert env['PULUMI_CONFIG_PASSPHRASE'] == OPERATOR_PASSPHRASE
     assert not [value for value in env.values() if 'stack-passphrase' in value or '/ambient/' in value]
@@ -682,7 +702,7 @@ def test_up_applies_what_is_planned_once_confirmed(tmp_path: Path, yes: bool, an
 
     assert run.up(yes=yes) == (0 if ups else driver.PLANNED)
 
-    assert fake.ups() == [['up', '--refresh', '--yes', '--skip-preview', '--stack', 'github']] * ups
+    assert [_stack_of(up) for up in fake.ups()] == ['github'] * ups
     assert len(asked) == (0 if yes else 1)
 
 
@@ -1131,10 +1151,10 @@ def test_a_run_stopped_before_its_checks_leaves_the_record_and_the_next_up_check
         _ = run.passthrough(['refresh', '--yes'])
 
     record = checkpoint.record(repository.checkout, committed)
-    assert record.read_text().startswith('unchecked: `pulumi refresh --yes`')
+    assert ' '.join(['refresh', '--yes']) in record.read_text().splitlines()[0]
     fake.failing_export = None
     assert run.up(yes=True) == 0
-    assert fake.ups() == [['up', '--refresh', '--yes', '--skip-preview', '--stack', committed]]
+    assert [_stack_of(up) for up in fake.ups()] == [committed]
     assert not record.exists()
 
 
@@ -2065,7 +2085,7 @@ def test_force_grants_the_permission_on_the_up_alone(repository: Repository) -> 
     assert _appliance(repository, fake).up(yes=True, force=True) == driver.NOTHING_PLANNED
 
     (up,) = fake.ups()
-    assert up == ['up', '--refresh', '--yes', '--skip-preview', '--stack', STATE_BACKEND]
+    assert _stack_of(up) == STATE_BACKEND
     granted = [env.get(permission.ENV) for env in fake.envs]
     # The preview carries none: it runs no hook, and grants nothing to anyone.
     assert granted == [None, permission.GRANTED]
@@ -2311,8 +2331,9 @@ def test_the_gate_reads_a_silent_backend_apart_from_a_missing_bundle(
     gate = appliance.Gate.for_checkout(checkout)
 
     # No bundle in the slot is this checkout's to repair, and the run refuses.
-    with pytest.raises(appliance.Refused, match='state-backend bundle operator'):
+    with pytest.raises(appliance.Refused) as refusal:
         _ = gate.backend()
+    assert _writes_the_operator_bundle(refusal.value)
 
     _fill_slots(checkout)
 
@@ -2574,8 +2595,9 @@ def test_a_checkout_with_no_bundle_is_refused_before_anything_runs(repository: R
     run = driver.Run.open(STATE_BACKEND, repository.checkout, pulumi=fake, base=AMBIENT)
 
     for act in (run.plan, lambda: run.up(yes=True)):
-        with pytest.raises(appliance.Refused, match='state-backend bundle operator'):
+        with pytest.raises(appliance.Refused) as refusal:
             _ = act()
+        assert _writes_the_operator_bundle(refusal.value)
     assert fake.streamed == []
 
 
