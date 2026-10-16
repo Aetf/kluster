@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import subprocess as sp
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -35,6 +36,7 @@ from kluster.lib.state_backend import render, settings, state
 from kluster.scripts.credentials import age, escrow
 from kluster.scripts.credentials.kdbx import PATH_ENV, KdbxStore
 from kluster.scripts.state_backend import cli
+from kluster.scripts.state_backend import cli as state_backend_cli
 
 
 @pytest.fixture
@@ -463,7 +465,15 @@ def test_a_restore_decrypts_verifies_and_lands_the_archive(
     # Listed and read before it is restored, and the backend is asked what
     # it serves both before and after: the verification is the last word,
     # not the log line above it.
-    assert tools.programs() == ['pulumi', state.PG_RESTORE, state.PG_RESTORE, state.PG_RESTORE, 'pulumi']
+    calls = [Path(argv[0]).name for argv in tools.calls if Path(argv[0]).name != age.BINARY]
+    (landing,) = [
+        i
+        for i, argv in enumerate(argv for argv in tools.calls if Path(argv[0]).name != age.BINARY)
+        if Path(argv[0]).name == state.PG_RESTORE and any(arg.startswith('--dbname') for arg in argv)
+    ]
+    assert 'pulumi' in calls[:landing]
+    assert 'pulumi' in calls[landing + 1 :]
+    assert state.PG_RESTORE in calls[:landing]
     # A provisioned box carries an empty pulumi_state table once anything
     # has opened the backend -- the restore's own first question to `pulumi`
     # included -- so the landing call must drop before it recreates, inside
@@ -871,9 +881,24 @@ def test_the_dump_and_the_kit_restore_hand_their_handlers_what_the_command_line_
     }
 
 
+def _writes_the_operator_bundle(message: str) -> bool:
+    """Whether a message names one `state-backend` command, and it writes the operator's bundle.
+
+    Parsed by that command's own parser, so the remedy is one an operator can
+    run as written.
+    """
+    commands = re.findall(r'`state-backend ([^`]*)`', message)
+    if len(commands) != 1:
+        return False
+    parsed = state_backend_cli.build_parser().parse_args(shlex.split(commands[0]))
+    return (parsed.action, parsed.name) == ('bundle', 'operator')
+
+
 def test_a_bundle_that_is_not_there_names_the_command_that_writes_one(tmp_path: Path) -> None:
-    with pytest.raises(state.StateError, match='state-backend bundle operator'):
+    with pytest.raises(state.StateError) as refusal:
         _ = state.connection(tmp_path / 'nothing-here')
+
+    assert _writes_the_operator_bundle(str(refusal.value))
 
 
 def test_the_connection_is_the_url_plus_the_bundle_beside_it(bundle: Path) -> None:
@@ -936,4 +961,4 @@ def test_a_url_that_still_carries_its_paths_works_and_says_what_to_re_run(
         assert _dump(kit, registry, bundle, tmp_path / 'taken.dump.age') == 0
 
     assert f'--dbname={LEGACY_URL}' in tools.argv(state.PG_DUMP)
-    assert any('state-backend bundle operator' in record.getMessage() for record in caplog.records)
+    assert any(_writes_the_operator_bundle(record.getMessage()) for record in caplog.records)
