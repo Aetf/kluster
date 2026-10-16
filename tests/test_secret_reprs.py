@@ -25,8 +25,8 @@ fields before printing the record. What the marker cannot catch is a
 credential in a field nobody marked, and that residual is stated where the
 marker is declared.
 
-**The modules `MODULES` names do not carry the marker yet, and a census holds
-them instead**: it pins, for every record in them, which of its fields carry
+**The modules `MODULES` names do not carry the marker yet — `slots`, whose
+file another change holds — and a census holds them instead**: it pins, for every record in them, which of its fields carry
 secrets and which do not, and then holds both halves against the classes
 themselves. A field added to any of them fails here until its author has said
 which half it is in — the failure mode being guarded is a field added later to
@@ -54,9 +54,9 @@ three can hide a field, so the rule for the other two is not an annotation but
 a prohibition — a `NamedTuple` or a `TypedDict` may carry no secret at all, and
 both the marker's case and the census refuse one that says it does.
 
-**The census's modules are the ones that hold credentials**, a component's
-module as readily as a script's. Its boundary is deliberate rather than
-exhaustive: it proves nothing about a class in a module it does not name, and
+**No module joins the census**: one that grows a record carrying a
+credential marks the field instead. The census's boundary is deliberate rather
+than exhaustive: it proves nothing about a class in a module it does not name, and
 a module is covered whole or not at all, because a record censused by class
 alone leaves the next record in the same module uncaught. The marker has no
 such boundary: the package is walked whole.
@@ -65,9 +65,9 @@ such boundary: the package is walked whole.
 `Output` it holds in production.** An `Output`'s repr discloses nothing, but
 the type promises nothing about arriving as one — a test hands over the
 literal — so a field of that type carrying a credential is hidden like any
-other. `routing`'s session password is one, marked; `container` and `k8s` are
-censused for that class of field: a mounted file's contents, an initial
-state's contents, the ACME token, and a produced Secret's own data.
+other. `routing`, `container` and `k8s` mark theirs: the session password, a
+mounted file's contents, an initial state's contents, the ACME token, and a
+produced Secret's own data.
 
 **A field that holds a library's object is classified by what the object
 holds, not by what it prints**, as `pki.Authority`'s key is. `kdbx` and
@@ -106,11 +106,7 @@ import pulumi
 import pytest
 
 import kluster
-from kluster.components.gateway import container
-from kluster.lib import k8s
 from kluster.lib.secret import Secret
-from kluster.lib.state_backend import render
-from kluster.providers.device_files import ssh
 from kluster.scripts.credentials import (
     b2,
     escrow,
@@ -161,13 +157,7 @@ class Census:
 
 #: The modules whose records this census covers: the ones whose secret fields
 #: do not carry the marker yet.
-MODULES: tuple[ModuleType, ...] = (
-    slots,
-    render,
-    ssh,
-    container,
-    k8s,
-)
+MODULES: tuple[ModuleType, ...] = (slots,)
 
 CENSUS: dict[type, Census] = {
     # The three caches hold the forge, an opened escrow and the backend
@@ -193,47 +183,6 @@ CENSUS: dict[type, Census] = {
     slots.StateRead: Census('stack output'),
     slots.SecretStore: Census('key'),
     slots.WorkstationSlot: Census('name'),
-    render.Machine: Census(
-        'operator_keys postgres_uid postgres_image database ci_role operator_role ca_cert server_cert '
-        'server_key ssh_host_key age_recipients age_url age_sha256 b2_dump_key_id b2_dump_key b2_bucket_id '
-        'b2_prefix dump_script dump_schedule reboot_day reboot_time reboot_window_minutes',
-        secret='server_key ssh_host_key b2_dump_key',
-    ),
-    # The machine as the Butane template reads it: every field of the one
-    # above, and the host key's public half.
-    render._Parameters: Census(  # pyright: ignore[reportPrivateUsage]
-        'operator_keys postgres_uid postgres_image database ci_role operator_role ca_cert server_cert '
-        'server_key ssh_host_key age_recipients age_url age_sha256 b2_dump_key_id b2_dump_key b2_bucket_id '
-        'b2_prefix dump_script dump_schedule reboot_day reboot_time reboot_window_minutes ssh_host_key_pub',
-        secret='server_key ssh_host_key b2_dump_key',
-    ),
-    ssh.CommandResult: Census('exit_status stdout stderr'),
-    ssh.Device: Census('host username private_key host_key port', secret='private_key'),
-    ssh.FileStat: Census('owner group mode size kind'),
-    container.BridgedDeclaration: Census('service pin'),
-    # The zone-scoped token the proxy answers DNS-01 challenges with.
-    container.CaddyService: Census('service pin acme_token vhosts legacy', secret='acme_token'),
-    container.ContainerDeclaration: Census('service pin'),
-    # An initial state is a service's own configuration.
-    container.InitialState: Census('into content', secret='content'),
-    # With `secret` set, a credential the image reads (the ACME token today);
-    # hidden whatever the file holds, since the field is one.
-    container.MountedFile: Census('name target content secret', secret='content'),
-    container.OverlayDaemon: Census('service pin'),
-    container.ResolverService: Census('service pin'),
-    container.Rootfs: Census('repository tag digest'),
-    container._AdguardInitialParams: Census(  # pyright: ignore[reportPrivateUsage]
-        'cluster address api_port upstreams gateway_zones gateway_resolver'
-    ),
-    container._CaddyParams: Census(  # pyright: ignore[reportPrivateUsage]
-        'acme_contact zone controller controller_upstream token_path api_port vhosts legacy_zone legacy'
-    ),
-    container._MachineParams: Census(  # pyright: ignore[reportPrivateUsage]
-        'cluster name capability kill_signal kill_gracetime environment bridge host_network state_bind devices binds'
-    ),
-    container._ResolvParams: Census('cluster resolver'),  # pyright: ignore[reportPrivateUsage]
-    # The produced Secret's own data, template holes and all.
-    k8s.SecretTemplate: Census('data type immutable labels annotations', secret='data'),
 }
 
 
