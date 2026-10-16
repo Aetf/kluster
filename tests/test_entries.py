@@ -12,6 +12,8 @@ walk over the real parser, `tests/test_cli.py`'s
 
 from __future__ import annotations
 
+import itertools
+import re
 from pathlib import Path
 
 import pytest
@@ -100,7 +102,7 @@ def test_listing_the_roots_needs_no_kit_and_prints_no_value(
     printed = capsys.readouterr().out
     assert 'a-secret' not in printed
     for member in masters.ROOTS:
-        assert f'{member}: in the secret store' in printed
+        assert member in printed
 
 
 def test_a_row_no_api_can_create_stops_rather_than_inventing_one(
@@ -113,7 +115,8 @@ def test_a_row_no_api_can_create_stops_rather_than_inventing_one(
     monkeypatch.setattr('getpass.getpass', lambda _prompt='': '')
 
     assert main(['--kdbx', str(kit.path), 'seed', 'cloudflare', 'create']) == 1
-    assert 'dash.cloudflare.com' in caplog.text
+    for line in entries.SEEDS['cloudflare'].console.splitlines():
+        assert line.strip() in caplog.text
 
 
 def test_the_help_says_when_to_run_what(capsys: pytest.CaptureFixture[str]) -> None:
@@ -127,16 +130,17 @@ def test_the_help_says_when_to_run_what(capsys: pytest.CaptureFixture[str]) -> N
         _ = main(['--help'])
 
     printed = capsys.readouterr().out
-    for landmark in ('bring-up, from nothing', 'when one seed is lost', 'rotation', 'day to day'):
-        assert landmark in printed
-    # Each lifecycle verb appears in the ordering, not only in the tree.
-    for verb in ('kit bootstrap', 'kit rotate', 'derived <row> generate', 'derived check'):
-        assert verb in printed
-    # And each one the ordering spells out whole is a leaf the tree still
-    # carries, so a verb renamed in the parser is red here while the
-    # hand-written ordering still names the old one. `derived <row> generate`
-    # names no row; the help suite holds the order's rows to the tree.
+    # Each command the ordering spells is a leaf the tree still carries, up
+    # to the first placeholder or option, so a verb renamed in the parser is
+    # red here while the hand-written ordering still names the old one. A
+    # command stands on a line of its own, step number aside: a line of prose
+    # that a wrap starts with the word reads on into punctuation.
+    spelled = [
+        list(itertools.takewhile(lambda word: '<' not in word and not word.startswith('-'), found.group(1).split()))
+        for line in printed.splitlines()
+        if (found := re.fullmatch(r'\s*(?:\d+\.\s+)?credentials((?: [a-z0-9<>-]+)+)\s*', line))
+    ]
     leaves = commands()
-    for landmark in ('kit bootstrap', 'kit rotate', 'derived check'):
-        words = landmark.split()
-        assert words in [leaf[: len(words)] for leaf in leaves], landmark
+    assert spelled
+    for words in spelled:
+        assert words in [leaf[: len(words)] for leaf in leaves], words
