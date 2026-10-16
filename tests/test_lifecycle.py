@@ -21,7 +21,6 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-import keyring.backends.fail
 import oci_clock
 import pinned_tools
 import pytest
@@ -32,6 +31,7 @@ from cloudflare_api import ACCOUNT_ID as CLOUDFLARE_ACCOUNT
 from cloudflare_api import MINTING_POLICY, console_seed
 from cloudflare_api import FakeApi as CloudflareApi
 from credentials_command_tree import named_commands, named_leaves
+from keyring.backends import fail as fail_keyring
 from memory_keyring import installed
 from oci_clock import SimulatedClock
 from oci_conventions import with_tenancy_ocid
@@ -886,7 +886,7 @@ def slots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     directory = tmp_path / 'checkout' / '.credentials'
     monkeypatch.setattr(workstation, 'directory', lambda: directory)
     monkeypatch.setattr('sys.stdin', io.StringIO())
-    with installed(keyring.backends.fail.Keyring()):
+    with installed(fail_keyring.Keyring()):
         yield directory
 
 

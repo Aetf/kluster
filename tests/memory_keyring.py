@@ -16,15 +16,15 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 import keyring
-import keyring.backend
-import keyring.errors
+from keyring import backend as keyring_backend
+from keyring import errors as keyring_errors
 from keyring.backends import fail as fail_keyring
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
 
-class MemoryKeyring(keyring.backend.KeyringBackend):
+class MemoryKeyring(keyring_backend.KeyringBackend):
     """A Secret Service that lives for the length of one test."""
 
     # `keyring`'s own backends declare this the same way; the base class makes
@@ -43,18 +43,18 @@ class MemoryKeyring(keyring.backend.KeyringBackend):
 
     def delete_password(self, service: str, username: str) -> None:
         if (service, username) not in self.items:
-            raise keyring.errors.PasswordDeleteError(username)
+            raise keyring_errors.PasswordDeleteError(username)
         del self.items[(service, username)]
 
 
 #: The backends `installed` has put in place, innermost last. What a block
 #: restores is read from here rather than asked of `keyring`, which resolves the
 #: machine's own backend wherever nothing has been set yet.
-_INSTALLED: list[keyring.backend.KeyringBackend] = []
+_INSTALLED: list[keyring_backend.KeyringBackend] = []
 
 
 @contextmanager
-def installed(backend: keyring.backend.KeyringBackend) -> Generator[keyring.backend.KeyringBackend]:
+def installed(backend: keyring_backend.KeyringBackend) -> Generator[keyring_backend.KeyringBackend]:
     """`backend` as the process's secret store for the block, and the previous one back after it.
 
     The previous one is the one an enclosing block installed. Outside every

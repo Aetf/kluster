@@ -15,9 +15,9 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
-import keyring.backends.fail
 import pytest
 from credentials_command_tree import named_commands
+from keyring.backends import fail as fail_keyring
 from memory_keyring import MemoryKeyring, installed
 
 from kluster.scripts.credentials import devices, kdbx, masters, workstation
@@ -48,7 +48,7 @@ def store() -> Iterator[MemoryKeyring]:
 @pytest.fixture
 def headless() -> Iterator[None]:
     """A machine with no secret store at all — CI, or a server over SSH."""
-    with installed(keyring.backends.fail.Keyring()):
+    with installed(fail_keyring.Keyring()):
         yield
 
 
