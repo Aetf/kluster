@@ -253,3 +253,15 @@ PGSSLKEY = """
 {{- env.PGSSLKEY | default(value="") -}}
 {%- endif -%}
 """
+# The stack the prose checker's language server runs its threads on. Its
+# markdown inline-math parser scans from a lone `$` to the end of the block
+# with a `java.util.regex` lazy loop, which recurses once per character: past
+# a few hundred words after the `$` the worker overflows the default stack,
+# the server swallows the `StackOverflowError`, and `ltex-cli-plus` waits for
+# diagnostics that never come (kluster-ops#465). Every way this repository
+# reaches the checker -- AGENTS.md's recipe, the prose step -- is `mise x --
+# ltex-cli-plus`, which carries this; ltex is the only Java among the tools
+# above. A workaround, held by `tests/test_ltex_stack.py`: remove this line
+# when that case fails because the pinned release checks its reproducer on
+# the default stack.
+JAVA_OPTS = "-Xss16m"

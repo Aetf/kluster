@@ -93,7 +93,9 @@ def test_every_variable_mise_sets_is_masked_or_deliberately_not() -> None:
     """
     materialized = set(tomllib.loads(MISE.read_text())['env'])
 
-    assert materialized <= root_credentials.MASKED | root_credentials.UNMASKED_PATHS
+    assert (
+        materialized <= root_credentials.MASKED | root_credentials.UNMASKED_PATHS | root_credentials.UNMASKED_SETTINGS
+    )
 
 
 def test_the_variables_left_unmasked_carry_paths_rather_than_values() -> None:
@@ -101,10 +103,12 @@ def test_the_variables_left_unmasked_carry_paths_rather_than_values() -> None:
 
     A path in a failed assertion discloses where key material lives, not the
     material; a value would be the disclosure this module exists to prevent.
-    So the two sets may not overlap, and the exempt ones are the ones the
-    suites redirect rather than blank.
+    So neither exempt set may overlap the masked one: the paths are the ones
+    the suites redirect rather than blank, and the settings carry no secret
+    at all.
     """
     assert root_credentials.MASKED & root_credentials.UNMASKED_PATHS == frozenset()  # noqa: SIM300 -- the overlap is the subject
+    assert root_credentials.MASKED & root_credentials.UNMASKED_SETTINGS == frozenset()  # noqa: SIM300 -- the overlap is the subject
 
 
 def test_a_fake_credential_names_the_variable_it_stands_in_for() -> None:

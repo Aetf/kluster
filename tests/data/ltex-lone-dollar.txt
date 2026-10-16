@@ -1,0 +1,50 @@
+# B
+
+-   **Patches are Python.** Per-node machine config is assembled from
+    typed Python dicts (our framework's home turf), covering: KubeSpan
+    on; KubePrism; dual-stack pod/service CIDRs **IPv4 first**
+    (architecture.md §1.3); CP scheduling enabled
+    (`allowSchedulingOnControlPlanes` — the combined CP+ingress role);
+    cert SANs including the NLB IP; **etcd encryption at rest**
+    (secretbox — the architecture.md §6.5 residual-risk mitigation for
+    cluster secrets in a $0-trust tenancy); kubelet system-reserved so
+    eviction actually works (the legacy CP-starvation lesson,
+    architecture.md §6.5); the **Talos ingress firewall**
+    (`NetworkDefaultActionConfig` `block`, plus a `NetworkRuleConfig`
+    per opening) as **the only filter** — the subnet admits everything
+    (§1; architecture.md §4.1) — enumeration rule (2026-08-24): **only
+    ports that terminate in the host netns**, each opening stating its
+    protocol and its sources — apid 50000/tcp and kube-apiserver
+    6443/tcp (a hostNetwork static pod, so host-side despite also being
+    an NLB listener) from anywhere; KubeSpan 51820/**udp** from
+    anywhere, since the worker's peers see it at a home address that is
+    dynamic and WireGuard answers no packet not keyed to a peer; the
+    kubelet 10250/tcp from the cluster's own ranges alone (the VCN, the
+    cluster VLAN and both pod ranges); the homelab worker additionally
+    BGP 179/tcp from the UDM. Intra-cluster traffic — etcd, trustd,
+    kubelet↔apiserver — rides KubeSpan and enters on the `kubespan`
+    interface, which the ingress chain accepts ahead of every rule, so
+    no opening names it. The default-action document is on every node
+    because without it Talos keeps the openings and accepts every other
+    port. **Service ports are
+    deliberately absent**: LoadBalancer VIP traffic — NLB health
+    checks on backend ports included — is intercepted by Cilium's
+    BPF datapath at tc ingress *before* nftables, so declared
+    frontends serve without firewall entries while undeclared ports
+    fall through to the host stack and hit the default-deny; the
+    two layers compose, per-service admission control *is* the KPR
+    datapath, and machine config never carries an app port (the
+    co-location principle survives). Verified both ways at
+    bootstrap (§6); recorded fallback if BPF precedence fails on
+    the chosen datapath mode: copy the small public-port census (a
+    `conventions` constant — 80/443/22000×2/8443/hath, rarely
+    changing) into machine config, accepting the cross-stack cost
+    only in that world; kube-apiserver `anonymous-auth=false` pinned and audit
+    logging on (a public 6443 warrants both, defaults notwithstanding);
+    the dedicated-VIP node's secondary private IP on its physical link;
+    the **local-path volume** (`/var/mnt/storage`, storage.md §2 — the
+    StorageClass's provisioner is k8s-base's, but the directory under
+    it is machine config); and on a node a block volume
+    attaches to (§1), the **node volume** and a **node label** naming
+    it (`conventions.NODE_VOLUME_LABEL`), in the configuration the node
+    boots with.
