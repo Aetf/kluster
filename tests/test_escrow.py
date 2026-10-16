@@ -94,8 +94,9 @@ def test_init_refuses_to_replace_a_recovery_key(kit: KdbxStore, registry: escrow
     # replaces one is the rotation that re-wraps first.
     _ = escrow.init(kit, registry)
 
-    with pytest.raises(escrow.EscrowError, match='already holds a recovery key'):
+    with pytest.raises(escrow.EscrowRefused) as refused:
         _ = escrow.init(kit, registry)
+    assert refused.value.refusal is escrow.Refusal.RECOVERY_HELD
 
 
 def test_init_refuses_a_recipients_file_already_in_the_repo(kit: KdbxStore, registry: escrow.Registry) -> None:
@@ -105,8 +106,9 @@ def test_init_refuses_a_recipients_file_already_in_the_repo(kit: KdbxStore, regi
     registry.set_recipients([age.generate().public])
     before = registry.recipients_file.read_text()
 
-    with pytest.raises(escrow.EscrowError, match='already exists'):
+    with pytest.raises(escrow.EscrowRefused) as refused:
         _ = escrow.init(kit, registry)
+    assert refused.value.refusal is escrow.Refusal.RECIPIENTS_EXIST
 
     assert registry.recipients_file.read_text() == before
     assert not kit.has(escrow.RECOVERY_ENTRY)
@@ -203,10 +205,12 @@ def test_a_backup_identity_label_takes_one_generation_for_its_lifetime(vault: es
     # second one would have the next provision run encrypt every dump to a key
     # no dump in retention was written to, so both writers refuse it and the
     # first generation is what the label goes on answering with.
-    with pytest.raises(escrow.EscrowError, match='one value for its lifetime'):
+    with pytest.raises(escrow.EscrowRefused) as refused:
         _ = escrow.generate(vault, label)
-    with pytest.raises(escrow.EscrowError, match='one value for its lifetime'):
+    assert refused.value.refusal is escrow.Refusal.SINGLE_VALUE
+    with pytest.raises(escrow.EscrowRefused) as refused:
         _ = escrow.adopt(vault, label, age.generate().secret)
+    assert refused.value.refusal is escrow.Refusal.SINGLE_VALUE
 
     assert vault.registry.generations(label) == [escrow.FIRST]
     assert vault.recover(label) == first
@@ -267,8 +271,9 @@ def test_import_refuses_a_value_that_is_not_there(vault: escrow.Vault, label: st
     # escrowed empty string is only discovered by the recovery that needed it.
     # Said as emptiness whatever the label expects: "this is not a PEM private
     # key" would send the operator looking at the wrong end of the pipe.
-    with pytest.raises(escrow.EscrowError, match='empty'):
+    with pytest.raises(escrow.EscrowRefused) as refused:
         _ = escrow.adopt(vault, label, value)
+    assert refused.value.refusal is escrow.Refusal.EMPTY
 
     assert vault.registry.generations(label) == []
 
@@ -278,8 +283,9 @@ def test_import_refuses_something_that_is_not_an_age_identity(vault: escrow.Vaul
 
     # A wrong-but-non-empty pipe: the recipient rather than the identity is
     # the mistake the labels invite, and it survives every check but the shape.
-    with pytest.raises(escrow.EscrowError, match='age identity'):
+    with pytest.raises(escrow.EscrowRefused) as refused:
         _ = escrow.adopt(vault, label, age.generate().public)
+    assert refused.value.refusal is escrow.Refusal.NOT_ITS_SHAPE
 
     assert vault.registry.generations(label) == []
 
@@ -311,8 +317,9 @@ def _certificate() -> str:
 @pytest.mark.parametrize('block', [_certificate, _public_key], ids=['certificate', 'public-key'])
 def test_import_refuses_something_that_is_not_a_private_key(vault: escrow.Vault, block: Callable[[], str]) -> None:
     # A whole PEM block, so the footer is there and the header alone refuses it.
-    with pytest.raises(escrow.EscrowError, match='PEM private key'):
+    with pytest.raises(escrow.EscrowRefused) as refused:
         _ = escrow.adopt(vault, escrow.CA, block())
+    assert refused.value.refusal is escrow.Refusal.NOT_ITS_SHAPE
 
     assert vault.registry.generations(escrow.CA) == []
 
@@ -320,8 +327,9 @@ def test_import_refuses_something_that_is_not_a_private_key(vault: escrow.Vault,
 def test_import_refuses_a_private_key_that_stops_half_way(vault: escrow.Vault) -> None:
     truncated = pki.generate_ca_key()[:80]
 
-    with pytest.raises(escrow.EscrowError, match='PEM private key'):
+    with pytest.raises(escrow.EscrowRefused) as refused:
         _ = escrow.adopt(vault, escrow.CA, truncated)
+    assert refused.value.refusal is escrow.Refusal.NOT_ITS_SHAPE
 
     assert vault.registry.generations(escrow.CA) == []
 
@@ -365,8 +373,9 @@ assert not _APP_KEYS_MISSING, f'console rows lack {sorted(_APP_KEYS_MISSING)}'
 def test_a_console_row_cannot_be_drawn_here(vault: escrow.Vault, label: str) -> None:
     # Randomness would produce a PEM nothing on the platform has ever heard
     # of. The refusal names the command that does file one instead.
-    with pytest.raises(escrow.EscrowError, match='made in a console'):
+    with pytest.raises(escrow.EscrowRefused) as refused:
         _ = escrow.generate(vault, label)
+    assert refused.value.refusal is escrow.Refusal.CONSOLE_MADE
 
     assert vault.registry.generations(label) == []
 
@@ -410,8 +419,9 @@ def test_recording_a_key_the_registry_has_never_seen_is_the_next_generation(vaul
 def test_recording_something_that_is_not_a_private_key_is_refused(vault: escrow.Vault, label: str) -> None:
     # Nothing here can draw a key a console hands out, and a wrong pipe is
     # caught at the record rather than on the day a workflow signs with it.
-    with pytest.raises(escrow.EscrowError, match='PEM private key'):
+    with pytest.raises(escrow.EscrowRefused) as refused:
         _ = escrow.record(vault, label, 'Iv1.the-client-id')
+    assert refused.value.refusal is escrow.Refusal.NOT_ITS_SHAPE
 
     assert vault.registry.generations(label) == []
 
@@ -420,8 +430,9 @@ def test_recording_a_row_that_is_drawn_here_is_refused(vault: escrow.Vault) -> N
     # `record` is for a value this side cannot produce. Pointing it at the
     # passphrase would escrow whatever the operator pasted as a generation of
     # a credential every stack but those encrypted apart is under.
-    with pytest.raises(escrow.EscrowError, match='drawn here'):
+    with pytest.raises(escrow.EscrowRefused) as refused:
         _ = escrow.record(vault, escrow.PASSPHRASE, 'a-pasted-passphrase')
+    assert refused.value.refusal is escrow.Refusal.DRAWN_HERE
 
     assert vault.registry.generations(escrow.PASSPHRASE) == []
 
@@ -446,8 +457,9 @@ def test_a_key_still_in_a_kit_is_read_out_of_it(vault: escrow.Vault, kit: KdbxSt
 
 
 def test_a_row_that_was_never_in_a_kit_says_so(kit: KdbxStore) -> None:
-    with pytest.raises(escrow.EscrowError, match='never held in a kit'):
+    with pytest.raises(escrow.EscrowRefused) as refused:
         _ = escrow.from_kit(kit, escrow.PASSPHRASE)
+    assert refused.value.refusal is escrow.Refusal.NEVER_IN_KIT
 
 
 def test_a_kit_carrying_no_such_row_sends_the_operator_to_the_console(kit: KdbxStore) -> None:
@@ -455,8 +467,9 @@ def test_a_kit_carrying_no_such_row_sends_the_operator_to_the_console(kit: KdbxS
     # it holds no entry to read -- which is an ordinary kit and not a broken
     # one. "No entry seeds/GitHub App (dispatch)" would read like damage and
     # invite a hunt for the row; what the operator needs is the other source.
-    with pytest.raises(escrow.EscrowError, match='carries no such row') as refused:
+    with pytest.raises(escrow.EscrowRefused) as refused:
         _ = escrow.from_kit(kit, escrow.DISPATCH_KEY)
+    assert refused.value.refusal is escrow.Refusal.KIT_LACKS_ROW
 
     ((_, parsed),) = named_commands(str(refused.value))
     assert (parsed['action'], parsed['label']) == (escrow.register()[escrow.DISPATCH_KEY].verb, escrow.DISPATCH_KEY)
@@ -464,13 +477,41 @@ def test_a_kit_carrying_no_such_row_sends_the_operator_to_the_console(kit: KdbxS
 
 
 def test_an_unregistered_label_is_refused(vault: escrow.Vault) -> None:
-    with pytest.raises(escrow.EscrowError, match='no label'):
+    with pytest.raises(escrow.EscrowRefused) as refused:
         _ = escrow.generate(vault, 'made/up')
+    assert refused.value.refusal is escrow.Refusal.NO_SUCH_LABEL
+
+
+@pytest.mark.parametrize('content', [None, '# nothing but a comment\n'], ids=['no file', 'no recipient'])
+def test_a_recipients_file_that_names_nobody_is_refused_by_which(
+    registry: escrow.Registry, content: str | None
+) -> None:
+    if content is not None:
+        registry.root.mkdir(parents=True, exist_ok=True)
+        _ = registry.recipients_file.write_text(content)
+
+    with pytest.raises(escrow.EscrowRefused) as refused:
+        _ = registry.recipients()
+    expected = escrow.Refusal.NO_RECIPIENTS_FILE if content is None else escrow.Refusal.NO_RECIPIENT
+    assert refused.value.refusal is expected
+
+
+def test_the_latest_of_a_label_with_nothing_escrowed_is_refused_naming_it(registry: escrow.Registry) -> None:
+    with pytest.raises(escrow.EscrowRefused) as refused:
+        _ = registry.latest(escrow.PASSPHRASE)
+    assert (refused.value.refusal, refused.value.label) == (escrow.Refusal.NOTHING_ESCROWED, escrow.PASSPHRASE)
+
+
+def test_a_rewrap_to_no_recipient_is_refused(vault: escrow.Vault) -> None:
+    with pytest.raises(escrow.EscrowRefused) as refused:
+        _ = escrow.rewrap(vault.registry, identities=[vault.identity], recipients=[])
+    assert refused.value.refusal is escrow.Refusal.NO_TARGET
 
 
 def test_a_label_cannot_escape_the_registry(registry: escrow.Registry) -> None:
-    with pytest.raises(escrow.EscrowError, match='is not a label'):
+    with pytest.raises(escrow.EscrowRefused) as refused:
         _ = registry.path('../../etc/passwd', 1)
+    assert refused.value.refusal is escrow.Refusal.NOT_A_LABEL
 
 
 def test_rewrap_preserves_every_plaintext_under_a_new_recipient(vault: escrow.Vault) -> None:
@@ -517,8 +558,9 @@ def test_rewrap_refuses_to_lock_the_operator_out(vault: escrow.Vault) -> None:
     # with a key this run cannot open.
     _ = escrow.generate(vault, escrow.PASSPHRASE)
 
-    with pytest.raises(escrow.EscrowError, match='would lock the escrow'):
+    with pytest.raises(escrow.EscrowRefused) as refused:
         _ = escrow.rewrap(vault.registry, identities=[vault.identity], recipients=[age.generate().public])
+    assert refused.value.refusal is escrow.Refusal.WOULD_LOCK
 
 
 def test_rotating_the_recovery_key_changes_no_plaintext(kit: KdbxStore, registry: escrow.Registry) -> None:
@@ -573,8 +615,9 @@ def test_rotating_the_recovery_key_refuses_a_successor_holding_the_retired_key(
         kit.get(escrow.RECOVERY_ENTRY),
     )
 
-    with pytest.raises(escrow.EscrowError, match='the retired key itself'):
+    with pytest.raises(escrow.EscrowRefused) as refused:
         escrow.rotate_recovery(kit, successor, registry)
+    assert refused.value.refusal is escrow.Refusal.RETIRED_KEY
 
     assert registry.recipients() == [kit.get(escrow.RECOVERY_ENTRY, attribute='UserName')]
 
@@ -600,8 +643,6 @@ def test_a_recovery_row_without_a_key_is_written_over(kit: KdbxStore, registry: 
 # does not name it. The states a rotation leaves a checkout in, one per case.
 # --------------------------------------------------------------------------
 
-ANCHOR = 'the recovery recipient of the kit in hand'
-
 
 @pytest.fixture
 def successor() -> age.Identity:
@@ -616,10 +657,12 @@ def _in_hand(vault: escrow.Vault, identity: str) -> escrow.Vault:
 
 def _refused(vault: escrow.Vault) -> None:
     """A generation and an import are both refused, and nothing is filed."""
-    with pytest.raises(escrow.EscrowError, match=ANCHOR):
+    with pytest.raises(escrow.EscrowRefused) as refused:
         _ = escrow.generate(vault, escrow.PASSPHRASE)
-    with pytest.raises(escrow.EscrowError, match=ANCHOR):
+    assert refused.value.refusal is escrow.Refusal.NOT_ANCHORED
+    with pytest.raises(escrow.EscrowRefused) as refused:
         _ = escrow.adopt(vault, escrow.ALERTMANAGER, 'a-token-from-somewhere-else')
+    assert refused.value.refusal is escrow.Refusal.NOT_ANCHORED
     assert vault.registry.generations(escrow.PASSPHRASE) == [escrow.FIRST]
     assert vault.registry.generations(escrow.ALERTMANAGER) == []
 
@@ -699,8 +742,9 @@ def test_recording_in_a_stale_clone_is_refused_in_the_rules_words(vault: escrow.
     # generation no identity matched, which names neither cause nor way out.
     _ = escrow.record(vault, escrow.DISPATCH_KEY, console_key())
 
-    with pytest.raises(escrow.EscrowError, match=ANCHOR):
+    with pytest.raises(escrow.EscrowRefused) as refused:
         _ = escrow.record(_in_hand(vault, successor.secret), escrow.DISPATCH_KEY, pki.generate_ca_key())
+    assert refused.value.refusal is escrow.Refusal.NOT_ANCHORED
 
     assert vault.registry.generations(escrow.DISPATCH_KEY) == [escrow.FIRST]
 
@@ -762,8 +806,9 @@ def test_a_refused_write_draws_nothing(vault: escrow.Vault, monkeypatch: pytest.
     monkeypatch.setattr(escrow, '_token', mint)
     vault.registry.set_recipients([age.generate().public])
 
-    with pytest.raises(escrow.EscrowError, match=ANCHOR):
+    with pytest.raises(escrow.EscrowRefused) as refused:
         _ = escrow.generate(vault, escrow.PASSPHRASE)
+    assert refused.value.refusal is escrow.Refusal.NOT_ANCHORED
 
     assert drawn == []
 
@@ -771,8 +816,9 @@ def test_a_refused_write_draws_nothing(vault: escrow.Vault, monkeypatch: pytest.
 def test_a_kit_without_a_recovery_key_is_sent_to_bootstrap(registry: escrow.Registry) -> None:
     # The anchor is read out of the kit, so a kit that has none has nothing to
     # anchor a write to; the row that holds one is created by the bootstrap.
-    with pytest.raises(escrow.EscrowError, match='recovery key') as refused:
+    with pytest.raises(escrow.EscrowRefused) as refused:
         _ = escrow.Vault.open(MemoryKit(), registry)
+    assert refused.value.refusal is escrow.Refusal.NO_RECOVERY_KEY
 
     ((_, parsed),) = named_commands(str(refused.value))
     assert (parsed['subject'], parsed['action'], parsed['only']) == ('kit', 'bootstrap', entries.RECOVERY)
@@ -791,7 +837,7 @@ def test_check_names_a_label_with_nothing_escrowed(vault: escrow.Vault) -> None:
 
     problems = escrow.check(vault.registry)
 
-    assert any(escrow.CA in problem and 'nothing escrowed' in problem for problem in problems)
+    assert any(problem.subject == escrow.CA and problem.fault is escrow.Fault.NOTHING_ESCROWED for problem in problems)
 
 
 def test_check_catches_a_ciphertext_that_is_not_one(vault: escrow.Vault) -> None:
@@ -800,7 +846,9 @@ def test_check_catches_a_ciphertext_that_is_not_one(vault: escrow.Vault) -> None
 
     problems = escrow.check(vault.registry)
 
-    assert any('not an armored age file' in problem for problem in problems)
+    assert any(
+        (problem.subject, problem.fault) == (escrow.PASSPHRASE, escrow.Fault.NOT_ARMORED) for problem in problems
+    )
 
 
 def test_check_catches_a_hole_in_the_generations(vault: escrow.Vault) -> None:
@@ -811,7 +859,9 @@ def test_check_catches_a_hole_in_the_generations(vault: escrow.Vault) -> None:
 
     problems = escrow.check(vault.registry)
 
-    assert any('without a gap' in problem for problem in problems)
+    assert any(
+        (problem.subject, problem.fault) == (escrow.PASSPHRASE, escrow.Fault.GENERATION_GAP) for problem in problems
+    )
 
 
 def test_check_catches_a_stray_file(vault: escrow.Vault) -> None:
@@ -820,7 +870,7 @@ def test_check_catches_a_stray_file(vault: escrow.Vault) -> None:
 
     problems = escrow.check(vault.registry)
 
-    assert any('neither a ciphertext' in problem for problem in problems)
+    assert any(problem.fault is escrow.Fault.STRAY and problem.subject.endswith('1.age.bak') for problem in problems)
 
 
 def test_check_names_a_label_the_register_does_not(vault: escrow.Vault) -> None:
@@ -836,7 +886,7 @@ def test_check_names_a_label_the_register_does_not(vault: escrow.Vault) -> None:
 
     (problem,) = escrow.check(vault.registry)
 
-    assert problem.startswith(f'{unregistered}:')
+    assert (problem.subject, problem.fault) == (unregistered, escrow.Fault.UNREGISTERED)
 
 
 def test_check_names_a_recipient_that_is_not_one(vault: escrow.Vault) -> None:
@@ -851,8 +901,8 @@ def test_check_names_a_recipient_that_is_not_one(vault: escrow.Vault) -> None:
 
     # Named by its line, and never repeated: the report of a pasted private
     # key is read on a screen and pasted into issues.
-    assert 'line 2' in problem
-    assert malformed not in problem
+    assert (problem.fault, problem.lines) == (escrow.Fault.RECIPIENTS, (2,))
+    assert malformed not in str(problem)
 
 
 def test_check_names_a_recipient_whose_checksum_is_wrong(vault: escrow.Vault) -> None:
@@ -865,7 +915,7 @@ def test_check_names_a_recipient_whose_checksum_is_wrong(vault: escrow.Vault) ->
 
     (problem,) = escrow.check(vault.registry)
 
-    assert 'line 1' in problem
+    assert (problem.fault, problem.lines) == (escrow.Fault.RECIPIENTS, (1,))
 
 
 def _mistyped(recipient: str) -> str:
@@ -884,8 +934,10 @@ def test_a_writer_refuses_a_recipient_line_that_is_not_one_by_its_number(vault: 
     wrong = _mistyped(recipient) if kind == 'mistyped' else age.generate().secret
     vault.registry.set_recipients([recipient, wrong])
 
-    with pytest.raises(escrow.EscrowError, match='line 2') as refused:
+    with pytest.raises(escrow.EscrowRefused) as refused:
         _ = escrow.generate(vault, escrow.PASSPHRASE)
+    assert refused.value.refusal is escrow.Refusal.RECIPIENT_REFUSED
+    assert refused.value.lines == (2,)
 
     assert wrong not in str(refused.value)
     assert vault.registry.generations(escrow.PASSPHRASE) == []
@@ -896,7 +948,7 @@ def test_check_wants_no_kit(registry: escrow.Registry) -> None:
     # wrong. An empty registry has no recipients file either.
     problems = escrow.check(registry)
 
-    assert any(escrow.RECIPIENTS_FILE in problem for problem in problems)
+    assert any(problem.fault is escrow.Fault.RECIPIENTS for problem in problems)
     assert len(problems) >= len(escrow.register())
 
 

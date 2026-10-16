@@ -40,6 +40,7 @@ read, `check` walks it with no key at all, and a recovery needs nothing but
 from __future__ import annotations
 
 import base64
+import enum
 import logging
 import os
 import re
@@ -117,6 +118,68 @@ _LABEL = re.compile(r'[a-z0-9][a-z0-9-]*(/[a-z0-9][a-z0-9-]*)*\Z')
 
 class EscrowError(RuntimeError):
     pass
+
+
+class Refusal(enum.Enum):
+    """Which rule of the escrow a refused call broke."""
+
+    #: `init` over a kit that already holds a recovery key.
+    RECOVERY_HELD = enum.auto()
+    #: `init` over a recipients file that already exists.
+    RECIPIENTS_EXIST = enum.auto()
+    #: An empty value offered as a label's secret.
+    EMPTY = enum.auto()
+    #: A value that is not the shape the label holds.
+    NOT_ITS_SHAPE = enum.auto()
+    #: A label the register does not have.
+    NO_SUCH_LABEL = enum.auto()
+    #: A string that is not a label at all.
+    NOT_A_LABEL = enum.auto()
+    #: No recipients file.
+    NO_RECIPIENTS_FILE = enum.auto()
+    #: A recipients file that names no recipient.
+    NO_RECIPIENT = enum.auto()
+    #: Recipients-file lines the pinned `age` refuses; `lines` are their numbers.
+    RECIPIENT_REFUSED = enum.auto()
+    #: Nothing escrowed under a label.
+    NOTHING_ESCROWED = enum.auto()
+    #: A second generation of a label that holds one value for its lifetime.
+    SINGLE_VALUE = enum.auto()
+    #: A write the kit in hand could not open: the recipients file does not name its key.
+    NOT_ANCHORED = enum.auto()
+    #: A draw for a label made in a console.
+    CONSOLE_MADE = enum.auto()
+    #: A read out of a kit for a label never held in one.
+    NEVER_IN_KIT = enum.auto()
+    #: A read out of a kit that holds no such row.
+    KIT_LACKS_ROW = enum.auto()
+    #: A record of a label drawn here.
+    DRAWN_HERE = enum.auto()
+    #: A re-wrap with no recipient to wrap to.
+    NO_TARGET = enum.auto()
+    #: A re-wrap no identity in hand could open again.
+    WOULD_LOCK = enum.auto()
+    #: A rotation whose successor holds the retired key itself.
+    RETIRED_KEY = enum.auto()
+    #: A kit that holds no recovery key.
+    NO_RECOVERY_KEY = enum.auto()
+
+
+class EscrowRefused(EscrowError):
+    """A call the escrow refused: `refusal` says which rule, `label` which row where there is one.
+
+    `lines` are the recipients-file lines a `RECIPIENT_REFUSED` names, by
+    number; a line's content is never carried, since the likeliest wrong line
+    is a private key pasted where the public one goes.
+    """
+
+    def __init__(
+        self, message: str, *, refusal: Refusal, label: str | None = None, lines: tuple[int, ...] = ()
+    ) -> None:
+        super().__init__(message)
+        self.refusal: Refusal = refusal
+        self.label: str | None = label
+        self.lines: tuple[int, ...] = lines
 
 
 def _token() -> str:
@@ -316,11 +379,17 @@ class Label:
         if self.shape.matches(value):
             return
         if not value.strip():
-            raise EscrowError(
+            raise EscrowRefused(
                 f'nothing to escrow as {self.name}: the value is empty, which is what a producer that '
-                'wrote no output leaves in the pipe'
+                'wrote no output leaves in the pipe',
+                refusal=Refusal.EMPTY,
+                label=self.name,
             )
-        raise EscrowError(f'this is not {self.shape.looks_like}, which is what {self.name} holds ({self.what})')
+        raise EscrowRefused(
+            f'this is not {self.shape.looks_like}, which is what {self.name} holds ({self.what})',
+            refusal=Refusal.NOT_ITS_SHAPE,
+            label=self.name,
+        )
 
 
 def backup_labels() -> tuple[str, ...]:
@@ -553,7 +622,11 @@ def fill_command(label: str) -> str:
 def _row(label: str) -> Label:
     rows = register()
     if label not in rows:
-        raise EscrowError(f'no label {label!r} in the register; it holds {", ".join(sorted(rows))}')
+        raise EscrowRefused(
+            f'no label {label!r} in the register; it holds {", ".join(sorted(rows))}',
+            refusal=Refusal.NO_SUCH_LABEL,
+            label=label,
+        )
     return rows[label]
 
 
@@ -582,7 +655,11 @@ class Registry:
 
     def directory(self, label: str) -> Path:
         if not _LABEL.match(label):
-            raise EscrowError(f'{label!r} is not a label: lower-case words joined by / and -')
+            raise EscrowRefused(
+                f'{label!r} is not a label: lower-case words joined by / and -',
+                refusal=Refusal.NOT_A_LABEL,
+                label=label,
+            )
         return self.root.joinpath(*label.split('/'))
 
     def path(self, label: str, generation: int) -> Path:
@@ -603,13 +680,15 @@ class Registry:
             # but comments are each said in words of their own below.
             _ = config.lines(self.recipients_file, 'the escrow recipients')
         except FileNotFoundError as exc:
-            raise EscrowError(
-                f'no {self.recipients_file}; `credentials kit bootstrap` writes it while creating the recovery key'
+            raise EscrowRefused(
+                f'no {self.recipients_file}; `credentials kit bootstrap` writes it while creating the recovery key',
+                refusal=Refusal.NO_RECIPIENTS_FILE,
             ) from exc
         except ValueError as exc:
-            raise EscrowError(f'{self.recipients_file} names no recipient') from exc
+            raise EscrowRefused(f'{self.recipients_file} names no recipient', refusal=Refusal.NO_RECIPIENT) from exc
         values: list[str] = []
         refused: list[str] = []
+        lines: list[int] = []
         # Numbered against the file as an editor shows it, which `lines`
         # does not keep: the same blank and comment lines are skipped.
         for number, line in enumerate(self.recipients_file.read_text().splitlines(), start=1):
@@ -622,9 +701,12 @@ class Registry:
                 raise
             except age.AgeError as exc:
                 refused.append(str(exc))
+                lines.append(number)
             values.append(value)
         if refused:
-            raise EscrowError(f'{self.recipients_file}: {"; ".join(refused)}')
+            raise EscrowRefused(
+                f'{self.recipients_file}: {"; ".join(refused)}', refusal=Refusal.RECIPIENT_REFUSED, lines=tuple(lines)
+            )
         return values
 
     def set_recipients(self, values: Sequence[str]) -> None:
@@ -653,7 +735,11 @@ class Registry:
     def latest(self, label: str) -> int:
         found = self.generations(label)
         if not found:
-            raise EscrowError(f'nothing escrowed for {label!r}; `{fill_command(label)}` puts one there')
+            raise EscrowRefused(
+                f'nothing escrowed for {label!r}; `{fill_command(label)}` puts one there',
+                refusal=Refusal.NOTHING_ESCROWED,
+                label=label,
+            )
         return found[-1]
 
     def labels(self) -> list[str]:
@@ -683,11 +769,13 @@ def _next_generation(registry: Registry, row: Label) -> int:
     """
     found = registry.generations(row.name)
     if found and row.single:
-        raise EscrowError(
+        raise EscrowRefused(
             f'{row.name} holds one value for its lifetime and already holds generation {found[-1]}: its '
             f'readers take the latest generation alone, so a second would be adopted by the next build '
             f'while everything produced under the first stays openable only with the first. Rotating '
-            f'{row.what} is a new label, not a new generation (credentials.md §2.2)'
+            f'{row.what} is a new label, not a new generation (credentials.md §2.2)',
+            refusal=Refusal.SINGLE_VALUE,
+            label=row.name,
         )
     return registry.next_generation(row.name)
 
@@ -736,13 +824,15 @@ def _anchored(vault: Vault, label: str) -> list[str]:
     recipients = vault.registry.recipients()
     recipient = age.recipient(vault.identity)
     if not _opens(recipients, [recipient]):
-        raise EscrowError(
+        raise EscrowRefused(
             f'{vault.registry.recipients_file} does not name {recipient}, the recovery recipient of the kit in '
             f'hand, so {label} would be escrowed where this kit cannot open it. A checkout whose {DIRECTORY}/ '
             'predates a kit rotation is brought up to date with the commit that re-wrapped it, and a rotation '
             'that stopped part way is finished by `credentials kit rotate --into` the same file; a kit that '
             f'predates this {DIRECTORY}/ is a retired one, and its successor is the kit to run with '
-            '(credentials.md §2.2)'
+            '(credentials.md §2.2)',
+            refusal=Refusal.NOT_ANCHORED,
+            label=label,
         )
     return recipients
 
@@ -784,15 +874,17 @@ def init(kit: KdbxStore, registry: Registry, *, entry: str = RECOVERY_ENTRY) -> 
     this key and nothing else, so overwriting it is losing all of them at once.
     """
     if kit.has(entry):
-        raise EscrowError(
+        raise EscrowRefused(
             f'{entry!r} already holds a recovery key, and every ciphertext under {DIRECTORY}/ opens with it: '
             'replacing it is `credentials kit rotate`, and writing the recipients file afresh for the key '
-            'already there is `credentials kit rewrap`'
+            'already there is `credentials kit rewrap`',
+            refusal=Refusal.RECOVERY_HELD,
         )
     if registry.recipients_file.exists():
-        raise EscrowError(
+        raise EscrowRefused(
             f'{registry.recipients_file} already exists; it belongs to a recovery key already in a kit, and '
-            're-writing it to name that key is `credentials kit rewrap`'
+            're-writing it to name that key is `credentials kit rewrap`',
+            refusal=Refusal.RECIPIENTS_EXIST,
         )
     identity = age.generate()
     kit.put(entry, identity.public, identity.secret)
@@ -818,9 +910,11 @@ def generate(vault: Vault, label: str) -> str:
     """
     row = _row(label)
     if not isinstance(row.origin, Generated):
-        raise EscrowError(
+        raise EscrowRefused(
             f'{label} is made in a console, not here, so there is nothing to draw; '
-            f'`{fill_command(label)}` prints the steps and escrows what they produce'
+            f'`{fill_command(label)}` prints the steps and escrows what they produce',
+            refusal=Refusal.CONSOLE_MADE,
+            label=label,
         )
     generation = _next_generation(vault.registry, row)
     recipients = _anchored(vault, label)
@@ -901,16 +995,22 @@ def from_kit(kit: KdbxStore, label: str) -> str:
     row = _row(label)
     origin = row.origin
     if not isinstance(origin, Console) or origin.kit is None:
-        raise EscrowError(f'{label} was never held in a kit, so there is nothing to read out of one')
+        raise EscrowRefused(
+            f'{label} was never held in a kit, so there is nothing to read out of one',
+            refusal=Refusal.NEVER_IN_KIT,
+            label=label,
+        )
     if not kit.has(origin.kit.entry):
         # A kit is filled from §2's table and a rotation writes a new database
         # from the same table, so a kit holding no such entry is one written
         # since the row left that table -- an ordinary kit rather than a
         # damaged one, and the answer is the console rather than a repair.
-        raise EscrowError(
+        raise EscrowRefused(
             f'{kit.path} holds no {origin.kit.entry!r}: a kit written from the seed table as it stands now '
             f'carries no such row, so this value comes from the console instead -- pipe it into '
-            f'`credentials derived {row_name(label)} record` without --from-kit'
+            f'`credentials derived {row_name(label)} record` without --from-kit',
+            refusal=Refusal.KIT_LACKS_ROW,
+            label=label,
         )
     value = kit.attachment(origin.kit.entry, origin.kit.filename).decode().strip()
     identifier = kit.describe(origin.kit.entry).get('UserName', '')
@@ -941,9 +1041,11 @@ def record(vault: Vault, label: str, secret: str) -> Path:
     """
     row = _row(label)
     if not isinstance(row.origin, Console):
-        raise EscrowError(
+        raise EscrowRefused(
             f'{label} is drawn here rather than made in a console; `{fill_command(label)}` mints a new '
-            f'generation of it, and `credentials derived {row_name(label)} import` takes on one that exists'
+            f'generation of it, and `credentials derived {row_name(label)} import` takes on one that exists',
+            refusal=Refusal.DRAWN_HERE,
+            label=label,
         )
     # Before anything is decrypted: a value that cannot be this row's secret is
     # refused where its source is still known, rather than after a walk that
@@ -982,10 +1084,13 @@ def rewrap(registry: Registry, *, identities: Sequence[str], recipients: Sequenc
     """
     targets = list(recipients if recipients is not None else registry.recipients())
     if not targets:
-        raise EscrowError('no recipient to re-wrap to')
+        raise EscrowRefused('no recipient to re-wrap to', refusal=Refusal.NO_TARGET)
     held = [age.recipient(secret) for secret in identities]
     if not _opens(targets, held):
-        raise EscrowError('none of the identities in hand is among the recipients; this would lock the escrow')
+        raise EscrowRefused(
+            'none of the identities in hand is among the recipients; this would lock the escrow',
+            refusal=Refusal.WOULD_LOCK,
+        )
     _name_others(registry, targets, held=held, written='every generation')
 
     # Everything is opened before anything is written: a run that dies part
@@ -1033,9 +1138,10 @@ def rotate_recovery(kit: KdbxStore, successor: KdbxStore, registry: Registry, *,
     if holds_recovery(successor, entry=entry):
         secret = successor.get(entry)
         if secret == retired:
-            raise EscrowError(
+            raise EscrowRefused(
                 f'{entry!r} in the successor holds the retired key itself; a successor is a new file, '
-                'not the kit being rotated or a copy of it'
+                'not the kit being rotated or a copy of it',
+                refusal=Refusal.RETIRED_KEY,
             )
         log.info('escrow: the successor already holds a recovery key; re-wrapping to it')
     else:
@@ -1050,7 +1156,41 @@ def missing(registry: Registry) -> list[str]:
     return [label for label in register() if not registry.generations(label)]
 
 
-def check(registry: Registry) -> list[str]:
+class Fault(enum.Enum):
+    """What `check` finds wrong with the registry."""
+
+    #: The recipients file is absent, empty, or names a line the pinned `age` refuses.
+    RECIPIENTS = enum.auto()
+    #: A label the register expects has nothing escrowed.
+    NOTHING_ESCROWED = enum.auto()
+    #: A label's generations do not count from `FIRST` without a gap.
+    GENERATION_GAP = enum.auto()
+    #: A generation that is not an armored age file.
+    NOT_ARMORED = enum.auto()
+    #: A label escrowed that the register does not name.
+    UNREGISTERED = enum.auto()
+    #: A file in the registry that is neither a ciphertext nor part of it.
+    STRAY = enum.auto()
+
+
+@dataclass(frozen=True)
+class Problem:
+    """One thing `check` finds: the label or path it is about, the `Fault`, and the sentence an operator reads.
+
+    It prints as the sentence, which is what `credentials derived check` logs.
+    `lines` are the recipients-file lines the pinned `age` refuses, by number.
+    """
+
+    subject: str
+    fault: Fault
+    said: str
+    lines: tuple[int, ...] = ()
+
+    def __str__(self) -> str:
+        return self.said
+
+
+def check(registry: Registry) -> list[Problem]:
     """Everything wrong with the registry, said in full. No kit, no key.
 
     Deliberately answerable by someone holding only a clone: presence of every
@@ -1061,30 +1201,46 @@ def check(registry: Registry) -> list[str]:
     no kit there is nothing to compare against, so that is each writer's
     check (`_anchored`).
     """
-    problems: list[str] = []
+    problems: list[Problem] = []
     try:
         _ = registry.recipients()
     except EscrowError as exc:
-        problems.append(str(exc))
+        lines = exc.lines if isinstance(exc, EscrowRefused) else ()
+        problems.append(Problem(str(registry.recipients_file), Fault.RECIPIENTS, str(exc), lines))
 
     expected = register()
     for label, row in expected.items():
         generations = registry.generations(label)
         if not generations:
-            problems.append(f'{label}: nothing escrowed, and the register expects {row.what}')
+            problems.append(
+                Problem(
+                    label, Fault.NOTHING_ESCROWED, f'{label}: nothing escrowed, and the register expects {row.what}'
+                )
+            )
             continue
         if generations != list(range(FIRST, FIRST + len(generations))):
             listed = ', '.join(str(number) for number in generations)
-            problems.append(f'{label}: generations are {listed}, which is not {FIRST} upwards without a gap')
+            problems.append(
+                Problem(
+                    label,
+                    Fault.GENERATION_GAP,
+                    f'{label}: generations are {listed}, which is not {FIRST} upwards without a gap',
+                )
+            )
         for generation in generations:
             path = registry.path(label, generation)
             if not age.is_armored(path.read_text()):
-                problems.append(f'{label}: generation {generation} is not an armored age file')
+                problems.append(
+                    Problem(label, Fault.NOT_ARMORED, f'{label}: generation {generation} is not an armored age file')
+                )
 
     for label in registry.labels():
         if label not in expected and not label.startswith(f'{BACKUP}/'):
-            problems.append(f'{label}: escrowed, but the register does not name it')
-    problems.extend(f'{path}: neither a ciphertext nor part of the registry' for path in registry.strays())
+            problems.append(Problem(label, Fault.UNREGISTERED, f'{label}: escrowed, but the register does not name it'))
+    problems.extend(
+        Problem(str(path), Fault.STRAY, f'{path}: neither a ciphertext nor part of the registry')
+        for path in registry.strays()
+    )
     return problems
 
 
@@ -1107,10 +1263,11 @@ class Vault:
     @classmethod
     def open(cls, kit: KdbxStore, registry: Registry | None = None, *, entry: str = RECOVERY_ENTRY) -> Vault:
         if not holds_recovery(kit, entry=entry):
-            raise EscrowError(
+            raise EscrowRefused(
                 f'{kit.path} holds no recovery key at {entry!r}. A kit that predates the escrow gets one from '
                 '`credentials kit bootstrap --only recovery`; where a recipients file is already committed, the '
-                'kit that holds its key is the one to run with'
+                'kit that holds its key is the one to run with',
+                refusal=Refusal.NO_RECOVERY_KEY,
             )
         return cls(registry=registry if registry is not None else Registry.open(), identity=kit.get(entry))
 
