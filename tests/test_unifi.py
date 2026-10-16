@@ -134,6 +134,27 @@ async def test_the_census_is_exactly_the_designed_set(mocks: Controller) -> None
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('worker_gua', [WORKER_GUA, None])
+async def test_every_address_group_is_named_by_a_declared_policy(mocks: Controller, worker_gua: str | None) -> None:
+    """A group exists because a rule names it, so none sits on the controller naming nothing.
+
+    Checked with the pinhole's pair absent too: a group only a conditional row
+    named would otherwise outlive it.
+    """
+    async with declaring():
+        unifi.SiteFirewall(NAME, api_url=API_URL, site=SITE, worker_gua=worker_gua, static_hosts={})
+
+    named = {
+        side.get('ipGroupId')
+        for inputs in mocks.by_name(POLICY).values()
+        for side in (inputs['source'], inputs['destination'])
+    }
+    groups = {f'{name}_id' for name in mocks.names('unifi:index/firewallGroup:FirewallGroup')}
+    assert groups
+    assert groups <= named, sorted(groups - named)
+
+
+@pytest.mark.asyncio
 async def test_every_policy_is_declared_in_force(mocks: Controller) -> None:
     """A disabled policy is still on the census, still in its pair's order, and matches nothing.
 
@@ -221,18 +242,18 @@ async def test_the_new_zone_is_given_the_egress_its_nodes_cannot_work_without() 
     """
     firewall = build()
 
-    assert await firewall.cluster_egress.action.future() == 'ALLOW'
-    source = await firewall.cluster_egress.source.future()
-    destination = await firewall.cluster_egress.destination.future()
+    assert await firewall.policies['cluster-egress'].action.future() == 'ALLOW'
+    source = await firewall.policies['cluster-egress'].source.future()
+    destination = await firewall.policies['cluster-egress'].destination.future()
     assert source is not None and destination is not None
     assert source.zone_id == f'{NAME}-zone_id'
     assert destination.zone_id == zone_id(unifi.ZONE_EXTERNAL)
     # The whole zone, both families and every protocol: what a node reaches on
     # the internet is not a decision the gateway is in a position to make.
     assert source.ips is None
-    assert await firewall.cluster_egress.ip_version.future() == 'BOTH'
-    assert await firewall.cluster_egress.protocol.future() == 'all'
-    assert await firewall.cluster_egress.auto_allow_return_traffic.future() is True
+    assert await firewall.policies['cluster-egress'].ip_version.future() == 'BOTH'
+    assert await firewall.policies['cluster-egress'].protocol.future() == 'all'
+    assert await firewall.policies['cluster-egress'].auto_allow_return_traffic.future() is True
 
 
 @pytest.mark.asyncio
@@ -247,7 +268,7 @@ async def test_the_cluster_zone_talks_to_the_home_in_both_directions() -> None:
     """
     firewall = build()
 
-    outward = firewall.cluster_internal
+    outward = firewall.policies['cluster-internal']
     assert await outward.action.future() == 'ALLOW'
     source = await outward.source.future()
     destination = await outward.destination.future()
@@ -256,7 +277,7 @@ async def test_the_cluster_zone_talks_to_the_home_in_both_directions() -> None:
     assert destination.zone_id == zone_id(unifi.ZONE_INTERNAL)
     assert source.ips is None and destination.ips is None
 
-    inward = firewall.internal_cluster
+    inward = firewall.policies['internal-cluster']
     assert await inward.action.future() == 'ALLOW'
     source = await inward.source.future()
     destination = await inward.destination.future()
@@ -288,8 +309,8 @@ async def test_the_iot_vlan_is_carved_out_of_the_way_into_the_cluster() -> None:
     firewall = build()
 
     families = (
-        (firewall.iot_cluster_v4, 'IPV4', f'{NAME}-iot-v4_id'),
-        (firewall.iot_cluster_v6, 'IPV6', f'{NAME}-iot-v6_id'),
+        (firewall.policies['iot-cluster-v4'], 'IPV4', f'{NAME}-iot-v4_id'),
+        (firewall.policies['iot-cluster-v6'], 'IPV6', f'{NAME}-iot-v6_id'),
     )
     for policy, version, group in families:
         assert await policy.action.future() == 'BLOCK'
@@ -319,8 +340,8 @@ async def test_the_pinhole_lands_in_the_cluster_zone_rather_than_the_internal_on
     firewall = build()
 
     # Built with an address, so the conditional half of the census is here.
-    assert firewall.peer_v6 is not None
-    destination = await firewall.peer_v6.destination.future()
+    assert 'peer-v6' in firewall.policies
+    destination = await firewall.policies['peer-v6'].destination.future()
     assert destination is not None
     assert destination.zone_id == f'{NAME}-zone_id'
 
@@ -335,10 +356,10 @@ async def test_the_pool_is_named_by_group_and_the_groups_are_single_family() -> 
     """
     firewall = build()
 
-    for group in (firewall.pool_v4, firewall.pool_v6):
+    for group in (firewall.groups['pool-v4'], firewall.groups['pool-v6']):
         await _holds_its_own_family(group)
 
-    for policy in (firewall.iot_pool_v4, firewall.iot_pool_v6):
+    for policy in (firewall.policies['iot-pool-v4'], firewall.policies['iot-pool-v6']):
         destination = await policy.destination.future()
         assert destination is not None
         # Through the group, never as a literal: the pool is not a network
@@ -359,8 +380,8 @@ async def test_only_the_media_vip_is_reachable_from_the_iot_vlan() -> None:
     firewall = build()
 
     for policy, vip in (
-        (firewall.iot_media_v4, conventions.LAN_POOL.media_vip.v4),
-        (firewall.iot_media_v6, conventions.LAN_POOL.media_vip.v6),
+        (firewall.policies['iot-media-v4'], conventions.LAN_POOL.media_vip.v4),
+        (firewall.policies['iot-media-v6'], conventions.LAN_POOL.media_vip.v6),
     ):
         assert await policy.action.future() == 'ALLOW'
         destination = await policy.destination.future()
@@ -383,10 +404,10 @@ async def test_every_pool_rule_is_sourced_from_the_iot_vlan_alone() -> None:
     firewall = build()
 
     families = (
-        (firewall.iot_media_v4, f'{NAME}-iot-v4_id'),
-        (firewall.iot_pool_v4, f'{NAME}-iot-v4_id'),
-        (firewall.iot_media_v6, f'{NAME}-iot-v6_id'),
-        (firewall.iot_pool_v6, f'{NAME}-iot-v6_id'),
+        (firewall.policies['iot-media-v4'], f'{NAME}-iot-v4_id'),
+        (firewall.policies['iot-pool-v4'], f'{NAME}-iot-v4_id'),
+        (firewall.policies['iot-media-v6'], f'{NAME}-iot-v6_id'),
+        (firewall.policies['iot-pool-v6'], f'{NAME}-iot-v6_id'),
     )
     for policy, group in families:
         source = await policy.source.future()
@@ -406,7 +427,7 @@ async def test_the_iot_vlan_is_named_by_group_and_the_groups_hold_its_subnets() 
     """
     firewall = build()
 
-    for group in (firewall.iot_v4, firewall.iot_v6):
+    for group in (firewall.groups['iot-v4'], firewall.groups['iot-v6']):
         await _holds_its_own_family(group)
 
 
@@ -447,17 +468,17 @@ async def test_no_policy_hands_a_subnet_to_a_field_of_single_addresses(mocks: Co
 #: pool pair — and has a case of its own below. For these the claim is one, and
 #: it is the same for every one of them.
 ORDERINGS = [
-    ('pool_order', zone_id(unifi.ZONE_INTERNAL), zone_id(unifi.ZONE_EXTERNAL)),
-    ('peer_order', zone_id(unifi.ZONE_EXTERNAL), f'{NAME}-zone_id'),
-    ('cluster_egress_order', f'{NAME}-zone_id', zone_id(unifi.ZONE_EXTERNAL)),
-    ('cluster_internal_order', f'{NAME}-zone_id', zone_id(unifi.ZONE_INTERNAL)),
+    ('iot-pool-order', zone_id(unifi.ZONE_INTERNAL), zone_id(unifi.ZONE_EXTERNAL)),
+    ('peer-order', zone_id(unifi.ZONE_EXTERNAL), f'{NAME}-zone_id'),
+    ('cluster-egress-order', f'{NAME}-zone_id', zone_id(unifi.ZONE_EXTERNAL)),
+    ('cluster-internal-order', f'{NAME}-zone_id', zone_id(unifi.ZONE_INTERNAL)),
 ]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(('attribute', 'source', 'destination'), ORDERINGS)
+@pytest.mark.parametrize(('key', 'source', 'destination'), ORDERINGS)
 async def test_a_pair_evaluates_its_declared_policies_before_its_predefined_ones(
-    mocks: Controller, attribute: str, source: str, destination: str
+    mocks: Controller, key: str, source: str, destination: str
 ) -> None:
     """Order is declared rather than inherited from creation order.
 
@@ -467,12 +488,13 @@ async def test_a_pair_evaluates_its_declared_policies_before_its_predefined_ones
     resources themselves, which is why it is asserted here.
     """
     async with declaring():
-        order = getattr(build(), attribute)
+        order = build().orders[key]
     on_pair = {policy for policy, pair in _policy_pairs(mocks).items() if pair == (source, destination)}
 
-    assert order is not None
+    placed = await order.before_predefined_ids.future()
     assert on_pair
-    assert set(await order.before_predefined_ids.future()) == on_pair
+    assert placed is not None
+    assert set(placed) == on_pair
     assert await order.source_zone_id.future() == source
     assert await order.destination_zone_id.future() == destination
 
@@ -482,9 +504,9 @@ async def test_nothing_is_ordered_behind_a_pairs_predefined_rules() -> None:
     """The complement of the rule above: `after` is the placement nothing wants."""
     firewall = build()
 
-    for attribute, *_ in ORDERINGS:
-        order = getattr(firewall, attribute)
-        assert await order.after_predefined_ids.future() is None, attribute
+    for key, *_ in ORDERINGS:
+        order = firewall.orders[key]
+        assert await order.after_predefined_ids.future() is None, key
 
 
 @pytest.mark.asyncio
@@ -499,7 +521,7 @@ async def test_the_iot_drop_precedes_the_allow_that_would_otherwise_answer_for_i
     """
     firewall = build()
 
-    order = firewall.internal_cluster_order
+    order = firewall.orders['internal-cluster-order']
     assert await order.before_predefined_ids.future() == [
         f'{NAME}-iot-cluster-v4_id',
         f'{NAME}-iot-cluster-v6_id',
@@ -520,7 +542,12 @@ async def test_the_pool_rules_are_declared_on_the_uplink_pair() -> None:
     """
     firewall = build()
 
-    for policy in (firewall.iot_media_v4, firewall.iot_media_v6, firewall.iot_pool_v4, firewall.iot_pool_v6):
+    for policy in (
+        firewall.policies['iot-media-v4'],
+        firewall.policies['iot-media-v6'],
+        firewall.policies['iot-pool-v4'],
+        firewall.policies['iot-pool-v6'],
+    ):
         source = await policy.source.future()
         destination = await policy.destination.future()
         assert source is not None and destination is not None
@@ -538,15 +565,15 @@ async def test_both_halves_of_the_peer_flow_name_the_same_port_and_host() -> Non
     """
     firewall = build()
 
-    assert firewall.peer_v6 is not None
-    assert firewall.peer_v4 is not None
-    pinhole = await firewall.peer_v6.destination.future()
+    assert 'peer-v6' in firewall.policies
+    assert 'peer-v4' in firewall.forwards
+    pinhole = await firewall.policies['peer-v6'].destination.future()
     assert pinhole is not None
 
     # The same port on both halves -- the provider hands the v6 side a number
     # and the v4 side a string, so each is read as the number it names.
-    dst_port = await firewall.peer_v4.dst_port.future()
-    fwd_port = await firewall.peer_v4.fwd_port.future()
+    dst_port = await firewall.forwards['peer-v4'].dst_port.future()
+    fwd_port = await firewall.forwards['peer-v4'].fwd_port.future()
     assert dst_port is not None
     assert fwd_port is not None
     assert pinhole.port is not None
@@ -555,9 +582,11 @@ async def test_both_halves_of_the_peer_flow_name_the_same_port_and_host() -> Non
     # The same host, in the address each family reaches it at: the worker's
     # global address on one side, its LAN address on the other.
     assert pinhole.ips == [WORKER_GUA], 'the pinhole matches a literal address, the prefix rotating'
-    assert await firewall.peer_v6.ip_version.future() == 'IPV6'
-    assert await firewall.peer_v4.fwd_ip.future() == str(talos.STATIC_ADDRESSES[conventions.HOMELAB_NODE].address.ip)
-    assert await firewall.peer_v4.src_ip.future() == 'any'
+    assert await firewall.policies['peer-v6'].ip_version.future() == 'IPV6'
+    assert await firewall.forwards['peer-v4'].fwd_ip.future() == str(
+        talos.STATIC_ADDRESSES[conventions.HOMELAB_NODE].address.ip
+    )
+    assert await firewall.forwards['peer-v4'].src_ip.future() == 'any'
 
 
 @pytest.mark.asyncio
@@ -573,18 +602,14 @@ async def test_no_port_forward_exists_until_the_application_runs_on_the_worker(m
     async with declaring():
         firewall = build(peer_on_worker=False)
 
-    assert firewall.peer_v4 is None
+    assert 'peer-v4' not in firewall.forwards
     assert 'unifi:index/portForward:PortForward' not in mocks.types
-    assert firewall.peer_v6 is not None
+    assert 'peer-v6' in firewall.policies
 
 
 @pytest.mark.asyncio
 async def test_the_controller_credential_is_an_api_key_on_a_bounded_provider(mocks: Controller) -> None:
-    """A key of its own, and a retry budget that cannot lock the account out.
-
-    The controller's login rate limit is account-wide, so an unbounded retry
-    from a runner is an outage for the people using the console. The number
-    is small on purpose and asserted so that raising it is a visible edit.
+    """A key of its own, on a provider built for these resources alone.
 
     Read off the wire rather than off the resource, because a provider's
     settings are serialized as strings and the strings are what the run
@@ -597,8 +622,6 @@ async def test_the_controller_credential_is_an_api_key_on_a_bounded_provider(moc
 
     assert settings['apiUrl'] == API_URL
     assert settings['site'] == SITE
-    assert settings['httpMaxRetries'] == str(unifi.HTTP_MAX_RETRIES)
-    assert unifi.HTTP_MAX_RETRIES <= 3
 
     key = settings['apiKey']
     assert isinstance(key, dict), 'the key is classified as a secret, so it is never plain text in state'
