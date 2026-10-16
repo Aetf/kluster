@@ -333,7 +333,7 @@ async def test_an_asker_that_is_not_a_component_is_refused_before_anything_is_re
     # landed by the time the record is read below.
     async with declaring():
         for opts in (pulumi.ResourceOptions(), pulumi.ResourceOptions(parent=mechanism.units)):
-            with pytest.raises(ValueError, match='named for the component the URN places it under'):
+            with pytest.raises(persistence.ParentNotAComponent):
                 _ = mechanism.executable('orphan.sh', '#!/bin/sh\nexit 0\n', opts=opts)
     assert set(monitor.registrations) == before
 
@@ -1864,7 +1864,7 @@ async def test_a_mechanism_with_no_packages_is_refused() -> None:
     the device has nothing.
     """
     async with declaring():
-        with pytest.raises(ValueError, match='at least one package'):
+        with pytest.raises(persistence.NoPackages):
             _ = DevicePersistence(
                 'empty',
                 connection=Connection(host=HOST, host_key=HOST_KEY, username=conventions.gateway.SSH_USER),

@@ -118,6 +118,8 @@ __all__ = (
     'UNIT_SOURCE_DIR',
     'UNIT_SUFFIX',
     'DevicePersistence',
+    'NoPackages',
+    'ParentNotAComponent',
     'dropin_dir',
     'dropin_hook',
     'dropin_source',
@@ -429,6 +431,14 @@ def udm_boot_unit() -> str:
     return templates.load(TEMPLATE_PACKAGE, f'templates/{UDM_BOOT_UNIT}')
 
 
+class ParentNotAComponent(ValueError):
+    """A device resource asked for with an `opts` whose parent is not a component, so the rule has no name for it."""
+
+
+class NoPackages(ValueError):
+    """A `DevicePersistence` given an empty package set, which renders a boot script that fails."""
+
+
 def _asker(opts: pulumi.ResourceOptions) -> str:
     """The name of the component that asked for a resource, read off the `opts` it handed over.
 
@@ -442,7 +452,7 @@ def _asker(opts: pulumi.ResourceOptions) -> str:
     """
     parent = opts.parent
     if not isinstance(parent, Component):
-        raise ValueError(
+        raise ParentNotAComponent(
             f'a device resource is named for the component the URN places it under (style/pulumi.md), '
             f'so `opts` must carry a component as its parent; it carries {parent!r}'
         )
@@ -470,7 +480,7 @@ class DevicePersistence(Component, pulumi_type='kluster:gateway:DevicePersistenc
         backstop to blame the next resource on (framework/pulumi.md §1.3).
         """
         if not packages:
-            raise ValueError(
+            raise NoPackages(
                 'DevicePersistence needs at least one package: the device holds none of its own, and an '
                 'empty set renders a script that fails on the boot it exists to repair'
             )

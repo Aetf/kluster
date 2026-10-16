@@ -21,6 +21,7 @@ import tempfile
 from pathlib import Path
 
 from kluster.conventions import CompartmentMissing
+from kluster.lib import config as lib_config
 from kluster.lib import stack_environment
 from kluster.lib.pulumi_cli import PulumiRefused
 from kluster.lib.state_backend import committed, render, settings, state
@@ -44,10 +45,11 @@ log = logging.getLogger(__name__)
 #: rather than today's call paths, because that is the boundary a test can
 #: hold (`test_provision.py` walks it in both directions); the members no
 #: current call reaches -- `PulumiRefused`, which `state.stacks` and the
-#: configuration's reads translate into their own, and `CompartmentMissing`,
-#: which `conventions` raises for a compartment it does not record -- are here
-#: so that a call that reaches one tomorrow gets the line rather than the
-#: traceback.
+#: configuration's reads translate into their own; `CompartmentMissing`,
+#: which `conventions` raises for a compartment it does not record; and
+#: `lib_config.ShapeRefused`, which the readers of a stack's structured
+#: configuration raise -- are here so that a call that reaches one tomorrow
+#: gets the line rather than the traceback.
 REFUSALS = (
     AgeError,
     CompartmentMissing,
@@ -59,6 +61,7 @@ REFUSALS = (
     StateError,
     WorkstationError,
     committed.Refused,
+    lib_config.ShapeRefused,
     stack_environment.EnvironmentRefused,
 )
 

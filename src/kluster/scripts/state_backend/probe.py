@@ -6,7 +6,8 @@ handshake with no credential at all, and the age of the newest dump, read off
 a listing of the dump prefix as a key that can list and nothing else. Each
 answers with a `Verdict`, every verdict is printed whether it passed or not,
 and a failure names the playbook that answers it -- an alert with no procedure
-is the one shape architecture.md §4.3 refuses. A key B2 refuses, and B2 not
+is the one shape architecture.md §4.3 refuses -- and a `Finding` that says
+which failure it was, since several share a playbook. A key B2 refuses, and B2 not
 answering, are the dump probe's verdicts too, rather than exceptions that
 would take the other probe's verdict down with them.
 
@@ -27,6 +28,7 @@ lands together with the pin bump that adopts it there.
 from __future__ import annotations
 
 import datetime as dt
+import enum
 import ipaddress
 import logging
 import re
@@ -105,18 +107,57 @@ Handshake = Callable[[Sequence[str]], sp.CompletedProcess[str]]
 Authorize = Callable[[str, str], tuple[b2.Session, str]]
 
 
+class Finding(enum.Enum):
+    """What a failed verdict found, for a reader that branches on it rather than on the wording.
+
+    Several findings share a playbook, so the playbook does not tell them
+    apart; the code does, and `observed` is free to say it in any words.
+    """
+
+    #: The certificate probe's handshake got no answer within `HANDSHAKE_TIMEOUT`.
+    UNANSWERED = enum.auto()
+    #: The handshake failed.
+    NO_HANDSHAKE = enum.auto()
+    #: A handshake that completed and served no certificate.
+    NO_CERTIFICATE = enum.auto()
+    #: The leaf is not valid yet.
+    NOT_YET_VALID = enum.auto()
+    #: The leaf has expired.
+    EXPIRED = enum.auto()
+    #: The leaf expires inside the alert margin.
+    EXPIRING = enum.auto()
+    #: The leaf does not name the address it was served from.
+    WRONG_ADDRESS = enum.auto()
+    #: Nothing under the dump prefix.
+    NO_DUMP = enum.auto()
+    #: An object under the dump prefix that is not named like a dump.
+    STRANGER = enum.auto()
+    #: The newest dump is older than the most a dump may be behind.
+    STALE = enum.auto()
+    #: B2 refused the list-only key, or it is confined to no bucket.
+    KEY_REFUSED = enum.auto()
+    #: B2 did not answer the listing.
+    B2_UNANSWERED = enum.auto()
+
+
 @dataclass(frozen=True)
 class Verdict:
     """What one probe found, and where a failure sends the reader.
 
-    A failure is a verdict that names a playbook; a pass names none. Both
-    carry what was observed, because a green run whose log says nothing about
-    what it measured cannot be told from one that measured nothing.
+    A failure is a verdict that names a playbook and a `Finding`; a pass names
+    neither. Both carry what was observed, because a green run whose log says
+    nothing about what it measured cannot be told from one that measured
+    nothing.
     """
 
     probe: str
     observed: str
     playbook: str | None = None
+    finding: Finding | None = None
+
+    def __post_init__(self) -> None:
+        if (self.playbook is None) != (self.finding is None):
+            raise ValueError(f'a verdict names a playbook and a finding, or neither: {self.playbook!r}, {self.finding}')
 
     @property
     def passed(self) -> bool:
@@ -186,14 +227,23 @@ def certificate(
             f'no answer from {address}:{port} within {HANDSHAKE_TIMEOUT}s — the box is down, or the packets are '
             'being dropped on the way',
             REBUILD_PLAYBOOK,
+            Finding.UNANSWERED,
         )
     if completed.returncode != 0:
         why = _first_line(completed.stderr) or f'openssl exited {completed.returncode}'
-        return Verdict(CERTIFICATE, f'{address}:{port} did not complete a TLS handshake: {why}', REBUILD_PLAYBOOK)
+        return Verdict(
+            CERTIFICATE,
+            f'{address}:{port} did not complete a TLS handshake: {why}',
+            REBUILD_PLAYBOOK,
+            Finding.NO_HANDSHAKE,
+        )
     leaf = leaf_certificate(completed.stdout)
     if leaf is None:
         return Verdict(
-            CERTIFICATE, f'{address}:{port} completed a handshake and served no certificate', REBUILD_PLAYBOOK
+            CERTIFICATE,
+            f'{address}:{port} completed a handshake and served no certificate',
+            REBUILD_PLAYBOOK,
+            Finding.NO_CERTIFICATE,
         )
 
     moment = now or dt.datetime.now(dt.UTC)
@@ -204,15 +254,22 @@ def certificate(
             CERTIFICATE,
             f'the server certificate is not valid until {leaf.not_valid_before_utc.isoformat()}',
             REISSUE_PLAYBOOK,
+            Finding.NOT_YET_VALID,
         )
     if remaining < dt.timedelta(0):
-        return Verdict(CERTIFICATE, f'the server certificate expired on {expiry.date().isoformat()}', REISSUE_PLAYBOOK)
+        return Verdict(
+            CERTIFICATE,
+            f'the server certificate expired on {expiry.date().isoformat()}',
+            REISSUE_PLAYBOOK,
+            Finding.EXPIRED,
+        )
     if remaining < config.EXPIRY_ALERT_MARGIN:
         return Verdict(
             CERTIFICATE,
             f'the server certificate expires on {expiry.date().isoformat()}, {remaining.days} day(s) from now and '
             f'inside the {config.EXPIRY_ALERT_MARGIN.days}-day alert margin',
             REISSUE_PLAYBOOK,
+            Finding.EXPIRING,
         )
     named = _names(leaf)
     if str(ipaddress.ip_address(address)) not in named:
@@ -221,6 +278,7 @@ def certificate(
             CERTIFICATE,
             f'the server certificate names {listed} and not {address}, so every verify-full client refuses it',
             REISSUE_PLAYBOOK,
+            Finding.WRONG_ADDRESS,
         )
     return Verdict(
         CERTIFICATE,
@@ -242,15 +300,24 @@ def hours(span: dt.timedelta) -> str:
     return f'{span.total_seconds() / 3600:.1f} h'
 
 
+class KeyMissing(SlotRefused):
+    """The list-only key's variables, some of them empty: `empty` names which."""
+
+    def __init__(self, message: str, *, empty: tuple[str, ...]) -> None:
+        super().__init__(message)
+        self.empty: tuple[str, ...] = empty
+
+
 def credential(environ: Mapping[str, str]) -> tuple[str, str]:
-    """The list-only key out of the environment, or a refusal naming what fills it."""
+    """The list-only key out of the environment, or a `KeyMissing` naming what fills it."""
     key_id, key = environ.get(KEY_ID_ENV, ''), environ.get(KEY_ENV, '')
-    missing = [name for name, value in ((KEY_ID_ENV, key_id), (KEY_ENV, key)) if not value]
+    missing = tuple(name for name, value in ((KEY_ID_ENV, key_id), (KEY_ENV, key)) if not value)
     if missing:
-        raise SlotRefused(
+        raise KeyMissing(
             f'the dump-age probe reads the list-only B2 key from {KEY_ID_ENV} and {KEY_ENV}, and '
             f'{" and ".join(missing)} {"is" if len(missing) == 1 else "are"} empty; '
-            '`credentials derived b2-freshness-dumps mint` fills the secrets a workflow hands over as those'
+            '`credentials derived b2-freshness-dumps mint` fills the secrets a workflow hands over as those',
+            empty=missing,
         )
     return key_id, key
 
@@ -292,6 +359,7 @@ def dumps(
             'the box refuses to upload one that holds no stack (a box replaced and not restored, or a site '
             'before its first `pulumi stack init`), or its dump timer never fired',
             REBUILD_PLAYBOOK,
+            Finding.NO_DUMP,
         )
     taken_at: dict[str, dt.datetime] = {}
     strangers: list[str] = []
@@ -307,6 +375,7 @@ def dumps(
             f'{len(strangers)} object(s) under {b2.DUMP_PREFIX} are not named like a dump, the first being '
             f'{strangers[0]!r} — nothing but the appliance uploads there, so something else has',
             REBUILD_PLAYBOOK,
+            Finding.STRANGER,
         )
     newest = max(taken_at, key=taken_at.__getitem__)
     age = (now or dt.datetime.now(dt.UTC)) - taken_at[newest]
@@ -318,6 +387,7 @@ def dumps(
             'the refusal of an archive holding no stack (a box replaced and not restored) among the causes, '
             'or it no longer runs',
             REBUILD_PLAYBOOK,
+            Finding.STALE,
         )
     return Verdict(DUMPS, f'the newest dump, {newest}, was taken {hours(age)} ago (allowed: {hours(max_age)})')
 
@@ -336,6 +406,7 @@ def _listing(key_id: str, key: str, *, authorize: Authorize) -> tuple[str, ...] 
         f'B2 refused the key in {KEY_ID_ENV} and {KEY_ENV}, or it is confined to no bucket, so the prefix was '
         'not listed — `credentials derived b2-freshness-dumps mint` mints the list-only key and refills both',
         KEY_PLAYBOOK,
+        Finding.KEY_REFUSED,
     )
     try:
         session, bucket_id = authorize(key_id, key)
@@ -355,6 +426,7 @@ def _unanswered(exc: requests.RequestException) -> Verdict:
         DUMPS,
         f'B2 did not answer the listing ({type(exc).__name__}), so nothing is known about the dumps this run',
         MONITORING,
+        Finding.B2_UNANSWERED,
     )
 
 

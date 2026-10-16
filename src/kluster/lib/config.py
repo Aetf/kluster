@@ -17,14 +17,42 @@ by name instead of by traceback (rfc-002 §10.4).
 
 from __future__ import annotations
 
+import enum
 from pathlib import Path
 from typing import cast
 
-__all__ = ('lines', 'strings', 'text')
+__all__ = ('Shape', 'ShapeRefused', 'lines', 'strings', 'text')
+
+
+class Shape(enum.Enum):
+    """What a value was instead of the shape it was read as."""
+
+    #: Not JSON at all: what the stack's configuration object holds would not parse.
+    NOT_JSON = enum.auto()
+    #: Of another type: a value, or an entry of a list, that is not what was asked.
+    WRONG_TYPE = enum.auto()
+    #: An empty string, where a value or an entry must say something.
+    EMPTY = enum.auto()
+
+
+class ShapeRefused(TypeError):
+    """A configuration value refused for its shape, by name and never by value.
+
+    A `TypeError`, as every refusal of a shape here is, and the fields say
+    which: `what` is the value's name as the caller gave it, `shape` what it
+    was instead, and `entry` the 1-based position of the list entry at fault,
+    or `None` where the value as a whole is.
+    """
+
+    def __init__(self, message: str, *, what: str, shape: Shape, entry: int | None = None) -> None:
+        super().__init__(message)
+        self.what: str = what
+        self.shape: Shape = shape
+        self.entry: int | None = entry
 
 
 def text(value: object, what: str) -> str:
-    """`value` as a non-empty string, or a `TypeError` saying what it is instead.
+    """`value` as a non-empty string, or a `ShapeRefused` saying what it is instead.
 
     The single-value case of `strings`, for the places a structured answer
     would otherwise be coerced into one silently — a `None` that becomes the
@@ -39,14 +67,16 @@ def text(value: object, what: str) -> str:
     output it was.
     """
     if not isinstance(value, str):
-        raise TypeError(f'{what} must be a non-empty string, and is {type(value).__name__}')
+        raise ShapeRefused(
+            f'{what} must be a non-empty string, and is {type(value).__name__}', what=what, shape=Shape.WRONG_TYPE
+        )
     if not value:
-        raise TypeError(f'{what} must be a non-empty string, and is empty')
+        raise ShapeRefused(f'{what} must be a non-empty string, and is empty', what=what, shape=Shape.EMPTY)
     return value
 
 
 def strings(value: object, what: str) -> tuple[str, ...]:
-    """`value` as a list of non-empty strings, or a `TypeError` saying what shape it is.
+    """`value` as a list of non-empty strings, or a `ShapeRefused` saying what shape it is.
 
     **The refusal names the shape and never the value**, for `text`'s reason:
     what this raises is logged, and a list that arrives this way may be
@@ -55,15 +85,23 @@ def strings(value: object, what: str) -> tuple[str, ...]:
     entry is wrong by its position and what it is instead: a type, or empty.
     """
     if not isinstance(value, list):
-        raise TypeError(f'{what} must be a list, not {type(value).__name__}')
+        raise ShapeRefused(f'{what} must be a list, not {type(value).__name__}', what=what, shape=Shape.WRONG_TYPE)
     entries = cast('list[object]', value)
     for position, entry in enumerate(entries, start=1):
         if not isinstance(entry, str):
-            raise TypeError(
-                f'{what} must be a list of non-empty strings, and entry {position} is {type(entry).__name__}'
+            raise ShapeRefused(
+                f'{what} must be a list of non-empty strings, and entry {position} is {type(entry).__name__}',
+                what=what,
+                shape=Shape.WRONG_TYPE,
+                entry=position,
             )
         if not entry:
-            raise TypeError(f'{what} must be a list of non-empty strings, and entry {position} is empty')
+            raise ShapeRefused(
+                f'{what} must be a list of non-empty strings, and entry {position} is empty',
+                what=what,
+                shape=Shape.EMPTY,
+                entry=position,
+            )
     return tuple(cast('list[str]', entries))
 
 

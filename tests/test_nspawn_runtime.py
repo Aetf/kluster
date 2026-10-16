@@ -464,13 +464,13 @@ def test_a_machine_keeps_no_file_whose_name_the_runtime_already_uses() -> None:
     ]
     reserved.append(PurePosixPath(nspawn.initial_state_path('plain', 'AdGuardHome.yaml')).parent.name)
     for name in reserved:
-        with pytest.raises(ValueError, match='nspawn runtime keeps'):
+        with pytest.raises(nspawn.ReservedName):
             _ = nspawn.machine_file('plain', name)
 
     # Any settings name and not only this machine's: the mirror keys the live
     # directory by machine name, so a second one here would be installed as
     # another machine's settings and removed as stale in the same run.
-    with pytest.raises(ValueError, match='nspawn runtime keeps'):
+    with pytest.raises(nspawn.ReservedName):
         _ = nspawn.machine_file('plain', f'other{nspawn.NSPAWN_SUFFIX}')
 
 
@@ -483,7 +483,7 @@ def test_a_machine_keeps_no_file_the_content_stamp_cannot_see() -> None:
     where the others here are loud, which is why the name is refused at the one
     place a caller can be held to a name at all.
     """
-    with pytest.raises(ValueError, match='content stamp cannot see'):
+    with pytest.raises(nspawn.UnstampedName):
         _ = nspawn.machine_file('plain', '.env')
 
     _ = nspawn.machine_file('plain', 'resolv.conf')

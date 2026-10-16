@@ -89,6 +89,11 @@ QBITTORRENT_ON_WORKER = 'qbittorrentOnWorker'
 #: during the ceremony, `workerGua` only after it.
 GATEWAY_BOOTSTRAP_HOST = 'gatewayBootstrapHost'
 
+
+class BootstrapHostRefused(ValueError):
+    """`GATEWAY_BOOTSTRAP_HOST` holds something other than a literal IP address."""
+
+
 #: Static host entries on the gateway's own resolver. Empty, and that is the
 #: design: the device name plane is DHCP-derived and served by that resolver,
 #: while every service is named by its public hostname and steered by the
@@ -300,7 +305,11 @@ async def main() -> None:
     try:
         recipients = config.require_secret_object(BUDGET_ALERT_RECIPIENTS)
     except pulumi.ConfigTypeError:
-        raise TypeError(f'{BUDGET_ALERT_RECIPIENTS} must be a JSON list of addresses, and is not JSON') from None
+        raise lib_config.ShapeRefused(
+            f'{BUDGET_ALERT_RECIPIENTS} must be a JSON list of addresses, and is not JSON',
+            what=BUDGET_ALERT_RECIPIENTS,
+            shape=lib_config.Shape.NOT_JSON,
+        ) from None
     _ = Guardrails(
         conventions.CLUSTER_NAME,
         tenancy_id=tenancy_id,
@@ -489,7 +498,7 @@ def _gateway(config: pulumi.Config) -> Gateway:
         try:
             _ = ip_address(bootstrap_host)
         except ValueError:
-            raise ValueError(
+            raise BootstrapHostRefused(
                 f'{GATEWAY_BOOTSTRAP_HOST} is {bootstrap_host!r}, which is not a literal IP '
                 'address. The apply this key exists for runs inside the cutover window, which '
                 'stops both home resolvers, so nothing on the LAN answers for a name at the '
