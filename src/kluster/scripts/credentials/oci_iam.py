@@ -1086,6 +1086,62 @@ def _sweep(iam: Iam, user_id: str, keep: str) -> None:
         _retire(iam, user_id, existing)
 
 
+class TenancyMismatch(CredentialRejected):
+    """A credential that signs for another account than the one `conventions.OCI_TENANCY` records.
+
+    Both accounts are fields, because which of the two is stale is the
+    operator's question and neither one alone answers it.
+    """
+
+    def __init__(self, message: str, *, signs_for: str, recorded: str) -> None:
+        super().__init__(message)
+        self.signs_for: str = signs_for
+        self.recorded: str = recorded
+
+
+class CompartmentGone(CredentialRejected):
+    """`conventions` records a compartment OCID, and the tenancy has no compartment of that name."""
+
+    def __init__(self, message: str, *, name: str, recorded: str) -> None:
+        super().__init__(message)
+        self.name: str = name
+        self.recorded: str = recorded
+
+
+class CompartmentStale(CredentialRejected):
+    """The compartment of the recorded name is another one than the OCID `conventions` records."""
+
+    def __init__(self, message: str, *, name: str, found: str, recorded: str) -> None:
+        super().__init__(message)
+        self.name: str = name
+        self.found: str = found
+        self.recorded: str = recorded
+
+
+#: The command that records a seed row's identity domain, which is what a sweep
+#: that could not make room usually lacks (credentials.md §4.3): the subject,
+#: the member and the action, as the CLI dispatches on them.
+DOMAIN_REPAIR = ('seed', entries.OCI, 'domain')
+
+
+class QuotaFull(CredentialRejected):
+    """A user that already holds `KEY_QUOTA` keys, refused before the mint the quota would refuse.
+
+    `held` is every fingerprint the user holds. `keep` is the one in use where
+    the run knows it, and `None` where nothing it reads can tell; `repair` is
+    the command that clears what usually fills the user, where it is known,
+    as the leaf the CLI dispatches on.
+    """
+
+    def __init__(
+        self, message: str, *, held: tuple[str, ...], keep: str | None, repair: tuple[str, str, str] | None
+    ) -> None:
+        super().__init__(message)
+        self.held: tuple[str, ...] = held
+        self.keep: str | None = keep
+        self.repair: tuple[str, str, str] | None = repair
+
+
 def _room_for_one_more(iam: Iam, user_id: str, *, name: str, live: str | None) -> None:
     """Refuse to mint into a full user, naming the keys in the way.
 
@@ -1129,20 +1185,26 @@ def _room_for_one_more(iam: Iam, user_id: str, *, name: str, live: str | None) -
         return
     spare = [fingerprint for fingerprint in held if fingerprint != live]
     if live is not None and len(spare) < len(held):
-        raise CredentialRejected(
+        raise QuotaFull(
             f'{name} already holds {len(held)} API keys (the quota) and the sweep could not make room. '
             f'Keep {live}: it is the key this kit holds the private half of and the one this command signs '
             f'as, and deleting it would leave the row recoverable only from the account root. Delete the '
             f'rest in the console and run this again: {", ".join(spare)}. A sweep that could not make room '
             'usually means this row predates the identity-domain attribute retirement goes through: '
-            '`credentials seed oci domain` records it once, and until it does every rotation strands '
-            'another key here (docs/credentials.md §4.3).'
+            f'`credentials {" ".join(DOMAIN_REPAIR)}` records it once, and until it does every rotation strands '
+            'another key here (docs/credentials.md §4.3).',
+            held=tuple(held),
+            keep=live,
+            repair=DOMAIN_REPAIR,
         )
-    raise CredentialRejected(
+    raise QuotaFull(
         f'{name} already holds {len(held)} API keys (the quota), and this run cannot tell which of them is '
         'in use: nothing it reads holds the private half of any of them. Delete all but one in the console '
         'and run this again, or delete all of them and run this again, which is equally safe because the '
-        f're-run mints a fresh key and writes it down: {", ".join(held)}'
+        f're-run mints a fresh key and writes it down: {", ".join(held)}',
+        held=tuple(held),
+        keep=None,
+        repair=None,
     )
 
 
@@ -1516,10 +1578,12 @@ def verify_tenancy(tenancy: str) -> None:
     """
     intended = conventions.OCI_TENANCY.tenancy_ocid
     if tenancy != intended:
-        raise CredentialRejected(
+        raise TenancyMismatch(
             f'this seed signs for {tenancy}, but `conventions.OCI_TENANCY` records {intended} as the account '
             'this program declares into: one of the two is stale, and minting here would leave a live key in '
-            'an account the stack does not act in'
+            'an account the stack does not act in',
+            signs_for=tenancy,
+            recorded=intended,
         )
     log.info('the seed signs for %s, which is the tenancy `conventions` records', tenancy)
 
@@ -1546,11 +1610,13 @@ def verify_adopted_tenancy(tenancy: str) -> None:
     """
     intended = conventions.OCI_TENANCY.tenancy_ocid
     if tenancy != intended:
-        raise CredentialRejected(
+        raise TenancyMismatch(
             f'this account root signs for {tenancy}, but `conventions.OCI_TENANCY` records {intended} as the '
             'account this program declares into: one of the two is stale, and recording the identity domain of '
             'the first on the kit would leave a row whose successors are minted in one tenancy and whose '
-            'predecessors are retired through another'
+            'predecessors are retired through another',
+            signs_for=tenancy,
+            recorded=intended,
         )
     log.info('the account root signs for %s, which is the tenancy `conventions` records', tenancy)
 
@@ -1594,16 +1660,21 @@ def ensure_compartment(iam: Iam, consumer: str, *, override: str | None = None) 
         )
         return ocid
     if found is None:
-        raise CredentialRejected(
+        raise CompartmentGone(
             f'`conventions` records {intended.ocid} as the {intended.name} compartment, but this tenancy has '
             'none of that name: either the mapping is stale, or this is not the tenancy it describes — a drill '
-            'names its own compartment with --compartment'
+            'names its own compartment with --compartment',
+            name=intended.name,
+            recorded=intended.ocid,
         )
     if found != intended.ocid:
-        raise CredentialRejected(
+        raise CompartmentStale(
             f'the compartment named {intended.name} in this tenancy is {found}, but `conventions` records '
             f'{intended.ocid} for {consumer}: one of the two is stale, and minting against the wrong one would '
-            'confine the key to a compartment the stack does not act in'
+            'confine the key to a compartment the stack does not act in',
+            name=intended.name,
+            found=found,
+            recorded=intended.ocid,
         )
     return found
 

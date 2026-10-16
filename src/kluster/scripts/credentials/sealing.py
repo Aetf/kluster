@@ -100,9 +100,11 @@ def cluster_kubeconfig(physical: pulumi_config.Stack) -> str:
     if not isinstance(value, str) or not value.strip():
         raise SlotRefused(f'the `{physical.name}` stack output `{output}` is not a kubeconfig')
     if value == rpc.UNKNOWN:
-        raise SlotRefused(
+        raise pulumi_config.UnknownOutput(
             f"the `{physical.name}` stack exports `{output}` as Pulumi's unknown sentinel, which an apply "
-            f'restricted by `--target` leaves behind; apply `{physical.name}` again with no targets'
+            f'restricted by `--target` leaves behind; apply `{physical.name}` again with no targets',
+            stack=physical.name,
+            output=output,
         )
     return value
 
@@ -160,9 +162,10 @@ class Sealer:
         """
         stack = self.open_stack(value.stack)
         if not stack.exists():
-            raise SlotRefused(
+            raise pulumi_config.StackMissing(
                 f'the `{value.stack}` stack does not exist in the state backend, so it has no configuration to '
-                f'write the sealed {value.name} into; `pulumi stack init {value.stack} --no-select` creates it'
+                f'write the sealed {value.name} into; `pulumi stack init {value.stack} --no-select` creates it',
+                stack=value.stack,
             )
         return stack
 

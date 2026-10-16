@@ -426,8 +426,9 @@ def test_creating_the_seed_in_an_unrecorded_tenancy_builds_nothing_at_all(
     # Both accounts are named, because which of the two is stale -- a root
     # typed for another tenancy, or an OCID recorded wrong -- is the operator's
     # question and neither one alone answers it.
-    with pytest.raises(oci_iam.CredentialRejected, match=f'{TENANCY}.*{ELSEWHERE}'):
+    with pytest.raises(oci_iam.TenancyMismatch) as refused:
         _ = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+    assert (refused.value.signs_for, refused.value.recorded) == (TENANCY, ELSEWHERE)
 
     # The check is above `ensure`, which is where this path's first write is:
     # the group, the user, the membership and the policy are made before any
@@ -449,8 +450,9 @@ def test_rotating_a_seed_from_an_unrecorded_tenancy_retires_nothing(
     before = oci_iam.load_seed(kit, SEED_ENTRY).private_key
     with_tenancy_ocid(monkeypatch, ELSEWHERE)
 
-    with pytest.raises(oci_iam.CredentialRejected, match=f'{TENANCY}.*{ELSEWHERE}'):
+    with pytest.raises(oci_iam.TenancyMismatch) as refused:
         _ = oci_iam.rotate_seed(kit, seed_entry=SEED_ENTRY, connect=tenancy)
+    assert (refused.value.signs_for, refused.value.recorded) == (TENANCY, ELSEWHERE)
 
     # This path's first write is a sweep, which deletes: creating no principals
     # makes the stakes lower than `create_seed`'s and the shape identical, and
@@ -533,8 +535,9 @@ def test_resuming_into_a_successor_from_an_unrecorded_tenancy_retires_nothing(
     tenancy.calls.clear()
     with_tenancy_ocid(monkeypatch, ELSEWHERE)
 
-    with pytest.raises(oci_iam.CredentialRejected, match=f'{TENANCY}.*{ELSEWHERE}'):
+    with pytest.raises(oci_iam.TenancyMismatch) as refused:
         _ = oci_iam.rotate_seed(kit, seed_entry=SEED_ENTRY, into=successor, connect=tenancy)
+    assert (refused.value.signs_for, refused.value.recorded) == (TENANCY, ELSEWHERE)
 
     # The resume's first act is the sweep of every key but the successor's,
     # the predecessor's included, so a check below it would have spent the
@@ -693,8 +696,9 @@ def test_a_recorded_compartment_the_tenancy_does_not_have_is_refused(
     # Refused rather than created: a recorded OCID that answers to nothing is a
     # fact gone stale, and making a second compartment beside it would hide
     # that behind a key confined to somewhere the stack does not act.
-    with pytest.raises(oci_iam.CredentialRejected, match='none of that name'):
+    with pytest.raises(oci_iam.CompartmentGone) as refused:
         _ = oci_iam.mint_api_key(seeded, consumer=conventions.STATE_BACKEND, seed_entry=SEED_ENTRY, connect=tenancy)
+    assert refused.value.recorded == 'ocid1.compartment.oc1..gone'
     assert tenancy.identity.compartments == {}
 
 
@@ -708,8 +712,9 @@ def test_a_compartment_whose_ocid_disagrees_with_the_mapping_is_refused(
         conventions.Compartment(consumer=conventions.STATE_BACKEND, name=live.name, ocid='ocid1.compartment.oc1..old'),
     )
 
-    with pytest.raises(oci_iam.CredentialRejected, match='is stale'):
+    with pytest.raises(oci_iam.CompartmentStale) as refused:
         _ = oci_iam.mint_api_key(seeded, consumer=conventions.STATE_BACKEND, seed_entry=SEED_ENTRY, connect=tenancy)
+    assert (refused.value.found, refused.value.recorded) == (live.id, 'ocid1.compartment.oc1..old')
 
 
 def test_the_drill_compartment_is_recorded_apart_from_every_other() -> None:
@@ -806,8 +811,9 @@ def test_a_seed_from_another_tenancy_creates_nothing(
     # Both accounts are named, because which of the two is stale -- a kit
     # re-seeded from another tenancy, or an OCID recorded wrong -- is the
     # operator's question and neither one alone answers it.
-    with pytest.raises(oci_iam.CredentialRejected, match=f'{TENANCY}.*{ELSEWHERE}'):
+    with pytest.raises(oci_iam.TenancyMismatch) as refused:
         _ = oci_iam.mint_api_key(seeded, consumer=conventions.PHYSICAL, seed_entry=SEED_ENTRY, connect=tenancy)
+    assert (refused.value.signs_for, refused.value.recorded) == (TENANCY, ELSEWHERE)
 
     # The seed's row names its tenancy, so opening the kit is enough to know
     # it and the refusal costs nothing. Held against `conventions` after the
@@ -832,8 +838,9 @@ def test_a_seed_from_another_tenancy_does_not_converge_its_own_policy_there(
     # account, which is the orphan class in its earliest form.
     tenancy.identity.policies.clear()
 
-    with pytest.raises(oci_iam.CredentialRejected, match=f'{TENANCY}.*{ELSEWHERE}'):
+    with pytest.raises(oci_iam.TenancyMismatch) as refused:
         _ = oci_iam.mint_api_key(seeded, consumer=conventions.PHYSICAL, seed_entry=SEED_ENTRY, connect=tenancy)
+    assert (refused.value.signs_for, refused.value.recorded) == (TENANCY, ELSEWHERE)
 
     assert tenancy.identity.policies == {}
 
@@ -1250,8 +1257,9 @@ def test_adopting_a_domain_from_an_unrecorded_tenancy_records_nothing(
     # Both accounts are named, because which of the two is stale -- a root
     # typed for another tenancy, or an OCID recorded wrong -- is the operator's
     # question and neither one alone answers it.
-    with pytest.raises(oci_iam.CredentialRejected, match=f'{TENANCY}.*{ELSEWHERE}'):
+    with pytest.raises(oci_iam.TenancyMismatch) as refused:
         _ = oci_iam.adopt_domain(kit, seed_entry=SEED_ENTRY, root=root, connect=tenancy)
+    assert (refused.value.signs_for, refused.value.recorded) == (TENANCY, ELSEWHERE)
 
     # This command's whole effect is the URL it records, so the row is what a
     # refusal has to leave untouched -- a foreign one written here would be
@@ -1454,21 +1462,19 @@ def test_a_full_consumer_user_says_its_live_key_cannot_be_told_apart(seeded: Kdb
         public_pem = oci_iam.generate_key().public_pem
         _ = tenancy.identity.upload_api_key(minted.user, oci.identity.models.CreateApiKeyDetails(key=public_pem))
 
-    with pytest.raises(oci_iam.CredentialRejected, match='the quota') as refusal:
+    with pytest.raises(oci_iam.QuotaFull) as refusal:
         _ = oci_iam.mint_api_key(
             seeded, consumer=conventions.PHYSICAL, compartment_id=drill, seed_entry=SEED_ENTRY, connect=tenancy
         )
 
-    # The other answer, and the reason the two are different messages: this
-    # consumer's key is in a slot this program never reads, delivered there as
-    # a secret, so it cannot say which of the three is live. Naming one to keep
-    # here would be a guess, and both moves it offers instead have to be moves
-    # the operator can act on -- so the re-run is named.
+    # The other answer: this consumer's key is in a slot this program never
+    # reads, delivered there as a secret, so it cannot say which of the three
+    # is live. Naming one to keep here would be a guess.
     message = str(refusal.value)
+    assert set(refusal.value.held) == set(tenancy.identity.keys[minted.user])
     assert all(held in message for held in tenancy.identity.keys[minted.user])
-    assert 'cannot tell which' in message
-    assert 'Keep ' not in message
-    assert 'run this again' in message
+    assert refusal.value.keep is None
+    assert refusal.value.repair is None
 
 
 def test_a_full_user_no_key_of_which_can_go_names_the_errand(
@@ -1482,14 +1488,13 @@ def test_a_full_user_no_key_of_which_can_go_names_the_errand(
 
     # The sweep is refused wholesale, so rotation must refuse to mint -- with
     # the fingerprints in hand, not a bare quota 400.
-    with pytest.raises(oci_iam.CredentialRejected, match='the quota') as refusal:
+    with pytest.raises(oci_iam.QuotaFull) as refusal:
         _ = oci_iam.rotate_seed(kit, seed_entry=SEED_ENTRY, connect=tenancy)
 
-    # Every held key is named, and none of them is called superseded: the
-    # strays a refused sweep leaves are not keys anything has replaced.
+    # Every held key is named.
     message = str(refusal.value)
+    assert set(refusal.value.held) == set(tenancy.identity.keys[user_id])
     assert all(held in message for held in tenancy.identity.keys[user_id])
-    assert 'superseded' not in message
 
     # And on *this* path the live key is knowable -- the kit holds its private
     # half and the session signs with it -- so the refusal names it as the one
@@ -1498,9 +1503,7 @@ def test_a_full_user_no_key_of_which_can_go_names_the_errand(
     # from the account root. The errand has to end somewhere the operator can
     # act, so it names the re-run too.
     kept = oci_iam.fingerprint(oci_iam.load_seed(kit, SEED_ENTRY).private_key)
-    assert f'Keep {kept}' in message
-    assert 'cannot tell which' not in message
-    assert 'run this again' in message
+    assert refusal.value.keep == kept
     # Named once, and once only. A message that says "keep X" and then lists X
     # among the ones to delete contradicts itself on the single point this
     # whole path turns on, and the operator resolves the contradiction at a
@@ -1512,6 +1515,7 @@ def test_a_full_user_no_key_of_which_can_go_names_the_errand(
     # not make room is what a row predating its identity-domain attribute
     # produces, so clearing the strays by hand strands another next rotation.
     assert DOMAIN_REPAIR in named_leaves(message)
+    assert refusal.value.repair in named_leaves(message)
 
 
 class Interrupted(RuntimeError):
