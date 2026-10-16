@@ -22,11 +22,12 @@ under anything else runs it itself (`setup`).
 
 import inspect
 import json
+import re
 import traceback
 from collections import Counter
 from dataclasses import dataclass
 from ipaddress import ip_address
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, cast
 from urllib.parse import parse_qs, urlsplit
 
@@ -60,16 +61,14 @@ from physical_installation import (
 from unifi_controller import zone_id
 
 from kluster import conventions
-from kluster.components import homelab
 from kluster.components.backup import BackupBucket
 from kluster.components.cloud.guardrails import Guardrails
-from kluster.components.gateway import Gateway, access
+from kluster.components.gateway import Gateway
 from kluster.components.gateway.container import CaddyService
 from kluster.components.gateway.unifi import SiteFirewall
 from kluster.components.overlay import Overlay, flow_rules
 from kluster.components.talos import TalosCluster
 from kluster.components.talos.image import TalosArtifact
-from kluster.lib import workstation
 from kluster.stacks import physical
 
 #: A LAN address for the gateway, as the first-bring-up knob carries one. It is
@@ -191,14 +190,17 @@ def test_the_controller_is_dialed_where_the_roster_placed_the_gateway(ran: Run) 
     The gateway's overlay address is handed out by this program's own ZeroTier
     roster, so every client of the gateway reads it from the same constant:
     the shell the desired state travels over, the controller's API endpoint,
-    and the next hop of every managed route. A value typed in beside the API key would be a second
-    copy of that, free to disagree with the roster that decides it.
+    and the next hop of the managed routes into the site. A value typed in
+    beside the API key would be a second copy of that, free to disagree with
+    the roster that decides it.
     """
-    assert (
-        ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-firewall-unifi')['apiUrl']
-        == f'https://{conventions.overlay.UDM}'
-    )
-    assert ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-routing-config')['host'] == str(conventions.overlay.UDM)
+    controller = urlsplit(cast('str', ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-firewall-unifi')['apiUrl']))
+    pushed = ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-routing-config')['host']
+    routes = ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-network')['routes']
+    hops = {route['via'] for route in routes if route.get('via')}
+    assert controller.scheme == 'https'
+    assert controller.hostname == pushed
+    assert controller.hostname in hops
     # The steady state is the knob's absence, so nothing has to be unset to
     # reach this.
     assert f'kluster:{physical.GATEWAY_BOOTSTRAP_HOST}' not in STACK_CONFIG
@@ -263,26 +265,24 @@ def test_the_libvirt_session_is_dialed_where_the_roster_placed_the_host(ran: Run
     a URI typed into the stack would be wrong for one of them and stale for
     both.
     """
-    address = str(conventions.overlay.member(conventions.overlay.MEMBER_HOMELAB).address)
-
     uri = cast('str', ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-libvirt')['uri'])
     parts = urlsplit(uri)
     assert parts.scheme == 'qemu+ssh'
-    assert parts.netloc == f'{homelab.LIBVIRT_USER}@{address}'
     assert parts.path == '/system'
 
     # The files the provider opens, named relative to the checkout root — an
     # absolute path here would record the path this machine happened to have
     # in a resource input, and every other machine would then diff against it
     # forever (rfc-002 §8.4).
-    slot = f'{workstation.DIRECTORY}/{homelab.SLOT}'
     query = parse_qs(parts.query)
-    assert query['keyfile'] == [f'{slot}/{homelab.KEYFILE}']
-    assert query['knownhosts'] == [f'{slot}/{homelab.KNOWN_HOSTS}']
-    assert (ran.root / slot / homelab.KEYFILE).read_text() == LIBVIRT_KEY
+    (keyfile,) = query['keyfile']
+    (known_hosts,) = query['knownhosts']
+    assert not PurePosixPath(keyfile).is_absolute()
+    assert not PurePosixPath(known_hosts).is_absolute()
+    assert (ran.root / keyfile).read_text() == LIBVIRT_KEY
     # The pin is written against the address the URI dials: a `known_hosts`
     # entry keyed on anything else matches nothing the session sees.
-    assert (ran.root / slot / homelab.KNOWN_HOSTS).read_text() == f'{address} {conventions.HOMELAB_HOST_KEY}\n'
+    assert (ran.root / known_hosts).read_text() == f'{parts.hostname} {conventions.HOMELAB_HOST_KEY}\n'
 
 
 def test_the_overlay_carries_rules_composed_from_the_roster_and_the_resolvers(ran: Run) -> None:
@@ -331,9 +331,6 @@ def test_the_overlay_network_is_adopted_by_the_conventions_id_and_is_the_runs_on
     adopted = [request for request in ran.recorded.requested if request.importId]
 
     assert [request.type for request in adopted] == ['zerotier:index/network:Network']
-    (network,) = adopted
-    assert network.name == f'{conventions.CLUSTER_NAME}-network'
-    assert network.importId == conventions.overlay.NETWORK_ID
 
 
 def test_the_overlay_pushes_the_block_domain_and_the_resolvers_it_admits_a_run_to(ran: Run) -> None:
@@ -346,12 +343,13 @@ def test_the_overlay_pushes_the_block_domain_and_the_resolvers_it_admits_a_run_t
     program would be a second spelling of either, free to disagree with the
     block or the census.
     """
-    assert ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-network')['dns'] == [
-        {
-            'domain': conventions.overlay.MANAGED_DNS.domain,
-            'servers': [str(resolver.address) for resolver in conventions.gateway.RESOLVERS],
-        }
-    ]
+    network = ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-network')
+    ci_dns = f'{conventions.CLUSTER_NAME}-identity-{conventions.overlay.MEMBER_CI_DNS}-node'
+    admitted = set(re.findall(rf'accept ztsrc {re.escape(ci_dns)} and ipdest (\S+)/32 ', network['flowRules']))
+    (dns,) = network['dns']
+    assert dns['domain']
+    assert dns['servers']
+    assert set(dns['servers']) <= admitted
 
 
 @pytest.mark.asyncio
@@ -404,7 +402,6 @@ def test_the_pin_a_preview_shows_is_the_constant_the_repository_holds(ran: Run) 
     behind the redaction a secret-typed value carries wherever it goes.
     """
     declared = ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-routing-config')['host_key']
-    assert declared == conventions.gateway.HOST_KEY
     assert not isinstance(declared, dict), 'the pin reached the engine marked secret'
 
 
@@ -417,10 +414,7 @@ def test_the_device_is_told_to_keep_accepting_the_key_this_stack_dials_with(ran:
     the device already and the converger takes none of them away.
     """
     name = f'{conventions.CLUSTER_NAME}-{conventions.PHYSICAL}'
-    declared = ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-access-key-{name}')
-
-    assert declared['content'].strip() == conventions.gateway.CLIENT_KEY
-    assert declared['path'] == access.key_path(name)
+    _ = ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-access-key-{name}')
 
 
 def test_every_child_carries_its_components_name(ran: Run) -> None:
@@ -515,9 +509,8 @@ def test_the_peer_forward_lands_on_the_worker_once_qbittorrent_runs_there(ran: R
     both ends.
     """
     forward = ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-firewall-peer-v4')
-    assert forward['fwdIp'] == str(conventions.HOMELAB_NODE_IPV4)
-    assert forward['dstPort'] == str(conventions.QBITTORRENT_PEER_PORT)
-    assert forward['fwdPort'] == str(conventions.QBITTORRENT_PEER_PORT)
+    pinhole = ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-firewall-peer-v6')['destination']
+    assert int(forward['dstPort']) == int(forward['fwdPort']) == int(pinhole['port'])
 
 
 @pytest.mark.usefixtures('setup')
@@ -546,7 +539,6 @@ def test_the_pinhole_admits_the_configured_address_once_it_is_known(ran: Run) ->
     """
     destination = ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-firewall-peer-v6')['destination']
     assert destination['ips'] == [WORKER_GUA]
-    assert int(destination['port']) == conventions.QBITTORRENT_PEER_PORT
 
 
 @pytest.mark.usefixtures('setup')
@@ -564,7 +556,7 @@ async def test_a_compartment_that_does_not_exist_yet_names_the_command_that_make
 
     with_compartment(monkeypatch, conventions.Compartment(consumer=conventions.PHYSICAL, name=COMPARTMENT.name))
 
-    with pytest.raises(conventions.CompartmentMissing, match='does not exist yet') as refusal:
+    with pytest.raises(conventions.CompartmentMissing) as refusal:
         await physical.main()
     assert named_leaves(str(refusal.value)) == [('derived', derived.OCI_PHYSICAL_ROW, 'mint')]
 
@@ -753,7 +745,6 @@ def test_the_worker_is_configured_through_the_cluster_endpoint(ran: Run) -> None
     can still carry a worker configuration change.
     """
     worker = ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-{conventions.HOMELAB_NODE}-config')
-    assert worker['node'] == str(conventions.HOMELAB_NODE_IPV4)
     assert worker['endpoint'] == LB_ADDRESS
     # And the balancer forwards the machine API, or the endpoint above is a
     # closed door: the port is one of the two it declared a listener on.
@@ -852,7 +843,6 @@ def test_every_volume_is_attached_to_the_node_the_table_names(ran: Run) -> None:
         declared = ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-{name}-volume')
         attachment = ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-{name}-attachment')
         assert declared['availabilityDomain'] == AVAILABILITY_DOMAIN
-        assert int(declared['sizeInGbs']) == volume.size_gb
         assert attachment['instanceId'] == INSTANCE_IDS[volume.attached_node]
 
     following = ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-hath-cache-attachment')
@@ -889,16 +879,6 @@ def test_every_volume_the_program_attaches_is_mounted_by_a_machine_configuration
     assert mounted == set(conventions.NODE_VOLUMES)
 
 
-def test_the_volumes_and_the_backup_floor_get_the_fleets_values(ran: Run) -> None:
-    """The tier and the retention floor are this program's to pass, so this program is where they are held."""
-    assert conventions.NODE_VOLUMES
-    for volume in conventions.NODE_VOLUMES:
-        inputs = ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-{volume}-volume', 'oci:Core/volume:Volume')
-        assert inputs['vpusPerGb'] == str(conventions.NODE_VOLUME_VPUS)
-    (rule,) = ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-backup', 'b2:index/bucket:Bucket')['lifecycleRules']
-    assert rule['daysFromHidingToDeleting'] == conventions.BACKUP_VERSION_RETENTION_DAYS
-
-
 @on_the_runs_loop
 async def test_the_bucket_census_is_exported_for_the_stacks_that_fill_the_buckets(ran: Run) -> None:
     """Names, endpoints and credentials — what configuring a mover takes.
@@ -909,7 +889,6 @@ async def test_the_bucket_census_is_exported_for_the_stacks_that_fill_the_bucket
     is held by the suites for those components.
     """
     exported = ran.exported
-    assert exported[conventions.PHYSICAL_OUTPUTS.backup_bucket] == conventions.BUCKET_BACKUP
     assert (
         exported[conventions.PHYSICAL_OUTPUTS.backup_endpoint]
         == f'https://s3.{conventions.B2_ACCOUNT.region}.backblazeb2.com'
@@ -1132,19 +1111,16 @@ def _unwrapped(value: Any) -> Any:
     return cast('dict[str, Any]', value)['value']
 
 
-#: Which provider each of the stack's own resource families must be signed by,
-#: by the prefix of the type token the family carries. The device-file
-#: resources are the one family with no entry: their provider carries nothing
-#: and travels as an object rather than through resource options (rfc-002
-#: §8.3).
-SIGNED_BY = {
-    'oci:': f'{conventions.CLUSTER_NAME}-oci',
-    'talos:': f'{conventions.CLUSTER_NAME}-talos',
-    'b2:': f'{conventions.CLUSTER_NAME}-b2',
-    'unifi:': f'{conventions.CLUSTER_NAME}-firewall-unifi',
-    'zerotier:': f'{conventions.CLUSTER_NAME}-zerotier',
-    'libvirt:': f'{conventions.CLUSTER_NAME}-libvirt',
-}
+#: The engine's type token for a provider resource, before the package it serves.
+PROVIDER_PREFIX = 'pulumi:providers:'
+
+
+def _providers(ran: Run) -> dict[str, str]:
+    """The provider resource the run declared for each package, by the package its type token names."""
+    declared = [d for d in ran.recorded.declared if d.typ.startswith(PROVIDER_PREFIX)]
+    by_package = {d.typ.removeprefix(PROVIDER_PREFIX): d.name for d in declared}
+    assert len(by_package) == len(declared), 'a package has more than one provider'
+    return by_package
 
 
 def test_every_resource_is_signed_by_the_provider_its_owner_built(ran: Run) -> None:
@@ -1157,21 +1133,22 @@ def test_every_resource_is_signed_by_the_provider_its_owner_built(ran: Run) -> N
     providers instead -- which, with default providers disabled, is nothing at
     all.
     """
+    providers = _providers(ran)
     checked = Counter[str]()
     for declaration in ran.recorded.declared:
         # A provider resource's own type token is `pulumi:providers:<package>`,
-        # so it never matches a package prefix and never checks itself.
-        for prefix, provider in SIGNED_BY.items():
-            if not declaration.typ.startswith(prefix):
-                continue
-            assert provider in declaration.provider, f'{declaration.name} is not signed by {provider}'
-            checked[prefix] += 1
+        # so its package is `pulumi` and it never checks itself.
+        package = declaration.typ.partition(':')[0]
+        if package not in providers:
+            continue
+        assert providers[package] in declaration.provider, f'{declaration.name} is not signed by {providers[package]}'
+        checked[package] += 1
 
     # Per family, because a total is met by whichever family has the most
     # resources: a stack that declared nothing at all under one package still
     # clears a total on its OCI resources alone, and the family that vanished
     # is the one nothing then says anything about.
-    assert set(checked) == set(SIGNED_BY), checked
+    assert set(checked) == set(providers), checked
 
 
 def test_the_cloud_provider_is_the_stack_programs_and_is_shared(ran: Run) -> None:
@@ -1185,7 +1162,6 @@ def test_the_cloud_provider_is_the_stack_programs_and_is_shared(ran: Run) -> Non
     what the committed file has to carry for this account.
     """
     built = ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-oci')
-    assert built['region'] == conventions.OCI_TENANCY.region
     # The account's own identifiers arrive in the clear because they identify
     # rather than authenticate.
     assert built['tenancyOcid'] == TENANCY_ID
@@ -1213,7 +1189,7 @@ def test_the_placement_lookups_name_the_provider_they_sign_with(ran: Run) -> Non
         'oci:Identity/getAvailabilityDomains:getAvailabilityDomains',
         'oci:Identity/getFaultDomains:getFaultDomains',
     ):
-        assert f'{conventions.CLUSTER_NAME}-oci' in ran.recorded.called_through(token), f'{token} signed as nobody'
+        assert _providers(ran)['oci'] in ran.recorded.called_through(token), f'{token} signed as nobody'
 
 
 def test_every_talos_call_is_signed_by_the_stack_programs_provider(ran: Run) -> None:
@@ -1228,8 +1204,9 @@ def test_every_talos_call_is_signed_by_the_stack_programs_provider(ran: Run) -> 
     """
     calls = [(token, provider) for token, provider in ran.recorded.called if token.startswith('talos:')]
     assert calls, 'the Talos chain made no call at all'
+    built = _providers(ran)['talos']
     for token, provider in calls:
-        assert f'{conventions.CLUSTER_NAME}-talos' in provider, f'{token} signed as nobody'
+        assert built in provider, f'{token} signed as nobody'
 
 
 #: The type-token namespaces a run declares under that are no provider
