@@ -62,6 +62,8 @@ REFUSALS = (
     WorkstationError,
     committed.Refused,
     lib_config.ShapeRefused,
+    provision.DigestMissing,
+    provision.DocumentIncomplete,
     stack_environment.EnvironmentRefused,
 )
 

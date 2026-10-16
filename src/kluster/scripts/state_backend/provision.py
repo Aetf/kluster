@@ -33,6 +33,35 @@ from . import config
 log = logging.getLogger(__name__)
 
 
+class DocumentIncomplete(RuntimeError):
+    """A document another project publishes lacks a field this program reads.
+
+    The FCOS stream metadata and the registry's token answer are both other
+    projects' decisions, so a field they stop publishing is refused naming the
+    document (`what`), the descent asked for (`path`) and the first key that
+    was not there (`missing`), rather than surfacing as a `KeyError` several
+    levels into one expression.
+    """
+
+    def __init__(self, message: str, *, what: str, path: tuple[str, ...], missing: str) -> None:
+        super().__init__(message)
+        self.what: str = what
+        self.path: tuple[str, ...] = path
+        self.missing: str = missing
+
+
+class DigestMissing(RuntimeError):
+    """The registry answered a manifest request without saying which digest it serves.
+
+    An empty answer would otherwise be logged as a resolution, and the check
+    that exists to catch a bad pin would report success.
+    """
+
+    def __init__(self, message: str, *, image: str) -> None:
+        super().__init__(message)
+        self.image: str = image
+
+
 @dataclass(frozen=True)
 class FcosArtifact:
     """The compressed disk image one FCOS release publishes for this platform."""
@@ -74,7 +103,9 @@ def _descend(document: object, path: Sequence[str], *, what: str) -> object:
     found = document
     for step in path:
         if not isinstance(found, dict) or step not in found:
-            raise RuntimeError(f'{what} has no {".".join(path)}: nothing under {step}')
+            raise DocumentIncomplete(
+                f'{what} has no {".".join(path)}: nothing under {step}', what=what, path=tuple(path), missing=step
+            )
         found = cast('dict[str, object]', found)[step]
     return found
 
@@ -83,7 +114,7 @@ def _string(document: object, key: str, *, what: str) -> str:
     """One non-empty string field of such a document, refused by name if absent."""
     value = cast('dict[str, object]', document).get(key) if isinstance(document, dict) else None
     if not isinstance(value, str) or not value:
-        raise RuntimeError(f'{what} has no {key}, and holds {document!r}')
+        raise DocumentIncomplete(f'{what} has no {key}, and holds {document!r}', what=what, path=(key,), missing=key)
     return value
 
 
@@ -187,7 +218,9 @@ def _image_digest(repository: str, reference: str) -> str:
     Anonymous pull scope is enough to read a manifest, so this needs no
     credential -- which is the point: the check has to run on a PR from a
     fork's CI as readily as on main. A reference the registry does not serve
-    raises the registry's `HTTPError`.
+    raises the registry's `HTTPError`; a token answer without a token is
+    `DocumentIncomplete`, and a manifest answer without a digest is
+    `DigestMissing`.
     """
     image = f'{repository}@{reference}' if reference.startswith('sha256:') else f'{repository}:{reference}'
     repository = repository.removeprefix('docker.io/')
@@ -213,9 +246,7 @@ def _image_digest(repository: str, reference: str) -> str:
         # case below rather than a `KeyError` from inside a mapping.
         digest = response.headers.get(DIGEST_HEADER, '')
     if not digest:
-        # An empty answer would otherwise be logged as a resolution, and the
-        # check that exists to catch a bad pin would report success.
-        raise RuntimeError(f'the registry answered for {image} without a {DIGEST_HEADER} header')
+        raise DigestMissing(f'the registry answered for {image} without a {DIGEST_HEADER} header', image=image)
     return str(digest)
 
 
@@ -224,7 +255,7 @@ def _postgres_pin_ok() -> bool:
     try:
         pinned = _image_digest(settings.POSTGRES_REPOSITORY, settings.POSTGRES_DIGEST)
         current = _image_digest(settings.POSTGRES_REPOSITORY, settings.POSTGRES_TAG)
-    except (urllib.error.HTTPError, RuntimeError) as exc:
+    except (urllib.error.HTTPError, DigestMissing, DocumentIncomplete) as exc:
         log.error('%s: registry says %s (is the digest published?)', settings.POSTGRES_IMAGE, exc)
         return False
     if pinned != settings.POSTGRES_DIGEST:
