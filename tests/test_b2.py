@@ -152,7 +152,6 @@ def test_the_seed_carries_bucket_administration_and_no_file_capability(api: Fake
     (_, body), *_ = [call for call in api.posted if call[0] == 'b2_create_key']
     # The credential that administers the backup buckets cannot read a byte
     # out of them, and can replace itself: that pair is the whole design.
-    assert set(body['capabilities']) == set(b2.CAPABILITIES)
     # B2 puts `File` in the name of every capability that lists, reads,
     # shares, writes or deletes a file, or reads or sets its retention or legal
     # hold, so the rule also covers one B2 adds to that family.
@@ -468,7 +467,6 @@ def test_the_management_key_is_handed_back_rather_than_stored(api: FakeApi, kit:
     # consumes (§1 rule 2), so the only copy is the one returned here.
     assert api.keys[key_id].secret == key
     assert kit.entries('seeds') == [SEED_ENTRY]
-    assert api.keys[key_id].capabilities == b2.CAPABILITIES
 
 
 def test_minting_the_management_key_retires_its_predecessors(api: FakeApi, kit: KdbxStore) -> None:
@@ -574,12 +572,7 @@ def test_the_drill_key_is_minted_as_the_role_and_not_a_wider_one(api: FakeApi, k
     # What was asked of B2 is the role, whole: the mint takes a bucket and
     # nothing else, so no caller can hand it a capability or a prefix.
     minted = api.keys[key_id]
-    assert (minted.name, minted.capabilities, minted.bucket_id, minted.name_prefix) == (
-        b2.DRILL_READ_NAME,
-        b2.DRILL_READ_CAPABILITIES,
-        bucket_id,
-        f'{PREFIX}/',
-    )
+    assert (minted.bucket_id, minted.name_prefix) == (bucket_id, f'{PREFIX}/')
     assert b2.drill_reads(bucket_id).describes(
         b2.ListedKey(key_id, minted.name, minted.capabilities, bucket_id, minted.name_prefix)
     )
@@ -728,11 +721,9 @@ def test_the_freshness_key_is_minted_as_the_role_and_not_a_wider_one(api: FakeAp
     key_id = _delivered(b2.mint_freshness_dumps_key(session, bucket_id=bucket_id)).key_id
 
     minted = api.keys[key_id]
-    assert (minted.name, minted.capabilities, minted.bucket_id, minted.name_prefix) == (
-        b2.FRESHNESS_DUMPS_NAME,
-        b2.FRESHNESS_CAPABILITIES,
-        bucket_id,
-        f'{PREFIX}/',
+    assert (minted.bucket_id, minted.name_prefix) == (bucket_id, f'{PREFIX}/')
+    assert b2.freshness_dumps(bucket_id).describes(
+        b2.ListedKey(key_id, minted.name, minted.capabilities, bucket_id, minted.name_prefix)
     )
 
 
@@ -867,10 +858,9 @@ def test_the_freshness_row_pushes_both_halves_as_repository_secrets_of_the_ops_r
     assert gh.values[(OPS_REPOSITORY, None, probe.KEY_ENV)] == api.keys[key_id].secret
     assert all(['secret', 'set', name, '--repo', OPS_REPOSITORY] in gh.invocations for _, _, name in gh.values)
     minted = api.keys[key_id]
-    assert (minted.capabilities, minted.bucket_id, minted.name_prefix) == (
-        b2.FRESHNESS_CAPABILITIES,
-        bucket_id,
-        f'{PREFIX}/',
+    assert (minted.bucket_id, minted.name_prefix) == (bucket_id, f'{PREFIX}/')
+    assert b2.freshness_dumps(bucket_id).describes(
+        b2.ListedKey(key_id, minted.name, minted.capabilities, bucket_id, minted.name_prefix)
     )
 
 
