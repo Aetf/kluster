@@ -40,9 +40,10 @@ from kluster.components.overlay.flow_rules import flow_rules
 VENDOR = Path(__file__).parent / 'vendor' / 'zerotier-rule-compiler'
 SOURCE = VENDOR / 'source.toml'
 
-#: The one bound a compile runs under. It takes well under a second; this is a
-#: hang guard, an order of magnitude above that.
-TIMEOUT = 60
+#: The one bound a compile runs under: well over the fraction of a second a
+#: compile takes under a loaded run, and below the 60 s case bound, so a hung
+#: compiler is named by its own timeout rather than by the case's.
+TIMEOUT = 20
 
 
 def node() -> str:

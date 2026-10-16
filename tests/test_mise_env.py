@@ -123,7 +123,9 @@ def _resolve(
         capture_output=True,
         text=True,
         check=True,
-        timeout=60,
+        # Below the 60 s case bound with room for a second resolve in one
+        # case, so a hung `mise` is named by its own timeout.
+        timeout=20,
     )
     pairs = (entry.split('=', 1) for entry in result.stdout.split('\0') if '=' in entry)
     return {name: value for name, value in pairs if name in EXPORTED}

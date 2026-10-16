@@ -133,9 +133,11 @@ SHAPES: dict[str, Shape] = {
     ),
 }
 
-#: The one bound a `talosctl` call runs under. Each call takes well under a
-#: second; this is a hang guard, an order of magnitude above that.
-TIMEOUT = 60
+#: The one bound a `talosctl` call runs under: each takes under a second in a
+#: loaded run, and the first case makes at most four -- the module's version
+#: check and secrets, its own render and validate -- so summed they stay below
+#: the 60 s case bound and a hung call is named by its own timeout.
+TIMEOUT = 12
 
 
 def pinned_release() -> str:
