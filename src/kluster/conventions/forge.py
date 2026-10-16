@@ -11,11 +11,13 @@ ci.md §3 defines the credential partition in exactly the terms below — which
 branches may deploy into a cell, and whether a reviewer stands in front of it —
 and the switches a workflow branches on are the same kind of fact about what a
 repository *is* here: the labels it reads, the identities it tests the
-author of a pull request against, the variables it reads, and the Apps whose
-tokens may push to it. What stays in the `github` stack is the
+author of a pull request against, the variables it reads, the Apps whose
+tokens may push to it, and whether a workflow merges its pull requests with no
+human on them. What stays in the `github` stack is the
 upstream object's own settings, which are no part of any entry: the required
-check names, the repository descriptions, the merge-strategy flags
-(framework/github.md §3).
+check names, the repository descriptions, and the posture every repository
+shares, merge methods included (`components.forge.ALLOWED`,
+framework/github.md §3).
 
 **`authors` creates nothing, and that is not what decides where it lives.**
 style/pulumi.md places a census by counting the programs that read it,
@@ -233,6 +235,14 @@ class Repository:
     #: was never set is one that fails at the step that needed it, on the
     #: first run after a rebuild.
     variables: tuple[Variable, ...] = ()
+    #: Why a workflow merges this repository's pull requests with no human on
+    #: them, or `None`, the default, where every merge is a person's. A reason
+    #: rather than a flag, because what it decides is a loosening: the
+    #: repository then offers auto-merge, which queues a merge behind the
+    #: checks, and branch updating, which lets a pull request satisfy "must be
+    #: up to date" with nobody there. A row that asks for them says which
+    #: workflow needs them, on the line that asks.
+    unattended_merges: str | None = None
 
     @property
     def full_name(self) -> str:
@@ -321,6 +331,7 @@ DEPLOYMENT = Repository(
     authors=(RENOVATE,),
     apps=(DISPATCH_APP,),
     variables=(DISPATCH_APP_CLIENT_ID,),
+    unattended_merges='noop-automerge merges dependency bumps into this repository without a human (ci.md §3)',
 )
 
 #: The notification and drill repository. Private on purpose — it holds the

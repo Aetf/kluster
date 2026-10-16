@@ -25,9 +25,9 @@ them.
 **Which repositories and Environments there are is not decided here.** The
 `credentials` command reads the same table, so it lives in `conventions.forge`
 (github.md §3); this program declares from it and adds what only it decides --
-the descriptions, the merge-strategy flags, and the checks a pull request must
-pass. Each repository is one `ManagedRepository`, so this program is wiring:
-the provider, the two entries, and the parameters that are neither.
+the descriptions and the checks a pull request must pass. Each repository is
+one `ManagedRepository`, so this program is wiring: the provider, the two
+entries, and the parameters that are neither.
 """
 
 from __future__ import annotations
@@ -85,9 +85,6 @@ async def main() -> None:
         entry=conventions.forge.DEPLOYMENT,
         description='Pulumi Python for a Talos/Cilium cluster spanning OCI and a homelab LAN',
         required_checks=REQUIRED_CHECKS,
-        # noop-automerge merges dependency bumps without a human, and this is
-        # the repository it merges them into.
-        unattended_merges=True,
         opts=on_github,
     )
 

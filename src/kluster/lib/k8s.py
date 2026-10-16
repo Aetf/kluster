@@ -22,7 +22,7 @@ import fnmatch
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, Literal, cast
 
 import pulumi
 import pulumi_crds as crds
@@ -37,6 +37,7 @@ from kluster.lib.versions import ChartPin
 __all__ = (
     'KUBECONFIG_KEY',
     'POD_SECURITY_ENFORCE_LABEL',
+    'LooserLevel',
     'PodSecurity',
     'SealingScope',
     'SecretTemplate',
@@ -246,31 +247,54 @@ class PodSecurity(StrEnum):
 POD_SECURITY_ENFORCE_LABEL = 'pod-security.kubernetes.io/enforce'
 
 
+@dataclass(frozen=True, kw_only=True)
+class LooserLevel:
+    """A namespace's exception to `restricted`: the level its pods are admitted under instead, and why.
+
+    `restricted` is what `namespace` gives a namespace that names none of
+    these, so a namespace held to less is one whose declaration says so, with
+    its reason on the same lines, and a loosening is a line in the diff rather
+    than one level traded for another. The level is typed to the two looser
+    ones: an exception that named `restricted` would be no exception, and the
+    type refuses it where it is written.
+    """
+
+    level: Literal[PodSecurity.BASELINE, PodSecurity.PRIVILEGED]
+    #: What the namespace's pods need that `restricted` refuses: the host's
+    #: namespaces or paths, a device, or a security context the chart does not
+    #: expose.
+    reason: str
+
+
 def namespace(
     resource_name: str,
     *,
     name: str,
-    pod_security: PodSecurity,
+    looser: LooserLevel | None = None,
     opts: pulumi.ResourceOptions | None = None,
 ) -> k8s.core.v1.Namespace:
-    """A namespace, with the Pod Security level its pods are admitted under.
+    """A namespace, its pods admitted under `restricted` unless `looser` names a lower level and why.
 
-    The level is required rather than defaulted, because a namespace that
-    states none is held to the cluster-wide default, whatever that is, and the
-    pods in it fail admission only once they are created
-    (declarative/cluster-infra.md §0). A namespace whose level is not
-    `restricted` says why where it is declared.
+    The level is stated on every namespace, never left off, because a
+    namespace that states none is held to the cluster-wide default, whatever
+    that is, and the pods in it fail admission only once they are created
+    (declarative/cluster-infra.md §0). `restricted` is the level a caller gets
+    by naming nothing, so what a declaration has to spell out is the
+    exception, and the exception carries its reason (`LooserLevel`).
 
     :param resource_name: The logical name, which carries the declaring
         component's name.
     :param name: The namespace's own name. It is fixed rather than autonamed:
         what installs into the namespace names it.
+    :param looser: The level the namespace is held to instead of `restricted`,
+        and why.
     """
+    level = PodSecurity.RESTRICTED if looser is None else looser.level
     return k8s.core.v1.Namespace(
         resource_name,
         metadata=k8s.meta.v1.ObjectMetaArgs(
             name=name,
-            labels={POD_SECURITY_ENFORCE_LABEL: pod_security.value},
+            labels={POD_SECURITY_ENFORCE_LABEL: level.value},
         ),
         opts=opts,
     )

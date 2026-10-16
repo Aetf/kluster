@@ -15,8 +15,8 @@ directory. The provisioner's configuration, the helper pod's template and the
 helper's two scripts are files beside this module, rendered into one
 ConfigMap the provisioner reads.
 
-Its namespace is `privileged`: the helper pods mount the host path they
-provision, which `baseline` refuses (cluster-infra.md §0).
+Its namespace is `privileged`, with the reason at its declaration: the helper
+pods mount the host path they provision (cluster-infra.md §0).
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ import pulumi_kubernetes as k8s
 
 from kluster import conventions
 from kluster.lib import templates
-from kluster.lib.k8s import PodSecurity, namespace
+from kluster.lib.k8s import LooserLevel, PodSecurity, namespace
 from kluster.lib.versions import ImagePin
 from putils import Component
 
@@ -87,7 +87,13 @@ class LocalPathProvisioner(Component, pulumi_type='kluster:local_path:LocalPathP
         behind = self.child_opts(depends_on=list(after))
 
         self.namespace = namespace(
-            f'{name}-namespace', name=NAMESPACE, pod_security=PodSecurity.PRIVILEGED, opts=behind
+            f'{name}-namespace',
+            name=NAMESPACE,
+            looser=LooserLevel(
+                level=PodSecurity.PRIVILEGED,
+                reason='the helper pods mount the host path they provision, which `baseline` refuses',
+            ),
+            opts=behind,
         )
         named = k8s.meta.v1.ObjectMetaArgs(name=PROVISIONER_NAME, namespace=self.namespace.metadata.name)
 

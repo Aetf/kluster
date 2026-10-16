@@ -1,10 +1,13 @@
 """The `github` program and the census it declares from.
 
-Every case about the program is a setting that a later diff cannot show,
-because each is a rule about what *cannot* happen: a check that is required, a
-push that is refused, a repository a destroy may not delete. Two more are
-about where a resource *is* rather than what it says: the provider that signs
-it, and the URN it keeps.
+Every case about the program holds a relation a later diff cannot show: a
+check that is required against the workflows that report it, a census entry
+against the resource declared from it, a token against the provider it opens.
+Two more are about where a resource *is* rather than what it says: the
+provider that signs it, and the URN it keeps. The posture -- which merges,
+pushes and bypasses a repository refuses -- is not held here: it is written
+refusing in `kluster.components.forge`, every exception named in `ALLOWED`
+with its reason, so a loosening is a line in that table's diff.
 
 The census these cases read (`conventions.forge`) is held still in
 `test_conventions`, where every census's invariants and seam tests are
@@ -100,7 +103,6 @@ def test_main_requires_only_checks_that_always_run(stack: Forge) -> None:
     protection = stack.by_name(BRANCH_PROTECTION)[PROTECTION]
 
     (required,) = protection['requiredStatusChecks']
-    assert required['strict'] is True
     assert required['contexts'], 'main requires no check at all'
     always = checks_every_pull_request_reports(str(protection['pattern']))
     assert set(required['contexts']) <= always, (
@@ -150,16 +152,6 @@ def checks_every_pull_request_reports(branch: str) -> set[str]:
             if not {'if', 'needs'} & job.keys() and 'matrix' not in cast('dict[str, object]', job.get('strategy') or {})
         }
     return names
-
-
-def test_the_owner_cannot_walk_around_the_gate(stack: Forge) -> None:
-    # The installation has one admin, so an unenforced protection is no
-    # protection: it would be bypassed by exactly the person it applies to.
-    protection = stack.by_name(BRANCH_PROTECTION)[PROTECTION]
-
-    assert protection['enforceAdmins'] is True
-    assert protection['allowsForcePushes'] is False
-    assert protection['allowsDeletions'] is False
 
 
 def test_every_environment_the_census_names_is_declared(stack: Forge) -> None:
@@ -212,14 +204,8 @@ def test_a_reviewer_stands_in_front_of_exactly_the_gated_environments(stack: For
     assert gated == census
     for name in gated:
         assert environments[name]['reviewers'] == [{'users': [conventions.forge.ACCOUNT.user_id]}]
-        # Off for the same reason `enforce_admins` is on: a door with a key
-        # under the mat is not a door.
-        assert environments[name]['canAdminsBypass'] is False
-        # Off because the one reviewer is the operator who opened the change:
-        # with self-review refused, no gated deploy could ever be approved.
-        assert environments[name]['preventSelfReview'] is False
-    # Both settings only qualify a reviewer, so an ungated Environment is sent
-    # neither.
+    # The self-review and admin-bypass settings only qualify a reviewer, so an
+    # ungated Environment is sent neither.
     for name in set(environments) - gated:
         assert 'preventSelfReview' not in environments[name], name
         assert 'canAdminsBypass' not in environments[name], name
@@ -231,24 +217,6 @@ def test_the_run_asks_the_account_nothing(stack: Forge) -> None:
     # one call that needs a parent named for it before it can inherit a
     # provider at all.
     assert stack.called == []
-
-
-def test_merges_are_rebases_only(stack: Forge) -> None:
-    """A squash rewrites authorship to the merging identity.
-
-    Which for noop-automerge is `noreply@github.com`, and a merge commit would
-    contradict the linear history the branch protection asks for.
-    """
-    repositories = stack.by_name(REPOSITORY)
-
-    # A loop is only a claim about what it visits, so the run is held to the
-    # census before it is walked: a run that declared no repository would
-    # satisfy the loop and nothing else here.
-    assert set(repositories) == {repository.name for repository in conventions.forge.REPOSITORIES}
-    for repository in repositories.values():
-        assert repository['allowRebaseMerge'] is True
-        assert repository['allowSquashMerge'] is False
-        assert repository['allowMergeCommit'] is False
 
 
 def test_each_repository_is_declared_with_the_visibility_the_census_records(stack: Forge) -> None:
@@ -480,19 +448,30 @@ def test_each_variable_a_workflow_reads_is_a_declared_resource(stack: Forge) -> 
             assert not isinstance(declared['value'], dict), 'a variable value reached the wire marked secret'
 
 
-def test_only_the_repository_that_merges_unattended_offers_auto_merge(stack: Forge) -> None:
-    """Auto-merge and branch updating are what noop-automerge needs, and only it needs them.
+def test_auto_merge_is_offered_exactly_where_the_census_merges_unattended(stack: Forge) -> None:
+    """Auto-merge and branch updating are what an unattended merge needs, and only it needs them.
 
     One queues a merge behind the checks; the other lets a pull request
-    satisfy "must be up to date" without a human. The ops repository merges
-    nothing unattended, so it asks for neither.
+    satisfy "must be up to date" without a human. A repository whose census
+    row names no workflow that merges unattended asks for neither, so the
+    settings are absent rather than sent off.
     """
     repositories = stack.by_name(REPOSITORY)
+    unattended = {
+        repository.name for repository in conventions.forge.REPOSITORIES if repository.unattended_merges is not None
+    }
 
-    assert repositories[conventions.forge.DEPLOYMENT.name]['allowAutoMerge'] is True
-    assert repositories[conventions.forge.DEPLOYMENT.name]['allowUpdateBranch'] is True
-    assert 'allowAutoMerge' not in repositories[conventions.forge.OPS.name]
-    assert 'allowUpdateBranch' not in repositories[conventions.forge.OPS.name]
+    # A loop is only a claim about what it visits, so the run is held to the
+    # census before it is walked: a run that declared no repository would
+    # satisfy the loop and nothing else here.
+    assert set(repositories) == {repository.name for repository in conventions.forge.REPOSITORIES}
+    for name, inputs in repositories.items():
+        if name in unattended:
+            assert inputs['allowAutoMerge'] is True, name
+            assert inputs['allowUpdateBranch'] is True, name
+        else:
+            assert 'allowAutoMerge' not in inputs, name
+            assert 'allowUpdateBranch' not in inputs, name
 
 
 def test_the_required_checks_are_a_roll_every_repository_states() -> None:

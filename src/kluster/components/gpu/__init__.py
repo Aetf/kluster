@@ -21,11 +21,10 @@ after up to the 10 s default timeout when the worker is unreachable. Chart
 SGX's controller, and Aetf/kluster#428, renovate's in-cluster bump, moves both
 Intel pins to it.
 
-Both namespaces are `privileged` (cluster-infra.md §0): NFD's worker reads the
-host's `/boot`, `/sys`, `/proc/swaps`, libraries, OS release and local
-feature files through host paths, and the plugin mounts the GPU's device
-nodes. The plugin's DaemonSet runs in the operator's namespace, which is where
-the operator creates it.
+Both namespaces are `privileged` (cluster-infra.md §0), each with its reason
+at its declaration: NFD's worker reads the host through host paths, and the
+plugin mounts the GPU's device nodes. The plugin's DaemonSet runs in the
+operator's namespace, which is where the operator creates it.
 """
 
 from __future__ import annotations
@@ -34,7 +33,7 @@ from collections.abc import Sequence
 
 import pulumi
 
-from kluster.lib.k8s import PodSecurity, helm_chart, namespace
+from kluster.lib.k8s import LooserLevel, PodSecurity, helm_chart, namespace
 from kluster.lib.versions import ChartPin
 from putils import Component
 
@@ -107,7 +106,14 @@ class NodeFeatureDiscovery(Component, pulumi_type='kluster:gpu:NodeFeatureDiscov
         behind = self.child_opts(depends_on=list(after))
 
         self.namespace = namespace(
-            f'{name}-namespace', name=NFD_NAMESPACE, pod_security=PodSecurity.PRIVILEGED, opts=behind
+            f'{name}-namespace',
+            name=NFD_NAMESPACE,
+            looser=LooserLevel(
+                level=PodSecurity.PRIVILEGED,
+                reason="the worker reads the host's `/boot`, `/sys`, `/proc/swaps`, libraries, OS release and "
+                'local feature files through host paths, which `baseline` refuses',
+            ),
+            opts=behind,
         )
         self.chart = helm_chart(
             name, pin=chart, namespace=self.namespace.metadata.name, values=nfd_values(), opts=behind
@@ -146,7 +152,14 @@ class IntelGpuPlugin(Component, pulumi_type='kluster:gpu:IntelGpuPlugin'):
         behind = self.child_opts(depends_on=list(after))
 
         self.namespace = namespace(
-            f'{name}-namespace', name=INTEL_NAMESPACE, pod_security=PodSecurity.PRIVILEGED, opts=behind
+            f'{name}-namespace',
+            name=INTEL_NAMESPACE,
+            looser=LooserLevel(
+                level=PodSecurity.PRIVILEGED,
+                reason="the plugin's DaemonSet, which the operator creates in this namespace, mounts the GPU's "
+                'device nodes from the host, which `baseline` refuses',
+            ),
+            opts=behind,
         )
         self.operator = helm_chart(
             f'{name}-operator',

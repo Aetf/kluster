@@ -30,8 +30,8 @@ from mock_monitor import Recorder, declaring, run_with
 from renovate_text import as_python_spells_it, as_renovate_spells_it, listed, package_rules
 
 from kluster import conventions
-from kluster.components import local_path, reloader, talos
-from kluster.lib.k8s import PodSecurity, namespace
+from kluster.components import talos
+from kluster.lib.k8s import LooserLevel, PodSecurity, namespace
 from kluster.lib.versions import versions
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -286,22 +286,6 @@ def test_reloaders_container_drops_every_capability_and_refuses_privilege_escala
 # -- Namespaces ---------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ('component', 'name', 'level'),
-    [
-        (CERT_MANAGER, conventions.CERT_MANAGER_NAMESPACE, 'restricted'),
-        (RELOADER, reloader.NAMESPACE, 'restricted'),
-        (LOCAL_PATH, local_path.NAMESPACE, 'privileged'),
-    ],
-)
-def test_each_namespace_enforces_its_pod_security_level(applied: Run, component: str, name: str, level: str) -> None:
-    """`restricted` unless the component's pods need the host; local-path's helper pods mount the path they provision."""
-    namespace_ = applied.inputs(NAMESPACE, f'{component}-namespace')['metadata']
-
-    assert namespace_['name'] == name
-    assert namespace_['labels'] == {ENFORCE: level}
-
-
 @pytest.mark.parametrize('chart', [CERT_MANAGER, RELOADER])
 def test_each_chart_installs_into_the_namespace_its_component_creates(applied: Run, chart: str) -> None:
     """Into the namespace that states the level, and behind it, so the namespace exists before the chart's objects."""
@@ -376,20 +360,31 @@ def test_every_child_carries_its_components_name(applied: Run) -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_namespace_enforces_the_level_it_is_created_with() -> None:
+async def test_a_namespace_enforces_restricted_unless_it_declares_a_looser_level() -> None:
     """The level is the admission controller's label, with the value it reads, and the namespace keeps its name.
 
-    One level, the one furthest from the house default: every level takes the
-    same path to the label, and a helper that wrote the default whatever it
-    was handed would pass for the default itself.
+    A namespace that names no exception is held to `restricted`. The exception
+    is the level furthest from it: every looser level takes the same path to
+    the label, and a helper that wrote `restricted` whatever it was handed
+    would pass for the default itself.
     """
-    level = PodSecurity.PRIVILEGED
     monitor = await run_with(Recorder(), stack='test')
     async with declaring():
-        _ = namespace('owner-namespace', name='owned', pod_security=level)
+        _ = namespace('plain-namespace', name='plain')
+        _ = namespace(
+            'loose-namespace',
+            name='loose',
+            looser=LooserLevel(level=PodSecurity.PRIVILEGED, reason='a stand-in for what the pods need of the host'),
+        )
 
-    metadata = monitor.inputs_of('owner-namespace', NAMESPACE)['metadata']
-    assert metadata == {'name': 'owned', 'labels': {ENFORCE: level.value}}
+    assert monitor.inputs_of('plain-namespace', NAMESPACE)['metadata'] == {
+        'name': 'plain',
+        'labels': {ENFORCE: 'restricted'},
+    }
+    assert monitor.inputs_of('loose-namespace', NAMESPACE)['metadata'] == {
+        'name': 'loose',
+        'labels': {ENFORCE: 'privileged'},
+    }
 
 
 def test_the_levels_are_the_pod_security_standards_own() -> None:

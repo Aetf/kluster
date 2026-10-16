@@ -14,19 +14,32 @@ between this installation's two repositories is census fields and parameters
 branches in the body.
 
 **The census decides what exists; the parameters carry what GitHub stores.**
-Which Environments a repository has, which of them a reviewer gates and which
-labels and variables its workflows read are `conventions.forge`, and a label's meaning
+Which Environments a repository has, which of them a reviewer gates, which
+labels and variables its workflows read and whether one of them merges with no
+human are `conventions.forge`, and a label's meaning
 travels beside its name there rather than arriving here, because a switch
 whose name is declared and whose meaning is not is one a reader has to
 reconstruct from the workflow that reads it. What arrives as a parameter is
 what defines no entry in the design and only this stack reads: the
-description, the required check names, and the pull-request automation flags
-(framework/github.md §3).
+description and the required check names (framework/github.md §3).
+
+**The posture is written refusing, and `ALLOWED` is every exception.** Each
+setting that decides what a person or a workflow may do to a repository past
+its gates -- a merge method, an admin past `main`'s protection or past an
+Environment's reviewer, a force push, a deletion, a merge commit in `main`'s
+history, a merge of a stale branch, a reviewer approving their own deployment
+-- is refused unless `ALLOWED` names it, and an entry there carries its
+reason. So loosening the posture is one line in that table with the reason
+on it, rather than one value traded for another at a resource's argument.
+The one loosening a repository asks for alone, unattended merging, is its
+census row's (`Repository.unattended_merges`), with the reason on that row.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from enum import Enum, auto
+from typing import final
 
 import pulumi
 import pulumi_github as github
@@ -34,13 +47,66 @@ import pulumi_github as github
 from kluster import conventions
 from putils import Component
 
-__all__ = ('LABEL_COLOR', 'ManagedRepository', 'UnenforceableChecks')
+__all__ = ('ALLOWED', 'LABEL_COLOR', 'Allowance', 'ManagedRepository', 'UnenforceableChecks')
 
 #: One color for every declared label. These are switches a workflow reads
 #: rather than a taxonomy a reader browses, so a hue per label would be
 #: meaning nobody put there; it is GitHub's own default-palette blue, which is
 #: what the labels already carry.
 LABEL_COLOR = 'BFD4F2'
+
+
+@final
+class Allowance(Enum):
+    """A setting every repository refuses unless `ALLOWED` names it.
+
+    Each member is the permissive side of one GitHub setting, and the
+    component reads only whether `ALLOWED` names it: a member absent there is
+    sent to GitHub as the refusal.
+    """
+
+    #: A pull request may land as its commits rebased onto `main`.
+    REBASE_MERGES = auto()
+    #: A pull request may land as one squashed commit.
+    SQUASH_MERGES = auto()
+    #: A pull request may land as a merge commit.
+    MERGE_COMMITS = auto()
+    #: An admin may merge or push past `main`'s protection (`enforce_admins`
+    #: off).
+    ADMINS_PAST_PROTECTION = auto()
+    #: `main` takes force pushes.
+    FORCE_PUSHES = auto()
+    #: `main` may be deleted.
+    DELETING_MAIN = auto()
+    #: `main`'s history may hold merge commits (`required_linear_history`
+    #: off).
+    NONLINEAR_HISTORY = auto()
+    #: A pull request may merge with its required checks green on a branch
+    #: behind `main` (`strict` off).
+    STALE_MERGES = auto()
+    #: An admin may deploy into a gated Environment without its reviewer.
+    ADMINS_PAST_GATES = auto()
+    #: The author of a change may approve its deployment into a gated
+    #: Environment.
+    SELF_REVIEW = auto()
+
+
+#: Every exception to the refusing posture, each beside its reason. A setting
+#: named here is the permissive one on every repository of this installation,
+#: and one absent is refused, so this table is the whole of what the posture
+#: allows.
+ALLOWED: Mapping[Allowance, str] = {
+    Allowance.REBASE_MERGES: (
+        'a pull request has to land somehow, and a rebase is the one method that keeps both its authorship and '
+        "`main`'s linear history: a squash rewrites authorship to the merging identity, which for an unattended "
+        'merge is `noreply@github.com`, and a merge commit is the history `NONLINEAR_HISTORY` refuses'
+    ),
+    Allowance.SELF_REVIEW: (
+        'the installation has one operator, who opens every change and is the only reviewer a gated Environment '
+        'has, so self-review is the only review there can be: refused, it would make the gate impassable rather '
+        'than stricter'
+    ),
+}
 
 
 class UnenforceableChecks(ValueError):
@@ -61,7 +127,6 @@ class ManagedRepository(Component, pulumi_type='kluster:forge:ManagedRepository'
         entry: conventions.forge.Repository,
         description: str,
         required_checks: Sequence[str],
-        unattended_merges: bool = False,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         """
@@ -75,11 +140,6 @@ class ManagedRepository(Component, pulumi_type='kluster:forge:ManagedRepository'
             would let a call site that lost the argument take the guard off
             `main` with the component raising nothing — only the stack's own
             tests would notice.
-        :param unattended_merges: Whether auto-merge and branch updating are
-            offered. They are the two settings an unattended merge needs: one
-            queues it behind the checks, the other lets a pull request satisfy
-            "must be up to date" without a human. A repository whose pull
-            requests are all merged by hand asks for neither.
         """
         # The `github` stack's state holds every repository under the type
         # below rather than this class's own: the alias moves each onto this
@@ -108,15 +168,15 @@ class ManagedRepository(Component, pulumi_type='kluster:forge:ManagedRepository'
             has_issues=True,
             has_projects=False,
             has_wiki=False,
-            # Rebase only. A squash rewrites authorship to the merging
-            # identity, which for an unattended merge is `noreply@github.com`;
-            # a merge commit would defeat the linear history the branch
-            # protection below asks for.
-            allow_rebase_merge=True,
-            allow_squash_merge=False,
-            allow_merge_commit=False,
-            allow_auto_merge=True if unattended_merges else None,
-            allow_update_branch=True if unattended_merges else None,
+            allow_rebase_merge=Allowance.REBASE_MERGES in ALLOWED,
+            allow_squash_merge=Allowance.SQUASH_MERGES in ALLOWED,
+            allow_merge_commit=Allowance.MERGE_COMMITS in ALLOWED,
+            # The two settings an unattended merge needs, offered only where
+            # the census row says which workflow merges unattended and why. A
+            # repository whose merges are all a person's is sent neither, which
+            # Pulumi reads as unset.
+            allow_auto_merge=True if entry.unattended_merges is not None else None,
+            allow_update_branch=True if entry.unattended_merges is not None else None,
             delete_branch_on_merge=True,
             security_and_analysis=_secret_scanning(entry),
             # A `pulumi destroy` of this stack must not be able to delete the
@@ -178,18 +238,21 @@ class ManagedRepository(Component, pulumi_type='kluster:forge:ManagedRepository'
                 f'{name}-main',
                 repository_id=self.repository.node_id,
                 pattern='main',
-                required_status_checks=[{'strict': True, 'contexts': list(required_checks)}],
-                required_linear_history=True,
-                allows_deletions=False,
-                allows_force_pushes=False,
-                # Including the account owner. A gate the one person who can
-                # open it routinely walks around is a suggestion, and this one
-                # is why a merge to `main` implies `required_checks` were
-                # green on an up-to-date branch. That is the whole of what a
-                # merge implies: a check this list does not name is advisory
-                # however red it is, so what those names are is a decision in
-                # its own right (framework/github.md §3).
-                enforce_admins=True,
+                required_status_checks=[
+                    {'strict': Allowance.STALE_MERGES not in ALLOWED, 'contexts': list(required_checks)}
+                ],
+                required_linear_history=Allowance.NONLINEAR_HISTORY not in ALLOWED,
+                allows_deletions=Allowance.DELETING_MAIN in ALLOWED,
+                allows_force_pushes=Allowance.FORCE_PUSHES in ALLOWED,
+                # Enforced on the account owner too, while `ALLOWED` lets no
+                # admin past. A gate the one person who can open it routinely
+                # walks around is a suggestion, and this one is why a merge to
+                # `main` implies `required_checks` were green on an up-to-date
+                # branch. That is the whole of what a merge implies: a check
+                # this list does not name is advisory however red it is, so
+                # what those names are is a decision in its own right
+                # (framework/github.md §3).
+                enforce_admins=Allowance.ADMINS_PAST_PROTECTION not in ALLOWED,
                 opts=on_repository,
             )
             if required_checks
@@ -211,13 +274,11 @@ class ManagedRepository(Component, pulumi_type='kluster:forge:ManagedRepository'
                     else None
                 ),
                 reviewers=_reviewers(environment),
-                # Admin bypass is off for the same reason `enforce_admins` is
-                # on above -- a door with a key under the mat. Both settings
-                # only qualify a reviewer, so they are sent beside one and
-                # nowhere else: Pulumi drops a `None` input, which is how an
-                # ungated Environment stays a bare one.
-                prevent_self_review=False if environment.gated else None,
-                can_admins_bypass=False if environment.gated else None,
+                # Both settings only qualify a reviewer, so they are sent
+                # beside one and nowhere else: Pulumi drops a `None` input,
+                # which is how an ungated Environment stays a bare one.
+                prevent_self_review=(Allowance.SELF_REVIEW not in ALLOWED) if environment.gated else None,
+                can_admins_bypass=(Allowance.ADMINS_PAST_GATES in ALLOWED) if environment.gated else None,
                 opts=on_repository,
             )
             for environment in entry.environments
