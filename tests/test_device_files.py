@@ -17,6 +17,7 @@ tests exercise is the real ordering rather than an attribute set by hand.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
 import re
 import shlex
@@ -25,7 +26,7 @@ from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, final
+from typing import Annotated, Any, final, get_origin
 
 import asyncssh
 import pulumi.dynamic as dynamic
@@ -39,6 +40,7 @@ from mock_monitor import Recorder, declaring, run_with
 from pulumi.runtime import rpc
 from shimmed_serialization import serialized
 
+from kluster.lib.secret import Secret
 from kluster.providers.configured import FINGERPRINT_LENGTH, PROVIDER_VERSION, SESSION
 from kluster.providers.device_files import paths, provider, ssh
 
@@ -1198,6 +1200,7 @@ def test_a_relative_directory_is_refused_before_anything_is_made() -> None:
     result = directory_provider().check({}, directory_props(path='custom/machines'))
 
     assert [failure.property for failure in result.failures] == ['path']
+    assert paths.refusal('custom/machines') is paths.Departure.RELATIVE
 
 
 def test_a_directory_path_that_is_not_the_one_spelling_of_its_place_is_refused() -> None:
@@ -1212,12 +1215,13 @@ def test_a_directory_path_that_is_not_the_one_spelling_of_its_place_is_refused()
     trailing = directory_provider().check({}, directory_props(path=f'{DIRECTORY_PATH}/'))
 
     assert [failure.property for failure in trailing.failures] == ['path']
-    assert 'trailing slash' in trailing.failures[0].reason
+    assert paths.refusal(f'{DIRECTORY_PATH}/') is paths.Departure.TRAILING_SLASH
     assert repr(DIRECTORY_PATH) in trailing.failures[0].reason, 'the failure says how to spell it instead'
 
     for spelling in (f'{DIRECTORY_PATH}/.', '/data/custom/../custom/machines', '/data//custom/machines'):
         result = directory_provider().check({}, directory_props(path=spelling))
         assert [failure.property for failure in result.failures] == ['path'], spelling
+        assert paths.refusal(spelling) is paths.Departure.NOT_CANONICAL, spelling
 
 
 def test_every_declared_path_is_held_to_the_same_spelling() -> None:
@@ -2216,17 +2220,52 @@ def test_a_path_a_shell_would_mangle_is_quoted_in_the_pull_and_the_unpack() -> N
 ##
 
 
-def test_only_a_files_content_is_ever_kept_out_of_plain_state() -> None:
-    """The provider echoes its inputs back, so a secret one has to be marked.
+def _marked(resource: type) -> set[str]:
+    """The output properties a resource class declares `Annotated[..., Secret]`, read off its annotations.
 
-    There is one, and it is a file's content. The credential is not a property
-    of any resource, and nothing about the connection is marked either: the pin
-    is a public key, and a pin a reviewer can read is worth more than a
-    redacted one, so it reaches the engine in the clear from a constant the
-    program holds (`conventions.gateway.HOST_KEY`).
+    Read here rather than through `provider.secret_outputs`, so that the case
+    below holds the provider's reading against a second one.
     """
-    assert provider.secret_outputs() == []
-    assert provider.secret_outputs(secret_content=True) == ['content']
+    declared = inspect.get_annotations(resource, eval_str=True)
+    return {
+        name
+        for name, annotation in declared.items()
+        if get_origin(annotation) is Annotated and Secret in getattr(annotation, '__metadata__', ())
+    }
+
+
+#: Each resource the module fixture declares, by the class it is: the file
+#: declared secret, since a file's marked properties are kept out on request.
+DECLARED = {
+    'frr-secret': provider.DeviceFile,
+    'machines': provider.DeviceDirectory,
+    'adguard-rootfs': provider.DeviceArtifact,
+}
+
+
+@pytest.mark.parametrize(('name', 'resource'), DECLARED.items(), ids=list(DECLARED))
+def test_every_marked_output_is_kept_out_of_plain_state(stack: Recorder, name: str, resource: type) -> None:
+    """The provider echoes its inputs back, so a secret one has to be marked, and a marked one is kept out.
+
+    The properties come off the marker, so there is no list to keep: a
+    property is held here from the commit that marks it. The credential is not
+    a property of any resource, and nothing about the connection is marked: the
+    pin is a public key, and a pin a reviewer can read is worth more than a
+    redacted one (`conventions.gateway.HOST_KEY`).
+    """
+    kept_out = set(stack.options_of(name).additionalSecretOutputs)
+
+    assert _marked(resource) <= kept_out, f'{name} leaves {sorted(_marked(resource) - kept_out)} in plain state'
+
+
+def test_some_output_is_marked() -> None:
+    """The reading found the marker: with nothing marked, the case above would pass by holding nothing."""
+    assert any(_marked(resource) for resource in DECLARED.values())
+
+
+def test_a_file_not_declared_secret_keeps_its_content_readable(stack: Recorder) -> None:
+    """Secret on request, and not by default: most of what a device holds is configuration one wants to read."""
+    assert list(stack.options_of('frr').additionalSecretOutputs) == []
 
 
 def test_a_connection_hands_every_resource_its_address_and_its_pin() -> None:
@@ -2281,6 +2320,9 @@ async def stack() -> Recorder:
     monitor = await run_with(Recorder(), stack='physical')
     async with declaring():
         _ = provider.DeviceFile('frr', connection=connection, path=CONFIG_PATH, content=CONFIG, hook=HOOK)
+        _ = provider.DeviceFile(
+            'frr-secret', connection=connection, path=f'{CONFIG_PATH}.secret', content=CONFIG, secret=True
+        )
         _ = provider.DeviceDirectory('machines', connection=connection, path=DIRECTORY_PATH)
         _ = provider.DeviceArtifact(
             'adguard-rootfs',
@@ -2568,8 +2610,9 @@ def test_a_path_the_checker_refuses_has_no_parent_for_the_transport_to_use(path:
     fail.
     """
     assert [failure.property for failure in file_provider().check({}, file_props(path=path)).failures] == ['path']
-    with pytest.raises(ValueError, match='no declared path'):
+    with pytest.raises(paths.UndeclaredPath) as refused:
         _ = paths.parent(path)
+    assert refused.value.departure is paths.refusal(path)
 
 
 def test_the_device_root_is_a_parent_and_never_a_declaration() -> None:
@@ -2587,14 +2630,12 @@ def test_the_device_root_is_a_parent_and_never_a_declaration() -> None:
         artifact_provider().check({}, artifact_props(root=paths.ROOT)),
     ):
         assert len(check.failures) == 1
-        assert 'device root' in check.failures[0].reason
 
     # Every spelling of it, refused for being the root rather than told to
     # declare the root instead: the question is asked of the canonical form, so
     # a path that normalizes to `/` never reaches the advice about spelling.
     for spelling in (paths.ROOT, '//', '/.', '/..'):
-        reason = paths.refusal(spelling)
-        assert reason is not None and 'device root' in reason, spelling
+        assert paths.refusal(spelling) is paths.Departure.ROOT, spelling
 
     assert paths.parent('/data') == paths.ROOT
 
@@ -2603,7 +2644,7 @@ def test_a_write_to_a_path_the_checker_would_refuse_reaches_no_device() -> None:
     """The transport asks the grammar rather than carrying a spelling of its own."""
     device, connection = transport(answer())
 
-    with pytest.raises(ValueError, match='no declared path'):
+    with pytest.raises(paths.UndeclaredPath):
         asyncio.run(device.write(f'{CONFIG_PATH}/', b'hello', mode='0644', owner=None))
 
     assert connection.commands == []
@@ -2617,7 +2658,7 @@ def test_a_doubled_leading_slash_is_the_single_root_this_device_reads() -> None:
     device that reads `//` as a root of its own.
     """
     assert paths.canonical('//data/frr') == '/data/frr'
-    assert paths.refusal('//data/frr') is not None
+    assert paths.refusal('//data/frr') is paths.Departure.NOT_CANONICAL
 
 
 def test_every_reserved_status_is_drawn_from_the_range_the_class_states() -> None:

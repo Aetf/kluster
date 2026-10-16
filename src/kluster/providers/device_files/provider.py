@@ -135,8 +135,10 @@ sees is a tree of unknown provenance, which is work to do.
 A file's content is declared secret on request (`secret=True`), for the files
 that carry device credentials, and not by default: a secret input renders as a
 hash in a preview, and most of what a device holds is configuration one wants to
-read. The pinned host key is deliberately not secret either -- it is a public
-key, and a reviewable pin is worth more than a redacted one.
+read. What the request keeps out is every output property the resource class
+marks `Annotated[..., Secret]` (`secret_outputs`), the content alone today. The
+pinned host key is deliberately not secret either -- it is a public key, and a
+reviewable pin is worth more than a redacted one.
 
 The provider classes carry nothing into state. A dynamic provider is pickled into
 every resource it manages, so what these classes serialize to is what state
@@ -155,15 +157,17 @@ from __future__ import annotations
 
 import abc
 import asyncio
+import inspect
 import shlex
 from collections.abc import Coroutine, Mapping
 from contextlib import AbstractAsyncContextManager, suppress
 from dataclasses import dataclass
-from typing import Any, final
+from typing import Annotated, Any, final, get_origin
 
 import pulumi
 import pulumi.dynamic as dynamic
 
+from kluster.lib.secret import Secret
 from kluster.lib.versions import is_digest
 from kluster.providers.configured import (
     STAMPS,
@@ -613,13 +617,21 @@ def marker_path(directory: str) -> str:
     return f'{directory}.digest'
 
 
-def secret_outputs(*, secret_content: bool = False) -> list[str]:
-    """The properties the engine must keep out of plain state and previews.
+def secret_outputs(resource: type[dynamic.Resource]) -> list[str]:
+    """The output properties of `resource` the engine keeps out of plain state and previews, when it is secret.
 
-    Only a file's content is ever one. The address and the pin are public, and
-    the credential is not a property of any resource.
+    Read off the marker: a property declared `Annotated[..., Secret]` on the
+    resource class (`kluster.lib.secret`) is one, and nothing else is -- the
+    address and the pin are public, and the credential is not a property of
+    any resource. Read off the declaration rather than listed, so a property
+    that is marked is also kept out, with no second list to keep in step.
     """
-    return ['content'] if secret_content else []
+    declared = inspect.get_annotations(resource, eval_str=True)
+    return [
+        name
+        for name, annotation in declared.items()
+        if get_origin(annotation) is Annotated and Secret in getattr(annotation, '__metadata__', ())
+    ]
 
 
 def endpoint(props: Mapping[str, Any]) -> str:
@@ -696,8 +708,8 @@ def _canonical_path(props: Mapping[str, Any], key: str) -> list[dynamic.CheckFai
     value = props.get(key)
     if value is None or is_unknown(value):
         return []
-    reason = paths.refusal(str(value))
-    return [dynamic.CheckFailure(key, reason)] if reason is not None else []
+    departure = paths.refusal(str(value))
+    return [dynamic.CheckFailure(key, paths.explain(str(value), departure))] if departure is not None else []
 
 
 def _registry_qualified(props: Mapping[str, Any], key: str) -> list[dynamic.CheckFailure]:
@@ -1125,7 +1137,9 @@ class DeviceFile(dynamic.Resource, module='device_files', name='DeviceFile'):
     """A file the device must have, and what to run once it has it."""
 
     path: pulumi.Output[str]
-    content: pulumi.Output[str]
+    #: A credential, for the files that carry one: kept out of plain state and
+    #: previews when the file is declared `secret`.
+    content: Annotated[pulumi.Output[str], Secret]
     mode: pulumi.Output[str]
     owner: pulumi.Output[str | None]
     hook: pulumi.Output[str | None]
@@ -1168,7 +1182,7 @@ class DeviceFile(dynamic.Resource, module='device_files', name='DeviceFile'):
                 'hook': hook,
             },
             pulumi.ResourceOptions.merge(
-                pulumi.ResourceOptions(additional_secret_outputs=secret_outputs(secret_content=secret)),
+                pulumi.ResourceOptions(additional_secret_outputs=secret_outputs(DeviceFile) if secret else []),
                 opts,
             ),
         )
