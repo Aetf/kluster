@@ -393,7 +393,7 @@ def test_a_dump_of_a_backend_serving_no_stack_is_not_written(
     _ = double(holds=holds)
     output = tmp_path / 'taken.dump.age'
 
-    with pytest.raises(state.StateError, match='holds no stack checkpoint'):
+    with pytest.raises(state.NoStack):
         _ = _dump(kit, registry, bundle, output)
 
     assert not output.exists()
@@ -417,8 +417,9 @@ def test_a_dump_never_overwrites_one(
     output = tmp_path / 'taken.dump.age'
     _ = output.write_bytes(b'an earlier dump')
 
-    with pytest.raises(state.StateError, match='already exists'):
+    with pytest.raises(state.StateRefused) as refused:
         _ = _dump(kit, registry, bundle, output)
+    assert refused.value.reason is state.Refusal.EXISTS
 
     assert output.read_bytes() == b'an earlier dump'
 
@@ -505,15 +506,17 @@ def test_a_stack_listing_that_is_not_json_quotes_what_was_printed(monkeypatch: p
     # has to say what it got, because that text is the whole diagnosis.
     target = _printing('error: could not read stacks from the backend', monkeypatch)
 
-    with pytest.raises(state.StateError, match='did not print JSON'):
+    with pytest.raises(state.StateRefused) as refused:
         _ = state.stacks(target)
+    assert refused.value.reason is state.Refusal.NOT_JSON
 
 
 def test_a_stack_listing_that_is_not_a_list_says_so(monkeypatch: pytest.MonkeyPatch) -> None:
     target = _printing('{"message": "unauthorized"}', monkeypatch)
 
-    with pytest.raises(state.StateError, match='printed a dict, not a list of stacks'):
+    with pytest.raises(state.StateRefused) as refused:
         _ = state.stacks(target)
+    assert refused.value.reason is state.Refusal.NOT_A_LIST
 
 
 def test_a_stack_entry_without_a_name_is_named_rather_than_counted(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -522,13 +525,15 @@ def test_a_stack_entry_without_a_name_is_named_rather_than_counted(monkeypatch: 
     # would be a stack that exists in one direction and not the other.
     target = _printing('[{"name": "dns"}, {"current": true}]', monkeypatch)
 
-    with pytest.raises(state.StateError, match='entry 1 carries no name'):
+    with pytest.raises(state.StateRefused) as refused:
         _ = state.stacks(target)
+    assert refused.value.reason is state.Refusal.NAMELESS_ENTRY
 
 
 def test_an_absent_age_identity_file_is_not_reported_as_an_empty_one(tmp_path: Path) -> None:
-    with pytest.raises(state.StateError, match='no age identity file at'):
+    with pytest.raises(state.StateRefused) as refused:
         _ = state.identity_file(tmp_path / 'never-written')
+    assert refused.value.reason is state.Refusal.NO_IDENTITY_FILE
 
 
 def test_an_age_identity_file_holding_only_comments_is_reported_as_empty(tmp_path: Path) -> None:
@@ -537,8 +542,9 @@ def test_an_age_identity_file_holding_only_comments_is_reported_as_empty(tmp_pat
     path = tmp_path / 'drill.key'
     _ = path.write_text('# created: 2026-08-29\n\n')
 
-    with pytest.raises(state.StateError, match='holds no age identity'):
+    with pytest.raises(state.StateRefused) as refused:
         _ = state.identity_file(path)
+    assert refused.value.reason is state.Refusal.EMPTY_IDENTITY
 
 
 def test_a_restore_refuses_a_backend_that_already_serves_stacks(
@@ -587,7 +593,7 @@ def test_force_does_not_restore_an_archive_holding_no_stack(
     dump = tmp_path / 'state.dump'
     _ = dump.write_bytes(ARCHIVE)
 
-    with pytest.raises(state.StateError, match='holds no stack checkpoint'):
+    with pytest.raises(state.NoStack):
         _ = _restore(None, registry, bundle, dump, force=True)
 
     assert tools.restored is None
@@ -648,8 +654,9 @@ def test_a_file_that_is_neither_is_refused(
     dump = tmp_path / 'state.sql'
     _ = dump.write_text('-- PostgreSQL database dump\n')
 
-    with pytest.raises(state.StateError, match='neither an age file nor'):
+    with pytest.raises(state.StateRefused) as refused:
         _ = _restore(None, registry, bundle, dump)
+    assert refused.value.reason is state.Refusal.NEITHER_FORMAT
 
 
 def test_a_dump_that_is_not_there_says_so(
@@ -659,8 +666,9 @@ def test_a_dump_that_is_not_there_says_so(
     # should read as one rather than as a traceback.
     _ = double()
 
-    with pytest.raises(state.StateError, match='no dump at'):
+    with pytest.raises(state.StateRefused) as refused:
         _ = _restore(None, registry, bundle, tmp_path / 'never-written.dump.age')
+    assert refused.value.reason is state.Refusal.NO_DUMP
 
 
 def test_a_truncated_ciphertext_never_becomes_an_archive(
@@ -765,29 +773,24 @@ def test_the_wrong_identity_is_a_refusal_rather_than_a_restore(
     assert tools.restored is None
 
 
-#: What has to be said *before* each step that can take minutes or write to a
-#: database, and the word that has to appear in what the run said by then. A
-#: log that only speaks on success is indistinguishable from a hang.
-ANNOUNCED = {
-    state.PG_DUMP: 'dumping',
-    state.PG_RESTORE: 'archive',
-    'age --encrypt': 'encrypting',
-    'age --decrypt': 'decrypting',
-    'pulumi': 'stacks',
-}
-
-
-def _step(argv: Sequence[str]) -> str:
-    """Which of the steps above this invocation is.
+def _step(argv: Sequence[str]) -> state.Step | None:
+    """Which slow step this invocation does, read off the tool and its arguments; `None` for any other call.
 
     The escrow opens its own ciphertexts with the same binary, so `age` alone
     does not identify a step: the file-to-file form is the one these commands
-    make, and it is the one that names an output.
+    make, and it is the one that names an output. `pg_restore` reads an
+    archive with `--list` or `--data-only` and writes one otherwise.
     """
     program = Path(argv[0]).name
+    if program == state.PG_DUMP:
+        return state.Step.DUMP
+    if program == state.PG_RESTORE:
+        return state.Step.VERIFY if {'--list', '--data-only'} & set(argv) else state.Step.RESTORE
     if program == age.BINARY and '--output' in argv:
-        return f'{age.BINARY} {"--encrypt" if "--encrypt" in argv else "--decrypt"}'
-    return program
+        return state.Step.ENCRYPT if '--encrypt' in argv else state.Step.DECRYPT
+    if program == 'pulumi':
+        return state.Step.LIST_STACKS
+    return None
 
 
 def test_every_slow_step_announces_itself_before_it_starts(
@@ -799,12 +802,20 @@ def test_every_slow_step_announces_itself_before_it_starts(
     bundle: Path,
     tmp_path: Path,
 ) -> None:
+    """Each step's own announcement is on record by the time its tool first runs.
+
+    Held by the step the record names rather than by its words, and against
+    the moment the step's work begins: a result line logged between two steps
+    does not stand in for the announcement of the second.
+    """
     caplog.set_level(logging.INFO)
     tools = double()
-    said: dict[str, list[str]] = {}
+    announced_by_then: dict[state.Step, set[object]] = {}
 
     def watch(argv: Sequence[str], **kwargs: Any) -> Any:
-        said.setdefault(_step(argv), list(caplog.messages))
+        step = _step(argv)
+        if step is not None and step not in announced_by_then:
+            announced_by_then[step] = {getattr(record, 'step', None) for record in caplog.records}
         return tools(argv, **kwargs)
 
     monkeypatch.setattr(state.sp, 'run', watch)
@@ -813,8 +824,9 @@ def test_every_slow_step_announces_itself_before_it_starts(
     assert _dump(kit, registry, bundle, dump) == 0
     assert _restore(kit, registry, bundle, dump, force=True) == 0
 
-    for program, word in ANNOUNCED.items():
-        assert any(word in message for message in said[program]), f'{program} ran without announcing itself'
+    assert set(announced_by_then) == set(state.Step), 'the run did not reach every slow step'
+    for step, announced in announced_by_then.items():
+        assert step in announced, f'{step.name} ran before it announced itself'
 
 
 def test_the_default_name_is_the_one_the_appliance_uses() -> None:

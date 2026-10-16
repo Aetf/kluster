@@ -255,6 +255,11 @@ jobs:
           WITH_THE_BUMP: |
             Pulumi.yaml
             sdks/**
+          # Which of the two a path off the list was refused for, written as
+          # the step's `reason` output beside `noop=false`: on neither list,
+          # or on `WITH_THE_BUMP` in a pull request that is not the bump.
+          NOT_LISTED: not-listed
+          BUMP_ONLY: bump-only
         run: |
           set -euo pipefail
           if [ "$FORK" = 'true' ] || [ "$OVERRIDE" = 'true' ]; then
@@ -340,8 +345,10 @@ jobs:
               fi
               if matches "$candidate" "$WITH_THE_BUMP"; then
                 echo "$candidate is on the allow-list only in renovate's packages-only bump of Pulumi.yaml, which this pull request is not; not a candidate."
+                echo "reason=$BUMP_ONLY" >> "$GITHUB_OUTPUT"
               else
                 echo "$candidate is not on the allow-list; not a candidate."
+                echo "reason=$NOT_LISTED" >> "$GITHUB_OUTPUT"
               fi
               echo 'noop=false' >> "$GITHUB_OUTPUT"
               exit 0

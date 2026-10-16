@@ -95,6 +95,14 @@ def _classify() -> tuple[dict[str, str], dict[str, str], str]:
     return workflow_env, step_env, str(step['run'])
 
 
+def _reasons() -> tuple[str, str]:
+    """The two values the step's `reason` output takes for a path off the list, as the step's env names them."""
+    _, step_env, _ = _classify()
+    not_listed, bump_only = step_env['NOT_LISTED'], step_env['BUMP_ONLY']
+    assert not_listed != bump_only, 'the two reasons are one value, so no case can tell them apart'
+    return not_listed, bump_only
+
+
 @dataclass(frozen=True)
 class Verdict:
     returncode: int
@@ -269,6 +277,8 @@ def test_pulumi_yaml_the_admission_did_not_admit_is_the_human_route(tmp_path: Pa
     assert verdict.returncode == 0, verdict.stderr
     assert not verdict.noop
     assert 'Pulumi.yaml' in verdict.stdout
+    _, bump_only = _reasons()
+    assert verdict.outputs.get('reason') == bump_only
 
 
 def test_the_bridged_sdks_in_renovates_pull_request_that_leaves_the_block_are_the_human_route(tmp_path: Path) -> None:
@@ -281,6 +291,8 @@ def test_the_bridged_sdks_in_renovates_pull_request_that_leaves_the_block_are_th
     assert verdict.returncode == 0, verdict.stderr
     assert not verdict.noop
     assert 'sdks/b2/pulumi_b2/provider.py' in verdict.stdout
+    _, bump_only = _reasons()
+    assert verdict.outputs.get('reason') == bump_only
 
 
 def test_the_bridged_sdks_beside_a_change_to_pulumi_yaml_that_is_not_packages_only_are_the_human_route(
@@ -291,6 +303,8 @@ def test_the_bridged_sdks_beside_a_change_to_pulumi_yaml_that_is_not_packages_on
     assert verdict.returncode == 0, verdict.stderr
     assert not verdict.noop
     assert 'sdks/b2/pulumi_b2/provider.py' in verdict.stdout
+    _, bump_only = _reasons()
+    assert verdict.outputs.get('reason') == bump_only
 
 
 @pytest.mark.parametrize(
@@ -308,6 +322,8 @@ def test_a_path_a_stack_or_a_workflow_reads_is_the_human_route(path: str, tmp_pa
     assert verdict.returncode == 0, verdict.stderr
     assert not verdict.noop
     assert path in verdict.stdout
+    not_listed, _ = _reasons()
+    assert verdict.outputs.get('reason') == not_listed
 
 
 @pytest.mark.parametrize(

@@ -30,7 +30,7 @@ from mock_monitor import Recorder, declaring, run_under_backstop
 from workflow_files import github_name, read_workflow, workflow_jobs, workflows_and_actions
 
 from kluster import conventions
-from kluster.components.forge import ManagedRepository
+from kluster.components.forge import ManagedRepository, UnenforceableChecks
 from kluster.scripts.credentials import devices
 from kluster.stacks import github as program
 
@@ -518,13 +518,14 @@ async def test_required_checks_on_a_repository_the_plan_cannot_guard_are_refused
     """
     _ = await run_under_backstop(Forge(), stack='github')
 
-    with pytest.raises(ValueError, match='no branch protection'):
+    with pytest.raises(UnenforceableChecks) as refused:
         _ = ManagedRepository(
             conventions.forge.OPS.name,
             entry=conventions.forge.OPS,
             description='a private repository',
             required_checks=('checks',),
         )
+    assert refused.value.repository == conventions.forge.OPS.name
 
 
 def test_every_child_carries_its_repositorys_name(stack: Forge) -> None:
