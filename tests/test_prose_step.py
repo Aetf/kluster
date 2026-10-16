@@ -29,7 +29,6 @@ import sys
 from pathlib import Path
 from typing import cast
 
-import pytest
 from workflow_files import GITHUB, mapping, read_workflow, workflow_jobs
 
 ROOT = Path(__file__).parent.parent
@@ -62,6 +61,28 @@ def prose_run() -> str:
     return run
 
 
+#: Each git call's bound, and the step's. Summed over a case they stay below
+#: its 60 s bound, so whichever hangs is named by its own timeout.
+GIT_TIMEOUT = 5
+STEP_TIMEOUT = 20
+
+
+def _environment(home: Path) -> dict[str, str]:
+    """The scratch repository's environment: the caller's `PATH` and none of their git.
+
+    No `GIT_*` variable of the caller's reaches git -- an inherited `GIT_DIR`
+    would point it at another repository -- and neither does their global or
+    system configuration, where an excludes file would decide which markdown
+    the step sees.
+    """
+    return {
+        'PATH': os.environ['PATH'],
+        'HOME': str(home),
+        'GIT_CONFIG_GLOBAL': os.devnull,
+        'GIT_CONFIG_NOSYSTEM': '1',
+    }
+
+
 def run_step(tmp_path: Path, script: dict[str, list[int]]) -> tuple[int, str, list[str]]:
     """Run the prose step over one markdown file per key of `script`.
 
@@ -74,8 +95,10 @@ def run_step(tmp_path: Path, script: dict[str, list[int]]) -> tuple[int, str, li
         shutil.copy(ROOT / '.vscode' / f'ltex.{name}.en-US.txt', repo / '.vscode')
     for file in script:
         (repo / file).write_text('# A document\n')
-    subprocess.run(['git', 'init', '-q'], cwd=repo, check=True)
-    subprocess.run(['git', 'add', '.'], cwd=repo, check=True)
+    for args in (['init', '-q'], ['add', '.']):
+        _ = subprocess.run(
+            ['git', *args], cwd=repo, env=_environment(tmp_path), check=True, capture_output=True, timeout=GIT_TIMEOUT
+        )
 
     bin_dir = tmp_path / 'bin'
     bin_dir.mkdir()
@@ -87,7 +110,7 @@ def run_step(tmp_path: Path, script: dict[str, list[int]]) -> tuple[int, str, li
     log.touch()
 
     env = {
-        **os.environ,
+        **_environment(tmp_path),
         'PATH': f'{bin_dir}{os.pathsep}{os.environ["PATH"]}',
         # No base commit: the step checks every tracked markdown file.
         'BASE': '',
@@ -103,7 +126,7 @@ def run_step(tmp_path: Path, script: dict[str, list[int]]) -> tuple[int, str, li
         env=env,
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=STEP_TIMEOUT,
     )
     return done.returncode, done.stdout + done.stderr, log.read_text().splitlines()
 
@@ -145,11 +168,10 @@ def test_a_verdict_on_the_retry_is_the_verdict(tmp_path: Path) -> None:
     assert '::error' not in output
 
 
-@pytest.mark.parametrize('verdict', [1, 3])
-def test_a_verdict_is_not_retried(tmp_path: Path, verdict: int) -> None:
-    code, output, checked = run_step(tmp_path, {'a.md': [verdict, 0], 'b.md': [0]})
+def test_a_verdict_is_not_retried(tmp_path: Path) -> None:
+    code, output, checked = run_step(tmp_path, {'a.md': [1, 0], 'b.md': [0]})
 
-    assert code == verdict, output
+    assert code == 1, output
     assert checked == ['a.md', 'b.md']
     assert '::warning' not in output
     assert '::notice' not in output

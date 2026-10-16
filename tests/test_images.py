@@ -450,12 +450,36 @@ def _select_step() -> dict[str, Any]:
     return step
 
 
+#: Each git call's bound, and the selection step's. A case makes one
+#: selection, so summed they stay below its 60 s bound, and whichever hangs is
+#: named by its own timeout.
+GIT_TIMEOUT = 5
+STEP_TIMEOUT = 10
+
+
+def _git_environment(home: Path) -> dict[str, str]:
+    """git as the case built it: the caller's `PATH` and none of their git.
+
+    No `GIT_*` variable of the caller's reaches it -- an inherited `GIT_DIR`
+    would point it at another repository -- and neither does their global or
+    system configuration, where a signing helper or an excludes file would
+    decide what the selection sees.
+    """
+    return {
+        'PATH': os.environ['PATH'],
+        'HOME': str(home),
+        'GIT_CONFIG_GLOBAL': os.devnull,
+        'GIT_CONFIG_NOSYSTEM': '1',
+    }
+
+
 def _git(tree: Path, *args: str) -> None:
     subprocess.run(
-        ['git', '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'commit.gpgsign=false', *args],
+        ['git', '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', *args],
         cwd=tree,
+        env=_git_environment(tree.parent),
         capture_output=True,
-        timeout=30,
+        timeout=GIT_TIMEOUT,
         check=True,
     )
 
@@ -477,19 +501,22 @@ def _select(tmp_path: Path, event: str, changed: str) -> list[str]:
     output.write_text('')
     step = _select_step()
     env = {
-        'PATH': os.environ['PATH'],
+        **_git_environment(tree.parent),
         'EVENT': event,
         'BASE': cast(str, step['env']['BASE']),
         'GITHUB_OUTPUT': str(output),
     }
-    subprocess.run(['bash', '-c', cast(str, step['run'])], cwd=tree, env=env, timeout=30, check=True)
+    subprocess.run(['bash', '-c', cast(str, step['run'])], cwd=tree, env=env, timeout=STEP_TIMEOUT, check=True)
     (line,) = output.read_text().splitlines()
     return cast(list[str], json.loads(line.removeprefix('images=')))
 
 
 def test_the_selection_step_the_cases_run_is_the_one_the_runner_runs() -> None:
     step = _select_step()
-    assert step['env'] == {'EVENT': '${{ github.event_name }}', 'BASE': 'HEAD^1'}
+    # The cases set `EVENT` themselves and take `BASE` from the step as it
+    # stands, so `BASE` has to be a value the runner passes through unchanged.
+    assert set(step['env']) == {'EVENT', 'BASE'}
+    assert '${{' not in step['env']['BASE']
     assert '${{' not in step['run']
 
 
