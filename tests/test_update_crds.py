@@ -123,24 +123,25 @@ def test_select_crds_tolerates_empty_documents() -> None:
 
 
 @pytest.mark.parametrize(
-    ('document', 'refusal'),
+    ('document', 'reason'),
     [
         pytest.param(
             'apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nspec:\n  group: example.com\n',
-            'no metadata.name',
+            sources.Malformed.NO_NAME,
             id='no-name',
         ),
         pytest.param(
             'apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\n'
             'metadata:\n  name: widgets.example.com\n',
-            'widgets.example.com has no spec.group',
+            sources.Malformed.NO_GROUP,
             id='no-group',
         ),
     ],
 )
-def test_select_crds_names_what_a_definition_lacks(document: str, refusal: str) -> None:
-    with pytest.raises(sources.SourceError, match=re.escape(refusal)):
+def test_select_crds_names_what_a_definition_lacks(document: str, reason: sources.Malformed) -> None:
+    with pytest.raises(sources.SourceError) as refused:
         _ = sources.select_crds([document])
+    assert refused.value.reason is reason
 
 
 def test_yaml_file_urls_keeps_the_yaml_entries_of_a_contents_listing() -> None:
@@ -158,8 +159,10 @@ def test_yaml_file_urls_keeps_the_yaml_entries_of_a_contents_listing() -> None:
 
 def test_yaml_file_urls_names_the_directory_when_the_answer_is_not_a_listing() -> None:
     """A rate-limited contents call answers an object, and every entry lookup would then fail."""
-    with pytest.raises(sources.SourceError, match='example/repo@v1:crds: the contents API answered a dict'):
+    with pytest.raises(sources.SourceError) as refused:
         _ = sources.yaml_file_urls({'message': 'API rate limit exceeded'}, what='example/repo@v1:crds')
+    assert refused.value.reason is sources.Malformed.NOT_A_LISTING
+    assert 'example/repo@v1:crds' in str(refused.value)
 
 
 def test_yaml_file_urls_skips_the_entries_that_are_not_files() -> None:
@@ -174,13 +177,17 @@ def test_yaml_file_urls_skips_the_entries_that_are_not_files() -> None:
 
 def test_yaml_file_urls_names_the_yaml_entry_that_has_no_download_url() -> None:
     """Demanded of the files that survive the filter, and of nothing else."""
-    with pytest.raises(sources.SourceError, match=re.escape('the entry widget.yaml carries no download_url')):
+    with pytest.raises(sources.SourceError) as refused:
         _ = sources.yaml_file_urls([{'name': 'widget.yaml', 'download_url': None}], what='example/repo@v1:crds')
+    assert refused.value.reason is sources.Malformed.NO_DOWNLOAD_URL
+    assert 'widget.yaml' in str(refused.value)
 
 
 def test_yaml_file_urls_names_the_directory_when_an_entry_has_no_name() -> None:
-    with pytest.raises(sources.SourceError, match='example/repo@v1:crds: an entry carries no name'):
+    with pytest.raises(sources.SourceError) as refused:
         _ = sources.yaml_file_urls([{'download_url': 'https://example.com/widget.yaml'}], what='example/repo@v1:crds')
+    assert refused.value.reason is sources.Malformed.NO_ENTRY_NAME
+    assert 'example/repo@v1:crds' in str(refused.value)
 
 
 @pytest.mark.parametrize(
@@ -798,14 +805,59 @@ def test_a_warning_from_outside_the_package_under_a_progress_bar_goes_through_tq
     assert len([line for line in written if 'a library warned under a bar' in line]) == 1
 
 
+def _helm_printing(printed: str) -> Callable[..., str]:
+    """A stand-in for `sources._helm` that runs nothing and prints `printed`."""
+
+    def helm(*_args: object, **_kwargs: object) -> str:
+        return printed
+
+    return helm
+
+
+_A_PIN = ChartPin(
+    name='widgets',
+    repository='oci://registry.example.invalid/charts',
+    version='1.0.0',
+    digest=f'sha256:{"0" * 64}',
+    definitions=False,
+)
+
+
+def test_an_archive_without_the_executable_is_refused_by_reason(tmp_path: Path) -> None:
+    with pytest.raises(sources.SourceError) as refused:
+        _ = sources._extracted_binary(tmp_path, 'helm', source='an archive')  # pyright: ignore[reportPrivateUsage]
+    assert refused.value.reason is sources.Malformed.NO_EXECUTABLE
+
+
+def test_a_chart_that_declares_no_app_version_is_refused_by_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sources, '_helm', _helm_printing('name: widgets\nversion: 1.0.0\n'))
+
+    with pytest.raises(sources.SourceError) as refused:
+        _ = sources.chart_app_version(tmp_path / 'helm', _A_PIN, workdir=tmp_path)
+    assert refused.value.reason is sources.Malformed.NO_APP_VERSION
+
+
+def test_a_chart_that_unpacks_into_no_chart_is_refused_with_the_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sources, '_helm', _helm_printing(''))
+
+    with pytest.raises(sources.SourceError) as refused:
+        _ = sources.chart_value_paths(tmp_path / 'helm', _A_PIN, workdir=tmp_path)
+    assert (refused.value.reason, refused.value.count) == (sources.Malformed.CHART_COUNT, 0)
+
+
 def test_a_stack_file_with_no_config_block_overrides_nothing(tmp_path: Path) -> None:
     """What `pulumi stack init` writes before any `config set`: a salt and no block."""
     stack = tmp_path / 'Pulumi.fresh.yaml'
     _ = stack.write_text('encryptionsalt: v1:abc\n')
 
     assert sources.read_config(stack, required=False) == {}
-    with pytest.raises(sources.SourceError, match='has no `config:` block'):
+    with pytest.raises(sources.SourceError) as refused:
         _ = sources.read_config(stack)
+    assert refused.value.reason is sources.Malformed.NO_CONFIG
 
 
 # -- renovate's managers on the block ---------------------------------------------
@@ -1163,25 +1215,27 @@ def test_the_bundle_path_is_the_one_the_entry_names(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ('packages', 'refusal'),
+    ('packages', 'reason', 'count'),
     [
-        ({}, 'has no `packages:` entry `crds`'),
-        ({'crds': {'source': 'kubernetes', 'version': '1.0.0'}}, 'has no `packages:` entry `crds`'),
-        ({'crds': {'source': 'kubernetes', 'extensions': ['name=crds']}}, 'names 0 `crd-manifest=` paths'),
+        ({}, sources.Malformed.NO_PACKAGES_ENTRY, None),
+        ({'crds': {'source': 'kubernetes', 'version': '1.0.0'}}, sources.Malformed.NO_PACKAGES_ENTRY, None),
+        ({'crds': {'source': 'kubernetes', 'extensions': ['name=crds']}}, sources.Malformed.MANIFEST_COUNT, 0),
         (
             {'crds': {'source': 'kubernetes', 'extensions': ['crd-manifest=a.yaml', 'crd-manifest=b.yaml']}},
-            'names 2 `crd-manifest=` paths',
+            sources.Malformed.MANIFEST_COUNT,
+            2,
         ),
     ],
 )
 def test_a_project_whose_entry_names_no_one_manifest_is_refused_by_name(
-    tmp_path: Path, packages: dict[str, object], refusal: str
+    tmp_path: Path, packages: dict[str, object], reason: sources.Malformed, count: int | None
 ) -> None:
     project = tmp_path / 'Pulumi.yaml'
     _ = project.write_text(json.dumps({'name': 'p', 'packages': packages}))
 
-    with pytest.raises(sources.SourceError, match=re.escape(refusal)):
+    with pytest.raises(sources.SourceError) as refused:
         _ = sources.bundle_path(project)
+    assert (refused.value.reason, refused.value.count) == (reason, count)
 
 
 def test_the_committed_bundle_is_the_scripts_own_output() -> None:

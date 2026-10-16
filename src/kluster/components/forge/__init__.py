@@ -34,13 +34,21 @@ import pulumi_github as github
 from kluster import conventions
 from putils import Component
 
-__all__ = ('LABEL_COLOR', 'ManagedRepository')
+__all__ = ('LABEL_COLOR', 'ManagedRepository', 'UnenforceableChecks')
 
 #: One color for every declared label. These are switches a workflow reads
 #: rather than a taxonomy a reader browses, so a hue per label would be
 #: meaning nobody put there; it is GitHub's own default-palette blue, which is
 #: what the labels already carry.
 LABEL_COLOR = 'BFD4F2'
+
+
+class UnenforceableChecks(ValueError):
+    """Required checks named on a repository whose plan offers no branch protection to enforce them."""
+
+    def __init__(self, message: str, *, repository: str) -> None:
+        super().__init__(message)
+        self.repository: str = repository
 
 
 class ManagedRepository(Component, pulumi_type='kluster:forge:ManagedRepository'):
@@ -86,9 +94,10 @@ class ManagedRepository(Component, pulumi_type='kluster:forge:ManagedRepository'
             # Branch protection is public-repository-or-paid on this account
             # (framework/github.md §2), so declaring checks that can never be
             # enforced would leave a repository looking guarded and not be.
-            raise ValueError(
+            raise UnenforceableChecks(
                 f"{entry.name}: required checks are named, but this account's plan offers no branch "
-                f'protection on a private repository'
+                f'protection on a private repository',
+                repository=entry.name,
             )
 
         self.repository = github.Repository(

@@ -39,6 +39,7 @@ from pulumi.output import UNKNOWN
 
 from kluster import conventions
 from kluster.components import talos
+from kluster.lib.stack_addresses import Held
 from kluster.lib.versions import versions
 
 CONFIG_GROUP = 'kubernetes:yaml/v2:ConfigGroup'
@@ -353,21 +354,21 @@ def test_what_the_operator_defines_waits_for_the_chart(applied: Run) -> None:
 
 
 @pytest.mark.parametrize(
-    ('output', 'value', 'preview', 'named'),
+    ('output', 'value', 'preview', 'held'),
     [
         # The node GUAs a targeted apply of `physical` left as the sentinel:
         # unknown in a preview, absent in an update.
-        (OUTPUTS.node_guas, UNKNOWN, True, 'unknown'),
-        (OUTPUTS.node_guas, None, False, 'absent'),
-        (OUTPUTS.node_private_ips, {}, False, 'empty mapping'),
-        (OUTPUTS.cluster_endpoint_v6, '203.0.113.10', False, 'an IPv4 address'),
-        (OUTPUTS.vip1_private, {}, False, 'a mapping'),
+        (OUTPUTS.node_guas, UNKNOWN, True, Held.UNKNOWN),
+        (OUTPUTS.node_guas, None, False, Held.ABSENT),
+        (OUTPUTS.node_private_ips, {}, False, Held.EMPTY_MAPPING),
+        (OUTPUTS.cluster_endpoint_v6, '203.0.113.10', False, Held.WRONG_FAMILY),
+        (OUTPUTS.vip1_private, {}, False, Held.MAPPING),
     ],
     ids=['guas-unknown', 'guas-absent', 'node-ips-elided', 'balancer-v6-wrong-family', 'vip-elided'],
 )
 @pytest.mark.asyncio
 async def test_an_output_that_is_not_an_address_stops_the_run_by_name(
-    output: str, value: object, preview: bool, named: str
+    output: str, value: object, preview: bool, held: Held
 ) -> None:
     """The pool is declared from nothing a StackReference can read back in place of an address.
 
@@ -386,5 +387,5 @@ async def test_an_output_that_is_not_an_address_stops_the_run_by_name(
 
     assert run.refused is not None
     assert repr(output) in str(run.refused)
-    assert named in str(run.refused)
+    assert (run.refused.output, run.refused.held) == (output, held)
     assert conventions.POOL_INTERNET not in {it.inputs['metadata']['name'] for it in run.monitor.of_type(POOL)}

@@ -74,6 +74,23 @@ APPLICATION_KEY_ID = 'b2ApplicationKeyId'
 APPLICATION_KEY = 'b2ApplicationKey'
 
 
+class UnseparatedPrefix(ValueError):
+    """A scope whose prefix has no trailing separator, and so matches its siblings too."""
+
+    def __init__(self, message: str, *, scope: str, prefix: str) -> None:
+        super().__init__(message)
+        self.scope: str = scope
+        self.prefix: str = prefix
+
+
+class DuplicateScope(ValueError):
+    """Two scopes under one name, which is the key's name too."""
+
+    def __init__(self, message: str, *, scope: str) -> None:
+        super().__init__(message)
+        self.scope: str = scope
+
+
 @dataclass(frozen=True)
 class Scope:
     """One consumer's reach into the bucket: a key name, and a prefix.
@@ -217,10 +234,12 @@ def _check(scopes: Sequence[Scope]) -> None:
     seen: set[str] = set()
     for scope in scopes:
         if not scope.prefix.endswith('/'):
-            raise ValueError(
+            raise UnseparatedPrefix(
                 f'scope {scope.name!r} has prefix {scope.prefix!r}: a prefix without a trailing '
-                'separator also matches its siblings, which is the opposite of prefix-scoping'
+                'separator also matches its siblings, which is the opposite of prefix-scoping',
+                scope=scope.name,
+                prefix=scope.prefix,
             )
         if scope.name in seen:
-            raise ValueError(f'scope {scope.name!r} is declared twice')
+            raise DuplicateScope(f'scope {scope.name!r} is declared twice', scope=scope.name)
         seen.add(scope.name)

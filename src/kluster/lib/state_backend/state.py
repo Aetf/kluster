@@ -35,6 +35,7 @@ the file-to-file form the archive needs.
 from __future__ import annotations
 
 import datetime as dt
+import enum
 import json
 import logging
 import os
@@ -99,6 +100,58 @@ class StateError(RuntimeError):
 
 class NoStack(StateError):
     """The archive reads, and holds no stack checkpoint (`verify_dump`)."""
+
+
+class Step(enum.Enum):
+    """A step of a dump or a restore that can take minutes or writes to a database.
+
+    Each announces itself before it starts, with its member as the log
+    record's `step` (`extra={'step': ...}`), so a reader of the log -- or a
+    case -- can tell which step a line announces without reading its words: a
+    log that only speaks on success is indistinguishable from a hang.
+    """
+
+    #: `pg_dump` of the live state.
+    DUMP = enum.auto()
+    #: `pg_restore` reading the archive's contents and its stack rows.
+    VERIFY = enum.auto()
+    #: `pg_restore` writing the archive into a backend.
+    RESTORE = enum.auto()
+    #: `age --encrypt` of the archive.
+    ENCRYPT = enum.auto()
+    #: `age --decrypt` of a dump.
+    DECRYPT = enum.auto()
+    #: `pulumi stack ls` against the backend.
+    LIST_STACKS = enum.auto()
+
+
+class Refusal(enum.Enum):
+    """Which input a dump or a restore refused before any step ran."""
+
+    #: The dump's destination already exists.
+    EXISTS = enum.auto()
+    #: `pulumi stack ls --json` printed something that is not JSON.
+    NOT_JSON = enum.auto()
+    #: `pulumi stack ls --json` printed JSON that is not a list.
+    NOT_A_LIST = enum.auto()
+    #: An entry of that list carries no name.
+    NAMELESS_ENTRY = enum.auto()
+    #: No age identity file at the path given.
+    NO_IDENTITY_FILE = enum.auto()
+    #: An identity file holding no identity.
+    EMPTY_IDENTITY = enum.auto()
+    #: A dump that is neither an age file nor a `pg_dump` archive.
+    NEITHER_FORMAT = enum.auto()
+    #: No dump at the path given.
+    NO_DUMP = enum.auto()
+
+
+class StateRefused(StateError):
+    """A dump or a restore refused on its input: `reason` says which."""
+
+    def __init__(self, message: str, *, reason: Refusal) -> None:
+        super().__init__(message)
+        self.reason: Refusal = reason
 
 
 def dump_name(now: dt.datetime | None = None) -> str:
@@ -230,6 +283,7 @@ def pg_dump(target: Connection, destination: Path) -> None:
         'running %s -Fc against %s — tens of MB over TLS, expect seconds to minutes',
         PG_DUMP,
         endpoint(target.url),
+        extra={'step': Step.DUMP},
     )
     _ = _run(
         [
@@ -300,7 +354,7 @@ def verify_dump(archive: Path) -> list[str]:
     it would remove them. The appliance's timer refuses the same archives
     before it uploads (physical/state-backend.md §5).
     """
-    log.info('checking the archive: asking %s to list what it contains', PG_RESTORE)
+    log.info('checking the archive: asking %s to list what it contains', PG_RESTORE, extra={'step': Step.VERIFY})
     _ = _run(
         [PG_RESTORE, '--list', str(archive)],
         what=f'{PG_RESTORE} --list {archive}',
@@ -348,7 +402,11 @@ def pg_restore(target: Connection, archive: Path) -> None:
     superusers that is `ci` or `operator` itself, which the connecting role
     may not become, and the transaction aborts on it.
     """
-    log.info('restoring into %s — this writes the whole archive in one transaction', endpoint(target.url))
+    log.info(
+        'restoring into %s — this writes the whole archive in one transaction',
+        endpoint(target.url),
+        extra={'step': Step.RESTORE},
+    )
     _ = _run(
         [
             PG_RESTORE,
@@ -389,6 +447,7 @@ def stacks(target: Connection) -> list[str]:
         'asking pulumi which stacks %s serves; a connection not made within %ds is a backend that does not answer',
         endpoint(target.url),
         CONNECT_TIMEOUT,
+        extra={'step': Step.LIST_STACKS},
     )
     try:
         printed = pulumi_cli.run_pulumi(
@@ -417,14 +476,22 @@ def _stack_names(printed: str) -> list[str]:
     try:
         listing: object = json.loads(printed or '[]')
     except ValueError as exc:
-        raise StateError(f'`pulumi stack ls --json` did not print JSON: {printed[:120]!r}') from exc
+        raise StateRefused(
+            f'`pulumi stack ls --json` did not print JSON: {printed[:120]!r}', reason=Refusal.NOT_JSON
+        ) from exc
     if not isinstance(listing, list):
-        raise StateError(f'`pulumi stack ls --json` printed a {type(listing).__name__}, not a list of stacks')
+        raise StateRefused(
+            f'`pulumi stack ls --json` printed a {type(listing).__name__}, not a list of stacks',
+            reason=Refusal.NOT_A_LIST,
+        )
     names: list[str] = []
     for index, entry in enumerate(cast('list[object]', listing)):
         name = cast('dict[str, object]', entry).get('name') if isinstance(entry, dict) else None
         if not isinstance(name, str) or not name:
-            raise StateError(f'`pulumi stack ls --json` entry {index} carries no name, and is {entry!r}')
+            raise StateRefused(
+                f'`pulumi stack ls --json` entry {index} carries no name, and is {entry!r}',
+                reason=Refusal.NAMELESS_ENTRY,
+            )
         names.append(name)
     return names
 
@@ -438,7 +505,7 @@ def encrypted(path: Path) -> bool:
     a decryption of plaintext or a restore of ciphertext.
     """
     if not path.is_file():
-        raise StateError(f'no dump at {path}')
+        raise StateRefused(f'no dump at {path}', reason=Refusal.NO_DUMP)
     # The first bytes, not the file: this runs before a restore, and the input
     # is a dump of the whole Pulumi state.
     with path.open('rb') as handle:
@@ -447,7 +514,9 @@ def encrypted(path: Path) -> bool:
         return True
     if head.startswith(ARCHIVE_MAGIC):
         return False
-    raise StateError(f'{path} is neither an age file nor a pg_dump custom-format archive')
+    raise StateRefused(
+        f'{path} is neither an age file nor a pg_dump custom-format archive', reason=Refusal.NEITHER_FORMAT
+    )
 
 
 def encrypt(source: Path, destination: Path, recipients: Sequence[str]) -> None:
@@ -461,7 +530,9 @@ def encrypt(source: Path, destination: Path, recipients: Sequence[str]) -> None:
     argv = [age.BINARY, '--encrypt']
     for value in recipients:
         argv += ['--recipient', value]
-    log.info('encrypting the archive to %d recipient(s) with %s', len(recipients), age.BINARY)
+    log.info(
+        'encrypting the archive to %d recipient(s) with %s', len(recipients), age.BINARY, extra={'step': Step.ENCRYPT}
+    )
     _ = _run(
         [*argv, '--output', str(destination), str(source)],
         what=f'{age.BINARY} --encrypt',
@@ -479,7 +550,7 @@ def decrypt(source: Path, destination: Path, identities: Sequence[str]) -> None:
     """
     if not identities:
         raise StateError(f'no identity to open {source} with')
-    log.info('decrypting %s, trying %d identity/identities', source, len(identities))
+    log.info('decrypting %s, trying %d identity/identities', source, len(identities), extra={'step': Step.DECRYPT})
     _ = _run(
         [age.BINARY, '--decrypt', '--identity', '-', '--output', str(destination), str(source)],
         what=f'{age.BINARY} --decrypt',
@@ -499,11 +570,11 @@ def identity_file(path: Path) -> tuple[str, ...]:
     try:
         return lib_config.lines(path, 'the age identity file')
     except FileNotFoundError as exc:
-        raise StateError(f'no age identity file at {path}') from exc
+        raise StateRefused(f'no age identity file at {path}', reason=Refusal.NO_IDENTITY_FILE) from exc
     except OSError as exc:
         raise StateError(f'{path} cannot be read: {exc}') from exc
     except ValueError as exc:
-        raise StateError(f'{path} holds no age identity') from exc
+        raise StateRefused(f'{path} holds no age identity', reason=Refusal.EMPTY_IDENTITY) from exc
 
 
 def refuse_to_overwrite(destination: Path) -> None:
@@ -514,7 +585,7 @@ def refuse_to_overwrite(destination: Path) -> None:
     caller.
     """
     if destination.exists():
-        raise StateError(f'{destination} already exists; a dump never overwrites one')
+        raise StateRefused(f'{destination} already exists; a dump never overwrites one', reason=Refusal.EXISTS)
 
 
 def write_dump(destination: Path, *, bundle_dir: Path, recipients: Sequence[str]) -> None:

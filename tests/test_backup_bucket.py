@@ -19,7 +19,9 @@ from mock_monitor import Recorder, declaring, run_with
 from kluster import conventions
 from kluster.components.backup import (
     BackupBucket,
+    DuplicateScope,
     Scope,
+    UnseparatedPrefix,
     barman_scope,
     etcd_scope,
     s3_endpoint,
@@ -190,13 +192,15 @@ async def test_the_credential_halves_are_reachable_by_scope() -> None:
 def test_a_prefix_without_a_separator_is_refused() -> None:
     # `volsync/app` also matches `volsync/apple/…`, so a key scoped that way
     # reads a neighbor's backups.
-    with pytest.raises(ValueError, match='trailing separator'):
+    with pytest.raises(UnseparatedPrefix) as refused:
         build([Scope(name='sloppy', prefix='volsync/app')])
+    assert (refused.value.scope, refused.value.prefix) == ('sloppy', 'volsync/app')
 
 
 def test_two_scopes_may_not_share_a_name() -> None:
-    with pytest.raises(ValueError, match='declared twice'):
+    with pytest.raises(DuplicateScope) as refused:
         build([Scope(name='etcd', prefix='etcd/'), Scope(name='etcd', prefix='other/')])
+    assert refused.value.scope == 'etcd'
 
 
 def test_the_endpoint_names_the_account_region() -> None:

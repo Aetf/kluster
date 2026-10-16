@@ -17,6 +17,7 @@ disagree on a pin's shape.
 
 from __future__ import annotations
 
+import enum
 import hashlib
 import logging
 import os
@@ -51,8 +52,44 @@ YAML_SUFFIXES = ('.yaml', '.yml')
 _GITHUB_API = 'https://api.github.com'
 
 
+class Malformed(enum.Enum):
+    """What a fetched document lacks, or holds in the wrong shape."""
+
+    #: An unpacked release with no executable of the name looked for.
+    NO_EXECUTABLE = enum.auto()
+    #: A project or stack file with no `config:` block.
+    NO_CONFIG = enum.auto()
+    #: A project file with no `packages:` entry carrying `extensions:`.
+    NO_PACKAGES_ENTRY = enum.auto()
+    #: A `packages:` entry naming other than one manifest; `count` says how many.
+    MANIFEST_COUNT = enum.auto()
+    #: A chart that declares no `appVersion`.
+    NO_APP_VERSION = enum.auto()
+    #: A chart that unpacked into other than one chart.
+    CHART_COUNT = enum.auto()
+    #: A contents-API answer that is not a listing.
+    NOT_A_LISTING = enum.auto()
+    #: A listing entry with no name.
+    NO_ENTRY_NAME = enum.auto()
+    #: A YAML entry with no `download_url`.
+    NO_DOWNLOAD_URL = enum.auto()
+    #: A CRD document with no `metadata.name`.
+    NO_NAME = enum.auto()
+    #: A CRD document with no `spec.group`.
+    NO_GROUP = enum.auto()
+
+
 class SourceError(RuntimeError):
-    """A fetched document is not shaped the way the thing it claims to be is."""
+    """A fetched document is not shaped the way the thing it claims to be is: `reason` says how.
+
+    `count` is the number found where a `MANIFEST_COUNT` or a `CHART_COUNT`
+    wanted one, and `None` for every other reason.
+    """
+
+    def __init__(self, message: str, *, reason: Malformed, count: int | None = None) -> None:
+        super().__init__(message)
+        self.reason: Malformed = reason
+        self.count: int | None = count
 
 
 class BelowFloor(RuntimeError):
@@ -160,7 +197,7 @@ def _extracted_binary(workdir: Path, name: str, *, source: str) -> Path:
     """
     found = next((path for path in workdir.rglob(name) if path.is_file() and os.access(path, os.X_OK)), None)
     if found is None:
-        raise SourceError(f'{source} unpacked no executable called {name}')
+        raise SourceError(f'{source} unpacked no executable called {name}', reason=Malformed.NO_EXECUTABLE)
     return found.resolve()
 
 
@@ -179,7 +216,7 @@ def read_config(path: Path, *, required: bool = True) -> dict[str, object]:
     if config is None and not required:
         return {}
     if not isinstance(config, dict):
-        raise SourceError(f'{path} has no `config:` block')
+        raise SourceError(f'{path} has no `config:` block', reason=Malformed.NO_CONFIG)
     return cast('dict[str, object]', config)
 
 
@@ -212,7 +249,9 @@ def bundle_path(path: Path) -> Path:
     entry = packages.get(EXTENSION) if isinstance(packages, dict) else None
     extensions = entry.get('extensions') if isinstance(entry, dict) else None
     if not isinstance(extensions, list):
-        raise SourceError(f'{path} has no `packages:` entry `{EXTENSION}` carrying `extensions:`')
+        raise SourceError(
+            f'{path} has no `packages:` entry `{EXTENSION}` carrying `extensions:`', reason=Malformed.NO_PACKAGES_ENTRY
+        )
     manifests = [
         value
         for item in extensions
@@ -222,7 +261,9 @@ def bundle_path(path: Path) -> Path:
     ]
     if len(manifests) != 1:
         raise SourceError(
-            f'the `packages:` entry `{EXTENSION}` of {path} names {len(manifests)} `{MANIFEST_PARAMETER}=` paths, not one'
+            f'the `packages:` entry `{EXTENSION}` of {path} names {len(manifests)} `{MANIFEST_PARAMETER}=` paths, not one',
+            reason=Malformed.MANIFEST_COUNT,
+            count=len(manifests),
         )
     return path.parent / manifests[0]
 
@@ -284,7 +325,7 @@ def chart_app_version(helm: Path, pin: ChartPin, *, workdir: Path) -> str:
     metadata = _yaml().load(_helm(helm, ['show', 'chart', *_chart_location(pin)], workdir=workdir))
     app_version = metadata.get('appVersion') if isinstance(metadata, dict) else None
     if not isinstance(app_version, str) or not app_version:
-        raise SourceError(f'chart {pin.name} {pin.version} declares no appVersion')
+        raise SourceError(f'chart {pin.name} {pin.version} declares no appVersion', reason=Malformed.NO_APP_VERSION)
     return app_version
 
 
@@ -296,7 +337,11 @@ def chart_value_paths(helm: Path, pin: ChartPin, *, workdir: Path) -> ValuePaths
     _ = _helm(helm, ['pull', *_chart_location(pin), '--untar', '--untardir', str(destination)], workdir=workdir)
     unpacked = [path for path in destination.iterdir() if (path / 'Chart.yaml').is_file()]
     if len(unpacked) != 1:
-        raise SourceError(f'chart {pin.name} {pin.version} unpacked into {len(unpacked)} charts, not one')
+        raise SourceError(
+            f'chart {pin.name} {pin.version} unpacked into {len(unpacked)} charts, not one',
+            reason=Malformed.CHART_COUNT,
+            count=len(unpacked),
+        )
     return read_chart(unpacked[0])
 
 
@@ -381,17 +426,22 @@ def yaml_file_urls(listing: object, *, what: str) -> list[str]:
     demanded only of the entries that survive the filter.
     """
     if not isinstance(listing, list):
-        raise SourceError(f'{what}: the contents API answered a {type(listing).__name__}, not a list of entries')
+        raise SourceError(
+            f'{what}: the contents API answered a {type(listing).__name__}, not a list of entries',
+            reason=Malformed.NOT_A_LISTING,
+        )
     urls: list[str] = []
     for entry in cast('list[Any]', listing):
         name = entry.get('name') if isinstance(entry, dict) else None
         if not isinstance(name, str) or not name:
-            raise SourceError(f'{what}: an entry carries no name, and is {entry!r}')
+            raise SourceError(f'{what}: an entry carries no name, and is {entry!r}', reason=Malformed.NO_ENTRY_NAME)
         if not name.endswith(YAML_SUFFIXES):
             continue
         url = entry.get('download_url')
         if not isinstance(url, str) or not url:
-            raise SourceError(f'{what}: the entry {name} carries no download_url, and is {entry!r}')
+            raise SourceError(
+                f'{what}: the entry {name} carries no download_url, and is {entry!r}', reason=Malformed.NO_DOWNLOAD_URL
+            )
         urls.append(url)
     return urls
 
@@ -412,9 +462,11 @@ def definition(document: dict[str, Any]) -> Definition:
     name = metadata.get('name') if isinstance(metadata, dict) else None
     group = spec.get('group') if isinstance(spec, dict) else None
     if not isinstance(name, str) or not name:
-        raise SourceError(f'a {CRD_KIND} document has no metadata.name, and holds {sorted(document)}')
+        raise SourceError(
+            f'a {CRD_KIND} document has no metadata.name, and holds {sorted(document)}', reason=Malformed.NO_NAME
+        )
     if not isinstance(group, str) or not group:
-        raise SourceError(f'{CRD_KIND} {name} has no spec.group')
+        raise SourceError(f'{CRD_KIND} {name} has no spec.group', reason=Malformed.NO_GROUP)
     return Definition(name=name, group=group, document=document)
 
 
