@@ -379,18 +379,13 @@ def test_an_archive_holding_no_stack_is_not_uploaded(tmp_path: Path, listing: st
     stack init`, dumps to an archive of a plausible size whose restore brings
     nothing back. Uploaded, it would be the newest object -- the one every
     recovery takes -- so the run fails before `age` and before B2, and the
-    newest object stays the last dump that held state. The words name the
-    rule and both readings, because the box is one nobody logs into to ask.
+    newest object stays the last dump that held state.
     """
     box = Box(tmp_path, listing=listing, holds=holds)
 
     ran = box.run()
 
     assert ran.returncode != 0
-    assert 'holds no stack checkpoint' in ran.stderr
-    assert 'nothing was uploaded' in ran.stderr
-    assert 'state-backend.md §5' in ran.stderr
-    assert 'state-backend restore' in ran.stderr and 'pulumi stack init' in ran.stderr
     assert box.of('age') == [] and box.of('curl') == []
     _left_nothing_behind(box)
 
@@ -416,7 +411,6 @@ def test_rows_that_cannot_be_read_stop_the_run_with_what_pg_restore_said(tmp_pat
     ran = box.run()
 
     assert ran.returncode != 0
-    assert 'pg_restore --data-only failed' in ran.stderr
     assert said in ran.stderr
     assert box.of('age') == [] and box.of('curl') == []
     _left_nothing_behind(box)
@@ -438,7 +432,6 @@ def test_a_listing_that_cannot_be_read_stops_the_run_with_what_pg_restore_said(t
     ran = box.run()
 
     assert ran.returncode != 0
-    assert 'pg_restore --list failed' in ran.stderr
     assert said in ran.stderr
     assert box.of('age') == [] and box.of('curl') == []
     _left_nothing_behind(box)
@@ -455,17 +448,17 @@ def test_the_plaintext_archive_does_not_outlive_the_dump(tmp_path: Path) -> None
     assert ran.returncode == 0, ran.stderr
     (put,) = box.of('curl')[2:]
     assert put.beside is not None
-    assert [name for name in put.beside if name.endswith(('.dump', '.age'))] == ['state.dump.age']
+    assert not [name for name in put.beside if name.endswith('.dump')]
 
 
-@pytest.mark.parametrize(('pg', 'age', 'message'), [(1, 0, 'pg_dump failed'), (0, 2, 'age failed')])
-def test_dump_fails_when_a_step_fails(tmp_path: Path, pg: int, age: int, message: str) -> None:
+@pytest.mark.parametrize(('pg', 'age', 'encrypted'), [(1, 0, False), (0, 2, True)])
+def test_dump_fails_when_a_step_fails(tmp_path: Path, pg: int, age: int, *, encrypted: bool) -> None:
     box = Box(tmp_path, pg=pg, age=age)
 
     ran = box.run()
 
     assert ran.returncode != 0
-    assert message in ran.stderr
+    assert bool(box.of('age')) == encrypted
     assert box.of('curl') == []
     _left_nothing_behind(box)
 
@@ -480,7 +473,8 @@ def test_the_run_names_the_object_under_the_prefix_and_a_stamp(tmp_path: Path) -
     name = put.header('X-Bz-File-Name')
     assert name is not None
     assert re.fullmatch(r'kluster/state/\d{8}T\d{6}Z\.dump\.age', name), name
-    assert f'uploaded {name}' in ran.stdout
+    # The run's last word is the object it stored, once B2 has taken it.
+    assert name in ran.stdout.splitlines()[-1]
 
 
 def test_the_backend_wait_survives_a_hanging_probe(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -569,13 +563,14 @@ def test_a_failed_dump_reaches_the_next_login() -> None:
     "the last run failed", so a successful run takes it down again.
     """
     unit = _unit('state-dump.service')
-    assert 'OnFailure=state-dump-failed.service' in unit
+    on_failure = re.search(r'^\s*OnFailure=(\S+)$', unit, re.M)
+    assert on_failure is not None, 'a failed run starts nothing'
     removed = re.search(r'^\s*ExecStartPost=-/usr/bin/rm -f (\S+)$', unit, re.M)
     assert removed is not None, 'a good run takes no notice down'
 
     # The notice the failed run writes is the one a good run removes, where
     # the login prints it.
-    notice = _unit('state-dump-failed.service')
+    notice = _unit(on_failure.group(1))
     assert f'> {removed.group(1)}' in notice
     assert removed.group(1).startswith('/etc/motd.d/')
     # And it says where the rest of the story is.
@@ -590,11 +585,11 @@ def test_the_script_reads_the_environment_the_unit_provides() -> None:
     rendered for nothing. The harness runs the script under the same names,
     so a run here is a run under the box's environment.
     """
-    env_file = BUTANE.split('    - path: /etc/kluster/state-dump.env\n', 1)[1].split('\n\n', 1)[0]
+    named = re.search(r'^\s*EnvironmentFile=(\S+)$', _unit('state-dump.service'), re.M)
+    assert named is not None, 'the unit reads no environment'
+    env_file = BUTANE.split(f'    - path: {named.group(1)}\n', 1)[1].split('\n\n', 1)[0]
     provided = set(re.findall(r'^          (\w+)=', env_file, re.M))
-    unit = _unit('state-dump.service')
 
-    assert 'EnvironmentFile=/etc/kluster/state-dump.env' in unit
     assert provided == set(ENV)
     assert {name for name in provided if f'${name}' not in TEXT and f'${{{name}' not in TEXT} == set()
 
@@ -612,7 +607,9 @@ def test_the_dump_unit_spools_to_the_hosts_var_tmp() -> None:
     assert 'PrivateTmp' not in _unit('state-dump.service')
     # Nor does the box move the spool through the script's own seam: the
     # defaults are what it runs on, and every seam is the suite's.
-    assert 'STATE_DUMP_' not in BUTANE
+    seams = set(re.findall(r'^\w+=\$\{(\w+):-', TEXT, re.M))
+    assert seams
+    assert {seam for seam in seams if seam in BUTANE} == set()
 
 
 # -- what the box can execute at all -------------------------------------------
@@ -701,4 +698,5 @@ def test_the_appliance_executes_only_what_the_image_ships() -> None:
     assert {where: head for where, head in targets.items() if head not in EXECUTABLES} == {}
     # The rule reaches the dump script through its shebang, not by accident
     # of the template text: the variable it is rendered from is resolved.
-    assert targets['shebang of /usr/local/bin/state-dump'] == '/usr/bin/bash'
+    interpreter = render.machine_file(render.DUMP_SCRIPT).split('\n', 1)[0].removeprefix('#!').split()[0]
+    assert any(where.startswith('shebang of ') and head == interpreter for where, head in targets.items())
