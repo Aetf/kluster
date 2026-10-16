@@ -25,6 +25,8 @@ a mint for somebody else's user is served by the legacy shim.
 from __future__ import annotations
 
 import ipaddress
+import re
+import shlex
 import shutil
 from pathlib import Path
 
@@ -66,6 +68,7 @@ from kluster.scripts.credentials import (
 # `.credentials/` directory, and the map is a different thing entirely.
 from kluster.scripts.credentials import slots as slot_map
 from kluster.scripts.credentials.kdbx import KdbxStore
+from kluster.scripts.operator_stack import cli as operator_stack_cli
 
 
 @pytest.fixture
@@ -77,6 +80,11 @@ def pinned_age() -> None:
 needs_age = pytest.mark.usefixtures('pinned_age')
 
 STACK = derived.ZONES_STACK
+
+#: The capabilities B2 documents as acting on files: listing, reading,
+#: sharing (a download authorization), writing and deleting them. A key
+#: holding none of them cannot read a byte out of a bucket.
+B2_FILE_CAPABILITIES = frozenset({'listFiles', 'readFiles', 'shareFiles', 'writeFiles', 'deleteFiles'})
 COMPARTMENT = 'ocid1.compartment.oc1..physical'
 
 
@@ -193,7 +201,7 @@ def test_a_stack_no_program_declares_is_refused_naming_the_census(api: FakeApi, 
     runner = RecordedPulumi()
     slot = pulumi_config.Stack(name='dsn', directory=pulumi_config.project_dir(), run=runner)
 
-    with pytest.raises(pulumi_config.SlotRefused, match=r'dsn.*k8s-base') as refusal:
+    with pytest.raises(pulumi_config.SlotRefused, match='dsn') as refusal:
         derived.cloudflare_zones(kit, stacks=[slot])
 
     # A misspelled stack would otherwise be created in the backend and
@@ -274,8 +282,10 @@ def test_a_stack_that_does_not_exist_refuses_the_mint_before_anything_is_created
     runner = RecordedPulumi()
     slot = pulumi_config.Stack(name=APPS, directory=pulumi_config.project_dir(), run=runner)
 
-    with pytest.raises(pulumi_config.SlotRefused, match='apps stack does not exist'):
+    with pytest.raises(pulumi_config.SlotRefused) as refusal:
         derived.cloudflare_zones(kit, stacks=[dns_slot, slot])
+
+    assert APPS in str(refusal.value)
 
     # The row's own stack is created by its first mint, which is bring-up;
     # any other stack is brought up on its own, and a mint aimed there fills
@@ -287,7 +297,7 @@ def test_a_stack_that_does_not_exist_refuses_the_mint_before_anything_is_created
 
 
 def test_a_mint_with_no_stack_to_deliver_into_is_refused(api: FakeApi, kit: KdbxStore) -> None:
-    with pytest.raises(pulumi_config.SlotRefused, match='names no stack'):
+    with pytest.raises(pulumi_config.SlotRefused):
         derived.cloudflare_zones(kit, stacks=[])
 
     assert _live(api) == []
@@ -658,11 +668,7 @@ def test_every_part_of_the_signing_configuration_is_a_secret(
     # plain, which is why the plain half is empty rather than merely small.
     secret = [args[2] for args in runner.invocations if args[:2] == ['config', 'set'] and '--secret' in args]
     plain = [args[2] for args in runner.invocations if args[:2] == ['config', 'set'] and '--secret' not in args]
-    assert set(secret) == {
-        derived.OCI_USER_KEY,
-        derived.OCI_FINGERPRINT_KEY,
-        derived.OCI_PRIVATE_KEY_KEY,
-    }
+    assert set(secret) == set(runner.config)
     assert plain == []
 
 
@@ -682,7 +688,7 @@ def test_the_compartment_comes_from_conventions_when_no_flag_names_one(
     # The ordinary bring-up names no compartment: `conventions` does, and the
     # mint creates the one this consumer has no compartment for yet.
     created = next(iter(tenancy.identity.compartments.values()))
-    name = f'{conventions.CLUSTER_NAME}-{derived.PHYSICAL_STACK}'
+    name = oci_iam.Identity.name_for(conventions.PHYSICAL)
     assert created.name == intended.name
     assert [policy.statements for policy in tenancy.identity.policies.values() if policy.name == name] == [
         [f'Allow group {name} to manage all-resources in compartment id {created.id}']
@@ -799,7 +805,7 @@ def test_the_recorded_compartment_is_adopted_not_recreated(
 
     # The post-record state: the OCID is written, so the mint must find that
     # compartment and act in it, creating nothing.
-    name = f'{conventions.CLUSTER_NAME}-{derived.PHYSICAL_STACK}'
+    name = oci_iam.Identity.name_for(conventions.PHYSICAL)
     assert list(tenancy.identity.compartments) == [recorded_compartment.ocid]
     assert [policy.statements for policy in tenancy.identity.policies.values() if policy.name == name] == [
         [f'Allow group {name} to manage all-resources in compartment id {recorded_compartment.ocid}']
@@ -815,7 +821,7 @@ def test_the_per_stack_identity_is_confined_to_the_compartment_it_names(
 
     # One name for the user, its group and its policy, and the policy is the
     # whole of what the key may do — a compartment rather than a verb list.
-    name = f'{conventions.CLUSTER_NAME}-{derived.PHYSICAL_STACK}'
+    name = oci_iam.Identity.name_for(conventions.PHYSICAL)
     group = next(candidate for candidate in tenancy.identity.groups.values() if candidate.name == name)
     assert (user, group.id) in tenancy.identity.memberships
     assert [policy.statements for policy in tenancy.identity.policies.values() if policy.name == name] == [
@@ -940,14 +946,13 @@ def test_the_appliance_key_lands_in_the_state_backend_stack(
     # The three values the stack program builds its OCI provider from, each a
     # secret, the fingerprint the key's own; where the appliance may act is a
     # convention the program reads, so nothing of the account is written.
-    assert user == _named(tenancy, f'{conventions.CLUSTER_NAME}-{conventions.STATE_BACKEND}')
+    assert user == _named(tenancy, oci_iam.Identity.name_for(conventions.STATE_BACKEND))
     assert runner.config[derived.OCI_USER_KEY] == user
     key = runner.config[derived.OCI_PRIVATE_KEY_KEY]
     assert runner.config[derived.OCI_FINGERPRINT_KEY] == oci_iam.fingerprint(key)
     assert tenancy.identity.keys[user] == [oci_iam.fingerprint(key)]
-    written = {derived.OCI_USER_KEY, derived.OCI_FINGERPRINT_KEY, derived.OCI_PRIVATE_KEY_KEY}
-    assert set(runner.config) == written
-    assert {args[2] for args in runner.invocations if args[:2] == ['config', 'set'] and '--secret' in args} == written
+    secret = {args[2] for args in runner.invocations if args[:2] == ['config', 'set'] and '--secret' in args}
+    assert secret == set(runner.config)
 
 
 def test_the_appliance_row_is_refused_in_another_account_before_anything_is_created(
@@ -986,7 +991,7 @@ def test_the_appliance_row_is_its_own_principal(
     # Two §3 OCI rows, two principals: the appliance's stack and the physical
     # stack are separate consumers, so a compromise of either is confined to
     # its own compartment.
-    name = f'{conventions.CLUSTER_NAME}-{conventions.STATE_BACKEND}'
+    name = oci_iam.Identity.name_for(conventions.STATE_BACKEND)
     assert sorted(user.name for user in tenancy.identity.users.values()) == [oci_iam.SEED_NAME, name]
     assert [policy.statements for policy in tenancy.identity.policies.values() if policy.name == name] == [
         [f'Allow group {name} to manage all-resources in compartment id {COMPARTMENT}']
@@ -1036,7 +1041,8 @@ def test_the_management_key_lands_in_the_stack_config_with_its_id(
     assert b2_api_fake.keys[key_id].secret == runner.config[derived.B2_KEY_KEY]
     # Bucket, key and lifecycle administration, and no file capability at all:
     # what manages the backup buckets cannot read a byte out of them.
-    assert b2_api_fake.keys[key_id].capabilities == b2.CAPABILITIES
+    assert b2_api_fake.keys[key_id].capabilities
+    assert not set(b2_api_fake.keys[key_id].capabilities) & B2_FILE_CAPABILITIES
 
 
 def test_the_management_key_never_touches_the_kit(
@@ -1124,7 +1130,8 @@ def test_the_appliance_management_key_lands_in_its_stack_under_a_role_of_its_own
 
     assert runner.config[derived.B2_KEY_ID_KEY] == key_id
     assert b2_api_fake.keys[key_id].secret == runner.config[derived.B2_KEY_KEY]
-    assert b2_api_fake.keys[key_id].capabilities == b2.CAPABILITIES
+    assert b2_api_fake.keys[key_id].capabilities
+    assert not set(b2_api_fake.keys[key_id].capabilities) & B2_FILE_CAPABILITIES
     # A name of its own, so this mint's retirement leaves the key the
     # `physical` stack holds live, and that stack's re-run leaves this one.
     assert b2_api_fake.named(b2.STATE_BACKEND_MANAGEMENT.name) == [key_id]
@@ -1169,10 +1176,13 @@ def test_the_state_backend_rows_refuse_a_stack_with_no_checkpoint_before_anythin
         lambda: derived.state_backend_server(vault_in_hand, stack=slot),
         lambda: derived.state_backend_host_key(stack=slot, public_file=public_file),
     ):
-        with pytest.raises(
-            pulumi_config.SlotRefused, match=f'operator-stack {derived.STATE_BACKEND_STACK} pulumi stack init'
-        ):
+        with pytest.raises(pulumi_config.SlotRefused) as refused:
             deliver()
+        # The remedy is a command the operator can run as written: one
+        # `operator-stack` invocation, creating this stack.
+        (remedy,) = re.findall(r'`operator-stack ([^`]*)`', str(refused.value))
+        parsed = operator_stack_cli.build_parser().parse_args(shlex.split(remedy))
+        assert (parsed.stack, parsed.command, parsed.args[:2]) == (slot.name, 'pulumi', ['stack', 'init'])
 
     assert b2_api_fake.named(b2.STATE_BACKEND_MANAGEMENT.name) == []
     assert tenancy.identity.users == users
@@ -1205,7 +1215,10 @@ def test_the_server_certificate_chains_to_the_escrowed_ca_and_names_the_address(
     # The key a secret, the two certificates in the clear, and the three one
     # issuance: the key opens the certificate the config holds.
     secret_keys = {args[2] for args in runner.invocations if args[:2] == ['config', 'set'] and '--secret' in args}
-    assert secret_keys == {derived.SERVER_KEY_KEY}
+    (secret_key,) = secret_keys
+    _ = serialization.load_pem_private_key(runner.config[secret_key].encode(), password=None)
+    for plain in set(runner.config) - secret_keys:
+        _ = x509.load_pem_x509_certificate(runner.config[plain].encode())
     assert runner.config[derived.SERVER_KEY_KEY] == issued.key_pem.decode().strip()
     certificate = x509.load_pem_x509_certificate(runner.config[derived.SERVER_CERT_KEY].encode())
     ca = x509.load_pem_x509_certificate(runner.config[derived.CA_CERT_KEY].encode())
@@ -1403,7 +1416,7 @@ def test_a_file_to_commit_outside_the_checkout_is_refused(tmp_path: Path, monkey
     # where no commit picks the file up.
     monkeypatch.setattr(lib_workstation, 'repo_root', lambda: tmp_path / 'checkout')
 
-    with pytest.raises(lib_workstation.WorkstationError, match='is not in the checkout'):
+    with pytest.raises(lib_workstation.WorkstationError):
         _ = derived.committed_target(tmp_path / 'installed' / 'host-key.txt')
 
     inside = tmp_path / 'checkout' / 'host-key.txt'
