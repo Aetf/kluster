@@ -84,6 +84,12 @@ MASKED = ROOT_VARIABLES | BACKEND_VARIABLES
 #: deliberate verdict -- masked, or knowingly not -- rather than to silence.
 UNMASKED_PATHS = frozenset({'PGSSLROOTCERT', 'PGSSLCERT', 'PGSSLKEY', 'KLUSTER_KDBX'})
 
+#: Variables that carry a tool's setting, neither a credential nor a path to
+#: one, and are left in place for the same reason as the paths: so that every
+#: key `mise.toml` sets has a verdict. `JAVA_OPTS` is the stack the prose
+#: checker's server runs on (`mise.toml`, kluster-ops#465).
+UNMASKED_SETTINGS = frozenset({'JAVA_OPTS'})
+
 
 def strip(environment: MutableMapping[str, str]) -> None:
     """Remove every masked variable from `environment`.

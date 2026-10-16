@@ -64,15 +64,17 @@ SLOT_URL = 'postgres://operator@192.0.2.10:5432/pulumi_state'
 
 
 def _checkout(checkout: Path) -> Path:
-    """`checkout`, created, holding `mise.toml`'s `[env]` table."""
+    """`checkout`, created, holding the templates of `mise.toml`'s `[env]` table."""
     config = tomllib.loads(MISE_TOML.read_text())
     table = config['env']
-    # Every key is resolved and compared, so a template added without the
-    # guard fails here until it carries an exported value and a slot.
-    assert set(table) == EXPORTED.keys(), f'[env] keys {sorted(table)} are not EXPORTED'
+    assert all(isinstance(value, str) for value in table.values()), '[env] holds a value that is not a string'
+    # Every template is resolved and compared, so a template added without
+    # the guard fails here until it carries an exported value and a slot. A
+    # value with no template syntax renders to itself and reads no slot.
+    templates = {name: value for name, value in table.items() if '{{' in value or '{%' in value}
+    assert set(templates) == EXPORTED.keys(), f'[env] templates {sorted(templates)} are not EXPORTED'
     lines = ['[env]']
-    for name, template in table.items():
-        assert isinstance(template, str), f'{name} is not a template string'
+    for name, template in templates.items():
         # A JSON string is a valid TOML basic string.
         lines.append(f'{name} = {json.dumps(template)}')
     checkout.mkdir(parents=True)
