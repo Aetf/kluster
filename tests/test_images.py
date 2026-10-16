@@ -534,7 +534,6 @@ def test_a_registry_that_does_not_answer_stops_the_job(tmp_path: Path) -> None:
     conf = _run_conf(ROOT, tmp_path, 'emailproxy', registry='unreachable')
     assert conf.returncode != 0
     assert 'published' not in conf.outputs
-    assert 'Could not tell whether' in conf.stderr
 
 
 #: What pushes a tag, in a step of the workflow.

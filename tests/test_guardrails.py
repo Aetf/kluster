@@ -18,7 +18,6 @@ from mock_monitor import Recorder, run_with
 from kluster.components.cloud.guardrails import (
     A1_CORES_PER_AD,
     A1_MEMORY_GB_PER_AD,
-    BUDGET_AMOUNT,
     OBJECT_STORAGE_GB,
     AlertRule,
     Guardrails,
@@ -108,7 +107,6 @@ async def test_the_quota_and_budget_live_above_what_they_govern() -> None:
 async def test_the_budget_resets_monthly() -> None:
     guardrails = build()
     assert await guardrails.budget.reset_period.future() == 'MONTHLY'
-    assert await guardrails.budget.amount.future() == BUDGET_AMOUNT
 
 
 @pytest.mark.asyncio

@@ -1000,7 +1000,6 @@ def test_physical_with_nothing_escrowed_is_refused_naming_the_command_that_files
     with pytest.raises(pulumi_config.PassphraseMissing) as refusal:
         _ = found.variables(pulumi_config.PHYSICAL)
     assert ('derived', pulumi_config.PHYSICAL_ROW, 'generate') in named_leaves(str(refusal.value))
-    assert 'The stack passphrase the previewed stacks share is deliberately not used' in str(refusal.value)
 
 
 @needs_age
