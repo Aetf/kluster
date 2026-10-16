@@ -94,9 +94,10 @@ async def monitor(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Providers:
     from kluster.lib import workstation
 
     # The component materializes the session's credential into the checkout's
-    # `.credentials/`, so every case here is pointed at a checkout of its own:
-    # a suite that wrote into the tree it runs from would leave a key behind
-    # and, worse, overwrite the operator's.
+    # `.credentials/` and names both files relative to the checkout in the
+    # connection URI, so every case here runs in a checkout of its own rather
+    # than in a layer alone: the running checkout's layer is closed, and a
+    # write into it is refused (framework/testing.md §1.1).
     monkeypatch.setattr(workstation, 'repo_root', lambda: tmp_path)
     pulumi.runtime.set_all_config({f'kluster:{PRIVATE_KEY}': IDENTITY})
     return await run_with(Providers(), stack='physical')

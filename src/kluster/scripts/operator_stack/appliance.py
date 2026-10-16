@@ -365,7 +365,7 @@ class Gate:
     @classmethod
     def for_checkout(cls, checkout: Path) -> Gate:
         """The gate asking the backend over the `operator` client bundle in `checkout`'s slot."""
-        bundle_dir = checkout / lib_workstation.DIRECTORY / stack_environment.BUNDLE_SLOT
+        bundle_dir = lib_workstation.slots(checkout) / stack_environment.BUNDLE_SLOT
 
         def ready() -> None:
             _ = _connection(bundle_dir)

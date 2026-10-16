@@ -49,7 +49,6 @@ from kluster.scripts.credentials import (
     masters,
     oci_iam,
     pulumi_config,
-    workstation,
 )
 from kluster.scripts.credentials.kdbx import KdbxStore
 from kluster.scripts.credentials.masters import CredentialRejected
@@ -182,9 +181,8 @@ def test_an_account_root_is_read_at_the_moment_it_is_needed(monkeypatch: pytest.
     # A mint borrows its account root from the desktop secret store, or from
     # the operator when there is none (§2). No database but the kit is opened
     # for it, and nothing is read before the row that needs it is reached.
-    # The chain's file layer is `slots`', under `tmp_path`: in a checkout
-    # whose own `.credentials/roots/` holds this account's root, the chain
-    # would answer from there, and the assertion below would print it.
+    # The chain's file layer is `slots`', the case's own and empty, so no
+    # layer of the chain answers and the borrow below reaches the operator.
     def nothing_remembered(_account: str) -> str | None:
         return None
 
@@ -877,17 +875,15 @@ def test_a_missing_bundle_still_yields_the_passphrase(
 
 
 @pytest.fixture
-def slots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
-    """The chain's store and file layers, moved off the operator's: no store, and slots under `tmp_path`.
+def slots(credential_files: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+    """The chain's store and file layers, the case's own: no store, and the running checkout's slots under `tmp_path`.
 
     Nobody is at a terminal either, so a run the chain does not answer is
     refused rather than left at a prompt.
     """
-    directory = tmp_path / 'checkout' / '.credentials'
-    monkeypatch.setattr(workstation, 'directory', lambda: directory)
     monkeypatch.setattr('sys.stdin', io.StringIO())
     with installed(fail_keyring.Keyring()):
-        yield directory
+        yield credential_files
 
 
 @needs_age

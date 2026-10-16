@@ -346,7 +346,7 @@ def _earlier_generations(vault: escrow.Vault, label: str) -> list[str]:
 
 def _operator_passphrase() -> str:
     """The operator passphrase, found through the chain for the checkout whose slots this package writes."""
-    return stack_environment.operator_passphrase(workstation.directory().parent)
+    return stack_environment.operator_passphrase(workstation.repo_root())
 
 
 def require_member(only: str | None) -> None:

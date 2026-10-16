@@ -85,7 +85,7 @@ one, the ones that write the command out. Any other document points at
 one of those rather than writing its own. A run aimed at part of the
 suite, such as a drill's (§5), is not the gate and carries its own number.
 
-### 1.1 A test process holds no credentials in its environment
+### 1.1 A test process reaches none of the operator's credentials
 
 The Pulumi stack passphrase and the backend URL are materialized by
 `mise.toml`, into `PULUMI_CONFIG_PASSPHRASE` and `PULUMI_BACKEND_URL`, out
@@ -111,13 +111,15 @@ above that one.
     off `masters.ROOTS` rather than listed a second time, together with the
     other variables `mise.toml` lists under `redactions`. A root added to that
     register is masked by that addition alone.
--   **What is deliberately not masked** is `PGSSLROOTCERT`, `PGSSLCERT`,
-    `PGSSLKEY` and `KLUSTER_KDBX`, named in `root_credentials.UNMASKED_PATHS`.
-    Each carries a *path* to credential material rather than the material, so
-    a failed assertion renders a path; a suite that needs the files behind one
-    points the path elsewhere rather than blanking it. Every key `mise.toml`
-    sets has to fall in one of the two sets, which is what makes a new one a
-    decision somebody takes rather than an omission nobody sees.
+-   **What is not masked** is `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY` and
+    `KLUSTER_KDBX`, named in `root_credentials.UNMASKED_PATHS`. Each carries a
+    *path* to credential material rather than the material, so a failed
+    assertion would render a path, which discloses nothing. A path is what a
+    process follows to the material, though, so the file layer's closure
+    below removes them from the process instead. Every key `mise.toml` sets
+    has to land in one of `root_credentials`' verdicts — masked, a path, or a
+    tool's setting — which is what makes a new one a decision somebody takes
+    rather than an omission nobody sees.
 -   **A suite that needs a value asks for a fake one by name**, with
     `root_credentials.fake_credentials('KLUSTER_B2_KEY')` as a context manager,
     or `root_credentials.fake(name)` for the value on its own. The value is
@@ -135,13 +137,14 @@ above that one.
     which a suite supplies with `pulumi.runtime.set_all_config` and which this
     mechanism has no part in.
 
-**The environment is one of three channels, and the desktop secret store is
-the second one closed.** An account root and the operator passphrase are
-looked up in the desktop secret store, then in a file under the checkout's
-own `.credentials/`, and only then in the variable (`kluster.lib.acquisition`,
-credentials.md §2), and a `credentials` command writes the store as well as
-reading it: `generate` and `recover` of the operator passphrase, `root
-remember`, `kit password remember`.
+**The environment is one channel of the chain; the desktop secret store and
+the file layer are the others, and each is closed too.** An account root and
+the operator passphrase are looked up in the desktop secret store, then in a
+file under the checkout's own `.credentials/`, and only then in the variable
+(`kluster.lib.acquisition`, credentials.md §2), and a `credentials` command
+writes the store as well as reading it: `generate` and `recover` of the
+operator passphrase, `root remember`, `kit password remember`. The kit is a
+file in that directory too, unless `KLUSTER_KDBX` names one elsewhere.
 
 -   **The store is closed for the whole session.** `tests/conftest.py`
     installs a `keyring` backend that refuses every call — what a machine
@@ -157,26 +160,83 @@ remember`, `kit password remember`.
     back, since asking resolves the machine's own wherever none has been set:
     `tests/test_harness_isolation.py` holds both, against a stand-in for that
     store which records being resolved.
--   **The file layer is still each suite's to redirect.** `workstation`
-    resolves `.credentials/` from its own `__file__`, so on an operator
-    workstation the file layer answers with live material without the
-    environment being consulted at all. A suite that reaches `masters`,
-    `workstation`, `kdbx` or the operator passphrase redirects it itself, by
-    pointing `workstation.directory` at a `tmp_path` the way
-    `tests/test_masters.py::local` does, or by handing the chain a checkout
-    under `tmp_path`. Until that too is closed by construction, this remains a
-    discipline rather than a property, and a suite that forgets it can print
-    a credential that never went near a variable.
+-   **The file layer is closed for the whole process, from before the first
+    test module is collected.** `kluster.lib.workstation.slots` is the one
+    place a checkout's `.credentials/` is formed: `workstation.directory()`
+    goes through it, and so does every reader handed a checkout.
+    `tests/conftest.py`'s `pytest_configure` replaces it through
+    `tests/file_layer.py`, and its `pytest_unconfigure` puts it back. Asked
+    for the checkout the process runs from, the replacement answers
+    `file_layer.CLOSED`, `/dev/null/.credentials`; asked for any other
+    checkout, it answers that checkout's own. The same step removes the path
+    variables above, so a process a case starts cannot follow them in
+    either. Collection is what makes it this early: building the
+    `credentials` parser, as a parametrization over its commands does,
+    computes the client bundle's directory for an option's default.
+-   **What a case meets is a checkout with no file layer and no way to make
+    one.** For reads, that is what every workspace and every CI run already
+    is: each slot is absent, and each reader takes the branch it takes on
+    such a machine. The chain passes over the file to the variable and the
+    prompt, `KdbxStore.from_env` refuses naming the kit's path under
+    `/dev/null`, and the operator passphrase is refused as
+    `NoOperatorPassphrase`, naming its slot. A write is refused by the
+    operating system, which makes nothing below a device file, for root as
+    for anyone: it fails as an `OSError` naming a path at or under
+    `/dev/null`. Refusing the write rather than taking it somewhere shared
+    is what keeps one case's write from becoming the next case's read.
+-   **A case that needs the layer asks for `credential_files`**, which makes
+    the running checkout's slots the case's own `tmp_path / '.credentials'`
+    for its length — for every reader, the ones handed that checkout
+    included. A fixture wider than a case opens the same block,
+    `file_layer.opened`, on a directory from `tmp_path_factory`. Blocks end
+    innermost first, and the end of one puts back what the enclosing block
+    had opened, the closed layer outside every block, without resolving the
+    checkout.
+-   **A case whose subject is a checkout makes one of its own**: it points
+    `workstation.repo_root` at a directory under `tmp_path`, or hands a
+    reader a checkout it built there, and that checkout's layer is open
+    because it is the case's own rather than the running checkout's. That
+    is the form for a case about the checkout itself — its root, its
+    committed files — and for a component that writes into the checkout's
+    layer and names what it wrote relative to the checkout, as the
+    `physical` stack's libvirt transport does (`tests/test_homelab.py`,
+    `tests/physical_installation.py`).
+-   **The live tier is the exception, declared where its opt-in lives.** A
+    drill opens and rotates the operator's kit, which is a file in the layer
+    or wherever `KLUSTER_KDBX` names it, so `tests/live/conftest.py` holds
+    every drill inside `file_layer.live()`: the running checkout's own
+    `.credentials/`, and the path variables as the process received them.
+    Nothing is collected from there without `RUN_LIVE_DRILLS=1` (§5).
+-   **What it does not reach** is a resolution outside the test process's
+    own code: a process a case starts that imports `kluster` finds its own
+    checkout from its own copy of the package, and a path formed by hand
+    from `workstation.repo_root()` rather than through `slots` is outside
+    the replacement. Today's instances are none: the children that import
+    `kluster` are handed a checkout under `tmp_path` or a working directory,
+    or run an installed copy with no checkout around it
+    (`tests/test_machine.py`).
 
-The asymmetry is the reason the three are not fixed the same way. A variable
-can be read while a module is being *imported*, which is before any fixture
-has run, so nothing short of stripping at import reaches it. The store and
-the file layer are only ever reached from inside a test, so a fixture is early
-enough — closing them is ordinary work rather than a place where the mechanism
-has to be unusual.
+`tests/test_harness_isolation.py` holds the closed layer in a child run whose
+running checkout the case made itself, under its `tmp_path`, with a copy of the
+package and a decoy in each slot. The child resolves a slot while it is
+collected, reads the layer from a module's fixture and from cases, writes to
+it, and starts a process that follows the environment toward it, and no decoy
+comes back from any of those or is changed by them. A case in it that asks for
+`credential_files` writes and reads a layer of its own, the layer is closed
+again after that case, and inside `file_layer.live()` the decoys answer.
 
-The masking and the closed store cover the live tier too (§5). A drill reads
-its credentials from the kit, never from the ambient environment.
+**Each channel is closed where it is first reached.** A variable can be read
+while a module is being *imported*, before any hook or fixture has run, so the
+environment is stripped when `tests/conftest.py` is imported. A slot is first
+resolved while the test modules are collected, after that import and before
+any fixture, so the file layer is closed in `pytest_configure`, between the
+two. The store is only ever reached from inside a test, so a fixture is early
+enough for it — ordinary work rather than a place where the mechanism has to
+be unusual.
+
+The masking and the closed store cover the live tier too (§5): a drill reads
+its credentials from the kit, never from the ambient environment, and the
+file layer is the one channel opened for it.
 
 ### 1.2 Nothing a case starts outlives it
 
@@ -583,10 +643,12 @@ in sync. The command's `-n 0` overrides the workers `addopts` starts
 output and its live log reach no terminal.
 
 A drill reads its credentials from the same store the command-line entry point
-uses — for the credential drills, `KdbxStore.from_env` on `$KLUSTER_KDBX`. It
-cannot read them from the ambient environment, nor take the kit's master
-password from the desktop secret store: §1.1 masks the one and closes the
-other for the whole process, the live tier included. Pass `-s`, so the
+uses — for the credential drills, `KdbxStore.from_env`, on `$KLUSTER_KDBX` or
+the kit's slot in the checkout. It cannot read them from the ambient
+environment, nor take the kit's master password from the desktop secret store:
+§1.1 masks the one and closes the other for the whole process, the live tier
+included. The file layer is the one channel §1.1 opens for the drills, from
+`tests/live/conftest.py`, because the kit is read through it. Pass `-s`, so the
 password prompt reaches a terminal.
 `--log-cli-level=INFO` is what makes the run a transcript worth pasting.
 

@@ -146,7 +146,7 @@ def slot(root: Path | None = None) -> Path:
     produced by a command, so nothing should go looking for the command that
     produced it.
     """
-    return (workstation.directory() if root is None else root / workstation.DIRECTORY) / SLOT
+    return (workstation.directory() if root is None else workstation.slots(root)) / SLOT
 
 
 def connection_uri(*, host: str, private_key: str, root: Path | None = None) -> str:

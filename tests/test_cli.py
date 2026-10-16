@@ -1061,13 +1061,11 @@ ENVIRONMENT = cli.lifecycle.environment
 
 
 @pytest.fixture
-def chain(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
-    """The acquisition chain moved off the operator's: no store, slots under `tmp_path`, nobody at a terminal."""
-    directory = tmp_path / 'checkout' / '.credentials'
-    monkeypatch.setattr(cli.workstation, 'directory', lambda: directory)
+def chain(credential_files: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+    """The acquisition chain, the case's own: no store, the running checkout's slots under `tmp_path`, nobody at a terminal."""
     monkeypatch.setattr('sys.stdin', io.StringIO())
     with installed(fail_keyring.Keyring()):
-        yield directory
+        yield credential_files
 
 
 def _sync_reading_the_forge_token(

@@ -27,13 +27,12 @@ The acquisition chain (`kluster.lib.acquisition.find`) consults the desktop
 secret store, then a file under the checkout's own `.credentials/`, and only
 then the variable; `workstation` resolves that directory from `__file__`, so
 on an operator workstation the file layer answers with live material without
-the environment being involved at all. Closing those two is not the same
-problem: they are reached at *test* time and never at import, so a fixture
-reaches them where it could not reach this. The store is closed that way, for
-every case, in `tests/conftest.py`; the file layer is not yet, so a suite that
-touches `masters`, `workstation`, `kdbx` or the operator passphrase redirects
-it itself, as `tests/test_masters.py` does with a `tmp_path`. `docs/framework/testing.md` §1.1 is where
-that discipline is written down.
+the environment being involved at all. Each of the other two is closed where
+it is first reached, which is later than this: the file layer while the test
+modules are collected, so `tests/conftest.py` closes it from
+`pytest_configure` (`tests/file_layer.py`), and the store only ever from
+inside a test, so a session-scoped fixture there closes it.
+`docs/framework/testing.md` §1.1 has all three.
 
 This module is a named module rather than part of `conftest`, because test
 modules import from it and `conftest` is not a name an import can aim at.
@@ -77,11 +76,13 @@ BACKEND_VARIABLES = frozenset(
 MASKED = ROOT_VARIABLES | BACKEND_VARIABLES
 
 #: Variables that carry a *path* to credential material rather than the
-#: material itself, and are therefore deliberately left in place: a failing
-#: assertion renders the path, and the tests that need the files behind them
-#: point the path elsewhere instead. Named rather than merely absent so that
-#: `test_root_credentials.py` can hold every key `mise.toml` sets to a
-#: deliberate verdict -- masked, or knowingly not -- rather than to silence.
+#: material itself, and are therefore not masked: a failing assertion renders
+#: the path, which discloses nothing. A path is what a process follows to the
+#: material, though, so the file layer's closure removes these from the test
+#: process instead, reading them from here (`file_layer.close`). Named rather
+#: than merely absent so that `test_root_credentials.py` can hold every key
+#: `mise.toml` sets to a deliberate verdict -- masked, or knowingly not --
+#: rather than to silence.
 UNMASKED_PATHS = frozenset({'PGSSLROOTCERT', 'PGSSLCERT', 'PGSSLKEY', 'KLUSTER_KDBX'})
 
 #: Variables that carry a tool's setting, neither a credential nor a path to
