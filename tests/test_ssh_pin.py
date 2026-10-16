@@ -44,20 +44,22 @@ def _home_reaches_the_client_configuration() -> bool:
     to redden that case is a pinned client picking up a configuration nobody
     named on its command line, and a file this test named is not that.
 
-    Measured rather than inferred from a version string, because it is the
-    property the case needs rather than the version that decides: OpenSSH
-    resolves that default path through the password database on some builds
-    (9.6p1 reads `getpwuid()`'s home directory and ignores `$HOME`) and
-    through `$HOME` on others (10.5p1). Where it is the former, the operator
-    configuration the case turns on could only be supplied by writing the real
-    `~/.ssh/config`, which a test may not do.
+    Measured, because where a client resolves that default path from is a
+    property of the build and of what wraps it: plain OpenSSH can read it from
+    the password database's home directory whatever `$HOME` says, and a
+    wrapper such as a claude-session service's (`ssh -F "$HOME/.ssh/config"`)
+    hands it over from `$HOME`. The probe sets a value no other configuration
+    could supply -- a control path inside its own scratch directory -- so an
+    operator's own `ControlMaster auto` cannot answer for it. Where the answer
+    is no, the configuration the case turns on could only be supplied by
+    writing the real `~/.ssh/config`, which a test may not do.
     """
     if shutil.which('ssh') is None:
         return False
     with tempfile.TemporaryDirectory() as scratch:
         configuration = Path(scratch) / '.ssh' / 'config'
         configuration.parent.mkdir()
-        _ = configuration.write_text('Host *\n  ControlMaster auto\n')
+        _ = configuration.write_text(f'Host *\n  ControlPath {scratch}/probe-%h\n')
         # A user configuration anyone but its owner may write is ignored, so a
         # machine whose umask is 0002 would otherwise answer "no" for a reason
         # that has nothing to do with the question being asked.
@@ -69,7 +71,7 @@ def _home_reaches_the_client_configuration() -> bool:
             timeout=30,
             env=dict(os.environ, HOME=scratch),
         )
-    return 'controlmaster auto' in probed.stdout.lower()
+    return f'controlpath {scratch}/probe-{ADDRESS}' in probed.stdout.splitlines()
 
 
 #: What the appliance's reserved address stands in as. Never resolved: the
@@ -324,6 +326,13 @@ def test_a_multiplexing_master_cannot_carry_the_pinned_exec(tmp_path: Path, pyte
     # reads `LOGNAME` or `USER` first and the account database only where
     # neither is set, so the case does not fail for want of `USER`.
     login = f'{getpass.getuser()}@{ADDRESS}'
+
+    # The client resolves the control path this case wrote, and no other: a
+    # client that read another configuration would make its master wherever
+    # that one says -- outside this case's tree, where the case can neither
+    # see it nor take it down.
+    resolved = _client(['ssh', '-G', login], cwd=sockets, home=home)
+    assert f'controlpath ./mux-{ADDRESS}' in resolved.stdout.splitlines(), resolved.stdout
 
     try:
         # The operator's bare login: trust-on-first-use, against the wrong
