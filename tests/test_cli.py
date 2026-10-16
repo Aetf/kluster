@@ -32,10 +32,10 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
-import keyring.backends.fail
 import pinned_tools
 import pytest
 from credentials_command_tree import commands, named_leaves
+from keyring.backends import fail as fail_keyring
 from memory_keyring import MemoryKeyring, installed
 from memory_kit import MemoryKit
 
@@ -1066,7 +1066,7 @@ def chain(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     directory = tmp_path / 'checkout' / '.credentials'
     monkeypatch.setattr(cli.workstation, 'directory', lambda: directory)
     monkeypatch.setattr('sys.stdin', io.StringIO())
-    with installed(keyring.backends.fail.Keyring()):
+    with installed(fail_keyring.Keyring()):
         yield directory
 
 

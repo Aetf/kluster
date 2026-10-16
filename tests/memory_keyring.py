@@ -17,8 +17,8 @@ from typing import TYPE_CHECKING
 
 import keyring
 import keyring.backend
-import keyring.backends.fail
 import keyring.errors
+from keyring.backends import fail as fail_keyring
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -61,7 +61,7 @@ def installed(backend: keyring.backend.KeyringBackend) -> Generator[keyring.back
     block it is a store that refuses every call: the machine's own backend is
     never resolved, so the end of no block can hand it back.
     """
-    previous = _INSTALLED[-1] if _INSTALLED else keyring.backends.fail.Keyring()
+    previous = _INSTALLED[-1] if _INSTALLED else fail_keyring.Keyring()
     _INSTALLED.append(backend)
     keyring.set_keyring(backend)
     try:

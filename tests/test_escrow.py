@@ -13,12 +13,12 @@ import functools
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-import keyring.backends.fail
 import pinned_tools
 import pytest
 from credentials_command_tree import named_commands
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
+from keyring.backends import fail as fail_keyring
 from memory_keyring import MemoryKeyring, installed
 from memory_kit import MemoryKit
 
@@ -983,7 +983,7 @@ def test_the_operator_passphrase_goes_to_its_slot_on_a_machine_with_no_store(
     kit: KdbxStore, vault: escrow.Vault, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The slot is the chain's file layer: where the value lives when the store is not there to take it."""
-    with installed(keyring.backends.fail.Keyring()):
+    with installed(fail_keyring.Keyring()):
         filed, slot = _recover_the_operator_passphrase(kit, vault, tmp_path, monkeypatch)
 
     assert slot.read_text() == filed + '\n'
