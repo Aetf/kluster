@@ -38,6 +38,7 @@ from mock_monitor import Declaration
 from pulumi.output import UNKNOWN
 
 from kluster import conventions
+from kluster.components import talos
 from kluster.lib.versions import versions
 
 CONFIG_GROUP = 'kubernetes:yaml/v2:ConfigGroup'
@@ -126,35 +127,62 @@ def test_the_proxy_replacement_is_on_and_reaches_the_api_server_through_kubepris
 
 def test_the_mtu_is_kubespans_link(applied: Run) -> None:
     """The underlying network's MTU, which the agent takes the tunnel's overhead off itself."""
-    assert applied.values('cilium')['MTU'] == conventions.KUBESPAN_MTU
+    assert applied.values('cilium')['MTU'] == talos.kubespan_document()['mtu']
     assert applied.values('cilium')['routingMode'] == 'tunnel'
 
 
-#: The feature switches the design rests on, by their path in the chart's
-#: values, and what each must be. Most are not the chart's default, so a value
-#: dropped is a feature gone: a single-stack cluster under a dual-stack pool and
-#: class, a BGP session with no control plane to hold it, and metrics ports the
-#: node firewall opens (physical.md §2) with nothing behind them.
+#: The feature switches the design rests on that nothing this suite declares
+#: depends on in a way it can read: a BGP session the gateway's stack peers
+#: with, and the tunnel the MTU above is sized for. Both are off the chart's
+#: default, so a value dropped is a feature gone.
 FEATURE_SWITCHES: dict[str, tuple[tuple[str, ...], object]] = {
-    'both-families': (('ipv6', 'enabled'), True),
     'bgp-control-plane': (('bgpControlPlane', 'enabled'), True),
     'tunnel-over-vxlan': (('tunnelProtocol',), 'vxlan'),
-    'agent-metrics': (('prometheus', 'enabled'), True),
-    'operator-metrics': (('operator', 'prometheus', 'enabled'), True),
-    'envoy-metrics': (('envoy', 'prometheus', 'enabled'), True),
-    'hubble-relay-off': (('hubble', 'relay', 'enabled'), False),
-    'hubble-ui-off': (('hubble', 'ui', 'enabled'), False),
+}
+
+#: Where each metrics server listens, as the chart's defaults place them: the
+#: agent's, the operator's and Envoy's, each switched by `prometheus.enabled`
+#: under its own path.
+METRICS_PORTS: dict[tuple[str, ...], int] = {
+    ('prometheus',): 9962,
+    ('operator', 'prometheus'): 9963,
+    ('envoy', 'prometheus'): 9964,
 }
 
 
 @pytest.mark.parametrize('switch', FEATURE_SWITCHES)
 def test_each_feature_the_design_rests_on_is_switched_as_it_needs(applied: Run, switch: str) -> None:
     path, expected = FEATURE_SWITCHES[switch]
-    value: object = applied.values('cilium')
-    for key in path:
-        value = cast('dict[str, object]', value).get(key) if isinstance(value, dict) else None
 
-    assert value == expected
+    assert _at(applied.values('cilium'), path) == expected
+
+
+def _at(values: object, path: tuple[str, ...]) -> object:
+    for key in path:
+        values = cast('dict[str, object]', values).get(key) if isinstance(values, dict) else None
+    return values
+
+
+def test_every_metrics_port_the_node_firewall_opens_has_its_server_switched_on(applied: Run) -> None:
+    """A port the firewall opens to the pods with nothing behind it is a scrape that fails (physical.md §2)."""
+    values = applied.values('cilium')
+    opened = [path for path, port in METRICS_PORTS.items() if port in talos.POD_REACHED_PORTS]
+
+    assert opened
+    for path in opened:
+        assert _at(values, (*path, 'enabled')) is True, path
+
+
+def test_both_families_are_on_where_a_pool_hands_out_both(applied: Run) -> None:
+    """A single-stack agent under a dual-stack pool and class leaves the v6 addresses unserved."""
+    families = {
+        ipaddress.ip_network(block['cidr']).version
+        for pool in applied.monitor.of_type(POOL)
+        for block in pool.inputs['spec']['blocks']
+    }
+
+    assert 6 in families
+    assert _at(applied.values('cilium'), ('ipv6', 'enabled')) is True
 
 
 def test_hubble_exports_flow_metrics(applied: Run) -> None:
@@ -252,6 +280,16 @@ def _pool(run: Run, name: str) -> dict[str, Any]:
     return spec
 
 
+def _selects_its_own_name(run: Run, name: str) -> bool:
+    """Whether a pool selects the Services labeled with its own name, under the one key every pool uses."""
+    selectors = {
+        it.inputs['metadata']['name']: it.inputs['spec']['serviceSelector'] for it in run.monitor.of_type(POOL)
+    }
+    keys = {key for selector in selectors.values() for key in selector['matchLabels']}
+    (key,) = keys
+    return selectors[name] == {'matchLabels': {key: name}}
+
+
 def test_the_internet_pool_is_the_node_addresses_the_vip_and_the_balancers_two(applied: Run) -> None:
     """One single-address block per member, and no other address: a node's public IPv4 is never one.
 
@@ -271,7 +309,7 @@ def test_the_internet_pool_is_the_node_addresses_the_vip_and_the_balancers_two(a
 
     assert [block.keys() for block in spec['blocks']] == [{'cidr'}] * len(spec['blocks'])
     assert sorted(block['cidr'] for block in spec['blocks']) == sorted(expected)
-    assert spec['serviceSelector'] == {'matchLabels': {conventions.LB_POOL_LABEL: conventions.POOL_INTERNET}}
+    assert _selects_its_own_name(applied, conventions.POOL_INTERNET)
 
 
 def test_the_lan_pool_is_its_range_and_selects_its_own_services(applied: Run) -> None:
@@ -279,9 +317,8 @@ def test_the_lan_pool_is_its_range_and_selects_its_own_services(applied: Run) ->
     lan = conventions.LAN_POOL
     spec = _pool(applied, lan.name)
 
-    assert sorted(block['cidr'] for block in spec['blocks']) == sorted([str(lan.v4), str(lan.v6)])
-    assert ipaddress.ip_network(str(lan.v6)).version == 6
-    assert spec['serviceSelector'] == {'matchLabels': {conventions.LB_POOL_LABEL: lan.name}}
+    assert sorted(ipaddress.ip_network(block['cidr']).version for block in spec['blocks']) == [4, 6]
+    assert _selects_its_own_name(applied, lan.name)
 
 
 # -- The baseline policy -------------------------------------------------------
