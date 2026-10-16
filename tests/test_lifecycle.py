@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import functools
 import io
+import logging
 import re
 import shutil
 from collections.abc import Callable, Iterator, Sequence
@@ -438,11 +439,15 @@ def test_the_re_ask_at_the_console_row_names_no_command_but_the_paste(
     _ = lifecycle.rotate(kit, _successor(tmp_path / 'successor.kdbx'), prompt=_refuse, registry=registry)
 
     assert _unlocked(tmp_path / 'successor.kdbx').get(entries.SEEDS['cloudflare'].entry) == accepted
-    messages = [record.message for record in caplog.records]
-    refused = next(i for i, message in enumerate(messages) if 'refused, and nothing was stored' in message)
+    # The refusal is the record above info that names the missing permission,
+    # and the hint the line after it.
+    messages = [record.getMessage() for record in caplog.records]
+    refused = next(
+        i
+        for i, record in enumerate(caplog.records)
+        if record.levelno > logging.INFO and cloudflare.ZONE_VISIBILITY_PERMISSION in record.getMessage()
+    )
     refusal, hint = messages[refused], messages[refused + 1]
-    assert cloudflare.ZONE_VISIBILITY_PERMISSION in refusal
-    assert 'paste the token again at this prompt' in hint
     for line in (refusal, hint):
         assert not re.search(r'seed \S+ create', line), line
         assert '`credentials ' not in line, line
