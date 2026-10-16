@@ -18,6 +18,7 @@ credential in the process table of a shared machine.
 
 from __future__ import annotations
 
+import enum
 import json
 import logging
 import re
@@ -49,6 +50,42 @@ class PassphraseMissing(SlotRefused):
     is not in the config" and "this machine cannot read that config at all" send
     an operator to different places.
     """
+
+
+class StackMissing(SlotRefused):
+    """A stack the state backend does not hold, where a slot needs one that is already there."""
+
+    def __init__(self, message: str, *, stack: str) -> None:
+        super().__init__(message)
+        self.stack: str = stack
+
+
+class UnknownOutput(SlotRefused):
+    """A stack output left as Pulumi's unknown sentinel, by an apply restricted by `--target`."""
+
+    def __init__(self, message: str, *, stack: str, output: str) -> None:
+        super().__init__(message)
+        self.stack: str = stack
+        self.output: str = output
+
+
+class ReadBack(enum.Enum):
+    """How a key just written reads back other than as written."""
+
+    #: Stored encrypted, where it was written in the clear: the wrong channel, though it reads back equal.
+    AS_SECRET = enum.auto()
+    #: Read back as another value than the one written.
+    DIFFERENT = enum.auto()
+
+
+class ReadBackRefused(SlotRefused):
+    """A key that does not read back as it was written: `read_back` says how."""
+
+    def __init__(self, message: str, *, stack: str, key: str, read_back: ReadBack) -> None:
+        super().__init__(message)
+        self.stack: str = stack
+        self.key: str = key
+        self.read_back: ReadBack = read_back
 
 
 def run_pulumi(args: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdin: str | None) -> str:
@@ -363,7 +400,12 @@ class Stack:
         log.info('setting %s on the %s stack', key, self.name)
         _ = self._pulumi('config', 'set', key, '--stack', self.name, stdin=value)
         if self.get(key) != value:
-            raise SlotRefused(f'{key} on the {self.name} stack does not read back as what was just written')
+            raise ReadBackRefused(
+                f'{key} on the {self.name} stack does not read back as what was just written',
+                stack=self.name,
+                key=key,
+                read_back=ReadBack.DIFFERENT,
+            )
 
     def set_plain_at(self, path: str, value: str) -> None:
         """Write `value` in the clear at a path inside a structured key, and read it back as written and as plain.
@@ -386,9 +428,19 @@ class Stack:
             raise SlotRefused(f'`pulumi config get --path {path} --json` did not print JSON') from exc
         held = cast('dict[str, object]', entry) if isinstance(entry, dict) else {}
         if held.get('secret') is not False:
-            raise SlotRefused(f'{path} on the {self.name} stack is not stored in the clear after being written so')
+            raise ReadBackRefused(
+                f'{path} on the {self.name} stack is not stored in the clear after being written so',
+                stack=self.name,
+                key=path,
+                read_back=ReadBack.AS_SECRET,
+            )
         if held.get('value') != value:
-            raise SlotRefused(f'{path} on the {self.name} stack does not read back as what was just written')
+            raise ReadBackRefused(
+                f'{path} on the {self.name} stack does not read back as what was just written',
+                stack=self.name,
+                key=path,
+                read_back=ReadBack.DIFFERENT,
+            )
 
     def set_secret(self, key: str, value: str) -> None:
         """Write a secret key, and read it back to prove the slot holds it.

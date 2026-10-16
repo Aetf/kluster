@@ -81,6 +81,7 @@ creates either in a console. The installation's other automation installs them
 from __future__ import annotations
 
 import base64
+import enum
 import getpass
 import hashlib
 import logging
@@ -106,6 +107,85 @@ Prompt = Callable[[str], str]
 #: The path that means standard input, so a value can be piped in from another
 #: tool. A name rather than `/dev/stdin`, which is not a file everywhere.
 STDIN = '-'
+
+
+class Answer(enum.Enum):
+    """Why a field's value was refused before anything was pushed."""
+
+    #: Asked for and left blank.
+    BLANK = enum.auto()
+    #: Handed in through a file or standard input that came through empty.
+    EMPTY = enum.auto()
+    #: A value of several lines offered at a terminal, which would echo it.
+    AT_TERMINAL = enum.auto()
+
+
+class FieldRefused(KdbxError):
+    """One field of a row refused before anything is pushed: `field` is its name, `answer` why."""
+
+    def __init__(self, message: str, *, title: str, field: str, answer: Answer) -> None:
+        super().__init__(message)
+        self.title: str = title
+        self.field: str = field
+        self.answer: Answer = answer
+
+
+class UnknownFields(KdbxError):
+    """Values handed in under names no field of the row has."""
+
+    def __init__(self, message: str, *, title: str, names: tuple[str, ...]) -> None:
+        super().__init__(message)
+        self.title: str = title
+        self.names: tuple[str, ...] = names
+
+
+class NoSingleSecret(KdbxError):
+    """A row asked for the one credential it authenticates as, which holds some other number of secrets."""
+
+    def __init__(self, message: str, *, title: str, secrets: tuple[str, ...]) -> None:
+        super().__init__(message)
+        self.title: str = title
+        self.secrets: tuple[str, ...] = secrets
+
+
+class Missing(enum.Enum):
+    """How a recorded value is missing from the stack that should hold it."""
+
+    #: The key is not in the stack's configuration.
+    ABSENT = enum.auto()
+    #: The key decrypts to an empty value.
+    EMPTY = enum.auto()
+
+
+class RecordMissing(pulumi_config.SlotRefused):
+    """A row's value read back from its stack and not there: `record` is the leaf that puts it there."""
+
+    def __init__(self, message: str, *, stack: str, key: str, missing: Missing, record: tuple[str, str, str]) -> None:
+        super().__init__(message)
+        self.stack: str = stack
+        self.key: str = key
+        self.missing: Missing = missing
+        self.record: tuple[str, str, str] = record
+
+
+class KeyNotPublished(pulumi_config.SlotRefused):
+    """A private key whose public half is not the one the mail zones publish, refused before it is sealed.
+
+    Both digests are of public keys, so they are fields; nothing of the
+    private key is.
+    """
+
+    def __init__(self, message: str, *, key: str, digest: str, published: str) -> None:
+        super().__init__(message)
+        self.key: str = key
+        self.digest: str = digest
+        self.published: str = published
+
+
+def _record_leaf(member: str) -> tuple[str, str, str]:
+    """The `credentials derived <member> record` leaf, as the CLI dispatches on it."""
+    return ('derived', member, 'record')
+
 
 #: The stacks that read these credentials, named from the module that already
 #: names them so a device and a mint cannot disagree about where `physical`
@@ -180,9 +260,12 @@ class Field:
         """Ask the operator for it, never echoing a secret."""
         if self.multiline:
             if sys.stdin.isatty():
-                raise KdbxError(
+                raise FieldRefused(
                     f'{title}: {self.describes} is several lines, so it is piped in or named with {self.flag}, '
-                    'never typed at a terminal that would echo it'
+                    'never typed at a terminal that would echo it',
+                    title=title,
+                    field=self.name,
+                    answer=Answer.AT_TERMINAL,
                 )
             value = sys.stdin.read().strip()
         elif self.secret:
@@ -190,7 +273,9 @@ class Field:
         else:
             value = prompt(f'{title} — {self.describes}: ').strip()
         if not value:
-            raise KdbxError(f'{title}: {self.describes} is required')
+            raise FieldRefused(
+                f'{title}: {self.describes} is required', title=title, field=self.name, answer=Answer.BLANK
+            )
         return value
 
     def resolve(self, given: str | None, *, prompt: Prompt, title: str) -> str:
@@ -212,7 +297,12 @@ class Field:
         else:
             value = Path(given).expanduser().read_text().strip()
         if not value:
-            raise KdbxError(f'{title}: {self.describes} came through empty, so there is nothing to deliver')
+            raise FieldRefused(
+                f'{title}: {self.describes} came through empty, so there is nothing to deliver',
+                title=title,
+                field=self.name,
+                answer=Answer.EMPTY,
+            )
         return value
 
 
@@ -402,7 +492,7 @@ def _collect(
     handed = given or {}
     unknown = sorted(set(handed) - {field.name for field in fields})
     if unknown:
-        raise KdbxError(f'{title} has no field named {", ".join(unknown)}')
+        raise UnknownFields(f'{title} has no field named {", ".join(unknown)}', title=title, names=tuple(unknown))
     return {field: field.resolve(handed.get(field.name), prompt=prompt, title=title) for field in fields}
 
 
@@ -469,14 +559,22 @@ def seal(device: Device, *, stack: pulumi_config.Stack, sealer: sealing.Sealer) 
         except pulumi_config.PassphraseMissing:
             raise
         except pulumi_config.SlotRefused as exc:
-            raise pulumi_config.SlotRefused(
+            raise RecordMissing(
                 f"{device.title} is not in the {device.stack} stack's configuration: "
-                f'`credentials derived {device.member} record` is what puts it there ({exc})'
+                f'`credentials derived {device.member} record` is what puts it there ({exc})',
+                stack=device.stack,
+                key=field.key,
+                missing=Missing.ABSENT,
+                record=_record_leaf(device.member),
             ) from exc
         if not value:
-            raise pulumi_config.SlotRefused(
+            raise RecordMissing(
                 f'{device.title} decrypts to an empty value in the {device.stack} stack; '
-                f're-run `credentials derived {device.member} record`'
+                f're-run `credentials derived {device.member} record`',
+                stack=device.stack,
+                key=field.key,
+                missing=Missing.EMPTY,
+                record=_record_leaf(device.member),
             )
         values[field.name] = value
     sealer.deliver(device.sealed, values)
@@ -539,9 +637,12 @@ def matches_published_dkim(published: str, *, key: str) -> Callable[[Mapping[str
         )
         actual = _spki_digest(der)
         if actual != expected:
-            raise pulumi_config.SlotRefused(
+            raise KeyNotPublished(
                 f"{key}'s public key has the digest {actual}, and the one the mail zones publish has {expected}: "
-                'it is not the key they publish, so it was not sealed'
+                'it is not the key they publish, so it was not sealed',
+                key=key,
+                digest=actual,
+                published=expected,
             )
 
     return verify
@@ -649,7 +750,11 @@ def borrow(device: Device, *, stack: pulumi_config.Stack) -> str:
     """
     secrets = [field for field in device.fields if field.secret]
     if len(secrets) != 1:
-        raise KdbxError(f'{device.title} is {len(secrets)} secrets, so there is no single value to authenticate with')
+        raise NoSingleSecret(
+            f'{device.title} is {len(secrets)} secrets, so there is no single value to authenticate with',
+            title=device.title,
+            secrets=tuple(field.name for field in secrets),
+        )
     try:
         value = stack.get(secrets[0].key).strip()
     except pulumi_config.PassphraseMissing:
@@ -657,14 +762,22 @@ def borrow(device: Device, *, stack: pulumi_config.Stack) -> str:
         # decrypt that stack at all, and the refusal already says what to run.
         raise
     except pulumi_config.SlotRefused as exc:
-        raise pulumi_config.SlotRefused(
+        raise RecordMissing(
             f"{device.title} is not in the {device.stack} stack's configuration: "
-            f'`credentials derived {device.member} record` is what puts it there ({exc})'
+            f'`credentials derived {device.member} record` is what puts it there ({exc})',
+            stack=device.stack,
+            key=secrets[0].key,
+            missing=Missing.ABSENT,
+            record=_record_leaf(device.member),
         ) from exc
     if not value:
-        raise pulumi_config.SlotRefused(
+        raise RecordMissing(
             f'{device.title} decrypts to an empty value in the {device.stack} stack; '
-            f're-run `credentials derived {device.member} record`'
+            f're-run `credentials derived {device.member} record`',
+            stack=device.stack,
+            key=secrets[0].key,
+            missing=Missing.EMPTY,
+            record=_record_leaf(device.member),
         )
     return value
 
@@ -675,9 +788,16 @@ __all__ = (
     'GITHUB_ADMIN',
     'SEALED_RECORDS',
     'STDIN',
+    'Answer',
     'Device',
     'Field',
+    'FieldRefused',
+    'KeyNotPublished',
+    'Missing',
+    'NoSingleSecret',
+    'RecordMissing',
     'SealedRecord',
+    'UnknownFields',
     'announce',
     'borrow',
     'deliver',

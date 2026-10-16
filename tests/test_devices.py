@@ -23,7 +23,6 @@ from fake_pulumi import RecordedPulumi
 
 from kluster import conventions
 from kluster.scripts.credentials import devices, escrow, pulumi_config
-from kluster.scripts.credentials.kdbx import KdbxError
 
 UNIFI = devices.DEVICES['unifi']
 ADGUARD = devices.DEVICES['adguard']
@@ -258,8 +257,9 @@ def test_an_answer_left_blank_is_refused_and_nothing_is_pushed(monkeypatch: pyte
     slot, runner = stack(ADGUARD.stack)
     monkeypatch.setattr('getpass.getpass', lambda _prompt='': '   ')
 
-    with pytest.raises(KdbxError, match='is required'):
+    with pytest.raises(devices.FieldRefused) as refused:
         _ = devices.deliver(ADGUARD, stack=slot)
+    assert refused.value.answer is devices.Answer.BLANK
 
     # Every value is collected before the first one is pushed, so a run
     # abandoned at a prompt leaves the stack as it was rather than half filled.
@@ -275,11 +275,11 @@ def test_a_file_whose_producer_failed_is_refused_by_name(tmp_path: Path, typed: 
     # delivered as an empty string fails much later, in a stack nobody is
     # watching.
     (field,) = UNIFI.fields
-    with pytest.raises(KdbxError, match='came through empty') as refused:
+    with pytest.raises(devices.FieldRefused) as refused:
         _ = devices.deliver(UNIFI, stack=slot, given={field.name: str(empty)})
 
-    assert UNIFI.title in str(refused.value)
-    assert field.describes in str(refused.value)
+    assert refused.value.answer is devices.Answer.EMPTY
+    assert (refused.value.title, refused.value.field) == (UNIFI.title, field.name)
 
 
 def test_a_value_handed_in_under_a_name_no_field_has_is_refused() -> None:
@@ -287,8 +287,9 @@ def test_a_value_handed_in_under_a_name_no_field_has_is_refused() -> None:
 
     # Dropping it silently turns a scripted run into an interactive one, at
     # exactly the prompt the caller meant to answer.
-    with pytest.raises(KdbxError, match='no field named apikey'):
+    with pytest.raises(devices.UnknownFields) as refused:
         _ = devices.deliver(UNIFI, stack=slot, given={'apikey': 'a-value'})
+    assert refused.value.names == ('apikey',)
 
 
 def test_the_delivery_names_the_file_to_commit(typed: None, caplog: pytest.LogCaptureFixture) -> None:
@@ -370,8 +371,10 @@ def test_a_row_that_reads_back_empty_is_refused_rather_than_handed_on() -> None:
     slot, runner = stack(GITHUB_ADMIN.stack)
     runner.config[GITHUB_ADMIN.fields[0].key] = '  '
 
-    with pytest.raises(pulumi_config.SlotRefused, match='empty'):
+    with pytest.raises(devices.RecordMissing) as refused:
         _ = devices.borrow(GITHUB_ADMIN, stack=slot)
+    assert refused.value.missing is devices.Missing.EMPTY
+    assert refused.value.key == GITHUB_ADMIN.fields[0].key
 
 
 def test_a_row_of_several_secrets_has_no_single_value_to_authenticate_with() -> None:
@@ -383,8 +386,9 @@ def test_a_row_of_several_secrets_has_no_single_value_to_authenticate_with() -> 
     """
     slot, _ = stack(ADGUARD.stack)
 
-    with pytest.raises(KdbxError, match='no single value'):
+    with pytest.raises(devices.NoSingleSecret) as refused:
         _ = devices.borrow(ADGUARD, stack=slot)
+    assert set(refused.value.secrets) == {field.name for field in ADGUARD.fields if field.secret}
 
 
 def test_a_stack_encrypted_apart_refuses_on_a_machine_that_holds_no_passphrase_for_it() -> None:

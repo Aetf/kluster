@@ -47,7 +47,7 @@ from scratch_projects import cli_directories
 
 from kluster import conventions
 from kluster.scripts.credentials import cloudflare, derived, devices, pulumi_config, sealing
-from kluster.scripts.credentials.kdbx import KdbxError, KdbxStore
+from kluster.scripts.credentials.kdbx import KdbxStore
 from kluster.scripts.credentials.pulumi_config import SlotRefused
 from kluster.stacks import physical
 
@@ -275,12 +275,12 @@ def test_the_ciphertext_is_written_in_the_clear_at_its_rows_path_in_its_rows_sta
 
 
 @pytest.mark.parametrize(
-    ('misreports', 'refusal'),
-    [('secret', 'not stored in the clear'), ('value', 'does not read back')],
+    ('misreports', 'read_back'),
+    [('secret', pulumi_config.ReadBack.AS_SECRET), ('value', pulumi_config.ReadBack.DIFFERENT)],
     ids=['stored as a secret', 'another value'],
 )
 def test_a_write_that_does_not_read_back_as_written_and_as_plain_is_refused(
-    stacks: Stacks, misreports: Literal['secret', 'value'], refusal: str
+    stacks: Stacks, misreports: Literal['secret', 'value'], read_back: pulumi_config.ReadBack
 ) -> None:
     # The write's own check: a sealed value is read without decryption, so one
     # stored as a secret is in the wrong channel even though it reads back
@@ -288,8 +288,10 @@ def test_a_write_that_does_not_read_back_as_written_and_as_plain_is_refused(
     stacks.runner(K8S_BASE).misreports = misreports
     sealer = sealing.Sealer(certificate='', open_stack=stacks.open, run=fake_kubeseal)
 
-    with pytest.raises(SlotRefused, match=refusal):
+    with pytest.raises(pulumi_config.ReadBackRefused) as refused:
         sealer.deliver(conventions.sealed.BGP_PASSWORD, {'password': 'a-password'})
+    assert refused.value.read_back is read_back
+    assert refused.value.stack == K8S_BASE
 
 
 def test_a_seal_into_a_stack_that_does_not_exist_is_refused_before_anything_is_sealed(stacks: Stacks) -> None:
@@ -302,8 +304,9 @@ def test_a_seal_into_a_stack_that_does_not_exist_is_refused_before_anything_is_s
     stacks.runner(K8S_BASE).stacks.clear()
     sealer = sealing.Sealer(certificate='', open_stack=stacks.open, run=recording)
 
-    with pytest.raises(SlotRefused, match='does not exist'):
+    with pytest.raises(pulumi_config.StackMissing) as refused:
         _ = sealer.stack(conventions.sealed.DNS01_TOKEN)
+    assert refused.value.stack == K8S_BASE
     assert stacks.runner(K8S_BASE).stacks == []
     assert sealed == []
 
@@ -377,9 +380,10 @@ def test_a_physical_stack_that_exports_no_kubeconfig_has_no_cluster(stacks: Stac
 def test_a_kubeconfig_left_as_the_unknown_sentinel_is_refused_by_name(stacks: Stacks) -> None:
     stacks.runner(PHYSICAL).outputs[conventions.PHYSICAL_OUTPUTS.kubeconfig] = rpc.UNKNOWN
 
-    with pytest.raises(SlotRefused, match='unknown sentinel') as refused:
+    with pytest.raises(pulumi_config.UnknownOutput) as refused:
         _ = sealing.cluster_kubeconfig(stacks.open(PHYSICAL))
     assert not isinstance(refused.value, sealing.NoCluster)
+    assert (refused.value.stack, refused.value.output) == (PHYSICAL, conventions.PHYSICAL_OUTPUTS.kubeconfig)
 
 
 def test_the_certificate_is_fetched_from_the_controller_the_conventions_name_with_physicals_kubeconfig(
@@ -472,7 +476,7 @@ def test_the_dns01_mint_refuses_a_scope_with_no_zone_before_anything_is_minted(
 ) -> None:
     monkeypatch.setattr(conventions.routes, 'served_zones', lambda: ())
 
-    with pytest.raises(SlotRefused, match='serves no zone'):
+    with pytest.raises(derived.NoZoneServed):
         _ = derived.cloudflare_dns01(kit, sealer=sealer)
     assert _dns01_live(api) == []
     assert written(stacks, conventions.sealed.DNS01_TOKEN) == {}
@@ -483,8 +487,9 @@ def test_the_dns01_mint_refuses_a_missing_declaring_stack_before_anything_is_min
 ) -> None:
     stacks.runner(K8S_BASE).stacks.clear()
 
-    with pytest.raises(SlotRefused, match='does not exist'):
+    with pytest.raises(pulumi_config.StackMissing) as refused:
         _ = derived.cloudflare_dns01(kit, sealer=sealer)
+    assert refused.value.stack == K8S_BASE
     assert _dns01_live(api) == []
 
 
@@ -558,8 +563,9 @@ def test_a_record_whose_declaring_stack_does_not_exist_writes_neither_end(
     _ = secret.write_text('a-drawn-password\n')
     stacks.runner(K8S_BASE).stacks.clear()
 
-    with pytest.raises(SlotRefused, match='does not exist'):
+    with pytest.raises(pulumi_config.StackMissing) as refused:
         _ = devices.deliver(BGP, stack=stacks.open(BGP.stack), given={'password': str(secret)}, sealer=sealer)
+    assert refused.value.stack == K8S_BASE
     # Refused before the gateway's end is written, for the reason a refused
     # seal is: the two ends are one value.
     assert stacks.runner(PHYSICAL).config == {}
@@ -579,8 +585,10 @@ def test_seal_writes_the_worker_s_copy_of_what_the_gateway_s_stack_holds(
 def test_seal_before_the_password_is_recorded_names_the_command_that_records_it(
     stacks: Stacks, sealer: sealing.Sealer
 ) -> None:
-    with pytest.raises(SlotRefused, match='is what puts it there') as refused:
+    with pytest.raises(devices.RecordMissing) as refused:
         devices.seal(BGP, stack=stacks.open(BGP.stack), sealer=sealer)
+    assert refused.value.missing is devices.Missing.ABSENT
+    assert refused.value.record in named_leaves(str(refused.value))
     assert ('derived', devices.BGP, 'record') in named_leaves(str(refused.value))
     assert written(stacks, conventions.sealed.BGP_PASSWORD) == {}
 
@@ -687,7 +695,7 @@ def test_a_dkim_key_the_mail_zones_do_not_publish_is_refused_before_anything_is_
 
     with (
         caplog.at_level(logging.DEBUG),
-        pytest.raises(SlotRefused, match='not the key they publish, so it was not sealed') as refused,
+        pytest.raises(devices.KeyNotPublished) as refused,
     ):
         devices.record_sealed(DKIM, sealer=sealer, given={'key': str(key)})
 
@@ -755,8 +763,9 @@ def test_the_dkim_key_is_sealed_at_its_path_for_exims_secret_and_read_back(
     assert unseal(kubeseal, key_pair, value, written(stacks, value)) == {'tls.key': pem.strip()}
 
     apps.misreports = 'value'
-    with pytest.raises(SlotRefused, match='does not read back'):
+    with pytest.raises(pulumi_config.ReadBackRefused) as refused:
         devices.record_sealed(_published_as(txt), sealer=sealer, given={'key': str(key)})
+    assert refused.value.read_back is pulumi_config.ReadBack.DIFFERENT
 
 
 @pytest.mark.parametrize('given', [None, devices.STDIN], ids=['no flag', '--key-file -'])
@@ -771,5 +780,6 @@ def test_a_dkim_key_is_never_taken_at_a_terminal(
 
     monkeypatch.setattr('sys.stdin', Terminal('-----BEGIN PRIVATE KEY-----\n'))
 
-    with pytest.raises(KdbxError, match='never typed at a terminal'):
+    with pytest.raises(devices.FieldRefused) as refused:
         devices.record_sealed(DKIM, sealer=sealer, given={'key': given})
+    assert refused.value.answer is devices.Answer.AT_TERMINAL

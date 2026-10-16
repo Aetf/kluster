@@ -86,6 +86,11 @@ from .kdbx import KdbxStore
 
 log = logging.getLogger(__name__)
 
+
+class NoZoneServed(pulumi_config.SlotRefused):
+    """The route census serves no zone, so a token scoped to the served zones would be scoped to nothing."""
+
+
 #: The stack that manages the installation's DNS records: the zones token's own
 #: stack, which the row's first mint creates. The token is delivered into every
 #: stack the slot map's zones row names, and this is the one of them that may
@@ -418,7 +423,7 @@ def cloudflare_dns01(kit: KdbxStore, *, sealer: sealing.Sealer, seed_entry: str 
     value = conventions.sealed.DNS01_TOKEN
     zones = conventions.routes.served_zones()
     if not zones:
-        raise pulumi_config.SlotRefused(
+        raise NoZoneServed(
             f'the cluster serves no zone, so the {DNS01_ROW} token would be scoped to nothing; '
             'the primary zone is served by definition, so the route census or its derivation is broken'
         )
