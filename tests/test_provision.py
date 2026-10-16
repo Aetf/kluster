@@ -69,15 +69,44 @@ def test_a_manifest_without_a_digest_header_is_refused(monkeypatch: pytest.Monke
     """
     _registry(monkeypatch, _Answer(body={'token': 'a-pull-token'}), _Answer(headers={}))
 
-    with pytest.raises(RuntimeError, match='without a Docker-Content-Digest header'):
+    with pytest.raises(provision.DigestMissing) as refused:
         _ = provision._image_digest('docker.io/library/postgres', '17')  # pyright: ignore[reportPrivateUsage]
+
+    assert refused.value.image == 'docker.io/library/postgres:17'
 
 
 def test_a_token_response_without_a_token_names_the_repository(monkeypatch: pytest.MonkeyPatch) -> None:
     _registry(monkeypatch, _Answer(body={'errors': ['nope']}))
 
-    with pytest.raises(RuntimeError, match='the registry pull token for library/postgres has no token'):
+    with pytest.raises(provision.DocumentIncomplete) as refused:
         _ = provision._image_digest('docker.io/library/postgres', '17')  # pyright: ignore[reportPrivateUsage]
+
+    assert refused.value.missing == 'token'
+    assert 'library/postgres' in refused.value.what
+
+
+def test_a_stream_that_stops_publishing_the_platform_is_refused_at_the_step_that_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fedora's stream metadata is another project's document: a platform it drops is named, not a `KeyError`.
+
+    The descent stops at the first key the document does not hold, so the
+    refusal says which step of the path failed rather than that the whole
+    path is absent.
+    """
+    path = provision._ARTIFACT_PATH  # pyright: ignore[reportPrivateUsage]
+    stream: dict[str, object] = {}
+    level = stream
+    for step in path[:-1]:
+        level[step] = {}
+        level = cast('dict[str, object]', level[step])
+    _registry(monkeypatch, _Answer(body=stream))
+
+    with pytest.raises(provision.DocumentIncomplete) as refused:
+        _ = provision.fcos_artifact()
+
+    assert refused.value.path == path
+    assert refused.value.missing == path[-1]
 
 
 def test_a_resolved_manifest_answers_its_digest(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -90,7 +119,7 @@ def test_a_resolved_manifest_answers_its_digest(monkeypatch: pytest.MonkeyPatch)
     assert provision._image_digest('docker.io/library/postgres', '17') == 'sha256:abc'  # pyright: ignore[reportPrivateUsage]
 
 
-def _resolving(monkeypatch: pytest.MonkeyPatch, answers: dict[str, str | urllib.error.HTTPError]) -> list[str]:
+def _resolving(monkeypatch: pytest.MonkeyPatch, answers: dict[str, str | Exception]) -> list[str]:
     """`_image_digest` answering each reference from `answers`; returns the references asked, in order."""
     asked: list[str] = []
 
@@ -98,7 +127,7 @@ def _resolving(monkeypatch: pytest.MonkeyPatch, answers: dict[str, str | urllib.
         assert repository == settings.POSTGRES_REPOSITORY
         asked.append(reference)
         answer = answers[reference]
-        if isinstance(answer, urllib.error.HTTPError):
+        if isinstance(answer, Exception):
             raise answer
         return answer
 
@@ -118,6 +147,23 @@ def test_a_pinned_digest_the_registry_serves_passes_though_the_tag_has_moved(mon
 def test_a_pinned_digest_the_registry_does_not_serve_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     missing = urllib.error.HTTPError('https://registry-1.docker.io', 404, 'manifest unknown', Message(), None)
     _ = _resolving(monkeypatch, {settings.POSTGRES_DIGEST: missing, settings.POSTGRES_TAG: settings.POSTGRES_DIGEST})
+
+    assert not provision._postgres_pin_ok()  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.parametrize(
+    'refusal',
+    [
+        provision.DigestMissing('no digest', image=settings.POSTGRES_IMAGE),
+        provision.DocumentIncomplete('no token', what='the token', path=('token',), missing='token'),
+    ],
+    ids=['no-digest', 'no-token'],
+)
+def test_a_registry_answer_that_resolves_nothing_fails_the_pin(
+    monkeypatch: pytest.MonkeyPatch, refusal: Exception
+) -> None:
+    """`pins` reports the pin as failed and goes on to the others, rather than ending the run there."""
+    _ = _resolving(monkeypatch, {settings.POSTGRES_DIGEST: refusal, settings.POSTGRES_TAG: settings.POSTGRES_DIGEST})
 
     assert not provision._postgres_pin_ok()  # pyright: ignore[reportPrivateUsage]
 
