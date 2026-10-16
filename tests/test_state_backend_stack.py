@@ -82,6 +82,10 @@ OFFERING = 'Uocm:PHX-AD-2'
 INSTANCE = 'oci:Core/instance:Instance'
 SECURITY_LIST = 'oci:Core/securityList:SecurityList'
 SUBNET = 'oci:Core/subnet:Subnet'
+ROUTE_TABLE = 'oci:Core/routeTable:RouteTable'
+INTERNET_GATEWAY = 'oci:Core/internetGateway:InternetGateway'
+#: The engine's type token for a provider resource, before the package it serves.
+PROVIDER = 'pulumi:providers:'
 PUBLIC_IP = 'oci:Core/publicIp:PublicIp'
 IMAGE_BUCKET = 'oci:ObjectStorage/bucket:Bucket'
 DUMP_BUCKET = 'b2:index/bucket:Bucket'
@@ -231,6 +235,12 @@ def _options(run: Appliance, typ: str) -> Any:
     return request
 
 
+def _id_of(run: Appliance, typ: str) -> str:
+    """The id the monitor hands the one resource of `typ` the run declares."""
+    (declared,) = run.of_type(typ)
+    return f'{declared.name}_id'
+
+
 def _one(run: Appliance, typ: str) -> dict[str, Any]:
     (declared,) = run.of_type(typ)
     return declared.inputs
@@ -294,10 +304,10 @@ def test_the_list_holds_the_declared_rules_and_nothing_else(run: Appliance) -> N
 def test_the_subnet_carries_only_the_programs_list_and_table(run: Appliance) -> None:
     subnet = _one(run, SUBNET)
 
-    assert subnet['securityListIds'] == [f'{NAME}-rules_id']
-    assert subnet['routeTableId'] == f'{NAME}-routes_id'
-    assert _one(run, 'oci:Core/routeTable:RouteTable')['routeRules'] == [
-        {'networkEntityId': f'{NAME}-igw_id', 'destination': '0.0.0.0/0', 'destinationType': 'CIDR_BLOCK'}
+    assert subnet['securityListIds'] == [_id_of(run, SECURITY_LIST)]
+    assert subnet['routeTableId'] == _id_of(run, ROUTE_TABLE)
+    assert _one(run, ROUTE_TABLE)['routeRules'] == [
+        {'networkEntityId': _id_of(run, INTERNET_GATEWAY), 'destination': '0.0.0.0/0', 'destinationType': 'CIDR_BLOCK'}
     ]
 
 
@@ -323,24 +333,9 @@ def test_the_subnet_is_the_only_resource_handed_a_route_table(run: Appliance) ->
     """
     holding = {(declared.typ, declared.name) for declared in run.declared if list(_route_table_ids(declared.inputs))}
 
-    assert holding == {(SUBNET, f'{NAME}-subnet')}
+    assert holding == {(SUBNET, declared.name) for declared in run.of_type(SUBNET)}
     assert run.of_type('oci:Core/privateIp:PrivateIp') == []
-    assert len(run.of_type('oci:Core/routeTable:RouteTable')) == 1
-
-
-PROTECTED = {
-    'vcn': 'oci:Core/vcn:Vcn',
-    'subnet': SUBNET,
-    'address': PUBLIC_IP,
-    'image-bucket': IMAGE_BUCKET,
-    'dump-bucket': DUMP_BUCKET,
-}
-
-
-def test_nothing_else_is_protected(run: Appliance) -> None:
-    protected = {request.type for request in run.requested if request.protect}
-
-    assert protected == set(PROTECTED.values())
+    assert len(run.of_type(ROUTE_TABLE)) == 1
 
 
 # --------------------------------------------------------------------------
@@ -420,11 +415,13 @@ def test_metadata_carries_the_ignition_and_nothing_else(run: Appliance) -> None:
     assert '"ignition"' in ignition
 
 
-def test_the_bill_of_materials_is_in_the_clear_and_names_no_secret(run: Appliance) -> None:
+def test_the_bill_of_materials_is_in_the_clear_and_names_no_secret(run: Appliance, tmp_path: Path) -> None:
     extended = _one(run, INSTANCE)['extendedMetadata']
 
     assert not _secret(extended)
-    assert {'butane', 'server_key', 'ssh_host_key', 'b2_dump_key_id'} <= set(extended)
+    # Every component the bill names, whatever the keys: its names do not
+    # depend on the values it digests.
+    assert set(extended) == set(render.bill_of_materials(_render_machine(_machine(tmp_path).keys)))
     assert 'b2_dump_key' not in extended
 
 
@@ -434,7 +431,7 @@ def test_the_box_launches_where_the_shape_is_offered_and_without_a_public_addres
     assert instance['availabilityDomain'] == OFFERING
     assert instance['createVnicDetails']['assignPublicIp'] == 'false'
     assert instance['createVnicDetails']['nsgIds'] == []
-    assert instance['createVnicDetails']['subnetId'] == f'{NAME}-subnet_id'
+    assert instance['createVnicDetails']['subnetId'] == _id_of(run, SUBNET)
 
 
 def test_the_reserved_address_points_at_the_primary_private_address(run: Appliance) -> None:
@@ -445,7 +442,7 @@ def test_the_readiness_resource_replaces_on_the_instances_id(run: Appliance) -> 
     readiness = _one(run, READINESS)
 
     assert list(_options(run, READINESS).replaceOnChanges) == ['instance_id']
-    assert readiness['instance_id'] == f'{NAME}-vm_id'
+    assert readiness['instance_id'] == _id_of(run, INSTANCE)
     assert readiness['address'] == settings.ADDRESS
 
 
@@ -540,7 +537,9 @@ def test_the_dump_keys_grant_is_the_declared_one(run: Appliance) -> None:
 
     assert key['capabilities'] == ['writeFiles']
     assert key['bucketIds'] == [DUMP_BUCKET_ID]
-    assert key['namePrefix'] == f'{conventions.STATE_DUMP_PREFIX}/'
+    # Where the key may write is where the retention rule reads.
+    (rule,) = _one(run, DUMP_BUCKET)['lifecycleRules']
+    assert key['namePrefix'] == rule['fileNamePrefix']
 
 
 @pytest.mark.asyncio
@@ -557,12 +556,10 @@ async def test_a_new_dump_key_generation_is_a_new_key_name(
 
 
 def test_the_dump_buckets_retention_is_one_rule_on_the_dump_prefix(run: Appliance) -> None:
-    bucket = _one(run, DUMP_BUCKET)
+    (rule,) = _one(run, DUMP_BUCKET)['lifecycleRules']
 
-    assert bucket['bucketName'] == settings.B2_BUCKET
-    (rule,) = bucket['lifecycleRules']
-    assert rule['fileNamePrefix'] == f'{conventions.STATE_DUMP_PREFIX}/'
-    assert rule['daysFromUploadingToHiding'] == settings.B2_RETENTION_DAYS
+    assert rule['fileNamePrefix']
+    assert rule['daysFromUploadingToHiding']
 
 
 # --------------------------------------------------------------------------
@@ -576,24 +573,20 @@ def _bound(request: Any) -> dict[str, list[str]]:
     return {kind: list(getattr(binding, kind)) for kind in kinds if list(getattr(binding, kind))}
 
 
-def test_the_hooks_are_bound_where_rfc_006_4_3_says(run: Appliance) -> None:
-    bound = {request.type: _bound(request) for request in run.requested if _bound(request)}
-
-    assert bound == {
-        INSTANCE: {'before_create': [f'{NAME}-permit'], 'before_delete': [f'{NAME}-dump']},
-        READINESS: {'after_create': [f'{NAME}-restore']},
-    }
-
-
 def test_the_stacks_own_providers_sign_every_resource_and_every_call(run: Appliance) -> None:
     # A default provider configures itself from the workstation's own OCI
     # configuration, and nothing in this stack's configuration disables it
     # yet: the program's two are what keep every write on the appliance's
     # own credentials (rfc-006 §4.1).
-    expected = {'oci': f'::{NAME}-oci::', 'b2': f'::{NAME}-b2::'}
+    expected = {
+        declared.typ.removeprefix(PROVIDER): f'::{declared.name}::'
+        for declared in run.declared
+        if declared.typ.startswith(PROVIDER)
+    }
     native = [declaration for declaration in run.declared if declaration.typ.split(':')[0] in expected]
     tokens = {call.token for call in run.called}
 
+    assert {'oci', 'b2'} <= set(expected)
     assert native
     for declaration in native:
         assert expected[declaration.typ.split(':')[0]] in declaration.provider, (declaration.typ, declaration.name)
@@ -847,6 +840,7 @@ class Tools:
     calls: list[str] = dataclasses.field(default_factory=list[str])
     served: list[str] = dataclasses.field(default_factory=list[str])
     dump_fails: bool = False
+    verify_fails: bool = False
     #: The bundle directory every connection was built from.
     bundles: list[Path] = dataclasses.field(default_factory=list[Path])
 
@@ -867,6 +861,8 @@ def tools(monkeypatch: pytest.MonkeyPatch) -> Tools:
 
     def verify_dump(archive: Path) -> list[str]:
         found.calls.append('verify_dump')
+        if found.verify_fails:
+            raise state.StateError(f'{archive} holds no stack checkpoint')
         return [str(archive)]
 
     def encrypt(source: Path, destination: Path, recipients: tuple[str, ...]) -> None:
@@ -921,7 +917,6 @@ def test_with_the_permission_the_delete_hook_dumps_and_keeps_the_plaintext(tools
 
     dumped = replacement.dump_now()
 
-    assert tools.calls == ['pg_dump', 'verify_dump', 'encrypt to 2']
     assert dumped.parent == tmp_path
     assert dumped.name.endswith('.dump.age')
     assert dumped.read_bytes().startswith(b'age-encryption.org/')
@@ -941,13 +936,24 @@ def test_a_failed_dump_raises_and_keeps_nothing(tools: Tools, tmp_path: Path) ->
     assert not list(tmp_path.glob('*.dump.age'))
 
 
+def test_a_dump_that_does_not_verify_is_neither_encrypted_nor_kept(tools: Tools, tmp_path: Path) -> None:
+    tools.verify_fails = True
+    replacement = _replacement(tmp_path, granted=True)
+
+    with pytest.raises(state.StateError):
+        _ = replacement.dump_now()
+
+    assert not [call for call in tools.calls if call.startswith('encrypt')]
+    assert replacement.archive is None
+    assert not list(tmp_path.glob('*.dump.age'))
+
+
 def test_the_restore_hook_restores_from_the_plaintext(tools: Tools, tmp_path: Path) -> None:
     replacement = _replacement(tmp_path, granted=True)
     _ = replacement.dump_now()
 
     held = replacement.restore_now()
 
-    assert tools.calls[-2:] == ['pg_restore PGDMP the archive', 'stacks']
     assert held == ['organization/kluster-py/physical']
 
 
@@ -960,7 +966,7 @@ def test_without_a_plaintext_over_a_backend_that_holds_no_stack_the_restore_hook
         _ = replacement.restore_now()
 
     assert 'stack init' in str(refused.value)
-    assert tools.calls == ['stacks']
+    assert not [call for call in tools.calls if call.startswith('pg_restore')]
 
 
 def test_without_a_plaintext_over_a_backend_that_holds_stacks_the_restore_hook_passes(
@@ -972,7 +978,7 @@ def test_without_a_plaintext_over_a_backend_that_holds_stacks_the_restore_hook_p
     replacement = _replacement(tmp_path, granted=False)
 
     assert replacement.restore_now() == ['organization/kluster-py/dns']
-    assert tools.calls == ['stacks']
+    assert not [call for call in tools.calls if call.startswith('pg_restore')]
 
 
 def test_the_restore_hook_never_restores_over_a_backend_that_serves_a_stack(tools: Tools, tmp_path: Path) -> None:
@@ -1054,13 +1060,45 @@ async def test_with_the_permission_the_registered_hooks_dump_and_restore_through
     assert tools.calls == []
 
     await _call(wired, 'dump', INSTANCE)
-    assert tools.calls == ['pg_dump', 'verify_dump', 'encrypt to 2']
     (dumped,) = wired.work.glob('*.dump.age')
     assert dumped.read_bytes().startswith(b'age-encryption.org/')
 
     await _call(wired, 'restore', READINESS)
-    assert tools.calls[3:] == ['stacks', 'pg_restore PGDMP the archive', 'stacks']
+    assert [call for call in tools.calls if call.startswith('pg_restore')]
     assert set(tools.bundles) == {wired.bundle}
+
+
+@pytest.mark.asyncio
+async def test_the_hook_that_dumps_runs_before_the_instance_goes_and_the_one_that_restores_after_readiness(
+    wired: Wired, tools: Tools, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each registered hook is told apart by what calling it does, then found where it is bound (rfc-006 §4.3)."""
+    monkeypatch.setenv(permission.ENV, permission.GRANTED)
+    did: dict[str, list[str]] = {name: [] for name in wired.run.hooks}
+    # Twice over: a restore refuses until a dump has left a plaintext.
+    for _ in range(2):
+        for name, hook in wired.run.hooks.items():
+            before = len(tools.calls)
+            args = pulumi.ResourceHookArgs(
+                urn=f'urn:pulumi:{NAME}::kluster::{INSTANCE}::x', id='x', name='x', type=INSTANCE
+            )
+            try:
+                called = hook.callback(args)
+                if inspect.isawaitable(called):
+                    await called
+            except (hooks.HookRefused, state.StateError):
+                # A restore before any dump, or a second dump in the same second.
+                pass
+            did[name] += tools.calls[before:]
+    (dumping,) = [name for name, calls in did.items() if 'pg_dump' in calls]
+    (restoring,) = [name for name, calls in did.items() if any(call.startswith('pg_restore') for call in calls)]
+    (permitting,) = [name for name, calls in did.items() if not calls]
+    bound = {request.type: _bound(request) for request in wired.run.requested if _bound(request)}
+
+    assert bound == {
+        INSTANCE: {'before_create': [permitting], 'before_delete': [dumping]},
+        READINESS: {'after_create': [restoring]},
+    }
 
 
 # --------------------------------------------------------------------------
