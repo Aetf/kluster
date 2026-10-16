@@ -42,10 +42,10 @@ import pickle
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-import keyring.backends.fail
 import pykeepass.pykeepass as pykeepass_module
 import pytest
 import root_credentials
+from keyring.backends import fail as fail_keyring
 from memory_keyring import installed
 from memory_kit import MemoryKit
 from pulumi.runtime.settings import SETTINGS
@@ -102,7 +102,7 @@ def secret_store_closed() -> Iterator[None]:
     any scope is set up and taken away after the last is torn down: a module's
     fixture between two cases meets it as the cases do.
     """
-    with installed(keyring.backends.fail.Keyring()):
+    with installed(fail_keyring.Keyring()):
         yield
 
 
