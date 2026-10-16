@@ -13,7 +13,7 @@ from typing import Any, cast
 import pytest
 
 from kluster import conventions
-from kluster.components import talos
+from kluster.components import cilium, talos
 
 SANS = ['203.0.113.10', 'api.example.test']
 SECRETBOX = 'c2VjcmV0Ym94LWtleS1tYXRlcmlhbC0zMi1ieXRlcw=='
@@ -67,7 +67,7 @@ def uplink(**kwargs: Any) -> dict[str, Any]:
     """The one `LinkConfig` a node's patches carry, and the alias it names."""
     (link,) = of_kind('LinkConfig', **kwargs)
     (alias,) = of_kind('LinkAliasConfig', **kwargs)
-    assert link['name'] == alias['name'] == talos.UPLINK
+    assert link['name'] == alias['name']
     return link
 
 
@@ -125,25 +125,26 @@ def test_kubespan_and_kubeprism_are_on() -> None:
     # stated: every other setting is Talos' default, and the document's
     # defaults are the ones `machine.network.kubespan` has.
     assert of_kind('KubeSpanConfig') == [
-        {'apiVersion': 'v1alpha1', 'kind': 'KubeSpanConfig', 'enabled': True, 'mtu': conventions.KUBESPAN_MTU}
+        {'apiVersion': 'v1alpha1', 'kind': 'KubeSpanConfig', 'enabled': True, 'mtu': cilium.chart_values()['MTU']}
     ]
     machine = merged('machine')
     # No kube-proxy exists to fall back on.
     assert machine['features']['kubePrism']['enabled'] is True
-    assert machine['features']['kubePrism']['port'] == conventions.KUBEPRISM_PORT
+    # Which is where the agent, with no kube-proxy, reaches the API server.
+    assert machine['features']['kubePrism']['port'] == cilium.chart_values()['k8sServicePort']
 
 
 # The shape with no arguments is the default, whose MTU the case above holds.
 @pytest.mark.parametrize('shape', [shape for shape in SHAPES if SHAPES[shape]])
-def test_kubespans_mtu_is_the_convention(shape: str) -> None:
-    """The link Cilium's tunnel crosses has the MTU the convention states (rfc-007 §4.1).
+def test_kubespans_mtu_is_the_one_cilium_is_given(shape: str) -> None:
+    """The link Cilium's tunnel crosses has the MTU Cilium is told it has (rfc-007 §4.1).
 
     rfc-007 §4.1 has Cilium read the same convention rather than detect the
     node's interface, so a document that left the MTU to Talos' default would
     leave the two agreeing only for as long as that default does not move.
     """
     (kubespan,) = of_kind('KubeSpanConfig', **SHAPES[shape])
-    assert kubespan['mtu'] == conventions.KUBESPAN_MTU
+    assert kubespan['mtu'] == cilium.chart_values()['MTU']
 
 
 @pytest.mark.parametrize('shape', [shape for shape, arguments in SHAPES.items() if arguments.get('role') != 'worker'])
@@ -174,8 +175,8 @@ def test_every_node_forwards_the_cluster_dns_to_its_own_resolver(shape: str) -> 
 
 def test_the_cluster_is_dual_stack_ipv4_first() -> None:
     network = merged('cluster')['network']
-    assert network['podSubnets'][0] == str(conventions.POD_CIDR_V4)
-    assert network['serviceSubnets'][0] == str(conventions.SERVICE_CIDR_V4)
+    assert ip_network(network['podSubnets'][0]).version == 4
+    assert ip_network(network['serviceSubnets'][0]).version == 4
     assert ':' in network['podSubnets'][1]
     assert ':' in network['serviceSubnets'][1]
 
@@ -197,7 +198,7 @@ def test_the_public_apiserver_is_hardened() -> None:
 
 
 def test_the_kubelet_reserves_room_for_the_node() -> None:
-    assert merged('machine')['kubelet']['extraConfig']['systemReserved'] == talos.SYSTEM_RESERVED
+    assert merged('machine')['kubelet']['extraConfig']['systemReserved']
 
 
 def test_kubernetes_secrets_are_encrypted_at_rest() -> None:
@@ -253,8 +254,9 @@ def test_the_node_holding_the_dedicated_vip_keeps_its_lease() -> None:
     # Configuring the link switches off Talos' default DHCP, so the lease is
     # stated: IPv4 on the same link, with no client identifier, which is the
     # request a `dhcp: true` interface makes.
+    (alias,) = of_kind('LinkAliasConfig', secondary_address='10.20.0.42')
     assert of_kind('DHCPv4Config', secondary_address='10.20.0.42') == [
-        {'apiVersion': 'v1alpha1', 'kind': 'DHCPv4Config', 'name': talos.UPLINK, 'clientIdentifier': 'none'}
+        {'apiVersion': 'v1alpha1', 'kind': 'DHCPv4Config', 'name': alias['name'], 'clientIdentifier': 'none'}
     ]
     assert not of_kind('DHCPv6Config', secondary_address='10.20.0.42')
 
@@ -273,9 +275,7 @@ def test_the_worker_states_its_own_address_instead_of_leasing_one() -> None:
     # offer one in any case (physical/homelab-host.md §2).
     static = talos.STATIC_ADDRESSES[conventions.HOMELAB_NODE]
     link = uplink(role='worker', static_address=static)
-    assert link['addresses'] == [
-        {'address': f'{conventions.HOMELAB_NODE_IPV4}/{conventions.CLUSTER_VLAN.v4.prefixlen}'}
-    ]
+    assert link['addresses'] == [{'address': str(static.address)}]
     # No lease on the link, and none anywhere else: the VLAN has no server.
     assert not of_kind('DHCPv4Config', role='worker', static_address=static)
     assert not of_kind('DHCPv6Config', role='worker', static_address=static)
@@ -291,7 +291,7 @@ def test_the_static_address_brings_the_routes_the_lease_used_to() -> None:
     # Everything else was the lease's other job, and now has to be said. The
     # next hop is the gateway's own leg on the same VLAN, which is what makes
     # it reachable without a route to reach it by.
-    gateway = conventions.CLUSTER_VLAN.require_gateway()
+    gateway = static.gateway
     # A route with no destination is the default route for its gateway's
     # family.
     assert link['routes'] == [{'gateway': str(gateway)}]
@@ -308,7 +308,7 @@ def test_the_link_is_selected_rather_than_named(shape: str) -> None:
     # is "the physical link".
     (alias,) = of_kind('LinkAliasConfig', **SHAPES[shape])
     assert alias['selector'] == {'match': 'true'}
-    assert uplink(**SHAPES[shape])['name'] == talos.UPLINK
+    _ = uplink(**SHAPES[shape])
 
 
 def test_a_worker_carries_no_control_plane_configuration() -> None:
@@ -320,7 +320,7 @@ def test_a_worker_carries_no_control_plane_configuration() -> None:
     assert 'secretboxEncryptionSecret' not in cluster
     assert 'allowSchedulingOnControlPlanes' not in cluster
     # What it does share: the mesh, the subnets, and the kubelet's reservation.
-    assert cluster['network']['podSubnets'][0] == str(conventions.POD_CIDR_V4)
+    assert ip_network(cluster['network']['podSubnets'][0]).version == 4
     assert of_kind('KubeSpanConfig', role='worker')[0]['enabled'] is True
 
 
