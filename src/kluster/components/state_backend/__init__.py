@@ -7,7 +7,9 @@ run that finds none writes nothing:
 
 -   **The network**: its own VCN, internet gateway, route table and subnet,
     the VCN and the subnet protected; and one security list the program owns,
-    which the subnet carries alone, admitting `RULES`.
+    which the subnet carries alone. The list admits nothing but `RULES`, each
+    rule an opening that says why it is there, and the box's interface takes
+    no public address of its own and no network security group.
 -   **The image**: the pinned Fedora CoreOS release's `oraclecloud` artifact,
     uploaded to the image bucket (`kluster.providers.oci_objects`) and
     imported from there.
@@ -27,7 +29,15 @@ run that finds none writes nothing:
 -   **The dump bucket**, protected, its retention converged in place, and
     **the dump key** the box uploads with, named for the generation its
     caller passes: a new generation replaces the key, and so the box, and the
-    old key goes at the end of that deployment.
+    old key goes at the end of that deployment. The key holds the
+    capabilities `DUMP_KEY_CAPABILITIES` names, each beside its reason, and
+    no other.
+
+**The box's options, the readiness resource's, and each secret output
+carry their reasons where they are declared.** A posture that must not loosen — the list's openings, the
+interface, the dump key's grant — is written closed, with every exception
+named beside why it is needed, so a loosening is a line in the diff with its
+reason on it.
 
 **No resource here is imported.** Every one is the program's own, created by it
 and kept in the committed state. A lost state brings the resources back
@@ -51,6 +61,7 @@ nobody can reach or whose dumps nobody can open, so nothing is planned.
 from __future__ import annotations
 
 import base64
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -69,6 +80,7 @@ from putils import Component, async_output, background, resolve
 
 __all__ = (
     'ANYWHERE',
+    'DUMP_KEY_CAPABILITIES',
     'RULES',
     'SERVER_ROW',
     'Keys',
@@ -82,13 +94,18 @@ __all__ = (
 ANYWHERE = '0.0.0.0/0'
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class Rule:
-    """One rule of the security list: what it admits in, or lets out.
+    """One opening in the security list: what it admits in, or lets out, and why.
 
     `ports` is a TCP destination range; `icmp` an ICMP type and, where the
     rule names one, its code. Every rule is stateful, so the replies to what
     it admits are admitted too.
+
+    `reason` is required: a rule is an exception to a list that admits
+    nothing, and it says what needs it. It is kept out of the repr, which
+    orders the declared list (`_sorted`), so rewording a reason moves no
+    rule.
     """
 
     ingress: bool
@@ -98,20 +115,52 @@ class Rule:
     peer: str
     ports: tuple[int, int] | None = None
     icmp: tuple[int, int | None] | None = None
+    #: What needs this opening.
+    reason: str = field(repr=False, compare=False)
 
 
-#: Every rule the subnet's security list holds, and nothing else: 5432 and 22
-#: from anywhere, the client certificate being the wall
-#: (physical/state-backend.md §4); the ICMP "destination unreachable" rules a
-#: VCN's default list carries, "fragmentation needed" from anywhere for path
-#: MTU discovery and every code from inside the VCN; and all egress.
+#: Every opening the subnet's security list holds. The list admits nothing
+#: else, so a rule added here widens what reaches the box, and its reason is
+#: the line a review reads (physical/state-backend.md §4).
 RULES = frozenset(
     {
-        Rule(ingress=True, protocol='6', peer=ANYWHERE, ports=(settings.PORT, settings.PORT)),
-        Rule(ingress=True, protocol='6', peer=ANYWHERE, ports=(22, 22)),
-        Rule(ingress=True, protocol='1', peer=ANYWHERE, icmp=(3, 4)),
-        Rule(ingress=True, protocol='1', peer=settings.VCN_CIDR, icmp=(3, None)),
-        Rule(ingress=False, protocol='all', peer=ANYWHERE),
+        Rule(
+            ingress=True,
+            protocol='6',
+            peer=ANYWHERE,
+            ports=(settings.PORT, settings.PORT),
+            reason='Postgres, from anywhere: its clients include CI runners, which have no address range a rule '
+            'could name, and the client certificate it demands is the wall',
+        ),
+        Rule(
+            ingress=True,
+            protocol='6',
+            peer=ANYWHERE,
+            ports=(22, 22),
+            reason='SSH, key authentication only, from wherever the operator is, for `state-backend ssh`',
+        ),
+        Rule(
+            ingress=True,
+            protocol='1',
+            peer=ANYWHERE,
+            icmp=(3, 4),
+            reason='"fragmentation needed" from anywhere, which path MTU discovery needs: without it a '
+            'connection over a path with a smaller MTU stalls',
+        ),
+        Rule(
+            ingress=True,
+            protocol='1',
+            peer=settings.VCN_CIDR,
+            icmp=(3, None),
+            reason='every "destination unreachable" from inside the VCN, which the VCN\'s default list carries',
+        ),
+        Rule(
+            ingress=False,
+            protocol='all',
+            peer=ANYWHERE,
+            reason='all egress: the box pulls its Postgres image and its OS updates and uploads its dumps to B2, '
+            'and none of those has a fixed address range',
+        ),
     }
 )
 
@@ -119,6 +168,15 @@ RULES = frozenset(
 def _sorted(rules: frozenset[Rule]) -> list[Rule]:
     """The rules in one order, so the list's declared inputs are the same on every run."""
     return sorted(rules, key=repr)
+
+
+#: Every capability the dump key holds, each beside its reason. B2 grants a key
+#: nothing it does not name, and this key is in the box's Ignition, so what it
+#: holds is what a stolen box or a leaked Ignition holds.
+DUMP_KEY_CAPABILITIES: Mapping[str, str] = {
+    'writeFiles': 'the box uploads its dump and reads nothing back, since the uploader keeps no index, so the '
+    'key needs to neither list nor read (physical/state-backend.md §5)',
+}
 
 
 def _ingress(rule: Rule) -> oci.core.SecurityListIngressSecurityRuleArgs:
@@ -281,8 +339,10 @@ class StateBackend(Component, pulumi_type='kluster:state_backend:StateBackend'):
             name=settings.IMAGE_BUCKET,
             namespace=async_output(self._namespace),
             access_type='NoPublicAccess',
-            # The OCID of the user that made it (rfc-006 §3.3), which the
-            # provider does not mark.
+            # `createdBy` is the OCID of the user that made the bucket, which
+            # the provider does not mark: an output that identifies a
+            # principal is secret in a stack whose state is committed
+            # (rfc-006 §3.3).
             opts=self.child_opts(protect=True, additional_secret_outputs=['createdBy']),
         )
         self.artifact = ArtifactObject(
@@ -332,7 +392,9 @@ class StateBackend(Component, pulumi_type='kluster:state_backend:StateBackend'):
         self.dump_key = b2.ApplicationKey(
             f'{name}-dump-key',
             key_name=f'{settings.B2_DUMP_KEY_NAME}-{dump_key_generation}',
-            capabilities=['writeFiles'],
+            capabilities=list(DUMP_KEY_CAPABILITIES),
+            # Confined to the dump bucket, and within it to the prefix the
+            # retention rule reads, so whatever it writes is pruned.
             bucket_ids=[self.dump_bucket.bucket_id],
             name_prefix=f'{settings.B2_PREFIX}/',
             opts=self.child_opts(),
@@ -351,7 +413,16 @@ class StateBackend(Component, pulumi_type='kluster:state_backend:StateBackend'):
             ),
             create_vnic_details=oci.core.InstanceCreateVnicDetailsArgs(
                 subnet_id=self.subnet.id,
+                # No public address at launch: a private address carries one
+                # public address, and the box's is the reserved one below, the
+                # address the certificate and every client bundle name. An
+                # ephemeral one would take its place and change with every
+                # replacement.
                 assign_public_ip='false',
+                # In no network security group, so the subnet's list is all
+                # that admits anything to the box; declared empty, a group put
+                # on the interface by hand is a difference the next run
+                # removes in place.
                 nsg_ids=[],
                 display_name=f'{settings.NAME}-vnic',
             ),
@@ -365,9 +436,25 @@ class StateBackend(Component, pulumi_type='kluster:state_backend:StateBackend'):
             instance_options=oci.core.InstanceInstanceOptionsArgs(are_legacy_imds_endpoints_disabled=True),
             preserve_boot_volume=False,
             opts=self.child_opts(
+                # The provider updates `metadata` in place, and Ignition reads
+                # it only at first boot: a changed Ignition is a new box, which
+                # passes through the permission and the dump hook like any
+                # replacement (rfc-006 §4.2).
                 replace_on_changes=['metadata'],
+                # The old box goes first. The dump is taken before the delete
+                # and the restore after the new box answers, so created first,
+                # the new box would be restored before the old one was dumped;
+                # deleted first, the old box is dumped through the reserved
+                # address while it still points there (rfc-006 §4.3).
                 delete_before_replace=True,
+                # The provider updates the image in place by replacing the
+                # running box's boot volume, data directory and all, with no
+                # dump hook in the way. Zincati keeps the running box current,
+                # so the image matters only at the next launch (rfc-006 §4.2).
                 ignore_changes=['sourceDetails.sourceId'],
+                # Secret as an output whatever the provider returns: the engine
+                # wraps a named output whole, and this one is the Ignition,
+                # which holds the server key and the host key.
                 additional_secret_outputs=['metadata'],
                 hooks=pulumi.ResourceHookBinding(
                     before_create=[pulumi.ResourceHook(f'{name}-permit', self.replacement.permit)],
@@ -390,6 +477,10 @@ class StateBackend(Component, pulumi_type='kluster:state_backend:StateBackend'):
             ca_certificate=keys.ca_certificate,
             instance_id=self.instance.id,
             opts=self.child_opts(
+                # A new box replaces the resource rather than updating it: the
+                # dynamic provider has no `diff`, so the engine would update
+                # it, and an update runs no `after_create`, so the restore
+                # below would never run (rfc-006 §4.3).
                 replace_on_changes=['instance_id'],
                 hooks=pulumi.ResourceHookBinding(
                     after_create=[pulumi.ResourceHook(f'{name}-restore', self.replacement.restore)]

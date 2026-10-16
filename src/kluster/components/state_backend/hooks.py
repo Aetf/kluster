@@ -45,16 +45,48 @@ from putils import background
 
 log = logging.getLogger(__name__)
 
-__all__ = ('HookRefused', 'Replacement')
+__all__ = ('AlreadyServing', 'HookRefused', 'NoPermission', 'NothingServed', 'Replacement')
 
 
 class HookRefused(RuntimeError):
     """A hook stopped the step it runs before, or failed the one it runs after."""
 
 
+class NoPermission(HookRefused):
+    """`permit` or `dump` refused a step on the box: the run does not carry the replacement permission.
+
+    The refusal names `permission.REMEDY`, the run that does.
+    """
+
+
+class AlreadyServing(HookRefused):
+    """`restore` refused to restore this run's dump over a backend that already serves a stack.
+
+    `dumped` is the encrypted dump this run took, which is kept.
+    """
+
+    def __init__(self, message: str, *, dumped: Path | None) -> None:
+        super().__init__(message)
+        self.dumped: Path | None = dumped
+
+
+class NothingServed(HookRefused):
+    """`restore` found a backend that serves no stack once it was done.
+
+    `dumped` is the encrypted dump this run took and restored, after which
+    the backend still lists no stack; `None` where the run took no dump, and
+    the backend is owed a restore this run cannot make, or belongs to a site
+    before its first `stack init`.
+    """
+
+    def __init__(self, message: str, *, dumped: Path | None) -> None:
+        super().__init__(message)
+        self.dumped: Path | None = dumped
+
+
 def _refuse_without_permission(step: str, granted: Callable[[], bool]) -> None:
     if not granted():
-        raise HookRefused(
+        raise NoPermission(
             f'this run would {step} the state-backend box, and it does not carry the permission to: '
             f'`{permission.REMEDY}` is the run that does ({permission.ENV} is set by the driver for it)'
         )
@@ -119,9 +151,10 @@ class Replacement:
             # whatever the backend holds, so one that serves a stack is never
             # restored over.
             if serving := state.served(target):
-                raise HookRefused(
+                raise AlreadyServing(
                     f'{state.endpoint(target.url)} already serves {len(serving)} stack(s), so the dump this run '
-                    f'took is not restored over them; it is in {self._dumped}'
+                    f'took is not restored over them; it is in {self._dumped}',
+                    dumped=self._dumped,
                 )
             log.info('restoring the dump this run took into the new box')
             state.pg_restore(target, archive)
@@ -130,14 +163,16 @@ class Replacement:
             log.info('the backend serves %d stack(s)', len(held))
             return held
         if archive is not None:
-            raise HookRefused(
+            raise NothingServed(
                 f'the dump this run took went into {state.endpoint(target.url)}, and `pulumi stack ls` lists no '
-                'stack there: the encrypted dump beside it is the one to restore with `state-backend restore <file>`'
+                'stack there: the encrypted dump beside it is the one to restore with `state-backend restore <file>`',
+                dumped=self._dumped,
             )
-        raise HookRefused(
+        raise NothingServed(
             f'{state.endpoint(target.url)} serves no stack, and this run took no dump to restore into it: '
             '`state-backend restore <file>` restores the dump the box was replaced from, or the newest nightly '
-            'one; a site with no state yet needs only its first `pulumi stack init` against it'
+            'one; a site with no state yet needs only its first `pulumi stack init` against it',
+            dumped=None,
         )
 
     async def permit(self, _args: pulumi.ResourceHookArgs) -> None:

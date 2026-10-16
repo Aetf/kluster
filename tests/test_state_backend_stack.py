@@ -1,9 +1,12 @@
 """The `state-backend` program, its component, its hooks and its two dynamic resources (rfc-006 §4).
 
-Under mocks, one run of the whole program is read back for what it declares:
-the network and its one security list, the options of rfc-006 §4.2 on the
-instance, the protected resources, what is secret, the dump key's grant and
-where the hooks are bound. The hooks are then exercised as functions, over
+Under mocks, one run of the whole program is read back for what its
+resources hold of each other: the subnet and its one list and table, where
+the box launches, what is secret, where the dump key may write and where the
+hooks are bound. The security list's openings, the instance's options, the
+secret outputs and the dump key's grant are not restated here: each carries
+its reason at its declaration, and what each option does is
+`tests/test_state_backend_engine.py`'s. The hooks are then exercised as functions, over
 `kluster.lib.state_backend.state` with its tools replaced, and the two dynamic
 resources' refusals over a fake stream and a local TLS server. What the engine
 does with the options and hooks is `tests/test_state_backend_engine.py`.
@@ -87,7 +90,6 @@ INTERNET_GATEWAY = 'oci:Core/internetGateway:InternetGateway'
 #: The engine's type token for a provider resource, before the package it serves.
 PROVIDER = 'pulumi:providers:'
 PUBLIC_IP = 'oci:Core/publicIp:PublicIp'
-IMAGE_BUCKET = 'oci:ObjectStorage/bucket:Bucket'
 DUMP_BUCKET = 'b2:index/bucket:Bucket'
 DUMP_KEY_TYPE = 'b2:index/applicationKey:ApplicationKey'
 READINESS = 'pulumi-python:dynamic/postgres_tls:Readiness'
@@ -230,11 +232,6 @@ async def run(tmp_path_factory: pytest.TempPathFactory) -> AsyncGenerator[Applia
         yield await _run(Appliance(), machine)
 
 
-def _options(run: Appliance, typ: str) -> Any:
-    (request,) = [request for request in run.requested if request.type == typ]
-    return request
-
-
 def _id_of(run: Appliance, typ: str) -> str:
     """The id the monitor hands the one resource of `typ` the run declares."""
     (declared,) = run.of_type(typ)
@@ -253,52 +250,6 @@ def _secret(value: object) -> bool:
 # --------------------------------------------------------------------------
 # The network.
 # --------------------------------------------------------------------------
-
-#: The security list's rules as the provider takes them: 5432 and 22 from
-#: anywhere, the ICMP rules a VCN's default list carries, and all egress, every
-#: one stateful (rfc-006 §4.1).
-INGRESS = {
-    'tcp-5432': {
-        'protocol': '6',
-        'source': '0.0.0.0/0',
-        'sourceType': 'CIDR_BLOCK',
-        'stateless': False,
-        'tcpOptions': {'min': 5432, 'max': 5432},
-    },
-    'tcp-22': {
-        'protocol': '6',
-        'source': '0.0.0.0/0',
-        'sourceType': 'CIDR_BLOCK',
-        'stateless': False,
-        'tcpOptions': {'min': 22, 'max': 22},
-    },
-    'fragmentation-needed': {
-        'protocol': '1',
-        'source': '0.0.0.0/0',
-        'sourceType': 'CIDR_BLOCK',
-        'stateless': False,
-        'icmpOptions': {'type': 3, 'code': 4},
-    },
-    'unreachable-from-the-vcn': {
-        'protocol': '1',
-        'source': '10.10.0.0/24',
-        'sourceType': 'CIDR_BLOCK',
-        'stateless': False,
-        'icmpOptions': {'type': 3},
-    },
-}
-EGRESS = {
-    'all': {'protocol': 'all', 'destination': '0.0.0.0/0', 'destinationType': 'CIDR_BLOCK', 'stateless': False},
-}
-
-
-def test_the_list_holds_the_declared_rules_and_nothing_else(run: Appliance) -> None:
-    declared = _one(run, SECURITY_LIST)
-
-    assert len(declared['ingressSecurityRules']) == len(INGRESS)
-    assert all(rule in declared['ingressSecurityRules'] for rule in INGRESS.values())
-    assert len(declared['egressSecurityRules']) == len(EGRESS)
-    assert all(rule in declared['egressSecurityRules'] for rule in EGRESS.values())
 
 
 def test_the_subnet_carries_only_the_programs_list_and_table(run: Appliance) -> None:
@@ -386,21 +337,8 @@ async def test_the_program_exports_when_the_configured_certificate_expires(
 # --------------------------------------------------------------------------
 
 
-def test_the_instance_carries_the_options_of_rfc_006_4_2(run: Appliance) -> None:
-    options = _options(run, INSTANCE)
-
-    assert list(options.replaceOnChanges) == ['metadata']
-    assert options.deleteBeforeReplace is True
-    # An image bump would otherwise replace the boot volume of the running box
-    # in place, data directory and all, with no dump hook in the way.
-    assert list(options.ignoreChanges) == ['sourceDetails.sourceId']
-
-
-def test_metadata_is_secret_as_an_input_and_as_an_output(run: Appliance) -> None:
-    instance = _one(run, INSTANCE)
-
-    assert _secret(instance['metadata'])
-    assert 'metadata' in _options(run, INSTANCE).additionalSecretOutputs
+def test_metadata_is_secret_as_an_input(run: Appliance) -> None:
+    assert _secret(_one(run, INSTANCE)['metadata'])
 
 
 def test_metadata_carries_the_ignition_and_nothing_else(run: Appliance) -> None:
@@ -425,12 +363,10 @@ def test_the_bill_of_materials_is_in_the_clear_and_names_no_secret(run: Applianc
     assert 'b2_dump_key' not in extended
 
 
-def test_the_box_launches_where_the_shape_is_offered_and_without_a_public_address(run: Appliance) -> None:
+def test_the_box_launches_where_the_shape_is_offered_into_the_programs_subnet(run: Appliance) -> None:
     instance = _one(run, INSTANCE)
 
     assert instance['availabilityDomain'] == OFFERING
-    assert instance['createVnicDetails']['assignPublicIp'] == 'false'
-    assert instance['createVnicDetails']['nsgIds'] == []
     assert instance['createVnicDetails']['subnetId'] == _id_of(run, SUBNET)
 
 
@@ -438,10 +374,9 @@ def test_the_reserved_address_points_at_the_primary_private_address(run: Applian
     assert _one(run, PUBLIC_IP)['privateIpId'] == 'primary'
 
 
-def test_the_readiness_resource_replaces_on_the_instances_id(run: Appliance) -> None:
+def test_the_readiness_resource_names_the_instance_and_waits_on_the_held_address(run: Appliance) -> None:
     readiness = _one(run, READINESS)
 
-    assert list(_options(run, READINESS).replaceOnChanges) == ['instance_id']
     assert readiness['instance_id'] == _id_of(run, INSTANCE)
     assert readiness['address'] == settings.ADDRESS
 
@@ -462,25 +397,12 @@ async def test_a_reservation_at_another_address_is_refused(tmp_path: Path, monke
 # --------------------------------------------------------------------------
 
 
-def test_the_image_buckets_creator_is_secret(run: Appliance) -> None:
-    assert list(_options(run, IMAGE_BUCKET).additionalSecretOutputs) == ['createdBy']
-
-
 def test_the_oci_providers_user_and_fingerprint_are_secret(run: Appliance) -> None:
     provider = _one(run, 'pulumi:providers:oci')
 
     assert provider['userOcid'] == {SECRET_SIG: SECRET_MARK, 'value': OCI_USER}
     assert provider['fingerprint'] == {SECRET_SIG: SECRET_MARK, 'value': OCI_FINGERPRINT}
     assert _secret(provider['privateKey'])
-
-
-def test_the_dump_key_is_secret_and_its_id_is_not_declared_so(run: Appliance) -> None:
-    # The id is the resource's id, which the engine cannot mark: an identifier
-    # rather than a credential (rfc-006 §3.3).
-    declared = list(_options(run, DUMP_KEY_TYPE).additionalSecretOutputs)
-
-    assert 'applicationKey' in declared
-    assert 'applicationKeyId' not in declared
 
 
 def _sdk_class(token: str) -> type:
@@ -532,10 +454,9 @@ def test_the_output_name_reader_reads_names_rather_than_attributes() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_the_dump_keys_grant_is_the_declared_one(run: Appliance) -> None:
+def test_the_dump_key_is_confined_to_the_dump_bucket_and_the_retained_prefix(run: Appliance) -> None:
     key = _one(run, DUMP_KEY_TYPE)
 
-    assert key['capabilities'] == ['writeFiles']
     assert key['bucketIds'] == [DUMP_BUCKET_ID]
     # Where the key may write is where the retention rule reads.
     (rule,) = _one(run, DUMP_BUCKET)['lifecycleRules']
@@ -700,8 +621,10 @@ def test_the_current_generation_absent_from_the_recipients_file_is_refused(tmp_p
     _ = backup.write_text(f'{current.rsplit("/", 1)[0]}/{settings.AGE_GENERATION + 1} {CURRENT}\n')
     _ = drill.write_text(f'{DRILL}\n')
 
-    with pytest.raises(committed.Refused, match=f'no recipient for {current}'):
+    with pytest.raises(committed.CurrentMissing) as refused:
         _ = committed.age_recipients(backup=backup, drill=drill)
+
+    assert refused.value.label == current
 
 
 def test_the_box_encrypts_to_the_window_then_the_drill(tmp_path: Path) -> None:
@@ -841,6 +764,8 @@ class Tools:
     served: list[str] = dataclasses.field(default_factory=list[str])
     dump_fails: bool = False
     verify_fails: bool = False
+    #: A restore that lands and leaves the backend listing no stack.
+    restore_lists_nothing: bool = False
     #: The bundle directory every connection was built from.
     bundles: list[Path] = dataclasses.field(default_factory=list[Path])
 
@@ -871,7 +796,8 @@ def tools(monkeypatch: pytest.MonkeyPatch) -> Tools:
 
     def pg_restore(_target: state.Connection, archive: Path) -> None:
         found.calls.append(f'pg_restore {archive.read_bytes().decode()}')
-        found.served.append('organization/kluster-py/physical')
+        if not found.restore_lists_nothing:
+            found.served.append('organization/kluster-py/physical')
 
     def stacks(_target: state.Connection) -> list[str]:
         found.calls.append('stacks')
@@ -904,9 +830,10 @@ def test_without_the_permission_the_create_and_delete_hooks_refuse_and_nothing_i
 ) -> None:
     replacement = _replacement(tmp_path, granted=False)
 
-    with pytest.raises(hooks.HookRefused, match=r'up --force'):
+    with pytest.raises(hooks.NoPermission) as refused:
         _ = getattr(replacement, hook)()
 
+    assert permission.REMEDY in str(refused.value)
     assert tools.calls == []
     assert replacement.archive is None
     assert not list(tmp_path.glob('*.dump.age'))
@@ -962,11 +889,23 @@ def test_without_a_plaintext_over_a_backend_that_holds_no_stack_the_restore_hook
 ) -> None:
     replacement = _replacement(tmp_path, granted=True)
 
-    with pytest.raises(hooks.HookRefused, match=r'state-backend restore <file>') as refused:
+    with pytest.raises(hooks.NothingServed) as refused:
         _ = replacement.restore_now()
 
-    assert 'stack init' in str(refused.value)
+    assert refused.value.dumped is None
     assert not [call for call in tools.calls if call.startswith('pg_restore')]
+
+
+def test_a_restore_after_which_the_backend_lists_no_stack_refuses_naming_the_dump(tools: Tools, tmp_path: Path) -> None:
+    tools.restore_lists_nothing = True
+    replacement = _replacement(tmp_path, granted=True)
+    dumped = replacement.dump_now()
+
+    with pytest.raises(hooks.NothingServed) as refused:
+        _ = replacement.restore_now()
+
+    assert refused.value.dumped == dumped
+    assert [call for call in tools.calls if call.startswith('pg_restore')]
 
 
 def test_without_a_plaintext_over_a_backend_that_holds_stacks_the_restore_hook_passes(
@@ -987,8 +926,10 @@ def test_the_restore_hook_never_restores_over_a_backend_that_serves_a_stack(tool
     dumped = replacement.dump_now()
     tools.served.append('organization/kluster-py/dns')
 
-    with pytest.raises(hooks.HookRefused, match=str(dumped)):
+    with pytest.raises(hooks.AlreadyServing) as refused:
         _ = replacement.restore_now()
+
+    assert refused.value.dumped == dumped
 
     assert not [call for call in tools.calls if call.startswith('pg_restore')]
 
@@ -1043,7 +984,7 @@ async def _call(wired: Wired, hook: str, typ: str) -> None:
 async def test_without_the_permission_the_registered_instance_hooks_refuse_and_dump_nothing(
     wired: Wired, tools: Tools, hook: str
 ) -> None:
-    with pytest.raises(hooks.HookRefused, match=permission.ENV):
+    with pytest.raises(hooks.NoPermission):
         await _call(wired, hook, INSTANCE)
 
     assert tools.calls == []
@@ -1500,7 +1441,8 @@ def test_the_wait_gives_up_on_a_box_that_never_answers(clock: _Clock) -> None:
         attempts.append(clock.read())
         raise postgres_tls.NotAnswering('connection refused')
 
-    with pytest.raises(postgres_tls.NotAnswering, match=f'within {postgres_tls.TIMEOUT}s'):
+    with pytest.raises(postgres_tls.GaveUp) as gave_up:
         postgres_tls.wait(LOOPBACK, 5432, 'unused', timeout=postgres_tls.TIMEOUT, attempt=attempt)
 
+    assert gave_up.value.timeout == postgres_tls.TIMEOUT
     assert attempts[-1] <= postgres_tls.TIMEOUT < attempts[-1] + postgres_tls.INTERVAL

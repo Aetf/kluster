@@ -13,7 +13,8 @@ server answers that it will.
 **Not answering is waited out; the wrong certificate is refused at once.** A
 box that is still booting refuses or drops the connection, which is the
 expected state for minutes after a launch, so each attempt that fails to
-connect is followed by another until `timeout` runs out. A box that answers
+connect is followed by another until `timeout` runs out, and the wait then
+gives up (`GaveUp`). A box that answers
 with a certificate that does not chain to the authority, or that names
 another address, is not going to become the right box by waiting, and the
 create fails naming what the certificate is not.
@@ -43,6 +44,7 @@ __all__ = (
     'INTERVAL',
     'SSL_REQUEST',
     'TIMEOUT',
+    'GaveUp',
     'NotAnswering',
     'Readiness',
     'ReadinessProvider',
@@ -66,6 +68,19 @@ SSL_REQUEST = struct.pack('!ii', 8, 80877103)
 
 class NotAnswering(Exception):
     """The server did not get as far as presenting a certificate."""
+
+
+@final
+class GaveUp(NotAnswering):
+    """The wait's end: no attempt within `timeout` seconds got as far as a certificate.
+
+    A `NotAnswering`, as each attempt's failure is, and raised from the last
+    one; what tells the two apart is this type.
+    """
+
+    def __init__(self, message: str, *, timeout: float) -> None:
+        super().__init__(message)
+        self.timeout: float = timeout
 
 
 @final
@@ -135,7 +150,9 @@ def wait(
         except NotAnswering as exc:
             now = time.monotonic()
             if now + INTERVAL > deadline:
-                raise NotAnswering(f'{address}:{port} did not answer within {int(timeout)}s; last: {exc}') from exc
+                raise GaveUp(
+                    f'{address}:{port} did not answer within {int(timeout)}s; last: {exc}', timeout=timeout
+                ) from exc
             pulumi.log.info(
                 f'still waiting for {address}:{port} after {int(now - started)}s of {int(timeout)}s, trying again '
                 f'in {INTERVAL}s: {exc}'
