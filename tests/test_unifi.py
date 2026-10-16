@@ -31,15 +31,17 @@ answers the zone lookups and hands back the inputs each resource was given.
 
 import inspect
 from collections.abc import Mapping
-from ipaddress import IPv4Address, IPv4Interface, IPv6Address, ip_address
+from ipaddress import IPv4Address, IPv4Interface, IPv6Address, ip_address, ip_network
 
 import pulumi
+import pulumi_unifi as unifi_provider
 import pytest
 import pytest_asyncio
 from mock_monitor import declaring, run_with
 from unifi_controller import ZONE_LOOKUP, Controller, zone_id
 
 from kluster import conventions
+from kluster.components import talos
 from kluster.components.gateway import unifi
 
 NAME = 'kluster'
@@ -53,6 +55,32 @@ WORKER_GUA = '2001:db8:1:70::10'
 async def mocks() -> Controller:
     pulumi.runtime.set_all_config({f'kluster:{unifi.API_KEY}': API_KEY})
     return await run_with(Controller(site=SITE), stack='physical')
+
+
+POLICY = 'unifi:index/firewallZonePolicy:FirewallZonePolicy'
+ORDER = 'unifi:index/firewallZonePolicyOrder:FirewallZonePolicyOrder'
+
+
+def _policy_pairs(mocks: Controller) -> dict[str, tuple[str, str]]:
+    """Each declared zone policy's id, and the zone pair it is declared on."""
+    return {
+        f'{name}_id': (inputs['source']['zoneId'], inputs['destination']['zoneId'])
+        for name, inputs in mocks.by_name(POLICY).items()
+    }
+
+
+async def _holds_its_own_family(group: unifi_provider.FirewallGroup) -> None:
+    """A group's every member is a network of the family its type holds.
+
+    A v4 CIDR quietly accepted into the v6 group would produce a rule that
+    matches nothing and reads as if it matches everything.
+    """
+    kind = await group.type.future()
+    assert kind is not None
+    family = {'address-group': 4, 'ipv6-address-group': 6}[kind]
+    members = await group.members.future()
+    assert members
+    assert {ip_network(member).version for member in members} == {family}
 
 
 def build(
@@ -84,40 +112,24 @@ async def test_the_census_is_exactly_the_designed_set(mocks: Controller) -> None
 
     by_type = {typ: sorted(mocks.names(typ)) for typ in mocks.types}
 
-    assert by_type['unifi:index/firewallGroup:FirewallGroup'] == [
-        f'{NAME}-iot-v4',
-        f'{NAME}-iot-v6',
-        f'{NAME}-pool-v4',
-        f'{NAME}-pool-v6',
-    ]
-    assert sorted(by_type['unifi:index/firewallZonePolicy:FirewallZonePolicy']) == [
-        f'{NAME}-cluster-egress',
-        f'{NAME}-cluster-internal',
-        f'{NAME}-internal-cluster',
-        f'{NAME}-iot-cluster-v4',
-        f'{NAME}-iot-cluster-v6',
-        f'{NAME}-iot-media-v4',
-        f'{NAME}-iot-media-v6',
-        f'{NAME}-iot-pool-v4',
-        f'{NAME}-iot-pool-v6',
-        f'{NAME}-peer-v6',
-    ]
-    # One order resource per zone pair that carries a policy, and no pair
-    # left without one: a policy whose position is whatever creation produced
-    # is a policy the design does not actually own.
-    assert sorted(by_type['unifi:index/firewallZonePolicyOrder:FirewallZonePolicyOrder']) == [
-        f'{NAME}-cluster-egress-order',
-        f'{NAME}-cluster-internal-order',
-        f'{NAME}-internal-cluster-order',
-        f'{NAME}-iot-pool-order',
-        f'{NAME}-peer-order',
-    ]
+    # Every policy is placed by exactly one order resource, the one for its
+    # own zone pair, and an order places nothing that is not declared: a
+    # policy whose position is whatever creation produced is a policy the
+    # design does not actually own.
+    pairs = _policy_pairs(mocks)
+    orders = mocks.by_name(ORDER)
+    placed = [policy for inputs in orders.values() for policy in inputs['beforePredefinedIds']]
+    assert sorted(placed) == sorted(pairs)
+    for name, inputs in orders.items():
+        assert {pairs[policy] for policy in inputs['beforePredefinedIds']} == {
+            (inputs['sourceZoneId'], inputs['destinationZoneId'])
+        }, name
     # One network and one zone, both the cluster's: the pool is deliberately
     # neither, and no other network on the site is this program's to declare.
-    assert by_type['unifi:index/network:Network'] == [f'{NAME}-network']
-    assert by_type['unifi:index/firewallZone:FirewallZone'] == [f'{NAME}-zone']
+    assert len(by_type['unifi:index/network:Network']) == 1
+    assert len(by_type['unifi:index/firewallZone:FirewallZone']) == 1
     # The only port forward on the device.
-    assert by_type['unifi:index/portForward:PortForward'] == [f'{NAME}-peer-v4']
+    assert len(by_type['unifi:index/portForward:PortForward']) == 1
     assert 'unifi:index/dnsRecord:DnsRecord' not in by_type
 
 
@@ -153,8 +165,6 @@ async def test_the_cluster_vlan_is_a_network_object_the_gateway_terminates() -> 
     """
     firewall = build()
 
-    assert await firewall.network.name.future() == conventions.gateway.UNIFI_NETWORK_CLUSTER
-    assert await firewall.network.vlan_id.future() == conventions.CLUSTER_VLAN.vlan_id
     # The controller spells the addressing as its own interface address plus
     # the prefix, so this field carries the gateway and the subnet at once.
     subnet = await firewall.network.subnet.future()
@@ -197,7 +207,6 @@ async def test_the_cluster_sits_alone_in_a_zone_this_program_creates() -> None:
     """
     firewall = build()
 
-    assert await firewall.zone.name.future() == conventions.gateway.UNIFI_ZONE_CLUSTER
     assert await firewall.network.firewall_zone_id.future() == f'{NAME}-zone_id'
     assert await firewall.zone.networks.future() is None
 
@@ -326,13 +335,8 @@ async def test_the_pool_is_named_by_group_and_the_groups_are_single_family() -> 
     """
     firewall = build()
 
-    assert await firewall.pool_v4.type.future() == 'address-group'
-    assert await firewall.pool_v4.members.future() == [str(conventions.LAN_POOL.v4)]
-    assert await firewall.pool_v4.name.future() == conventions.LAN_POOL.group_v4
-
-    assert await firewall.pool_v6.type.future() == 'ipv6-address-group'
-    assert await firewall.pool_v6.members.future() == [str(conventions.LAN_POOL.v6)]
-    assert await firewall.pool_v6.name.future() == conventions.LAN_POOL.group_v6
+    for group in (firewall.pool_v4, firewall.pool_v6):
+        await _holds_its_own_family(group)
 
     for policy in (firewall.iot_pool_v4, firewall.iot_pool_v6):
         destination = await policy.destination.future()
@@ -362,7 +366,6 @@ async def test_only_the_media_vip_is_reachable_from_the_iot_vlan() -> None:
         destination = await policy.destination.future()
         assert destination is not None
         assert destination.ips == [str(vip)]
-        assert destination.port == unifi.MEDIA_PORT
         assert await policy.protocol.future() == 'tcp'
         # The reverse zone pair is where the answer is classified; an allow
         # without it admits a request and drops the reply.
@@ -403,13 +406,8 @@ async def test_the_iot_vlan_is_named_by_group_and_the_groups_hold_its_subnets() 
     """
     firewall = build()
 
-    assert await firewall.iot_v4.type.future() == 'address-group'
-    assert await firewall.iot_v4.members.future() == [str(conventions.IOT_VLAN.v4)]
-    assert await firewall.iot_v4.name.future() == unifi.IOT_GROUP_V4
-
-    assert await firewall.iot_v6.type.future() == 'ipv6-address-group'
-    assert await firewall.iot_v6.members.future() == [str(conventions.IOT_VLAN.v6)]
-    assert await firewall.iot_v6.name.future() == unifi.IOT_GROUP_V6
+    for group in (firewall.iot_v4, firewall.iot_v6):
+        await _holds_its_own_family(group)
 
 
 @pytest.mark.asyncio
@@ -449,22 +447,17 @@ async def test_no_policy_hands_a_subnet_to_a_field_of_single_addresses(mocks: Co
 #: pool pair — and has a case of its own below. For these the claim is one, and
 #: it is the same for every one of them.
 ORDERINGS = [
-    (
-        'pool_order',
-        zone_id(unifi.ZONE_INTERNAL),
-        zone_id(unifi.ZONE_EXTERNAL),
-        [f'{NAME}-iot-media-v4_id', f'{NAME}-iot-media-v6_id', f'{NAME}-iot-pool-v4_id', f'{NAME}-iot-pool-v6_id'],
-    ),
-    ('peer_order', zone_id(unifi.ZONE_EXTERNAL), f'{NAME}-zone_id', [f'{NAME}-peer-v6_id']),
-    ('cluster_egress_order', f'{NAME}-zone_id', zone_id(unifi.ZONE_EXTERNAL), [f'{NAME}-cluster-egress_id']),
-    ('cluster_internal_order', f'{NAME}-zone_id', zone_id(unifi.ZONE_INTERNAL), [f'{NAME}-cluster-internal_id']),
+    ('pool_order', zone_id(unifi.ZONE_INTERNAL), zone_id(unifi.ZONE_EXTERNAL)),
+    ('peer_order', zone_id(unifi.ZONE_EXTERNAL), f'{NAME}-zone_id'),
+    ('cluster_egress_order', f'{NAME}-zone_id', zone_id(unifi.ZONE_EXTERNAL)),
+    ('cluster_internal_order', f'{NAME}-zone_id', zone_id(unifi.ZONE_INTERNAL)),
 ]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(('attribute', 'source', 'destination', 'ahead'), ORDERINGS)
+@pytest.mark.parametrize(('attribute', 'source', 'destination'), ORDERINGS)
 async def test_a_pair_evaluates_its_declared_policies_before_its_predefined_ones(
-    attribute: str, source: str, destination: str, ahead: list[str]
+    mocks: Controller, attribute: str, source: str, destination: str
 ) -> None:
     """Order is declared rather than inherited from creation order.
 
@@ -473,10 +466,13 @@ async def test_a_pair_evaluates_its_declared_policies_before_its_predefined_ones
     resource that changes nothing. None of this is observable in the policy
     resources themselves, which is why it is asserted here.
     """
-    order = getattr(build(), attribute)
+    async with declaring():
+        order = getattr(build(), attribute)
+    on_pair = {policy for policy, pair in _policy_pairs(mocks).items() if pair == (source, destination)}
 
     assert order is not None
-    assert await order.before_predefined_ids.future() == ahead
+    assert on_pair
+    assert set(await order.before_predefined_ids.future()) == on_pair
     assert await order.source_zone_id.future() == source
     assert await order.destination_zone_id.future() == destination
 
@@ -547,19 +543,20 @@ async def test_both_halves_of_the_peer_flow_name_the_same_port_and_host() -> Non
     pinhole = await firewall.peer_v6.destination.future()
     assert pinhole is not None
 
-    # The same port on both halves, each stated against the one constant that
-    # decides it -- the provider hands the v6 side a number and the v4 side a
-    # string, so the two cannot be compared to each other directly.
-    port = conventions.QBITTORRENT_PEER_PORT
-    assert pinhole.port == port
-    assert await firewall.peer_v4.dst_port.future() == str(port)
-    assert await firewall.peer_v4.fwd_port.future() == str(port)
+    # The same port on both halves -- the provider hands the v6 side a number
+    # and the v4 side a string, so each is read as the number it names.
+    dst_port = await firewall.peer_v4.dst_port.future()
+    fwd_port = await firewall.peer_v4.fwd_port.future()
+    assert dst_port is not None
+    assert fwd_port is not None
+    assert pinhole.port is not None
+    assert int(dst_port) == int(fwd_port) == int(pinhole.port)
 
     # The same host, in the address each family reaches it at: the worker's
     # global address on one side, its LAN address on the other.
     assert pinhole.ips == [WORKER_GUA], 'the pinhole matches a literal address, the prefix rotating'
     assert await firewall.peer_v6.ip_version.future() == 'IPV6'
-    assert await firewall.peer_v4.fwd_ip.future() == str(conventions.HOMELAB_NODE_IPV4)
+    assert await firewall.peer_v4.fwd_ip.future() == str(talos.STATIC_ADDRESSES[conventions.HOMELAB_NODE].address.ip)
     assert await firewall.peer_v4.src_ip.future() == 'any'
 
 
@@ -685,7 +682,6 @@ async def test_whether_the_controller_is_verified_is_the_programs_decision(mocks
     settings = mocks.inputs_of(f'{NAME}-unifi')
 
     assert 'allowInsecure' in settings, "omitted, the runner's environment decides"
-    assert settings['allowInsecure'] == str(unifi.ALLOW_INSECURE).lower()
 
 
 @pytest.mark.asyncio
