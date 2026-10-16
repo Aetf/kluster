@@ -193,6 +193,12 @@ STATE_BACKEND_MANAGEMENT = Role(
 #: What the drill's reader is called, on the same terms as the names above: `kluster-drill` is
 #: the name its OCI principal carries (`oci_iam.Identity.name_for`), and the
 #: suffix says which of the drill's two keys this is.
+#:
+#: This name and the freshness probe's below are held by live keys in the
+#: account, and retirement matches on the name alone (`retire_others`). So a
+#: rename is a migration rather than an edit: the next mint creates a key
+#: under the new name and retires nothing, and the key under the old one stays
+#: live until it is deleted by hand.
 DRILL_READ_NAME = f'{conventions.CLUSTER_NAME}-{conventions.DRILL}-read'
 
 #: What the freshness probe's key is called, on the same terms: the state

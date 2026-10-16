@@ -45,9 +45,18 @@ class Compartment:
 
     #: The consumer whose key is confined to the compartment: the stack,
     #: command or workflow it belongs to, and the name its `credentials
-    #: derived` row and IAM principal carry.
+    #: derived` row and IAM principal carry. Once the key is minted, the
+    #: tenancy holds that principal's user, group and policy under the name
+    #: `oci_iam.Identity.name_for` derives from this, so changing it is a
+    #: migration rather than an edit: the three recreated under the new name,
+    #: and the ones under the old name deleted.
     consumer: str
-    #: What the compartment is called in the tenancy.
+    #: What the compartment is called in the tenancy. Once the compartment
+    #: exists the tenancy holds this name — the mint finds the compartment by
+    #: it, and the quota statements name it — so changing it is a migration
+    #: rather than an edit: the compartment renamed in the tenancy in the same
+    #: sitting, or the mint refuses the recorded OCID as gone
+    #: (`CompartmentGone`).
     name: str
     #: What OCI calls it, once it exists.
     ocid: str | None = None
