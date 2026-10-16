@@ -59,9 +59,10 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from kluster.lib import acquisition
+from kluster.lib.secret import Secret
 
 from . import kdbx, workstation
 from .kdbx import KdbxError
@@ -165,7 +166,7 @@ class Credential:
     """
 
     root: Root
-    values: dict[str, str] = dataclasses.field(repr=False, compare=False)
+    values: Annotated[dict[str, str], Secret] = dataclasses.field(repr=False, compare=False)
 
     def __getitem__(self, name: str) -> str:
         value = self.values.get(name)

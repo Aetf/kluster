@@ -26,11 +26,12 @@ import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
 from kluster.conventions import identity
 from kluster.lib import pulumi_cli, stack_environment
 from kluster.lib.pulumi_cli import Runner
+from kluster.lib.secret import Secret
 
 log = logging.getLogger(__name__)
 
@@ -145,7 +146,7 @@ class BackendEnvironment:
     #: The stack passphrase, which every stack but `physical` and the
     #: operator stacks is given. It does not print; the URL is what a repr is
     #: read for.
-    passphrase: str | None = field(default=None, repr=False, compare=False)
+    passphrase: Annotated[str | None, Secret] = field(default=None, repr=False, compare=False)
     url: str | None = None
     #: Where the operator passphrase is found, for the stacks in `APART` and
     #: no other: the acquisition chain (`stack_environment.operator_passphrase`)

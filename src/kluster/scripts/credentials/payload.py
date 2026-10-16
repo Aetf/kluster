@@ -16,7 +16,9 @@ does not stop a mint.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import cast
+from typing import Annotated, cast
+
+from kluster.lib.secret import Secret
 
 from .masters import CredentialRejected
 
@@ -71,7 +73,7 @@ class Payload:
     #: The answer as it arrived, which for a mint includes the credential the
     #: provider discloses once. Kept out of the repr for that reason; `where`
     #: still prints, and is what a refusal is read by.
-    fields: dict[str, object] = field(repr=False, compare=False)
+    fields: Annotated[dict[str, object], Secret] = field(repr=False, compare=False)
 
     @classmethod
     def of(cls, answer: object, where: str) -> Payload:

@@ -116,13 +116,11 @@ from kluster.scripts.credentials import (
     escrow,
     github_secrets,
     kdbx,
-    masters,
     oci_iam,
-    payload,
     pulumi_config,
     slots,
 )
-from kluster.scripts.state_backend import adopt, config
+from kluster.scripts.state_backend import adopt
 
 #: The sentinel written into every secret field of every record built below, and looked for
 #: in the repr. Distinctive because the assertion that it is *absent* is only
@@ -164,56 +162,14 @@ class Census:
 #: The modules whose records this census covers: the ones whose secret fields
 #: do not carry the marker yet.
 MODULES: tuple[ModuleType, ...] = (
-    escrow,
-    kdbx,
-    masters,
-    oci_iam,
-    payload,
-    pulumi_config,
     slots,
-    config,
     render,
-    adopt,
     ssh,
     container,
     k8s,
 )
 
 CENSUS: dict[type, Census] = {
-    escrow.Console: Census('steps kit'),
-    escrow.Generated: Census('mint'),
-    escrow.KitAttachment: Census('entry filename'),
-    escrow.Label: Census('name what origin shape slot'),
-    escrow.Registry: Census('root'),
-    escrow.Shape: Census('looks_like matches'),
-    escrow.Vault: Census('registry identity', secret='identity'),
-    escrow.WorkstationSlot: Census('path read_by store'),
-    # The unlocked database, which holds the master password as `.password`.
-    # Hidden for what it holds rather than for how `PyKeePass` prints, as
-    # `pki.Authority`'s key is; `SHAPED` says why it is filled with the bare sentinel.
-    kdbx.KdbxStore: Census('path _db', secret='_db'),
-    masters.Credential: Census('root values', secret='values'),
-    masters.Field: Census('name describes file env kind'),
-    masters.Root: Census('member title console fields'),
-    oci_iam.ApiKey: Census('tenancy user private_key', secret='private_key'),
-    oci_iam.Domain: Census('client url'),
-    oci_iam.Iam: Census('tenancy identity caller connect domain'),
-    oci_iam.Identity: Census('name email section statements'),
-    oci_iam.KeyPair: Census('private_pem public_pem', secret='private_pem'),
-    oci_iam.Policy: Census('ocid name statements'),
-    oci_iam.Principal: Census('ocid handle'),
-    oci_iam.SeedRow: Census('tenancy user private_key', secret='private_key'),
-    oci_iam.TenancyDomain: Census('url display_name kind'),
-    oci_iam._ConsumerPolicyParams: Census('group compartment_id'),  # pyright: ignore[reportPrivateUsage]
-    oci_iam._SeedPolicyParams: Census('group'),  # pyright: ignore[reportPrivateUsage]
-    oci_iam._SeedSession: Census('iam row'),  # pyright: ignore[reportPrivateUsage]
-    # The raw answer, which for a mint carries the credential the provider
-    # discloses once.
-    payload.Payload: Census('where fields', secret='fields'),
-    # `operator` and `physical` are where the operator passphrase and
-    # `physical`'s are found, functions, which hold no value to print.
-    pulumi_config.BackendEnvironment: Census('passphrase url operator physical', secret='passphrase'),
-    pulumi_config.Stack: Census('name directory environment run'),
     # The three caches hold the forge, an opened escrow and the backend
     # environment, each a record with a secret of its own, and are out of the
     # repr and out of comparison for that reason as well as for being caches.
@@ -237,7 +193,6 @@ CENSUS: dict[type, Census] = {
     slots.StateRead: Census('stack output'),
     slots.SecretStore: Census('key'),
     slots.WorkstationSlot: Census('name'),
-    config.ClientBundle: Census('name address ca_cert cert key', secret='key'),
     render.Machine: Census(
         'operator_keys postgres_uid postgres_image database ci_role operator_role ca_cert server_cert '
         'server_key ssh_host_key age_recipients age_url age_sha256 b2_dump_key_id b2_dump_key b2_bucket_id '
@@ -252,10 +207,6 @@ CENSUS: dict[type, Census] = {
         'b2_prefix dump_script dump_schedule reboot_day reboot_time reboot_window_minutes ssh_host_key_pub',
         secret='server_key ssh_host_key b2_dump_key',
     ),
-    config.Roots: Census('ca age_recipients'),
-    # The OCI clients `adopt` reads through, each built from a configuration
-    # carrying the stack's OCI key.
-    adopt.Clients: Census('network object_storage buckets', secret='network object_storage'),
     ssh.CommandResult: Census('exit_status stdout stderr'),
     ssh.Device: Census('host username private_key host_key port', secret='private_key'),
     ssh.FileStat: Census('owner group mode size kind'),
