@@ -265,8 +265,8 @@ class _Execed(Exception):
 
 
 @pytest.fixture
-def execed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[list[str]]:
-    """`ssh` argv instead of an `ssh` process, with the slot under `tmp_path`."""
+def execed(monkeypatch: pytest.MonkeyPatch, credential_files: Path) -> list[list[str]]:
+    """`ssh` argv instead of an `ssh` process, with the running checkout's slots the case's own."""
     captured: list[list[str]] = []
 
     def execvp(file: str, args: Sequence[str]) -> None:
@@ -275,7 +275,6 @@ def execed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[list[str]]:
         raise _Execed
 
     monkeypatch.setattr(provision.os, 'execvp', execvp)
-    monkeypatch.setattr(workstation, 'directory', lambda: tmp_path / '.credentials')
     return captured
 
 
