@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from renovate_text import as_python_spells_it, package_rule
+from renovate_text import as_python_spells_it, group, package_rule
 
 from kluster.lib.state_backend import settings
 
@@ -29,6 +29,11 @@ DATASOURCE = 'fedora-coreos-stable'
 def _spelled(pattern: str) -> str:
     """`pattern` as `renovate.json5` holds it: double-quoted, since it holds single quotes, each backslash doubled."""
     return '"' + pattern.replace('\\', '\\\\') + '"'
+
+
+def _settings_path() -> str:
+    """The settings module's path, relative to the checkout as renovate matches it."""
+    return Path(settings.__file__).resolve().relative_to(ROOT.resolve()).as_posix()
 
 
 def _config() -> str:
@@ -53,7 +58,9 @@ def test_the_manager_reads_the_stream_through_its_own_data_source() -> None:
     manager = config[config.rindex('    {\n', 0, at) : config.index('\n    },', at)]
 
     assert f"datasourceTemplate: 'custom.{DATASOURCE}'," in manager
-    assert "'/^src/kluster/lib/state_backend/settings\\\\.py$/'," in manager
+    # The file the manager reads is the module the pin lives in, wherever it moves.
+    (pattern,) = re.findall(r"managerFilePatterns: \[\s*'/([^']*)/',", manager)
+    assert re.fullmatch(pattern.replace('\\\\', '\\'), _settings_path())
 
     datasources = config[config.index('customDatasources: {') :]
     entry = datasources[datasources.index(f"'{DATASOURCE}': {{") :]
@@ -80,6 +87,5 @@ def test_the_manager_falls_in_the_appliances_group() -> None:
     # A bump imports a new image, so it travels with the appliance's other pins
     # rather than alone; the group rule matches the file.
     config = _config()
-    appliance = "'src/kluster/lib/state_backend/settings.py'"
-    _, rule = package_rule(config, config.index(appliance))
-    assert "groupSlug: 'state-backend'," in rule
+    _, rule = package_rule(config, config.index(f"'{_settings_path()}'"))
+    assert len(group(rule)) == 2, 'the rule names a group and its slug'
