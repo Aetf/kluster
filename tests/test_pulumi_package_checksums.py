@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pinned_tools
 import pytest
-from scratch_projects import cli_directories
+from scratch_projects import cli_directories, scrubbed
 
 #: The sha256 of the bridge plugin's `linux-amd64` archive at the release the
 #: block pins. Any 32 bytes would do: the entry is refused before anything is
@@ -42,8 +42,9 @@ packages:
       - 0.14.0
 """
 
-#: A `pulumi` call loads one small file; this is a hang guard, far above that.
-TIMEOUT = 60
+#: A `pulumi` call loads one small file in well under a second; the bound sits
+#: below the 60 s case bound, so a hung CLI is named by its own timeout.
+TIMEOUT = 20
 
 
 @pytest.fixture
@@ -55,8 +56,10 @@ def load(pulumi: str, project: str, directory: Path) -> subprocess.CompletedProc
     """Run `pulumi stack ls` on `project`, with a home and a backend of its own."""
     (directory / 'state').mkdir()
     _ = (directory / 'Pulumi.yaml').write_text(project)
+    # Nothing of the run's own `PULUMI_`/`PG` variables: the CLI sees only
+    # what the case sets (framework/testing.md §8).
     env = {
-        **os.environ,
+        **scrubbed(os.environ),
         **cli_directories(directory),
         'PULUMI_BACKEND_URL': f'file://{directory / "state"}',
         'PULUMI_SKIP_UPDATE_CHECK': '1',

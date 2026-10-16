@@ -248,7 +248,7 @@ def test_the_records_import_without_the_gateway_behind_them() -> None:
         f'print(" ".join(sorted(name for name in {GATEWAY_IMPORTS!r} if name in sys.modules)))'
     )
 
-    loaded = subprocess.run([sys.executable, '-c', probe], capture_output=True, check=True, text=True)
+    loaded = subprocess.run([sys.executable, '-c', probe], capture_output=True, check=True, text=True, timeout=20)
 
     assert loaded.stdout.split() == []
 
