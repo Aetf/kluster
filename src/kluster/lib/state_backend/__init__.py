@@ -18,8 +18,6 @@ beside it (docs/style/pulumi.md, "Layering"):
 -   `state`: taking the Pulumi state out of the box, and putting it back.
 -   `readiness`: waiting for a box to answer.
 -   `permission`: the permission a run carries to replace the box.
--   `adoption`: the resources the stack imports at the cutover, and where
-    their ids are kept.
 
 Nothing here imports a script, which is what lets the package render without
 a checkout around it.

@@ -28,9 +28,8 @@ shape nor the domain, which reads like a permissions problem.
 > cut it over (rfc-006 §14, slice 6; the drill's record is
 > `kluster-ops#462`). The stack declares it whole (rfc-006 §4), and the
 > box serves the stack's stable server certificate and SSH host key
-> (§1), the ones `state-backend ssh` pins. The stack still carries the
-> adoption, the ids `state-backend adopt` wrote into its configuration
-> as `adopted` for its program to import, until slice 7 removes it.
+> (§1), the ones `state-backend ssh` pins. Every resource it declares
+> is its own: none carries an import.
 > `src/kluster/lib/state_backend/machine/`
 > holds the Butane file, the operator keys, the dump script and the
 > files the `credentials derived` rows commit beside them; the
@@ -277,7 +276,7 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
 -   **Every hand operation is a command.** The box is declared by the
     stack, and what the stack does not declare is a command of the
     `state-backend` console script: render a scratch box, ssh, pins,
-    bundle, dump, restore, probe, and the cutover's `adopt`. Key
+    bundle, dump, restore and probe. Key
     rotation rides the `credentials derived` rows that fill the stack's
     configuration and the replacement that carries what they wrote; the
     CA and age identity rotations of §7.1 and §7.4 add the generator for
@@ -1142,7 +1141,7 @@ The statuses are an interface, so a script can branch on them
 | `0` | Nothing planned, or what was planned applied, and the backend serves its stacks. | Land the checkpoint, where the run wrote one. |
 | other | `pulumi up` itself failed, and the backend serves its stacks: the status is `pulumi`'s own. | Read its output; land the checkpoint it wrote, which records every step that finished. |
 | `1` | Something is planned and nothing was applied: a plain `plan`, an `up` not confirmed, or one holding a replacement of the box for `--force`. | Read the plan; run `up`, or `up --force` for the box. |
-| `2` | A refusal or a failed check: the working copy behind the forge's `main`, a conflicted checkpoint, no `operator` bundle in its slot, a create beside a held address or a replacement of an adopted resource (§1), or a checkpoint carrying a secret in the clear. | Read the refusal; it names the repair. |
+| `2` | A refusal or a failed check: the working copy behind the forge's `main`, a conflicted checkpoint, no `operator` bundle in its slot, a create beside a held address or a replacement of a resource its declaration imports (§7.5, "Losing it"), or a checkpoint carrying a secret in the clear. | Read the refusal; it names the repair. |
 | `3` | The estate's backend answers and serves no stack: a box owed a restore, or a site before its first `pulumi stack init`. | `state-backend restore <file>` of the dump the replacement took, or the newest nightly one; a new site needs only its first `stack init`. |
 | `4` | The estate's backend does not answer at the address the run names. | `state-backend ssh` reaches the box for diagnosis (§6). |
 
@@ -1156,26 +1155,6 @@ connection that must open within a few seconds
 (`state.CONNECT_TIMEOUT`), so an address whose traffic is dropped is `4`
 in seconds rather than when TCP gives up.
 
-#### The cutover
-
-The appliance serving when the stack is first applied was built by a
-script, so the stack's first run adopts what that script built and
-replaces the box (rfc-006 §14, slice 6). `state-backend adopt` reads the
-ids of the VCN, its gateway and subnet, the reserved address, the image
-bucket and the dump bucket, under the names the stack declares, and
-writes them into the stack's configuration in the clear, all of them or
-none: the program refuses a partial set, since a name left out is a
-second resource beside the first. The program imports each through the
-component, with its secret markings. Three things are not imported. The
-instance, whose `metadata` would be recorded in the clear. The image:
-OCI returns no image's source, so an imported image differs from its
-declaration and is replaced, and the engine refuses to replace a
-resource whose declaration carries an import id — the driver refuses
-such a run before it starts, naming the resource. And the dump key the
-script minted. The stack makes its own of each, and the script's key,
-image and its object, the old security group and the box are deleted or
-terminated by hand.
-
 Other commands:
 
 ```sh
@@ -1186,7 +1165,6 @@ state-backend dump                    # a dump of the live state, encrypted like
 state-backend restore <dump>          # feed a dump into a box that serves no stack
 state-backend probe                   # the scheduled checks, run by the ops repository
 state-backend ssh                     # a diagnostic login; the box is never configured by hand
-state-backend adopt                   # the cutover's ids, into the stack's configuration
 ```
 
 #### Connecting
@@ -1288,11 +1266,25 @@ itself, and the drill key's `--identity-file` restore.
 
 **A lost stack state** — only with every clone of the repository, since
 every checkpoint that ever landed is in `main`'s history — costs one
-replacement (rfc-006 §3.6). What the cutover adopts is adopted again
-the same way, `state-backend adopt` reading the ids by name; the image is
-imported afresh, the old one deleted by hand; the instance is dumped, terminated by hand and
-launched again by `up --force`, with the dump key beside it, since an
-imported key has no secret. A **stale** checkpoint is refused by the driver before a
-run starts (framework/pulumi.md §3.3), and a **corrupt** one is reverted
+replacement (rfc-006 §3.6). Every resource but the instance comes back
+through the program: a change of its own sets the `import_` option on each
+of the component's native declarations, with the id read from the OCI or B2
+console, and is reverted once a run has applied it, since the engine refuses
+to replace a resource whose declaration still carries an import id and the
+driver refuses such a run before it starts. Through the program rather than
+`pulumi import`, which the driver refuses: only the program records each
+resource with its secret markings
+([framework/pulumi.md](../framework/pulumi.md) §3.3). A declaration left
+without an id is a second resource created beside the first, so every one
+gets its id but three. The image: OCI returns no image's source, so an
+imported image would differ from its declaration and be replaced; the
+program builds its own afresh, and the old one is deleted by hand. The dump
+key, whose secret B2 returned once: an imported key has none, so the program
+mints a new one, and the old one is deleted by hand. And the instance, whose
+`metadata` an import would record in the clear: it is dumped, terminated by
+hand and launched again by `up --force`. The dynamic resources need no id:
+each converges on what is already there when it is created
+([framework/ci.md](../framework/ci.md) §3). A **stale** checkpoint is
+refused by the driver before a run starts (framework/pulumi.md §3.3), and a **corrupt** one is reverted
 by a commit, after which a refreshed `plan` shows what the revert does
 not know about.
