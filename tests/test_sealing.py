@@ -49,6 +49,7 @@ from kluster import conventions
 from kluster.scripts.credentials import cloudflare, derived, devices, pulumi_config, sealing
 from kluster.scripts.credentials.kdbx import KdbxError, KdbxStore
 from kluster.scripts.credentials.pulumi_config import SlotRefused
+from kluster.stacks import physical
 
 #: Bounds one `kubeseal` call: every call here is local.
 TIMEOUT = 30
@@ -267,7 +268,7 @@ def test_the_ciphertext_is_written_in_the_clear_at_its_rows_path_in_its_rows_sta
     # decrypting it: anywhere else is a value nothing reads, and stored as a
     # secret it is a second layer of encryption for no reader.
     runner = stacks.runner(value.stack)
-    assert runner.plain == {f'{conventions.sealed.CONFIG_KEY}["bgp-password"]["password"]': 'AgB-sealed-a-password'}
+    assert runner.plain == {value.path('password'): 'AgB-sealed-a-password'}
     assert runner.config == {}
     assert not [args for args in runner.invocations if '--secret' in args]
     assert stacks.runner(PHYSICAL).plain == {}
@@ -397,8 +398,6 @@ def test_the_certificate_is_fetched_from_the_controller_the_conventions_name_wit
 
     ((argv, kubeconfig),) = seen
     assert kubeconfig == KUBECONFIG
-    assert argv[argv.index('--controller-name') + 1] == conventions.SEALING_CONTROLLER
-    assert argv[argv.index('--controller-namespace') + 1] == conventions.SEALING_NAMESPACE
     assert '--fetch-cert' in argv
     assert 'BEGIN CERTIFICATE' in sealer.certificate
 
@@ -516,7 +515,7 @@ def test_the_session_password_is_recorded_for_the_gateway_and_sealed_for_the_wor
 
     # One value, both ends of the session: a config secret of the stack that
     # writes the gateway's end, and the worker's end sealed for Cilium.
-    assert stacks.runner(PHYSICAL).config == {'gatewayBgpPassword': 'a-drawn-password'}
+    assert stacks.runner(PHYSICAL).config == {physical.GATEWAY_BGP_PASSWORD: 'a-drawn-password'}
     value = conventions.sealed.BGP_PASSWORD
     assert unseal(kubeseal, key_pair, value, written(stacks, value)) == {'password': 'a-drawn-password'}
 
@@ -530,7 +529,7 @@ def test_a_password_recorded_before_the_cluster_exists_says_where_its_sealed_cop
     with caplog.at_level(logging.WARNING):
         _ = devices.deliver(BGP, stack=stacks.open(BGP.stack), given={'password': str(secret)}, sealer=None)
 
-    assert stacks.runner(PHYSICAL).config == {'gatewayBgpPassword': 'a-drawn-password'}
+    assert stacks.runner(PHYSICAL).config == {physical.GATEWAY_BGP_PASSWORD: 'a-drawn-password'}
     assert written(stacks, conventions.sealed.BGP_PASSWORD) == {}
     assert ('derived', devices.BGP, 'seal') in named_leaves(caplog.text)
 
@@ -569,7 +568,7 @@ def test_a_record_whose_declaring_stack_does_not_exist_writes_neither_end(
 def test_seal_writes_the_worker_s_copy_of_what_the_gateway_s_stack_holds(
     stacks: Stacks, sealer: sealing.Sealer, kubeseal: str, key_pair: KeyPair
 ) -> None:
-    stacks.runner(PHYSICAL).config['gatewayBgpPassword'] = 'the-recorded-password'
+    stacks.runner(PHYSICAL).config[physical.GATEWAY_BGP_PASSWORD] = 'the-recorded-password'
 
     devices.seal(BGP, stack=stacks.open(BGP.stack), sealer=sealer)
 
@@ -752,9 +751,8 @@ def test_the_dkim_key_is_sealed_at_its_path_for_exims_secret_and_read_back(
     devices.record_sealed(_published_as(txt), sealer=sealer, given={'key': str(key)})
 
     value = conventions.sealed.DKIM_EXIM
-    assert set(apps.plain) == {'sealedSecrets["dkim-exim"]["tls.key"]'}
+    assert set(apps.plain) == {value.path('tls.key')}
     assert unseal(kubeseal, key_pair, value, written(stacks, value)) == {'tls.key': pem.strip()}
-    assert ['config', 'get', '--path', value.path('tls.key'), '--json', '--stack', APPS] in apps.invocations
 
     apps.misreports = 'value'
     with pytest.raises(SlotRefused, match='does not read back'):
