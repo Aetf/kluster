@@ -39,12 +39,31 @@ reads it (`devices.py`) or into the escrow where nothing reads it yet
 homes and hand the kit a rotation it cannot perform: the kit's own rotation
 would then owe every consumer a redelivery.
 
+**Each row is declared as one of three kinds**, and the kind carries the
+membership rule, so a new member says which part of it the member answers to
+in the line that declares it:
+
+-   `MintedSeed` -- one its platform's API makes, from the account root on
+    `create` and, where it can, from itself on `rotate`. It states what it
+    mints and has no console steps.
+-   `ConsoleSeed` -- one no API can make. It states what it mints, carries
+    the console steps that make it, and cannot mint its own successor: those
+    steps are its rotation as well.
+-   `RecoverySeed` -- the key that opens what §2.2 escrows, the one kind that
+    mints nothing.
+
+Each kind takes exactly the fields its rule leaves to the row: a minted or a
+console seed cannot be declared without saying what it mints, a console seed
+without its steps, and a minted seed cannot be handed steps at all. The
+register takes the kinds and not the plain `Seed`, which is the shape every
+command reads, so a row declared as anything else is a type error.
+
 Adding a seed means adding a row here and a row in §2, in the same change.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 GROUP = 'seeds'
 
@@ -83,7 +102,12 @@ class Repair:
 
 @dataclass(frozen=True)
 class Seed:
-    """One row of the seed layer."""
+    """One row of the seed layer, in the shape every command reads.
+
+    A register row is declared as one of the kinds below rather than as this
+    class, so that the rule a row is an exception to is named where it is
+    declared.
+    """
 
     #: The `credentials seed <member>` name.
     member: str
@@ -123,6 +147,40 @@ class Seed:
         return bool(self.console)
 
 
+@dataclass(frozen=True)
+class MintedSeed(Seed):
+    """A seed its platform's API makes: no console visit creates or rotates it."""
+
+    console: str = field(default='', init=False)
+
+
+@dataclass(frozen=True)
+class ConsoleSeed(Seed):
+    """A seed no API can make, carrying the console steps that make it.
+
+    The steps are its rotation too: a console-made seed cannot mint its own
+    successor, so `mints_own_successor` is not the row's to state.
+    """
+
+    mints_own_successor: bool = field(default=False, init=False)
+    #: The steps, which `create` prints at the moment it stops.
+    console: str = field(kw_only=True)
+
+
+@dataclass(frozen=True)
+class RecoverySeed(Seed):
+    """The key that opens what §2.2 escrows: generated here, and the one kind that mints nothing."""
+
+    mints: str = field(default='nothing; it is what opens the escrowed secrets generated here', init=False)
+    mints_own_successor: bool = field(default=False, init=False)
+    console: str = field(default='', init=False)
+
+
+def _register(*seeds: MintedSeed | ConsoleSeed | RecoverySeed) -> dict[str, Seed]:
+    """The register, keyed by member, from rows each declared as its kind."""
+    return {seed.member: seed for seed in seeds}
+
+
 #: The member names `SEEDS` is keyed by that other modules ask for. The
 #: recovery row is the one every command has to treat apart -- it is the key
 #: the escrow opens with rather than a provider credential -- so its name is
@@ -132,70 +190,64 @@ OCI = 'oci'
 CLOUDFLARE = 'cloudflare'
 B2 = 'b2'
 
-SEEDS: dict[str, Seed] = {
-    seed.member: seed
-    for seed in (
-        Seed(
-            member=RECOVERY,
-            title='Recovery key',
-            identifier='the age recipient (its public half)',
-            mints='nothing; it is what opens the escrowed secrets generated here',
-            mints_own_successor=False,
-        ),
-        Seed(
-            member=OCI,
-            title='OCI seed API key',
-            identifier='the user OCID',
-            mints='the per-stack OCI users and their API keys',
-            mints_own_successor=True,
-            attachment=OCI_KEY_ATTACHMENT,
-            attributes=(OCI_TENANCY_ATTRIBUTE, OCI_DOMAIN_ATTRIBUTE),
-            repair=Repair(
-                verb='domain',
-                summary='record the tenancy identity domain on a row that predates it',
-                detail=(
-                    "Read the tenancy's identity domain from OCI and record it on the seed row. Retiring "
-                    'an API key goes through that domain, and rows written before the attribute existed '
-                    'hold no such URL: a rotation on one of them mints a successor and then cannot retire '
-                    'what it supersedes, because the older endpoint refuses the call. Reading the '
-                    "tenancy's domains is the account root's privilege, so this is the one seed command "
-                    'that borrows a root -- once, on a kit that needs the repair.'
-                ),
+SEEDS: dict[str, Seed] = _register(
+    RecoverySeed(
+        member=RECOVERY,
+        title='Recovery key',
+        identifier='the age recipient (its public half)',
+    ),
+    MintedSeed(
+        member=OCI,
+        title='OCI seed API key',
+        identifier='the user OCID',
+        mints='the per-stack OCI users and their API keys',
+        mints_own_successor=True,
+        attachment=OCI_KEY_ATTACHMENT,
+        attributes=(OCI_TENANCY_ATTRIBUTE, OCI_DOMAIN_ATTRIBUTE),
+        repair=Repair(
+            verb='domain',
+            summary='record the tenancy identity domain on a row that predates it',
+            detail=(
+                "Read the tenancy's identity domain from OCI and record it on the seed row. Retiring "
+                'an API key goes through that domain, and rows written before the attribute existed '
+                'hold no such URL: a rotation on one of them mints a successor and then cannot retire '
+                'what it supersedes, because the older endpoint refuses the call. Reading the '
+                "tenancy's domains is the account root's privilege, so this is the one seed command "
+                'that borrows a root -- once, on a kit that needs the repair.'
             ),
         ),
-        Seed(
-            member=CLOUDFLARE,
-            title='Cloudflare seed token',
-            identifier='the token id',
-            mints='the zone-scoped provider token, the DNS-01 token, the gateway ACME token',
-            mints_own_successor=False,
-            console=(
-                'dash.cloudflare.com → My Profile → API Tokens → Create Token\n'
-                '  → "Create Additional Tokens" template, named "kluster-seed".\n'
-                '  Two permission rows, both of them: User → API Tokens → Edit,\n'
-                '  which the template fills in, and Zone → Zone → Read, added by\n'
-                '  hand, with Zone Resources left at all zones. The second is not\n'
-                '  optional: a zone-scoped token names its zones by id, and the\n'
-                '  ids are looked up through this seed, so a seed that cannot list\n'
-                '  zones mints nothing.\n'
-                '  Cloudflare refuses to let a token mint a token carrying token\n'
-                '  permissions, so this one cannot be minted and cannot mint its\n'
-                '  successor -- rotation is this same visit again, and the\n'
-                '  superseded token is deleted on the same page.\n'
-                '  Editing a token on that page extends the value already in\n'
-                '  hand, so a seed with a row missing is fixed in place: add the\n'
-                '  row to it there and paste the same value again. A new token\n'
-                '  with both rows, recorded here with the old one deleted, is\n'
-                '  the other way. An account-root token held elsewhere is the\n'
-                '  seed once it carries both.'
-            ),
+    ),
+    ConsoleSeed(
+        member=CLOUDFLARE,
+        title='Cloudflare seed token',
+        identifier='the token id',
+        mints='the zone-scoped provider token, the DNS-01 token, the gateway ACME token',
+        console=(
+            'dash.cloudflare.com → My Profile → API Tokens → Create Token\n'
+            '  → "Create Additional Tokens" template, named "kluster-seed".\n'
+            '  Two permission rows, both of them: User → API Tokens → Edit,\n'
+            '  which the template fills in, and Zone → Zone → Read, added by\n'
+            '  hand, with Zone Resources left at all zones. The second is not\n'
+            '  optional: a zone-scoped token names its zones by id, and the\n'
+            '  ids are looked up through this seed, so a seed that cannot list\n'
+            '  zones mints nothing.\n'
+            '  Cloudflare refuses to let a token mint a token carrying token\n'
+            '  permissions, so this one cannot be minted and cannot mint its\n'
+            '  successor -- rotation is this same visit again, and the\n'
+            '  superseded token is deleted on the same page.\n'
+            '  Editing a token on that page extends the value already in\n'
+            '  hand, so a seed with a row missing is fixed in place: add the\n'
+            '  row to it there and paste the same value again. A new token\n'
+            '  with both rows, recorded here with the old one deleted, is\n'
+            '  the other way. An account-root token held elsewhere is the\n'
+            '  seed once it carries both.'
         ),
-        Seed(
-            member=B2,
-            title='B2 seed key',
-            identifier='the application key id',
-            mints='the management keys and every prefix-scoped writer key',
-            mints_own_successor=True,
-        ),
-    )
-}
+    ),
+    MintedSeed(
+        member=B2,
+        title='B2 seed key',
+        identifier='the application key id',
+        mints='the management keys and every prefix-scoped writer key',
+        mints_own_successor=True,
+    ),
+)

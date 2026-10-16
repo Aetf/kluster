@@ -140,6 +140,9 @@ class Guardrails(Component, pulumi_type='kluster:cloud:Guardrails'):
             display_name=f'{name}-budget',
             description='Monthly spend on the cluster compartment',
             amount=BUDGET_AMOUNT,
+            # Monthly because `BUDGET_AMOUNT` is a month's accepted cost: the
+            # period and the amount are one decision, and the alerts'
+            # percentages are of the month's spend.
             reset_period='MONTHLY',
             target_type='COMPARTMENT',
             targets=[compartment_id],

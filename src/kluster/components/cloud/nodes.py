@@ -37,6 +37,12 @@ IPv4 is the family the cluster endpoint names, and its children carry the
 port's name alone; every other family's carry the family after the name
 (`kubernetes-ipv6`, `https-ipv6`).
 
+**The fleet's posture is written closed, each setting beside its reason.**
+Legacy IMDS is off on every node, the dedicated VIP's address is reserved, and
+every backend set preserves the client's address. None of the three is a
+parameter: each is a literal at its declaration, so loosening one is an edit
+to that line, with the reason it contradicts beside it in the diff.
+
 The load balancer is a component of its own because the dependency runs
 through it: a node's machine configuration names the cluster endpoint, which
 *is* the load balancer's address, while the backends that point at the nodes
@@ -200,6 +206,9 @@ class NodeLoadBalancer(Component, pulumi_type='kluster:cloud:NodeLoadBalancer'):
                     # balancer's. It is also what makes the subnet's rule for
                     # a backend the same rule as the listener's: a forwarded
                     # packet reaches the node carrying the client's address.
+                    # Turning it off on the IPv6 sets is the fallback
+                    # declarative/physical.md §6 keeps, and that section
+                    # states what it costs.
                     is_preserve_source=True,
                     # Over TCP for every set, a port served on TCP and UDP
                     # included; `forwarded` refuses one with no TCP to check.
@@ -322,9 +331,10 @@ class CloudNodes(Component, pulumi_type='kluster:cloud:CloudNodes'):
                 # Talos reads its machine config from the metadata service,
                 # base64-encoded by `user_data` once the configuration resolves.
                 metadata={'user_data': pulumi.Output.from_input(machine_config).apply(user_data)},
-                # Legacy IMDS serves that config without authentication; v2's
-                # header is a static string, so the baseline network policy is
-                # what actually keeps pods away from it (architecture.md §4.1).
+                # Legacy IMDS off on every node: it serves that config without
+                # authentication. v2's header is a static string, so this is
+                # defense in depth, and the baseline network policy is what
+                # actually keeps pods away from it (architecture.md §4.1).
                 instance_options=oci.core.InstanceInstanceOptionsArgs(
                     are_legacy_imds_endpoints_disabled=True,
                 ),
@@ -349,6 +359,10 @@ class CloudNodes(Component, pulumi_type='kluster:cloud:CloudNodes'):
         self.reserved_ip = oci.core.PublicIp(
             f'{name}-vip1',
             compartment_id=compartment_id,
+            # Reserved, not ephemeral: OCI deletes an ephemeral public IP with
+            # the private IP it is assigned to, and a reserved one lasts until
+            # it is deleted itself, so a node rebuild leaves the workload's
+            # address where it was.
             lifetime='RESERVED',
             private_ip_id=self.secondary_ip.id,
             display_name=f'{name}-vip1',

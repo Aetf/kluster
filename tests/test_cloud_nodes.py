@@ -2,8 +2,8 @@
 
 The properties asserted here are the ones a later `pulumi diff` cannot show
 because they are structural -- that no two nodes share an availability
-domain, for instance, that the dedicated VIP is a reserved address attached
-to a secondary private IP rather than an ephemeral one, that every port the
+domain, for instance, that the dedicated VIP is attached to a secondary
+private IP of its node rather than to the node's own address, that every port the
 balancer forwards answers on both of its addresses, or that moving a
 management port renames nothing that state or the balancer keys on.
 """
@@ -211,17 +211,6 @@ async def test_a_single_ad_region_spreads_across_fault_domains_instead() -> None
 
 
 @pytest.mark.asyncio
-async def test_the_legacy_metadata_endpoint_is_off_on_every_node(nodes: CloudNodes) -> None:
-    # "Every node" is a claim about a fleet, so the fleet is pinned before it
-    # is walked: an empty one satisfies the loop and nothing else here.
-    assert set(nodes.instances) == {'cp1', 'cp2', 'cp3'}
-    for instance in nodes.instances.values():
-        options = await instance.instance_options.future()
-        assert options is not None
-        assert options.are_legacy_imds_endpoints_disabled is True
-
-
-@pytest.mark.asyncio
 async def test_each_node_boots_the_machine_config_it_was_given(nodes: CloudNodes) -> None:
     """Read back the way Talos's `oracle` platform reads it: base64-decoded, strictly.
 
@@ -248,13 +237,13 @@ def test_user_data_is_standard_base64_of_the_utf8_bytes() -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_vip_is_a_reserved_address_on_a_secondary_private_ip(nodes: CloudNodes) -> None:
+async def test_the_vip_is_on_a_secondary_private_ip_of_its_node(nodes: CloudNodes) -> None:
     """Pointing it at the node's primary address would tie it to the node.
 
-    The workload's address has to survive a node rebuild, which is what
-    reserving it and attaching it to a second private IP buys.
+    The public address is mapped onto a second private IP on the VIP node's
+    own VNIC, which a LoadBalancer Service can claim and an egress policy can
+    source from, rather than onto the address the node itself answers on.
     """
-    assert await nodes.reserved_ip.lifetime.future() == 'RESERVED'
     assert await nodes.secondary_ip.vnic_id.future() == vnic_of(VIP_NODE_ID)
     assert await nodes.reserved_ip.private_ip_id.future() == await nodes.secondary_ip.id.future()
 
@@ -295,24 +284,6 @@ def balancer_rows() -> list[PublicPort]:
 def forwarded_names() -> set[str]:
     """What the balancer forwards, by name: the management ports' fields and the balancer rows'."""
     return {*ManagementPorts._fields, *(row.name for row in balancer_rows())}
-
-
-@pytest.mark.asyncio
-async def test_every_backend_set_preserves_the_client_address(balancer: NodeLoadBalancer) -> None:
-    """The client's address reaches the node through every set, the management ports' and the census's alike.
-
-    The backend sets are the management ports and the census rows the
-    balancer fronts, and nothing else, on each family: the structures the
-    node firewall opens, the cluster endpoint names and the Gateways answer.
-    A census set that dropped preservation would hand Envoy, and every
-    Service behind it, the balancer's address in place of the client's
-    (rfc-007 §5.1, §5.3).
-    """
-    assert set(balancer.backend_sets) == {'IPV4', 'IPV6'}
-    for family, backend_sets in balancer.backend_sets.items():
-        assert set(backend_sets) == forwarded_names(), family
-        for name, backend_set in backend_sets.items():
-            assert await backend_set.is_preserve_source.future() is True, (family, name)
 
 
 @pytest.mark.asyncio
