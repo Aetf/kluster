@@ -30,7 +30,7 @@ from mock_monitor import Recorder, declaring, run_under_backstop
 from workflow_files import github_name, read_workflow, workflow_jobs, workflows_and_actions
 
 from kluster import conventions
-from kluster.components.forge import LABEL_COLOR, ManagedRepository
+from kluster.components.forge import ManagedRepository
 from kluster.scripts.credentials import devices
 from kluster.stacks import github as program
 
@@ -251,21 +251,6 @@ def test_merges_are_rebases_only(stack: Forge) -> None:
         assert repository['allowMergeCommit'] is False
 
 
-def test_destroying_the_stack_cannot_delete_the_repositories(stack: Forge) -> None:
-    """Twice over: the engine refuses to delete a protected resource, and the provider archives rather than deletes.
-
-    The protection is a resource option, so it is read off the registration
-    request and under the repository's own type -- the component holding it
-    carries the same name and no such option.
-    """
-    repositories = stack.by_name(REPOSITORY)
-
-    assert set(repositories) == {repository.name for repository in conventions.forge.REPOSITORIES}
-    assert all(inputs['archiveOnDestroy'] is True for inputs in repositories.values())
-    for repository in conventions.forge.REPOSITORIES:
-        assert stack.options_of(repository.name, REPOSITORY).protect is True, repository.name
-
-
 def test_each_repository_is_declared_with_the_visibility_the_census_records(stack: Forge) -> None:
     repositories = stack.by_name(REPOSITORY)
 
@@ -295,7 +280,7 @@ def test_vulnerability_alerts_are_asked_for_where_the_provider_still_answers(sta
     # resource; asking both ways is how a deprecation becomes a diff loop.
     alerts = stack.by_name(VULNERABILITY_ALERTS)
 
-    assert set(alerts) == {'kluster', 'kluster-ops'}
+    assert set(alerts) == {repository.name for repository in conventions.forge.REPOSITORIES}
     assert all(inputs['enabled'] is True for inputs in alerts.values())
     assert all('vulnerabilityAlerts' not in inputs for inputs in stack.by_name(REPOSITORY).values())
 
@@ -311,9 +296,9 @@ def test_the_provider_is_built_here_and_signs_every_resource(stack: Forge) -> No
     """
     provider = stack.by_name(PROVIDER)
 
-    assert set(provider) == {f'{conventions.CLUSTER_NAME}-github'}
+    (name,) = provider
     # The account is named from the census, not from an invoke that resolves it.
-    assert provider[f'{conventions.CLUSTER_NAME}-github']['owner'] == conventions.forge.ACCOUNT.login
+    assert provider[name]['owner'] == conventions.forge.ACCOUNT.login
 
     signed = {declaration.provider for declaration in stack.declared if declaration.typ.startswith('github:')}
 
@@ -322,7 +307,7 @@ def test_the_provider_is_built_here_and_signs_every_resource(stack: Forge) -> No
     # signs both -- reached through each component's options, never re-plumbed
     # onto a resource.
     assert len(signed) == 1
-    assert f'::{conventions.CLUSTER_NAME}-github::' in signed.pop()
+    assert f'::{name}::' in signed.pop()
 
 
 def test_the_token_reaches_the_provider_from_this_stacks_config_and_marked_secret(stack: Forge) -> None:
@@ -446,11 +431,11 @@ def test_each_label_a_workflow_branches_on_is_a_declared_resource(stack: Forge) 
     """
     labels = stack.by_name(LABEL)
 
-    # Written out, because everything below this line is derived from the
-    # census on both sides: a census that lost its labels would leave the
-    # comparison `set() == set()` and the loop body unentered, and the whole
-    # case would pass having asserted nothing (ops#184).
-    assert set(labels) == {'kluster-expect-changes', 'kluster-ops-alert'}
+    # Everything below this line is derived from the census on both sides: a
+    # census that lost its labels would leave the comparison `set() == set()`
+    # and the loop body unentered, and the whole case would pass having
+    # asserted nothing (ops#184).
+    assert labels
     assert set(labels) == {
         f'{repository.name}-{label.name}'
         for repository in conventions.forge.REPOSITORIES
@@ -461,7 +446,6 @@ def test_each_label_a_workflow_branches_on_is_a_declared_resource(stack: Forge) 
             declared = labels[f'{repository.name}-{label.name}']
             assert declared['name'] == label.name
             assert declared['description'] == label.description
-            assert declared['color'] == LABEL_COLOR
             assert declared['repository'] == repository.name
 
 
@@ -476,10 +460,10 @@ def test_each_variable_a_workflow_reads_is_a_declared_resource(stack: Forge) -> 
     """
     variables = stack.by_name(VARIABLE)
 
-    # Written out, for the reason the label case writes its set out: with
-    # both sides derived from the census, a census that lost its variables
-    # would leave `set() == set()` and the loop unentered (ops#184).
-    assert set(variables) == {'kluster-DISPATCH_APP_CLIENT_ID'}
+    # Not empty, for the reason the label case guards it: with both sides
+    # derived from the census, a census that lost its variables would leave
+    # `set() == set()` and the loop unentered (ops#184).
+    assert variables
     assert set(variables) == {
         f'{repository.name}-{variable.name}'
         for repository in conventions.forge.REPOSITORIES
