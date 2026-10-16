@@ -18,8 +18,8 @@ import keyring.errors
 import pytest
 from credentials_command_tree import named_commands
 
-from kluster.scripts.credentials import workstation
-from kluster.scripts.credentials.kdbx import KEYRING_SERVICE, PATH_ENV, KdbxError, KdbxStore
+from kluster.scripts.credentials import kdbx, workstation
+from kluster.scripts.credentials.kdbx import KEYRING_SERVICE, PATH_ENV, KdbxStore
 
 PASSWORD = 'correct horse battery staple'
 
@@ -93,8 +93,9 @@ def test_create_refuses_an_existing_file(tmp_path: Path) -> None:
     _ = KdbxStore.create(path, PASSWORD)
 
     # Rotation writes a new file; the retired one outlives it (§2.2).
-    with pytest.raises(KdbxError, match='already exists'):
+    with pytest.raises(kdbx.DatabaseExists) as refused:
         _ = KdbxStore.create(path, PASSWORD)
+    assert refused.value.path == path
 
 
 def _reopened(path: Path) -> KdbxStore:
@@ -188,8 +189,9 @@ def test_put_is_idempotent(store: KdbxStore) -> None:
 
 
 def test_missing_entry_names_itself(store: KdbxStore) -> None:
-    with pytest.raises(KdbxError, match='no entry'):
+    with pytest.raises(kdbx.NoEntry) as refused:
         _ = store.get('seeds/absent')
+    assert refused.value.entry == 'seeds/absent'
 
 
 def test_describe_omits_the_password(store: KdbxStore) -> None:
@@ -207,8 +209,9 @@ def test_wrong_password_is_reported_as_such(tmp_path: Path) -> None:
     _ = KdbxStore.create(path, PASSWORD)
 
     # A rotation must fail before it mints anything, not halfway through.
-    with pytest.raises(KdbxError, match='could not unlock'):
+    with pytest.raises(kdbx.WrongPassword) as refused:
         KdbxStore(path=path).unlock_with('wrong')
+    assert refused.value.path == path
 
 
 def test_a_remembered_password_skips_the_prompt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -47,6 +47,29 @@ from .masters import CredentialRejected
 
 log = logging.getLogger(__name__)
 
+
+class AccountMismatch(CredentialRejected):
+    """A Cloudflare credential that reaches other accounts than the one `conventions.CLOUDFLARE_ACCOUNT` records.
+
+    `seen` is every account it reaches and `recorded` the one `conventions`
+    names, because which of the two is stale is the operator's question and
+    neither one alone answers it.
+    """
+
+    def __init__(self, message: str, *, seen: tuple[str, ...], recorded: str) -> None:
+        super().__init__(message)
+        self.seen: tuple[str, ...] = seen
+        self.recorded: str = recorded
+
+
+class ZoneNotVisible(CredentialRejected):
+    """A zone the seed cannot see: in another account, or behind a token with no zone read permission."""
+
+    def __init__(self, message: str, *, zone: str) -> None:
+        super().__init__(message)
+        self.zone: str = zone
+
+
 API = 'https://api.cloudflare.com/client/v4'
 
 #: How many zones one listing page carries. This installation is far below it,
@@ -530,9 +553,10 @@ def _resolve_zones(session: Session, names: Sequence[str]) -> tuple[str, dict[st
     for name in names:
         matches = [zone for zone in session.zones(name=name) if zone.name == name]
         if not matches:
-            raise CredentialRejected(
+            raise ZoneNotVisible(
                 f'the Cloudflare seed cannot see the zone {name!r}: it is not in this account, '
-                'or the seed token carries no zone read permission'
+                'or the seed token carries no zone read permission',
+                zone=name,
             )
         ids[name] = matches[0].zone_id
         accounts.add(matches[0].account_id)
@@ -559,11 +583,13 @@ def verify_account(account_id: str) -> None:
     """
     intended = conventions.CLOUDFLARE_ACCOUNT.account_id
     if account_id != intended:
-        raise CredentialRejected(
+        raise AccountMismatch(
             f'the Cloudflare seed sees these zones in the account {account_id}, but '
             f'`conventions.CLOUDFLARE_ACCOUNT` records {intended} as the account this installation declares '
             'into: one of the two is stale, and minting here would leave a live token in an account this '
-            'installation does not own'
+            'installation does not own',
+            seen=(account_id,),
+            recorded=intended,
         )
     log.info('the zones are in %s, which is the account `conventions` records', account_id)
 
@@ -588,11 +614,13 @@ def verify_seed_account(visible: Sequence[Zone]) -> None:
     intended = conventions.CLOUDFLARE_ACCOUNT.account_id
     accounts = sorted({zone.account_id for zone in visible})
     if intended not in accounts:
-        raise CredentialRejected(
+        raise AccountMismatch(
             f'this Cloudflare token sees zones in {", ".join(accounts)}, and none of those is the '
             f'{intended} that `conventions.CLOUDFLARE_ACCOUNT` records as the account this installation '
             'declares into: one of the two is stale, and a seed adopted here would mint every later '
-            'credential in an account this repository does not name'
+            'credential in an account this repository does not name',
+            seen=tuple(accounts),
+            recorded=intended,
         )
     log.info("the seed sees this installation's account, %s, among the zones it can list", intended)
 

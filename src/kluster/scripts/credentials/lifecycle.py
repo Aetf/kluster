@@ -27,6 +27,7 @@ Two properties are the point:
 
 from __future__ import annotations
 
+import enum
 import functools
 import getpass
 import logging
@@ -41,6 +42,52 @@ from .kdbx import KdbxError, KdbxStore
 from .masters import CredentialRejected, Prompt
 
 log = logging.getLogger(__name__)
+
+
+class UnknownMember(KdbxError):
+    """An `--only` that names no row of the register's §2."""
+
+    def __init__(self, message: str, *, member: str) -> None:
+        super().__init__(message)
+        self.member: str = member
+
+
+class RotationStopped(KdbxError):
+    """A rotation stopped at a console row's paste: `rotated` are the rows the successor holds, in order."""
+
+    def __init__(self, message: str, *, stopped_at: str, rotated: tuple[str, ...], successor: Path) -> None:
+        super().__init__(message)
+        self.stopped_at: str = stopped_at
+        self.rotated: tuple[str, ...] = rotated
+        self.successor: Path = successor
+
+
+class Lineage(enum.Enum):
+    """How an existing `--into` fails to be the successor of the kit being rotated."""
+
+    #: The kit itself, or a copy of it: one database identity.
+    SAME_KIT = enum.auto()
+    #: No lineage marker: a kit `bootstrap` wrote, or a successor that died before its marker.
+    UNMARKED = enum.auto()
+    #: The successor of another kit.
+    OTHER_KIT = enum.auto()
+
+
+class NotTheSuccessor(KdbxError):
+    """An existing `--into` that is not the successor of the kit being rotated (§4.2)."""
+
+    def __init__(self, message: str, *, path: Path, lineage: Lineage) -> None:
+        super().__init__(message)
+        self.path: Path = path
+        self.lineage: Lineage = lineage
+
+
+class NoAccountCheck(KdbxError):
+    """A seed that mints its own successor and has no account check in the rotation's pre-flight."""
+
+    def __init__(self, message: str, *, member: str) -> None:
+        super().__init__(message)
+        self.member: str = member
 
 
 def root(member: str, prompt: Prompt) -> masters.Credential:
@@ -127,7 +174,12 @@ def _adopt_pasted_seed(seed: entries.Seed, *, into: KdbxStore, rotated: Sequence
         try:
             token = getpass.getpass(f'{seed.title} — the token (Ctrl-C to stop): ').strip()
         except (EOFError, KeyboardInterrupt) as exc:
-            raise KdbxError(f'{seed.title}: stopped at the paste; {_left_behind(seed, rotated, into)}') from exc
+            raise RotationStopped(
+                f'{seed.title}: stopped at the paste; {_left_behind(seed, rotated, into)}',
+                stopped_at=seed.member,
+                rotated=tuple(rotated),
+                successor=into.path,
+            ) from exc
         if not token:
             log.warning('nothing pasted; paste the token, or Ctrl-C to stop')
             continue
@@ -305,7 +357,7 @@ def require_member(only: str | None) -> None:
     touches none of them, and reports the empty result as a finished run.
     """
     if only is not None and only not in entries.SEEDS:
-        raise KdbxError(f'no seed named {only!r}; expected one of {", ".join(entries.SEEDS)}')
+        raise UnknownMember(f'no seed named {only!r}; expected one of {", ".join(entries.SEEDS)}', member=only)
 
 
 def bootstrap(
@@ -375,8 +427,9 @@ def prove_account(kit: KdbxStore, seed: entries.Seed) -> None:
         case entries.B2:
             b2.verify_account(b2.Session.from_entry(kit, seed.entry).account_id)
         case _ if seed.mints_own_successor:
-            raise KdbxError(
-                f'rotating {seed.member} is in the register (§2) but its account check is not in the pre-flight'
+            raise NoAccountCheck(
+                f'rotating {seed.member} is in the register (§2) but its account check is not in the pre-flight',
+                member=seed.member,
             )
         case _:
             pass
@@ -449,23 +502,29 @@ def require_successor_of(kit: KdbxStore, into: KdbxStore) -> None:
     new one.
     """
     if into.uuid == kit.uuid:
-        raise KdbxError(
+        raise NotTheSuccessor(
             f'{into.path} is the kit being rotated, or a copy of it (the same database identity as '
-            f'{kit.path}); a rotation writes a new file, and resumes only into the one it was writing'
+            f'{kit.path}); a rotation writes a new file, and resumes only into the one it was writing',
+            path=into.path,
+            lineage=Lineage.SAME_KIT,
         )
     predecessor = into.predecessor_uuid()
     if predecessor is None:
-        raise KdbxError(
+        raise NotTheSuccessor(
             f'{into.path} exists and carries no lineage marker, so it is not the successor of {kit.path}: '
             f'if `credentials --kdbx {into.path} kit ls` shows no row it is a successor that died before its '
             'marker was written, and is deleted by hand; if it shows rows it is some other kit, and a rotation '
-            'writes a new file'
+            'writes a new file',
+            path=into.path,
+            lineage=Lineage.UNMARKED,
         )
     if predecessor != kit.uuid:
-        raise KdbxError(
+        raise NotTheSuccessor(
             f'{into.path} is the successor of another kit ({predecessor}), not of {kit.path} ({kit.uuid}): a '
             'retired kit of this installation, or a successor written from a different one; a rotation resumes '
-            'only into the successor it was writing'
+            'only into the successor it was writing',
+            path=into.path,
+            lineage=Lineage.OTHER_KIT,
         )
 
 

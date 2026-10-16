@@ -39,7 +39,6 @@ from kluster.scripts.credentials.delivery import Delivery
 from kluster.scripts.credentials.github_secrets import Forge
 from kluster.scripts.credentials.kdbx import KdbxStore
 from kluster.scripts.credentials.masters import CredentialRejected
-from kluster.scripts.credentials.pulumi_config import SlotRefused
 from kluster.scripts.state_backend import probe
 
 PASSWORD = 'kit-password'
@@ -172,8 +171,9 @@ def test_a_rejected_credential_names_the_key_id_it_was_given(api: FakeApi) -> No
 def test_a_row_missing_a_half_is_refused_before_the_call(api: FakeApi, kit: KdbxStore) -> None:
     kit.put(SEED_ENTRY, '', 'secret-without-an-id')
 
-    with pytest.raises(ValueError, match='key id as its username'):
+    with pytest.raises(b2.EntryIncomplete) as refused:
         _ = b2.Session.from_entry(kit, SEED_ENTRY)
+    assert (refused.value.entry, refused.value.missing) == (SEED_ENTRY, ('UserName',))
 
 
 def test_the_minted_seed_is_proven_to_work_before_the_kit_names_it(api: FakeApi, kit: KdbxStore) -> None:
@@ -768,8 +768,9 @@ def test_a_key_confined_to_no_bucket_is_refused_as_the_wrong_key(api: FakeApi, k
     # The seed is account-wide; handed over where a prefix-scoped key was
     # expected, the refusal says so and names where the intended key comes
     # from, rather than failing later on a bucket id nothing supplied.
-    with pytest.raises(CredentialRejected, match='confined to no bucket'):
+    with pytest.raises(b2.Unconfined) as refused:
         _ = b2.Session.authorize_confined(key_id, kit.get(SEED_ENTRY))
+    assert refused.value.key_id == key_id
 
 
 def test_minting_the_freshness_key_retires_its_predecessor(api: FakeApi, kit: KdbxStore) -> None:
@@ -905,8 +906,9 @@ def test_the_freshness_row_refuses_before_minting_where_the_dump_bucket_does_not
     _ = _seeded(api, kit)
     before = _mints(api)
 
-    with pytest.raises(SlotRefused, match='no bucket named'):
+    with pytest.raises(derived.BucketMissing) as refused:
         _ = derived.b2_freshness_dumps(kit, Forge(token='admin-token', run=RecordedGh()))
+    assert refused.value.bucket == appliance_settings.B2_BUCKET
 
     assert _mints(api) == before
 
@@ -952,13 +954,16 @@ def test_a_listed_key_missing_a_field_is_refused_naming_the_entry() -> None:
     # Which call, which row, which field: a listing read one field at a time
     # is what keeps a changed response from surfacing as a KeyError inside a
     # retirement that has already deleted something.
-    with pytest.raises(payload.ResponseRejected, match=r'b2_list_keys\.keys\[1\]: the answer carries no keyName'):
+    with pytest.raises(payload.ResponseRejected) as refused:
         _ = b2._key_page(answer)  # pyright: ignore[reportPrivateUsage]
+    assert refused.value.where.endswith('.keys[1]')
+    assert (refused.value.field, refused.value.expected) == ('keyName', payload.Expected.PRESENT)
 
 
 def test_an_answer_that_is_not_an_object_is_refused_rather_than_indexed() -> None:
-    with pytest.raises(payload.ResponseRejected, match='b2_create_key: expected an object'):
+    with pytest.raises(payload.ResponseRejected) as refused:
         _ = b2._created_key(['key-1', 'secret-of-key-1'])  # pyright: ignore[reportPrivateUsage]
+    assert (refused.value.field, refused.value.expected) == (None, payload.Expected.OBJECT)
 
 
 #: Shaped like the secret half of a key: short enough that a refusal which
@@ -999,8 +1004,8 @@ def test_a_refusal_describes_the_answer_and_never_quotes_it(answer: object, desc
 
     message = str(refused.value)
     assert STRAY_SECRET not in message, message
-    assert 'b2_create_key' in message
     # Kind and size are what is said instead, so the message is still an answer.
+    assert refused.value.found == described_as
     assert described_as in message, message
 
 

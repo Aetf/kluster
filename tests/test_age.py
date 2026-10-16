@@ -129,11 +129,11 @@ def test_a_line_that_is_not_a_recipient_is_refused_by_name_alone() -> None:
     # Whatever the tool's reason, the refusal names the line and carries no
     # part of it -- neither as given nor as an echo that escaped its quotes.
     for value in _not_recipients():
-        with pytest.raises(age.AgeError) as refused:
+        with pytest.raises(age.RecipientRefused) as refused:
             age.check_recipient(value, name='line 4')
 
         said = str(refused.value)
-        assert said.startswith('line 4 is not an age recipient'), said
+        assert (refused.value.subject, refused.value.identity) == ('line 4', False)
         assert value not in said
         assert json.dumps(value)[1:-1] not in said
 
@@ -164,10 +164,12 @@ def _identities() -> list[str]:
 def test_a_refusal_reads_as_the_line_and_the_tools_reason() -> None:
     # The reason without the tool's wrapping: the recipients file it read was
     # standard input, and its position there is the line's own name already.
-    with pytest.raises(age.AgeError) as refused:
+    with pytest.raises(age.RecipientRefused) as refused:
         age.check_recipient(_mistyped(age.generate().public), name='line 4')
 
-    assert str(refused.value) == 'line 4 is not an age recipient (malformed recipient)'
+    assert (refused.value.subject, refused.value.identity) == ('line 4', False)
+    # The tool's own words, which this repository does not write.
+    assert refused.value.reason == 'malformed recipient'
 
 
 @needs_age
@@ -175,10 +177,11 @@ def test_the_position_the_tool_gives_is_left_out_of_its_verdict() -> None:
     # A line that looks like an identity of some other kind gets past the
     # prefix refusal, and the tool's verdict on it carries the position it
     # read it at, which is the line's own name already.
-    with pytest.raises(age.AgeError) as refused:
+    with pytest.raises(age.RecipientRefused) as refused:
         age.check_recipient('AGE-PLUGIN-EXAMPLE-1QQQQ', name='line 2')
 
-    assert str(refused.value) == 'line 2 is not an age recipient (apparent identity found in recipients file)'
+    assert refused.value.subject == 'line 2'
+    assert refused.value.reason == 'apparent identity found in recipients file'
 
 
 #: The bech32 alphabet and generator, for a plugin recipient that parses.
@@ -206,10 +209,10 @@ def test_a_failure_that_is_not_a_verdict_on_the_line_is_the_bare_refusal() -> No
     # piece of the line. Only a verdict given on a line of the file is kept.
     value = _bech32('age1s3cretpluginname', [0] * 20)
 
-    with pytest.raises(age.AgeError) as refused:
+    with pytest.raises(age.RecipientRefused) as refused:
         age.check_recipient(value, name='line 3')
 
-    assert str(refused.value) == 'line 3 is not an age recipient'
+    assert (refused.value.subject, refused.value.reason) == ('line 3', None)
 
 
 def test_a_reason_that_repeats_the_value_is_left_out(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -230,10 +233,10 @@ def test_a_reason_that_repeats_the_value_is_left_out(tmp_path: Path, monkeypatch
     monkeypatch.setattr(age, 'BINARY', str(echoing))
     value = 'not "a" recipient'
 
-    with pytest.raises(age.AgeError) as refused:
+    with pytest.raises(age.RecipientRefused) as refused:
         age.check_recipient(value, name='line 5')
 
-    assert str(refused.value) == 'line 5 is not an age recipient'
+    assert (refused.value.subject, refused.value.reason) == ('line 5', None)
 
 
 @needs_age
@@ -245,8 +248,9 @@ def test_an_identity_is_refused_before_it_reaches_the_tool(shape: int, monkeypat
     value = _identities()[shape]
     monkeypatch.setattr(age, 'BINARY', 'age-that-is-not-installed')
 
-    with pytest.raises(age.AgeError, match='private half') as refused:
+    with pytest.raises(age.RecipientRefused) as refused:
         age.check_recipient(value, name='line 2')
+    assert (refused.value.subject, refused.value.identity) == ('line 2', True)
 
     assert str(refused.value).startswith('line 2 ')
     assert age.SECRET_STEM not in str(refused.value).upper()

@@ -91,6 +91,14 @@ class NoZoneServed(pulumi_config.SlotRefused):
     """The route census serves no zone, so a token scoped to the served zones would be scoped to nothing."""
 
 
+class BucketMissing(pulumi_config.SlotRefused):
+    """A B2 bucket a row is confined to that the account does not hold."""
+
+    def __init__(self, message: str, *, bucket: str) -> None:
+        super().__init__(message)
+        self.bucket: str = bucket
+
+
 #: The stack that manages the installation's DNS records: the zones token's own
 #: stack, which the row's first mint creates. The token is delivered into every
 #: stack the slot map's zones row names, and this is the one of them that may
@@ -306,10 +314,11 @@ def _deliverable(stack: pulumi_config.Stack, *, own: str) -> None:
             f'the stacks are {", ".join(sorted(conventions.STACK_NAMES.names()))}'
         )
     if stack.name != own and not stack.exists():
-        raise pulumi_config.SlotRefused(
+        raise pulumi_config.StackMissing(
             f'the {stack.name} stack does not exist in the state backend, and a mint creates no stack but '
             f"this row's own ({own}): a delivery fills a stack that is already there, and bringing "
-            f'{stack.name} into being is its own bring-up'
+            f'{stack.name} into being is its own bring-up',
+            stack=stack.name,
         )
 
 
@@ -974,9 +983,10 @@ def _dump_bucket(session: b2.Session) -> str:
     name = appliance_settings.B2_BUCKET
     found = session.buckets(name)
     if not found:
-        raise pulumi_config.SlotRefused(
+        raise BucketMissing(
             f'the B2 account holds no bucket named {name}, so there is nothing for a drill to read; '
-            'the state-backend stack declares it'
+            'the state-backend stack declares it',
+            bucket=name,
         )
     return found[0].bucket_id
 

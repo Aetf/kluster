@@ -15,6 +15,7 @@ does not stop a mint.
 
 from __future__ import annotations
 
+import enum
 from dataclasses import dataclass, field
 from typing import Annotated, cast
 
@@ -23,15 +24,43 @@ from kluster.lib.secret import Secret
 from .masters import CredentialRejected
 
 
+class Expected(enum.Enum):
+    """What the reader of an answer needed where it found something else, as a refusal says it."""
+
+    OBJECT = 'an object'
+    LIST = 'a list'
+    #: The field there at all.
+    PRESENT = 'present'
+    NON_EMPTY_STRING = 'a non-empty string'
+    STRING = 'a string'
+    WHOLE_NUMBER = 'a whole number'
+
+
 class ResponseRejected(CredentialRejected):
     """A provider's answer is not the shape the code reading it needs.
 
     A subclass because the two are one event to everything that handles them:
     a run that cannot go on against a provider, reported to the operator as one
     line rather than as a traceback (`cli.py`). What separates them is the
-    sentence — a rejected credential names the credential, this names the
-    field.
+    type, and the fields say where: `where` is the call and the path walked
+    into its answer, `field` the field at fault or `None` for the answer
+    itself, `expected` what was needed, and `found` what arrived instead as
+    its kind and size, never its content -- or `None` for a field that is not
+    there.
     """
+
+    def __init__(self, where: str, *, field: str | None, expected: Expected, found: str | None) -> None:
+        if field is None:
+            message = f'{where}: expected {expected.value}, and the answer is {found}'
+        elif found is None:
+            message = f'{where}: the answer carries no {field}'
+        else:
+            message = f'{where}: {field} is {found}, not {expected.value}'
+        super().__init__(message)
+        self.where: str = where
+        self.field: str | None = field
+        self.expected: Expected = expected
+        self.found: str | None = found
 
 
 def _describe(value: object) -> str:
@@ -79,14 +108,14 @@ class Payload:
     def of(cls, answer: object, where: str) -> Payload:
         """The answer as an object, or a refusal saying what arrived instead."""
         if not isinstance(answer, dict):
-            raise ResponseRejected(f'{where}: expected an object, and the answer is {_describe(answer)}')
+            raise ResponseRejected(where, field=None, expected=Expected.OBJECT, found=_describe(answer))
         return cls(where=where, fields=cast('dict[str, object]', answer))
 
     @classmethod
     def each(cls, answer: object, where: str) -> tuple[Payload, ...]:
         """The answer as an array of objects, each carrying its own index."""
         if not isinstance(answer, list):
-            raise ResponseRejected(f'{where}: expected a list, and the answer is {_describe(answer)}')
+            raise ResponseRejected(where, field=None, expected=Expected.LIST, found=_describe(answer))
         listed = cast('list[object]', answer)
         return tuple(cls.of(entry, f'{where}[{index}]') for index, entry in enumerate(listed))
 
@@ -98,7 +127,7 @@ class Payload:
         it holds is the call's business rather than the envelope's.
         """
         if field not in self.fields:
-            raise ResponseRejected(f'{self.where}: the answer carries no {field}')
+            raise ResponseRejected(self.where, field=field, expected=Expected.PRESENT, found=None)
         return self.fields[field]
 
     def truth(self, field: str) -> bool:
@@ -113,7 +142,7 @@ class Payload:
         """A field that must be there and must say something."""
         value = self.value(field)
         if not isinstance(value, str) or not value:
-            raise ResponseRejected(f'{self.where}: {field} is {_describe(value)}, not a non-empty string')
+            raise ResponseRejected(self.where, field=field, expected=Expected.NON_EMPTY_STRING, found=_describe(value))
         return value
 
     def string(self, field: str) -> str:
@@ -125,7 +154,7 @@ class Payload:
         """
         value = self.value(field)
         if not isinstance(value, str):
-            raise ResponseRejected(f'{self.where}: {field} is {_describe(value)}, not a string')
+            raise ResponseRejected(self.where, field=field, expected=Expected.STRING, found=_describe(value))
         return value
 
     def optional_text(self, field: str) -> str | None:
@@ -138,7 +167,7 @@ class Payload:
         if value is None:
             return None
         if not isinstance(value, str):
-            raise ResponseRejected(f'{self.where}: {field} is {_describe(value)}, not a string')
+            raise ResponseRejected(self.where, field=field, expected=Expected.STRING, found=_describe(value))
         return value
 
     def optional_whole(self, field: str) -> int | None:
@@ -148,18 +177,20 @@ class Payload:
             return None
         # `True` is an `int` in Python, and is not a number of days.
         if isinstance(value, bool) or not isinstance(value, int):
-            raise ResponseRejected(f'{self.where}: {field} is {_describe(value)}, not a whole number')
+            raise ResponseRejected(self.where, field=field, expected=Expected.WHOLE_NUMBER, found=_describe(value))
         return value
 
     def texts(self, field: str) -> tuple[str, ...]:
         """A field that must be a list of strings, such as a capability set."""
         value = self.value(field)
         if not isinstance(value, list):
-            raise ResponseRejected(f'{self.where}: {field} is {_describe(value)}, not a list')
+            raise ResponseRejected(self.where, field=field, expected=Expected.LIST, found=_describe(value))
         found: list[str] = []
         for index, entry in enumerate(cast('list[object]', value)):
             if not isinstance(entry, str):
-                raise ResponseRejected(f'{self.where}: {field}[{index}] is {_describe(entry)}, not a string')
+                raise ResponseRejected(
+                    self.where, field=f'{field}[{index}]', expected=Expected.STRING, found=_describe(entry)
+                )
             found.append(entry)
         return tuple(found)
 

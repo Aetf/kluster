@@ -92,6 +92,23 @@ class CredentialRejected(RuntimeError):
     """
 
 
+class AnswerRequired(KdbxError):
+    """A part of an account root asked for and left blank."""
+
+    def __init__(self, message: str, *, title: str, field: str) -> None:
+        super().__init__(message)
+        self.title: str = title
+        self.field: str = field
+
+
+class RootNotHeld(KdbxError):
+    """An account root asked to be forgotten that neither the secret store nor a token file holds."""
+
+    def __init__(self, message: str, *, title: str) -> None:
+        super().__init__(message)
+        self.title: str = title
+
+
 @dataclass(frozen=True)
 class Field:
     """One part of an account root, and the four places it can come from.
@@ -122,14 +139,14 @@ class Field:
             case 'file':
                 raw = prompt(f'{title} — path to {self.describes}: ').strip()
                 if not raw:
-                    raise KdbxError(f'{title}: {self.describes} is required')
+                    raise AnswerRequired(f'{title}: {self.describes} is required', title=title, field=self.name)
                 return Path(raw).expanduser().read_text()
             case 'secret':
                 value = getpass.getpass(f'{title} — {self.describes}: ').strip()
             case 'identifier':
                 value = prompt(f'{title} — {self.describes}: ').strip()
         if not value:
-            raise KdbxError(f'{title}: {self.describes} is required')
+            raise AnswerRequired(f'{title}: {self.describes} is required', title=title, field=self.name)
         return value
 
 
@@ -369,4 +386,4 @@ def forget(root: Root) -> None:
             log.info('removed %s', path)
             removed += 1
     if not removed:
-        raise KdbxError(f'{root.title} is not in the secret store, and has no token file')
+        raise RootNotHeld(f'{root.title} is not in the secret store, and has no token file', title=root.title)
