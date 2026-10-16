@@ -40,7 +40,10 @@ from pathlib import Path
 import pytest
 
 from kluster.conventions import identity
+from kluster.lib import bundle as bundle_files
 from kluster.lib import stack_environment
+from kluster.lib import workstation as lib_workstation
+from kluster.scripts.credentials import workstation as credential_slots
 
 MISE = shutil.which('mise')
 needs_mise = pytest.mark.skipif(MISE is None, reason='mise is not on PATH')
@@ -79,20 +82,20 @@ def _checkout(checkout: Path) -> Path:
 
 def _fill_slots(checkout: Path) -> dict[str, str]:
     """Write every slot `mise.toml` reads into `checkout`; what they resolve to."""
-    slots = checkout / '.credentials'
-    bundle = slots / 'state-backend'
+    slots = checkout / lib_workstation.DIRECTORY
+    bundle = slots / stack_environment.BUNDLE_SLOT
     bundle.mkdir(parents=True)
-    _ = (bundle / 'backend-url').write_text(SLOT_URL + '\n')
-    _ = (slots / 'pulumi.passphrase').write_text('slot-passphrase\n')
+    _ = (bundle / bundle_files.URL_FILE).write_text(SLOT_URL + '\n')
+    _ = (slots / credential_slots.PASSPHRASE).write_text('slot-passphrase\n')
     # The operator passphrase is here as on a workstation with no secret
     # store, and nothing below may resolve it.
     _ = (slots / stack_environment.OPERATOR_PASSPHRASE_SLOT).write_text('slot-operator-passphrase\n')
     return {
         'PULUMI_BACKEND_URL': SLOT_URL,
         'PULUMI_CONFIG_PASSPHRASE': 'slot-passphrase',
-        'PGSSLROOTCERT': str(bundle / 'ca.crt'),
-        'PGSSLCERT': str(bundle / 'client.crt'),
-        'PGSSLKEY': str(bundle / 'client.key'),
+        'PGSSLROOTCERT': str(bundle / bundle_files.CA_FILE),
+        'PGSSLCERT': str(bundle / bundle_files.CERT_FILE),
+        'PGSSLKEY': str(bundle / bundle_files.KEY_FILE),
     }
 
 
@@ -222,6 +225,24 @@ def test_a_sibling_whose_name_extends_the_checkouts_is_not_under_it(tmp_path: Pa
     assert resolved == slots
 
 
+def _runs_an_operator_stack(task: object) -> bool:
+    """Whether a task's definition runs `pulumi` against an operator stack, or the driver for one."""
+    return any(
+        re.search(rf'(?:--stack|-s)[\s=]+{re.escape(stack)}\b|operator-stack\s+{re.escape(stack)}\b', str(task))
+        for stack in identity.OPERATOR_STACKS
+    )
+
+
+def test_the_operator_stack_predicate_finds_each_spelling_of_one() -> None:
+    """The check below can only pass if it can fail: each way a task could name an operator stack is found."""
+    assert identity.OPERATOR_STACKS
+    for stack in identity.OPERATOR_STACKS:
+        for run in (f'pulumi up --stack {stack}', f'pulumi preview -s {stack}', f'pulumi refresh --stack={stack}'):
+            assert _runs_an_operator_stack({'run': run}), run
+        assert _runs_an_operator_stack({'run': f'operator-stack {stack} plan'})
+    assert not _runs_an_operator_stack({'run': 'pulumi preview --stack dns'})
+
+
 def test_nothing_in_mise_toml_reaches_an_operator_stack() -> None:
     """No template reads the operator passphrase, and no task runs `pulumi` against one.
 
@@ -234,14 +255,7 @@ def test_nothing_in_mise_toml_reaches_an_operator_stack() -> None:
     reading = [
         name for name, template in config['env'].items() if stack_environment.OPERATOR_PASSPHRASE_SLOT in str(template)
     ]
-    running = [
-        name
-        for name, task in config.get('tasks', {}).items()
-        if any(
-            re.search(rf'(?:--stack|-s)[\s=]+{re.escape(stack)}\b|operator-stack\s+{re.escape(stack)}\b', str(task))
-            for stack in identity.OPERATOR_STACKS
-        )
-    ]
+    running = [name for name, task in config.get('tasks', {}).items() if _runs_an_operator_stack(task)]
 
     assert reading == [], f'[env] templates reading the operator passphrase: {reading}'
     assert running == [], f'mise tasks running an operator stack: {running}'
