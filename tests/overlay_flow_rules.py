@@ -78,11 +78,19 @@ class Packet:
     ipauth: bool = True
 
 
+class ContinuedRule(ValueError):
+    """A rule runs past its first line, which this reading would read as the whole rule."""
+
+
+class UnmodeledMatcher(ValueError):
+    """A rule names a matcher this reading has no model of."""
+
+
 def rule_lines(rendered: str) -> list[str]:
     """Every rule after the stock base filter, each of which is one line.
 
     Raises:
-        ValueError: a rule continues onto another line. Its first line alone
+        ContinuedRule: a rule continues onto another line. Its first line alone
             would read as an unconditional action, so it is refused rather
             than read.
     """
@@ -90,7 +98,7 @@ def rule_lines(rendered: str) -> list[str]:
     lines = [line for line in body.splitlines() if line.startswith(('accept', 'drop'))]
     unfinished = [line for line in lines if not line.endswith(';')]
     if unfinished:
-        raise ValueError(f'rules this reading does not model, continued past their first line: {unfinished}')
+        raise ContinuedRule(f'rules this reading does not model, continued past their first line: {unfinished}')
     return lines
 
 
@@ -113,7 +121,7 @@ def _matches(matcher: str, packet: Packet) -> bool:
         case ['dport', port]:
             return packet.ethertype == 'ipv4' and packet.dport == int(port)
         case _:
-            raise ValueError(f'{matcher!r} is a matcher this reading does not model')
+            raise UnmodeledMatcher(f'{matcher!r} is a matcher this reading does not model')
 
 
 def verdict(rendered: str, packet: Packet) -> Literal['accept', 'drop']:
