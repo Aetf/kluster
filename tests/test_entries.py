@@ -1,12 +1,14 @@
 """The seed register's own rules, and the commands that read it without a kit.
 
 What a §2 row must be: an entry one group deep, an identifier that is never
-blank, the manual surface no API can create, no kit row the escrow also holds,
-the recovery key alone minting nothing, and the Cloudflare console text asking
-for both of the seed's permissions. Beside them, the root listing that needs no
-kit, the console-only `create` that stops with its console steps, and the
-help's ordering of the lifecycle. That every register row has a command is the
-walk over the real parser, `tests/test_cli.py`'s
+blank, no kit row the escrow also holds, and the Cloudflare console text asking
+for both of the seed's permissions. Which kind of row a member is -- minted,
+console-made, or the recovery key that alone mints nothing -- is its
+declaration's to say (`entries`), and the kinds' fields are what enforce it;
+what is held here is what each kind makes of a row. Beside them, the root
+listing that needs no kit, the console-only `create` that stops with its
+console steps, and the help's ordering of the lifecycle. That every register
+row has a command is the walk over the real parser, `tests/test_cli.py`'s
 `test_the_walk_finds_every_register_row`.
 """
 
@@ -36,15 +38,28 @@ def test_no_seed_leaves_its_identifier_empty() -> None:
         assert seed.identifier
 
 
-def test_console_only_seeds_are_the_manual_surface() -> None:
-    # Everything a rotation must stop for: Cloudflare, which forbids a minted
-    # token from carrying token permissions and so has no credential able to
-    # mint the seed. The recovery key is generated rather than minted, so it is
-    # not one of them, and a credential that is merely created in a console is
-    # not one either -- it is a §3 row, escrowed or delivered where it is read
-    # (`escrow.Console`, `devices.py`), because a kit row a consumer reads
-    # would make every kit rotation owe that consumer a redelivery.
-    assert {member for member, seed in entries.SEEDS.items() if seed.manual} == {'cloudflare'}
+def test_a_console_seed_is_the_manual_kind_and_a_minted_one_is_not() -> None:
+    # What a rotation stops for: a console seed is manual by its steps. A
+    # minted seed has no steps to carry, whatever it can mint.
+    console = entries.ConsoleSeed(
+        member='example', title='Example', identifier='its id', mints='a credential', console='a console → a page.'
+    )
+    minted = entries.MintedSeed(
+        member='example', title='Example', identifier='its id', mints='a credential', mints_own_successor=True
+    )
+
+    assert console.manual
+    assert not minted.manual
+
+
+def test_the_recovery_kind_alone_is_declared_without_stating_what_it_mints() -> None:
+    # The one kind exempt from minting (§2): it is declared with its name and
+    # its identifier alone, and still has words for the listing that says what
+    # each seed mints.
+    recovery = entries.RecoverySeed(member='example', title='Example', identifier='its recipient')
+
+    assert recovery.mints.strip()
+    assert not recovery.manual
 
 
 def test_nothing_the_escrow_holds_is_also_a_kit_row() -> None:
@@ -63,17 +78,6 @@ def test_nothing_the_escrow_holds_is_also_a_kit_row() -> None:
 
     assert addressed
     assert not addressed & held
-
-
-def test_only_the_recovery_key_mints_nothing() -> None:
-    # §2's membership rule as a check rather than as prose: a kit row earns its
-    # place by minting successors, and the one exception is the recovery key,
-    # which opens what the escrow holds. A credential that does neither is a §3
-    # row delivered into its consumer's slot, however console-bound its
-    # creation is -- without that line the kit becomes a token drawer again.
-    barren = {member for member, seed in entries.SEEDS.items() if seed.mints.startswith('nothing')}
-
-    assert barren == {'recovery'}
 
 
 def test_the_cloudflare_console_text_asks_for_both_of_the_seed_s_permissions() -> None:

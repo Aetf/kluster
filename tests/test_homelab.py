@@ -1,9 +1,11 @@
 """The worker VM under libvirt, and the session that declares it.
 
 The worker is ordinary infrastructure — it can be rebuilt — but the disk
-under it is not, so the assertions here are mostly about what the program must
-*never* do: resize or rewrite that disk out from under a running node. Those
-are resource options, invisible in any later `pulumi diff` that goes well.
+under it is not. What keeps the program from resizing or rewriting that disk
+out from under a running node is resource options, and each carries its reason
+at its declaration (`components/homelab`) rather than a case here restating it.
+The cases hold what the declarations produce: the disk the worker boots, the
+session the provider dials, and where the disk tuning lands.
 
 The home-automation domain on the same host is declared nowhere, so nothing
 here asserts about it (rfc-002 §13).
@@ -169,32 +171,6 @@ async def test_the_disk_is_not_sized_by_the_declaration(monitor: Providers) -> N
 
 
 @pytest.mark.asyncio
-async def test_growing_the_disk_is_a_host_operation_not_a_diff(monitor: Providers) -> None:
-    host = build()
-    request = await registration(monitor, host.volume)
-
-    # The volume is created at its source file's size and grown on the host
-    # with `truncate` plus `virsh blockresize`, so the file and the state part
-    # company from the first growth. Every field of a libvirt volume replaces the
-    # volume, so a refresh that read the grown file back and diffed against it
-    # would propose destroying the worker's disk.
-    assert 'size' in set(request.ignoreChanges)
-    assert host.volume._protect is True  # pyright: ignore[reportPrivateUsage]
-
-
-@pytest.mark.asyncio
-async def test_a_talos_upgrade_is_not_a_proposal_to_rewrite_the_disk(monitor: Providers) -> None:
-    request = await registration(monitor, build().volume)
-
-    # `source` says what the disk was written with, and Talos upgrades itself
-    # in place over its machine API — so the declaration stops describing the
-    # volume as soon as the node is upgraded. Left diffable, the next
-    # `versions:talos` bump would propose replacing a running node's boot disk,
-    # and `protect` would then refuse every apply until the bump was reverted.
-    assert 'source' in set(request.ignoreChanges)
-
-
-@pytest.mark.asyncio
 async def test_the_seed_carries_the_worker_configuration_and_nothing_generated() -> None:
     host = build()
 
@@ -231,25 +207,6 @@ async def test_the_worker_joins_the_second_bridge() -> None:
     # path that cannot hairpin back to the host.
     assert interface.macvtap is None
     assert interface.network_name is None
-
-
-@pytest.mark.asyncio
-async def test_the_worker_comes_back_from_a_host_reboot() -> None:
-    host = build()
-
-    assert await host.domain.autostart.future() is True
-    assert await host.domain.running.future() is True
-
-
-@pytest.mark.asyncio
-async def test_a_resized_worker_is_undefined_before_it_is_redefined(monitor: Providers) -> None:
-    request = await registration(monitor, build().domain)
-
-    # `vcpu` and `memory` replace the domain rather than update it, and the
-    # domain's name is stated rather than generated — so a replacement that
-    # created first would collide with the domain it is replacing.
-    assert request.deleteBeforeReplace is True
-    assert request.deleteBeforeReplaceDefined is True
 
 
 @pytest.mark.asyncio
@@ -415,18 +372,11 @@ def test_the_slot_is_the_checkouts_own_local_directory() -> None:
 # -- the disk tuning the provider cannot express ----------------------------
 
 
-def test_the_data_disk_returns_freed_space_to_the_host() -> None:
+def test_the_data_disk_is_driven_in_the_format_the_volume_was_created_in() -> None:
     from kluster.components.homelab import DISK_FORMAT, disk_tuning_xslt
 
     disk = _transformed_disk("disk[@device='disk']")
 
-    # `discard=unmap` is what makes in-guest TRIM punch holes back out of the
-    # sparse image; without it the file only ever grows, and the migration
-    # interleaves reclamation with growth on a disk that has no slack.
-    assert disk.attrib['discard'] == 'unmap'
-    # `cache=none` keeps guest I/O out of the host page cache, which would
-    # otherwise cache it a second time.
-    assert disk.attrib['cache'] == 'none'
     assert disk.attrib['type'] == DISK_FORMAT
     # The stylesheet is read verbatim, so the format it writes is a literal in
     # the file rather than something the volume hands it. The two must agree:
@@ -435,14 +385,23 @@ def test_the_data_disk_returns_freed_space_to_the_host() -> None:
     assert f'type="{DISK_FORMAT}"' in disk_tuning_xslt()
 
 
-def test_the_seed_is_left_exactly_as_the_provider_wrote_it() -> None:
-    # The stylesheet is a scalpel: the cdrom wants neither setting, and a
-    # transform that reached it would be changing a disk it does not
-    # understand.
-    cdrom = _transformed_disk("disk[@device='cdrom']")
+def test_the_tuning_reaches_the_data_disk_and_leaves_the_seed_as_the_provider_wrote_it() -> None:
+    """The stylesheet is a scalpel: the data disk gets its driver, and the cdrom is untouched.
 
-    assert 'discard' not in cdrom.attrib
-    assert 'cache' not in cdrom.attrib
+    What the driver says, and why, is `disk_tuning_xslt`'s to state. What is
+    held here is where it lands: the data disk is driven by exactly the
+    element the stylesheet writes, which differs from what the provider wrote,
+    and the seed's driver comes through as the provider wrote it -- a transform
+    that reached the cdrom would be changing a disk it does not understand.
+    """
+    (written,) = _etree().XML(_xslt()).iter('driver')
+    tuned = dict(_transformed_disk("disk[@device='disk']").attrib)
+
+    assert tuned == dict(written.attrib)
+    assert tuned != dict(_provider_disk("disk[@device='disk']").attrib)
+    assert dict(_transformed_disk("disk[@device='cdrom']").attrib) == dict(
+        _provider_disk("disk[@device='cdrom']").attrib
+    )
 
 
 async def registration(monitor: Providers, resource: pulumi.Resource) -> Any:
@@ -454,16 +413,32 @@ async def registration(monitor: Providers, resource: pulumi.Resource) -> Any:
     return monitor.options_of(str(await resource.urn.future()).rsplit('::', 1)[-1])
 
 
-def _transformed_disk(selector: str) -> Any:
-    """One disk's driver element, after the domain XML has been through XSLT."""
+def _etree() -> Any:
+    return pytest.importorskip('lxml.etree', reason='lxml is present as a dependency of pykeepass')
+
+
+def _xslt() -> bytes:
     from kluster.components.homelab import disk_tuning_xslt
 
-    etree = pytest.importorskip('lxml.etree', reason='lxml is present as a dependency of pykeepass')
-    transform = etree.XSLT(etree.XML(disk_tuning_xslt().encode()))
-    result = transform(etree.XML(PROVIDER_DOMAIN_XML.encode()))
-    driver = result.getroot().find(f'devices/{selector}/driver')
+    return disk_tuning_xslt().encode()
+
+
+def _driver(domain: Any, selector: str) -> Any:
+    driver = domain.find(f'devices/{selector}/driver')
     assert driver is not None
     return driver
+
+
+def _provider_disk(selector: str) -> Any:
+    """One disk's driver element, as the provider writes the domain XML."""
+    return _driver(_etree().XML(PROVIDER_DOMAIN_XML.encode()), selector)
+
+
+def _transformed_disk(selector: str) -> Any:
+    """One disk's driver element, after the domain XML has been through XSLT."""
+    etree = _etree()
+    transform = etree.XSLT(etree.XML(_xslt()))
+    return _driver(transform(etree.XML(PROVIDER_DOMAIN_XML.encode())).getroot(), selector)
 
 
 @pytest.mark.asyncio

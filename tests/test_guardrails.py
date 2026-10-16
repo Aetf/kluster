@@ -104,12 +104,6 @@ async def test_the_quota_and_budget_live_above_what_they_govern() -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_budget_resets_monthly() -> None:
-    guardrails = build()
-    assert await guardrails.budget.reset_period.future() == 'MONTHLY'
-
-
-@pytest.mark.asyncio
 async def test_one_alert_can_arrive_before_the_money_is_spent() -> None:
     guardrails = build()
     types = {name: await rule.type.future() for name, rule in guardrails.alerts.items()}

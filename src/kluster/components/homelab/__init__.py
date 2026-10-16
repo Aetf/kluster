@@ -241,7 +241,9 @@ def disk_tuning_xslt() -> str:
 
     The stylesheet takes no parameters and is read verbatim: the disk format it
     names is `DISK_FORMAT`, which the volume is created with, and the suite
-    holds the two in step.
+    holds the two in step. The reasons for both settings are stated here rather
+    than in the stylesheet, whose text is the domain's `xml.xslt` input: an edit
+    to it, a comment included, is a change to the domain.
     """
     return templates.load(_TEMPLATE_PACKAGE, 'templates/disk-tuning.xslt')
 
@@ -342,6 +344,11 @@ class HomelabHost(Component, pulumi_type='kluster:homelab:HomelabHost'):
             # which is the image and the room Talos boots into after it.
             source=image_path,
             opts=self.child_opts(
+                # The worker's disk is everything the node holds, and every
+                # field of a libvirt volume replaces it, so neither a delete
+                # nor a replacement happens by accident. Rebuilding the worker
+                # from a newer image is the deliberate unprotect, replace,
+                # protect again the module docstring describes.
                 protect=True,
                 # Both are facts about the volume's *creation*, and every field
                 # of a libvirt volume replaces the volume, so neither may
@@ -378,9 +385,12 @@ class HomelabHost(Component, pulumi_type='kluster:homelab:HomelabHost'):
             memory=memory_gib * MIB_PER_GIB,
             machine=MACHINE_TYPE,
             cpu=libvirt.DomainCpuArgs(mode=CPU_MODE),
-            # A cluster node that does not come back from a host reboot is a
-            # node somebody has to remember to start.
+            # Started with the host: a cluster node that does not come back
+            # from a host reboot is a node somebody has to remember to start.
             autostart=True,
+            # Running, and started again by the next apply that finds it
+            # stopped: the day-1 chain waits on this node answering. It is
+            # the provider's default, stated so the decision reads here.
             running=True,
             # virtio-blk: the provider's default bus, and `scsi` is left off
             # deliberately — a virtio-scsi controller would buy nothing that
