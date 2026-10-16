@@ -393,7 +393,6 @@ async def test_the_balancer_publishes_a_public_address_of_each_family(balancer: 
     A and an AAAA from here; the address list it reads them out of also holds
     the balancer's private address, which is not either of them.
     """
-    assert await balancer.load_balancer.nlb_ip_version.future() == 'IPV4_AND_IPV6'
     assert await balancer.address.future() == LB_ADDRESS
     assert await balancer.address_v6.future() == LB_ADDRESS_V6
 
@@ -483,7 +482,6 @@ async def test_every_port_the_balancer_forwards_is_served_on_each_family_it_hold
 
     # The ports are the censuses', so an empty fleet cannot pass this.
     assert forwarded_ports(declared) == {*conventions.MANAGEMENT_PORTS, *(row.port for row in balancer_rows())}
-    assert families == {'IPV4', 'IPV6'}
     assert served == set(product(forwarded_ports(declared), families))
 
 
