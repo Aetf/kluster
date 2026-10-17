@@ -118,7 +118,7 @@ def credential_files(tmp_path: Path) -> Iterator[Path]:
     nothing. A fixture wider than a case opens the same block,
     `file_layer.opened`, on a directory from `tmp_path_factory`.
     """
-    with file_layer.opened(tmp_path / workstation.DIRECTORY) as directory:
+    with file_layer.opened(workstation.slots(tmp_path)) as directory:
         yield directory
 
 

@@ -209,12 +209,10 @@ file in that directory too, unless `KLUSTER_KDBX` names one elsewhere.
     Nothing is collected from there without `RUN_LIVE_DRILLS=1` (§5).
 -   **What it does not reach** is a resolution outside the test process's
     own code: a process a case starts that imports `kluster` finds its own
-    checkout from its own copy of the package, and a path formed by hand
-    from `workstation.repo_root()` rather than through `slots` is outside
-    the replacement. Today's instances are none: the children that import
-    `kluster` are handed a checkout under `tmp_path` or a working directory,
-    or run an installed copy with no checkout around it
-    (`tests/test_machine.py`).
+    checkout from its own copy of the package. Today's instances are none:
+    the children that import `kluster` are handed a checkout under
+    `tmp_path` or a working directory, or run an installed copy with no
+    checkout around it (`tests/test_machine.py`).
 
 `tests/test_harness_isolation.py` holds the closed layer in a child run whose
 running checkout the case made itself, under its `tmp_path`, with a copy of the

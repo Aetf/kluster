@@ -84,7 +84,7 @@ def _checkout(checkout: Path) -> Path:
 
 def _fill_slots(checkout: Path) -> dict[str, str]:
     """Write every slot `mise.toml` reads into `checkout`; what they resolve to."""
-    slots = checkout / lib_workstation.DIRECTORY
+    slots = lib_workstation.slots(checkout)
     bundle = slots / stack_environment.BUNDLE_SLOT
     bundle.mkdir(parents=True)
     _ = (bundle / bundle_files.URL_FILE).write_text(SLOT_URL + '\n')

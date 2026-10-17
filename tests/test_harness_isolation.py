@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from kluster.lib import bundle, stack_environment
+from kluster.lib import workstation as lib_workstation
 from kluster.scripts.credentials import masters, workstation
 
 if TYPE_CHECKING:
@@ -372,7 +373,7 @@ def test_the_running_checkouts_file_layer_is_closed_to_every_reader(tmp_path: Pa
         ROOT / 'src' / 'kluster', checkout / 'src' / 'kluster', ignore=shutil.ignore_patterns('__pycache__')
     )
     (checkout / 'mise.toml').write_text('')
-    layer = checkout / workstation.DIRECTORY
+    layer = lib_workstation.slots(checkout)
     key = layer / stack_environment.BUNDLE_SLOT / bundle.KEY_FILE
     kit = layer / workstation.KIT
     decoys = [

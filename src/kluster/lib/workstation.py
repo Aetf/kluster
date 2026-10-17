@@ -55,7 +55,9 @@ log = logging.getLogger(__name__)
 
 #: The one git-ignored directory. Named for what it holds rather than hidden
 #: under a tool's name: it survives any of the tools that read from it.
-DIRECTORY = '.credentials'
+#: Private, so that no other module forms the path from it: `slots` is the one
+#: place the directory is formed, and the place the test harness closes.
+_DIRECTORY = '.credentials'
 
 
 class WorkstationError(RuntimeError):
@@ -84,7 +86,7 @@ def slots(checkout: Path) -> Path:
     the test harness replaces this attribute for the life of its process,
     and a copy bound by `from`-import is one the replacement never reaches.
     """
-    return checkout / DIRECTORY
+    return checkout / _DIRECTORY
 
 
 def directory() -> Path:

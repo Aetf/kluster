@@ -39,15 +39,16 @@ from kluster.lib import workstation
 if TYPE_CHECKING:
     from collections.abc import Generator
 
-#: The running checkout's `.credentials/` while the layer is closed: below a
-#: device file, so every slot is absent and nothing can be created, and a
-#: refusal names a path that says why.
-CLOSED = Path(os.devnull) / workstation.DIRECTORY
-
 #: The production function, captured before anything replaces it: what every
 #: checkout other than the running one is answered with, and what `live`
 #: opens the running one's real layer through.
 _SLOTS = workstation.slots
+
+#: The running checkout's `.credentials/` while the layer is closed: below a
+#: device file, so every slot is absent and nothing can be created, and a
+#: refusal names a path that says why. Formed by the captured function, so it
+#: is the same path whether or not the closure is installed yet.
+CLOSED = _SLOTS(Path(os.devnull))
 
 
 @dataclass

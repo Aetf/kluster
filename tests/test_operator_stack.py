@@ -275,7 +275,7 @@ def repository(tmp_path: Path) -> Repository:
 
 
 def _fill_slots(checkout: Path) -> None:
-    slots = checkout / workstation.DIRECTORY
+    slots = workstation.slots(checkout)
     (slots / stack_environment.BUNDLE_SLOT).mkdir(parents=True)
     _ = (slots / stack_environment.BUNDLE_SLOT / bundle.URL_FILE).write_text(SLOT_URL + '\n')
     _ = (slots / credential_slots.PASSPHRASE).write_text('a-slot-stack-passphrase\n')
@@ -342,7 +342,7 @@ def test_the_estate_backend_stack_runs_under_its_slots_and_nothing_its_caller_ca
 
     assert run.plan() == driver.NOTHING_PLANNED
 
-    slot = checkout / workstation.DIRECTORY / stack_environment.BUNDLE_SLOT
+    slot = workstation.slots(checkout) / stack_environment.BUNDLE_SLOT
     for env in fake.envs:
         assert env['PULUMI_CONFIG_PASSPHRASE'] == OPERATOR_PASSPHRASE
         assert env['PULUMI_BACKEND_URL'] == SLOT_URL
@@ -378,7 +378,7 @@ def test_a_machine_without_the_operator_passphrase_is_refused_naming_the_command
     """No layer of the chain holds it and nobody is at a terminal: the refusal names the command that fills it."""
     checkout = tmp_path / 'kluster'
     _fill_slots(checkout)
-    (checkout / workstation.DIRECTORY / stack_environment.OPERATOR_PASSPHRASE_SLOT).unlink()
+    (workstation.slots(checkout) / stack_environment.OPERATOR_PASSPHRASE_SLOT).unlink()
 
     with pytest.raises(stack_environment.NoOperatorPassphrase) as refusal:
         _ = driver.Run.open('github', checkout, pulumi=FakePulumi(), base=AMBIENT)
@@ -406,7 +406,7 @@ def test_the_operator_passphrase_is_found_by_the_chain_in_its_order(
     """
     checkout = tmp_path / 'kluster'
     _fill_slots(checkout)
-    slot = checkout / workstation.DIRECTORY / stack_environment.OPERATOR_PASSPHRASE_SLOT
+    slot = workstation.slots(checkout) / stack_environment.OPERATOR_PASSPHRASE_SLOT
     slot.unlink()
     held = LAYERS[LAYERS.index(first) :]
     if 'store' in held:
@@ -434,7 +434,7 @@ def test_an_empty_layer_is_passed_over_rather_than_handed_to_pulumi(
     checkout = tmp_path / 'kluster'
     _fill_slots(checkout)
     secret_store.items[(acquisition.KEYRING_SERVICE, stack_environment.OPERATOR_PASSPHRASE_ACCOUNT)] = '  '
-    _ = (checkout / workstation.DIRECTORY / stack_environment.OPERATOR_PASSPHRASE_SLOT).write_text('\n')
+    _ = (workstation.slots(checkout) / stack_environment.OPERATOR_PASSPHRASE_SLOT).write_text('\n')
     monkeypatch.setenv(stack_environment.OPERATOR_PASSPHRASE_ENV, 'from-variable')
 
     assert stack_environment.operator_passphrase(checkout, lambda _question: None) == 'from-variable'
@@ -443,7 +443,7 @@ def test_an_empty_layer_is_passed_over_rather_than_handed_to_pulumi(
 def test_an_empty_answer_at_the_prompt_is_refused(tmp_path: Path) -> None:
     checkout = tmp_path / 'kluster'
     _fill_slots(checkout)
-    (checkout / workstation.DIRECTORY / stack_environment.OPERATOR_PASSPHRASE_SLOT).unlink()
+    (workstation.slots(checkout) / stack_environment.OPERATOR_PASSPHRASE_SLOT).unlink()
 
     with pytest.raises(stack_environment.NoOperatorPassphrase) as refusal:
         _ = stack_environment.operator_passphrase(checkout, lambda _question: '  ')
@@ -465,7 +465,7 @@ def test_a_run_at_a_terminal_is_asked_for_the_operator_passphrase_the_chain_does
     """The chain's last layer as a run meets it: a prompt where standard input is a terminal, and its answer used."""
     checkout = tmp_path / 'kluster'
     _fill_slots(checkout)
-    (checkout / workstation.DIRECTORY / stack_environment.OPERATOR_PASSPHRASE_SLOT).unlink()
+    (workstation.slots(checkout) / stack_environment.OPERATOR_PASSPHRASE_SLOT).unlink()
     monkeypatch.setattr('sys.stdin', _Terminal())
     asked: list[str] = []
 
@@ -488,7 +488,7 @@ def test_an_unreadable_slot_is_refused_naming_it(tmp_path: Path, monkeypatch: py
     """A slot that is there and cannot be read is the operator's to repair, not a layer to skip or a traceback."""
     checkout = tmp_path / 'kluster'
     _fill_slots(checkout)
-    slot = checkout / workstation.DIRECTORY / stack_environment.OPERATOR_PASSPHRASE_SLOT
+    slot = workstation.slots(checkout) / stack_environment.OPERATOR_PASSPHRASE_SLOT
     slot.chmod(0)
     monkeypatch.setenv(stack_environment.OPERATOR_PASSPHRASE_ENV, 'from-variable')
 
@@ -2656,7 +2656,7 @@ def test_a_backend_whose_traffic_is_dropped_does_not_answer(
 def test_a_checkout_with_no_bundle_is_refused_before_anything_runs(repository: Repository) -> None:
     # The run's hooks connect with the bundle and the driver reads the backend
     # through it, so a run without one would fail only after it had written.
-    shutil.rmtree(repository.checkout / workstation.DIRECTORY / stack_environment.BUNDLE_SLOT)
+    shutil.rmtree(workstation.slots(repository.checkout) / stack_environment.BUNDLE_SLOT)
     fake = FakePulumi(printed=_planned(*_address('')))
     run = driver.Run.open(STATE_BACKEND, repository.checkout, pulumi=fake, base=AMBIENT)
 
