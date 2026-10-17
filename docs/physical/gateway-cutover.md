@@ -606,9 +606,8 @@ not moved.
 -   **The host-side timers are stopped**: `check-gw.timer`,
     `gw-backup.timer` and `autodeploy-containers.timer` — see step 0,
     which is inside the window only because it must not be forgotten.
--   **The window's time limit is written down: `<LIMIT: set by the
-    operator before the window opens>`**, counted from step 1's first
-    stop. From that moment the LAN has no resolver, so the limit is how
+-   **The window's time limit is 30 minutes** (operator ruling,
+    `kluster-ops#603`), counted from step 1's first stop. From that moment the LAN has no resolver, so the limit is how
     long the household goes without DNS while a failure is read. When it
     passes with alice and bob not answering §5's first two readings, the
     window stops diagnosing and runs §6 (§4 step 4).
@@ -782,7 +781,7 @@ five seconds instead of settling in `failed`, and §6 by hand is the only
 way back.
 
 **The reading has the time limit §3 wrote down**, counted from step 1:
-`<LIMIT: set by the operator before the window opens>`. Once it has
+30 minutes. Once it has
 passed with alice and bob not answering §5's first two readings, the
 window stops diagnosing, takes down whatever it learned, and runs §6.
 A step 3 still running at the limit is let return first rather than
