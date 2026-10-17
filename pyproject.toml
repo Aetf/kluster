@@ -204,6 +204,7 @@ select = [
     "C4",   # comprehensions and constructors that say the same thing more plainly
     "SIM",  # branches and context managers that say the same thing more plainly
     "RUF",  # ruff's own rules; RUF100 fails a `noqa` that suppresses nothing
+    "ICN",  # import conventions; what is configured below is the member imports banned
 ]
 # Deliberately not selected: `S` (bandit). What it reports here is the test
 # suite's asserts and fixtures, names and arguments that look like credentials,
@@ -214,6 +215,12 @@ select = [
 # The en dash is typography this tree uses on purpose (`§1–2`, `M0–M4`); the
 # confusable-character rules (RUF001-RUF003) still catch every other lookalike.
 allowed-confusables = ["–"]
+
+[tool.ruff.lint.flake8-import-conventions]
+# Modules the test harness replaces an attribute of, which are imported as a
+# module and never by member (docs/style/python.md, "Repository rules"):
+# `from module import name` binds a copy the replacement never reaches.
+banned-from = ["kluster.lib.workstation"]
 
 ##
 ## Type checker

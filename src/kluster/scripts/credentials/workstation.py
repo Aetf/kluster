@@ -30,12 +30,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from kluster.lib import workstation as lib_workstation
 from kluster.lib.stack_environment import OPERATOR_PASSPHRASE_SLOT, PHYSICAL_PASSPHRASE_SLOT
-from kluster.lib.workstation import DIRECTORY, WorkstationError, directory, repo_root, secret_dir, write
 
 __all__ = (
     'BUNDLE',
-    'DIRECTORY',
     'KIT',
     'OPERATOR_PASSPHRASE',
     'PASSPHRASE',
@@ -53,6 +52,16 @@ __all__ = (
     'secret_dir',
     'write',
 )
+
+# The mechanics, re-exported for this package's callers. Each of these looks
+# `slots` up on its own module at call time, so the test harness's replacement
+# of that one attribute reaches every caller through them
+# (framework/testing.md §1.1).
+WorkstationError = lib_workstation.WorkstationError
+directory = lib_workstation.directory
+repo_root = lib_workstation.repo_root
+secret_dir = lib_workstation.secret_dir
+write = lib_workstation.write
 
 #: The seed kit's default location (§2.1). `$KLUSTER_KDBX` overrides it, which
 #: is how a kit kept on removable media or shared between checkouts is used.

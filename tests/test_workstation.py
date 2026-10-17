@@ -110,7 +110,7 @@ def test_a_missing_level_is_created_0700(tmp_path: Path) -> None:
 def test_an_existing_credentials_tree_is_narrowed_to_its_owner(checkout: Path) -> None:
     # A `.credentials/` copied in from another machine keeps the mode the
     # copy gave it; the first write into it is what holds it to `0700`.
-    tree = checkout / workstation.DIRECTORY
+    tree = workstation.slots(checkout)
     nested = tree / 'state-backend'
     nested.mkdir(parents=True)
     tree.chmod(0o755)
@@ -136,11 +136,11 @@ def test_a_checkout_reached_through_a_symlink_still_has_its_tree_narrowed(
     linked = tmp_path / 'linked'
     linked.symlink_to(real, target_is_directory=True)
     monkeypatch.setattr(workstation, 'repo_root', lambda: linked)
-    tree = real / workstation.DIRECTORY
+    tree = workstation.slots(real)
     tree.mkdir()
     tree.chmod(0o755)
 
-    _ = workstation.secret_dir(real / workstation.DIRECTORY)
+    _ = workstation.secret_dir(workstation.slots(real))
 
     assert _mode(tree) == 0o700
 
@@ -165,7 +165,7 @@ def test_a_link_out_of_the_credentials_tree_does_not_carry_the_narrowing_with_it
     # directory the operator owns elsewhere must not be read as part of it.
     media = tmp_path_factory.mktemp('media')
     media.chmod(0o755)
-    tree = checkout / workstation.DIRECTORY
+    tree = workstation.slots(checkout)
     tree.mkdir(mode=0o700)
     (tree / 'kit').symlink_to(media, target_is_directory=True)
 
@@ -175,7 +175,7 @@ def test_a_link_out_of_the_credentials_tree_does_not_carry_the_narrowing_with_it
 
 
 def test_a_path_that_climbs_out_of_the_credentials_tree_narrows_nothing_outside_it(checkout: Path) -> None:
-    tree = checkout / workstation.DIRECTORY
+    tree = workstation.slots(checkout)
     tree.mkdir(mode=0o700)
     sibling = checkout / 'sibling'
     sibling.mkdir()

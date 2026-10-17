@@ -83,6 +83,14 @@ language (a config file, a rules program) lives in a file beside the
 module, loaded by the shared mechanism — string literals in Python are
 for names and one-liners the code owns.
 
+**A module the test harness replaces an attribute of is imported as a
+module, never by member.** The harness's replacement is one assignment to
+the module's attribute, which reaches only callers that look the name up
+there at call time, while `from module import name` binds a copy that the
+replacement never reaches. ruff's `banned-from` lists each such module.
+Today's instance is `kluster.lib.workstation`, whose `slots` the harness
+replaces (framework/testing.md §1.1).
+
 ## Tests
 
 A test case reads top to bottom as: irrelevant setup out of sight
