@@ -175,6 +175,8 @@ Every release the installation runs and did not write:
 -   the Python interpreter every job runs, the build uv installs for
     `.python-version`;
 -   the Python packages in `uv.lock`;
+-   the packages the build environments `uv sync` builds the project and
+    the SDKs in install;
 -   GitHub Actions;
 -   mise, and the tools `mise.toml` pins;
 -   the ZeroTier client the CI member installs;
@@ -224,6 +226,14 @@ Today:
 **A pin that names a version alone**, and so moves under such an upload.
 Each of these carries its reason, and these are accepted residuals:
 
+-   the packages a build environment installs (the backends of the
+    project and the SDKs, their own dependencies, and what a backend asks
+    for to build an editable install), each held to one version by
+    `pyproject.toml`'s `[tool.uv] build-constraint-dependencies` and moved
+    by renovate in a pull request, under the release age. None is among
+    the packages `uv.lock` hashes. The index refuses a file uploaded again
+    under its name, but a release can gain a new file; versions without
+    hashes are the operator's ruling (Aetf/kluster-ops#619);
 -   a Helm chart served only from an HTTP repository, which offers
     nothing to check a download against: `chart-volsync` and
     `chart-metrics-server` (`Pulumi.yaml` says why beside them);
