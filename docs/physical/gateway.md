@@ -1469,6 +1469,16 @@ apply is run in two parts around the cutover window:
     state to the declaration, so the declaration carries its full
     inputs and ignores no field.
 
+    **Before the run with no targets, the `physical` key's policy
+    carries its tenancy grants.** That run creates the guardrails in the
+    root compartment, which the compartment grant alone does not reach
+    (credentials.md §3). A `kluster-physical` policy minted before
+    `manage quota` and `manage usage-budgets in tenancy` were part of it
+    is brought up to date by running
+    `mise x uv -- uv run credentials derived oci-physical mint` again,
+    which also rotates the key into `Pulumi.physical.yaml`, committed as
+    step 7 commits it.
+
     **The run with no targets converges it, and is read before it is
     run.** It plans one `~` update on the network, from Central's
     values to the declaration, and one `+` create per roster entry —

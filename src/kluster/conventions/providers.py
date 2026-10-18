@@ -22,9 +22,10 @@ class CompartmentMissing(LookupError):
 class Compartment:
     """The OCI compartment one consumer administers, under both of its names.
 
-    A compartment is the whole of what a §3 OCI key may touch
-    (docs/credentials.md §3): each consumer administers its own and is a
-    stranger outside it. That makes the boundary a decision of this program
+    A compartment is what a §3 OCI key administers (docs/credentials.md
+    §3): each consumer administers its own and is a stranger outside it,
+    except for the tenancy-level families a consumer's register row names
+    (`physical`'s guardrails). That makes the boundary a decision of this program
     rather than a fact of the tenancy, so it is named here — and named twice,
     because the two halves are established at different moments.
 

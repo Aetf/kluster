@@ -608,6 +608,16 @@ def _policy(tenancy: Tenancy, name: str) -> list[str]:
     return next(policy.statements for policy in tenancy.identity.policies.values() if policy.name == name)
 
 
+def _compartment_grants(tenancy: Tenancy, name: str) -> list[str]:
+    """The statements of the policy of that name that grant inside a compartment.
+
+    What a case about which compartment the mint confined a key to reads: the
+    `physical` key also holds families in the tenancy itself, which
+    `test_physical_reach` holds against what its stack declares there.
+    """
+    return [statement for statement in _policy(tenancy, name) if ' in compartment ' in statement]
+
+
 def test_a_mint_creates_the_compartment_conventions_names_for_the_consumer(
     seeded: KdbxStore, tenancy: Tenancy, unrecorded: None
 ) -> None:
@@ -620,7 +630,9 @@ def test_a_mint_creates_the_compartment_conventions_names_for_the_consumer(
     assert _compartments(tenancy) == [intended.name]
     created = next(iter(tenancy.identity.compartments.values()))
     name = oci_iam.Identity.name_for(conventions.PHYSICAL)
-    assert _policy(tenancy, name) == [f'Allow group {name} to manage all-resources in compartment id {created.id}']
+    assert _compartment_grants(tenancy, name) == [
+        f'Allow group {name} to manage all-resources in compartment id {created.id}'
+    ]
 
 
 def test_the_ocid_of_a_new_compartment_is_announced_as_the_line_to_commit(
@@ -799,7 +811,9 @@ def test_a_compartment_named_on_the_command_line_is_taken_as_given(seeded: KdbxS
     # nothing is looked up, nothing is created, and nothing is compared.
     assert tenancy.identity.compartments == {}
     name = oci_iam.Identity.name_for(conventions.PHYSICAL)
-    assert _policy(tenancy, name) == [f'Allow group {name} to manage all-resources in compartment id {drill}']
+    assert _compartment_grants(tenancy, name) == [
+        f'Allow group {name} to manage all-resources in compartment id {drill}'
+    ]
 
 
 def test_a_seed_from_another_tenancy_creates_nothing(

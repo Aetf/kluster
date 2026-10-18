@@ -626,7 +626,7 @@ cell would say `pending` to an operator already being served.
 
 | Credential | From | Scope | Slot | Consumer |
 | --- | --- | --- | --- | --- |
-| OCI API key (`physical`) | OCI seed key | Its own user, group and policy; administrator of the `physical` compartment and a stranger outside it | Pulumi config secret | `physical` |
+| OCI API key (`physical`) | OCI seed key | Its own user, group and policy; administrator of the `physical` compartment, and in the tenancy `manage quota` and `manage usage-budgets` for the quota and the budget its guardrails declare in the root compartment, which reach the cap that limits it; a stranger to everything else | Pulumi config secret | `physical` |
 | OCI API key (state backend) | OCI seed key (`credentials derived oci-state-backend mint`) | The same shape, over the appliance's own compartment | Pulumi config secret (`state-backend`) | the `state-backend` stack, which builds its OCI provider with it (rfc-006 §4) |
 | Cloudflare token (zones) | CF seed token | DNS edit, this installation's zones only | Pulumi config secret | `dns`, `apps` |
 | Cloudflare token (DNS-01) | CF seed token (`credentials derived cloudflare-dns01 mint`) | DNS edit and zone read on the zones the cluster serves — the primary zone, and every zone a route publishes in (`conventions.routes.served_zones`). The excess, which the platform cannot scope away: cert-manager edits only `_acme-challenge` records, and Cloudflare scopes a token to zones rather than to records within one, so the token can edit every record in those zones | SealedSecret (`k8s-base`, `sealedSecrets.cloudflare-dns01`, in cert-manager's namespace) | cert-manager's cluster issuer |
@@ -750,10 +750,30 @@ rather than kept in the backend it declares (framework/pulumi.md §3.3), so
 its key needs no backend to exist first.
 
 Scope is a compartment rather than a list of verbs, which is what makes the
-two rows independent. Each user administers its own compartment and is a
-stranger everywhere else, so what a consumer may do widens by declaring a
-resource in its own compartment rather than by editing a policy, and a
-compromise of either key is confined to a boundary the console shows.
+two rows independent. Each user administers its own compartment, so what a
+consumer may do there widens by declaring a resource in it rather than by
+editing a policy, and a compromise of either key is confined to a boundary
+the console shows.
+
+**A resource OCI keeps in the root compartment is the exception**, because
+no compartment boundary reaches it. The `physical` stack declares two, the
+quota and the budget of its spend guardrails
+(`components/cloud/guardrails.py`), which OCI keeps in the root compartment
+whatever compartment they act on. So the `physical` key also holds, in the
+tenancy, the two families Oracle authorizes those under, `manage quota` and
+`manage usage-budgets`, and nothing else there (`oci_iam.TENANCY_POLICIES`;
+no other consumer holds any). Both are at `manage` because no lower verb
+covers what a run does: Oracle grants creating and updating a quota at
+`manage` alone, and deleting a budget's alert rule likewise, which a run
+does when the roll of alert rules loses one. That reach includes the cap
+that limits the key, since it can raise or remove the quota and rewrite the
+budget and its alerts. The residual is accepted, and threat-model.md §4
+says against whom. A test holds every resource `physical` declares in the
+root compartment against the families this policy grants, so a new one
+declared without its grant fails there rather than at the first `up`. The
+mint converges an existing policy to the register's statements, so
+re-running `credentials derived oci-physical mint` is what brings a group
+minted before a change up to it.
 
 **The compartment is part of the mint, not a prerequisite of it.**
 `conventions.OCI_TENANCY.compartments` names one per consumer, and the mint creates

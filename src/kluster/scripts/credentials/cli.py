@@ -971,7 +971,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="the physical stack's OCI user and API key",
         description=(
             'The OCI credential the physical stack acts with: its own IAM user, administering one '
-            'compartment and a stranger outside it. Which stack takes it is not a choice -- the user is '
+            'compartment and, in the tenancy, only the quota and budget its guardrails need. Which stack takes it is not a choice -- the user is '
             'named after this row, and minting retires every other key of that name.'
         ),
     )
@@ -981,7 +981,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="mint the user, group, policy and key from the seed into that stack's config secrets",
         description=(
             'Sign as the OCI seed to create the compartment this stack acts in, the user, its group and '
-            'the policy that confines that group to the compartment, then write the signing configuration '
+            "the policy that confines that group to the compartment and the guardrails' tenancy families, "
+            'then write the signing configuration '
             "into the stack's committed config: the user, the fingerprint and the private key, all "
             'encrypted. The tenancy, the region and the compartment do not travel with the credential -- '
             'each is a constant `conventions` names, and the stack reads it there; a compartment created '
