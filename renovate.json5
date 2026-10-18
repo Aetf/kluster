@@ -163,6 +163,19 @@
       rangeStrategy: 'replace',
     },
     {
+      // The build environments' pins (`[tool.uv] build-constraint-dependencies`
+      // in `pyproject.toml`, read by the custom manager below), in the python
+      // group with the libraries: a backend changes no resource either, and
+      // the root's own `[build-system]` pin of hatchling, which the pep621
+      // manager reads, has to move in the same pull request as its
+      // constraint, or the build environment asks for two versions at once.
+      matchDepTypes: [
+        'build-constraint',
+      ],
+      groupName: 'python dependencies',
+      groupSlug: 'python',
+    },
+    {
       // The kubernetes provider, out of the python group and into one of its
       // own: `sdks/crds` is generated against one provider version and
       // registers its resources at that version, so `pyproject.toml` pins the
@@ -933,6 +946,29 @@
       ],
       depNameTemplate: 'pulumi-kubernetes',
       datasourceTemplate: 'pypi',
+    },
+    {
+      // Every package a build environment installs, pinned in `pyproject.toml`'s
+      // `[tool.uv] build-constraint-dependencies`, which the pep621 manager
+      // does not read: it reads `index`, `sources` and `dev-dependencies` from
+      // that table and nothing else. The first pattern finds the list and the
+      // second each entry in it, so a requirement elsewhere in the file is not
+      // read twice. A test holds every entry to the second pattern. `uv.lock`
+      // records the list, and renovate runs `uv lock` only for the pep621
+      // manager's upgrades: a branch whose upgrades are all constraints
+      // arrives with the lock stale, failing `uv sync --locked`, until
+      // someone runs `uv lock` on it.
+      customType: 'regex',
+      managerFilePatterns: [
+        '/^pyproject\\.toml$/',
+      ],
+      matchStringsStrategy: 'recursive',
+      matchStrings: [
+        'build-constraint-dependencies = \\[[^\\]]*\\]',
+        '"(?<depName>[A-Za-z0-9][A-Za-z0-9._-]*)==(?<currentValue>[^"]+)"',
+      ],
+      datasourceTemplate: 'pypi',
+      depTypeTemplate: 'build-constraint',
     },
     {
       // The chart pins served from an HTTP chart repository: the key's

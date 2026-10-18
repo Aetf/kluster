@@ -102,6 +102,29 @@ default-groups = ["dev"]
 # `minimumReleaseAge`, and a test holds the two equal. A relative value, so
 # `uv.lock` records the span, not a date.
 exclude-newer = "7 days"
+# Every package a build environment installs -- the root's backend, the
+# workspace SDKs', each backend's own dependencies and what a backend asks for
+# on top to build an editable install -- at one version each. None of them is
+# in `uv.lock`, whose hashes hold the runtime set; without these the age above
+# is all that holds them, and a release would reach every job a week after
+# its upload with no pull request to read. Constraints rather than an edit to
+# a `[build-system]`, because the SDKs' is `pulumi install`'s to write. A
+# renovate custom manager moves each line (`renovate.json5`), and
+# `tests/test_build_constraints.py` holds every `[build-system]` requirement
+# the sync builds to one of them. `uv.lock` records the list, so a moved line
+# needs `uv lock` beside it; renovate relocks only for a manager of its own
+# with an upgrade on the branch, so a pull request that moves constraints and
+# nothing the pep621 manager reads is relocked by hand on its branch.
+build-constraint-dependencies = [
+    "editables==0.6",
+    "hatchling==1.32.4",
+    "packaging==26.3",
+    "pathspec==1.1.1",
+    "pluggy==1.6.0",
+    "setuptools==84.0.0",
+    "tomlkit==0.15.1",
+    "trove-classifiers==2026.9.21.13",
+]
 
 # Pin the package index so locking doesn't pick up ambient registry settings
 # (e.g. UV_INDEX_URL pointing at a private mirror). Note CLI flags and env
