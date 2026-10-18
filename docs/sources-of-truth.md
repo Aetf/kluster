@@ -154,6 +154,13 @@ Merging to `main` is an apply for the stacks the CI chain deploys
 (framework/ci.md §3), so the interim rule's "never applied" rests, stack
 by stack, on something other than the merge:
 
+-   **Every stack:** `deploy.yml` is disabled (operator ruling,
+    2026-10-17), so a merge starts no deploy at all until
+    physical/gateway-cutover.md §8.3 enables it as the step that arms
+    CI. That is the lock; the missing identity below is what stands
+    behind it. Read it with
+    `gh api repos/Aetf/kluster/actions/workflows/deploy.yml --jq .state`,
+    which answers `disabled_manually` until then.
 -   **`dns`:** the chain stops at `plan-physical`, because no
     Environment holds a ZeroTier identity: G3 finds none in `dns`,
     `physical` or `physical-plan`, and the last `deploy.yml` run failed
@@ -429,7 +436,7 @@ gh run list --repo Aetf/kluster-code --workflow pulumi-deploy.yml --limit 3
     `gh run` reads.
 -   **G3** lists secret names, never values. A `ZEROTIER_IDENTITY` on
     `dns` and on `physical-plan` means the next push to `main` applies
-    `dns` (§3).
+    `dns` once `deploy.yml` is enabled (§3).
 
 #### H — the homelab host
 
