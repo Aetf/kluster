@@ -1700,10 +1700,11 @@ one:
 
 ### 8.3 CI's overlay identities
 
-This is the step that arms CI. Until it runs, no Environment holds a
-ZeroTier identity, so the deploy chain stops at `plan-physical` and
-nothing a merge starts applies `dns` (sources-of-truth.md §3). Once it
-has run, every merge applies `dns` with no reviewer. That is why it
+This is the step that arms CI. Until it runs, `deploy.yml` is disabled,
+so a merge starts no deploy at all, and no Environment holds a ZeroTier
+identity, so a deploy started by hand would stop at `plan-physical`
+(sources-of-truth.md §3). Once it has run, every merge applies `dns`
+with no reviewer. That is why it
 shares a sitting with §8.2, with no merge between them, and why it
 waits for gateway.md §2.4: the per-run join it hands CI becomes
 load-bearing here (gateway.md §2.5).
@@ -1760,10 +1761,20 @@ kubeconfig (operations.md §2.5); their failure makes the run red and
 starts its alert job, which dispatches into the ops repository, where
 nothing handles it yet (operations.md §4).
 
-**The way back** takes the identities out of the Environments, which
-stops the deploy chain at `plan-physical` again:
+**Then the deploy chain is enabled**, once the reading has passed, and
+only then: from here a merge applies.
 
 ```sh
+gh workflow enable deploy.yml --repo Aetf/kluster
+gh api repos/Aetf/kluster/actions/workflows/deploy.yml --jq .state   # active
+```
+
+**The way back** disables the chain again and takes the identities out
+of the Environments, so a deploy started by hand also stops at
+`plan-physical`:
+
+```sh
+gh workflow disable deploy.yml --repo Aetf/kluster
 gh secret delete ZEROTIER_IDENTITY --env dns --repo Aetf/kluster
 gh secret delete ZEROTIER_IDENTITY --env physical --repo Aetf/kluster
 gh secret delete ZEROTIER_IDENTITY --env physical-plan --repo Aetf/kluster
