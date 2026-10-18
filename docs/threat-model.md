@@ -260,6 +260,13 @@ with no age and no merge. These are accepted residuals
     rebuilt;
 -   the UDM's firmware, which the gateway takes on its vendor's schedule
     with its auto-update left on;
+-   the Debian packages the gateway installs on the UDM by name
+    (`systemd-container`, `libnss-mymachines`, `skopeo`, `umoci`,
+    `rsync`), from the apt sources and keys the firmware configures, on
+    the first push and on the first boot after each firmware update: the
+    trust is the firmware's own, which the line above accepts, and the
+    first two cannot be pinned apart from the firmware's systemd
+    (Aetf/kluster-ops#620);
 -   what a self-built image's `RUN` step fetches in `homelab-containers`,
     whose checks are that repository's matter.
 
