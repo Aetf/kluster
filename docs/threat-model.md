@@ -576,3 +576,18 @@ token is a configuration secret of the `physical` stack (credentials.md
 whatever opens that configuration. The flow rules are worth what they do
 against an actor who holds an overlay identity and nothing else, and
 against that actor they are the whole defense.
+
+The spend quota is the same shape. The `physical` key, which writes it,
+can raise or remove it (credentials.md §3), so no quota constrains
+whatever holds that key: code a run of `physical` executes (§2.6), or a
+session that opens its configuration (§2.3). The quota is worth what it
+does against a mistake made through the stack (§2.2), a shape outside the
+envelope refused at creation, and against that it is the only control
+that refuses rather than reports. **That a holder of the key can spend
+past the envelope is accepted** by the operator's ruling on the third
+clause: closing it moves the guardrails into a stack of their own,
+applied as a principal that holds the tenancy, kept for this alone. What
+still notices sits outside the key. The budget's alerts go to mailboxes
+the key does not hold, so a cap raised by mistake arrives there as spend;
+a holder that also rewrites the alert rules, which the same grant allows,
+is answered by the account's bill.

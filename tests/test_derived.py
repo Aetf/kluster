@@ -629,6 +629,21 @@ def _named(tenancy: Tenancy, name: str) -> str:
     return next(user.id for user in tenancy.identity.users.values() if user.name == name)
 
 
+def _compartment_grants(tenancy: Tenancy, name: str) -> list[list[str]]:
+    """The statements of each policy of that name that grant inside a compartment.
+
+    The `physical` key also holds families in the tenancy itself, for the
+    resources its stack declares in the root compartment; which families, and
+    that they cover those resources, is `test_physical_reach`'s. What these
+    cases hold is which compartment the mint confined the rest to.
+    """
+    return [
+        [statement for statement in policy.statements if ' in compartment ' in statement]
+        for policy in tenancy.identity.policies.values()
+        if policy.name == name
+    ]
+
+
 def test_the_physical_stack_gets_the_signing_configuration_a_provider_needs(
     oci_kit: KdbxStore, tenancy: Tenancy, physical_stack: tuple[pulumi_config.Stack, RecordedPulumi]
 ) -> None:
@@ -690,7 +705,7 @@ def test_the_compartment_comes_from_conventions_when_no_flag_names_one(
     created = next(iter(tenancy.identity.compartments.values()))
     name = oci_iam.Identity.name_for(conventions.PHYSICAL)
     assert created.name == intended.name
-    assert [policy.statements for policy in tenancy.identity.policies.values() if policy.name == name] == [
+    assert _compartment_grants(tenancy, name) == [
         [f'Allow group {name} to manage all-resources in compartment id {created.id}']
     ]
 
@@ -807,24 +822,24 @@ def test_the_recorded_compartment_is_adopted_not_recreated(
     # compartment and act in it, creating nothing.
     name = oci_iam.Identity.name_for(conventions.PHYSICAL)
     assert list(tenancy.identity.compartments) == [recorded_compartment.ocid]
-    assert [policy.statements for policy in tenancy.identity.policies.values() if policy.name == name] == [
+    assert _compartment_grants(tenancy, name) == [
         [f'Allow group {name} to manage all-resources in compartment id {recorded_compartment.ocid}']
     ]
 
 
-def test_the_per_stack_identity_is_confined_to_the_compartment_it_names(
+def test_the_per_stack_identity_administers_the_compartment_it_names(
     oci_kit: KdbxStore, tenancy: Tenancy, physical_stack: tuple[pulumi_config.Stack, RecordedPulumi]
 ) -> None:
     slot, _ = physical_stack
 
     user = derived.oci_physical(oci_kit, stack=slot, compartment_id=COMPARTMENT, connect=tenancy)
 
-    # One name for the user, its group and its policy, and the policy is the
-    # whole of what the key may do — a compartment rather than a verb list.
+    # One name for the user, its group and its policy, and inside a
+    # compartment the policy is that compartment rather than a verb list.
     name = oci_iam.Identity.name_for(conventions.PHYSICAL)
     group = next(candidate for candidate in tenancy.identity.groups.values() if candidate.name == name)
     assert (user, group.id) in tenancy.identity.memberships
-    assert [policy.statements for policy in tenancy.identity.policies.values() if policy.name == name] == [
+    assert _compartment_grants(tenancy, name) == [
         [f'Allow group {name} to manage all-resources in compartment id {COMPARTMENT}']
     ]
     # The seed's own objects are untouched beside them: a per-stack mint adds

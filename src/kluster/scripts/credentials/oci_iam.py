@@ -17,7 +17,9 @@ Three credentials, three lifetimes:
     rotating it is running that command again. The compartment is part of that
     act rather than a prerequisite of it: `conventions` names one per consumer,
     and the mint creates the one that is not there yet — which is what the
-    seed's `manage compartments` is for.
+    seed's `manage compartments` is for. A consumer whose stack has to declare
+    something in the tenancy's root compartment holds the families that takes
+    as well, and only those (`TENANCY_POLICIES`).
 
 **An OCI API key is five things, and the row stores three** (§2): the user
 OCID as `UserName`, the private key as an attachment because it is a file, and
@@ -72,6 +74,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Annotated, Any, Protocol
 
@@ -119,8 +122,26 @@ KEY_QUOTA = 3
 #: (`kluster.lib.templates`).
 SEED_POLICY = 'templates/seed-policy.oci.j2'
 CONSUMER_POLICY = 'templates/consumer-policy.oci.j2'
+GUARDRAILS_POLICY = 'templates/guardrails-policy.oci.j2'
 
-#: The package the two policy files sit beside, for `importlib.resources`.
+#: What a consumer holds in the tenancy itself, beside its compartment, by
+#: consumer: the policy file whose statements its group carries as well. A
+#: consumer absent here holds its compartment and nothing outside it.
+#:
+#: `physical` is here because it declares the spend guardrails
+#: (`components/cloud/guardrails.py`): a compartment quota and a budget live in
+#: the root compartment whatever compartment they act on, so administering its
+#: own compartment does not let the stack create either. Its file grants the
+#: two families those resources are authorized under, `quota` and
+#: `usage-budgets`, and nothing else in the tenancy. Both at `manage`: Oracle's
+#: Quotas policy reference grants creating and updating a quota at `manage`
+#: alone, `use` adding nothing to `read`; and its Budgets page grants deleting
+#: a budget or an alert rule only at `manage`, which a run takes the moment the
+#: roll of alert rules loses one. What this costs is credentials.md §3's and
+#: threat-model.md §4's to say: the key can move the cap that limits it.
+TENANCY_POLICIES: Mapping[str, str] = {conventions.PHYSICAL: GUARDRAILS_POLICY}
+
+#: The package the policy files sit beside, for `importlib.resources`.
 _PACKAGE = 'kluster.scripts.credentials'
 
 
@@ -133,6 +154,11 @@ class _SeedPolicyParams:
 class _ConsumerPolicyParams:
     group: str
     compartment_id: str
+
+
+@dataclass(frozen=True)
+class _TenancyPolicyParams:
+    group: str
 
 
 def _statements(policy: str, params: object) -> tuple[str, ...]:
@@ -179,8 +205,8 @@ class Identity:
 
     Two kinds exist. The seed's (§2) may manage users, groups and policies
     across the tenancy, which is what makes it able to mint the other kind;
-    a consumer's (§3) may do anything it likes inside one compartment and
-    nothing at all outside it.
+    a consumer's (§3) may do anything it likes inside one compartment, and
+    outside it only what `TENANCY_POLICIES` names for that consumer.
 
     One of the provider roles credentials.md §3 describes, in this platform's
     own vocabulary.
@@ -215,17 +241,23 @@ class Identity:
         """The identity one consumer's own key belongs to (§3).
 
         The compartment is the scope, rather than a list of verbs: the user is
-        an administrator of one compartment and a stranger everywhere else, so
-        widening what a consumer may do is a resource it declares in its own
-        compartment rather than an edit here, and the blast radius of the key
-        is a boundary the console shows rather than a list to audit.
+        an administrator of one compartment, so widening what a consumer may
+        do there is a resource it declares in its own compartment rather than
+        an edit here, and the blast radius of the key is a boundary the
+        console shows rather than a list to audit. Outside the compartment it
+        holds what `TENANCY_POLICIES` names for it — families a resource the
+        root compartment alone can hold is authorized under — and is a
+        stranger to everything else.
         """
         name = cls.name_for(consumer)
+        statements = _statements(CONSUMER_POLICY, _ConsumerPolicyParams(group=name, compartment_id=compartment_id))
+        if (tenancy_policy := TENANCY_POLICIES.get(consumer)) is not None:
+            statements += _statements(tenancy_policy, _TenancyPolicyParams(group=name))
         return cls(
             name=name,
             email=f'{name}@{conventions.OCI_TENANCY.user_email_domain}',
             section='§3',
-            statements=_statements(CONSUMER_POLICY, _ConsumerPolicyParams(group=name, compartment_id=compartment_id)),
+            statements=statements,
         )
 
     @property
