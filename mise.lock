@@ -6,9 +6,9 @@ lockfile_version = 2
 url = "https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda"
 checksum = "sha256:1dd3fffd892081df9726d7eb7e0dea6198962ba775bd88842135a4ddb4deb3c9"
 
-[conda-packages.linux-x64."ca-certificates-2026.7.22-hbd8a1cb_0"]
-url = "https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.7.22-hbd8a1cb_0.conda"
-checksum = "sha256:0a0544cf95f64394fe4959286f5c71f5444ad58feb0602e53becb27448d24da6"
+[conda-packages.linux-x64."ca-certificates-2026.10.18-hbd8a1cb_0"]
+url = "https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.10.18-hbd8a1cb_0.conda"
+checksum = "sha256:d65aa0c8990f34e1e86e6b505c8a149fea6cfbfcccef087a77c0bcb0b4fbe159"
 
 [conda-packages.linux-x64."cyrus-sasl-2.1.28-hac629b4_1"]
 url = "https://conda.anaconda.org/conda-forge/linux-64/cyrus-sasl-2.1.28-hac629b4_1.conda"
@@ -261,7 +261,7 @@ conda_deps = [
     "libgomp-16.2.0-he0feb66_7",
     "liblzma-5.8.3-hb03c661_1",
     "libiconv-1.18-h0cb94f2_3",
-    "ca-certificates-2026.7.22-hbd8a1cb_0",
+    "ca-certificates-2026.10.18-hbd8a1cb_0",
     "ncurses-6.6-hdb14827_1",
     "libxcrypt-4.4.38-h280c20c_0",
 ]
