@@ -1340,8 +1340,9 @@ change that marks rule 0.3's gw-config row done deletes this file as
 well, once §8 has run. The procedures §8 uses that run again later are
 written where they outlive it, and §8 points at them: replacing CI's
 overlay identities in credentials.md §4.1 (stage 10), re-attaching a
-node volume through the program in declarative/physical.md §6, and
-removing a DS in declarative/dns.md §1.3.
+node volume through the program in declarative/physical.md §6,
+reading etcd's fsync latency in declarative/physical.md §6, and removing
+a DS in declarative/dns.md §1.3.
 
 ## 8. The rest of the bring-up
 
@@ -1374,11 +1375,17 @@ ip_of() { physical stack output node_public_ips --json | jq -r --arg n "$1" '.[$
 CP=($(physical stack output node_public_ips --json | jq -r '.[]'))
 CPS=$(physical stack output node_public_ips --json | jq -r '[.[]] | join(",")')
 tal() { talosctl --talosconfig "$TC" "$@"; }
+mkdir -p ~/.kube
+(umask 077; physical stack output kubeconfig --show-secrets > ~/.kube/kluster)
 ```
 
 The talosconfig's endpoints are the control planes and its nodes are
 the control planes' public addresses and the worker's LAN address, the
 same names step 5's health gate uses (`components/talos/`, `TalosDay1`).
+The kubeconfig is a cluster-admin credential, so it is written where
+the talosconfig is kept and not into a working directory. The API
+server answers without a network plugin, and the items that read the
+cluster through it use this file.
 
 **The launches found capacity, and the machine API reaches the worker
 through the cloud endpoints.**
@@ -1394,22 +1401,11 @@ answer is the proxy path: `talosctl` dials only the talosconfig's
 endpoints, which are the control planes, and names the worker to them,
 so the answer came through whichever control plane it reached.
 
-**etcd's disk.**
-
-```sh
-for n in "${CP[@]}"; do printf '%s: ' "$n"; tal -n "$n" logs etcd | grep -c 'slow fdatasync'; done
-```
-
-It passes when every control plane prints `0`: etcd logs `slow
-fdatasync` for each write-ahead-log sync that takes longer than a
-second. That is a tripwire and not cluster/nodes.md §1's criterion,
-which is under 10 ms and is read off etcd's
-`etcd_disk_wal_fsync_duration_seconds` histogram. No command here reads
-that histogram. etcd serves it on its client listener, behind the
-client-certificate authentication Talos turns on there, and the machine
-configuration's `etcd` block sets no metrics listener of its own
-(`components/talos/`), so a reader needs one of the two: a listener
-declared, or etcd's client certificate.
+**etcd's disk** is declarative/physical.md §6's etcd fsync item, both
+of its halves: the reading of etcd's fsync histogram against
+cluster/nodes.md §1's criterion, and the `slow fdatasync` tripwire
+beside it. Run them here, with the kubeconfig the setup wrote and with
+`tal` for `talosctl`, over `"${CP[@]}"`.
 
 **The node volumes.** Each row of `conventions.NODE_VOLUMES` names a
 volume and the node it attaches to:
@@ -1487,13 +1483,9 @@ for n in "${CP[@]}" "$WORKER"; do tal -n "$n" get volumestatus u-storage -o json
 It passes on `ready` from every node.
 
 **The node label**, on the Node object rather than in the machine
-configuration. The kubeconfig is a cluster-admin credential, so it is
-written where the talosconfig is kept and not into a working directory,
-and the API server answers without a network plugin:
+configuration:
 
 ```sh
-mkdir -p ~/.kube
-(umask 077; physical stack output kubeconfig --show-secrets > ~/.kube/kluster)
 L=$(mise x uv -- uv run python -c 'from kluster import conventions as c; print(c.NODE_VOLUME_LABEL)')
 kubectl --kubeconfig ~/.kube/kluster get nodes -o wide -L "$L"
 physical stack output node_private_ips --json

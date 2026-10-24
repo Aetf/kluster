@@ -187,7 +187,10 @@ machine_secrets
     (`allowSchedulingOnControlPlanes` — the combined CP+ingress role);
     cert SANs including the NLB IP; **etcd encryption at rest**
     (secretbox — the architecture.md §6.5 residual-risk mitigation for
-    cluster secrets in a $0-trust tenancy); kubelet system-reserved so
+    cluster secrets in a $0-trust tenancy); on the control planes,
+    **etcd's metrics listener**, plain HTTP on port
+    `ETCD_METRICS_PORT` (2381) at every address of the node, both
+    families, which serves the fsync histogram §6 reads; kubelet system-reserved so
     eviction actually works (the legacy CP-starvation lesson,
     architecture.md §6.5); the **Talos ingress firewall** (the next
     item); kube-apiserver `anonymous-auth=false` pinned and audit
@@ -226,8 +229,26 @@ machine_secrets
     the apiserver's calls to a remote kubelet go between node
     addresses, which KubeSpan routes into the `kubespan` interface, and
     the ingress chain accepts that interface ahead of every rule, so no
-    opening names them. Traffic from a pod to a listener in the host
-    netns rides it only when the listener is on another node: Cilium's
+    opening names them. **etcd's metrics listener takes no opening
+    either**: its reader is the API server's node proxy, a call between
+    node addresses that rides KubeSpan to another control plane and
+    enters on `lo` at its own, and the chain accepts `lo` ahead of every
+    rule too. The listener binds every address, because the proxy dials
+    the node's internal address, and with no rule admitting the port it
+    still answers nothing from outside the cluster. Inside the cluster
+    more than the proxy reaches it: every KubeSpan peer, the homelab
+    worker's host among them; once Cilium runs, a pod on another node,
+    whose call is masqueraded to its node's address and rides KubeSpan;
+    and a pod calling a host address inside the pod range on its own
+    node, which the ingress chain admits on any port, as it does all
+    traffic between the pod and service ranges. **That reach is accepted** under threat-model.md §4, on its
+    second clause: the listener serves counters, histograms and health,
+    never a key or a value, the class of host metrics rfc-007 §4.3
+    already lets a pod read at 9100 and 9962–9965. A scraper pod reading
+    it at its own node's address would need the cluster's ranges, and the
+    change that adds that scrape job settles the opening (rfc-007 §7.1).
+    Traffic from a pod to a listener in the
+    host netns rides it only when the listener is on another node: Cilium's
     tunnel carries traffic addressed to pods, not to a node's own
     addresses, so that call leaves its node masqueraded to a node
     address. On the pod's own node the call arrives on the pod's device
@@ -624,6 +645,75 @@ out of state, `--force` because the attachment is protected
 (`components/cloud/storage.py`), and the same preview and `up` follow.
 Any other plan is a diff nobody expected, and nothing is applied until
 it has been read.
+
+**The etcd fsync item** has two halves, a reading and a tripwire. The
+reading is taken off etcd's `etcd_disk_wal_fsync_duration_seconds`
+histogram, which every control plane serves on its metrics listener (§2), through the API server's
+node proxy: it needs no network plugin and no opening, only the
+cluster's kubeconfig. From the root of the checkout, with that
+kubeconfig at `~/.kube/kluster`:
+
+```sh
+P=$(mise x uv -- uv run python -c 'from kluster.components.talos import ETCD_METRICS_PORT; print(ETCD_METRICS_PORT)')
+E=$(mise x uv -- uv run python -c 'from kluster import conventions as c; print(len(c.CLOUD_NODES))')
+CPN=$(kubectl --kubeconfig ~/.kube/kluster get nodes -l node-role.kubernetes.io/control-plane -o jsonpath='{.items[*].metadata.name}')
+N=$(echo "$CPN" | wc -w)
+[ "$N" -eq "$E" ] || echo "FAIL: $N control planes labelled, $E declared"
+for n in $(echo "$CPN"); do
+    kubectl --kubeconfig ~/.kube/kluster get --raw "/api/v1/nodes/http:$n:$P/proxy/metrics" | awk -v n="$n" '
+        $1 == "etcd_disk_wal_fsync_duration_seconds_bucket{le=\"0.008\"}" { within = $2 }
+        $1 == "etcd_disk_wal_fsync_duration_seconds_count" { count = $2 }
+        END { ok = count > 0 && 100 * within >= 99 * count
+              printf "%s: %d of %d syncs within 8 ms, %s\n", n, within, count, ok ? "pass" : "FAIL" }'
+done
+```
+
+It passes when no line says `FAIL` and every control plane prints
+`pass`: etcd has synced its write-ahead log at least once since it
+started, and at least 99 % of those syncs finished within 8 ms. The comparison is made in integers,
+`100 × within ≥ 99 × count`, so no rounding carries a share just under
+99 % across the line. Talos labels every control plane
+`node-role.kubernetes.io/control-plane`, which is how the loop finds
+them, and the stack declares `conventions.CLOUD_NODES` as its control
+planes, which is how many it expects: a control plane the label misses
+would print nothing, so a short count fails the reading rather than
+leaving that node unread. A control plane the proxy cannot reach
+prints `0 of 0` and `FAIL`. The criterion is cluster/nodes.md §1's
+"under 10 ms" read as the 99th percentile, and 8 ms because the histogram has no bucket
+ending at 10 ms: its buckets end at 1, 2, 4, 8 and 16 ms and upward, and
+the share within 8 ms is the loosest reading of it that cannot pass a
+disk whose 99th percentile is over 10 ms. A disk whose 99th percentile
+falls between 8 and 16 ms fails it, under 10 ms or not, and against a
+typical 1–2 ms, a reading in that band is one to look into rather than
+a pass.
+
+The tripwire runs beside the reading, because a single sync over a
+second is the stall a 99 % share averages away. etcd logs `slow
+fdatasync` for each write-ahead-log sync that takes longer than a
+second. For each control plane, with the cluster's talosconfig:
+
+```sh
+talosctl -n <node> logs etcd | grep -c 'slow fdatasync'
+```
+
+It passes when every control plane prints `0`. The item passes when
+both halves do.
+
+A new control plane is a new boot volume, so the item runs again
+whenever one is replaced. A replacement boots with the listener in its
+configuration. **A control plane that was already running when the
+listener was declared serves it only after a reboot.** The configuration
+apply (§2) lands without one, but Talos fixes etcd's arguments when it
+starts the service, and nothing short of a reboot starts it again: no
+controller restarts etcd when its configuration changes, and the
+machine API refuses to restart the service. So reboot each such control
+plane, one at a time, and go on to the next only once the rebooted
+member is back in a healthy quorum:
+
+```sh
+talosctl -n <node> reboot
+talosctl -n <node> etcd status      # every member listed, none reporting an error
+```
 
 The local-path volume (§2) is first exercised there as well:
 
