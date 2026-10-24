@@ -3,19 +3,24 @@
 What matters here is what cannot be seen by reading a diff later: that the
 subnet's IPv6 block is derived from the prefix OCI assigns rather than
 declared, that Object Storage traffic is routed at the service gateway
-instead of out through the internet gateway, and that the subnet carries a
-list of this program's own that admits everything rather than the one OCI
-would attach in its absence.
+instead of out through the internet gateway, that the subnet carries a list
+of this program's own rather than the one OCI would attach in its absence,
+and what that list admits: everything over IPv4, and over IPv6 everything a
+node serves except the ICMPv6 a flood from the internet would starve
+neighbor discovery with.
 """
 
+import ipaddress
+from collections.abc import Sequence
 from typing import Any
 
 import pulumi
 import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, run_with
+from pulumi_oci.core.outputs import SecurityListEgressSecurityRule, SecurityListIngressSecurityRule
 
-from kluster.components.cloud import CloudNetwork
+from kluster.components.cloud import ICMPV6_FROM_ANYWHERE, CloudNetwork
 
 VCN_IPV6_PREFIX = '2603:c020:8000:1200::/56'
 OBJECT_STORAGE_SERVICE_ID = 'ocid1.service.oc1.phx.objectstorage'
@@ -99,11 +104,6 @@ async def test_object_storage_is_routed_at_the_service_gateway(network: CloudNet
     assert by_destination['::/0'] == ('CIDR_BLOCK', internet_gateway)
 
 
-#: The whole internet in each family, the two sources and destinations the
-#: subnet's list names (physical.md §1).
-ANYWHERE = {'0.0.0.0/0', '::/0'}
-
-
 @pytest.mark.asyncio
 async def test_the_subnet_carries_the_declared_list_and_no_other(network: CloudNetwork) -> None:
     """A subnet that names no list carries the VCN's default one, whose rules OCI chose.
@@ -114,26 +114,189 @@ async def test_the_subnet_carries_the_declared_list_and_no_other(network: CloudN
     assert await network.subnet.security_list_ids.future() == [await network.security_list.id.future()]
 
 
-@pytest.mark.asyncio
-async def test_the_list_admits_everything_both_ways_without_tracking_state(network: CloudNetwork) -> None:
-    """Every protocol, both families, both directions, and no connection tracking.
+# What the list admits is asked of it the way OCI decides it: a packet passes
+# when any one rule matches it (docs.oracle.com, Networking, "Security
+# Lists"). A rule matches on its protocol (`all` or the IANA number), on its
+# source block, which carries the family, and for ICMP on its type and code
+# where it names them. A question takes one of two forms. `admits` asks
+# whether every packet of a kind passes — every port, every code — and a rule
+# narrowed to some ports or to one code does not answer it yes. `admits_any`
+# asks whether any packet of the kind passes, and such a rule answers it yes:
+# a rule admitting neighbor solicitations of code 0 admits all of them, since
+# that is the type's only code (RFC 4861 §4.3). Positive cases ask the first,
+# negative cases the second, so neither can pass on a rule the model skipped.
 
-    The node's own firewall is the only filter (physical.md §2), so the list
-    decides nothing, and a stateful rule would spend a connection-tracking
-    table on every VNIC in the subnet to decide it.
+TCP, UDP, ICMP, ICMPV6, GRE = 6, 17, 1, 58, 47
+
+#: Sources the cases send from: a host on the internet in each family, and a
+#: neighbor on the node's own link speaking from its link-local address.
+INTERNET_V4 = '198.51.100.7'
+INTERNET_V6 = '2001:db8:4::7'
+ON_LINK = 'fe80::1'
+#: Another instance on the subnet, inside the /64 the subnet takes from the
+#: VCN's prefix; and an address inside that prefix but outside the subnet.
+ON_SUBNET = '2603:c020:8000:1200::5'
+OFF_SUBNET = '2603:c020:8000:1201::5'
+
+#: ICMPv6 types (RFC 4443, RFC 4861): the errors, echo, and neighbor discovery.
+ERRORS = (1, 2, 3, 4)
+ECHO_REQUEST, ECHO_REPLY = 128, 129
+NEIGHBOR_DISCOVERY = (133, 134, 135, 136, 137)
+
+
+def _matches(
+    rule: SecurityListIngressSecurityRule | SecurityListEgressSecurityRule,
+    peer: str,
+    protocol: int,
+    icmp_type: int | None,
+    *,
+    every: bool,
+) -> bool:
+    block = rule.source if isinstance(rule, SecurityListIngressSecurityRule) else rule.destination
+    if rule.protocol != 'all' and int(rule.protocol) != protocol:
+        return False
+    # `in` across families is False, which is how a block carries its family.
+    if ipaddress.ip_address(peer) not in ipaddress.ip_network(block):
+        return False
+    narrowed = rule.tcp_options is not None or rule.udp_options is not None
+    options = rule.icmp_options
+    if options is not None:
+        if icmp_type is not None and options.type != icmp_type:
+            return False
+        narrowed = narrowed or icmp_type is None or options.code is not None
+    return not (every and narrowed)
+
+
+def admits(
+    rules: Sequence[SecurityListIngressSecurityRule], source: str, protocol: int, icmp_type: int | None = None
+) -> bool:
+    """Every packet of the kind passes: every port, and every code of `icmp_type` (or every type)."""
+    return any(_matches(rule, source, protocol, icmp_type, every=True) for rule in rules)
+
+
+def admits_any(
+    rules: Sequence[SecurityListIngressSecurityRule], source: str, protocol: int, icmp_type: int | None = None
+) -> bool:
+    """Some packet of the kind passes: some port, or some code of `icmp_type` (or some type)."""
+    return any(_matches(rule, source, protocol, icmp_type, every=False) for rule in rules)
+
+
+@pytest_asyncio.fixture
+async def ingress(network: CloudNetwork) -> Sequence[SecurityListIngressSecurityRule]:
+    rules = await network.security_list.ingress_security_rules.future()
+    assert rules is not None
+    return rules
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('protocol', [TCP, UDP])
+async def test_every_ipv6_port_the_nodes_serve_is_admitted_from_the_internet(
+    ingress: Sequence[SecurityListIngressSecurityRule], protocol: int
+) -> None:
+    """The node's firewall decides ports (physical.md §2); the list narrows none."""
+    assert admits(ingress, INTERNET_V6, protocol)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(('protocol', 'icmp_type'), [(TCP, None), (UDP, None), (ICMP, 8), (GRE, None)])
+async def test_ipv4_is_admitted_whole(
+    ingress: Sequence[SecurityListIngressSecurityRule], protocol: int, icmp_type: int | None
+) -> None:
+    """IPv4 has no counterpart to the starvation: ARP never reaches the node's firewall."""
+    assert admits(ingress, INTERNET_V4, protocol, icmp_type)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('icmp_type', ERRORS)
+async def test_icmpv6_errors_are_admitted_from_the_internet(
+    ingress: Sequence[SecurityListIngressSecurityRule], icmp_type: int
+) -> None:
+    """A stateless list admits no reply by its connection, so the errors need rules of their own.
+
+    Packet too big (2) is path MTU discovery: without it a TCP connection
+    across a link narrower than the node's stalls once its segments fill.
     """
-    ingress = await network.security_list.ingress_security_rules.future()
+    assert admits(ingress, INTERNET_V6, ICMPV6, icmp_type)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('icmp_type', [ECHO_REQUEST, ECHO_REPLY])
+async def test_ping_answers_from_the_internet_both_ways(
+    ingress: Sequence[SecurityListIngressSecurityRule], icmp_type: int
+) -> None:
+    """Request so the node answers ping, reply so it hears answers to its own.
+
+    From anywhere, because the operator's address is dynamic — which is why
+    an echo flood is the starvation residual that remains (security-audit.md M3).
+    """
+    assert admits(ingress, INTERNET_V6, ICMPV6, icmp_type)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('icmp_type', [*NEIGHBOR_DISCOVERY, 130, 143])
+async def test_every_icmpv6_type_is_admitted_from_the_link(
+    ingress: Sequence[SecurityListIngressSecurityRule], icmp_type: int
+) -> None:
+    """Neighbor discovery and the router advertisement that carries the node's default route.
+
+    Multicast listener reports (130, 143) are link-scoped the same way.
+    """
+    assert admits(ingress, ON_LINK, ICMPV6, icmp_type)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('icmp_type', NEIGHBOR_DISCOVERY)
+async def test_neighbor_discovery_is_admitted_from_the_subnets_own_block_and_no_wider(
+    ingress: Sequence[SecurityListIngressSecurityRule], icmp_type: int
+) -> None:
+    """A node resolving another node on the subnet may solicit from its global address.
+
+    The block admitted is the subnet's, derived from the prefix OCI assigns:
+    a neighbor of the subnet's in the same VCN prefix is still off the link.
+    """
+    assert admits(ingress, ON_SUBNET, ICMPV6, icmp_type)
+    assert not admits_any(ingress, OFF_SUBNET, ICMPV6, icmp_type)
+
+
+@pytest.mark.asyncio
+async def test_no_other_icmpv6_type_is_admitted_from_the_internet(
+    ingress: Sequence[SecurityListIngressSecurityRule],
+) -> None:
+    """The narrowing itself: neighbor discovery's types, among every other, do not pass from off the link.
+
+    Each one admitted would be one more way to spend the shared allowance
+    neighbor discovery needs.
+    """
+    allowed = set(ICMPV6_FROM_ANYWHERE)
+    admitted = {icmp_type for icmp_type in range(256) if admits_any(ingress, INTERNET_V6, ICMPV6, icmp_type)}
+
+    assert admitted <= allowed
+
+
+@pytest.mark.asyncio
+async def test_no_other_ipv6_protocol_is_admitted_from_the_internet(
+    ingress: Sequence[SecurityListIngressSecurityRule],
+) -> None:
+    """IPv6 from the internet is TCP, UDP and those ICMPv6 types, not `all`."""
+    assert not admits_any(ingress, INTERNET_V6, GRE)
+
+
+@pytest.mark.asyncio
+async def test_no_ingress_rule_tracks_connections(ingress: Sequence[SecurityListIngressSecurityRule]) -> None:
+    """A stateful rule would spend a connection-tracking table on every VNIC in the subnet."""
+    assert ingress
+    assert all(rule.stateless for rule in ingress)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('destination', [INTERNET_V4, INTERNET_V6, ON_LINK])
+@pytest.mark.parametrize(('protocol', 'icmp_type'), [(TCP, None), (UDP, None), (ICMPV6, 135), (GRE, None)])
+async def test_everything_leaves_without_tracking_state(
+    network: CloudNetwork, destination: str, protocol: int, icmp_type: int | None
+) -> None:
+    """Egress is not narrowed: a node's own traffic leaves whatever it is and wherever it goes."""
     egress = await network.security_list.egress_security_rules.future()
 
-    assert ingress is not None
     assert egress is not None
-    admitted = [
-        (rule.protocol, rule.source, rule.source_type, rule.stateless, rule.tcp_options, rule.udp_options)
-        for rule in ingress
-    ]
-    released = [
-        (rule.protocol, rule.destination, rule.destination_type, rule.stateless, rule.tcp_options, rule.udp_options)
-        for rule in egress
-    ]
-    assert sorted(admitted) == sorted(('all', cidr, 'CIDR_BLOCK', True, None, None) for cidr in ANYWHERE)
-    assert sorted(released) == sorted(('all', cidr, 'CIDR_BLOCK', True, None, None) for cidr in ANYWHERE)
+    assert all(rule.stateless for rule in egress)
+    assert any(_matches(rule, destination, protocol, icmp_type, every=True) for rule in egress)

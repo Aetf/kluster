@@ -185,8 +185,8 @@ GATEWAY_PORTS: tuple[tuple[int, Literal['tcp', 'udp']], ...] = tuple(
 )
 
 #: What terminates in the host network namespace, and who may reach it. The
-#: firewall is the only filter in front of a public node: the cloud subnet
-#: admits everything (declarative/physical.md §1–2).
+#: firewall is the only filter on ports in front of a public node: the cloud
+#: subnet's list narrows no port (declarative/physical.md §1–2).
 #:
 #: The management APIs (`conventions.MANAGEMENT_PORTS`), which the balancer
 #: forwards from the same structure, are open to the internet; so is KubeSpan,

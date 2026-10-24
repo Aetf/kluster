@@ -415,9 +415,9 @@ def openings(**kwargs: Any) -> list[tuple[int, str, set[str]]]:
 
 @pytest.mark.parametrize('shape', list(SHAPES))
 def test_the_internet_reaches_the_host_on_the_management_ports_kubespan_and_the_gateways_alone(shape: str) -> None:
-    """The node firewall is the only filter in front of a public node (physical.md §2).
+    """The node firewall is the only filter on ports in front of a public node (physical.md §2).
 
-    The subnet admits everything, so a port this firewall opens to the
+    The subnet's list narrows no port, so a port this firewall opens to the
     internet is open to it, and one it leaves closed is closed only here. The
     default-deny document is what makes every other port closed: without it
     Talos builds no chain for the ports no rule names.

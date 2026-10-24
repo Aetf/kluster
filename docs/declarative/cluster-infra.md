@@ -324,8 +324,9 @@ All decided behavior from architecture.md §3, expressed as config:
     Hubble's flow metrics.
 -   **No `NodePort`** (Aetf/kluster-ops#397): whatever the datapath
     answers on a node's own address is internet-facing on a cloud
-    node, because the subnet admits everything and the datapath
-    answers a raw Service's frontend in BPF before the Talos ingress
+    node, because the subnet narrows no TCP or UDP port in either
+    family (its list narrows only IPv6's other protocols and ICMPv6,
+    security-audit.md M3) and the datapath answers a raw Service's frontend in BPF before the Talos ingress
     firewall sees the packet (physical.md §1–2). That set must be the
     declared `internet`-pool
     frontends and nothing else. hostPort and `externalIPs` are already
