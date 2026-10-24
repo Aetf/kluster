@@ -17,7 +17,10 @@ Four things are declared here, and each answers a different question
     admission decision. *Who* may be on the network is not decided here: the
     roster arrives as a parameter, and it lives in `conventions.overlay.ROSTER`
     because the `dns` stack publishes the `*.zt` host block from the same table.
-    This module is what turns that decision into authorized members.
+    This module is what turns that decision into authorized members, and into
+    the assignment pools: the addresses Central hands a member the roster does
+    not place, derived from the roster so that none of them is one it does
+    (`conventions.overlay.assignment_pools`).
 -   **The managed routes** — the whole route table the network carries, and
     it arrives as a parameter, from `conventions.overlay.MANAGED_ROUTES`. A
     route is `{target, via}` on the network and nothing more: `via` names a
@@ -48,14 +51,18 @@ Four things are declared here, and each answers a different question
     member applies it only under its own `allowDNS` setting, which is off by
     default and which nothing here can set (gateway.md §2.7).
 
-**The roster is the whole of admission.** A member is authorized because it has
-an entry, and the entry carries the node id that says which device it is — so
-there is nothing to cross-check, and nothing undeclared joins to reach the rules'
-final `accept`. The gateway is the one member the roster can be
-missing, because a ZeroTier identity is minted by the daemon's first run and
-that daemon is a container the gateway delivers; while the entry is absent no
-member is declared for it, and the ceremony that reads the minted id adds the
-entry as a commit (physical/gateway.md §2.5).
+**The roster is the whole of this program's admission.** A member is authorized
+because it has an entry, and the entry carries the node id that says which
+device it is — so there is nothing to cross-check, and this program admits
+nothing it does not declare to reach the rules' final `accept`. One admission
+is made outside it: the legacy cluster's CI authorizes a fresh identity per job
+at Central until that cluster retires, an accepted residual (threat-model.md
+§2.10), and those members draw their addresses from the assignment pools. The
+gateway is the one member the roster can be missing, because a ZeroTier
+identity is minted by the daemon's first run and that daemon is a container the
+gateway delivers; while the entry is absent no member is declared for it, and
+the ceremony that reads the minted id adds the entry as a commit
+(physical/gateway.md §2.5).
 
 **Two continuous-integration identities, not one.** ZeroTier maps a node to one
 endpoint at a time, so an identity live in two jobs at once flaps; there is one
@@ -63,7 +70,8 @@ identity per stack that joins — the one that configures the physical layer and
 the one that writes the resolvers' rewrites — and each is serialized by a
 job-level concurrency group named after it (gateway.md §2.6). Their key material
 is generated in state rather than pre-authorized by hand, which is what keeps
-the network-administration token out of every environment that joins.
+the network-administration token out of every environment of this repository
+that joins.
 
 **The overlay is IPv4-only.** No member carries a v6 assignment and no v6 route
 is managed, which is what makes the confinement rules complete: a continuous-
@@ -206,10 +214,18 @@ class Overlay(Component, pulumi_type='kluster:overlay:Overlay'):
             private=True,
             enable_broadcast=True,
             multicast_limit=MULTICAST_LIMIT,
-            # Every address on this network is one the roster assigned. Both
-            # derived IPv6 schemes are off, which is what keeps the overlay
-            # single-family and the confinement rules complete.
+            # A roster member holds the address its entry places, and the
+            # pools are for a member the roster does not place, so no pool
+            # holds an address it does. Never empty: the field is optional and
+            # computed, so an empty list can read as no declaration, keeping
+            # Central's own pools. Both derived IPv6 schemes are off, which is
+            # what keeps the overlay single-family and the confinement rules
+            # complete.
             assign_ipv4s=[zerotier.NetworkAssignIpv4Args(zerotier=True)],
+            assignment_pools=[
+                zerotier.NetworkAssignmentPoolArgs(start=str(pool.start), end=str(pool.end))
+                for pool in conventions.overlay.assignment_pools(roster)
+            ],
             assign_ipv6s=[zerotier.NetworkAssignIpv6Args(zerotier=False, rfc4193=False, sixplane=False)],
             # The whole table, as the census states it: `via` where it names
             # a member, and no `via` at all for the overlay's own subnet. The

@@ -372,10 +372,35 @@ Grouped by who controls their software:
     on it is §2.6's and reachable from §2.9, so it is not trusted at the
     network layer. The cluster's own controls (cluster/architecture.md
     §4.1) answer for it.
--   **The overlay's CI members.** **In scope**, because an identity can
-    leak where anyone can take it, a public Actions log among them. Each
-    is confined by its node address, which its holder cannot withhold
+-   **The overlay's CI members**, the two the roster declares. **In
+    scope**, because an identity can leak where anyone can take it, a
+    public Actions log among them. Each is confined by its node address,
+    which its holder cannot withhold
     ([physical/gateway.md](physical/gateway.md) §2.3).
+-   **kluster-code's CI**, the legacy cluster's preview and deploy
+    pipelines, and the ZeroTier Central token it holds as a repository
+    secret. **Trusted outright until kluster-code retires**
+    (Aetf/kluster-ops#79), an accepted residual by the operator's ruling
+    on Aetf/kluster-ops#609, because the legacy cluster is trusted, not
+    because the reach is small. Every job that receives the repository's
+    secrets joins the overlay with a fresh identity and authorizes it at
+    Central with that token. A same-repository pull request's preview is
+    such a job, Renovate's among them, and it installs the versions it
+    bumps in the job the token is handed to, where the joining action
+    also runs its cleanup step from a moving ref (`util/post@main`). What
+    those jobs install and run is inside the trust as well. A fork's pull request receives no
+    secret and does not join. No roster entry admits such a member and
+    no flow rule names it, so it reaches the rules' final `accept`: from
+    step 3 of the first bring-up, when the gateway answers at
+    `10.144.1.1`, that is every home subnet the managed routes carry
+    (physical/gateway.md §2.1, §2.2). The token also rewrites the
+    network's flow rules and routes, so whoever holds it is held by
+    neither. What retires it is a step of kluster-code's retirement
+    (Aetf/kluster-ops#79): its workflows disabled or the repository
+    archived, and its token deleted at Central, a token staying valid
+    until it is. If that token is also `physical`'s `zerotierApiToken`,
+    `physical`'s is rotated first, and any earlier rotation of it cuts
+    the legacy CI off.
 
 ## 3. What is defended
 
@@ -573,7 +598,8 @@ The second clause is the one most easily skipped: a lock on a door
 protects nothing from an actor already in the room. The ZeroTier Central
 token is a configuration secret of the `physical` stack (credentials.md
 §3), and it writes the overlay's flow rules, so no flow rule constrains
-whatever opens that configuration. The flow rules are worth what they do
+whatever opens that configuration, nor whatever holds the Central token
+kluster-code's CI keeps (§2.10). The flow rules are worth what they do
 against an actor who holds an overlay identity and nothing else, and
 against that actor they are the whole defense.
 

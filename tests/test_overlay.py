@@ -18,6 +18,7 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from ipaddress import IPv4Address
+from itertools import pairwise
 from typing import Any, final
 
 import pulumi
@@ -442,6 +443,114 @@ def test_no_member_is_handed_an_address_the_roster_did_not_choose(stack: Central
         assert member['noAutoAssignIps'] is True
         assert member['authorized'] is True
         assert len(member['ipAssignments']) == 1
+
+
+def declared_pools(network: Mapping[str, Any]) -> list[tuple[IPv4Address, IPv4Address]]:
+    """The assignment pools a network declaration carries, as first and last address."""
+    return [(IPv4Address(pool['start']), IPv4Address(pool['end'])) for pool in network['assignmentPools']]
+
+
+def pooled(address: IPv4Address, pools: Iterable[tuple[IPv4Address, IPv4Address]]) -> bool:
+    """Whether Central could hand `address` out of `pools`."""
+    return any(start <= address <= end for start, end in pools)
+
+
+def test_no_pool_holds_an_address_the_roster_places_or_the_gateways(stack: Central) -> None:
+    """A member authorized outside the roster draws its address from the pools.
+
+    That member is the legacy cluster's CI job, which authorizes itself at
+    Central (physical/gateway.md §2.1). A pool holding a placed address could
+    hand it the gateway's -- the next hop of every route to the home, reserved
+    before the ceremony records its entry -- a CI identity's, or a person's.
+    The pools stay among the subnet's host addresses: the controller hands out
+    an IPv4 pool address under any route whose target holds it, the routes to
+    the home included, so a range past the subnet could give a legacy job a
+    home-LAN address.
+    And there is at least one, because the provider's field is optional and
+    computed, so an empty list can read as no declaration and keep whatever
+    pools Central already holds.
+    """
+    pools = declared_pools(stack.inputs_of(f'{NAME}-network'))
+    assert pools, 'no pool declared: Central would keep the pools it has'
+
+    first = conventions.overlay.SUBNET.network_address + 1
+    last = conventions.overlay.SUBNET.broadcast_address - 1
+    for start, end in pools:
+        assert first <= start <= end <= last, (start, end)
+
+    placed = [entry.address for entry in conventions.overlay.ROSTER] + [conventions.overlay.UDM]
+    for address in placed:
+        assert not pooled(address, pools), address
+
+
+def test_the_gateways_address_is_out_of_the_pools_whether_or_not_its_entry_is_recorded() -> None:
+    """The pools are written at step 1 and the gateway's entry at step 2, so its address is reserved on its own.
+
+    Both rosters are built here, one without a gateway entry and one with it,
+    because the live roster holds only one of the two states at a time and a
+    case reading it would stop testing the other the day the entry lands.
+    """
+    overlay = conventions.overlay
+    without = tuple(entry for entry in overlay.ROSTER if entry.address != overlay.UDM)
+    gateway = overlay.EnrolledMember(
+        name=overlay.MEMBER_UDM, node_id='0a1b2c3d4e', address=overlay.UDM, role=overlay.Role.INFRA
+    )
+    for roster in (without, (*without, gateway)):
+        assert not pooled(overlay.UDM, [(pool.start, pool.end) for pool in overlay.assignment_pools(roster)])
+
+
+def test_the_pools_and_the_placed_addresses_together_cover_the_subnets_hosts_exactly() -> None:
+    """The pools are every host address the roster leaves, not merely some safe ones.
+
+    A pool short of that is still safe, but it is fewer addresses for the
+    legacy jobs than the definition promises (physical/gateway.md §2.1). The
+    roster is built here, with entries at the first host address, beside the
+    last, and at two adjacent addresses, where a range is most easily lost or
+    left inverted.
+    """
+    overlay = conventions.overlay
+    first = overlay.SUBNET.network_address + 1
+    last = overlay.SUBNET.broadcast_address - 1
+    addresses = (first, first + 1000, first + 1001, last - 1)
+    roster = tuple(
+        overlay.EnrolledMember(name=f'a-device-{n}', node_id=f'{n:010x}', address=address, role=overlay.Role.PERSONAL)
+        for n, address in enumerate(addresses)
+    )
+    pools = [(pool.start, pool.end) for pool in overlay.assignment_pools(roster)]
+
+    assert all(start <= end for start, end in pools)
+    ordered = sorted(pools)
+    assert all(a_end < b_start for (_, a_end), (b_start, _) in pairwise(ordered)), 'pools overlap'
+    placed = {*addresses, overlay.UDM}
+    assert not any(pooled(address, pools) for address in placed)
+    assert sum(int(end) - int(start) + 1 for start, end in pools) + len(placed) == int(last) - int(first) + 1
+
+
+@pytest.mark.asyncio
+async def test_a_member_added_inside_a_pool_takes_its_address_out_of_the_pools(stack: Central) -> None:
+    """The pools follow the roster the component is handed, not a copy of their own.
+
+    The entry this case adds sits at an address the fixture's pools hold, so a
+    pool written down once, or read from somewhere other than the roster
+    handed in, would still hold it.
+    """
+    pools = declared_pools(stack.inputs_of(f'{NAME}-network'))
+    address = pools[-1][0]
+    newcomer = conventions.overlay.EnrolledMember(
+        name='a-device-inside-a-pool', node_id='abcdef0123', address=address, role=conventions.overlay.Role.PERSONAL
+    )
+    async with declaring():
+        _ = overlay_module.Overlay(
+            'grown',
+            network_id=NETWORK_ID,
+            flow_rules=RULES,
+            roster=(*conventions.overlay.ROSTER, newcomer),
+            managed_routes=conventions.overlay.MANAGED_ROUTES,
+            dns=DNS,
+        )
+
+    assert pooled(address, pools)
+    assert not pooled(address, declared_pools(stack.inputs_of('grown-network')))
 
 
 def test_every_member_carries_a_declared_role_and_the_generated_ones_their_own_id(stack: Central) -> None:
