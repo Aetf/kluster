@@ -40,8 +40,8 @@ changes is on its allow-list — `uv.lock`, and renovate's bump of
 waits for a human outright. One that stays on the list proves itself
 with a preview of `k8s-base` and `apps` among others, and both stacks
 fail that preview until they hold a copy of the kubeconfig, which
-waits on `physical`'s first `up` — so the proof errors rather than
-passing. The whole account, the other facts
+waits for the second milestone's first step (§2.5) — so the proof
+errors rather than passing. The whole account, the other facts
 behind that error included, is ci.md §5. Every bump therefore merges
 the way the waiting rows do: as a reviewed pull request.
 
@@ -131,8 +131,14 @@ from an HTTP repository, which offers nothing to check a download against
     `physical` apply runs within its renewal window of the certificate's
     expiry — 720 hours by default, and `physical` sets none — so a CI
     `up-physical` re-issues it; replacing the cluster's PKI changes it
-    too. Cadence: after every `physical` `up`, and at least monthly,
-    which no 30-day window can slip past. Gist: `credentials derived sync
+    too. Cadence: the first copy is the first step of the second
+    milestone (`kluster-ops#77`), and from then on after every
+    `physical` `up`, and at least monthly, which no 30-day window can
+    slip past. `physical`'s first `up`, in the first milestone, is
+    followed by no copy: the commit of both stack files is an `up` of
+    `k8s-base` and `apps`, whose Environments take no reviewer, and the
+    bring-up's checks that need no network plugin run before Cilium
+    exists (physical/gateway-cutover.md §8.1). Gist: `credentials derived sync
     --only kubeconfig` from the checkout that holds the kit, then commit
     `Pulumi.k8s-base.yaml` and `Pulumi.apps.yaml`, whose copies the two
     stacks open their Kubernetes provider with (credentials.md §3). A

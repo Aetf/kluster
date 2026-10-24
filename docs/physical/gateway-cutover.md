@@ -1713,7 +1713,10 @@ The identities are three rows of `credentials derived ls`, and each is
 synced alone. A bare `credentials derived sync` fills every row it can
 obtain, which here would also issue CI a fresh state-backend client
 bundle and write the kubeconfig into `k8s-base`'s and `apps`'s stack
-files. From the checkout root:
+files. That copy is not made in this milestone: committed, it would be
+an `up` of both stacks with no reviewer, and it is the second
+milestone's first step instead (`kluster-ops#77`, operations.md §2.5).
+From the checkout root:
 
 ```sh
 mise x uv -- uv run credentials derived sync --only zerotier-network
@@ -1756,8 +1759,8 @@ member Central admits is read in Central's member list, which shows it
 seen during the run. Its path to the resolvers is first exercised by
 the first rewrite the stack writes. Until §8.4 has run for every
 zone the `dns` job stays red that way. The `k8s-base` and `apps` jobs
-fail, and go on failing until those stacks hold a copy of the
-kubeconfig (operations.md §2.5); their failure makes the run red and
+fail, and go on failing until the second milestone's first step copies
+the kubeconfig into those stacks (operations.md §2.5); their failure makes the run red and
 starts its alert job, which dispatches into the ops repository, where
 nothing handles it yet (operations.md §4).
 

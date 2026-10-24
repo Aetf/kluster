@@ -58,8 +58,7 @@ owns sequencing, data movement, and teardown.
     (physical/state-backend.md). The Talos image is not among them:
     the stack builds it through the Image Factory and imports it itself
     (declarative/physical.md §1). ZeroTier Central config is
-    Pulumi-managed (architecture.md §5.3); the
-    legacy `10.42.0.0/24`-via-VPS managed route is deleted in Wave F.
+    Pulumi-managed (architecture.md §5.3).
     **The overlay's home-LAN routes are net-new** (today the overlay and
     the LANs are not connected at all): the UDM container deploys via an
     operator-local run over the LAN, routes are added, and only after
@@ -219,7 +218,11 @@ orphans, finishing with the disk-reclaim that feeds rule 0.4.
     migration for exactly this reason), tear down remaining k3s residue
     and **cancel the Vultr instance** (the $30/mo baseline ends).
     `archvps.hosts`, which nothing references by then, deleted from the
-    `dns` stack (dns.md §6). DNSControl is not among the
+    `dns` stack (dns.md §6). The `Aetf-Arch-VPS` entry leaves
+    `conventions.overlay.ROSTER` no later than the cancellation, which
+    takes its member off the network at the next `physical` apply and
+    its `*.zt` record out of `dns` (physical/gateway.md §2.1, dns.md
+    §2). DNSControl is not among the
     trackers retired here: it retires at the zones' cutover, the `dns`
     up of §1 item 2 (sources-of-truth.md, row R1).
 2.  Homelab host: k3s uninstalled after Waves C/D; freed NVMe grows the

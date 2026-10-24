@@ -1229,9 +1229,11 @@ own configuration (rfc-007 §3.1). The value is generated in `physical`'s
 state, which is under a passphrase of its own, and a StackReference
 elides a secret across that split, so `credentials derived sync --only
 kubeconfig` copies it into both stacks' configuration from a
-workstation (credentials.md §3). `physical` has never been updated, so
-there is nothing to copy, and the read fails the run naming the key it
-lacks and the command that fills it — the program's traceback ends in
+workstation (credentials.md §3). Neither stack's configuration holds a
+copy, and `physical`'s first `up` makes none: the first copy is the
+second milestone's first step (operations.md §2.5). So the read fails
+the run naming the key it lacks and the command that fills it — the
+program's traceback ends in
 
 ```
 kluster.lib.k8s.UnusableKubeconfig: this stack's configuration holds no 'kubeconfig', so no Kubernetes provider is opened; `credentials derived sync --only kubeconfig` copies it in from the physical stack's state once physical has been applied
@@ -1253,9 +1255,11 @@ program's own `Missing required configuration variable` for the token,
 and whether `apps` holds the token is checked on the workstation, with
 `pulumi config get cloudflareApiToken --stack apps`, rather than read
 off this preview. **Retires when these stacks hold a kubeconfig they
-can open**: after `physical`'s first `up`, the copy and the commit of
-both stack files (operations.md §2.5); from then on the preview reaches
-the cluster through the balancer's 6443 (§2), as rfc-007 §3.3 lists.
+can open**: at the second milestone's first step (`kluster-ops#77`),
+the first copy and the commit of both stack files (operations.md §2.5),
+which the first milestone's `physical` `up` does not make; from then on
+the preview reaches the cluster through the balancer's 6443 (§2), as
+rfc-007 §3.3 lists.
 
 **Neither of those is a secret-availability problem, and the tell is
 which step fails, and then what the message names.** All five
