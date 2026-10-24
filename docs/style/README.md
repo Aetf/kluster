@@ -232,6 +232,21 @@ that needs no skip set at all is the tracked files — `jj file list`
 inside a workspace, `git ls-files` in a checkout — which hold no scratch
 to begin with.
 
+**A document that retires holds only what retires with it.** A runbook
+for a move made once, or a table that lives as long as a transition,
+says when it goes. A procedure in it that runs again after that day is
+written somewhere that outlives it, or the retirement sentence names
+where it moves; otherwise the procedure is deleted with the file, and
+whatever pointed at it points at nothing.
+[physical/gateway-cutover.md](../physical/gateway-cutover.md) is the
+example: it describes the cutover window and the bring-up steps that
+follow it once, and it is deleted when they have run. Replacing CI's
+overlay identities, re-attaching a node volume and removing a DS recur
+after it, so they are written in [credentials.md](../credentials.md)
+§4.1, [declarative/physical.md](../declarative/physical.md) §6 and
+[declarative/dns.md](../declarative/dns.md) §1.3, and its retirement
+sentence names where each went.
+
 **Docs layer like the code.** `docs/framework/` documents mechanisms
 (how this repo does Pulumi, CI, testing, and how work is dispatched)
 and names no kluster design decision; `docs/declarative/`, `docs/physical/` and `docs/cluster/` own
