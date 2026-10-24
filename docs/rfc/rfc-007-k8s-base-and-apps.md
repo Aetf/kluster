@@ -42,6 +42,10 @@
     manifest's, a `Role` in its own namespace for the helper pods beside
     the `ClusterRole`, rather than the legacy cluster's single
     `ClusterRole`.
+*   **Updated:** 2026-10-24 — §7.1: etcd's metrics listener is declared
+    in the machine configuration, with no opening, for the bring-up's
+    fsync reading through the API server's node proxy; the etcd scrape
+    job stays deferred with the other two.
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
@@ -1060,13 +1064,20 @@ Four of the chart's defaults are switched off:
     `grafana_dashboard` label (workloads.md §1).
 *   **The scrape jobs for the controller manager, the scheduler and
     etcd.** Talos binds the first two to `127.0.0.1`
-    ([`control_plane_static_pod.go` L583–618](https://github.com/siderolabs/talos/blob/v1.13.9/internal/app/machined/pkg/controllers/k8s/control_plane_static_pod.go#L583-L618))
-    and gives etcd no metrics address apart from its mutually
+    ([`control_plane_static_pod.go` L583–618](https://github.com/siderolabs/talos/blob/v1.13.9/internal/app/machined/pkg/controllers/k8s/control_plane_static_pod.go#L583-L618)),
+    so their jobs would scrape nothing and alert on their own absence.
+    Talos gives etcd no metrics address apart from its mutually
     authenticated client port
     ([`spec.go` L158–194](https://github.com/siderolabs/talos/blob/v1.13.9/internal/app/machined/pkg/controllers/etcd/spec.go#L158-L194)),
-    so the jobs would scrape nothing and alert on their own absence.
-    Exposing them is three `extraArgs` and three openings of §4.3's
-    class, and it lands with the first rule that needs them.
+    so the machine configuration declares one: plain HTTP on every
+    control plane, with no opening, which the bring-up's fsync check
+    reads through the API server's node proxy
+    ([declarative/physical.md](../declarative/physical.md) §2, §6).
+    Exposing the other two is two `extraArgs` and two openings of
+    §4.3's class. What etcd's job adds is the job itself, and whether
+    the listener needs an opening of that class, for a scraper on its
+    own node, is settled with it. All of it lands with the first rule
+    that needs them.
 
 The scrapes that do run: the kubelet and its containers, the API server,
 the cluster DNS, the node exporter, kube-state-metrics, and Cilium's

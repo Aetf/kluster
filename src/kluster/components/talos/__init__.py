@@ -80,6 +80,15 @@ KUBESPAN_PORT = 51820
 #: The kubelet's API, which the apiserver and metrics-server call.
 KUBELET_PORT = 10250
 
+#: etcd's metrics listener on a control plane: plain HTTP serving `/metrics`
+#: and etcd's health endpoints (`/health`, `/livez`, `/readyz`), never a key
+#: or a value. Talos starts etcd with none, so
+#: `control_plane_patch` declares one. 2381 is none of Talos' fixed ports and
+#: none in Cilium's port table (rfc-007 §4.3). It takes no opening
+#: (`HOST_OPENINGS`); the operator reads it through the API server's node
+#: proxy (declarative/physical.md §6).
+ETCD_METRICS_PORT = 2381
+
 #: The DHCPv6 client's port (RFC 8415 §7.2). A cloud node's IPv6 address is
 #: leased over DHCPv6, and the server's Reply comes from its own address rather
 #: than the multicast the Solicit went to, so it matches no connection-tracking
@@ -190,7 +199,20 @@ GATEWAY_PORTS: tuple[tuple[int, Literal['tcp', 'udp']], ...] = tuple(
 #: node arrives on the pod's device from the pod's address, while one to
 #: another node is masqueraded to a node address and enters on `kubespan`.
 #: The DHCPv6 client is open to the link alone. etcd and trustd have no opening: their
-#: peers reach them over KubeSpan, which enters on `kubespan`.
+#: peers reach them over KubeSpan, which enters on `kubespan`. Nor has etcd's
+#: metrics listener (`ETCD_METRICS_PORT`): its reader, the API server's node
+#: proxy, calls another control plane over KubeSpan and its own node on `lo`,
+#: both accepted ahead of every rule. Nothing outside the cluster reaches the
+#: port. Inside it, more than the reader does: every KubeSpan peer, the
+#: homelab worker's host among them; once Cilium runs, a pod on another node,
+#: masqueraded to its node's address over KubeSpan; and a pod calling a host
+#: address inside the pod range on its own node, which the chain's pod-range
+#: accept admits on any port. That reach is accepted under threat-model.md §4,
+#: failing its second clause: the listener serves counters, histograms and
+#: health, never a key or a value, the class of host metrics rfc-007 §4.3
+#: already lets a pod read. A scraper pod reading it at its own node's address
+#: would need an opening from the cluster's ranges, and the change that adds
+#: the scrape settles it (rfc-007 §7.1).
 #:
 #: A raw TCP/UDP LoadBalancer Service's port is absent: Cilium's BPF datapath
 #: answers it at tc ingress, ahead of nftables, so it serves without a
@@ -206,6 +228,20 @@ HOST_OPENINGS: tuple[Opening, ...] = (
 
 #: The ports `HOST_OPENINGS` opens, whatever the protocol or the sources.
 HOST_PORTS: tuple[int, ...] = tuple(opening.port for opening in HOST_OPENINGS)
+
+
+def etcd_metrics_url() -> str:
+    """Where a control plane's etcd serves its metrics: every address of the node, both families.
+
+    etcd opens the URL with a `tcp` listener, and on `tcp` an unspecified
+    host is one dual-stack socket, so `0.0.0.0` answers on every IPv4 and
+    IPv6 address alike. The host is unspecified rather than a node address
+    because the patch is shared by every control plane, and the reader, the
+    API server's node proxy, dials the node's internal address, where a
+    loopback listener would not answer. The firewall admits nothing to the
+    port, so nothing outside the cluster reaches it.
+    """
+    return f'http://{IPv4Address(0)}:{ETCD_METRICS_PORT}'
 
 
 def node_patch() -> dict[str, Any]:
@@ -266,8 +302,8 @@ def control_plane_patch(*, cert_sans: Sequence[str], secretbox_secret: str | Non
     """The parts only a control plane has: the apiserver, etcd, the CNI and the service proxy.
 
     A worker's configuration has no apiserver to harden and no etcd to
-    encrypt, and the CNI and kube-proxy are installed by the control plane,
-    so none of this belongs in the shared patch.
+    encrypt or read, and the CNI and kube-proxy are installed by the control
+    plane, so none of this belongs in the shared patch.
 
     Talos ships no CNI and no kube-proxy here: Cilium, which `k8s-base`
     installs, is both (rfc-007 §4.2). kube-proxy is off from the first boot
@@ -289,6 +325,8 @@ def control_plane_patch(*, cert_sans: Sequence[str], secretbox_secret: str | Non
             },
             'etcd': {
                 'advertisedSubnets': [str(conventions.VCN_CIDR)],
+                # etcd's metrics listener (`etcd_metrics_url`).
+                'extraArgs': {'listen-metrics-urls': etcd_metrics_url()},
             },
         }
     }

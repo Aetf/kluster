@@ -7,8 +7,9 @@ come up or comes up quietly insecure.
 
 import json
 from collections.abc import Sequence
-from ipaddress import IPv4Interface, IPv4Network, IPv6Network, ip_network
+from ipaddress import IPv4Interface, IPv4Network, IPv6Network, ip_address, ip_network
 from typing import Any, cast
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -309,6 +310,27 @@ def test_the_link_is_selected_rather_than_named(shape: str) -> None:
     (alias,) = of_kind('LinkAliasConfig', **SHAPES[shape])
     assert alias['selector'] == {'match': 'true'}
     _ = uplink(**SHAPES[shape])
+
+
+@pytest.mark.parametrize('shape', [shape for shape, arguments in SHAPES.items() if arguments.get('role') != 'worker'])
+def test_a_control_plane_serves_etcds_metrics_where_the_node_proxy_reaches_them(shape: str) -> None:
+    """Every control plane's etcd answers plain HTTP on every address of the node.
+
+    The reader is the API server's node proxy (declarative/physical.md §6),
+    which speaks the `http:` scheme the reading names and dials the node's
+    internal address, so a loopback listener would not answer it. Either
+    family's unspecified address does: etcd listens on `tcp`, where an
+    unspecified host is one dual-stack socket. A worker runs no etcd and
+    carries none of it (the case below).
+    """
+    cluster = merged('cluster', **SHAPES[shape])
+    (url,) = cast('str', cluster['etcd']['extraArgs']['listen-metrics-urls']).split(',')
+    listener = urlsplit(url)
+    host = ip_address(listener.hostname or '')
+
+    assert listener.scheme == 'http'
+    assert listener.port == talos.ETCD_METRICS_PORT
+    assert host.is_unspecified, host
 
 
 def test_a_worker_carries_no_control_plane_configuration() -> None:
