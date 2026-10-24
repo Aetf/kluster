@@ -6,11 +6,12 @@ image:
 -   the **cloud nodes** boot an OCI custom image. There is no official Talos
     image in OCI's catalog, so one is built by the Image Factory and imported.
 -   the **homelab worker** boots a `nocloud` disk image written into a libvirt
-    volume. Its schematic is not the cloud one — it carries the i915 firmware
-    the Wave C GPU cutover needs present from day 0 (physical/homelab-host.md
-    §3), and the cloud nodes have no use for it — so what the two share is the
-    shape rather than the resource: one schematic each, one way of asking the
-    factory where its artifact is.
+    volume. Its schematic is not the cloud one — it carries the driver,
+    firmware and GSC modules for the host's Arc A380, which the Wave C GPU
+    cutover passes through to the worker and needs present from day 0
+    (physical/homelab-host.md §3), and the cloud nodes have no use for it — so
+    what the two share is the shape rather than the resource: one schematic
+    each, one way of asking the factory where its artifact is.
 
 The schematic id is part of the declared state either way, which is what makes
 an image's contents reproducible rather than a thing someone once uploaded.
@@ -62,13 +63,26 @@ HOMELAB_PLATFORM = 'nocloud'
 #: states the same way — rather than a table a caller chooses for it: the
 #: cloud image and the worker image are two schematics, and the subclass that
 #: is each artifact names its own. The cloud schematic is the
-#: stock one, because the one extension the fleet needs is firmware for a GPU
-#: the cloud nodes do not have. The GPU cutover needs that i915 firmware
-#: present *before* it happens, so the worker's schematic carries it from
-#: day 0 — harmless without a GPU, and the cutover then touches no OS image
-#: (physical/homelab-host.md §3).
+#: stock one, because what the fleet adds to stock Talos is for a GPU the
+#: cloud nodes do not have: the Arc A380 the GPU cutover passes through to the
+#: worker. Each worker extension is one part of what that card needs:
+#:
+#: -   `siderolabs/i915` is its driver and its DG2 firmware: the `i915` module,
+#:     and linux-firmware's whole `i915/` directory, DMC, GuC and HuC included.
+#: -   `siderolabs/mei` is the path the DG2 HuC loads and authenticates through.
+#:     On DG2 the card's GSC does both, and `i915` reaches the GSC through the
+#:     `mei-gsc` and `mei_pxp` modules, which only this extension ships.
+#:
+#: The cutover needs them present *before* it happens, so the worker's
+#: schematic carries them from day 0 — harmless without a GPU, and the cutover
+#: then touches no OS image (physical/homelab-host.md §3).
+#:
+#: Each entry is an official extension the Image Factory lists for the pinned
+#: Talos version (`/version/<version>/extensions/official`). Nothing here
+#: checks the spelling, and the factory refuses an unknown name only when the
+#: disk image is fetched.
 CLOUD_EXTENSIONS: tuple[str, ...] = ()
-HOMELAB_EXTENSIONS = ('siderolabs/i915',)
+HOMELAB_EXTENSIONS = ('siderolabs/i915', 'siderolabs/mei')
 
 GIB = 1 << 30
 
@@ -228,9 +242,9 @@ class TalosNocloudImage(TalosArtifact, pulumi_type='kluster:talos:TalosNocloudIm
 
     The extension set, platform and architecture are stated here rather than
     taken as parameters: they are what this artifact *is* — the schematic the
-    worker boots, i915 firmware included, as the `nocloud` x86 image — and no
-    caller has a second opinion about any of them. What varies between
-    artifacts is carried by the base's `extensions`, `platform` and
+    worker boots, the A380's driver and firmware included, as the `nocloud`
+    x86 image — and no caller has a second opinion about any of them. What varies
+    between artifacts is carried by the base's `extensions`, `platform` and
     `architecture`, which is how this artifact differs from the cloud one.
 
     `path` is what a libvirt volume is created from, and the volume's capacity

@@ -451,8 +451,8 @@ them for day-2 once v0.12 is stable *and* has reached the Pulumi bridge.
     destroying the worker's disk. The **pool** pointing at the
     nodatacow subvolume is declared here too; the subvolume itself is
     host preparation (homelab-host.md §4).
--   **GPU hostdev**: not present at bootstrap (the two-phase plan,
-    homelab-host.md §3); when the Wave C cutover adds it,
+-   **GPU hostdev**: the Arc A380, not present at bootstrap (the
+    two-phase plan, homelab-host.md §3); when the Wave C cutover adds it,
     pulumi-libvirt's hostdev support is thin — the provider's XSLT
     escape hatch may be needed for the PCI device XML (the
     home-automation domain on the same host proves the libvirt side
@@ -596,7 +596,7 @@ migration.md §1): LB IPAM pool containing node primary IPs; NLB dual-stack list
 source-preservation semantics; etcd fsync latency on OCI block volumes;
 A1 capacity at creation; reserved-IP↔secondary-private-IP NAT; Cilium's
 MTU, `conventions.KUBESPAN_MTU`, over the KubeSpan underlay; talosctl reaching the homelab node via cloud endpoints (apid
-proxy); VFIO iGPU passthrough capability on a scratch VM.
+proxy).
 
 The node volumes (§1, §2) are first exercised at bring-up too, and the
 same gate confirms them:

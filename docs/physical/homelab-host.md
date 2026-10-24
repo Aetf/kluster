@@ -110,16 +110,58 @@ there is no lease, reservation or pool to reconcile it against. v6 is the SLAAC
 GUA from the UDM's RA on this network (architecture.md §3.5's
 qbittorrent path expects that GUA) plus the VLAN's ULA /64.
 
-## 3. GPU: two-phase VFIO passthrough
+## 3. GPU: the A380, passed through in two phases
 
-The VM bootstraps with no hostdev (host i915 keeps serving the legacy
-cluster), but its Talos schematic carries the i915 firmware extension
-from day 0 (harmless without a GPU) so the later cutover touches no OS
-image. The cutover itself — drain → host binds vfio-pci → domain gains
+The host has two GPUs, and the worker gets the discrete one:
+
+-   **The Arc A380** (DG2, `8086:56a5`) at `0000:03:00.0`, alone in
+    its `iommu_group` (23), is the device passed through. Its HDMI audio
+    function, `0000:04:00.0` (`8086:4f92`), is a PCI device of its own
+    outside that group, and it stays with the host: VFIO takes a whole
+    group, not a whole card, so nothing requires it, and the worker has
+    no use for HDMI audio.
+-   **The UHD 770 iGPU** at `0000:00:02.0`, alone in group 0, stays
+    with the host as its BIOS primary display, and that is a
+    requirement rather than a leftover. With the firmware console on the
+    A380, `simpledrm` leaves a dangling
+    `/dev/dri/by-path/pci-0000:03:00.0-platform-simple-framebuffer.0-card`
+    link, the legacy cluster's GPU device plugin maps it into containers,
+    and containerd fails them with `CreateContainerError`. Keeping the iGPU costs
+    nothing: it idles in RC6 at about zero watts, so disabling it in the
+    firmware would save nothing either.
+
+The VM bootstraps with no hostdev — the host's `i915` keeps the A380
+serving the legacy cluster — but its Talos schematic carries the
+A380's extensions from day 0 (harmless without a GPU) so the later
+cutover touches no OS image. There are two of them:
+
+-   `siderolabs/i915` is the driver and its firmware: the `i915` kernel
+    module, and the whole `i915/` directory of `linux-firmware`, which
+    at the pinned Talos holds the three blobs DG2 loads
+    (`dg2_dmc_ver2_08.bin`, `dg2_guc_70.bin`, `dg2_huc_gsc.bin`).
+-   `siderolabs/mei` is the path the last of those, the media firmware,
+    loads and authenticates through. On DG2 the card's GSC does both,
+    and `i915` reaches the GSC through the `mei-gsc` and `mei_pxp`
+    kernel modules, which this extension carries.
+
+The cutover itself — drain → host binds vfio-pci → domain gains
 the PCI hostdev → reboot → device plugin sees the GPU — is a migration
 window sequenced with the immich/jellyfin move (migration.md Wave C).
-The capability is verified early on a scratch VM (bootstrap
-verification, declarative/physical.md §6).
+It takes the legacy cluster's GPU: every legacy GPU consumer (immich's
+transcoding and machine learning, jellyfin) holds the A380, the legacy
+device plugin being limited to it, and the iGPU does not stand in for
+it, because their batch work outgrew the iGPU's throughput, which is
+what the A380 is there for. From the bind the legacy device plugin
+advertises no `gpu.intel.com/i915`, so a GPU job running in legacy
+immich or jellyfin fails, and a pod of theirs that restarts stays
+Pending, until their legacy manifests stop requesting the GPU or the
+app has moved; the rollback of migration.md §0 rule 1 does not return
+their GPU while the A380 is in the worker. Which state the window
+leaves them in is an open operator choice, recorded on
+kluster-ops#644 (migration.md Wave C lists the options). No probe on a
+scratch VM comes first: GPU
+passthrough is known to work on this host, so the cutover is the first
+time the A380 goes through VFIO for the cluster.
 
 ## 4. Host preparation: one aconfmgr change-set
 
@@ -156,8 +198,8 @@ contents, so nothing is discovered mid-bootstrap:
     192.168.70.10 — scoped to that host, and served over the host leg
     rather than the untagged LAN.
 
-The vfio-pci host binding is deliberately *not* here — it lands in the
-Wave C cutover (§3, migration.md).
+The A380's vfio-pci host binding is deliberately *not* here — it lands
+in the Wave C cutover (§3, migration.md).
 
 ## 5. NAS access from the cluster: NFS over the host leg
 

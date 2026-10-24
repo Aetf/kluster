@@ -86,29 +86,33 @@ def build_worker() -> image.TalosNocloudImage:
 # -- the two schematics -----------------------------------------------------
 
 
+def official_extensions(schematic: object) -> list[str]:
+    """The extensions a rendered schematic document asks the factory for."""
+    document = json.loads(str(schematic))
+    return cast('list[str]', document['customization']['systemExtensions']['officialExtensions'])
+
+
 @pytest.mark.asyncio
 async def test_the_two_artifacts_do_not_share_a_schematic() -> None:
-    cloud = await build_cloud().schematic.schematic.future()
-    worker = await build_worker().schematic.schematic.future()
+    cloud = official_extensions(await build_cloud().schematic.schematic.future())
+    worker = official_extensions(await build_worker().schematic.schematic.future())
 
     # The module docstring used to say the worker consumed *the same*
-    # schematic. It cannot: the worker's carries a firmware extension the
+    # schematic. It cannot: the worker's carries extensions for a GPU the
     # cloud nodes have no hardware for, and a schematic's contents are its id.
-    cloud_extensions = json.loads(str(cloud))['customization']['systemExtensions']['officialExtensions']
-    worker_extensions = json.loads(str(worker))['customization']['systemExtensions']['officialExtensions']
-    assert cloud_extensions != worker_extensions
-    assert 'siderolabs/i915' not in cloud_extensions
+    # So the cloud's asks for none of the worker's, whatever that set holds.
+    assert cloud != worker
+    assert not set(cloud) & set(worker)
 
 
 @pytest.mark.asyncio
-async def test_the_worker_carries_the_gpu_firmware_before_it_has_a_gpu() -> None:
-    worker = build_worker()
-
+async def test_the_worker_schematic_asks_for_exactly_the_worker_roll() -> None:
     # Day 0, deliberately (physical/homelab-host.md §3): the Wave C cutover
     # adds a PCI device to a running domain and must touch no OS image, so the
-    # extension has to have been there since the disk was written.
-    document = json.loads(str(await worker.schematic.schematic.future()))
-    assert 'siderolabs/i915' in document['customization']['systemExtensions']['officialExtensions']
+    # schematic the disk is written from already asks for every extension the
+    # worker's artifact declares, with no GPU anywhere in sight.
+    worker = official_extensions(await build_worker().schematic.schematic.future())
+    assert worker == list(image.HOMELAB_EXTENSIONS)
 
 
 @pytest.mark.asyncio

@@ -104,9 +104,9 @@ owns sequencing, data movement, and teardown.
     dual-stack + source preservation; reserved-IP NAT; MTU over
     KubeSpan; the security
     verifications (pod→IMDS denied, bogus-BGP rejected, ExternalAuth
-    fail-closed) — alongside the physical-only items (etcd fsync;
-    VFIO capability on a scratch VM). **No app migrates until this
-    gate passes** — every item is cheaper to fix on an empty cluster.
+    fail-closed) — alongside the Talos-level checks item 3 names, etcd
+    fsync among them. **No app migrates until this gate passes** —
+    every item is cheaper to fix on an empty cluster.
 
 ## 2. Waves
 
@@ -137,9 +137,21 @@ the VPS empties progressively):
     workloads.md §4 — their content moves from the VPS hostPath onto a
     NAS share once), the haos.ucw LAN-device backend (workloads.md §4),
     thread-dashboard (quadlet → cluster).
--   **Wave C — homelab heavy + the GPU window**: the vfio-pci cutover
-    (drain → bind → hostdev → reboot, physical/homelab-host.md §3) runs at the head
-    of this wave, then immich (CNPG via the barman restore of §3 — a
+-   **Wave C — homelab heavy + the GPU window**: the A380's vfio-pci
+    cutover (drain → bind → hostdev → reboot, physical/homelab-host.md §3)
+    runs at the head of this wave. It takes the legacy cluster's GPU:
+    since kluster-code#253 every legacy GPU consumer holds the A380, and
+    the iGPU, which stays with the host, does not stand in. From the bind
+    the legacy device plugin advertises no `gpu.intel.com/i915`, so a GPU
+    job running in legacy immich or jellyfin fails, and a pod of theirs
+    that restarts stays Pending, until their legacy manifests stop
+    requesting the GPU or the app has moved; §0 rule 1's rollback does
+    not return their GPU while the A380 is in the worker. Which state the
+    window leaves them in is an open operator choice, recorded on
+    kluster-ops#644: moved to CPU by a kluster-code change before the
+    bind, down from the bind until each has moved, or the bind moved to
+    the tail of this wave with the new deployments on CPU until then.
+    Then immich (CNPG via the barman restore of §3 — a
     path this cluster has not drilled; NAS media PVs re-point in place;
     ML/thumbnail caches re-derive) and
     jellyfin+shoko (NAS re-point + config PVC copy; **verify the
