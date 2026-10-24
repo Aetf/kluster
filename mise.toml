@@ -34,8 +34,8 @@ locked = true
 # Renovate maintains these -- it cannot bump `latest`, which is why they are
 # written out.
 [tools]
-pulumi = "3.268.0"
-uv = "0.12.24"
+pulumi = "3.270.0"
+uv = "0.13.1"
 # age is the tool this repository escrows with rather than a format it
 # reimplements: `age`/`age-keygen` write and open every ciphertext under
 # `escrow/`, and the box's dumps are age-encrypted too; butane renders the
@@ -99,7 +99,7 @@ kubeseal = "0.39.1"
 # with no dependencies, vendored at the release the CI member runs
 # (tests/vendor/zerotier-rule-compiler/source.toml), so node is the whole of
 # what it needs installed.
-node = "24.21.0"
+node = "24.22.0"
 # The prose checker AGENTS.md's gate runs over every markdown file but the
 # generated SDKs' under `sdks/`, and the one gate tool no registry carries: it
 # is pinned straight to its GitHub
