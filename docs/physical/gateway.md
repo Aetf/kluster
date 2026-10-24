@@ -1355,79 +1355,631 @@ These Central rules are the **only policing layer** for overlay-forwarded
 traffic — the UBIOS firewall does not classify `zt*` interfaces and
 forwards them on default ACCEPT (architecture.md §5.3).
 
-### 2.4 Verification (test network, before cutover)
+### 2.4 Verification
 
-Run against a scratch ZeroTier network with the same rules, rendered
-over the node addresses of two throwaway `ci`-tagged members — one
-standing for each CI identity:
+The items below are the census of what the overlay must be shown to
+do, and each is read in one or more of three places:
 
-1.  Each CI member reaches exactly its own identity's targets (SSH
-    banner / API response) — the `ci-physical` stand-in the UDM's SSH
-    and UniFi API and the homelab host's SSH, the `ci-dns` stand-in
-    both AdGuard APIs — including the **return leg** (rules are
-    stateless — a working handshake proves both directions).
-2.  No CI member can ping or reach any other LAN address through the
+-   **A scratch network, before the cutover window** (§2.4.1):
+    everything the rules engine decides. The window's targeted run
+    changes nothing at Central, and the run with no targets that
+    completes step 1 writes the composed program; from then on every
+    member is judged by it, the household's devices among them (§2.5).
+-   **The real gateway, after the ceremony's step 4 and before the `dns`
+    stack's first `up`** (§2.4.2): what only the device's kernel and
+    services show. It comes before the identity sync, which hands the
+    `dns` identity to every pull request's preview
+    ([threat-model.md](../threat-model.md) §3.1), and against the holder
+    of an identity the flow rules are the whole defense.
+-   **The identity sync's own reading**, the drift run of
+    [gateway-cutover.md](gateway-cutover.md) §8.3: items 4 and 7 on the
+    path they describe, a hosted runner joining the real network. They
+    are read off the readiness line of the ZeroTier action, which every
+    job that joins with the `physical` identity waits on: its `wait_for`
+    is the gateway's shell, `10.144.1.1:22`. They are availability rather
+    than confinement, so the sync may carry them: the deploy chain stays
+    disabled until that reading passes.
+
+**Why the halves fall there.** Evaluation is distributed: every frame
+is judged by the sender's daemon and by the receiver's (§2.3). So every
+confinement property is a property of the program and of the release
+the two daemons run, and a stand-in running the device's own image
+carries the device's end of every leg. What a stand-in cannot carry is
+the device's kernel and services, and a hosted runner's path to the
+device.
+
+1.  **Each CI identity reaches exactly its own identity's targets** —
+    `ci-physical` the gateway's SSH and UniFi API and the homelab host's
+    SSH, `ci-dns` both AdGuard APIs — including the **return leg**: the
+    rules are stateless, so a connection that completes and returns the
+    listener's banner proves both directions.
+2.  No CI identity can ping or reach any other LAN address through the
     routes, or reach a `personal` member directly.
 3.  `ipdest` LAN-CIDR matching on routed (pre-forward) destinations
     behaves as modeled.
 4.  First-packet behavior after a fresh join (a run's first ARP can
-    meet the UDM's before the UDM's certificate of ownership arrives,
-    §2.3): connection succeeds on retry within normal client timeouts.
-5.  Personal members are unaffected: full reachability, ARP/ND intact.
-6.  Local discovery between two personal members over the overlay (an mDNS
-    query/response round trip) works with the rules applied —
+    meet the gateway's before the gateway's certificate of ownership
+    arrives, §2.3): the connection succeeds on retry within normal
+    client timeouts.
+5.  Personal members are unaffected: full reachability, ARP and
+    neighbor discovery intact.
+6.  Local discovery between two personal members over the overlay (an
+    mDNS query/response round trip) works with the rules applied —
     exercises the multicast settings and the final-accept fallthrough
     together.
-7.  **Join latency**: measure a fresh `ci`-tagged member's
-    join→SSH-reachable time against the UDM (expectation and why it
-    should beat the legacy 1–2 min: §2.6).
-8.  **Address ownership and the controller door.** Items 1 and 4
-    passing with the draft's `chr ipauth` matches in place is itself
-    the first reading: it holds only if Central issues each member a
-    certificate of ownership for its assigned address, which the
-    controller source does. Then, from the `ci`-tagged member:
-    -   `curl -sk -o /dev/null -w '%{http_code}\n' https://<udm-zt-ip>/`
-        prints an HTTP status: the controller's API answers over a
-        handshake that does not verify its certificate, which is the
-        connection `controller_provider` builds. The provider's own
-        first call through that construction is the pre-window probe
-        of gateway-cutover.md §3.
-    -   On the UDM, `ip neigh del <ci-member-ip> dev <zt-iface>`, then
-        `tcpdump -ni <zt-iface> 'arp and host <ci-member-ip>'` while the
-        `ci` member calls an AdGuard API. Every request reads
-        `who-has <ci-member-ip> tell <udm-zt-ip>`. The capture is on the
-        UDM because the kernel writes the frame to the tap before
-        ZeroTier's outbound filter sees it, so a request naming one of
-        the UDM's LAN addresses shows here if one is sent; on the `ci`
-        member the draft would already have dropped it, and the capture
-        there sees only what passed. Such a request is what the draft
-        drops at the run, and the AdGuard calls would fail with it.
-    -   A scratch `personal` member holds `<udm-zt-ip>` as a second
-        address on its interface, so it joins that address's ARP group
-        and its kernel answers requests for it. On the `ci` member,
-        `ip neigh flush dev <zt-iface>`, then
-        `arping -c 3 -I <zt-iface> <udm-zt-ip>`: only the UDM's MAC
-        answers, where a program without the ARP drops shows both.
-        `ip neigh` then shows the UDM's MAC, and the `curl` above still
-        reaches the UDM.
-9.  **Each identity is confined by its node address, whatever its
-    tag says.**
-    -   From the `ci-dns` stand-in, `nc -vz -w 5 <udm-zt-ip> 22` and
-        `nc -vz -w 5 <homelab-host> 22` both time out, while the same
-        commands from the `ci-physical` stand-in connect; the `ci-dns`
-        stand-in's `curl -s http://<adguard-alice>/` still answers.
-    -   Then set the `ci-dns` stand-in's `role` tag to `personal` in
-        the scratch network's member settings and repeat the reads.
-        The tag it pushes now says `personal`, which leaves every
-        tag-keyed rule where a withheld tag would: `tseq role 2` fails
-        at the receiver, and `treq role 2` does not match at the
-        sender. So no modified client is needed to stand in for a
-        member that withholds its tag. The results are unchanged: the
-        stand-in still cannot open either shell and still reaches the
-        AdGuard APIs. Against a program with `drop tseq role 2` and
-        `drop treq role 2` in place of the node-address drops, the
-        same member opens the UDM's SSH, which is what makes the
-        reading able to fail.
+7.  **Join latency**: a fresh CI member's join→SSH-reachable time
+    against the gateway (the expectation, and why it should beat the
+    legacy 1–2 min: §2.6).
+8.  **Address ownership and the controller door**, in three parts. The
+    first: items 1 and 4 pass with the program's `chr ipauth` matches in
+    place, which holds only if Central issues each member a certificate
+    of ownership for its assigned address, as the controller source
+    does; and the controller's API answers at the gateway's overlay
+    address over a handshake that does not verify its certificate, the
+    connection `controller_provider` builds. The second: the gateway
+    sends its ARP towards a run from its overlay address and never from
+    one of its LAN addresses — a request naming a LAN address is what
+    the program drops at the run, and the AdGuard calls would fail with
+    it. The third: no other member can answer a run's ARP for the
+    gateway's address.
+9.  **Each identity is confined by its node address, whatever its tag
+    says.** A member whose tag says `personal` is judged as one that
+    withholds its tag: `tseq role 2` fails at the receiver and
+    `treq role 2` does not match at the sender (§2.3), so no modified
+    client is needed to stand in for a member that withholds it.
+
+Where each is read:
+
+| Item | On a scratch network (§2.4.1) | On the real network |
+| --- | --- | --- |
+| 1 | every leg of both identities, with the negative half: each reaches nothing the other's legs name | §2.4.2: the doors at the overlay address, and the resolvers over the managed route; gateway-cutover.md §8.3: `ci-physical`'s legs, with its real identity |
+| 2 | whole | — |
+| 3 | whole | none of its own; §2.4.2's resolver reading implies it |
+| 4 | a CI stand-in's first dial after its first join, against a gateway stand-in running the device's binary | gateway-cutover.md §8.3: the readiness line of the `physical` join |
+| 5 | whole | — |
+| 6 | whole | — |
+| 7 | none: a stand-in measures its own NAT, not a hosted runner's path to the device's un-NATed socket (§2.6) | gateway-cutover.md §8.3: the readiness line's attempt count. Not a gate (§2.6) |
+| 8 | the first part's ownership half, and the third part with its control | §2.4.2: the first part's controller door, and the second part, read on the device |
+| 9 | whole, with its control | — |
+
+**The scratch half runs again, before the change is applied, for any
+change to the program that adds a matcher or a kind of leg it has not
+had**, for the reason it runs before the window: once applied, the
+program judges every member. It is the engine's counterpart of the
+suite's reading of the program, which refuses a matcher it does not
+model (`tests/overlay_flow_rules.py`).
+
+#### 2.4.1 The engine's half: a scratch network, before the window
+
+**The same program over scratch addresses, not the same text.** The
+program is a pure function of the gateway's and the homelab host's
+overlay addresses, the resolvers' site addresses, and the node addresses
+of the members it confines: `flow_rules` takes the addresses, and
+`FlowRules.render` fills in the node addresses. The scratch
+addresses are production's with one octet moved:
+
+| What | Production | Scratch |
+| --- | --- | --- |
+| overlay subnet | `10.144.0.0/16` | `10.145.0.0/16` |
+| gateway | `10.144.1.1` | `10.145.1.1` |
+| homelab host | `10.144.180.10` | `10.145.180.10` |
+| `ci-physical`, `ci-dns` | `10.144.2.1`, `10.144.2.2` | `10.145.2.1`, `10.145.2.2` |
+| container VLAN; resolvers | `10.0.5.0/24`; `.3`, `.4` | `10.1.5.0/24`; `.3`, `.4` |
+
+Rendered over the same node addresses, the scratch program with
+`10.145.` read as `10.144.` and `10.1.5.` as `10.0.5.` is the stack's
+program byte for byte, which `tests/test_overlay_probe.py` holds. The
+alternative, the homelab host on two networks with one subnet, puts a
+second interface carrying `10.144.0.0/16` on a production host that is
+the recovery side-door (§3), and its text would still differ in the node
+addresses.
+
+**The pools are derived, not substituted.** The rosters differ, so the
+scratch network's assignment pools are no translation of the stack's:
+they are the same derivation over the probe's roster and routes —
+every host address of the scratch subnet less the stand-ins' addresses
+and the scratch gateway's (§2.1). The component draws them from the
+routes it is handed, the subnet of the one with no `via` less every
+next hop, so the probe's scratch routes are all it takes. No stand-in
+draws from the pools, each being placed; what they add is a list of
+several ranges taking the same round trip the stack's will.
+
+**What it proves**, for the release the production daemons run at the
+two ends that judge a run's frames: each rule as both ends evaluate it.
+That is the legs in both directions, the drops, confinement by node
+address whatever the tag, the ARP ownership checks, routed traffic
+matched on its pre-forward destination, personal traffic and discovery
+untouched, and the first-packet behavior of the device's daemon.
+
+**What it does not prove, and what does:**
+
+-   That the production program names the production members. The
+    suite holds that the stack composes it from the roster's and the
+    census's addresses, and that ZeroTier's compiler takes it
+    (`tests/test_physical_stack.py`, `tests/test_flow_rules_compile.py`).
+-   That it names the identities CI holds. One value feeds both: the
+    program is rendered over the minted node addresses and each member is
+    written on the same one (`tests/test_overlay.py`), so an identity
+    Central admits is an identity the program confines. The drift run of
+    gateway-cutover.md §8.3 reads it live.
+-   That Central holds that program: step 1's preview reading of
+    `flowRules` (§2.5), and the no-change follow-up of gateway-cutover.md
+    §5, step 5.
+-   The device's kernel and services: §2.4.2. A hosted runner's path:
+    gateway-cutover.md §8.3.
+-   The other members' own clients. The program names no tag, so nothing
+    in it depends on the release at their end (§2.3).
+
+**The probe** is a throwaway Pulumi project in the form of
+gateway-cutover.md §3's controller probe, and its program is `Overlay`
+itself over a scratch roster, the scratch route table and a scratch DNS
+block. Its roster is a `GeneratedMember` per stand-in, so the
+component mints every stand-in's identity in the probe's state as it
+mints the CI identities in production; the CI stand-ins carry the names
+`flow_rules` confines. Each identity's private key is exported as a secret under the
+stand-in's name, as the stack exports the CI ones.
+
+Two configuration keys change the program, and only for the controls.
+`ciDnsRole` defaults to `ci`, and item 9 sets it to `personal`.
+`control=tags` replaces the closing node-address drops with
+`drop tseq role ci;` and `drop treq role ci;`, and `control=arp` removes
+the ARP node-address drops. Each control is a rule program wrapping
+the composed one, so it goes through the component's render like the
+program itself.
+
+`Overlay` adopts a network rather than creating one, so the scratch
+network is created by hand in Central first, and its id is the probe's
+`networkId`: the probe's one hand step. While it stands it carries the
+component's name and description, the production network's own, which
+is why the teardown's last reading is by id.
+
+From the root of the checkout that holds `.credentials/`, with
+`physical` opened under its own passphrase (credentials.md §4.4):
+
+```sh
+physical() {
+    mise x -- env -u PULUMI_CONFIG_PASSPHRASE \
+        PULUMI_CONFIG_PASSPHRASE_FILE=.credentials/physical.passphrase \
+        pulumi "$@" --stack physical
+}
+PROBE=$PWD/.claude/overlay-probe
+PULUMI=$(mise which pulumi)
+probe() {
+    (cd "$PROBE" && PULUMI_BACKEND_URL="file://$PROBE/state" PULUMI_HOME="$PROBE/home" \
+        PULUMI_CONFIG_PASSPHRASE=probe "$PULUMI" "$@")
+}
+mise x uv -- uv sync
+mkdir -p "$PROBE/state"
+cat > "$PROBE/Pulumi.yaml" <<'EOF'
+name: overlay-probe
+runtime:
+  name: python
+  options:
+    toolchain: uv
+    virtualenv: ../../.venv
+EOF
+cat > "$PROBE/__main__.py" <<'EOF'
+import re
+from collections.abc import Mapping
+from dataclasses import dataclass
+from ipaddress import IPv4Address, IPv4Network
+
+import pulumi
+
+from kluster import conventions
+from kluster.components.overlay import Overlay
+from kluster.components.overlay.flow_rules import FlowRules, flow_rules
+
+NAME = 'kluster-probe'
+overlay = conventions.overlay
+Role = overlay.Role
+config = pulumi.Config()
+
+# Production's addresses with one octet moved (physical/gateway.md §2.4.1).
+SUBNET = IPv4Network('10.145.0.0/16')
+LAN = IPv4Network('10.1.5.0/24')
+GATEWAY = IPv4Address('10.145.1.1')
+HOMELAB = IPv4Address('10.145.180.10')
+RESOLVERS = (IPv4Address('10.1.5.3'), IPv4Address('10.1.5.4'))
+
+# Every identity is minted in the probe's state, as the stack mints the CI ones.
+ROSTER = (
+    overlay.GeneratedMember(name='gateway', address=GATEWAY, role=Role.INFRA),
+    overlay.GeneratedMember(name='homelab', address=HOMELAB, role=Role.INFRA),
+    overlay.GeneratedMember(name=overlay.MEMBER_CI_PHYSICAL, address=IPv4Address('10.145.2.1'), role=Role.CI),
+    overlay.GeneratedMember(
+        name=overlay.MEMBER_CI_DNS,
+        address=IPv4Address('10.145.2.2'),
+        role=Role[config.get('ciDnsRole', 'ci').upper()],
+    ),
+    overlay.GeneratedMember(name='personal-a', address=IPv4Address('10.145.0.101'), role=Role.PERSONAL),
+    overlay.GeneratedMember(name='personal-b', address=IPv4Address('10.145.0.102'), role=Role.PERSONAL),
+)
+
+
+@dataclass(frozen=True)
+class Control:
+    """The composed program with the lines one control names replaced."""
+
+    program: FlowRules
+    kind: str
+
+    @property
+    def members(self) -> tuple[str, ...]:
+        return self.program.members
+
+    def render(self, node_ids: Mapping[str, str]) -> str:
+        nodes = '|'.join(node_ids.values())
+        pattern, replacement = {
+            # The closing node-address drops, keyed on the tag instead.
+            'tags': (rf'(?:^drop zt(?:src|dest) (?:{nodes});\n)+', 'drop tseq role ci;\ndrop treq role ci;\n'),
+            # The ARP node-address drops, gone.
+            'arp': (rf'(?:^drop ethertype arp and zt(?:src|dest) (?:{nodes});\n)+', ''),
+        }[self.kind]
+        text, blocks = re.subn(pattern, replacement, self.program.render(node_ids), flags=re.MULTILINE)
+        if blocks != 1:
+            raise ValueError(f'control {self.kind} matched {blocks} blocks of the program, not one')
+        return text
+
+
+network_id = config.require('networkId')
+# The teardown destroys the network this run adopts; the production network is never that one.
+if network_id.lower() == overlay.NETWORK_ID:
+    raise ValueError(f'networkId {network_id} is the production network; the probe adopts a scratch one')
+
+rules = flow_rules(gateway_overlay_address=GATEWAY, homelab_overlay_address=HOMELAB, resolver_site_addresses=RESOLVERS)
+control = config.get('control')
+network = Overlay(
+    NAME,
+    network_id=network_id,
+    flow_rules=rules if control is None else Control(rules, control),
+    roster=ROSTER,
+    managed_routes=(overlay.ManagedRoute(SUBNET, None), overlay.ManagedRoute(LAN, GATEWAY)),
+    dns=overlay.ManagedDns(domain='probe.invalid', servers=RESOLVERS),
+)
+for member, identity in network.identities.items():
+    pulumi.export(member, pulumi.Output.secret(identity.private_key))
+EOF
+probe stack ls --all       # an empty table: the backend in hand is the probe's own
+probe stack init probe
+probe config set networkId <the scratch network's id>
+physical config get zerotierApiToken | probe config set --secret zerotierApiToken
+```
+
+The token is read out of `physical`'s configuration under that stack's
+own passphrase, and it is the probe's one credential. The rest runs one
+line at a time, each reading the result of the one before:
+
+```sh
+probe preview --diff       # the network row carries the composed program over 10.145. and 10.1.5.
+probe up
+probe preview --refresh --expect-no-changes
+```
+
+The first preview plans the stack, the component and its provider, an
+identity and a member per stand-in, and the network as an import; its
+`flowRules` is the program over the scratch addresses. The refreshed
+preview exits zero: that is the update path of gateway-cutover.md §5,
+step 5, read before the window, so a `via` normalization or a dropped
+DNS block is fixed in the program before step 5 rather than after it.
+
+**The stand-ins** are rootless containers on the workstation:
+
+| Stands for | Stand-in | Address | Role | In its namespace |
+| --- | --- | --- | --- | --- |
+| the device | `gateway` | `10.145.1.1`, and `10.1.5.1` on the stand-in LAN | `infra` | forwarding on; a listener on 22 and one on 443, each answering with a banner naming it |
+| the homelab host | `homelab` | `10.145.180.10` | `infra` | a listener on 22 |
+| the `physical` identity | `ci-physical` | `10.145.2.1` | `ci` | a listener on 22 that no member may reach |
+| the `dns` identity | `ci-dns` | `10.145.2.2` | `ci`, or `personal` under `ciDnsRole` | client tools |
+| a personal device | `personal-a` | `10.145.0.101` | `personal` | a listener on 22; an mDNS responder; `10.145.1.1` as a second address, for item 8 |
+| a personal device | `personal-b` | `10.145.0.102` | `personal` | client tools |
+| alice, bob, and a LAN host no leg names | the resolver stand-in, not a member | `10.1.5.3`, `10.1.5.4`, `10.1.5.50` | none | a listener on 80 at each address; a route to `10.145.0.0/16` via `10.1.5.1` |
+
+The procedure holds each of these, for the reason given:
+
+-   **Every member stand-in runs the device's image by its pin, with the
+    two grants the device's machine has**: the tunnel device and
+    `CAP_NET_ADMIN` (`components/gateway/container.py`). The pin is the
+    device's own build, for its architecture, so on a workstation of
+    another one it runs under `qemu-user` emulation, and that is a
+    precondition: `/proc/sys/fs/binfmt_misc/qemu-aarch64` is registered,
+    and its first line reads `enabled`. Emulation changes the daemons'
+    timing, which no confinement reading depends on; item 4 is a race,
+    so its reading here is indicative, and gateway-cutover.md §8.3's is
+    its record. Each stand-in takes its identity as the CI action
+    installs one, `identity.secret` in the state directory
+    before the daemon starts, and takes `networks.d/<scratch id>.conf`,
+    since the daemon joins at start exactly the networks that directory
+    names (`OverlayDaemon` in `components/gateway/container.py`). Its
+    client tools and listeners run in a second container of the same
+    image that shares its network namespace and adds `CAP_NET_RAW`, so
+    the daemon's own container carries the device's grants and no more.
+-   **The CI end runs the release the action pins.** The image builds
+    the release the action installs, but it is pinned by digest, so
+    before any reading `zerotier-cli -v` in a stand-in is compared with
+    the action's `ZEROTIER_VERSION`. Where they differ, the CI stand-ins
+    run ZeroTier's own packaging of the action's release instead.
+-   **The stand-in LAN is reachable only through the gateway stand-in.**
+    Only the gateway and resolver stand-ins join it, it is internal, and
+    each CI and personal stand-in's `ip route get 10.1.5.3` names its
+    ZeroTier interface. Any other path would carry a CI stand-in's call
+    past the rules under test, and its positive readings would pass for
+    the wrong reason.
+-   **Every scratch address is private in ZeroTier's scope.** A client
+    installs a global-scope managed address or route only under
+    `allowGlobal`, which is off by default, and `10.0.0.0/8` is private.
+    The ranges are also disjoint from every network this program
+    declares, which `tests/test_overlay_probe.py` holds.
+-   **Nothing outlives the drill.** Every container carries a fixed
+    `kluster-probe-` name and a PID limit, since the image runs s6; they
+    are removed by name with their volumes, and the stand-in LAN with
+    them, so the drill is idempotent and safe to repeat.
+
+In the same shell, once `probe up` has passed:
+
+```sh
+IMAGE=$(sed -n 's/^ *versions:image-gateway-zerotier: \(.*\):[^:@/]*\(@sha256:[0-9a-f]*\)$/\1\2/p' Pulumi.yaml)
+NETWORK=$(probe config get networkId)
+on() { m=$1; shift; podman exec "kluster-probe-$m-tools" "$@"; }   # a command in a stand-in's namespace
+zt() { on "$1" ip -o -4 addr show to 10.145.0.0/16 | awk '{print $2; exit}'; }   # its ZeroTier interface, once
+serve() { podman exec -d "kluster-probe-$1-tools" nc -lk -p "$2" -e echo "kluster-probe-$1:$2"; }
+ready() { until on "$1" which avahi-daemon >/dev/null; do sleep 2; done; }   # its tools are installed
+standin() {   # standin <member> [podman run options…]
+    m=$1; shift
+    mkdir -p "$PROBE/standins/$m/networks.d"
+    : > "$PROBE/standins/$m/networks.d/$NETWORK.conf"
+    (umask 077; probe stack output "$m" --show-secrets > "$PROBE/standins/$m/identity.secret")
+    podman run -d --rm --name "kluster-probe-$m" --pids-limit 256 \
+        --device /dev/net/tun --cap-add NET_ADMIN \
+        -v "$PROBE/standins/$m:/var/lib/zerotier-one" "$@" "$IMAGE"
+    podman run -d --rm --name "kluster-probe-$m-tools" --hostname "$m" --pids-limit 256 \
+        --network "container:kluster-probe-$m" --cap-add NET_ADMIN,NET_RAW --entrypoint sh "$IMAGE" \
+        -c 'apk add -q --no-cache tcpdump iproute2 dbus avahi avahi-tools && exec sleep infinity'
+}
+
+podman network create --internal --disable-dns --subnet 10.1.5.0/24 --gateway 10.1.5.254 kluster-probe-lan
+podman run -d --rm --name kluster-probe-resolver --pids-limit 256 --cap-add NET_ADMIN \
+    --network kluster-probe-lan:ip=10.1.5.3 --entrypoint sh "$IMAGE" -c '
+        ip addr add 10.1.5.4/24 dev eth0 && ip addr add 10.1.5.50/24 dev eth0 &&
+        ip route add 10.145.0.0/16 via 10.1.5.1 && exec nc -lk -p 80 -e echo kluster-probe-resolver:80'
+standin gateway --network podman --network kluster-probe-lan:ip=10.1.5.1 --sysctl net.ipv4.ip_forward=1
+standin homelab
+standin personal-a
+standin personal-b
+```
+
+`--disable-dns` keeps the internal network's own resolver out of the
+gateway stand-in's `resolv.conf`, where it would answer for nothing
+outside and leave `apk` unable to reach its mirror.
+
+**The first readings are the drill's own preconditions.** Each stand-in
+started so far reports `ONLINE` in `zerotier-cli info`, run in its
+daemon's container with `podman exec kluster-probe-<m>`, and
+`zerotier-cli -v` there prints the action's `ZEROTIER_VERSION`. Then,
+once each tools container has its packages, the listeners and the mDNS
+responders:
+
+```sh
+for m in gateway homelab personal-a personal-b; do ready "$m"; done
+serve gateway 22; serve gateway 443; serve homelab 22; serve personal-a 22
+for m in personal-a personal-b; do
+    on "$m" sh -c "mkdir -p /run/dbus && dbus-daemon --system --fork &&
+        sed -i 's/^#*allow-interfaces=.*/allow-interfaces=$(zt "$m")/' /etc/avahi/avahi-daemon.conf &&
+        avahi-daemon -D --no-drop-root --no-chroot"
+done
+```
+
+**Item 4** is read as the CI stand-ins start, because it is about a first
+dial: each one's first connection, issued once its interface holds its
+address, is to its own first target, and it connects. The dial is a
+single connect with no retry of its own beyond the kernel's, as the
+device-files provider's is:
+
+```sh
+standin ci-physical; serve ci-physical 22
+until on ci-physical ip -4 addr show to 10.145.2.1/32 | grep -q inet; do sleep 1; done
+on ci-physical nc -w 30 10.145.1.1 22       # kluster-probe-gateway:22
+standin ci-dns
+until on ci-dns ip -4 addr show to 10.145.2.2/32 | grep -q inet; do sleep 1; done
+on ci-dns nc -w 30 10.1.5.3 80              # kluster-probe-resolver:80
+ready ci-physical; ready ci-dns
+for m in ci-physical ci-dns personal-a personal-b; do on "$m" ip route get 10.1.5.3; done   # each: dev zt…
+```
+
+**Items 1, 2 and 5 are one matrix.** A connection that completes and
+returns the listener's banner proves both legs, and a dropped flow
+shows as a timeout, which the loop prints as `dropped`:
+
+```sh
+for from in ci-physical ci-dns personal-b; do
+    for to in 10.145.1.1:22 10.145.1.1:443 10.145.180.10:22 10.1.5.3:80 10.1.5.4:80 10.1.5.50:80 \
+              10.145.0.101:22 10.145.2.1:22; do
+        [ "$from:$to" = ci-physical:10.145.2.1:22 ] && continue   # its own address: read below
+        printf '%s -> %s: ' "$from" "$to"
+        on "$from" nc -w 5 "${to%:*}" "${to#*:}" || echo dropped
+    done
+    for to in 10.145.1.1 10.145.180.10 10.1.5.3 10.1.5.4 10.1.5.50 10.145.0.101 10.145.2.1; do
+        [ "$from:$to" = ci-physical:10.145.2.1 ] && continue      # its own address replies locally
+        printf '%s ping %s: ' "$from" "$to"
+        on "$from" ping -q -c 2 -W 2 "$to" >/dev/null && echo replies || echo dropped
+    done
+done
+on ci-physical nc -w 5 10.145.2.1 22        # the CI listener answers inside its own namespace
+```
+
+| Destination | From `ci-physical` | From `ci-dns` | From `personal-b` |
+| --- | --- | --- | --- |
+| gateway shell, `10.145.1.1:22` | connects | dropped | connects |
+| gateway controller door, `10.145.1.1:443` | connects | dropped | connects |
+| homelab shell, `10.145.180.10:22` | connects | dropped | connects |
+| resolvers, `10.1.5.3:80` and `10.1.5.4:80` | dropped | connects | connects |
+| the LAN host no leg names, `10.1.5.50:80` | dropped | dropped | connects |
+| a personal member, `10.145.0.101:22` | dropped | dropped | connects |
+| the CI listener, `10.145.2.1:22` | not read | dropped | dropped |
+| `ping -c 2 -W 2` to any of the above | dropped, its own address not read | dropped | replies, except from a CI stand-in |
+
+**Every "dropped" is paired with a member that connects to the same
+address and port**, so a drop reads as the rules and not as a dead
+listener. The CI listener, which no member may reach, is the one
+exception, and is shown listening from inside its own namespace
+instead.
+
+Beside the matrix:
+
+-   **Item 3.** A capture on `ci-dns`'s ZeroTier interface during its
+    resolver call shows the gateway stand-in's MAC as the frame's
+    destination and `10.1.5.3` as its IP destination: the pre-forward
+    destination the leg matches.
+
+    ```sh
+    on ci-dns sh -c 'tcpdump -leni "$1" -c 1 "tcp dst port 80" 2>/tmp/capture & \
+        until grep -q listening /tmp/capture; do sleep 0.1; done; nc -w 5 10.1.5.3 80; wait' - "$(zt ci-dns)"
+    on gateway ip -o link show "$(zt gateway)"  # the MAC the capture's destination names
+    ```
+
+-   **Item 5.** A link-local IPv6 ping between the personal stand-ins
+    replies. A stand-in with no `fe80::` address on its ZeroTier
+    interface has no IPv6 in its namespace, and this half is then
+    unreadable rather than passed.
+
+    ```sh
+    LL=$(on personal-a ip -6 -o addr show dev "$(zt personal-a)" scope link | awk '{print $4}' | cut -d/ -f1)
+    on personal-b ping -c 2 "$LL%$(zt personal-b)"
+    ```
+
+-   **Item 6.** `on personal-b avahi-resolve -4 -n personal-a.local`
+    prints `10.145.0.101`, and `avahi-resolve -6 -n personal-a.local`
+    prints personal-a's link-local address: the responder is held to its
+    ZeroTier interface, so both answers crossed the overlay. Item 5's
+    ping is what exercises IPv6 framing there.
+-   **Item 8, third part.** `personal-a` takes `10.145.1.1` as a second
+    address, so its kernel answers ARP for it, and a run's ARP for the
+    gateway meets two answers unless the program drops one. The
+    `arping` shows only the gateway stand-in's MAC, and the shell's
+    banner still names the gateway rather than `personal-a`, whose
+    listener answers on the same port. Under `control=arp` (below),
+    with the second address taken again, the same `arping` shows both
+    MAC addresses, which is what makes the reading able to fail. The
+    second address goes once each reading is in, since it would answer
+    `personal-b`'s matrix calls to the gateway too.
+
+    ```sh
+    on personal-a ip addr add 10.145.1.1/16 dev "$(zt personal-a)"
+    on ci-physical ip neigh flush dev "$(zt ci-physical)"
+    on ci-physical arping -c 3 -I "$(zt ci-physical)" 10.145.1.1
+    on ci-physical nc -w 5 10.145.1.1 22        # kluster-probe-gateway:22
+    on personal-a ip addr del 10.145.1.1/16 dev "$(zt personal-a)"
+    ```
+-   **Item 9.** The matrix already shows `ci-dns`'s shells timing out
+    and its resolvers connecting. The control comes first: with
+    `ciDnsRole=personal` and `control=tags`, `ci-dns` opens
+    `10.145.1.1:22`, which is what makes the reading able to fail and
+    shows that the new tag has reached it. With `control` removed and
+    the tag still `personal`, the shell is dropped again, and the
+    resolvers still connect: the confined reading, under a tag known to say
+    `personal`. The composed program names no tag, so read without the
+    control first the same cell would not tell the two tags apart.
+
+The controls run one at a time, each read and then undone:
+
+```sh
+probe config set control arp && probe up        # item 8, with the second address: both MAC addresses answer
+probe config rm control && probe up             # restored: only the gateway's
+probe config set ciDnsRole personal && probe config set control tags && probe up
+on ci-dns nc -w 5 10.145.1.1 22                 # item 9's control: kluster-probe-gateway:22
+probe config rm control && probe up
+on ci-dns nc -w 5 10.145.1.1 22 || echo dropped # item 9, tagged personal: dropped
+on ci-dns nc -w 5 10.1.5.3 80                   # and its resolver still connects
+probe config rm ciDnsRole && probe up
+```
+
+**Teardown** removes every stand-in by name, then the network at
+Central, then the directory:
+
+```sh
+for m in gateway homelab ci-physical ci-dns personal-a personal-b; do
+    podman rm --force --volumes "kluster-probe-$m-tools" "kluster-probe-$m"
+done
+podman rm --force --volumes kluster-probe-resolver
+podman network rm kluster-probe-lan
+podman ps -a --filter name=kluster-probe    # nothing
+PRODUCTION=$(mise x uv -- uv run python -c 'from kluster.conventions import overlay; print(overlay.NETWORK_ID)')
+if probe stack export | grep -qi "$PRODUCTION"; then
+    echo 'the probe state holds the production network: stop'
+else
+    probe state unprotect --all && probe destroy --remove
+fi
+rm -rf "$PROBE"
+```
+
+**The production network is refused twice.** The program raises
+before it declares anything when `networkId` is
+`conventions.overlay.NETWORK_ID`, so no run adopts it; and the teardown
+lifts no protection and destroys nothing while the probe's state names
+that id,
+because `destroy` deletes whatever network the state holds, and a
+deleted production network is a new id every member re-joins by hand.
+`rm -rf` runs only once `destroy` has succeeded or its leftovers are
+gone by hand in Central.
+
+`destroy` deletes the scratch network at Central, the component having
+adopted it, and its members with it. Its last reading is Central's
+network list: no network but `conventions.overlay.NETWORK_ID`, the
+production one, so nothing named for the cluster is left standing
+beside it. The directory goes in every case, since its configuration
+and state hold the Central token under a passphrase anyone can read
+above.
+
+**Unproven until the first run:** the drill against a scratch network
+as a whole. That the stand-in form starts — the device's image under
+rootless podman with the device's grants, emulated on an `x86_64`
+workstation, `zerotier-cli info` reporting `ONLINE` and a joined
+network's interface created — is what the procedure's first readings
+confirm, before any reading depends on it.
+
+#### 2.4.2 The device's half: the real gateway, after step 4
+
+It runs after the ceremony's step 4, once the gateway is a member, and
+before [gateway-cutover.md](gateway-cutover.md) §8.2. The reader is an
+overlay member that is **not** a CI identity and not the homelab host,
+and whose route to the container VLAN is the managed one:
+`ip route get 10.0.5.3` names its ZeroTier interface. `Aetf-Arch-VPS`
+is off the LAN and qualifies.
+
+A CI identity would add nothing here. What only the device can show is
+the address its kernel sends ARP from, its doors answering at its overlay
+address, and the routed path, and any member shows those; confinement
+is decided in the daemons, and the device's daemon is the gateway
+stand-in's binary, so a confined peer would read nothing §2.4.1 did
+not. And a CI identity outside its Environment is a second live copy of
+it, in scope because it can leak
+([threat-model.md](../threat-model.md) §2.10), and the flap rule of §2.6
+would make its safety an ordering nothing enforces: the copy dead before
+CI's first join.
+
+-   `nc -w 5 10.144.1.1 22 </dev/null` prints the device's `SSH-2.0-`
+    banner, and `nc -w 5 10.144.180.10 22 </dev/null` prints the homelab
+    host's.
+-   `curl -sk -o /dev/null -w '%{http_code}\n' https://10.144.1.1/`
+    prints a status: the controller answers at its overlay address over
+    a handshake that verifies nothing, the connection
+    `controller_provider` builds (item 8, first part). The provider's
+    own first call through that construction is the pre-window probe of
+    gateway-cutover.md §3.
+-   On the device: find its ZeroTier interface by `10.144.1.1`, run
+    `ip neigh del <reader> dev <it>`, then
+    `tcpdump -ni <it> 'arp and host <reader>'`. Meanwhile, the reader's
+    `curl -s -o /dev/null -w '%{http_code}\n'` to `http://10.0.5.3/`
+    and to `http://10.0.5.4/` each prints a status, and every ARP
+    request in the capture reads `who-has <reader> tell 10.144.1.1`
+    (item 8, second part). The capture is on the device because the
+    kernel writes the frame to the tap before ZeroTier's outbound
+    filter sees it, so a request naming one of the device's LAN
+    addresses shows here if one is sent.
+
+Any other sender address in the capture is the failure item 8 names: a
+run would drop the device's ARP, and `ci-dns`'s calls would fail. It is
+fixed on the device before the identity sync.
 
 ### 2.5 First bring-up
 
@@ -1678,14 +2230,17 @@ Two things that are *not* part of the cycle:
     existing members gain reachability and lose no route, because the
     census also carries the route Central holds today
     (sources-of-truth.md R7), the overlay's own. No flip, no transition window.
--   **CI's per-run overlay join becomes load-bearing only after §2.4
-    passes** — until the flow rules and routes are verified,
+-   **CI's per-run overlay join becomes load-bearing only after §2.4.1
+    and §2.4.2 pass** — until the flow rules and routes are verified,
     `physical` runs stay operator-local. What makes it load-bearing is
     the identity sync, which pushes the two CI identities into their
     Environments: one `credentials derived sync --only` run per row,
-    after step 4 and §2.4, in one sitting with the `dns` stack's first
-    `up`, with the drift check as its reading and a written way back
-    ([gateway-cutover.md](gateway-cutover.md) §8.3).
+    after step 4 and §2.4.2 (§2.4.1 having passed before the window),
+    in one sitting with the `dns` stack's first `up`, with a written way
+    back ([gateway-cutover.md](gateway-cutover.md) §8.3). Its reading is
+    the drift check, the first run on the join it has just made
+    load-bearing, and the place §2.4 items 4 and 7 are read, on the
+    readiness line of the `physical` join.
 
 There are no ordering edges between the three places the ceremony
 reaches — ZeroTier Central, the device, and this program's dial to it: the
@@ -1727,8 +2282,10 @@ Facts that shape it (decided 2026-08-24):
     container) sits on the WAN interface un-NATed — the direct path
     should form on first contact, and traffic flows (slowly, via ZeroTier
     relays) even before it does. Seconds-class is the expectation, not
-    a measurement: §2.4 item 7 is what measures it. If it stays
-    minutes it is a per-job fixed cost, not a correctness problem.
+    a measurement: §2.4 item 7 is what measures it, as the attempt count
+    on the readiness line of every job that joins with the `physical`
+    identity, which waits for the gateway's shell. If it stays minutes
+    it is a per-job fixed cost, not a correctness problem.
 
 ### 2.7 Managed DNS: the pushed search domain
 

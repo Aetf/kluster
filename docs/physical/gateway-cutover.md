@@ -573,6 +573,11 @@ not moved.
     those tools take ends at the resolver pair, and the window does
     not open until that is changed: the pulls would fail inside it,
     after the state has already moved.
+-   **The flow rules have passed on a scratch network**: gateway.md
+    §2.4.1. It runs before the window because the run with no targets,
+    step 5 once the window has closed, writes the composed program to
+    every member, the household's devices among them, so a rule that
+    misbehaves is found on stand-ins rather than on them.
 -   **The window's targeted apply has been previewed.** Step 3 runs
     `pulumi up` against the gateway's resources alone, named by URN.
     Those URNs are derived from the component declarations
@@ -1352,9 +1357,10 @@ in the shell that defined `physical()` at the root of the checkout that
 holds `.credentials/`, except where an item says otherwise, and none
 of them touches the device or §6's rollback. §8.1 runs once step 5 has
 passed and the ceremony's step 3 has written the talosconfig; §8.2 and
-§8.3 run in one sitting, after the ceremony's step 4 and after
-gateway.md §2.4 has passed, so that no merge lands between them; §8.4
-follows §8.2 zone by zone. §3's update window holds for every one of
+§8.3 run in one sitting, so that no merge lands between them, after the
+ceremony's step 4 and after gateway.md §2.4.2 has passed — its §2.4.1
+passed before the window (§3), and §8.3 is where its items 4 and 7 are
+read; §8.4 follows §8.2 zone by zone. §3's update window holds for every one of
 them.
 
 ### 8.1 Verifications that need no network plugin
@@ -1715,8 +1721,8 @@ identity, so a deploy started by hand would stop at `plan-physical`
 (sources-of-truth.md §3). Once it has run, every merge applies `dns`
 with no reviewer. That is why it
 shares a sitting with §8.2, with no merge between them, and why it
-waits for gateway.md §2.4: the per-run join it hands CI becomes
-load-bearing here (gateway.md §2.5).
+waits for gateway.md §2.4.1 and §2.4.2: the per-run join it hands CI
+becomes load-bearing here (gateway.md §2.5).
 
 The identities are three rows of `credentials derived ls`, and each is
 synced alone. A bare `credentials derived sync` fills every row it can
@@ -1758,10 +1764,20 @@ succeeds or fails in its `Refresh and compare` step with §8.2's
 `pending` DNSSEC status as its only diff. The step listing is what
 tells the two kinds of red apart: a `dns` job red at its join step
 failed to install its identity, and one red at `Refresh and compare`
-with that diff alone did not. The `physical` job proves its join: its
-preview dials the device over the overlay. The `dns` job proves less.
-The action is called with no `wait_for`, so its join step returns once
-`zerotier-cli join` does, admitted or not, and while `ROUTES` is empty
+with that diff alone did not. The `physical` job proves its join
+twice. Its join step is called with `wait_for: 10.144.1.1:22`, so it
+returns only once the device's shell answers over the overlay, printing
+`10.144.1.1:22 reachable after N attempts`, and its preview then dials
+the device. That line is where gateway.md §2.4 reads items 4 and 7 on a
+hosted runner: item 4 passes when it prints, the first-packet drop
+having recovered within the wait, and N is item 7's join latency, each
+attempt a connect bounded at three seconds with three seconds between
+them. Every later `physical` job prints the same line. The `dns` job
+proves less. Its join is the one called with no `wait_for`, because a
+resolver is a leaf whose absence fails only its own rewrites
+(gateway.md §3) and a wait would fail the whole job; so its join step
+returns once `zerotier-cli join` does, admitted or not, and while
+`ROUTES` is empty
 the `dns` preview reaches nothing over the overlay. What it shows is
 that the identity installs and the stack previews. That `ci-dns` is a
 member Central admits is read in Central's member list, which shows it

@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from ipaddress import IPv4Address
+from ipaddress import IPv4Address, IPv4Network
 from itertools import pairwise
 from typing import Any, final
 
@@ -486,7 +486,8 @@ def test_no_pool_holds_an_address_the_roster_places_or_the_gateways(stack: Centr
 def test_the_gateways_address_is_out_of_the_pools_whether_or_not_its_entry_is_recorded() -> None:
     """The pools are written at step 1 and the gateway's entry at step 2, so its address is reserved on its own.
 
-    Both rosters are built here, one without a gateway entry and one with it,
+    What reserves it is the routes, which name it as their next hop from step
+    1. Both rosters are built here, one without a gateway entry and one with it,
     because the live roster holds only one of the two states at a time and a
     case reading it would stop testing the other the day the entry lands.
     """
@@ -496,7 +497,8 @@ def test_the_gateways_address_is_out_of_the_pools_whether_or_not_its_entry_is_re
         name=overlay.MEMBER_UDM, node_id='0a1b2c3d4e', address=overlay.UDM, role=overlay.Role.INFRA
     )
     for roster in (without, (*without, gateway)):
-        assert not pooled(overlay.UDM, [(pool.start, pool.end) for pool in overlay.assignment_pools(roster)])
+        pools = overlay.assignment_pools(roster, overlay.MANAGED_ROUTES)
+        assert not pooled(overlay.UDM, [(pool.start, pool.end) for pool in pools])
 
 
 def test_the_pools_and_the_placed_addresses_together_cover_the_subnets_hosts_exactly() -> None:
@@ -516,7 +518,7 @@ def test_the_pools_and_the_placed_addresses_together_cover_the_subnets_hosts_exa
         overlay.EnrolledMember(name=f'a-device-{n}', node_id=f'{n:010x}', address=address, role=overlay.Role.PERSONAL)
         for n, address in enumerate(addresses)
     )
-    pools = [(pool.start, pool.end) for pool in overlay.assignment_pools(roster)]
+    pools = [(pool.start, pool.end) for pool in overlay.assignment_pools(roster, overlay.MANAGED_ROUTES)]
 
     assert all(start <= end for start, end in pools)
     ordered = sorted(pools)
@@ -524,6 +526,64 @@ def test_the_pools_and_the_placed_addresses_together_cover_the_subnets_hosts_exa
     placed = {*addresses, overlay.UDM}
     assert not any(pooled(address, pools) for address in placed)
     assert sum(int(end) - int(start) + 1 for start, end in pools) + len(placed) == int(last) - int(first) + 1
+
+
+def test_the_pools_follow_the_subnet_the_routes_give_and_leave_out_every_next_hop() -> None:
+    """The subnet is the one the routes hand the network, not a copy the census keeps beside them.
+
+    A second caller with a network of its own -- physical/gateway.md §2.4.1's
+    probe, over a scratch subnet -- hands routes that name neither the
+    census's subnet nor its gateway, and its pools are drawn from what it
+    handed.
+    """
+    overlay = conventions.overlay
+    subnet = IPv4Network('10.145.0.0/16')
+    hop = IPv4Address('10.145.1.1')
+    routes = (overlay.ManagedRoute(subnet, None), overlay.ManagedRoute(IPv4Network('10.1.5.0/24'), hop))
+    member = overlay.EnrolledMember(
+        name='a-device', node_id='0a0a0a0a0a', address=IPv4Address('10.145.0.101'), role=overlay.Role.PERSONAL
+    )
+
+    pools = [(pool.start, pool.end) for pool in overlay.assignment_pools((member,), routes)]
+
+    assert all(start in subnet and end in subnet for start, end in pools)
+    assert not pooled(member.address, pools)
+    assert not pooled(hop, pools)
+    assert sum(int(end) - int(start) + 1 for start, end in pools) + len({member.address, hop}) == len(
+        list(subnet.hosts())
+    )
+
+
+@pytest.mark.parametrize(
+    'via_less',
+    [(), (IPv4Network('10.144.0.0/16'), IPv4Network('10.145.0.0/16'))],
+    ids=['none', 'several'],
+)
+@pytest.mark.asyncio
+async def test_routes_giving_no_one_subnet_are_refused_before_anything_is_declared(
+    stack: Central, via_less: tuple[IPv4Network, ...]
+) -> None:
+    """The pools are drawn from the route with no `via`, so routes holding none, or several, are refused by them.
+
+    Without one there is no subnet to draw from; with several the pools would
+    be drawn from whichever was read first. The refusal names the routes it
+    found, and comes before the component's first resource.
+    """
+    homes = tuple(route for route in conventions.overlay.MANAGED_ROUTES if route.via is not None)
+    routes = (*homes, *(conventions.overlay.ManagedRoute(target, None) for target in via_less))
+    declared = len(stack.declared)
+
+    async with declaring():
+        with pytest.raises(ValueError, match=re.escape(str([str(target) for target in via_less]))):
+            _ = overlay_module.Overlay(
+                'unsubnetted',
+                network_id=NETWORK_ID,
+                flow_rules=RULES,
+                roster=conventions.overlay.ROSTER,
+                managed_routes=routes,
+                dns=DNS,
+            )
+    assert len(stack.declared) == declared
 
 
 @pytest.mark.asyncio

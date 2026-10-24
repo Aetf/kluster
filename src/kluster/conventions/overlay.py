@@ -269,7 +269,7 @@ class AssignmentPool:
     end: IPv4Address
 
 
-def assignment_pools(roster: Iterable[RosterEntry]) -> tuple[AssignmentPool, ...]:
+def assignment_pools(roster: Iterable[RosterEntry], routes: Iterable[ManagedRoute]) -> tuple[AssignmentPool, ...]:
     """The ranges Central draws an address from: the subnet's hosts less every address placed here.
 
     No roster member draws from them, each being placed, so what does is a
@@ -278,20 +278,35 @@ def assignment_pools(roster: Iterable[RosterEntry]) -> tuple[AssignmentPool, ...
     Central picks such a member's address out of the pools, so a pool holding a
     placed address could hand it out — the gateway's, the next hop of every
     route to the home; a CI identity's, which its runs send from; or a
-    person's. So the pools are derived rather than written down: every host
-    address of the subnet except the ones `roster` places and the gateway's.
-    The gateway's is left out whether or not its entry is there, because the
-    pools are written before the ceremony records it (physical/gateway.md §2.5).
+    person's. So the pools are derived rather than written down, from the two
+    things the network is declared with: the subnet is the target of the one
+    route with no `via` (`ManagedRoute`), and what is left out is every address
+    `roster` places and every route's `via`. The gateway's address is therefore
+    left out whether or not its entry is there: the routes name it as their
+    next hop from the first converge, which is before the ceremony records the
+    entry (physical/gateway.md §2.5).
 
     The result is never empty while the roster leaves an address free, and that
     matters: the provider's field is optional and computed, so an empty list
     can read as no declaration at all, which keeps the pools Central holds.
+
+    Raises:
+        ValueError: `routes` holds no route without a `via`, or more than one,
+            so there is no one subnet to draw from.
     """
-    first = SUBNET.network_address + 1
-    last = SUBNET.broadcast_address - 1
+    routes = tuple(routes)
+    subnets = [route.target for route in routes if route.via is None]
+    if len(subnets) != 1:
+        raise ValueError(
+            f'the pools are drawn from the one route with no via, and the routes hold {[str(s) for s in subnets]}'
+        )
+    (subnet,) = subnets
+    first = subnet.network_address + 1
+    last = subnet.broadcast_address - 1
+    reserved = {entry.address for entry in roster} | {route.via for route in routes if route.via is not None}
     pools: list[AssignmentPool] = []
     start = first
-    for address in sorted({entry.address for entry in roster} | {UDM}):
+    for address in sorted(reserved):
         if not first <= address <= last:
             continue
         if address > start:

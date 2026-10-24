@@ -19,8 +19,9 @@ Four things are declared here, and each answers a different question
     because the `dns` stack publishes the `*.zt` host block from the same table.
     This module is what turns that decision into authorized members, and into
     the assignment pools: the addresses Central hands a member the roster does
-    not place, derived from the roster so that none of them is one it does
-    (`conventions.overlay.assignment_pools`).
+    not place, derived from the subnet the routes give the network less every
+    address the roster places and every route's next hop, so that none of them
+    is one a member or a route names (`conventions.overlay.assignment_pools`).
 -   **The managed routes** — the whole route table the network carries, and
     it arrives as a parameter, from `conventions.overlay.MANAGED_ROUTES`. A
     route is `{target, via}` on the network and nothing more: `via` names a
@@ -160,6 +161,10 @@ class Overlay(Component, pulumi_type='kluster:overlay:Overlay'):
         unknown = [member for member in flow_rules.members if member not in {entry.name for entry in roster}]
         if unknown:
             raise ValueError(f'the flow rules name {unknown}, which the overlay roster does not carry')
+        # The pools are drawn from the subnet the routes give the network, so
+        # routes that give it no one subnet are refused here, before anything
+        # is declared, rather than at the network's declaration.
+        pools = conventions.overlay.assignment_pools(roster, managed_routes)
 
         # A provider of its own: this token administers the whole ZeroTier
         # account, Central minting nothing smaller, so the resources it may
@@ -223,8 +228,7 @@ class Overlay(Component, pulumi_type='kluster:overlay:Overlay'):
             # complete.
             assign_ipv4s=[zerotier.NetworkAssignIpv4Args(zerotier=True)],
             assignment_pools=[
-                zerotier.NetworkAssignmentPoolArgs(start=str(pool.start), end=str(pool.end))
-                for pool in conventions.overlay.assignment_pools(roster)
+                zerotier.NetworkAssignmentPoolArgs(start=str(pool.start), end=str(pool.end)) for pool in pools
             ],
             assign_ipv6s=[zerotier.NetworkAssignIpv6Args(zerotier=False, rfc4193=False, sixplane=False)],
             # The whole table, as the census states it: `via` where it names
