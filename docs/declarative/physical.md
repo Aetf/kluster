@@ -80,6 +80,17 @@ credential (`ci_zerotier_identity_physical`,
     §5), boot volume ~50 GB. Machine config is delivered as
     base64 `user_data` in instance metadata (the Talos `oracle` platform
     reads the OCI metadata service) — day-0 needs no network apply.
+    It is **first-boot input**: Talos reads it only while STATE holds
+    no configuration, and a later change reaches the node through
+    `machine_configuration_apply` (§2). The image is launch input the
+    same way: a running node moves to a new release by `talosctl
+    upgrade` (Day-2, §2). The provider plans a changed `user_data` as a
+    replacement of the instance, and a changed image as a rebuild of
+    its boot volume in place, which restarts the node with no STATE
+    on whatever `user_data` it holds. So the declaration ignores
+    changes to both and the instance keeps the values it launched with;
+    a node that is replaced for any reason boots the current image and
+    configuration.
     **Legacy IMDS (v1) is disabled** on every instance; note OCI's v2
     auth header is a static string, so the control that actually keeps
     pods away from `user_data` (= the machine config, secrets included)
@@ -339,9 +350,11 @@ machine_secrets
     it cannot name anything the cloud assigns to the finished instance:
     a configuration naming the dedicated-VIP node's secondary private IP
     would wait on the instance that waits on it. That address arrives on
-    day 1 instead — the configuration applied over apid is the booted
-    one plus the address — and every other node is applied the very
-    configuration it booted. This is also why the chain is two
+    day 1 instead — the configuration applied over apid is the day-0
+    rendering plus the address — and every other node is applied its
+    day-0 rendering unchanged. A node launched before a configuration
+    change booted the older rendering, and the apply is what brings it
+    current. This is also why the chain is two
     components: day 0 is knowable up front, day 1 needs the address each
     machine's apid listens on.
 -   **Reboot-requiring config changes**: `apply_mode:

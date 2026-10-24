@@ -328,8 +328,9 @@ class CloudNodes(Component, pulumi_type='kluster:cloud:CloudNodes'):
                     assign_ipv6ip=True,
                     display_name=f'{name}-{node}',
                 ),
-                # Talos reads its machine config from the metadata service,
-                # base64-encoded by `user_data` once the configuration resolves.
+                # Talos reads its machine config from the metadata service at
+                # first boot, base64-encoded by `user_data` once the
+                # configuration resolves.
                 metadata={'user_data': pulumi.Output.from_input(machine_config).apply(user_data)},
                 # Legacy IMDS off on every node: it serves that config without
                 # authentication. v2's header is a static string, so this is
@@ -338,7 +339,30 @@ class CloudNodes(Component, pulumi_type='kluster:cloud:CloudNodes'):
                 instance_options=oci.core.InstanceInstanceOptionsArgs(
                     are_legacy_imds_endpoints_disabled=True,
                 ),
-                opts=self.child_opts(),
+                # Both launch inputs are read only when the instance is
+                # created, and another owner keeps a running node current, so
+                # the instance keeps the values it launched with:
+                #
+                # -   `user_data` is first-boot input: Talos reads it from the
+                #     metadata service only while STATE holds no
+                #     configuration, and every later change reaches the node
+                #     through `ConfigurationApply` (`components.talos`). The
+                #     provider plans a changed `user_data` as a replacement of
+                #     the instance -- an etcd member.
+                # -   The image is what a fresh boot volume is written from. A
+                #     running node moves to a new release by `talosctl
+                #     upgrade`, one node at a time (operations.md §2.1). The
+                #     provider updates a changed image in place by replacing
+                #     the boot volume, which would restart the node with no
+                #     STATE on its launch-time `user_data`, and all three at
+                #     once.
+                #
+                # A replacement, whether another input forces it or
+                # `--target-replace` does, is created from the program's
+                # current values all the same: the engine checks the
+                # program's inputs afresh for it, which
+                # `test_state_backend_engine` holds against the pinned CLI.
+                opts=self.child_opts(ignore_changes=['metadata.user_data', 'sourceDetails.sourceId']),
             )
 
         # The one node the dedicated VIP is mapped onto. That is one

@@ -436,9 +436,11 @@ class StateBackend(Component, pulumi_type='kluster:state_backend:StateBackend'):
             instance_options=oci.core.InstanceInstanceOptionsArgs(are_legacy_imds_endpoints_disabled=True),
             preserve_boot_volume=False,
             opts=self.child_opts(
-                # The provider updates `metadata` in place, and Ignition reads
-                # it only at first boot: a changed Ignition is a new box, which
-                # passes through the permission and the dump hook like any
+                # A changed `user_data` replaces the box -- the provider forces
+                # a new instance for it, and `replace_on_changes` holds that
+                # whatever the provider does -- and Ignition reads it only at
+                # first boot: a changed Ignition is a new box, which passes
+                # through the permission and the dump hook like any
                 # replacement (rfc-006 §4.2).
                 replace_on_changes=['metadata'],
                 # The old box goes first. The dump is taken before the delete

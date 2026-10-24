@@ -3,7 +3,7 @@
 No mock can show what the engine does around a hook, a replacement, or an
 `ignore_changes` input, so each case here runs the CLI `mise.toml` pins over
 a `file://` backend and a `PULUMI_HOME` of the case's own, against a program
-of stand-ins: `box` in the instance's place -- replaced on `gen`, `ign`
+of stand-ins: `box` in the instance's place -- replaced on `gen`, `meta.ign`
 ignored, deleted before it is replaced, a `before_create` and a
 `before_delete` hook -- and `ready` in the readiness resource's, a dynamic
 resource with no `diff` whose input is the box's id, replaced on it where the
@@ -13,6 +13,16 @@ hook raises when `PROBE_FAIL_<hook>` is set on the run. The project around
 the program is `scratch_projects`', and every command leads a POSIX session
 of its own that ends with it (`process_sessions`), so a `pulumi` stopped at
 its bound takes its plugins with it.
+
+The ignored input is nested under an object because every declaration
+that ignores one does so by a nested path -- the `state-backend` box's
+`sourceDetails.sourceId`, and the cloud nodes' `metadata.user_data` and
+`sourceDetails.sourceId` (`components.cloud.nodes`) -- and the engine
+treats the two differently: it resets an ignored path in a shallow copy of
+the program's inputs, so a nested one writes the old value into an object
+the program's inputs share, where a top-level one does not. A replacement
+taking the program's value of a nested input is therefore a case of its
+own.
 
 A pin bump reruns these against the new CLI. What one release does and the
 next stops doing -- the second delete of a resource a failed run left pending
@@ -70,12 +80,12 @@ def log(line):
 
 class BoxProvider(ResourceProvider):
     def create(self, props):
-        log(f"create box gen={props['gen']} ign={props['ign']}")
+        log(f"create box gen={props['gen']} ign={props['meta']['ign']}")
         return CreateResult(id_=f"box-{props['gen']}-{uuid.uuid4().hex[:8]}", outs=dict(props))
 
     def diff(self, _id, olds, news):
         replaces = ['gen'] if olds.get('gen') != news.get('gen') else []
-        changed = bool(replaces) or olds.get('ign') != news.get('ign')
+        changed = bool(replaces) or olds.get('meta') != news.get('meta')
         return DiffResult(changes=changed, replaces=replaces, delete_before_replace=True)
 
     def update(self, _id, _olds, news):
@@ -101,7 +111,7 @@ class ReadyProvider(ResourceProvider):
 
 class Box(Resource):
     def __init__(self, name, gen, ign, opts):
-        super().__init__(BoxProvider(), name, {'gen': gen, 'ign': ign}, opts)
+        super().__init__(BoxProvider(), name, {'gen': gen, 'meta': {'ign': ign}}, opts)
 
 
 class Ready(Resource):
@@ -125,7 +135,7 @@ if settings['box']:
         settings['gen'],
         settings['ign'],
         pulumi.ResourceOptions(
-            ignore_changes=['ign'],
+            ignore_changes=['meta.ign'],
             delete_before_replace=True,
             hooks=pulumi.ResourceHookBinding(before_create=[hook('before_create')], before_delete=[hook('before_delete')]),
         ),
