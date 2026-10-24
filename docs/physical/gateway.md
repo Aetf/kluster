@@ -217,9 +217,12 @@ declarative/physical.md §4.
     than one the design merely intends, and a machine that failed to
     deliver it stops the proxy instead of starting it somewhere else.
     The ZeroTier member
-    is told nothing at all: it is host-networked, and what it needs of
-    its machine is the tunnel device and the state directory that is its
-    identity on the overlay.
+    is told nothing through its environment: it is host-networked, and
+    what it needs of its machine is the tunnel device and the state
+    directory that is its identity on the overlay. The one thing
+    declared into that directory is an initial state naming the network
+    it joins, `networks.d/<network id>.conf`, placed before the daemon's
+    first start and the daemon's own from then on.
 
     **Host-networked is a requirement rather than an accident**, and it
     is written here because it is easy to lose in a refactor: the
