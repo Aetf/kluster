@@ -184,20 +184,23 @@ _ORDER = """when to run what:
          workflow reads, which stage 10 pushes: the ops repository's
          TRIGGER_APP_PRIVATE_KEY for the trigger key, the deployment
          repository's DISPATCH_APP_PRIVATE_KEY for the dispatch key.
-   10. credentials derived sync
+   10. credentials derived sync --only <row>
          The GitHub secrets CI reads, for the rows whose value lives
-         somewhere else and is copied into a slot. Run it again whenever one
-         of those values moves; a row it cannot fill yet says which slot is
-         waiting on what. It authenticates as the admin token stage 8
-         recorded, read back out of the github stack's config -- which needs
-         stage 2's passphrase. It pushes the stack passphrase into every
-         Environment a pull request can reach, the physical passphrase into
-         physical-plan and physical alone, and the operator passphrase into
-         none. It also copies physical's kubeconfig into the k8s-base and
-         apps stacks' config, once physical has been applied; `--only
-         kubeconfig` is that copy alone, which reads no admin token, and is
-         run again whenever physical's kubeconfig changes. Commit both
-         stack files when it writes them.
+         somewhere else and is copied into a slot, one row per run. Run it
+         again whenever one of those values moves; a row it cannot fill yet
+         says which slot is waiting on what. It authenticates as the admin
+         token stage 8 recorded, read back out of the github stack's config
+         -- which needs stage 2's passphrase. It pushes the stack passphrase
+         into every Environment a pull request can reach, the physical
+         passphrase into physical-plan and physical alone, and the operator
+         passphrase into none. Bring-up names every row but kubeconfig: the
+         bare form fills every row it can obtain, which once physical has
+         been applied includes physical's kubeconfig, copied into the
+         k8s-base and apps stacks' config, and committing those two files
+         is the first up of both. `--only kubeconfig` is that copy alone,
+         which reads no admin token; it is run at k8s-base's own bring-up,
+         the second milestone's first step, and again whenever physical's
+         kubeconfig changes. Commit both stack files when it writes them.
    11. credentials derived cloudflare-dns01 mint
        credentials derived bgp seal
        credentials derived alert-webhook record

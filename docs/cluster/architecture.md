@@ -990,11 +990,10 @@ pushes those files itself**:
 
 **The UDM runs the ZeroTier daemon as a standing member and is the home
 side's overlay router.** Today's shape — the homelab host as the only home
-member, and a single managed route (`10.42.0.0/24` via the legacy
-VPS, for the old cluster's pod subnet) — means overlay members have *no*
-route to the home LANs at all, and every design that adds one through
-the host would put a single non-gateway machine on the management data
-path. Moving the daemon to the UDM puts overlay termination where routing
+member, and no managed route but the overlay's own subnet — means
+overlay members have *no* route to the home LANs at all, and every
+design that adds one through the host would put a single non-gateway
+machine on the management data path. Moving the daemon to the UDM puts overlay termination where routing
 already lives:
 
 -   **Routes become trivial**: ZeroTier Central managed routes for the home
@@ -1004,7 +1003,9 @@ already lives:
     pool's ULA /64 is deliberately not among them, and the overlay
     assigns no IPv6 address (physical/gateway.md §2.2). The UDM reaches the pool through its own
     BGP-learned route (§3.4) — one hop, no host in the path. The
-    legacy `10.42.0.0/24`-via-VPS route retires with the VPS.
+    legacy cluster's pod subnet takes no managed route: its flannel
+    installs that route on the homelab host itself (physical/gateway.md
+    §2.2).
 -   **Management-path independence**: CI's per-run overlay join (ci.md §2)
     and roaming personal devices reach the UDM (SSH, AdGuard APIs) and
     everything behind it even when the homelab host is down — matching

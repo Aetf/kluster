@@ -115,11 +115,6 @@ MANAGED_DNS = ManagedDns(domain=OVERLAY_DOMAIN, servers=tuple(resolver.address f
 #: and adds the entry as a commit (physical/gateway.md §2.5).
 MEMBER_UDM = 'udm'
 
-#: The legacy deployment, as the roster names it. It is the one member a route
-#: other than the gateway's is via: the legacy cluster's pod subnet stays
-#: routed through it until the machine retires (cluster/migration.md §4).
-MEMBER_VPS = 'Aetf-Arch-VPS'
-
 #: The homelab host, as the roster names it. It is the one member the flow
 #: rules and the libvirt session look up rather than take from a constant: the
 #: session reaches it member to member, at the overlay address it was assigned
@@ -204,11 +199,11 @@ ROSTER: tuple[RosterEntry, ...] = (
         note='the homelab host: a plain member and the recovery side-door, never a router',
     ),
     EnrolledMember(
-        name=MEMBER_VPS,
+        name='Aetf-Arch-VPS',
         node_id='fb6c235c67',
         address=IPv4Address('10.144.160.212'),
         role=Role.INFRA,
-        note='the legacy deployment, retiring with its own route',
+        note='the legacy deployment, retiring in Wave F',
     ),
     EnrolledMember(
         name='haos',
@@ -278,10 +273,6 @@ class ManagedRoute:
     via: IPv4Address | None
 
 
-#: The legacy cluster's pod subnet, reached through the machine that still
-#: runs it. Retires with that machine's roster entry (cluster/migration.md §4).
-LEGACY_POD_SUBNET = IPv4Network('10.42.0.0/24')
-
 #: The whole route table the network carries, and the only one: the network is
 #: adopted with its routes declared in full, so what is absent here is deleted
 #: at Central. First the overlay's own subnet, with no `via`, which is what
@@ -294,8 +285,10 @@ LEGACY_POD_SUBNET = IPv4Network('10.42.0.0/24')
 #: passes through no control plane. No run dials it: the `physical` stack's
 #: Talos calls go to the control planes' public addresses and to the balancer
 #: (`stacks/physical.py`), and the flow rules admit a run to no address on it.
-#: Then the legacy route, via the retiring member's own address so that the
-#: entry and the route leave in one commit.
+#: The gateway is the only next hop. The legacy cluster's pod subnet is not
+#: here: its flannel, in `host-gw` mode over the overlay interface, installs
+#: that route on the homelab host itself, and a managed route would hand every
+#: member a path to the legacy deployment's pods that nothing uses.
 MANAGED_ROUTES: tuple[ManagedRoute, ...] = (
     ManagedRoute(SUBNET, None),
     ManagedRoute(SERVER_LAN.v4, UDM),
@@ -303,5 +296,4 @@ MANAGED_ROUTES: tuple[ManagedRoute, ...] = (
     ManagedRoute(IOT_VLAN.v4, UDM),
     ManagedRoute(CONTAINER_VLAN.v4, UDM),
     ManagedRoute(LAN_POOL.v4, UDM),  # reached via the UDM's BGP-learned route
-    ManagedRoute(LEGACY_POD_SUBNET, member(MEMBER_VPS).address),
 )

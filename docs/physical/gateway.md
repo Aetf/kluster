@@ -1053,7 +1053,7 @@ device being renamed in Central.
 | --- | --- | --- |
 | `udm` | `infra` | The gateway: a static managed address, and the next hop of every route to the home (§2.2). Absent from the roster until §2.5 step 2 records the node id its daemon mints. |
 | `Aetf-Arch-Homelab` | `infra` | The homelab host: a plain member, never a router (the overlay carries no home-LAN routes), and the recovery side-door (§3). The one address the flow rules and the libvirt session look up rather than take from a constant. |
-| `Aetf-Arch-VPS` | `infra` | The legacy deployment. Retires in Wave F together with its `10.42.0.0/24` route. |
+| `Aetf-Arch-VPS` | `infra` | The legacy deployment. Its entry leaves the roster in Wave F, no later than the machine is cancelled (cluster/migration.md §4). |
 | `haos` | `infra` | Home automation, reachable while the cluster is not. |
 | `ci-physical` | `ci` | The `physical` stack's identity: `plan-physical`, `up-physical`, and the drift matrix's `physical` entry join with it. Identity generated in state (`zerotier_identity`), private key an Environment secret; `zt-physical` keeps it live in one job at a time (§2.6). IPv4-only (§2.3). |
 | `ci-dns` | `ci` | The `dns` stack's identity: `up-dns`, a pull request's `preview (dns)` and `prove (dns)`, and the drift matrix's `dns` entry join with it — the LAN-touching work is the AdGuard rewrites (declarative/dns.md §3). Same generation, its own confinement (§2.3), serialized by `zt-dns` (§2.6). IPv4-only (§2.3). |
@@ -1074,13 +1074,19 @@ first converge deletes at Central. Each row is `{target, via}`:
 | The IoT VLAN | `192.168.90.0/24` | `10.144.1.1` |
 | The container VLAN | `10.0.5.0/24` | `10.144.1.1` — the resolvers' addresses, which the managed DNS (§2.7) names. |
 | The `lan` pool | `192.168.71.0/24` | `10.144.1.1`, reached through the UDM's own BGP-learned route, one hop — how a person off-site reaches a cluster service. |
-| The legacy pod subnet | `10.42.0.0/24` | The VPS member's own overlay address, so that the route and the roster entry leave in one commit. Deleted in Wave F (cluster/migration.md §4). |
 
 All reachability into the home is via the UDM member's overlay address; the
 homelab host advertises nothing. The suite holds the table's shape
 rather than its rows: some via-less route covers every address the
-roster places, every `via` is a member, and the home subnets go via
-the gateway and nothing else does.
+roster places, and every `via` is the gateway's address, for a home
+subnet.
+
+**The legacy cluster's pod subnet is not on the table.** That cluster
+needs no managed route: its flannel runs in `host-gw` mode over the
+homelab host's overlay interface and installs the route to the VPS's
+pods on that host itself. A managed route for it would be installed by
+every member as a path to the VPS's pod addresses past its ingress,
+which nothing uses.
 
 **There is no router object.** ZeroTier's model is an emulated switch:
 a route is `{target, via}` on the *network*, and `via` is nothing but
@@ -1487,18 +1493,23 @@ apply is run in two parts around the cutover window:
     on the network row:
 
     -   `routes`: the via-less `10.144.0.0/16` route on **both**
-        sides; the legacy `10.42.0.0/24` via the VPS member's address
-        on both sides; the home subnets of §2.2 added via
-        `10.144.1.1`. The diff is printed as a list and pairs rows by
-        position, so what is read is the set of targets and next hops,
-        not the row count.
+        sides, and the home subnets of §2.2 added via `10.144.1.1`.
+        The diff is printed as a list and pairs rows by position, so
+        what is read is the set of targets and next hops, not the row
+        count.
     -   `flowRules`: Central's current program on the left, the
         composed program on the right.
     -   `dns`: the block added.
-    -   `name`, `description`, `multicastLimit`, `enableBroadcast`,
-        `assignIpv6s` change only if Central's values differ from the
-        declaration, and then to the declared value; `assignmentPools`
-        is absent from the diff.
+    -   `assignIpv6s`: `rfc4193` and `sixplane` from on to off, and
+        `zerotier` off on the right side. Central has both derived
+        IPv6 schemes on (sources-of-truth.md R7), and turning them off
+        is the single-family overlay of §2.2: each member drops the two
+        IPv6 addresses derived from the network id at its next
+        configuration refresh.
+    -   `name`, `description`, `multicastLimit` and `enableBroadcast`
+        change only if Central's values differ from the declaration,
+        and then to the declared value; `assignmentPools` is absent
+        from the diff.
     -   **No `+-` or `--` row anywhere on the network, and no warning
         containing `may not be replaced`.** A replace is what
         re-issues the network id and makes every member re-join; the
@@ -1624,10 +1635,9 @@ Two things that are *not* part of the cycle:
 
 -   **The routes to the home are net-new additions** — the home-LAN
     and lan-pool routes via the UDM member appear where none existed;
-    existing members gain reachability and lose nothing, because the
-    census also carries what Central already holds (§2.2): the
-    overlay's own route and the legacy one. No flip, no transition
-    window.
+    existing members gain reachability and lose no route, because the
+    census also carries the route Central holds today
+    (sources-of-truth.md R7), the overlay's own. No flip, no transition window.
 -   **CI's per-run overlay join becomes load-bearing only after §2.4
     passes** — until the flow rules and routes are verified,
     `physical` runs stay operator-local. What makes it load-bearing is

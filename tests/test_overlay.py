@@ -308,30 +308,25 @@ def test_a_route_with_no_via_covers_every_address_the_roster_places() -> None:
         assert any(address in target for target in own), address
 
 
-def test_every_via_is_a_member_and_only_the_gateway_forwards_for_the_home() -> None:
-    """A `via` is nothing but a member's address, and the home is routed by the router.
+def test_the_gateway_is_the_only_next_hop_and_only_for_the_home() -> None:
+    """A `via` is the gateway's address, and the gateway forwards for the home alone.
 
-    A route via an address no member holds is a route to nothing. A home subnet
-    via anything but the gateway would put a machine that is not a router on
-    the management path; the gateway forwarding for anything but the home
-    would make it the next hop of a subnet it has no leg on. The one route via
-    another member is the legacy pod subnet, via the machine that still runs
-    that cluster, so that the route leaves with the entry.
+    A route via an address no member holds is a route to nothing. A route via
+    any other member would put a machine that is not a router on a forwarding
+    path -- every member installs every route, so the whole network would send
+    that subnet through it -- and the gateway forwarding for anything but the
+    home would make it the next hop of a subnet it has no leg on. A home
+    subnet with no `via` at all is the route ZeroTier installs on a member's
+    own interface: every member would take the LAN for a subnet of the
+    overlay and look for its hosts there.
     """
     home = {network.v4 for network in conventions.SITE_NETWORKS} | {conventions.LAN_POOL.v4}
-    members = {entry.address for entry in conventions.overlay.ROSTER} | {conventions.overlay.UDM}
-    legacy = conventions.overlay.member(conventions.overlay.MEMBER_VPS).address
 
     for route in conventions.overlay.MANAGED_ROUTES:
-        if route.via is None:
-            continue
-        assert route.via in members, route
         if route.target in home:
             assert route.via == conventions.overlay.UDM, route
-        elif route.target == conventions.overlay.LEGACY_POD_SUBNET:
-            assert route.via == legacy, route
-        else:
-            raise AssertionError(f'{route} is via a member for a subnet that is neither the home nor the legacy one')
+        elif route.via is not None:
+            raise AssertionError(f'{route} is via {route.via} for a subnet that is not the home')
 
 
 def test_the_census_carries_the_cluster_vlan_and_the_pool_by_name() -> None:
