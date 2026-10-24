@@ -94,8 +94,10 @@ UDM
     rfc-002 §3.2).
 
 member
-    What has joined the overlay, one roster entry each (`overlay.ROSTER`,
-    `overlay.member`). Its identity keeps ZeroTier's own word, node id
+    What has joined the overlay: one roster entry each for what this program
+    admits (`overlay.ROSTER`, `overlay.member`), and the legacy cluster's CI
+    jobs, authorized at Central outside the roster until it retires
+    (physical/gateway.md §2.1). Its identity keeps ZeroTier's own word, node id
     (`EnrolledMember.node_id`); a node unqualified is a Talos node
     (`cloud.ALL_NODES`); the homelab host is the machine the worker runs on,
     itself a member (`overlay.MEMBER_HOMELAB`, `conventions.homelab`).
@@ -128,8 +130,15 @@ census
     the register.
 
 roster
-    The overlay's census, one entry per member (`overlay.ROSTER`; rfc-002
-    §3.1).
+    The overlay's census, one entry per member this program admits
+    (`overlay.ROSTER`; rfc-002 §3.1).
+
+assignment pool
+    A range ZeroTier Central hands a member's overlay address out of when the
+    roster does not place it (`overlay.AssignmentPool`,
+    `overlay.assignment_pools`; physical/gateway.md §2.1). Not the cluster's
+    service-address pools, which share the noun (`site.AddressPool`,
+    `site.LAN_POOL`).
 
 register
     The credential register, credentials.md: the inventory of every

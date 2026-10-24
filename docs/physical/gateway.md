@@ -1008,9 +1008,10 @@ cutover.
 
 ### 2.1 Member roster & addressing
 
-The roster is **`conventions.overlay.ROSTER`**: one entry per member,
-carrying the name Central shows, the `role` tag, the member's overlay
-address, and — for a device that minted its own identity — its node id.
+The roster is **`conventions.overlay.ROSTER`**: one entry per member
+this program admits, carrying the name Central shows, the `role` tag,
+the member's overlay address, and — for a device that minted its own
+identity — its node id.
 It lives in `conventions` rather than in one stack's data because two
 stacks decide from it and neither owns it: `physical` declares the
 membership from it and `dns` publishes the `*.zt` host block from it,
@@ -1018,13 +1019,14 @@ one A record per entry (declarative/dns.md §2). A member is therefore
 admitted and named by the same declaration, and a device that leaves
 the overlay leaves both together.
 
-**An entry is the whole of admission**, which is what makes that tuple
-a census rather than a list. A node id is minted by the device and
-never changes, so it is an identity rather than a setting, and it is
-recorded here beside the address; there is no configured mapping to
-cross-check the roster against, and nothing undeclared joins to reach
-the final `accept` (§2.3). Two shapes carry that:
-`EnrolledMember` for a device that arrived with an identity,
+**An entry is the whole of this program's admission**, which is what
+makes that tuple a census rather than a list. A node id is minted by
+the device and never changes, so it is an identity rather than a
+setting, and it is recorded here beside the address; there is no
+configured mapping to cross-check the roster against, and this program
+admits nothing undeclared to reach the final `accept` (§2.3); the
+legacy cluster's CI is admitted outside it (below). Two shapes carry an
+entry: `EnrolledMember` for a device that arrived with an identity,
 `GeneratedMember` for the two whose key material this program creates
 in state — so a generated member with a node id written down is a
 combination that does not type-check rather than one something has to
@@ -1043,14 +1045,41 @@ whole of the mechanism: no member is declared for the gateway and no
 `udm.zt` record is published for exactly as long as the entry is
 missing.
 
-**Every member is placed; none draws from the pool.** A pool address
-would move, and the flow rules and DNS records naming it would not move
-with it. The gateway's address and the two continuous-integration ones
-are this repository's decision; the rest are the assignments Central
-already made, recorded on the entry and re-declared as static from
-there. A member whose display name contains a space keeps it: the
+**Every roster member is placed; none draws from the pool.** A pool
+address would move, and the flow rules and DNS records naming it would
+not move with it. The gateway's address and the two
+continuous-integration ones are this repository's decision; the rest
+are the assignments Central already made, recorded on the entry and
+re-declared as static from there. A member whose display name contains a space keeps it: the
 record helper lowercases and hyphenates the DNS label, rather than the
 device being renamed in Central.
+
+**The legacy cluster's CI joins outside the roster until kluster-code
+retires** (`kluster-ops#79`). Its preview and deploy pipelines join this
+network with a fresh identity per job, authorize it at Central with a
+Central token held as a secret of that repository, and delete the
+member when the job ends. This design rejects the mechanism for its own
+CI (§2.6); the legacy cluster's stays because that cluster is trusted
+until it retires, the residual
+[threat-model.md](../threat-model.md) §2.10 accepts. No entry admits
+such a member and no flow rule names it, so it reaches the final
+`accept` and, from §2.5 step 3, the home subnets via `10.144.1.1`.
+
+**The assignment pools are what the roster leaves.** Central hands such
+a member an address out of the network's IPv4 assignment pools, so a
+pool holding a placed address could give a legacy job the gateway's —
+the next hop of every route to the home — a CI identity's, or a
+person's. The pools are therefore derived and never written down:
+every host address of `10.144.0.0/16` less the addresses the roster
+places and `10.144.1.1`, which is left out before the gateway's entry
+exists (`conventions.overlay.assignment_pools`). The suite holds the
+relation rather than the ranges: no placed address falls inside a pool,
+every pool sits inside the subnet, and an entry added inside a pool
+takes its address out of it. The pools govern only what is drawn after
+they are written: a member already holding an address keeps it, and no
+static assignment is checked against another member's, so an address
+placed while a live legacy job holds it — at the converge, at step 3,
+or for any later entry — is shared until that job deletes its member.
 
 | Member | role tag | Notes |
 | --- | --- | --- |
@@ -1284,11 +1313,12 @@ the routed AdGuard calls, whose replies no ownership check can cover —
 nor reply to a run from that address. Traffic with no run at either end
 keeps the LAN's posture, spoofing included, as the final `accept`
 gives it. A member the rules do not name has the final `accept`'s
-reach, which is why the roster discipline in §2.1 exists: membership is
-Pulumi-gated (a member the roster doesn't authorize never joins), and
-the program names every CI identity the roster carries, which the
-suite holds. A rotated CI identity's old member record is deleted
-before its successor is created (the member's `replace_on_changes` and
+reach, which is why the roster discipline in §2.1 exists: this
+program authorizes no member the roster lacks, and names every CI
+identity the roster carries, which the suite holds. The legacy
+cluster's self-authorized CI members are the exception §2.1 names, and
+they have that reach. A rotated CI identity's old member record is
+deleted before its successor is created (the member's `replace_on_changes` and
 `delete_before_replace`), because the rules name only the node
 addresses they are rendered over, and an old record left authorized
 would be a member no rule confines.
@@ -1509,10 +1539,17 @@ apply is run in two parts around the cutover window:
         is the single-family overlay of §2.2: each member drops the two
         IPv6 addresses derived from the network id at its next
         configuration refresh.
+    -   `assignmentPools`: Central's current pools on the left, which
+        no reading in sources-of-truth.md records, and on the right the
+        ranges §2.1 derives — every host address of `10.144.0.0/16`
+        less the roster's addresses and `10.144.1.1`. The provider
+        sends the declared list whole, so the right side replaces the
+        left rather than adding to it. Like `routes`, the diff pairs
+        rows by position, so what is read is the set of ranges: none
+        on the right holds a roster address or `10.144.1.1`.
     -   `name`, `description`, `multicastLimit` and `enableBroadcast`
         change only if Central's values differ from the declaration,
-        and then to the declared value; `assignmentPools` is absent
-        from the diff.
+        and then to the declared value.
     -   **No `+-` or `--` row anywhere on the network, and no warning
         containing `may not be replaced`.** A replace is what
         re-issues the network id and makes every member re-join; the
@@ -1680,7 +1717,9 @@ Facts that shape it (decided 2026-08-24):
 -   **Rejected: per-run generated identities** self-authorizing via
     the Central API — that puts the network-admin Central token into
     every environment that joins, dissolving the confinement the flow
-    rules exist to provide.
+    rules exist to provide. The legacy cluster's CI joins exactly
+    this way until kluster-code retires: not part of this design, and
+    the residual threat-model.md §2.10 names (§2.1).
 -   **Join latency expectation**: kluster-code's measured 1–2 min
     wait-for-peer is dominated by NAT traversal toward a NATed host
     member (relay first, then a hole-punched direct path). Here the

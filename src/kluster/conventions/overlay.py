@@ -10,6 +10,7 @@ tells an address, a member or a route apart from the site's own
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import IntEnum
 from ipaddress import IPv4Address, IPv4Network
@@ -57,9 +58,8 @@ class Role(IntEnum):
     rules do not read it. A tag is a credential the member itself pushes to
     its peers, so a rule on it confines only a member that cooperates, and the
     rules name each member they confine by its node address instead
-    (`components/overlay/flow_rules.py`). `PERSONAL` is the tag's own default.
-    Nothing rides on that default, because membership is declared from the
-    roster and an undeclared member never joins to receive it.
+    (`components/overlay/flow_rules.py`). `PERSONAL` is the tag's own default,
+    and nothing rides on it, because no rule reads a tag.
     """
 
     PERSONAL = 0
@@ -173,9 +173,9 @@ class GeneratedMember:
 RosterEntry = EnrolledMember | GeneratedMember
 
 
-#: Every member of the overlay. The order is the order the design lists them
-#: in: the infrastructure the overlay exists to reach, then the identities that
-#: reach it unattended, then the people.
+#: Every member this program admits to the overlay. The order is the order the
+#: design lists them in: the infrastructure the overlay exists to reach, then
+#: the identities that reach it unattended, then the people.
 #:
 #: The table is a convention rather than one stack's data because two stacks
 #: decide from it and neither owns it. `physical` declares the membership from
@@ -187,8 +187,11 @@ RosterEntry = EnrolledMember | GeneratedMember
 #:
 #: It is a census by construction. A member the flow rules do not name by its
 #: node address falls through to their final `accept`, a personal device's
-#: reach. That is safe only because admission is gated by this same table, so
-#: an undeclared member never joins to receive it.
+#: reach, and this program admits no member the table lacks. The one admission
+#: it does not make is the legacy cluster's CI, which authorizes a fresh
+#: identity per job at Central itself and reaches that `accept` as an accepted
+#: residual until that cluster retires (threat-model.md §2.10); such a member
+#: draws its address from `assignment_pools`.
 #:
 #: The gateway is absent, and absence is the whole of what says so: no member
 #: is declared for it and no `udm.zt` record is published until the ceremony
@@ -255,6 +258,48 @@ def member(name: str) -> RosterEntry:
         if entry.name == name:
             return entry
     raise ValueError(f'{name} is not on the overlay roster')
+
+
+@final
+@dataclass(frozen=True)
+class AssignmentPool:
+    """A range Central hands a member's address out of, both ends included, as Central spells one."""
+
+    start: IPv4Address
+    end: IPv4Address
+
+
+def assignment_pools(roster: Iterable[RosterEntry]) -> tuple[AssignmentPool, ...]:
+    """The ranges Central draws an address from: the subnet's hosts less every address placed here.
+
+    No roster member draws from them, each being placed, so what does is a
+    member something other than this program authorized at Central: the legacy
+    cluster's CI jobs, until that cluster retires (physical/gateway.md §2.1).
+    Central picks such a member's address out of the pools, so a pool holding a
+    placed address could hand it out — the gateway's, the next hop of every
+    route to the home; a CI identity's, which its runs send from; or a
+    person's. So the pools are derived rather than written down: every host
+    address of the subnet except the ones `roster` places and the gateway's.
+    The gateway's is left out whether or not its entry is there, because the
+    pools are written before the ceremony records it (physical/gateway.md §2.5).
+
+    The result is never empty while the roster leaves an address free, and that
+    matters: the provider's field is optional and computed, so an empty list
+    can read as no declaration at all, which keeps the pools Central holds.
+    """
+    first = SUBNET.network_address + 1
+    last = SUBNET.broadcast_address - 1
+    pools: list[AssignmentPool] = []
+    start = first
+    for address in sorted({entry.address for entry in roster} | {UDM}):
+        if not first <= address <= last:
+            continue
+        if address > start:
+            pools.append(AssignmentPool(start=start, end=address - 1))
+        start = address + 1
+    if start <= last:
+        pools.append(AssignmentPool(start=start, end=last))
+    return tuple(pools)
 
 
 @final
