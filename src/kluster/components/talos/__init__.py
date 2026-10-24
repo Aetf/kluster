@@ -17,7 +17,7 @@ Splitting them is not an aesthetic choice. An OCI instance's `user_data` *is*
 its machine configuration, so a configuration naming something the cloud only
 assigns to the finished instance — the dedicated VIP's secondary private IP —
 would wait on the instance that is waiting on it. Day 1 carries those
-addresses instead, over apid, on top of the configuration the machine booted.
+addresses instead, over apid, on top of its day-0 rendering.
 
 The homelab worker's address runs the other way. Nothing assigns it — the
 cluster VLAN it sits on carries no DHCP server at all, by design, because the
@@ -748,7 +748,8 @@ class TalosDay1(Component, pulumi_type='kluster:talos:TalosDay1'):
     control-plane operations on the first control plane, which is directly
     reachable, and they stay that way.
 
-    :param cluster: the PKI and the day-0 configuration these machines booted.
+    :param cluster: the PKI and the day-0 configuration: what a machine boots with
+        when it is launched, and what is applied to it here.
     :param addresses: node name to the address the node is *named* by. Every
         node of the cluster needs one — a cluster is not healthy because the
         nodes somebody listed are.
@@ -788,8 +789,10 @@ class TalosDay1(Component, pulumi_type='kluster:talos:TalosDay1'):
         #: caller named a way in to reach it with.
         self._endpoints = {node: (endpoints or {}).get(node, self._addresses[node]) for node in cluster.roles}
 
-        # What is applied is the booted configuration plus whatever only exists
-        # now: the secondary private IP behind the dedicated VIP.
+        # What is applied is the current day-0 rendering plus whatever only
+        # exists now: the secondary private IP behind the dedicated VIP. A node
+        # launched before a configuration change booted an older rendering, and
+        # this apply brings it current.
         self.configurations = {
             node: cluster.configuration(node, secondary_address=self._secondary_addresses.get(node))
             for node in cluster.roles

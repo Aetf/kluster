@@ -407,11 +407,11 @@ keeps the running target current, and the option carries its reason
 beside it at the declaration. What the option makes the engine do is
 held by an engine case (`tests/test_state_backend_engine.py`), not by a
 test that restates the option. The `state-backend` instance carries both: its `metadata`,
-the Ignition, replaces the box, and its image is ignored once launched,
-since Zincati keeps the running box current; updated in place, the first
-would be written into a box Ignition never reads again, and the second
-would replace the running box's boot volume without the dump hook that a
-replacement runs.
+the Ignition, replaces the box, which the provider also plans for a
+changed `user_data` and the option states for every key; and its image is
+ignored once launched, since Zincati keeps the running box current, where
+an update in place would replace the running box's boot volume without
+the dump hook that a replacement runs.
 
 **Adopted resources graduate to declared.** `import` is step one of
 adoption; the end state is an explicit declaration whose fields are

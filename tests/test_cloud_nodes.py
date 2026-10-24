@@ -11,6 +11,7 @@ management port renames nothing that state or the balancer keys on.
 import base64
 import hashlib
 import ipaddress
+import re
 from collections import Counter
 from itertools import product
 from typing import Any, cast
@@ -140,6 +141,16 @@ async def placements() -> list[tuple[str, str]]:
     return await physical._placements(COMPARTMENT_ID, cloud)  # pyright: ignore[reportPrivateUsage]
 
 
+#: Each node's machine config, distinct per node so a value that reached the
+#: wrong node, or an input carrying it that a case cannot find, shows.
+MACHINE_CONFIGS = {'cp1': 'config-1', 'cp2': 'config-2', 'cp3': 'config-3'}
+
+#: The image every node launches from.
+IMAGE_ID = 'ocid1.image.test'
+
+INSTANCE = 'oci:Core/instance:Instance'
+
+
 def build_balancer(name: str = 'lb') -> NodeLoadBalancer:
     return NodeLoadBalancer(name, compartment_id=COMPARTMENT_ID, subnet_id=SUBNET_ID)
 
@@ -149,8 +160,8 @@ def build_nodes(placements: list[tuple[str, str]]) -> CloudNodes:
         'kluster',
         compartment_id=COMPARTMENT_ID,
         subnet_id=SUBNET_ID,
-        image_id='ocid1.image.test',
-        machine_configs={'cp1': 'config-1', 'cp2': 'config-2', 'cp3': 'config-3'},
+        image_id=IMAGE_ID,
+        machine_configs=MACHINE_CONFIGS,
         ocpus=1,
         memory_gb=8,
         boot_volume_gb=50,
@@ -223,7 +234,102 @@ async def test_each_node_boots_the_machine_config_it_was_given(nodes: CloudNodes
         node: base64.b64decode((fields or {}).get('user_data') or '', validate=True).decode()
         for node, fields in metadata.items()
     }
-    assert decoded == {'cp1': 'config-1', 'cp2': 'config-2', 'cp3': 'config-3'}
+    assert decoded == MACHINE_CONFIGS
+
+
+def carries(value: object, config: str) -> bool:
+    """Whether one input leaf is `config` -- a launch input's value -- as given or base64-encoded."""
+    if not isinstance(value, str):
+        return False
+    if value == config:
+        return True
+    try:
+        return base64.b64decode(value, validate=True).decode() == config
+    except ValueError:
+        return False
+
+
+def paths_carrying(inputs: object, config: str, path: tuple[str, ...] = ()) -> list[tuple[str, ...]]:
+    """Every property path under `inputs` whose leaf carries `config`."""
+    if isinstance(inputs, dict):
+        fields = cast('dict[str, object]', inputs)
+        return [found for key, value in fields.items() for found in paths_carrying(value, config, (*path, key))]
+    if isinstance(inputs, list):
+        items = cast('list[object]', inputs)
+        return [
+            found for index, item in enumerate(items) for found in paths_carrying(item, config, (*path, str(index)))
+        ]
+    return [path] if carries(inputs, config) else []
+
+
+#: A property path the engine parses: a name, a quoted key, an index or `*`
+#: first, then any number of `.name`, `["key"]`, `[index]` or `[*]`. The
+#: engine skips an `ignore_changes` entry it cannot parse, and an empty one
+#: resets nothing, both without failing the run, so an entry outside this
+#: ignores nothing at all.
+PROPERTY_PATH = re.compile(
+    r'(?:[^.\[\]"]+|\["[^"]*"\]|\[(?:\d+|\*)\])(?:\.[^.\[\]"]+|\.?\["[^"]*"\]|\.?\[(?:\d+|\*)\])*'
+)
+
+
+def segments(path: str) -> tuple[str, ...]:
+    """A property path as the engine reads one: dotted names, and keys, indices or `*` in brackets.
+
+    Refused where the engine would not parse it, rather than read as whatever
+    fragments of it look like names: `metadata[user_data]` would otherwise
+    read as `metadata.user_data`, and the empty path as one above every input.
+    """
+    if not PROPERTY_PATH.fullmatch(path):
+        raise ValueError(f'the engine cannot parse {path!r} and ignores nothing for it')
+    return tuple(
+        name or key or index for name, key, index in re.findall(r'([^.\[\]"]+)|\["([^"]*)"\]|\[(\d+|\*)\]', path)
+    )
+
+
+def ignored(path: tuple[str, ...], ignore_changes: list[str]) -> bool:
+    """Whether an `ignore_changes` entry names `path` or a property above it."""
+    return any(
+        len(entry) <= len(path) and all(part in ('*', field) for part, field in zip(entry, path, strict=False))
+        for entry in map(segments, ignore_changes)
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_launch_input_change_after_launch_reaches_no_input_of_the_instance(
+    monitor: Oci, nodes: CloudNodes
+) -> None:
+    """Every input that carries a node's machine config or its image is one the engine ignores on an update.
+
+    Both are read only at launch, and another owner keeps a running node
+    current. The config is first-boot input: Talos reads it from the metadata
+    service only while STATE holds none, and a change after launch reaches the
+    node through `ConfigurationApply`; the provider plans a changed
+    `user_data` as a replacement of the instance, an etcd member. A new
+    release reaches a running node by `talosctl upgrade`; the provider
+    updates a changed image in place by rebuilding the boot volume, which
+    restarts the node with no STATE on its launch-time `user_data`. Each is
+    found by its value rather than by the option list, so one moving to
+    another input, or reaching a second one, is held too; and a value found
+    nowhere fails rather than passing over nothing.
+
+    A replacement is created from the program's values of ignored inputs,
+    a targeted one included, which `test_state_backend_engine` holds against
+    the pinned CLI -- a rebuilt node boots the current image and config.
+    """
+    for instance in nodes.instances.values():
+        _ = await instance.urn.future()
+
+    for node, config in MACHINE_CONFIGS.items():
+        inputs = monitor.inputs_of(f'kluster-{node}', INSTANCE)
+        ignore_changes = list(monitor.options_of(f'kluster-{node}', INSTANCE).ignoreChanges)
+        for launch_input, value in {'machine config': config, 'image': IMAGE_ID}.items():
+            carrying = paths_carrying(inputs, value)
+            assert carrying, f'no input of {node} carries its {launch_input}'
+            assert [path for path in carrying if not ignored(path, ignore_changes)] == [], (
+                node,
+                launch_input,
+                ignore_changes,
+            )
 
 
 def test_user_data_is_standard_base64_of_the_utf8_bytes() -> None:
