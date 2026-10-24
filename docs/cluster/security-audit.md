@@ -212,9 +212,9 @@ physical/gateway.md §4.
 netstack runs kubelet, apid and KubeSpan. OCI security rules are "derived,
 not enumerated" (physical.md §1) — a mis-derived service rule silently
 widens exposure with no second layer. *Amended 2026-09-28*: by decision
-(Aetf/kluster-ops#397) the subnet's security list admits everything and
-the node-local firewall is the only layer (physical.md §1–2), so there
-are no derived OCI rules to get wrong. The attack is now a machine
+(Aetf/kluster-ops#397) the subnet's security list narrows no port and
+the node-local firewall is the only layer on ports (physical.md §1–2), so
+there are no derived OCI rules to get wrong. The attack is now a machine
 configuration that ships without its default-deny document or with an
 opening wider than the design — the kubelet, etcd and `trustd` would face
 the internet with nothing beneath — or a frontend Cilium's datapath
@@ -222,14 +222,35 @@ answers on a node's own address that nobody meant to publish, which the
 firewall never sees. A `NodePort` is that frontend by default: Kubernetes
 allocates one to every LoadBalancer Service, and a `lan`-pool raw TCP/UDP
 Service, whose traffic policy is `Cluster`, would answer it at a cloud
-node's public address. The residual this leaves is ICMPv6: the list
-admits every ICMPv6 packet, and Talos's default-deny chain admits
-ICMPv6 through one allowance of 5 packets a second shared by every
-source, which neighbor discovery also needs. An ICMPv6 flood above
-5 packets a second at a cloud node's public IPv6 address therefore cuts that node's
-IPv6, its route to OCI's virtual router included. IPv4 is unaffected,
-since ARP never reaches the firewall. Whether the list narrows ICMPv6
-is a decision of its own.
+node's public address. The residual this leaves is an ICMPv6 flood of the
+types the list admits from the internet. Talos's default-deny chain
+admits ICMPv6 through one allowance of 5 packets a second shared by
+every source, which neighbor discovery also needs, so a flood above
+5 packets a second at a cloud node's public IPv6 address cuts that
+node's IPv6, its route to OCI's virtual router included. IPv4 is
+unaffected, since ARP never reaches the firewall. *Amended 2026-10-24*
+(Aetf/kluster-ops#485, rfc-005 §9.2): the subnet's list narrows ICMPv6,
+the one place where it does what the node cannot. From the internet it
+admits IPv6 TCP and UDP, and of ICMPv6 the four error messages (types
+1–4: path MTU discovery among them, which a stateless list must admit)
+and echo request and reply (128 and 129); every ICMPv6 type, neighbor
+discovery's included, it admits only from link-local sources, which no
+sender off the node's link has, and from the subnet's own IPv6 block,
+which the subnet's instances send from: a node resolving another node's
+global address solicits from its own global address, and OCI does not
+document whether it carries neighbor discovery between instances through
+the list. Nothing OCI documents stops a sender on the internet from
+forging a source in that block, since the source/destination check asks
+only whether the VNIC is a packet's source or destination, so the rule
+admits such a packet as well. Echo stays open to anywhere so that ping
+answers, since the operator's home address is dynamic and no narrower
+source would hold it. The residual is therefore narrowed rather than
+closed: a flood of echo or of the error types from anywhere, or of any
+type from a source forged into the subnet's block, still spends the
+allowance. It is accepted under threat-model.md §4: the actor is anyone
+on the internet (threat-model.md §2.9), and the forged-source path gives
+that actor nothing an unforged echo flood does not already give it.
+`tests/test_cloud_network.py` holds the list to that shape.
 
 **Fix.** A Talos `NetworkRuleConfig` ingress firewall (default-deny,
 platform ports enumerated) in machine config, plus explicit
@@ -260,7 +281,8 @@ rule of its own:
 §1), checked at bootstrap (physical.md §6).
 
 **Lives in.** physical.md §1, §2, §6 (verification), architecture.md
-§4.1, cluster-infra.md §2.
+§4.1, cluster-infra.md §2; the list's ICMPv6 rules in
+`src/kluster/components/cloud/__init__.py`.
 
 ### M4 — hath (closed-source binary) co-located with etcd
 

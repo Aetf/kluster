@@ -55,20 +55,26 @@ credential (`ci_zerotier_identity_physical`,
 -   **VCN**: dual-stack (IPv4 + the assigned /56 GUA), one public
     subnet, internet gateway, and a **service gateway** (2026-08-24 —
     node ↔ Object Storage/OCIR traffic rides the in-region $0 path
-    instead of the IGW). **The subnet admits everything**: it carries
-    one security list of this stack's own, which admits every protocol
-    from `0.0.0.0/0` and `::/0` and lets every protocol out to both, all
-    four rules stateless. A subnet naming no list would carry the VCN's
-    default one, whose rules are OCI's choice rather than this
+    instead of the IGW). **The subnet narrows no port**: it carries one
+    security list of this stack's own. It admits every IPv4 protocol
+    from `0.0.0.0/0`; over IPv6 it admits TCP and UDP from `::/0`, the
+    four ICMPv6 error types and echo request and reply from `::/0`, and
+    every ICMPv6 type from `fe80::/10` and from the subnet's own IPv6
+    block. ICMPv6 is narrowed because Talos admits it through one rate
+    allowance that neighbor discovery shares, so only the list can bound
+    a flood (cluster/security-audit.md M3, which also records what that
+    leaves open). The list lets every protocol out to both families, and
+    every rule is stateless. A subnet naming no list would carry the
+    VCN's default one, whose rules are OCI's choice rather than this
     program's, so the list is declared and is the subnet's only one.
-    Stateless because a rule that admits every packet both ways has
-    nothing to decide by a connection's state, while tracking it costs a
-    table on each VNIC that drops new connections when it fills. The
-    list applies to the NLB's VNIC too, which answers only on its
-    listeners. **The filter is the node's**: the Talos ingress firewall
-    decides every port in the host network namespace (§2), and what
-    Cilium's datapath answers ahead of it is the declared raw TCP/UDP
-    Services, while no Service allocates a `NodePort`
+    Stateless because a rule that decides by protocol, type and source
+    has nothing to decide by a connection's state, while tracking it
+    costs a table on each VNIC that drops new connections when it fills.
+    The list applies to the NLB's VNIC too, which answers only on its
+    listeners. **The filter on ports is the node's**: the Talos ingress
+    firewall decides every port in the host network namespace (§2), and
+    what Cilium's datapath answers ahead of it is the declared raw
+    TCP/UDP Services, while no Service allocates a `NodePort`
     (cluster-infra.md §2).
 -   **Image**: no official Talos OCI image — an `image_factory_schematic`
     (talos provider) pins the schematic (platform `oracle`, arm64, no
@@ -202,9 +208,9 @@ machine_secrets
     attaches to (§1), the **node volume** and a **node label** naming
     it (`conventions.NODE_VOLUME_LABEL`), in the configuration the node
     boots with.
--   **The Talos ingress firewall is the only filter.** It is a
+-   **The Talos ingress firewall is the only filter on ports.** It is a
     `NetworkDefaultActionConfig` of `block` plus a `NetworkRuleConfig`
-    per opening, and the subnet in front of it admits everything (§1;
+    per opening, and the subnet in front of it narrows no port (§1;
     architecture.md §4.1). Its enumeration rule (2026-08-24) is **only
     ports that terminate in the host netns**, each opening stating its
     protocol and its sources. apid 50000/tcp and kube-apiserver

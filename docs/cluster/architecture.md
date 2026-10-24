@@ -495,9 +495,11 @@ belongs to — this section holds the cluster-level statements).
     default (workloads.md §1), strict limits, and per-app network
     policy.
 -   **Node surface**: the cloud nodes' primary IPs are public VIPs,
-    and the subnet's security list admits everything (physical.md §1),
-    so **the Talos ingress firewall is the only filter** (default-deny
-    in machine config, physical.md §2). It polices the host netstack
+    and the subnet's security list narrows no port (physical.md §1) —
+    over IPv6 it admits TCP, UDP and only the ICMPv6 that
+    security-audit.md M3 names — so **the Talos ingress firewall is the
+    only filter on ports** (default-deny in machine config, physical.md
+    §2). It polices the host netstack
     alone: the management ports, KubeSpan and the Gateways' listener
     ports are open to the internet, the kubelet and the metrics ports a
     pod scrapes to the cluster's own ranges, the DHCPv6 client to the
@@ -833,8 +835,10 @@ The entire stack is deployed via Pulumi using multiple providers:
 2.  **OCI (pulumi-oci)**: Provisions the dual-stack VCN (v4 + /56 GUA
     v6), the three A1 instances (Talos via custom image import), their
     primary IPs, the NLB (listeners + backend sets, §3.2), block
-    volumes, and a security list that admits everything — the Talos
-    ingress firewall is the filter (§4.1, declarative/physical.md §1).
+    volumes, and a security list that narrows no port, admitting over
+    IPv6 only TCP, UDP and the ICMPv6 security-audit.md M3 names — the
+    Talos ingress firewall is the filter (§4.1, declarative/physical.md
+    §1).
     -   NLB listeners are derived from declarations, not hand-listed:
         the management ports' and the public port census's, both
         conventions, and both declared in the physical stack, because

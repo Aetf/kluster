@@ -166,8 +166,9 @@ class PublicPort:
 #: the home site's is `QBITTORRENT_PEER_PORT` below. Read by `physical` for
 #: the node firewall's openings of the rows the Gateways answer; rfc-007 §5.3
 #: makes `k8s-base` (the Gateways' ports) and `apps` (the raw Services) its
-#: readers too. No security rule names a port: the cloud subnet admits
-#: everything and the node's firewall is the filter (physical.md §1–2). It is
+#: readers too. No security rule names a port: the cloud subnet's list narrows
+#: no port, only IPv6's other protocols and ICMPv6 (security-audit.md M3), and
+#: the node's firewall is the filter (physical.md §1–2). It is
 #: the firewall-audit reference too, and what the recorded fallback copies
 #: into machine configuration for the rows a Service's pods answer.
 PUBLIC_PORT_CENSUS: tuple[PublicPort, ...] = (
