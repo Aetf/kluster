@@ -28,8 +28,8 @@ credential and neither implies the other:
 overlay with routes that bridge it to the site, which is a fact about the
 gateway; the overlay's own configuration — who may join, what the rules are —
 is not the gateway's business and does not go through it. The two meet only in
-`conventions`: the roster says which address the gateway answers at, and both
-read it.
+`conventions`: the roster says which address the gateway answers at, and the
+network id which network its daemon asks to join, and both read them.
 """
 
 from __future__ import annotations

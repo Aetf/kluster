@@ -757,7 +757,11 @@ routing configuration, the authorized key, and for each machine its
 settings file, its root filesystem, its mounted configuration and
 secrets, its initial state where it has one, and the digest marker
 naming the pin its tree came from. Installing the initial states is a
-no-op: every state directory that should hold state holds it.
+no-op for the machines that moved, whose state directories hold
+state. The overlay member's is the one empty state directory, so it is
+given its network file: the daemon asks to join the overlay at its
+first start, and is admitted once the ceremony's step 3 authorizes it
+(gateway.md §1, §2.5).
 Post-apply hooks converge and start the machines — writing
 each machine's content stamp as they do — the overlay member last and
 for the first time (gateway.md §1.1).
@@ -800,7 +804,19 @@ ls /var/lib/machines                         # four links, and nothing stale
 ls /etc/systemd/nspawn                       # four settings files, nothing else
 ls /data/on_boot.d    # the four rendered scripts, and 50-authorized-keys.sh until §7
 machinectl shell zerotier /usr/sbin/zerotier-cli info
+machinectl shell zerotier /usr/sbin/zerotier-cli listnetworks   # the overlay's network, ACCESS_DENIED
 ```
+
+The overlay member lists the network `conventions.overlay.NETWORK_ID`
+names: as `ACCESS_DENIED` until the ceremony's step 3 authorizes it, or
+as `REQUESTING_CONFIGURATION` while Central has not answered yet. A
+list without that network is a daemon that never asked to join, which
+step 3's authorization cannot admit, so it is chased before the
+ceremony's step 2 records the node id `info` printed (gateway.md
+§2.5). The push log's
+`machines: initial state for zerotier` line, and `networks.d/` under
+`/data/custom/machines/zerotier/state`, say whether the network file
+was placed before the daemon's first start.
 
 `systemctl status udm-boot` says nothing about this push and is not on
 the list: the hooks run the boot-chain scripts directly, and `20-units.sh`
@@ -1222,7 +1238,8 @@ serving again with all of it in place:
     ```
 -   `/data/custom/frr`, one directory holding one configuration file.
 -   `machines-new/`, which is where the overlay member's minted identity
-    now lives — `machines-new/zerotier/state`. **A retry of the window
+    now lives, with the network file the daemon keeps beside it —
+    `machines-new/zerotier/state`. **A retry of the window
     has to carry that directory across**, or the member mints a second
     identity and the node id read in the ceremony's next step is not the
     one the roster was about to authorize.

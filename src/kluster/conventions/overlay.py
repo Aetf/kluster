@@ -24,7 +24,10 @@ from kluster.conventions.site import CLUSTER_VLAN, CONTAINER_VLAN, IOT_VLAN, LAN
 #: changing it means adopting a different network. It is not a secret either —
 #: joining takes an authorized member, not knowledge of the id — so the
 #: administration token beside it stays configuration and this does not
-#: (rfc-002 §11).
+#: (rfc-002 §11). The gateway's daemon is given it once, as an initial state
+#: (`OverlayDaemon` in `components/gateway/container.py`): a daemon that has
+#: already run does not follow a change, and is moved onto the new network by
+#: hand.
 NETWORK_ID = '83048a0632b6ba9b'
 
 SUBNET = IPv4Network('10.144.0.0/16')

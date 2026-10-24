@@ -163,7 +163,9 @@ CADDY_TOKEN_PATH = '/etc/caddy/cloudflare.token'
 CADDY_RESOLV_CONF = '/etc/resolv.conf'
 
 #: The device node the overlay daemon needs, and the state directory whose
-#: contents are its identity on the overlay.
+#: contents are its identity on the overlay and the networks it joins: the
+#: directory the image's run script starts the daemon against
+#: (`zerotier-one /var/lib/zerotier-one`), so it moves only with the image.
 TUN_DEVICE = '/dev/net/tun'
 OVERLAY_STATE = '/var/lib/zerotier-one'
 
@@ -473,11 +475,25 @@ class OverlayDaemon(ContainerDeclaration[conventions.gateway.HostNetworkService]
     no address, so there is no bridge, so nspawn leaves it in the host's
     namespace (rfc-002 §4.1).
 
-    Nothing is injected into it: the daemon is started with its state directory
-    as its only argument, it takes the network it joins from what that directory
-    holds, and it reaches its roots by literal address. What it needs of its
-    machine is the tunnel device and the state bind that is its identity on the
-    overlay.
+    Nothing is injected into its environment: the daemon is started with its
+    state directory as its only argument, and it reaches its roots by literal
+    address. What it needs of its machine is the tunnel device and the state
+    bind that is its identity on the overlay.
+
+    **The network it joins is an initial state.** At start the daemon joins
+    exactly the networks named by the files in `networks.d/` of that directory,
+    one `<network id>.conf` each, and nothing else in the image joins one. So
+    the overlay's network is declared there, as an empty file named for
+    `conventions.overlay.NETWORK_ID` — the id the stack hands the overlay
+    component to adopt the network by, so the daemon asks to join the network
+    whose members that component authorizes. Empty is enough:
+    the daemon writes the configuration its controller sends into that same
+    file, and starts from a request for one when what it finds there does not
+    parse. That rewrite is why the file is an initial state and not a mounted
+    one: it is the daemon's from its first start, and the daemon deletes it if
+    it ever leaves. Like every initial state it is placed only into a state
+    directory that holds nothing, so a daemon that has already run keeps the
+    identity and the memberships it has.
     """
 
     @property
@@ -487,6 +503,12 @@ class OverlayDaemon(ContainerDeclaration[conventions.gateway.HostNetworkService]
     @property
     def devices(self) -> tuple[str, ...]:
         return (TUN_DEVICE,)
+
+    @property
+    def initial_state(self) -> InitialState:
+        # `into` is relative to the state directory, which is bind-mounted at
+        # `OVERLAY_STATE` -- the directory the daemon is started against.
+        return InitialState(into=f'networks.d/{conventions.overlay.NETWORK_ID}.conf', content='')
 
 
 #: One service's declaration, whichever image it is for. A fifth service is a
