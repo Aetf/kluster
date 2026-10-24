@@ -323,10 +323,10 @@ async def main() -> None:
     # §3: the disk the worker boots, and the VM that boots it.
     #
     # The image is the worker's own artifact: the fleet's Talos version, a
-    # schematic of its own (x86, and the i915 firmware the GPU cutover wants
-    # present from day 0), and a file on this machine rather than an entry in a
-    # cloud catalog. No cloud provider on it, only the chain's: nothing it
-    # declares reaches the account.
+    # schematic of its own (x86, and the A380's driver and firmware, which the
+    # GPU cutover wants present from day 0), and a file on this machine rather
+    # than an entry in a cloud catalog. No cloud provider on it, only the
+    # chain's: nothing it declares reaches the account.
     worker_image = TalosNocloudImage(f'{conventions.CLUSTER_NAME}-worker', talos_version=talos_version, opts=on_talos)
     # No endpoint and no credential among the VM's arguments: the libvirt
     # session is the component's own, so it builds its provider and reads the

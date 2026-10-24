@@ -335,7 +335,8 @@ derived from a host inventory, not guessed.
 
 ### 4.1 Host inventory (measured 2026-08-22, Aetf-Arch-Homelab)
 
-**Hardware**: i9-12900KS (16C/24T), **32 GB RAM** (the binding
+**Hardware**: i9-12900KS (16C/24T) with its UHD 770 iGPU, an Arc A380
+discrete GPU (added 2026-10-18), **32 GB RAM** (the binding
 constraint), 465 GB NVMe (system + legacy k3s data; ~85 GB free while the
 legacy cluster still runs), ZFS pool `nas` (80 TB raw, 57 TB used) on the
 JBOD — this host *is* the NAS.
@@ -360,12 +361,17 @@ reasons**: qbittorrent-nox (blocked on IPv6, solved by architecture.md
 reads NAS hardlink counts — both reachable in-cluster), and
 thread-dashboard. distccd is retired or containerized opportunistically.
 
-**GPU**: legacy workloads hold 3× `gpu.intel.com/i915` allocations
-(immich ML/transcode, jellyfin). Plan of record: VFIO-passthrough the
-UHD 770 into the Talos VM (host is headless) + Intel device plugin in
-the guest; fallback is CPU transcode at reduced quality-of-life. The
-capability is verified early on a scratch VM; the actual bind is a
-scheduled migration cutover (physical/homelab-host.md §3, migration.md Wave C).
+**GPU** (2026-10-19): legacy workloads hold 3× `gpu.intel.com/i915` allocations
+(immich ML/transcode, jellyfin), all on the host's Arc A380, to which
+the legacy device plugin is limited. Plan of record: VFIO-passthrough
+the A380 (`0000:03:00.0`, alone in its `iommu_group`; its HDMI audio
+function stays with the host) into the Talos VM + Intel device plugin
+in the guest, while the UHD 770 iGPU stays with the host as its BIOS
+primary display; fallback is CPU transcode at reduced quality-of-life.
+The bind is a scheduled migration cutover with no probe ahead of it,
+since passthrough is known to work on this host
+(physical/homelab-host.md §3 has both devices and the reasons,
+migration.md Wave C the window).
 
 ### 4.2 VM sizing
 
