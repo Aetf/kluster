@@ -60,6 +60,11 @@ jobs:
         with:
           network_id: ${{ secrets.ZEROTIER_NETWORK_ID }}
           identity: ${{ secrets.ZEROTIER_IDENTITY }}
+          # The gateway's shell, which the device-files push dials: the join
+          # waits for it rather than racing the run's first packets, and its
+          # readiness line is where physical/gateway.md §2.4 reads items 4
+          # and 7. An unreachable gateway fails the job at this step.
+          wait_for: '10.144.1.1:22'
       - uses: ./.github/actions/state-backend
         timeout-minutes: 5
         with:
@@ -113,6 +118,8 @@ jobs:
         with:
           network_id: ${{ secrets.ZEROTIER_NETWORK_ID }}
           identity: ${{ secrets.ZEROTIER_IDENTITY }}
+          # The gateway's shell, as in `plan-physical`.
+          wait_for: '10.144.1.1:22'
       - uses: ./.github/actions/state-backend
         timeout-minutes: 5
         with:

@@ -11,7 +11,9 @@ too, which is what makes that job exempt.
 
 The same section pins what the jobs run besides the runner: every action from
 outside this repository by commit, and ZeroTier, which the composite action
-installs from its apt repository, by release and by signing key.
+installs from its apt repository, by release and by signing key. And every
+job that joins the overlay is held to the wait its identity calls for: a
+`physical` join waits for the gateway's shell, a `dns` join for nothing.
 
 The workflow files are read the way the other seams read them, through the
 loaders in `workflow_files`.
@@ -21,12 +23,17 @@ from __future__ import annotations
 
 import re
 import tomllib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 from urllib.parse import parse_qs, urlsplit
 
 from renovate_text import as_python_spells_it
 from workflow_files import GITHUB, github_name, mapping, read_workflow, workflow_jobs, workflows_and_actions
+
+from kluster import conventions
+from kluster.components.overlay.flow_rules import SSH_PORT
+from kluster.scripts.credentials import slots
 
 ROOT = Path(__file__).parent.parent
 
@@ -351,3 +358,120 @@ def test_renovate_reads_the_zerotier_release_for_the_suite_the_action_installs_f
     source = re.search(r'\] (\S+) \$\{ZEROTIER_SUITE\} main', run)
     assert source is not None, 'the install writes no apt source for the suite the action names'
     assert source[1].replace('${ZEROTIER_SUITE}', suite) == f'{url.scheme}://{url.netloc}{url.path}'
+
+
+#: How a step names the composite action that joins the overlay.
+JOIN_ACTION = './.github/actions/zerotier'
+#: A value that is a matrix property and nothing else.
+MATRIX_VALUE = re.compile(r'^\$\{\{\s*matrix\.([\w-]+)\s*\}\}$')
+#: The two step conditions a join is written under: a matrix property compared
+#: with a literal, and a matrix property read as a flag.
+MATRIX_EQUALS = re.compile(r"^matrix\.([\w-]+) == '([^']*)'$")
+MATRIX_FLAG = re.compile(r'^matrix\.([\w-]+)$')
+
+
+@dataclass(frozen=True)
+class Join:
+    """One way a job can join the overlay: where, in which Environment, and what it waits for."""
+
+    where: str
+    environment: str
+    wait_for: str
+
+
+def _matrix_rows(job: dict[str, object], where: str) -> list[dict[str, object]] | None:
+    """Every combination a job's matrix runs, or `None` for a matrix with an axis written as an expression.
+
+    Axes and `include` entries are read, but not both in one matrix: GitHub
+    merges an `include` entry into the combinations it matches, which no join
+    here relies on, so a matrix that mixes them is refused rather than read
+    wrongly.
+    """
+    strategy = job.get('strategy')
+    if strategy is None:
+        return [{}]
+    matrix = mapping(strategy, f'{where} strategy:').get('matrix')
+    if not isinstance(matrix, dict):
+        return None
+    matrix = cast('dict[str, object]', matrix)
+    include = [mapping(entry, f'{where} include entry') for entry in cast('list[object]', matrix.get('include', []))]
+    axes = {key: values for key, values in matrix.items() if key not in {'include', 'exclude'}}
+    # An axis written as an expression (`fromJSON(...)`) has no values to read.
+    if not all(isinstance(values, list) for values in axes.values()):
+        return None
+    assert not (axes and include), f'{where}: a matrix with both axes and include entries is not read here'
+    if include:
+        return include
+    rows: list[dict[str, object]] = [{}]
+    for key, values in axes.items():
+        rows = [row | {key: value} for row in rows for value in cast('list[object]', values)]
+    return rows
+
+
+def _resolved(value: object, row: dict[str, object], where: str) -> str:
+    """A step or job value as one matrix combination makes it."""
+    text = '' if value is None else str(value)
+    if reference := MATRIX_VALUE.match(text):
+        assert reference.group(1) in row, f'{where}: matrix.{reference.group(1)} is not in {row}'
+        return str(row[reference.group(1)])
+    assert '${{' not in text, f'{where}: {text!r} is an expression this case does not read'
+    return text
+
+
+def _joins() -> list[Join]:
+    """Every join any workflow can make, one per matrix combination its step runs in."""
+    joins: list[Join] = []
+    for where, job in sorted(_step_running_jobs().items()):
+        steps = [mapping(step, f'{where} step') for step in cast('list[object]', job.get('steps', []))]
+        for step in steps:
+            if step.get('uses') != JOIN_ACTION:
+                continue
+            rows = _matrix_rows(job, where)
+            condition = step.get('if')
+            if isinstance(condition, str) and (equals := MATRIX_EQUALS.match(condition)):
+                key, value = equals.groups()
+                only: dict[str, object] = {key: value}
+                rows = [only] if rows is None else [row for row in rows if str(row.get(key)) == value]
+            elif isinstance(condition, str) and (flag := MATRIX_FLAG.match(condition)):
+                assert rows is not None, f'{where}: a join under {condition!r} over a matrix this case cannot read'
+                rows = [row for row in rows if row.get(flag.group(1)) is True]
+            else:
+                assert condition is None, f'{where}: a join under {condition!r}, a condition this case does not read'
+                assert rows is not None, f'{where}: a join over a matrix this case cannot read'
+            # A join no combination runs would leave the step unread.
+            assert rows, f'{where}: no matrix combination runs its join under {condition!r}'
+            environment = job.get('environment')
+            if isinstance(environment, dict):
+                environment = cast('dict[str, object]', environment).get('name')
+            inputs = mapping(step.get('with', {}), f'{where} join with:')
+            joins.extend(
+                Join(where, _resolved(environment, row, where), _resolved(inputs.get('wait_for'), row, where))
+                for row in rows
+            )
+    return joins
+
+
+def test_a_physical_join_waits_for_the_gateways_shell_and_a_dns_join_waits_for_nothing() -> None:
+    """Which identity a job joins with decides whether its join waits, and on what.
+
+    The identity is the Environment's secret, so the Environment decides it
+    (`slots.ZEROTIER_PHYSICAL`, `slots.ZEROTIER_DNS`). A `physical` run's first
+    dial is the device-files push's single connect to the gateway's shell, and
+    the flow rules can drop a fresh member's first packets (physical/gateway.md
+    §2.3), so its join waits for that shell; the readiness line it prints is
+    where §2.4 there reads items 4 and 7. A `dns` run reaches the resolvers,
+    each a leaf whose absence fails only its own rewrites (§3 there), so a wait
+    on one would fail the whole job, and its join waits for nothing.
+    """
+    joins = _joins()
+    physical = [join for join in joins if join.environment in slots.ZEROTIER_PHYSICAL]
+    dns = [join for join in joins if join.environment in slots.ZEROTIER_DNS]
+
+    # A read that stopped finding either kind would pass on nothing.
+    assert physical, 'no job joins with the physical identity'
+    assert dns, 'no job joins with the dns identity'
+    # An Environment holding neither identity has nothing to join with.
+    assert [join for join in joins if join not in physical + dns] == []
+    gateway_shell = f'{conventions.overlay.UDM}:{SSH_PORT}'
+    assert [join for join in physical if join.wait_for != gateway_shell] == []
+    assert [join for join in dns if join.wait_for] == []
