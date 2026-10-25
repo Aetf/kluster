@@ -1354,9 +1354,9 @@ a DS in declarative/dns.md §1.3.
 The first milestone's steps that follow the ceremony (gateway.md §2.5)
 and are not the gateway's. Each runs from the operator's workstation,
 in the shell that defined `physical()` at the root of the checkout that
-holds `.credentials/`, except where an item says otherwise, and none
-of them touches the device or §6's rollback. §8.1 runs once step 5 has
-passed and the ceremony's step 3 has written the talosconfig; §8.2 and
+holds `.credentials/`, and none of them touches the device or §6's
+rollback. §8.1 runs once step 5 has passed and the ceremony's step 3
+has written the talosconfig; §8.2 and
 §8.3 run in one sitting, so that no merge lands between them, after the
 ceremony's step 4 and after gateway.md §2.4.2 has passed — its §2.4.1
 passed before the window (§3), and §8.3 is where its items 4 and 7 are
@@ -1499,94 +1499,6 @@ physical stack output node_private_ips --json
 
 It passes when the label's column holds each row's name on the node whose internal address is the private
 address of the row's node, and is empty on every other node.
-
-**The iGPU can be passed through.** This one runs on the homelab host,
-and it costs the household something: from `start` to `destroy` below,
-the host's `i915` driver lets go of the iGPU, so the legacy cluster's
-GPU workloads on that host (immich's machine learning and transcoding,
-jellyfin's hardware transcoding) have no device, and a job running on
-it fails. It takes a minute or two, at an hour when nobody is watching
-anything. The `kubectl` lines run as the operator's own user, whose
-`kubectl` context is the legacy cluster's; the rest run as root.
-
-First the readings the way back is measured against:
-
-```sh
-kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.allocatable.gpu\.intel\.com/i915}{"\n"}{end}'
-kubectl get pods -n intel-gpu -l app=intel-gpu-plugin
-lspci -D -nnk -d 8086::0300          # the iGPU's address, and "Kernel driver in use: i915"
-```
-
-Write down the homelab node's allocatable count, and confirm that the
-device plugin's pod is listed: its namespace and label are what the way
-back selects it by. Then the gate, with `GPU` set to the address `lspci`
-printed, on its own:
-
-```sh
-GPU=0000:00:02.0
-ls /sys/bus/pci/devices/$GPU/iommu_group/devices       # the iGPU's own address, and nothing else
-```
-
-A missing `iommu_group` directory means the host runs with its I/O
-memory management unit off, and a group with other devices in it means
-they would have to be passed through with it. Either is a finding
-against the host preparation, and nothing below runs. Only a group
-holding the iGPU alone goes on to the probe:
-
-```sh
-D=$(mktemp -d)
-cat > "$D/vfio-probe.xml" <<XML
-<domain type='kvm'>
-  <name>kluster-vfio-probe</name>
-  <memory unit='MiB'>256</memory>
-  <vcpu>1</vcpu>
-  <os><type arch='x86_64' machine='q35'>hvm</type></os>
-  <devices>
-    <hostdev mode='subsystem' type='pci' managed='yes'>
-      <source><address domain='0x${GPU:0:4}' bus='0x${GPU:5:2}' slot='0x${GPU:8:2}' function='0x${GPU:11:1}'/></source>
-    </hostdev>
-  </devices>
-</domain>
-XML
-virsh -c qemu:///system define "$D/vfio-probe.xml"
-virsh -c qemu:///system start kluster-vfio-probe
-virsh -c qemu:///system domstate kluster-vfio-probe     # running
-lspci -k -s "$GPU"                                       # Kernel driver in use: vfio-pci
-virsh -c qemu:///system destroy kluster-vfio-probe
-virsh -c qemu:///system undefine kluster-vfio-probe
-rm -rf "$D"
-```
-
-It passes when the domain runs and the device is bound to `vfio-pci`
-while it does. The domain has no disk and boots nothing, and it does not
-need to: a running domain is QEMU holding the device through VFIO,
-which is the host's half of the capability. Whether a guest's `i915`
-drives the device is read in the cutover itself, where the worker gains
-it and the device plugin in the guest reports it (homelab-host.md §3,
-cluster/migration.md Wave C). A `start` that fails is read by its
-message: one naming VFIO or the I/O memory management unit is a finding against the host
-preparation, and one naming the domain's XML is this probe's own shape
-at fault. Either way `undefine`, the `rm` and the way back below still
-run.
-
-**The way back.** The hostdev is `managed`, so the domain's `destroy`
-hands the device back to `i915`. Then:
-
-```sh
-lspci -k -s "$GPU"                                     # Kernel driver in use: i915
-virsh -c qemu:///system nodedev-reattach "pci_$(echo "$GPU" | tr ':.' '__')"   # only if it still says vfio-pci
-ls /dev/dri                                            # the card and render nodes are back
-kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.allocatable.gpu\.intel\.com/i915}{"\n"}{end}'
-```
-
-The way back is complete when the homelab node's allocatable count is
-the one written down. A count of `0` with the device back on `i915` is
-the device plugin not having registered the device again: deleting its
-pod, `kubectl delete pod -n intel-gpu -l app=intel-gpu-plugin`,
-restarts it without evicting the pods that use the GPU, and the count
-returns. If `i915` does not take the device back even after
-`nodedev-reattach`, the last way back is rebooting the homelab host,
-with the legacy cluster and everything else it runs.
 
 ### 8.2 The `dns` stack's first `up`
 
