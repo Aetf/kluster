@@ -372,8 +372,10 @@ def packages_script(
     space would otherwise become two entries the device cannot install.
 
     `cache` is the offline cache, and the directory apt downloads the set into
-    sits beside it, so what the cache can ever hold is what apt fetched for the
-    set: never apt's shared archives, where any other apt run leaves its debs.
+    sits beside it, so the debs the cache can ever hold are what apt fetched
+    for the set: never apt's shared archives, where any other apt run leaves
+    its debs. Beside them, a cache resolved against the base holds a copy of
+    the base's release, naming the base it was resolved against.
     `base` is the directory the firmware base is saved in (`DPKG_BASE_DIR`),
     `status` the live database it is saved from (`DPKG_STATUS`), and
     `release` the running firmware's release it is saved under

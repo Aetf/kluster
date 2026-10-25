@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import final
 
+import process_sessions
 import pulumi
 import pytest
 import pytest_asyncio
@@ -1066,8 +1067,12 @@ def _install(
     download_fails: bool = False,
     power_loss: bool = False,
     postinst_fails: tuple[str, str] | None = None,
+    args: tuple[str, ...] = (),
 ) -> _Run:
-    """Run the package converger once, and read back what it asked of apt and dpkg."""
+    """Run the package converger once, with `args` after it, and read back what it asked of apt and dpkg.
+
+    With no `args` it is the run the boot chain makes.
+    """
     for flag, raised in (
         (device.offline, not online),
         (device.refresh_fails, refresh_fails),
@@ -1083,12 +1088,13 @@ def _install(
     else:
         _ = device.postinst_fails.write_text(' '.join(postinst_fails))
     device.calls.unlink(missing_ok=True)
-    completed = subprocess.run(
-        ['/bin/bash', str(device.script)],
+    # The script starts processes of its own -- the stand-ins, `awk`, the
+    # version comparator, a `yes | dpkg` pipeline -- so it leads a POSIX session
+    # that ends with the call, whichever way the call ends.
+    completed = process_sessions.run(
+        ['/bin/bash', str(device.script), *args],
         env={'PATH': f'{device.tools}:/usr/bin:/bin'},
-        capture_output=True,
         text=True,
-        check=False,
         # A script that does not return is a failure with a name this way,
         # `TimeoutExpired` below the case's bound, rather than the case's
         # timeout: the device runs it from the boot chain, where waiting
@@ -1110,6 +1116,17 @@ def _names_in(directory: Path) -> set[str]:
 def _debs(directory: Path, *packages: str) -> set[str]:
     """The names the debs of `packages` have in `directory`."""
     return {deb(directory, package).name for package in packages}
+
+
+def _resolution(device: _Packages) -> tuple[set[str], list[bytes]]:
+    """The cache as a resolution reads: the names of its debs, and the content of every other file in it.
+
+    A cache resolved against the saved base holds one other file, a byte copy
+    of the base's release; one refreshed without a base holds none.
+    """
+    names = _names_in(device.cache)
+    debs = {name for name in names if name.endswith('.deb')}
+    return debs, [(device.cache / name).read_bytes() for name in sorted(names - debs)]
 
 
 def _offline_install(device: _Packages, *packages: str) -> str:
@@ -1246,7 +1263,7 @@ def test_a_post_update_boot_caches_what_the_firmware_lacks_for_the_set(tmp_path:
     run = _install(device, online=True)
 
     assert run.status == 0
-    assert _names_in(device.cache) == _debs(device.cache, *PACKAGES, DEPENDENCY)
+    assert _resolution(device) == (_debs(device.cache, *PACKAGES, DEPENDENCY), [device.base_release.read_bytes()])
 
     _update_firmware(device)
     run = _install(device, online=False)
@@ -1284,7 +1301,7 @@ def test_a_post_update_boot_cut_short_leaves_the_base_it_recorded_for_the_boot_a
 
     assert run.status == 0
     assert device.base_status.read_text() == base
-    assert _names_in(device.cache) == _debs(device.cache, *PACKAGES, DEPENDENCY)
+    assert _resolution(device) == (_debs(device.cache, *PACKAGES, DEPENDENCY), [device.base_release.read_bytes()])
 
     _update_firmware(device)
     run = _install(device, online=False)
@@ -1435,7 +1452,7 @@ def test_a_held_back_package_leaves_the_rest_of_the_cache_installed_and_the_next
     assert run.status == 0
     assert _listed(device.status) == {FIRMWARE, PINNED, DEPENDENCY, *PACKAGES}
     assert _record(device.status, PINNED) == ('install ok installed', NEWER_FIRMWARE[PINNED])
-    assert _names_in(device.cache) == _debs(device.cache, *PACKAGES, DEPENDENCY)
+    assert _resolution(device) == (_debs(device.cache, *PACKAGES, DEPENDENCY), [device.base_release.read_bytes()])
 
 
 def test_an_install_whose_newer_dependency_failed_its_maintainer_script_is_repaired_from_the_cache(
@@ -1601,7 +1618,7 @@ def test_a_boot_that_finds_part_of_the_set_and_a_networkless_boot_after_it_insta
     run = _install(device, online=True)
 
     assert run.status == 0
-    assert _names_in(device.cache) == _debs(device.cache, *PACKAGES, DEPENDENCY)
+    assert _resolution(device) == (_debs(device.cache, *PACKAGES, DEPENDENCY), [device.base_release.read_bytes()])
     assert device.base_status.read_text() == base
 
     _update_firmware(device)
@@ -1631,7 +1648,7 @@ def test_the_cache_is_what_the_base_lacks_and_replaces_the_old_one_whole(tmp_pat
     assert run.status == 0
     assert not _dpkg_installs(run)
     assert _listed(device.status) == {kept, lost, DEPENDENCY, FIRMWARE}
-    assert _names_in(device.cache) == _debs(device.cache, *PACKAGES, DEPENDENCY)
+    assert _resolution(device) == (_debs(device.cache, *PACKAGES, DEPENDENCY), [device.base_release.read_bytes()])
     assert not [path for path in tmp_path.iterdir() if path.name.startswith(f'{device.cache.name}.')], (
         'nothing of the swap is left beside the cache'
     )
@@ -1826,7 +1843,7 @@ def test_a_deb_another_apt_run_left_behind_is_neither_cached_nor_installed(tmp_p
     run = _install(device, online=True)
 
     assert run.status == 0
-    assert _names_in(device.cache) == _debs(device.cache, *PACKAGES, DEPENDENCY)
+    assert _resolution(device) == (_debs(device.cache, *PACKAGES, DEPENDENCY), [device.base_release.read_bytes()])
     assert foreign.exists(), "the shared archives are not the converger's to empty either"
 
     _update_firmware(device)
@@ -1835,6 +1852,288 @@ def test_a_deb_another_apt_run_left_behind_is_neither_cached_nor_installed(tmp_p
     assert run.status == 0
     assert _dpkg_installs(run) == [_offline_install(device, *PACKAGES, DEPENDENCY)]
     assert _listed(device.status) == {FIRMWARE, *PACKAGES, DEPENDENCY}
+
+
+def _check(device: _Packages) -> _Run:
+    """`10-packages.sh --check`, run once."""
+    return _install(device, online=True, args=('--check',))
+
+
+def _refresh(device: _Packages, *, online: bool = True, refresh_fails: bool = False) -> _Run:
+    """`10-packages.sh --refresh`, run once."""
+    return _install(device, online=online, refresh_fails=refresh_fails, args=('--refresh',))
+
+
+def _tree(device: _Packages) -> dict[str, tuple[int, bytes | None]]:
+    """Every path of the device's tree with its mode, and a file's content.
+
+    The stand-ins' record of their calls is left out: it is the harness's, and
+    each run starts it again.
+    """
+    root = device.script.parent
+    return {
+        str(path.relative_to(root)): (path.lstat().st_mode, path.read_bytes() if path.is_file() else None)
+        for path in sorted(root.rglob('*'))
+        if path != device.calls
+    }
+
+
+#: The two caches a networkless post-update boot can start from: one an
+#: earlier refresh resolved against a base, and the superset a device keeps
+#: until its first firmware update records one — the cache the gateway enters
+#: this mechanism with, which names no base at all.
+STARTING_CACHES = pytest.mark.parametrize(
+    'superset', [pytest.param(False, id='from-a-resolved-cache'), pytest.param(True, id='from-the-superset')]
+)
+
+
+def _after_a_networkless_update(tmp_path: Path, *, superset: bool = False) -> _Packages:
+    """A device whose firmware update booted with no network, and booted again since.
+
+    An online boot refreshed the cache on the first firmware: resolved against
+    its base, or, with `superset`, on a device that kept part of the set and so
+    recorded no base. The update's first boot reached no archive: it recorded
+    the new firmware's base and installed the whole set from that cache, so
+    every installed version has a deb in the cache, which is what a rule
+    comparing the two passes. The boot after it found the set installed and
+    stopped before apt, as every boot does while the set stays installed.
+    """
+    if superset:
+        survivor = next(package for package in PACKAGES if package != DEPENDENT)
+        device = _packages(tmp_path, installed=(survivor,), cached=())
+        assert _install(device, online=True).status == 0
+        assert not device.base.exists()
+    else:
+        device = _packages(tmp_path, installed=(), cached=())
+        assert _install(device, online=True).status == 0
+    _update_firmware(device)
+    assert _install(device, online=False).status == 0
+    assert _listed(device.status) == {FIRMWARE, *PACKAGES, DEPENDENCY}
+    assert _install(device, online=True).calls == [], 'a boot that finds the set installed stops before apt'
+    return device
+
+
+def test_the_check_passes_in_silence_after_a_post_update_boot_that_reached_apt(tmp_path: Path) -> None:
+    """The healthy case is the one the daily reading sees, and it prints nothing.
+
+    A firmware update whose first boot reached apt records the new base and
+    resolves the cache against it on that same boot.
+    """
+    device = _packages(tmp_path, installed=(), cached=())
+    assert _install(device, online=True).status == 0
+    _update_firmware(device)
+    assert _install(device, online=True).status == 0
+
+    run = _check(device)
+
+    assert run.status == 0
+    assert run.output == ''
+
+
+def test_the_check_names_a_member_the_cache_holds_no_deb_of(tmp_path: Path) -> None:
+    """A set that grew while its refresh failed leaves a cache that cannot install the new member.
+
+    The boot that installed the grown set through apt succeeded, so nothing on
+    the device failed; the cache it kept was resolved for the set before it
+    grew, and the next networkless boot after an update would leave the new
+    member missing. The check names it, and only it.
+    """
+    kept, grown = sorted(PACKAGES)
+    device = _packages(tmp_path, installed=(), cached=())
+    assert _install(device, online=True).status == 0
+    deb(device.cache, grown).unlink()
+    _ = device.status.write_text(_database(FIRMWARE, kept, DEPENDENCY))
+    assert _install(device, online=True, refresh_fails=True).status == 0
+    assert grown in _listed(device.status)
+
+    run = _check(device)
+
+    assert run.status == 1
+    assert len(_said(run)) == 1
+    assert _names_only(run, grown)
+
+
+@STARTING_CACHES
+def test_the_check_fails_after_a_networkless_post_update_boot_installed_the_set_from_the_cache(
+    tmp_path: Path, *, superset: bool
+) -> None:
+    """A cache every installed version has a deb in can still be resolved against the previous firmware.
+
+    The networkless boot installed the cache as it was, so comparing installed
+    versions with cached ones finds them equal. What it did not do is resolve
+    the cache against the base it recorded, and the boot after it, finding the
+    set installed, does not reach apt. The check names the recorded base's
+    release, and no member — whether the cache names the base of an earlier
+    firmware or, as the superset does on a device's first update, no base at
+    all.
+    """
+    device = _after_a_networkless_update(tmp_path, superset=superset)
+    recorded = device.base_release.read_text().strip()
+
+    run = _check(device)
+
+    assert run.status == 1
+    assert any(recorded in words for words in _said(run))
+    assert not any(words & set(PACKAGES) for words in _said(run))
+
+
+def test_the_check_passes_with_no_base_while_every_member_is_cached(tmp_path: Path) -> None:
+    """Before any firmware update has recorded a base, the superset cache is the one there is.
+
+    There is no base for it to have been resolved against, so a deb of every
+    member is all the check asks of it.
+    """
+    survivor = next(package for package in PACKAGES if package != DEPENDENT)
+    device = _packages(tmp_path, installed=(survivor,), cached=())
+    assert _install(device, online=True).status == 0
+    assert not device.base.exists()
+
+    run = _check(device)
+
+    assert run.status == 0
+    assert run.output == ''
+
+
+def test_the_check_changes_nothing(tmp_path: Path) -> None:
+    """The check is a reading, taken from the homelab host while the device runs.
+
+    It calls neither apt nor dpkg, and leaves alone even what a run killed
+    outright left behind — a download directory, which every other run
+    removes.
+    """
+    device = _after_a_networkless_update(tmp_path)
+    device.download.mkdir()
+    _ = deb(device.download, 'left-by-a-killed-run').write_text('')
+    before = _tree(device)
+
+    run = _check(device)
+
+    assert run.status == 1
+    assert _tree(device) == before
+    assert not device.calls.exists(), 'neither apt nor dpkg was called'
+
+
+def test_the_check_reads_the_new_half_of_a_swap_cut_short_and_leaves_it_there(tmp_path: Path) -> None:
+    """A swap stopped between its renames leaves the cache the next boot reads beside a missing one.
+
+    The check reads that cache, as the next boot would, and does not complete
+    the swap itself.
+    """
+    device = _packages(tmp_path, installed=(), cached=())
+    assert _install(device, online=True).status == 0
+    _ = device.cache.rename(device.cache.with_name(f'{device.cache.name}.new'))
+    before = _tree(device)
+
+    run = _check(device)
+
+    assert run.status == 0, run.output
+    assert _tree(device) == before
+
+
+@STARTING_CACHES
+def test_a_refresh_resolves_the_cache_against_the_base_a_networkless_boot_recorded(
+    tmp_path: Path, *, superset: bool
+) -> None:
+    """`--refresh` is the remedy for a failed check: the refresh an online post-update boot would have run."""
+    device = _after_a_networkless_update(tmp_path, superset=superset)
+
+    run = _refresh(device)
+
+    assert run.status == 0, run.output
+    assert _resolution(device) == (_debs(device.cache, *PACKAGES, DEPENDENCY), [device.base_release.read_bytes()])
+    assert not device.download.exists(), 'the download directory goes with the run'
+    run = _check(device)
+    assert run.status == 0
+    assert run.output == ''
+
+
+@pytest.mark.parametrize(
+    ('online', 'refresh_fails'),
+    [pytest.param(False, False, id='apt-unreachable'), pytest.param(True, True, id='download-failed')],
+)
+def test_a_refresh_that_cannot_download_everything_keeps_the_old_cache_whole_and_fails(
+    tmp_path: Path, *, online: bool, refresh_fails: bool
+) -> None:
+    """The refresh's rule holds by hand too: a cache is replaced only by a whole resolution.
+
+    Run by hand, a refresh that kept the old cache also says so in its exit
+    status, since there is no boot whose success it would otherwise cloud.
+    """
+    device = _after_a_networkless_update(tmp_path)
+    before = {path.name: path.read_bytes() for path in device.cache.iterdir()}
+
+    run = _refresh(device, online=online, refresh_fails=refresh_fails)
+
+    assert run.status != 0
+    assert {path.name: path.read_bytes() for path in device.cache.iterdir()} == before
+    assert _check(device).status == 1
+
+
+#: `cp` failing to write the cache's record of its base, wherever the refresh
+#: puts it — in the cache or in either half of its swap — as a full `/data`
+#: would, and copying everything else with the real `cp`.
+CP_FAILING_ON_THE_RECORD = """#!/bin/sh
+for last; do :; done
+case "$last" in
+    {cache}/release | {cache}.*/release)
+        echo "cp: cannot create regular file '$last': No space left on device" >&2
+        exit 1
+        ;;
+esac
+exec /bin/cp "$@"
+"""
+
+
+def test_a_refresh_whose_record_of_the_base_cannot_be_written_keeps_the_old_cache_whole_and_fails(
+    tmp_path: Path,
+) -> None:
+    """A cache with no record of its base is not swapped in.
+
+    The record goes into the new cache before the swap, so a copy that fails
+    leaves the old cache in place, debs and record both, rather than a
+    resolved cache the check would then report as resolved against nothing.
+    """
+    device = _after_a_networkless_update(tmp_path)
+    cp = device.tools / 'cp'
+    _ = cp.write_text(CP_FAILING_ON_THE_RECORD.format(cache=device.cache))
+    cp.chmod(0o755)
+    before = {path.name: path.read_bytes() for path in device.cache.iterdir()}
+
+    run = _refresh(device)
+
+    assert run.status != 0
+    assert {path.name: path.read_bytes() for path in device.cache.iterdir()} == before
+    assert not device.cache.with_name(f'{device.cache.name}.new').exists()
+
+
+def test_a_refresh_with_part_of_the_set_missing_installs_nothing_and_fails(tmp_path: Path) -> None:
+    """Installing the set is the boot path's, and `--refresh` only refreshes.
+
+    A refresh on a device missing a member would resolve a cache for a set the
+    device does not run; the boot path, which installs first, is the run that
+    repairs it.
+    """
+    kept, _ = sorted(PACKAGES)
+    device = _packages(tmp_path, installed=(kept,), cached=(*PACKAGES, DEPENDENCY))
+    before = _tree(device)
+
+    run = _refresh(device)
+
+    assert run.status != 0
+    assert _tree(device) == before
+    assert not [call for call in run.calls if call.startswith(('apt-get', 'dpkg -i'))]
+
+
+def test_an_argument_the_script_does_not_take_runs_nothing(tmp_path: Path) -> None:
+    """A mistyped mode is refused rather than taken for the boot path, which installs and refreshes."""
+    device = _packages(tmp_path, installed=(), cached=())
+    before = _tree(device)
+
+    run = _install(device, online=True, args=('--chek',))
+
+    assert run.status != 0
+    assert _tree(device) == before
+    assert not device.calls.exists()
 
 
 def test_the_package_set_is_a_set() -> None:
