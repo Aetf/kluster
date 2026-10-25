@@ -122,8 +122,9 @@ runs:
           if timeout "$((left < 1 ? 1 : left < 3 ? left : 3))" \
             bash -c "cat < /dev/null > /dev/tcp/${TARGET/:/\/}" 2>/dev/null; then
             # Read by physical/gateway-cutover.md §8.3, which takes gateway.md
-            # §2.4's items 4 and 7 off it by its leading `<host> reachable
-            # after N attempts`.
+            # §2.4's item 4 off its leading `<host> reachable after N
+            # attempts` and item 7 off its trailing `S s`, the seconds from
+            # `zerotier-cli join` returning to this connect.
             echo "${TARGET} reachable after ${attempts} attempts, $(($(date +%s) - waiting)) s"
             exit 0
           fi
