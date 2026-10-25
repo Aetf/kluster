@@ -527,10 +527,12 @@ class DevicePersistence(Component, pulumi_type='kluster:gateway:DevicePersistenc
     def executable(self, name: str, content: pulumi.Input[str], *, opts: pulumi.ResourceOptions) -> DeviceFile:
         """One executable under `bin/`, delivered and nothing else.
 
-        No hook: what runs it is a unit, per this layer's local rule, and
-        installing a program is not an event anything on the device has to be
-        told about. Only the file named is managed, so an executable placed by
-        hand beside it is left alone.
+        No hook: installing a program is not an event anything on the device
+        has to be told about. Whatever runs it finds it at its path when it
+        runs — a unit at its next start, the hook of another file
+        (`executable_hook`), or a caller off the device, an operator or the
+        homelab host (physical/gateway.md §1.2). Only the file named is
+        managed, so an executable placed by hand beside it is left alone.
 
         It waits on the directory it lands in, which is the edge a destroy
         needs: Pulumi deletes in reverse dependency order, and a directory
