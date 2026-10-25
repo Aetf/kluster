@@ -384,7 +384,7 @@ Owning docs keep the content — the index only locates it.
 | Playbook family | Lives in |
 | --- | --- |
 | State backend (cert/CA, PG major, rebuild, age rotation) | physical/state-backend.md §7 |
-| Gateway (ZeroTier container down, firmware-wiped device, UDM replacement) | physical/gateway.md §3 |
+| Gateway (ZeroTier container down, firmware-wiped device, UDM replacement; and every finding of the daily gateway check: a machine, the boot chain, a delivered unit, the routing daemon or the offline package cache, a check that did not run, a certificate not renewing, an autobackup not copied off) | physical/gateway.md §3 |
 | Node replacement (CP node, worker VM, block volume and VIP extras) | §3 here |
 | Upgrades (Talos serial, Cilium canary) | §2 here |
 | Backup restores (CNPG, VolSync, etcd) | storage.md §5; the drills are §4 here |

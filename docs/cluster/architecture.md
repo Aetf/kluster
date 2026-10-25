@@ -971,10 +971,12 @@ pushes those files itself**:
     not be present at boot), caddy config, AdGuard static configs, and
     device-side secrets (from Pulumi config secrets). **The gw-config
     repo retires** with a pointer commit (the old-tracker rule) — one
-    source of truth per device. The only survivor outside Pulumi is the
-    *pull* direction (periodic UniFi-autobackup and config-snapshot
-    retrieval): that is a scheduled job, not desired state, and moves
-    to a yadm-managed timer on the homelab host. Firewall-rule needs
+    source of truth per device. What survives outside Pulumi is the
+    host's scheduled jobs that *read* the device: the pull (periodic
+    UniFi-autobackup and config-snapshot retrieval) and the daily
+    check of the device against the declaration. They are scheduled
+    jobs, not desired state, and run from yadm-managed timers on the
+    homelab host (physical/gateway.md §1.6). Firewall-rule needs
     (e.g. the qbittorrent v6 pinhole, §3.5) go through the bridged
     unifi provider (§5.1), not this one — unless zone-policy support
     there fails verification, in which case this provider grows the

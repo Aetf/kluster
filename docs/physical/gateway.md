@@ -758,7 +758,12 @@ in which case it is a script in the boot chain. A unit gets its own
 journal, its own failure in `systemctl status`, a restart policy, and
 it can be run again outside boot; what it cannot get is a place before
 the unit store exists, which is what the two scripts above need and
-what the numeric order of `on_boot.d` expresses.
+what the numeric order of `on_boot.d` expresses. **An executable that
+something runs on demand — a push's hook, an operator, the homelab host
+over SSH — is an executable alone**, with no unit: it runs nothing on
+its own, so there is nothing for a unit's journal, failure state or
+restart policy to hold. `machine-rollback` (§1.1) and `gateway-health`
+(§1.6) are of this kind.
 
 **The container services of §1.1 are a layer on top of this one**, and
 they reach the device only through it. That layer — the nspawn runtime
@@ -1041,6 +1046,148 @@ a row in it** (`credentials.derived.GATEWAY_ACME_ZONES`, held equal to
 the vhosts by a test). Both narrow back when the census empties. This
 block's challenge is checked the way §1 describes, which is the same way
 the primary block's is: one rule for both zones.
+
+### 1.6 Reading the device from the homelab host
+
+Nothing on the device watches it. It runs no timer and no daemon for
+the purpose: the homelab host reads it from outside, which is also what
+notices a device that does not answer, and the device holds no
+credential to deliver an alert with. Three pieces do the reading, and
+each sits where the fact it compares against is declared:
+
+| Piece | Lives in | Runs | Compares the device against |
+| --- | --- | --- | --- |
+| `gateway-health` | this repository, rendered onto the device as `/data/custom/bin/gateway-health` | on demand, over the homelab host's SSH | what `Gateway` declares: its machines, the units the persistence layer delivers, the routing daemon, and the offline package cache |
+| `check-gateway` | homelab-ops, behind a yadm timer on the homelab host | daily | `gateway-health`'s verdict, the proxy's certificates as a LAN host sees them, and how fresh the copies of the backups are; it mails each finding with its playbook |
+| `gateway-backup-pull` | homelab-ops, behind a yadm timer on the homelab host | weekly | nothing: it copies the controller's autobackups into `~/.config/gw-backups`, and the resolvers' configuration until [sources-of-truth.md](../sources-of-truth.md) R2 flips |
+
+The two host jobs are scripts in homelab-ops, a repository of the
+homelab host's own, run by timers yadm installs there and pinned by
+yadm's mise configuration. No stack owns the host's own units
+([sources-of-truth.md](../sources-of-truth.md) §2), so this repository
+holds neither of them; what it holds is the contract they read, which
+is `gateway-health` and its playbooks in §3. How the cutover window
+starts and stops each of them is
+[gateway-cutover.md](gateway-cutover.md) §3–6.
+
+**`gateway-health` reads the device against the declaration, and
+writes nothing.** It is rendered from the same declarations `Gateway`
+builds its children from, so a fifth machine or another delivered unit
+is read from the push that declares it, and it is an executable with no
+unit (§1.2). On a healthy device it prints nothing and exits 0.
+Otherwise, it prints one line per finding and exits 1:
+
+    <subject>: <state> — playbook: physical/gateway.md §3, "<title>"
+
+The title is a bullet of §3, spelled as it is there. What it reads:
+
+1.  **Every declared machine runs**: `systemd-nspawn@<name>.service`
+    is active for caddy, both resolvers and the overlay member. The list
+    is the declaration's, not the device's `/etc/systemd/nspawn`: a
+    firmware update that does not carry `/etc` across removes exactly
+    those settings files (§3), and a list read off them would be empty
+    in the case the reading exists for.
+2.  **Every unit the persistence layer delivers is enabled and
+    active**: `udm-boot.service`, the bridge watchdog,
+    `frr-config.service` and `authorized-keys.service`. Each
+    `Type=oneshot` unit among them sets `RemainAfterExit`, so a run that succeeded leaves it
+    active and one that failed leaves it failed. `udm-boot.service` not
+    active is the boot chain's last run having failed: a failing
+    on_boot script, the offline install among them, marks it failed
+    (§1.2). That finding names a playbook of its own.
+3.  **The routing daemon runs**: `frr.service` is active. Its boot edge
+    is the one fact about the boot path that a push cannot show
+    ([gateway-cutover.md](gateway-cutover.md) §2), so a daily reading
+    catches the first boot it fails on. Whether it is enabled is not
+    read, since nothing enables it (§1.3), and the BGP session's state
+    is not read either: it stays `Active` or `Connect` until the worker
+    peers.
+4.  **The overlay member is online**: `zerotier-cli info` reports
+    `ONLINE`, or `TUNNELED` for a member that reaches its roots only
+    over ZeroTier's TCP relay, which is reachable all the same. Either
+    holds from the member's first start, before the roster authorizes
+    it as well as after. The client runs in the mount namespace of the
+    machine's leader, which holds the daemon's state and token:
+
+        leader=$(machinectl show --property=Leader --value zerotier)
+        nsenter --target "$leader" --mount -- /usr/sbin/zerotier-cli info
+
+    `machinectl shell` cannot run it. machined starts a shell's command
+    through the guest's own systemd over the guest's system bus, and
+    these machines run s6-overlay with neither (§1). The member
+    shares the host's network, so the client reaches the daemon's local
+    port without entering anything else. The member is read only while
+    its machine runs, so a machine that is down is one finding rather
+    than two.
+5.  **The offline cache would carry an offline boot**:
+    `10-packages.sh --check` passes (§1.2), and the reasons it prints
+    otherwise become the finding. The rule for a cache that would carry
+    an offline boot is the mechanism's alone, so this reading does not
+    restate it.
+
+`gateway-health --certificates` reads nothing, and prints one line per
+certificate the declared proxy obtains: the proxy's address and one
+name that certificate covers. Each site block of the `Caddyfile` is one
+wildcard certificate, so the lines are the controller's vhost and, while
+the legacy census has a row, its first name (§1.5). A probe goes to the
+address with the name as its SNI, because a site block refuses a name it
+does not serve.
+
+**`check-gateway`** runs daily at 08:23, with `RandomizedDelaySec=600`
+and `Persistent=true`. Each run:
+
+1.  runs `ssh -o BatchMode=yes -o ConnectTimeout=10 gw
+    /data/custom/bin/gateway-health` and relays its lines. A connection
+    that fails, an executable that is missing, or an exit that is not 0
+    with no output is one finding of the job's own: the check did not
+    run;
+2.  probes each certificate `--certificates` names from the LAN,
+    `openssl s_client -connect <address>:443 -servername <name>
+    -verify_hostname <name> -verify_return_error`. The certificate must
+    be served, verify for the name and have 21 days or more left. There
+    is one probe per certificate because a renewal fails per zone;
+3.  checks the backups: `gateway-backup.service` is not failed; the
+    newest autobackup on the device that is older than eight days, a
+    pull period and a day, is under `~/.config/gw-backups/unifi/`; and
+    the newest autobackup on the device is no older than 32 days, which
+    is the controller's monthly schedule, a console setting. A pull that
+    stopped is otherwise indistinguishable from one that works;
+4.  mails the findings, one block each with its playbook, under the
+    subject `[actionable] homelab-ops/check-gateway: <n> finding(s)`.
+    These are the fields of the one channel's payload convention
+    ([architecture.md](../cluster/architecture.md) §4.3), so moving the
+    job onto that channel changes only the transport. A healthy run
+    writes one journal line.
+
+**`gateway-backup-pull`** runs weekly, on Monday at 07:41. It reads the
+same paths on the layout before the cutover and on the declared one, so
+it runs across the window and across a rollback:
+
+-   **The controller's autobackups**: `rsync -rt
+    gw:/data/unifi/data/backup/autobackup/ ~/.config/gw-backups/unifi/`.
+    The path is the controller's own, and `rsync` on the device end is
+    why the package set carries it (§1.2).
+-   **Each resolver's `AdGuardHome.yaml`, until R2 flips**, into
+    `~/.config/gw-backups/<name>/`. It reads the declared state
+    directory, `/data/custom/machines/<name>/state/`, where that exists,
+    and otherwise `/data/<name>/`, where the file sits before the window
+    and after a rollback. The second path is transitional and leaves
+    with the transfer, which [sources-of-truth.md](../sources-of-truth.md)
+    R2 removes in the change that applies the stack's rewrites.
+-   **Each transfer stands alone**: one that fails is named on stderr
+    and in the exit status, and the others still run.
+
+There is no machine manifest: the declaration holds the pins and the
+machine set.
+
+**What the readings do not do.** Drift is a preview's to find, not
+theirs. No resolver is probed, because every device in the house
+notices a resolver that stops answering within minutes. And the alert
+goes by mail rather than through the one channel
+([operations.md](../operations.md) §4), whose dispatch handler is not
+built: until it is, mail is the one path that delivers. The residual
+that follows is that a host timer that stops is silent; the channel's
+heartbeat is what closes it.
 
 ## 2. ZeroTier network design
 
@@ -2167,7 +2314,10 @@ apply is run in two parts around the cutover window:
     10.144.1.1`, an address no member answers for until step 3 —
     which is all a route to an absent router ever is.
 2.  **Read the minted node id off the device** — `zerotier-cli info` in
-    that container — and add the gateway's entry to
+    that container's mount namespace, entered as §1.6 enters it:
+    `nsenter --target "$(machinectl show --property=Leader --value
+    zerotier)" --mount -- /usr/sbin/zerotier-cli info` — and add the
+    gateway's entry to
     `conventions.overlay.ROSTER`, at `10.144.1.1` and with that id. It
     is a commit rather than a configuration change: a node id is an
     identity the device minted once and keeps.
@@ -2440,7 +2590,10 @@ while a resolver is a leaf whose absence says nothing about the records
 at the registrar.
 
 -   **ZeroTier container down on the UDM** — trigger: physical-stack CI runs
-    fail to reach the UDM; personal devices lose LAN reachability. The
+    fail to reach the UDM; personal devices lose LAN reachability;
+    `gateway-health` reports the member neither `ONLINE` nor `TUNNELED`
+    while its machine
+    runs (§1.6). The
     repair tool (the device-files push) itself rides the overlay, hence
     the side-door: connect to the **homelab host's direct overlay
     address** (member-to-member traffic needs no managed routes), hop to the LAN, SSH the
@@ -2457,13 +2610,87 @@ at the registrar.
     post-update: the unifios-utilities apt pattern (architecture.md
     §5.3).
 -   **UDM replaced** — trigger: hardware failure/RMA. Restore from the
-    UniFi autobackup (the pull-direction yadm timer), re-run the
+    UniFi autobackup (the copies under `~/.config/gw-backups/unifi/` on
+    the homelab host, which `gateway-backup-pull` keeps, §1.6), re-run the
     device-files provider for the services, re-authorize the *new* UDM
     member identity in the roster (identity lives in `/data`, lost with
     the box), re-point the managed routes at it — the §2.5 ceremony
     over again, bootstrap knob and all, since a replacement box is a
     device with no identity and no services (personal members' direct
     paths still work throughout).
+
+The readings of §1.6 name the entries below: `gateway-health`'s
+findings first, then the ones `check-gateway` raises of its own. Every
+command runs on the device unless the entry says otherwise.
+
+-   **A declared machine not running** — trigger: `gateway-health`
+    reports `systemd-nspawn@<name>.service` not active. Its drop-in
+    restarts a machine every five seconds (§1.1), so one that stays down
+    is one that cannot start: `journalctl -u systemd-nspawn@<name>.service`
+    says why. A push that just displaced its tree is undone by
+    `machine-rollback <name>` (§1.1); a machine whose settings file or
+    link is gone is put back by running
+    `/data/on_boot.d/30-nspawn-units.sh` and then
+    `/data/on_boot.d/40-machines.sh` by hand (§1.1). The overlay member down is also "ZeroTier container
+    down on the UDM" above, for what it takes with it.
+-   **The boot chain's last run failed** — trigger: `udm-boot.service`
+    is not active. Every script of the chain runs whatever an earlier
+    one exits with (§1.2), so `journalctl -b -u udm-boot.service` names
+    the one that failed. The common case is `10-packages.sh` on an
+    offline boot, which names the members it could not install: run
+    `/data/on_boot.d/10-packages.sh` again, with no argument, once apt
+    is reachable. Once the cause is
+    gone, `systemctl restart udm-boot.service` runs the chain as a boot
+    does, and the unit is active again.
+-   **A delivered unit disabled or failed** — trigger: `gateway-health`
+    reports one of the persistence layer's units not enabled or not
+    active. `systemctl status <unit>` and its journal say which. A
+    disabled unit, or one whose live copy is gone, is put back by
+    `/data/on_boot.d/20-units.sh`, which installs, enables and starts
+    every unit it holds a source for; a source that is gone is drift
+    the next `physical` preview reports, and an apply writes it back. A
+    unit that runs an executable fails when the executable does, and its
+    journal holds the executable's own words (`frr-config.service`:
+    §1.3).
+-   **The routing daemon not running** — trigger: `frr.service` is not
+    active. `journalctl -u frr.service` says why. A run of quick starts
+    trips its start limit, which `systemctl reset-failed frr` clears;
+    then `systemctl restart frr-config.service` checks the configuration
+    and starts the daemon behind it (§1.3). A configuration the parser
+    refuses fails `frr-config.service` instead, which is the previous
+    entry.
+-   **The offline cache would not carry an offline boot** — trigger:
+    `10-packages.sh --check` fails, and its reasons are the finding.
+    `/data/on_boot.d/10-packages.sh --refresh`, with apt reachable,
+    resolves the cache again; `10-packages.sh --check` printing nothing
+    afterward is the pass. A refresh that keeps failing on a download
+    is the case §1.2 describes for an archive that no longer serves the
+    installed version.
+-   **The check did not run** — trigger: `check-gateway`'s session to
+    the device failed, `gateway-health` is missing, or it exited non-zero
+    with no output. A device that does not answer is "ZeroTier container
+    down on the UDM" above, by its side door. A missing executable is
+    drift the next `physical` preview reports, and an apply writes it
+    back. Otherwise, run `/data/custom/bin/gateway-health` by hand and
+    read what it writes to stderr.
+-   **The proxy's certificate is not renewing** — trigger: a probe from
+    the LAN finds no certificate served for a name, one that does not
+    verify for it, or one with fewer than 21 days left. Each site block
+    renews its own wildcard, so the name says which zone. Read the
+    challenge in `journalctl -u systemd-nspawn@caddy.service` as §1
+    describes: a propagation timeout that repeats, or the registrar
+    refusing the token. The token's zones are §1.5's, and a token that
+    was revoked or expired is minted again (credentials.md §3).
+-   **The autobackup is not copied off the device** — trigger:
+    `gateway-backup.service` failed, the newest autobackup on the device
+    older than eight days is missing from `~/.config/gw-backups/unifi/`,
+    or the newest one on the device is older than 32 days. On the
+    homelab host, `journalctl --user -u gateway-backup.service` names
+    the transfer that failed. `rsync` missing on the device end is a
+    firmware update the offline install did not survive, which is the
+    boot chain's entry above. No recent autobackup on the device at all
+    is the controller's schedule, a console setting. Then
+    `systemctl --user start gateway-backup.service` takes a copy.
 
 ## 4. Firewall target state
 

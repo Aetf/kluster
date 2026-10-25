@@ -1,0 +1,118 @@
+#!/bin/sh
+# Managed by the {{ cluster }} physical stack. Local edits are overwritten.
+#
+# The device read against what the physical stack declares for it: every
+# declared machine running, every unit the persistence layer delivers enabled
+# and active, the routing daemon running, the overlay member online, and an
+# offline package cache that would carry an offline boot. Nothing on the device
+# runs this. The homelab host's daily check runs it over SSH, and an operator
+# can run it by hand (physical/gateway.md §1.6).
+#
+# Read-only. It asks systemd questions and changes nothing: the package script
+# runs in its --check mode, which writes nothing, and the overlay member is read
+# with `zerotier-cli info` in its machine's mount namespace.
+#
+# A healthy device gives no output and exit status 0. Otherwise it prints one
+# line per finding, each naming its playbook in physical/gateway.md §3, and
+# exits 1.
+#
+# With --certificates it reads nothing, and prints one line per certificate the
+# declared proxy obtains instead: the proxy's address and one name that
+# certificate covers, which is what a probe from the LAN needs.
+set -u
+
+usage() {
+    echo "usage: $0 [--certificates]" >&2
+    exit 2
+}
+
+[ $# -le 1 ] || usage
+case ${1:-} in
+'') ;;
+--certificates)
+    printf '%s\n'{% for line in certificates %} {{ line }}{% endfor %}
+    exit 0
+    ;;
+*) usage ;;
+esac
+
+found=0
+
+# One finding: what is wrong, how it reads, and the playbook it is answered by.
+finding() {
+    printf '%s: %s — playbook: physical/gateway.md §3, "%s"\n' "$1" "$2" "$3"
+    found=1
+}
+
+# Lines of output as one line, for a finding: carriage returns dropped, empty
+# lines skipped, the rest joined with `sep` (a space unless given).
+oneline() {
+    awk -v sep="${1:- }" '{ sub(/\r$/, "") } NF { out = out (out == "" ? "" : sep) $0 } END { print out }'
+}
+
+# `systemctl is-active` or `is-enabled` on one unit, judged by its exit status,
+# which is how systemd means it. The word it printed is what a finding reports;
+# a unit it has no file for prints nothing on stdout and is reported by status.
+ask() {
+    answer=$(systemctl "$1" "$2" 2>/dev/null)
+    status=$?
+    answer=${answer:-"no answer (exit $status)"}
+    return $status
+}
+
+# The machines, from the declaration rather than from /etc/systemd/nspawn: a
+# firmware update that does not carry /etc across removes exactly those
+# settings files, and a list read off them would be empty in the case this
+# reading exists for.
+for unit in{% for unit in machine_units %} {{ unit }}{% endfor %}; do
+    ask is-active "$unit" || finding "$unit" "$answer" {{ playbooks.machine }}
+done
+
+# The overlay member, read only while its machine runs: a machine that is down
+# is the finding above, and asking inside it would report the same fault twice.
+# The machine runs s6-overlay, with no systemd and no bus, so `machinectl
+# shell` cannot start a command in it: machined asks the guest's own systemd for
+# that. The client runs in the mount namespace of the machine's leader instead,
+# which holds the daemon's state and token; the member shares the host's
+# network, so the daemon's local port is reachable as it is. Its lines are
+# joined into one, as everything a finding quotes is. `TUNNELED` is a member
+# that reaches its roots only over ZeroTier's TCP relay, and is online too.
+if ask is-active {{ overlay_unit }}; then
+    info=$( { leader=$(machinectl show --property=Leader --value {{ overlay_machine }}) &&
+        nsenter --target "$leader" --mount -- {{ zerotier_cli }} info; } </dev/null 2>&1 | oneline)
+    case " $info " in
+    *' ONLINE '* | *' TUNNELED '*) ;;
+    *) finding {{ overlay_machine }} "zerotier-cli info: ${info:-no answer}" {{ playbooks.overlay }} ;;
+    esac
+fi
+
+# Every unit the persistence layer delivers is enabled and active. Each oneshot
+# among them keeps its success as `active`, so a failed run reads as not active.
+# The boot chain's anchor not active is its last run having failed, which has a
+# playbook of its own.
+for unit in{% for unit in units %} {{ unit }}{% endfor %}; do
+    wrong=
+    title={{ playbooks.unit }}
+    ask is-enabled "$unit" || wrong=$answer
+    if ! ask is-active "$unit"; then
+        wrong=${wrong:+$wrong, }$answer
+        if [ "$unit" = {{ boot_chain_unit }} ]; then
+            title={{ playbooks.boot_chain }}
+        fi
+    fi
+    [ -z "$wrong" ] || finding "$unit" "$wrong" "$title"
+done
+
+# The routing daemon. Nothing enables its unit, so only whether it runs is read.
+ask is-active {{ routing_daemon }} || finding {{ routing_daemon }} "$answer" {{ playbooks.routing }}
+
+# The offline cache, judged by the package script itself, whose reasons become
+# one finding.
+reasons=$({{ packages_script }} --check 2>&1)
+status=$?
+if [ "$status" -ne 0 ]; then
+    reasons=$(printf '%s\n' "$reasons" | sed 's/^packages: //' | oneline '; ')
+    finding {{ packages_check }} "${reasons:-exit $status, and no reason given}" {{ playbooks.packages }}
+fi
+
+exit "$found"

@@ -162,8 +162,8 @@ not moved.
     takes that failure out of the window: `apt-get install -y
     systemd-container libnss-mymachines skopeo umoci rsync`, on any day
     before it. `rsync` is there today, from gw-config's own package
-    script, and stays in the set for the backup pull (§7). The pull
-    probe below needs `skopeo` and `umoci` in place.
+    script, and stays in the set for the backup pull (gateway.md §1.6).
+    The pull probe below needs `skopeo` and `umoci` in place.
 -   **The ACME token is minted and committed**: `credentials derived
     cloudflare-gateway-acme mint` has run and the `physical` stack file
     carrying the token is committed (credentials.md §3). The proxy comes
@@ -608,9 +608,31 @@ not moved.
     stack, means the targets do not select what they were derived
     from; the window then runs `pulumi up` with no targets at all and
     takes the risk gateway.md §2.5 sets out.
--   **The host-side timers are stopped**: `check-gw.timer`,
-    `gw-backup.timer` and `autodeploy-containers.timer` — see step 0,
-    which is inside the window only because it must not be forgotten.
+-   **The host jobs that read the device are in place**
+    (gateway.md §1.6), on the homelab host:
+    -   the homelab-ops pin in yadm's mise configuration names the
+        commit that carries `check-gateway` and `gateway-backup-pull`;
+    -   `gateway-backup.timer` is enabled and has run once, and its
+        first copies are committed under `~/.config/gw-backups`;
+    -   `gw-backup.timer`, its units and the old pull script are gone;
+    -   `check-gateway.timer` is installed and disabled.
+
+    ```sh
+    systemctl --user list-timers gateway-backup.timer check-gw.timer autodeploy-containers.timer  # each with a next run
+    systemctl --user is-enabled check-gateway.timer  # disabled
+    systemctl --user cat gw-backup.timer             # no files found
+    ```
+
+    The new jobs carry new names so that the window moves no pin. A pin
+    move runs yadm's `projects:sync`, which rebuilds the host's
+    container images and restarts the services built from them: work
+    for an ordinary day, not for a 30-minute window or a rollback. The
+    pull reads the device on either layout, so it runs across the window
+    and is in no step of it; the old check is what step 0 stops, and
+    `check-gateway` takes over from it at the end of §5.
+-   **The host-side timers are stopped**: `check-gw.timer` and
+    `autodeploy-containers.timer` — see step 0, which is inside the
+    window only because it must not be forgotten.
 -   **The window's time limit is 30 minutes** (operator ruling,
     `kluster-ops#603`), counted from step 1's first stop. From that moment the LAN has no resolver, so the limit is how
     long the household goes without DNS while a failure is read. When it
@@ -634,8 +656,9 @@ not moved.
     Once CI holds its identities (§8.3), a merge starts a deploy chain
     that holds the backend too, so the same hour is one to merge
     nothing in.
--   **A current UniFi autobackup is in hand** (§7): unrelated to the
-    machines, and the cheapest insurance in the window.
+-   **A current UniFi autobackup is in hand**: the newest copy under
+    `~/.config/gw-backups/unifi/` (gateway.md §1.6). It is unrelated to
+    the machines, and the cheapest insurance in the window.
 
 ## 4. The window
 
@@ -660,10 +683,10 @@ fails every pull in this window.
 that owns them:
 
 ```sh
-systemctl --user disable --now check-gw.timer gw-backup.timer autodeploy-containers.timer
-systemctl --user is-enabled check-gw.timer gw-backup.timer autodeploy-containers.timer  # disabled, three times
-systemctl --user is-active check-gw.timer gw-backup.timer autodeploy-containers.timer   # inactive, three times
-systemctl --user is-active autodeploy-containers.service                                # inactive
+systemctl --user disable --now check-gw.timer autodeploy-containers.timer
+systemctl --user is-enabled check-gw.timer autodeploy-containers.timer  # disabled, twice
+systemctl --user is-active check-gw.timer autodeploy-containers.timer   # inactive, twice
+systemctl --user is-active autodeploy-containers.service                # inactive
 ```
 
 Stopping a timer leaves a run it already started alone, and a deploy
@@ -688,12 +711,12 @@ reboot the machine links survive, and the restored settings bind
 `/data/adguard-alice`, which no longer exists: a machine whose bind source
 is missing is one nspawn refuses to start. On a post-firmware boot the
 links are gone, and the restored `40-machines.sh` makes one to
-`machines/<name>`, which is now a directory with no `/sbin/init`. The weekly pull would
-likewise fail from that morning on, its `set -e` tripping over the
-resolver state it can no longer find. They come back when §7's
-replacements exist.
+`machines/<name>`, which is now a directory with no `/sbin/init`. Its
+replacement, `check-gateway`, holds the device to the declared layout,
+and starts at the end of §5. The weekly pull is not stopped: it reads
+both layouts (gateway.md §1.6).
 
-The third timer is the other writer of the machines' trees. Every five
+The reconciler's timer is the other writer of the machines' trees. Every five
 minutes it runs the homelab-ops script `bin/autodeploy-containers`,
 which fetches the `main` branch of homelab-containers and, for each of
 `adguard-bob`, `caddy` and `adguard-alice` whose paths changed since
@@ -711,7 +734,7 @@ daily check off the reconciler's own failure mail is the only notice. A
 merge that touches only `caddy/`
 takes that path. The resolvers' recipe fails safe at its first copy,
 because their old state directory has moved, and that failure stops
-every target after it. So the reconciler stops with the other two, and
+every target after it. So the reconciler stops with the old check, and
 §7 retires it rather than bringing it back.
 
 **Step 1 — stop the machines.** State directories are moved out from
@@ -808,9 +831,15 @@ machinectl list                              # four machines, all running
 ls /var/lib/machines                         # four links, and nothing stale
 ls /etc/systemd/nspawn                       # four settings files, nothing else
 ls /data/on_boot.d    # the four rendered scripts, and 50-authorized-keys.sh until §7
-machinectl shell zerotier /usr/sbin/zerotier-cli info
-machinectl shell zerotier /usr/sbin/zerotier-cli listnetworks   # the overlay's network, ACCESS_DENIED
+leader=$(machinectl show --property=Leader --value zerotier)
+nsenter --target "$leader" --mount -- /usr/sbin/zerotier-cli info
+nsenter --target "$leader" --mount -- /usr/sbin/zerotier-cli listnetworks   # the overlay's network, ACCESS_DENIED
 ```
+
+The client runs in the overlay member's mount namespace, entered through
+the machine's leader, because `machinectl shell` cannot start a command in
+a machine whose first process is s6-overlay rather than systemd
+(gateway.md §1.6).
 
 The overlay member lists the network `conventions.overlay.NETWORK_ID`
 names: as `ACCESS_DENIED` until the ceremony's step 3 authorizes it, or
@@ -926,6 +955,12 @@ object with no file behind it and goes at the next boot, or to
     is not from … recording it as the base`, then `packages: downloading
     what the firmware base … lacks`. From that update on, the cache is
     exactly what the firmware lacks for the set.
+
+    **The repair passes when `/data/on_boot.d/10-packages.sh --check`
+    prints nothing.** Before a base exists, that says every member of the
+    set has a deb in the cache, not that the superset holds every
+    dependency (gateway.md §1.2). `gateway-health` takes the same reading
+    every day from the end of this section.
 -   **The resolvers kept their configuration**: each interface shows the
     filters, clients and rewrites it had before the window. A resolver
     that came up on factory settings means its state did not move.
@@ -1076,6 +1111,23 @@ object with no file behind it and goes at the next boot, or to
     the soak's first one is meant to (§2), take the *before* again
     after it: the comparison is across the controller pass, not across
     a boot.
+-   **The daily check starts, last**, on the homelab host as the user
+    that owns it, once every reading above has been taken. It holds the
+    device to the cache repair's pass and to the issuance, among the
+    rest, so it runs after both:
+
+    ```sh
+    systemctl --user start check-gateway.service
+    journalctl --user -u check-gateway.service -n 20 --no-pager   # one healthy line, no finding
+    systemctl --user enable --now check-gateway.timer
+    ```
+
+    A finding here is read through the playbook it names (gateway.md
+    §3) before the timer is enabled. `udm-boot.service` is the one
+    reading this run cannot take about the push: its state is the
+    previous boot's run of the old chain, as above, which the old check
+    reported clean. From the timer on, the device is read every day
+    again, starting on the day of the window.
 
 **Step 5 — apply the rest of the stack**, from the operator's
 workstation, once every reading above has been taken and every check
@@ -1249,19 +1301,23 @@ serving again with all of it in place:
     identity and the node id read in the ceremony's next step is not the
     one the roster was about to authorize.
 
-**Last, the host-side timers come back**, on the homelab host as the
-user that owns them, because gw-config is the device's tracker again
-and the old layout is what all three were written against:
+**Last, the host-side timers change back**, on the homelab host as the
+user that owns them. `check-gateway` holds the device to the declared
+layout, which the rollback has just taken away, and gw-config is the
+device's tracker again, with the old layout the one the old check and
+the reconciler were written against:
 
 ```sh
-systemctl --user enable --now check-gw.timer gw-backup.timer autodeploy-containers.timer
-systemctl --user list-timers check-gw.timer gw-backup.timer autodeploy-containers.timer
+systemctl --user disable --now check-gateway.timer
+systemctl --user enable --now check-gw.timer autodeploy-containers.timer
+systemctl --user list-timers check-gw.timer autodeploy-containers.timer
 ```
 
-The listing shows the three timers, each with a next run. Without this
-step nothing runs the daily drift check or the weekly pull of the UniFi
-autobackup and the resolver snapshots, and a homelab-containers merge
-reaches the device only when someone deploys it by hand.
+The listing shows both timers, each with a next run. Without this step
+nothing runs the daily drift check, and a homelab-containers merge
+reaches the device only when someone deploys it by hand. The weekly
+pull is in neither list: it reads both layouts and keeps running across
+the rollback (gateway.md §1.6).
 
 ## 7. Cleanup and retirement
 
@@ -1290,34 +1346,17 @@ what holds it now:
 | `caddy/Caddyfile`, `caddy/resolv.conf` | two rendered files the machine mounts |
 | `secrets/cf_token` | the minted token, delivered as a device secret |
 | `deploy.sh` and the daily drift check | `pulumi preview`, which diffs the device itself |
-| `backups/adguard-*` | the state directory, which is now the persisted thing; the rewrites in it are the `dns` stack's declaration |
+| the daily check's runtime readings: machines, boot chain, offline package cache | `gateway-health` on the device, which runs `10-packages.sh --check` for the cache, read daily by `check-gateway` on the homelab host (gateway.md §1.6) |
+| `backups/adguard-*` | the state directory, which is now the persisted thing; the rewrites in it are the `dns` stack's declaration. Until sources-of-truth.md R2 flips, `gateway-backup-pull` also copies each resolver's configuration into `~/.config/gw-backups` |
 | `backups/machines-manifest.txt` | the declaration: pins, machine set and settings are all in the program |
 
-**The UniFi autobackup relocates rather than retires.** It is the
-recovery path for everything the controller holds that no declaration
-covers — device adoption, system settings, admin accounts — so it
-outlives the repository that happened to store it. Its new home is
-`~/.config/gw-backups`, yadm-managed, holding autobackups alone, which
-lets the gw-config directory be deleted whole. Four edits make that true:
-
--   **The pull job** keeps only its UniFi transfer, with
-    `~/.config/gw-backups` as the destination. The resolver-snapshot and
-    machine-manifest transfers go with the rows above — and the manifest
-    reads paths that no longer exist.
--   **The daily check** loses its drift section, which a preview answers
-    now, and keeps what the device still needs: the four machines
-    running, the boot chain enabled with its last run clean, the offline
-    package cache matching the rendered set — `systemd-container`,
-    `libnss-mymachines`, `skopeo`, `umoci`, and `rsync`, which the pull
-    job's own transfer runs on the device end (gateway.md §1.2) —
-    and a certificate probe, which now names a declared vhost and reaches
-    it with `curl --resolve` rather than through a `lan.ucw.phd` name.
--   **The timer units of the check and the pull**, `check-gw.timer` and
-    `gw-backup.timer` (yadm `##h` alternates on the homelab host), keep
-    their schedules and lose gw-config from their descriptions; both are
-    re-enabled once the scripts above are.
--   **The homelab-ops pin** in yadm's mise configuration moves to the
-    commit carrying those scripts, which is what puts them on the host.
+Nothing reads or writes `~/.config/gw-config` once the old check is
+gone, so the directory is deleted whole then, and its `backups/` stays
+in yadm's history. **The UniFi autobackup relocated before the window**
+(§3): it is the recovery path for everything the controller holds that
+no declaration covers — device adoption, system settings, admin
+accounts — so it outlives the repository that happened to store it, and
+`gateway-backup-pull` keeps it in `~/.config/gw-backups`.
 
 **homelab-containers** keeps building and publishing the images and stops
 pushing them: a root filesystem is delivered as a digest-pinned artifact
@@ -1325,16 +1364,18 @@ the device pulls itself, so the repository's device-push recipe retires
 with a pointer to that, and the `.old` rollback copies it left beside
 each tree go with it.
 
-**The reconciler that calls that recipe retires with it**, and it is
-not one of the timers that come back. `bin/autodeploy-containers` lives
-in homelab-ops and its timer in yadm, so its removal is made of edits
-outside this repository:
+**The reconciler that calls that recipe retires with it, and the old
+check with them.** `bin/check-gw` and `bin/autodeploy-containers` live in homelab-ops
+and their timers in yadm, so their removal is made of edits outside
+this repository, under `kluster-ops#79`:
 
--   homelab-ops drops the three gateway targets, `adguard-alice`,
-    `adguard-bob` and `caddy`, from `bin/autodeploy-containers`, and
-    retires the script once no target is left;
--   the yadm `##h` alternates of `autodeploy-containers.timer` and its
-    service go with the script;
+-   homelab-ops drops `bin/check-gw`, and drops the three gateway
+    targets, `adguard-alice`, `adguard-bob` and `caddy`, from
+    `bin/autodeploy-containers`, retiring that script once no target is
+    left;
+-   the yadm `##h` alternates of `check-gw.timer`,
+    `autodeploy-containers.timer` and their services go with the
+    scripts;
 -   the homelab-ops pin in yadm's mise configuration moves to the commit
     that carries the change.
 

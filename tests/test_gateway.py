@@ -12,19 +12,24 @@ rather than in `pulumi preview`.
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
+import process_sessions
 import pulumi
 import pytest
 import pytest_asyncio
 from device_places import DEVICE_ARTIFACT, DEVICE_FILE
+from fake_systemd import FakeSystemd
 from mock_monitor import declaring, run_under_backstop
 from unifi_controller import Controller
 
 from kluster import conventions
 from kluster.components.gateway import (
     BACKUP_PULL_PACKAGES,
+    HEALTH_PROGRAM,
+    PLAYBOOKS,
     Gateway,
     access,
     container,
@@ -113,6 +118,7 @@ async def test_the_machine_carrying_the_session_actuates_after_every_other_child
         gateway.routing.config,
         gateway.access.keys[CI_KEY.name],
         gateway.firewall.network,
+        gateway.health,
     )
     expected = {str(await resource.urn.future()) for resource in elsewhere}
 
@@ -148,10 +154,10 @@ def test_the_device_keeps_the_program_the_backup_pull_runs_on_its_end(monitor: C
     """The controller's autobackups leave the device over `rsync`, which needs it on both ends.
 
     Nothing on the device uses it, so no layer here requires it; the pull on
-    the homelab host does, and it keeps that transfer after the configuration
-    repository it ships with retires (gateway-cutover.md §7). A firmware update
-    takes every package it did not ship, so a set without `rsync` breaks the
-    pull at the first update after the window.
+    the homelab host does, and that transfer is the one it keeps for good
+    (physical/gateway.md §1.6). A firmware update takes every package it did
+    not ship, so a set without `rsync` breaks the pull at the first update
+    after the window.
     """
     packages = rendered_packages(monitor)
 
@@ -209,6 +215,56 @@ def test_the_gateway_declares_one_machine_per_service_and_nothing_else(monitor: 
 
     assert trees == {nspawn.rootfs_path(service.name) for service in conventions.gateway.SERVICES}
     assert written == {service.name for service in conventions.gateway.SERVICES}
+
+
+def test_the_health_reading_reads_every_machine_and_every_unit_the_program_delivers(
+    monitor: Controller, tmp_path: Path
+) -> None:
+    """The executable the device is given reads what this program declares on it, all of it and nothing else.
+
+    Its lists are rendered from the declaration, so a fifth machine or another
+    unit delivered through the mechanism is read from the push that declares
+    it. What it reads is taken from what it reports: the executable the program
+    delivers runs against a systemd on which nothing is running, and every
+    machine and unit it holds to running is then a finding.
+    """
+    ours = f'{NAME}-'
+    machines = {
+        str(image.inputs['root']).removeprefix(f'{nspawn.MACHINES}/').split('/')[0]
+        for image in monitor.of_type(DEVICE_ARTIFACT)
+        if image.name.startswith(ours)
+    }
+    unit_sources = {
+        os.path.basename(path)
+        for declaration in monitor.of_type(DEVICE_FILE)
+        if declaration.name.startswith(ours)
+        and os.path.dirname(path := str(declaration.inputs.get('path', ''))) == persistence.UNIT_SOURCE_DIR
+        and path.endswith(persistence.UNIT_SUFFIX)
+    }
+    delivered = monitor.inputs_of(f'{NAME}-bin-{HEALTH_PROGRAM}')
+    assert delivered['path'] == persistence.executable_path(HEALTH_PROGRAM)
+
+    # The package script is the device's; a stand-in at its place answers that
+    # the cache passes, so what remains to report is systemd's.
+    packages = tmp_path / persistence.PACKAGES_SCRIPT
+    _ = packages.write_text('#!/bin/sh\nexit 0\n')
+    packages.chmod(0o755)
+    program = tmp_path / HEALTH_PROGRAM
+    _ = program.write_text(
+        str(delivered['content']).replace(persistence.on_boot_path(persistence.PACKAGES_SCRIPT), str(packages))
+    )
+    systemd = FakeSystemd(tmp_path / 'systemd')
+    reading = process_sessions.run(
+        ['/bin/sh', str(program)], env={'PATH': f'{systemd.tools}:/usr/bin:/bin'}, text=True, timeout=30
+    )
+
+    findings = [re.match(r'^([^:]+): .* "(.+)"$', line) for line in reading.stdout.splitlines()]
+    assert all(findings), reading.stdout
+    read = [(finding[1], finding[2]) for finding in findings if finding is not None]
+    assert {subject for subject, title in read if title == PLAYBOOKS.machine} == {
+        nspawn.machine_unit(machine) for machine in machines
+    }
+    assert {subject for subject, title in read if title in {PLAYBOOKS.unit, PLAYBOOKS.boot_chain}} == unit_sources
 
 
 @pytest.mark.asyncio
