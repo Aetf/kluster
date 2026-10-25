@@ -42,9 +42,11 @@ from pulumi.runtime import rpc
 __all__ = (
     'ARTIFACT_MODE',
     'CHUNK_BYTES',
+    'ERROR_BODY_BYTES',
     'FETCH_TIMEOUT',
     'FactoryImage',
     'FactoryImageProvider',
+    'FactoryRefused',
     'TruncatedArtifact',
     'fetch',
     'materialize',
@@ -74,10 +76,40 @@ class TruncatedArtifact(Exception):
         self.url: str = url
 
 
+@final
+class FactoryRefused(Exception):
+    """The factory answered with an error status, and said why in the body.
+
+    The factory builds an artifact when it is first asked for, and a schematic
+    it cannot build — an extension name it does not list for the release, say
+    — is refused there, with the reason as the response body. A status code
+    alone names none of that, so the body travels with the error.
+    """
+
+    def __init__(self, url: str, status: int, reason: str) -> None:
+        super().__init__(f'{url} answered HTTP {status}: {reason or "(no reason given)"}')
+        self.url: str = url
+        self.status: int = status
+        self.reason: str = reason
+
+
+#: How much of an error response's body is kept as its reason. An error body
+#: is a sentence; this only bounds what a misbehaving server can make the
+#: program hold.
+ERROR_BODY_BYTES = 1 << 14
+
+
 def fetch(url: str) -> requests.Response:
-    """Open the artifact's byte stream. The one seam a test replaces."""
+    """Open the artifact's byte stream. The one seam a test replaces.
+
+    An error status raises `FactoryRefused`, carrying the start of the body,
+    which is where the factory says what it refused.
+    """
     response = requests.get(url, stream=True, timeout=FETCH_TIMEOUT)
-    response.raise_for_status()
+    if not response.ok:
+        with response:
+            body = next(response.iter_content(ERROR_BODY_BYTES), b'')
+        raise FactoryRefused(url, response.status_code, body.decode(errors='replace').strip())
     return response
 
 

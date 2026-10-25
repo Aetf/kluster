@@ -95,7 +95,7 @@ from an HTTP repository, which offers nothing to check a download against
 
 | Surface | PR opened by | Applied by | Policy |
 | --- | --- | --- | --- |
-| Talos version (machine-config pin + Image Factory schematic + `mise.toml`'s `talosctl`) | renovate (GitHub-releases datasource) | `physical` stack for the pin and the schematic; `talosctl upgrade` by hand, serial, staged (declarative/physical.md §2) | Reviewed; one pull request moves `versions:talos` and the `talosctl` pin together, because `tests/test_talos_validate.py` holds the two equal; §2.1 runbook |
+| Talos version (machine-config pin + Image Factory schematic + `mise.toml`'s `talosctl`) | renovate (GitHub-releases datasource) | `physical` stack for the pin and the schematic; `talosctl upgrade` by hand, one node at a time in §2.1's order (declarative/physical.md §2) | Reviewed; one pull request moves `versions:talos` and the `talosctl` pin together, because `tests/test_talos_validate.py` holds the two equal; §2.1 runbook |
 | Kubernetes version | same PR family (Talos-coupled) | `talosctl upgrade-k8s` | Reviewed; after the Talos bump it belongs to |
 | Cilium chart | renovate — the custom manager for an OCI chart's `versions:chart-` pin in `Pulumi.yaml`, moving its version and digest together; alone in a `cilium` group, out of the `in-cluster` one, the way Talos travels alone | CI chain (merge = deploy) | Reviewed, **never automerged** — §2.2 runbook; ≥1.20 floor (ExternalAuth), checked by `update_crds`, which the bump is finished by running on its branch: the chart's version is the ref Cilium's definitions are rendered from |
 | k8s-base charts (cert-manager, CNPG, VolSync, sealed-secrets, VictoriaMetrics, …) and the Gateway API definitions | renovate — custom managers on the `versions:chart-` pins (the Helm data source for an HTTP repository, the docker one for an OCI registry, which moves the digest with the version) and on the `versions:manifest-` pin (its release and sha256 together); one `in-cluster` group, Cilium excepted, with the cluster images the block pins | CI chain | Reviewed — chart bumps always produce a real diff; major behind dashboard approval. A bump of a pin `update_crds` reads is red until `update_crds` runs on its branch, because `packages/crds` records the pins it was generated from (framework/pulumi.md §4) |
@@ -114,6 +114,53 @@ from an HTTP repository, which offers nothing to check a download against
     members at once (the CI-serialization rule,
     declarative/physical.md §2);
     homelab worker last; `upgrade-k8s` afterward as its own step.
+
+    **Each node is upgraded to the installer its own configuration
+    names, never with a bare `talosctl upgrade`.** A bare one installs
+    the stock `ghcr.io/siderolabs/installer`, which is built from no
+    schematic, so the worker comes back without `siderolabs/i915` and
+    `siderolabs/mei`. Talos never consults the configuration's
+    installer for an upgrade: `talosctl` sends whatever its `--image`
+    flag holds, whose default is the stock image
+    (`cmd/talosctl/cmd/talos/upgrade.go` in Talos v1.13.9), and the
+    node reads `machine.install.image` only in its install task, which
+    runs on a disk with no META partition — never on a node booted from
+    a factory disk image (`v1alpha1_sequencer_tasks.go`, `Install`).
+    The configuration names the factory installer built from the
+    schematic the node boots (declarative/physical.md §2), and the pin
+    PR's `physical` apply has moved its tag to the new release.
+
+    Each node, in the order above, takes two commands, run from the
+    checkout, with `<node>` the address `talosctl` names that node by.
+    The first reads the installer the node holds and prints it:
+
+        installer="$( { talosctl -n <node> get machineconfig persistent -o jsonpath='{.spec}' 2>/dev/null || talosctl -n <node> get machineconfig v1alpha1 -o jsonpath='{.spec}'; } | mise x uv -- uv run python -c 'import sys, yaml; print(next(d for d in yaml.safe_load_all(sys.stdin) if d and "machine" in d)["machine"]["install"]["image"])')" && echo "$installer"
+
+    It prints `factory.talos.dev/<platform>-installer/<schematic
+    id>:<release>`. The tag is the release the upgrade installs, so the
+    second command runs only once the tag is the new pin:
+
+        talosctl -n <node> upgrade --image "$installer"
+
+    The first command reads the `persistent` configuration where the
+    node has one, and the active `v1alpha1` otherwise. An apply that
+    needs a reboot is staged rather than applied (`apply_mode:
+    staged_if_needing_reboot`, declarative/physical.md §2), and the node
+    judges the whole document against its active one, so a pin bump
+    stages too whenever any reboot-requiring change is pending on that
+    node. A staged apply writes only `persistent` (`v1alpha1_server.go`,
+    the `STAGED` case), so `v1alpha1` then still names the old tag; the
+    reboot that ends the upgrade applies the staged document with it. A
+    node that has rebooted since its last apply has no `persistent`:
+    Talos does not write it again for a configuration loaded from STATE
+    (`internal/app/machined/pkg/controllers/config/acquire.go`), and
+    `v1alpha1` is then the whole answer. A failed read prints nothing
+    and stops at the `&&`, so no upgrade starts with an empty image. The
+    configuration stores itself as one YAML string, so no `jsonpath`
+    reaches the field, and the YAML is parsed.
+
+    After the worker's upgrade, `talosctl -n <node> get extensions`
+    still lists both extensions.
 -   **§2.2 Cilium upgrade.** Trigger: chart PR. Gist: the riskiest
     bump in the system — before merge, re-run the affected subset of
     the bootstrap verifications on the preview environment of one

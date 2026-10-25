@@ -180,6 +180,12 @@ async def main() -> None:
         talos_version=talos_version,
         opts=pulumi.ResourceOptions(providers=[cloud, talos]),
     )
+    # The worker's own artifact: the fleet's Talos version, a schematic of its
+    # own (x86, and the A380's driver and firmware, which the GPU cutover wants
+    # present from day 0), and a file on this machine rather than an entry in a
+    # cloud catalog. No cloud provider on it, only the chain's: nothing it
+    # declares reaches the account. The disk it becomes is §3's.
+    worker_image = TalosNocloudImage(f'{conventions.CLUSTER_NAME}-worker', talos_version=talos_version, opts=on_talos)
     load_balancer = NodeLoadBalancer(
         conventions.CLUSTER_NAME,
         compartment_id=compartment_id,
@@ -207,6 +213,13 @@ async def main() -> None:
         # (`conventions`), and a second place to state it is a second place
         # for it to be wrong.
         bgp_peers={conventions.HOMELAB_NODE: f'{conventions.CLUSTER_VLAN.require_gateway()}/32'},
+        # Each node's installer is the one the factory builds from the
+        # schematic of the image that node boots, so an upgrade that installs
+        # it keeps what the image carries (operations.md §2.1).
+        installers={
+            **dict.fromkeys(conventions.CLOUD_NODES, image.installer),
+            conventions.HOMELAB_NODE: worker_image.installer,
+        },
         # The same table the attachments below are declared from: the machine
         # mounts each volume its node will be handed, and is labelled with it.
         # It is the table rather than the attachments because those need the
@@ -320,14 +333,10 @@ async def main() -> None:
         opts=on_cloud,
     )
 
-    # §3: the disk the worker boots, and the VM that boots it.
+    # §3: the VM the worker's disk image boots in. The image itself is
+    # declared beside the cloud one above, because the cluster names its
+    # installer.
     #
-    # The image is the worker's own artifact: the fleet's Talos version, a
-    # schematic of its own (x86, and the A380's driver and firmware, which the
-    # GPU cutover wants present from day 0), and a file on this machine rather
-    # than an entry in a cloud catalog. No cloud provider on it, only the
-    # chain's: nothing it declares reaches the account.
-    worker_image = TalosNocloudImage(f'{conventions.CLUSTER_NAME}-worker', talos_version=talos_version, opts=on_talos)
     # No endpoint and no credential among the VM's arguments: the libvirt
     # session is the component's own, so it builds its provider and reads the
     # key that opens it (rfc-002 §8.1). The home-automation domain on the same

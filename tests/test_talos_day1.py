@@ -92,6 +92,11 @@ async def fake() -> Talos:
     return await run_with(Talos(), stack='physical')
 
 
+def installer_of(node: str) -> str:
+    """An installer image of one node's own, different for every node."""
+    return f'factory.talos.dev/example-installer/{node}:v1.11.0'
+
+
 def build_cluster(name: str = 'kluster', **kwargs: Any) -> TalosCluster:
     """Day 0: the PKI and the configuration each machine boots with.
 
@@ -103,6 +108,10 @@ def build_cluster(name: str = 'kluster', **kwargs: Any) -> TalosCluster:
     kwargs.setdefault('control_plane_nodes', ('cp1', 'cp2', 'cp3'))
     kwargs.setdefault('worker_nodes', ('homelab',))
     kwargs.setdefault('bgp_peers', {'homelab': '192.168.70.1/32'})
+    kwargs.setdefault(
+        'installers',
+        {node: installer_of(node) for node in (*kwargs['control_plane_nodes'], *kwargs['worker_nodes'])},
+    )
     kwargs.setdefault('volumes', {})
     return TalosCluster(
         name,
@@ -428,6 +437,40 @@ async def test_a_stranger_cannot_be_named_by_either_component(fake: Talos) -> No
         build(secondary_addresses={'nowhere': SECONDARY})
     with pytest.raises(ValueError, match='endpoints name nodes that are not in the cluster'):
         build(endpoints={'nowhere': BALANCER})
+
+
+def installers_in(patches: list[dict[str, Any]]) -> list[str]:
+    """The installer images a node's patches name, in the order they name them."""
+    return [
+        cast('dict[str, str]', patch['machine']['install'])['image']
+        for patch in patches
+        if 'kind' not in patch and 'install' in patch.get('machine', {})
+    ]
+
+
+@pytest.mark.asyncio
+async def test_each_node_names_its_own_installer_and_no_other(fake: Talos) -> None:
+    """Each node's configuration names the installer it was handed, in both of its renderings.
+
+    The installers differ from node to node here, so a rendering that read
+    another node's entry, or one node's for all of them, names the wrong one.
+    The node holding the dedicated VIP is rendered twice, and the rendering
+    day 1 applies is the one a running node holds, which the upgrade runbook
+    reads the installer from (operations.md §2.1).
+    """
+    day1 = build()
+    for node in ('cp1', 'cp2', 'cp3', 'homelab'):
+        assert installers_in(await patches_of(day1.cluster, node)) == [installer_of(node)]
+        assert installers_in(await patches_of(day1, node)) == [installer_of(node)]
+
+
+@pytest.mark.asyncio
+async def test_every_node_names_an_installer_and_only_nodes_do(fake: Talos) -> None:
+    every = {node: installer_of(node) for node in ('cp1', 'cp2', 'cp3', 'homelab')}
+    with pytest.raises(ValueError, match=r"every node names its own installer, and \['homelab'\] name none"):
+        build_cluster('kluster-missing', installers={node: image for node, image in every.items() if node != 'homelab'})
+    with pytest.raises(ValueError, match='installers name nodes that are not in the cluster'):
+        build_cluster('kluster-stranger', installers={**every, 'nowhere': installer_of('nowhere')})
 
 
 def volumes_in(patches: list[dict[str, Any]]) -> list[str]:

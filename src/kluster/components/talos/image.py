@@ -16,6 +16,15 @@ image:
 The schematic id is part of the declared state either way, which is what makes
 an image's contents reproducible rather than a thing someone once uploaded.
 
+**Each artifact also names its installer.** A node boots its disk image once;
+every later release reaches it through `talosctl upgrade`, which installs
+whatever installer image it is handed, and the default it is handed is the
+stock one, built from no schematic. So the factory lookup that finds an
+artifact's disk image also yields the installer the factory builds from the
+same schematic for the same platform, and the node's machine configuration
+names it (`kluster.components.talos.installer_patch`), where the upgrade
+runbook reads it (operations.md §2.1).
+
 **The worker's artifact takes a detour through the machine running the
 program.** The factory serves `nocloud` as `.raw.xz`; the libvirt provider does
 not decompress an xz source (dmacvicar/terraform-provider-libvirt#390) and a
@@ -158,6 +167,16 @@ class TalosArtifact(Component, abc.ABC):
             schematic=_schematic_document(extensions),
             opts=self.child_opts(),
         )
+        #: What the factory serves for this schematic, platform and
+        #: architecture: looked up once, and read by both the disk image below
+        #: and the installer, so the two cannot name different schematics.
+        self._urls = async_output(self._factory_urls)
+        #: The installer image the factory builds from this schematic for this
+        #: platform: `factory.talos.dev/<platform>-installer/<schematic id>:<version>`.
+        #: It carries what the disk image carries, extensions included, which
+        #: the stock `ghcr.io/siderolabs/installer` does not, so it is what an
+        #: upgrade of a node booted from this artifact has to install.
+        self.installer: pulumi.Output[str] = async_output(self._installer)
         self._declare_artifact(name)
         self.register_outputs({})
 
@@ -169,8 +188,8 @@ class TalosArtifact(Component, abc.ABC):
         open, so the resources it declares are this component's children.
         """
 
-    async def _disk_url(self) -> str:
-        """The factory's disk image for this schematic, architecture and platform."""
+    async def _factory_urls(self) -> _FactoryArtifacts:
+        """The factory's artifacts for this schematic, architecture and platform."""
         schematic_id = await resolve(self.schematic.id)
         urls = await resolve(
             imagefactory.get_urls_output(
@@ -184,7 +203,24 @@ class TalosArtifact(Component, abc.ABC):
                 opts=pulumi.InvokeOptions(parent=self),
             )
         )
-        return urls.urls.disk_image
+        if not urls.urls.installer:
+            # The provider names an installer for every platform it names a
+            # disk image for. An answer without one would render a node
+            # configuration naming no installer of its own, so it is refused
+            # rather than carried on.
+            raise ValueError(
+                f'the factory lookup for schematic {schematic_id} ({self.platform}, {self.architecture}) '
+                'named no installer image'
+            )
+        return _FactoryArtifacts(disk_image=urls.urls.disk_image, installer=urls.urls.installer)
+
+    async def _disk_url(self) -> str:
+        """The factory's disk image for this schematic, architecture and platform."""
+        return (await resolve(self._urls)).disk_image
+
+    async def _installer(self) -> str:
+        """The factory's installer image for this schematic and platform."""
+        return (await resolve(self._urls)).installer
 
 
 class TalosImage(TalosArtifact, pulumi_type='kluster:talos:TalosImage'):
@@ -293,6 +329,20 @@ class TalosNocloudImage(TalosArtifact, pulumi_type='kluster:talos:TalosNocloudIm
         schematic_id = await resolve(self.schematic.id)
         name = f'talos-{self.talos_version}-{self.platform}-{self.architecture}-{schematic_id}'
         return str(IMAGE_CACHE / f'{name}-room{HOMELAB_DISK_ROOM}.raw')
+
+
+@final
+@dataclass(frozen=True)
+class _FactoryArtifacts:
+    """The two of the factory's artifacts for one schematic that this program uses.
+
+    A class of its own rather than the provider's result, whose fields do not
+    survive being carried through an output: what comes back is the mapping
+    alone, without its attributes.
+    """
+
+    disk_image: str
+    installer: str
 
 
 @final

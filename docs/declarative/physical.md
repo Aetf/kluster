@@ -208,6 +208,27 @@ machine_secrets
     attaches to (§1), the **node volume** and a **node label** naming
     it (`conventions.NODE_VOLUME_LABEL`), in the configuration the node
     boots with.
+-   **Each node names its own factory installer.** The configuration
+    sets `machine.install.image` to the installer the Image Factory
+    builds from the schematic of the image that node boots, for that
+    image's platform — `factory.talos.dev/oracle-installer/<cloud
+    schematic>:<release>` on the cloud nodes and
+    `factory.talos.dev/nocloud-installer/<worker schematic>:<release>`
+    on the worker. Both values come out of the factory lookup that finds
+    the boot image (`TalosArtifact.installer`), so the two cannot name
+    different schematics. Left alone, the provider writes the stock
+    `ghcr.io/siderolabs/installer` there, which carries none of the
+    worker's extensions. The field is not what an upgrade reads:
+    `talosctl upgrade` installs whatever `--image` names, and the
+    upgrade runbook reads that value from this field
+    (operations.md §2.1). A pin bump moves the tag in the configuration.
+    `machine.install` is among the fields Talos applies immediately, so
+    `machine_configuration_apply` carries that change without a reboot
+    when nothing else in the apply needs one. Otherwise, the whole
+    document is staged ("Reboot-requiring config changes" below), and
+    the tag moves in the active configuration at the next reboot; until
+    then it is the node's `persistent` configuration that names it,
+    which is where the runbook reads it first.
 -   **The Talos ingress firewall is the only filter on ports.** It is a
     `NetworkDefaultActionConfig` of `block` plus a `NetworkRuleConfig`
     per opening, and the subnet in front of it narrows no port (§1;

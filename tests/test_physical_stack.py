@@ -160,6 +160,7 @@ CENSUS_PARAMETERS = (
     (TalosCluster, 'control_plane_nodes'),
     (TalosCluster, 'worker_nodes'),
     (TalosCluster, 'bgp_peers'),
+    (TalosCluster, 'installers'),
     (TalosCluster, 'volumes'),
     # Handed down by the two artifact subclasses rather than by this program:
     # each states the schematic it is, and the base that renders it takes the
