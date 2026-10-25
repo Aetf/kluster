@@ -28,10 +28,11 @@
 # hand -- is neither cached nor installed from the cache.
 #
 # That download replaces {{ cache }} whole, so the cache is exactly what the
-# latest resolution named and never accumulates. It replaces it only when apt
-# fetched everything it planned and a deb of every package of the set is among
-# it; a failed or partial download, or a base that lists part of the set as
-# installed, keeps the old cache and says so.
+# latest resolution named and never accumulates; a copy of the base's release
+# goes in with it, naming the base it was resolved against. It replaces it only
+# when apt fetched everything it planned and a deb of every package of the set
+# is among it; a failed or partial download, or a base that lists part of the
+# set as installed, keeps the old cache and says so.
 #
 # Until a firmware update's boot has recorded a base, what the firmware lacks
 # is not known, and the cache is a superset rather than a resolution: the set
@@ -49,16 +50,48 @@
 # lists at a newer version is held back. So after a firmware update that ships
 # such a package, an offline boot leaves the members of the set that pin it
 # unpacked and fails, naming them, and the next boot that reaches apt installs
-# the set against the firmware's version. The script exits 0 only when every
-# member of the set is installed. A failure here stops nothing after it:
-# udm-boot.service hands each file of on_boot.d to `xargs -n 1`, which runs
-# every one whatever an earlier one exited with, unless it exited 255 -- and
-# this script exits 0 or 1.
+# the set against the firmware's version. Run from the boot chain, the script
+# exits 0 only when every member of the set is installed. A failure here stops
+# nothing after it: udm-boot.service hands each file of on_boot.d to
+# `xargs -n 1`, which runs every one whatever an earlier one exited with,
+# unless it exited 255 -- and this script exits 0 or 1.
 #
 # {{ cache }} is this script's alone -- the swap below replaces it whole, so
 # nothing else may keep a file in it.
+#
+# Run with no argument, as the boot chain runs it, it does all of the above.
+# Given one of two arguments instead, it runs for a person or the homelab host:
+#
+#   --check    changes nothing, and says whether either of two reasons holds:
+#              a member of the set with no deb in the cache, and a recorded
+#              base the cache was not resolved against. It prints one line per
+#              reason that holds and exits 1, and otherwise prints nothing and
+#              exits 0. Before a base exists that pass says only that every
+#              member has a deb: what the members need beyond the firmware is
+#              not known, so a member installed outside this script can lack a
+#              dependency the superset does not hold. The second reason is
+#              what a firmware update whose first boot had no network leaves:
+#              that boot installs the whole set from the cache and records the
+#              new base, and every boot after it that finds the set installed
+#              stops before apt, so nothing resolves the cache against the new
+#              base until a run reaches apt.
+#   --refresh  runs the refresh a boot runs after apt installed the set: the
+#              set must be installed and apt reachable. A failed download keeps
+#              the old cache and exits 1. Before a base exists it has no
+#              install of its own, so a dependency the old cache lacks is not
+#              fetched.
 
 set -u
+
+case "$#:${1-}" in
+    0:) MODE=boot ;;
+    1:--check) MODE=check ;;
+    1:--refresh) MODE=refresh ;;
+    *)
+        echo "usage: $0 [--check | --refresh]" >&2
+        exit 1
+        ;;
+esac
 
 PACKAGES=({{ packages | join(' ') }})
 CACHE={{ cache }}
@@ -69,6 +102,10 @@ CACHE={{ cache }}
 BASE={{ base }}
 BASE_STATUS=$BASE/status
 BASE_RELEASE=$BASE/release
+# The release of the base the cache was resolved against: a copy of
+# $BASE_RELEASE, written into the new cache before the swap, so it is replaced
+# with the debs it describes. A cache refreshed without a base has none.
+RESOLVED=release
 # dpkg's database on the running system, which is what the base is saved from,
 # and the running firmware's release, which is what it is saved under.
 STATUS={{ status }}
@@ -79,17 +116,6 @@ RELEASE={{ release }}
 # directory that already exists.
 DOWNLOAD=$CACHE.download
 APT=(apt-get -o "Dir::Cache::archives=$DOWNLOAD")
-# Set before anything is downloaded, so that a run which exits anywhere, or is
-# stopped by a signal, takes the directory with it; one killed outright leaves
-# it for the next run, which empties it before using it.
-trap 'rm -rf "$DOWNLOAD"' EXIT
-
-# The swap below is two renames. A run stopped between them leaves no cache
-# and the whole new one beside it, which is put in place before anything reads
-# the cache.
-if [ ! -d "$CACHE" ] && [ -d "$CACHE.new" ]; then
-    mv "$CACHE.new" "$CACHE"
-fi
 
 is_installed() {
     dpkg -s "$1" 2>/dev/null | grep -q '^Status: install ok installed'
@@ -156,6 +182,37 @@ deb_version() {
     echo "${version//%3a/:}"
 }
 
+# Whether either reason holds -- a member of the set with no deb in the cache,
+# or a recorded base the cache was not resolved against -- read without changing
+# anything: no swap is completed and no download directory removed, so a run
+# killed outright leaves what it left. The cache read is the one the next boot
+# or refresh reads -- the new half of a swap cut short when there is no cache
+# beside it.
+check() {
+    local p cache=$CACHE status=0
+    if [ ! -d "$CACHE" ] && [ -d "$CACHE.new" ]; then
+        cache=$CACHE.new
+    fi
+    for p in "${PACKAGES[@]}"; do
+        if ! compgen -G "$cache/${p}_*.deb" >/dev/null; then
+            echo "packages: the offline cache in $cache holds no deb of $p"
+            status=1
+        fi
+    done
+    # The release, written after the database, is what marks a base recorded.
+    if [ -f "$BASE_RELEASE" ] && ! cmp -s "$BASE_RELEASE" "$cache/$RESOLVED"; then
+        if [ -f "$cache/$RESOLVED" ]; then
+            echo "packages: the offline cache in $cache was resolved against the firmware base of $(head -n 1 "$cache/$RESOLVED"), not the one recorded in $BASE for $(head -n 1 "$BASE_RELEASE")"
+        else
+            echo "packages: the offline cache in $cache was not resolved against the firmware base recorded in $BASE for $(head -n 1 "$BASE_RELEASE")"
+        fi
+        status=1
+    fi
+    return $status
+}
+
+# Replace the cache with what apt downloads for the set. Returns 1, keeping the
+# old cache, when the download is not the whole of it.
 refresh() {
     local p deb name cached version wanted=()
     if [ -f "$BASE_STATUS" ]; then
@@ -165,7 +222,7 @@ refresh() {
         echo "packages: downloading what the firmware base in $BASE_STATUS lacks for ${PACKAGES[*]}, to refresh the offline cache in $CACHE"
         if ! "${APT[@]}" -o "Dir::State::status=$BASE_STATUS" install -y --download-only "${PACKAGES[@]}"; then
             echo "packages: cache refresh download failed, keeping the old cache"
-            return
+            return 1
         fi
     else
         # The install's debs stay: they are the dependencies this boot found
@@ -173,13 +230,13 @@ refresh() {
         echo "packages: no firmware base in $BASE_STATUS yet: downloading ${PACKAGES[*]} and keeping every package of the old cache in $CACHE the download does not carry, until a firmware update's boot records the base"
         if ! "${APT[@]}" install -y --download-only --reinstall "${PACKAGES[@]}"; then
             echo "packages: cache refresh download failed, keeping the old cache"
-            return
+            return 1
         fi
     fi
     for p in "${PACKAGES[@]}"; do
         if ! carried "$p"; then
             echo "packages: the refresh fetched no deb of $p, which the base in $BASE_STATUS lists as installed or apt could not download; keeping the old cache"
-            return
+            return 1
         fi
     done
     if [ ! -f "$BASE_STATUS" ]; then
@@ -200,17 +257,53 @@ refresh() {
             echo "packages: downloading ${wanted[*]}, installed at a version the old cache does not hold"
             if ! (cd "$DOWNLOAD" && apt-get download "${wanted[@]}"); then
                 echo "packages: cache refresh download failed, keeping the old cache"
-                return
+                return 1
             fi
         fi
     fi
     rm -rf "$CACHE.new" "$CACHE.old"
     mkdir -p "$CACHE.new"
     mv "$DOWNLOAD"/*.deb "$CACHE.new/"
+    if [ -f "$BASE_STATUS" ] && [ -f "$BASE_RELEASE" ] \
+        && ! cp "$BASE_RELEASE" "$CACHE.new/$RESOLVED"; then
+        echo "packages: recording which base the new cache was resolved against failed, keeping the old cache"
+        rm -rf "$CACHE.new"
+        return 1
+    fi
     [ -d "$CACHE" ] && mv "$CACHE" "$CACHE.old"
     mv "$CACHE.new" "$CACHE"
     rm -rf "$CACHE.old"
 }
+
+if [ "$MODE" = check ]; then
+    check
+    exit
+fi
+
+# Set before anything is downloaded, so that a run which exits anywhere, or is
+# stopped by a signal, takes the directory with it; one killed outright leaves
+# it for the next run, which empties it before using it.
+trap 'rm -rf "$DOWNLOAD"' EXIT
+
+# The swap is two renames. A run stopped between them leaves no cache and the
+# whole new one beside it, which is put in place before anything reads the
+# cache.
+if [ ! -d "$CACHE" ] && [ -d "$CACHE.new" ]; then
+    mv "$CACHE.new" "$CACHE"
+fi
+
+if [ "$MODE" = refresh ]; then
+    if ! installed; then
+        echo "packages: --refresh needs ${PACKAGES[*]} installed, and they are not all installed; the boot path (this script with no argument) installs them" >&2
+        exit 1
+    fi
+    fresh_download
+    # The lists are empty after a firmware update whose first boot had no
+    # network; the download below cannot resolve anything without them.
+    apt-get update || echo "packages: apt-get update failed, continuing"
+    refresh
+    exit
+fi
 
 if installed; then
     echo "packages: ${PACKAGES[*]} all present, nothing to do"
@@ -238,6 +331,8 @@ echo "packages: installing ${PACKAGES[*]} via apt (post-firmware-update boot)...
 # install will fail and we fall back to the cache.
 apt-get update || echo "packages: apt-get update failed, continuing"
 
+# A refresh that fails keeps the old cache and fails nothing here: the set is
+# installed, and that is what this boot is for.
 if "${APT[@]}" install -y "${PACKAGES[@]}"; then
     refresh
     exit 0

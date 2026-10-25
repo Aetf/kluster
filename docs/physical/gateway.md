@@ -528,7 +528,10 @@ replaces the cache whole, and only when apt fetched everything it
 planned and the download holds a deb of every package of the set: a
 failed download, or a base that lists part of the set as installed,
 keeps the old cache and says so. The cache therefore holds what the
-latest resolution named and never accumulates.
+latest resolution named and never accumulates. A refresh against a base
+also copies `dpkg.base/release` into the new cache before the swap, as
+`dpkg/release`, so the cache names the base it was resolved against and
+that name is replaced with the debs it describes.
 
 **Until a firmware update's boot records a base, the cache is a
 superset.** A device that has held the set since its last update has had
@@ -605,17 +608,58 @@ so `20-units.sh` and every script after it still run on that boot, and
 the failure shows on the unit.
 
 The update's first boot saves the new firmware's database, reaching apt
-or not, and the first boot that reaches apt resolves the cache against
-it. A firmware that shipped a package of the set itself would give no
-boot that finds none of the set installed, and the base would stay the
-older firmware's until one did.
+or not, and resolves the cache against it only when it reaches apt.
+**A first boot with no network leaves the cache resolved against the
+previous firmware until something re-resolves it.** That boot installs
+the whole set from the cache, and a boot that finds the set installed
+stops before apt, so the cache stays resolved against the previous
+firmware until a run reaches apt. That is a boot that finds part of the
+set missing (a push that grows the set among them), the next update's
+first boot that reaches apt, or `10-packages.sh --refresh`, the one an
+operator runs. `--check` is what reports the state (below). A firmware that shipped a
+package of the set itself would give no boot that finds none of the set
+installed, and the base would stay the older firmware's until one did.
+
+**Two arguments run the script for a person or the homelab host
+rather than for the boot.**
+`10-packages.sh --check` changes nothing: it calls neither apt nor
+dpkg, completes no swap, and removes no download directory. It prints
+one line per reason and exits 1, for either of two reasons, and
+otherwise prints nothing and exits 0. One is a member of the set with no deb in `dpkg/`, which is
+what a set that grew on a boot whose refresh failed leaves. The other
+is a recorded base the cache was not resolved against, read by
+comparing `dpkg/release` with `dpkg.base/release` byte for byte, so the
+clock a boot ran under does not enter the verdict. Comparing the
+installed versions with the cached debs instead would pass the state the
+paragraph above describes, since that boot installed the cache as it
+was. Before any base exists, the superset is the only cache there is,
+and a deb of every member passes. Without a base, what the members need
+beyond the firmware is not known, so that pass does not say the
+superset holds it: a member installed outside this script can lack a
+dependency, and the offline boot then fails and says so
+([gateway-cutover.md](gateway-cutover.md) §5). Where a swap was cut short, the check
+reads the new half, which is the cache the next run of the boot path or
+of `--refresh` puts in place.
+
+`10-packages.sh --refresh` runs the refresh a boot runs after apt
+installed the set, and is the remedy for a failed check. It needs the
+set installed, since installing it is the boot path's, and apt
+reachable: it runs `apt-get update` first, because a networkless
+post-update boot left the lists empty. A download that is not the whole
+cache keeps the old one, as the boot's refresh does. A boot whose
+install succeeded still exits 0 then, but `--refresh` exits 1, since
+the refresh is all it was run for. Before a base exists, it is the
+superset refresh with no install of its own: it downloads the set by
+name and carries the old cache over, so a dependency the old cache lacks
+is not fetched. Any other argument is refused, so a mistyped mode does
+not run the boot path.
 
 The cache is refreshed by moving the old directory aside and the new
 one into place — two renames, and a run stopped between them leaves the
-new cache beside a missing one, which the next run puts in place before
-reading the cache — so **`dpkg/` is that script's alone**: a file this
-program wrote there would be deleted by the next refresh and reported as
-drift forever after. The program declares nothing about `dpkg.base/`
+new cache beside a missing one, which the next run of the boot path or
+of `--refresh` puts in place before reading the cache — so **`dpkg/` is
+that script's alone**: a file this program wrote there would be deleted
+by the next refresh and reported as drift forever after. The program declares nothing about `dpkg.base/`
 either, which the script rewrites on every post-update boot.
 
 **Nothing orders this script against `frr-config.service`** (§1.3).
