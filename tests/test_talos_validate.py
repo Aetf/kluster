@@ -68,6 +68,11 @@ TALOS_KEY = 'versions:talos'
 #: SAN an address, not which ones.
 BALANCER = '203.0.113.10'
 
+#: What a node's installer is built from: a schematic id, in the factory's
+#: shape for one (64 hex digits). Any id serves: validation does not read
+#: `machine.install.image`.
+SCHEMATIC = '0' * 64
+
 #: How `talosctl validate` is told which platform checks to apply.
 Mode = Literal['cloud', 'metal']
 
@@ -187,6 +192,7 @@ def secretbox_secret(bundle: Path) -> str:
 def patches(shape: Shape, bundle: Path) -> list[str]:
     """The patch list the component gives one node shape, as the provider receives it."""
     return talos.patches(
+        installer=f'factory.talos.dev/{shape.platform}-installer/{SCHEMATIC}:{pinned_release()}',
         role=shape.role,
         cert_sans=[BALANCER],
         secretbox_secret=secretbox_secret(bundle) if shape.role == 'controlplane' else None,

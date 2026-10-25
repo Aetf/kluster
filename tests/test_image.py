@@ -14,9 +14,10 @@ mistaken for a resource somebody deleted.
 from __future__ import annotations
 
 import inspect
+import io
 import json
 import lzma
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, cast
 
@@ -35,7 +36,8 @@ CLUSTER = 'kluster'
 WORKER = f'{CLUSTER}-worker'
 TALOS_VERSION = 'v1.11.0'
 COMPARTMENT = 'ocid1.compartment.oc1..test'
-FACTORY = 'https://factory.talos.dev/image'
+FACTORY_HOST = 'factory.talos.dev'
+FACTORY = f'https://{FACTORY_HOST}/image'
 
 #: What the mock monitor hands back as a schematic's id. It stands in for the
 #: factory's content hash, and the file name below is built out of it.
@@ -56,6 +58,8 @@ class Factory(Recorder):
         super().__init__()
         #: The arguments of every `getUrls` invoke, in the order they were made.
         self.invokes: list[dict[str, Any]] = []
+        #: Whether an answer names the installer, as the provider's always does.
+        self.names_installer = True
 
     def answer(self, args: pulumi.runtime.MockCallArgs) -> dict[str, Any]:
         if args.token != 'talos:imageFactory/getUrls:getUrls':
@@ -67,7 +71,13 @@ class Factory(Recorder):
         suffix = 'raw.xz' if platform == 'nocloud' else 'qcow2'
         schematic = arguments['schematicId']
         version = arguments['talosVersion']
-        return {'urls': {'diskImage': f'{FACTORY}/{schematic}/{version}/{platform}-{architecture}.{suffix}'}}
+        urls = {'diskImage': f'{FACTORY}/{schematic}/{version}/{platform}-{architecture}.{suffix}'}
+        if self.names_installer:
+            # The provider's own shape: one installer per platform, for every
+            # architecture (terraform-provider-talos v0.11.0,
+            # `talos_image_factory_urls_data_source.go`).
+            urls['installer'] = f'{FACTORY_HOST}/{platform}-installer/{schematic}:{version}'
+        return {'urls': urls}
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -125,6 +135,43 @@ async def test_the_worker_asks_the_factory_for_the_nocloud_x86_artifact(factory:
     # And it asked for that artifact rather than merely receiving it: platform
     # and architecture are what pick one file out of the factory's matrix.
     assert {'platform': 'nocloud', 'architecture': 'amd64'}.items() <= factory.invokes[-1].items()
+
+
+# -- the installers --------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_each_artifact_names_the_installer_of_its_own_schematic_and_platform(factory: Factory) -> None:
+    """The installer is the one the factory builds from the schematic the disk image is built from.
+
+    Read off the same lookup as the disk image, so the two name one schematic
+    by construction: one lookup per artifact, and the installer carries the
+    schematic and the platform that lookup asked about.
+    """
+    cloud = build_cloud()
+    worker = build_worker()
+
+    assert await cloud.installer.future() == f'{FACTORY_HOST}/oracle-installer/{CLOUD_SCHEMATIC}:{TALOS_VERSION}'
+    assert await worker.installer.future() == f'{FACTORY_HOST}/nocloud-installer/{WORKER_SCHEMATIC}:{TALOS_VERSION}'
+    assert sorted(str(invoke['schematicId']) for invoke in factory.invokes) == sorted(
+        [CLOUD_SCHEMATIC, WORKER_SCHEMATIC]
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_factory_answer_naming_no_installer_is_refused(factory: Factory) -> None:
+    """A node configuration must never be rendered with no installer of its own.
+
+    The provider names one for every platform, so an answer without one is
+    malformed; carried on, it would reach the configuration as a missing value
+    rendered into a string.
+    """
+    factory.names_installer = False
+
+    worker = build_worker()
+
+    with pytest.raises(ValueError, match=f'schematic {WORKER_SCHEMATIC} .*named no installer image'):
+        _ = await worker.installer.future()
 
 
 # -- the cloud half, unchanged ----------------------------------------------
@@ -416,6 +463,67 @@ def test_a_stream_that_ends_early_leaves_nothing_that_looks_finished(
     # into a volume boots into nothing, and the next run would have reused it.
     assert not path.exists()
     assert list(tmp_path.iterdir()) == []
+
+
+def factory_response(status: int, body: bytes) -> requests.Response:
+    """A response as `requests` builds it from a streamed reply."""
+    response = requests.Response()
+    response.status_code = status
+    response.raw = io.BytesIO(body)
+    return response
+
+
+def answering(status: int, body: bytes) -> Callable[..., requests.Response]:
+    """A stand-in for `requests.get` that answers every request with one response."""
+
+    def get(*_: object, **__: object) -> requests.Response:
+        return factory_response(status, body)
+
+    return get
+
+
+def test_a_refusal_carries_the_factorys_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The factory says why it refused in the body, and the error says it too.
+
+    An extension name the factory does not list for the release is refused
+    when the image is first built, which is when it is fetched, and the status
+    alone names neither the extension nor the release.
+    """
+    reason = b'extension "siderolabs/i91" is not available for Talos version v1.13.9\n'
+    asked: list[str] = []
+
+    def get(url: str, **_: object) -> requests.Response:
+        asked.append(url)
+        return factory_response(400, reason)
+
+    monkeypatch.setattr(talos_factory.requests, 'get', get)
+    url = 'https://factory.invalid/image/0123/v1.13.9/nocloud-amd64.raw.xz'
+
+    with pytest.raises(talos_factory.FactoryRefused) as refused:
+        _ = talos_factory.fetch(url)
+
+    assert asked == [url]
+    assert refused.value.status == 400
+    assert refused.value.reason == reason.decode().strip()
+    assert reason.decode().strip() in str(refused.value)
+
+
+def test_a_refusal_keeps_only_the_start_of_a_long_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    body = b'x' * (talos_factory.ERROR_BODY_BYTES * 3)
+    monkeypatch.setattr(talos_factory.requests, 'get', answering(500, body))
+
+    with pytest.raises(talos_factory.FactoryRefused) as refused:
+        _ = talos_factory.fetch('https://factory.invalid/image')
+
+    assert len(refused.value.reason) == talos_factory.ERROR_BODY_BYTES
+
+
+def test_a_success_is_handed_back_unread(monkeypatch: pytest.MonkeyPatch) -> None:
+    compressed = lzma.compress(PAYLOAD)
+    monkeypatch.setattr(talos_factory.requests, 'get', answering(200, compressed))
+
+    with talos_factory.fetch('https://factory.invalid/image') as response:
+        assert b''.join(response.iter_content(talos_factory.CHUNK_BYTES)) == compressed
 
 
 # -- the resource around it --------------------------------------------------

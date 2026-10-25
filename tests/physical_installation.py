@@ -45,6 +45,11 @@ TALOSCONFIG = 'context: kluster\n'
 #: path — so its shape only has to be something no test could mistake for real.
 LIBVIRT_KEY = '-----BEGIN OPENSSH PRIVATE KEY-----\nexample\n-----END OPENSSH PRIVATE KEY-----\n'
 
+#: The Image Factory, as the provider addresses it: disk images by URL, and
+#: installer images by registry host.
+FACTORY_HOST = 'factory.talos.dev'
+FACTORY = f'https://{FACTORY_HOST}'
+
 #: A manifest digest, as a root filesystem pin carries one. Nothing here checks
 #: the bytes behind it; the shape is what the reader is checked against.
 DIGEST = f'sha256:{"f" * 64}'
@@ -174,11 +179,21 @@ class Installation(Controller):
             case 'talos:imageFactory/getUrls:getUrls':
                 # Two artifacts of the same family: the cloud nodes' OCI image
                 # and the worker's `nocloud` disk image, which the factory
-                # serves compressed.
-                platform = str(cast('dict[str, Any]', args.args)['platform'])
+                # serves compressed. Each lookup also names the installer the
+                # factory builds from the same schematic for the platform, in
+                # the provider's own shape for it. Both carry the schematic
+                # asked about, so a case can tell which schematic each names.
+                arguments = cast('dict[str, Any]', args.args)
+                platform = str(arguments['platform'])
+                schematic = str(arguments['schematicId'])
+                version = str(arguments['talosVersion'])
                 suffix = 'raw.xz' if platform == 'nocloud' else 'qcow2'
-                url = f'https://factory.talos.dev/image/test/v1.11.0/{platform}-arch.{suffix}'
-                return {'urls': {'diskImage': url}}
+                return {
+                    'urls': {
+                        'diskImage': f'{FACTORY}/image/{schematic}/{version}/{platform}-arch.{suffix}',
+                        'installer': f'{FACTORY_HOST}/{platform}-installer/{schematic}:{version}',
+                    }
+                }
             case _:
                 return super().answer(args)
 

@@ -278,6 +278,34 @@ def node_patch() -> dict[str, Any]:
     }
 
 
+def installer_patch(installer: str) -> dict[str, Any]:
+    """Name the node's own factory installer as the image it installs from.
+
+    `installer` is the installer the Image Factory builds from the schematic
+    the node's boot image was built from (`TalosArtifact.installer`), so it
+    carries what that image carries, system extensions included. Without
+    this patch the provider writes the stock `ghcr.io/siderolabs/installer`
+    of the Talos release it was built against, which carries none.
+
+    What reads the field, at v1.13.9, is narrower than its name suggests.
+    Talos reads it in one place: the install task, which runs only on a
+    machine with no META partition — a blank disk booted from an ISO or over
+    PXE (`v1alpha1_sequencer_tasks.go`, `Install`). Every node here boots a
+    disk image that already carries META, so none of them reads it at boot.
+    An upgrade does not read it either: `talosctl upgrade` sends the image
+    its `--image` flag names, whose default is the stock installer, and the
+    node refuses a request that names none (`internal/app/lifecycle`,
+    `Upgrade`). So the field is where the node's configuration states which
+    installer is its own, and the upgrade runbook reads it from there
+    (operations.md §2.1). Changing it alone needs no reboot:
+    `machine.install` is among the fields Talos applies immediately
+    (`CanApplyImmediate`). An apply that carries a reboot-requiring change
+    beside it is staged whole, and the node's `persistent` configuration
+    names the new installer until the next reboot makes it active.
+    """
+    return {'machine': {'install': {'image': installer}}}
+
+
 def kubespan_document() -> dict[str, Any]:
     """KubeSpan on, which every machine in the cluster carries, at the MTU the design sizes Cilium from.
 
@@ -559,6 +587,7 @@ def ingress_firewall_documents(extra: Sequence[Opening] = ()) -> list[dict[str, 
 
 def patches(
     *,
+    installer: str,
     role: Role = 'controlplane',
     cert_sans: Sequence[str] = (),
     secretbox_secret: str | None = None,
@@ -569,6 +598,11 @@ def patches(
 ) -> list[str]:
     """The patch list for one node, as the provider wants it.
 
+    `installer` is the node's own factory installer (`installer_patch`). It
+    has no default, because the default the provider fills in is the stock
+    installer, which would drop the node's extensions on the upgrade that
+    took it.
+
     `volume` is the name of the node volume attached to this node, if one is.
 
     `bgp_peer` is a subnet, not a host: it is who may open a BGP session with
@@ -578,7 +612,12 @@ def patches(
     and `secondary_address` an extra address on top of whichever it already
     has; no node has both, and a node with neither is configured by its lease.
     """
-    documents: list[Mapping[str, Any]] = [node_patch(), kubespan_document(), local_path_volume_document()]
+    documents: list[Mapping[str, Any]] = [
+        node_patch(),
+        installer_patch(installer),
+        kubespan_document(),
+        local_path_volume_document(),
+    ]
     if volume is not None:
         documents.append(node_volume_label_patch(volume))
     if role == 'controlplane':
@@ -620,6 +659,11 @@ class TalosCluster(Component, pulumi_type='kluster:talos:TalosCluster'):
         Required like the node rolls above, and the one roll nothing else
         would catch: a call site that lost it would boot a worker that
         refuses its gateway's session, and no check or test would object.
+    :param installers: node name to the installer image of the artifact
+        that node boots (`TalosArtifact.installer`), which its configuration
+        names as its own (`installer_patch`). Every node needs one, and from
+        the artifact it boots: the installer is built from a schematic, and
+        only the boot image's schematic carries what the node runs.
     :param volumes: the node volumes, by name (`conventions.NODE_VOLUMES`).
         Each is mounted, and its node labelled, in the configuration of the
         node it attaches to, so the volume is part of what that machine boots
@@ -645,6 +689,7 @@ class TalosCluster(Component, pulumi_type='kluster:talos:TalosCluster'):
         worker_nodes: Sequence[str],
         talos_version: str,
         bgp_peers: Mapping[str, pulumi.Input[str]],
+        installers: Mapping[str, pulumi.Input[str]],
         volumes: Mapping[str, conventions.NodeVolumeEntry],
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
@@ -668,6 +713,13 @@ class TalosCluster(Component, pulumi_type='kluster:talos:TalosCluster'):
         unknown = sorted(set(self._bgp_peers) - set(self.roles))
         if unknown:
             raise ValueError(f'BGP peers name nodes that are not in the cluster: {unknown}')
+        self._installers = dict(installers)
+        unknown = sorted(set(self._installers) - set(self.roles))
+        if unknown:
+            raise ValueError(f'installers name nodes that are not in the cluster: {unknown}')
+        missing = sorted(set(self.roles) - set(self._installers))
+        if missing:
+            raise ValueError(f'every node names its own installer, and {missing} name none')
         self._volumes = _volumes_by_node(volumes, self.roles)
 
         self.secrets = machine.Secrets(
@@ -726,6 +778,7 @@ class TalosCluster(Component, pulumi_type='kluster:talos:TalosCluster'):
 
     async def _patches(self, node: str, role: Role, secondary_address: pulumi.Input[str] | None) -> list[str]:
         return patches(
+            installer=str(await resolve(self._installers[node])),
             role=role,
             cert_sans=await _resolved(self._cert_sans),
             secretbox_secret=await self._secretbox_secret() if role == 'controlplane' else None,

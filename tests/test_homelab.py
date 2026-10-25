@@ -114,6 +114,9 @@ def build_cluster(worker_nodes: tuple[str, ...] = (WORKER,)) -> Any:
         control_plane_nodes=('cp1',),
         worker_nodes=worker_nodes,
         bgp_peers={},
+        # Any image reference serves: no case here reads the installer, and
+        # every node has to name one.
+        installers={node: f'factory.talos.dev/installer/{node}:v1.11.0' for node in ('cp1', *worker_nodes)},
         volumes={},
         talos_version='v1.11.0',
     )

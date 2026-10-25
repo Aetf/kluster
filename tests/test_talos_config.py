@@ -23,9 +23,13 @@ PEER = '192.0.2.1/32'
 #: A node volume's name. Not a census row: what is held here is how any name
 #: renders, and which rows exist is `conventions`' to say.
 VOLUME = 'example-data'
+#: A node's own installer, as an artifact names it. Invented: what is held
+#: here is where any installer lands in the configuration.
+INSTALLER = 'factory.talos.dev/example-installer/0123abcd:v1.13.9'
 
 
 def documents(**kwargs: Any) -> list[dict[str, Any]]:
+    kwargs.setdefault('installer', INSTALLER)
     kwargs.setdefault('cert_sans', SANS)
     kwargs.setdefault('secretbox_secret', SECRETBOX)
     return [json.loads(patch) for patch in talos.patches(**kwargs)]
@@ -119,6 +123,17 @@ def holds(document: dict[str, Any], path: tuple[str, ...]) -> bool:
 @pytest.mark.parametrize('shape', list(SHAPES))
 def test_no_patch_carries_a_field_the_pinned_release_deprecates(shape: str, path: tuple[str, ...]) -> None:
     assert [document for document in documents(**SHAPES[shape]) if holds(document, path)] == []
+
+
+@pytest.mark.parametrize('shape', list(SHAPES))
+def test_every_node_names_the_installer_it_is_handed_as_its_own(shape: str) -> None:
+    """The installer lands where Talos looks for a node's installer, on every shape.
+
+    The provider writes the stock installer there when nothing else does, so
+    a shape that dropped the patch would still validate, and would name an
+    installer carrying none of the node's extensions.
+    """
+    assert merged('machine', **SHAPES[shape])['install'] == {'image': INSTALLER}
 
 
 def test_kubespan_and_kubeprism_are_on() -> None:
