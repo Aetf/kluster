@@ -1679,12 +1679,13 @@ failed to install its identity, and one red at `Refresh and compare`
 with that diff alone did not. The `physical` job proves its join
 twice. Its join step is called with `wait_for: 10.144.1.1:22`, so it
 returns only once the device's shell answers over the overlay, printing
-`10.144.1.1:22 reachable after N attempts`, and its preview then dials
-the device. That line is where gateway.md §2.4 reads items 4 and 7 on a
-hosted runner: item 4 passes when it prints, the first-packet drop
-having recovered within the wait, and N is item 7's join latency, each
-attempt a connect bounded at three seconds with three seconds between
-them. Every later `physical` job prints the same line. The `dns` job
+`10.144.1.1:22 reachable after N attempts, S s`, and its preview then
+dials the device. That line is where gateway.md §2.4 reads items 4 and
+7 on a hosted runner: item 4 passes when it prints, the first-packet
+drop having recovered within the wait, and S is item 7's join latency,
+the seconds the wait took from `zerotier-cli join` returning to the
+connect that answered. Every later `physical` job prints the same
+line. The `dns` job
 proves less. Its join is the one called with no `wait_for`, because a
 resolver is a leaf whose absence fails only its own rewrites
 (gateway.md §3) and a wait would fail the whole job; so its join step

@@ -1482,7 +1482,7 @@ Where each is read:
 | 4 | a CI stand-in's first dial after its first join, against a gateway stand-in running the device's binary | gateway-cutover.md §8.3: the readiness line of the `physical` join |
 | 5 | whole | — |
 | 6 | whole | — |
-| 7 | none: a stand-in measures its own NAT, not a hosted runner's path to the device's un-NATed socket (§2.6) | gateway-cutover.md §8.3: the readiness line's attempt count. Not a gate (§2.6) |
+| 7 | none: a stand-in measures its own NAT, not a hosted runner's path to the device's un-NATed socket (§2.6) | gateway-cutover.md §8.3: the readiness line's seconds. Not a gate (§2.6) |
 | 8 | the first part's ownership half, and the third part with its control | §2.4.2: the first part's controller door, and the second part, read on the device |
 | 9 | whole, with its control | — |
 
@@ -2326,8 +2326,8 @@ Facts that shape it (decided 2026-08-24):
     container) sits on the WAN interface un-NATed — the direct path
     should form on first contact, and traffic flows (slowly, via ZeroTier
     relays) even before it does. Seconds-class is the expectation, not
-    a measurement: §2.4 item 7 is what measures it, as the attempt count
-    on the readiness line of every job that joins with the `physical`
+    a measurement: §2.4 item 7 is what measures it, as the seconds on
+    the readiness line of every job that joins with the `physical`
     identity, which waits for the gateway's shell. If it stays minutes
     it is a per-job fixed cost, not a correctness problem.
 
