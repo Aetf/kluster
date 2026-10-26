@@ -217,13 +217,13 @@ url = "https://github.com/bitnami/sealed-secrets/releases/download/v0.39.1/kubes
 url_api = "https://api.github.com/repos/bitnami/sealed-secrets/releases/assets/521998648"
 
 [[tools.node]]
-version = "24.21.0"
+version = "24.22.0"
 backend = "core:node"
-specifiers = ["24.21.0"]
+specifiers = ["24.22.0"]
 
 [tools.node."platforms.linux-x64"]
-checksum = "sha256:6e1db87ef58b8819e5d5402eff1536491b18edd8eb7bee5ef7897876e88dc5ff"
-url = "https://nodejs.org/dist/v24.21.0/node-v24.21.0-linux-x64.tar.gz"
+checksum = "sha256:28ea0a438de9a13bd7891fd758eee6c7819ee8af5442dfd8d45bd65e56d4228c"
+url = "https://nodejs.org/dist/v24.22.0/node-v24.22.0-linux-x64.tar.gz"
 
 [[tools.postgres]]
 version = "17.11"
@@ -267,14 +267,14 @@ conda_deps = [
 ]
 
 [[tools.pulumi]]
-version = "3.268.0"
+version = "3.270.0"
 backend = "aqua:pulumi/pulumi"
-specifiers = ["3.268.0"]
+specifiers = ["3.270.0"]
 
 [tools.pulumi."platforms.linux-x64"]
-checksum = "sha256:903cafeaa9f6327e4bf53a8b7b99ae660f26198acfa804a2f982bf5de3f1de0b"
-url = "https://github.com/pulumi/pulumi/releases/download/v3.268.0/pulumi-v3.268.0-linux-x64.tar.gz"
-url_api = "https://api.github.com/repos/pulumi/pulumi/releases/assets/618268008"
+checksum = "sha256:d05899c251cb0413a9a2304f23229218c46852a61256913f34f08ebc27266139"
+url = "https://github.com/pulumi/pulumi/releases/download/v3.270.0/pulumi-v3.270.0-linux-x64.tar.gz"
+url_api = "https://api.github.com/repos/pulumi/pulumi/releases/assets/648328406"
 provenance = "cosign"
 
 [[tools.talosctl]]
@@ -289,12 +289,12 @@ url_api = "https://api.github.com/repos/siderolabs/talos/releases/assets/5205476
 provenance = "cosign"
 
 [[tools.uv]]
-version = "0.12.24"
+version = "0.13.2"
 backend = "aqua:astral-sh/uv"
-specifiers = ["0.12.24"]
+specifiers = ["0.13.2"]
 
 [tools.uv."platforms.linux-x64"]
-checksum = "sha256:b4dfaef47d491a7296981f8374a4595f55dbf84e8937c8ecd2983574d8bb3da6"
-url = "https://github.com/astral-sh/uv/releases/download/0.12.24/uv-x86_64-unknown-linux-gnu.tar.gz"
-url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/622873043"
+checksum = "sha256:e14d48c117ec33601d6f860dda47aa5ea490d77a5a9ef770529c448fa6747d9f"
+url = "https://github.com/astral-sh/uv/releases/download/0.13.2/uv-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/657430342"
 provenance = "github-attestations"
