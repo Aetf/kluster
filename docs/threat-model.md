@@ -302,9 +302,8 @@ Which routes wait, and why a week, is the comment on `minimumReleaseAge`
 in `renovate.json5`.
 
 **The merge boundary**, whose first half keeps an unmerged pin in CI away
-from every credential but those of the stacks a pull request previews,
-where it holds (§3.1). It
-does not reach the workstation, where a session that runs a branch's
+from every credential but those of the stacks a pull request previews
+(§3.1). It does not reach the workstation, where a session that runs a branch's
 dependencies runs them with the operator's credentials (§3.3).
 
 A compromise planted to outlast the waiting period is accepted.
@@ -422,8 +421,11 @@ Grouped by who controls their software:
     what can be restored: off-platform backups that no automation key can
     delete, versioned state, and the kit.
 
-The first half of the merge boundary holds for the operator stacks'
-credentials, and for `physical`'s once it has moved and the stack passphrase it was under has been rotated out of every Environment (§3.1). The forge does not enforce the second half today (§3.2).
+The first half of the merge boundary holds: for the operator stacks'
+credentials outright, and for `physical`'s on the assumption that the
+earlier generation of the stack passphrase, which their ciphertexts in
+git history are under, has not leaked (§3.1). The forge does not enforce
+the second half today (§3.2).
 The workstation is outside the boundary by construction (§3.3).
 
 ### 3.1 The first half: what an unmerged ref's runs hold
@@ -434,25 +436,28 @@ The workstation is outside the boundary by construction (§3.3).
 > stack's state; `physical`'s credentials, and the operator stacks', never
 > reach it.
 
-That is the half once `physical` has moved and the stack passphrase it
-was under has been rotated out of every Environment. `physical`'s configuration
-moves under a passphrase of its own, which only `physical-plan` and
-`physical` receive. Those Environments take protected branches only, so
-a job of a pull request or of a branch push that names either is refused
-before any step of it runs: GitHub documents this, and the move's first
-contact observes it ([framework/github.md](framework/github.md) §1,
-framework/ci.md §3). `Pulumi.physical.yaml` is under that passphrase
-(Aetf/kluster-ops#487). The move comes before `physical`'s first `up`, because the backend keeps every
-checkpoint written before it in rows those runs read. Git history keeps
-the ciphertexts `physical`'s configuration held under the stack
-passphrase (credentials.md §1 rule 6), so this half holds for `physical`
-once the stack passphrase those ciphertexts are under has been rotated
-out of every Environment: `credentials derived sync --only
-pulumi-passphrase` replaces it there, once `credentials derived
-pulumi-passphrase re-encrypt` has moved every stack under it
-(credentials.md §4.2). A pull request's runs then hold only
-a generation that opens none of them, the earlier one being assumed not
-leaked.
+That is the half as it holds, for `physical` on the assumption stated
+below. `physical`'s configuration is under a passphrase of its own,
+which only `physical-plan` and `physical` receive. Those Environments
+take protected branches only, so a job of a pull request or of a branch
+push that names either is refused before any step of it runs: GitHub
+documents this, and the move's first contact, not yet run, observes it
+(Aetf/kluster-ops#487; [framework/github.md](framework/github.md) §1,
+framework/ci.md §3).
+`Pulumi.physical.yaml` is under that passphrase (Aetf/kluster-ops#487).
+The move comes before `physical`'s first `up`, because the backend keeps
+every checkpoint written before it in rows those runs read. Git history
+keeps the ciphertexts `physical`'s configuration held under the stack
+passphrase (credentials.md §1 rule 6), and the generation of the stack
+passphrase they are under is in no Environment: every stack the stack
+passphrase encrypts is on a later generation (`credentials derived
+pulumi-passphrase re-encrypt`), and that later one is what the
+Environments hold (`credentials derived sync --only pulumi-passphrase`,
+credentials.md §4.2). A pull request's runs hold only a generation that
+opens none of those ciphertexts, so this half holds for `physical` on
+the assumption that the earlier generation has not leaked. A leak of it
+is credentials.md §4.2's leaked passphrase, and every config secret it
+held is issued again.
 
 `dns`, `k8s-base` and `apps` share the stack passphrase: their
 Environments take any branch for the previews, so whatever reaches one

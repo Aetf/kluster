@@ -17,8 +17,12 @@
     and §3; the rule on bots in the operations repository beside its
     fence, cluster/architecture.md §4.3; and the partition in
     [framework/github.md](../framework/github.md) §1 and
-    [framework/ci.md](../framework/ci.md) §3, where the move is built and
-    the operator's run of it, with its first contact, is pending
+    [framework/ci.md](../framework/ci.md) §3, where the move is built.
+    The operator has run it, and the generation of the stack passphrase
+    that `physical`'s earlier ciphertexts are under is in no Environment.
+    The move's first contact is still to be observed: a job of a pull
+    request or of a branch push naming `physical-plan` refused before
+    any step, and `dns`'s preview reading `physical`'s addresses
     (Aetf/kluster-ops#487). Where this text and those documents
     disagree, they are right. **What moved since acceptance:** §4.6 and
     §9.3 describe the pins as they stood then. Since then the tools
@@ -44,6 +48,11 @@
     been rotated out of every Environment, the earlier generation being
     assumed not leaked, where it said once every credential `physical`'s
     configuration held under it had been issued again.
+*   **Updated:** 2026-10-26. The status: the operator has run §5.1's
+    move, and the generation of the stack passphrase that `physical`'s
+    earlier ciphertexts are under is in no Environment, and the move's
+    first contact is still to be observed, where it said the operator's
+    run of the move, with its first contact, was pending.
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
