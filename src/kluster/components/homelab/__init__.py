@@ -1,15 +1,25 @@
 """The homelab side of the physical layer, under libvirt (physical.md §3).
 
 One domain on this host is this program's: the Talos worker VM, with the
-storage pool, disk and cloud-init seed it boots from. The home-automation
+storage pool, disk and seed volume it boots from. The home-automation
 domain that shares the host is **not declared here** — it predates this
 program, outlives it, and belongs to the host's own configuration management
 (rfc-002 §13).
 
-The worker's machine configuration reaches it on a cloud-init seed image
-rather than through a metadata service: there is no cloud platform here to
-serve one. That seed carries cluster secrets, so it lives beside the disk
-image on the same root-only, snapshot-excluded subvolume.
+The worker's machine configuration reaches it on a seed volume rather than
+through a metadata service: there is no cloud platform here to serve one. The
+seed is an ISO 9660 image labelled `cidata` that the program builds (`seed`),
+uploaded into the pool as an ordinary volume and attached as the domain's
+second virtio disk, read-only. It carries cluster secrets, as the disk does,
+and both volumes are declared `0600` (`volume_xslt`). Neither the provider's
+`CloudInitDisk` nor the domain's `cloudinit` attribute is used: the attribute
+writes the seed as an IDE cdrom, which the q35 machine has no bus for.
+
+**The seed is first-boot input.** Talos reads its `user-data` only while the
+disk's STATE partition holds no complete configuration, so the seed ignores
+later renderings, and the day-1 chain's `ConfigurationApply` keeps the running
+worker current as it does the control planes. It is replaced with the disk,
+so a new disk boots the rendering current at the run that created it.
 
 **The connection is derived, and its credential is materialized** rather than
 recorded: an SSH transport is authenticated by files on the machine running
@@ -59,15 +69,33 @@ in place over its machine API — the declared artifact is what the disk was
 *written* with, not what is on it now — so the declaration stops describing the
 volume the first time the node is upgraded, and a later `versions:talos` bump
 must not propose rewriting a running node's disk. Rebuilding the worker from a
-newer image is therefore a deliberate act rather than a diff: unprotect the
-volume, replace it, protect it again, and let the day-1 chain bring the node
-back. It destroys everything the node held, which is why nothing does it by
-accident.
+newer image is therefore a deliberate act rather than a diff, and two
+commands: `mise x -- pulumi state unprotect --stack physical '<disk URN>'`,
+then `mise x -- pulumi up --stack physical --replace '<disk URN>'`. The run
+deletes the disk, the seed and the domain, the disk last, before it creates
+any of them again, the seed from the current rendering; the program's
+`protect` protects the new disk in the same run. It
+destroys everything the node held, which is why nothing does it by accident.
+
+**What the provider cannot declare is one stylesheet layer**, applied when the
+domain and the volumes are created: the data disk's cache and discard, the
+seed's read-only flag, a domain with no display, and a volume's mode
+(`domain_xslt`, `volume_xslt`). The provider applies an `xml.xslt` by running
+`xsltproc` on the machine running the program, pinned in `mise.toml`. The
+layer goes when the pinned provider is a release whose schema declares those
+four and whose SSH transport offers only the configured identity
+(homelab-host.md §6): the templates, the pin, the provider's recorded
+definitions — the domain's transcript `tests/data/homelab-domain.xml` and the
+volume's `PROVIDER_VOLUME_XML` in `tests/test_homelab.py` — and the cases over
+them go with it, and the declarations take the provider's own attributes in
+their place. A case fails when the installed provider is not the release the
+transcript was recorded from.
 """
 
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -77,12 +105,14 @@ import pulumi_libvirt as libvirt
 from kluster import conventions
 from kluster.components.talos import TalosCluster
 from kluster.lib import templates, workstation
-from putils import Component, own_provider_opts, with_provider
+from putils import Component, async_output, own_provider_opts, resolve, with_provider
+
+from . import seed
 
 __all__ = ('LIBVIRT_USER', 'PRIVATE_KEY', 'HomelabHost', 'connection_uri', 'slot')
 
 #: The package `importlib.resources` resolves this module's `templates/`
-#: directory against, so the stylesheet travels with the code that reads it
+#: directory against, so the stylesheets travel with the code that reads them
 #: (rfc-002 §9.1).
 _TEMPLATE_PACKAGE = 'kluster.components.homelab'
 
@@ -96,6 +126,13 @@ MIB_PER_GIB = 1024
 #: The volume is created sparse — the provider declares a capacity and no
 #: allocation — so the file occupies what the guest has written.
 DISK_FORMAT = 'raw'
+
+#: The seed's format as libvirt records it. libvirt probes an uploaded ISO
+#: image as `iso` and the volume's read returns that, so a seed declared `raw`
+#: would differ from its own read on every refresh, and every field of a
+#: libvirt volume replaces the volume. The disk that attaches it is still
+#: driven `raw`, the provider's driver for every format but qcow2.
+SEED_FORMAT = 'iso'
 
 #: Q35 rather than the provider's default i440fx. The machine type is fixed
 #: at definition time, and the Wave C cutover hands this domain a PCI hostdev
@@ -112,10 +149,10 @@ CPU_MODE = 'host-passthrough'
 #: by the host's own configuration management (homelab-host.md §4).
 LIBVIRT_USER = 'virt'
 
-#: The workstation slot the run materializes its transport into
-#: (credentials.md §1 rule 6): the checkout's git-ignored `.credentials/`, one
-#: directory deeper so this pair sits beside another consumer's rather than in
-#: the root of it.
+#: The workstation slot the run materializes its transport and the worker's
+#: seed into (credentials.md §1 rule 6): the checkout's git-ignored
+#: `.credentials/`, one directory deeper so these files sit beside another
+#: consumer's rather than in the root of it.
 SLOT = 'libvirt'
 KEYFILE = 'identity'
 KNOWN_HOSTS = 'known_hosts'
@@ -136,9 +173,10 @@ PRIVATE_KEY = 'libvirtPrivateKey'
 def slot(root: Path | None = None) -> Path:
     """`.credentials/libvirt/` in this checkout.
 
-    Both files in it are **working files, not slots**: a slot is durable and
-    written by a `credentials` command — a kit, a passphrase, a client
-    bundle — while these two are derived from stack configuration by this
+    Every file in it is a **working file, not a slot**: a slot is durable
+    and written by a `credentials` command — a kit, a passphrase, a client
+    bundle — while these — the session's identity and `known_hosts`, and
+    the worker's seed image — are derived from stack configuration by this
     component on every run, owned by it and disposable. They live under
     `.credentials/` anyway because that directory is the `0700` boundary, the
     one answer to "what on this machine is secret", and a second git-ignored
@@ -224,40 +262,106 @@ def connection_uri(*, host: str, private_key: str, root: Path | None = None) -> 
     return f'{LIBVIRT_ENDPOINT}://{LIBVIRT_USER}@{host}{LIBVIRT_OBJECT}?{query}'
 
 
-def disk_tuning_xslt() -> str:
-    """The stylesheet that gives the data disk `cache=none` and `discard=unmap`.
+@dataclass(frozen=True)
+class _DomainStylesheet:
+    """What the domain's stylesheet is rendered with: the volumes it tells apart."""
 
-    Neither is expressible through the provider's disk block, and both are
-    load-bearing (homelab-host.md §1): `discard=unmap` is what lets in-guest
-    TRIM punch holes back out of the sparse image, so deleting data in the
-    cluster returns NVMe to the host during the interleaved migration, and
-    `cache=none` keeps guest I/O from being cached a second time in the host's
-    page cache. The provider's escape hatch for exactly this is an XSLT
-    transform of the domain XML it is about to define.
+    disk_volume: str
+    disk_format: str
+    seed_volume: str
 
-    The driver element is written rather than patched, so the result does not
-    depend on which attributes the provider happened to emit. Only the data
-    disk is matched: the seed is a cdrom, and it wants neither setting.
 
-    The stylesheet takes no parameters and is read verbatim: the disk format it
-    names is `DISK_FORMAT`, which the volume is created with, and the suite
-    holds the two in step. The reasons for both settings are stated here rather
-    than in the stylesheet, whose text is the domain's `xml.xslt` input: an edit
-    to it, a comment included, is a change to the domain.
+def domain_xslt(*, disk_volume: str, seed_volume: str) -> str:
+    """The stylesheet that turns the provider's domain into the one the worker runs.
+
+    Three changes, each matched by what it changes and nothing wider:
+
+    -   The data disk, matched by its volume's name, is driven `cache=none`
+        and `discard=unmap`. Both are load-bearing (homelab-host.md §1):
+        `discard=unmap` is what lets in-guest TRIM punch holes back out of the
+        sparse image, so deleting data in the cluster returns NVMe to the host
+        during the interleaved migration, and `cache=none` keeps guest I/O
+        from being cached a second time in the host's page cache. The driver
+        element is written rather than patched, so the result does not depend
+        on which attributes the provider happened to emit, and it names the
+        format the volume is created in.
+    -   The seed, matched by its volume's name, is read-only to the guest.
+        Talos leaves a read-only disk out of provisioning, and a writable seed
+        would be a candidate for a node volume whose selector finds its disk
+        by exclusion (`!system_disk`).
+    -   The display is removed. The provider adds a SPICE display to a domain
+        that declares none, and the host's QEMU has no SPICE: libvirt refuses
+        the definition. The host is headless, and the serial console is how
+        the worker says why it failed.
+
+    The reasons are stated here rather than in the template, whose rendering
+    is the domain's `xml.xslt` input: an edit to it, a comment included, is a
+    change to the domain.
     """
-    return templates.load(_TEMPLATE_PACKAGE, 'templates/disk-tuning.xslt')
+    return templates.render(
+        _TEMPLATE_PACKAGE,
+        'templates/domain.xslt.j2',
+        _DomainStylesheet(disk_volume=disk_volume, disk_format=DISK_FORMAT, seed_volume=seed_volume),
+    )
+
+
+def volume_xslt() -> str:
+    """The stylesheet that gives a volume's file mode `0600`.
+
+    The disk and the seed both carry the worker's machine secrets, and the
+    provider creates every volume `0644`, readable by every account on the
+    host that can reach the pool's directory. The directory is the host
+    preparation's, and keeps the search bit for others that QEMU, which the
+    host's system instance runs as `libvirt-qemu` rather than root, needs to
+    reach any image in it, the home-automation domain's included; so the
+    files are what keeps the secrets to their owner: `0600`, and owned by
+    root except while QEMU holds them.
+
+    `0600` and owned by root does not lock QEMU out of the worker's images.
+    When libvirt's QEMU driver starts a domain, it sets "the ownership of the
+    file/device path to the correct user/group ID" of each of its disk images
+    (drvqemu.html, "POSIX users/groups"; `dynamic_ownership` in `qemu.conf`,
+    on by default), so the image's owner bits become QEMU's. The disk returns
+    to root when the domain stops (`remember_owner`), and the read-only seed
+    stays QEMU's from the worker's first start on: "The user/group of
+    read-only images is not restored as with read-write images" (`qemu.conf`,
+    beside `dynamic_ownership`). So each image is readable by root and by the
+    account every domain's QEMU runs as, and by no other.
+
+    Read verbatim, for the reason `domain_xslt` gives; an edit to it is a
+    change to both volumes, and every field of a libvirt volume replaces it.
+    """
+    return templates.load(_TEMPLATE_PACKAGE, 'templates/volume.xslt')
 
 
 def seed_metadata(hostname: str) -> str:
     """The `meta-data` half of the nocloud seed.
 
-    `instance-id` is what a nocloud datasource compares to decide whether a
-    boot is a *first* boot, so it is derived from the node rather than
-    generated: a fresh value on every apply would re-run first-boot logic on a
-    machine that has been running for months. Emitted as JSON because JSON is
+    Talos reads it at every boot, for the platform's metadata, while it reads
+    `user-data` only at a boot with an empty STATE, so it is derived from the
+    node and static rather than generated. Emitted as JSON because JSON is
     YAML, and the program then needs no serializer to state two facts.
     """
     return json.dumps({'instance-id': hostname, 'local-hostname': hostname})
+
+
+def seed_source(*, user_data: pulumi.Input[str], meta_data: str, root: Path | None = None) -> pulumi.Output[str]:
+    """Write the seed for `user_data` into the slot, and return its path relative to the checkout.
+
+    The file is a working file of the slot's (`slot`), written on every run
+    like the session's identity and for the same reason: a path is a property
+    of the machine running the program. It is named relative to the checkout,
+    as the identity is (`connection_uri`), because the volume's `source` is a
+    provider input in state.
+    """
+
+    async def written() -> str:
+        rendered = await resolve(user_data)
+        checkout = workstation.repo_root() if root is None else root
+        path = seed.write(slot(root), user_data=rendered, meta_data=meta_data)
+        return str(path.relative_to(checkout))
+
+    return async_output(written)
 
 
 class HomelabHost(Component, pulumi_type='kluster:homelab:HomelabHost'):
@@ -281,8 +385,9 @@ class HomelabHost(Component, pulumi_type='kluster:homelab:HomelabHost'):
         secrets the seed carries come out of the same place, so the component
         takes the cluster whole rather than a rendered string.
     :param storage_dir: the nodatacow subvolume that holds the disk image and
-        the seed. The pool that points at it is declared here; the subvolume
-        and its `chattr +C` are host preparation (homelab-host.md §4).
+        the seed. The pool that points at it is declared here; the subvolume,
+        its mode and its `chattr +C` are host preparation (homelab-host.md
+        §4).
     :param image_path: the decompressed Talos `nocloud` image, on the machine
         running the program. The provider reads it there and uploads it into
         the pool; nothing about it is fetched by the host.
@@ -334,21 +439,23 @@ class HomelabHost(Component, pulumi_type='kluster:homelab:HomelabHost'):
             opts=self.child_opts(protect=True),
         )
 
+        disk_volume = f'{domain_name}.{DISK_FORMAT}'
         self.volume = libvirt.Volume(
             f'{domain_name}-disk',
-            name=f'{domain_name}.{DISK_FORMAT}',
+            name=disk_volume,
             pool=self.pool.name,
             format=DISK_FORMAT,
             # The bytes the worker boots. No `size` beside it: the provider
             # refuses the pair and takes the volume's capacity from the file,
             # which is the image and the room Talos boots into after it.
             source=image_path,
+            xml=libvirt.VolumeXmlArgs(xslt=volume_xslt()),
             opts=self.child_opts(
                 # The worker's disk is everything the node holds, and every
                 # field of a libvirt volume replaces it, so neither a delete
                 # nor a replacement happens by accident. Rebuilding the worker
-                # from a newer image is the deliberate unprotect, replace,
-                # protect again the module docstring describes.
+                # from a newer image is the deliberate unprotect and replace
+                # the module docstring describes.
                 protect=True,
                 # Both are facts about the volume's *creation*, and every field
                 # of a libvirt volume replaces the volume, so neither may
@@ -364,18 +471,40 @@ class HomelabHost(Component, pulumi_type='kluster:homelab:HomelabHost'):
                 #     proposal to rewrite a running node's disk, which `protect`
                 #     would then refuse for as long as the bump stood.
                 ignore_changes=['size', 'source'],
+                # The volume's name is stated, and a create before the delete
+                # would ask the pool for a second volume under it: the
+                # provider adopts the existing volume, uploads into it, and
+                # then deletes it as the original, which leaves the pool with
+                # no disk at all.
+                delete_before_replace=True,
             ),
         )
 
         # Talos' nocloud platform reads its machine configuration from the
         # seed's user-data, which is why the worker needs no metadata service.
-        self.seed = libvirt.CloudInitDisk(
+        seed_volume = f'{domain_name}-seed.{SEED_FORMAT}'
+        self.seed = libvirt.Volume(
             f'{domain_name}-seed',
-            name=f'{domain_name}-seed.iso',
+            name=seed_volume,
             pool=self.pool.name,
-            user_data=cluster.machine_configs[node],
-            meta_data=seed_metadata(domain_name),
-            opts=self.child_opts(),
+            format=SEED_FORMAT,
+            source=seed_source(user_data=cluster.machine_configs[node], meta_data=seed_metadata(domain_name)),
+            xml=libvirt.VolumeXmlArgs(xslt=volume_xslt()),
+            opts=self.child_opts(
+                # First-boot input: Talos reads the seed's user-data only
+                # while STATE holds no configuration, and the day-1 chain's
+                # `ConfigurationApply` keeps the running worker current, so a
+                # new rendering is no reason to touch the seed or the domain
+                # that attaches it.
+                ignore_changes=['source'],
+                # And so it is replaced with the disk it boots: a replacement
+                # is created from the program's current inputs, so a new disk
+                # boots the rendering current at its run rather than the one
+                # the seed was first created with.
+                replace_with=[self.volume],
+                # Its name is stated, for the reason the disk's is.
+                delete_before_replace=True,
+            ),
         )
 
         self.domain = libvirt.Domain(
@@ -394,9 +523,12 @@ class HomelabHost(Component, pulumi_type='kluster:homelab:HomelabHost'):
             running=True,
             # virtio-blk: the provider's default bus, and `scsi` is left off
             # deliberately — a virtio-scsi controller would buy nothing that
-            # this disk needs.
-            disks=[libvirt.DomainDiskArgs(volume_id=self.volume.id)],
-            cloudinit=self.seed.id,
+            # either disk needs. The data disk first, so it is `vda`; the seed
+            # second, which Talos finds by its label whatever its bus.
+            disks=[
+                libvirt.DomainDiskArgs(volume_id=self.volume.id),
+                libvirt.DomainDiskArgs(volume_id=self.seed.id),
+            ],
             # The second host bridge, which is the one over the cluster VLAN.
             # The existing bridge enslaves the IoT VLAN, which is where the
             # Home Assistant domain belongs and a cluster node does not; the
@@ -406,7 +538,7 @@ class HomelabHost(Component, pulumi_type='kluster:homelab:HomelabHost'):
             # The host is headless, so a serial console is how a machine that
             # fails before apid comes up says why.
             consoles=[libvirt.DomainConsoleArgs(type='pty', target_type='serial', target_port='0')],
-            xml=libvirt.DomainXmlArgs(xslt=disk_tuning_xslt()),
+            xml=libvirt.DomainXmlArgs(xslt=domain_xslt(disk_volume=disk_volume, seed_volume=seed_volume)),
             # A domain's name is fixed at definition time and this one is
             # stated, so a replacement — a RAM change, above all — has to
             # undefine the old domain before it defines the new one.

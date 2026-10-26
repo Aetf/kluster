@@ -398,6 +398,14 @@ in `mise.toml`, the generated SDKs' recipes in `Pulumi.yaml`'s own
 files under `docker/`, and the actions and mise's own release in the
 workflows that call them (`.github/workflows/`).
 
+**A program a provider runs on the machine running the stack is pinned
+in `mise.toml` like every command-line tool**, and the stack runs under
+`mise x`, so the provider inherits it from `PATH`. A provider that
+shells out to a program the machine happens to have makes a run on a
+workstation and a run on a runner differ by whatever each installed,
+and fails where neither did. Today that is `xsltproc`, which the libvirt
+provider runs for every `xml.xslt` a declaration hands it.
+
 **A pin that a stack program and a script both read lives in the
 `versions:` block, and the script reads `Pulumi.yaml` itself, through
 the parser the program's accessor uses.** `lib/versions.py` parses a
@@ -1058,7 +1066,7 @@ is the file that is the artifact, read with nothing done to it.
 
 **The `.j2` suffix decides, and the suffix is stripped from the key.** A
 file named `Caddyfile.j2` is rendered with the parameters and lands
-under `Caddyfile`; a file named `disk-tuning.xslt` is copied through
+under `Caddyfile`; a file named `volume.xslt` is copied through
 byte for byte under its own name. So a directory holding both kinds
 takes one call and no globs, and a file that must keep literal
 `{{ … }}` — a Grafana dashboard, a Go template some controller renders

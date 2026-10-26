@@ -49,6 +49,10 @@ dependencies = [
     "keyring>=25.7.0,<26",
     "pulumi-cloudflare>=6.11.0,<7",
     "pulumi-libvirt>=0.5.4,<0.6",
+    # The worker's seed image, an ISO 9660 filesystem the program builds
+    # itself (`components.homelab.seed`): the provider's own builder runs a
+    # `mkisofs` that nothing can pin.
+    "pycdlib>=1.22.0,<2",
     "pulumi-b2",
     "pulumi-unifi",
     "pulumi-zerotier",

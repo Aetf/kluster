@@ -209,7 +209,13 @@ from an HTTP repository, which offers nothing to check a download against
     and the node holding the **dedicated VIP** needs the secondary
     private IP and the reserved-IP NAT re-pointed (architecture.md §3.2).
 -   **§3.2 Homelab worker VM.** Trigger: VM/disk loss or rebuild.
-    Gist: re-create from machine config (nocloud seed); local-path
+    Gist: `mise x -- pulumi state unprotect --stack physical '<disk
+    URN>'`, then `mise x -- pulumi up --stack physical --replace '<disk
+    URN>'`, which
+    replaces the disk, the domain and the seed, the seed from the
+    current machine config (declarative/physical.md §3) — the way to a
+    fresh worker, where a STATE wipe on the kept disk boots the seed as
+    it stood at the last rebuild; local-path
     data returns via VolSync restore (that's the designed move-path,
     storage.md §2 — no drill of it has run, §4); NAS-backed PVs
     re-point untouched; BGP session re-establishes from the static IP

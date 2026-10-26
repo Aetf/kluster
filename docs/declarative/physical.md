@@ -451,10 +451,10 @@ them for day-2 once v0.12 is stable *and* has reached the Pulumi bridge.
     the program assumes — is
     **[physical/homelab-host.md](../physical/homelab-host.md)**; this
     section owns only how it is declared. Talos via the `nocloud`
-    image variant, machine config on a cloud-init seed ISO — the seed
-    carries the machine secrets: root-only permissions, and it lives
-    outside every host snapshot/backup scope (the same subvolume
-    discipline as the disk image).
+    image variant, machine config on the seed below — the seed
+    carries the machine secrets: like the disk, it is a volume declared
+    `0600`, and it lives outside every host snapshot/backup scope (the
+    same subvolume discipline as the disk image).
 -   **Volume**: created *from* the decompressed `nocloud` image, which
     the provider uploads into the pool over the same connection it
     defines the domains through — so the first boot follows from an
@@ -469,15 +469,77 @@ them for day-2 once v0.12 is stable *and* has reached the Pulumi bridge.
     that resource, because a libvirt volume has no update path at all
     and any field that diverged — a file the host has grown, an image a
     Talos self-upgrade has replaced — would otherwise propose
-    destroying the worker's disk. The **pool** pointing at the
-    nodatacow subvolume is declared here too; the subvolume itself is
-    host preparation (homelab-host.md §4).
+    destroying the worker's disk. The volume's name is stated, so it is
+    deleted before it is replaced: creating a volume, the provider
+    adopts an existing volume of the same name and uploads into it, so a
+    replacement made before the delete would write the new image into
+    the live disk and then delete it as the original. The **pool**
+    pointing at the nodatacow subvolume is declared here too, and names
+    no permissions, so the directory keeps the mode the host preparation
+    gives it; the subvolume itself is host preparation (homelab-host.md
+    §4).
+-   **Seed**: an ISO 9660 image labelled `cidata` holding `user-data`,
+    the worker's machine configuration, and `meta-data`, derived from
+    the node and static, with no `network-config`. Talos' `nocloud`
+    platform finds a `cidata` filesystem on any disk whatever its bus,
+    and reads `meta-data` at every boot and `user-data` only while the
+    disk's STATE partition holds no complete configuration. The program
+    builds the image (`components/homelab/seed.py`) and writes it into
+    the libvirt slot, `0600`, under a name that is the digest of what it
+    carries; it is uploaded into the pool as an ordinary volume declared
+    `iso`, the format libvirt probes an uploaded ISO as and reads back,
+    and attached as the domain's second virtio disk, read-only, so Talos
+    leaves it out of provisioning. Neither the provider's
+    `CloudInitDisk` nor the domain's `cloudinit` attribute is used: the
+    attribute attaches an IDE CD-ROM, which q35 has no bus for, and the
+    resource builds its image with a `mkisofs` that nothing can pin.
+    The seed is first-boot input, so it ignores later changes to its
+    `source`, and `ConfigurationApply` keeps the running worker current,
+    as it keeps the control planes current (§1), so a new rendering
+    plans nothing on the seed or the domain. It is replaced with the disk
+    (`replace_with`), so a new disk boots the rendering current at the
+    run that created it, and it is deleted before it is replaced for
+    the disk's reason.
+-   **Rebuilding the worker** is two commands: `mise x -- pulumi state
+    unprotect --stack physical '<disk URN>'`, then `mise x -- pulumi up
+    --stack physical --replace '<disk URN>'`. The run deletes the disk,
+    the seed and the domain, the disk last, before it creates any of
+    them again, the seed from the current rendering, and the program's
+    `protect` protects the new disk in the same run. A `talosctl reset`
+    that wipes STATE on the kept disk is no way to a fresh worker: the
+    node then boots the seed as it stood at the last rebuild.
+-   **What the provider cannot declare is one stylesheet layer**,
+    applied when the domain and the volumes are created: the data
+    disk's `cache=none` and `discard=unmap` (homelab-host.md §1), the
+    seed's read-only flag, a domain with no display — the provider adds
+    a SPICE display, and the host's QEMU has none — and a volume's mode,
+    `0600` where the provider writes `0644`. The directory above the
+    volumes keeps the host's mode, with the search bit for others that
+    QEMU needs: the system instance runs QEMU as `libvirt-qemu`, not as
+    root, and libvirt's QEMU driver hands a domain's disk images to that
+    account when it starts the domain (`dynamic_ownership`, on by
+    default), so a `0600` image is readable by root and by QEMU, and by
+    no other account. The provider applies each by running
+    `xsltproc` on the machine running the program, which `mise.toml`
+    pins (framework/pulumi.md §3.2). The layer is the templates under
+    `components/homelab/templates/`, the pin, and the definitions the
+    provider generates, as its debug output recorded them — the domain's
+    transcript `tests/data/homelab-domain.xml` and the volume's
+    `PROVIDER_VOLUME_XML` in `tests/test_homelab.py` — with the cases
+    over them, one of which fails when the installed provider is not
+    the transcript's release. It goes when the pinned provider declares
+    those four and its SSH transport offers only the configured identity
+    (homelab-host.md §6 rules out one that offers an agent's keys
+    first). The v0.9 line declares the four — a volume's mode as
+    `target.permissions.mode` in v0.9.9's `docs/resources/volume.md` —
+    and its transport offers the agent's keys first.
 -   **GPU hostdev**: the Arc A380, not present at bootstrap (the
     two-phase plan, homelab-host.md §3); when the Wave C cutover adds it,
-    pulumi-libvirt's hostdev support is thin — the provider's XSLT
-    escape hatch may be needed for the PCI device XML (the
+    pulumi-libvirt's hostdev support is thin — a template in the
+    domain's stylesheet above may be needed for the PCI device XML (the
     home-automation domain on the same host proves the libvirt side
-    works).
+    works), and it replaces the domain inside the cutover's drained
+    reboot.
 -   **The session**: `qemu+ssh` as the host's own service user, and the
     provider is built inside the component that owns the connection,
     which is where its private key is read and the only place that key

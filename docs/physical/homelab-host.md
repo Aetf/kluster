@@ -177,7 +177,15 @@ contents, so nothing is discovered mid-bootstrap:
     the program's, declared against that path
     (declarative/physical.md §3), and a pool defined here as well is a
     pool the first apply finds already defined, which fails the run
-    rather than converging on it;
+    rather than converging on it. The directory's mode is the
+    change-set's, `0755` on its `tmpfiles.d` line, which sets it again at
+    every boot, and the pool names none: the system instance runs QEMU
+    as `libvirt-qemu`, not as root, so the search bit for others is what
+    lets QEMU reach any image in the directory, the HAOS domain's
+    included. What keeps the worker's secrets to their owner is each of
+    its volume files, `0600` by declaration, owned by root and handed to
+    QEMU's account when libvirt starts the domain (declarative/physical.md
+    §3);
 -   the **HAOS domain's own definition** — its full XML, the file a
     host-side `virsh define` restores the machine from. This program
     declares nothing about that domain (declarative/physical.md §3), so
@@ -304,7 +312,11 @@ proposes creating a machine that is already running.
 **The two files are working files, not credential slots.** A slot is
 durable, written once by a `credentials` command and read by later runs
 (credentials.md §1); these two are derived from stack configuration by
-the program itself on every run, owned by it and disposable. They live
+the program itself on every run, owned by it and disposable. The
+worker's seed image, which the program uploads into the pool
+(declarative/physical.md §3), is a working file of the same kind in the
+same directory, named relative to the checkout for the reason the two
+paths above are. They live
 under `.credentials/` anyway because that directory is the `0700`
 boundary — the single answer to "what on this machine is secret" — and
 a second git-ignored directory would be a second boundary to establish

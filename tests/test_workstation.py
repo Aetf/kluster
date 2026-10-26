@@ -89,6 +89,31 @@ def test_a_wider_file_already_in_the_slot_is_replaced_rather_than_written_into(t
     assert slot.read_text() == 'the-new-one\n'
 
 
+@pytest.mark.usefixtures('open_umask', 'no_chmod')
+def test_a_secret_in_bytes_is_created_0600_and_written_as_given(tmp_path: Path) -> None:
+    # An image a provider uploads: a newline after it would be a byte the
+    # reader never asked for.
+    slot = tmp_path / 'slot' / 'seed.iso'
+    image = b'\x00CD001\x01\x00no trailing newline'
+
+    _ = workstation.write_bytes(slot, image)
+
+    assert _mode(slot) == 0o600
+    assert slot.read_bytes() == image
+
+
+@pytest.mark.usefixtures('open_umask', 'no_chmod')
+def test_a_wider_file_already_in_the_slot_is_replaced_by_the_bytes_rather_than_written_into(tmp_path: Path) -> None:
+    slot = tmp_path / 'seed.iso'
+    _ = slot.write_bytes(b'an older and longer image')
+    slot.chmod(0o644)
+
+    _ = workstation.write_bytes(slot, b'a new one')
+
+    assert _mode(slot) == 0o600
+    assert slot.read_bytes() == b'a new one'
+
+
 def test_nothing_but_the_slot_is_left_beside_it(tmp_path: Path) -> None:
     slot = tmp_path / 'passphrase'
 

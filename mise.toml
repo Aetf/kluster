@@ -69,6 +69,13 @@ postgres = { version = "17.11", channel = "conda-forge" }
 # new build's gawk off its package list (`rpmostree.rpmdb.pkglist` in the
 # build's `commitmeta.json`) and move the pin to that line.
 "conda:gawk" = { version = "5.3.1", channel = "conda-forge" }
+# The `xsltproc` the libvirt provider runs on the machine running the
+# `physical` stack, to apply every `xml.xslt` a declaration hands it
+# (framework/pulumi.md §3.2): the homelab worker's domain and pool carry one
+# each (`components/homelab/templates/`). The stack runs under `mise x`, so
+# the provider finds this one on `PATH`. libxslt publishes source alone, so it
+# comes from the `conda-forge` channel like the Postgres client and gawk.
+"conda:libxslt" = { version = "1.1.45", channel = "conda-forge" }
 # jq is what the scripts under test run beside that awk: the dump script on
 # the box, and the workflow steps the suite runs as they are written. Its
 # releases are static binaries.
