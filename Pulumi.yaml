@@ -37,10 +37,10 @@ config:
   # decision, held as `conventions.gateway.image_repository` -- the stack checks
   # each pin against it and refuses a mismatch by key, so the two resolvers
   # cannot drift onto two different images.
-  versions:image-gateway-caddy: ghcr.io/aetf/homelab-containers/caddy:3@sha256:8258d234b66696ef52b34e9cb5b73ca6af4dfcc0fc91c25e894374753e50780c
-  versions:image-gateway-adguard-alice: ghcr.io/aetf/homelab-containers/adguard:3@sha256:45a2895bea93f2d7ed02a1ea4a36783e32eae29733ea613869724ddeb024aad5
-  versions:image-gateway-adguard-bob: ghcr.io/aetf/homelab-containers/adguard:3@sha256:45a2895bea93f2d7ed02a1ea4a36783e32eae29733ea613869724ddeb024aad5
-  versions:image-gateway-zerotier: ghcr.io/aetf/homelab-containers/zerotier:3@sha256:e4d8cb40f8a5e787b7d4ad6ddc60d6a0289d2eb988b3575e6a54273a354c39d7
+  versions:image-gateway-caddy: ghcr.io/aetf/homelab-containers/caddy:15@sha256:efb4a052ebe2223496236d3c25518f58133b5df6026f76de0a768fd1661b9c1d
+  versions:image-gateway-adguard-alice: ghcr.io/aetf/homelab-containers/adguard:15@sha256:bc9e6c3ff2096bee3d379d32fc6f1f7f7e3b93e7f29089e253ce7c9caab9aa6f
+  versions:image-gateway-adguard-bob: ghcr.io/aetf/homelab-containers/adguard:15@sha256:bc9e6c3ff2096bee3d379d32fc6f1f7f7e3b93e7f29089e253ce7c9caab9aa6f
+  versions:image-gateway-zerotier: ghcr.io/aetf/homelab-containers/zerotier:15@sha256:d45c7fec976354126bbe82fcbca1ed66d919d4c3877340dc99819a8176d370eb
 
   # local-path-provisioner, which `k8s-base` declares as resources rather than
   # installing from a chart (declarative/cluster-infra.md §1): the provisioner,
