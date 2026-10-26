@@ -413,6 +413,31 @@ ignored once launched, since Zincati keeps the running box current, where
 an update in place would replace the running box's boot volume without
 the dump hook that a replacement runs.
 
+**First-boot input that is a resource of its own is replaced with the
+resource whose replacement makes the next boot a first boot**
+(`replace_with`): for the homelab worker's seed volume, the disk the
+worker boots from, whose STATE partition decides it. An `ignore_changes`
+on such a resource keeps a running target's later changes off it, and
+alone it would leave a rebuilt target booting the launch value, because
+the replacement that carries an ignored input current is the resource's
+own. An input of the target itself, as the control planes'
+`metadata.user_data` is, needs nothing more. The seed carries both
+options, and `tests/test_homelab_engine.py` holds what the engine does
+with them.
+
+**A resource with a stated physical name, on a target that refuses a
+second object under one name or adopts the existing one, is replaced
+delete-first.** Create-before-delete asks the target to hold two objects
+under one name. Refused, the replacement fails. Adopted, as the libvirt
+provider adopts a volume, the closing delete removes what the create
+just wrote. Where the provider's own diff orders it, as the Kubernetes
+provider's does for a named object that keeps its name and namespace,
+that is enough. Otherwise, the resource declares `delete_before_replace`,
+with the reason at the declaration. A target that holds two objects
+under one name between the create and the delete, as AdGuard's rewrite
+list does, needs neither. Today: the homelab worker's disk, seed and
+domain.
+
 **Adopted resources graduate to declared.** `import` is step one of
 adoption; the end state is an explicit declaration whose fields are
 owned, with `ignore_changes` shrunk to what genuinely belongs to

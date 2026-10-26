@@ -438,9 +438,17 @@ workloads.md §4.
 
 ### L8 — Seed ISO / machine-secret files on the homelab host
 
-The libvirt nocloud seed carries the worker's machine secrets. Root-only
-permissions, excluded from every host snapshot/backup scope (same
-subvolume discipline as the VM image). *Lives in* declarative/physical.md §3.
+The libvirt nocloud seed carries the worker's machine secrets, and so
+does the disk, whose STATE holds the machine configuration. Each volume
+is declared `0600`, where the provider would create it `0644`, so it is
+readable by root and by `libvirt-qemu`, the account every domain's QEMU
+runs as, once libvirt has handed the image to it at a domain start (the
+disk while the worker runs, the read-only seed from its first start on),
+and by no other account. The directory above them keeps the search bit
+QEMU needs. On the machine running the program the seed image is a
+`0600` working file inside the `0700` `.credentials/`.
+Excluded from every host snapshot/backup scope (same subvolume
+discipline as the VM image). *Lives in* declarative/physical.md §3.
 
 ### L9 — KubeSpan discovery is an external dependency
 

@@ -4,11 +4,13 @@
   <xsl:template match="node()|@*">
     <xsl:copy><xsl:apply-templates select="node()|@*"/></xsl:copy>
   </xsl:template>
-  <xsl:template match="/domain/devices/disk[@device='disk']">
+  <xsl:template match="/volume/target">
     <xsl:copy>
-      <xsl:apply-templates select="@*"/>
-      <driver name="qemu" type="raw" cache="none" discard="unmap"/>
-      <xsl:apply-templates select="node()[not(self::driver)]"/>
+      <xsl:apply-templates select="node()[not(self::permissions)]|@*"/>
+      <permissions>
+        <xsl:apply-templates select="permissions/node()[not(self::mode)]|permissions/@*"/>
+        <mode>0600</mode>
+      </permissions>
     </xsl:copy>
   </xsl:template>
 </xsl:stylesheet>

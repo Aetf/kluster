@@ -1145,6 +1145,7 @@ dependencies = [
     { name = "pulumi-unifi" },
     { name = "pulumi-zerotier" },
     { name = "pulumiverse-talos" },
+    { name = "pycdlib" },
     { name = "pykeepass" },
     { name = "requests" },
     { name = "ruamel-yaml", extra = ["oldlibyaml"] },
@@ -1185,6 +1186,7 @@ requires-dist = [
     { name = "pulumi-unifi", editable = "sdks/unifi" },
     { name = "pulumi-zerotier", editable = "sdks/zerotier" },
     { name = "pulumiverse-talos", specifier = ">=0.8.1,<0.9" },
+    { name = "pycdlib", specifier = ">=1.22.0,<2" },
     { name = "pykeepass", specifier = ">=4.2.0,<5" },
     { name = "requests", specifier = ">=2.32.3,<3" },
     { name = "ruamel-yaml", extras = ["oldlibyaml"], specifier = ">=0.19.1,<0.20" },
@@ -2199,6 +2201,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/da/9f/abfd2959e9261dd5217ca8551d4de211ca6ab26fe9b72cf44731ff6c4442/pure_eval-0.2.4.tar.gz", hash = "sha256:260c2774686e651b79f8b8e7fc9d80b3599ea6a66334b47d5f4abb69fc2c0ea1", size = 20563, upload-time = "2026-09-10T21:41:22.836Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/6d/18/83376915176eb058cb86470eb7396388a13350b09a8f233a79303bbcbc5b/pure_eval-0.2.4-py3-none-any.whl", hash = "sha256:96cae060a313cfaad51bb761278bfb0e62dc0248d9315a81173752dc546cd37a", size = 11893, upload-time = "2026-09-10T21:41:21.532Z" },
+]
+
+[[package]]
+name = "pycdlib"
+version = "1.22.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c3/4a/894c8cb0fbc8a7f3846a3ff1d24cd05d6acca962b9610d61a65c74398aea/pycdlib-1.22.0.tar.gz", hash = "sha256:00456c146e2834eac96ddf738b6b2cbe81564d9efe2022ae6a155fc6649870c6", size = 362477, upload-time = "2026-10-09T13:56:15.768Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7c/64/5a5912a3f3ba47dba3eb7f707e51f91926b26be4bde25fe2da483f3c4a9b/pycdlib-1.22.0-py3-none-any.whl", hash = "sha256:bfa0b3631345a14b2741fe088398b6b8dc2838442ea607fd07d027dcc67b9e94", size = 238118, upload-time = "2026-10-09T13:56:14.117Z" },
 ]
 
 [[package]]

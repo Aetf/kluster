@@ -147,12 +147,21 @@ def write(path: Path, value: str) -> Path:
     reads it — `read_file(...) | trim` in a mise template, `$(cat ...)` in a
     shell — and what keeps a hand-inspected file from looking truncated.
     """
+    return write_bytes(path, (value if value.endswith('\n') else value + '\n').encode())
+
+
+def write_bytes(path: Path, value: bytes) -> Path:
+    """Put a secret that is not text in a slot, exactly as given: `write`'s staging and modes, and nothing appended.
+
+    For a file whose bytes are the artifact — an image a provider uploads —
+    where a newline would be content the reader never asked for.
+    """
     _ = secret_dir(path.parent)
     descriptor, name = tempfile.mkstemp(dir=path.parent, prefix=f'.{path.name}.', suffix='.new')
     staged = Path(name)
     try:
-        with os.fdopen(descriptor, 'w') as sink:
-            _ = sink.write(value if value.endswith('\n') else value + '\n')
+        with os.fdopen(descriptor, 'wb') as sink:
+            _ = sink.write(value)
             sink.flush()
             os.fsync(sink.fileno())
         _ = staged.replace(path)

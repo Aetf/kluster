@@ -563,8 +563,8 @@
       // test holds the two equal. This rule goes once the mise manager passes
       // the channel on: a lookup with it removed then finds the package.
       //
-      // Matched by datasource and name, as the other conda pin's rule below
-      // is: the conda datasource reaches this repository through every
+      // Matched by datasource and name, as every other conda pin's rule is:
+      // the conda datasource reaches this repository through every
       // `mise.toml` pin that names a `channel`, and each needs the channel in
       // its name.
       matchDatasources: [
@@ -642,6 +642,34 @@
       prBodyNotes: [
         'This moves the appliance to a new Fedora CoreOS major, which ships its own gawk line. Re-check `mise.toml`\'s `conda:gawk` pin and the `allowedVersions` of its rule in `renovate.json5` against the new build\'s gawk, as the pin\'s comment describes.',
       ],
+    },
+    {
+      // The local xsltproc's lookup, for the reason the client's rule above
+      // gives: the mise manager hands the conda datasource the bare name,
+      // `libxslt`, which api.anaconda.org does not answer, so the name is the
+      // channel's here, `conda-forge/libxslt`, the channel `mise.toml` writes.
+      matchDatasources: [
+        'conda',
+      ],
+      matchDepNames: [
+        'conda:libxslt',
+      ],
+      overridePackageName: 'conda-forge/libxslt',
+    },
+    {
+      // The local xsltproc's releases, every one of them a `1.1.N` on the one
+      // line libxslt publishes: each is a patch, which the global
+      // `patch: enabled: false` would drop, so its pin would never move. Its
+      // patches are re-enabled here, as local-path-provisioner's are above,
+      // and the update travels in the toolchain group with the other mise
+      // pins.
+      matchDepNames: [
+        'conda:libxslt',
+      ],
+      matchUpdateTypes: [
+        'patch',
+      ],
+      enabled: true,
     },
     {
       // The self-built images (ci.md §4). Each pin here is one image, so they

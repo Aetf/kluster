@@ -172,6 +172,30 @@ conda_deps = [
     "ncurses-6.6-hdb14827_1",
 ]
 
+[[tools."conda:libxslt"]]
+version = "1.1.45"
+backend = "conda:libxslt"
+specifiers = ["1.1.45"]
+
+[tools."conda:libxslt".options]
+channel = "conda-forge"
+
+[tools."conda:libxslt"."platforms.linux-x64"]
+checksum = "sha256:3beb51b5ce8d2e0690b8517d3d955972d502cfbe2899279cbb9cbb6ff134d360"
+url = "https://conda.anaconda.org/conda-forge/linux-64/libxslt-1.1.45-h8e12856_1.conda"
+conda_deps = [
+    "libgcc-16.2.0-ha9f2e26_7",
+    "libxml2-2.15.4-h7df9aa5_1",
+    "libxml2-16-2.15.4-hf3af7cc_1",
+    "_openmp_mutex-4.5-20_gnu",
+    "libgomp-16.2.0-he0feb66_7",
+    "liblzma-5.8.3-hb03c661_1",
+    "libzlib-1.3.2-h25fd6f3_3",
+    "icu-78.3-py310h44b86e0_2",
+    "libstdcxx-16.2.0-h934c35e_7",
+    "libiconv-1.18-h0cb94f2_3",
+]
+
 [[tools."github:ltex-plus/ltex-ls-plus"]]
 version = "18.7.0"
 backend = "github:ltex-plus/ltex-ls-plus"

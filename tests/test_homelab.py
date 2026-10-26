@@ -4,8 +4,10 @@ The worker is ordinary infrastructure — it can be rebuilt — but the disk
 under it is not. What keeps the program from resizing or rewriting that disk
 out from under a running node is resource options, and each carries its reason
 at its declaration (`components/homelab`) rather than a case here restating it.
-The cases hold what the declarations produce: the disk the worker boots, the
-session the provider dials, and where the disk tuning lands.
+The cases hold what the declarations produce: the disk and the seed the
+worker boots, the session the provider dials, and what the stylesheets make of
+the definitions the provider generates. What the engine does with the seed's
+options is `tests/test_homelab_engine.py`'s.
 
 The home-automation domain on the same host is declared nowhere, so nothing
 here asserts about it (rfc-002 §13).
@@ -13,16 +15,26 @@ here asserts about it (rfc-002 §13).
 
 from __future__ import annotations
 
+import copy
+import importlib.metadata
 import inspect
+import io
 import json
+import re
+import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import parse_qs, urlsplit
 
+import pinned_tools
+import process_sessions
 import pulumi
+import pycdlib
 import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
+from pycdlib.dr import DirectoryRecord
 
 from kluster import conventions
 from kluster.components import homelab
@@ -40,24 +52,26 @@ MEMORY_GIB = 10
 #: upload. What matters below is that the volume is created *from* it.
 IMAGE_PATH = '/var/tmp/kluster-talos-images/talos-v1.11.0-nocloud-amd64-abc123.raw'
 
-#: A domain as the libvirt provider builds one before it defines it: a virtio
-#: data disk and the seed as a cdrom. The stylesheet under test is applied to
-#: this shape, so what is asserted is the XML libvirt would receive.
-PROVIDER_DOMAIN_XML = """<domain type='kvm'>
-  <name>kluster-worker</name>
-  <devices>
-    <disk type='volume' device='disk'>
-      <driver name='qemu' type='raw'/>
-      <source volume='kluster-worker.raw'/>
-      <target dev='vda' bus='virtio'/>
-    </disk>
-    <disk type='file' device='cdrom'>
-      <driver name='qemu' type='raw'/>
-      <source file='kluster-worker-seed.iso'/>
-      <target dev='hda' bus='ide'/>
-    </disk>
-  </devices>
-</domain>
+#: The domain the pinned provider generates for this declaration, before its
+#: stylesheet, as its debug output records it. The stylesheet cases run over it,
+#: so what is asserted is the XML libvirt would receive.
+TRANSCRIPT = Path(__file__).parent / 'data' / 'homelab-domain.xml'
+
+#: A volume as the pinned provider generates one before its stylesheet, as its
+#: debug output records it (`Generated XML for libvirt volume`): the disk's,
+#: and every volume's has this shape, with the provider's own `644`. Part of
+#: the stylesheet layer with the domain's transcript, and recorded again with
+#: it when the pinned provider moves.
+PROVIDER_VOLUME_XML = """<volume>
+    <name>kluster-worker.raw</name>
+    <capacity unit="B">4194304</capacity>
+    <target>
+        <format type="raw"></format>
+        <permissions>
+            <mode>644</mode>
+        </permissions>
+    </target>
+</volume>
 """
 
 
@@ -175,14 +189,103 @@ async def test_the_disk_is_not_sized_by_the_declaration(monitor: Providers) -> N
 
 
 @pytest.mark.asyncio
-async def test_the_seed_carries_the_worker_configuration_and_nothing_generated() -> None:
+async def test_the_domain_boots_the_seed_as_its_second_disk_and_carries_no_cloud_init_cd() -> None:
+    """The q35 machine has no IDE bus, and the provider's `cloudinit` attaches the seed on one."""
     host = build()
 
-    assert await host.seed.user_data.future() == MACHINE_CONFIG
-    metadata = json.loads(str(await host.seed.meta_data.future()))
-    # A fresh instance-id on every apply would tell a nocloud datasource that
-    # a long-running machine is booting for the first time.
-    assert metadata == {'instance-id': DOMAIN, 'local-hostname': DOMAIN}
+    assert await host.domain.cloudinit.future() is None
+    disks = await host.domain.disks.future()
+    assert disks is not None
+    assert [disk.volume_id for disk in disks] == [await host.volume.id.future(), await host.seed.id.future()]
+
+
+@pytest.mark.asyncio
+async def test_the_seed_is_a_cidata_image_carrying_the_rendering_and_the_derived_metadata(tmp_path: Path) -> None:
+    """What Talos' `nocloud` platform finds: the label, the two files under their names, and nothing else.
+
+    Read back through both name extensions, since a reader may take either.
+    The metadata is derived from the node and static, because Talos reads it
+    at every boot. There is no `network-config`: an empty one fails to decode,
+    and the node's addressing is in its machine configuration.
+    """
+    host = build()
+
+    iso = _opened_seed(tmp_path / str(await host.seed.source.future()))
+    try:
+        assert iso.pvd.volume_identifier.decode().rstrip() == 'cidata'
+        assert _names(iso, rr_path='/') == ['meta-data', 'user-data']
+        assert _names(iso, joliet_path='/') == ['meta-data', 'user-data']
+        assert _read(iso, '/user-data') == MACHINE_CONFIG
+        assert json.loads(_read(iso, '/meta-data')) == {'instance-id': DOMAIN, 'local-hostname': DOMAIN}
+    finally:
+        iso.close()
+
+
+@pytest.mark.asyncio
+async def test_the_seed_is_written_into_the_slot_where_only_this_machine_can_read_it(tmp_path: Path) -> None:
+    """It carries the cluster's secrets, as the session's identity does, and sits beside it.
+
+    The volume names it relative to the checkout, because the name is a
+    provider input in state and an absolute path differs on every machine.
+    """
+    host = build()
+
+    source = str(await host.seed.source.future())
+    seed = _opened(tmp_path, source)
+    assert seed.parent == homelab.slot(tmp_path)
+    assert seed.stat().st_mode & 0o777 == 0o600
+    assert seed.parent.stat().st_mode & 0o777 == 0o700
+
+
+def test_one_rendering_names_one_seed_and_a_new_one_replaces_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The name follows what the seed carries, not the image, whose bytes carry the time it was built.
+
+    A name that moved on every run would be a new `source` on every run; one
+    that stayed put across renderings would leave a stale seed under the
+    current name. Each build here runs a minute after the one before it.
+    """
+    from kluster.components.homelab import seed
+
+    clock = iter(range(1_800_000_000, 1_800_100_000, 60))
+    monkeypatch.setattr(time, 'time', lambda: float(next(clock)))
+    first = seed.write(tmp_path, user_data='one', meta_data='{}')
+    again = seed.write(tmp_path, user_data='one', meta_data='{}')
+    assert again == first
+
+    second = seed.write(tmp_path, user_data='two', meta_data='{}')
+
+    assert second != first
+    assert sorted(tmp_path.iterdir()) == [second]
+
+
+def _opened_seed(path: Path) -> pycdlib.PyCdlib:
+    iso = pycdlib.PyCdlib()
+    iso.open_fp(io.BytesIO(path.read_bytes()))
+    return iso
+
+
+def _names(iso: pycdlib.PyCdlib, **path: str) -> list[str]:
+    """The names of the files at a directory, in the tree the keyword names: `rr_path` or `joliet_path`."""
+    names: list[str] = []
+    # pycdlib's own annotation leaves the records' type out of the generator.
+    children = cast('Iterator[DirectoryRecord]', iso.list_children(**path))  # pyright: ignore[reportUnknownMemberType]
+    for record in children:
+        if record.is_dot() or record.is_dotdot():
+            continue
+        if 'rr_path' in path:
+            assert record.rock_ridge is not None
+            names.append(record.rock_ridge.name().decode())
+        else:
+            names.append(record.file_identifier().decode('utf-16-be'))
+    return sorted(names)
+
+
+def _read(iso: pycdlib.PyCdlib, path: str) -> str:
+    sink = io.BytesIO()
+    iso.get_file_from_iso_fp(sink, rr_path=path)
+    return sink.getvalue().decode()
 
 
 @pytest.mark.asyncio
@@ -373,38 +476,113 @@ def test_the_slot_is_the_checkouts_own_local_directory() -> None:
     assert slot().is_relative_to(workstation.repo_root())
 
 
-# -- the disk tuning the provider cannot express ----------------------------
+# -- what the stylesheets make of the provider's definitions ----------------
+#
+# Each stylesheet is applied by the pinned `xsltproc`, with the flags the
+# provider runs it with (`libvirt/utils_xslt.go`), to what the provider
+# generates, so the result is what libvirt receives.
 
 
-def test_the_data_disk_is_driven_in_the_format_the_volume_was_created_in() -> None:
-    from kluster.components.homelab import DISK_FORMAT, disk_tuning_xslt
+def test_the_transcript_is_the_installed_providers() -> None:
+    """The transcript stands for the pinned provider, and a new provider generates its own.
 
-    disk = _transformed_disk("disk[@device='disk']")
-
-    assert disk.attrib['type'] == DISK_FORMAT
-    # The stylesheet is read verbatim, so the format it writes is a literal in
-    # the file rather than something the volume hands it. The two must agree:
-    # a driver naming a format the volume was not created with is a domain that
-    # will not start.
-    assert f'type="{DISK_FORMAT}"' in disk_tuning_xslt()
-
-
-def test_the_tuning_reaches_the_data_disk_and_leaves_the_seed_as_the_provider_wrote_it() -> None:
-    """The stylesheet is a scalpel: the data disk gets its driver, and the cdrom is untouched.
-
-    What the driver says, and why, is `disk_tuning_xslt`'s to state. What is
-    held here is where it lands: the data disk is driven by exactly the
-    element the stylesheet writes, which differs from what the provider wrote,
-    and the seed's driver comes through as the provider wrote it -- a transform
-    that reached the cdrom would be changing a disk it does not understand.
+    A bump of `pulumi-libvirt` is finished when the transcript is recorded
+    again from it (its own header says how) and the cases below pass over the
+    new one, and the stylesheet layer is gone when the provider declares what
+    it works around (`components.homelab`).
     """
-    (written,) = _etree().XML(_xslt()).iter('driver')
-    tuned = dict(_transformed_disk("disk[@device='disk']").attrib)
+    recorded = re.search(r'pulumi-libvirt (\S+) generates', TRANSCRIPT.read_text())
+    assert recorded is not None
+    assert importlib.metadata.version('pulumi-libvirt') == recorded.group(1), (
+        'pulumi-libvirt moved: record tests/data/homelab-domain.xml and PROVIDER_VOLUME_XML again from it, '
+        'and check templates/domain.xslt.j2 and templates/volume.xslt against them'
+    )
 
-    assert tuned == dict(written.attrib)
-    assert tuned != dict(_provider_disk("disk[@device='disk']").attrib)
-    assert dict(_transformed_disk("disk[@device='cdrom']").attrib) == dict(
-        _provider_disk("disk[@device='cdrom']").attrib
+
+@pytest.mark.asyncio
+async def test_the_domain_stylesheet_makes_exactly_its_three_changes(tmp_path: Path) -> None:
+    """The data disk gets its driver, the seed goes read-only, the display goes, and nothing else moves.
+
+    The data disk is driven in the format its volume is created in, with
+    `cache=none` and `discard=unmap` (homelab-host.md §1). The seed is
+    read-only, so Talos leaves it out of provisioning. The provider's SPICE
+    display is one the host's QEMU cannot offer.
+    """
+    host = build()
+    xml = await host.domain.xml.future()
+    assert xml is not None and xml.xslt is not None
+    etree = _etree()
+    provided = etree.XML(_without_comments(TRANSCRIPT.read_text()).encode())
+    # A third disk, as the data disk under another name and in another
+    # format: each template matches its own volume and nothing wider, so this
+    # one comes through as the provider wrote it.
+    other = copy.deepcopy(provided.find('devices/disk'))
+    other.find('driver').set('type', 'qcow2')
+    other.find('source').set('volume', 'another.qcow2')
+    other.find('target').set('dev', 'vdc')
+    provided.find('devices').insert(2, other)
+
+    transformed = etree.XML(_xsltproc(tmp_path, xml.xslt, etree.tostring(provided)))
+
+    expected = copy.deepcopy(provided)
+    data_disk, seed_disk, _ = expected.findall('devices/disk')
+    assert data_disk.find('source').get('volume') == await host.volume.name.future()
+    assert seed_disk.find('source').get('volume') == await host.seed.name.future()
+    driver = data_disk.find('driver')
+    driver.attrib.clear()
+    driver.attrib.update(
+        {'name': 'qemu', 'type': str(await host.volume.format.future()), 'cache': 'none', 'discard': 'unmap'}
+    )
+    seed_disk.append(etree.Element('readonly'))
+    devices = expected.find('devices')
+    devices.remove(devices.find('graphics'))
+    assert _canonical(transformed) == _canonical(expected)
+
+
+@pytest.mark.asyncio
+async def test_each_volume_is_created_readable_by_its_owner_alone(tmp_path: Path) -> None:
+    """The disk and the seed carry the machine secrets, and the provider creates every volume `0644`.
+
+    The mode is all the stylesheet changes; the directory above the files is
+    the host's, and QEMU needs its search bit.
+    """
+    host = build()
+    etree = _etree()
+    expected = etree.XML(PROVIDER_VOLUME_XML.encode())
+    expected.find('target/permissions/mode').text = '0600'
+
+    for volume in (host.volume, host.seed):
+        xml = await volume.xml.future()
+        assert xml is not None and xml.xslt is not None
+        transformed = etree.XML(_xsltproc(tmp_path, xml.xslt, PROVIDER_VOLUME_XML.encode()))
+        assert _canonical(transformed) == _canonical(expected)
+
+
+def _xsltproc(tmp_path: Path, stylesheet: str, document: bytes) -> bytes:
+    """`document` through `stylesheet`, as the provider runs the pinned `xsltproc` over a definition."""
+    style = tmp_path / 'style.xslt'
+    _ = style.write_text(stylesheet)
+    source = tmp_path / 'definition.xml'
+    _ = source.write_bytes(document)
+    ran = process_sessions.run(
+        [pinned_tools.located('xsltproc'), '--nomkdir', '--nonet', '--nowrite', str(style), str(source)],
+        timeout=30,
+    )
+    assert ran.returncode == 0, ran.stderr
+    return ran.stdout
+
+
+def _without_comments(text: str) -> str:
+    return re.sub(r'<!--.*?-->\s*', '', text, flags=re.S)
+
+
+def _canonical(element: Any) -> tuple[Any, ...]:
+    """An element as its tag, attributes, text and children, with the indentation between elements dropped."""
+    return (
+        element.tag,
+        sorted(element.attrib.items()),
+        (element.text or '').strip(),
+        [_canonical(child) for child in element],
     )
 
 
@@ -419,30 +597,6 @@ async def registration(monitor: Providers, resource: pulumi.Resource) -> Any:
 
 def _etree() -> Any:
     return pytest.importorskip('lxml.etree', reason='lxml is present as a dependency of pykeepass')
-
-
-def _xslt() -> bytes:
-    from kluster.components.homelab import disk_tuning_xslt
-
-    return disk_tuning_xslt().encode()
-
-
-def _driver(domain: Any, selector: str) -> Any:
-    driver = domain.find(f'devices/{selector}/driver')
-    assert driver is not None
-    return driver
-
-
-def _provider_disk(selector: str) -> Any:
-    """One disk's driver element, as the provider writes the domain XML."""
-    return _driver(_etree().XML(PROVIDER_DOMAIN_XML.encode()), selector)
-
-
-def _transformed_disk(selector: str) -> Any:
-    """One disk's driver element, after the domain XML has been through XSLT."""
-    etree = _etree()
-    transform = etree.XSLT(etree.XML(_xslt()))
-    return _driver(transform(etree.XML(PROVIDER_DOMAIN_XML.encode())).getroot(), selector)
 
 
 @pytest.mark.asyncio

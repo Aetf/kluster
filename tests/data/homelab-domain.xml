@@ -1,0 +1,49 @@
+<!--
+  The domain XML pulumi-libvirt 0.5.4 generates for `HomelabHost`'s worker,
+  before it applies the declaration's `xml.xslt`: the `Generated XML for
+  libvirt domain` lines of its debug output (`TF_LOG=DEBUG`, and `pulumi
+  up` logging to stderr at `-v=9`), from a run of the component against a
+  session-mode libvirtd of its own. Recorded again whenever the pinned
+  provider moves; `tests/test_homelab.py` fails until it is.
+-->
+<domain type="kvm">
+    <name>kluster-worker</name>
+    <memory unit="MiB">1024</memory>
+    <vcpu>2</vcpu>
+    <os>
+        <type machine="pc-q35-11.1">hvm</type>
+    </os>
+    <features>
+        <pae></pae>
+        <acpi></acpi>
+        <apic></apic>
+    </features>
+    <cpu mode="host-passthrough"></cpu>
+    <devices>
+        <disk type="volume" device="disk">
+            <driver name="qemu" type="raw"></driver>
+            <source pool="kluster" volume="kluster-worker.raw"></source>
+            <target dev="vda" bus="virtio"></target>
+        </disk>
+        <disk type="volume" device="disk">
+            <driver name="qemu" type="raw"></driver>
+            <source pool="kluster" volume="kluster-worker-seed.iso"></source>
+            <target dev="vdb" bus="virtio"></target>
+        </disk>
+        <interface type="bridge">
+            <mac address="52:54:00:e6:d7:b3"></mac>
+            <source bridge="kvmbr1"></source>
+            <model type="virtio"></model>
+        </interface>
+        <console>
+            <target type="serial" port="0"></target>
+        </console>
+        <channel type="unix">
+            <target type="virtio" name="org.qemu.guest_agent.0"></target>
+        </channel>
+        <graphics type="spice" autoport="yes"></graphics>
+        <rng model="virtio">
+            <backend model="random">/dev/urandom</backend>
+        </rng>
+    </devices>
+</domain>

@@ -1074,7 +1074,14 @@ leaves its resource recorded and fails the run; a replacement, targeted or
 not, is created from the program's value of an `ignore_changes` input; and a
 dependent declaring `replace_on_changes` on the replaced resource's id is
 replaced with it and runs its `after_create`, where one that does not is
-updated and runs nothing.
+updated and runs nothing. `tests/test_homelab_engine.py` holds, the same
+way, what the homelab worker's seed rests on: a changed input that a
+resource declared `replace_with` another ignores runs nothing, and a
+`--replace` of that other, protected resource runs once its state's
+protection is lifted, deleting it, the seed and their dependent before
+creating all three again, the seed from the program's current value; and
+a stand-in replaced alone, whose name is stated, is deleted before it is
+created again.
 
 It runs in the suite, under the bounds every real-engine case carries
 (below):
@@ -1135,7 +1142,8 @@ edit here. The census is a run with a `pulumi` first on `PATH` that logs
 the case it was started from and hands over to the pinned one. Today's
 are:
 
--   the two modules above;
+-   the engine modules above, `tests/test_state_backend_engine.py`,
+    `tests/test_homelab_engine.py` and `tests/test_extension_provider.py`;
 -   the `real` cases of `tests/test_operator_stack.py`, which run the
     operator driver against a scratch stack;
 -   the cases of `tests/test_pulumi_config.py` that take a real-CLI
