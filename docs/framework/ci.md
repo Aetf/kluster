@@ -848,12 +848,11 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     with the previewed stacks' configuration secrets, the `dns` overlay
     membership and the `ci` bundle's access to every stack's state, and
     with nothing that opens `physical`'s configuration — whose
-    ciphertexts from before the move stay in git history under the
-    stack passphrase, which is why that move ends once the stack
-    passphrase they are under has been rotated out of every
-    Environment (credentials.md §4.2), and is made before `physical`'s
-    first `up`, the backend keeping every checkpoint written before it
-    (credentials.md §1 rule 6).
+    ciphertexts from before the move stay in git history under a
+    generation of the stack passphrase that no Environment holds
+    (credentials.md §4.2), which is assumed not leaked, and the move is
+    made before `physical`'s first `up`, the backend keeping every
+    checkpoint written before it (credentials.md §1 rule 6).
     **PRs get no physical preview at
     all**: a physical-path PR is reviewed as code, and its resource
     diff is read in `plan-physical`'s output on main — reading it is
