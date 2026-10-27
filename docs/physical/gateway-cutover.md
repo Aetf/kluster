@@ -630,6 +630,98 @@ not moved.
     pull reads the device on either layout, so it runs across the window
     and is in no step of it; the old check is what step 0 stops, and
     `check-gateway` takes over from it at the end of §5.
+-   **The gateway's pins are no older than what the device runs.**
+    Until step 0 stops it, the reconciler deploys the `main` branch of
+    homelab-containers to the device (§4 says how), so a merge there
+    puts the machines ahead of the build `Pulumi.yaml` pins, and step 3
+    would then replace each tree with an older one. The reading holds
+    every `versions:image-gateway-*` pin's source commit against the
+    commit the reconciler last deployed for the same machine: the
+    stamp `<member>.deployed` in the reconciler's state directory
+    (homelab-ops `bin/autodeploy-containers`), where `<member>` is what
+    the key's name ends in. The stamps are the reconciler's own record:
+    a deploy run by hand moves none of them, so after one the reading
+    can say `holds` while the device runs a newer tree than the stamp
+    names. A target deployed by hand is deployed again from the commit
+    its stamp names before the reading is taken, and from this reading
+    until step 3 the gateway's targets are deployed by the reconciler
+    alone. On the homelab host, from the root of a checkout of the
+    commit step 3 applies:
+
+    ```sh
+    JQ=$(mise which jq)
+    STAMPS=${XDG_STATE_HOME:-$HOME/.local/state}/autodeploy-containers
+    HC=$(mktemp -d)
+    git clone -q --bare --filter=tree:0 https://github.com/Aetf/homelab-containers "$HC"
+    sed -n 's/^ *versions:image-gateway-\([a-z-]*\): ghcr\.io\/\([^:@]*\):[^:@/]*@\(sha256:[0-9a-f]*\)$/\1 \2 \3/p' Pulumi.yaml |
+    while read -r member repo digest; do
+        token=$(curl -fsS "https://ghcr.io/token?scope=repository:$repo:pull" | "$JQ" -r .token)
+        config=$(curl -fsS -H "Authorization: Bearer $token" \
+            -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
+            "https://ghcr.io/v2/$repo/manifests/$digest" | "$JQ" -r .config.digest)
+        revision=$(curl -fsSL -H "Authorization: Bearer $token" "https://ghcr.io/v2/$repo/blobs/$config" |
+            "$JQ" -r '.config.Labels["org.opencontainers.image.revision"]')
+        if [ ! -f "$STAMPS/$member.deployed" ]; then
+            echo "$member $revision: no stamp"
+            continue
+        fi
+        stamp=$(cat "$STAMPS/$member.deployed")
+        git -C "$HC" merge-base --is-ancestor "$stamp" "$revision"
+        case $? in 0) verdict=holds ;; 1) verdict=BEHIND ;; *) verdict=UNREAD ;; esac
+        echo "$member $revision, stamp $stamp: $verdict"
+    done
+    rm -rf "$HC"
+    ```
+
+    The requests are anonymous: ghcr.io hands out a pull token for a
+    public repository to anyone who asks. The source commit is the
+    `org.opencontainers.image.revision` label of the image
+    **configuration**, the blob the manifest's `config` names, which
+    is what the third request fetches; `skopeo inspect` reports the
+    same label under `Labels`. The manifest carries an annotation of
+    the same name with another commit in it, the Alpine base image's,
+    inherited from docker-alpine, and that is what `skopeo inspect
+    --raw` or the second response shows. Read off the manifest, the
+    comparison is between commits of two different repositories.
+
+    It passes when every line ends in `holds` but zerotier's, which
+    ends in `no stamp`: the reconciler deploys no zerotier tree, so
+    nothing on the device is newer than that pin. `holds` is `git
+    merge-base --is-ancestor` reading the stamp as the pin's revision
+    or one of its ancestors, in a clone of homelab-containers. There
+    is one line per `versions:image-gateway-*` key, and a key with no
+    line is a pin the `sed` did not parse.
+
+    The other two verdicts each have one answer:
+
+    -   **`BEHIND`**: the device runs a commit the pinned build does
+        not contain. The pins move before the window — Renovate's
+        `renovate/major-gateway-rootfs` branch, approved from the
+        Dependency Dashboard, or by hand to a newer build's tag and
+        digest, every key to the same build — and then this reading
+        and the pull probe above run again, the probe because it pulls
+        the zerotier pin. homelab-containers publishes the whole estate
+        from each push to its `main`, and the reconciler moves a stamp
+        only to a pushed commit whose checks, that publish among them,
+        have passed, so a build of the newest stamp's commit exists, and
+        its revision descends from every stamp.
+        A merge that changed nothing a machine is built from reads
+        `BEHIND` too, since the reconciler moves that machine's stamp
+        to the new commit all the same, and it gets the same answer.
+    -   **`UNREAD`**: `git` could not find one of the two commits, and
+        the message it printed above the line names which. An empty
+        revision is a registry request that failed, and the `curl` error
+        above it says which one; `null` is a configuration with no such
+        label. A revision `git` cannot find is a commit GitHub does not
+        serve for homelab-containers, above all a label read from
+        somewhere other than the configuration.
+
+    The stamps move until step 0 stops the reconciler, and a merge into
+    the `main` of homelab-containers moves them only once its checks
+    have passed and the reconciler's next run has reached it, minutes
+    after the merge. A reading in between still reads `holds`. So this
+    one is taken early enough that a `BEHIND` leaves time to move the
+    pins, and step 0 takes it again once nothing can move a stamp.
 -   **The host-side timers are stopped**: `check-gw.timer` and
     `autodeploy-containers.timer` — see step 0, which is inside the
     window only because it must not be forgotten.
@@ -697,6 +789,16 @@ step 1 waits until the same line prints `inactive`; it can also print
 out. The run holds a lock
 and ends on its own; killing it partway through its `ssh` to the device
 is worse than the wait.
+
+**Then §3's pin reading is taken again**, the same block from the same
+checkout, once `systemctl --user is-active autodeploy-containers.service`
+prints `inactive` or `failed`. With the timer and its last run both
+stopped, nothing moves a stamp before step 3, so this is the reading
+the window opens on; §3's can lapse at any merge into
+homelab-containers before the timer stopped. It passes as §3's does.
+A `BEHIND` or `UNREAD` calls the window off here, before step 1, by
+the way back the next paragraph gives, and the pins move as §3 says
+before another window.
 
 A window called off after this step and before step 1 has changed
 nothing on the device, and the way back from it is §6's last block
