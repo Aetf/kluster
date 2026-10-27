@@ -36,7 +36,19 @@
 
 set -euo pipefail
 
-AUTHORIZE_URL='https://api.backblazeb2.com/b2api/v3/b2_authorize_account'
+# Version 4 of B2's native API, for both calls before the upload. The key the
+# `state-backend` stack mints for this box is confined to the dump bucket
+# through `bucketIds`, which makes it what B2 calls a multi-bucket application
+# key, and B2 authorizes one of those on `b2_authorize_account` v4 alone
+# ("Native API Versions" in B2's documentation). On v3 it answers
+# `bad_request`, "This request is not currently supported on API version
+# number 3" (Aetf/kluster-ops#665). A key minted with a single `bucketId`
+# authorizes on v4 as well. v4's answer carries `apiInfo.storageApi.apiUrl` and
+# `authorizationToken`, and `b2_get_upload_url`, which B2 documents as a GET
+# with a `bucketId` query parameter, accepts the POST with a JSON body that
+# `upload` sends (both operations' reference pages).
+NATIVE_API_PATH='b2api/v4'
+AUTHORIZE_URL="https://api.backblazeb2.com/$NATIVE_API_PATH/b2_authorize_account"
 CONTAINER='pgstate'
 
 # Where the archive and its ciphertext sit while the run needs them. Not
@@ -188,7 +200,7 @@ upload() {
   log 'asking B2 for an upload URL'
   target=$(b2 120 -H "Authorization: $token" -H 'Content-Type: application/json' \
     --data "$(jq -cn --arg id "$B2_BUCKET_ID" '{bucketId: $id}')" \
-    "$api_url/b2api/v3/b2_get_upload_url")
+    "$api_url/$NATIVE_API_PATH/b2_get_upload_url")
   upload_url=$(jq -er '.uploadUrl' <<< "$target")
   upload_token=$(jq -er '.authorizationToken' <<< "$target")
 

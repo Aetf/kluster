@@ -137,12 +137,27 @@ SERVING = rows(META, CHECKPOINT_BAK, CHECKPOINT)
 ARCHIVE = b'PGDMP-archive-bytes'
 CIPHERTEXT = b'age-encrypted bytes'
 
+#: What `b2_authorize_account` v4 answers for the dump key, laid out as the
+#: operation's reference page in B2's documentation has it: the key's
+#: restriction under `apiInfo.storageApi.allowed`, beside the account's API
+#: host, and the token.
 ACCOUNT: dict[str, Any] = {
-    'apiInfo': {'storageApi': {'apiUrl': 'https://api999.backblazeb2.com'}},
+    'accountId': 'account-id',
+    'apiInfo': {
+        'storageApi': {
+            'apiUrl': 'https://api999.backblazeb2.com',
+            'allowed': {
+                'buckets': [{'id': 'bucket-id', 'name': 'bucket-name'}],
+                'capabilities': ['writeFiles'],
+                'namePrefix': 'kluster/state/',
+            },
+        },
+    },
     'authorizationToken': 'account-token',
 }
 UPLOAD_TARGET: dict[str, Any] = {
-    'uploadUrl': 'https://pod-000.backblazeb2.com/b2api/v3/b2_upload_file',
+    'bucketId': 'bucket-id',
+    'uploadUrl': 'https://pod-000-1005-03.backblaze.com/b2api/v4/b2_upload_file?cvt=c001_v0001005_t0027&bucket=bucket-id',
     'authorizationToken': 'upload-token',
 }
 
@@ -213,8 +228,27 @@ if [[ -n $FAKE_CURL_REFUSES && $url == *"$FAKE_CURL_REFUSES"* ]]; then
   printf '%s' '{"code": "bad_auth_token", "message": "Invalid authorization token", "status": 401}'
   exit 22
 fi
+# The key the box authorizes as is the dump key as the `state-backend` stack
+# mints it: confined to its bucket through `bucketIds`, which makes it a
+# multi-bucket key in B2's terms (`test_state_backend_stack` holds the
+# declaration to that). B2 authorizes such a key on v4 alone; the refusal below
+# is the error document B2 answers on v3 (Aetf/kluster-ops#665), numbered for
+# the version asked, with curl's `--fail-with-body` exit and the body kept.
+if [[ $url =~ /b2api/v([0-9]+)/b2_authorize_account$ ]]; then
+  version=${BASH_REMATCH[1]}
+  if (( version < 4 )); then
+    printf '{"code": "bad_request", "message": "This request is not currently supported on API version number %s", "status": 400}' "$version"
+    exit 22
+  fi
+  if (( version > 4 )); then
+    echo "fake curl: no answer for b2_authorize_account v$version: $url" >&2
+    exit 99
+  fi
+  printf '%s' "$FAKE_ACCOUNT"
+  exit 0
+fi
 case $url in
-  *b2_authorize_account*) printf '%s' "$FAKE_ACCOUNT" ;;
+  *b2_authorize_account*) echo "fake curl: b2_authorize_account at no API version: $url" >&2; exit 99 ;;
   *b2_get_upload_url*) printf '%s' "$FAKE_UPLOAD_TARGET" ;;
   *) printf '%s' '{"fileId": "4_z"}' ;;
 esac

@@ -30,6 +30,7 @@ from pathlib import Path
 
 import pytest
 from state_dump_box import (
+    ACCOUNT,
     ARCHIVE,
     CHECKPOINT,
     CHECKPOINT_BAK,
@@ -54,7 +55,9 @@ from state_dump_box import (
 
 from kluster.lib.state_backend import readiness, render, settings, state
 
-AUTHORIZE_URL = 'https://api.backblazeb2.com/b2api/v3/b2_authorize_account'
+#: The URL B2 documents `b2_authorize_account` under, up to the API version:
+#: the one host the script knows before B2 names the account's own.
+AUTHORIZATION_ROOT = 'https://api.backblazeb2.com/b2api/'
 
 TEXT = SCRIPT.read_text()
 
@@ -105,12 +108,13 @@ def test_upload_walks_authorize_then_get_url_then_put(tmp_path: Path) -> None:
 
     assert ran.returncode == 0, ran.stderr
     authorize, get_url, put = box.of('curl')
-    assert authorize.argv[-1] == AUTHORIZE_URL
+    assert authorize.argv[-1].startswith(AUTHORIZATION_ROOT) and authorize.argv[-1].endswith('/b2_authorize_account')
     # Basic auth is the key id and secret, not a token.
     assert authorize.argv[authorize.argv.index('-u') + 1] == 'key-id:key-secret'
 
     # The api url comes from the authorize response, never hardcoded.
-    assert get_url.argv[-1] == 'https://api999.backblazeb2.com/b2api/v3/b2_get_upload_url'
+    api_url = ACCOUNT['apiInfo']['storageApi']['apiUrl']
+    assert get_url.argv[-1].startswith(f'{api_url}/b2api/') and get_url.argv[-1].endswith('/b2_get_upload_url')
     assert get_url.header('Authorization') == 'account-token'
     # Addressed by id: the writeFiles-only key cannot resolve a bucket name.
     assert get_url.argv[get_url.argv.index('--data') + 1] == '{"bucketId":"bucket-id"}'
@@ -127,6 +131,25 @@ def test_upload_walks_authorize_then_get_url_then_put(tmp_path: Path) -> None:
     assert deadlines[2] > deadlines[0] == deadlines[1], deadlines
     # The failure the unit's timeout would otherwise be the only account of.
     assert all('--fail-with-body' in call.argv for call in (authorize, get_url, put))
+
+
+def test_the_stacks_multi_bucket_dump_key_authorizes_and_uploads(tmp_path: Path) -> None:
+    """The dump key as the stack mints it reaches the upload.
+
+    The stack confines the key to the dump bucket through `bucketIds`, which
+    makes it a multi-bucket key in B2's terms, and B2 refuses one on every
+    `b2_authorize_account` version before 4 (`state_dump_box` answers as B2
+    does). A box whose script authorizes on an earlier version fails every
+    night at its first B2 call and uploads nothing.
+    """
+    box = Box(tmp_path)
+
+    ran = box.run()
+
+    assert ran.returncode == 0, ran.stderr
+    *_, put = box.of('curl')
+    assert put.argv[-1] == UPLOAD_TARGET['uploadUrl']
+    assert put.sent == CIPHERTEXT
 
 
 def test_upload_percent_encodes_the_object_name(tmp_path: Path) -> None:
