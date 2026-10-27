@@ -230,11 +230,15 @@ documentation the change makes true ships with it rather than after it.
   a change there takes, is
   [docs/sources-of-truth.md](docs/sources-of-truth.md).
 * Work happens in a `jj` workspace of its own (`jj workspace add -r main
-  .claude/workspaces/<name>`, then `mise trust` inside it, which every
-  `mise x uv` command otherwise refuses), and **a workspace dies with the
-  dispatch that created it** — the agent removes its own when it reports
-  with no pull request, the merging dispatcher removes it after the
-  merge.
+  .claude/workspaces/<name>`, then `mise trust` inside it, which matters
+  only where the workspace is no git worktree — `jj` from 0.46, run from
+  the primary, makes it one, and mise shares the primary's trust with a
+  worktree), and **a
+  workspace dies with the dispatch that created it** — the agent removes
+  its own when it reports with no pull request, the merging dispatcher
+  removes it after the merge, each with `jj workspace forget <name>` from
+  the primary and then `rm -rf` of the directory, which `forget` leaves
+  on disk.
   **Scratch goes under the workspace's own `.claude/`**, which
   `.gitignore` covers apart from the tracked `agents/` and
   `settings.json`: a workspace root is a checkout, so a file written
@@ -260,11 +264,16 @@ documentation the change makes true ships with it rather than after it.
   then refuses with `Won't push commit … since it has no description`
   and a non-zero exit. Read the head SHA back with
   `jj log -r <branch> --no-graph -T commit_id`, not with
-  `git rev-parse HEAD`. That trap is one instance of a rule: inside a
-  workspace, git answers about the primary checkout wherever the answer
-  depends on a working copy, on `HEAD`, or on a path resolved relative
-  to the current directory. The failure modes, the rest of that rule and
-  the rest of the protocol are
+  `git rev-parse HEAD`, which answers for the workspace's `@-` rather
+  than for the branch: the two part when a bookmark was left where it
+  was, and agree when work left in `@` put the bookmark below it, which
+  only the `jj log` before the push shows. That trap is one instance of
+  a rule: inside a workspace, git is the workspace's own git worktree,
+  so it answers about the workspace and acts on its files behind `jj`'s
+  back — `git checkout HEAD -- <file>` discards an uncommitted change,
+  `git stash` takes it off disk. The failure modes, the rest of that
+  rule, the workspace that is no worktree, and the rest of the protocol
+  are
   [dispatch.md](docs/framework/dispatch.md) §1.2.
 * **A builder in a `jj` workspace never fetches; the dispatcher fetches
   and rebases.** A branch that opens behind `main` is the expected case,

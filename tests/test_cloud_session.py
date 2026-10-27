@@ -177,9 +177,11 @@ TRACKED = (
 def test_gitignore_keeps_scratch_out_and_lets_the_tracked_paths_through(tmp_path: Path, path: str) -> None:
     """Evaluated in a repository of its own, so no enclosing checkout answers instead.
 
-    Inside a `jj` workspace git walks up to the primary checkout and re-roots
-    every path (framework/dispatch.md §1.2); a fresh repository holding only
-    `.gitignore` has no such parent to answer for it. No global or system git
+    From a workspace that is no git worktree, git walks up to the primary
+    checkout and re-roots every path (framework/dispatch.md §1.2), and in any
+    checkout the repository's `info/exclude` answers beside `.gitignore`; a
+    fresh repository holding only `.gitignore` has no parent to walk up to,
+    and its `info/exclude` holds no pattern. No global or system git
     configuration is read either, since a user's own excludes file would
     answer beside this one.
     """
