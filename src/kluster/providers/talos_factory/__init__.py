@@ -21,6 +21,17 @@ there at first boot. So the decompressed artifact is extended by `room` bytes
 of zeros, sparsely: the extension costs the machine running the program no
 space, and how much room a disk needs is the consumer's to say.
 
+**A delete removes only the file its own create left.** The object a
+`FactoryImage` stands for is the file, not anything at the factory: the
+factory names an artifact by the schematic's content and offers no delete.
+The file's path is named by its content too, so a replacement that declares
+the same artifact, a targeted `--replace` say, finds the file there and keeps
+it, and the engine then deletes the original. Each create therefore records
+the identity of its own last write to the file, `written`, and the delete
+unlinks the file only while it still carries that identity. A file with
+another identity, a replacement's write say, is left in place, with a
+warning.
+
 What is *done* with an artifact — which schematic it was built from, which
 volume or catalog it feeds — belongs to the components in
 `kluster.components.talos`, not here.
@@ -44,6 +55,7 @@ __all__ = (
     'CHUNK_BYTES',
     'ERROR_BODY_BYTES',
     'FETCH_TIMEOUT',
+    'WRITTEN',
     'FactoryImage',
     'FactoryImageProvider',
     'FactoryRefused',
@@ -65,6 +77,13 @@ CHUNK_BYTES = 1 << 20
 #: private to its owner, and this is a public image whose only secret is the
 #: bandwidth it took to get.
 ARTIFACT_MODE = 0o644
+
+
+#: The output holding the identity of the resource's own write to the file.
+#: State records every identity under this name, and nothing rewrites it,
+#: so a rename needs a migration: a resource recorded under the old name
+#: reads as one with nothing recorded, and its delete unlinks the file.
+WRITTEN = 'written'
 
 
 @final
@@ -160,6 +179,34 @@ def materialize(url: str, path: Path, *, room: int) -> None:
         partial.unlink(missing_ok=True)
 
 
+def _written(path: Path) -> str:
+    """Set the artifact's mode, and answer the identity of that write: the file number and status-change time.
+
+    Run on a file the create reused as much as on one it fetched, since the
+    `chmod` is the write: a `chmod` to the mode a file already has still marks
+    its status-change time (POSIX `chmod()`, "shall mark for update the last
+    file status change timestamp"), so a reused file gets an identity of its
+    own while the gigabyte it holds is kept. The mark is a time from the file
+    system's clock, so it tells apart only writes that clock tells apart. A
+    replacement is created in a later run than its original. Two writes
+    within one tick of a file system that stamps coarsely, ZFS among them,
+    share a time. Neither half is derived from the
+    content, which a replacement writing the same artifact shares, and the
+    pair survives a later write at the same path, which a file number alone,
+    allocated again once freed, does not.
+
+    A string rather than numbers: a number crosses the engine as a float,
+    and a status-change time in nanoseconds is past the integers a float holds
+    exactly.
+    """
+    path.chmod(ARTIFACT_MODE)
+    return _identity(path.stat())
+
+
+def _identity(status: os.stat_result) -> str:
+    return f'{status.st_ino} {status.st_ctime_ns}'
+
+
 #: Every input, each of which makes the file another file.
 _IDENTITY = ('url', 'path', 'room')
 
@@ -180,14 +227,18 @@ class FactoryImageProvider(dynamic.ResourceProvider):
     **`read` is deliberately the inherited one, which reports no drift.** The
     file is a build artifact rather than managed state — a CI runner is fresh
     every time and has none of them — and a refresh that called a missing file
-    a deleted resource would take the worker's disk down with it.
+    a deleted resource would take the worker's disk down with it. It also
+    hands back `written` as the create recorded it rather than reading it off
+    the file: a refresh reads an original awaiting its delete as well, and one
+    that recorded what it found there would give the original the identity of
+    its replacement's write.
     """
 
     def create(self, props: dict[str, Any]) -> dynamic.CreateResult:
         path = Path(str(props['path']))
         # A number crosses the engine as a float, whatever the program declared.
         materialize(str(props['url']), path, room=int(props['room']))
-        return dynamic.CreateResult(id_=str(path), outs=props)
+        return dynamic.CreateResult(id_=str(path), outs={**props, WRITTEN: _written(path)})
 
     def diff(self, _id: str, olds: dict[str, Any], news: dict[str, Any]) -> dynamic.DiffResult:
         if any(_is_unknown(news.get(key)) for key in _IDENTITY):
@@ -205,7 +256,34 @@ class FactoryImageProvider(dynamic.ResourceProvider):
         )
 
     def delete(self, _id: str, props: dict[str, Any]) -> None:
-        Path(str(props['path'])).unlink(missing_ok=True)
+        """Unlink the file while it is still the one this resource's create left.
+
+        Another identity at the path is another write, by a replacement,
+        another stack or another machine, or a status change since then, and
+        the file is left: the delete says so and returns rather than failing,
+        since an original whose delete fails stays in state and that delete
+        fails again on every later run. A resource with nothing recorded
+        unlinks the file, as every delete did before the create recorded an
+        identity. The provider has no update to record one later, so such a
+        resource keeps none until it is replaced. If that replacement reused
+        the file, the original's delete removes it.
+
+        The check and the unlink are two calls, so a write landing between
+        them would be removed. Within a stack nothing writes the path at that
+        point: the engine deletes an original only after its replacement's
+        create has returned, and no other resource of the stack declares the
+        path.
+        """
+        path = Path(str(props['path']))
+        try:
+            status = path.stat()
+        except FileNotFoundError:
+            return
+        recorded = props.get(WRITTEN)
+        if recorded is not None and recorded != _identity(status):
+            pulumi.log.warn(f'{path} is not the file this resource recorded, so it is left in place')
+            return
+        path.unlink(missing_ok=True)
 
 
 @final
