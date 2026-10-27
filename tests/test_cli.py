@@ -41,7 +41,7 @@ from memory_kit import MemoryKit
 
 from kluster.lib import acquisition, stack_environment
 from kluster.lib import workstation as lib_workstation
-from kluster.scripts.credentials import age, cli, devices, entries, escrow, masters
+from kluster.scripts.credentials import age, cli, devices, entries, escrow, kdbx, masters
 from kluster.scripts.credentials.kdbx import PATH_ENV, KdbxStore
 
 PASSWORD = 'kit-password'
@@ -977,6 +977,104 @@ def test_import_reads_its_pipe_before_unlocking_the_kit(
     assert cli.main(argv) == 1
 
     assert 'standard input was empty' in caplog.text
+
+
+class _Prompts:
+    """A real kit on disk, filed with a recovery key and a stack passphrase, whose every unlock is counted.
+
+    Each command reaches it the way a run does, a locked `KdbxStore` from
+    `from_env`, so what is counted is the master password being asked for and
+    the database file being opened, each as often as a run would.
+    """
+
+    def __init__(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.asked: list[str] = []
+        self.opened: list[str] = []
+
+        def getpass(prompt: str = '') -> str:
+            self.asked.append(prompt)
+            return PASSWORD
+
+        real = kdbx.PyKeePass
+
+        def pykeepass(filename: str, **kwargs: Any) -> Any:
+            self.opened.append(filename)
+            return real(filename, **kwargs)
+
+        monkeypatch.setattr('getpass.getpass', getpass)
+        monkeypatch.setattr(kdbx, 'PyKeePass', pykeepass)
+        self.registry = escrow.Registry.open(tmp_path / 'escrow')
+        made = KdbxStore.create(tmp_path / 'kit.kdbx', PASSWORD)
+        _ = escrow.init(made, self.registry)
+        self.stack_passphrase = escrow.generate(escrow.Vault.open(made, self.registry), escrow.PASSPHRASE)
+        # The kit is filed; what is counted from here is the command's own.
+        self.asked.clear()
+        self.opened.clear()
+
+        def from_env(_path: Path | None = None) -> KdbxStore:
+            return KdbxStore(path=made.path)
+
+        monkeypatch.setattr(KdbxStore, 'from_env', from_env)
+
+    def main(self, *argv: str, bundle: Path) -> int:
+        return cli.main(['--escrow', str(self.registry.root), *argv, '--bundle-dir', str(bundle)])
+
+
+@needs_age
+def test_a_row_that_reads_nothing_from_the_kit_never_asks_for_its_master_password(
+    chain: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`state-backend-host-key generate` takes the operator passphrase through the chain and reads nothing from the kit.
+
+    Named nowhere in the command: the kit is not opened because nothing the
+    row reaches asks it for anything, which is what a new row of the same
+    kind gets too.
+    """
+    chain.mkdir(parents=True)
+    _ = (chain / stack_environment.OPERATOR_PASSPHRASE_SLOT).write_text('from-the-slot\n')
+    kit = _Prompts(tmp_path, monkeypatch)
+    seen: list[str] = []
+
+    def host_key(*, stack: cli.pulumi_config.Stack, public_file: Path) -> str:
+        _ = public_file
+        seen.append(stack.env[cli.pulumi_config.PASSPHRASE_ENV])
+        return 'ssh-ed25519 AAAA'
+
+    def target(_name: str) -> Path:
+        return tmp_path / 'host-key.pub'
+
+    monkeypatch.setattr(cli.derived, 'state_backend_host_key', host_key)
+    monkeypatch.setattr(cli.derived, 'committed_target', target)
+
+    code = kit.main('derived', cli.derived.STATE_BACKEND_HOST_KEY_ROW, 'generate', bundle=tmp_path / 'bundle')
+
+    assert code == 0
+    assert seen == ['from-the-slot']
+    assert kit.asked == []
+    assert kit.opened == []
+
+
+@needs_age
+def test_a_row_that_opens_stacks_under_the_stack_passphrase_asks_for_the_master_password_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`pulumi-passphrase re-encrypt` reads the kit for the environment and again for the earlier generations: one prompt."""
+    kit = _Prompts(tmp_path, monkeypatch)
+    seen: list[str | None] = []
+
+    def re_encrypt(environment: cli.pulumi_config.BackendEnvironment, **_: object) -> list[str]:
+        for name in cli.pulumi_config.ON_STACK_PASSPHRASE:
+            seen.append(environment.variables(name).get(cli.pulumi_config.PASSPHRASE_ENV))
+        return []
+
+    monkeypatch.setattr(cli.lifecycle.pulumi_config, 're_encrypt_on_stack_passphrase', re_encrypt)
+
+    code = kit.main('derived', escrow.row_name(escrow.PASSPHRASE), 're-encrypt', bundle=tmp_path / 'bundle')
+
+    assert code == 0
+    assert seen == [kit.stack_passphrase] * len(cli.pulumi_config.ON_STACK_PASSPHRASE)
+    assert len(kit.asked) == 1
+    assert len(kit.opened) == 1
 
 
 class _Terminal(io.StringIO):
