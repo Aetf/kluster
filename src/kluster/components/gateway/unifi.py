@@ -609,7 +609,10 @@ class SiteFirewall(Component, pulumi_type='kluster:gateway:SiteFirewall'):
                         type=group.kind,
                         members=[str(group.subnet)],
                         site=site,
-                        opts=child,
+                        # The name is stated, and the controller refuses a
+                        # second firewall group under it, so a replacement
+                        # created before the delete would fail.
+                        opts=self.child_opts(delete_before_replace=True),
                     )
 
         def destination(policy: Policy, zone: pulumi.Input[str]) -> unifi.FirewallZonePolicyDestinationArgs:

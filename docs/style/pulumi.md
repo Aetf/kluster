@@ -430,13 +430,29 @@ second object under one name or adopts the existing one, is replaced
 delete-first.** Create-before-delete asks the target to hold two objects
 under one name. Refused, the replacement fails. Adopted, as the libvirt
 provider adopts a volume, the closing delete removes what the create
-just wrote. Where the provider's own diff orders it, as the Kubernetes
-provider's does for a named object that keeps its name and namespace,
-that is enough. Otherwise, the resource declares `delete_before_replace`,
-with the reason at the declaration. A target that holds two objects
-under one name between the create and the delete, as AdGuard's rewrite
-list does, needs neither. Today: the homelab worker's disk, seed and
-domain.
+just wrote, in a run that reports success. A provider's own diff orders
+only the replacements it plans, as the Kubernetes provider's does for a
+named object that keeps its name and namespace. A replacement the engine
+decides without asking the provider takes its order from the resource's
+own `delete_before_replace`, and without one is created first; among
+them are a targeted `--replace` or taint, and a replacement that
+`replace_with` carries over from another resource, except that a
+delete-first replacement of that other resource deletes it first
+whatever its own option says. So on a target that refuses, a provider
+whose diff orders the replacement is enough, since what that diff does
+not plan is either deleted first or refused at its create before
+anything is deleted. On a target that adopts it is not, and the resource
+declares `delete_before_replace` whatever its provider's diff does; so
+does every resource whose provider's diff does not order the
+replacement, either way with the reason at the declaration. A provider
+this repository writes may answer an adopting target in its delete
+instead, by removing only the object that resource's own create wrote,
+which makes either order safe. A target that holds two objects under one
+name between the create and the delete, as AdGuard's rewrite list does,
+needs neither. Today: the homelab worker's disk, seed and domain; a
+forge repository's Environments, Actions variables, branch protection
+and vulnerability alerts; the B2 buckets; a Cloudflare zone, its DNSSEC
+state and its records; and the gateway's UniFi firewall groups.
 
 **Adopted resources graduate to declared.** `import` is step one of
 adoption; the end state is an explicit declaration whose fields are
