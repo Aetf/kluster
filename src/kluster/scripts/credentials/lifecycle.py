@@ -267,22 +267,23 @@ def environment(
     """What a Pulumi run needs here, recovered and read rather than stored.
 
     The stack passphrase is recovered from the escrow with the kit's recovery
-    key (§2.2), so the one place it exists outside its consumers is a committed
-    ciphertext nobody can open without the kit, and so is `physical`'s own
-    passphrase. Each is recovered only when a stack under it is asked for,
-    and the environment unlocks the kit then and not before: it asks a
-    command whose stacks take neither, such as one that writes only an
+    key (§2.2), so the one place it exists outside its consumers is a
+    committed ciphertext nobody can open without the kit, and so is
+    `physical`'s own passphrase. Each is recovered only when a stack under it
+    is asked for, and the environment unlocks the kit then and not before: it
+    asks a command whose stacks take neither, such as one that writes only an
     operator stack, for no master password, and a kit with nothing filed
-    under `physical`'s label refuses the commands that reach `physical` by naming the command that
-    files one, and no other. The operator passphrase is
-    found the way the `operator-stack` driver finds it, through the
+    under `physical`'s label refuses the commands that reach `physical` by
+    naming the command that files one, and no other. The operator passphrase
+    is found the way the `operator-stack` driver finds it, through the
     acquisition chain (`stack_environment.operator_passphrase`), only when an
     operator stack is asked for, and at most once for this environment; the
     escrow is its recovery path, which `credentials derived
-    operator-passphrase recover` walks and a refusal names. The URL is read from the bundle `state-backend bundle`
-    writes, so the two halves of "log in to the backend" come from one command — and a
-    machine with no bundle yet answers with no URL, which its caller can see
-    rather than discover inside a subprocess.
+    operator-passphrase recover` walks and a refusal names. The URL is read
+    from the bundle `state-backend bundle` writes, so the two halves of "log
+    in to the backend" come from one command — and a machine with no bundle
+    yet answers with no URL, which its caller can see rather than discover
+    inside a subprocess.
     """
     # Opened on first use, by whichever passphrase is asked for first: the
     # vault reads the kit's recovery key, and the environment never unlocks
@@ -310,8 +311,8 @@ def _physical_passphrase(vault: Callable[[], escrow.Vault]) -> str:
     """`physical`'s passphrase, recovered with the kit; a label with nothing filed is refused by its fill command.
 
     The vault is opened outside the label's lookup, so a kit with no recovery
-    key is refused here as it is for every other stack, rather than as a
-    passphrase this machine cannot give.
+    key is refused here as it is for a stack under the stack passphrase,
+    rather than as a passphrase this machine cannot give.
     """
     opened = vault()
     try:

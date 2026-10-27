@@ -16,6 +16,12 @@ that buys, and what a failed push costs instead, is the register's to say.
 A row appears here when it has a slot to be delivered into: a mint with no
 slot would be exactly the parked secret the register rules out.
 
+**A row that mints into a stack finds that stack's passphrase first**:
+the environment finds a passphrase only when a stack asks for it, and a mint
+that went first would leave its credential live at the provider when the
+passphrase is then refused (`_passphrase_in_hand`; a seal's declaring stack
+is asked whether it exists, which finds it the same way).
+
 Which slot a row is pushed into follows from what consumes it. A stack's
 credential goes into that stack's committed configuration, where the program
 reads it before it can run -- the state-backend appliance's OCI key included,
@@ -291,6 +297,24 @@ OCI_SEED_ENTRY = entries.SEEDS['oci'].entry
 B2_SEED_ENTRY = entries.SEEDS['b2'].entry
 
 
+def _passphrase_in_hand(stack: pulumi_config.Stack) -> None:
+    """Find the passphrase `stack`'s configuration is under, refusing as the stack itself would, before a mint.
+
+    The environment looks for a stack's passphrase only when that stack is
+    first asked for (`lifecycle.environment`), so whatever it refuses for that
+    stack (today, a kit with no recovery key, a label with nothing filed under
+    it, or a machine that cannot give the operator passphrase) is refused
+    there. For a row that mints and then writes its stack, that is after the
+    mint, with the new credential live at its provider and in no slot. Asked
+    first, every such refusal fires before anything is minted, and a
+    successful run finds the passphrase once: the environment keeps what it
+    found for the run. Nothing here reaches the state backend, so a stack the
+    row's first mint creates is not refused for being absent.
+    """
+    log.info("finding the passphrase the %s stack's configuration is under", stack.name)
+    _ = stack.env
+
+
 def _deliverable(stack: pulumi_config.Stack, *, own: str) -> None:
     """Refuse a delivery aimed anywhere but a stack of this project that is there to take it.
 
@@ -305,14 +329,17 @@ def _deliverable(stack: pulumi_config.Stack, *, own: str) -> None:
     exception because its first mint *is* its bring-up (credentials.md §4.1):
     nothing else creates it, so the push cannot assume it exists.
 
-    Before the kit is opened and before anything is minted, so a refusal here
-    leaves no token live at the provider and no stack in the backend.
+    Each stack's passphrase is found here too (`_passphrase_in_hand`), the
+    row's own stack's included. All of it runs before the seed is read and
+    before anything is minted, so a refusal here leaves no token live at the
+    provider and no stack in the backend.
     """
     if stack.name not in conventions.STACK_NAMES.names():
         raise pulumi_config.SlotRefused(
             f'{stack.name!r} is no stack of this project, so nothing would read a token delivered there; '
             f'the stacks are {", ".join(sorted(conventions.STACK_NAMES.names()))}'
         )
+    _passphrase_in_hand(stack)
     if stack.name != own and not stack.exists():
         raise pulumi_config.StackMissing(
             f'the {stack.name} stack does not exist in the state backend, and a mint creates no stack but '
@@ -389,7 +416,10 @@ def cloudflare_gateway_acme(
     states: the token is named after this row and the mint retires every other
     token of that name, so a delivery aimed elsewhere would revoke the
     gateway's live credential on its way to filling a different stack's slot.
+    The stack's passphrase is found before the seed is read
+    (`_passphrase_in_hand`).
     """
+    _passphrase_in_hand(stack)
     zones = GATEWAY_ACME_ZONES
     log.info('opening the Cloudflare seed from the kit')
     session = cloudflare.Session.from_entry(kit, seed_entry)
@@ -504,7 +534,11 @@ def oci_physical(
     for another tenancy's, while catching it still costs nothing. A run given
     `compartment_id` is pointed at a drill tenancy and is not held to it, for
     the reason `oci_iam.ensure_compartment` is not.
+
+    The stack's passphrase is found before the seed is read
+    (`_passphrase_in_hand`).
     """
+    _passphrase_in_hand(stack)
     pending = oci_iam.mint_api_key(
         kit, consumer=PHYSICAL_STACK, compartment_id=compartment_id, seed_entry=seed_entry, connect=connect
     )
@@ -528,7 +562,8 @@ def oci_state_backend(
     The shape `oci_physical` delivers, confined to the compartment
     `conventions` names for the appliance: the stack program builds its OCI
     provider from these three values (rfc-006 §4.1). Refused before anything
-    is minted while the stack has no checkpoint (`_require_initialized`).
+    is minted while the stack has no checkpoint (`_require_initialized`) or
+    while this machine cannot give its passphrase (`_passphrase_in_hand`).
 
     The account is held against `conventions.OCI_TENANCY` here as it is for the
     row above: this key builds the appliance the whole installation's state
@@ -538,6 +573,7 @@ def oci_state_backend(
     is not.
     """
     _require_initialized(stack)
+    _passphrase_in_hand(stack)
     pending = oci_iam.mint_api_key(
         kit,
         consumer=conventions.STATE_BACKEND,
@@ -559,8 +595,10 @@ def b2_management(kit: KdbxStore, *, stack: pulumi_config.Stack, seed_entry: str
     (`b2.py`): the credential that manages the backup buckets cannot read a
     byte out of them. Both halves are secrets — the id is not the key, but it
     names the one key of that name the account holds, and the pair is one
-    credential.
+    credential. The stack's passphrase is found before the seed is read
+    (`_passphrase_in_hand`).
     """
+    _passphrase_in_hand(stack)
     log.info('opening the B2 seed from the kit')
     pending = b2.mint_management(kit, seed_entry=seed_entry)
 
@@ -614,8 +652,11 @@ def b2_state_backend_management(kit: KdbxStore, *, stack: pulumi_config.Stack, s
     (`b2.STATE_BACKEND_MANAGEMENT`): retirement matches a role's name, so one
     name for both would have each mint revoke the other stack's key. The
     stack declares the dump bucket and the dump key with it (rfc-006 §4.1).
+    Its checkpoint and its passphrase are asked for before the seed is read,
+    as for the appliance's OCI key.
     """
     _require_initialized(stack)
+    _passphrase_in_hand(stack)
     log.info('opening the B2 seed from the kit')
     pending = b2.mint_management(kit, seed_entry=seed_entry, role=b2.STATE_BACKEND_MANAGEMENT)
 
