@@ -359,17 +359,21 @@ See also: docs/credentials.md -- §2 the seeds, §3 the derived rows, §4 this o
 def _add_bundle_dir(command: argparse.ArgumentParser) -> None:
     """Say where the state backend's client bundle is.
 
-    Every row delivered into a Pulumi config secret needs it: the stack's
-    configuration lives in the state backend, so pushing into it means
+    Every command that reaches a stack whose state is in the state backend
+    needs it: a config command selects its stack in the backend, so writing
+    a stack's configuration, reading it back, or reading its state means
     reaching the backend, which is this bundle plus the stack's passphrase:
-    the stack passphrase the kit recovers, or, for an operator stack, the
-    operator passphrase the acquisition chain finds.
+    the stack passphrase or `physical`'s, each recovered with the kit, or,
+    for an operator stack, the operator passphrase the acquisition chain
+    finds. A stack whose state is committed, as the `state-backend` stack's
+    is, needs no bundle, and a run without one refuses only the stacks in the
+    backend (`pulumi_config.Stack.require_backend`).
     """
     _ = command.add_argument(
         '--bundle-dir',
         type=Path,
         default=workstation.bundle_dir(),
-        help='the client certificates `state-backend` wrote, which reach the stack config',
+        help='the client certificates `state-backend` wrote, which reach the stacks whose state is in the backend',
     )
 
 

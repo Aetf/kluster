@@ -282,14 +282,11 @@ def environment(
     operator-passphrase recover` walks and a refusal names. The URL is read
     from the bundle `state-backend bundle` writes, so the two halves of "log
     in to the backend" come from one command. A machine with no bundle yet
-    answers with no URL and says why (`no_backend`). A command that asks
-    before it acts -- each row that mints into a stack, before the mint, and
-    the sealer, for `physical` and for the stack that declares a sealed value
-    (`pulumi_config.Stack.require_backend`) -- is then refused by name for a
-    stack whose state is in the backend, and a command whose stacks keep their
-    state committed needs no bundle at all. A command that does not ask still
-    starts `pulumi` with no backend named, which answers from whatever backend
-    the caller's environment names.
+    answers with no URL and says why (`no_backend`). Every `pulumi` run
+    against a stack whose state is in the backend is then refused by name
+    before it starts (`pulumi_config.Stack.require_backend`), and each row
+    that mints into such a stack is refused so before the mint; a command
+    whose stacks keep their state committed needs no bundle at all.
     """
     # Opened on first use, by whichever passphrase is asked for first: the
     # vault reads the kit's recovery key, and the environment never unlocks

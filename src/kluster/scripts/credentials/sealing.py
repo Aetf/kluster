@@ -88,11 +88,11 @@ def cluster_kubeconfig(physical: pulumi_config.Stack) -> str:
     what an apply restricted by `--target` leaves for an export it skipped --
     is refused by name rather than handed to `kubeseal` as a file. A machine
     with no backend to reach `physical` in is refused before the stack is
-    asked anything (`pulumi_config.Stack.require_backend`), rather than told
-    there is no cluster by whatever backend its environment names.
+    asked anything, as every `pulumi` run is (`pulumi_config.Stack.require_backend`),
+    rather than told there is no cluster by whatever backend its environment
+    names.
     """
     output = conventions.PHYSICAL_OUTPUTS.kubeconfig
-    physical.require_backend()
     if not physical.exists():
         raise NoCluster(f'the `{physical.name}` stack has no state, so there is no cluster to seal to yet')
     value = physical.outputs().get(output)
@@ -163,11 +163,10 @@ class Sealer:
         A seal fills a stack that is already there: creating one is that
         stack's own bring-up. Asked before anything is minted, so a refusal
         leaves nothing live at a provider; a machine with no backend to reach
-        the stack in is refused before the backend is asked
-        (`pulumi_config.Stack.require_backend`).
+        the stack in is refused before the backend is asked, as every `pulumi`
+        run is (`pulumi_config.Stack.require_backend`).
         """
         stack = self.open_stack(value.stack)
-        stack.require_backend()
         if not stack.exists():
             raise pulumi_config.StackMissing(
                 f'the `{value.stack}` stack does not exist in the state backend, so it has no configuration to '
