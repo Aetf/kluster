@@ -599,6 +599,22 @@ def test_a_record_whose_declaring_stack_does_not_exist_writes_neither_end(
     assert stacks.runner(PHYSICAL).config == {}
 
 
+def test_a_password_recorded_before_physical_exists_creates_it_and_writes_the_sealed_copy(
+    stacks: Stacks, tmp_path: Path
+) -> None:
+    """The declaring stack is held to exist before the console steps; the row's own is not, and its fill creates it."""
+    secret = tmp_path / 'password'
+    _ = secret.write_text('a-drawn-password\n')
+    stacks.runner(PHYSICAL).stacks.clear()
+    sealer = sealing.Sealer(certificate='', open_stack=stacks.open, run=fake_kubeseal)
+
+    _ = devices.deliver(BGP, stack=stacks.open(BGP.stack), given={'password': str(secret)}, sealer=sealer)
+
+    assert stacks.runner(PHYSICAL).stacks == [PHYSICAL]
+    assert stacks.runner(PHYSICAL).config == {physical.GATEWAY_BGP_PASSWORD: 'a-drawn-password'}
+    assert written(stacks, conventions.sealed.BGP_PASSWORD) == {'password': 'AgB-sealed-a-drawn-password'}
+
+
 def test_seal_writes_the_worker_s_copy_of_what_the_gateway_s_stack_holds(
     stacks: Stacks, sealer: sealing.Sealer, kubeseal: str, key_pair: KeyPair
 ) -> None:
@@ -618,6 +634,18 @@ def test_seal_before_the_password_is_recorded_names_the_command_that_records_it(
     assert refused.value.missing is devices.Missing.ABSENT
     assert refused.value.record in named_leaves(str(refused.value))
     assert ('derived', devices.BGP, 'record') in named_leaves(str(refused.value))
+    assert written(stacks, conventions.sealed.BGP_PASSWORD) == {}
+
+
+def test_seal_before_the_declaring_stack_exists_is_refused_and_writes_nothing(stacks: Stacks) -> None:
+    stacks.runner(PHYSICAL).config[physical.GATEWAY_BGP_PASSWORD] = 'the-recorded-password'
+    stacks.runner(K8S_BASE).stacks.clear()
+    sealer = sealing.Sealer(certificate='', open_stack=stacks.open, run=fake_kubeseal)
+
+    with pytest.raises(pulumi_config.StackMissing) as refused:
+        devices.seal(BGP, stack=stacks.open(BGP.stack), sealer=sealer)
+
+    assert refused.value.stack == K8S_BASE
     assert written(stacks, conventions.sealed.BGP_PASSWORD) == {}
 
 
@@ -777,7 +805,7 @@ def test_a_dkim_key_the_mail_zones_do_not_publish_is_refused_before_anything_is_
 
     assert not run.seals()
     assert written(stacks, conventions.sealed.DKIM_EXIM) == {}
-    assert not apps.invocations
+    assert not apps.plain and not apps.config
     assert not any(line in str(refused.value) or line in caplog.text for line in _body(pem))
 
 
@@ -844,6 +872,7 @@ def test_the_dkim_key_is_sealed_at_its_path_for_exims_secret_and_read_back(
     assert refused.value.read_back is pulumi_config.ReadBack.DIFFERENT
 
 
+@pytest.mark.usefixtures('apps')
 @pytest.mark.parametrize('given', [None, devices.STDIN], ids=['no flag', '--key-file -'])
 def test_a_dkim_key_is_never_taken_at_a_terminal(
     monkeypatch: pytest.MonkeyPatch, sealer: sealing.Sealer, given: str | None

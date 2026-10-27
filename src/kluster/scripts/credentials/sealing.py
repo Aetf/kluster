@@ -162,10 +162,13 @@ class Sealer:
 
         A seal fills a stack that is already there: creating one is that
         stack's own bring-up. Asked before anything is minted, so a refusal
-        leaves nothing live at a provider; a machine with no backend to reach
-        the stack in is refused before the backend is asked, as every `pulumi`
-        run is (`pulumi_config.Stack.require_backend`).
+        leaves nothing live at a provider, and before a console's steps are
+        printed or a value is asked for, so a refusal costs the operator
+        nothing made by hand. A machine with no backend to reach the stack in,
+        or no passphrase to open it with, is refused before the backend is
+        asked, as every `pulumi` run is (`pulumi_config.Stack.require_backend`).
         """
+        log.info('checking the state backend for the %s stack the sealed %s is written into', value.stack, value.name)
         stack = self.open_stack(value.stack)
         if not stack.exists():
             raise pulumi_config.StackMissing(
@@ -211,7 +214,13 @@ class Sealer:
         return sealed
 
     def write(self, value: conventions.sealed.SealedValue, sealed: Mapping[str, str]) -> None:
-        """Write ciphertext already sealed for `value` into its stack, each at the path its row derives."""
+        """Write ciphertext already sealed for `value` into its stack, each at the path its row derives.
+
+        The stack is found here again rather than handed in by a caller that
+        found it earlier: every write is then held to a declaring stack that
+        exists, whichever caller reaches it and whether or not it asked
+        first, at the cost of one more `pulumi stack ls`.
+        """
         stack = self.stack(value)
         for key in value.keys:
             stack.set_plain_at(value.path(key), sealed[key])
