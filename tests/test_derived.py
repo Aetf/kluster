@@ -58,6 +58,7 @@ from kluster.scripts.credentials import (
     derived,
     entries,
     escrow,
+    lifecycle,
     masters,
     oci_iam,
     pki,
@@ -1114,14 +1115,20 @@ def test_a_re_run_rotates_the_management_key(
 # -- the `state-backend` stack's configuration -------------------------------
 
 
-def _state_backend_stack(checkout: Path, *, initialized: bool = True) -> tuple[pulumi_config.Stack, RecordedPulumi]:
+#: An environment holding the operator passphrase, which the `state-backend`
+#: stack's configuration is under.
+OPERATOR_EQUIPPED = pulumi_config.BackendEnvironment(operator=lambda: 'an-operator-passphrase')
+
+
+def _state_backend_stack(
+    checkout: Path, *, initialized: bool = True, environment: pulumi_config.BackendEnvironment = OPERATOR_EQUIPPED
+) -> tuple[pulumi_config.Stack, RecordedPulumi]:
     """The `state-backend` stack over `checkout`, with its first checkpoint laid out unless `initialized` is false."""
     if initialized:
         path = checkout / stack_environment.CHECKPOINTS / '.pulumi' / 'stacks' / 'kluster-py'
         path.mkdir(parents=True)
         _ = (path / f'{derived.STATE_BACKEND_STACK}.json').write_text('{}')
     runner = RecordedPulumi(stacks=[derived.STATE_BACKEND_STACK])
-    environment = pulumi_config.BackendEnvironment(operator=lambda: 'an-operator-passphrase')
     return pulumi_config.Stack(
         name=derived.STATE_BACKEND_STACK, directory=checkout, environment=environment, run=runner
     ), runner
@@ -1204,6 +1211,165 @@ def test_the_state_backend_rows_refuse_a_stack_with_no_checkpoint_before_anythin
     assert tenancy.identity.users == users
     assert runner.invocations == []
     assert not public_file.exists()
+
+
+# -- a stack's passphrase, found before the mint ------------------------------
+#
+# The environment a `credentials` run builds finds each passphrase only when a
+# stack first asks for it (`lifecycle.environment`), so a row that minted
+# first would meet a passphrase this machine cannot give with its new
+# credential already live. Each row that calls `_passphrase_in_hand` is run
+# here on an environment that refuses that stack's passphrase: the fake
+# platform holds nothing new afterwards, `pulumi` was never run, and the
+# refusal is the one the stack's environment gives on its own, undressed.
+# `cloudflare_dns01` finds its declaring stack's passphrase through
+# `Sealer.stack`'s existence check, which `test_sealing.py` holds ahead of the
+# mint.
+
+
+def _with_no_recovery_key(kit: KdbxStore, tmp_path: Path) -> pulumi_config.BackendEnvironment:
+    """The environment a `credentials` run builds over `kit`, which holds its seeds and no recovery key."""
+    assert not escrow.holds_recovery(kit)
+    return lifecycle.environment(kit, tmp_path / 'no-bundle', escrow.Registry.open(tmp_path / 'escrow'))
+
+
+def _refused_as_its_stack_is(refused: BaseException, stack: pulumi_config.Stack) -> None:
+    """`refused` is the refusal `stack`'s environment gives when that stack is asked for, as itself."""
+    with pytest.raises(type(refused)) as own:
+        _ = stack.env
+    assert str(refused) == str(own.value)
+
+
+def _refused_as_a_stack_under_the_stack_passphrase_is(
+    refused: BaseException, environment: pulumi_config.BackendEnvironment
+) -> None:
+    """A kit with no recovery key refuses the row the way it refuses a stack under the stack passphrase."""
+    assert isinstance(refused, escrow.EscrowRefused)
+    assert refused.refusal is escrow.Refusal.NO_RECOVERY_KEY
+    with pytest.raises(escrow.EscrowRefused) as theirs:
+        _ = environment.variables(pulumi_config.ON_STACK_PASSPHRASE[0])
+    assert (refused.refusal, str(refused)) == (theirs.value.refusal, str(theirs.value))
+
+
+def test_the_zones_row_on_a_kit_with_no_recovery_key_mints_nothing(
+    api: FakeApi, kit: KdbxStore, tmp_path: Path
+) -> None:
+    """Delivered into its own stack alone, which no existence check asks for before the mint."""
+    environment = _with_no_recovery_key(kit, tmp_path)
+    runner = RecordedPulumi()
+    slot = pulumi_config.Stack(name=STACK, directory=pulumi_config.project_dir(), environment=environment, run=runner)
+
+    with pytest.raises(escrow.EscrowRefused) as refused:
+        derived.cloudflare_zones(kit, stacks=[slot])
+
+    assert _live(api) == []
+    assert runner.invocations == []
+    _refused_as_a_stack_under_the_stack_passphrase_is(refused.value, environment)
+    _refused_as_its_stack_is(refused.value, slot)
+
+
+def _physical_on(environment: pulumi_config.BackendEnvironment) -> tuple[pulumi_config.Stack, RecordedPulumi]:
+    runner = RecordedPulumi()
+    stack = pulumi_config.Stack(
+        name=derived.PHYSICAL_STACK, directory=pulumi_config.project_dir(), environment=environment, run=runner
+    )
+    return stack, runner
+
+
+def test_the_gateway_row_on_a_kit_with_no_recovery_key_mints_nothing(
+    api: FakeApi, kit: KdbxStore, tmp_path: Path
+) -> None:
+    environment = _with_no_recovery_key(kit, tmp_path)
+    slot, runner = _physical_on(environment)
+
+    with pytest.raises(escrow.EscrowRefused) as refused:
+        _ = derived.cloudflare_gateway_acme(kit, stack=slot)
+
+    assert _gateway_live(api) == []
+    assert runner.invocations == []
+    _refused_as_a_stack_under_the_stack_passphrase_is(refused.value, environment)
+    _refused_as_its_stack_is(refused.value, slot)
+
+
+def test_the_physical_oci_row_on_a_kit_with_no_recovery_key_mints_nothing(
+    oci_kit: KdbxStore, tenancy: Tenancy, tmp_path: Path
+) -> None:
+    environment = _with_no_recovery_key(oci_kit, tmp_path)
+    slot, runner = _physical_on(environment)
+    users = dict(tenancy.identity.users)
+    keys = {user: list(held) for user, held in tenancy.identity.keys.items()}
+
+    with pytest.raises(escrow.EscrowRefused) as refused:
+        _ = derived.oci_physical(oci_kit, stack=slot, compartment_id=COMPARTMENT, connect=tenancy)
+
+    assert tenancy.identity.users == users
+    assert tenancy.identity.keys == keys
+    assert runner.invocations == []
+    _refused_as_a_stack_under_the_stack_passphrase_is(refused.value, environment)
+    _refused_as_its_stack_is(refused.value, slot)
+
+
+def test_the_physical_b2_row_on_a_kit_with_no_recovery_key_mints_nothing(
+    b2_api_fake: b2_api.FakeApi, b2_kit: KdbxStore, tmp_path: Path
+) -> None:
+    environment = _with_no_recovery_key(b2_kit, tmp_path)
+    slot, runner = _physical_on(environment)
+
+    with pytest.raises(escrow.EscrowRefused) as refused:
+        _ = derived.b2_management(b2_kit, stack=slot)
+
+    assert b2_api_fake.named(b2.MANAGEMENT.name) == []
+    assert runner.invocations == []
+    _refused_as_a_stack_under_the_stack_passphrase_is(refused.value, environment)
+    _refused_as_its_stack_is(refused.value, slot)
+
+
+@needs_age
+def test_the_physical_b2_row_with_no_physical_passphrase_filed_mints_nothing(
+    b2_api_fake: b2_api.FakeApi, b2_kit: KdbxStore, tmp_path: Path
+) -> None:
+    """The escrow holds the stack passphrase and nothing under `physical`'s label, so only `physical`'s own refuses."""
+    registry = escrow.Registry.open(tmp_path / 'escrow')
+    _ = escrow.init(b2_kit, registry)
+    _ = escrow.generate(escrow.Vault.open(b2_kit, registry), escrow.PASSPHRASE)
+    slot, runner = _physical_on(lifecycle.environment(b2_kit, tmp_path / 'no-bundle', registry))
+
+    with pytest.raises(pulumi_config.PassphraseMissing) as refused:
+        _ = derived.b2_management(b2_kit, stack=slot)
+
+    assert b2_api_fake.named(b2.MANAGEMENT.name) == []
+    assert runner.invocations == []
+    _refused_as_its_stack_is(refused.value, slot)
+
+
+def test_the_appliance_oci_row_with_no_operator_passphrase_mints_nothing(
+    oci_kit: KdbxStore, tenancy: Tenancy, tmp_path: Path
+) -> None:
+    """The `state-backend` stack's passphrase is the operator's, found by the acquisition chain rather than the kit."""
+    slot, runner = _state_backend_stack(tmp_path, environment=pulumi_config.BackendEnvironment())
+    users = dict(tenancy.identity.users)
+    keys = {user: list(held) for user, held in tenancy.identity.keys.items()}
+
+    with pytest.raises(pulumi_config.PassphraseMissing) as refused:
+        _ = derived.oci_state_backend(oci_kit, stack=slot, compartment_id=COMPARTMENT, connect=tenancy)
+
+    assert tenancy.identity.users == users
+    assert tenancy.identity.keys == keys
+    assert runner.invocations == []
+    _refused_as_its_stack_is(refused.value, slot)
+
+
+def test_the_appliance_b2_row_with_no_operator_passphrase_mints_nothing(
+    b2_api_fake: b2_api.FakeApi, b2_kit: KdbxStore, tmp_path: Path
+) -> None:
+    slot, runner = _state_backend_stack(tmp_path, environment=pulumi_config.BackendEnvironment())
+
+    with pytest.raises(pulumi_config.PassphraseMissing) as refused:
+        _ = derived.b2_state_backend_management(b2_kit, stack=slot)
+
+    assert b2_api_fake.named(b2.STATE_BACKEND_MANAGEMENT.name) == []
+    assert runner.invocations == []
+    _refused_as_its_stack_is(refused.value, slot)
 
 
 def test_a_value_in_the_clear_that_opens_with_dashes_reaches_the_config(
