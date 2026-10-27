@@ -21,6 +21,7 @@ import subprocess
 from pathlib import Path
 
 import pinned_tools
+import process_sessions
 import pytest
 from scratch_projects import cli_directories, scrubbed
 
@@ -64,8 +65,8 @@ def load(pulumi: str, project: str, directory: Path) -> subprocess.CompletedProc
         'PULUMI_BACKEND_URL': f'file://{directory / "state"}',
         'PULUMI_SKIP_UPDATE_CHECK': '1',
     }
-    return subprocess.run(
-        [pulumi, 'stack', 'ls'], cwd=directory, env=env, capture_output=True, text=True, timeout=TIMEOUT, check=False
+    return process_sessions.run(
+        [pulumi, 'stack', 'ls'], cwd=directory, env=env, text=True, timeout=TIMEOUT, check=False
     )
 
 

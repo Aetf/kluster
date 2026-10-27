@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import itertools
 import re
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -387,12 +386,12 @@ def test_a_guarded_hook_runs_what_landed_and_does_nothing_once_it_is_gone(
     _ = path.write_text(f'#!/bin/sh\ntouch {ran}\n')
     path.chmod(0o755)
 
-    landed = subprocess.run(['sh', '-c', hook], capture_output=True, timeout=30, check=False)
+    landed = process_sessions.run(['sh', '-c', hook], timeout=30, check=False)
     assert (landed.returncode, ran.exists()) == (0, True), landed.stderr
 
     ran.unlink()
     path.unlink()
-    gone = subprocess.run(['sh', '-c', hook], capture_output=True, timeout=30, check=False)
+    gone = process_sessions.run(['sh', '-c', hook], timeout=30, check=False)
     assert (gone.returncode, ran.exists()) == (0, False), gone.stderr
 
 
@@ -460,10 +459,9 @@ def _hook_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _HookTree:
 
 def _run_hook(tree: _HookTree, hook: str) -> None:
     """Run `hook` as the provider does after a write or a delete, against the tree's `systemctl`."""
-    ran = subprocess.run(
+    ran = process_sessions.run(
         ['sh', '-c', hook],
         env={'PATH': f'{tree.systemd.tools}:/usr/bin:/bin'},
-        capture_output=True,
         check=False,
         timeout=30,
     )
@@ -2379,10 +2377,9 @@ def _device(tmp_path: Path) -> _Device:
 def _converge(device: _Device) -> tuple[int, list[str]]:
     """Run the converger once, and read back what it asked of systemd."""
     _ = device.systemd.take_calls()
-    completed = subprocess.run(
+    completed = process_sessions.run(
         ['/bin/bash', str(device.script)],
         env={'PATH': f'{device.systemd.tools}:/usr/bin:/bin'},
-        capture_output=True,
         check=False,
         # As `_install`'s: a converger that does not return fails by name.
         timeout=30,

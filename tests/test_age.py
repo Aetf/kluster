@@ -12,11 +12,11 @@ import contextlib
 import json
 import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 
 import pinned_tools
+import process_sessions
 import pytest
 from renovate_text import group, listed, package_rule
 
@@ -140,7 +140,7 @@ def test_a_line_that_is_not_a_recipient_is_refused_by_name_alone() -> None:
 
 def _post_quantum() -> str:
     """A post-quantum identity, `AGE-SECRET-KEY-PQ-1…`, from the pinned `age-keygen -pq`."""
-    drawn = subprocess.run([age.KEYGEN, '-pq'], capture_output=True, text=True, check=True, timeout=age.TIMEOUT)
+    drawn = process_sessions.run([age.KEYGEN, '-pq'], text=True, check=True, timeout=age.TIMEOUT)
     return next(line for line in drawn.stdout.splitlines() if line.startswith(age.SECRET_STEM))
 
 

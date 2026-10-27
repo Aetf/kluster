@@ -243,7 +243,9 @@ starts the command as the leader of a POSIX session of its own, and every
 way out of the call -- a clean exit, a `TimeoutExpired`, an assertion, the
 case bound, a `KeyboardInterrupt` -- kills every process in that POSIX
 session and waits until each is gone. `run` is `subprocess.run` with the
-output captured; `started` is a block that owns the command between its
+output captured, whose `check=True` failure carries what the command said --
+its stderr, or its stdout where stderr is empty -- as a note, since nothing
+else would show it; `started` is a block that owns the command between its
 start and its end, for a case that reads the command's output as it runs or
 signals it. What the helper bounds is its own waits: `run`, and a
 `Command`'s `wait` and `communicate`, take a `timeout=` with no default, and
@@ -273,8 +275,13 @@ What it does not reach is, by definition, anything outside the POSIX session
 of a command it started, and anything at all once the test process can no
 longer run a `finally`. Today's instances:
 
--   **A descendant that calls `setsid()`.** None of the adopting suites'
-    commands has one, and the CLI's plugins do not.
+-   **A descendant that calls `setsid()`.** `ssh`'s `ControlPersist`
+    master is one: it backgrounds itself in a session of its own. Its
+    connection stays behind in the session, as the `ProxyCommand` that
+    carries it, so `tests/test_ssh_pin.py`, which makes one, holds the
+    session of the login that made it open until the case ends, and takes
+    the master itself down with `ssh -O exit`. The CLI's plugins call no
+    `setsid()`.
 -   **A process code under test starts through a runner of its own** --
     `pulumi_cli.run_pulumi`, `github_secrets.run_gh`, the client tools
     `state` runs. Those keep `subprocess.run`'s kill of the child alone.
@@ -306,10 +313,29 @@ are the container service's rather than the case's, so it is the one kind of
 process that ends by itself however the test process ends, and the label is
 the census of what is left.
 
-A suite that still starts a process through `subprocess` is a finding when
-that process can outlive its own kill: one that starts processes of its own,
-or blocks on a pipe, a FIFO or a service. Each of today's is a slice of
-Aetf/kluster-ops#530's plan.
+**A call that starts a process any other way says why at the call.** A test
+module that reaches one -- calls it, or hands it on as a value -- carries
+`# outside process_sessions -- <reason>` on the line that names it, or among
+the comment lines directly above that line, the way a lint exception carries
+its `noqa`. The census below recognizes `subprocess`'s, `os`'s `exec`,
+`spawn` and `fork` families with its `system` and `popen`, `pty`'s,
+`asyncio`'s `create_subprocess_*` and its event loop's `subprocess_exec` and
+`subprocess_shell`, `multiprocessing`'s, the `ProcessPoolExecutor` of
+`concurrent.futures`, and `psutil`'s `Popen`; a way it does not recognize is
+under the rule all the same, and the change that first gives such a call its
+reason adds the way to the census, which otherwise reads that reason as one
+left over. The reason names what the helper cannot do there. Today's
+instances: a stand-in for the runner code under test calls, which takes that
+runner's arguments; the outer run of the helper's own test, which must not
+depend on what it checks; and the process outside every session that the
+helper's own test holds it leaves alone.
+
+`tests/test_process_sessions.py` holds the census. It reads every module
+under `tests/` but the helper, finds each such call by the name it resolves
+to through the module's imports, or, for the event loop's methods, by the
+method's own name, and fails naming each one with no reason beside it, and
+each reason that explains no start -- left behind by a conversion, say -- as
+RUF100 fails a `noqa` that suppresses nothing.
 
 ## 2. Writing Tests
 

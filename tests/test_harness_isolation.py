@@ -29,6 +29,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import process_sessions
 import pytest
 
 from kluster.lib import bundle, stack_environment
@@ -212,7 +213,7 @@ def _child(
     (directory / 'test_child.py').write_text(module)
     (directory / 'pytest.ini').write_text(CONFIGURATION)
     (directory / 'machine_store.py').write_text(MACHINE_STORE)
-    return subprocess.run(
+    return process_sessions.run(
         [
             sys.executable,
             '-m',
@@ -235,7 +236,6 @@ def _child(
             'XDG_DATA_HOME': str(directory / 'data'),
             **(env or {}),
         },
-        capture_output=True,
         text=True,
         timeout=TIMEOUT,
         check=False,
@@ -276,11 +276,11 @@ def test_a_pickler_change_is_named_on_what_made_it_and_on_nothing_else(child: st
 #: slot holds a decoy naming itself.
 FILE_LAYER_CHILD = """
 import os
-import subprocess
 from pathlib import Path
 
 import file_layer
 import kluster
+import process_sessions
 import pytest
 
 from kluster.lib import stack_environment
@@ -331,7 +331,7 @@ def test_a_write_into_the_layer_is_refused() -> None:
 
 
 def test_a_process_a_case_starts_follows_no_path_into_the_layer() -> None:
-    run = subprocess.run(['sh', '-c', 'cat "$PGSSLKEY"'], capture_output=True, text=True, timeout=10, check=False)
+    run = process_sessions.run(['sh', '-c', 'cat "$PGSSLKEY"'], text=True, timeout=10, check=False)
     assert 'decoy' not in run.stdout, run.stdout
 
 

@@ -37,7 +37,6 @@ from __future__ import annotations
 import fnmatch
 import json
 import re
-import subprocess
 import tomllib
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -45,6 +44,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 import pinned_tools
+import process_sessions
 import pytest
 import yaml
 from renovate_text import listed, package_rules, scalar
@@ -152,7 +152,7 @@ def pinned_release() -> str:
 
 def run(argv: Sequence[str], cwd: Path) -> str:
     """Run one `talosctl` command; a non-zero exit fails the case with what Talos said."""
-    proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=TIMEOUT, check=False)
+    proc = process_sessions.run(argv, cwd=cwd, text=True, timeout=TIMEOUT, check=False)
     if proc.returncode != 0:
         pytest.fail(f'`{" ".join(argv)}` exited {proc.returncode}:\n{proc.stderr.strip() or proc.stdout.strip()}')
     return proc.stdout
@@ -162,8 +162,8 @@ def run(argv: Sequence[str], cwd: Path) -> str:
 def talosctl() -> str:
     """The pinned `talosctl`, refused if it is missing or is some other release."""
     binary = pinned_tools.located(TOOL)
-    reported = subprocess.run(
-        [binary, 'version', '--client', '--short'], capture_output=True, text=True, timeout=TIMEOUT, check=True
+    reported = process_sessions.run(
+        [binary, 'version', '--client', '--short'], text=True, timeout=TIMEOUT, check=True
     ).stdout
     release = pinned_release()
     found = re.search(r'Talos (v\S+)', reported)

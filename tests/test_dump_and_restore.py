@@ -108,6 +108,9 @@ class Double:
         self.before: list[str] = list(before)
         self.after: list[str] = list(after)
         self.answers_before: bool = answers_before
+        # outside process_sessions -- the stand-in for the runner `state` calls,
+        # `subprocess.run` itself, takes that runner's arguments and hands the
+        # calls it does not double on to the real one (framework/testing.md §1.2).
         self.real: Any = sp.run
         self.calls: list[list[str]] = []
         self.environments: list[Mapping[str, str] | None] = []

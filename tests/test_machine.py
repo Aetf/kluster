@@ -17,7 +17,6 @@ import os
 import re
 import shlex
 import shutil
-import subprocess
 import sys
 import urllib.parse
 from dataclasses import fields
@@ -26,6 +25,7 @@ from typing import Any, cast
 
 import drill_recipient_redirect
 import pinned_tools
+import process_sessions
 import pytest
 from credentials_command_tree import named_commands
 from cryptography.hazmat.primitives import serialization
@@ -311,7 +311,7 @@ def test_a_post_quantum_drill_recipient_is_refused(drill_recipient_file: Path) -
     # `age1pq1…` parses, and passes a bare `age1` prefix test, but `age` will
     # not mix it with the escrowed generations' classic recipients: every
     # nightly dump would fail to encrypt. Native means one `1`, the separator.
-    drawn = subprocess.run([age.KEYGEN, '-pq'], capture_output=True, text=True, check=True, timeout=age.TIMEOUT)
+    drawn = process_sessions.run([age.KEYGEN, '-pq'], text=True, check=True, timeout=age.TIMEOUT)
     secret = next(line for line in drawn.stdout.splitlines() if line.startswith(age.SECRET_STEM))
     pq = age.recipient(secret)
     assert pq.startswith(f'{age.PUBLIC_PREFIX}pq1')
@@ -515,9 +515,8 @@ def test_the_package_renders_from_an_installed_copy_with_no_checkout_around_it(
     uv = os.environ.get('UV') or pinned_tools.located('uv')
     root = Path(__file__).parent.parent
     dist = tmp_path / 'dist'
-    built = subprocess.run(
+    built = process_sessions.run(
         [uv, 'build', '--wheel', '--out-dir', str(dist), str(root)],
-        capture_output=True,
         text=True,
         env={**os.environ, 'UV_OFFLINE': '1'},
         timeout=BUILD_TIMEOUT,
@@ -541,10 +540,9 @@ def test_the_package_renders_from_an_installed_copy_with_no_checkout_around_it(
         'bucket_id': minted.b2_bucket_id,
     }
     machine = render.machine(**arguments)
-    rendered = subprocess.run(
+    rendered = process_sessions.run(
         [sys.executable, '-c', INSTALLED_RENDER],
         input=json.dumps(arguments),
-        capture_output=True,
         text=True,
         cwd=tmp_path,
         env={**os.environ, 'PYTHONPATH': str(site)},

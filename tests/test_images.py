@@ -24,12 +24,12 @@ import json
 import os
 import re
 import shutil
-import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+import process_sessions
 import pytest
 import yaml
 from renovate_text import as_python_spells_it, as_renovate_spells_it
@@ -123,11 +123,10 @@ def _run_conf(tree: Path, scratch: Path, image: str, *, arch: str = '', registry
         'FAKE_REGISTRY': registry,
         'FAKE_SKOPEO_LOG': str(log),
     }
-    done = subprocess.run(
+    done = process_sessions.run(
         ['bash', '-c', cast(str, _conf_step()['run'])],
         cwd=tree,
         env=env,
-        capture_output=True,
         text=True,
         timeout=30,
         check=False,
@@ -304,10 +303,9 @@ FINGERPRINTED = re.compile(r'^(?P<name>ghcr\.io/[^:]+):(?P<tag>.+)-(?P<fingerpri
 
 def _conf_tag(tree: Path, image: str) -> tuple[str, str]:
     """The conf's own IMAGE and TAG, sourced the way the step sources them."""
-    done = subprocess.run(
+    done = process_sessions.run(
         ['bash', '-c', 'set -a; . "docker/$1.conf"; printf "%s\\n%s\\n" "$IMAGE" "$TAG"', 'conf', image],
         cwd=tree,
-        capture_output=True,
         text=True,
         timeout=30,
         check=True,
@@ -474,11 +472,10 @@ def _git_environment(home: Path) -> dict[str, str]:
 
 
 def _git(tree: Path, *args: str) -> None:
-    subprocess.run(
+    process_sessions.run(
         ['git', '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', *args],
         cwd=tree,
         env=_git_environment(tree.parent),
-        capture_output=True,
         timeout=GIT_TIMEOUT,
         check=True,
     )
@@ -506,7 +503,7 @@ def _select(tmp_path: Path, event: str, changed: str) -> list[str]:
         'BASE': cast(str, step['env']['BASE']),
         'GITHUB_OUTPUT': str(output),
     }
-    subprocess.run(['bash', '-c', cast(str, step['run'])], cwd=tree, env=env, timeout=STEP_TIMEOUT, check=True)
+    process_sessions.run(['bash', '-c', cast(str, step['run'])], cwd=tree, env=env, timeout=STEP_TIMEOUT, check=True)
     (line,) = output.read_text().splitlines()
     return cast(list[str], json.loads(line.removeprefix('images=')))
 

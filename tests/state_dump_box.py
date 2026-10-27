@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 import pinned_tools
+import process_sessions
 import pytest
 
 from kluster.lib.state_backend import render, settings
@@ -344,7 +345,7 @@ class Box:
 
     def run(self, *args: str, env: dict[str, str] | None = None) -> sp.CompletedProcess[str]:
         """The script, executed as the box executes it."""
-        return sp.run([str(SCRIPT), *args], env={**self.env, **(env or {})}, capture_output=True, text=True, timeout=30)
+        return process_sessions.run([str(SCRIPT), *args], env={**self.env, **(env or {})}, text=True, timeout=30)
 
     @property
     def calls(self) -> list[Call]:

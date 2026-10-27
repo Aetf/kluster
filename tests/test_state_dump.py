@@ -28,6 +28,7 @@ import subprocess as sp
 import tomllib
 from pathlib import Path
 
+import process_sessions
 import pytest
 from state_dump_box import (
     ACCOUNT,
@@ -242,11 +243,10 @@ def _count_stacks(data: str, tools: Path) -> int:
     Under the box's `awk`, `gawk`, which `tools` holds ahead of the host's.
     """
     box_tools(tools)
-    ran = sp.run(
+    ran = process_sessions.run(
         [str(SCRIPT), 'count-stacks'],
         input=data,
         env={'PATH': f'{tools}{os.pathsep}/usr/bin:/bin', 'PG_DATABASE': ENV['PG_DATABASE']},
-        capture_output=True,
         text=True,
         timeout=30,
     )
@@ -287,7 +287,7 @@ def test_the_box_tools_a_run_here_reaches_are_the_pinned_releases(tmp_path: Path
     environment = {'PATH': f'{tmp_path}{os.pathsep}{os.environ["PATH"]}'}
 
     def version(*argv: str) -> str:
-        ran = sp.run(argv, env=environment, capture_output=True, text=True, timeout=30, check=True)
+        ran = process_sessions.run(argv, env=environment, text=True, timeout=30, check=True)
         return ran.stdout.splitlines()[0]
 
     assert version(str(tmp_path / 'awk'), '--version').startswith(f'GNU Awk {pins["conda:gawk"]["version"]},')

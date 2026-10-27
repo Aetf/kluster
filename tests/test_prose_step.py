@@ -24,11 +24,11 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 from typing import cast
 
+import process_sessions
 from workflow_files import GITHUB, mapping, read_workflow, workflow_jobs
 
 ROOT = Path(__file__).parent.parent
@@ -96,9 +96,7 @@ def run_step(tmp_path: Path, script: dict[str, list[int]]) -> tuple[int, str, li
     for file in script:
         (repo / file).write_text('# A document\n')
     for args in (['init', '-q'], ['add', '.']):
-        _ = subprocess.run(
-            ['git', *args], cwd=repo, env=_environment(tmp_path), check=True, capture_output=True, timeout=GIT_TIMEOUT
-        )
+        _ = process_sessions.run(['git', *args], cwd=repo, env=_environment(tmp_path), check=True, timeout=GIT_TIMEOUT)
 
     bin_dir = tmp_path / 'bin'
     bin_dir.mkdir()
@@ -120,11 +118,10 @@ def run_step(tmp_path: Path, script: dict[str, list[int]]) -> tuple[int, str, li
         'STAND_IN_LOG': str(log),
     }
     # GitHub's `bash` shell: `bash --noprofile --norc -eo pipefail {0}`.
-    done = subprocess.run(
+    done = process_sessions.run(
         ['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', prose_run()],
         cwd=repo,
         env=env,
-        capture_output=True,
         text=True,
         timeout=STEP_TIMEOUT,
     )

@@ -17,11 +17,11 @@ environment, which `tests/conftest.py` has already stripped of credentials.
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 from pathlib import Path
 
 import fences
+import process_sessions
 
 ROOT = Path(__file__).parent.parent
 TESTING = ROOT / 'docs' / 'framework' / 'testing.md'
@@ -63,7 +63,7 @@ def test_the_example_passes_as_written(tmp_path: Path) -> None:
     _ = (tmp_path / 'conftest.py').write_text("raise RuntimeError('a conftest outside the example was imported')\n")
     environment = {**os.environ, 'PYTHONPATH': str(ROOT / 'tests')}
 
-    run = subprocess.run(
+    run = process_sessions.run(
         [
             sys.executable,
             '-m',
@@ -84,7 +84,6 @@ def test_the_example_passes_as_written(tmp_path: Path) -> None:
         ],
         cwd=example,
         env=environment,
-        capture_output=True,
         text=True,
         check=False,
         # A stop-loss below the per-case bound, so a hung example fails here
