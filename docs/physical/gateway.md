@@ -122,6 +122,14 @@ declarative/physical.md §4.
         what would move this verb, and re-reading `systemctl
         --version` is what would say that it had.
 
+        **The device's shells**, measured on the device 2026-10-27, on
+        UniFi OS 5.1.33 (`/usr/lib/version` reads
+        `UDMPROSE.al324.v5.1.33.44ce47b.260909.0025`):
+        `/etc/debian_version` reads `11.11`; `/bin/sh` resolves to
+        dash, which runs the device's `#!/bin/sh` scripts; and root's
+        login shell is `/bin/bash`, which runs a command sent over
+        root's SSH session.
+
         **The `machinectl` verbs below are derived from systemd's and
         s6's sources rather than measured on this device**, which is
         the opposite of the reading in §1.3 and is marked because the
@@ -2612,7 +2620,13 @@ at the registrar.
     `udm-boot.service` back into place first (§1.2), and it restores
     the rest. Fallback if host-networking nspawn misbehaves
     post-update: the unifios-utilities apt pattern (architecture.md
-    §5.3).
+    §5.3). Then read the base the update left, `cat
+    /etc/debian_version` and `readlink -f /bin/sh`. A Debian release
+    other than 11 moves `mise.toml`'s `http:dash` pin to that
+    release's dash ([operations.md](../operations.md) §1). A `/bin/sh`
+    other than dash is not a version move: the device's `#!/bin/sh`
+    scripts no longer run under dash, so the shell the suite runs them
+    under (`tests/device_shell.py`) is replaced, and the pin with it.
 -   **UDM replaced** — trigger: hardware failure/RMA. Restore from the
     UniFi autobackup (the copies under `~/.config/gw-backups/unifi/` on
     the homelab host, which `gateway-backup-pull` keeps, §1.6), re-run the
