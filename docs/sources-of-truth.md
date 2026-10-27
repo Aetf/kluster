@@ -285,9 +285,35 @@ pq stack export --stack dns | mise x uv -- uv run python -c 'import json, sys; f
         B2 mean a checkpoint carried in that way, with nothing from
         before it readable here.
     -   The backend records no user or host. `local` is a workstation or
-        an agent session. `git.head` names the primary checkout's commit
-        even for a run from a `jj` workspace (framework/dispatch.md
-        §1.2).
+        an agent session. `git.head` is the commit at `HEAD` of the
+        repository Pulumi finds by walking up from the program's
+        directory to the first entry named `.git`, and `git.dirty` is
+        whether `git status` run in that directory prints anything
+        (`GetGitRepository` in `sdk/go/common/util/gitutil/git.go`,
+        `addGitCommitMetadata` in `pkg/cmd/pulumi/metadata/metadata.go`).
+        Which commit that is depends on where the run started. `jj`
+        keeps each git `HEAD` at the `@-` of the working copy it belongs
+        to, as of the last `jj` command that updated that working copy,
+        which a snapshot alone does not (framework/dispatch.md §1.2):
+        -   From the primary checkout, `git.head` is the primary's `@-`.
+        -   From a workspace that is a git worktree, which is what
+            `jj workspace add` run in the primary makes, the walk stops
+            at the workspace's own `.git` file, and `git.head` is that
+            workspace's `@-`, not the primary's commit. Work still in the
+            workspace's `@` is named by no key; it shows as `+dirty`.
+        -   From a workspace that is no worktree, the walk reaches the
+            primary's `.git`: `git.head` is the primary's `@-`, and the
+            `git status` behind `+dirty` answers about the primary's
+            tree, whose `.gitignore` covers the workspace. Its own work,
+            committed or not, is named by no key and does not show as
+            `+dirty`.
+
+        `git.headName` is absent in each case, since that `HEAD` is
+        detached. `vcs.root` tells the last case apart: it is the
+        program's path from the root git found, `.` from the primary or
+        a worktree and `.claude/workspaces/<name>` from a workspace that
+        is no worktree. These keys are in the history entry alone: the
+        stored deployment (B3) carries no git metadata.
 -   **B3:** `stack export` prints the stored deployment. It
     deserializes, which is where decryption happens, only under
     `--show-secrets` (`stack_export.go`).
