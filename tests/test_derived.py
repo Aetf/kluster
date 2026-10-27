@@ -370,9 +370,10 @@ def live_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[pulum
 
 
 #: The bound the real-CLI case below runs under. Each `pulumi` command it
-#: starts is bounded by `pulumi_cli.TIMEOUT`, so the case's own bound sits
-#: above that rather than at the suite's, and a stalled command fails as a
-#: `TimeoutExpired` naming it (testing.md §8). On a four-core machine the
+#: starts goes through `pulumi_cli.run_pulumi`, bounded by `pulumi_cli.TIMEOUT`,
+#: so the case's own bound sits above that rather than at the suite's, and a
+#: stalled command is refused by the runner, naming it and that bound
+#: (testing.md §8). On a four-core machine the
 #: case took 0.6 s idle and 1.4 s with four times as many busy processes as
 #: cores. A stop-loss; nothing asserts on elapsed time.
 REAL_CLI_CASE_TIMEOUT = 2 * pulumi_cli.TIMEOUT

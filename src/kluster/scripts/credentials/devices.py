@@ -760,14 +760,16 @@ def _read_back(device: Device, key: str, *, stack: pulumi_config.Stack) -> str:
     refusal travels unchanged.
 
     So does every other refusal of the read that is not the stack's answer
-    that the key is absent: a state backend that does not answer, a
+    that the key is absent: a state backend that cannot be reached, a
     passphrase that does not decrypt what is there. Each says in its own words
     what is wrong, and dressed up as a missing record it would send the
     operator to re-record a value that is in fact present. A refused read is
     therefore asked about once more, of the stack itself (`Stack.has`), which
-    decrypts nothing. Where the backend does not answer, that question is
-    refused as well, and it is still the read's refusal that travels,
-    unchanged, since it is the one that names the command the caller made.
+    decrypts nothing. Where the backend cannot be reached, that question is
+    refused as well -- where its traffic is dropped, once the runner's bound
+    has run out a second time -- and it is still the read's refusal that
+    travels, unchanged, since it is the one that names the command the
+    caller made.
     """
     try:
         value = stack.get(key).strip()

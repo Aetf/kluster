@@ -1222,8 +1222,11 @@ measurement in their comment:
     runs: `pytest.mark.timeout` with the module's constant.
 -   **The command bound** is the `timeout=` of each `pulumi` process, and
     of any wait on one, and sits below the case bound, so a stalled
-    command fails as a `TimeoutExpired` naming it before the case's bound
-    fires. A process a case started and stops waiting on is killed with
+    command fails naming it before the case's bound fires: as a
+    `TimeoutExpired` where the case started it, and as the refusal
+    `pulumi_cli.run_pulumi` raises at its own bound, naming the command,
+    the backend and that bound, where the code under test did. A process
+    a case started and stops waiting on is killed with
     its POSIX session (§1.2), never waited on without a bound.
 -   **Both are stop-losses.** Each sits several times above the worst
     measured under load, and nothing asserts on elapsed time (§7 item 5).

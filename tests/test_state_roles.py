@@ -82,8 +82,11 @@ CLIENT_ROLES = (settings.CI_ROLE, settings.OPERATOR_ROLE)
 COMMAND_TIMEOUT = 60
 
 #: The bound on a case, its share of the module's set-up included: above
-#: every command bound, so a stalled command fails as a `TimeoutExpired`
-#: naming it rather than as the case's bound (framework/testing.md §8). The
+#: every command bound, so a stalled command fails naming it rather than as
+#: the case's bound (framework/testing.md §8) -- one the case starts as a
+#: `TimeoutExpired`, a `pulumi` the code under test starts as the refusal
+#: `pulumi_cli.run_pulumi` raises at its bound, and a client tool `state`
+#: runs as a `StateError`. The
 #: largest command bound is not this module's: `render` gives `butane` 120 s
 #: of its own, in `ignition`'s set-up. A stop-loss; nothing asserts on
 #: elapsed time.

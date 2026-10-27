@@ -2625,12 +2625,19 @@ def test_a_replacement_of_an_adopted_resource_is_refused_before_up_naming_it(
 
 @pytest.fixture
 def unanswered(monkeypatch: pytest.MonkeyPatch) -> list[Mapping[str, str]]:
-    """`pulumi stack ls` against a backend whose traffic is dropped: the runner's own bound runs out."""
+    """`pulumi stack ls` against a backend whose traffic is dropped: the runner's own bound runs out.
+
+    Refused as the runner refuses a run that outlasts its bound, naming the
+    command, the backend and the bound.
+    """
     asked: list[Mapping[str, str]] = []
 
     def run_pulumi(args: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdin: str | None) -> str:
         asked.append(env)
-        raise sp.TimeoutExpired(cmd=['pulumi', *args], timeout=120)
+        backend = pulumi_cli.backend_named(env.get(pulumi_cli.BACKEND_URL_ENV))
+        raise pulumi_cli.PulumiRefused(
+            f'`pulumi {" ".join(args)}` against {backend} did not finish within its bound of {pulumi_cli.TIMEOUT}s'
+        )
 
     monkeypatch.setattr(state.pulumi_cli, 'run_pulumi', run_pulumi)
     return asked
