@@ -35,6 +35,22 @@ and a change to it, like a rotation, re-stamps the resource and uploads
 nothing. `read` is the inherited one and reports no drift: an object deleted
 behind the state is found by the image import that needs it.
 
+**The delete removes only the object its own create wrote.** The create
+records `etag`, the ETag OCI answers the upload with, and the delete is
+conditioned on it (`if-match`). OCI's ETag names a write rather than its
+bytes, so a replacement the engine creates before it deletes the original --
+a `--replace`, which asks no diff -- uploads the same artifact under the
+same name with an ETag of its own, and the original's delete then answers
+`412` and leaves the replacement where it is, with a warning rather than a
+failure: an original whose delete fails stays in state, and that delete is
+retried, and fails again, on every later run. A refresh carries the
+recorded ETag rather than reading the object's: it refreshes that original
+too, which a read would hand the replacement's ETag. The ETag is in the
+clear in the committed checkpoint: it names a write, not a principal. A
+resource that recorded none deletes unconditionally, and its first re-stamp
+takes the object's current ETag; a re-stamp that finds no object records
+`NO_WRITE` instead and warns, and the delete then removes nothing.
+
 **Each of the three long steps says what it is doing before it starts** --
 the fetch, the decompression, the upload -- through `pulumi.log`, which
 `pulumi` draws on the stack's row as the run goes. The standard `logging`
@@ -62,9 +78,11 @@ __all__ = (
     'CHUNK_BYTES',
     'COMPARED',
     'DECLARED',
+    'ETAG',
     'FETCH_TIMEOUT',
     'FINGERPRINT_CONFIG',
     'IDENTITY',
+    'NO_WRITE',
     'PRIVATE_KEY_CONFIG',
     'USER_CONFIG',
     'VERSION',
@@ -101,9 +119,19 @@ DECLARED = (*IDENTITY, 'tenancy')
 #: What `diff` compares: the declared properties and the two stamps.
 COMPARED = (*DECLARED, *STAMPS)
 
+#: The output that records the ETag of the write the resource's create made,
+#: which its delete is conditioned on.
+ETAG = 'etag'
+
+#: What `etag` records for a resource whose re-stamp found no object: no write
+#: of the resource's stands, and no later write can be one, so its delete
+#: removes nothing. No upload is answered with it, OCI's ETags being UUIDs. It
+#: is stored in state, so renaming it is a migration.
+NO_WRITE = 'no-write-of-this-resource-stands'
+
 #: This module's version, bumped by hand when an operation's behavior changes
 #: (`configured`).
-VERSION = '1'
+VERSION = '2'
 
 
 class ArtifactRefused(Exception):
@@ -176,12 +204,18 @@ def _decompress(url: str, source: Path, path: Path) -> None:
             _ = sink.write(decompressor.decompress(chunk, max_length=CHUNK_BYTES))
 
 
-def upload(config: Mapping[str, str], props: Mapping[str, Any], path: Path) -> None:
-    """Upload the file at `path` as the object `props` names. The seam a test replaces."""
+def upload(config: Mapping[str, str], props: Mapping[str, Any], path: Path) -> str:
+    """Upload the file at `path` as the object `props` names, and answer the write's ETag. The seam a test replaces.
+
+    `upload_file` answers with the multipart upload's commit or, for a file
+    too small to go multipart, the put, and either carries the ETag the
+    write left on the object.
+    """
     client = oci.object_storage.ObjectStorageClient(dict(config))
-    _ = oci.object_storage.UploadManager(client, allow_parallel_uploads=True).upload_file(
+    response = oci.object_storage.UploadManager(client, allow_parallel_uploads=True).upload_file(
         str(props['namespace']), str(props['bucket']), str(props['object_name']), str(path)
     )
+    return str(response.headers['etag'])
 
 
 def _gib(path: Path) -> float:
@@ -194,7 +228,7 @@ def _object_id(props: Mapping[str, Any]) -> str:
 
 @final
 class ArtifactObjectProvider(ConfiguredProvider):
-    """One artifact as one object: create uploads it, delete removes it, update re-stamps."""
+    """One artifact as one object: create uploads it, delete removes what that upload wrote, update re-stamps."""
 
     user: str
     fingerprint: str
@@ -236,8 +270,9 @@ class ArtifactObjectProvider(ConfiguredProvider):
             replaces=replaces,
             # A new object is uploaded before the old one goes, so the image
             # that imported the old one never points at nothing -- unless the
-            # two are one object, whose delete would then remove what the
-            # create had just uploaded.
+            # two are one object, which the old one's delete makes room for
+            # first, so that this replacement does not rest on the ETag the
+            # delete is conditioned on.
             delete_before_replace=_object_id(olds) == _object_id(news),
         )
 
@@ -249,21 +284,62 @@ class ArtifactObjectProvider(ConfiguredProvider):
             pulumi.log.info(
                 f'uploading {props["object_name"]} to {props["namespace"]}/{props["bucket"]} ({_gib(path):.1f} GiB)'
             )
-            upload(self._signing(props), props, path)
-        return dynamic.CreateResult(id_=_object_id(props), outs=props)
+            etag = upload(self._signing(props), props, path)
+        return dynamic.CreateResult(id_=_object_id(props), outs={**props, ETAG: etag})
 
-    def update(self, _id: str, _olds: dict[str, Any], news: dict[str, Any]) -> dynamic.UpdateResult:
+    def update(self, _id: str, olds: dict[str, Any], news: dict[str, Any]) -> dynamic.UpdateResult:
         # Reached only when a stamp or the tenancy moved (`diff`): the object
-        # is the one declared, so this records the new stamps and uploads
-        # nothing.
-        return dynamic.UpdateResult(outs=news)
+        # is the one declared, so this records the new stamps, keeps the
+        # recorded ETag, and uploads nothing. A resource that recorded none
+        # takes the object's current one.
+        etag = olds.get(ETAG) or self._current_etag(news)
+        return dynamic.UpdateResult(outs={**news, ETAG: etag})
 
-    def delete(self, _id: str, props: dict[str, Any]) -> None:
+    def _current_etag(self, props: dict[str, Any]) -> str:
+        """The ETag the object `props` names carries now, or `NO_WRITE` where the read finds no object.
+
+        A `404` is the object missing or this credential unable to read it
+        (OCI's `NotAuthorizedOrNotFound`). Either way no write this resource
+        made is known to stand, and recording nothing would make its delete
+        unconditional for good, removing whatever a later replacement
+        uploads; failing would be retried, and fail again, on every later run.
+        """
         client = oci.object_storage.ObjectStorageClient(self._signing(props))
         try:
-            _ = client.delete_object(str(props['namespace']), str(props['bucket']), str(props['object_name']))
+            response = client.head_object(str(props['namespace']), str(props['bucket']), str(props['object_name']))
         except oci.exceptions.ServiceError as exc:
             if exc.status != 404:
+                raise
+            pulumi.log.warn(
+                f'{_object_id(props)} is missing, or this credential cannot read it; '
+                'recording that no write of this resource stands, so its delete will remove nothing'
+            )
+            return NO_WRITE
+        # The SDK's code paths let a checker infer `None` for its answer; a
+        # `head_object` that succeeds answers with the object's headers.
+        return str(response.headers['etag'])  # pyright: ignore[reportOptionalMemberAccess]
+
+    def delete(self, _id: str, props: dict[str, Any]) -> None:
+        etag = props.get(ETAG)
+        if etag == NO_WRITE:
+            return
+        client = oci.object_storage.ObjectStorageClient(self._signing(props))
+        condition = {} if etag is None else {'if_match': str(etag)}
+        try:
+            _ = client.delete_object(
+                str(props['namespace']), str(props['bucket']), str(props['object_name']), **condition
+            )
+        except oci.exceptions.ServiceError as exc:
+            if exc.status == 412:
+                # Another write holds the name: a replacement that uploaded
+                # the artifact again before this delete ran. It is left, and
+                # the delete returns, so the engine drops this resource
+                # rather than retrying it on every later run.
+                pulumi.log.warn(
+                    f'{_object_id(props)} was written again after this resource uploaded it '
+                    f'(ETag {etag}); leaving it in place'
+                )
+            elif exc.status != 404:
                 raise
 
 

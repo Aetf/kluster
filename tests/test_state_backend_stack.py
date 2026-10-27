@@ -8,7 +8,8 @@ secret outputs and the dump key's grant are not restated here: each carries
 its reason at its declaration, and what each option does is
 `tests/test_state_backend_engine.py`'s. The hooks are then exercised as functions, over
 `kluster.lib.state_backend.state` with its tools replaced, and the two dynamic
-resources' refusals over a fake stream and a local TLS server. What the engine
+resources' refusals over a fake stream and a local TLS server, and the
+artifact object's deletes over a fake bucket. What the engine
 does with the options and hooks is `tests/test_state_backend_engine.py`.
 
 The files committed beside the Butane template are written into a directory
@@ -28,6 +29,7 @@ import lzma
 import socket
 import ssl
 import threading
+import uuid
 from collections.abc import AsyncGenerator, Callable, Generator, Iterable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -35,6 +37,7 @@ from types import ModuleType
 from typing import Any, cast
 
 import pulumi
+import pulumi.dynamic as dynamic
 import pulumi_b2 as b2
 import pulumi_oci as oci
 import pytest
@@ -46,6 +49,9 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 from mock_monitor import Recorder, declaring, run_under_backstop
+
+# The SDK ships no stubs.
+from oci.exceptions import ServiceError  # pyright: ignore[reportMissingTypeStubs]
 
 from kluster import conventions
 from kluster.components import state_backend as component
@@ -1070,8 +1076,9 @@ def uploaded(monkeypatch: pytest.MonkeyPatch) -> Callable[[bytes], list[bytes]]:
         def fetch(_url: str) -> _Stream:
             return _Stream(body)
 
-        def upload(_config: object, _props: object, path: Path) -> None:
+        def upload(_config: object, _props: object, path: Path) -> str:
             sent.append(path.read_bytes())
+            return f'an-etag-{len(sent)}'
 
         monkeypatch.setattr(oci_objects, 'fetch', fetch)
         monkeypatch.setattr(oci_objects, 'upload', upload)
@@ -1111,8 +1118,9 @@ def test_the_upload_says_each_long_step_before_it_starts(monkeypatch: pytest.Mon
         events.append(('fetched', url))
         return _Stream(ARTIFACT)
 
-    def upload(_config: object, props: dict[str, Any], _path: Path) -> None:
+    def upload(_config: object, props: dict[str, Any], _path: Path) -> str:
         events.append(('uploaded', str(props['object_name'])))
+        return 'an-etag'
 
     monkeypatch.setattr(oci_objects.pulumi.log, 'info', said)
     monkeypatch.setattr(oci_objects, 'fetch', fetch)
@@ -1214,8 +1222,9 @@ def test_a_matching_artifact_is_decompressed_a_bounded_amount_at_a_time(
 
 
 def test_a_replacement_that_keeps_the_objects_name_deletes_the_old_one_first() -> None:
-    # Created before the old one is deleted, the new object would be removed
-    # by that delete, the two being one object.
+    # The two being one object, the old one's delete makes room before the
+    # create, so the replacement does not rest on the ETag that delete is
+    # conditioned on.
     provider = _artifact_provider()
     olds = provider.check({}, _props('a' * 64)).inputs
     corrected = provider.check({}, _props('b' * 64)).inputs
@@ -1242,6 +1251,189 @@ def test_a_rotation_alone_re_stamps_and_a_release_bump_replaces(uploaded: Callab
     assert provider.diff('id', olds, rotated).changes is True
     assert set(provider.diff('id', olds, bumped).replaces or ()) == {'sha256', 'object_name'}
     assert uploaded(ARTIFACT) == []
+
+
+@dataclasses.dataclass
+class _Stored:
+    body: bytes
+    etag: str
+
+
+_NO_HEADERS: dict[str, str] = {}
+
+
+@dataclasses.dataclass
+class _Answer:
+    headers: dict[str, str]
+
+
+class _Bucket:
+    """One OCI bucket with versioning disabled, as the provider's upload, `head_object` and `delete_object` meet it.
+
+    It also serves `ARTIFACT` as the fetch, and keeps the warnings the
+    provider says.
+
+    Every upload mints an ETag of its own, whatever its bytes: OCI's ETag
+    names the write. In the CLI reference's examples, which upload one file
+    under one name again and again
+    (https://docs.oracle.com/en-us/iaas/tools/oci-cli/latest/oci_cli_docs/cmdref/os/object/put.html),
+    the plain put, `--force` and `--verify-checksum` store the same
+    zero-byte body (`1B2M2Y8AsgTpgAmY7PhCfg==` is the MD5 of nothing) with
+    nothing else changed, and answer three different ETags; and every ETag
+    shown is a version-4, random, UUID, which no digest of the body yields.
+    A delete whose `if_match` is not the object's ETag is refused with
+    `412 NoEtagMatch`
+    (https://docs.oracle.com/en-us/iaas/Content/API/References/apierrors.htm).
+    A name that holds nothing answers `404` before any `if_match` is
+    compared: a server ignores the preconditions of a request that would
+    not succeed without them (RFC 9110 §13.2.1).
+    The bucket stands in for the client whatever account it is opened with.
+    """
+
+    def __init__(self) -> None:
+        self.objects: dict[str, _Stored] = {}
+        self.warnings: list[str] = []
+
+    def upload(self, _config: object, props: dict[str, Any], path: Path) -> str:
+        etag = str(uuid.uuid4())
+        self.objects[str(props['object_name'])] = _Stored(path.read_bytes(), etag)
+        return etag
+
+    def _stored(self, name: str) -> _Stored:
+        if (stored := self.objects.get(name)) is None:
+            raise ServiceError(404, 'ObjectNotFound', _NO_HEADERS, f'{name} not found')
+        return stored
+
+    def head_object(self, _namespace: str, _bucket: str, name: str) -> _Answer:
+        return _Answer(headers={'etag': self._stored(name).etag})
+
+    def delete_object(self, _namespace: str, _bucket: str, name: str, *, if_match: str | None = None) -> _Answer:
+        stored = self._stored(name)
+        if if_match is not None and if_match != stored.etag:
+            raise ServiceError(412, 'NoEtagMatch', _NO_HEADERS, f'{if_match} is not the ETag of {name}')
+        del self.objects[name]
+        return _Answer(headers=_NO_HEADERS)
+
+    def client(self, _config: object) -> _Bucket:
+        return self
+
+    def fetch(self, _url: str) -> _Stream:
+        return _Stream(ARTIFACT)
+
+    def warn(self, message: str, *_args: object, **_kwargs: object) -> None:
+        self.warnings.append(message)
+
+
+@pytest.fixture
+def bucket(monkeypatch: pytest.MonkeyPatch) -> _Bucket:
+    """A bucket the provider uploads `ARTIFACT` into and deletes from, and the warnings it says."""
+    found = _Bucket()
+    monkeypatch.setattr(oci_objects, 'fetch', found.fetch)
+    monkeypatch.setattr(oci_objects, 'upload', found.upload)
+    monkeypatch.setattr('oci.object_storage.ObjectStorageClient', found.client)
+    monkeypatch.setattr(oci_objects.pulumi.log, 'warn', found.warn)
+    return found
+
+
+def _artifact_props() -> dict[str, Any]:
+    return _artifact_provider().check({}, _props(hashlib.sha256(ARTIFACT).hexdigest())).inputs
+
+
+def _refreshed(provider: oci_objects.ArtifactObjectProvider, created: dynamic.CreateResult) -> dict[str, Any]:
+    return provider.read(created.id, dict(created.outs or {})).outs or {}
+
+
+@pytest.mark.parametrize('handed', [False, True], ids=['as-created', 'as-refreshed'])
+def test_a_replacement_created_first_with_the_same_bytes_survives_the_originals_delete(
+    bucket: _Bucket, *, handed: bool
+) -> None:
+    # A `--replace` asks no diff: the replacement uploads the same artifact
+    # under the same name, and the original is deleted after it with the
+    # original's outputs -- or with what a refresh made of them, which reads
+    # the original too.
+    provider = _artifact_provider()
+    original = provider.create(_artifact_props())
+    replacement = provider.create(_artifact_props())
+    outs = _refreshed(provider, original) if handed else dict(original.outs or {})
+
+    provider.delete(original.id, outs)
+
+    name = _artifact_props()['object_name']
+    assert bucket.objects[name].body == lzma.decompress(ARTIFACT)
+    assert bucket.objects[name].etag == (replacement.outs or {})[oci_objects.ETAG]
+    (warning,) = bucket.warnings
+    assert original.id in warning, warning
+
+
+def test_a_re_stamp_keeps_the_etag_its_create_recorded_whatever_wrote_the_name_since(bucket: _Bucket) -> None:
+    # A re-stamp writes nothing, so the write its delete is conditioned on
+    # stays the create's own, and not whatever the object holds by then.
+    provider = _artifact_provider()
+    original = provider.create(_artifact_props())
+    replacement = provider.create(_artifact_props())
+    provider.private_key = 'a-rotated-key'
+    stamped = provider.update(original.id, dict(original.outs or {}), _artifact_props()).outs or {}
+
+    provider.delete(original.id, stamped)
+    assert _artifact_props()['object_name'] in bucket.objects
+
+    provider.delete(replacement.id, dict(replacement.outs or {}))
+    assert bucket.objects == {}
+
+
+def test_a_resource_that_recorded_no_etag_deletes_the_object_unconditionally(bucket: _Bucket) -> None:
+    provider = _artifact_provider()
+    created = provider.create(_artifact_props())
+    _ = provider.create(_artifact_props())
+
+    provider.delete(created.id, {k: v for k, v in (created.outs or {}).items() if k != oci_objects.ETAG})
+
+    assert bucket.objects == {}
+    assert bucket.warnings == []
+
+
+def test_a_delete_of_an_object_already_gone_is_done(bucket: _Bucket) -> None:
+    provider = _artifact_provider()
+    created = provider.create(_artifact_props())
+    bucket.objects.clear()
+
+    provider.delete(created.id, dict(created.outs or {}))
+
+    assert bucket.warnings == []
+
+
+def test_a_re_stamp_of_a_resource_that_recorded_no_etag_records_the_objects_current_one(bucket: _Bucket) -> None:
+    # What every resource holds after an upload made before the ETag was
+    # recorded: the re-stamp takes the object's, and a replacement created
+    # first after that survives the delete.
+    provider = _artifact_provider()
+    created = provider.create(_artifact_props())
+    unrecorded = {k: v for k, v in (created.outs or {}).items() if k != oci_objects.ETAG}
+
+    stamped = provider.update(created.id, unrecorded, _artifact_props()).outs or {}
+    _ = provider.create(_artifact_props())
+    provider.delete(created.id, stamped)
+
+    assert stamped[oci_objects.ETAG] == (created.outs or {})[oci_objects.ETAG]
+    assert _artifact_props()['object_name'] in bucket.objects
+
+
+def test_a_re_stamp_that_finds_no_object_leaves_a_later_replacement_to_survive_the_delete(bucket: _Bucket) -> None:
+    # The object deleted behind the state, the re-stamp finds none, and the
+    # recovery is a `--replace` of the artifact: a create-first replacement,
+    # which the original's delete must not remove.
+    provider = _artifact_provider()
+    created = provider.create(_artifact_props())
+    bucket.objects.clear()
+    unrecorded = {k: v for k, v in (created.outs or {}).items() if k != oci_objects.ETAG}
+
+    stamped = provider.update(created.id, unrecorded, _artifact_props()).outs or {}
+    replacement = provider.create(_artifact_props())
+    provider.delete(created.id, stamped)
+
+    assert bucket.objects[_artifact_props()['object_name']].etag == (replacement.outs or {})[oci_objects.ETAG]
+    (warning,) = bucket.warnings
+    assert created.id in warning, warning
 
 
 # --------------------------------------------------------------------------
