@@ -16,6 +16,7 @@ import os
 import re
 from pathlib import Path
 
+import device_shell
 import process_sessions
 import pulumi
 import pytest
@@ -255,7 +256,10 @@ def test_the_health_reading_reads_every_machine_and_every_unit_the_program_deliv
     )
     systemd = FakeSystemd(tmp_path / 'systemd')
     reading = process_sessions.run(
-        ['/bin/sh', str(program)], env={'PATH': f'{systemd.tools}:/usr/bin:/bin'}, text=True, timeout=30
+        device_shell.argv(HEALTH_PROGRAM, program),
+        env={'PATH': f'{systemd.tools}:/usr/bin:/bin'},
+        text=True,
+        timeout=30,
     )
 
     findings = [re.match(r'^([^:]+): .* "(.+)"$', line) for line in reading.stdout.splitlines()]

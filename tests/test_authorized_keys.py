@@ -16,11 +16,12 @@ sources left in place, and the modes the daemon accepts.
 from __future__ import annotations
 
 import stat
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import final
 
+import device_shell
+import process_sessions
 import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
@@ -195,14 +196,18 @@ def _hand_written(device: _Device, content: str) -> None:
     _ = device.authorized.write_text(content)
 
 
+#: Bounds one run of the converger: a handful of file operations on a
+#: temporary tree, so a run still going then is one that hung.
+CONVERGER_TIMEOUT = 30
+
+
 def _converge(device: _Device) -> None:
     """Run the converger once, as the unit and every key file's hook run it."""
-    completed = subprocess.run(
-        ['/bin/sh', str(device.script)],
+    completed = process_sessions.run(
+        device_shell.argv(access.CONVERGER, device.script),
         env={'PATH': '/usr/bin:/bin'},
-        capture_output=True,
-        check=False,
         text=True,
+        timeout=CONVERGER_TIMEOUT,
     )
     assert completed.returncode == 0, completed.stderr
 
