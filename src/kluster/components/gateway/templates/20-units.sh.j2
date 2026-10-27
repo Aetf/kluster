@@ -17,7 +17,10 @@
 # the unit files, because {{ live_unit_dir }} also holds symlinks and units that
 # are not this program's; a unit this program stops declaring is retired by the
 # delete of the resource that declared it, which disables it and removes the
-# live copy in the same session.
+# live copy in the same session. That delete leaves a source edited or touched
+# on the device since the apply that last wrote it, and the unit with it: this
+# script installs such a unit again at every boot until its source is removed
+# by hand.
 #
 # Drop-ins are converged first, by the same pair of directories one level down,
 # so that a unit the loop below restarts starts with the statements its

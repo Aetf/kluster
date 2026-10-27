@@ -48,6 +48,16 @@ directory at the path and reports success, and a remove deletes a named pipe or
 a socket somebody else put there. `stat` answers about the path itself rather
 than through it, which is how a caller learns what is there before it asks for
 either.
+
+**A remove takes away only the write it was given.** Every write ends by
+reporting what `stat -c '%i %Z'` prints for the path -- the file number and
+status-change time of what its rename put there (`IDENTITY_FORMAT`) -- and a
+remove handed that identity asks a third question before `rm -f`: whether the
+file at the path is still that write (`identity_test`). One that is not is
+left where it is (`RewrittenAtPath`). Neither half is derived from the bytes,
+so a second write of the same content is a second identity: the staged file is
+made while the file it displaces still exists, so the two never share a file
+number.
 """
 
 from __future__ import annotations
@@ -69,6 +79,7 @@ from kluster.providers.device_files import paths
 __all__ = (
     'DEFAULT_TIMEOUT',
     'DIRECTORY',
+    'IDENTITY_FORMAT',
     'REGULAR_EMPTY_FILE',
     'REGULAR_FILE',
     'SYMBOLIC_LINK',
@@ -80,6 +91,7 @@ __all__ = (
     'HostKeyRefused',
     'PinRejected',
     'ReservedStatus',
+    'RewrittenAtPath',
     'Runner',
     'SshTransport',
     'SymbolicLinkAtPath',
@@ -88,6 +100,7 @@ __all__ = (
     'client_credential',
     'connect',
     'directory_test',
+    'identity_test',
     'pinned_host_keys',
     'regular_file_test',
     'same_mode',
@@ -116,6 +129,14 @@ REGULAR_EMPTY_FILE = 'regular empty file'
 #: carrying on every resource.
 STAGING_SUFFIX = '.kluster-staged'
 
+#: What a write records of what it put at a path, as `stat -c` spells it: the
+#: file number and the status-change time, in whole seconds. Every `stat -c`
+#: has both. The file number alone is not enough, since a number freed by one
+#: write can be handed to a later one; the status-change time is the kernel's
+#: to set, and no tool sets it to a value of its choosing, as `touch -d` does a
+#: modification time.
+IDENTITY_FORMAT = '%i %Z'
+
 
 @unique
 class ReservedStatus(IntEnum):
@@ -131,7 +152,7 @@ class ReservedStatus(IntEnum):
     the shell's own -- `command not found`, a file that cannot be executed, and
     the 128 + signal a killed process reports. A member outside the range would
     collide with an answer the session did not mean, which is why adding a
-    fourth is a change to this class rather than a new name beside it.
+    member is a change to this class rather than a new name beside it.
     """
 
     #: There is no such path. `cat` and `stat` both exit 1 for an absent file
@@ -152,6 +173,11 @@ class ReservedStatus(IntEnum):
     #: and reports success, so this is the one wrong kind no command complains
     #: about.
     WRONG_KIND = 45
+    #: The file at this path is not the write the caller recorded: its
+    #: `IDENTITY_FORMAT` answer differs. `rm -f` removes whatever is there,
+    #: and a replacement that wrote the same path again is the one it would
+    #: remove.
+    REWRITTEN = 46
 
     def __init__(self, status: int) -> None:
         if status not in self.available():
@@ -221,6 +247,22 @@ class WrongKindAtPath(DeviceError):
 
 
 @final
+class RewrittenAtPath(DeviceError):
+    """Another write than the one recorded stands at a path, so the remove left it.
+
+    The case it answers is a replacement the engine orders create-first, under
+    `--replace` say: the new resource writes the path again and the original's
+    delete follows. What stands there is the new resource's, and the original
+    has nothing left to remove. `written` is the identity the caller recorded.
+    """
+
+    def __init__(self, path: str, written: str) -> None:
+        super().__init__(f'leaving {path}: it holds another write than the one recorded ({written})')
+        self.path: str = path
+        self.written: str = written
+
+
+@final
 class CommandFailed(DeviceError):
     """A command exited non-zero."""
 
@@ -264,13 +306,15 @@ class FileStat:
     `symbolic link` -- because existence alone does not say what is there, and a
     resource that declares a directory has to be able to tell one from a file
     somebody left at the same path. `stat` is asked about the path itself
-    rather than through it, so a link is reported as a link.
+    rather than through it, so a link is reported as a link. `identity` is
+    what `IDENTITY_FORMAT` prints for it, the form a write returns.
     """
 
     owner: str
     group: str
     mode: str
     size: int
+    identity: str
     kind: str
 
     @property
@@ -315,8 +359,12 @@ class Transport(Protocol):
         """What the path is and whose it is, or `None` if there is no such path."""
         ...
 
-    async def write(self, path: str, data: bytes, *, mode: str, owner: str | None) -> None:
+    async def write(self, path: str, data: bytes, *, mode: str, owner: str | None) -> str:
         """Put `data` at `path`, creating parent directories, atomically.
+
+        What it returns is the identity of the file it put there
+        (`IDENTITY_FORMAT`), which a later `remove` is handed so as to take
+        away this write and no other.
 
         A symbolic link at `path` raises `SymbolicLinkAtPath` and anything else
         that is not a regular file raises `WrongKindAtPath`; nothing is written
@@ -324,12 +372,13 @@ class Transport(Protocol):
         """
         ...
 
-    async def remove(self, path: str) -> None:
+    async def remove(self, path: str, *, written: str | None = None) -> None:
         """Delete `path`. Removing what is not there is not an error.
 
         A symbolic link at `path` raises `SymbolicLinkAtPath` and anything else
         that is not a regular file raises `WrongKindAtPath`; both stay where
-        they are.
+        they are. Given `written`, a regular file whose identity is another
+        raises `RewrittenAtPath` and stays too.
         """
         ...
 
@@ -396,20 +445,25 @@ class SshTransport:
 
     async def stat(self, path: str) -> FileStat | None:
         quoted = shlex.quote(path)
-        script = f"if [ ! -e {quoted} ]; then exit {ReservedStatus.ABSENT}; fi; stat -c '%U %G %a %s %F' {quoted}"
+        script = (
+            f'if [ ! -e {quoted} ]; then exit {ReservedStatus.ABSENT}; fi; '
+            f"stat -c '%U %G %a %s {IDENTITY_FORMAT} %F' {quoted}"
+        )
         result = await self._sh(script)
         if result.exit_status == ReservedStatus.ABSENT:
             return None
         _check(f'stat {path}', result)
         # The kind is last and is the one field with spaces in it (`regular
         # empty file`), so it takes whatever remains of the line.
-        fields = result.text.split(None, 4)
-        if len(fields) != 5:
+        fields = result.text.split(None, 6)
+        if len(fields) != 7 or not (fields[4].isdigit() and fields[5].isdigit()):
             raise CommandFailed(f'stat {path}', result.exit_status, f'unreadable stat output: {result.text!r}')
-        owner, group, mode, size, kind = fields
-        return FileStat(owner=owner, group=group, mode=mode, size=int(size), kind=kind.strip())
+        owner, group, mode, size, number, changed, kind = fields
+        return FileStat(
+            owner=owner, group=group, mode=mode, size=int(size), identity=f'{number} {changed}', kind=kind.strip()
+        )
 
-    async def write(self, path: str, data: bytes, *, mode: str, owner: str | None) -> None:
+    async def write(self, path: str, data: bytes, *, mode: str, owner: str | None) -> str:
         """The staged write, refusing whatever the declaration did not name.
 
         Both refusals are the script's first acts, in the same shell run as the
@@ -418,6 +472,9 @@ class SshTransport:
         points at one, and *over* a link that points at a file. The parent it
         creates is the one `paths` gives, so the directory made is the one the
         declared path sits in and no other spelling of it.
+
+        Its last act is the `stat` whose answer it returns, in the same run, so
+        the identity is that of the file the `mv` put in place.
         """
         staged = shlex.quote(f'{path}{STAGING_SUFFIX}')
         script = [
@@ -430,27 +487,39 @@ class SshTransport:
         if owner:
             script.append(f'chown {shlex.quote(owner)} {staged}')
         script.append(f'mv -f {staged} {shlex.quote(path)}')
+        script.append(f"stat -c '{IDENTITY_FORMAT}' {shlex.quote(path)}")
         result = await self._sh(' && '.join(script), stdin=data)
         if result.exit_status == ReservedStatus.SYMBOLIC_LINK:
             raise SymbolicLinkAtPath(path)
         if result.exit_status == ReservedStatus.WRONG_KIND:
             raise WrongKindAtPath(path, REGULAR_FILE, 'write')
         _check(f'write {path}', result)
+        identity = result.text.strip()
+        number, _, changed = identity.partition(' ')
+        if not (number.isdigit() and changed.isdigit()):
+            raise CommandFailed(f'write {path}', result.exit_status, f'unreadable identity: {result.text!r}')
+        return identity
 
-    async def remove(self, path: str) -> None:
+    async def remove(self, path: str, *, written: str | None = None) -> None:
         """The delete, refusing whatever the declaration did not name.
 
         `rm -f` takes away a link, a named pipe, a socket or a device node
         without a word -- it complains only about a directory. So the delete
         asks the same two questions the write asks, and a resource that
-        declared a file never removes something that is not one.
+        declared a file never removes something that is not one. Given the
+        identity a write returned, it asks a third (`identity_test`), and a
+        file that a later write put at the path stays.
         """
-        script = f'{symlink_test(path)} && {regular_file_test(path)} && rm -f {shlex.quote(path)}'
-        result = await self._sh(script)
+        tests = [symlink_test(path), regular_file_test(path)]
+        if written is not None:
+            tests.append(identity_test(path, written))
+        result = await self._sh(' && '.join([*tests, f'rm -f {shlex.quote(path)}']))
         if result.exit_status == ReservedStatus.SYMBOLIC_LINK:
             raise SymbolicLinkAtPath(path)
         if result.exit_status == ReservedStatus.WRONG_KIND:
             raise WrongKindAtPath(path, REGULAR_FILE, 'remove')
+        if result.exit_status == ReservedStatus.REWRITTEN and written is not None:
+            raise RewrittenAtPath(path, written)
         _check(f'remove {path}', result)
 
     async def run(self, command: str) -> CommandResult:
@@ -553,6 +622,26 @@ def directory_test(path: str) -> str:
     """
     quoted = shlex.quote(path)
     return f'if [ -e {quoted} ] && [ ! -d {quoted} ]; then exit {ReservedStatus.WRONG_KIND}; fi'
+
+
+def identity_test(path: str, written: str) -> str:
+    """The test that refuses a path holding another write than `written`.
+
+    `written` is what a write returned (`IDENTITY_FORMAT`). Anything at the
+    path is asked about, a link included, which `stat` describes rather than
+    follows; a path with nothing at it passes, since there is nothing there
+    for a later write to have put. Whatever `stat` cannot answer for is
+    another identity, so a failure to ask leaves the path alone.
+
+    An `if` whose condition is false exits zero, so the fragment chains with
+    `&&` in front of the commands it guards.
+    """
+    quoted = shlex.quote(path)
+    asked = f'"$(stat -c {shlex.quote(IDENTITY_FORMAT)} {quoted})"'
+    return (
+        f'if [ -e {quoted} ] || [ -L {quoted} ]; then '
+        f'[ {asked} = {shlex.quote(written)} ] || exit {ReservedStatus.REWRITTEN}; fi'
+    )
 
 
 def same_mode(left: str, right: str) -> bool:

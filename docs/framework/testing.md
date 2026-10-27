@@ -1155,6 +1155,8 @@ are:
 
 -   the engine modules above, `tests/test_state_backend_engine.py`,
     `tests/test_homelab_engine.py` and `tests/test_extension_provider.py`;
+-   `tests/test_device_directory_engine.py`, which holds what a device
+    directory's `delete_before_replace` rests on;
 -   the `real` cases of `tests/test_operator_stack.py`, which run the
     operator driver against a scratch stack;
 -   the cases of `tests/test_pulumi_config.py` that take a real-CLI

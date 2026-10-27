@@ -112,10 +112,33 @@ every custom provider here shares; what is this module's own is which key holds
 the credential and what an endpoint is.
 
 **Only the path is a replacement.** The bytes cannot be at two paths at once, so
-a moved file is created before the old one is deleted. Nothing else about a
-resource here identifies it, the address least of all: a replacement triggered by
-an address would delete, at what is the same device, the file its own create had
-just written there.
+a moved file or tree is created before the old one is deleted; a moved
+directory is deleted first, for the reason `DeviceDirectory` gives. Nothing else
+about a resource here identifies it, the address least of all: a replacement
+triggered by an address would delete, at what is the same device, the file its
+own create had just written there.
+
+**A delete takes away only what its own resource wrote.** A replacement the
+engine decides without asking `diff` -- a `--replace`, a taint, one another
+resource carries over -- is created before the original is deleted, and its
+create writes the same path again (style/pulumi.md, "Resources and their
+contents"). So every write records the identity of the file it put in place
+(`WRITTEN`, in the transport's `ssh.IDENTITY_FORMAT`): a file's own, and for a
+tree the marker's, which every push rewrites. The delete removes the object only
+while the path still holds that write. Otherwise it leaves the object, says so
+through `pulumi.log`, runs no hook, and returns, so the engine drops the original
+from state: a delete that failed instead would keep it there, and fail again on
+every later run. The identity moves with any write at the path, not only a
+replacement's. A file edited, rewritten or touched on the device since its
+resource last wrote it, including an editor's save that changed nothing, is left
+by that resource's retirement as well, with the same warning naming the path.
+Nothing is destroyed that way, and the file is then the operator's to remove. A
+refresh carries the recorded identity rather than reading it
+from the device, since it refreshes that original as well; an update that only
+re-stamps writes nothing and keeps it, recording what `stat` reports only where
+nothing is recorded. A resource with nothing recorded is deleted as it stands.
+A directory has no identity to record -- `mkdir -p` makes nothing new where a
+directory is -- so a `DeviceDirectory` is replaced delete-first instead.
 
 **Order within an apply is chosen so that a failure is visible.** A file is
 written, then its hook runs; a failed hook raises, so the resource is not
@@ -193,6 +216,7 @@ __all__ = (
     'SUPERSEDED_SUFFIX',
     'UNPACKING_SUFFIX',
     'VERSION',
+    'WRITTEN',
     'Connection',
     'DeviceArtifact',
     'DeviceArtifactProvider',
@@ -267,7 +291,12 @@ PRIVATE_KEY_CONFIG = 'gatewayPrivateKey'
 
 #: This module's version, bumped by hand when an operation's behavior changes
 #: (`configured`).
-VERSION = '4'
+VERSION = '5'
+
+#: The output property holding the identity of what the resource's last write
+#: put on the device (`ssh.IDENTITY_FORMAT`): the file's for a `DeviceFile`, the
+#: marker's for a `DeviceArtifact`. Output only, so no comparison reads it.
+WRITTEN = 'written'
 
 #: What `diff` compares, and the whole of it. Its `olds` is the stored *output*
 #: bag while its `news` is the checked *input* bag (framework/pulumi.md §5.3
@@ -525,12 +554,20 @@ def unpack_script(directory: str) -> str:
     )
 
 
-def purge_script(directory: str) -> str:
+def purge_script(directory: str, written: str | None = None) -> str:
     """The command that removes a tree and every sibling the push uses.
 
     Guarded like the rest: `rm -rf` deletes a link, a named pipe or a socket as
     readily as the tree, so a delete that ran past the questions would take
     away something this resource only ever named the path of.
+
+    Given `written`, the identity of the marker the resource's last push wrote,
+    its next question is whether the marker is still that write
+    (`ssh.identity_test`): a marker another push rewrote exits
+    `ssh.ReservedStatus.REWRITTEN` and leaves the tree, its siblings and the
+    marker as they are. With no marker it purges, since the only ways one is
+    withdrawn -- this resource's own failed hook, and the rollback -- both leave
+    a tree that is this resource's.
     """
     removed = (
         directory,
@@ -538,8 +575,10 @@ def purge_script(directory: str) -> str:
         f'{directory}{SUPERSEDED_SUFFIX}',
         f'{directory}{LAYOUT_SUFFIX}',
     )
-    guards = f'{ssh.symlink_test(directory)} && {ssh.directory_test(directory)}'
-    return guards + ' && rm -rf ' + ' '.join(shlex.quote(path) for path in removed)
+    guards = [ssh.symlink_test(directory), ssh.directory_test(directory)]
+    if written is not None:
+        guards.append(ssh.identity_test(marker_path(directory), written))
+    return ' && '.join(guards) + ' && rm -rf ' + ' '.join(shlex.quote(path) for path in removed)
 
 
 def make_script(path: str, mode: str, owner: str | None) -> str:
@@ -741,6 +780,21 @@ def _octal(props: Mapping[str, Any], key: str) -> list[dynamic.CheckFailure]:
     return []
 
 
+def recorded(props: Mapping[str, Any]) -> str | None:
+    """The identity a property bag records of its resource's last write, if any."""
+    written = props.get(WRITTEN)
+    return str(written) if written else None
+
+
+def left(props: Mapping[str, Any], what: str) -> None:
+    """Say that a delete found another write where its own was, and did nothing.
+
+    A warning rather than a failure: an original whose delete fails stays in
+    state, and that delete is retried, and fails again, on every later run.
+    """
+    pulumi.log.warn(f'{endpoint(props)}: {what}; nothing is removed and no hook runs')
+
+
 def gone() -> dynamic.ReadResult:
     """What a `read` returns for a resource the device no longer has.
 
@@ -806,6 +860,22 @@ class DeviceProvider(ConfiguredProvider, abc.ABC):
     async def _drifted(self, props: Mapping[str, Any]) -> bool:
         """Whether the device disagrees with what `props` declares."""
 
+    async def _restamped(self, olds: Mapping[str, Any], props: Mapping[str, Any], path: str) -> str | None:
+        """The identity a re-stamp keeps: the one recorded, or else what is at `path`.
+
+        A re-stamp writes nothing, so it has no write of its own to record. A
+        resource whose state holds no identity takes the one `stat` reports,
+        which is how a resource created before identities were recorded comes
+        to record one; one that holds an identity keeps it, since what is at the path is the resource's last
+        write only as far as that write's own answer says.
+        """
+        written = recorded(olds)
+        if written is not None:
+            return written
+        async with open_transport(self._device(props)) as transport:
+            stat = await transport.stat(path)
+        return None if stat is None else stat.identity
+
 
 @final
 class DeviceFileProvider(DeviceProvider):
@@ -815,10 +885,10 @@ class DeviceFileProvider(DeviceProvider):
         return self._stamp(news, [*_canonical_path(news, 'path'), *_octal(news, 'mode')])
 
     def create(self, props: dict[str, Any]) -> dynamic.CreateResult:
-        run_sync(self._apply(props))
+        written = run_sync(self._apply(props))
         # The checked inputs go back out as the outputs, stamps included, so the
-        # stored bag records the session that wrote this file.
-        return dynamic.CreateResult(id_=str(props['path']), outs=props)
+        # stored bag records the session that wrote this file -- and the write.
+        return dynamic.CreateResult(id_=str(props['path']), outs={**props, WRITTEN: written})
 
     def diff(self, _id: str, olds: dict[str, Any], news: dict[str, Any]) -> dynamic.DiffResult:
         replaces = replacements(olds, news, 'path')
@@ -833,12 +903,14 @@ class DeviceFileProvider(DeviceProvider):
         return dynamic.DiffResult(changes=run_sync(self._drifted(news)), replaces=[])
 
     def update(self, _id: str, olds: dict[str, Any], news: dict[str, Any]) -> dynamic.UpdateResult:
-        if not run_sync(self._restamp_only(olds, news, FILE_DECLARED)):
-            run_sync(self._apply(news))
+        if run_sync(self._restamp_only(olds, news, FILE_DECLARED)):
+            written = run_sync(self._restamped(olds, news, str(news['path'])))
+        else:
+            written = run_sync(self._apply(news))
         # The outs replace the stored output bag (framework/pulumi.md §5.3 E9),
-        # so what state says about the session that last wrote this file stays
-        # true.
-        return dynamic.UpdateResult(outs=news)
+        # so what state says about the session that last wrote this file, and
+        # about the write, stays true.
+        return dynamic.UpdateResult(outs={**news, WRITTEN: written})
 
     def read(self, id_: str, props: dict[str, Any]) -> dynamic.ReadResult:
         return run_sync(self._read(id_, props))
@@ -846,15 +918,17 @@ class DeviceFileProvider(DeviceProvider):
     def delete(self, _id: str, props: dict[str, Any]) -> None:
         run_sync(self._delete(props))
 
-    async def _apply(self, props: Mapping[str, Any]) -> None:
+    async def _apply(self, props: Mapping[str, Any]) -> str:
+        """Write the file, then run its hook; what it returns is the write's identity."""
         async with open_transport(self._device(props)) as transport:
-            await transport.write(
+            written = await transport.write(
                 str(props['path']),
                 str(props['content']).encode(),
                 mode=str(props['mode']),
                 owner=_owner(props),
             )
             await run_hook(transport, props)
+        return written
 
     async def _drifted(self, props: Mapping[str, Any]) -> bool:
         path = str(props['path'])
@@ -895,7 +969,14 @@ class DeviceFileProvider(DeviceProvider):
 
     async def _delete(self, props: Mapping[str, Any]) -> None:
         async with open_transport(self._device(props)) as transport:
-            await transport.remove(str(props['path']))
+            try:
+                await transport.remove(str(props['path']), written=recorded(props))
+            except ssh.RewrittenAtPath as rewritten:
+                # Another write stands there -- a replacement created before
+                # this resource's delete -- and its reader has been told about
+                # that one. Telling it the file is gone would be false.
+                left(props, str(rewritten))
+                return
             # The hook runs on the way out too: whatever reads this file has to
             # be told it is gone, exactly as it was told it had arrived.
             await run_hook(transport, props)
@@ -917,8 +998,8 @@ class DeviceArtifactProvider(DeviceProvider):
         return self._stamp(news, failures)
 
     def create(self, props: dict[str, Any]) -> dynamic.CreateResult:
-        run_sync(self._land(props))
-        return dynamic.CreateResult(id_=str(props['root']), outs=props)
+        written = run_sync(self._land(props))
+        return dynamic.CreateResult(id_=str(props['root']), outs={**props, WRITTEN: written})
 
     def diff(self, _id: str, olds: dict[str, Any], news: dict[str, Any]) -> dynamic.DiffResult:
         replaces = replacements(olds, news, 'root')
@@ -934,9 +1015,11 @@ class DeviceArtifactProvider(DeviceProvider):
         # A re-stamp pulls nothing either: the tree the device holds is the
         # image the pin names, and neither end has a reason to fetch it again to
         # find that out.
-        if not run_sync(self._restamp_only(olds, news, ARTIFACT_DECLARED)):
-            run_sync(self._land(news))
-        return dynamic.UpdateResult(outs=news)
+        if run_sync(self._restamp_only(olds, news, ARTIFACT_DECLARED)):
+            written = run_sync(self._restamped(olds, news, marker_path(str(news['root']))))
+        else:
+            written = run_sync(self._land(news))
+        return dynamic.UpdateResult(outs={**news, WRITTEN: written})
 
     def read(self, id_: str, props: dict[str, Any]) -> dynamic.ReadResult:
         return run_sync(self._read(id_, props))
@@ -944,14 +1027,15 @@ class DeviceArtifactProvider(DeviceProvider):
     def delete(self, _id: str, props: dict[str, Any]) -> None:
         run_sync(self._delete(props))
 
-    async def _land(self, props: Mapping[str, Any]) -> None:
+    async def _land(self, props: Mapping[str, Any]) -> str:
         """Pull, unpack, claim, notify -- all of it on the far end of one session.
 
         Every step is a command the device runs, and a step that fails ends the
         operation with what the device said about it. Nothing before the second
         rename touches the live tree, so a pull that could not reach the
         registry and an unpack that ran out of disk both leave the container
-        running exactly what it was running.
+        running exactly what it was running. What it returns is the identity of
+        the marker it wrote, which stands for the whole push.
         """
         root = str(props['root'])
         digest = str(props['digest'])
@@ -966,7 +1050,7 @@ class DeviceArtifactProvider(DeviceProvider):
             if not unpack.ok:
                 raise UnpackFailed(root, unpack.exit_status, unpack.stderr)
             # Before the hook: the hook reads this.
-            await _mark(transport, root, digest)
+            written = await _mark(transport, root, digest)
             try:
                 await run_hook(transport, props)
             except BaseException:
@@ -976,6 +1060,7 @@ class DeviceArtifactProvider(DeviceProvider):
                 with suppress(Exception):
                     await transport.remove(marker_path(root))
                 raise
+        return written
 
     async def _drifted(self, props: Mapping[str, Any]) -> bool:
         root = str(props['root'])
@@ -1005,11 +1090,24 @@ class DeviceArtifactProvider(DeviceProvider):
         tree is declared, say -- would leave a running container's root
         filesystem with no record of where it came from, which is a worse place
         than where it started.
+
+        A marker another push rewrote stops the purge before anything goes
+        (`purge_script`): the tree is that push's, the container may be running
+        on it, and the hook it would run has nothing true to say. The purge's
+        own question is the one that counts, so the marker's removal after it
+        asks nothing more.
         """
         root = str(props['root'])
+        written = recorded(props)
         async with open_transport(self._device(props)) as transport:
-            purged = await transport.run(purge_script(root))
+            purged = await transport.run(purge_script(root, written))
             _refused(root, purged, 'delete')
+            if written is not None and purged.exit_status == ssh.ReservedStatus.REWRITTEN:
+                left(
+                    props,
+                    f'leaving the tree at {root}: its marker holds another push than the one recorded ({written})',
+                )
+                return
             if not purged.ok:
                 # A read-only filesystem, a permission the session lost, a disk
                 # that is gone: every one of them leaves the tree where it is,
@@ -1054,10 +1152,11 @@ class DeviceDirectoryProvider(DeviceProvider):
     def diff(self, _id: str, olds: dict[str, Any], news: dict[str, Any]) -> dynamic.DiffResult:
         replaces = replacements(olds, news, 'path')
         if replaces:
-            # Created before deleted, as a moved file is: the new directory
-            # exists before the old one is taken away, and the old one is taken
-            # away only if nothing has filled it in the meantime.
-            return dynamic.DiffResult(changes=True, replaces=replaces, delete_before_replace=False)
+            # Deleted first, as every replacement of a directory is
+            # (`DeviceDirectory`): a directory that holds files refuses the
+            # delete before anything is made, rather than after a create that
+            # leaves an original no later run can delete.
+            return dynamic.DiffResult(changes=True, replaces=replaces, delete_before_replace=True)
         if has_unknowns(news):
             return dynamic.DiffResult(changes=None)
         if declared_change(olds, news, DIRECTORY_COMPARED):
@@ -1161,8 +1260,11 @@ class DeviceFile(dynamic.Resource, module='device_files', name='DeviceFile'):
 
         `owner` is `user` or `user:group`, and omitting it leaves ownership to
         whatever the device does by default. `hook` runs after every write and
-        after the delete; a non-zero exit fails the operation. `secret=True`
-        marks the content a credential, for the files that carry one.
+        after a delete that removes the file; a non-zero exit fails the
+        operation. A delete that finds another write at the path -- a
+        replacement's, or an edit made on the device since -- leaves it and
+        runs nothing. `secret=True` marks the
+        content a credential, for the files that carry one.
 
         **`path` is the file, and not a link to one or a directory of that
         name.** Anything else at the path is drift a preview reports and an
@@ -1229,6 +1331,20 @@ class DeviceDirectory(dynamic.Resource, module='device_files', name='DeviceDirec
         places, and one left behind at the old path would be an orphan nothing
         declares -- while everything else, the address dialed included, is a
         value the next apply converges where the directory already is.
+
+        **Every replacement is deleted first**, whatever the caller's `opts`
+        leave unsaid. The create adopts a directory that is already there, and
+        `mkdir -p` makes nothing new for the delete to tell from the original,
+        so no identity of the create's own write exists to guard the delete
+        with. Created first, a replacement of a directory that holds files
+        leaves the original's delete refused, and every later run retries it
+        and fails; an empty one is removed after the create made it. Deleted
+        first, the full directory's delete is refused before anything is made,
+        the original stays, and the next run plans nothing. The cost is a
+        planned move of a directory holding declared files, which is refused
+        at its delete where create-first would complete it: such a move is a
+        directory under a new logical name beside the old, and the old one is
+        retired once it is empty.
         """
         super().__init__(
             DeviceDirectoryProvider(),
@@ -1242,7 +1358,8 @@ class DeviceDirectory(dynamic.Resource, module='device_files', name='DeviceDirec
             },
             # A path, a mode and an owner: nothing here is a secret, and a
             # preview that shows them is a preview a reviewer can read.
-            opts,
+            # Deleted before it is replaced, for the reason the docstring gives.
+            pulumi.ResourceOptions.merge(pulumi.ResourceOptions(delete_before_replace=True), opts),
         )
 
 
@@ -1278,9 +1395,10 @@ class DeviceArtifact(dynamic.Resource, module='device_files', name='DeviceArtifa
 
         The resource owns the directory whole: it replaces it on a new pin and
         removes it on a delete, along with the staging siblings the push works
-        through. `root` is therefore the only replacement -- the tree cannot be
-        in two places, and one left at the old path would be an orphan nothing
-        declares.
+        through, unless another push has rewritten the marker since -- a
+        replacement's, whose tree it then is. `root` is therefore the only
+        replacement -- the tree cannot be in two places, and one left at the
+        old path would be an orphan nothing declares.
 
         **`root` is the tree, not a symbolic link to one**, and what is at the
         path is compared rather than only whether something is there: a link,
@@ -1309,9 +1427,9 @@ class DeviceArtifact(dynamic.Resource, module='device_files', name='DeviceArtifa
         )
 
 
-async def _mark(transport: ssh.Transport, location: str, digest: str) -> None:
-    """Record which published artifact the tree at `location` came from."""
-    await transport.write(marker_path(location), f'{digest}\n'.encode(), mode=MARKER_MODE, owner=None)
+async def _mark(transport: ssh.Transport, location: str, digest: str) -> str:
+    """Record which published artifact the tree at `location` came from, and return the write's identity."""
+    return await transport.write(marker_path(location), f'{digest}\n'.encode(), mode=MARKER_MODE, owner=None)
 
 
 async def _marker(transport: ssh.Transport, directory: str) -> bytes | None:
