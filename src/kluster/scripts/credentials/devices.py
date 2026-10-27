@@ -565,31 +565,7 @@ def seal(device: Device, *, stack: pulumi_config.Stack, sealer: sealing.Sealer) 
     """
     if device.sealed is None:
         raise KdbxError(f'{device.title} has no copy in the cluster, so there is nothing to seal')
-    values: dict[str, str] = {}
-    for field in device.fields:
-        try:
-            value = stack.get(field.key).strip()
-        except pulumi_config.MachineRefused:
-            raise
-        except pulumi_config.SlotRefused as exc:
-            raise RecordMissing(
-                f"{device.title} is not in the {device.stack} stack's configuration: "
-                f'`credentials derived {device.member} record` is what puts it there ({exc})',
-                stack=device.stack,
-                key=field.key,
-                missing=Missing.ABSENT,
-                record=_record_leaf(device.member),
-            ) from exc
-        if not value:
-            raise RecordMissing(
-                f'{device.title} decrypts to an empty value in the {device.stack} stack; '
-                f're-run `credentials derived {device.member} record`',
-                stack=device.stack,
-                key=field.key,
-                missing=Missing.EMPTY,
-                record=_record_leaf(device.member),
-            )
-        values[field.name] = value
+    values = {field.name: _read_back(device, field.key, stack=stack) for field in device.fields}
     sealer.deliver(device.sealed, values)
 
 
@@ -758,9 +734,8 @@ def borrow(device: Device, *, stack: pulumi_config.Stack) -> str:
     A stack that has no such key is the mid-crossing state — a checkout whose
     stack file predates the row — so the refusal names the command that fills
     it rather than passing `pulumi`'s own message on, which says to set the key
-    by hand. A machine that cannot open that stack *at all* -- no passphrase
-    for it, no backend to reach it in -- is a different state with a different
-    answer, and its refusal travels unchanged.
+    by hand. That refusal is only for a stack that answers that the key is
+    absent; every other refusal of the read travels unchanged (`_read_back`).
     """
     secrets = [field for field in device.fields if field.secret]
     if len(secrets) != 1:
@@ -769,18 +744,50 @@ def borrow(device: Device, *, stack: pulumi_config.Stack) -> str:
             title=device.title,
             secrets=tuple(field.name for field in secrets),
         )
+    return _read_back(device, secrets[0].key, stack=stack)
+
+
+def _read_back(device: Device, key: str, *, stack: pulumi_config.Stack) -> str:
+    """One field of a row read back out of the stack that holds it, as `borrow` and `seal` read theirs.
+
+    Refused as `RecordMissing` only where the stack answers that the value is
+    not there: a key it does not hold -- or a stack neither the backend nor the
+    checkout holds a configuration for -- or a key that decrypts to nothing. A
+    backend that holds no such stack while the checkout holds its committed
+    file has said nothing about that file, and is not that answer. A machine
+    that cannot open the stack *at all* -- no passphrase for it, no backend to
+    reach it in -- is a different state with a different answer, and its
+    refusal travels unchanged.
+
+    So does every other refusal of the read that is not the stack's answer
+    that the key is absent: a state backend that does not answer, a
+    passphrase that does not decrypt what is there. Each says in its own words
+    what is wrong, and dressed up as a missing record it would send the
+    operator to re-record a value that is in fact present. A refused read is
+    therefore asked about once more, of the stack itself (`Stack.has`), which
+    decrypts nothing. Where the backend does not answer, that question is
+    refused as well, and it is still the read's refusal that travels,
+    unchanged, since it is the one that names the command the caller made.
+    """
     try:
-        value = stack.get(secrets[0].key).strip()
+        value = stack.get(key).strip()
     except pulumi_config.MachineRefused:
         # Not this row's problem and not this row's answer: the machine cannot
         # open that stack at all, and the refusal already says what to run.
         raise
     except pulumi_config.SlotRefused as exc:
+        log.info(
+            'reading %s from the %s stack was refused; asking the state backend whether the stack holds it',
+            key,
+            device.stack,
+        )
+        if not _answered_absent(stack, key):
+            raise
         raise RecordMissing(
             f"{device.title} is not in the {device.stack} stack's configuration: "
             f'`credentials derived {device.member} record` is what puts it there ({exc})',
             stack=device.stack,
-            key=secrets[0].key,
+            key=key,
             missing=Missing.ABSENT,
             record=_record_leaf(device.member),
         ) from exc
@@ -789,11 +796,19 @@ def borrow(device: Device, *, stack: pulumi_config.Stack) -> str:
             f'{device.title} decrypts to an empty value in the {device.stack} stack; '
             f're-run `credentials derived {device.member} record`',
             stack=device.stack,
-            key=secrets[0].key,
+            key=key,
             missing=Missing.EMPTY,
             record=_record_leaf(device.member),
         )
     return value
+
+
+def _answered_absent(stack: pulumi_config.Stack, key: str) -> bool:
+    """Whether `stack` answers that it holds no `key`: False where it holds one, and where it does not answer."""
+    try:
+        return not stack.has(key)
+    except pulumi_config.SlotRefused:
+        return False
 
 
 __all__ = (

@@ -41,7 +41,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
-from fake_pulumi import RecordedPulumi
+from fake_pulumi import RecordedPulumi, Unanswering
 from memory_kit import MemoryKit
 from pulumi.runtime import rpc
 from scratch_projects import cli_directories, scrubbed
@@ -617,6 +617,54 @@ def test_seal_before_the_password_is_recorded_names_the_command_that_records_it(
     assert refused.value.missing is devices.Missing.ABSENT
     assert refused.value.record in named_leaves(str(refused.value))
     assert ('derived', devices.BGP, 'record') in named_leaves(str(refused.value))
+    assert written(stacks, conventions.sealed.BGP_PASSWORD) == {}
+
+
+def unopened(name: str) -> pulumi_config.Stack:
+    """A sealer's way to its declaring stack that must never be taken: nothing was read to write there."""
+    raise AssertionError(f'a seal whose value was never read opened the {name} stack to write it')
+
+
+def unsealed(args: Sequence[str], *, stdin: str | None) -> str:
+    """A `kubeseal` that must never be run: nothing was read to seal."""
+    raise AssertionError(f'a seal whose value was never read ran kubeseal {" ".join(args)}')
+
+
+#: The sealer the cases about a refused read hand `seal`: reaching it at all
+#: fails the case, so a read that went through cannot pass for one refused.
+UNREACHED = sealing.Sealer(certificate='', open_stack=unopened, run=unsealed)
+
+
+def test_seal_against_a_state_backend_that_does_not_answer_is_not_told_the_password_is_missing() -> None:
+    """A backend that does not answer has said nothing about the password, so the read's own refusal travels.
+
+    Told it is missing, the operator would draw and record a new password
+    while the gateway still holds the old one; what they need is the backend,
+    which the read's refusal names.
+    """
+    runner = Unanswering()
+    slot = pulumi_config.Stack(
+        name=BGP.stack,
+        directory=pulumi_config.project_dir(),
+        environment=pulumi_config.BackendEnvironment(physical=lambda: 'the-physical-passphrase'),
+        run=runner,
+    )
+
+    with pytest.raises(SlotRefused) as refused:
+        devices.seal(BGP, stack=slot, sealer=UNREACHED)
+
+    assert not isinstance(refused.value, devices.RecordMissing)
+    assert refused.value is runner.refusals[0]
+
+
+def test_seal_of_a_password_the_stack_holds_but_cannot_be_read_is_not_told_it_is_missing(stacks: Stacks) -> None:
+    """The stack lists the key, so whatever the read was refused for, the password is not absent."""
+    stacks.runner(PHYSICAL).undecryptable.add(physical.GATEWAY_BGP_PASSWORD)
+
+    with pytest.raises(SlotRefused) as refused:
+        devices.seal(BGP, stack=stacks.open(BGP.stack), sealer=UNREACHED)
+
+    assert not isinstance(refused.value, devices.RecordMissing)
     assert written(stacks, conventions.sealed.BGP_PASSWORD) == {}
 
 

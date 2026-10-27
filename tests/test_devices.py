@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 from credentials_command_tree import named_leaves
-from fake_pulumi import RecordedPulumi
+from fake_pulumi import RecordedPulumi, Unanswering
 
 from kluster import conventions
 from kluster.scripts.credentials import devices, escrow, pulumi_config
@@ -50,6 +50,13 @@ FULLY_EQUIPPED = pulumi_config.BackendEnvironment(
 
 def stack(name: str) -> tuple[pulumi_config.Stack, RecordedPulumi]:
     runner = RecordedPulumi()
+    slot = pulumi_config.Stack(name=name, directory=pulumi_config.project_dir(), environment=FULLY_EQUIPPED, run=runner)
+    return slot, runner
+
+
+def listed(name: str) -> tuple[pulumi_config.Stack, RecordedPulumi]:
+    """A stack the recorded backend holds, as `stack` makes one, whose keys it lists."""
+    runner = RecordedPulumi(stacks=[name])
     slot = pulumi_config.Stack(name=name, directory=pulumi_config.project_dir(), environment=FULLY_EQUIPPED, run=runner)
     return slot, runner
 
@@ -354,12 +361,83 @@ def test_reading_back_a_stack_that_has_no_such_key_names_the_command_that_fills_
     delivered with. Naming the `record` command is what keeps the answer in the
     error rather than in a second investigation.
     """
-    slot, _ = stack(GITHUB_ADMIN.stack)
+    slot, runner = listed(GITHUB_ADMIN.stack)
+    runner.config['anotherKey'] = 'a-value'
+
+    with pytest.raises(devices.RecordMissing) as refused:
+        _ = devices.borrow(GITHUB_ADMIN, stack=slot)
+
+    assert refused.value.missing is devices.Missing.ABSENT
+    assert refused.value.key == GITHUB_ADMIN.fields[0].key
+    assert named_leaves(str(refused.value)) == [('derived', GITHUB_ADMIN.member, 'record')]
+
+
+def unmade(directory: Path, name: str) -> pulumi_config.Stack:
+    """A stack the recorded backend does not hold, in a checkout of `directory` holding only a `Pulumi.yaml`."""
+    _ = (directory / 'Pulumi.yaml').write_text('name: a-project\nruntime: python\n')
+    return pulumi_config.Stack(name=name, directory=directory, environment=FULLY_EQUIPPED, run=RecordedPulumi())
+
+
+def test_a_stack_neither_the_backend_nor_the_checkout_holds_has_no_record_either(tmp_path: Path) -> None:
+    """A stack not yet made anywhere, the fresh install: the record is absent, and `record`'s fill makes the stack."""
+    slot = unmade(tmp_path, GITHUB_ADMIN.stack)
+
+    with pytest.raises(devices.RecordMissing) as refused:
+        _ = devices.borrow(GITHUB_ADMIN, stack=slot)
+
+    assert refused.value.missing is devices.Missing.ABSENT
+    assert refused.value.key == GITHUB_ADMIN.fields[0].key
+    assert refused.value.record in named_leaves(str(refused.value))
+
+
+def test_a_backend_without_the_stack_says_nothing_about_the_committed_stack_file(tmp_path: Path) -> None:
+    """The checkout commits the stack's configuration, keys and all, so a backend that lacks the stack is not its answer.
+
+    An appliance rebuilt before its restore, or a bundle naming another, holds
+    no `github` stack while `Pulumi.github.yaml` holds a good token; told the
+    token is missing, the operator would make a new one in the GitHub UI.
+    """
+    slot = unmade(tmp_path, GITHUB_ADMIN.stack)
+    _ = (tmp_path / f'Pulumi.{GITHUB_ADMIN.stack}.yaml').write_text(
+        f'config:\n  a-project:{GITHUB_ADMIN.fields[0].key}:\n    secure: v1:AAAA\n'
+    )
 
     with pytest.raises(pulumi_config.SlotRefused) as refused:
         _ = devices.borrow(GITHUB_ADMIN, stack=slot)
 
-    assert named_leaves(str(refused.value)) == [('derived', GITHUB_ADMIN.member, 'record')]
+    assert not isinstance(refused.value, devices.RecordMissing)
+    # The read's own refusal, not the refusal of the question asked after it.
+    assert not isinstance(refused.value, pulumi_config.StackMissing)
+
+
+def test_a_state_backend_that_does_not_answer_is_not_told_the_credential_is_missing() -> None:
+    """A backend that does not answer has said nothing about the record, so the read's own refusal travels.
+
+    Told it is missing, the operator would re-record in the GitHub UI a token
+    that is in fact in the stack; what they need is the backend, which the
+    read's refusal names.
+    """
+    runner = Unanswering()
+    slot = pulumi_config.Stack(
+        name=GITHUB_ADMIN.stack, directory=pulumi_config.project_dir(), environment=FULLY_EQUIPPED, run=runner
+    )
+
+    with pytest.raises(pulumi_config.SlotRefused) as refused:
+        _ = devices.borrow(GITHUB_ADMIN, stack=slot)
+
+    assert not isinstance(refused.value, devices.RecordMissing)
+    assert refused.value is runner.refusals[0]
+
+
+def test_a_key_the_stack_holds_but_cannot_be_read_is_not_told_it_is_missing() -> None:
+    """A stack that answers that it holds the key has not said the record is absent, whatever the read was refused for."""
+    slot, runner = listed(GITHUB_ADMIN.stack)
+    runner.undecryptable.add(GITHUB_ADMIN.fields[0].key)
+
+    with pytest.raises(pulumi_config.SlotRefused) as refused:
+        _ = devices.borrow(GITHUB_ADMIN, stack=slot)
+
+    assert not isinstance(refused.value, devices.RecordMissing)
 
 
 def test_a_row_that_reads_back_empty_is_refused_rather_than_handed_on() -> None:
