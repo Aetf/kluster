@@ -698,7 +698,11 @@ one rule decides all three of them. `/etc/systemd/system` is shared
 with the firmware, so a live unit file with no source is left where it
 is, and a unit is retired from the other side instead — deleting the
 resource that declared it removes the source and, in the same session,
-disables the unit and removes the live copy. `/etc/systemd/nspawn`
+disables the unit and removes the live copy. That delete removes only the
+source its resource last wrote: one edited or touched on the device since
+is left, with the unit, and the run warns naming it, so the source is then
+the operator's to remove (`providers/device_files/provider.py`).
+`/etc/systemd/nspawn`
 (§1.1) holds nothing that is not this program's, so a settings file
 belonging to no declared machine is removed. A `<unit>.d` directory
 this program has a source for is its own the same way, so a live

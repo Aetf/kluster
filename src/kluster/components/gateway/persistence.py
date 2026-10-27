@@ -47,7 +47,12 @@ the two mean different things the command asks which happened by looking for
 the file. That is how a unit is retired by the same apply that stops declaring
 it: the source is gone, so the hook disables the unit and removes the live copy
 instead of converging it, and a drop-in comes off the unit it amended the same
-way.
+way. A delete that finds another write at the path than its own resource's last
+one leaves the file and runs no hook, and the run warns naming the path
+(`providers.device_files`). A replacement's write is the case this is for. A
+source edited or touched on the device since the apply that last wrote it gets
+the same answer, and a unit left that way is installed again by `20-units.sh` at
+every boot until its source is removed by hand.
 
 **`dpkg/` is `10-packages.sh`'s alone.** The cache is refreshed by moving the
 old directory aside and the new one into place, so any file Pulumi wrote in it

@@ -447,12 +447,26 @@ does every resource whose provider's diff does not order the
 replacement, either way with the reason at the declaration. A provider
 this repository writes may answer an adopting target in its delete
 instead, by removing only the object that resource's own create wrote,
-which makes either order safe. A target that holds two objects under one
+which makes either order safe. The create records an identity of its own
+write that any later write changes, whatever that write contains: the tag
+a store answers a write with, or the file number and status-change time
+(`stat -c '%i %Z'`) of what a staged write's rename put in place. An
+identity derived from the content, such as a digest, is the same for a
+replacement that writes the same bytes, so the delete would remove that
+replacement all the same. A delete that finds another write there leaves
+it and says so rather than failing, since an original whose delete fails
+stays in state, and that delete is retried, and fails again, on every
+later run. A refresh carries the recorded identity rather than reading it
+from the target, since it reads that original as well. A create that
+writes nothing new where the object stands, as `mkdir -p` does on a
+directory that is already there, has no identity to record, so its
+resource declares the option. A target that holds two objects under one
 name between the create and the delete, as AdGuard's rewrite list does,
 needs neither. Today: the homelab worker's disk, seed and domain; a
 forge repository's Environments, Actions variables, branch protection
 and vulnerability alerts; the B2 buckets; a Cloudflare zone, its DNSSEC
-state and its records; and the gateway's UniFi firewall groups.
+state and its records; and the gateway's UniFi firewall groups and
+device directories.
 
 **Adopted resources graduate to declared.** `import` is step one of
 adoption; the end state is an explicit declaration whose fields are

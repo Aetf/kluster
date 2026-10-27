@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import itertools
 import os
 import re
 import shlex
@@ -105,6 +106,16 @@ UMOCI = 'umoci raw unpack'
 HOOK_COMMAND = 'systemctl restart adguard'
 
 
+#: The file numbers the double hands out, one per entry it makes, as a rename
+#: puts a new file at a path on every write.
+FILE_NUMBERS = itertools.count(1)
+
+
+def minted() -> str:
+    """A new identity, in the form `ssh.IDENTITY_FORMAT` prints one."""
+    return f'{next(FILE_NUMBERS)} 1700000000'
+
+
 @final
 @dataclass
 class Entry:
@@ -114,7 +125,9 @@ class Entry:
     of thing is one of the answers the providers act on. `resolves` is what a
     link at this path points at -- the kind the shell tests that follow a link
     would find, or `None` for one pointing at nothing -- and it is read for no
-    other kind.
+    other kind. `identity` is the entry's own and every entry's another, which
+    is what a staged write's rename gives a path; it is left out of equality,
+    so an expected entry is written without one.
     """
 
     data: bytes
@@ -123,6 +136,7 @@ class Entry:
     group: str = 'root'
     kind: str = ssh.REGULAR_FILE
     resolves: str | None = ssh.REGULAR_FILE
+    identity: str = field(default_factory=minted, compare=False)
 
 
 @final
@@ -201,6 +215,7 @@ class Transport:
             group=entry.group,
             mode=format(int(entry.mode, 8), 'o'),
             size=len(entry.data),
+            identity=entry.identity,
             kind=entry.kind,
         )
 
@@ -209,16 +224,21 @@ class Transport:
         """The kind a shell test that follows a link finds at this entry."""
         return entry.resolves if entry.kind == ssh.SYMBOLIC_LINK else entry.kind
 
-    async def write(self, path: str, data: bytes, *, mode: str, owner: str | None) -> None:
+    async def write(self, path: str, data: bytes, *, mode: str, owner: str | None) -> str:
         self._refuse_a_link(path)
         self._refuse_a_wrong_kind(path, 'write')
         user, _, group = (owner or 'root:root').partition(':')
-        self.device.files[path] = Entry(data=data, mode=mode, owner=user, group=group or 'root')
+        entry = Entry(data=data, mode=mode, owner=user, group=group or 'root')
+        self.device.files[path] = entry
         self.device.log.append(f'write {path}')
+        return entry.identity
 
-    async def remove(self, path: str) -> None:
+    async def remove(self, path: str, *, written: str | None = None) -> None:
         self._refuse_a_link(path)
         self._refuse_a_wrong_kind(path, 'remove')
+        entry = self.device.files.get(path)
+        if written is not None and entry is not None and entry.identity != written:
+            raise ssh.RewrittenAtPath(path, written)
         _ = self.device.files.pop(path, None)
         self.device.log.append(f'remove {path}')
 
@@ -245,10 +265,27 @@ class Transport:
             # of: a command given a timeout that runs past it raises rather
             # than returning a status.
             raise TimeoutError(f'`{command}` never answered')
+        if self._rewritten(command):
+            return ssh.CommandResult(exit_status=ssh.ReservedStatus.REWRITTEN, stdout=b'', stderr='')
         answered = [status for fragment, status in self.device.statuses.items() if fragment in command]
         refused = any(fragment in command for fragment in self.device.refuse)
         status = answered[0] if answered else (1 if refused else self.device.hook_status)
         return ssh.CommandResult(exit_status=status, stdout=b'', stderr='refused')
+
+    def _rewritten(self, command: str) -> bool:
+        """Whether `command` asks `ssh.identity_test` about an entry holding another identity.
+
+        The double answers the one question a script asks about a write by
+        reading it back out of the command: the test renders the path, then
+        the identity recorded, so a command carrying the question for a path
+        but not the entry's own identity is asking about another write.
+        """
+        for path, entry in self.device.files.items():
+            held = ssh.identity_test(path, entry.identity)
+            question = held[: held.rindex(shlex.quote(entry.identity))]
+            if question in command and held not in command:
+                return True
+        return False
 
 
 @pytest.fixture
@@ -293,6 +330,13 @@ def directory_provider(credential: str = PRIVATE_KEY) -> provider.DeviceDirector
 def checked(instance: provider.DeviceProvider, props: dict[str, Any]) -> dict[str, Any]:
     """The inputs as the engine stores and compares them: what `check` returned."""
     return instance.check({}, props).inputs
+
+
+def created(instance: provider.DeviceProvider, props: dict[str, Any]) -> dict[str, Any]:
+    """The output bag a create hands the engine, which state then holds."""
+    outs = instance.create(props).outs
+    assert outs is not None
+    return outs
 
 
 def file_props(**overrides: Any) -> dict[str, Any]:
@@ -687,7 +731,7 @@ def test_an_update_returns_the_bag_state_keeps(device: Device) -> None:
 
     result = file_provider().update('id', olds, news)
 
-    assert result.outs == news
+    assert result.outs == news | {provider.WRITTEN: device.files[CONFIG_PATH].identity}
 
 
 def test_a_hook_that_refuses_fails_the_apply(device: Device) -> None:
@@ -716,6 +760,116 @@ def test_deleting_a_file_tells_the_device_it_is_gone(device: Device) -> None:
 
     assert CONFIG_PATH not in device.files
     assert device.log == [f'remove {CONFIG_PATH}', f'run {HOOK}']
+
+
+def warnings(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """What the provider says through `pulumi.log.warn`, kept rather than printed."""
+    said: list[str] = []
+    monkeypatch.setattr(provider.pulumi.log, 'warn', said.append)
+    return said
+
+
+def test_a_file_a_replacement_wrote_again_is_left_to_it_and_its_reader_is_told_nothing(
+    device: Device, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `--replace` creates before it deletes, and the create writes this very path with these very bytes.
+
+    The original's delete then arrives with the original's outputs. Removing
+    the file, and running the hook that tells its reader it is gone, would
+    leave the device without the file the replacement just wrote -- for a
+    unit's source, the unit stopped and disabled -- in a run that reports
+    success. So the delete finds another write there, leaves it, and says so
+    rather than failing, which would keep the original in state for every
+    later run to fail on.
+    """
+    said = warnings(monkeypatch)
+    props = checked(file_provider(), file_props())
+    original = created(file_provider(), props)
+    replacement = created(file_provider(), props)
+    device.log.clear()
+
+    file_provider().delete('id', original)
+
+    assert device.files[CONFIG_PATH].identity == replacement[provider.WRITTEN]
+    assert device.log == [], 'no remove and no hook follow the replacement'
+    assert len(said) == 1
+    assert CONFIG_PATH in said[0]
+
+
+def test_a_file_still_holding_its_resources_own_write_is_removed_and_its_reader_told(
+    device: Device, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    said = warnings(monkeypatch)
+    own = created(file_provider(), checked(file_provider(), file_props()))
+    device.log.clear()
+
+    file_provider().delete('id', own)
+
+    assert CONFIG_PATH not in device.files
+    assert device.log == [f'remove {CONFIG_PATH}', f'run {HOOK}']
+    assert said == []
+
+
+def test_a_replacement_that_has_written_again_since_is_still_not_the_originals_to_remove(
+    device: Device, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The original's delete can come runs later, after the replacement's own update.
+
+    A delete that failed keeps the original in state, and the next `up` runs the
+    replacement's update before it retries the delete. The write that update
+    makes is the replacement's too, so the original still has nothing there.
+    """
+    _ = warnings(monkeypatch)
+    props = checked(file_provider(), file_props())
+    original = created(file_provider(), props)
+    replacement = created(file_provider(), props)
+    edited = checked(file_provider(), file_props(content='router bgp 65001\n'))
+    _ = file_provider().update('id', replacement, edited)
+
+    file_provider().delete('id', original)
+
+    assert device.files[CONFIG_PATH].data == b'router bgp 65001\n'
+
+
+def test_a_refresh_carries_the_write_state_recorded_rather_than_the_one_it_finds(device: Device) -> None:
+    """A refresh reads the original of a replacement as well as the replacement.
+
+    One that recorded what it found would hand the original the replacement's
+    write, and the original's delete would then remove it.
+    """
+    props = checked(file_provider(), file_props())
+    original = created(file_provider(), props)
+    _ = file_provider().create(props)
+
+    refreshed = file_provider().read('id', original)
+
+    assert refreshed.outs is not None
+    assert refreshed.outs[provider.WRITTEN] == original[provider.WRITTEN]
+
+
+def test_a_restamp_records_the_write_the_device_holds_where_state_holds_none(device: Device) -> None:
+    """The first `up` after the identity arrives re-stamps every resource, and writes nothing to do it."""
+    olds = checked(file_provider(), file_props())
+    converged(device, olds)
+    device.log.clear()
+    rotated = file_provider(private_key())
+
+    result = rotated.update('id', olds, checked(rotated, file_props()))
+
+    assert result.outs is not None
+    assert result.outs[provider.WRITTEN] == device.files[CONFIG_PATH].identity
+    assert [line for line in device.log if line.startswith(('write', 'remove'))] == []
+
+
+def test_a_restamp_keeps_the_write_state_recorded(device: Device) -> None:
+    """What is at the path is the resource's last write only as far as that write's own answer says."""
+    olds = created(file_provider(), checked(file_provider(), file_props()))
+    rotated = file_provider(private_key())
+
+    result = rotated.update('id', olds, checked(rotated, file_props()))
+
+    assert result.outs is not None
+    assert result.outs[provider.WRITTEN] == olds[provider.WRITTEN]
 
 
 def test_reading_reports_what_the_device_holds_rather_than_what_state_remembers(device: Device) -> None:
@@ -977,12 +1131,17 @@ def test_ownership_a_directory_does_not_have_is_drift(device: Device) -> None:
     assert directory_provider().diff('id', props, props).changes is True
 
 
-def test_moving_a_directory_replaces_it_and_the_new_path_exists_before_the_old_one_goes(device: Device) -> None:
-    """The path is the identity; the address it is reached at is not."""
+def test_moving_a_directory_replaces_it_and_takes_the_old_one_away_first(device: Device) -> None:
+    """The path is the identity; the address it is reached at is not.
+
+    Deleted first, as every replacement of a directory is: a directory that
+    holds files refuses the delete before the new one is made, where a delete
+    after the create would leave an original no later run can remove.
+    """
     result = directory_provider().diff('id', directory_props(), directory_props(path='/data/custom/other'))
 
     assert result.replaces == ['path']
-    assert result.delete_before_replace is False
+    assert result.delete_before_replace is True
 
     moved = directory_provider().diff('id', directory_props(), directory_props(host='gateway.invalid'))
     assert moved.replaces == []
@@ -1505,11 +1664,15 @@ def test_a_write_through_a_real_shell_lands_the_bytes_with_the_declared_mode(tmp
     the mode is the declared one and no staging file is left behind."""
     path = tmp_path / 'frr' / 'frr.conf'
 
-    asyncio.run(shell_transport().write(str(path), b'router bgp 65000\n', mode='0640', owner=None))
+    written = asyncio.run(shell_transport().write(str(path), b'router bgp 65000\n', mode='0640', owner=None))
 
+    held = path.stat()
     assert path.read_bytes() == b'router bgp 65000\n'
-    assert path.stat().st_mode & 0o777 == 0o640
+    assert held.st_mode & 0o777 == 0o640
     assert [entry.name for entry in path.parent.iterdir()] == ['frr.conf']
+    # The identity is the file the rename put in place, as the file system
+    # itself numbers it and dates its last status change.
+    assert written == f'{held.st_ino} {held.st_ctime_ns // 10**9}'
 
 
 def test_a_file_named_to_break_a_shell_is_written_and_removed_as_named(
@@ -1517,11 +1680,11 @@ def test_a_file_named_to_break_a_shell_is_written_and_removed_as_named(
 ) -> None:
     path, ran = hostile(tmp_path, monkeypatch)
 
-    asyncio.run(
+    written = asyncio.run(
         shell_transport().write(str(path), b'router bgp 65000\n', mode='0644', owner=f'{os.getuid()}:{os.getgid()}')
     )
     assert path.read_bytes() == b'router bgp 65000\n'
-    asyncio.run(shell_transport().remove(str(path)))
+    asyncio.run(shell_transport().remove(str(path), written=written))
 
     assert not ran.exists()
     assert list(tmp_path.iterdir()) == []
@@ -1612,6 +1775,10 @@ def test_a_link_pointing_at_nothing_is_absent_to_stat_and_still_refused_by_a_wri
     assert not target.exists()
 
 
+#: An identity no write in these cases returned.
+FOREIGN_WRITE = '1 1'
+
+
 def test_a_named_pipe_at_the_path_is_neither_written_nor_removed(tmp_path: Path) -> None:
     """The kind `rm -f` deletes without a word, and `mv -f` would block on.
 
@@ -1625,7 +1792,10 @@ def test_a_named_pipe_at_the_path_is_neither_written_nor_removed(tmp_path: Path)
     with pytest.raises(ssh.WrongKindAtPath) as written:
         asyncio.run(shell_transport().write(str(path), b'router bgp 65000\n', mode='0644', owner=None))
     with pytest.raises(ssh.WrongKindAtPath) as removed:
-        asyncio.run(shell_transport().remove(str(path)))
+        # Handed an identity, as every delete hands one: the kind is asked
+        # about first, so a pipe is refused by name rather than left as
+        # another write.
+        asyncio.run(shell_transport().remove(str(path), written=FOREIGN_WRITE))
 
     assert path.is_fifo()
     # Each verb says which one it was and what would have satisfied it, because
@@ -1639,16 +1809,19 @@ def test_a_remove_refuses_a_link_rather_than_taking_the_indirection_away(tmp_pat
     """`rm -f` deletes a link without following it, so the guard is the whole
     difference between refusing one and destroying one."""
     target = tmp_path / 'elsewhere'
-    _ = target.write_text('what the link points at\n')
+    written = asyncio.run(shell_transport().write(str(target), b'what the link points at\n', mode='0644', owner=None))
     link = tmp_path / 'frr.conf'
     link.symlink_to(target)
 
     with pytest.raises(ssh.SymbolicLinkAtPath):
-        asyncio.run(shell_transport().remove(str(link)))
+        # Handed an identity, as every delete hands one: the link is refused
+        # by name before the identity is asked about, which `stat` would
+        # answer for the link and not for what it points at.
+        asyncio.run(shell_transport().remove(str(link), written=written))
 
     assert link.is_symlink()
 
-    asyncio.run(shell_transport().remove(str(target)))
+    asyncio.run(shell_transport().remove(str(target), written=written))
     assert not target.exists(), 'the guard refuses a link and nothing else'
 
 
@@ -1745,6 +1918,32 @@ def test_a_refreshed_directory_that_matches_its_declaration_is_no_change(tmp_pat
 
     assert refreshed.outs is not None
     assert directory_provider().diff('id', refreshed.outs, props).changes is False
+
+
+@pytest.mark.usefixtures('shell_device')
+def test_through_a_real_shell_a_file_written_again_with_the_same_bytes_is_left_to_the_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The case no digest answers: both writes hold the same bytes, and only the write tells them apart.
+
+    The rename puts a new file at the path on every write, so the second
+    write's file number is not the first's. The replacement's own delete
+    removes it, which is the other half of the guard.
+    """
+    said = warnings(monkeypatch)
+    path = tmp_path / 'frr.conf'
+    props = checked(file_provider(), file_props(path=str(path), owner=None, hook=None))
+    original = created(file_provider(), props)
+    replacement = created(file_provider(), props)
+
+    file_provider().delete('id', original)
+
+    assert path.read_text() == CONFIG
+    assert len(said) == 1
+
+    file_provider().delete('id', replacement)
+
+    assert not path.exists()
 
 
 ##
@@ -1990,6 +2189,113 @@ def test_deleting_an_artifact_takes_the_tree_and_its_staging_with_it(device: Dev
     assert f'{ROOTFS_TREE}{provider.SUPERSEDED_SUFFIX}' in purge
     assert f'{ROOTFS_TREE}{provider.UNPACKING_SUFFIX}' in purge
     assert f'{ROOTFS_TREE}{provider.LAYOUT_SUFFIX}' in purge
+
+
+def test_a_tree_a_replacement_pushed_again_is_left_to_it_and_nothing_is_told_it_is_gone(
+    device: Device, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `--replace` lands the same pin again, and the machine runs on the tree it put there.
+
+    The original's purge would take that tree away and the marker with it,
+    and its hook would leave the machine running on deleted files until the
+    next `up`. The marker is what every push rewrites, so the purge asks about
+    it first and stops.
+    """
+    said = warnings(monkeypatch)
+    props = checked(artifact_provider(), artifact_props())
+    landed(device, props)
+    original = created(artifact_provider(), props)
+    replacement = created(artifact_provider(), props)
+    device.log.clear()
+
+    artifact_provider().delete('id', original)
+
+    assert device.files[provider.marker_path(ROOTFS_TREE)].identity == replacement[provider.WRITTEN]
+    assert device.log == [f'run {provider.purge_script(ROOTFS_TREE, original[provider.WRITTEN])}']
+    assert HOOK_COMMAND not in device.commands
+    assert len(said) == 1
+    assert ROOTFS_TREE in said[0]
+
+
+def test_a_tree_still_holding_its_resources_own_push_is_purged_and_its_hook_run(
+    device: Device, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    said = warnings(monkeypatch)
+    own = created(artifact_provider(), checked(artifact_provider(), artifact_props()))
+    device.log.clear()
+
+    artifact_provider().delete('id', own)
+
+    assert device.log == [
+        f'run {provider.purge_script(ROOTFS_TREE, own[provider.WRITTEN])}',
+        f'remove {provider.marker_path(ROOTFS_TREE)}',
+        f'run {HOOK_COMMAND}',
+    ]
+    assert said == []
+
+
+def test_a_restamped_artifact_records_its_markers_write_where_state_holds_none(device: Device) -> None:
+    olds = checked(artifact_provider(), artifact_props())
+    landed(device, olds)
+    rotated = artifact_provider(private_key())
+
+    result = rotated.update('id', olds, checked(rotated, artifact_props()))
+
+    assert result.outs is not None
+    assert result.outs[provider.WRITTEN] == device.files[provider.marker_path(ROOTFS_TREE)].identity
+    assert not any(SKOPEO in command for command in device.commands)
+
+
+def test_a_refreshed_artifact_carries_the_push_state_recorded(device: Device) -> None:
+    props = checked(artifact_provider(), artifact_props())
+    landed(device, props)
+    original = created(artifact_provider(), props)
+    _ = artifact_provider().create(props)
+
+    refreshed = artifact_provider().read('id', original)
+
+    assert refreshed.outs is not None
+    assert refreshed.outs[provider.WRITTEN] == original[provider.WRITTEN]
+
+
+def marked_tree(directory: Path) -> tuple[Path, str]:
+    """A tree on `directory` with a superseded sibling and a marker the shipped transport wrote.
+
+    What it returns is the tree and the marker write's identity.
+    """
+    tree = directory / 'adguard'
+    tree.mkdir()
+    _ = (tree / 'bin').write_text('a root filesystem\n')
+    Path(f'{tree}{provider.SUPERSEDED_SUFFIX}').mkdir()
+    marker = provider.marker_path(str(tree))
+    written = asyncio.run(shell_transport().write(marker, f'{ROOTFS_DIGEST}\n'.encode(), mode='0644', owner=None))
+    return tree, written
+
+
+def test_a_purge_through_a_real_shell_leaves_a_tree_whose_marker_another_push_wrote(tmp_path: Path) -> None:
+    """The same bytes written again are another write, which is what the purge asks about."""
+    tree, original = marked_tree(tmp_path)
+    marker = Path(provider.marker_path(str(tree)))
+    _ = asyncio.run(shell_transport().write(str(marker), marker.read_bytes(), mode='0644', owner=None))
+
+    assert sh(provider.purge_script(str(tree), original)) == ssh.ReservedStatus.REWRITTEN
+
+    assert (tree / 'bin').exists()
+    assert Path(f'{tree}{provider.SUPERSEDED_SUFFIX}').exists()
+    assert marker.read_text() == f'{ROOTFS_DIGEST}\n'
+
+
+@pytest.mark.parametrize('marker', ['own', 'withdrawn'])
+def test_a_purge_through_a_real_shell_takes_a_tree_whose_marker_is_its_own_or_gone(tmp_path: Path, marker: str) -> None:
+    """A marker is withdrawn only by its own resource's failed hook and by the rollback, both over a tree that is its."""
+    tree, written = marked_tree(tmp_path)
+    if marker == 'withdrawn':
+        Path(provider.marker_path(str(tree))).unlink()
+
+    assert sh(provider.purge_script(str(tree), written)) == 0
+
+    assert not tree.exists()
+    assert not Path(f'{tree}{provider.SUPERSEDED_SUFFIX}').exists()
 
 
 @pytest.mark.parametrize(
@@ -2468,17 +2774,22 @@ def test_a_client_credential_that_is_not_a_key_is_refused_before_the_handshake()
         _ = ssh.client_credential('-----BEGIN OPENSSH PRIVATE KEY-----\nnope\n')
 
 
+#: What a write's closing `stat` prints, as a session hands it back.
+WRITTEN_ANSWER = b'1234 1700000000\n'
+
+
 def test_a_write_is_staged_and_moved_into_place() -> None:
     """An interrupted write leaves the previous file whole.
 
     The bytes, the mode and the owner all land on a staged file beside the
     path, and only after the last of them is the staged file moved over it.
+    What the write returns is what the `stat` after the move printed.
     """
-    device, connection = transport(answer())
+    device, connection = transport(answer(stdout=WRITTEN_ANSWER))
     path = '/data/frr/frr.conf'
     staged = f'{path}{ssh.STAGING_SUFFIX}'
 
-    asyncio.run(device.write(path, b'hello', mode='0640', owner='root:root'))
+    written = asyncio.run(device.write(path, b'hello', mode='0640', owner='root:root'))
 
     (command,) = connection.commands
     steps = command.split(' && ')
@@ -2488,10 +2799,28 @@ def test_a_write_is_staged_and_moved_into_place() -> None:
     assert steps[moved].split()[-2:] == [staged, path]
     assert max(landing) < moved
     assert connection.inputs == [b'hello']
+    assert written == '1234 1700000000'
+
+
+def test_a_write_whose_identity_cannot_be_read_is_a_fault() -> None:
+    """An identity nobody can compare is no identity: the delete would leave the file for good."""
+    device, _ = transport(answer(stdout=b'stat: missing operand\n'))
+
+    with pytest.raises(ssh.CommandFailed):
+        _ = asyncio.run(device.write('/data/x', b'hello', mode='0644', owner=None))
+
+
+def test_a_remove_whose_write_was_replaced_says_so_rather_than_failing() -> None:
+    device, _ = transport(answer(exit_status=ssh.ReservedStatus.REWRITTEN))
+
+    with pytest.raises(ssh.RewrittenAtPath) as raised:
+        asyncio.run(device.remove('/data/x', written='1234 1700000000'))
+
+    assert raised.value.written == '1234 1700000000'
 
 
 def test_a_write_with_no_declared_owner_leaves_ownership_alone() -> None:
-    device, connection = transport(answer())
+    device, connection = transport(answer(stdout=WRITTEN_ANSWER))
 
     asyncio.run(device.write('/data/x', b'hello', mode='0644', owner=None))
 
@@ -2515,17 +2844,17 @@ def test_a_read_that_actually_failed_is_a_fault() -> None:
     assert 'Permission denied' in str(raised.value)
 
 
-def test_a_stat_is_read_as_owner_group_mode_size_and_kind() -> None:
-    device, _ = transport(answer(stdout=b'root staff 640 12 regular empty file\n'))
+def test_a_stat_is_read_as_owner_group_mode_size_identity_and_kind() -> None:
+    device, _ = transport(answer(stdout=b'root staff 640 12 1234 1700000000 regular empty file\n'))
 
     assert asyncio.run(device.stat('/data/x')) == ssh.FileStat(
-        owner='root', group='staff', mode='640', size=12, kind='regular empty file'
+        owner='root', group='staff', mode='640', size=12, identity='1234 1700000000', kind='regular empty file'
     )
 
 
 def test_the_kind_takes_the_rest_of_the_line_because_it_is_the_field_with_spaces() -> None:
     """`%F` says `regular empty file`, and a split into fixed fields would lose it."""
-    device, _ = transport(answer(stdout=b'root root 755 4096 directory\n'))
+    device, _ = transport(answer(stdout=b'root root 755 4096 1234 1700000000 directory\n'))
     stat = asyncio.run(device.stat('/data/custom/dpkg'))
 
     assert stat is not None
@@ -2555,7 +2884,7 @@ def test_modes_written_two_ways_compare_equal() -> None:
 
 
 def test_ownership_is_compared_only_as_far_as_it_was_declared() -> None:
-    stat = ssh.FileStat(owner='root', group='staff', mode='0644', size=0, kind='regular file')
+    stat = ssh.FileStat(owner='root', group='staff', mode='0644', size=0, identity='1 1', kind='regular file')
 
     assert ssh.same_owner(None, stat)
     assert ssh.same_owner('root', stat)
