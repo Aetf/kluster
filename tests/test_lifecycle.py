@@ -33,6 +33,7 @@ from cloudflare_api import MINTING_POLICY, console_seed
 from cloudflare_api import FakeApi as CloudflareApi
 from credentials_command_tree import named_commands, named_leaves
 from fake_gh import RecordedGh
+from fake_pulumi import RecordedPulumi
 from keyring.backends import fail as fail_keyring
 from memory_keyring import installed
 from oci_clock import SimulatedClock
@@ -1218,13 +1219,27 @@ def no_bundle(
 
     So a refusal can only be the backend's.
     """
+    _escrow_the_stack_passphrases(kit, registry)
+    slots.mkdir(parents=True)
+    _ = (slots / stack_environment.OPERATOR_PASSPHRASE_SLOT).write_text('from-the-slot\n')
+    monkeypatch.setenv(pulumi_config.BACKEND_URL_ENV, CALLERS_BACKEND)
+    started = _recording_pulumi(monkeypatch)
+    bundle_dir = tmp_path / 'no-bundle'
+    return NoBundle(
+        bundle_dir=bundle_dir, environment=lifecycle.environment(kit, bundle_dir, registry), started=started
+    )
+
+
+def _escrow_the_stack_passphrases(kit: KdbxStore, registry: escrow.Registry) -> None:
+    """The kit's recovery key, and the stack passphrase and `physical`'s escrowed under it: every passphrase but the operator's."""
     _ = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
     vault = escrow.Vault.open(kit, registry)
     for label in (escrow.PASSPHRASE, escrow.PHYSICAL_PASSPHRASE):
         _ = escrow.generate(vault, label)
-    slots.mkdir(parents=True)
-    _ = (slots / stack_environment.OPERATOR_PASSPHRASE_SLOT).write_text('from-the-slot\n')
-    monkeypatch.setenv(pulumi_config.BACKEND_URL_ENV, CALLERS_BACKEND)
+
+
+def _recording_pulumi(monkeypatch: pytest.MonkeyPatch) -> list[tuple[list[str], str | None]]:
+    """`pulumi_cli.run_pulumi` replaced for the case: each run's arguments, and the backend it would have answered from."""
     started: list[tuple[list[str], str | None]] = []
 
     def run(args: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdin: str | None) -> str:
@@ -1234,10 +1249,20 @@ def no_bundle(
         return ''
 
     monkeypatch.setattr(pulumi_cli, 'run_pulumi', run)
-    bundle_dir = tmp_path / 'no-bundle'
-    return NoBundle(
-        bundle_dir=bundle_dir, environment=lifecycle.environment(kit, bundle_dir, registry), started=started
-    )
+    return started
+
+
+def _unasked(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every hidden prompt fails the case, as `_refuse` does the plain one: nothing is to be asked for."""
+    monkeypatch.setattr('getpass.getpass', _refuse)
+
+
+def _unprinted(device: devices.Device, caplog: pytest.LogCaptureFixture) -> None:
+    """None of `device`'s console steps reached the log."""
+    steps = [line.strip() for line in device.console.splitlines() if line.strip()]
+    assert steps, f'nothing to exercise: {device.member} has no console steps'
+    for step in steps:
+        assert step not in caplog.text
 
 
 def _forge_as_the_cli_opens_it(machine: NoBundle) -> github_secrets.Forge:
@@ -1303,19 +1328,24 @@ def test_derived_sync_of_the_whole_map_on_a_machine_with_no_bundle_starts_no_pul
 
 @needs_age
 @pytest.mark.parametrize('member', [member for member, device in devices.DEVICES.items() if device.sealed is None])
-def test_recording_a_row_with_no_seal_on_a_machine_with_no_bundle_starts_no_pulumi(
-    no_bundle: NoBundle, tmp_path: Path, member: str
+def test_recording_a_row_with_no_seal_on_a_machine_with_no_bundle_is_refused_before_its_console_steps(
+    no_bundle: NoBundle, member: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """`derived <row> record`: the row's own stack is created where the backend has none, which needs the backend too."""
+    """`derived <row> record`: refused before the operator is sent to make the credential, and no `pulumi` started.
+
+    The row's own stack is created where the backend has none, which needs the
+    backend too; and the console steps have the operator make a credential
+    the console shows once, so a refusal after them leaves it made and in no
+    slot.
+    """
     device = devices.DEVICES[member]
-    secret = tmp_path / 'a-secret'
-    _ = secret.write_text('a-recorded-secret\n')
-    given = {field.name: str(secret) if field.secret else 'a-recorded-value' for field in device.fields}
+    _unasked(monkeypatch)
 
     with pytest.raises(pulumi_config.BackendMissing) as refused:
-        _ = devices.deliver(device, stack=no_bundle.stack(device.stack), given=given, prompt=_refuse)
+        _ = devices.deliver(device, stack=no_bundle.stack(device.stack), prompt=_refuse)
 
     no_bundle.refused(refused.value, stacks={device.stack})
+    _unprinted(device, caplog)
 
 
 @needs_age
@@ -1370,3 +1400,77 @@ def test_re_encrypting_the_stacks_on_the_stack_passphrase_on_a_machine_with_no_b
         _ = lifecycle.re_encrypt_stacks(kit, no_bundle.bundle_dir, registry)
 
     no_bundle.refused(refused.value, stacks=set(pulumi_config.ON_STACK_PASSPHRASE))
+
+
+# -- `derived <row> record` finds its stack before it prints the console steps -
+#
+# The steps send the operator to a console that shows the credential once, so
+# whatever would refuse the fill -- no backend to reach the stack in, no
+# passphrase to open it with -- refuses before them (`devices.deliver`), on
+# the environment a `credentials` run builds.
+
+
+@needs_age
+def test_recording_the_admin_token_with_no_operator_passphrase_is_refused_before_its_console_steps(
+    kit: KdbxStore,
+    registry: escrow.Registry,
+    tmp_path: Path,
+    slots: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """`derived github-admin record` on a machine the operator passphrase is not on, with a bundle in place.
+
+    So the refusal can only be the passphrase's: the escrow holds every other
+    one, and the chain holds nothing for the `github` stack.
+    """
+    _escrow_the_stack_passphrases(kit, registry)
+    assert not slots.exists()
+    bundle = tmp_path / 'bundle'
+    bundle.mkdir()
+    _ = (bundle / 'backend-url').write_text('postgres://operator@192.0.2.10:5432/pulumi_state\n')
+    started = _recording_pulumi(monkeypatch)
+    admin = devices.DEVICES[devices.GITHUB_ADMIN]
+    stack = pulumi_config.Stack(
+        name=admin.stack,
+        directory=pulumi_config.project_dir(),
+        environment=lifecycle.environment(kit, bundle, registry),
+    )
+    _unasked(monkeypatch)
+
+    with pytest.raises(pulumi_config.PassphraseMissing) as refused:
+        _ = devices.deliver(admin, stack=stack, prompt=_refuse)
+
+    assert ('derived', pulumi_config.APART[admin.stack], 'recover') in named_leaves(str(refused.value))
+    assert started == []
+    _unprinted(admin, caplog)
+
+
+@needs_age
+@pytest.mark.parametrize('member', [member for member, device in devices.DEVICES.items() if device.sealed is None])
+def test_a_rows_first_record_creates_its_stack_rather_than_being_refused_for_its_absence(
+    kit: KdbxStore, registry: escrow.Registry, tmp_path: Path, slots: Path, member: str
+) -> None:
+    """What is found before the console steps is how to open the stack, not the stack: its first fill creates it."""
+    _escrow_the_stack_passphrases(kit, registry)
+    slots.mkdir(parents=True)
+    _ = (slots / stack_environment.OPERATOR_PASSPHRASE_SLOT).write_text('from-the-slot\n')
+    bundle = tmp_path / 'bundle'
+    bundle.mkdir()
+    _ = (bundle / 'backend-url').write_text('postgres://operator@192.0.2.10:5432/pulumi_state\n')
+    device = devices.DEVICES[member]
+    secret = tmp_path / 'a-secret'
+    _ = secret.write_text('a-recorded-secret\n')
+    given = {field.name: str(secret) if field.secret else 'a-recorded-value' for field in device.fields}
+    backend = RecordedPulumi()
+    stack = pulumi_config.Stack(
+        name=device.stack,
+        directory=pulumi_config.project_dir(),
+        environment=lifecycle.environment(kit, bundle, registry),
+        run=backend,
+    )
+
+    _ = devices.deliver(device, stack=stack, given=given, prompt=_refuse)
+
+    assert backend.stacks == [device.stack]
+    assert set(backend.config) == {field.key for field in device.fields}
