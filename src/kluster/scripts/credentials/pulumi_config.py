@@ -339,7 +339,18 @@ class Stack:
         return self.environment.variables(self.name, checkout=self.directory)
 
     def require_backend(self) -> None:
-        """Refuse this stack before `pulumi` is started where this machine has no backend to reach it in.
+        """Refuse this stack where this machine has no backend to reach it in; no `pulumi` is started here.
+
+        Every `pulumi` run this stack makes is refused so before it starts
+        (`_pulumi`). Asked on its own by a caller that has to refuse before
+        an act that is no `pulumi` run, such as a mint, which would leave a
+        new credential live at its provider when the fill after it is
+        refused.
+        """
+        _ = self._started_with()
+
+    def _started_with(self, passphrase: str | None = None) -> Mapping[str, str]:
+        """The variables a `pulumi` run against this stack starts with, refused where they name no backend.
 
         Which backend the stack is given is `env`'s to say
         (`stack_environment.backend_variables`): `checkpoints/` in the checkout
@@ -349,18 +360,26 @@ class Stack:
         `pulumi` run would not be: started with no `PULUMI_BACKEND_URL`, it
         answers from whatever backend the caller's environment or the CLI's
         own login names. The stack's passphrase is found first, as `env` finds
-        it, so a machine that has neither is refused for the passphrase. No
-        `pulumi` is started here.
+        it, so a machine that has neither is refused for the passphrase.
+        `passphrase` replaces the stack's own, for a run that has to open the
+        stack under another (`re_encrypt`).
         """
-        if BACKEND_URL_ENV in self.env or self.environment.no_backend is None:
-            return
-        raise BackendMissing(
-            f'the {self.name} stack keeps its state in the state backend, and {self.environment.no_backend}',
-            stack=self.name,
-        )
+        env = self.env
+        if BACKEND_URL_ENV not in env and self.environment.no_backend is not None:
+            raise BackendMissing(
+                f'the {self.name} stack keeps its state in the state backend, and {self.environment.no_backend}',
+                stack=self.name,
+            )
+        return env if passphrase is None else {**env, PASSPHRASE_ENV: passphrase}
 
-    def _pulumi(self, *args: str, stdin: str | None = None) -> str:
-        return self.run([*args], cwd=self.directory, env=self.env, stdin=stdin)
+    def _pulumi(self, *args: str, stdin: str | None = None, passphrase: str | None = None) -> str:
+        """Start one `pulumi` run against this stack: the one place this class starts one.
+
+        So no run starts without the backend check (`_started_with`), the
+        runs `re_encrypt` makes under a passphrase other than the stack's own
+        included.
+        """
+        return self.run([*args], cwd=self.directory, env=self._started_with(passphrase), stdin=stdin)
 
     def exists(self) -> bool:
         return self.name in self._stack_names(self._pulumi('stack', 'ls', '--json'))
@@ -411,13 +430,16 @@ class Stack:
         alone. `config get --json` answers with the value and whether it is
         stored encrypted, and without the newline the plain form prints.
 
-        A key this cannot read -- absent, or refused for any other reason --
-        counts as not held, so the caller goes on to write it, and that write
-        either fills the slot or refuses with its own reason. Nothing is
-        logged: what is compared is a secret.
+        A machine that cannot open this stack at all (`MachineRefused`) is
+        refused as it is. Any other key this cannot read -- absent, or refused
+        for any other reason -- counts as not held, so the caller goes on to
+        write it, and that write either fills the slot or refuses with its own
+        reason. Nothing is logged: what is compared is a secret.
         """
         try:
             printed = self._pulumi('config', 'get', key, '--json', '--stack', self.name)
+        except MachineRefused:
+            raise
         except SlotRefused:
             return False
         try:
@@ -595,11 +617,8 @@ class Stack:
         salt = self._salt()
         failure: SlotRefused | None = None
         try:
-            _ = self.run(
-                ['stack', 'change-secrets-provider', 'passphrase', '--stack', self.name],
-                cwd=self.directory,
-                env={**self.env, PASSPHRASE_ENV: current},
-                stdin=own,
+            _ = self._pulumi(
+                'stack', 'change-secrets-provider', 'passphrase', '--stack', self.name, stdin=own, passphrase=current
             )
         except SlotRefused as exc:
             failure = exc
@@ -712,7 +731,7 @@ class Stack:
 
     def _decrypts(self, args: Sequence[str], passphrase: str, *, stdin: str | None = None) -> bool:
         try:
-            _ = self.run(list(args), cwd=self.directory, env={**self.env, PASSPHRASE_ENV: passphrase}, stdin=stdin)
+            _ = self._pulumi(*args, stdin=stdin, passphrase=passphrase)
         except SlotRefused as exc:
             if 'incorrect passphrase' in str(exc):
                 return False

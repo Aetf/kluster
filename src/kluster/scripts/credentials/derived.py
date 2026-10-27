@@ -311,11 +311,10 @@ def _stack_in_reach(stack: pulumi_config.Stack) -> None:
     successful run finds the passphrase once: the environment keeps what it
     found for the run. The backend is held the same way
     (`pulumi_config.Stack.require_backend`): on a machine with no client
-    bundle a stack whose state is in the state backend has none, and the fill
-    would start `pulumi` with no backend named, which `pulumi` does not refuse
-    but answers from whatever backend the caller's environment names. Nothing
-    here reaches the state backend, so a stack the row's first mint creates is
-    not refused for being absent.
+    bundle a stack whose state is in the state backend has none, and every
+    `pulumi` run against it is refused, the fill's included, which comes
+    after the mint. Nothing here reaches the state backend, so a stack the
+    row's first mint creates is not refused for being absent.
     """
     log.info('finding the passphrase and the backend the %s stack is opened with', stack.name)
     stack.require_backend()

@@ -13,9 +13,10 @@ from __future__ import annotations
 import functools
 import io
 import logging
+import os
 import re
 import shutil
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,7 @@ from cloudflare_api import ACCOUNT_ID as CLOUDFLARE_ACCOUNT
 from cloudflare_api import MINTING_POLICY, console_seed
 from cloudflare_api import FakeApi as CloudflareApi
 from credentials_command_tree import named_commands, named_leaves
+from fake_gh import RecordedGh
 from keyring.backends import fail as fail_keyring
 from memory_keyring import installed
 from oci_clock import SimulatedClock
@@ -39,18 +41,22 @@ from oci_tenancy import ROOT_USER, TENANCY, Tenancy
 
 from kluster import conventions
 from kluster.conventions import identity
-from kluster.lib import stack_environment
+from kluster.lib import pulumi_cli, stack_environment
 from kluster.scripts.credentials import (
     age,
     b2,
     cloudflare,
+    devices,
     entries,
     escrow,
+    github_secrets,
     lifecycle,
     masters,
     oci_iam,
     pulumi_config,
+    sealing,
 )
+from kluster.scripts.credentials import slots as slot_map
 from kluster.scripts.credentials.kdbx import KdbxStore
 from kluster.scripts.credentials.masters import CredentialRejected
 
@@ -1162,3 +1168,205 @@ def test_the_stacks_under_the_stack_passphrase_are_moved_from_its_earlier_genera
 
     assert lifecycle.re_encrypt_stacks(kit, tmp_path / 'absent', registry) == list(pulumi_config.ON_STACK_PASSPHRASE)
     assert seen == [(newest, [second, first])]
+
+
+# -- with no client bundle, no command starts `pulumi` ------------------------
+#
+# A `pulumi` run started with no `PULUMI_BACKEND_URL` of its own does not
+# refuse: `run_pulumi` lays its variables over the caller's environment, so
+# the run answers from whatever backend that names -- under `mise x`, the
+# shell's own export; with none, the CLI's stored login. So each command that
+# reaches a stack whose state is in the backend is run here on the
+# environment a `credentials` run builds on a machine with no client bundle,
+# every passphrase recoverable, with a backend the caller's environment names
+# and a runner in place of the CLI that records which backend each run would
+# have answered from. The runner is `kluster.lib.pulumi_cli`'s, beneath every
+# `pulumi` run this package makes, so no case can reach the pinned CLI with
+# the placeholder: `pulumi` is never started, and the refusal names the
+# bundle directory looked in.
+
+#: A backend the caller's environment names, which no run here may answer from.
+CALLERS_BACKEND = 'postgres://the-callers-backend.invalid/pulumi_state'
+
+
+@dataclass(frozen=True)
+class NoBundle:
+    """A machine with no client bundle: where one was looked for, what a run builds, and every `pulumi` started."""
+
+    bundle_dir: Path
+    environment: pulumi_config.BackendEnvironment
+    #: Each run's arguments, and the backend it would have answered from.
+    started: list[tuple[list[str], str | None]]
+
+    def stack(self, name: str) -> pulumi_config.Stack:
+        """`name`, opened the way a command opens it: under the run's environment, with the default runner."""
+        return pulumi_config.Stack(name=name, directory=pulumi_config.project_dir(), environment=self.environment)
+
+    def refused(self, refusal: BaseException, *, stacks: Collection[str]) -> None:
+        """`refusal` is the backend's, for one of `stacks`, naming the bundle directory, and no `pulumi` ran."""
+        assert self.started == []
+        assert isinstance(refusal, pulumi_config.BackendMissing)
+        assert refusal.stack in stacks
+        assert str(self.bundle_dir) in str(refusal)
+
+
+@pytest.fixture
+def no_bundle(
+    kit: KdbxStore, registry: escrow.Registry, tmp_path: Path, slots: Path, monkeypatch: pytest.MonkeyPatch
+) -> NoBundle:
+    """The escrow holds the stack passphrase and `physical`'s, the chain the operator passphrase, and there is no bundle.
+
+    So a refusal can only be the backend's.
+    """
+    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
+    vault = escrow.Vault.open(kit, registry)
+    for label in (escrow.PASSPHRASE, escrow.PHYSICAL_PASSPHRASE):
+        _ = escrow.generate(vault, label)
+    slots.mkdir(parents=True)
+    _ = (slots / stack_environment.OPERATOR_PASSPHRASE_SLOT).write_text('from-the-slot\n')
+    monkeypatch.setenv(pulumi_config.BACKEND_URL_ENV, CALLERS_BACKEND)
+    started: list[tuple[list[str], str | None]] = []
+
+    def run(args: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdin: str | None) -> str:
+        _ = cwd, stdin
+        # What `pulumi_cli.run_pulumi` would start the process with.
+        started.append((list(args), {**os.environ, **env}.get(pulumi_config.BACKEND_URL_ENV)))
+        return ''
+
+    monkeypatch.setattr(pulumi_cli, 'run_pulumi', run)
+    bundle_dir = tmp_path / 'no-bundle'
+    return NoBundle(
+        bundle_dir=bundle_dir, environment=lifecycle.environment(kit, bundle_dir, registry), started=started
+    )
+
+
+def _forge_as_the_cli_opens_it(machine: NoBundle) -> github_secrets.Forge:
+    """The forge `derived sync` pushes to, its admin token read out of the `github` stack (`cli._forge`)."""
+    admin = devices.DEVICES[devices.GITHUB_ADMIN]
+    return github_secrets.Forge(token=devices.borrow(admin, stack=machine.stack(admin.stack)), run=RecordedGh())
+
+
+def _sync_context(machine: NoBundle, kit: KdbxStore, registry: escrow.Registry) -> slot_map.Context:
+    """What `derived sync` may reach for, opened as the command opens each part (`cli._sync_context`)."""
+    return slot_map.Context(
+        open_forge=lambda: _forge_as_the_cli_opens_it(machine),
+        open_vault=lambda: escrow.Vault.open(kit, registry),
+        open_environment=lambda: machine.environment,
+        project=pulumi_config.project_dir(),
+        ask=_refuse,
+    )
+
+
+def _stacks_reached(row: slot_map.Row) -> set[str]:
+    """Every stack a `derived sync` of `row` reads or writes, the `github` stack the admin token is in included."""
+    reached = {target.stack for target in row.config_sinks}
+    if isinstance(row.source, slot_map.StateRead):
+        reached.add(row.source.stack)
+    if row.sinks:
+        reached.add(devices.DEVICES[devices.GITHUB_ADMIN].stack)
+    return reached
+
+
+#: The rows a `derived sync --only <row>` reads or writes a stack for: a state
+#: read, or a copy into a stack's configuration, of a row with a slot to fill
+#: (one with none is refused before anything is read). Read off the map, so a
+#: row added to it is covered here.
+REACHING_A_STACK = tuple(
+    name
+    for name, row in slot_map.ROWS.items()
+    if (row.sinks or row.config_sinks) and (row.config_sinks or isinstance(row.source, slot_map.StateRead))
+)
+
+
+@needs_age
+@pytest.mark.parametrize('only', REACHING_A_STACK)
+def test_derived_sync_of_a_row_on_a_machine_with_no_bundle_starts_no_pulumi(
+    no_bundle: NoBundle, kit: KdbxStore, registry: escrow.Registry, only: str
+) -> None:
+    with pytest.raises(pulumi_config.BackendMissing) as refused:
+        _ = slot_map.sync(_sync_context(no_bundle, kit, registry), only=only)
+
+    no_bundle.refused(refused.value, stacks=_stacks_reached(slot_map.ROWS[only]))
+
+
+@needs_age
+def test_derived_sync_of_the_whole_map_on_a_machine_with_no_bundle_starts_no_pulumi(
+    no_bundle: NoBundle, kit: KdbxStore, registry: escrow.Registry
+) -> None:
+    """The bare form: refused at the first stack a row reaches, the `github` stack's admin token among them."""
+    with pytest.raises(pulumi_config.BackendMissing) as refused:
+        _ = slot_map.sync(_sync_context(no_bundle, kit, registry))
+
+    reached = set[str]().union(*(_stacks_reached(row) for row in slot_map.ROWS.values()))
+    no_bundle.refused(refused.value, stacks=reached)
+
+
+@needs_age
+@pytest.mark.parametrize('member', [member for member, device in devices.DEVICES.items() if device.sealed is None])
+def test_recording_a_row_with_no_seal_on_a_machine_with_no_bundle_starts_no_pulumi(
+    no_bundle: NoBundle, tmp_path: Path, member: str
+) -> None:
+    """`derived <row> record`: the row's own stack is created where the backend has none, which needs the backend too."""
+    device = devices.DEVICES[member]
+    secret = tmp_path / 'a-secret'
+    _ = secret.write_text('a-recorded-secret\n')
+    given = {field.name: str(secret) if field.secret else 'a-recorded-value' for field in device.fields}
+
+    with pytest.raises(pulumi_config.BackendMissing) as refused:
+        _ = devices.deliver(device, stack=no_bundle.stack(device.stack), given=given, prompt=_refuse)
+
+    no_bundle.refused(refused.value, stacks={device.stack})
+
+
+@needs_age
+def test_reading_the_admin_token_on_a_machine_with_no_bundle_starts_no_pulumi(no_bundle: NoBundle) -> None:
+    """`devices.borrow`, ahead of every command that pushes a GitHub secret, lets the refusal through as it is.
+
+    Not dressed as a token the stack does not hold, which would send the
+    operator to `github-admin record`.
+    """
+    admin = devices.DEVICES[devices.GITHUB_ADMIN]
+
+    with pytest.raises(pulumi_config.BackendMissing) as refused:
+        _ = devices.borrow(admin, stack=no_bundle.stack(admin.stack))
+
+    no_bundle.refused(refused.value, stacks={admin.stack})
+
+
+@needs_age
+@pytest.mark.parametrize('member', [member for member, device in devices.DEVICES.items() if device.sealed is not None])
+def test_sealing_a_recorded_row_on_a_machine_with_no_bundle_starts_no_pulumi(no_bundle: NoBundle, member: str) -> None:
+    """`derived <row> seal` lets the refusal through as it is, not dressed as a value nobody recorded."""
+    device = devices.DEVICES[member]
+
+    def unreached(args: Sequence[str], *, stdin: str | None) -> str:
+        raise AssertionError(f'kubeseal was started ({args}) for a value nothing read')
+
+    sealer = sealing.Sealer(certificate='', open_stack=no_bundle.stack, run=unreached)
+
+    with pytest.raises(pulumi_config.BackendMissing) as refused:
+        devices.seal(device, stack=no_bundle.stack(device.stack), sealer=sealer)
+
+    no_bundle.refused(refused.value, stacks={device.stack})
+
+
+@needs_age
+def test_re_encrypting_physical_on_a_machine_with_no_bundle_starts_no_pulumi(
+    no_bundle: NoBundle, kit: KdbxStore, registry: escrow.Registry
+) -> None:
+    """`derived physical-passphrase re-encrypt`, which would otherwise move whatever `physical` the caller's backend holds."""
+    with pytest.raises(pulumi_config.BackendMissing) as refused:
+        _ = lifecycle.re_encrypt_physical(kit, no_bundle.bundle_dir, registry)
+
+    no_bundle.refused(refused.value, stacks={pulumi_config.PHYSICAL})
+
+
+@needs_age
+def test_re_encrypting_the_stacks_on_the_stack_passphrase_on_a_machine_with_no_bundle_starts_no_pulumi(
+    no_bundle: NoBundle, kit: KdbxStore, registry: escrow.Registry
+) -> None:
+    """`derived pulumi-passphrase re-encrypt`, refused at the first stack it would move."""
+    with pytest.raises(pulumi_config.BackendMissing) as refused:
+        _ = lifecycle.re_encrypt_stacks(kit, no_bundle.bundle_dir, registry)
+
+    no_bundle.refused(refused.value, stacks=set(pulumi_config.ON_STACK_PASSPHRASE))

@@ -11,6 +11,7 @@ CLI is not installed, which is neither CI nor a workstation with `mise`.
 
 from __future__ import annotations
 
+import ast
 import inspect
 import json
 import os
@@ -294,6 +295,67 @@ def test_an_environment_holds_a_backend_or_why_it_has_none_and_not_both() -> Non
 
     _ = pulumi_config.BackendEnvironment(url='postgres://operator@192.0.2.10/pulumi_state')
     _ = pulumi_config.BackendEnvironment(no_backend='no bundle')
+
+
+#: The methods of `Stack` that run `pulumi` today, each called the way a
+#: caller calls it; every run, these and any added later, is held to the
+#: backend check by `test_a_stack_starts_pulumi_only_where_its_backend_is_checked`.
+STARTING_PULUMI: Mapping[str, Callable[[pulumi_config.Stack], object]] = {
+    'exists': lambda stack: stack.exists(),
+    'ensure': lambda stack: stack.ensure(),
+    'get': lambda stack: stack.get(QUALIFIED_KEY),
+    'holds': lambda stack: stack.holds(QUALIFIED_KEY, SECRET),
+    'outputs': lambda stack: stack.outputs(),
+    'set': lambda stack: stack.set(QUALIFIED_KEY, 'a-plain-value'),
+    'set_plain_at': lambda stack: stack.set_plain_at(f'{QUALIFIED_KEY}.inner', 'a-plain-value'),
+    'set_secret': lambda stack: stack.set_secret(QUALIFIED_KEY, SECRET),
+    'fill': lambda stack: stack.fill(secret={QUALIFIED_KEY: SECRET}, plain={}, holds='a secret'),
+    're_encrypt': lambda stack: stack.re_encrypt(former=['an-earlier-passphrase']),
+}
+
+
+def test_a_stack_starts_pulumi_only_where_its_backend_is_checked() -> None:
+    """`Stack` reaches its runner only in `_pulumi`, which takes every run's variables from `_started_with`.
+
+    Read off the class's source rather than off a list of its methods, so a run
+    started anywhere else -- a probe after the first run, a method added
+    later, the runner handed on as a value -- fails here, and renaming a
+    method or adding one that starts nothing does not.
+    """
+    (cls,) = ast.parse(inspect.getsource(pulumi_config.Stack)).body
+    assert isinstance(cls, ast.ClassDef)
+    reaching = {
+        (function.name, node.lineno)
+        for function in cls.body
+        if isinstance(function, ast.FunctionDef)
+        for node in ast.walk(function)
+        if isinstance(node, ast.Attribute)
+        and node.attr == 'run'
+        and isinstance(node.value, ast.Name)
+        and node.value.id == 'self'
+    }
+    assert reaching, 'no reference to the runner was found, so nothing was checked'
+    only = pulumi_config.Stack._pulumi.__name__  # pyright: ignore[reportPrivateUsage]
+    assert {name for name, _ in reaching} == {only}, sorted(reaching)
+
+
+@pytest.mark.parametrize('method', sorted(STARTING_PULUMI))
+def test_with_no_backend_no_method_starts_pulumi(method: str, tmp_path: Path) -> None:
+    """A stack whose state is in the backend, on a machine that has none, is refused by every method before any run.
+
+    `holds` included, which answers "not held" for a key it cannot read and
+    so would send the caller on to a write.
+    """
+    runner = RecordedPulumi(stacks=[STACK])
+    environment = pulumi_config.BackendEnvironment(passphrase=lambda: 'the-stack-passphrase', no_backend='no bundle')
+    stack = pulumi_config.Stack(name=STACK, directory=tmp_path, environment=environment, run=runner)
+    assert stack_environment.home(STACK) is not identity.StateHome.COMMITTED
+
+    with pytest.raises(pulumi_config.BackendMissing) as refused:
+        _ = STARTING_PULUMI[method](stack)
+
+    assert refused.value.stack == STACK
+    assert runner.invocations == []
 
 
 def test_only_the_operator_stacks_are_given_the_operator_passphrase() -> None:
