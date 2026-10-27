@@ -297,7 +297,7 @@ def environment(
             bundle_dir / bundle.URL_FILE,
         )
     return pulumi_config.BackendEnvironment(
-        shared=functools.cache(lambda: vault().recover(escrow.PASSPHRASE)),
+        passphrase=functools.cache(lambda: vault().recover(escrow.PASSPHRASE)),
         url=url.read_text().strip() if url is not None else None,
         # Once per command: every `pulumi` call a command makes against an
         # operator stack builds its environment again, and a chain that ends

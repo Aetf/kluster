@@ -914,7 +914,7 @@ def context(
     # stack, which is opened under its own and refused without it; the stack
     # passphrase, for the stacks a copy writes into.
     resolved = pulumi_config.BackendEnvironment(
-        passphrase=STACK_PASSPHRASE, url=backend_url, physical=lambda: PHYSICAL_PASSPHRASE
+        passphrase=lambda: STACK_PASSPHRASE, url=backend_url, physical=lambda: PHYSICAL_PASSPHRASE
     )
     return slots.Context(
         open_forge=lambda: Forge(token='the-admin-token', run=gh),

@@ -191,7 +191,7 @@ class Stacks:
         # Each stack picks its own passphrase out of one environment, `physical`
         # its own, as in a run that holds the kit.
         environment = pulumi_config.BackendEnvironment(
-            passphrase='the-stack-passphrase', physical=lambda: 'the-physical-passphrase'
+            passphrase=lambda: 'the-stack-passphrase', physical=lambda: 'the-physical-passphrase'
         )
         return pulumi_config.Stack(
             name=name, directory=pulumi_config.project_dir(), environment=environment, run=self.runner(name)
@@ -358,7 +358,7 @@ def test_the_write_is_held_to_what_the_real_cli_accepts(
         monkeypatch.setenv(variable, directory)
     monkeypatch.setenv('PULUMI_SKIP_UPDATE_CHECK', 'true')
     environment = pulumi_config.BackendEnvironment(
-        passphrase='probe-passphrase', url=state.as_uri(), physical=lambda: 'probe-physical-passphrase'
+        passphrase=lambda: 'probe-passphrase', url=state.as_uri(), physical=lambda: 'probe-physical-passphrase'
     )
     stack = pulumi_config.Stack(name=value.stack, directory=project, environment=environment)
     stack.ensure()

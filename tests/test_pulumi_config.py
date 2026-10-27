@@ -222,7 +222,7 @@ def live_stack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> pulumi_config
         # The passphrase and the URL go in a `BackendEnvironment`, so the probe
         # exercises the resolution the real callers use: the stack picks its
         # own passphrase out of it by its own name.
-        environment=pulumi_config.BackendEnvironment(passphrase='probe-passphrase', url=state.as_uri()),
+        environment=pulumi_config.BackendEnvironment(passphrase=lambda: 'probe-passphrase', url=state.as_uri()),
     )
 
 
@@ -300,7 +300,7 @@ def test_only_the_operator_stacks_are_given_the_operator_passphrase() -> None:
         asked.append('asked')
         return 'the-operator-passphrase'
 
-    environment = pulumi_config.BackendEnvironment(passphrase='the-stack-passphrase', operator=find)
+    environment = pulumi_config.BackendEnvironment(passphrase=lambda: 'the-stack-passphrase', operator=find)
     assert pulumi_config.APART, 'nothing to exercise: no stack is encrypted apart from the others'
     operator_stack = next(iter(pulumi_config.APART))
 
@@ -327,7 +327,7 @@ def test_only_physical_is_given_its_own_passphrase() -> None:
         return 'the-physical-passphrase'
 
     environment = pulumi_config.BackendEnvironment(
-        passphrase='the-stack-passphrase', operator=lambda: 'the-operator-passphrase', physical=find
+        passphrase=lambda: 'the-stack-passphrase', operator=lambda: 'the-operator-passphrase', physical=find
     )
 
     assert environment.variables(STACK)[pulumi_config.PASSPHRASE_ENV] == 'the-stack-passphrase'
@@ -339,7 +339,7 @@ def test_only_physical_is_given_its_own_passphrase() -> None:
 
 
 def test_physical_is_refused_where_nothing_gives_its_passphrase() -> None:
-    environment = pulumi_config.BackendEnvironment(passphrase='the-stack-passphrase')
+    environment = pulumi_config.BackendEnvironment(passphrase=lambda: 'the-stack-passphrase')
 
     with pytest.raises(pulumi_config.PassphraseMissing) as refusal:
         _ = environment.variables(pulumi_config.PHYSICAL)
@@ -350,7 +350,7 @@ def test_physical_is_refused_with_the_reason_its_finder_gives() -> None:
     def find() -> str:
         raise stack_environment.EnvironmentRefused('nothing escrowed for the label')
 
-    environment = pulumi_config.BackendEnvironment(passphrase='the-stack-passphrase', physical=find)
+    environment = pulumi_config.BackendEnvironment(passphrase=lambda: 'the-stack-passphrase', physical=find)
 
     with pytest.raises(pulumi_config.PassphraseMissing, match='nothing escrowed for the label'):
         _ = environment.variables(pulumi_config.PHYSICAL)
@@ -391,11 +391,12 @@ def physical_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[P
 
 
 def _physical_under(project: Path, url: str, own: str, *, former: str | None = None) -> pulumi_config.Stack:
-    """`physical` as a `credentials` run opens it: its own passphrase is `own`."""
+    """`physical` as a `credentials` run opens it: its own passphrase is `own`, and `former` the stack passphrase."""
+    stack_passphrase = None if former is None else (lambda: former)
     return pulumi_config.Stack(
         name=pulumi_config.PHYSICAL,
         directory=project,
-        environment=pulumi_config.BackendEnvironment(passphrase=former, url=url, physical=lambda: own),
+        environment=pulumi_config.BackendEnvironment(passphrase=stack_passphrase, url=url, physical=lambda: own),
     )
 
 
@@ -499,7 +500,7 @@ def test_a_move_that_did_not_take_is_refused(physical_project: tuple[Path, str])
     moving = pulumi_config.Stack(
         name=pulumi_config.PHYSICAL,
         directory=project,
-        environment=pulumi_config.BackendEnvironment(passphrase=FORMER, url=url, physical=lambda: OWN),
+        environment=pulumi_config.BackendEnvironment(passphrase=lambda: FORMER, url=url, physical=lambda: OWN),
         run=swallowing,
     )
 
@@ -577,7 +578,10 @@ def test_the_stacks_under_the_stack_passphrase_are_the_ones_a_run_hands_it_to(tm
     second list to edit.
     """
     environment = pulumi_config.BackendEnvironment(
-        passphrase='the-stack-passphrase', url='file:///nowhere', operator=lambda: 'operator', physical=lambda: 'own'
+        passphrase=lambda: 'the-stack-passphrase',
+        url='file:///nowhere',
+        operator=lambda: 'operator',
+        physical=lambda: 'own',
     )
     handed = [
         name
@@ -590,15 +594,15 @@ def test_the_stacks_under_the_stack_passphrase_are_the_ones_a_run_hands_it_to(tm
 
 
 def test_the_stack_passphrase_is_looked_for_only_for_a_stack_that_takes_it(tmp_path: Path) -> None:
-    """`shared` is asked for a stack under the stack passphrase and for no other, as `operator` and `physical` are."""
+    """`passphrase` is asked for a stack under the stack passphrase and for no other, as `operator` and `physical` are."""
     looked: list[str] = []
 
-    def shared() -> str:
+    def find() -> str:
         looked.append('the escrow')
         return 'the-stack-passphrase'
 
     environment = pulumi_config.BackendEnvironment(
-        url='file:///nowhere', shared=shared, operator=lambda: 'operator', physical=lambda: 'own'
+        url='file:///nowhere', passphrase=find, operator=lambda: 'operator', physical=lambda: 'own'
     )
     for name in (*pulumi_config.APART, pulumi_config.PHYSICAL):
         _ = environment.variables(name, checkout=tmp_path)
@@ -609,14 +613,9 @@ def test_the_stack_passphrase_is_looked_for_only_for_a_stack_that_takes_it(tmp_p
     assert looked == ['the escrow']
 
 
-def test_the_stack_passphrase_is_given_one_way_or_the_other_never_both() -> None:
-    with pytest.raises(ValueError):
-        _ = pulumi_config.BackendEnvironment(passphrase='in-hand', shared=lambda: 'from-the-escrow')
-
-
 def _on_stack_passphrase(url: str, passphrase: str) -> pulumi_config.BackendEnvironment:
     """The stacks' environment with the stack passphrase in hand: `passphrase` as it, `physical` its own."""
-    return pulumi_config.BackendEnvironment(passphrase=passphrase, url=url, physical=lambda: PHYSICAL_OWN)
+    return pulumi_config.BackendEnvironment(passphrase=lambda: passphrase, url=url, physical=lambda: PHYSICAL_OWN)
 
 
 def _rotation_estate(project: Path, url: str) -> dict[str, pulumi_config.Stack]:

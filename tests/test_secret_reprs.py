@@ -79,8 +79,8 @@ prints what it carries, and with the bare sentinel where it does not
 **A field that holds a record is classified by what that record prints**, in
 its repr and in pytest's explanation of a comparison, not by what it holds:
 `pulumi_config.Stack` carries the stack passphrase through a
-`BackendEnvironment` that hides it in both, and the last two tests here pin
-that mechanism.
+`BackendEnvironment` that keeps the function that finds it out of both, and
+the last two tests here pin that mechanism.
 The one exception is a field already out of the repr for another reason —
 `Context`'s three caches, the forge with its admin token among them — which
 the census records as secret, since every hidden field has to be one it can
@@ -631,7 +631,7 @@ def test_a_context_prints_neither_the_token_nor_the_passphrase_it_reaches() -> N
     regression in either inner record would show first.
     """
     environment = pulumi_config.BackendEnvironment(
-        passphrase=SECRET, url='https://backend.example', operator=lambda: SECRET
+        passphrase=lambda: SECRET, url='https://backend.example', operator=lambda: SECRET
     )
     context = slots.Context(
         open_forge=lambda: github_secrets.Forge(token=SECRET),
@@ -641,7 +641,9 @@ def test_a_context_prints_neither_the_token_nor_the_passphrase_it_reaches() -> N
     )
     stack = pulumi_config.Stack(name='dns', directory=Path('.'), environment=environment)
 
-    assert context.forge.token == SECRET and stack.environment.passphrase == SECRET, 'the records were not filled'
+    assert context.forge.token == SECRET and stack.environment.stack_passphrase() == SECRET, (
+        'the records were not filled'
+    )
     assert SECRET not in repr(context)
     assert SECRET not in repr(context.forge)
     assert SECRET not in repr(stack)
