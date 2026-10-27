@@ -124,6 +124,24 @@ HOMELAB_DISK_ROOM = 3 * GIB
 IMAGE_CACHE = Path('/var/tmp/kluster-talos-images')
 
 
+class FactoryNamedNoInstaller(ValueError):
+    """The factory's answer for one schematic named no installer image.
+
+    The type is the rule: it is the one thing this module refuses in the
+    factory's answer, so a program tells the refusal apart by the type alone.
+    The fields say which lookup the answer was for, and the message, built
+    from them, is for a person.
+    """
+
+    def __init__(self, *, schematic_id: str, platform: str, architecture: str) -> None:
+        super().__init__(
+            f'the factory lookup for schematic {schematic_id} ({platform}, {architecture}) named no installer image'
+        )
+        self.schematic_id: str = schematic_id
+        self.platform: str = platform
+        self.architecture: str = architecture
+
+
 class TalosArtifact(Component, abc.ABC):
     """A pinned Image Factory schematic, and where the factory serves it.
 
@@ -208,9 +226,8 @@ class TalosArtifact(Component, abc.ABC):
             # disk image for. An answer without one would render a node
             # configuration naming no installer of its own, so it is refused
             # rather than carried on.
-            raise ValueError(
-                f'the factory lookup for schematic {schematic_id} ({self.platform}, {self.architecture}) '
-                'named no installer image'
+            raise FactoryNamedNoInstaller(
+                schematic_id=schematic_id, platform=self.platform, architecture=self.architecture
             )
         return _FactoryArtifacts(disk_image=urls.urls.disk_image, installer=urls.urls.installer)
 
