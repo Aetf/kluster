@@ -384,7 +384,10 @@ class StateBackend(Component, pulumi_type='kluster:state_backend:StateBackend'):
                     days_from_hiding_to_deleting=1,
                 )
             ],
-            opts=self.child_opts(protect=True),
+            # A bucket's name is unique across all of B2, which refuses a
+            # second bucket under it, so a replacement created before the
+            # delete would fail.
+            opts=self.child_opts(protect=True, delete_before_replace=True),
         )
         # No `additional_secret_outputs`: the SDK marks the key secret, and its
         # id is the resource's id, which the engine cannot mark, and an

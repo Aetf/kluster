@@ -176,8 +176,14 @@ class BackupBucket(Component, pulumi_type='kluster:backup:BackupBucket'):
                     days_from_starting_to_canceling_unfinished_large_files=unfinished_upload_days,
                 )
             ],
-            # The safety net every other resource's destroy path assumes.
-            opts=self.child_opts(protect=True),
+            opts=self.child_opts(
+                # The safety net every other resource's destroy path assumes.
+                protect=True,
+                # A bucket's name is unique across all of B2, which refuses a
+                # second bucket under it, so a replacement created before the
+                # delete would fail.
+                delete_before_replace=True,
+            ),
         )
 
         # Keys are not protected. They are the one thing here meant to be

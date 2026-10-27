@@ -189,6 +189,13 @@ class ManagedRepository(Component, pulumi_type='kluster:forge:ManagedRepository'
         #: component, which is what these resources are -- properties of a
         #: repository.
         on_repository = pulumi.ResourceOptions(parent=self.repository)
+        #: The same, for a property the repository holds once under the name or
+        #: key the program states: its replacement deletes before it creates
+        #: (style/pulumi.md, "Resources and their contents"), and each
+        #: declaration says what GitHub would do with a create first.
+        replaced_delete_first = pulumi.ResourceOptions.merge(
+            on_repository, pulumi.ResourceOptions(delete_before_replace=True)
+        )
 
         # Its own resource rather than the `Repository` field of the same
         # name, which the provider deprecated in favor of exactly this.
@@ -196,7 +203,10 @@ class ManagedRepository(Component, pulumi_type='kluster:forge:ManagedRepository'
             name,
             repository=self.repository.name,
             enabled=True,
-            opts=on_repository,
+            # One setting per repository, which a create enables where it
+            # stands and a delete disables: created before the delete, a
+            # replacement would end with the alerts off.
+            opts=replaced_delete_first,
         )
 
         # A label a workflow branches on is a resource, because a workflow
@@ -210,6 +220,9 @@ class ManagedRepository(Component, pulumi_type='kluster:forge:ManagedRepository'
                 name=label.name,
                 color=LABEL_COLOR,
                 description=label.description,
+                # Stated as well, and GitHub refuses a second label under it,
+                # but the provider's diff already replaces it delete-first:
+                # the bridge does for a `name` it would otherwise auto-name.
                 opts=on_repository,
             )
             for label in entry.labels
@@ -225,7 +238,10 @@ class ManagedRepository(Component, pulumi_type='kluster:forge:ManagedRepository'
                 repository=self.repository.name,
                 variable_name=variable.name,
                 value=variable.value,
-                opts=on_repository,
+                # The name is the variable's address in the repository, and
+                # GitHub refuses a second variable under it, so a replacement
+                # created before the delete would fail.
+                opts=replaced_delete_first,
             )
             for variable in entry.variables
         }
@@ -253,7 +269,10 @@ class ManagedRepository(Component, pulumi_type='kluster:forge:ManagedRepository'
                 # what those names are is a decision in its own right
                 # (framework/github.md §3).
                 enforce_admins=Allowance.ADMINS_PAST_PROTECTION not in ALLOWED,
-                opts=on_repository,
+                # A repository holds one rule per pattern, and GitHub refuses
+                # a second for `main`, so a replacement created before the
+                # delete would fail.
+                opts=replaced_delete_first,
             )
             if required_checks
             else None
@@ -279,7 +298,14 @@ class ManagedRepository(Component, pulumi_type='kluster:forge:ManagedRepository'
                 # which is how an ungated Environment stays a bare one.
                 prevent_self_review=(Allowance.SELF_REVIEW not in ALLOWED) if environment.gated else None,
                 can_admins_bypass=(Allowance.ADMINS_PAST_GATES in ALLOWED) if environment.gated else None,
-                opts=on_repository,
+                # The name is stated, and GitHub creates an Environment by
+                # create-or-update: created before the delete, a replacement
+                # would write into the existing Environment, and the closing
+                # delete would remove it. Deleted first, it stands again
+                # afterwards, though bare: the secrets the register pushes
+                # into it (framework/github.md §4) go with the delete in
+                # either order.
+                opts=replaced_delete_first,
             )
             for environment in entry.environments
         }

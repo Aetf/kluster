@@ -53,6 +53,10 @@ class ManagedZone(Component, pulumi_type='kluster:dns:ManagedZone'):
                 # The zone is the registrar-facing object: destroying it
                 # would take the delegation with it, and every record below.
                 protect=True,
+                # An account holds one zone per name and Cloudflare refuses a
+                # second, so a replacement created before the delete would
+                # fail.
+                delete_before_replace=True,
             ),
         )
 
@@ -60,7 +64,14 @@ class ManagedZone(Component, pulumi_type='kluster:dns:ManagedZone'):
             f'{name}-dnssec',
             zone_id=self.zone.id,
             status='active',
-            opts=self.child_opts(),
+            # One DNSSEC state per zone, which a create enables where it stands
+            # and a delete disables: created before the delete, a replacement
+            # would end with DNSSEC off under a state that records it active.
+            # Deleted first, it is still off from the delete to the create,
+            # which a DS at the parent makes the outage declarative/dns.md
+            # §1.3 describes, so a replacement of this resource starts with
+            # that section's DS removal.
+            opts=self.child_opts(delete_before_replace=True),
         )
 
         self.records: dict[str, cloudflare.DnsRecord] = {}
@@ -79,7 +90,10 @@ class ManagedZone(Component, pulumi_type='kluster:dns:ManagedZone'):
                 proxied=record.proxied,
                 priority=record.priority,
                 comment=record.comment or None,
-                opts=self.child_opts(),
+                # Cloudflare refuses a record identical to one the zone holds,
+                # so a replacement that keeps the record's content, created
+                # before the delete, would fail.
+                opts=self.child_opts(delete_before_replace=True),
             )
 
         self.register_outputs({'zone_id': self.zone.id})
