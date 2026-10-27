@@ -170,8 +170,14 @@ async def test_a_factory_answer_naming_no_installer_is_refused(factory: Factory)
 
     worker = build_worker()
 
-    with pytest.raises(ValueError, match=f'schematic {WORKER_SCHEMATIC} .*named no installer image'):
+    with pytest.raises(image.FactoryNamedNoInstaller) as refused:
         _ = await worker.installer.future()
+    asked = factory.invokes[-1]
+    assert (refused.value.schematic_id, refused.value.platform, refused.value.architecture) == (
+        asked['schematicId'],
+        asked['platform'],
+        asked['architecture'],
+    )
 
 
 # -- the cloud half, unchanged ----------------------------------------------
