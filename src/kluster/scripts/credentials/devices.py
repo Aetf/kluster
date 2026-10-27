@@ -466,7 +466,7 @@ DEVICES: dict[str, Device] = {
 
 
 def announce(device: Device) -> None:
-    """Print the steps that create the credential, before anything is asked for.
+    """Print the steps that create the credential, before any of its values is asked for.
 
     Always, rather than only when a prompt follows: the steps are the
     register's answer to "where does this come from", and a run that supplies
@@ -504,7 +504,18 @@ def deliver(
     prompt: Prompt = input,
     sealer: sealing.Sealer | None = None,
 ) -> tuple[str, ...]:
-    """Print the console steps, collect the values, push them. Returns the keys written.
+    """Find how `stack` is opened, print the console steps, collect the values, push them. Returns the keys written.
+
+    The passphrase and the backend `stack` is opened with are found first
+    (`pulumi_config.Stack.require_backend`), before the console steps are
+    printed or any of the row's values is asked for; finding them may itself
+    ask, for the kit's master password or the operator passphrase, which open
+    the stack and make nothing. Where the console shows the credential once
+    -- UniFi's API key, ZeroTier Central's token, GitHub's personal access
+    token -- a machine that cannot open the stack, with no client bundle or no
+    passphrase for it, refused only at the fill after the steps, would leave
+    the credential made at its console and in no slot. Finding them starts no `pulumi`, so a row's first `record`, whose
+    fill creates the stack, is not refused because the stack is absent.
 
     For a row the cluster needs too (`Device.sealed`), `sealer` seals the
     values in the same run: before the configuration is written, so a cluster
@@ -515,6 +526,8 @@ def deliver(
     that cannot reach a cluster that exists refuses rather than passing
     `None`.
     """
+    log.info('finding the passphrase and the backend the %s stack is opened with', stack.name)
+    stack.require_backend()
     announce(device)
     values = _collect(device.title, device.fields, given, prompt)
     sealed: tuple[sealing.Sealer, conventions.sealed.SealedValue, dict[str, str]] | None = None
