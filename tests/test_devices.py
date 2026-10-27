@@ -42,7 +42,7 @@ def refuses(prompt: str) -> str:
 #: either out would have every case about those stacks failing on the
 #: passphrase instead of on its subject.
 FULLY_EQUIPPED = pulumi_config.BackendEnvironment(
-    passphrase='the-stack-passphrase',
+    passphrase=lambda: 'the-stack-passphrase',
     operator=lambda: 'the-operator-passphrase',
     physical=lambda: 'the-physical-passphrase',
 )
@@ -404,7 +404,7 @@ def test_a_stack_encrypted_apart_refuses_on_a_machine_that_holds_no_passphrase_f
     bare = pulumi_config.Stack(
         name=GITHUB_ADMIN.stack,
         directory=pulumi_config.project_dir(),
-        environment=pulumi_config.BackendEnvironment(passphrase='the-stack-passphrase'),
+        environment=pulumi_config.BackendEnvironment(passphrase=lambda: 'the-stack-passphrase'),
         run=runner,
     )
 
@@ -432,7 +432,7 @@ def test_a_machine_that_cannot_decrypt_the_stack_is_not_told_the_credential_is_m
     bare = pulumi_config.Stack(
         name=GITHUB_ADMIN.stack,
         directory=pulumi_config.project_dir(),
-        environment=pulumi_config.BackendEnvironment(passphrase='the-stack-passphrase'),
+        environment=pulumi_config.BackendEnvironment(passphrase=lambda: 'the-stack-passphrase'),
         run=RecordedPulumi(),
     )
 

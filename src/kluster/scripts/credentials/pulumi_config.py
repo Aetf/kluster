@@ -180,39 +180,34 @@ class BackendEnvironment:
     stack with another's passphrase.
     """
 
-    #: The stack passphrase, which every stack but `physical` and the
-    #: operator stacks is given, for a caller that already holds it; a
-    #: `credentials` run hands `shared` instead, and the two are never given
-    #: together. It does not print; the URL is what a repr is read for.
-    passphrase: Annotated[str | None, Secret] = field(default=None, repr=False, compare=False)
+    #: Where the stack passphrase is found, for every stack but `physical` and
+    #: the operator stacks: the kit's escrow, for a `credentials` run, while a
+    #: caller that already holds it hands a function answering it. A
+    #: function for the reason `operator` and `physical` are: it is called
+    #: only for a stack under the stack passphrase, so a command that points
+    #: at none never has it looked for, nor the kit unlocked for it. The
+    #: caller makes it answer once per command. None gives such a stack no
+    #: passphrase at all. Marked secret and kept out of the repr and out of
+    #: comparison although it is a function, as `operator` and `physical`
+    #: are: a cached recovery holds what it found until the command ends, and
+    #: a callable can print what it binds, as a `functools.partial` does.
+    passphrase: Annotated[Callable[[], str] | None, Secret] = field(default=None, repr=False, compare=False)
     url: str | None = None
-    #: Where the stack passphrase is found when `passphrase` is not given: the
-    #: kit's escrow, for a `credentials` run. A function for the reason
-    #: `operator` and `physical` are: it is called only for a stack under the
-    #: stack passphrase, so a command that points at none never has it looked
-    #: for, nor the kit unlocked for it. The caller makes it
-    #: answer once per command. None, with no `passphrase`, gives such a stack
-    #: no passphrase at all.
-    shared: Callable[[], str] | None = field(default=None, compare=False)
     #: Where the operator passphrase is found, for the stacks in `APART` and
     #: no other: the acquisition chain (`stack_environment.operator_passphrase`)
     #: for a run on a workstation. A function rather than a value, so it is
     #: called only when such a stack is asked for and a command that never
     #: points at one never looks, let alone prompts; the caller makes it answer
     #: once per command. None looks nowhere, and such a stack is refused.
-    operator: Callable[[], str] | None = field(default=None, compare=False)
+    #: Marked for `passphrase`'s reason.
+    operator: Annotated[Callable[[], str] | None, Secret] = field(default=None, repr=False, compare=False)
     #: Where `physical`'s passphrase is found, for that stack and no other: the
     #: kit's escrow, for a `credentials` run. A function for the reason
     #: `operator` is one -- a command that never points at `physical` never
     #: opens the label, and a kit with nothing filed under it refuses only the
     #: commands that do. None looks nowhere, and `physical` is refused.
-    physical: Callable[[], str] | None = field(default=None, compare=False)
-
-    def __post_init__(self) -> None:
-        # Two ways to give one value, and with both given `shared` would never
-        # be called: refused rather than resolved by a precedence nobody chose.
-        if self.passphrase is not None and self.shared is not None:
-            raise ValueError('a BackendEnvironment takes the stack passphrase as `passphrase` or as `shared`, not both')
+    #: Marked for `passphrase`'s reason.
+    physical: Annotated[Callable[[], str] | None, Secret] = field(default=None, repr=False, compare=False)
 
     def variables(self, stack: str, *, checkout: Path | None = None) -> dict[str, str]:
         """The variables a `pulumi` run against `stack` is started with.
@@ -237,10 +232,8 @@ class BackendEnvironment:
         return values | stack_environment.backend_variables(stack, checkout=checkout, estate_url=self.url)
 
     def stack_passphrase(self) -> str | None:
-        """The stack passphrase: `passphrase` where it is given, what `shared` finds where that is, else None."""
-        if self.passphrase is not None:
-            return self.passphrase
-        return self.shared() if self.shared is not None else None
+        """The stack passphrase, as `passphrase` finds it; None where nothing is given to find it."""
+        return self.passphrase() if self.passphrase is not None else None
 
     def _operator(self, stack: str, row: str) -> str:
         """The operator passphrase for `stack`, from `operator`; `PassphraseMissing` where it finds none.
@@ -693,7 +686,7 @@ def re_encrypt_on_stack_passphrase(
     directory: Path | None = None,
     run: Runner = run_pulumi,
 ) -> list[str]:
-    """Move every stack under the stack passphrase onto the one `environment` holds, from whichever of `former` opens it.
+    """Move every stack under the stack passphrase onto the one `environment` finds, from whichever of `former` opens it.
 
     Each stack in `ON_STACK_PASSPHRASE` is moved by `Stack.re_encrypt`, which
     proves the move took and leaves a stack already under the newest
