@@ -3,10 +3,13 @@
 The executable is rendered from the declarations the stack program builds the
 gateway out of, and run as the homelab host runs it: no argument for the
 reading, `--certificates` for the list a LAN probe works from. Its systemd is
-`tests/fake_systemd.py`. `machinectl`, which names the overlay member's
+`tests/fake_systemd.py`, behind a `systemctl` that answers `--version` itself
+with the release a case sets. `machinectl`, which names the overlay member's
 leader, `nsenter`, which runs `zerotier-cli info` in that leader's mount
 namespace, and the package script, whose `--check` the reading relays, are
-stand-ins that answer what a case sets and record what they were asked.
+stand-ins that answer what a case sets and record what they were asked. The
+base is read under the stand-in's tree: its `/etc/debian_version` and its
+`/bin/sh` are files there.
 
 What it reads it reads against the declaration, so the wiring of the
 declaration into the program -- which machines, which units -- is
@@ -19,7 +22,7 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import device_shell
@@ -70,11 +73,15 @@ class _Device:
 
     root: Path
     systemd: FakeSystemd
+    #: Where the stand-ins that go ahead of the stand-in systemd's own tools live.
+    tools: Path
     program: Path
     #: What the overlay member's `zerotier-cli info` prints.
     member: Path
     #: What `10-packages.sh --check` prints; absent, the check passes.
     check_fails: Path
+    #: The release `systemctl --version` names.
+    systemd_release: Path
     machinectl_calls: Path
     nsenter_calls: Path
     check_calls: Path
@@ -85,20 +92,37 @@ def _stub(path: Path, body: str) -> None:
     path.chmod(0o755)
 
 
+def _systemd_release(*, terminate_signals_nspawn: bool) -> int:
+    """A systemd release on the given side of the one `machinectl terminate` changes at, next to it."""
+    return gateway.SYSTEMD_TERMINATE_RELEASE - (0 if terminate_signals_nspawn else 1)
+
+
+def _link_bin_sh(root: Path, target: str) -> None:
+    """The stand-in's `/bin/sh` made a link to `target`, an absolute path on the device, as Debian links it."""
+    link = root / 'bin' / 'sh'
+    shell = root / target.lstrip('/')
+    shell.parent.mkdir(parents=True, exist_ok=True)
+    link.unlink(missing_ok=True)
+    link.symlink_to(os.path.relpath(shell, link.parent))
+
+
 def _device(tmp_path: Path, *, legacy: tuple[conventions.gateway.LegacyVhost, ...] | None = None) -> _Device:
-    """A device every declared machine and unit is healthy on, before a case breaks one thing."""
-    root = tmp_path / 'device'
+    """A device every declared machine and unit is healthy on, on the declared base, before a case breaks one thing."""
+    root = tmp_path.resolve() / 'device'
     logs = tmp_path / 'logs'
+    tools = tmp_path / 'tools'
     live = root / 'etc-systemd-system'
-    for directory in (root, logs, live):
+    for directory in (root, logs, tools, live, root / 'etc', root / 'bin'):
         directory.mkdir()
     systemd = FakeSystemd(root / SYSTEMD, unit_path=(live,))
     device = _Device(
         root=root,
         systemd=systemd,
+        tools=tools,
         program=root / gateway.HEALTH_PROGRAM,
         member=root / 'member-info',
         check_fails=root / 'check-fails',
+        systemd_release=root / 'systemd-release',
         machinectl_calls=logs / 'machinectl',
         nsenter_calls=logs / 'nsenter',
         check_calls=logs / 'packages',
@@ -155,10 +179,28 @@ def _device(tmp_path: Path, *, legacy: tuple[conventions.gateway.LegacyVhost, ..
         f'echo "$*" >>{device.check_calls}\n[ -e {device.check_fails} ] || exit 0\ncat {device.check_fails}\nexit 1\n',
     )
     _ = device.member.write_text(ONLINE)
+    # `systemctl --version` as Debian's systemd answers it, the release first;
+    # every other question goes to the stand-in systemd.
+    _stub(
+        tools / 'systemctl',
+        f'if [ "$*" = --version ]; then\n'
+        f'    release=$(cat {device.systemd_release})\n'
+        '    echo "systemd $release ($release.1-1)"\n'
+        '    echo "+PAM +AUDIT +SELINUX"\n'
+        '    exit 0\n'
+        'fi\n'
+        f'exec {Path(systemd.tools) / "systemctl"} "$@"\n',
+    )
+    base = gateway.DEVICE_BASE
+    _ = (root / 'etc' / 'debian_version').write_text(f'{base.debian_release}.11\n')
+    _link_bin_sh(root, base.shell)
+    _ = device.systemd_release.write_text(str(_systemd_release(terminate_signals_nspawn=base.terminate_signals_nspawn)))
 
     proxy = caddy() if legacy is None else caddy(legacy)
     _ = device.program.write_text(
-        gateway.health_program(caddy=proxy, resolvers=RESOLVERS, overlay_daemon=OVERLAY, packages_script=str(packages))
+        gateway.health_program(
+            caddy=proxy, resolvers=RESOLVERS, overlay_daemon=OVERLAY, packages_script=str(packages), root=str(root)
+        )
     )
     device.program.chmod(0o755)
 
@@ -188,7 +230,7 @@ def _read(device: _Device, *args: str) -> _Reading:
     """Run the executable once, as `ssh gw /data/custom/bin/gateway-health` would."""
     completed = process_sessions.run(
         [*device_shell.argv(gateway.HEALTH_PROGRAM, device.program), *args],
-        env={'PATH': f'{device.systemd.tools}:/usr/bin:/bin'},
+        env={'PATH': f'{device.tools}:{device.systemd.tools}:/usr/bin:/bin'},
         text=True,
         timeout=30,
     )
@@ -242,6 +284,24 @@ def _leave_a_member_uncached(device: _Device) -> None:
     _ = device.check_fails.write_text('packages: the offline cache in /data/custom/dpkg holds no deb of rsync\n')
 
 
+def _move_the_debian_release(device: _Device) -> None:
+    _ = (device.root / 'etc' / 'debian_version').write_text(f'{int(gateway.DEVICE_BASE.debian_release) + 1}.1\n')
+
+
+def _another_shell() -> str:
+    """A shell `/bin/sh` could resolve to that is not the declared one."""
+    return next(shell for shell in ('/bin/bash', '/bin/mksh') if shell != gateway.DEVICE_BASE.shell)
+
+
+def _replace_bin_sh(device: _Device) -> None:
+    _link_bin_sh(device.root, _another_shell())
+
+
+def _move_systemd_across_the_terminate_release(device: _Device) -> None:
+    moved = not gateway.DEVICE_BASE.terminate_signals_nspawn
+    _ = device.systemd_release.write_text(str(_systemd_release(terminate_signals_nspawn=moved)))
+
+
 @pytest.mark.parametrize(
     ('deviation', 'subject', 'playbook'),
     [
@@ -252,8 +312,22 @@ def _leave_a_member_uncached(device: _Device) -> None:
         (_stop_the_routing_daemon, routing.FRR_SERVICE, gateway.PLAYBOOKS.routing),
         (_take_the_member_offline, conventions.gateway.OVERLAY.name, gateway.PLAYBOOKS.overlay),
         (_leave_a_member_uncached, f'{persistence.PACKAGES_SCRIPT} --check', gateway.PLAYBOOKS.packages),
+        (_move_the_debian_release, '/etc/debian_version', gateway.PLAYBOOKS.base),
+        (_replace_bin_sh, '/bin/sh', gateway.PLAYBOOKS.base),
+        (_move_systemd_across_the_terminate_release, 'systemd', gateway.PLAYBOOKS.base),
     ],
-    ids=['machine', 'boot-chain', 'unit-disabled', 'unit-inactive', 'routing-daemon', 'member-offline', 'cache'],
+    ids=[
+        'machine',
+        'boot-chain',
+        'unit-disabled',
+        'unit-inactive',
+        'routing-daemon',
+        'member-offline',
+        'cache',
+        'debian-release',
+        'bin-sh',
+        'systemd',
+    ],
 )
 def test_each_deviation_is_exactly_one_finding_that_names_its_subject_and_its_playbook(
     tmp_path: Path, deviation: Callable[[_Device], None], subject: str, playbook: str
@@ -319,6 +393,81 @@ def test_with_the_settings_files_gone_every_declared_machine_is_a_finding(tmp_pa
 
     assert {finding['subject'] for finding in findings} == set(MACHINE_UNITS)
     assert {finding['title'] for finding in findings} == {gateway.PLAYBOOKS.machine}
+
+
+def test_a_point_release_of_the_declared_debian_release_is_no_finding(tmp_path: Path) -> None:
+    """The base is the major release, which is what the dash pin follows, so a point release moves nothing."""
+    device = _device(tmp_path)
+    _ = (device.root / 'etc' / 'debian_version').write_text(f'{gateway.DEVICE_BASE.debian_release}.12\n')
+
+    reading = _read(device)
+
+    assert (reading.status, reading.lines) == (0, [])
+
+
+@pytest.mark.parametrize(
+    ('deviation', 'read'),
+    [
+        (_move_the_debian_release, f'{int(gateway.DEVICE_BASE.debian_release) + 1}.1'),
+        (_replace_bin_sh, _another_shell()),
+    ],
+    ids=['debian-release', 'bin-sh'],
+)
+def test_a_base_finding_says_what_the_device_read_on_the_devices_terms(
+    tmp_path: Path, deviation: Callable[[_Device], None], read: str
+) -> None:
+    """What the finding quotes is the device's own path, with the stand-in's tree taken off it."""
+    device = _device(tmp_path)
+    deviation(device)
+
+    (finding,) = _findings(_read(device))
+
+    assert read in finding['state']
+    assert str(device.root) not in finding['state']
+
+
+@pytest.mark.parametrize('shell', ['/bin/dash', '/usr/bin/dash'], ids=['bin', 'merged-usr'])
+def test_the_shell_is_read_against_the_declared_one_wherever_it_lives(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shell: str
+) -> None:
+    """A base with a merged `/usr` resolves `/bin/sh` outside `/bin`, and that is a declaration like any other."""
+    monkeypatch.setattr(gateway, 'DEVICE_BASE', replace(gateway.DEVICE_BASE, shell=shell))
+    device = _device(tmp_path)
+    assert _read(device).lines == []
+
+    _replace_bin_sh(device)
+
+    (finding,) = _findings(_read(device))
+    assert (finding['subject'], finding['title']) == ('/bin/sh', gateway.PLAYBOOKS.base)
+
+
+@pytest.mark.parametrize('terminate_signals_nspawn', [False, True], ids=['below', 'from'])
+def test_systemd_is_read_against_the_declared_side_of_the_terminate_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, terminate_signals_nspawn: bool
+) -> None:
+    """Either side can be the declared one: the release next to the boundary on that side passes, and across it is a finding."""
+    monkeypatch.setattr(
+        gateway, 'DEVICE_BASE', replace(gateway.DEVICE_BASE, terminate_signals_nspawn=terminate_signals_nspawn)
+    )
+    device = _device(tmp_path)
+    assert _read(device).lines == []
+
+    _move_systemd_across_the_terminate_release(device)
+
+    (finding,) = _findings(_read(device))
+    assert (finding['subject'], finding['title']) == ('systemd', gateway.PLAYBOOKS.base)
+
+
+def test_a_systemctl_that_names_no_release_is_a_finding(tmp_path: Path) -> None:
+    """An answer the reading cannot place on either side of the release is not taken for the declared side."""
+    device = _device(tmp_path)
+    _ = device.systemd_release.write_text('unknown')
+
+    reading = _read(device)
+
+    (finding,) = _findings(reading)
+    assert (finding['subject'], finding['title']) == ('systemd', gateway.PLAYBOOKS.base)
+    assert reading.errors == ''
 
 
 def _site_blocks(caddyfile: str) -> set[str]:

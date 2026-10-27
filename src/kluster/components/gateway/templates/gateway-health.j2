@@ -3,8 +3,9 @@
 #
 # The device read against what the physical stack declares for it: every
 # declared machine running, every unit the persistence layer delivers enabled
-# and active, the routing daemon running, the overlay member online, and an
-# offline package cache that would carry an offline boot. Nothing on the device
+# and active, the routing daemon running, the overlay member online, an offline
+# package cache that would carry an offline boot, and the base under the
+# firmware being the one the program is written for. Nothing on the device
 # runs this. The homelab host's daily check runs it over SSH, and an operator
 # can run it by hand (physical/gateway.md §1.6).
 #
@@ -114,5 +115,38 @@ if [ "$status" -ne 0 ]; then
     reasons=$(printf '%s\n' "$reasons" | sed 's/^packages: //' | oneline '; ')
     finding {{ packages_check }} "${reasons:-exit $status, and no reason given}" {{ playbooks.packages }}
 fi
+
+# The base under the firmware, read against the one the program is written for:
+# the Debian release, what `/bin/sh` resolves to, and which side of systemd
+# {{ systemd_release }} the device is on. The firmware's own release is not read, since one
+# that keeps the base moves nothing these facts decide, and a point release is
+# not compared either: the release is the major one `/etc/debian_version`
+# starts with. The paths are read under the tree's root, which is empty on the
+# device, and the shell `/bin/sh` resolves to is compared with that root taken
+# off its front.
+debian=$(cat {{ debian_version }} 2>/dev/null | oneline)
+[ "${debian%%.*}" = {{ debian_release }} ] ||
+    finding /etc/debian_version "reads ${debian:-nothing}, not Debian "{{ debian_release }} {{ playbooks.base }}
+
+shell=$(readlink -f {{ bin_sh }} 2>/dev/null)
+shell=${shell#{{ root }}}
+[ "$shell" = {{ shell }} ] ||
+    finding /bin/sh "resolves to ${shell:-nothing}, not "{{ shell }} {{ playbooks.base }}
+
+systemd=$(systemctl --version 2>/dev/null | awk 'NR == 1 && $1 == "systemd" { print $2 }')
+case $systemd in
+'' | *[!0-9]*)
+    finding systemd "systemctl --version names no release" {{ playbooks.base }}
+    ;;
+*)
+{%- if terminate_signals_nspawn %}
+    [ "$systemd" -ge {{ systemd_release }} ] ||
+        finding systemd "systemd $systemd, not {{ systemd_release }} or later" {{ playbooks.base }}
+{%- else %}
+    [ "$systemd" -lt {{ systemd_release }} ] ||
+        finding systemd "systemd $systemd, not below {{ systemd_release }}" {{ playbooks.base }}
+{%- endif %}
+    ;;
+esac
 
 exit "$found"
