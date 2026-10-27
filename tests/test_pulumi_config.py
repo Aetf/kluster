@@ -286,6 +286,16 @@ def test_a_stack_whose_state_is_committed_is_pointed_at_the_checkouts_checkpoint
     assert stack_environment.DISABLE_BACKUPS_ENV not in estate
 
 
+def test_an_environment_holds_a_backend_or_why_it_has_none_and_not_both() -> None:
+    # Both at once would leave `Stack.require_backend` to pick which one is
+    # true; the environment is refused instead of built.
+    with pytest.raises(ValueError):
+        _ = pulumi_config.BackendEnvironment(url='postgres://operator@192.0.2.10/pulumi_state', no_backend='no bundle')
+
+    _ = pulumi_config.BackendEnvironment(url='postgres://operator@192.0.2.10/pulumi_state')
+    _ = pulumi_config.BackendEnvironment(no_backend='no bundle')
+
+
 def test_only_the_operator_stacks_are_given_the_operator_passphrase() -> None:
     """The operator passphrase goes to the stacks in `APART` and to no other, and is not looked for otherwise.
 

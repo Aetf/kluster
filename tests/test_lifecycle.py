@@ -38,6 +38,7 @@ from oci_conventions import with_tenancy_ocid
 from oci_tenancy import ROOT_USER, TENANCY, Tenancy
 
 from kluster import conventions
+from kluster.conventions import identity
 from kluster.lib import stack_environment
 from kluster.scripts.credentials import (
     age,
@@ -958,6 +959,66 @@ def test_an_operator_stack_the_chain_does_not_answer_for_is_refused_naming_recov
         with pytest.raises(pulumi_config.PassphraseMissing) as refusal:
             _ = found.variables(stack)
         assert ('derived', row, 'recover') in named_leaves(str(refusal.value))
+
+
+@needs_age
+def test_with_no_bundle_every_stack_in_the_backend_is_refused_and_no_committed_one(
+    kit: KdbxStore, registry: escrow.Registry, tmp_path: Path, slots: Path
+) -> None:
+    """Which stacks need the bundle is the census's to say: those whose state is in the backend, an operator stack's too.
+
+    The same stacks are refused nothing with a bundle in place, so the bundle
+    is all that separates the two runs.
+    """
+    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
+    vault = escrow.Vault.open(kit, registry)
+    for label in (escrow.PASSPHRASE, escrow.PHYSICAL_PASSPHRASE):
+        _ = escrow.generate(vault, label)
+    slots.mkdir(parents=True)
+    _ = (slots / stack_environment.OPERATOR_PASSPHRASE_SLOT).write_text('from-the-slot\n')
+    bundle = tmp_path / 'bundle'
+    bundle.mkdir()
+    _ = (bundle / 'backend-url').write_text('postgres://operator@192.0.2.10:5432/pulumi_state\n')
+    absent = lifecycle.environment(kit, tmp_path / 'absent', registry)
+    present = lifecycle.environment(kit, bundle, registry)
+    names = set(conventions.STACK_NAMES.names())
+
+    refused: set[str] = set()
+    for name in names:
+        pulumi_config.Stack(name=name, directory=tmp_path, environment=present).require_backend()
+        try:
+            pulumi_config.Stack(name=name, directory=tmp_path, environment=absent).require_backend()
+        except pulumi_config.BackendMissing as exc:
+            assert exc.stack == name
+            refused.add(name)
+
+    committed = {name for name in names if stack_environment.home(name) is identity.StateHome.COMMITTED}
+    in_backend = {name for name, where in identity.OPERATOR_STACKS.items() if where is identity.StateHome.BACKEND}
+    assert committed, 'nothing to exercise: no stack keeps its state committed'
+    assert in_backend, 'nothing to exercise: no operator stack keeps its state in the backend'
+    assert refused == names - committed
+
+
+@needs_age
+def test_an_empty_backend_url_is_no_backend(kit: KdbxStore, registry: escrow.Registry, tmp_path: Path) -> None:
+    """A bundle whose URL file is empty names no backend, so it is refused as no bundle is, naming the file."""
+    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
+    _ = escrow.generate(escrow.Vault.open(kit, registry), escrow.PASSPHRASE)
+    bundle = tmp_path / 'bundle'
+    bundle.mkdir()
+    _ = (bundle / 'backend-url').write_text('\n')
+    found = lifecycle.environment(kit, bundle, registry)
+    (name, *_) = (
+        name
+        for name in pulumi_config.ON_STACK_PASSPHRASE
+        if stack_environment.home(name) is not identity.StateHome.COMMITTED
+    )
+
+    assert found.url is None
+    with pytest.raises(pulumi_config.BackendMissing) as refused:
+        pulumi_config.Stack(name=name, directory=tmp_path, environment=found).require_backend()
+    assert str(bundle / 'backend-url') in str(refused.value)
+    assert 'empty' in str(refused.value)
 
 
 class _Terminal(io.StringIO):

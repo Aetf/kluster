@@ -41,15 +41,33 @@ class SlotRefused(RuntimeError):
     """A slot would not take the value — the push failed, so nothing consumed it."""
 
 
-class PassphraseMissing(SlotRefused):
-    """A stack encrypted apart, on a machine holding no passphrase to open it with.
+class MachineRefused(SlotRefused):
+    """A stack this machine cannot open at all, whatever the stack holds.
 
-    Its own type because it is the one refusal here that is about the *machine*
-    rather than about the stack's contents, and a caller that dresses a refusal
-    up in its own words has to let this one through unchanged: "the credential
-    is not in the config" and "this machine cannot read that config at all" send
-    an operator to different places.
+    Its own type because it is a refusal about the *machine* rather than about
+    the stack's contents, and a caller that dresses a refusal up in its own
+    words has to let every kind of this one through unchanged, by this type
+    rather than by each kind: "the credential is not in the config" and "this
+    machine cannot read that config at all" send an operator to different
+    places.
     """
+
+
+class PassphraseMissing(MachineRefused):
+    """A stack encrypted apart, on a machine holding no passphrase to open it with."""
+
+
+class BackendMissing(MachineRefused):
+    """A stack whose state is in the state backend, on a machine with no backend to reach it in.
+
+    Refused before `pulumi` is started (`Stack.require_backend`), because
+    `pulumi` does not refuse a run that names no backend: it answers from
+    whatever backend the caller's environment or the CLI's own login names.
+    """
+
+    def __init__(self, message: str, *, stack: str) -> None:
+        super().__init__(message)
+        self.stack: str = stack
 
 
 class StackMissing(SlotRefused):
@@ -193,6 +211,14 @@ class BackendEnvironment:
     #: a callable can print what it binds, as a `functools.partial` does.
     passphrase: Annotated[Callable[[], str] | None, Secret] = field(default=None, repr=False, compare=False)
     url: str | None = None
+    #: Why there is no `url`, where whoever built this environment looked for
+    #: one: the bundle directory it found empty and the command that fills it.
+    #: `lifecycle.environment` sets it, and `Stack.require_backend` refuses with
+    #: it a stack whose state is in the state backend. None says nothing about
+    #: an absent `url`, and such a stack is then given no backend variable.
+    #: Never set beside a `url`, which is refused on construction: the two are
+    #: one fact, that there is a backend or why there is none.
+    no_backend: str | None = None
     #: Where the operator passphrase is found, for the stacks in `APART` and
     #: no other: the acquisition chain (`stack_environment.operator_passphrase`)
     #: for a run on a workstation. A function rather than a value, so it is
@@ -208,6 +234,10 @@ class BackendEnvironment:
     #: commands that do. None looks nowhere, and `physical` is refused.
     #: Marked for `passphrase`'s reason.
     physical: Annotated[Callable[[], str] | None, Secret] = field(default=None, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self.url is not None and self.no_backend is not None:
+            raise ValueError('a backend environment holds a URL or the reason it has none, not both')
 
     def variables(self, stack: str, *, checkout: Path | None = None) -> dict[str, str]:
         """The variables a `pulumi` run against `stack` is started with.
@@ -307,6 +337,27 @@ class Stack:
     def env(self) -> Mapping[str, str]:
         """The variables a `pulumi` run against *this* stack is started with."""
         return self.environment.variables(self.name, checkout=self.directory)
+
+    def require_backend(self) -> None:
+        """Refuse this stack before `pulumi` is started where this machine has no backend to reach it in.
+
+        Which backend the stack is given is `env`'s to say
+        (`stack_environment.backend_variables`): `checkpoints/` in the checkout
+        for a stack whose state is committed, the URL otherwise. An environment
+        that names no backend for this stack, and knows why
+        (`BackendEnvironment.no_backend`), is refused here by name, where a
+        `pulumi` run would not be: started with no `PULUMI_BACKEND_URL`, it
+        answers from whatever backend the caller's environment or the CLI's
+        own login names. The stack's passphrase is found first, as `env` finds
+        it, so a machine that has neither is refused for the passphrase. No
+        `pulumi` is started here.
+        """
+        if BACKEND_URL_ENV in self.env or self.environment.no_backend is None:
+            return
+        raise BackendMissing(
+            f'the {self.name} stack keeps its state in the state backend, and {self.environment.no_backend}',
+            stack=self.name,
+        )
 
     def _pulumi(self, *args: str, stdin: str | None = None) -> str:
         return self.run([*args], cwd=self.directory, env=self.env, stdin=stdin)

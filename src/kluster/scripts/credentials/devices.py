@@ -556,7 +556,7 @@ def seal(device: Device, *, stack: pulumi_config.Stack, sealer: sealing.Sealer) 
     for field in device.fields:
         try:
             value = stack.get(field.key).strip()
-        except pulumi_config.PassphraseMissing:
+        except pulumi_config.MachineRefused:
             raise
         except pulumi_config.SlotRefused as exc:
             raise RecordMissing(
@@ -745,8 +745,9 @@ def borrow(device: Device, *, stack: pulumi_config.Stack) -> str:
     A stack that has no such key is the mid-crossing state — a checkout whose
     stack file predates the row — so the refusal names the command that fills
     it rather than passing `pulumi`'s own message on, which says to set the key
-    by hand. A machine that cannot decrypt that stack *at all* is a different
-    state with a different answer, and its refusal travels unchanged.
+    by hand. A machine that cannot open that stack *at all* -- no passphrase
+    for it, no backend to reach it in -- is a different state with a different
+    answer, and its refusal travels unchanged.
     """
     secrets = [field for field in device.fields if field.secret]
     if len(secrets) != 1:
@@ -757,9 +758,9 @@ def borrow(device: Device, *, stack: pulumi_config.Stack) -> str:
         )
     try:
         value = stack.get(secrets[0].key).strip()
-    except pulumi_config.PassphraseMissing:
+    except pulumi_config.MachineRefused:
         # Not this row's problem and not this row's answer: the machine cannot
-        # decrypt that stack at all, and the refusal already says what to run.
+        # open that stack at all, and the refusal already says what to run.
         raise
     except pulumi_config.SlotRefused as exc:
         raise RecordMissing(
