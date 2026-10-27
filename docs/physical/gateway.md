@@ -119,8 +119,9 @@ declarative/physical.md §4.
         `terminate` sends `SIGTERM` to `systemd-nspawn` itself
         instead — the container goes down with it, the unit exits, and
         the machine comes back. A firmware jump onto a newer base is
-        what would move this verb, and re-reading `systemctl
-        --version` is what would say that it had.
+        what would move this verb, and `gateway-health` reads
+        `systemctl --version` against the side of 258 the program
+        declares, so a firmware that crosses it is a finding (§1.6).
 
         **The device's shells**, measured on the device 2026-10-27, on
         UniFi OS 5.1.33 (`/usr/lib/version` reads
@@ -129,6 +130,13 @@ declarative/physical.md §4.
         dash, which runs the device's `#!/bin/sh` scripts; and root's
         login shell is `/bin/bash`, which runs a command sent over
         root's SSH session.
+
+        **`Gateway` declares this base as `DEVICE_BASE`**: the Debian
+        release, what `/bin/sh` resolves to, and the side of systemd
+        258 above. `gateway-health` reads each against the device
+        (§1.6), and a mismatch is "The device's base moved" (§3). Root's
+        login shell is not among them, since nothing here depends on
+        it, and neither is the firmware's own release.
 
         **The `machinectl` verbs below are derived from systemd's and
         s6's sources rather than measured on this device**, which is
@@ -1069,7 +1077,7 @@ each sits where the fact it compares against is declared:
 
 | Piece | Lives in | Runs | Compares the device against |
 | --- | --- | --- | --- |
-| `gateway-health` | this repository, rendered onto the device as `/data/custom/bin/gateway-health` | on demand, over the homelab host's SSH | what `Gateway` declares: its machines, the units the persistence layer delivers, the routing daemon, and the offline package cache |
+| `gateway-health` | this repository, rendered onto the device as `/data/custom/bin/gateway-health` | on demand, over the homelab host's SSH | what `Gateway` declares: its machines, the units the persistence layer delivers, the routing daemon, the offline package cache, and the base the program is written for |
 | `check-gateway` | homelab-ops, behind a yadm timer on the homelab host | daily | `gateway-health`'s verdict, the proxy's certificates as a LAN host sees them, and how fresh the copies of the backups are; it mails each finding with its playbook |
 | `gateway-backup-pull` | homelab-ops, behind a yadm timer on the homelab host | weekly | nothing: it copies the controller's autobackups into `~/.config/gw-backups`, and the resolvers' configuration until [sources-of-truth.md](../sources-of-truth.md) R2 flips |
 
@@ -1136,6 +1144,14 @@ The title is a bullet of §3, spelled as it is there. What it reads:
     otherwise become the finding. The rule for a cache that would carry
     an offline boot is the mechanism's alone, so this reading does not
     restate it.
+6.  **The base is the declared one** (§1): the major release
+    `/etc/debian_version` starts with is `DEVICE_BASE`'s Debian
+    release, `readlink -f /bin/sh` is its shell, and the release
+    `systemctl --version` names is on its side of 258. Each mismatch is
+    one finding, and so is a `systemctl` whose answer names no release.
+    The firmware's own release is not compared, nor a point release:
+    one that keeps the base moves nothing these facts decide, and a
+    finding on every vendor update would be noise.
 
 `gateway-health --certificates` reads nothing, and prints one line per
 certificate the declared proxy obtains: the proxy's address and one
@@ -2620,13 +2636,9 @@ at the registrar.
     `udm-boot.service` back into place first (§1.2), and it restores
     the rest. Fallback if host-networking nspawn misbehaves
     post-update: the unifios-utilities apt pattern (architecture.md
-    §5.3). Then read the base the update left, `cat
-    /etc/debian_version` and `readlink -f /bin/sh`. A Debian release
-    other than 11 moves `mise.toml`'s `http:dash` pin to that
-    release's dash ([operations.md](../operations.md) §1). A `/bin/sh`
-    other than dash is not a version move: the device's `#!/bin/sh`
-    scripts no longer run under dash, so the shell the suite runs them
-    under (`tests/device_shell.py`) is replaced, and the pin with it.
+    §5.3). An update that moved the base the program is written for is
+    a finding of `gateway-health`'s next reading, "The device's base
+    moved" below.
 -   **UDM replaced** — trigger: hardware failure/RMA. Restore from the
     UniFi autobackup (the copies under `~/.config/gw-backups/unifi/` on
     the homelab host, which `gateway-backup-pull` keeps, §1.6), re-run the
@@ -2684,6 +2696,21 @@ command runs on the device unless the entry says otherwise.
     afterward is the pass. A refresh that keeps failing on a download
     is the case §1.2 describes for an archive that no longer serves the
     installed version.
+-   **The device's base moved** — trigger: `gateway-health` reports
+    `/etc/debian_version`, `/bin/sh` or `systemd` against `DEVICE_BASE`
+    (§1.6). The finding says what the device reads; what depends on it
+    moves first, by hand:
+    -   **Another Debian release** moves `mise.toml`'s `http:dash` pin
+        to that release's dash ([operations.md](../operations.md) §1).
+    -   **A `/bin/sh` other than dash** is not a version move: the
+        device's `#!/bin/sh` scripts no longer run under dash, so the
+        shell the suite runs them under (`tests/device_shell.py`) is
+        replaced, and the pin with it.
+    -   **A systemd on the other side of 258** sends §1's paragraph
+        on `machinectl terminate` back to be measured again.
+    -   **Then the declaration moves**: `DEVICE_BASE` in
+        `kluster.components.gateway` takes what the device reads, and
+        the `physical` push that delivers it clears the finding.
 -   **The check did not run** — trigger: `check-gateway`'s session to
     the device failed, `gateway-health` is missing, or it exited non-zero
     with no output. A device that does not answer is "ZeroTier container

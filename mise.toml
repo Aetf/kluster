@@ -93,8 +93,9 @@ jq = "1.8.2"
 # a `wait` fix the 0.5.11 line took only in 0.5.11.3, whose Arch build links
 # libedit beside the C library. The pin follows the device's base rather than
 # dash's newest release, so a firmware jump onto a newer Debian moves it to
-# that base's dash by hand (docs/operations.md §1, the gateway's dash row,
-# says what moves it). dash publishes source alone, and conda-forge's
+# that base's dash by hand, once `gateway-health`'s reading of the device's
+# base reports the jump (docs/operations.md §1, the gateway's dash row, says
+# what moves it). dash publishes source alone, and conda-forge's
 # `dash` is a different program, so this is Arch Linux's build of the release,
 # from the Arch Linux Archive, which keeps the packages Arch has shipped at
 # fixed URLs. The package is a `tar.zst` holding the binary at

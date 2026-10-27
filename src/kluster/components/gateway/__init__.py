@@ -65,10 +65,13 @@ from putils import Component
 __all__ = (
     'BACKUP_PULL_PACKAGES',
     'DELIVERED_UNITS',
+    'DEVICE_BASE',
     'HEALTH_PROGRAM',
     'PLAYBOOKS',
+    'SYSTEMD_TERMINATE_RELEASE',
     'ZEROTIER_CLI',
     'CaddyService',
+    'DeviceBase',
     'Gateway',
     'OverlayDaemon',
     'Playbooks',
@@ -109,6 +112,44 @@ ZEROTIER_CLI = '/usr/sbin/zerotier-cli'
 
 @final
 @dataclass(frozen=True)
+class DeviceBase:
+    """The base under the vendor's firmware that this program is written for (physical/gateway.md §1).
+
+    These are the facts a firmware update can move that something here
+    depends on, and nothing else about the device: a release that keeps them
+    moves nothing, so the vendor's own release string is not one of them. The
+    health reading compares each with the device, and a mismatch is a finding
+    whose playbook says what depends on it and what to move; moving the
+    declaration once that is done is what clears the finding.
+    """
+
+    #: The Debian major release, which `/etc/debian_version` starts with: the
+    #: release whose dash `mise.toml`'s `http:dash` pin follows.
+    debian_release: str
+    #: What `readlink -f /bin/sh` resolves to: the shell the device runs its
+    #: `#!/bin/sh` scripts under, which the suite's shell for their templates
+    #: stands in for (`tests/device_shell.py`).
+    shell: str
+    #: Whether the device's systemd is `SYSTEMD_TERMINATE_RELEASE` or later,
+    #: whose `machinectl terminate` signals `systemd-nspawn` instead of stopping
+    #: the machine's unit: the side of that release physical/gateway.md §1's
+    #: account of a machine's restarts is written for.
+    terminate_signals_nspawn: bool
+
+
+#: The systemd release from which `machinectl terminate` signals
+#: `systemd-nspawn` rather than stopping the machine's unit (physical/gateway.md
+#: §1).
+SYSTEMD_TERMINATE_RELEASE = 258
+
+#: The device's base, as read on the device (physical/gateway.md §1). It moves
+#: last in §3's "The device's base moved", once what depends on it has moved:
+#: moved alone, it silences the finding and leaves the dash pin behind.
+DEVICE_BASE = DeviceBase(debian_release='11', shell='/bin/dash', terminate_signals_nspawn=False)
+
+
+@final
+@dataclass(frozen=True)
 class Playbooks:
     """The playbook each finding of the health reading names: a bullet title of physical/gateway.md §3.
 
@@ -123,6 +164,7 @@ class Playbooks:
     routing: str = 'The routing daemon not running'
     overlay: str = 'ZeroTier container down on the UDM'
     packages: str = 'The offline cache would not carry an offline boot'
+    base: str = "The device's base moved"
 
 
 PLAYBOOKS = Playbooks()
@@ -144,6 +186,13 @@ class _HealthParams:
     packages_script: str
     packages_check: str
     certificates: tuple[str, ...]
+    root: str
+    debian_version: str
+    bin_sh: str
+    debian_release: str
+    shell: str
+    systemd_release: int
+    terminate_signals_nspawn: bool
     playbooks: Mapping[str, str]
 
 
@@ -153,6 +202,7 @@ def health_program(
     resolvers: Sequence[ResolverService],
     overlay_daemon: OverlayDaemon,
     packages_script: str = on_boot_path(PACKAGES_SCRIPT),
+    root: str = '',
 ) -> str:
     """The executable that reads the device against the declaration, rendered from the declaration.
 
@@ -163,6 +213,10 @@ def health_program(
     the mechanism's alone. `packages_script` defaults to where the boot chain
     holds that script, and is a parameter so the executable can be run against
     a tree that is not a device.
+
+    The base is `DEVICE_BASE`, read off `/etc/debian_version`, `/bin/sh` and
+    `systemctl --version`. `root` is the tree those paths are read under, empty
+    for the device's own, and a parameter for the same reason.
 
     `--certificates` lists one name per site block of the proxy's `Caddyfile`,
     each block being one wildcard certificate: the controller's vhost, and the
@@ -187,6 +241,13 @@ def health_program(
             packages_script=shlex.quote(packages_script),
             packages_check=shlex.quote(f'{PACKAGES_SCRIPT} --check'),
             certificates=tuple(shlex.quote(f'{caddy.service.address} {name}') for name in names),
+            root=shlex.quote(root),
+            debian_version=shlex.quote(f'{root}/etc/debian_version'),
+            bin_sh=shlex.quote(f'{root}/bin/sh'),
+            debian_release=shlex.quote(DEVICE_BASE.debian_release),
+            shell=shlex.quote(DEVICE_BASE.shell),
+            systemd_release=SYSTEMD_TERMINATE_RELEASE,
+            terminate_signals_nspawn=DEVICE_BASE.terminate_signals_nspawn,
             playbooks={field: shlex.quote(title) for field, title in asdict(PLAYBOOKS).items()},
         ),
     )
