@@ -12,15 +12,18 @@ CLI is not installed, which is neither CI nor a workstation with `mise`.
 from __future__ import annotations
 
 import ast
+import dataclasses
 import inspect
 import json
 import os
 import re
 import shutil
+import socket
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import pytest
 from credentials_command_tree import named_leaves
@@ -246,6 +249,79 @@ def test_the_real_cli_takes_a_secret_on_standard_input(live_stack: pulumi_config
     assert live_stack.get(QUALIFIED_KEY) == SECRET
 
 
+def test_a_stack_not_yet_made_anywhere_holds_no_key(recorded: tuple[pulumi_config.Stack, RecordedPulumi]) -> None:
+    stack, _ = recorded
+
+    assert not stack.has(QUALIFIED_KEY)
+
+
+def test_a_stack_the_backend_lacks_beside_its_committed_file_is_refused_rather_than_answered(
+    recorded: tuple[pulumi_config.Stack, RecordedPulumi],
+) -> None:
+    """The committed file is the stack's configuration, keys and all; a backend without the stack says nothing of it."""
+    stack, _ = recorded
+    _ = (stack.directory / f'Pulumi.{STACK}.yaml').write_text(f'config:\n  {QUALIFIED_KEY}:\n    secure: v1:AAAA\n')
+
+    with pytest.raises(pulumi_config.StackMissing) as refused:
+        _ = stack.has(QUALIFIED_KEY)
+    assert refused.value.stack == STACK
+
+
+@real_cli
+def test_the_real_cli_lists_a_key_the_stack_holds_and_no_other(live_stack: pulumi_config.Stack) -> None:
+    """`has` answers from the listing, a qualified key and one in the project's namespace alike.
+
+    A stack not made yet -- not in the backend, no stack file beside
+    `Pulumi.yaml` -- holds nothing, and says so rather than refusing; once it
+    holds a secret and a plain value, each is listed
+    under the name `get` reads it by, and a key nobody wrote is not.
+    """
+    assert not live_stack.has(QUALIFIED_KEY)
+
+    live_stack.ensure()
+    live_stack.set_secret(QUALIFIED_KEY, SECRET)
+    live_stack.set('anIdentifier', 'account-1')
+
+    assert live_stack.has(QUALIFIED_KEY)
+    assert live_stack.has('anIdentifier')
+    assert not live_stack.has('aKeyNobodyWrote')
+
+    # Asked under a passphrase that opens nothing, the answer is the same: the
+    # question decrypts no value, so it needs no credential to answer.
+    wrong = pulumi_config.Stack(
+        name=live_stack.name,
+        directory=live_stack.directory,
+        environment=dataclasses.replace(live_stack.environment, passphrase=lambda: 'not-the-passphrase'),
+    )
+    with pytest.raises(pulumi_config.SlotRefused):
+        _ = wrong.get(QUALIFIED_KEY)
+    assert wrong.has(QUALIFIED_KEY)
+
+
+@real_cli
+def test_the_real_cli_refuses_the_question_where_the_backend_does_not_answer(live_stack: pulumi_config.Stack) -> None:
+    """A backend that does not answer is never an answer that the stack holds no key.
+
+    The port is bound and never listened on, so a connection to it is refused
+    for as long as this case holds it, and nothing else can take it meanwhile.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as unanswering:
+        unanswering.bind(('127.0.0.1', 0))
+        port = cast('tuple[str, int]', unanswering.getsockname())[1]
+        stack = pulumi_config.Stack(
+            name=live_stack.name,
+            directory=live_stack.directory,
+            environment=pulumi_config.BackendEnvironment(
+                passphrase=lambda: 'probe-passphrase',
+                url=f'postgres://operator@127.0.0.1:{port}/pulumi_state?sslmode=disable',
+            ),
+        )
+
+        # The CLI's own words for it, which the read's refusal carries on.
+        with pytest.raises(pulumi_config.SlotRefused, match='connection refused'):
+            _ = stack.has(QUALIFIED_KEY)
+
+
 @real_cli
 @SIDES
 def test_a_failing_invocation_names_the_command(side: Side, tmp_path: Path) -> None:
@@ -304,6 +380,7 @@ STARTING_PULUMI: Mapping[str, Callable[[pulumi_config.Stack], object]] = {
     'exists': lambda stack: stack.exists(),
     'ensure': lambda stack: stack.ensure(),
     'get': lambda stack: stack.get(QUALIFIED_KEY),
+    'has': lambda stack: stack.has(QUALIFIED_KEY),
     'holds': lambda stack: stack.holds(QUALIFIED_KEY, SECRET),
     'outputs': lambda stack: stack.outputs(),
     'set': lambda stack: stack.set(QUALIFIED_KEY, 'a-plain-value'),

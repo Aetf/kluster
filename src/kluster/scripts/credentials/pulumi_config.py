@@ -29,6 +29,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, cast
 
+from ruamel.yaml import YAML
+
 from kluster.conventions import identity
 from kluster.lib import pulumi_cli, stack_environment
 from kluster.lib.pulumi_cli import Runner
@@ -420,6 +422,67 @@ class Stack:
 
     def get(self, key: str) -> str:
         return self._pulumi('config', 'get', key, '--stack', self.name).strip()
+
+    def has(self, key: str) -> bool:
+        """Whether the backend answers that this stack's configuration holds `key`.
+
+        The question a caller asks after `get` was refused, to tell "the stack
+        holds no such key" from every other reason a read fails, by the stack's
+        own answer rather than by the wording of `pulumi`'s refusal. A stack
+        the backend holds lists its keys in `pulumi config --json`. Without
+        `--show-secrets` that listing decrypts nothing and prints no secret's
+        value -- a secret is `{"secret": true}` and no more -- so it answers
+        under any passphrase, and asking it neither needs nor prints a
+        credential.
+
+        A stack the backend does not hold holds no key only where the checkout
+        holds no `Pulumi.<stack>.yaml` either, the state of a stack not yet
+        made. A stack file is the committed configuration, keys and all, so a
+        backend without the stack says nothing about what that file holds --
+        an appliance rebuilt before its restore, or a bundle naming another --
+        and that is refused (`StackMissing`) rather than answered.
+
+        Neither run answers without the backend, so a backend that does not
+        answer -- a name that resolves nowhere, a connection refused -- is
+        refused here, as `get` was, and is never an answer of False. A host
+        that drops the connection instead runs out `pulumi_cli.TIMEOUT` on the
+        read, before this is asked.
+
+        The listing names every key in full, `<namespace>:<name>`, while `get`
+        takes a key with no namespace as one in the project's own, the `name:`
+        of `Pulumi.yaml`; `key` is matched in either of those two spellings.
+        """
+        if not self.exists():
+            if (self.directory / f'Pulumi.{self.name}.yaml').exists():
+                raise StackMissing(
+                    f'the state backend holds no {self.name} stack, though the checkout holds '
+                    f'Pulumi.{self.name}.yaml, so it has said nothing about what that file holds: a backend '
+                    'not yet restored, or another one than the one the stack was made in',
+                    stack=self.name,
+                )
+            return False
+        printed = self._pulumi('config', '--json', '--stack', self.name)
+        try:
+            listing: object = json.loads(printed or '{}')
+        except ValueError as exc:
+            raise SlotRefused(f'`pulumi config --json` did not print JSON: {printed[:120]!r}') from exc
+        if not isinstance(listing, dict):
+            raise SlotRefused(f'`pulumi config --json` printed a {type(listing).__name__}, not an object of keys')
+        return self._qualified(key) in cast('dict[str, object]', listing)
+
+    def _qualified(self, key: str) -> str:
+        """`key` with its namespace, the project's own where it names none, as `pulumi config get` reads it."""
+        if ':' in key:
+            return key
+        # ruamel.yaml ships no annotation for what `load` takes or returns; the
+        # answer is narrowed below, as any parsed document is.
+        project: object = YAML(typ='safe').load(  # pyright: ignore[reportUnknownMemberType]
+            (self.directory / 'Pulumi.yaml').read_text()
+        )
+        name = cast('dict[str, object]', project).get('name') if isinstance(project, dict) else None
+        if not isinstance(name, str) or not name:
+            raise SlotRefused(f'the Pulumi.yaml in {self.directory} names no project, so {key} has no namespace')
+        return f'{name}:{key}'
 
     def holds(self, key: str, value: str) -> bool:
         """Whether `key` already holds `value`, stored as a secret.

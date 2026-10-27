@@ -911,7 +911,11 @@ the mints that push their own carriers — and each takes it out of the
 `github` stack's configuration rather than from a copy of its own. One
 credential, one home — which is also why those commands need the state
 backend reachable and the passphrase in hand, as every other command
-that reads a config secret does.
+that reads a config secret does. Only an answer that the token is absent
+is refused as one to record: a stack that holds no such key, or a stack
+that neither the backend nor the checkout holds. A backend that does not
+answer, or one that holds no stack the checkout commits a file for, is
+refused in the `pulumi` CLI's own words.
 
 **Two more are made in a console and read by a workflow.** Each
 single-purpose GitHub App has a private key generated on its own settings
