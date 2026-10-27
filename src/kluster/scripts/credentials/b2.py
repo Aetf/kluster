@@ -70,6 +70,13 @@ class Unconfined(CredentialRejected):
         self.key_id: str = key_id
 
 
+#: Version 3 of B2's native API, which is what `Session.authorize_confined`
+#: needs: it learns a confined key's bucket from `apiInfo.storageApi.bucketId`,
+#: a field v4's answer does not carry. Every key this module authorizes is the
+#: account's master key or one it mints itself, on v3 `b2_create_key` with a
+#: single `bucketId` or none, which v3 authorizes. A key a stack mints with
+#: `bucket_ids` is a multi-bucket key, which B2 authorizes on v4 alone
+#: (`state-dump.sh`).
 AUTHORIZE_URL = 'https://api.backblazeb2.com/b2api/v3/b2_authorize_account'
 
 #: How many keys to ask for per `b2_list_keys` page. B2 caps a single Class C
