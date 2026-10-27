@@ -92,19 +92,35 @@ starts it on an empty change on top of `main`. It errors on a missing
 parent rather than creating one, and `.claude/workspaces/` is ignored
 rather than tracked, so the `mkdir` is not optional in a fresh clone.
 
-`mise trust` is not optional either, and skipping it is what the first
-gate command in a new workspace fails on. mise keys trust by absolute
-path and shares it only across git **worktrees** — a `jj` workspace is
-not one, so the workspace's `mise.toml` is untrusted at its new path
-even though the primary checkout trusts the very same tracked file, and
-every `mise x uv -- uv run …` — the form AGENTS.md requires for all
-Python tooling — refuses with `Config files … are not trusted` until
-`mise trust` has been run once inside the workspace. It grants nothing
-the primary checkout does not already have: for the `-r main` form
-above, `jj workspace add` puts there the same `mise.toml` the primary
-already trusts. A workspace started on some other revision is trusting
-that revision's `mise.toml`, which is a judgment about the branch
-rather than a formality.
+**The workspace is a git worktree of the primary.** `jj workspace add`
+from `jj` 0.46.0, the release `mise.toml` pins, makes the new workspace
+a git worktree when it runs from a colocated workspace, as the primary
+is: it prints `Created Git worktree for the new workspace.`, and the
+workspace's `.git` is a file naming `.git/worktrees/<name>` in the
+primary. `git worktree list` in the primary lists every such workspace
+at its `@-`, with a detached `HEAD`. The rest of this section is written
+for worktree workspaces; a workspace that is not one has a paragraph of
+its own below.
+
+**mise needs no `mise trust` in a worktree workspace.** A command that
+runs project-defined behavior — `mise x`, `mise run`, `mise install` —
+trusts its active config by itself (from mise 2026.8.9, outside mise's
+paranoid mode), so `mise x uv -- uv run …`, the form AGENTS.md requires
+for all Python tooling, never refuses for want of trust. And mise
+shares trust across git worktrees (from mise 2026.7.5): a config inside
+a linked worktree is trusted when the same path in the main checkout
+is, so the commands that do not trust by themselves — `mise which`,
+`mise env` — answer in the workspace as they do in the primary, and the
+`mise trust` in the form above reports
+`No untrusted config files found.` That step is for the workspace that
+is no worktree (below). Trusting grants nothing the primary checkout
+does not already have: for the `-r main` form above, `jj workspace add`
+puts there the same `mise.toml` the primary already trusts. A workspace
+started on some other revision is trusting that revision's
+`mise.toml`, which is a judgment about the branch rather than a
+formality, and both trusts make it without asking: `mise x` trusts
+whatever config it runs under, and a worktree's trust follows the path
+rather than the content.
 
 **What AGENTS.md repeats from this section is decided by whether the
 step's failure routes an agent here.** AGENTS.md duplicates a form from
@@ -116,13 +132,16 @@ this section, and AGENTS.md carries at most the step's name and what it
 is for. That is the split as it stands. The push failures below exit
 zero and push nothing, and the prose checker reads a materialized
 conflict as misspellings rather than as a conflict, so no error routes
-an agent here and AGENTS.md carries both forms whole. The trust failure
+an agent here and AGENTS.md carries both forms whole. `jj workspace
+forget` is the same kind: it exits zero printing `Removed Git worktree
+for …` and leaves the directory standing, so AGENTS.md carries the
+removal's two commands as well. The trust failure
 is the opposite case: `mise ERROR Config files in … are not trusted.`
 followed by ``Trust them with `mise trust`.`` — fail-closed, and the
 remedy in the text — so AGENTS.md names `mise trust` in its setup
-sentence with the one clause saying what it is for, that `mise x uv`
-refuses without it, and the rest — what the refusal prints, why a
-workspace is untrusted, what trusting grants — lives here alone.
+sentence with the one clause saying when it matters, and the rest —
+what the refusal prints, which commands meet it, why a worktree
+workspace never does, what trusting grants — lives here alone.
 
 **Scratch belongs under the workspace's own `.claude/`.** A workspace
 root is a checkout, so a file written there is a repository path and
@@ -154,10 +173,17 @@ No workspace outlives the dispatch that created it:
 -   An agent that finishes **without** a pull request removes its own
     workspace before it reports — `jj workspace forget <name>`, run
     **from the primary workspace**, and then `rm -rf <path>`. Two
-    commands, because `forget` deliberately leaves the directory alone;
-    from the primary, because `forget` run inside its own workspace
-    succeeds with a warning and leaves the agent standing in the
-    directory it is about to remove.
+    commands, because `forget` removes the workspace's git worktree —
+    it prints `Removed Git worktree for …`, and the `.git` file goes
+    with git's record of it — and leaves the directory, its files and
+    its `.jj/` on disk; from the primary, because `forget` run inside
+    its own workspace succeeds with a warning and leaves the agent
+    standing in the directory it is about to remove. `jj workspace
+    remove <name>` does both in one command, but it refuses a stale
+    workspace with `The working copy is stale` and removes nothing, and
+    stale is the state a merged branch's workspace is in once the
+    dispatcher has fetched (below), so the two-command form is the one
+    that works in every case.
 -   An agent that **opened** a pull request leaves the workspace
     standing and names its path in the report. Removing it is the
     merging dispatcher's closing step, beside the label and the card,
@@ -169,8 +195,16 @@ Neither `/tmp` nor the home directory keeps a dead workspace. One whose
 work is merged or abandoned is a trap for the next agent, which can
 read a stale copy of a file it is about to edit. `jj workspace list` is
 the census that shows them, a directory that was deleted without being
-forgotten included: that one lists with no path, and `jj workspace
-forget` clears it.
+forgotten included: that one lists under its recorded path like any
+other, with nothing to say the directory is gone, and `jj workspace
+forget` clears it. A worktree workspace deleted that way also leaves
+git's record of it, which `git worktree list` marks `prunable` and
+which `forget` leaves in place once the directory is gone. Until
+`git worktree prune` in the primary removes that record,
+`jj workspace add` at that path fails with `is a missing but already
+registered worktree`, exits 1, and leaves an empty directory there. So
+clearing such a workspace is `jj workspace forget <name>` and then
+`git worktree prune`.
 
 **A builder never fetches; the dispatcher fetches and rebases.** A
 branch that opens behind `main` is the expected case, because bringing
@@ -255,30 +289,79 @@ the head SHA the report names (§4), **read with `jj` after the push**:
 
     jj log -r <branch> --no-graph -T commit_id
 
-**Not `git rev-parse HEAD`, and the reason generalizes: inside a
-workspace, git answers about the primary checkout wherever the answer
-depends on a working copy, on `HEAD`, or on a path resolved relative to
-the current directory.** An added workspace has no git repository of its
-own and sits inside the colocated primary, so git walks up — the `jj`
-form, or a tool that consults no git repository, is what to use instead.
-Each instance answers confidently about the wrong directory and none of
-them complains: `git rev-parse HEAD` returns `main` rather than the
-workspace's head; `git status --porcelain` describes the primary's tree;
-`git apply -p1` resolves a diff's paths against the primary's root,
-drops everything outside the current directory, and exits zero having
-applied nothing, where `patch -p1` applies it. `git show <sha>` and
-`git diff <a>..<b>` answer correctly **when no path is named**, because
-every workspace shares the one object store. With one named, they fail
-the same silent way: adding `-- <path>` makes `git diff <a>..<b>` print
-nothing and exit zero, and `git show <sha>` print its header and no
-diff, because the path is read relative to the workspace directory as
-git sees it, and `-- ':(top)<path>'` is what answers from in there.
-Depending on none of those does not by itself make a command safe:
-`git ls-tree <sha>` and `git grep <pat> <sha>` name no path and still
-answer about the current directory, because git applies the prefix
-itself, and `--full-tree` and `:(top)` are what restore them. A
-reviewer is the most exposed to all of it (§3.2), since an empty answer
-reads as an absent one.
+**Not `git rev-parse HEAD`: it answers for `@-`, not for the branch.**
+`jj` sets a worktree workspace's detached `HEAD` to its `@-` whenever it
+updates that working copy. The two agree wherever the bookmark sits on
+`@-`, which is the healthy state and is equally the work left in `@`,
+where the `set` put the branch on the commit below the work. They part
+where the bookmark was left where it was: `HEAD` names the new work
+while the branch, and the forge, still hold the commit before it. A
+rewrite of `@-` from another workspace that leaves its tree alone, such
+as a `jj describe`, leaves `HEAD` on the old commit until a `jj`
+command there next updates its working copy, such as a `jj describe` or
+a `jj new`; a snapshot does not. So `HEAD` matching the branch is no
+health check: it matches on the empty pull request as it does on a
+healthy push, and only the `jj log` before the push tells the two
+apart.
+
+**Inside a worktree workspace, git answers about the workspace.** It
+has a `HEAD` and an index of its own, so `git rev-parse --show-toplevel`
+names the workspace, `git status` and `git diff` describe its working
+copy against `@-`, and `gh` reaches the primary's remotes through the
+worktree and infers the repository as it does in the primary. A path
+resolves against the current directory, with the workspace root as the
+top of the tree, as in any checkout: from a subdirectory,
+`git show <sha> -- <path>` with a path written from the root prints
+nothing and exits 0, `git ls-tree <sha>` lists only that subdirectory,
+and `-- ':(top)<path>'` and `--full-tree` are what reach the top. A
+reviewer is the most exposed to that (§3.2), since an empty answer
+reads as an absent one. The other side of git answering about the
+workspace is that it acts on the workspace's files behind `jj`'s back:
+`git checkout HEAD -- <file>` discards an uncommitted change in it, and
+`git stash` takes the change off disk. The `jj` form is still the one to
+use for anything about commits.
+
+**A workspace that is no git worktree**, one whose directory holds no
+`.git` and which `git worktree list` in the primary does not name, is
+one added with `--no-colocate` or `git.colocate = false`, added from a
+workspace that is itself no worktree, converted with
+`jj git colocation disable`, or made by a `jj` before 0.46. It has no
+git repository of its own and sits inside the
+colocated primary, so git walks up and answers about the primary
+checkout wherever the answer depends on a working copy, on `HEAD`, or
+on a path resolved relative to the current directory — the `jj` form,
+or a tool that consults no git repository, is what to use instead. Each
+instance answers confidently about the wrong directory and none of them
+complains: `git rev-parse HEAD` returns the primary's head rather than
+the workspace's; `git status --porcelain` describes the primary's tree;
+`git checkout HEAD -- <file>` fails with `did not match any file(s)
+known to git` and leaves the file as it was. A command that writes the
+working tree and names no path acts on the primary's instead:
+`git stash` takes the primary's uncommitted change into a stash, and
+reports `No local changes to save` only while the primary is clean, and
+`git reset --hard` discards that change. Each exits 0, the operator's
+work leaves the primary's disk, and the primary's next `jj` snapshot
+records it gone. `git stash pop` there brings back what `git stash`
+took. After `git reset --hard`, the op-log read-back of
+[testing.md](testing.md) §6 returns only what a snapshot taken by a
+`jj` command in the primary recorded before the reset, since `jj`
+commands in other workspaces never snapshot the primary, and a change
+written there since the last such command is gone. `git apply -p1` of a git-format diff
+(`diff --git` headers, which `jj diff --git` writes) resolves its paths
+against the primary's root, drops everything outside the current
+directory, and exits zero having applied nothing, where `patch -p1`
+applies it. `git show <sha>` and `git diff <a>..<b>` answer correctly
+when no path is named, because every workspace shares the one object
+store; adding `-- <path>` makes both print nothing and exit zero,
+because the path is read relative to the workspace directory as git
+sees it, and `git ls-tree <sha>` and `git grep <pat> <sha>` answer about
+the current directory with no path named at all — `:(top)` and
+`--full-tree` restore each. mise keys trust by such a workspace's own
+path, so `mise which` and `mise env` there refuse with `Config files in
+… are not trusted.` until the form's `mise trust` has run once inside
+it, or a `mise x` there has trusted it implicitly. This paragraph, and
+the `mise trust` step with it, go when every workspace that
+`jj workspace list` names is in `git worktree list`.
 
 **Whether a change merged is the forge's answer, not the repository's.**
 This repository rebase-merges, so a merged change's commits keep their
@@ -683,8 +766,8 @@ merge can report once:
     or extended by hand. That is what the dispatcher compares the pull
     request's head against before merging and before its own rebase (§2
     rule 8), and it is why `git rev-parse HEAD` is not used inside a
-    workspace, where it answers about the primary checkout instead
-    (§1.2).
+    workspace, where it answers for the workspace's `@-` rather than
+    for the branch (§1.2).
 -   **Findings become issues, not comments in passing.** An agent's
     unpredicted discovery — a mismatch, a dead mechanism, a stale
     document — is filed as its own issue, labeled and put on a

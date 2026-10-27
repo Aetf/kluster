@@ -861,9 +861,12 @@ jj file show -r main <path> > .claude/mutation/back && \
 **The other correct answer is to commit first.** Describe the change and
 `jj new`, so that the work sits at `@-` and the mutation is alone in
 `@`. **`jj new` is the stash here**: `jj` has no stash of its own, and
-`git stash` inside a workspace reports on the *primary's* tree — `No
-local changes to save`, exit 0, the workspace's file untouched and its
-real change still sitting in it, which is the setup for losing it.
+`git stash` is not one. A workspace is a git worktree — every one the
+form in [dispatch.md](dispatch.md) §1.2 makes — so `git stash` there
+takes the real change off disk along with the mutation, into a stash
+`jj` knows nothing about, and exits 0, which is the setup for losing
+it. A workspace that is no worktree answers differently (dispatch.md
+§1.2).
 
 Only after that `jj new` is `jj restore <file>` a revert of the mutation
 alone; run against a `@` that holds the real change as well, it takes
@@ -878,7 +881,8 @@ copy *is* `@`, restores the file from itself: it prints
 was. That output reads as "the file already matched" rather than as
 "the revert did nothing", which is the whole difficulty. It is the trap
 below with the sign reversed — `git checkout HEAD -- <file>` destroys
-silently, this changes nothing silently, and either way the operator
+an uncommitted round silently wherever git sees the checkout, this
+changes nothing silently, and either way the operator
 believes a revert happened and reads the next run as evidence about the
 real change. So the source has to be a commit other than the one holding
 the mutation, and **after any revert, verify the file rather than the
@@ -888,23 +892,30 @@ success. In a mutation round the run itself carries the tell — a failure list 
 the test which should have gone green is the no-op showing through — and
 a round read as pass/fail counts alone has nothing that disagrees.
 
-**`git checkout HEAD -- <file>` is the trap, and it does not spring
-where a builder here would expect.** In a checkout git can see — the
-colocated primary, or a plain clone — it exits 0 and discards the real
-change along with the mutation, with no prompt. What makes that hard to
-catch is the state it leaves behind: the file stops appearing as
-modified and `git status --porcelain` comes back empty, which reads as
-*committed* rather than *gone*. There is no undo.
+**`git checkout HEAD -- <file>` is the trap.** In a checkout git can
+see — the colocated primary, a plain clone, or a `jj` workspace, which
+is a git worktree ([dispatch.md](dispatch.md) §1.2) — it exits 0 and
+puts the file back to
+`HEAD` with no prompt, and in a `jj` checkout `HEAD` is `@-`: with the
+round uncommitted, that discards the real change along with the
+mutation. What makes that hard to catch is the state it leaves behind:
+the file stops appearing as modified and `git status --porcelain` comes
+back empty, which reads as *committed* rather than *gone*. git has no
+undo for it; what a `jj` snapshot recorded before it is still readable
+from the operation log (below).
 
-Inside a `jj` workspace the same command is instead **inert**. The
-workspace has no git repository of its own, so git walks up to the
-colocated primary ([dispatch.md](dispatch.md) §1.2) — and that walk
-re-roots the `pathspec` as well as `HEAD`. `f.txt` resolves to
-`.claude/workspaces/<name>/f.txt`, which is inside an ignored directory
-and in no tree git knows, so the command fails with `error: pathspec
-'f.txt' did not match any file(s) known to git`, exits 1, and changes
-nothing. Read that exit 1 as "nothing happened", not as evidence that
-something was lost.
+**So no revert here goes through git.** With the round committed, the
+same `git checkout HEAD -- <file>` reverts the mutation alone, because
+`HEAD` is then the round's commit; with the round uncommitted it
+destroys the round; and a workspace that is no worktree answers
+differently again (dispatch.md §1.2). `git checkout` and `git stash`
+act on the workspace's files behind `jj`'s back, and what they do turns
+on state the command line does not show. The forms above answer the
+same in every case: the rename from the pristine copy,
+which reads no revision at all and is right with the round committed or
+not, and, with the round committed, `jj restore <file>` —
+`jj restore --from @- <file>` is the same source spelled out — which
+reads `jj`'s own commit rather than git's view of it.
 
 **The bare `jj restore <path>` has a third failure of its own, and it
 belongs to the fix cycle.** The source it defaults to is `@-`, so what

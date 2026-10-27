@@ -226,9 +226,11 @@ TRAVELS = (
 def test_gitignore_keeps_what_stays_on_the_machine_and_lets_the_checkpoint_through(tmp_path: Path, path: str) -> None:
     """Evaluated in a repository of its own, with no global or system configuration.
 
-    Inside a `jj` workspace git walks up to the primary checkout and re-roots
-    every path (framework/dispatch.md §1.2), and a user's own excludes file
-    would answer beside this one.
+    A checkout's own git answers with more than this file: from a workspace
+    that is no git worktree it walks up to the primary checkout and re-roots
+    every path (framework/dispatch.md §1.2), and in any checkout the
+    repository's `info/exclude` and a user's own excludes file answer beside
+    this one.
     """
     env = {
         'PATH': os.environ['PATH'],
