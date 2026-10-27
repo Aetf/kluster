@@ -28,6 +28,7 @@ import ipaddress
 import re
 import shlex
 import shutil
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import b2_api
@@ -63,6 +64,7 @@ from kluster.scripts.credentials import (
     oci_iam,
     pki,
     pulumi_config,
+    sealing,
 )
 
 # Aliased: `slots` is the name a fixture below gives the workstation's
@@ -1217,7 +1219,7 @@ def test_the_state_backend_rows_refuse_a_stack_with_no_checkpoint_before_anythin
 # The environment a `credentials` run builds finds each passphrase only when a
 # stack first asks for it (`lifecycle.environment`), so a row that minted
 # first would meet a passphrase this machine cannot give with its new
-# credential already live. Each row that calls `_passphrase_in_hand` is run
+# credential already live. Each row that calls `_stack_in_reach` is run
 # here on an environment that refuses that stack's passphrase: the fake
 # platform holds nothing new afterwards, `pulumi` was never run, and the
 # refusal is the one the stack's environment gives on its own, undressed.
@@ -1369,6 +1371,174 @@ def test_the_appliance_b2_row_with_no_operator_passphrase_mints_nothing(
     assert b2_api_fake.named(b2.STATE_BACKEND_MANAGEMENT.name) == []
     assert runner.invocations == []
     _refused_as_its_stack_is(refused.value, slot)
+
+
+# -- a stack's backend, found before the mint ---------------------------------
+#
+# A machine with no client bundle has no backend for a stack whose state is in
+# the state backend, and a `pulumi` run started with none does not refuse: it
+# answers from whatever backend the caller's environment names. So each row
+# that mints into such a stack is run here on the environment a `credentials`
+# run builds on that machine, with every passphrase recoverable: the fake
+# platform holds nothing new afterwards, `pulumi` was never run, and the
+# refusal is the one the stack gives when its backend is asked for.
+
+
+def _with_no_bundle(kit: KdbxStore, tmp_path: Path) -> pulumi_config.BackendEnvironment:
+    """The environment a `credentials` run builds over `kit` on a machine with no client bundle.
+
+    The escrow holds the stack passphrase and `physical`'s, so a refusal can
+    only be the backend's.
+    """
+    registry = escrow.Registry.open(tmp_path / 'escrow')
+    _ = escrow.init(kit, registry)
+    vault = escrow.Vault.open(kit, registry)
+    for label in (escrow.PASSPHRASE, escrow.PHYSICAL_PASSPHRASE):
+        _ = escrow.generate(vault, label)
+    return lifecycle.environment(kit, tmp_path / 'no-bundle', registry)
+
+
+def _refused_for_its_backend(refused: BaseException, stack: pulumi_config.Stack, tmp_path: Path) -> None:
+    """`refused` is the refusal `stack` gives when its backend is asked for, naming the bundle looked for."""
+    assert isinstance(refused, pulumi_config.BackendMissing)
+    assert refused.stack == stack.name
+    assert str(tmp_path / 'no-bundle') in str(refused)
+    with pytest.raises(pulumi_config.BackendMissing) as own:
+        stack.require_backend()
+    assert str(refused) == str(own.value)
+
+
+@needs_age
+def test_the_zones_row_on_a_machine_with_no_bundle_mints_nothing(api: FakeApi, kit: KdbxStore, tmp_path: Path) -> None:
+    runner = RecordedPulumi()
+    slot = pulumi_config.Stack(
+        name=STACK, directory=pulumi_config.project_dir(), environment=_with_no_bundle(kit, tmp_path), run=runner
+    )
+
+    with pytest.raises(pulumi_config.SlotRefused) as refused:
+        derived.cloudflare_zones(kit, stacks=[slot])
+
+    assert _live(api) == []
+    assert runner.invocations == []
+    _refused_for_its_backend(refused.value, slot, tmp_path)
+
+
+@needs_age
+def test_the_gateway_row_on_a_machine_with_no_bundle_mints_nothing(
+    api: FakeApi, kit: KdbxStore, tmp_path: Path
+) -> None:
+    slot, runner = _physical_on(_with_no_bundle(kit, tmp_path))
+
+    with pytest.raises(pulumi_config.SlotRefused) as refused:
+        _ = derived.cloudflare_gateway_acme(kit, stack=slot)
+
+    assert _gateway_live(api) == []
+    assert runner.invocations == []
+    _refused_for_its_backend(refused.value, slot, tmp_path)
+
+
+@needs_age
+def test_the_physical_oci_row_on_a_machine_with_no_bundle_mints_nothing(
+    oci_kit: KdbxStore, tenancy: Tenancy, tmp_path: Path
+) -> None:
+    slot, runner = _physical_on(_with_no_bundle(oci_kit, tmp_path))
+    users = dict(tenancy.identity.users)
+    keys = {user: list(held) for user, held in tenancy.identity.keys.items()}
+
+    with pytest.raises(pulumi_config.SlotRefused) as refused:
+        _ = derived.oci_physical(oci_kit, stack=slot, compartment_id=COMPARTMENT, connect=tenancy)
+
+    assert tenancy.identity.users == users
+    assert tenancy.identity.keys == keys
+    assert runner.invocations == []
+    _refused_for_its_backend(refused.value, slot, tmp_path)
+
+
+@needs_age
+def test_the_physical_b2_row_on_a_machine_with_no_bundle_mints_nothing(
+    b2_api_fake: b2_api.FakeApi, b2_kit: KdbxStore, tmp_path: Path
+) -> None:
+    slot, runner = _physical_on(_with_no_bundle(b2_kit, tmp_path))
+
+    with pytest.raises(pulumi_config.SlotRefused) as refused:
+        _ = derived.b2_management(b2_kit, stack=slot)
+
+    assert b2_api_fake.named(b2.MANAGEMENT.name) == []
+    assert runner.invocations == []
+    _refused_for_its_backend(refused.value, slot, tmp_path)
+
+
+def _never_sealed(args: Sequence[str], *, stdin: str | None) -> str:
+    raise AssertionError(f'kubeseal was run as {args[0]}, with {"a value" if stdin else "nothing"} on standard input')
+
+
+def _stacks_on(
+    environment: pulumi_config.BackendEnvironment,
+) -> tuple[Callable[[str], pulumi_config.Stack], dict[str, RecordedPulumi]]:
+    """Opens every stack under `environment`, each one present in its recorded `pulumi`, as a sealer opens them."""
+    runners: dict[str, RecordedPulumi] = {}
+
+    def open_stack(name: str) -> pulumi_config.Stack:
+        runner = runners.setdefault(name, RecordedPulumi(stacks=[name]))
+        return pulumi_config.Stack(
+            name=name, directory=pulumi_config.project_dir(), environment=environment, run=runner
+        )
+
+    return open_stack, runners
+
+
+@needs_age
+def test_the_dns01_rows_sealer_on_a_machine_with_no_bundle_is_never_built(kit: KdbxStore, tmp_path: Path) -> None:
+    """The certificate is fetched with the kubeconfig in `physical`'s state, which is read before the row mints."""
+    runner = RecordedPulumi(stacks=[derived.PHYSICAL_STACK])
+    environment = _with_no_bundle(kit, tmp_path)
+    physical = pulumi_config.Stack(
+        name=derived.PHYSICAL_STACK, directory=pulumi_config.project_dir(), environment=environment, run=runner
+    )
+
+    with pytest.raises(pulumi_config.SlotRefused) as refused:
+        _ = sealing.cluster_sealer(physical, open_stack=lambda _name: physical, run=_never_sealed)
+
+    assert runner.invocations == []
+    _refused_for_its_backend(refused.value, physical, tmp_path)
+
+
+@needs_age
+def test_the_dns01_row_on_a_machine_with_no_bundle_mints_nothing(api: FakeApi, kit: KdbxStore, tmp_path: Path) -> None:
+    """A sealer that holds a certificate already, so the declaring stack is the first thing the row asks for."""
+    open_stack, runners = _stacks_on(_with_no_bundle(kit, tmp_path))
+    sealer = sealing.Sealer(certificate='', open_stack=open_stack, run=_never_sealed)
+
+    with pytest.raises(pulumi_config.SlotRefused) as refused:
+        _ = derived.cloudflare_dns01(kit, sealer=sealer)
+
+    assert [str(token['id']) for token in api.tokens.values() if token['name'] == cloudflare.DNS01.name] == []
+    assert runners, 'the row opened no stack, so nothing held it to its backend'
+    assert all(runner.invocations == [] for runner in runners.values())
+    _refused_for_its_backend(refused.value, open_stack(conventions.sealed.DNS01_TOKEN.stack), tmp_path)
+
+
+@needs_age
+def test_the_state_backend_rows_need_no_bundle(
+    b2_api_fake: b2_api.FakeApi,
+    b2_kit: KdbxStore,
+    tmp_path: Path,
+    credential_files: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The `state-backend` stack keeps its state committed, so a machine with no bundle still fills it.
+
+    Its passphrase is the operator's, found by the acquisition chain, whose
+    variable is the layer that answers here.
+    """
+    assert not credential_files.exists()
+    monkeypatch.setenv(stack_environment.OPERATOR_PASSPHRASE_ENV, 'an-operator-passphrase')
+    slot, runner = _state_backend_stack(tmp_path, environment=_with_no_bundle(b2_kit, tmp_path))
+
+    key_id = derived.b2_state_backend_management(b2_kit, stack=slot)
+
+    assert b2_api_fake.named(b2.STATE_BACKEND_MANAGEMENT.name) == [key_id]
+    assert runner.config[derived.B2_KEY_ID_KEY] == key_id
 
 
 def test_a_value_in_the_clear_that_opens_with_dashes_reaches_the_config(

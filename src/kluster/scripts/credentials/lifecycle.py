@@ -281,24 +281,42 @@ def environment(
     escrow is its recovery path, which `credentials derived
     operator-passphrase recover` walks and a refusal names. The URL is read
     from the bundle `state-backend bundle` writes, so the two halves of "log
-    in to the backend" come from one command — and a machine with no bundle
-    yet answers with no URL, which its caller can see rather than discover
-    inside a subprocess.
+    in to the backend" come from one command. A machine with no bundle yet
+    answers with no URL and says why (`no_backend`). A command that asks
+    before it acts -- each row that mints into a stack, before the mint, and
+    the sealer, for `physical` and for the stack that declares a sealed value
+    (`pulumi_config.Stack.require_backend`) -- is then refused by name for a
+    stack whose state is in the backend, and a command whose stacks keep their
+    state committed needs no bundle at all. A command that does not ask still
+    starts `pulumi` with no backend named, which answers from whatever backend
+    the caller's environment names.
     """
     # Opened on first use, by whichever passphrase is asked for first: the
     # vault reads the kit's recovery key, and the environment never unlocks
     # the kit for a command whose stacks take neither the stack passphrase
     # nor `physical`'s.
     vault = functools.cache(lambda: escrow.Vault.open(kit, registry))
-    url = bundle.backend_url_file(bundle_dir)
-    if url is None:
-        log.warning(
-            'no %s; run `state-backend bundle operator --address <the reserved address>` first',
-            bundle_dir / bundle.URL_FILE,
+    found = bundle.backend_url_file(bundle_dir)
+    # An empty file names no backend, so it is no bundle rather than a URL:
+    # handed on, it would be a `PULUMI_BACKEND_URL` that is set and says nothing.
+    url = (found.read_text().strip() or None) if found is not None else None
+    no_backend = None
+    if found is None:
+        no_backend = (
+            f'there is no client bundle in {bundle_dir} to reach it with: '
+            '`state-backend bundle operator --address <the reserved address>` writes one'
         )
+    elif url is None:
+        no_backend = (
+            f'{found} is empty, so the client bundle in {bundle_dir} names no backend; '
+            're-run `state-backend bundle operator --address <the reserved address>`'
+        )
+    if no_backend is not None:
+        log.warning('no state backend for a stack whose state is in it: %s', no_backend)
     return pulumi_config.BackendEnvironment(
         passphrase=functools.cache(lambda: vault().recover(escrow.PASSPHRASE)),
-        url=url.read_text().strip() if url is not None else None,
+        url=url,
+        no_backend=no_backend,
         # Once per command: every `pulumi` call a command makes against an
         # operator stack builds its environment again, and a chain that ends
         # at a prompt would ask on each of them.
