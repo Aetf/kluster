@@ -56,6 +56,13 @@ def _entries() -> dict[str, list[dict[str, Any]]]:
 PINS = _pins()
 
 
+def _as_mise_spells(value: object) -> str:
+    """An option's value as `mise.lock` records it: a string, with a boolean as TOML writes one."""
+    if isinstance(value, bool):
+        return 'true' if value else 'false'
+    return str(value)
+
+
 def test_the_lock_is_binding() -> None:
     """Without `locked`, a pin with no entry installs and records what it fetched."""
     config = tomllib.loads((ROOT / 'mise.toml').read_text())
@@ -69,11 +76,27 @@ def test_the_lock_holds_the_pinned_tools_and_no_others() -> None:
 
 @pytest.mark.parametrize('name', sorted(PINS))
 def test_each_pin_has_one_entry_at_its_version(name: str) -> None:
+    """The entry is the pin's: its version, and every option it records written in the pin with that value.
+
+    An entry records only the options its backend keys an install by -- a
+    conda pin's `channel`, but none of an `http:` pin's `url` or `bin_path`
+    -- so what is held is that the entry says nothing the pin does not: an
+    option recorded with another value, or one the pin does not hold, is an
+    entry written for some other pin. The other direction, an option the pin
+    writes that its backend keys by and the entry lacks, is mise's own
+    refusal: an install takes an entry only where the options it records
+    equal the ones the backend computes from the pin (`get_locked_version`),
+    and otherwise fails with the pin `not in the lockfile`. mise records
+    every option as a string, so the pin's value is compared as mise spells
+    it.
+    """
     version, options = PINS[name]
     entries = _entries().get(name, [])
 
     assert [entry['version'] for entry in entries] == [version], f'run `mise lock {name}` after moving its pin'
-    assert entries[0].get('options', {}) == options
+    recorded: dict[str, Any] = entries[0].get('options', {})
+    pinned = {key: _as_mise_spells(options[key]) for key in recorded if key in options}
+    assert pinned == recorded, f'run `mise lock {name}` after changing its options'
 
 
 @pytest.mark.parametrize('name', sorted(PINS))

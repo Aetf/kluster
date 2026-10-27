@@ -22,6 +22,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+import device_shell
 import process_sessions
 import pytest
 from fake_systemd import FakeSystemd
@@ -186,7 +187,7 @@ class _Reading:
 def _read(device: _Device, *args: str) -> _Reading:
     """Run the executable once, as `ssh gw /data/custom/bin/gateway-health` would."""
     completed = process_sessions.run(
-        ['/bin/sh', str(device.program), *args],
+        [*device_shell.argv(gateway.HEALTH_PROGRAM, device.program), *args],
         env={'PATH': f'{device.systemd.tools}:/usr/bin:/bin'},
         text=True,
         timeout=30,

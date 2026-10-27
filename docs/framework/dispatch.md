@@ -545,23 +545,25 @@ script has for the environment to be cached. It runs from two places:
 
 **The environment's network access is Full**, set on claude.ai. The
 default, Trusted, refuses hosts the script downloads from — mise's
-own, and the one uv fetches its Python from — and a refused download is
+own, the one uv fetches its Python from, and `archive.archlinux.org`,
+where `dash` installs from (below) — and a refused download is
 the failure the script's line names. Full does not open the GitHub API:
 the session's GitHub proxy answers `api.github.com` only for
 repositories attached to the session, whatever the network access. So no
 tool `mise.toml` pins may need the API to install; the `ltex-ls-plus`
 pin's comment there says how that one stays off it.
 
-The pinned tools install from three hosts, each tool's URL recorded in
+The pinned tools install from these hosts, each tool's URL recorded in
 `mise.lock`: `nodejs.org` for `node`; `conda.anaconda.org` for every tool
 pinned from a `conda` channel (today `postgres`, `gawk` and `libxslt`),
-every package a `conda` install unpacks included; and release downloads
-from `github.com` for every other tool. Full reaches any host, and the
-Claude Code documentation lists all three among the hosts Trusted allows too
-(its cloud environments page, "Default allowed domains"); it scopes the
-GitHub proxy's repository check to API requests. Release downloads from
-`github.com` pass at Full as measured in a cloud session. The other two
-hosts have not been measured from one.
+every package a `conda` install unpacks included; `archive.archlinux.org`
+for `dash`; and release downloads from `github.com` for every other tool.
+Full reaches any host. The Claude Code documentation lists each of them
+but `archive.archlinux.org` among the hosts Trusted allows too (its cloud
+environments page, "Default allowed domains"); it scopes the GitHub
+proxy's repository check to API requests. Release downloads from
+`github.com` pass at Full as measured in a cloud session. The other hosts
+have not been measured from one.
 
 ## 2. Concurrent dispatchers
 

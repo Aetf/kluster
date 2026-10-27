@@ -209,6 +209,15 @@ checksum = "sha256:1e16df6c578dc76ff97d644445d126ba6fba5c2e8e174178ab86372652fd7
 url = "https://github.com/ltex-plus/ltex-ls-plus/releases/download/18.7.0/ltex-ls-plus-18.7.0-linux-x64.tar.gz"
 url_api = "https://api.github.com/repos/ltex-plus/ltex-ls-plus/releases/assets/446654224"
 
+[[tools."http:dash"]]
+version = "0.5.11.1"
+backend = "http:dash"
+specifiers = ["0.5.11.1"]
+
+[tools."http:dash"."platforms.linux-x64"]
+checksum = "sha256:d34b294eee83a21aa2241003bec50d9c4e21eb54232c9578a56e1bcf4eb3aabc"
+url = "https://archive.archlinux.org/packages/d/dash/dash-0.5.11.1-1-x86_64.pkg.tar.zst"
+
 [[tools.jj]]
 version = "0.46.0"
 backend = "aqua:jj-vcs/jj"

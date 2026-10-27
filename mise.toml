@@ -80,6 +80,32 @@ postgres = { version = "17.11", channel = "conda-forge" }
 # the box, and the workflow steps the suite runs as they are written. Its
 # releases are static binaries.
 jq = "1.8.2"
+# The shell the gateway runs its `#!/bin/sh` scripts under, so the suite runs
+# every such device template under the interpreter the device runs it with
+# rather than whichever `/bin/sh` a host has, which is not the device's: bash
+# on a workstation, which accepts the bashisms dash refuses, and a later dash
+# on CI's Ubuntu runners (tests/device_shell.py). The gateway's base is
+# Debian 11 (docs/physical/gateway.md), whose dash is
+# `0.5.11+git20200708+dd9ef66`: upstream's master at that commit, which no
+# release is, with Debian's patches on it. 0.5.11.1, the 0.5.11 maintenance
+# release cut the same day, parses the same language. The two differ at run
+# time: the device's matches patterns with the C library's `fnmatch`, and has
+# a `wait` fix the 0.5.11 line took only in 0.5.11.3, whose Arch build links
+# libedit beside the C library. The pin follows the device's base rather than
+# dash's newest release, so a firmware jump onto a newer Debian moves it to
+# that base's dash by hand. dash publishes source alone, and conda-forge's
+# `dash` is a different program, so this is Arch Linux's build of the release,
+# from the Arch Linux Archive, which keeps the packages Arch has shipped at
+# fixed URLs. The package is a `tar.zst` holding the binary at
+# `usr/bin/dash`, and the binary links the C library alone, so any glibc host
+# runs it. The archive publishes no checksum file mise can read, so the sum is
+# written here: the sha256 of the package whose detached signature, beside it
+# in the archive, verifies against the Arch Linux keyring.
+"http:dash".version = "0.5.11.1"
+"http:dash".bin_path = "usr/bin"
+"http:dash".platforms.linux-x64.url = "https://archive.archlinux.org/packages/d/dash/dash-{{ version }}-1-x86_64.pkg.tar.zst"
+"http:dash".platforms.linux-x64.checksum = "sha256:d34b294eee83a21aa2241003bec50d9c4e21eb54232c9578a56e1bcf4eb3aabc"
+
 # jj is the version control a workstation runs, and the operator-stack driver
 # reads a jj checkout's working copy through it, so the cases that hold that
 # reading run the pinned release here and in CI alike. Its releases are

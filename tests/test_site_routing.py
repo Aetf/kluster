@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import final
 
+import device_shell
 import process_sessions
 import psutil
 import pytest
@@ -192,7 +193,7 @@ def _converge(device: _Device, *, daemon_answers: bool = True, syntax_accepted: 
     device.checks.unlink(missing_ok=True)
 
     completed = process_sessions.run(
-        ['/bin/sh', str(device.script)],
+        device_shell.argv(routing.CONVERGER, device.script),
         env={'PATH': f'{device.systemd.tools}:{device.tools}:/usr/bin:/bin'},
         timeout=COMMAND_TIMEOUT,
     )
@@ -735,7 +736,7 @@ def test_a_converger_that_stalls_fails_naming_itself_and_leaves_nothing_running(
         # Past the parenthesized command name, the fields from the state on:
         # the session is proc(5)'s sixth field.
         session = int(line.rsplit(')', 1)[1].split()[3])
-        assert expired.value.cmd == ['/bin/sh', str(device.script)]
+        assert expired.value.cmd == device_shell.argv(routing.CONVERGER, device.script)
         assert expired.value.timeout == COMMAND_TIMEOUT
         assert _in_session(session) == []
         (note,) = expired.value.__notes__
