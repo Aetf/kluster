@@ -137,26 +137,27 @@ the VPS empties progressively):
     workloads.md §4 — their content moves from the VPS hostPath onto a
     NAS share once), the haos.ucw LAN-device backend (workloads.md §4),
     thread-dashboard (quadlet → cluster).
--   **Wave C — homelab heavy + the GPU window**: the A380's vfio-pci
-    cutover (drain → bind → hostdev → reboot, physical/homelab-host.md §3)
-    runs at the head of this wave. It takes the legacy cluster's GPU:
-    since kluster-code#253 every legacy GPU consumer holds the A380, and
-    the iGPU, which stays with the host, does not stand in. From the bind
-    the legacy device plugin advertises no `gpu.intel.com/i915`, so a GPU
-    job running in legacy immich or jellyfin fails, and a pod of theirs
-    that restarts stays Pending, until their legacy manifests stop
-    requesting the GPU or the app has moved; §0 rule 1's rollback does
-    not return their GPU while the A380 is in the worker. Which state the
-    window leaves them in is an open operator choice, recorded on
-    kluster-ops#644: moved to CPU by a kluster-code change before the
-    bind, down from the bind until each has moved, or the bind moved to
-    the tail of this wave with the new deployments on CPU until then.
-    Then immich (CNPG via the barman restore of §3 — a
-    path this cluster has not drilled; NAS media PVs re-point in place;
-    ML/thumbnail caches re-derive) and
-    jellyfin+shoko (NAS re-point + config PVC copy; **verify the
-    TVs' path — IoT → media-VIP allow — before its DNS re-points**,
-    physical/gateway.md §4.2). syncthing-nas
+-   **Wave C — homelab heavy, opened by the GPU window**: the wave
+    opens with one drained window that both grows the VM (§0 rule 4)
+    and runs the A380's vfio-pci cutover (drain → bind → hostdev →
+    reboot, physical/homelab-host.md §3), since each replaces the
+    worker's domain. The cutover takes the legacy cluster's GPU: since
+    kluster-code#253 the legacy device plugin is limited to the A380,
+    which every legacy GPU consumer holds. Just before the window, a
+    kluster-code change moves that plugin to the UHD 770 iGPU
+    (`8086:4680`), which stays with the host. The window itself scales
+    legacy immich and jellyfin down, since §0 rule 4 grows the VM by
+    what they free, and that leaves the A380 unused for the bind. They
+    stay down from the window until each move verifies, and a legacy
+    app runs again only through §0 rule 1's rollback, which starts it
+    on the iGPU at any point in the wave and, after the growth, also
+    needs back the RAM the VM took (kluster-ops#672). Then the moves, with
+    the new immich and jellyfin taking the A380 from their first start:
+    immich (CNPG via the barman restore of §3 — a path this cluster
+    has not drilled; NAS media PVs re-point in place; ML/thumbnail
+    caches re-derive), jellyfin+shoko (NAS re-point + config PVC copy;
+    **verify the TVs' path — IoT → media-VIP allow — before its DNS
+    re-points**, physical/gateway.md §4.2), and syncthing-nas, which
     re-points its NAS PV.
 -   **Wave D — host-native onboarding**: qbittorrent-nox
     (`/var/lib/qBittorrent` profile copy; verify seedwatch category

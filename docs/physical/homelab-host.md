@@ -126,8 +126,19 @@ The host has two GPUs, and the worker gets the discrete one:
     A380, `simpledrm` leaves a dangling
     `/dev/dri/by-path/pci-0000:03:00.0-platform-simple-framebuffer.0-card`
     link, the legacy cluster's GPU device plugin maps it into containers,
-    and containerd fails them with `CreateContainerError`. Keeping the iGPU costs
-    nothing: it idles in RC6 at about zero watts, so disabling it in the
+    and containerd fails them with `CreateContainerError`. With the
+    console on the iGPU, as it is, `simpledrm` leaves the same kind of
+    link under the iGPU's address,
+    `pci-0000:00:02.0-platform-simple-framebuffer.0-card`, which points
+    at `card0`: the A380 on a boot where the A380 takes that name, and
+    nothing once the A380 is bound to vfio-pci. The plugin maps every
+    by-path entry under the address of the card it serves, so the legacy
+    plugin serves the iGPU only with its by-path mounts off, in the
+    kluster-code change that moves it there, or with that stale link
+    removed on the host (kluster-ops#670 settles which); without either,
+    a rollback onto the iGPU after the bind fails the same way on any
+    boot where the iGPU is not `card0`. Keeping the iGPU costs nothing:
+    it idles in RC6 at about zero watts, so disabling it in the
     firmware would save nothing either.
 
 The VM bootstraps with no hostdev — the host's `i915` keeps the A380
@@ -145,23 +156,26 @@ cutover touches no OS image. There are two of them:
     kernel modules, which this extension carries.
 
 The cutover itself — drain → host binds vfio-pci → domain gains
-the PCI hostdev → reboot → device plugin sees the GPU — is a migration
-window sequenced with the immich/jellyfin move (migration.md Wave C).
-It takes the legacy cluster's GPU: every legacy GPU consumer (immich's
-transcoding and machine learning, jellyfin) holds the A380, the legacy
-device plugin being limited to it, and the iGPU does not stand in for
-it, because their batch work outgrew the iGPU's throughput, which is
-what the A380 is there for. From the bind the legacy device plugin
-advertises no `gpu.intel.com/i915`, so a GPU job running in legacy
-immich or jellyfin fails, and a pod of theirs that restarts stays
-Pending, until their legacy manifests stop requesting the GPU or the
-app has moved; the rollback of migration.md §0 rule 1 does not return
-their GPU while the A380 is in the worker. Which state the window
-leaves them in is an open operator choice, recorded on
-kluster-ops#644 (migration.md Wave C lists the options). No probe on a
-scratch VM comes first: GPU
-passthrough is known to work on this host, so the cutover is the first
-time the A380 goes through VFIO for the cluster.
+the PCI hostdev → reboot → device plugin sees the GPU — is the
+migration window that opens migration.md Wave C, the same drained
+window as that wave's VM growth (migration.md §0 rule 4), since each
+replaces the domain. It takes the A380 from the legacy cluster, whose
+device plugin kluster-code#253 limited to it, so a kluster-code change
+comes just before the window: the legacy plugin advertises the iGPU
+instead. The window scales every legacy GPU consumer (immich's
+transcoding and machine learning, jellyfin) down, since migration.md
+§0 rule 4 grows the VM by what they free, and they stay down until each
+app's move verifies, so from the window a legacy app runs only when the
+rollback of migration.md §0 rule 1 starts it again. On the iGPU it runs
+at the lower throughput their batch work outgrew, which is what the
+A380 is there for, and the change waits for the head of the wave
+because until then the legacy batch work keeps the A380. With the
+legacy plugin on the iGPU, and its by-path mounts kept clear of the
+stale link above, that rollback starts each app with a GPU at any point
+in the wave, and from the cutover the new immich and jellyfin take the
+A380 from their first start. No probe on a scratch VM comes
+first: GPU passthrough is known to work on this host, so the cutover is
+the first time the A380 goes through VFIO for the cluster.
 
 ## 4. Host preparation: one aconfmgr change-set
 
