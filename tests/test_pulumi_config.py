@@ -15,6 +15,7 @@ import ast
 import dataclasses
 import inspect
 import json
+import logging
 import os
 import re
 import shutil
@@ -23,7 +24,7 @@ import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Protocol, cast
 
 import pytest
 from credentials_command_tree import named_leaves
@@ -48,7 +49,7 @@ PROJECT = 'slot-probe'
 #: The bound every case here that starts the pinned `pulumi` runs under, set
 #: from measured durations rather than from the suite's per-case bound
 #: (testing.md §8), and above `pulumi_cli.TIMEOUT`, the bound each command
-#: carries, so a stalled command fails as a `TimeoutExpired` naming it. On
+#: carries, so a stalled command is refused naming it and that bound. On
 #: four cores under the suite's four workers the slowest took 11 s, and 39 s
 #: with twelve busy processes beside them. A stop-loss; nothing asserts on
 #: elapsed time.
@@ -157,12 +158,20 @@ def test_an_output_dump_that_is_not_json_is_refused_without_being_quoted(tmp_pat
     assert 'line 1 column' in message
 
 
+class BoundedRunner(Protocol):
+    """A runner whose bound its caller may set, as both sides' runners take one."""
+
+    def __call__(
+        self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdin: str | None, timeout: float | None = None
+    ) -> str: ...
+
+
 @dataclass(frozen=True)
 class Side:
     """One side of the runner's boundary, and the refusal it raises."""
 
     project_dir: Callable[[], Path]
-    run_pulumi: pulumi_cli.Runner
+    run_pulumi: BoundedRunner
     refusal: type[Exception]
 
 
@@ -337,6 +346,171 @@ def test_a_failing_invocation_names_the_command(side: Side, tmp_path: Path) -> N
             env=cli_directories(tmp_path) | {'PULUMI_BACKEND_URL': (tmp_path / 'state').as_uri()},
             stdin=None,
         )
+
+
+#: The bound a run against a `pulumi` that never answers is given: far below
+#: the suite's per-case bound, which the run must not reach. What the cases
+#: below hold is what the bound ends in, never how long it took.
+UNANSWERED_BOUND = 0.5
+
+#: A backend URL carrying a password in each place a URL can: beside its
+#: user, and in its query, as libpq reads one.
+GUARDED_URL = 'postgres://operator:a-password@192.0.2.10:5432/pulumi_state?sslmode=verify-full&password=a-password'
+
+
+#: The bound a run against a `pulumi` that answers is given: a stop-loss,
+#: below the suite's per-case bound, which nothing asserts on.
+ANSWERED_BOUND = 30
+
+
+def _plant(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, program: str) -> None:
+    """Put a `pulumi` running `program` first on PATH: one process with no children, so a kill leaves nothing behind."""
+    stand_ins = tmp_path / 'bin'
+    stand_ins.mkdir()
+    stand_in = stand_ins / 'pulumi'
+    _ = stand_in.write_text(f'#!{sys.executable}\n{program}')
+    stand_in.chmod(0o700)
+    monkeypatch.setenv('PATH', f'{stand_ins}{os.pathsep}{os.environ["PATH"]}')
+
+
+@pytest.fixture
+def unanswering(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A `pulumi` that never answers, as one whose backend drops its traffic does not.
+
+    It waits for a signal that only the runner's kill at its bound delivers.
+    """
+    _plant(tmp_path, monkeypatch, 'import signal\nsignal.pause()\n')
+
+
+@pytest.fixture
+def answering(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A `pulumi` that marks that it started, prints an empty stack listing and exits. Returns the marker's path."""
+    started = tmp_path / 'started'
+    _plant(tmp_path, monkeypatch, f'import pathlib\npathlib.Path({str(started)!r}).touch()\nprint("[]")\n')
+    return started
+
+
+@SIDES
+def test_a_run_that_outlasts_its_bound_is_refused_naming_the_command_the_backend_and_the_bound(
+    side: Side, unanswering: None, tmp_path: Path
+) -> None:
+    # The refusal each side's callers already catch, so a `credentials`
+    # command ends on its one-line refusal rather than on a traceback.
+    with pytest.raises(side.refusal) as refused:
+        _ = side.run_pulumi(
+            ['stack', 'ls', '--json'],
+            cwd=tmp_path,
+            env={'PULUMI_BACKEND_URL': GUARDED_URL},
+            stdin=None,
+            timeout=UNANSWERED_BOUND,
+        )
+
+    message = str(refused.value)
+    assert '`pulumi stack ls --json`' in message
+    assert 'postgres://192.0.2.10:5432' in message
+    assert f'{UNANSWERED_BOUND:g}s' in message
+    assert 'a-password' not in message, message
+
+
+def test_a_run_given_no_bound_is_held_to_the_constant_as_it_stands_when_the_run_starts(
+    unanswering: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A harness bounds the runs of the code under test by replacing
+    # `pulumi_cli.TIMEOUT` (tests/test_state_roles.py does), which reaches
+    # only a default read at the run rather than bound at the definition.
+    monkeypatch.setattr(pulumi_cli, 'TIMEOUT', UNANSWERED_BOUND)
+
+    with pytest.raises(pulumi_config.SlotRefused, match=re.escape(f'{UNANSWERED_BOUND:g}s')):
+        _ = pulumi_config.run_pulumi(['stack', 'ls', '--json'], cwd=tmp_path, env={}, stdin=None)
+
+
+def test_a_run_says_what_it_reaches_before_it_starts(
+    answering: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The line before a run names the command, the backend and the bound, so the wait it starts is explained.
+
+    The stand-in answers and exits, so its marker is there once the run has
+    returned: whether the line came first is ordered by the run itself, not
+    by how soon the stand-in got to its marker.
+    """
+    started_when_said: list[bool] = []
+
+    class Witness(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            started_when_said.append(answering.exists())
+
+    witness = Witness()
+    logging.getLogger(pulumi_cli.__name__).addHandler(witness)
+    try:
+        with caplog.at_level(logging.INFO, logger=pulumi_cli.__name__):
+            printed = pulumi_cli.run_pulumi(
+                ['stack', 'ls', '--json'],
+                cwd=tmp_path,
+                env={'PULUMI_BACKEND_URL': GUARDED_URL},
+                stdin=None,
+                timeout=ANSWERED_BOUND,
+            )
+    finally:
+        logging.getLogger(pulumi_cli.__name__).removeHandler(witness)
+
+    assert printed.strip() == '[]'
+    assert answering.exists()
+    assert started_when_said == [False]
+    (said,) = [record.getMessage() for record in caplog.records if record.name == pulumi_cli.__name__]
+    assert '`pulumi stack ls --json`' in said
+    assert 'postgres://192.0.2.10:5432' in said
+    assert f'{ANSWERED_BOUND:g}s' in said
+    assert 'a-password' not in said, said
+
+
+@pytest.mark.parametrize(
+    ('url', 'named'),
+    [
+        (GUARDED_URL, 'postgres://192.0.2.10:5432'),
+        ('file:///srv/checkout/checkpoints?metadata=skip', 'file:///srv/checkout/checkpoints'),
+        ('s3://a-bucket/prefix?region=us-east-1', 's3://a-bucket'),
+        ('file://~/state', 'file://~/state'),
+    ],
+    ids=['password-beside-user-and-in-query', 'file', 'bucket', 'file-under-home'],
+)
+def test_a_backend_is_named_by_its_scheme_and_host(url: str, named: str) -> None:
+    assert pulumi_cli.backend_named(url) == named
+
+
+def test_an_empty_backend_url_is_named_as_none_set() -> None:
+    # `mise.toml` renders the variable empty wherever no slot applies, so an
+    # empty value is what a run with no URL of its own inherits there.
+    assert pulumi_cli.backend_named('') == pulumi_cli.backend_named(None)
+
+
+@pytest.mark.parametrize(
+    'url',
+    [
+        'operator:a-password@192.0.2.10',
+        'postgres://operator:a-password@[::1/pulumi_state',
+        'postgres://operator:a-pass/word@192.0.2.10:5432/pulumi_state',
+        'postgres://operator:a-pass?word@192.0.2.10:5432/pulumi_state',
+        'postgres://operator:a-pass#word@192.0.2.10:5432/pulumi_state',
+        'file://operator:a-password@localhost/state',
+    ],
+    ids=[
+        'no-scheme',
+        'unparsable',
+        'slash-in-password',
+        'question-mark-in-password',
+        'hash-in-password',
+        'file-with-user-information',
+    ],
+)
+def test_a_backend_url_whose_host_is_not_plain_is_named_by_nothing_in_it(url: str) -> None:
+    # A shell can export anything as `PULUMI_BACKEND_URL`, and the name is
+    # logged and refused with whatever shape the value has: where the host
+    # cannot be told from the user information, neither the user nor any
+    # part of the password is named.
+    named = pulumi_cli.backend_named(url)
+
+    assert 'a-pass' not in named, named
+    assert 'operator' not in named, named
 
 
 def test_a_stack_whose_state_is_committed_is_pointed_at_the_checkouts_checkpoints(

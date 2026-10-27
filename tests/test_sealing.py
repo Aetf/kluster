@@ -322,9 +322,10 @@ def shaped_like_kubeseal(args: Sequence[str], *, stdin: str | None) -> str:
 
 
 #: The bound the real-CLI case below runs under. Each `pulumi` command it
-#: starts is bounded by `pulumi_cli.TIMEOUT`, so the case's own bound sits
-#: above that rather than at the suite's, and a stalled command fails as a
-#: `TimeoutExpired` naming it (testing.md §8). Each row took 0.4 to 0.5 s
+#: starts goes through `pulumi_cli.run_pulumi`, bounded by `pulumi_cli.TIMEOUT`,
+#: so the case's own bound sits above that rather than at the suite's, and a
+#: stalled command is refused by the runner, naming it and that bound
+#: (testing.md §8). Each row took 0.4 to 0.5 s
 #: under the suite's four workers, and 2.5 s on a loaded machine. A
 #: stop-loss; nothing asserts on elapsed time.
 REAL_CLI_CASE_TIMEOUT = 2 * pulumi_cli.TIMEOUT

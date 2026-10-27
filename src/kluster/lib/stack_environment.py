@@ -39,7 +39,8 @@ from pathlib import Path
 from kluster.conventions import identity
 from kluster.lib import acquisition, bundle, pulumi_cli, workstation
 
-BACKEND_URL_ENV = 'PULUMI_BACKEND_URL'
+#: The CLI's variable naming a run's backend, which the runner names in its own lines.
+BACKEND_URL_ENV = pulumi_cli.BACKEND_URL_ENV
 PASSPHRASE_ENV = 'PULUMI_CONFIG_PASSPHRASE'
 #: Turns off the `backups/` copy a `file://` backend writes beside every update
 #: (framework/pulumi.md §3.3); set for a committed stack.

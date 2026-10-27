@@ -440,8 +440,9 @@ def stacks(target: Connection) -> list[str]:
     reads): an address whose traffic is dropped -- a lost box, or an address
     not yet pointed at a new one -- would otherwise hold the question for as
     long as TCP retries a connection, past the runner's own bound. A run that
-    still outlasts that bound is a backend that did not answer, refused as a
-    `StateError` like any other.
+    still outlasts that bound is a backend that did not answer, which the
+    runner refuses as it refuses any failed run, and which is a `StateError`
+    here like any other.
     """
     log.info(
         'asking pulumi which stacks %s serves; a connection not made within %ds is a backend that does not answer',
@@ -458,10 +459,6 @@ def stacks(target: Connection) -> list[str]:
         )
     except pulumi_cli.PulumiRefused as exc:
         raise StateError(str(exc)) from exc
-    except sp.TimeoutExpired as exc:
-        raise StateError(
-            f'`pulumi stack ls` against {endpoint(target.url)} did not finish within {exc.timeout}s'
-        ) from exc
     return sorted(_stack_names(printed))
 
 

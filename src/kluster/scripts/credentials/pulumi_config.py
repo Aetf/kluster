@@ -108,16 +108,18 @@ class ReadBackRefused(SlotRefused):
         self.read_back: ReadBack = read_back
 
 
-def run_pulumi(args: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdin: str | None) -> str:
+def run_pulumi(
+    args: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdin: str | None, timeout: float | None = None
+) -> str:
     """Run one `pulumi` command (`pulumi_cli.run_pulumi`), a refusal refused as a slot.
 
     The boundary between the runner, which `kluster.lib` holds for every
-    caller, and this package: a `pulumi` run that failed here is a slot that
-    would not take the value, which is what every caller in this package
-    catches.
+    caller, and this package: a `pulumi` run that failed here, or outlasted
+    its bound, is a slot that would not take the value, which is what every
+    caller in this package catches.
     """
     try:
-        return pulumi_cli.run_pulumi(args, cwd=cwd, env=env, stdin=stdin)
+        return pulumi_cli.run_pulumi(args, cwd=cwd, env=env, stdin=stdin, timeout=timeout)
     except pulumi_cli.PulumiRefused as exc:
         raise SlotRefused(str(exc)) from exc
 
@@ -442,11 +444,11 @@ class Stack:
         an appliance rebuilt before its restore, or a bundle naming another --
         and that is refused (`StackMissing`) rather than answered.
 
-        Neither run answers without the backend, so a backend that does not
-        answer -- a name that resolves nowhere, a connection refused -- is
-        refused here, as `get` was, and is never an answer of False. A host
-        that drops the connection instead runs out `pulumi_cli.TIMEOUT` on the
-        read, before this is asked.
+        Neither run answers without the backend, so a backend that cannot be
+        reached -- a name that resolves nowhere, a connection refused, or
+        traffic dropped until the runner's bound runs out -- is refused here,
+        as `get` was, and is never an answer of False; dropped traffic waits
+        out the bound on the read and again here.
 
         The listing names every key in full, `<namespace>:<name>`, while `get`
         takes a key with no namespace as one in the project's own, the `name:`
@@ -497,7 +499,8 @@ class Stack:
         refused as it is. Any other key this cannot read -- absent, or refused
         for any other reason -- counts as not held, so the caller goes on to
         write it, and that write either fills the slot or refuses with its own
-        reason. Nothing is logged: what is compared is a secret.
+        reason. It logs nothing of its own, and the line the runner logs before
+        the run names the key, never the value: what is compared is a secret.
         """
         try:
             printed = self._pulumi('config', 'get', key, '--json', '--stack', self.name)
