@@ -1185,12 +1185,12 @@ row in `conventions.sealed` names, and writes the ciphertext in the clear
 at the row's path in the declaring stack's configuration, reading it
 back as written and as plain. `kubeseal` is pinned in `mise.toml`: the
 format is the controller's own hybrid encryption, and the tool built for
-it is what writes it. Three rows are sealed. The DNS-01 token is sealed
-by its `mint`; alertmanager's webhook by its `record`, which writes
-nothing else; and the BGP session password by its `record` once a
-cluster exists, or by its `seal`, which reads the value back out of
-`physical`'s configuration, for a password recorded before there was a
-cluster to seal it to.
+it is what writes it. The DNS-01 token is sealed by its `mint`;
+alertmanager's webhook and the mail relay's DKIM key each by its
+`record`, which writes nothing else; and the BGP session password by its
+`record` once a cluster exists, or by its `seal`, which reads the value
+back out of `physical`'s configuration, for a password recorded before
+there was a cluster to seal it to.
 
 The **App-key rows** carry the same verb one slot over (`escrow.py`):
 console steps printed, the value taken on standard input, and the escrow
