@@ -518,22 +518,26 @@ def deliver(
     fill creates the stack, is not refused because the stack is absent.
 
     For a row the cluster needs too (`Device.sealed`), `sealer` seals the
-    values in the same run: before the configuration is written, so a cluster
-    that refuses the seal leaves both slots as they were, and written after
-    it. `None` is a run with no cluster to seal to yet, which delivers the
-    configuration alone and names `seal` as the step that follows once there
-    is one; a sealed row's `sealer` is the caller's to build, and a caller
-    that cannot reach a cluster that exists refuses rather than passing
-    `None`.
+    values in the same run. The stack that declares the sealed copy is found
+    before the console steps too (`sealing.Sealer.stack`), and that one has
+    to exist already: the seal fills it, and creating it is its own bring-up.
+    The values are sealed before the configuration is written, so a cluster
+    that refuses the seal leaves both slots as they were, and the ciphertext
+    is written after it. `None` is a run with no cluster to seal to yet,
+    which delivers the configuration alone and names `seal` as the step that
+    follows once there is one; a sealed row's `sealer` is the caller's to
+    build, and a caller that cannot reach a cluster that exists refuses
+    rather than passing `None`.
     """
     log.info('finding the passphrase and the backend the %s stack is opened with', stack.name)
     stack.require_backend()
+    if device.sealed is not None and sealer is not None:
+        _ = sealer.stack(device.sealed)
     announce(device)
     values = _collect(device.title, device.fields, given, prompt)
     sealed: tuple[sealing.Sealer, conventions.sealed.SealedValue, dict[str, str]] | None = None
     if device.sealed is not None and sealer is not None:
         ciphertexts = sealer.seal(device.sealed, {field.name: value for field, value in values.items()})
-        _ = sealer.stack(device.sealed)
         sealed = (sealer, device.sealed, ciphertexts)
 
     stack.fill(
@@ -705,7 +709,15 @@ def record_sealed(
     given: Mapping[str, str | None] | None = None,
     prompt: Prompt = input,
 ) -> None:
-    """Print the console steps, collect the values, check them, seal them into the stack that declares them."""
+    """Find the stack that declares the row, print the console steps, collect the values, check them, seal them into it.
+
+    The declaring stack is found first (`sealing.Sealer.stack`) -- opened
+    under its own passphrase in the backend it keeps its state in, and held
+    to exist -- before the steps are printed or any value is asked for, so a
+    machine that could not write the ciphertext refuses before the operator
+    makes or pipes in the value.
+    """
+    _ = sealer.stack(record.sealed)
     log.warning('%s is neither minted nor derived; it comes from here:', record.title)
     for line in record.console.splitlines():
         log.warning('  %s', line)

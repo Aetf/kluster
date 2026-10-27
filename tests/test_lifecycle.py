@@ -1252,12 +1252,23 @@ def _recording_pulumi(monkeypatch: pytest.MonkeyPatch) -> list[tuple[list[str], 
     return started
 
 
+class _Unread(io.StringIO):
+    """Standard input as a pipe that fails the case when it is read: nothing is to be piped in."""
+
+    def read(self, size: int | None = -1, /) -> str:
+        raise AssertionError(f'standard input was read ({size}) for a value nothing was to ask for')
+
+
 def _unasked(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every hidden prompt fails the case, as `_refuse` does the plain one: nothing is to be asked for."""
+    """Every hidden prompt and every read of standard input fails the case, as `_refuse` does the plain prompt.
+
+    Nothing is to be asked for.
+    """
     monkeypatch.setattr('getpass.getpass', _refuse)
+    monkeypatch.setattr('sys.stdin', _Unread())
 
 
-def _unprinted(device: devices.Device, caplog: pytest.LogCaptureFixture) -> None:
+def _unprinted(device: devices.Device | devices.SealedRecord, caplog: pytest.LogCaptureFixture) -> None:
     """None of `device`'s console steps reached the log."""
     steps = [line.strip() for line in device.console.splitlines() if line.strip()]
     assert steps, f'nothing to exercise: {device.member} has no console steps'
@@ -1474,3 +1485,123 @@ def test_a_rows_first_record_creates_its_stack_rather_than_being_refused_for_its
 
     assert backend.stacks == [device.stack]
     assert set(backend.config) == {field.key for field in device.fields}
+
+
+# -- a sealed row's `record` finds its declaring stack first ------------------
+#
+# The stack the sealed copy is written into is not the row's own -- `k8s-base`
+# for the session password and alertmanager's webhook, `apps` for the DKIM
+# key -- and it is found before the console steps too (`sealing.Sealer.stack`),
+# on the environment a `credentials` run builds.
+
+#: Every row sealed to the cluster by its `record`: the device row whose
+#: configuration is sealed too, and the rows whose seal is the whole delivery.
+SEALED_ROWS = (
+    *(member for member, device in devices.DEVICES.items() if device.sealed is not None),
+    *devices.SEALED_RECORDS,
+)
+
+
+def _sealed_row(member: str) -> devices.Device | devices.SealedRecord:
+    return devices.DEVICES[member] if member in devices.DEVICES else devices.SEALED_RECORDS[member]
+
+
+def _declaring_stack(member: str) -> str:
+    sealed = _sealed_row(member).sealed
+    assert sealed is not None
+    return sealed.stack
+
+
+def _kubeseal_unstarted(args: Sequence[str], *, stdin: str | None) -> str:
+    """A `kubeseal` that fails the case if it is started: nothing was asked for, so there is nothing to seal."""
+    _ = stdin
+    raise AssertionError(f'kubeseal was started ({args}) before the declaring stack was found')
+
+
+def _record_sealed_row(member: str, *, open_stack: Callable[[str], pulumi_config.Stack]) -> None:
+    """`derived <member> record`, as the command runs it once the sealer is built from `physical`."""
+    sealer = sealing.Sealer(certificate='', open_stack=open_stack, run=_kubeseal_unstarted)
+    if member in devices.DEVICES:
+        device = devices.DEVICES[member]
+        _ = devices.deliver(device, stack=open_stack(device.stack), prompt=_refuse, sealer=sealer)
+    else:
+        devices.record_sealed(devices.SEALED_RECORDS[member], sealer=sealer, prompt=_refuse)
+
+
+def _with_a_bundle(tmp_path: Path) -> Path:
+    """A client bundle naming a backend, so no refusal in the case is the backend's."""
+    bundle = tmp_path / 'bundle'
+    bundle.mkdir()
+    _ = (bundle / 'backend-url').write_text('postgres://operator@192.0.2.10:5432/pulumi_state\n')
+    return bundle
+
+
+@needs_age
+@pytest.mark.parametrize('member', SEALED_ROWS)
+def test_recording_a_sealed_row_whose_declaring_stack_has_no_passphrase_is_refused_before_its_console_steps(
+    kit: KdbxStore,
+    registry: escrow.Registry,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    member: str,
+) -> None:
+    """A kit holding `physical`'s passphrase and nothing under the stack passphrase's label, with a bundle in place.
+
+    So `physical` opens -- the sealer is built from it -- and the stack the
+    sealed copy is written into does not: refused before the operator is sent
+    to make the value or pipe it in, and before any `pulumi` starts.
+    """
+    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
+    _ = escrow.generate(escrow.Vault.open(kit, registry), escrow.PHYSICAL_PASSPHRASE)
+    environment = lifecycle.environment(kit, _with_a_bundle(tmp_path), registry)
+    started = _recording_pulumi(monkeypatch)
+    assert pulumi_config.PASSPHRASE_ENV in environment.variables(pulumi_config.PHYSICAL)
+    _unasked(monkeypatch)
+
+    with pytest.raises(escrow.EscrowRefused) as refused:
+        _record_sealed_row(
+            member,
+            open_stack=lambda name: pulumi_config.Stack(
+                name=name, directory=pulumi_config.project_dir(), environment=environment
+            ),
+        )
+
+    assert refused.value.label == escrow.PASSPHRASE
+    assert started == []
+    _unprinted(_sealed_row(member), caplog)
+
+
+@needs_age
+@pytest.mark.parametrize('member', SEALED_ROWS)
+def test_recording_a_sealed_row_before_its_declaring_stack_exists_is_refused_before_its_console_steps(
+    kit: KdbxStore,
+    registry: escrow.Registry,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    member: str,
+) -> None:
+    """Every stack opens, and the backend holds none: the declaring stack is refused for its absence, the row's own is not.
+
+    The session password's own stack is `physical`, absent here as well, and
+    what refuses is `k8s-base`: a row's first `record` creates its own stack,
+    while the stack its sealed copy is written into has to be there already.
+    """
+    _escrow_the_stack_passphrases(kit, registry)
+    environment = lifecycle.environment(kit, _with_a_bundle(tmp_path), registry)
+    backend = RecordedPulumi()
+    _unasked(monkeypatch)
+
+    with pytest.raises(pulumi_config.StackMissing) as refused:
+        _record_sealed_row(
+            member,
+            open_stack=lambda name: pulumi_config.Stack(
+                name=name, directory=pulumi_config.project_dir(), environment=environment, run=backend
+            ),
+        )
+
+    assert refused.value.stack == _declaring_stack(member)
+    assert backend.stacks == []
+    assert backend.config == {}
+    _unprinted(_sealed_row(member), caplog)
