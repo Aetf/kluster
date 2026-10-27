@@ -6,10 +6,10 @@ test is the block: records that appear together, in every zone of one set, and
 the per-zone view derived from them.
 """
 
-import subprocess
 import sys
 from collections import Counter
 
+import process_sessions
 import pytest
 
 from kluster import conventions
@@ -186,7 +186,7 @@ def test_the_records_import_without_the_gateway_behind_them() -> None:
         f'print(" ".join(sorted(name for name in {GATEWAY_IMPORTS!r} if name in sys.modules)))'
     )
 
-    loaded = subprocess.run([sys.executable, '-c', probe], capture_output=True, check=True, text=True, timeout=20)
+    loaded = process_sessions.run([sys.executable, '-c', probe], check=True, text=True, timeout=20)
 
     assert loaded.stdout.split() == []
 

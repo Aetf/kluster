@@ -15,10 +15,10 @@ import json
 import os
 import re
 import shutil
-import subprocess
 from pathlib import Path
 from typing import cast
 
+import process_sessions
 import pytest
 from workflow_files import github_name, mapping, read_workflow, workflows_and_actions
 
@@ -132,9 +132,7 @@ def _runs_the_script(command: str, tmp_path: Path, remote: str | None) -> bool:
         env['CLAUDE_CODE_REMOTE'] = remote
     # Hooks run in the session's working directory, so a command written
     # relative to it must meet the stand-in, not the checkout under test.
-    completed = subprocess.run(
-        ['sh', '-c', command], cwd=project, env=env, capture_output=True, text=True, check=False, timeout=60
-    )
+    completed = process_sessions.run(['sh', '-c', command], cwd=project, env=env, text=True, check=False, timeout=60)
     assert completed.returncode == 0, completed.stderr
     return marker.exists()
 
@@ -191,12 +189,12 @@ def test_gitignore_keeps_scratch_out_and_lets_the_tracked_paths_through(tmp_path
         'GIT_CONFIG_GLOBAL': os.devnull,
         'GIT_CONFIG_NOSYSTEM': '1',
     }
-    subprocess.run(['git', 'init', '-q', str(tmp_path)], env=env, check=True, timeout=60)
+    process_sessions.run(['git', 'init', '-q', str(tmp_path)], env=env, check=True, timeout=60)
     shutil.copy(ROOT / '.gitignore', tmp_path / '.gitignore')
     (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
     (tmp_path / path).touch()
 
-    completed = subprocess.run(
+    completed = process_sessions.run(
         ['git', 'check-ignore', '--no-index', '-q', path], cwd=tmp_path, env=env, check=False, timeout=60
     )
 

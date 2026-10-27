@@ -283,7 +283,9 @@ def run(
     still running at `timeout`, or a member still holding its output open,
     raises `TimeoutExpired` naming the command and its bound, with the
     output read so far; `check` raises `CalledProcessError` on a non-zero
-    status, after the session has ended.
+    status, after the session has ended. That error carries the command's
+    stderr as a note -- its stdout where stderr is empty -- because its
+    message names only the status, and a case's report shows its notes.
     """
     if input is not None and stdin is not None:
         raise ValueError('input and stdin are two stdins; hand one')
@@ -300,5 +302,9 @@ def run(
     status = command.returncode
     assert status is not None, 'communicate returned before the leader was reaped'
     if check and status != 0:
-        raise subprocess.CalledProcessError(status, command.args, output, errors)
+        failed = subprocess.CalledProcessError(status, command.args, output, errors)
+        said = errors or output
+        if said:
+            failed.add_note(said if isinstance(said, str) else said.decode(errors='replace'))
+        raise failed
     return subprocess.CompletedProcess(command.args, status, output, errors)

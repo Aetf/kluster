@@ -24,10 +24,10 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import subprocess
 from pathlib import Path
 from typing import Any
 
+import process_sessions
 import pytest
 
 from kluster.lib import stack_environment
@@ -238,12 +238,12 @@ def test_gitignore_keeps_what_stays_on_the_machine_and_lets_the_checkpoint_throu
         'GIT_CONFIG_GLOBAL': os.devnull,
         'GIT_CONFIG_NOSYSTEM': '1',
     }
-    _ = subprocess.run(['git', 'init', '-q', str(tmp_path)], env=env, check=True, timeout=60)
+    _ = process_sessions.run(['git', 'init', '-q', str(tmp_path)], env=env, check=True, timeout=60)
     _ = shutil.copy(ROOT / '.gitignore', tmp_path / '.gitignore')
     (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
     (tmp_path / path).touch()
 
-    completed = subprocess.run(
+    completed = process_sessions.run(
         ['git', 'check-ignore', '--no-index', '-q', path], cwd=tmp_path, env=env, check=False, timeout=60
     )
 

@@ -26,6 +26,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import TextIO, cast
 
+import process_sessions
 import pytest
 import requests
 import ruamel.yaml.main as ruamel_yaml_main
@@ -664,9 +665,7 @@ def test_update_crds_starts_when_the_sdk_does_not_import() -> None:
         'from kluster.scripts.update_crds import main; sys.exit(main(["--help"]))'
     )
 
-    run = subprocess.run(
-        [sys.executable, '-c', broken], capture_output=True, text=True, timeout=IMPORT_RUN_TIMEOUT, check=False
-    )
+    run = process_sessions.run([sys.executable, '-c', broken], text=True, timeout=IMPORT_RUN_TIMEOUT, check=False)
 
     assert run.returncode == 0, run.stderr
     assert '--project' in run.stdout

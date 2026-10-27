@@ -18,21 +18,27 @@ fixture that made it opens it for writing once as the case ends, which lets
 each of them read EOF and exit by itself; what a case pinned it also kills
 through the pin. Nothing is chosen by name or pattern.
 
-The last case holds the premise all of it rests on: that the `pulumi` CLI's
-plugins stay in its session (framework/testing.md §1.2).
+The premise case holds what all of it rests on: that the `pulumi` CLI's
+plugins stay in its session (framework/testing.md §1.2). The census after it
+holds the rule the helper exists for: every test module starts its processes
+through it, or says why at the call.
 """
 
 from __future__ import annotations
 
+import ast
 import errno
+import io
 import json
 import os
+import re
 import selectors
 import shutil
 import signal
 import subprocess as sp
 import sys
 import time
+import tokenize
 from collections.abc import Iterator
 from contextlib import suppress
 from dataclasses import dataclass
@@ -266,6 +272,22 @@ def test_a_leader_the_end_killed_reads_as_killed(fifo: str, planted: Planted) ->
 STDIN = 'import os; print(os.readlink("/proc/self/fd/0"))'
 
 
+@pytest.mark.parametrize(
+    ('program', 'text'),
+    [
+        ('import sys; print("ignored"); sys.exit("the complaint")', True),
+        ('import sys; print("the complaint"); sys.exit(1)', False),
+    ],
+    ids=['stderr', 'stdout where stderr is empty'],
+)
+def test_a_failed_check_carries_what_the_command_said(program: str, text: bool) -> None:
+    """`CalledProcessError`'s message names only the status, so the complaint rides as a note the report shows."""
+    with pytest.raises(sp.CalledProcessError) as failed:
+        _ = process_sessions.run([sys.executable, '-c', program], text=text, check=True, timeout=WAIT)
+
+    assert failed.value.__notes__ == ['the complaint\n']
+
+
 def test_a_command_reads_dev_null_and_never_this_processs_stdin() -> None:
     # pytest's capture and an xdist worker already hold /dev/null on fd 0,
     # so the case puts a pipe there for the length of the calls.
@@ -365,9 +387,8 @@ def test_an_interruption_inside_the_end_is_finished_by_the_second(
 
 
 def test_the_end_takes_its_own_session_and_nothing_outside_it(fifo: str, planted: Planted) -> None:
-    # A child of this process outside any helper's session: the deliberate
-    # exception to starting every process through `process_sessions`, since
-    # what the case holds is that the helper leaves such a process alone.
+    # outside process_sessions -- a child of this process outside every
+    # session the helper starts is what the case holds the helper leaves alone.
     plain = sp.Popen([sys.executable, '-c', CHILD, fifo], stdout=sp.PIPE, text=True)
     try:
         assert plain.stdout is not None
@@ -416,9 +437,9 @@ def test_a_member_is_gone_after_the_case_bound_fires_in_the_block(tmp_path: Path
     report = tmp_path / 'report'
     _ = (tmp_path / 'test_bound.py').write_text(BOUND_CASE.format(leader=_leader(fifo, 'block'), report=str(report)))
     _ = (tmp_path / 'pytest.ini').write_text('[pytest]\n')
-    # A plain `subprocess.run` rather than the helper under test, so that the
-    # outer run does not depend on what it is checking; the child pytest
-    # starts nothing outside the planted tree's own session.
+    # outside process_sessions -- the outer run does not depend on the helper
+    # it is checking, and the child pytest starts nothing outside the planted
+    # tree's own session.
     child_run = sp.run(
         [sys.executable, '-m', 'pytest', '-c', str(tmp_path / 'pytest.ini'), '-p', 'no:cacheprovider', '-q'],
         cwd=tmp_path,
@@ -590,3 +611,255 @@ def test_the_pulumi_clis_plugins_stay_in_its_session_and_go_with_it(
     assert 'pulumi' in str(expired.value.cmd)
     assert len(pinned) == 4, pinned
     assert [name for name, process in pinned.items() if process.is_running()] == []
+
+
+# The census: every test module starts its processes here, or says why at the call.
+
+#: The comment that says why a call starts a process some other way, on the
+#: line that names the way -- the first line of a call that spans several --
+#: or among the comment lines directly above that line.
+EXEMPT = '# outside process_sessions -- '
+
+#: The ways to start a process outside `process_sessions` that the census
+#: recognizes, as the dotted names a module's imports resolve them to:
+#: `subprocess`'s, the `exec`, `spawn` and `fork` families and `system`/`popen`
+#: of `os`, `pty`'s, `asyncio`'s, `multiprocessing`'s, `concurrent.futures`'
+#: process pool and `psutil`'s `Popen`. A way it does not recognize is under
+#: the rule all the same, and is added here by the change that first gives
+#: such a call its reason (framework/testing.md §1.2).
+STARTS = re.compile(
+    r'subprocess\.(run|Popen|call|check_call|check_output|getoutput|getstatusoutput)'
+    r'|os\.(system|popen|fork\w*|exec\w*|spawn\w*|posix_spawn\w*)'
+    r'|pty\.(spawn|fork)'
+    r'|asyncio(\.subprocess)?\.create_subprocess_\w+'
+    r'|multiprocessing(\.pool)?\.(Process|Pool|get_context)'
+    r'|concurrent\.futures(\.process)?\.ProcessPoolExecutor'
+    r'|psutil\.Popen'
+)
+
+#: The event loop's own ways, recognized by the method's name alone: a loop is
+#: a value rather than an import, so no import resolves it, and no other type
+#: names a method so.
+LOOP_STARTS = frozenset({'subprocess_exec', 'subprocess_shell'})
+
+
+@dataclass(frozen=True)
+class Start:
+    """A place a module reaches a way to start a process, and the line of the reason beside it, if one is."""
+
+    line: int
+    name: str
+    reason: int | None
+
+    @property
+    def explained(self) -> bool:
+        return self.reason is not None
+
+
+@dataclass(frozen=True)
+class Census:
+    """What a module reaches, and each reason it carries that explains no start, as a `noqa` that suppresses nothing."""
+
+    starts: list[Start]
+    unspent: list[int]
+
+
+def _imports(tree: ast.Module) -> dict[str, str]:
+    """What each name an import binds stands for, as a dotted name."""
+    bound: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname is not None:
+                    bound[alias.asname] = alias.name
+                else:
+                    # `import a.b` binds `a`.
+                    first = alias.name.partition('.')[0]
+                    bound[first] = first
+        elif isinstance(node, ast.ImportFrom) and node.module is not None and node.level == 0:
+            for alias in node.names:
+                bound[alias.asname or alias.name] = f'{node.module}.{alias.name}'
+    return bound
+
+
+def _qualified(node: ast.expr, bound: dict[str, str]) -> str | None:
+    """The dotted name `node` reads, its first part resolved through the module's imports."""
+    parts: list[str] = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name) or node.id not in bound:
+        return None
+    return '.'.join([bound[node.id], *reversed(parts)])
+
+
+def _started_by(node: ast.Attribute | ast.Name, bound: dict[str, str]) -> str | None:
+    """The way to start a process `node` names, if it names one the census recognizes."""
+    name = _qualified(node, bound)
+    if name is not None and STARTS.fullmatch(name):
+        return name
+    if isinstance(node, ast.Attribute) and node.attr in LOOP_STARTS:
+        return f'<event loop>.{node.attr}'
+    return None
+
+
+def reached(source: str) -> Census:
+    """Every place `source` reaches a way to start a process -- called, or handed on as a value -- and every reason left over."""
+    tree = ast.parse(source)
+    bound = _imports(tree)
+    comments: dict[int, str] = {}
+    code: set[int] = set()
+    for token in tokenize.generate_tokens(io.StringIO(source).readline):
+        if token.type == tokenize.COMMENT:
+            comments[token.start[0]] = token.string
+        elif token.type not in (tokenize.NL, tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT, tokenize.ENDMARKER):
+            code.update(range(token.start[0], token.end[0] + 1))
+
+    def reason(line: int) -> int | None:
+        """The line of the reason that explains a start on `line`: on it, or among the comment lines above."""
+        if comments.get(line, '').startswith(EXEMPT):
+            return line
+        above = line - 1
+        while above in comments and above not in code:
+            if comments[above].startswith(EXEMPT):
+                return above
+            above -= 1
+        return None
+
+    # A type named in an annotation or an `isinstance` is reported as well,
+    # though it starts nothing: that fails closed, and the tree has none.
+    found = [
+        Start(node.lineno, name, reason(node.lineno))
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute | ast.Name)
+        and isinstance(node.ctx, ast.Load)
+        and (name := _started_by(node, bound)) is not None
+    ]
+    spent = {start.reason for start in found}
+    reasons = sorted(line for line, comment in comments.items() if comment.startswith(EXEMPT))
+    return Census(sorted(found, key=lambda start: start.line), [line for line in reasons if line not in spent])
+
+
+@pytest.mark.parametrize(
+    'source',
+    [
+        'import subprocess\nsubprocess.run(["true"])\n',
+        'import subprocess as sp\nwith sp.Popen(["true"]) as child:\n    pass\n',
+        'from subprocess import check_output as read\nread(["true"])\n',
+        'import subprocess\nRUN = subprocess.run\n',
+        'import os\nos.system("true")\n',
+        'import os\nos.execv("/bin/true", ["true"])\n',
+        'import pty\npty.spawn(["true"])\n',
+        'import asyncio\nasyncio.create_subprocess_exec("true")\n',
+        'import asyncio.subprocess\nasyncio.subprocess.create_subprocess_shell("true")\n',
+        'import asyncio\nasyncio.get_running_loop().subprocess_exec(Protocol, "true")\n',
+        'async def start(loop):\n    await loop.subprocess_shell(Protocol, "true")\n',
+        'import multiprocessing\nmultiprocessing.Process(target=print).start()\n',
+        'from multiprocessing import Pool\nwith Pool(2) as pool:\n    pass\n',
+        'import multiprocessing\nmultiprocessing.get_context("spawn")\n',
+        'import concurrent.futures\nconcurrent.futures.ProcessPoolExecutor()\n',
+        'from concurrent.futures import ProcessPoolExecutor\nProcessPoolExecutor()\n',
+        'import psutil\npsutil.Popen(["true"])\n',
+        'import subprocess\n# outside process_sessions -- a reason\n\nsubprocess.run(["true"])\n',
+        'import subprocess\n# outside process_sessions -- a reason\nx = 1\nsubprocess.run(["true"])\n',
+        'import subprocess\nsubprocess.run(["true"])  # outside process_sessions, with no reason\n',
+    ],
+    ids=[
+        'run',
+        'an aliased Popen',
+        'an imported check_output',
+        'run handed on',
+        'os.system',
+        'os.execv',
+        'pty.spawn',
+        'asyncio',
+        'asyncio.subprocess',
+        "the running loop's subprocess_exec",
+        "a loop's subprocess_shell",
+        'multiprocessing.Process',
+        'an imported Pool',
+        'multiprocessing.get_context',
+        'concurrent.futures.ProcessPoolExecutor',
+        'an imported ProcessPoolExecutor',
+        'psutil.Popen',
+        'a reason a blank line above',
+        'a reason above another statement',
+        'the comment without its reason',
+    ],
+)
+def test_the_census_finds_a_process_started_outside_the_helper_with_no_reason(source: str) -> None:
+    assert [start.explained for start in reached(source).starts] == [False]
+
+
+@pytest.mark.parametrize(
+    'source',
+    [
+        'import process_sessions\nprocess_sessions.run(["true"], timeout=1)\n',
+        'import subprocess\ntry:\n    pass\nexcept subprocess.TimeoutExpired:\n    pass\n',
+        'import os\nos.path.join("a", "b")\n',
+        'SCRIPT = "import subprocess; subprocess.run([\'true\'])"\n',
+    ],
+    ids=['the helper', 'an exception type', 'another name of os', 'a program in a string'],
+)
+def test_the_census_passes_what_starts_no_process_outside_the_helper(source: str) -> None:
+    assert reached(source) == Census([], [])
+
+
+@pytest.mark.parametrize(
+    'source',
+    [
+        'import subprocess\nsubprocess.run(["true"])  # outside process_sessions -- a reason\n',
+        'import subprocess\nsubprocess.run(  # outside process_sessions -- a reason\n    ["true"],\n)\n',
+        'import subprocess\n# A comment of its own.\n# outside process_sessions -- a reason\nsubprocess.run(["true"])\n',
+    ],
+    ids=['on the line', 'on the first line of the call', 'among the comments above'],
+)
+def test_the_census_passes_a_start_with_its_reason(source: str) -> None:
+    census = reached(source)
+    assert ([start.explained for start in census.starts], census.unspent) == ([True], [])
+
+
+@pytest.mark.parametrize(
+    ('source', 'unspent'),
+    [
+        (
+            'import process_sessions\n# outside process_sessions -- a reason\nprocess_sessions.run(["true"], timeout=1)\n',
+            [2],
+        ),
+        (
+            'import subprocess\n# outside process_sessions -- a reason\nx = 1\nsubprocess.run(["true"])  # outside process_sessions -- its own\n',
+            [2],
+        ),
+        ('x = 1\n# outside process_sessions -- a reason with nothing under it\n', [2]),
+    ],
+    ids=['above a call through the helper', 'above a start that has a reason of its own', 'above nothing'],
+)
+def test_the_census_finds_a_reason_that_explains_no_start(source: str, unspent: list[int]) -> None:
+    assert reached(source).unspent == unspent
+
+
+def test_every_test_module_starts_its_processes_through_the_helper_or_says_why() -> None:
+    """framework/testing.md §1.2: a process a case starts goes through `process_sessions`.
+
+    Every Python file under `tests/` is read but the helper itself. The scan
+    has to find this module's own starts with their reasons, or it read
+    nothing.
+    """
+    modules = sorted(path for path in TESTS.rglob('*.py') if path != TESTS / 'process_sessions.py')
+    censuses = {path: reached(path.read_text()) for path in modules}
+    assert any(start.explained for start in censuses[Path(__file__)].starts)
+    found = [
+        f'{path.relative_to(TESTS.parent)}:{start.line}: {start.name}'
+        for path, census in censuses.items()
+        for start in census.starts
+        if not start.explained
+    ]
+    unspent = [
+        f'{path.relative_to(TESTS.parent)}:{line}: a reason with no start under it'
+        for path, census in censuses.items()
+        for line in census.unspent
+    ]
+    assert found == [], f'started outside tests/process_sessions.py, with no `{EXEMPT}<reason>` at the call: {found}'
+    assert unspent == [], (
+        f"each explains no start the census recognizes: put the reason with the call it explains, or add that call's way to STARTS: {unspent}"
+    )

@@ -14,9 +14,10 @@ process are the scheduler's to decide.
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 from pathlib import Path
+
+import process_sessions
 
 ROOT = Path(__file__).parent.parent
 
@@ -57,7 +58,7 @@ def test_a_cases_cancelled_outputs_are_not_tracked_into_the_next(tmp_path: Path)
     (tmp_path / 'pytest.ini').write_text(CONFIGURATION)
     environment = {**os.environ, 'PYTHONPATH': str(ROOT / 'tests')}
 
-    run = subprocess.run(
+    run = process_sessions.run(
         [
             sys.executable,
             '-m',
@@ -73,7 +74,6 @@ def test_a_cases_cancelled_outputs_are_not_tracked_into_the_next(tmp_path: Path)
         ],
         cwd=tmp_path,
         env=environment,
-        capture_output=True,
         text=True,
         timeout=TIMEOUT,
         check=False,

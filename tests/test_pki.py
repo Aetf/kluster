@@ -10,6 +10,7 @@ import ipaddress
 import subprocess as sp
 from pathlib import Path
 
+import process_sessions
 import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
@@ -153,9 +154,8 @@ def _verify(ca: bytes, leaf: bytes, directory: Path, *purpose: str) -> sp.Comple
     leaf_file = directory / 'leaf.pem'
     _ = ca_file.write_bytes(ca)
     _ = leaf_file.write_bytes(leaf)
-    return sp.run(
+    return process_sessions.run(
         ['openssl', 'verify', '-x509_strict', *purpose, '-CAfile', str(ca_file), str(leaf_file)],
-        capture_output=True,
         text=True,
         timeout=30,
     )

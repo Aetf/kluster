@@ -22,7 +22,6 @@ import itertools
 import os
 import re
 import shlex
-import subprocess
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -30,6 +29,7 @@ from pathlib import Path
 from typing import Annotated, Any, final, get_origin
 
 import asyncssh
+import process_sessions
 import pulumi.dynamic as dynamic
 import pytest
 import pytest_asyncio
@@ -1439,9 +1439,8 @@ SHELL_TIMEOUT = 5.0
 
 def sh(script: str) -> int:
     """Run one of the scripts the way the device's shell runs it, and report the status."""
-    completed = subprocess.run(
+    completed = process_sessions.run(
         ['/bin/sh', '-c', script],
-        capture_output=True,
         check=False,
         timeout=SHELL_TIMEOUT,
     )
@@ -1644,10 +1643,9 @@ class Shell:
         assert encoding is None
         assert check is False
         assert timeout > 0
-        completed = subprocess.run(
+        completed = process_sessions.run(
             ['/bin/sh', '-c', command],
             input=input,
-            capture_output=True,
             check=False,
             timeout=timeout,
         )
@@ -1843,9 +1841,7 @@ def owner_of(path: Path) -> str:
     with no entry, as in an arbitrary-uid container, is spelled the same way on
     both sides of a comparison instead of failing the lookup.
     """
-    named = subprocess.run(
-        ['stat', '-c', '%U:%G', str(path)], capture_output=True, text=True, check=True, timeout=SHELL_TIMEOUT
-    )
+    named = process_sessions.run(['stat', '-c', '%U:%G', str(path)], text=True, check=True, timeout=SHELL_TIMEOUT)
     return named.stdout.strip()
 
 

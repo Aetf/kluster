@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pinned_tools
+import process_sessions
 import pulumi
 import pytest
 import pytest_asyncio
@@ -211,9 +212,8 @@ def compile_rules(text: str, directory: Path) -> subprocess.CompletedProcess[str
     """ZeroTier's own compiler over `text`, as Central compiles a `rulesSource`."""
     source = directory / 'flow-rules.zt'
     _ = source.write_text(text)
-    return subprocess.run(
+    return process_sessions.run(
         [pinned_tools.located('node'), str(COMPILER), str(source)],
-        capture_output=True,
         text=True,
         timeout=COMPILE_TIMEOUT,
         check=False,

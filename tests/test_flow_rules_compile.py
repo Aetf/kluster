@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import cast
 
 import pinned_tools
+import process_sessions
 import pytest
 from overlay_flow_rules import NODE_IDS, rules
 
@@ -55,9 +56,8 @@ def compile_rules(program: str, directory: Path) -> subprocess.CompletedProcess[
     """Run the vendored `cli.js` over `program`, as Central compiles a `rulesSource`."""
     source = directory / 'flow-rules.zt'
     source.write_text(program)
-    return subprocess.run(
+    return process_sessions.run(
         [node(), str(VENDOR / 'cli.js'), str(source)],
-        capture_output=True,
         text=True,
         timeout=TIMEOUT,
         check=False,

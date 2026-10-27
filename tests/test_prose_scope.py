@@ -13,12 +13,12 @@ with a stand-in for the checker that logs which files it was handed.
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 import tomllib
 from pathlib import Path, PurePosixPath
 from typing import cast
 
+import process_sessions
 import pytest
 from workflow_files import GITHUB, mapping, read_workflow, workflow_jobs
 
@@ -77,12 +77,11 @@ def _environment(home: Path) -> dict[str, str]:
 
 
 def _git(repo: Path, *args: str) -> str:
-    done = subprocess.run(
+    done = process_sessions.run(
         ['git', *args],
         cwd=repo,
         env=_environment(repo.parent),
         check=True,
-        capture_output=True,
         text=True,
         timeout=GIT_TIMEOUT,
     )
@@ -125,11 +124,10 @@ def checked(tmp_path: Path, *, whole_tree: bool) -> list[str]:
         'RUNNER_TEMP': str(tmp_path),
         'STAND_IN_LOG': str(log),
     }
-    done = subprocess.run(
+    done = process_sessions.run(
         ['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', prose_run()],
         cwd=repo,
         env=env,
-        capture_output=True,
         text=True,
         timeout=STEP_TIMEOUT,
     )

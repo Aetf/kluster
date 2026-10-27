@@ -22,12 +22,12 @@ import json
 import os
 import re
 import shutil
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
 import pinned_tools
+import process_sessions
 import pytest
 from workflow_files import GITHUB, mapping, read_workflow, workflow_jobs
 
@@ -189,10 +189,9 @@ def _run(
         'FAKE_PR': json.dumps({'changedFiles': len(files) if changed is COUNTED else changed, 'headRefOid': head}),
         'FAKE_GH_FAILS': '1' if gh_fails else '',
     }
-    done = subprocess.run(
+    done = process_sessions.run(
         ['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', script],
         env=env,
-        capture_output=True,
         text=True,
         timeout=30,
         check=False,

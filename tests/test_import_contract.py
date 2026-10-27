@@ -14,6 +14,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import process_sessions
 import pytest
 
 ROOT = Path(__file__).parent.parent
@@ -53,9 +54,8 @@ def _tree(root: Path, edges: dict[str, str]) -> Path:
 
 def _lint(tree: Path) -> subprocess.CompletedProcess[str]:
     """`lint-imports` under the repository's contract, over `tree` alone."""
-    return subprocess.run(
+    return process_sessions.run(
         [str(Path(sys.executable).with_name('lint-imports')), '--config', str(CONTRACT), '--no-cache'],
-        capture_output=True,
         text=True,
         cwd=tree,
         env={**os.environ, 'PYTHONPATH': str(tree)},

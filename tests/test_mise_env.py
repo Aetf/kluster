@@ -32,11 +32,11 @@ from __future__ import annotations
 import json
 import re
 import shutil
-import subprocess
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
 
+import process_sessions
 import pytest
 
 from kluster.conventions import identity
@@ -114,7 +114,7 @@ def _resolve(
     unless named; `extra` joins the environment mise itself is started in.
     """
     assert MISE is not None
-    result = subprocess.run(
+    result = process_sessions.run(
         [MISE, 'x', '--', 'env', '-0'],
         cwd=cwd,
         env={
@@ -125,7 +125,6 @@ def _resolve(
             **(extra or {}),
             **EXPORTED,
         },
-        capture_output=True,
         text=True,
         check=True,
         # Below the 60 s case bound with room for a second resolve in one

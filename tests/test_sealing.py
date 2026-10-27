@@ -27,13 +27,13 @@ import io
 import json
 import logging
 import os
-import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
 import pinned_tools
+import process_sessions
 import pytest
 from cloudflare_api import ACCOUNT_ID, FakeApi, console_seed
 from credentials_command_tree import named_leaves
@@ -128,10 +128,9 @@ def unseal(
         'metadata': metadata,
         'spec': {'encryptedData': dict(ciphertexts), 'template': {'metadata': metadata}},
     }
-    proc = subprocess.run(
+    proc = process_sessions.run(
         [kubeseal, '--recovery-unseal', '--recovery-private-key', str(key_pair.private_key), '-o', 'json'],
         input=json.dumps(manifest),
-        capture_output=True,
         text=True,
         timeout=TIMEOUT,
         check=False,

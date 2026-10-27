@@ -21,6 +21,7 @@ import subprocess as sp
 import tempfile
 from pathlib import Path
 
+import process_sessions
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -64,9 +65,8 @@ def _home_reaches_the_client_configuration() -> bool:
         # machine whose umask is 0002 would otherwise answer "no" for a reason
         # that has nothing to do with the question being asked.
         configuration.chmod(0o600)
-        probed = sp.run(
+        probed = process_sessions.run(
             ['ssh', '-G', f'core@{ADDRESS}'],
-            capture_output=True,
             text=True,
             timeout=30,
             env=dict(os.environ, HOME=scratch),
@@ -150,10 +150,15 @@ def _client(argv: list[str], *, cwd: Path, home: Path | None = None) -> sp.Compl
     `home` is what lets a case put a client configuration in front of the
     connection without touching the one this machine's user has.
     """
+    return process_sessions.run(argv, text=True, timeout=30, cwd=cwd, env=_environment(home))
+
+
+def _environment(home: Path | None) -> dict[str, str]:
+    """This process's environment, with `home` as the client's home directory where one is named."""
     environment = dict(os.environ)
     if home is not None:
         environment['HOME'] = str(home)
-    return sp.run(argv, capture_output=True, text=True, timeout=30, cwd=cwd, env=environment)
+    return environment
 
 
 def _pinned_argv(known_hosts: Path, proxy: str, command: str = 'true') -> list[str]:
@@ -334,51 +339,64 @@ def test_a_multiplexing_master_cannot_carry_the_pinned_exec(tmp_path: Path, pyte
     resolved = _client(['ssh', '-G', login], cwd=sockets, home=home)
     assert f'controlpath ./mux-{ADDRESS}' in resolved.stdout.splitlines(), resolved.stdout
 
-    try:
-        # The operator's bare login: trust-on-first-use, against the wrong
-        # box, leaving the master that the pinned exec must not inherit.
-        # Inside the `try` so that the teardown owns it too -- its own timeout
-        # is the way this line raises, and it raises with a master standing.
-        bare = _client(
-            [
-                'ssh',
-                '-o',
-                'StrictHostKeyChecking=accept-new',
-                '-o',
-                f'UserKnownHostsFile={home / ".ssh" / "known_hosts"}',
-                '-o',
-                'IdentitiesOnly=yes',
-                '-i',
-                str(identity.private),
-                '-o',
-                'BatchMode=yes',
-                '-o',
-                f'ProxyCommand={proxy}',
-                login,
-                'true',
-            ],
-            cwd=sockets,
-            home=home,
-        )
-        assert bare.returncode == 0, f'the bare login never opened a session: {bare.stderr}'
-        assert list(sockets.iterdir()), 'no master socket, so this case would pass without proving anything'
+    # The operator's bare login: trust-on-first-use, against the wrong box,
+    # leaving the master that the pinned exec must not inherit. The master
+    # leaves the login's POSIX session -- `ControlPersist` backgrounds it in a
+    # session of its own -- but its connection does not: that is the
+    # `ProxyCommand`'s `sshd`, which stays in the session. So the session is
+    # held open for the rest of the case, rather than ended when the login
+    # returns, and its end takes the master's connection down with it
+    # (framework/testing.md §1.2).
+    with process_sessions.started(
+        [
+            'ssh',
+            '-o',
+            'StrictHostKeyChecking=accept-new',
+            '-o',
+            f'UserKnownHostsFile={home / ".ssh" / "known_hosts"}',
+            '-o',
+            'IdentitiesOnly=yes',
+            '-i',
+            str(identity.private),
+            '-o',
+            'BatchMode=yes',
+            '-o',
+            f'ProxyCommand={proxy}',
+            login,
+            'true',
+        ],
+        cwd=sockets,
+        env=_environment(home),
+        stdout=process_sessions.PIPE,
+        stderr=process_sessions.PIPE,
+        text=True,
+    ) as bare:
+        try:
+            # Inside the `try` so that the teardown owns the master too: the
+            # login's own timeout is the way this line raises, and it raises
+            # with a master standing.
+            _, complaints = bare.communicate(timeout=30)
+            assert bare.returncode == 0, f'the bare login never opened a session: {complaints}'
+            assert list(sockets.iterdir()), 'no master socket, so this case would pass without proving anything'
 
-        known_hosts = config.write_known_hosts(tmp_path / 'slot', address=ADDRESS, public_key=appliance.public)
-        reuse, pinned = _through_one_directory(_pinned_argv(known_hosts, proxy), cwd=sockets, home=home)
+            known_hosts = config.write_known_hosts(tmp_path / 'slot', address=ADDRESS, public_key=appliance.public)
+            reuse, pinned = _through_one_directory(_pinned_argv(known_hosts, proxy), cwd=sockets, home=home)
 
-        # The probe got through to a server it holds no pin for and could not
-        # have dialed, so the master is reusable from where the pinned client
-        # ran -- without which its refusal below would be a refusal for want
-        # of a master, and the case would prove nothing about the pin.
-        assert reuse.returncode == 0, (
-            'no master is reusable from the directory both clients ran in, '
-            f'so the refusal below would prove nothing: {reuse.stderr}'
-        )
-        assert pinned.returncode != 0
-        assert REFUSED in pinned.stderr
-    finally:
-        _ = _client(
-            ['ssh', '-O', 'exit', '-o', 'ControlPath=./mux-%h', login],
-            cwd=sockets,
-            home=home,
-        )
+            # The probe got through to a server it holds no pin for and could not
+            # have dialed, so the master is reusable from where the pinned client
+            # ran -- without which its refusal below would be a refusal for want
+            # of a master, and the case would prove nothing about the pin.
+            assert reuse.returncode == 0, (
+                'no master is reusable from the directory both clients ran in, '
+                f'so the refusal below would prove nothing: {reuse.stderr}'
+            )
+            assert pinned.returncode != 0
+            assert REFUSED in pinned.stderr
+        finally:
+            # The master itself, which is outside every session this case
+            # started.
+            _ = _client(
+                ['ssh', '-O', 'exit', '-o', 'ControlPath=./mux-%h', login],
+                cwd=sockets,
+                home=home,
+            )
