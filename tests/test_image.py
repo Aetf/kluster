@@ -290,8 +290,7 @@ async def test_the_local_artifact_is_named_by_what_it_contains(tmp_path: Path, m
     assert paths[0] == paths[1]
     assert paths[0] != another
     # Another release is another file: the provider keeps a file already at
-    # the path and replaces before it deletes, so a release that kept the path
-    # would be served the old file and then lose it.
+    # the path, so a release that kept the path would be served the old file.
     assert paths[0] != await worker_path(WORKER, f'{TALOS_VERSION}-next')
     # Another room is another file, for the same reason: a file already at the
     # path is reused, so a path that kept still would serve the old room.
@@ -595,16 +594,104 @@ def test_a_local_artifact_that_is_gone_is_not_a_deleted_resource(tmp_path: Path)
     assert result.outs == stored
 
 
-def test_deleting_the_resource_takes_the_local_copy_with_it(tmp_path: Path) -> None:
+def test_deleting_the_resource_takes_the_local_copy_with_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _ = serve(monkeypatch, lzma.compress(PAYLOAD))
+    path = tmp_path / 'talos.raw'
+    provider = talos_factory.FactoryImageProvider()
+    created = provider.create(props('https://factory.invalid/a.raw.xz', path))
+
+    provider.delete(str(created.id), created.outs or {})
+
+    # Deterministic cleanup, and tolerant of the file already being gone —
+    # which is the ordinary case on a machine that never created it.
+    assert not path.exists()
+    provider.delete(str(created.id), created.outs or {})
+
+
+def warnings_of(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Capture what the provider warns through `pulumi.log`, the channel a dynamic provider has."""
+    warned: list[str] = []
+
+    def warn(message: str, *_args: object, **_kwargs: object) -> None:
+        warned.append(message)
+
+    monkeypatch.setattr(talos_factory.pulumi.log, 'warn', warn)
+    return warned
+
+
+def until_the_clock_passes(path: Path) -> None:
+    """Return once the file system stamps a status change later than `path`'s last one.
+
+    A replacement is created in a later run than its original, whose write is
+    then behind the file system's clock. Two creates back to back are not: a
+    file system that stamps from a coarse clock gives both one status-change
+    time. So a case that stands for the later run waits for the clock to pass
+    the original's write, on a file of its own beside it, rather than
+    inheriting a fine-grained clock from the kernel.
+    """
+    stamped = path.stat().st_ctime_ns
+    probe = path.with_name(f'{path.name}.clock')
+    probe.touch()
+    while probe.stat().st_ctime_ns <= stamped:
+        probe.chmod(0o644)
+
+
+def test_a_replacement_that_reuses_the_file_keeps_it_when_the_original_is_deleted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A create-first replacement of the same artifact, as a targeted `--replace` makes, leaves the file.
+
+    The replacement declares the same path, finds the file the original
+    fetched and reuses it, and the engine then deletes the original with the
+    original's outputs. That delete must not take the file the replacement
+    stands for: nothing would bring it back, and the next disk rebuild on
+    this machine would find none.
+    """
+    requested = serve(monkeypatch, lzma.compress(PAYLOAD))
+    warned = warnings_of(monkeypatch)
+    path = tmp_path / 'talos.raw'
+    provider = talos_factory.FactoryImageProvider()
+    declared = props('https://factory.invalid/a.raw.xz', path)
+    original = provider.create(declared)
+    until_the_clock_passes(path)
+    replacement = provider.create(declared)
+    assert len(requested) == 1, 'the replacement reuses the file rather than fetching it again'
+
+    provider.delete(str(original.id), original.outs or {})
+
+    assert path.read_bytes() == PAYLOAD
+    assert len(warned) == 1 and str(path) in warned[0], warned
+    # The replacement's own delete, when it comes, is the one that removes it.
+    provider.delete(str(replacement.id), replacement.outs or {})
+    assert not path.exists()
+
+
+def test_a_refresh_keeps_the_identity_its_create_recorded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A refresh reads an original awaiting its delete too, and must not hand it the replacement's write."""
+    _ = serve(monkeypatch, lzma.compress(PAYLOAD))
+    _ = warnings_of(monkeypatch)
+    path = tmp_path / 'talos.raw'
+    provider = talos_factory.FactoryImageProvider()
+    declared = props('https://factory.invalid/a.raw.xz', path)
+    original = provider.create(declared)
+    until_the_clock_passes(path)
+    _ = provider.create(declared)
+
+    refreshed = provider.read(str(original.id), original.outs or {})
+    provider.delete(str(original.id), refreshed.outs or {})
+
+    assert path.read_bytes() == PAYLOAD
+
+
+def test_a_resource_created_with_no_identity_recorded_deletes_the_file(tmp_path: Path) -> None:
+    # A resource created without a recorded identity keeps none, since the
+    # provider has no update to give it one, and its delete removes the file.
     path = tmp_path / 'talos.raw'
     _ = path.write_bytes(PAYLOAD)
 
     talos_factory.FactoryImageProvider().delete('an-id', props('https://factory.invalid/a.raw.xz', path))
 
-    # Deterministic cleanup, and tolerant of the file already being gone —
-    # which is the ordinary case on a machine that never created it.
     assert not path.exists()
-    talos_factory.FactoryImageProvider().delete('an-id', props('https://factory.invalid/a.raw.xz', path))
 
 
 def test_the_provider_carries_no_state_of_its_own() -> None:
