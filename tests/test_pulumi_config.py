@@ -219,9 +219,9 @@ def live_stack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> pulumi_config
     return pulumi_config.Stack(
         name=STACK,
         directory=project,
-        # The passphrase and the URL go in as the shape a `credentials` run
-        # builds, so the probe exercises the resolution the real callers use:
-        # the stack picks its own passphrase out of this by its own name.
+        # The passphrase and the URL go in a `BackendEnvironment`, so the probe
+        # exercises the resolution the real callers use: the stack picks its
+        # own passphrase out of it by its own name.
         environment=pulumi_config.BackendEnvironment(passphrase='probe-passphrase', url=state.as_uri()),
     )
 
@@ -589,8 +589,33 @@ def test_the_stacks_under_the_stack_passphrase_are_the_ones_a_run_hands_it_to(tm
     assert list(pulumi_config.ON_STACK_PASSPHRASE) == handed
 
 
+def test_the_stack_passphrase_is_looked_for_only_for_a_stack_that_takes_it(tmp_path: Path) -> None:
+    """`shared` is asked for a stack under the stack passphrase and for no other, as `operator` and `physical` are."""
+    looked: list[str] = []
+
+    def shared() -> str:
+        looked.append('the escrow')
+        return 'the-stack-passphrase'
+
+    environment = pulumi_config.BackendEnvironment(
+        url='file:///nowhere', shared=shared, operator=lambda: 'operator', physical=lambda: 'own'
+    )
+    for name in (*pulumi_config.APART, pulumi_config.PHYSICAL):
+        _ = environment.variables(name, checkout=tmp_path)
+
+    assert looked == []
+    first = pulumi_config.ON_STACK_PASSPHRASE[0]
+    assert environment.variables(first, checkout=tmp_path)[pulumi_config.PASSPHRASE_ENV] == 'the-stack-passphrase'
+    assert looked == ['the escrow']
+
+
+def test_the_stack_passphrase_is_given_one_way_or_the_other_never_both() -> None:
+    with pytest.raises(ValueError):
+        _ = pulumi_config.BackendEnvironment(passphrase='in-hand', shared=lambda: 'from-the-escrow')
+
+
 def _on_stack_passphrase(url: str, passphrase: str) -> pulumi_config.BackendEnvironment:
-    """What a `credentials` run hands the stacks: `passphrase` as the stack passphrase, `physical` its own."""
+    """The stacks' environment with the stack passphrase in hand: `passphrase` as it, `physical` its own."""
     return pulumi_config.BackendEnvironment(passphrase=passphrase, url=url, physical=lambda: PHYSICAL_OWN)
 
 

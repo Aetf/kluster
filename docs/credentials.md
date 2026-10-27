@@ -1323,7 +1323,12 @@ variable, or a prompt where a machine has none of them. The kit's own
 master password is asked of the same store first
 (`credentials kit password remember` puts it there),
 because a run that then goes on for minutes should not be guarded by a
-password typed into a process nobody is watching. Nothing is written
+password typed into a process nobody is watching. It is asked for when a
+command first reads the kit, and not before: a command whose work reads
+nothing from it, such as `credentials derived state-backend-host-key
+generate`, which writes only a stack under the operator passphrase,
+never asks for it, and one that reads it several times asks once.
+Nothing is written
 to the store as a side effect of a run: each write is a command the
 operator ran by name — `credentials kit password remember`,
 `credentials root <name> remember`, and `credentials derived

@@ -246,6 +246,9 @@ _ORDER = """when to run what:
     `root`, `derived ls` and `derived check` looks for it, and one that
     mints from a seed or recovers an escrowed value unlocks it; so do the
     state-backend commands that reach the CA or the backup identities.
+    It is unlocked on the first read and not before, so a command that
+    reads nothing from it, such as `derived state-backend-host-key
+    generate`, never asks for its master password.
 
   when one seed is lost
     credentials kit bootstrap --only <member>
@@ -1520,8 +1523,9 @@ def _stack(args: argparse.Namespace, store: KdbxStore, name: str, registry: escr
 
     Opened with the same two variables a `pulumi` run needs, found here rather
     than expected in the environment (`lifecycle.environment`): the stack
-    passphrase recovered with the kit that is already open, the operator
-    passphrase through the acquisition chain. One command is one credential
+    passphrase recovered with the kit, which is unlocked for it only when a
+    stack under it is opened, the operator passphrase through the acquisition
+    chain. One command is one credential
     delivered, not a shell that has to be prepared first.
 
     The stack is named by the caller rather than read off `args`: no row takes

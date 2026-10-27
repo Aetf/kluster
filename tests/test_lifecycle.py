@@ -856,7 +856,7 @@ def test_the_environment_recovers_the_passphrase_and_reads_the_url(
 
     # The one place it exists outside its consumers is a committed ciphertext
     # nobody can open without the kit.
-    assert found.passphrase == passphrase
+    assert found.stack_passphrase() == passphrase
     assert found.url is not None and found.url.startswith('postgres://operator@')
 
 
@@ -870,8 +870,31 @@ def test_a_missing_bundle_still_yields_the_passphrase(
     found = lifecycle.environment(kit, tmp_path / 'absent', registry)
 
     # The appliance not existing yet is the normal case during bring-up.
-    assert found.passphrase
+    assert found.stack_passphrase()
     assert found.url is None
+
+
+@needs_age
+def test_the_environment_unlocks_the_kit_at_the_first_stack_under_the_stack_passphrase_and_not_before(
+    kit: KdbxStore, registry: escrow.Registry, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Building it reads nothing; the first stack under the stack passphrase unlocks the kit, and only once."""
+    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
+    passphrase = escrow.generate(escrow.Vault.open(kit, registry), escrow.PASSPHRASE)
+    asked: list[str] = []
+
+    def getpass(prompt: str = '') -> str:
+        asked.append(prompt)
+        return PASSWORD
+
+    monkeypatch.setattr('getpass.getpass', getpass)
+
+    found = lifecycle.environment(KdbxStore(path=kit.path), tmp_path / 'absent', registry)
+
+    assert asked == []
+    for name in pulumi_config.ON_STACK_PASSPHRASE:
+        assert found.variables(name)[pulumi_config.PASSPHRASE_ENV] == passphrase, name
+    assert len(asked) == 1
 
 
 @pytest.fixture
@@ -975,6 +998,18 @@ def test_a_command_asks_for_the_operator_passphrase_at_most_once(
     assert len(asked) == 1
 
 
+def test_a_kit_with_no_recovery_key_is_refused_the_same_way_for_every_stack_that_needs_it(
+    kit: KdbxStore, registry: escrow.Registry, tmp_path: Path
+) -> None:
+    """`physical` and a stack under the stack passphrase meet one refusal, which `derived sync` treats as one."""
+    found = lifecycle.environment(kit, tmp_path / 'absent', registry)
+
+    for name in (pulumi_config.PHYSICAL, pulumi_config.ON_STACK_PASSPHRASE[0]):
+        with pytest.raises(escrow.EscrowRefused) as refused:
+            _ = found.variables(name)
+        assert refused.value.refusal is escrow.Refusal.NO_RECOVERY_KEY, name
+
+
 @needs_age
 def test_physical_is_given_its_own_passphrase_recovered_with_the_kit(
     kit: KdbxStore, registry: escrow.Registry, tmp_path: Path
@@ -1059,7 +1094,7 @@ def test_the_stacks_under_the_stack_passphrase_are_moved_from_its_earlier_genera
     seen: list[tuple[str | None, Sequence[str]]] = []
 
     def moving(environment: pulumi_config.BackendEnvironment, *, former: Sequence[str]) -> list[str]:
-        seen.append((environment.passphrase, former))
+        seen.append((environment.stack_passphrase(), former))
         return list(pulumi_config.ON_STACK_PASSPHRASE)
 
     monkeypatch.setattr(pulumi_config, 're_encrypt_on_stack_passphrase', moving)

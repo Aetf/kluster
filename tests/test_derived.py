@@ -358,9 +358,10 @@ def live_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[pulum
     stack = pulumi_config.Stack(
         name=STACK,
         directory=project,
-        # The passphrase and the URL go in as the shape a `credentials` run
-        # builds, so the probe exercises the resolution the real callers use:
-        # the stack picks its own passphrase out of this by its own name.
+        # The passphrase goes in as a plain value, and the stack reads it
+        # through `stack_passphrase()` as it reads the thunk a `credentials`
+        # run hands it: the stack picks its own passphrase out of this by its
+        # own name.
         environment=pulumi_config.BackendEnvironment(passphrase='probe-passphrase', url=state.as_uri()),
     )
     return stack, name

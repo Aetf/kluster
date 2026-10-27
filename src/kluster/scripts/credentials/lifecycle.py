@@ -269,9 +269,12 @@ def environment(
     The stack passphrase is recovered from the escrow with the kit's recovery
     key (§2.2), so the one place it exists outside its consumers is a committed
     ciphertext nobody can open without the kit, and so is `physical`'s own
-    passphrase, though only when that stack is asked for: a kit with nothing
-    filed under its label refuses the commands that reach `physical` by naming
-    the command that files one, and no other. The operator passphrase is
+    passphrase. Each is recovered only when a stack under it is asked for,
+    and the environment unlocks the kit then and not before: it asks a
+    command whose stacks take neither, such as one that writes only an
+    operator stack, for no master password, and a kit with nothing filed
+    under `physical`'s label refuses the commands that reach `physical` by naming the command that
+    files one, and no other. The operator passphrase is
     found the way the `operator-stack` driver finds it, through the
     acquisition chain (`stack_environment.operator_passphrase`), only when an
     operator stack is asked for, and at most once for this environment; the
@@ -281,7 +284,11 @@ def environment(
     machine with no bundle yet answers with no URL, which its caller can see
     rather than discover inside a subprocess.
     """
-    vault = escrow.Vault.open(kit, registry)
+    # Opened on first use, by whichever passphrase is asked for first: the
+    # vault reads the kit's recovery key, and the environment never unlocks
+    # the kit for a command whose stacks take neither the stack passphrase
+    # nor `physical`'s.
+    vault = functools.cache(lambda: escrow.Vault.open(kit, registry))
     url = bundle.backend_url_file(bundle_dir)
     if url is None:
         log.warning(
@@ -289,7 +296,7 @@ def environment(
             bundle_dir / bundle.URL_FILE,
         )
     return pulumi_config.BackendEnvironment(
-        passphrase=vault.recover(escrow.PASSPHRASE),
+        shared=functools.cache(lambda: vault().recover(escrow.PASSPHRASE)),
         url=url.read_text().strip() if url is not None else None,
         # Once per command: every `pulumi` call a command makes against an
         # operator stack builds its environment again, and a chain that ends
@@ -299,10 +306,16 @@ def environment(
     )
 
 
-def _physical_passphrase(vault: escrow.Vault) -> str:
-    """`physical`'s passphrase, recovered with the kit; a label with nothing filed is refused by its fill command."""
+def _physical_passphrase(vault: Callable[[], escrow.Vault]) -> str:
+    """`physical`'s passphrase, recovered with the kit; a label with nothing filed is refused by its fill command.
+
+    The vault is opened outside the label's lookup, so a kit with no recovery
+    key is refused here as it is for every other stack, rather than as a
+    passphrase this machine cannot give.
+    """
+    opened = vault()
     try:
-        return vault.recover(escrow.PHYSICAL_PASSPHRASE)
+        return opened.recover(escrow.PHYSICAL_PASSPHRASE)
     except escrow.EscrowError as exc:
         raise stack_environment.EnvironmentRefused(str(exc)) from exc
 
@@ -319,7 +332,7 @@ def re_encrypt_physical(kit: KdbxStore, bundle_dir: Path, registry: escrow.Regis
     """
     opened = environment(kit, bundle_dir, registry)
     earlier = _earlier_generations(escrow.Vault.open(kit, registry), escrow.PHYSICAL_PASSPHRASE)
-    former = [passphrase for passphrase in (opened.passphrase, *earlier) if passphrase is not None]
+    former = [passphrase for passphrase in (opened.stack_passphrase(), *earlier) if passphrase is not None]
     stack = pulumi_config.Stack(name=pulumi_config.PHYSICAL, directory=pulumi_config.project_dir(), environment=opened)
     return stack.re_encrypt(former=former)
 

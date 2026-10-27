@@ -181,10 +181,19 @@ class BackendEnvironment:
     """
 
     #: The stack passphrase, which every stack but `physical` and the
-    #: operator stacks is given. It does not print; the URL is what a repr is
-    #: read for.
+    #: operator stacks is given, for a caller that already holds it; a
+    #: `credentials` run hands `shared` instead, and the two are never given
+    #: together. It does not print; the URL is what a repr is read for.
     passphrase: Annotated[str | None, Secret] = field(default=None, repr=False, compare=False)
     url: str | None = None
+    #: Where the stack passphrase is found when `passphrase` is not given: the
+    #: kit's escrow, for a `credentials` run. A function for the reason
+    #: `operator` and `physical` are: it is called only for a stack under the
+    #: stack passphrase, so a command that points at none never has it looked
+    #: for, nor the kit unlocked for it. The caller makes it
+    #: answer once per command. None, with no `passphrase`, gives such a stack
+    #: no passphrase at all.
+    shared: Callable[[], str] | None = field(default=None, compare=False)
     #: Where the operator passphrase is found, for the stacks in `APART` and
     #: no other: the acquisition chain (`stack_environment.operator_passphrase`)
     #: for a run on a workstation. A function rather than a value, so it is
@@ -198,6 +207,12 @@ class BackendEnvironment:
     #: opens the label, and a kit with nothing filed under it refuses only the
     #: commands that do. None looks nowhere, and `physical` is refused.
     physical: Callable[[], str] | None = field(default=None, compare=False)
+
+    def __post_init__(self) -> None:
+        # Two ways to give one value, and with both given `shared` would never
+        # be called: refused rather than resolved by a precedence nobody chose.
+        if self.passphrase is not None and self.shared is not None:
+            raise ValueError('a BackendEnvironment takes the stack passphrase as `passphrase` or as `shared`, not both')
 
     def variables(self, stack: str, *, checkout: Path | None = None) -> dict[str, str]:
         """The variables a `pulumi` run against `stack` is started with.
@@ -213,13 +228,19 @@ class BackendEnvironment:
         elif stack == PHYSICAL:
             chosen = self._physical(stack)
         else:
-            chosen = self.passphrase
+            chosen = self.stack_passphrase()
         values: dict[str, str] = {}
         if chosen is not None:
             values[PASSPHRASE_ENV] = chosen
         if checkout is None and stack_environment.home(stack) is identity.StateHome.COMMITTED:
             checkout = project_dir()
         return values | stack_environment.backend_variables(stack, checkout=checkout, estate_url=self.url)
+
+    def stack_passphrase(self) -> str | None:
+        """The stack passphrase: `passphrase` where it is given, what `shared` finds where that is, else None."""
+        if self.passphrase is not None:
+            return self.passphrase
+        return self.shared() if self.shared is not None else None
 
     def _operator(self, stack: str, row: str) -> str:
         """The operator passphrase for `stack`, from `operator`; `PassphraseMissing` where it finds none.
