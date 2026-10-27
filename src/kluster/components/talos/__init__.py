@@ -51,6 +51,7 @@ the configuration carries no `machine.kubelet.extraMounts`.
 
 from __future__ import annotations
 
+import enum
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -68,6 +69,53 @@ from putils import Component, async_output, resolve
 #: What a node is to Kubernetes. The cloud fleet is control planes that also
 #: carry workloads (architecture.md §1.1); the homelab machine is a worker.
 Role = Literal['controlplane', 'worker']
+
+
+class Refusal(enum.Enum):
+    """Which rule the rolls handed to a `TalosCluster` or `TalosDay1` broke."""
+
+    #: No control-plane node at all.
+    NO_CONTROL_PLANE = enum.auto()
+    #: A node named as both a control plane and a worker; `nodes` are those.
+    BOTH_ROLES = enum.auto()
+    #: A node named more than once within one roll; `nodes` are those.
+    NAMED_TWICE = enum.auto()
+    #: BGP peers keyed by nodes the cluster does not have.
+    BGP_PEER_STRANGER = enum.auto()
+    #: Installers keyed by nodes the cluster does not have.
+    INSTALLER_STRANGER = enum.auto()
+    #: Nodes with no installer of their own.
+    INSTALLER_MISSING = enum.auto()
+    #: Day 1 addresses keyed by nodes the cluster does not have.
+    ADDRESS_STRANGER = enum.auto()
+    #: Day 1 endpoints keyed by nodes the cluster does not have.
+    ENDPOINT_STRANGER = enum.auto()
+    #: Day 1 secondary addresses keyed by nodes the cluster does not have.
+    SECONDARY_ADDRESS_STRANGER = enum.auto()
+    #: Nodes day 1 has no address for.
+    ADDRESS_MISSING = enum.auto()
+    #: Volumes attached to nodes the cluster does not have; `volumes` are those.
+    VOLUME_STRANGER = enum.auto()
+    #: Nodes that more than one volume attaches to; `volumes` are theirs.
+    VOLUMES_CROWDED = enum.auto()
+
+
+class RollRefused(ValueError):
+    """Rolls a `TalosCluster` or `TalosDay1` refused: `refusal` says which rule, `nodes` which nodes broke it.
+
+    A `ValueError`, so a caller that catches one is unaffected; the message
+    is for a person, and the fields are what a program tells refusals apart
+    by. `volumes` names the volumes of a volume refusal.
+    """
+
+    def __init__(
+        self, message: str, *, refusal: Refusal, nodes: Sequence[str] = (), volumes: Sequence[str] = ()
+    ) -> None:
+        super().__init__(message)
+        self.refusal: Refusal = refusal
+        self.nodes: tuple[str, ...] = tuple(nodes)
+        self.volumes: tuple[str, ...] = tuple(volumes)
+
 
 #: Kubelet reservations exist so eviction has something to work with: an
 #: unreserved node starves its own control plane before the kubelet notices.
@@ -695,7 +743,7 @@ class TalosCluster(Component, pulumi_type='kluster:talos:TalosCluster'):
     ) -> None:
         super().__init__(name, opts=opts)
         if not control_plane_nodes:
-            raise ValueError('a cluster needs at least one control-plane node')
+            raise RollRefused('a cluster needs at least one control-plane node', refusal=Refusal.NO_CONTROL_PLANE)
         self.control_plane_nodes = tuple(control_plane_nodes)
         self.worker_nodes = tuple(worker_nodes)
         self.roles: dict[str, Role] = {
@@ -703,7 +751,24 @@ class TalosCluster(Component, pulumi_type='kluster:talos:TalosCluster'):
             **{node: cast('Role', 'worker') for node in self.worker_nodes},
         }
         if len(self.roles) != len(self.control_plane_nodes) + len(self.worker_nodes):
-            raise ValueError('a node is both a control plane and a worker')
+            both = sorted(set(self.control_plane_nodes) & set(self.worker_nodes))
+            if both:
+                raise RollRefused(
+                    f'a node is both a control plane and a worker: {both}', refusal=Refusal.BOTH_ROLES, nodes=both
+                )
+            twice = sorted(
+                {
+                    node
+                    for roll in (self.control_plane_nodes, self.worker_nodes)
+                    for node in roll
+                    if roll.count(node) > 1
+                }
+            )
+            raise RollRefused(
+                f'a node is named once in its roll, and {twice} are named more than once',
+                refusal=Refusal.NAMED_TWICE,
+                nodes=twice,
+            )
 
         self.cluster_name = cluster_name
         self._endpoint = endpoint
@@ -712,14 +777,26 @@ class TalosCluster(Component, pulumi_type='kluster:talos:TalosCluster'):
         self._bgp_peers = dict(bgp_peers)
         unknown = sorted(set(self._bgp_peers) - set(self.roles))
         if unknown:
-            raise ValueError(f'BGP peers name nodes that are not in the cluster: {unknown}')
+            raise RollRefused(
+                f'BGP peers name nodes that are not in the cluster: {unknown}',
+                refusal=Refusal.BGP_PEER_STRANGER,
+                nodes=unknown,
+            )
         self._installers = dict(installers)
         unknown = sorted(set(self._installers) - set(self.roles))
         if unknown:
-            raise ValueError(f'installers name nodes that are not in the cluster: {unknown}')
+            raise RollRefused(
+                f'installers name nodes that are not in the cluster: {unknown}',
+                refusal=Refusal.INSTALLER_STRANGER,
+                nodes=unknown,
+            )
         missing = sorted(set(self.roles) - set(self._installers))
         if missing:
-            raise ValueError(f'every node names its own installer, and {missing} name none')
+            raise RollRefused(
+                f'every node names its own installer, and {missing} name none',
+                refusal=Refusal.INSTALLER_MISSING,
+                nodes=missing,
+            )
         self._volumes = _volumes_by_node(volumes, self.roles)
 
         self.secrets = machine.Secrets(
@@ -865,17 +942,23 @@ class TalosDay1(Component, pulumi_type='kluster:talos:TalosDay1'):
         self.cluster = cluster
         self._addresses = dict(addresses)
         self._secondary_addresses = dict(secondary_addresses or {})
-        for label, keyed in (
-            ('addresses', self._addresses),
-            ('endpoints', dict(endpoints or {})),
-            ('secondary addresses', self._secondary_addresses),
+        for label, keyed, refusal in (
+            ('addresses', self._addresses, Refusal.ADDRESS_STRANGER),
+            ('endpoints', dict(endpoints or {}), Refusal.ENDPOINT_STRANGER),
+            ('secondary addresses', self._secondary_addresses, Refusal.SECONDARY_ADDRESS_STRANGER),
         ):
             unknown = sorted(set(keyed) - set(cluster.roles))
             if unknown:
-                raise ValueError(f'{label} name nodes that are not in the cluster: {unknown}')
+                raise RollRefused(
+                    f'{label} name nodes that are not in the cluster: {unknown}', refusal=refusal, nodes=unknown
+                )
         missing = sorted(set(cluster.roles) - set(self._addresses))
         if missing:
-            raise ValueError(f'day 1 needs an address for every node, and {missing} have none')
+            raise RollRefused(
+                f'day 1 needs an address for every node, and {missing} have none',
+                refusal=Refusal.ADDRESS_MISSING,
+                nodes=missing,
+            )
         #: Where each node is dialed, which is its own address unless the
         #: caller named a way in to reach it with.
         self._endpoints = {node: (endpoints or {}).get(node, self._addresses[node]) for node in cluster.roles}
@@ -996,14 +1079,22 @@ def _volumes_by_node(volumes: Mapping[str, conventions.NodeVolumeEntry], nodes: 
     """Node name to the name of the one volume attached to it, sentinels resolved."""
     unknown = sorted(name for name, entry in volumes.items() if entry.attached_node not in nodes)
     if unknown:
-        raise ValueError(f'volumes attach to nodes that are not in the cluster: {unknown}')
+        raise RollRefused(
+            f'volumes attach to nodes that are not in the cluster: {unknown}',
+            refusal=Refusal.VOLUME_STRANGER,
+            nodes=sorted({volumes[name].attached_node for name in unknown}),
+            volumes=unknown,
+        )
     by_node: dict[str, list[str]] = {}
     for name, entry in sorted(volumes.items()):
         by_node.setdefault(entry.attached_node, []).append(name)
     crowded = {node: names for node, names in by_node.items() if len(names) > 1}
     if crowded:
-        raise ValueError(
-            f'a node carries at most one volume, because its disk selector cannot tell two data disks apart: {crowded}'
+        raise RollRefused(
+            f'a node carries at most one volume, because its disk selector cannot tell two data disks apart: {crowded}',
+            refusal=Refusal.VOLUMES_CROWDED,
+            nodes=sorted(crowded),
+            volumes=sorted(name for names in crowded.values() for name in names),
         )
     return {node: names[0] for node, names in by_node.items()}
 

@@ -16,6 +16,7 @@ import asyncio
 import itertools
 import json
 import logging
+from collections.abc import Callable
 from ipaddress import IPv4Interface
 from typing import Any, cast
 
@@ -25,7 +26,7 @@ import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
-from kluster.components.talos import TalosCluster, TalosDay1
+from kluster.components.talos import Refusal, RollRefused, TalosCluster, TalosDay1
 
 #: The balancer in front of the control planes, in the two spellings the two
 #: ports are named with: a URL for the Kubernetes endpoint, a bare address for
@@ -123,6 +124,13 @@ def build_cluster(name: str = 'kluster', **kwargs: Any) -> TalosCluster:
     )
 
 
+def refused(build_it: Callable[[], object]) -> RollRefused:
+    """The refusal `build_it` raises, for a case to compare by its rule and its nodes, never by its wording."""
+    with pytest.raises(RollRefused) as caught:
+        _ = build_it()
+    return caught.value
+
+
 def build(**kwargs: Any) -> TalosDay1:
     """Day 1, on top of a day 0 the caller may hand in to inspect."""
     kwargs.setdefault('cluster', build_cluster())
@@ -160,15 +168,29 @@ async def test_every_node_gets_the_role_it_was_declared_with(fake: Talos) -> Non
 
 @pytest.mark.asyncio
 async def test_a_node_cannot_be_both_roles(fake: Talos) -> None:
-    with pytest.raises(ValueError, match='both a control plane and a worker'):
-        build_cluster(worker_nodes=('cp1',))
+    refusal = refused(lambda: build_cluster(worker_nodes=('cp1',)))
+    assert (refusal.refusal, refusal.nodes) == (Refusal.BOTH_ROLES, ('cp1',))
+
+
+@pytest.mark.asyncio
+async def test_a_node_named_twice_in_one_roll_is_refused_as_that_and_not_as_both_roles(fake: Talos) -> None:
+    control = refused(lambda: build_cluster(control_plane_nodes=('cp1', 'cp1', 'cp2')))
+    assert (control.refusal, control.nodes) == (Refusal.NAMED_TWICE, ('cp1',))
+    worker = refused(lambda: build_cluster('kluster-worker', worker_nodes=('homelab', 'homelab')))
+    assert (worker.refusal, worker.nodes) == (Refusal.NAMED_TWICE, ('homelab',))
+
+
+@pytest.mark.asyncio
+async def test_a_cluster_with_no_control_plane_is_refused(fake: Talos) -> None:
+    refusal = refused(lambda: build_cluster(control_plane_nodes=(), worker_nodes=('homelab',)))
+    assert (refusal.refusal, refusal.nodes) == (Refusal.NO_CONTROL_PLANE, ())
 
 
 @pytest.mark.asyncio
 async def test_day_one_needs_an_address_for_every_node(fake: Talos) -> None:
     # A cluster is not healthy because the nodes somebody listed are.
-    with pytest.raises(ValueError, match=r'an address for every node.*homelab'):
-        build(addresses={'cp1': '10.20.0.11', 'cp2': '10.20.0.12', 'cp3': '10.20.0.13'})
+    refusal = refused(lambda: build(addresses={'cp1': '10.20.0.11', 'cp2': '10.20.0.12', 'cp3': '10.20.0.13'}))
+    assert (refusal.refusal, refusal.nodes) == (Refusal.ADDRESS_MISSING, ('homelab',))
 
 
 @pytest.mark.asyncio
@@ -431,12 +453,14 @@ async def test_only_the_worker_takes_bgp(fake: Talos) -> None:
 
 @pytest.mark.asyncio
 async def test_a_stranger_cannot_be_named_by_either_component(fake: Talos) -> None:
-    with pytest.raises(ValueError, match='BGP peers name nodes that are not in the cluster'):
-        build_cluster(bgp_peers={'nowhere': '192.168.70.1/32'})
-    with pytest.raises(ValueError, match='secondary addresses name nodes that are not in the cluster'):
-        build(secondary_addresses={'nowhere': SECONDARY})
-    with pytest.raises(ValueError, match='endpoints name nodes that are not in the cluster'):
-        build(endpoints={'nowhere': BALANCER})
+    peer = refused(lambda: build_cluster(bgp_peers={'nowhere': '192.168.70.1/32'}))
+    assert (peer.refusal, peer.nodes) == (Refusal.BGP_PEER_STRANGER, ('nowhere',))
+    secondary = refused(lambda: build(secondary_addresses={'nowhere': SECONDARY}))
+    assert (secondary.refusal, secondary.nodes) == (Refusal.SECONDARY_ADDRESS_STRANGER, ('nowhere',))
+    endpoint = refused(lambda: build(endpoints={'nowhere': BALANCER}))
+    assert (endpoint.refusal, endpoint.nodes) == (Refusal.ENDPOINT_STRANGER, ('nowhere',))
+    address = refused(lambda: build(addresses={**ADDRESSES, 'nowhere': '10.20.0.99'}))
+    assert (address.refusal, address.nodes) == (Refusal.ADDRESS_STRANGER, ('nowhere',))
 
 
 def installers_in(patches: list[dict[str, Any]]) -> list[str]:
@@ -467,10 +491,16 @@ async def test_each_node_names_its_own_installer_and_no_other(fake: Talos) -> No
 @pytest.mark.asyncio
 async def test_every_node_names_an_installer_and_only_nodes_do(fake: Talos) -> None:
     every = {node: installer_of(node) for node in ('cp1', 'cp2', 'cp3', 'homelab')}
-    with pytest.raises(ValueError, match=r"every node names its own installer, and \['homelab'\] name none"):
-        build_cluster('kluster-missing', installers={node: image for node, image in every.items() if node != 'homelab'})
-    with pytest.raises(ValueError, match='installers name nodes that are not in the cluster'):
-        build_cluster('kluster-stranger', installers={**every, 'nowhere': installer_of('nowhere')})
+    missing = refused(
+        lambda: build_cluster(
+            'kluster-missing', installers={node: image for node, image in every.items() if node != 'homelab'}
+        )
+    )
+    assert (missing.refusal, missing.nodes) == (Refusal.INSTALLER_MISSING, ('homelab',))
+    stranger = refused(
+        lambda: build_cluster('kluster-stranger', installers={**every, 'nowhere': installer_of('nowhere')})
+    )
+    assert (stranger.refusal, stranger.nodes) == (Refusal.INSTALLER_STRANGER, ('nowhere',))
 
 
 def volumes_in(patches: list[dict[str, Any]]) -> list[str]:
@@ -527,27 +557,31 @@ async def test_a_volume_that_follows_the_dedicated_vip_is_mounted_where_the_vip_
 
 @pytest.mark.asyncio
 async def test_a_volume_on_a_node_outside_the_cluster_is_refused(fake: Talos) -> None:
-    with pytest.raises(ValueError, match=r'volumes attach to nodes that are not in the cluster.*stray'):
-        build_cluster(volumes={'stray': conventions.NodeVolumeEntry(node='nowhere', size_gb=1)})
+    refusal = refused(lambda: build_cluster(volumes={'stray': conventions.NodeVolumeEntry(node='nowhere', size_gb=1)}))
+    assert (refusal.refusal, refusal.nodes, refusal.volumes) == (Refusal.VOLUME_STRANGER, ('nowhere',), ('stray',))
 
 
 @pytest.mark.asyncio
 async def test_two_volumes_on_one_node_are_refused(fake: Talos) -> None:
     # The disk selector finds the data disk as the one that is not the boot
     # disk, which cannot tell two data disks apart.
-    with pytest.raises(ValueError, match=r'at most one volume.*cp2'):
-        build_cluster(
+    crowded = refused(
+        lambda: build_cluster(
             volumes={
                 'one': conventions.NodeVolumeEntry(node='cp2', size_gb=1),
                 'two': conventions.NodeVolumeEntry(node='cp2', size_gb=1),
             }
         )
+    )
+    assert (crowded.refusal, crowded.nodes, crowded.volumes) == (Refusal.VOLUMES_CROWDED, ('cp2',), ('one', 'two'))
     # A following volume collides the same way, once it has resolved.
-    with pytest.raises(ValueError, match=rf'at most one volume.*{conventions.DEDICATED_VIP_NODE}'):
-        build_cluster(
+    following = refused(
+        lambda: build_cluster(
             'kluster-following',
             volumes={
                 'one': conventions.NodeVolumeEntry(node=conventions.DEDICATED_VIP_NODE, size_gb=1),
                 'two': conventions.NodeVolumeEntry(node=conventions.FOLLOWS_DEDICATED_VIP, size_gb=1),
             },
         )
+    )
+    assert (following.refusal, following.nodes) == (Refusal.VOLUMES_CROWDED, (conventions.DEDICATED_VIP_NODE,))
