@@ -38,13 +38,14 @@ IP_ARCHVPS = '45.77.144.92'
 ANCHOR_ARCHVPS = f'archvps.{conventions.ANCHOR_LABEL}.{conventions.ZONE_PRIMARY}'
 
 
-def _vps(label: str, comment: str, *, proxied: bool = True) -> Block:
-    """One name the VPS serves, in the primary zone alone.
+def _vps(label: str, comment: str, *, unproxied: str = '') -> Block:
+    """One name the VPS serves, in the primary zone alone, proxied unless it says why not.
 
-    Proxy off is never an oversight: it is either a non-HTTP port on the name
-    or a body size the proxy would cap, which is why it is spelled per block.
+    Proxy off is never an oversight: it is either a protocol the proxy does
+    not carry on the name or a body size the proxy would cap, and the reason
+    is what turns the proxy off.
     """
-    return Block(conventions.PRIMARY_ONLY, (cname(label, ANCHOR_ARCHVPS, proxied=proxied, comment=comment),))
+    return Block(conventions.PRIMARY_ONLY, (cname(label, ANCHOR_ARCHVPS, unproxied=unproxied, comment=comment),))
 
 
 #: The blocks the VPS still serves. Each is deleted whole when the application
@@ -62,6 +63,9 @@ LEGACY: tuple[Block, ...] = (
                 IP_ARCHVPS,
                 ttl=conventions.ANCHOR_TTL,
                 comment='legacy VPS anchor; retires with the VPS',
+                unproxied=(
+                    'names published direct alias it, and a name is proxied when any record on its CNAME chain is'
+                ),
             ),
         ),
     ),
@@ -74,7 +78,12 @@ LEGACY: tuple[Block, ...] = (
     Block(
         conventions.PRIMARY_ONLY,
         (
-            cname('matrix', ANCHOR_ARCHVPS, proxied=False, comment='matrix homeserver, federation port'),
+            cname(
+                'matrix',
+                ANCHOR_ARCHVPS,
+                unproxied='federation is served on a port the proxy does not forward',
+                comment='matrix homeserver, federation port',
+            ),
             srv(
                 '_matrix-identity._tcp',
                 priority=10,
@@ -86,8 +95,17 @@ LEGACY: tuple[Block, ...] = (
     ),
     # syncthing -- Wave A
     _vps('sync', 'syncthing web UI'),
-    # stdiscosrv -- Wave A
-    _vps('syncapi', 'syncthing discovery and relay, non-HTTP ports', proxied=False),
+    # stdiscosrv -- Wave A. The relay's protocol is a binary one of its own
+    # (docs.syncthing.net/specs/relay-v1.html); behind a proxy, discovery
+    # needs the client's certificate passed on (users/stdiscosrv.html).
+    _vps(
+        'syncapi',
+        'syncthing discovery and relay, non-HTTP ports',
+        unproxied=(
+            'the relay speaks its own protocol rather than HTTP, and discovery '
+            "needs the client's TLS certificate, which the proxy does not pass on"
+        ),
+    ),
     # the WebDAV successor -- Wave A
     _vps('dav', 'nextcloud WebDAV'),
     # monitoring -- Wave B. Kept because the dashboard is in use; which
@@ -100,7 +118,7 @@ LEGACY: tuple[Block, ...] = (
     # the haos.ucw LAN-device backend -- Wave B
     _vps('haos', 'home assistant'),
     # immich -- Wave C
-    _vps('photos', 'immich; unproxied for large uploads', proxied=False),
+    _vps('photos', 'immich; unproxied for large uploads', unproxied='uploads larger than the proxy accepts'),
     # jellyfin -- Wave C
     _vps('tube', 'jellyfin'),
     # syncthing-nas -- Wave C
@@ -113,11 +131,18 @@ LEGACY: tuple[Block, ...] = (
     # syncthing on the VPS, in the website co-host's zone -- Wave A
     Block(
         ('unlimitedcodeworks.xyz',),
-        (cname('btsync', ANCHOR_ARCHVPS, proxied=False, comment='syncthing, non-HTTP ports'),),
+        (
+            cname(
+                'btsync',
+                ANCHOR_ARCHVPS,
+                unproxied='syncthing listens on ports that are not HTTP',
+                comment='syncthing, non-HTTP ports',
+            ),
+        ),
     ),
     # the doors static sites, in the website co-host's zone -- Wave B
     Block(
         ('unlimitedcodeworks.xyz',),
-        tuple(cname(label, ANCHOR_ARCHVPS, proxied=True) for label in ('games', 'game')),
+        tuple(cname(label, ANCHOR_ARCHVPS) for label in ('games', 'game')),
     ),
 )

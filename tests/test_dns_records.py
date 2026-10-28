@@ -1,16 +1,22 @@
 """The census as data: what it carries, what it dropped, what stays unique.
 
 These assertions are about the declaration, not about Pulumi, so they need no
-runtime — which is the point of keeping records as plain data. The unit under
-test is the block: records that appear together, in every zone of one set, and
-the per-zone view derived from them.
+runtime — which is the point of keeping records as plain data. The exception
+is the case that holds a field the declaration alone carries to what the zone
+component declares, which only a run can show. The unit under test is the
+block: records that appear together, in every zone of one set, and the
+per-zone view derived from them.
 """
 
+import ipaddress
 import sys
 from collections import Counter
+from collections.abc import Iterable
+from typing import Any
 
 import process_sessions
 import pytest
+from mock_monitor import Recorder, declaring, run_under_backstop
 
 from kluster import conventions
 from kluster.components.dns import base
@@ -24,7 +30,10 @@ from kluster.components.dns.base import (
     overlay_records,
 )
 from kluster.components.dns.legacy import ANCHOR_ARCHVPS, LEGACY
-from kluster.components.dns.record import Block, Record, a, cname, txt, zone_records
+from kluster.components.dns.record import Block, Record, a, aaaa, caa, cname, mx, srv, txt, zone_records
+from kluster.components.dns.zone import ManagedZone
+
+RECORD = 'cloudflare:index/dnsRecord:DnsRecord'
 
 #: Three addresses stand in for the `physical` stack's, so the anchor block is
 #: part of what the census assertions see.
@@ -46,6 +55,21 @@ def _keys(zone: str) -> set[str]:
 
 def _labels(zone: str) -> set[str]:
     return {record.label for record in _records(zone)}
+
+
+def _anchor_aliases(blocks: Iterable[Block]) -> list[Record]:
+    """Every CNAME to an anchor.
+
+    That is what an application name is (`conventions.ANCHOR_LABEL`), and it
+    is the website's `www` too, which is the web origin's.
+    """
+    anchors = f'.{conventions.ANCHOR_LABEL}.{conventions.ZONE_PRIMARY}'
+    return [
+        record
+        for block in blocks
+        for record in block.records
+        if record.type == 'CNAME' and isinstance(record.content, str) and record.content.endswith(anchors)
+    ]
 
 
 def _web_origin() -> Block:
@@ -282,19 +306,22 @@ def test_the_cluster_ca_is_authorized_everywhere_caa_is_declared() -> None:
 
 
 def test_an_externally_issued_zone_carries_no_caa() -> None:
-    """jiahui.id is a Google Site: nothing here knows what may issue for it.
+    """Nothing here knows what may issue for it, so nothing here pins it.
 
-    It has no CAA in production, and inventing a pin that current issuance
-    does not satisfy would break the site at its next renewal.
+    Its declaration says why. What is held here is that the CAA table and the
+    zone's records agree with it: no row in the table, and no CAA in the zone
+    by any other road.
     """
-    assert 'jiahui.id' not in ZONE_ISSUERS
-    assert [record for record in _records('jiahui.id') if record.type == 'CAA'] == []
+    zone = conventions.ZONE_EXTERNALLY_ISSUED
+
+    assert zone not in ZONE_ISSUERS
+    assert [record for record in _records(zone) if record.type == 'CAA'] == []
 
 
 def test_every_zone_is_classified_or_deliberately_unpinned() -> None:
     """A new zone must not silently inherit someone else's issuance policy."""
     assert set(ZONE_ISSUERS) <= set(conventions.ALL_ZONES)
-    assert set(conventions.ALL_ZONES) - set(ZONE_ISSUERS) == {'jiahui.id'}
+    assert set(conventions.ALL_ZONES) - set(ZONE_ISSUERS) == {conventions.ZONE_EXTERNALLY_ISSUED}
 
 
 def test_caa_keys_survive_a_value_with_parameters() -> None:
@@ -312,16 +339,117 @@ def test_caa_keys_survive_a_value_with_parameters() -> None:
     assert record.resource_key == 'caa-issue-pki-goog'
 
 
-@pytest.mark.parametrize('label', ['photos', 'matrix', 'syncapi'])
-def test_the_unproxied_records_stay_unproxied(label: str) -> None:
-    """Proxy-off is a requirement, not an oversight.
+def _through_a_proxied_record(blocks: Iterable[Block], zones: Iterable[str]) -> list[str]:
+    """Every direct CNAME, by name, whose target the census declares proxied."""
+    blocks = tuple(blocks)
+    declared: dict[str, list[Record]] = {}
+    for zone in zones:
+        for record in zone_records(zone, blocks):
+            declared.setdefault(record.fqdn(zone), []).append(record)
+    found: list[str] = []
+    for name, records in declared.items():
+        for record in records:
+            target = record.content
+            if (
+                record.type == 'CNAME'
+                and not record.proxied
+                and isinstance(target, str)
+                and any(hop.proxied for hop in declared.get(target, ()))
+            ):
+                found.append(name)
+    return sorted(found)
 
-    Large uploads (photos) and non-HTTP ports (matrix federation, syncthing's
-    discovery and relay) do not survive the proxy.
+
+def test_a_direct_name_resolves_through_no_proxied_record() -> None:
+    """A reason not to proxy holds only while the chain behind the name is direct.
+
+    Cloudflare proxies a name when any record on its CNAME chain is proxied
+    (developers.cloudflare.com/dns/proxy-status/), so a direct CNAME whose
+    target is proxied is served through the proxy whatever its own reason
+    says. Every hop the census declares is checked, in every zone.
     """
-    record = next(record for record in _records(conventions.ZONE_PRIMARY) if record.label == label)
+    reason = 'a port the proxy does not forward'
+    census = (
+        Block(
+            ('one.test',),
+            (
+                a('origin.hosts', '203.0.113.1'),
+                cname('direct', 'origin.hosts.one.test', unproxied=reason),
+                a('held.hosts', '203.0.113.2', unproxied=reason),
+                cname('kept', 'held.hosts.one.test', unproxied=reason),
+            ),
+        ),
+    )
 
-    assert record.proxied is False
+    assert _through_a_proxied_record(_blocks(), conventions.ALL_ZONES) == []
+    assert _through_a_proxied_record(census, ('one.test',)) == ['direct.one.test']
+
+
+def _proxied_where_the_edge_cannot_reach(blocks: Iterable[Block]) -> list[str]:
+    """Every proxied address record whose address is not globally routable."""
+    return [
+        record.label
+        for block in blocks
+        for record in block.records
+        if record.type in ('A', 'AAAA')
+        and record.proxied
+        and isinstance(record.content, str)
+        and not ipaddress.ip_address(record.content).is_global
+    ]
+
+
+def test_a_record_whose_address_the_edge_cannot_reach_is_published_direct() -> None:
+    """The edge cannot reach a private address, so proxying one publishes a name that answers nothing.
+
+    The overlay block is today's instance: its reason rests on its addresses,
+    which the census holds, so the relation is checked rather than left to
+    the reason's wording.
+    """
+    census = (Block(('one.test',), (a('member.zt', '10.144.0.9'), a('public', '45.77.144.92'))),)
+
+    assert _proxied_where_the_edge_cannot_reach(_blocks()) == []
+    assert _proxied_where_the_edge_cannot_reach(census) == ['member.zt']
+
+
+def test_a_record_is_proxied_unless_it_says_why_not_and_only_where_the_proxy_can_front_it() -> None:
+    # Cloudflare proxies A, AAAA and CNAME records alone; every other type is
+    # always DNS-only (developers.cloudflare.com/dns/proxy-status/).
+    assert a('@', '203.0.113.1').proxied
+    assert aaaa('@', '2001:db8::1').proxied
+    assert cname('www', 'example.test').proxied
+    assert not cname('www', 'example.test', unproxied='a port the proxy does not forward').proxied
+    for record in (
+        txt('@', 'v=spf1 -all'),
+        mx('@', 'mail.example.test', 10),
+        srv('_x._tcp', priority=0, weight=0, port=1, target='example.test'),
+        caa('@', tag='issue', value='letsencrypt.org'),
+    ):
+        assert not record.proxied, record.type
+
+
+async def _rendered(record: Record) -> dict[str, Any]:
+    """What the zone component declares for a zone holding `record` alone."""
+    monitor = await run_under_backstop(Recorder(), stack='dns')
+    async with declaring():
+        ManagedZone('one', zone='one.test', account_id='an-account', records=(record,))
+    (inputs,) = monitor.by_name(RECORD).values()
+    return inputs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('comment', ['', 'immich'])
+async def test_a_reasons_wording_changes_nothing_a_zone_carries(comment: str) -> None:
+    """The reason is the census's: it reaches no field of the record Cloudflare holds.
+
+    Whether a record has one decides `proxied`; what it says reaches nothing,
+    so rewording one is no change to the zone, and the dashboard's
+    explanation stays the record's comment -- with a comment or without one,
+    which is where a renderer falling back to the reason would show.
+    """
+    one = cname('photos', 'example.test', comment=comment, unproxied='uploads larger than the proxy accepts')
+    other = cname('photos', 'example.test', comment=comment, unproxied='bodies the proxy would cap')
+
+    assert await _rendered(one) == await _rendered(other)
 
 
 def test_a_parked_zone_carries_the_web_origin_and_its_caa_and_nothing_else() -> None:
@@ -341,29 +469,25 @@ def test_a_parked_zone_carries_the_web_origin_and_its_caa_and_nothing_else() -> 
         assert {record.resource_key for record in _records(zone) if record.type != 'CAA'} == origin, zone
 
 
-def test_the_website_co_host_carries_a_website_its_own_mail_and_its_own_names() -> None:
+def test_the_website_co_host_carries_no_name_of_the_primarys_applications() -> None:
     """It answers for a website and stops there: no application name, ever.
 
     Every application here holds one SSO cookie domain and one registered
-    redirect URI, so a second hostname for one is a login that loops. The pin
-    is the co-host's whole declared label set rather than a list of forbidden
-    names, because what would arrive is the name nobody thought to forbid --
-    an anchor copy, an overlay block, an application fanned across a set.
+    redirect URI, so a second hostname for one is a login that loops. An
+    application's name in this census is a CNAME to an anchor in the
+    primary, other than the website's own `www`. The co-host's names of its
+    own are not that, and neither is anything shared with the primary by
+    block. The anchor and the overlay block, the other names a copy would
+    bring, are held to the primary by the case below.
     """
-    assert _labels('unlimitedcodeworks.xyz') == {
-        # The web origin's apex, which the mail and verification records
-        # share, and the `www` beside it.
-        '@',
-        'www',
-        # Mail of its own: the Workspace DKIM key is issued per domain.
-        'k8s._domainkey',
-        'google._domainkey',
-        '_dmarc',
-        # Three names of its own, which the primary does not carry.
-        'btsync',
-        'games',
-        'game',
-    }
+    (cohost,) = (zone for zone in conventions.WEB_ZONES if zone != conventions.ZONE_PRIMARY)
+    origin = {id(record) for record in _web_origin().records}
+    primary = [block for block in _blocks() if conventions.ZONE_PRIMARY in block.zones]
+    applications = {record.label for record in _anchor_aliases(primary) if id(record) not in origin}
+
+    assert applications
+    assert _labels(cohost)
+    assert _labels(cohost) & applications == set()
 
 
 def test_the_legacy_anchor_and_the_overlay_block_are_the_primary_zones_alone() -> None:
