@@ -11,6 +11,7 @@ CLI is not installed, which is neither CI nor a workstation with `mise`.
 
 from __future__ import annotations
 
+import argparse
 import ast
 import dataclasses
 import inspect
@@ -30,11 +31,12 @@ import pytest
 from credentials_command_tree import named_leaves
 from fake_gh import RecordedGh
 from fake_pulumi import RecordedPulumi
+from memory_kit import MemoryKit
 from scratch_projects import cli_directories
 
 from kluster.conventions import identity
 from kluster.lib import pulumi_cli, stack_environment, workstation
-from kluster.scripts.credentials import devices, escrow, pulumi_config, slots
+from kluster.scripts.credentials import cli, devices, escrow, pulumi_config, slots
 from kluster.scripts.credentials.github_secrets import Forge
 
 STACK = 'dns'
@@ -567,6 +569,50 @@ def test_a_whole_map_sync_against_a_backend_that_does_not_answer_starts_one_run(
     assert {(slot.repository, slot.environment, slot.name) for slot in slots.ROWS['zerotier-network'].sinks} == set(
         gh.values
     )
+
+
+@pytest.mark.usefixtures('bounded')
+def test_a_sync_whose_forge_opens_after_its_backend_was_stopped_at_the_bound_starts_no_run_to_read_the_token(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The admin token is read through the sync's own context: refused unstarted, in the first refusal's words.
+
+    The context is the one `derived sync` opens (`cli._sync_context`), every
+    stack in the one backend that never answers. The rows are the map's own: a
+    state read copied into two stacks, and after it a row with a GitHub slot
+    whose value needs no backend, so the token's read is the only run it can
+    start. That row opens the forge and so reads the token out of the
+    `github` stack. Every start of the stand-in is counted, one layer below
+    the context's runner, so a read through a stack opened anywhere else is
+    counted too. Opening the forge is refused, and that refusal ends the walk.
+    """
+    starts: list[list[str]] = []
+    start = pulumi_cli.run_pulumi
+
+    def counted(
+        args: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdin: str | None, timeout: float | None = None
+    ) -> str:
+        starts.append(list(args))
+        return start(args, cwd=cwd, env=env, stdin=stdin, timeout=timeout)
+
+    def environment(*_: object) -> pulumi_config.BackendEnvironment:
+        return UNANSWERING_ENVIRONMENT
+
+    monkeypatch.setattr(pulumi_cli, 'run_pulumi', counted)
+    monkeypatch.setattr(cli.lifecycle, 'environment', environment)
+    context = cli._sync_context(  # pyright: ignore[reportPrivateUsage]
+        argparse.Namespace(bundle_dir=None), MemoryKit(), escrow.Registry(root=tmp_path / 'escrow')
+    )
+    walked = {name: slots.ROWS[name] for name in ('kubeconfig', 'zerotier-network')}
+    assert not walked['kubeconfig'].sinks and walked['zerotier-network'].sinks
+
+    with caplog.at_level(logging.ERROR), pytest.raises(pulumi_config.BackendTimedOut) as refused:
+        _ = slots.sync(context, rows=walked)
+
+    assert len(starts) == 1, starts
+    assert [record.getMessage() for record in caplog.records if record.levelno == logging.ERROR] == [
+        f'kubeconfig: {refused.value}'
+    ]
 
 
 def _unopened() -> escrow.Vault:

@@ -420,7 +420,7 @@ class Context:
     """What a push may reach for, each part opened only when a row needs it.
 
     Everything here is lazy on purpose: pushing the one manual row asks for no
-    kit, pushing an escrowed row opens no state backend, and copying a row whose
+    kit, recovering an escrowed row reads no stack, and copying a row whose
     every slot is a Pulumi config secret reads no admin token.
 
     **A backend that did not answer within the runner's bound is asked
@@ -472,8 +472,10 @@ class Context:
     def environment(self) -> pulumi_config.BackendEnvironment:
         """What a `pulumi` run needs here, opened at most once.
 
-        Two rows read it for two things. A state read runs `pulumi` with it.
-        The client bundle takes the appliance's address out of the backend
+        Every stack opened here (`stack`) runs `pulumi` with it, whatever it
+        was opened for. Today that is a state read, a copy into a stack's
+        configuration, and the admin token's read wherever the forge is opened
+        through `stack` (`cli._sync_context`). The client bundle takes the appliance's address out of the backend
         URL, because the one place a workstation records which box it talks to
         is the URL beside its own certificates.
         """

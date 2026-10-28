@@ -1566,7 +1566,7 @@ def _stacks(
 def _opener(
     args: argparse.Namespace, store: KdbxStore, registry: escrow.Registry
 ) -> Callable[[str], pulumi_config.Stack]:
-    """Opens any stack by name under one environment, recovered once, for a run that reaches several."""
+    """Opens any stack by name under one environment, recovered once, for a caller that names the stacks it reaches."""
     environment = lifecycle.environment(store, args.bundle_dir, registry)
     directory = pulumi_config.project_dir()
     return lambda name: pulumi_config.Stack(name=name, directory=directory, environment=environment)
@@ -1582,19 +1582,22 @@ def _config_stacks(row: str) -> tuple[str, ...]:
     return tuple(target.stack for target in slots.ROWS[row].targets if isinstance(target, slots.PulumiConfig))
 
 
-def _forge(args: argparse.Namespace, store: KdbxStore, registry: escrow.Registry) -> github_secrets.Forge:
-    """The forge's secret store, as the GitHub admin token.
+def _forge(open_stack: Callable[[str], pulumi_config.Stack]) -> github_secrets.Forge:
+    """The forge's secret store, as the GitHub admin token, read out of the `github` stack `open_stack` opens.
 
     The token comes out of the `github` stack's committed configuration, where
     it lives for the stack that declares the forge (`devices.py`) — one home,
     read by both. Reading it opens the state backend, which is why every
     command that pushes a GitHub secret needs the passphrase and the bundle.
+
+    The stack is the caller's to open, because the read is a `pulumi` run like
+    any other the command makes, and belongs under whatever the command holds
+    its other runs under: `derived sync` opens it through its context, so a
+    backend that context has seen stopped at the runner's bound refuses the
+    read unstarted (`slots.Context`).
     """
     return github_secrets.Forge(
-        token=devices.borrow(
-            devices.DEVICES[devices.GITHUB_ADMIN],
-            stack=_stack(args, store, derived.GITHUB_STACK, registry),
-        )
+        token=devices.borrow(devices.DEVICES[devices.GITHUB_ADMIN], stack=open_stack(derived.GITHUB_STACK))
     )
 
 
@@ -1606,12 +1609,19 @@ def _sync_context(args: argparse.Namespace, store: KdbxStore, registry: escrow.R
     slot, so copying the kubeconfig into two stacks' configuration needs
     neither; the kit's escrow only for a row recovered from it; and the
     backend only for a row that reads or writes a stack.
+
+    The `github` stack the token is read from is the context's own
+    (`Context.stack`), under the one environment every other run of the walk
+    is started with, so the read is one of the runs the context answers for: a
+    backend already stopped at the runner's bound earlier in the walk refuses
+    it unstarted rather than being waited out again.
     """
-    return slots.Context(
-        open_forge=lambda: _forge(args, store, registry),
+    context = slots.Context(
+        open_forge=lambda: _forge(context.stack),
         open_vault=lambda: escrow.Vault.open(store, registry),
         open_environment=lambda: lifecycle.environment(store, args.bundle_dir, registry),
     )
+    return context
 
 
 def _check(registry: escrow.Registry) -> int:
@@ -1897,7 +1907,9 @@ def main(argv: list[str] | None = None) -> int:
                 # The target first: the generator pushes before it writes,
                 # and a file no commit picks up must stop it before the push.
                 target = appliance_config.drill_recipient_target()
-                _ = derived.drill_age_identity(_forge(args, store, registry), recipient_file=target, rotate=args.rotate)
+                _ = derived.drill_age_identity(
+                    _forge(_opener(args, store, registry)), recipient_file=target, rotate=args.rotate
+                )
             # The drill's provider keys: two seeds out of the kit, every
             # carrier through the same sink as the admin token. The
             # compartment is not an argument -- the mint is held to the one
@@ -1905,7 +1917,7 @@ def main(argv: list[str] | None = None) -> int:
             case ('derived', derived.DRILL_CREDENTIALS_ROW, 'mint'):
                 _ = derived.drill_credentials(
                     store,
-                    _forge(args, store, registry),
+                    _forge(_opener(args, store, registry)),
                     only=args.only,
                     oci_seed_entry=args.oci_entry,
                     b2_seed_entry=args.b2_entry,
@@ -1913,7 +1925,7 @@ def main(argv: list[str] | None = None) -> int:
             # The freshness probe's key: one seed out of the kit, both
             # carriers through the same sink as the admin token.
             case ('derived', derived.B2_FRESHNESS_DUMPS_ROW, 'mint'):
-                _ = derived.b2_freshness_dumps(store, _forge(args, store, registry), seed_entry=args.entry)
+                _ = derived.b2_freshness_dumps(store, _forge(_opener(args, store, registry)), seed_entry=args.entry)
             # The device rows: no mint, so the command is the console steps
             # plus the push. Which stack takes it comes from the row rather
             # than from an argument -- the credential authenticates against

@@ -917,6 +917,12 @@ that neither the backend nor the checkout holds. A backend that does not
 answer, or one that holds no stack the checkout commits a file for, is
 refused in the words of the `pulumi` run that failed: the CLI's own, or,
 where the run outlasted its bound, those of the runner that stopped it.
+`derived sync` reads the token as one more run of its walk, against the
+same backend and under the same environment as the rest, so where an
+earlier row's run against that backend was stopped at the bound, the
+read is never started: it is refused in the words of the earlier run the
+runner stopped, and that refusal ends the walk, as any refusal to open
+the forge does.
 
 **Two more are made in a console and read by a workflow.** Each
 single-purpose GitHub App has a private key generated on its own settings

@@ -10,6 +10,7 @@ the run with instructions rather than being invented.
 
 from __future__ import annotations
 
+import argparse
 import functools
 import io
 import logging
@@ -32,7 +33,6 @@ from cloudflare_api import ACCOUNT_ID as CLOUDFLARE_ACCOUNT
 from cloudflare_api import MINTING_POLICY, console_seed
 from cloudflare_api import FakeApi as CloudflareApi
 from credentials_command_tree import named_commands, named_leaves
-from fake_gh import RecordedGh
 from fake_pulumi import RecordedPulumi
 from keyring.backends import fail as fail_keyring
 from memory_keyring import installed
@@ -46,11 +46,11 @@ from kluster.lib import pulumi_cli, stack_environment
 from kluster.scripts.credentials import (
     age,
     b2,
+    cli,
     cloudflare,
     devices,
     entries,
     escrow,
-    github_secrets,
     lifecycle,
     masters,
     oci_iam,
@@ -1242,8 +1242,10 @@ def _recording_pulumi(monkeypatch: pytest.MonkeyPatch) -> list[tuple[list[str], 
     """`pulumi_cli.run_pulumi` replaced for the case: each run's arguments, and the backend it would have answered from."""
     started: list[tuple[list[str], str | None]] = []
 
-    def run(args: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdin: str | None) -> str:
-        _ = cwd, stdin
+    def run(
+        args: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdin: str | None, timeout: float | None = None
+    ) -> str:
+        _ = cwd, stdin, timeout
         # What `pulumi_cli.run_pulumi` would start the process with.
         started.append((list(args), {**os.environ, **env}.get(pulumi_config.BACKEND_URL_ENV)))
         return ''
@@ -1276,21 +1278,17 @@ def _unprinted(device: devices.Device | devices.SealedRecord, caplog: pytest.Log
         assert step not in caplog.text
 
 
-def _forge_as_the_cli_opens_it(machine: NoBundle) -> github_secrets.Forge:
-    """The forge `derived sync` pushes to, its admin token read out of the `github` stack (`cli._forge`)."""
-    admin = devices.DEVICES[devices.GITHUB_ADMIN]
-    return github_secrets.Forge(token=devices.borrow(admin, stack=machine.stack(admin.stack)), run=RecordedGh())
-
-
 def _sync_context(machine: NoBundle, kit: KdbxStore, registry: escrow.Registry) -> slot_map.Context:
-    """What `derived sync` may reach for, opened as the command opens each part (`cli._sync_context`)."""
-    return slot_map.Context(
-        open_forge=lambda: _forge_as_the_cli_opens_it(machine),
-        open_vault=lambda: escrow.Vault.open(kit, registry),
-        open_environment=lambda: machine.environment,
-        project=pulumi_config.project_dir(),
-        ask=_refuse,
+    """What `derived sync` may reach for, opened by the command's own `cli._sync_context`, and asking nothing.
+
+    The forge among it: its admin token is read out of the `github` stack the
+    context opens, so a walk refused there is refused as the command's is.
+    """
+    context = cli._sync_context(  # pyright: ignore[reportPrivateUsage]
+        argparse.Namespace(bundle_dir=machine.bundle_dir), kit, registry
     )
+    context.ask = _refuse
+    return context
 
 
 def _stacks_reached(row: slot_map.Row) -> set[str]:
