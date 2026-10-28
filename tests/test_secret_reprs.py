@@ -82,7 +82,7 @@ its repr and in pytest's explanation of a comparison, not by what it holds:
 `BackendEnvironment` that keeps the function that finds it out of both, and
 the last two tests here pin that mechanism.
 The one exception is a field already out of the repr for another reason —
-`Context`'s three caches, the forge with its admin token among them — which
+`Context`'s caches, the forge with its admin token among them — which
 the census records as secret, since every hidden field has to be one it can
 name.
 """
@@ -157,13 +157,14 @@ class Census:
 MODULES: tuple[ModuleType, ...] = (slots,)
 
 CENSUS: dict[type, Census] = {
-    # The three caches hold the forge, an opened escrow and the backend
-    # environment, each a record with a secret of its own, and are out of the
-    # repr and out of comparison for that reason as well as for being caches.
+    # The caches hold the forge, an opened escrow and the backend environment,
+    # each a record with a secret of its own, and the refusals of each backend
+    # that did not answer, which hold none; they are out of the repr and out of
+    # comparison for being caches, and the first three for their secrets too.
     # `open_forge` is a function, which holds no value to print.
     slots.Context: Census(
-        'open_forge open_vault open_environment project runner ask _forge _vault _environment',
-        secret='_forge _vault _environment',
+        'open_forge open_vault open_environment project runner ask _forge _vault _environment _timed_out',
+        secret='_forge _vault _environment _timed_out',
     ),
     slots.Decided: Census('where constant'),
     slots.Derived: Census('label'),
