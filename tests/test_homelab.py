@@ -16,13 +16,13 @@ here asserts about it (rfc-002 §13).
 from __future__ import annotations
 
 import copy
-import importlib.metadata
 import inspect
 import io
 import json
 import re
 import time
 from collections.abc import Iterator
+from importlib import metadata
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import parse_qs, urlsplit
@@ -493,7 +493,7 @@ def test_the_transcript_is_the_installed_providers() -> None:
     """
     recorded = re.search(r'pulumi-libvirt (\S+) generates', TRANSCRIPT.read_text())
     assert recorded is not None
-    assert importlib.metadata.version('pulumi-libvirt') == recorded.group(1), (
+    assert metadata.version('pulumi-libvirt') == recorded.group(1), (
         'pulumi-libvirt moved: record tests/data/homelab-domain.xml and PROVIDER_VOLUME_XML again from it, '
         'and check templates/domain.xslt.j2 and templates/volume.xslt against them'
     )

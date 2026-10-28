@@ -18,10 +18,10 @@ says, is named in `[project] dependencies`.
 from __future__ import annotations
 
 import ast
-import importlib.metadata
 import re
 import sys
 import tomllib
+from importlib import metadata
 from pathlib import Path
 
 import pytest
@@ -71,7 +71,7 @@ def declared() -> set[str]:
 
 
 def test_every_third_party_module_a_script_imports_is_a_project_dependency() -> None:
-    providers = importlib.metadata.packages_distributions()
+    providers = metadata.packages_distributions()
     names = declared()
     modules = sorted(SCRIPTS.rglob('*.py'))
     imported = [

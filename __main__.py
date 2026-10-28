@@ -2,6 +2,6 @@
 
 import pulumi
 
-import kluster.main
+from kluster.main import main
 
-pulumi.run(kluster.main.main)
+pulumi.run(main)

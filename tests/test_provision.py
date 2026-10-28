@@ -10,17 +10,17 @@ from __future__ import annotations
 import ast
 import builtins
 import importlib
-import importlib.util
 import json
 import logging
 import re
 import types
-import urllib.error
-import urllib.request
 from collections.abc import Iterator, Sequence
 from email.message import Message
+from importlib import util as importlib_util
 from pathlib import Path
 from typing import Any, cast
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 import pytest
 
@@ -57,7 +57,7 @@ def _registry(monkeypatch: pytest.MonkeyPatch, *answers: _Answer) -> None:
     def urlopen(*_args: object, **_kwargs: object) -> _Answer:
         return remaining.pop(0)
 
-    monkeypatch.setattr(provision.urllib.request, 'urlopen', urlopen)
+    monkeypatch.setattr(provision.urllib_request, 'urlopen', urlopen)
 
 
 def test_a_manifest_without_a_digest_header_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -145,7 +145,7 @@ def test_a_pinned_digest_the_registry_serves_passes_though_the_tag_has_moved(mon
 
 
 def test_a_pinned_digest_the_registry_does_not_serve_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    missing = urllib.error.HTTPError('https://registry-1.docker.io', 404, 'manifest unknown', Message(), None)
+    missing = urllib_error.HTTPError('https://registry-1.docker.io', 404, 'manifest unknown', Message(), None)
     _ = _resolving(monkeypatch, {settings.POSTGRES_DIGEST: missing, settings.POSTGRES_TAG: settings.POSTGRES_DIGEST})
 
     assert not provision._postgres_pin_ok()  # pyright: ignore[reportPrivateUsage]
@@ -180,10 +180,10 @@ def test_the_digest_a_reference_is_asked_by_is_the_manifest_requested(monkeypatc
     answers = [_Answer(body={'token': 'a-pull-token'}), _Answer(headers={'Docker-Content-Digest': 'sha256:abc'})]
 
     def urlopen(request: object, *_args: object, **_kwargs: object) -> _Answer:
-        requested.append(request if isinstance(request, str) else cast('urllib.request.Request', request).full_url)
+        requested.append(request if isinstance(request, str) else cast('urllib_request.Request', request).full_url)
         return answers.pop(0)
 
-    monkeypatch.setattr(provision.urllib.request, 'urlopen', urlopen)
+    monkeypatch.setattr(provision.urllib_request, 'urlopen', urlopen)
     _ = provision._image_digest('docker.io/library/postgres', 'sha256:abc')  # pyright: ignore[reportPrivateUsage]
 
     assert requested[-1] == 'https://registry-1.docker.io/v2/library/postgres/manifests/sha256:abc'
@@ -439,7 +439,7 @@ def _imports(tree: ast.Module, package: str) -> Iterator[str]:
         elif isinstance(node, ast.ImportFrom):
             base = node.module or ''
             if node.level:
-                base = importlib.util.resolve_name('.' * node.level + base, package)
+                base = importlib_util.resolve_name('.' * node.level + base, package)
             names = [base, *(f'{base}.{alias.name}' for alias in node.names)]
         else:
             continue

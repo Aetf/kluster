@@ -64,7 +64,6 @@ not the provider's.
 from __future__ import annotations
 
 import base64
-import concurrent.futures
 import contextlib
 import copy
 import hashlib
@@ -72,6 +71,7 @@ import ipaddress
 import re
 import threading
 from collections.abc import Callable
+from concurrent import futures
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple, cast
 from urllib.parse import urlsplit
@@ -2030,7 +2030,7 @@ def test_concurrent_reads_with_a_refused_login_send_one_credentialed_request_per
             return raised
         return None
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(reads)) as pool:
+    with futures.ThreadPoolExecutor(max_workers=len(reads)) as pool:
         outcomes = list(pool.map(read, *zip(*reads, strict=True)))
 
     assert [type(outcome) for outcome in outcomes] == [api.Unusable] * len(reads)

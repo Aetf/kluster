@@ -17,11 +17,10 @@ import contextvars
 from collections.abc import Callable
 
 import pulumi
-import pulumi.runtime
-import pulumi.runtime.settings
 import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_under_backstop, run_with
+from pulumi.runtime import settings
 
 from putils import Component, UnparentedChildError, install_parent_backstop
 
@@ -260,7 +259,7 @@ async def test_installing_outside_a_program_says_so() -> None:
     """Without a root stack resource there is nothing to hang a transformation off."""
 
     def run() -> None:
-        pulumi.runtime.settings.ROOT.set(None)
+        settings.ROOT.set(None)
         with pytest.raises(RuntimeError, match='root stack resource'):
             install_parent_backstop()
 
