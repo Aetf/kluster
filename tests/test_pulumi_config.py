@@ -28,12 +28,14 @@ from typing import Protocol, cast
 
 import pytest
 from credentials_command_tree import named_leaves
+from fake_gh import RecordedGh
 from fake_pulumi import RecordedPulumi
 from scratch_projects import cli_directories
 
 from kluster.conventions import identity
 from kluster.lib import pulumi_cli, stack_environment, workstation
-from kluster.scripts.credentials import escrow, pulumi_config, slots
+from kluster.scripts.credentials import devices, escrow, pulumi_config, slots
+from kluster.scripts.credentials.github_secrets import Forge
 
 STACK = 'dns'
 SECRET = 'a-minted-token'
@@ -461,6 +463,118 @@ def test_a_run_says_what_it_reaches_before_it_starts(
     assert 'postgres://192.0.2.10:5432' in said
     assert f'{ANSWERED_BOUND:g}s' in said
     assert 'a-password' not in said, said
+
+
+#: The backend URL a command below is handed. Where it points does not
+#: matter -- the stand-in answers nothing, wherever it is pointed -- and it
+#: is the one backend every stack in the cases below is in.
+UNANSWERING_URL = 'postgres://192.0.2.10:5432/pulumi_state'
+
+#: What a machine holding every passphrase and a backend URL tells a run, so
+#: a case below is stopped at the bound and at nothing before it.
+UNANSWERING_ENVIRONMENT = pulumi_config.BackendEnvironment(
+    passphrase=lambda: 'the-stack-passphrase',
+    url=UNANSWERING_URL,
+    operator=lambda: 'the-operator-passphrase',
+    physical=lambda: 'the-physical-passphrase',
+)
+
+
+@dataclass
+class Starts:
+    """The runner the cases below start the stand-in through: `pulumi_config.run_pulumi`, each start remembered.
+
+    Counted here rather than by the stand-in, since a stand-in killed at its
+    bound may be killed before it gets to count itself; every call starts it
+    once, through the real runner and its real bound.
+    """
+
+    commands: list[list[str]] = dataclasses.field(default_factory=list[list[str]])
+
+    def __call__(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdin: str | None) -> str:
+        self.commands.append(list(args))
+        return pulumi_config.run_pulumi(args, cwd=cwd, env=env, stdin=stdin)
+
+
+@pytest.fixture
+def bounded(unanswering: None, monkeypatch: pytest.MonkeyPatch) -> Starts:
+    """The stand-in that never answers, every run against it bounded by `UNANSWERED_BOUND`, and its starts."""
+    monkeypatch.setattr(pulumi_cli, 'TIMEOUT', UNANSWERED_BOUND)
+    return Starts()
+
+
+def test_a_copy_into_a_backend_that_does_not_answer_starts_one_run(bounded: Starts, tmp_path: Path) -> None:
+    """The comparison a copy makes first is refused at the bound, and no write is started after it.
+
+    "Not held" would send the copy on to `pulumi config set`, a second wait
+    of the whole bound for the same silence.
+    """
+    stack = pulumi_config.Stack(name=STACK, directory=tmp_path, environment=UNANSWERING_ENVIRONMENT, run=bounded)
+
+    with pytest.raises(pulumi_config.BackendTimedOut):
+        _ = slots._fill_config('a-row', stack, QUALIFIED_KEY, SECRET)  # pyright: ignore[reportPrivateUsage]
+
+    assert [command[:2] for command in bounded.commands] == [['config', 'get']]
+
+
+def test_a_read_back_from_a_backend_that_does_not_answer_starts_one_run(bounded: Starts, tmp_path: Path) -> None:
+    """A read stopped at the bound is not followed by the question whether the stack holds the key.
+
+    That question goes to the same backend, and its refusal would be the same
+    wait again; the read's refusal travels unchanged, and is no missing record.
+    """
+    admin = devices.DEVICES[devices.GITHUB_ADMIN]
+    stack = pulumi_config.Stack(name=admin.stack, directory=tmp_path, environment=UNANSWERING_ENVIRONMENT, run=bounded)
+
+    with pytest.raises(pulumi_config.BackendTimedOut) as refused:
+        _ = devices.borrow(admin, stack=stack)
+
+    assert not isinstance(refused.value, devices.RecordMissing)
+    assert [command[:2] for command in bounded.commands] == [['config', 'get']]
+
+
+def test_a_whole_map_sync_against_a_backend_that_does_not_answer_starts_one_run(
+    bounded: Starts, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Every row that needs the backend is refused with the first refusal at the bound; the others are delivered.
+
+    The rows are the map's own: two read `physical`'s state and one copies it
+    into two stacks, all in the one backend, and the overlay network's id
+    needs no backend at all.
+    """
+    gh = RecordedGh()
+    walked = {
+        name: slots.ROWS[name]
+        for name in ('zerotier-identity-physical', 'zerotier-identity-dns', 'kubeconfig', 'zerotier-network')
+    }
+    context = slots.Context(
+        open_forge=lambda: Forge(token='the-admin-token', run=gh),
+        open_vault=_unopened,
+        open_environment=lambda: UNANSWERING_ENVIRONMENT,
+        runner=bounded,
+        ask=_never_asked,
+    )
+
+    with caplog.at_level(logging.INFO), pytest.raises(pulumi_config.SlotRefused) as refused:
+        _ = slots.sync(context, rows=walked)
+
+    assert len(bounded.commands) == 1, bounded.commands
+    for name in ('zerotier-identity-physical', 'zerotier-identity-dns', 'kubeconfig'):
+        assert name in str(refused.value)
+    assert 'zerotier-network' not in str(refused.value)
+    refusals = {record.getMessage().partition(': ')[2] for record in caplog.records if record.levelno == logging.ERROR}
+    assert len(refusals) == 1 and '' not in refusals, refusals
+    assert {(slot.repository, slot.environment, slot.name) for slot in slots.ROWS['zerotier-network'].sinks} == set(
+        gh.values
+    )
+
+
+def _unopened() -> escrow.Vault:
+    raise AssertionError('the sync opened the kit, which none of the rows it walked needs')
+
+
+def _never_asked(prompt: str) -> str:
+    raise AssertionError(f'the sync asked for a value, which none of the rows it walked takes: {prompt}')
 
 
 @pytest.mark.parametrize(

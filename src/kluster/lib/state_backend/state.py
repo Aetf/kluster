@@ -441,8 +441,8 @@ def stacks(target: Connection) -> list[str]:
     not yet pointed at a new one -- would otherwise hold the question for as
     long as TCP retries a connection, past the runner's own bound. A run that
     still outlasts that bound is a backend that did not answer, which the
-    runner refuses as it refuses any failed run, and which is a `StateError`
-    here like any other.
+    runner refuses as `StoppedAtBound`, a kind of `PulumiRefused`, and which
+    is a `StateError` here like any other.
     """
     log.info(
         'asking pulumi which stacks %s serves; a connection not made within %ds is a backend that does not answer',

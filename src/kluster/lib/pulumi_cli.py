@@ -6,10 +6,12 @@ which stacks it serves (`kluster.lib.state_backend.state`). Both run the pinned
 CLI (`mise.toml`) rather than the automation API, and both need the checkout
 that holds `Pulumi.yaml`, so the runner and that lookup live here, below both.
 
-A refusal is `PulumiRefused`, a run that outlasts its bound included. Each
-caller says what a refusal means in its own terms: the `credentials` package
-turns it into a slot that would not take the value (`SlotRefused`), the
-restore into a step that did not happen.
+A refusal is `PulumiRefused`, a run that outlasts its bound included, which is
+refused as its own kind of it (`StoppedAtBound`). Each caller says what a
+refusal means in its own terms: the `credentials` package turns it into a
+slot that would not take the value (`SlotRefused`), and a run stopped at its
+bound into a backend that did not answer in time; the restore turns either
+into a step that did not happen.
 """
 
 from __future__ import annotations
@@ -41,6 +43,17 @@ class PulumiRefused(RuntimeError):
     """A `pulumi` run failed, or the checkout it runs in could not be found."""
 
 
+class StoppedAtBound(PulumiRefused):
+    """A `pulumi` run still going at its bound, and stopped there.
+
+    Its own type because it says nothing about the stack the run asked about:
+    no answer came back at all, which is how a backend whose traffic is
+    dropped looks from here. Asking that backend anything else is another
+    wait of the same length for the same silence, so a caller that would ask
+    again after a refusal tells this one apart by type.
+    """
+
+
 class Runner(Protocol):
     """How a `pulumi` invocation is made. Substituted in tests."""
 
@@ -59,7 +72,7 @@ def run_pulumi(
     table of a shared machine.
 
     **A run still going after `timeout` seconds is killed and refused**, as
-    `PulumiRefused` naming the command, the backend and the bound, which is
+    `StoppedAtBound` naming the command, the backend and the bound, which is
     how a backend whose traffic is dropped looks from here. The line logged
     before the run names the same three, so the wait has an explanation
     while it lasts. With no `timeout` the bound is `TIMEOUT`, read when the
@@ -82,7 +95,7 @@ def run_pulumi(
             check=False,
         )
     except sp.TimeoutExpired as exc:
-        raise PulumiRefused(
+        raise StoppedAtBound(
             f'{command} against {backend} did not finish within its bound of {bound:g}s and was stopped; a '
             'backend whose traffic is dropped -- an unroutable address, a box that is down behind a firewall that '
             'does not reject -- ends a run this way'

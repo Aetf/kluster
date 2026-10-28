@@ -95,7 +95,7 @@ from __future__ import annotations
 import getpass
 import logging
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Collection, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
@@ -422,6 +422,14 @@ class Context:
     Everything here is lazy on purpose: pushing the one manual row asks for no
     kit, pushing an escrowed row opens no state backend, and copying a row whose
     every slot is a Pulumi config secret reads no admin token.
+
+    **A backend that did not answer within the runner's bound is asked
+    nothing more in the same command.** Once a run against it has been
+    stopped there (`pulumi_config.BackendTimedOut`), every later run a stack
+    opened here would start against it is refused with that refusal and
+    never started, so a command that reaches the backend for many rows waits
+    out the bound once. A backend is told apart by the URL a run is started
+    with.
     """
 
     #: The forge's secret store, as the GitHub admin token, for a row with a
@@ -441,6 +449,12 @@ class Context:
     _forge: Forge | None = field(default=None, init=False, repr=False, compare=False)
     _vault: escrow.Vault | None = field(default=None, init=False, repr=False, compare=False)
     _environment: pulumi_config.BackendEnvironment | None = field(default=None, init=False, repr=False, compare=False)
+    #: The first refusal at the bound of each backend that gave one, keyed by
+    #: the URL its run was started with; None for a run started with none,
+    #: against whatever backend the caller's environment names.
+    _timed_out: dict[str | None, pulumi_config.BackendTimedOut] = field(
+        default_factory=dict[str | None, pulumi_config.BackendTimedOut], init=False, repr=False, compare=False
+    )
 
     @property
     def forge(self) -> Forge:
@@ -472,7 +486,22 @@ class Context:
         # out of it by name (`pulumi_config.Stack`), so a row delivered to a
         # stack encrypted apart from the others cannot be run under the wrong
         # one from here.
-        return pulumi_config.Stack(name=name, directory=self.project, environment=self.environment, run=self.runner)
+        return pulumi_config.Stack(name=name, directory=self.project, environment=self.environment, run=self._run)
+
+    def _run(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdin: str | None) -> str:
+        """One `pulumi` run through `runner`, refused unstarted where its backend did not answer an earlier one."""
+        backend = env.get(pulumi_config.BACKEND_URL_ENV)
+        earlier = self._timed_out.get(backend)
+        if earlier is not None:
+            log.info(
+                'not starting `pulumi %s`: its backend did not answer a run earlier in this command', ' '.join(args)
+            )
+            raise pulumi_config.BackendTimedOut(str(earlier)) from earlier
+        try:
+            return self.runner(args, cwd=cwd, env=env, stdin=stdin)
+        except pulumi_config.BackendTimedOut as exc:
+            self._timed_out[backend] = exc
+            raise
 
 
 class Source(ABC):
@@ -1475,6 +1504,15 @@ def sync(context: Context, *, rows: Mapping[str, Row] | None = None, only: str |
     been, which is what makes the run's exit status mean "the map is filled".
     A run naming one row raises immediately instead: there, the refusal *is* the
     answer.
+
+    **A backend that does not answer within the runner's bound is waited
+    out once.** The first run against it stopped at the bound refuses its
+    row, and every later row that needs that backend is refused with the same
+    refusal, no run started (`Context`), whether it needed the backend to
+    obtain its value or to fill a config slot; the rows that do not need it
+    are still delivered. Filling a config slot, like obtaining a value, stops
+    no walk on a stack this machine cannot open (`pulumi_config.MachineRefused`),
+    whose refusal is reported as the row's.
     """
     table = rows if rows is not None else ROWS
     if only is not None and only not in table:
@@ -1533,15 +1571,21 @@ def sync(context: Context, *, rows: Mapping[str, Row] | None = None, only: str |
             context.forge.put(slot, values[slot])
             _verify(context.forge, slot, before[slot])
             pushed.append(str(slot))
-        for stack, target in zip(stacks, row.config_sinks, strict=True):
-            if _fill_config(name, stack, target.key, values[target]):
-                pushed.append(str(target))
-                log.info('%s: commit Pulumi.%s.yaml to publish the slot', name, stack.name)
+        try:
+            for stack, target in zip(stacks, row.config_sinks, strict=True):
+                if _fill_config(name, stack, target.key, values[target]):
+                    pushed.append(str(target))
+                    log.info('%s: commit Pulumi.%s.yaml to publish the slot', name, stack.name)
+        except pulumi_config.MachineRefused as exc:
+            if only is not None:
+                raise
+            log.error('%s: %s', name, exc)
+            refused.append(name)
 
     # Deliberately after the walk rather than inside it: what is delivered is
     # delivered either way, and the exit status still says the map is not full.
     if refused:
-        raise SlotRefused(f'{len(refused)} row(s) had no value to push: {", ".join(refused)}; each said why above')
+        raise SlotRefused(f'{len(refused)} row(s) were refused: {", ".join(refused)}; each said why above')
     return pushed
 
 

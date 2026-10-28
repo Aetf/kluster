@@ -768,20 +768,20 @@ def _read_back(device: Device, key: str, *, stack: pulumi_config.Stack) -> str:
     backend that holds no such stack while the checkout holds its committed
     file has said nothing about that file, and is not that answer. A machine
     that cannot open the stack *at all* -- no passphrase for it, no backend to
-    reach it in -- is a different state with a different answer, and its
-    refusal travels unchanged.
+    reach it in, a backend whose traffic is dropped until the runner's bound
+    runs out -- is a different state with a different answer, and its refusal
+    travels unchanged, with nothing asked after it.
 
-    So does every other refusal of the read that is not the stack's answer
-    that the key is absent: a state backend that cannot be reached, a
-    passphrase that does not decrypt what is there. Each says in its own words
-    what is wrong, and dressed up as a missing record it would send the
-    operator to re-record a value that is in fact present. A refused read is
-    therefore asked about once more, of the stack itself (`Stack.has`), which
+    Every other refusal of the read that is not the stack's answer that the
+    key is absent travels unchanged too, after one more question: a state
+    backend whose name resolves nowhere or that refuses the connection, a
+    passphrase that does not decrypt what is there. Each says in its own
+    words what is wrong, and dressed up as a missing record it would send the
+    operator to re-record a value that is in fact present. So a refused read
+    is asked about once more, of the stack itself (`Stack.has`), which
     decrypts nothing. Where the backend cannot be reached, that question is
-    refused as well -- where its traffic is dropped, once the runner's bound
-    has run out a second time -- and it is still the read's refusal that
-    travels, unchanged, since it is the one that names the command the
-    caller made.
+    refused as well, and it is still the read's refusal that travels,
+    unchanged, since it is the one that names the command the caller made.
     """
     try:
         value = stack.get(key).strip()

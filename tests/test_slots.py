@@ -1475,6 +1475,132 @@ def test_a_row_that_cannot_produce_its_value_does_not_stop_the_walk(caplog: pyte
     assert 'has no state' in caplog.text
 
 
+#: The URL the state backend is reached at in the cases below, which a stack
+#: whose state is committed is never pointed at.
+STATE_BACKEND_URL = 'postgres://192.0.2.10:5432/pulumi_state'
+#: A stack whose state is committed in the checkout, so a run against it is
+#: pointed at a backend of its own and not at `STATE_BACKEND_URL`.
+COMMITTED_STACK = conventions.STACK_NAMES.state_backend
+COMMITTED_KEY = 'aCopiedKey'
+#: A row whose source is a constant, copied into the committed stack: a row
+#: delivered without any run against the state backend.
+INTO_THE_CHECKOUT = slots.Row(
+    register='a constant copied into a stack whose state is committed',
+    source=slots.Decided(where='tests', constant='a-committed-copy'),
+    targets=(slots.PulumiConfig(COMMITTED_STACK, COMMITTED_KEY),),
+)
+
+
+@dataclass
+class Dropping(RecordedPulumi):
+    """`RecordedPulumi`, except that a run against `STATE_BACKEND_URL` that `drops` names is stopped at the bound.
+
+    What the state backend's dropped traffic looks like from this package
+    (`pulumi_config.BackendTimedOut`). Every run against that backend,
+    answered or stopped, is kept in `reached`; a stopped one reaches none of
+    the recorded state.
+    """
+
+    drops: Callable[[list[str]], bool] = lambda _args: True
+    reached: list[list[str]] = field(default_factory=list[list[str]])
+    stopped: list[list[str]] = field(default_factory=list[list[str]])
+
+    def __call__(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdin: str | None) -> str:
+        if env.get(pulumi_config.BACKEND_URL_ENV) == STATE_BACKEND_URL:
+            self.reached.append(list(args))
+            if self.drops(list(args)):
+                self.stopped.append(list(args))
+                raise pulumi_config.BackendTimedOut(f'`pulumi {" ".join(args)}` did not finish within its bound')
+        return super().__call__(args, cwd=cwd, env=env, stdin=stdin)
+
+
+def dropping(gh: RecordedGh, pulumi: Dropping) -> slots.Context:
+    """A whole-map run with every passphrase, the state backend at `STATE_BACKEND_URL`, its runs made through `pulumi`."""
+    # The operator passphrase is there for the committed stack, which is an
+    # operator stack and opened under it.
+    environment = pulumi_config.BackendEnvironment(
+        passphrase=lambda: STACK_PASSPHRASE,
+        url=STATE_BACKEND_URL,
+        operator=lambda: 'the-operator-passphrase',
+        physical=lambda: PHYSICAL_PASSPHRASE,
+    )
+    return slots.Context(
+        open_forge=lambda: Forge(token='the-admin-token', run=gh),
+        open_vault=unopened,
+        open_environment=lambda: environment,
+        runner=pulumi,
+        ask=typing_in('typed-in'),
+    )
+
+
+def test_a_backend_that_does_not_answer_within_the_bound_is_waited_out_once_and_another_backend_still_is() -> None:
+    """After a run against the state backend is stopped at the bound, no later row starts one; other rows deliver.
+
+    Each later row that needs the state backend is refused with the first
+    refusal. A stack whose state is committed is in a backend of its own, so
+    a copy into it is delivered, and so is a row that needs only the forge.
+    """
+    gh = RecordedGh()
+    pulumi = Dropping(stacks=[COMMITTED_STACK])
+    walked = {
+        name: slots.ROWS.get(name, INTO_THE_CHECKOUT)
+        for name in ('kubeconfig', 'into-the-checkout', 'zerotier-identity-dns', 'zerotier-network')
+    }
+
+    with pytest.raises(SlotRefused) as refused:
+        _ = slots.sync(dropping(gh, pulumi), rows=walked)
+
+    assert len(pulumi.reached) == 1, pulumi.reached
+    assert 'kubeconfig' in str(refused.value)
+    assert 'zerotier-identity-dns' in str(refused.value)
+    assert pulumi.config == {(COMMITTED_STACK, COMMITTED_KEY): 'a-committed-copy'}
+    assert {(slot.repository, slot.environment, slot.name) for slot in slots.ROWS['zerotier-network'].sinks} == set(
+        gh.values
+    )
+
+
+def test_a_copy_stopped_at_the_bound_refuses_its_row_and_the_walk_goes_on(caplog: pytest.LogCaptureFixture) -> None:
+    """A backend lost between reading the value and filling the slot is a row refused, not a walk ended.
+
+    The fill's first run is stopped at the bound, so the copy is refused and
+    reported like a row with no value; no later run is started against that
+    backend, and a row that needs none is still delivered.
+    """
+    pulumi = Dropping(
+        stacks=[PHYSICAL_STACK, K8S_BASE_STACK, APPS_STACK, COMMITTED_STACK],
+        outputs={KUBECONFIG_OUTPUT: KUBECONFIG},
+        drops=lambda args: args[:2] == ['config', 'get'],
+    )
+    walked = {
+        name: slots.ROWS.get(name, INTO_THE_CHECKOUT)
+        for name in ('kubeconfig', 'into-the-checkout', 'zerotier-identity-dns')
+    }
+
+    with caplog.at_level(logging.ERROR), pytest.raises(SlotRefused) as refused:
+        _ = slots.sync(dropping(RecordedGh(), pulumi), rows=walked)
+
+    assert 'kubeconfig' in str(refused.value)
+    assert 'zerotier-identity-dns' in str(refused.value)
+    stopped = ['config', 'get', slots.KUBECONFIG_KEY, '--json', '--stack', K8S_BASE_STACK]
+    assert pulumi.stopped == [stopped]
+    assert pulumi.reached[-1] == stopped
+    assert pulumi.config == {(COMMITTED_STACK, COMMITTED_KEY): 'a-committed-copy'}
+    said = [record.getMessage() for record in caplog.records if record.levelno == logging.ERROR]
+    assert len([line for line in said if ' '.join(stopped) in line]) == 2, said
+
+
+def test_a_named_row_whose_copy_is_stopped_at_the_bound_raises_that_refusal() -> None:
+    """Named alone, a row whose fill is stopped at the bound raises the bound's refusal, not the walk's summary."""
+    pulumi = Dropping(
+        stacks=[PHYSICAL_STACK, K8S_BASE_STACK, APPS_STACK],
+        outputs={KUBECONFIG_OUTPUT: KUBECONFIG},
+        drops=lambda args: args[:2] == ['config', 'get'],
+    )
+
+    with pytest.raises(pulumi_config.BackendTimedOut):
+        _ = slots.sync(dropping(RecordedGh(), pulumi), only='kubeconfig')
+
+
 def test_naming_a_row_with_no_github_slot_is_refused_rather_than_ignored() -> None:
     # A request for one specific row that quietly does nothing is worse than a
     # refusal: the operator walks away believing the slot is filled.

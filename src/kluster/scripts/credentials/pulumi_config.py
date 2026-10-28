@@ -72,6 +72,16 @@ class BackendMissing(MachineRefused):
         self.stack: str = stack
 
 
+class BackendTimedOut(MachineRefused):
+    """A backend that gave no answer within the runner's bound: the run against it was stopped there.
+
+    The runner's own refusal (`pulumi_cli.StoppedAtBound`), its text kept. A
+    `MachineRefused` because the run heard nothing from the backend, so it
+    says nothing about what the stack holds, and every further question to
+    that backend is another wait of the whole bound for the same silence.
+    """
+
+
 class StackMissing(SlotRefused):
     """A stack the state backend does not hold, where a slot needs one that is already there."""
 
@@ -114,12 +124,15 @@ def run_pulumi(
     """Run one `pulumi` command (`pulumi_cli.run_pulumi`), a refusal refused as a slot.
 
     The boundary between the runner, which `kluster.lib` holds for every
-    caller, and this package: a `pulumi` run that failed here, or outlasted
-    its bound, is a slot that would not take the value, which is what every
-    caller in this package catches.
+    caller, and this package: a `pulumi` run that failed here is a slot that
+    would not take the value, which is what every caller in this package
+    catches. One that outlasted its bound is the kind of that refusal which is
+    about this machine's reach rather than about the stack (`BackendTimedOut`).
     """
     try:
         return pulumi_cli.run_pulumi(args, cwd=cwd, env=env, stdin=stdin, timeout=timeout)
+    except pulumi_cli.StoppedAtBound as exc:
+        raise BackendTimedOut(str(exc)) from exc
     except pulumi_cli.PulumiRefused as exc:
         raise SlotRefused(str(exc)) from exc
 
@@ -447,8 +460,10 @@ class Stack:
         Neither run answers without the backend, so a backend that cannot be
         reached -- a name that resolves nowhere, a connection refused, or
         traffic dropped until the runner's bound runs out -- is refused here,
-        as `get` was, and is never an answer of False; dropped traffic waits
-        out the bound on the read and again here.
+        as `get` was, and is never an answer of False. Dropped traffic is
+        refused as `BackendTimedOut`, which a caller asking this after a
+        refused read lets through instead of asking (`devices._read_back`), so
+        the bound is waited out once.
 
         The listing names every key in full, `<namespace>:<name>`, while `get`
         takes a key with no namespace as one in the project's own, the `name:`
@@ -495,12 +510,15 @@ class Stack:
         alone. `config get --json` answers with the value and whether it is
         stored encrypted, and without the newline the plain form prints.
 
-        A machine that cannot open this stack at all (`MachineRefused`) is
-        refused as it is. Any other key this cannot read -- absent, or refused
-        for any other reason -- counts as not held, so the caller goes on to
-        write it, and that write either fills the slot or refuses with its own
-        reason. It logs nothing of its own, and the line the runner logs before
-        the run names the key, never the value: what is compared is a secret.
+        A machine that cannot open this stack at all (`MachineRefused`), a
+        backend that did not answer within the runner's bound among them, is
+        refused as it is, so the caller does not go on to a write that would
+        wait out the bound a second time. Any other key this cannot read --
+        absent, or refused for any other reason -- counts as not held, so the
+        caller goes on to write it, and that write either fills the slot or
+        refuses with its own reason. It logs nothing of its own, and the line
+        the runner logs before the run names the key, never the value: what is
+        compared is a secret.
         """
         try:
             printed = self._pulumi('config', 'get', key, '--json', '--stack', self.name)

@@ -2635,7 +2635,7 @@ def unanswered(monkeypatch: pytest.MonkeyPatch) -> list[Mapping[str, str]]:
     def run_pulumi(args: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdin: str | None) -> str:
         asked.append(env)
         backend = pulumi_cli.backend_named(env.get(pulumi_cli.BACKEND_URL_ENV))
-        raise pulumi_cli.PulumiRefused(
+        raise pulumi_cli.StoppedAtBound(
             f'`pulumi {" ".join(args)}` against {backend} did not finish within its bound of {pulumi_cli.TIMEOUT}s'
         )
 
