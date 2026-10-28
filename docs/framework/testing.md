@@ -496,7 +496,49 @@ a variant of a component built beside its baseline, to compare the two. The
 move is to give the variant a distinct logical name — a builder that takes
 the name as a parameter, the way `build_cluster` in
 `tests/test_talos_day1.py` does — not to loosen the refusal, because the
-engine would stop the same run.
+engine would stop the same run. A builder that supplies a default component
+builds it only when none was handed in: `kwargs.setdefault('cluster',
+build_cluster())` builds the default whatever the caller passed, which is a
+second registration under the same name.
+
+**A failed RPC of a run the case started fails the case, unless the case
+received the failure.** The patch raises on the SDK's executor thread, inside the
+registration's own task, and a failure there reaches the program through
+the refused resource's outputs, which most cases never read, and through
+the SDK's wait for its outstanding RPCs, which a real program meets on its
+way out and which fails the deployment. A case that does neither would pass
+with the failure printed beside it. So `tests/conftest.py` does
+the wait for every case, in its `pytest_runtest_call` hook: once the case
+has returned and before any fixture is torn down, so that what is still in
+flight finishes under the case's arrangements,
+`mock_monitor.fail_on_unreceived_failures` lets every RPC of the runs the
+case's setup and body started finish, and fails the case with
+`UnreceivedFailure` from the first failure among them. That is any RPC's
+failure — a duplicate URN, a component's refusal reaching a resource's
+inputs, an invoke the mock refused — because the SDK records the first of
+them all, and a real run fails on any. A failure the case received fails
+nothing: `declaring` receives the failure that leaves it, or one with the
+root of what leaves, and leaves one it only adds as a note for the hook; a
+case whose subject is a refused registration receives it with
+`the_run_failed_with(<type>)`, which hands back the program's own exception
+from under the SDK's `While processing resource: …`. The receipt is complete
+when that returns, and the SDK wraps a component's `ValueError` refusal in a
+`ValueError` of its own, so the case holds what comes back to the refusal it
+caught, by identity: a bare receipt of a type that wide receives whichever
+such refusal failed first.
+An output the case awaited does not count as receiving the registration's
+failure: an output carries it only to a case that reads that resource, and
+the hook cannot tell what a case read. `tests/test_mock_monitor_failures.py`
+holds the rule in a child run.
+
+Two limits stand, and
+[Aetf/kluster-ops#692](https://github.com/Aetf/kluster-ops/issues/692) is
+about them. The SDK records only a run's first failure, and a failure that
+comes while it holds one is never recorded, so a case that receives the
+first has received the run: a second failure is not judged. And a
+run that a wider fixture started, such as a module's shared run, is judged
+at the case that set the fixture up and not again, so a later case on it
+declares inside `declaring`.
 
 The patch belongs in one place because it does not compose: a second module
 capturing "the original" at its own import time would chain onto this one, and

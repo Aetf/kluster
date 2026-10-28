@@ -139,7 +139,10 @@ def build_cluster(worker_nodes: tuple[str, ...] = (WORKER,)) -> Any:
 def build(**kwargs: Any) -> Any:
     from kluster.components.homelab import HomelabHost
 
-    kwargs.setdefault('cluster', build_cluster())
+    # Only when none is handed in: a second cluster beside the caller's would
+    # be one more under the same logical name.
+    if 'cluster' not in kwargs:
+        kwargs['cluster'] = build_cluster()
     kwargs.setdefault('host', str(conventions.overlay.member(conventions.overlay.MEMBER_HOMELAB).address))
     kwargs.setdefault('storage_dir', STORAGE_DIR)
     kwargs.setdefault('bridge', BRIDGE)
