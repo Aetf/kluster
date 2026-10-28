@@ -21,6 +21,7 @@ from kluster.components.cloud.guardrails import (
     OBJECT_STORAGE_GB,
     AlertRule,
     Guardrails,
+    NoRecipient,
     quota_statements,
 )
 
@@ -139,11 +140,15 @@ async def test_a_budget_nobody_hears_is_refused() -> None:
     # refusal is: in the audience every rule receives.
     guardrails = build((), name='kluster-silent')
     assert guardrails.alerts
-    refusals: list[ValueError] = []
+    budget = await guardrails.budget.display_name.future()
+    refusals: list[NoRecipient] = []
     for rule in guardrails.alerts.values():
-        with pytest.raises(ValueError, match='notifies nobody') as refused:
+        with pytest.raises(ValueError) as failed:
             await rule.recipients.future()
-        refusals.append(refused.value)
+        # The output fails with the SDK's exception around the program's own.
+        refusal = root_of(failed.value, NoRecipient)
+        assert refusal.budget == budget
+        refusals.append(refusal)
     # And the run fails on it, as the deployment would: the rule's own
     # registration meets the same refusal.
-    assert await the_run_failed_with(ValueError) in [root_of(refusal, ValueError) for refusal in refusals]
+    assert await the_run_failed_with(NoRecipient) in refusals

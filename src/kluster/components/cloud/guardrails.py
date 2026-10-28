@@ -72,6 +72,19 @@ OBJECT_STORAGE_GB = 250
 BUDGET_AMOUNT = 25
 
 
+class NoRecipient(ValueError):
+    """A budget whose alerts have nobody to notify; `budget` is the budget's display name.
+
+    One rule, so a program tells the refusal apart by the type alone, and a
+    `ValueError`, so a caller that catches one is unaffected. The message,
+    built from the field, is for a person.
+    """
+
+    def __init__(self, *, budget: str) -> None:
+        super().__init__(f'the budget {budget} has no alert recipient, so its alerts notify nobody')
+        self.budget: str = budget
+
+
 @dataclass(frozen=True)
 class AlertRule:
     """One budget alert: a threshold, and whether it looks at spend or trend."""
@@ -134,10 +147,11 @@ class Guardrails(Component, pulumi_type='kluster:cloud:Guardrails'):
             opts=self.child_opts(),
         )
 
+        display_name = f'{name}-budget'
         self.budget = oci.budget.Budget(
             f'{name}-budget',
             compartment_id=tenancy_id,
-            display_name=f'{name}-budget',
+            display_name=display_name,
             description='Monthly spend on the cluster compartment',
             amount=BUDGET_AMOUNT,
             # Monthly because `BUDGET_AMOUNT` is a month's accepted cost: the
@@ -151,7 +165,7 @@ class Guardrails(Component, pulumi_type='kluster:cloud:Guardrails'):
 
         # OCI takes the audience as one comma-separated string, and every rule
         # takes the same one.
-        audience = async_output(self._audience)
+        audience = async_output(self._audience(display_name))
         self.alerts = {
             rule.name: oci.budget.Rule(
                 f'{name}-budget-{rule.name}',
@@ -170,10 +184,10 @@ class Guardrails(Component, pulumi_type='kluster:cloud:Guardrails'):
 
         self.register_outputs({})
 
-    async def _audience(self) -> str:
+    async def _audience(self, budget: str) -> str:
         recipients = await resolve(self._recipients)
         if not recipients:
-            raise ValueError('a budget alert with no recipient notifies nobody')
+            raise NoRecipient(budget=budget)
         return ','.join(recipients)
 
 
