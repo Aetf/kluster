@@ -80,6 +80,39 @@ FAMILIES: tuple[str, ...] = ('IPV4', 'IPV6')
 ENDPOINT_FAMILY = 'IPV4'
 
 
+# The refusals below are each one rule, so a program tells them apart by type
+# alone. Each is a `ValueError`, so a caller that catches one is unaffected;
+# the fields say what broke the rule, and the message, built from them, is for
+# a person.
+
+
+class UdpOnlyPort(ValueError):
+    """A census row the balancer fronts is served on UDP alone; `name` is the row's."""
+
+    def __init__(self, *, name: str) -> None:
+        super().__init__(
+            f'the public port {name!r} is served on UDP alone, and its backend set has no TCP port to check'
+        )
+        self.name: str = name
+
+
+class NoPublicAddress(ValueError):
+    """The balancer read back holding no public address of `family`."""
+
+    def __init__(self, *, family: str) -> None:
+        super().__init__(f'the load balancer has no public {family} address')
+        self.family: str = family
+
+
+class NotOneIpv6Address(ValueError):
+    """A node's primary VNIC read back holding other than one IPv6 address; `addresses` are the ones it holds."""
+
+    def __init__(self, *, node: str, addresses: Sequence[str]) -> None:
+        super().__init__(f'{node} holds {len(addresses)} IPv6 addresses on its primary VNIC, not one')
+        self.node: str = node
+        self.addresses: tuple[str, ...] = tuple(addresses)
+
+
 def management_ports() -> list[tuple[str, int]]:
     """Each management port as its field in `conventions.ManagementPorts` and its number.
 
@@ -128,9 +161,7 @@ def forwarded() -> list[Forwarded]:
     ]
     for entry in census:
         if 'tcp' not in entry.transports.protocols:
-            raise ValueError(
-                f'the public port {entry.name!r} is served on UDP alone, and its backend set has no TCP port to check'
-            )
+            raise UdpOnlyPort(name=entry.name)
     return [*management, *census]
 
 
@@ -272,7 +303,7 @@ class NodeLoadBalancer(Component, pulumi_type='kluster:cloud:NodeLoadBalancer'):
                 text = str(address.ip_address or '')
                 if address.is_public and separator in text:
                     return text
-            raise ValueError(f'the load balancer has no public {family} address')
+            raise NoPublicAddress(family=family)
 
         return self.load_balancer.ip_addresses.apply(public)
 
@@ -456,10 +487,10 @@ class CloudNodes(Component, pulumi_type='kluster:cloud:CloudNodes'):
                 opts=pulumi.InvokeOptions(parent=self),
             )
         )
-        addresses = list(vnic.ipv6addresses or [])
+        addresses = [str(address) for address in vnic.ipv6addresses or []]
         if len(addresses) != 1:
-            raise ValueError(f'{node} holds {len(addresses)} IPv6 addresses on its primary VNIC, not one')
-        return str(addresses[0])
+            raise NotOneIpv6Address(node=node, addresses=addresses)
+        return addresses[0]
 
     async def _primary_vnic_id(self, instance: oci.core.Instance) -> str:
         """The primary VNIC of `instance`.

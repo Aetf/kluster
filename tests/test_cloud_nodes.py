@@ -23,7 +23,15 @@ import pytest_asyncio
 from mock_monitor import Declaration, Recorder, declaring, decline_every_invoke, root_of, run_with, the_run_failed_with
 
 from kluster import conventions
-from kluster.components.cloud.nodes import CloudNodes, NodeLoadBalancer, user_data
+from kluster.components.cloud.nodes import (
+    FAMILY_SEPARATOR,
+    CloudNodes,
+    NodeLoadBalancer,
+    NoPublicAddress,
+    NotOneIpv6Address,
+    UdpOnlyPort,
+    user_data,
+)
 from kluster.conventions import Answerer, Front, ManagementPorts, PublicPort, Transports
 from kluster.stacks import physical
 
@@ -440,17 +448,20 @@ async def test_a_node_without_exactly_one_ipv6_address_is_refused(held: list[str
     # A backend the refusal reaches fails whole, its every output with it, so
     # each is read and the refusals counted: one per port on each node's IPv6
     # side, and none on the IPv4 side, which is told the instance instead.
-    refusals: list[ValueError] = []
+    # Each says what the VNIC holds, and names a node: every node once per
+    # port, so a refusal naming one node for another's backend is caught.
+    refusals: list[NotOneIpv6Address] = []
     for backend in nodes.backends:
         try:
             _ = await backend.ip_address.future()
         except ValueError as error:
-            assert f'holds {len(held)} IPv6 addresses on its primary VNIC, not one' in str(error)
-            refusals.append(error)
-    assert len(refusals) == len(forwarded_names()) * 3
+            # The output fails with the SDK's exception around the program's own.
+            refusals.append(root_of(error, NotOneIpv6Address))
+    assert all(refusal.addresses == tuple(held) for refusal in refusals), refusals
+    assert Counter(refusal.node for refusal in refusals) == dict.fromkeys(nodes.instances, len(forwarded_names()))
     # And the run fails on it, as the deployment would: the backend's own
     # registration meets the same refusal.
-    assert await the_run_failed_with(ValueError) in [root_of(refusal, ValueError) for refusal in refusals]
+    assert await the_run_failed_with(NotOneIpv6Address) in refusals
 
 
 @pytest.mark.asyncio
@@ -483,8 +494,10 @@ async def test_a_family_the_provider_never_handed_out_is_refused(monitor: Oci) -
     balancer = build_balancer(SINGLE_STACK)
 
     assert await balancer.address.future() == LB_ADDRESS
-    with pytest.raises(ValueError, match='no public IPv6 address'):
+    with pytest.raises(NoPublicAddress) as refused:
         _ = await balancer.address_v6.future()
+    # It names the family of the address this balancer was never handed.
+    assert FAMILY_SEPARATOR[refused.value.family] in LB_ADDRESS_V6
 
 
 #: The types everything declared per forwarded port is registered under.
@@ -661,5 +674,6 @@ async def test_a_row_served_on_udp_alone_is_refused(monkeypatch: pytest.MonkeyPa
     udp_only = PublicPort('udp-only', 3478, Transports.UDP, Front.BALANCER, Answerer.PODS)
     monkeypatch.setattr(conventions, 'PUBLIC_PORT_CENSUS', (*conventions.PUBLIC_PORT_CENSUS, udp_only))
 
-    with pytest.raises(ValueError, match="'udp-only' is served on UDP alone"):
+    with pytest.raises(UdpOnlyPort) as refused:
         _ = build_balancer()
+    assert refused.value.name == udp_only.name
