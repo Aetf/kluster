@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Any, ClassVar
 
 import pulumi
-import pulumi.runtime
+from pulumi import runtime
 
 __all__ = (
     'Component',
@@ -104,7 +104,7 @@ def install_parent_backstop() -> None:
     component that never called ``register_outputs``, which is the failure mode
     documented on `Component.register_outputs`.
     """
-    root = pulumi.runtime.get_root_resource()
+    root = runtime.get_root_resource()
     if root is None:
         raise RuntimeError(
             'install_parent_backstop() needs a root stack resource: call it from inside a running '
@@ -113,7 +113,7 @@ def install_parent_backstop() -> None:
     if root in _installed_on:
         return
     _installed_on.add(root)
-    pulumi.runtime.register_stack_transformation(_refuse_unparented)
+    runtime.register_stack_transformation(_refuse_unparented)
 
 
 def own_provider_opts(opts: pulumi.ResourceOptions | None) -> pulumi.ResourceOptions:

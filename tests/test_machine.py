@@ -18,10 +18,10 @@ import re
 import shlex
 import shutil
 import sys
-import urllib.parse
 from dataclasses import fields
 from pathlib import Path
 from typing import Any, cast
+from urllib import parse as urllib_parse
 
 import drill_recipient_redirect
 import pinned_tools
@@ -335,7 +335,7 @@ def _delivered(ignition: str, path: str) -> str:
         if entry['path'] != path:
             continue
         head, _, body = str(entry['contents']['source']).partition(',')
-        raw = base64.b64decode(body) if head.endswith(';base64') else urllib.parse.unquote_to_bytes(body)
+        raw = base64.b64decode(body) if head.endswith(';base64') else urllib_parse.unquote_to_bytes(body)
         if entry['contents'].get('compression') == 'gzip':
             raw = gzip.decompress(raw)
         return raw.decode()

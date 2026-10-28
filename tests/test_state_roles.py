@@ -49,12 +49,12 @@ import shlex
 import shutil
 import subprocess as sp
 import tarfile
-import urllib.parse
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib import parse as urllib_parse
 
 import process_sessions
 import pytest
@@ -223,7 +223,7 @@ def _delivered(ignition: dict[str, Any]) -> list[File]:
     files: list[File] = []
     for entry in ignition['storage']['files']:
         head, _, body = str(entry['contents']['source']).partition(',')
-        raw = base64.b64decode(body) if head.endswith(';base64') else urllib.parse.unquote_to_bytes(body)
+        raw = base64.b64decode(body) if head.endswith(';base64') else urllib_parse.unquote_to_bytes(body)
         if entry['contents'].get('compression') == 'gzip':
             raw = gzip.decompress(raw)
         user = int(entry['user']['id']) if 'user' in entry else 0

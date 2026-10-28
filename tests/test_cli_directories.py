@@ -15,9 +15,9 @@ creates it first. The block then ends, and with it the CLI, mid-download.
 
 from __future__ import annotations
 
-import http.server
 import os
 import threading
+from http import server as http_server
 from pathlib import Path
 
 import pinned_tools
@@ -38,7 +38,7 @@ def test_a_run_killed_mid_download_leaves_its_tarball_in_the_cases_own_directory
     pulumi = pinned_tools.located('pulumi')
     requested, release = threading.Event(), threading.Event()
 
-    class Holding(http.server.BaseHTTPRequestHandler):
+    class Holding(http_server.BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             requested.set()
             _ = release.wait(timeout=WAIT)
@@ -48,7 +48,7 @@ def test_a_run_killed_mid_download_leaves_its_tarball_in_the_cases_own_directory
 
     # The standard library's server on its own thread, the way its own
     # documentation runs one beside a client.
-    server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Holding)
+    server = http_server.ThreadingHTTPServer(('127.0.0.1', 0), Holding)
     serving = threading.Thread(target=server.serve_forever, daemon=True)
     serving.start()
     # The directory a run would make its temporary files in without its own.

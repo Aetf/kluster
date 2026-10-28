@@ -43,9 +43,8 @@ from contextlib import AbstractContextManager, asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
-import pulumi
-import pulumi.runtime.mocks
-import pulumi.runtime.settings
+from pulumi import runtime
+from pulumi.runtime import mocks, settings
 from pulumi.runtime.proto import resource_pb2
 from pulumi.runtime.stack import wait_for_rpcs
 
@@ -130,7 +129,7 @@ class PlaceMissing(AssertionError):
     """A registration of a type the place map lists carries no place input, so the census cannot count it."""
 
 
-class Recorder(pulumi.runtime.Mocks):
+class Recorder(runtime.Mocks):
     """A monitor that invents nothing and remembers every declaration and every call.
 
     Every registration is answered with its own inputs and an id built from the
@@ -178,23 +177,23 @@ class Recorder(pulumi.runtime.Mocks):
 
     # -- what a suite overrides ---------------------------------------------
 
-    def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
+    def computed(self, args: runtime.MockResourceArgs) -> dict[str, Any]:
         """Outputs the provider would read back beyond the inputs, if any."""
         return {}
 
-    def answer(self, args: pulumi.runtime.MockCallArgs) -> dict[str, Any]:
+    def answer(self, args: runtime.MockCallArgs) -> dict[str, Any]:
         """What an invoke returns; the empty answer for a token this suite does not serve."""
         return {}
 
     # -- the monitor --------------------------------------------------------
 
-    def new_resource(self, args: pulumi.runtime.MockResourceArgs) -> tuple[str | None, dict[str, Any]]:
+    def new_resource(self, args: runtime.MockResourceArgs) -> tuple[str | None, dict[str, Any]]:
         # `MockResourceArgs.inputs` is an untyped dict in the SDK.
         inputs: dict[str, Any] = dict(cast('dict[str, Any]', args.inputs))
         self.declared.append(Declaration(args.typ, args.name, inputs, args.provider or ''))
         return args.name + '_id', inputs | self.computed(args)
 
-    def call(self, args: pulumi.runtime.MockCallArgs) -> tuple[dict[str, Any], list[tuple[str, str]]]:
+    def call(self, args: runtime.MockCallArgs) -> tuple[dict[str, Any], list[tuple[str, str]]]:
         self.called.append(Call(args.token, args.provider or ''))
         return self.answer(args), []
 
@@ -401,7 +400,7 @@ class Recorder(pulumi.runtime.Mocks):
         return None
 
 
-_register_resource = pulumi.runtime.mocks.MockMonitor.RegisterResource
+_register_resource = mocks.MockMonitor.RegisterResource
 
 
 def _capture_request(self: Any, request: Any) -> Any:
@@ -454,7 +453,7 @@ def _capture_request(self: Any, request: Any) -> Any:
     return response
 
 
-pulumi.runtime.mocks.MockMonitor.RegisterResource = _capture_request
+mocks.MockMonitor.RegisterResource = _capture_request
 
 
 def _register_package(self: Any, request: Any) -> Any:
@@ -482,10 +481,10 @@ def _register_package(self: Any, request: Any) -> Any:
     )
 
 
-pulumi.runtime.mocks.MockMonitor.RegisterPackage = _register_package
+mocks.MockMonitor.RegisterPackage = _register_package
 
 
-async def run_with[MonitorT: pulumi.runtime.Mocks](
+async def run_with[MonitorT: runtime.Mocks](
     monitor: MonitorT, *, stack: str, project: str = 'kluster', preview: bool = False
 ) -> MonitorT:
     """Point the runtime at `monitor` and hand it back for the cases to read.
@@ -494,11 +493,11 @@ async def run_with[MonitorT: pulumi.runtime.Mocks](
     registrations afresh, so nothing a previous run left in flight is this
     run's to wait for.
     """
-    pulumi.runtime.set_mocks(monitor, project=project, stack=stack, preview=preview)
+    runtime.set_mocks(monitor, project=project, stack=stack, preview=preview)
     return monitor
 
 
-async def run_under_backstop[MonitorT: pulumi.runtime.Mocks](
+async def run_under_backstop[MonitorT: runtime.Mocks](
     monitor: MonitorT, *, stack: str, project: str = 'kluster', preview: bool = False
 ) -> MonitorT:
     """`run_with`, with the parent backstop on the run's root stack resource.
@@ -606,8 +605,8 @@ def decline_every_invoke() -> None:
     one. Every token, because a suite reaching for this has one invoke and it
     is the subject.
     """
-    mock = pulumi.runtime.settings.get_monitor()
-    assert isinstance(mock, pulumi.runtime.mocks.MockMonitor)
+    mock = settings.get_monitor()
+    assert isinstance(mock, mocks.MockMonitor)
 
     def declined(request: resource_pb2.ResourceInvokeRequest) -> resource_pb2.ResourceInvokeResponse:
         return resource_pb2.ResourceInvokeResponse(unknown=True)

@@ -18,12 +18,12 @@ import hashlib
 import json
 import logging
 import os
-import urllib.error
-import urllib.request
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn, cast
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 from kluster.lib.state_backend import committed, settings
 
@@ -80,7 +80,7 @@ _ARTIFACT_PATH = ('architectures', 'x86_64', 'artifacts', 'oraclecloud')
 def fcos_artifact() -> FcosArtifact:
     """The pinned stream's qcow2, out of the stream metadata Fedora publishes."""
     log.info('fetching the FCOS %s stream metadata from %s', settings.FCOS_STREAM, settings.FCOS_STREAM_URL)
-    with urllib.request.urlopen(settings.FCOS_STREAM_URL, timeout=60) as response:
+    with urllib_request.urlopen(settings.FCOS_STREAM_URL, timeout=60) as response:
         stream: object = json.load(response)
     what = f'the FCOS {settings.FCOS_STREAM} stream metadata'
     platform = _descend(stream, _ARTIFACT_PATH, what=what)
@@ -227,10 +227,10 @@ def _image_digest(repository: str, reference: str) -> str:
     log.info('asking the registry what %s resolves to', image)
 
     token_url = f'https://auth.docker.io/token?service=registry.docker.io&scope=repository:{repository}:pull'
-    with urllib.request.urlopen(token_url, timeout=60) as response:
+    with urllib_request.urlopen(token_url, timeout=60) as response:
         token = _string(json.load(response), 'token', what=f'the registry pull token for {repository}')
 
-    request = urllib.request.Request(
+    request = urllib_request.Request(
         f'https://registry-1.docker.io/v2/{repository}/manifests/{reference}',
         method='HEAD',
         headers={
@@ -241,7 +241,7 @@ def _image_digest(repository: str, reference: str) -> str:
             'application/vnd.docker.distribution.manifest.v2+json',
         },
     )
-    with urllib.request.urlopen(request, timeout=60) as response:
+    with urllib_request.urlopen(request, timeout=60) as response:
         # `.get`, because a header this asks for and does not receive is the
         # case below rather than a `KeyError` from inside a mapping.
         digest = response.headers.get(DIGEST_HEADER, '')
@@ -255,7 +255,7 @@ def _postgres_pin_ok() -> bool:
     try:
         pinned = _image_digest(settings.POSTGRES_REPOSITORY, settings.POSTGRES_DIGEST)
         current = _image_digest(settings.POSTGRES_REPOSITORY, settings.POSTGRES_TAG)
-    except (urllib.error.HTTPError, DigestMissing, DocumentIncomplete) as exc:
+    except (urllib_error.HTTPError, DigestMissing, DocumentIncomplete) as exc:
         log.error('%s: registry says %s (is the digest published?)', settings.POSTGRES_IMAGE, exc)
         return False
     if pinned != settings.POSTGRES_DIGEST:
@@ -290,7 +290,7 @@ def verify_pins() -> bool:
 
     log.info('downloading age %s to hash it against its pin: %s', settings.AGE_VERSION, settings.AGE_URL)
     hasher = hashlib.sha256()
-    with urllib.request.urlopen(settings.AGE_URL, timeout=300) as response:
+    with urllib_request.urlopen(settings.AGE_URL, timeout=300) as response:
         for chunk in iter(lambda: response.read(1 << 20), b''):
             hasher.update(chunk)
     age_digest = hasher.hexdigest()

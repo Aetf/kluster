@@ -29,10 +29,10 @@ and every gate launch carries one `<N>`.
 
 from __future__ import annotations
 
-import importlib.util
 import re
 import shlex
 from collections.abc import Iterator
+from importlib import util as importlib_util
 from pathlib import Path
 from types import ModuleType
 from typing import NamedTuple, cast
@@ -327,9 +327,9 @@ def test_every_gate_launch_carries_one_outer_bound() -> None:
 
 def _drill(path: Path) -> ModuleType:
     """A drill module, imported by its path: `tests/live` is collected only when the drills run."""
-    spec = importlib.util.spec_from_file_location(f'drill_{path.stem}', path)
+    spec = importlib_util.spec_from_file_location(f'drill_{path.stem}', path)
     assert spec is not None and spec.loader is not None, path
-    module = importlib.util.module_from_spec(spec)
+    module = importlib_util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
