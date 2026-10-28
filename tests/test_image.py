@@ -26,7 +26,7 @@ import pulumi.dynamic as dynamic
 import pytest
 import pytest_asyncio
 import requests
-from mock_monitor import Recorder, declaring, decline_every_invoke, run_with
+from mock_monitor import Recorder, declaring, decline_every_invoke, run_with, the_run_failed_with
 from pulumi.runtime import rpc
 
 from kluster.components.talos import image
@@ -164,7 +164,9 @@ async def test_a_factory_answer_naming_no_installer_is_refused(factory: Factory)
 
     The provider names one for every platform, so an answer without one is
     malformed; carried on, it would reach the configuration as a missing value
-    rendered into a string.
+    rendered into a string. The same refusal reaches the artifact's own
+    registration, whose inputs are built from that answer, and that is what
+    fails the deployment.
     """
     factory.names_installer = False
 
@@ -178,6 +180,7 @@ async def test_a_factory_answer_naming_no_installer_is_refused(factory: Factory)
         asked['platform'],
         asked['architecture'],
     )
+    assert await the_run_failed_with(image.FactoryNamedNoInstaller) is refused.value
 
 
 # -- the cloud half, unchanged ----------------------------------------------

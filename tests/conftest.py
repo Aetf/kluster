@@ -27,6 +27,11 @@ Next is a watch on a process-global the suites share without meaning to:
 name a fixture wider than a case that does, so that the residue fails what made
 it rather than whichever case happens to run after it.
 
+Then a watch on the mocked runs a case starts: the `pytest_runtest_call` hook
+fails a case whose run met a failure in an RPC -- a registration refused, a
+duplicate URN among them -- that nothing the case awaited received
+(`mock_monitor.fail_on_unreceived_failures`).
+
 The last is a workaround for the Pulumi SDK, kept apart so that it can be
 deleted whole: `mocked_runs_release_their_tasks` drops from the SDK's set of
 tracked outputs every task whose event loop has closed.
@@ -46,6 +51,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import file_layer
+import mock_monitor
 import pykeepass.pykeepass as pykeepass_module
 import pytest
 import root_credentials
@@ -371,6 +377,58 @@ def pytest_fixture_post_finalizer(fixturedef: pytest.FixtureDef[Any]) -> None:
     assert not changed, (
         f'the {fixturedef.scope}-scoped fixture {fixturedef.argname!r} {_described(changed, life.found, now)}'
     )
+
+
+#: How many mocked runs had started when a case's setup began, kept for the three hooks below.
+RUNS_BEFORE = pytest.StashKey[int]()
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    """Mark where the case's runs begin, before any of its fixtures is set up."""
+    item.stash[RUNS_BEFORE] = mock_monitor.runs_started()
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_call(item: pytest.Item) -> Generator[None, object, object]:
+    """Fail a case whose mocked run met a failure in an RPC that the case never received.
+
+    A mocked run carries each registration out in a task of its own, and a
+    failure there -- the recorder's refusal of a duplicate URN, a component's
+    refusal reaching a resource's inputs -- reaches the case through the
+    refused resource's outputs, which most cases never read, or through a
+    wait for the run's RPCs, which most never write; the case would pass with
+    the failure printed beside it. `mock_monitor.fail_on_unreceived_failures` is that
+    wait, for every run the case's setup or body started.
+
+    Here rather than in a fixture because of when it has to run: after the
+    case has returned, so that its loop is idle and can finish what is still
+    in flight, and before any fixture is torn down, so that what finishes
+    does so under the case's arrangements -- a checkout patched in, a
+    configuration set -- rather than after they are undone. A case that has
+    failed already is not judged: its own failure is the one to read.
+
+    Two limits stand (Aetf/kluster-ops#692): one receipt receives the whole
+    run, since the SDK keeps only a run's first failure, and a run a wider
+    fixture started -- a module's shared one -- is judged at the case that
+    set the fixture up and not again.
+    """
+    since = item.stash.get(RUNS_BEFORE, mock_monitor.runs_started())
+    result = yield
+    mock_monitor.fail_on_unreceived_failures(since)
+    return result
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_runtest_teardown(item: pytest.Item) -> None:
+    """Drop what is left of the case's runs once its fixtures are torn down.
+
+    A case that failed, in its body or in its setup, is never judged, and a
+    case whose setup failed never reaches the hook above at all; its runs
+    would otherwise stay on the record for the rest of the process, holding
+    their RPCs and the closed loop's tasks among them.
+    """
+    mock_monitor.forget_runs_since(item.stash.get(RUNS_BEFORE, mock_monitor.runs_started()))
 
 
 def release_closed_loops_tasks(tracked: set[asyncio.Task[Any]], lock: AbstractContextManager[object]) -> None:

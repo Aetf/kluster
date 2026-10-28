@@ -131,12 +131,19 @@ def refused(build_it: Callable[[], object]) -> RollRefused:
     return caught.value
 
 
-def build(**kwargs: Any) -> TalosDay1:
-    """Day 1, on top of a day 0 the caller may hand in to inspect."""
-    kwargs.setdefault('cluster', build_cluster())
+def build(name: str = 'kluster', **kwargs: Any) -> TalosDay1:
+    """Day 1, on top of a day 0 the caller may hand in to inspect.
+
+    Day 0 is built only when none is handed in: a second `build_cluster()`
+    beside the caller's would be a second cluster under the same logical
+    name, which the recorder refuses as the engine does. `name` is the
+    logical name, for the reason `build_cluster` takes one.
+    """
+    if 'cluster' not in kwargs:
+        kwargs['cluster'] = build_cluster()
     kwargs.setdefault('addresses', ADDRESSES)
     kwargs.setdefault('secondary_addresses', {'cp1': SECONDARY})
-    return TalosDay1('kluster', **kwargs)
+    return TalosDay1(name, **kwargs)
 
 
 async def urns_of(output: pulumi.Output[Any]) -> set[str]:
@@ -453,13 +460,19 @@ async def test_only_the_worker_takes_bgp(fake: Talos) -> None:
 
 @pytest.mark.asyncio
 async def test_a_stranger_cannot_be_named_by_either_component(fake: Talos) -> None:
-    peer = refused(lambda: build_cluster(bgp_peers={'nowhere': '192.168.70.1/32'}))
+    # Each refused component is registered before it refuses, so each is
+    # named apart from the others, and the three day-1 refusals stand on one
+    # day 0 rather than on one apiece.
+    peer = refused(lambda: build_cluster('kluster-peer', bgp_peers={'nowhere': '192.168.70.1/32'}))
     assert (peer.refusal, peer.nodes) == (Refusal.BGP_PEER_STRANGER, ('nowhere',))
-    secondary = refused(lambda: build(secondary_addresses={'nowhere': SECONDARY}))
+    cluster = build_cluster()
+    secondary = refused(lambda: build('kluster-secondary', cluster=cluster, secondary_addresses={'nowhere': SECONDARY}))
     assert (secondary.refusal, secondary.nodes) == (Refusal.SECONDARY_ADDRESS_STRANGER, ('nowhere',))
-    endpoint = refused(lambda: build(endpoints={'nowhere': BALANCER}))
+    endpoint = refused(lambda: build('kluster-endpoint', cluster=cluster, endpoints={'nowhere': BALANCER}))
     assert (endpoint.refusal, endpoint.nodes) == (Refusal.ENDPOINT_STRANGER, ('nowhere',))
-    address = refused(lambda: build(addresses={**ADDRESSES, 'nowhere': '10.20.0.99'}))
+    address = refused(
+        lambda: build('kluster-address', cluster=cluster, addresses={**ADDRESSES, 'nowhere': '10.20.0.99'})
+    )
     assert (address.refusal, address.nodes) == (Refusal.ADDRESS_STRANGER, ('nowhere',))
 
 

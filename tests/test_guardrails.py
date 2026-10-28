@@ -13,7 +13,7 @@ from collections.abc import Sequence
 import pulumi
 import pytest
 import pytest_asyncio
-from mock_monitor import Recorder, run_with
+from mock_monitor import Recorder, root_of, run_with, the_run_failed_with
 
 from kluster.components.cloud.guardrails import (
     A1_CORES_PER_AD,
@@ -139,6 +139,11 @@ async def test_a_budget_nobody_hears_is_refused() -> None:
     # refusal is: in the audience every rule receives.
     guardrails = build((), name='kluster-silent')
     assert guardrails.alerts
+    refusals: list[ValueError] = []
     for rule in guardrails.alerts.values():
-        with pytest.raises(ValueError, match='notifies nobody'):
+        with pytest.raises(ValueError, match='notifies nobody') as refused:
             await rule.recipients.future()
+        refusals.append(refused.value)
+    # And the run fails on it, as the deployment would: the rule's own
+    # registration meets the same refusal.
+    assert await the_run_failed_with(ValueError) in [root_of(refusal, ValueError) for refusal in refusals]

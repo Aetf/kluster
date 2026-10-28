@@ -20,7 +20,7 @@ import pulumi
 import pulumi_oci as oci
 import pytest
 import pytest_asyncio
-from mock_monitor import Declaration, Recorder, declaring, decline_every_invoke, run_with
+from mock_monitor import Declaration, Recorder, declaring, decline_every_invoke, root_of, run_with, the_run_failed_with
 
 from kluster import conventions
 from kluster.components.cloud.nodes import CloudNodes, NodeLoadBalancer, user_data
@@ -440,14 +440,17 @@ async def test_a_node_without_exactly_one_ipv6_address_is_refused(held: list[str
     # A backend the refusal reaches fails whole, its every output with it, so
     # each is read and the refusals counted: one per port on each node's IPv6
     # side, and none on the IPv4 side, which is told the instance instead.
-    refused = 0
+    refusals: list[ValueError] = []
     for backend in nodes.backends:
         try:
             _ = await backend.ip_address.future()
         except ValueError as error:
             assert f'holds {len(held)} IPv6 addresses on its primary VNIC, not one' in str(error)
-            refused += 1
-    assert refused == len(forwarded_names()) * 3
+            refusals.append(error)
+    assert len(refusals) == len(forwarded_names()) * 3
+    # And the run fails on it, as the deployment would: the backend's own
+    # registration meets the same refusal.
+    assert await the_run_failed_with(ValueError) in [root_of(refusal, ValueError) for refusal in refusals]
 
 
 @pytest.mark.asyncio
