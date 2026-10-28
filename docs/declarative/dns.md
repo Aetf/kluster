@@ -94,7 +94,9 @@ and the LAN-only names are covered by per-zone wildcards (§4).
 
 The zones as classified: unlimited-code.works, unlimitedcodeworks.xyz,
 peifeng.phd, ucw.phd and jiahui.love hold proxied names and take the
-Cloudflare set; jiahui.id takes none.
+Cloudflare set; jiahui.id takes none. It is declared as such in
+`conventions` (`ZONE_EXTERNALLY_ISSUED`), with that reason beside it, and
+`ZONE_ISSUERS` leaves it out, pointing at that declaration.
 
 ### 1.2 The Certificate Transparency read
 
@@ -380,10 +382,19 @@ first DS of each zone in that order.
     link that used to land on the primary's front page stops resolving
     rather than arriving somewhere else. Nothing in any repository,
     configuration file or certificate references either name.
--   **Cloudflare proxy is a helper parameter** (default on): the
-    existing per-record reasons — large uploads (photos), non-HTTP
-    ports (syncthing, matrix, minecraft) — become explicit
-    `proxied=False` arguments instead of lore in comments.
+-   **A record published direct says why, at its declaration.** Every
+    record of a type Cloudflare's proxy can front — A, AAAA and CNAME —
+    is proxied unless it carries a reason not to be, in the record's
+    `unproxied` field, and `proxied` is derived from that rather than
+    written beside it. The reasons are the census's, not lore in
+    comments: large uploads (photos), ports and protocols the proxy does
+    not carry (matrix, syncthing), an address the edge cannot reach (the
+    overlay block), and the anchors, each handing out an origin's address
+    that the names aliased to it resolve through — a name is proxied when
+    any record on its CNAME chain is, so a direct name is direct only
+    while its anchor is. The zone component sends
+    nothing for the reason's wording, and the dashboard's explanation
+    stays the record's comment.
 
 ## 3. Split-horizon (AdGuard, both instances, no sync)
 

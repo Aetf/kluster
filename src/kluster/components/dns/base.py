@@ -60,8 +60,14 @@ __all__ = (
 #: one is read by the row below it and by nothing else.
 MAIL_ZONES: tuple[str, ...] = (conventions.ZONE_PRIMARY, 'unlimitedcodeworks.xyz')
 
-#: Where jiahui.id's Google Site is served from.
+#: Where `conventions.ZONE_EXTERNALLY_ISSUED`'s Google Site is served from.
 IP_JIAHUI_SITE = '173.194.206.121'
+
+#: Why the Google Site's names are published direct, as far as anything
+#: here can say.
+JIAHUI_SITE_UNPROXIED = (
+    'a Google Site, served and certified outside this installation; why the proxy is off is not recorded'
+)
 
 
 def overlay_label(member: str) -> str:
@@ -91,6 +97,7 @@ def overlay_records() -> tuple[Record, ...]:
             str(entry.address),
             ttl=conventions.ANCHOR_TTL,
             comment='ZeroTier member',
+            unproxied='a private overlay address, which the edge cannot reach',
         )
         for entry in conventions.overlay.ROSTER
     )
@@ -178,9 +185,8 @@ ZONE_ISSUERS: Mapping[str, tuple[str, ...]] = {
     'peifeng.phd': CLOUDFLARE_ISSUERS,
     'ucw.phd': CLOUDFLARE_ISSUERS,
     'jiahui.love': CLOUDFLARE_ISSUERS,
-    # jiahui.id is deliberately absent: its apex and `www` are a Google Site,
-    # the log shows several authorities issuing for it — the edge's partner
-    # rotation, not one issuer (dns.md §1.1) — and it carries no CAA today.
+    # `conventions.ZONE_EXTERNALLY_ISSUED` is deliberately absent, for the
+    # reason its declaration gives.
 }
 
 
@@ -222,6 +228,15 @@ class AnchorAddresses:
 #: Cloudflare dashboard, so they say it in the same words.
 ANCHOR_CLUSTER_COMMENT = 'cluster ingress; every app record is a CNAME here'
 
+#: Why an anchor is direct, which every anchor shares: it hands out an
+#: origin's address, which the names aliased to it resolve through. Proxied,
+#: it would hand out the edge's instead and take every such name along, since
+#: Cloudflare proxies a name when any record on its CNAME chain is proxied.
+ANCHOR_UNPROXIED = (
+    "an anchor hands out an origin's address, which the names aliased to it resolve through; proxied, it hands "
+    "out the edge's, and a name is proxied when any record on its CNAME chain is"
+)
+
 
 def _anchor_records(anchors: AnchorAddresses) -> tuple[Record, ...]:
     """The anchor namespace, over the addresses the program supplies.
@@ -237,15 +252,26 @@ def _anchor_records(anchors: AnchorAddresses) -> tuple[Record, ...]:
     its IP, and its hot path must not depend on this stack.
     """
     return (
-        a(conventions.ANCHOR_CLUSTER, anchors.cluster_v4, ttl=conventions.ANCHOR_TTL, comment=ANCHOR_CLUSTER_COMMENT),
+        a(
+            conventions.ANCHOR_CLUSTER,
+            anchors.cluster_v4,
+            ttl=conventions.ANCHOR_TTL,
+            comment=ANCHOR_CLUSTER_COMMENT,
+            unproxied=ANCHOR_UNPROXIED,
+        ),
         aaaa(
-            conventions.ANCHOR_CLUSTER, anchors.cluster_v6, ttl=conventions.ANCHOR_TTL, comment=ANCHOR_CLUSTER_COMMENT
+            conventions.ANCHOR_CLUSTER,
+            anchors.cluster_v6,
+            ttl=conventions.ANCHOR_TTL,
+            comment=ANCHOR_CLUSTER_COMMENT,
+            unproxied=ANCHOR_UNPROXIED,
         ),
         a(
             conventions.ANCHOR_VIP1,
             anchors.vip1_v4,
             ttl=conventions.ANCHOR_TTL,
             comment='dedicated VIP, operator convenience; IPv4 only by construction',
+            unproxied=ANCHOR_UNPROXIED,
         ),
     )
 
@@ -262,13 +288,8 @@ BASE_RECORDS: tuple[Block, ...] = (
     Block(
         (*conventions.WEB_ZONES, *conventions.PARKED_ZONES),
         (
-            a(
-                '@',
-                legacy.IP_ARCHVPS,
-                proxied=True,
-                comment='web origin; repoints to kluster.hosts at migration',
-            ),
-            cname('www', legacy.ANCHOR_ARCHVPS, proxied=True),
+            a('@', legacy.IP_ARCHVPS, comment='web origin; repoints to kluster.hosts at migration'),
+            cname('www', legacy.ANCHOR_ARCHVPS),
         ),
     ),
     # The overlay host block, one record per roster member. Private addresses
@@ -291,10 +312,12 @@ BASE_RECORDS: tuple[Block, ...] = (
             ),
         ),
     ),
-    # The website co-host, which answers for a website and stops there: it
-    # carries no application name and could not carry one, because every
-    # application here holds one SSO cookie domain and one registered redirect
-    # URI. The three names it publishes of its own are in `legacy.py`.
+    # The website co-host's own records, in one block. The zone answers for a
+    # website and stops there: it carries no application name and could not
+    # carry one, because every application here holds one SSO cookie domain
+    # and one registered redirect URI. Everything else it carries is a shared
+    # block, or a name of its own the legacy VPS serves, which is that
+    # application's block in `legacy.py` and goes with its migration.
     Block(
         ('unlimitedcodeworks.xyz',),
         (
@@ -305,14 +328,14 @@ BASE_RECORDS: tuple[Block, ...] = (
             ),
         ),
     ),
-    # jiahui.id: a Google Site, mail forwarded by the registrar. Nothing of
-    # ours answers in it, so its apex and `www` are addresses with no name of
-    # this installation's to alias (dns.md §2).
+    # The externally issued zone: a Google Site, mail forwarded by the
+    # registrar. Nothing of ours answers in it, so its apex and `www` are
+    # addresses with no name of this installation's to alias (dns.md §2).
     Block(
-        ('jiahui.id',),
+        (conventions.ZONE_EXTERNALLY_ISSUED,),
         (
-            a('@', IP_JIAHUI_SITE),
-            a('www', IP_JIAHUI_SITE),
+            a('@', IP_JIAHUI_SITE, unproxied=JIAHUI_SITE_UNPROXIED),
+            a('www', IP_JIAHUI_SITE, unproxied=JIAHUI_SITE_UNPROXIED),
             *_verifications(
                 'PyY9W6ikS_voZGQE3i_JGRNPvMUw5o2QNyGxpnRxSoU',
                 'y6Df9QsIorwAdC8bsyCBMtlu3HpzPqppgM7syZsBTyo',
@@ -331,8 +354,8 @@ BASE_RECORDS: tuple[Block, ...] = (
     Block(
         ('jiahui.love',),
         (
-            a('@', legacy.IP_ARCHVPS, proxied=True, comment='web origin; repoints to kluster.hosts at migration'),
-            *(cname(label, 'jiahui.love', proxied=True) for label in ('www', 'gift', 'ji', 'peifeng')),
+            a('@', legacy.IP_ARCHVPS, comment='web origin; repoints to kluster.hosts at migration'),
+            *(cname(label, 'jiahui.love') for label in ('www', 'gift', 'ji', 'peifeng')),
         ),
     ),
     # CAA: per zone, by who issues for it. One block per issuer set.

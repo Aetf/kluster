@@ -5,7 +5,7 @@ outputs, no side effects -- so the zone census is a module of literals a
 reviewer can read top to bottom and a test can assert on without a Pulumi
 runtime. Turning a row into a `cloudflare.DnsRecord` is `zone.py`'s job.
 
-Two fields exist for the sake of the declaration rather than the DNS wire:
+Some fields exist for the sake of the declaration rather than the DNS wire:
 
 -   `key` is the record's identity in Pulumi's state. A zone holds several
     records with the same label and type (the apex TXT verifications, five
@@ -14,6 +14,10 @@ Two fields exist for the sake of the declaration rather than the DNS wire:
     replace -- a record whenever its value is rotated.
 -   `comment` rides along to Cloudflare's per-record comment field, the only
     place the dashboard can explain why a record exists.
+-   `unproxied` is why Cloudflare's proxy is off on a record of a type it
+    can front. It is the census's and nobody else's: `zone.py` sends no
+    field for it, so a reason's wording changes nothing a zone carries, and
+    only whether a record has one does, by way of `proxied`.
 
 `Block` is the unit the census is written in, and it is here rather than in
 `base.py` because `legacy.py` is written in it too and `base.py` reads
@@ -28,6 +32,7 @@ from dataclasses import dataclass
 import pulumi
 
 __all__ = (
+    'PROXIABLE',
     'TTL_AUTO',
     'TTL_HOUR',
     'Block',
@@ -49,6 +54,11 @@ __all__ = (
 TTL_AUTO = 1
 TTL_HOUR = 3600
 
+#: The record types Cloudflare's proxy can front: "Only records used for IP
+#: address resolution -- A, AAAA, and CNAME records -- can be proxied"
+#: (developers.cloudflare.com/dns/proxy-status/).
+PROXIABLE = frozenset({'A', 'AAAA', 'CNAME'})
+
 
 @dataclass(frozen=True)
 class Record:
@@ -59,9 +69,6 @@ class Record:
     type: str
     content: pulumi.Input[str] | None = None
     ttl: int = TTL_AUTO
-    proxied: bool = False
-    """Cloudflare's reverse proxy. Off means the record hands out the origin
-    address, which is what non-HTTP ports and large uploads need."""
     priority: int | None = None
     data: Mapping[str, str | int] | None = None
     """Structured payload for the types Cloudflare does not take as a content
@@ -69,6 +76,19 @@ class Record:
     comment: str = ''
     key: str = ''
     """State identity; defaults to label and type, which is unique for most."""
+    unproxied: str = ''
+    """Why the proxy is off, on a record of a type it can front (`PROXIABLE`).
+    Such a record is proxied unless it says why not -- a port or protocol
+    the proxy does not carry, a body larger than the proxy accepts, an
+    address the edge cannot reach -- so proxy-off is never an oversight, and a reason is all it takes
+    to turn the proxy off."""
+
+    @property
+    def proxied(self) -> bool:
+        """Cloudflare's reverse proxy. Off means the record hands out the
+        origin address. Derived, so a record cannot be proxied with a reason
+        not to be, or direct without one."""
+        return self.type in PROXIABLE and not self.unproxied
 
     @property
     def resource_key(self) -> str:
@@ -91,20 +111,18 @@ def zone_records(zone: str, blocks: Iterable[Block]) -> tuple[Record, ...]:
     return tuple(record for block in blocks if zone in block.zones for record in block.records)
 
 
-def a(
-    label: str, address: pulumi.Input[str], *, proxied: bool = False, ttl: int = TTL_AUTO, comment: str = ''
-) -> Record:
-    return Record(label=label, type='A', content=address, proxied=proxied, ttl=ttl, comment=comment)
+def a(label: str, address: pulumi.Input[str], *, unproxied: str = '', ttl: int = TTL_AUTO, comment: str = '') -> Record:
+    return Record(label=label, type='A', content=address, unproxied=unproxied, ttl=ttl, comment=comment)
 
 
 def aaaa(
-    label: str, address: pulumi.Input[str], *, proxied: bool = False, ttl: int = TTL_AUTO, comment: str = ''
+    label: str, address: pulumi.Input[str], *, unproxied: str = '', ttl: int = TTL_AUTO, comment: str = ''
 ) -> Record:
-    return Record(label=label, type='AAAA', content=address, proxied=proxied, ttl=ttl, comment=comment)
+    return Record(label=label, type='AAAA', content=address, unproxied=unproxied, ttl=ttl, comment=comment)
 
 
-def cname(label: str, target: str, *, proxied: bool = False, ttl: int = TTL_AUTO, comment: str = '') -> Record:
-    return Record(label=label, type='CNAME', content=target, proxied=proxied, ttl=ttl, comment=comment)
+def cname(label: str, target: str, *, unproxied: str = '', ttl: int = TTL_AUTO, comment: str = '') -> Record:
+    return Record(label=label, type='CNAME', content=target, unproxied=unproxied, ttl=ttl, comment=comment)
 
 
 def txt(label: str, value: str, *, ttl: int = TTL_AUTO, key: str = '', comment: str = '') -> Record:

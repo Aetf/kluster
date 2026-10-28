@@ -34,9 +34,19 @@ WEB_ZONES = (ZONE_PRIMARY, 'unlimitedcodeworks.xyz')
 #: `*.lan.ucw.phd` under.
 PARKED_ZONES = ('peifeng.phd', ZONE_SHORT)
 
+#: The zone whose names something outside this installation serves: a Google
+#: Site, with mail forwarded by the registrar. It carries no CAA, because
+#: nothing here decides which authorities issue for it — the log shows the
+#: edge's partner rotation beside Let's Encrypt — and a pin that current
+#: issuance does not satisfy is an outage at the next renewal
+#: (declarative/dns.md §1.1). The name is the registrar's, the Cloudflare
+#: zone's and the site's, all held outside this repository, so it is not this
+#: repository's to rename.
+ZONE_EXTERNALLY_ISSUED = 'jiahui.id'
+
 #: Family zones — taxonomy only, so that `ALL_ZONES` reads. Nothing is
 #: declared against this set.
-ZONE_FAMILY = ('jiahui.id', 'jiahui.love')
+ZONE_FAMILY = (ZONE_EXTERNALLY_ISSUED, 'jiahui.love')
 
 #: Every zone the `dns` stack declares, which is what the program loops over.
 ALL_ZONES = (*WEB_ZONES, *PARKED_ZONES, *ZONE_FAMILY)
