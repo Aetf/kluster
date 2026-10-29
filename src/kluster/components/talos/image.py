@@ -115,12 +115,22 @@ GIB = 1 << 30
 #: the host afterwards (physical/homelab-host.md §1).
 HOMELAB_DISK_ROOM = 3 * GIB
 
-#: Where a decompressed artifact is kept on the machine running the program.
-#: The path is a constant rather than a home-relative or temporary directory on
-#: purpose: it is an *input* of the libvirt volume, so a workstation and a CI
-#: runner that spelled it differently would each propose replacing the worker's
-#: disk with an identical image. `/var/tmp` is disk-backed and survives a
-#: reboot, which a 1.25 GB artifact wants and `/tmp` does not promise.
+#: Where the machine running the program keeps decompressed artifacts, a
+#: directory for each stack: `IMAGE_CACHE/<project>/<stack>/<file>`, the file
+#: named by what it holds (`TalosNocloudImage._local_path`).
+#:
+#: The root is a constant rather than a home-relative or temporary directory on
+#: purpose: the path is an *input* of the image, so a workstation and a CI
+#: runner that spelled it differently would each replace the image whenever
+#: the program ran on the other one, fetching the whole artifact to change
+#: nothing. The project and the stack are under it because every stack's runs
+#: on a machine share the root, and a file two stacks declared would be the
+#: last writer's, whose delete removes it from under the other
+#: (`talos_factory.materialize`). Both are names the stack has on every
+#: machine, so they keep one declaration at one path wherever it runs.
+#:
+#: `/var/tmp` is disk-backed and survives a reboot, which a 1.25 GB artifact
+#: wants and `/tmp` does not promise.
 IMAGE_CACHE = Path('/var/tmp/kluster-talos-images')
 
 
@@ -335,17 +345,22 @@ class TalosNocloudImage(TalosArtifact, pulumi_type='kluster:talos:TalosNocloudIm
         self.path: pulumi.Output[str] = self.artifact.path
 
     async def _local_path(self) -> str:
-        """Where this artifact lives locally, named by what it contains.
+        """Where this artifact lives locally: in the stack's directory, named by what it contains.
 
-        The schematic id and the Talos version are the artifact's identity, and
-        the room after it is the rest of what the file holds, so they are the
-        file name: two schematics never share a file, the same schematic is
-        never fetched twice, a file made with another room is never reused as
-        this one, and nothing about *when* the program ran enters the name.
+        The directory is `IMAGE_CACHE/<project>/<stack>`, so no other stack's
+        run on the machine declares the file, and no other stack's delete
+        removes it (`talos_factory.materialize` states the rule). The schematic
+        id and the Talos version are the artifact's identity, and the room
+        after it is the rest of what the file holds, so they are the file name:
+        two schematics never share a file, a stack reuses an artifact it
+        already holds on a machine rather than fetching it again, a file made
+        with another room is never reused as this one, and nothing about
+        *when* or *where* the program ran enters the path.
         """
         schematic_id = await resolve(self.schematic.id)
         name = f'talos-{self.talos_version}-{self.platform}-{self.architecture}-{schematic_id}'
-        return str(IMAGE_CACHE / f'{name}-room{HOMELAB_DISK_ROOM}.raw')
+        directory = IMAGE_CACHE / pulumi.get_project() / pulumi.get_stack()
+        return str(directory / f'{name}-room{HOMELAB_DISK_ROOM}.raw')
 
 
 @final
