@@ -60,9 +60,7 @@ which for the design, and the detour has become the design.
 The layers built this way today include the Renovate rule that looks
 `postgresql` up under its channel, as `conda-forge/postgresql`
 (`renovate.json5`), which goes once Renovate's mise manager passes a
-pin's channel on, and the drop-in that makes pasta podman's rootless
-network on CI ([framework/ci.md](../framework/ci.md) §3), which goes
-once the runner's podman defaults to pasta by itself.
+pin's channel on.
 
 ## Naming
 
