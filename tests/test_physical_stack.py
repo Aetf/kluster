@@ -67,8 +67,10 @@ from kluster.components.cloud.guardrails import Guardrails
 from kluster.components.gateway import Gateway
 from kluster.components.gateway.container import CaddyService
 from kluster.components.gateway.unifi import SiteFirewall
+from kluster.components.homelab.rebuild import ImageMissing
 from kluster.components.overlay import Overlay, flow_rules
 from kluster.components.talos import TalosCluster
+from kluster.components.talos import image as talos_image
 from kluster.components.talos.image import TalosArtifact
 from kluster.lib import config as lib_config
 from kluster.stacks import physical
@@ -308,6 +310,58 @@ def test_the_workers_disk_waits_on_what_writes_its_source(ran: Run) -> None:
         if json_format.MessageToDict(ran.recorded.registrations[urn].object).get('path') == source
     ]
     assert writers, f'{disk} waits on {waited_on} for its source {source}, and none of them declares that path'
+
+
+class _Callbacks:
+    """The callback server a hook registers with, which the mock monitor has none of. Keeps each hook by name."""
+
+    def __init__(self) -> None:
+        self.hooks: dict[str, pulumi.ResourceHook] = {}
+
+    def register_resource_hook(self, hook: pulumi.ResourceHook) -> None:
+        self.hooks[hook.name] = hook
+
+
+async def _ran_before_delete(hooks: list[pulumi.ResourceHook], args: pulumi.ResourceHookArgs) -> None:
+    """Call each hook as the engine calls a resource's `before_delete` hooks: in order, awaiting each."""
+    for hook in hooks:
+        called = hook.callback(args)
+        if inspect.isawaitable(called):
+            await called
+
+
+@pytest.mark.asyncio
+async def test_the_workers_disk_is_not_deleted_while_no_file_is_at_its_source(
+    setup: Installation, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """What the disk's delete runs first refuses until the file the disk is created from is there (operations.md §3.2).
+
+    The hook bound to the disk is called as the engine calls it, before the
+    disk's delete, and it reads the path the disk's own `source` names: a
+    hook that read any other path, or none, would let a rebuild delete the
+    disk ahead of a create that cannot open its file.
+    """
+    monkeypatch.setattr(talos_image, 'IMAGE_CACHE', tmp_path / 'cache')
+    callbacks = _Callbacks()
+    monkeypatch.setattr(pulumi.runtime.settings.SETTINGS, 'callbacks', callbacks)
+    async with declaring():
+        await physical.main()
+    disk = f'{conventions.CLUSTER_NAME}-{conventions.HOMELAB_NODE}-disk'
+    volume = 'libvirt:index/volume:Volume'
+    source = Path(setup.inputs_of(disk, volume)['source'])
+    run_before_delete = [callbacks.hooks[name] for name in setup.options_of(disk, volume).hooks.before_delete]
+    args = pulumi.ResourceHookArgs(
+        urn=f'urn:pulumi:physical::kluster::{volume}::{disk}', id=disk, name=disk, type=volume
+    )
+
+    assert run_before_delete
+    with pytest.raises(ImageMissing) as refused:
+        await _ran_before_delete(run_before_delete, args)
+    assert refused.value.path == str(source)
+
+    source.parent.mkdir(parents=True)
+    _ = source.write_bytes(b'')
+    await _ran_before_delete(run_before_delete, args)
 
 
 def test_the_overlay_carries_rules_composed_from_the_roster_and_the_resolvers(ran: Run) -> None:

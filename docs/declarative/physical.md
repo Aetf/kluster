@@ -513,7 +513,22 @@ them for day-2 once v0.12 is stable *and* has reached the Pulumi bridge.
     when it is missing (operations.md §3.2). The run deletes the disk,
     the seed and the domain, the disk last, before it creates any of
     them again, the seed from the current rendering, and the program's
-    `protect` protects the new disk in the same run. A `talosctl reset`
+    `protect` protects the new disk in the same run. The disk's `source`
+    is declared through a guard (`components/homelab/rebuild.py`) whose
+    `before_delete` hook on the disk refuses the delete while no file
+    is at the path this run declares, naming the two-flag command: a
+    run that names the disk alone with the file missing deletes the
+    seed and the domain and keeps the disk, and a plain `up` creates
+    those two again on it. The hook is recorded in state with the disk,
+    so a delete that is no replacement meets it too: a plain `destroy`
+    refuses the disk before deleting anything, since the engine runs no
+    delete hook without the program, and a `destroy --run-program`, or
+    an `up` of a program that no longer declares the worker, deletes
+    the seed and the domain and then fails at the disk, on the
+    program's `protect`, on the guard, or with `hook
+    "kluster-worker-disk-source" was not registered`. The disk leaves
+    the stack on purpose only after an `up` of a program that still
+    declares it with the hook unbound. A `talosctl reset`
     that wipes STATE on the kept disk is no way to a fresh worker: the
     node then boots the seed as it stood at the last rebuild.
 -   **What the provider cannot declare is one stylesheet layer**,

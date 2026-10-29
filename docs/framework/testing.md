@@ -1226,12 +1226,15 @@ protection is lifted, deleting it, the seed and their dependent before
 creating all three again, the seed from the program's current value; and
 a stand-in replaced alone, whose name is stated, is deleted before it is
 created again. It holds what the worker's rebuild rests on as well, with the
-real `FactoryImage` beside a stand-in disk: replaced alone and deleted first,
-the disk is deleted before a create that cannot open its source fails, and
-stays pending replacement; replaced with the image whose `path` it is created
-from, it is deleted only after the image's replacement has put the file in
-place, fetched where it was gone and reused where it was not, and the file
-outlives the image's original.
+real `FactoryImage` and the worker's disk's guard, `SourceGuard`, beside
+stand-ins for the disk, the seed and the domain: replaced alone with no file
+at its source, the disk is kept by the guard's refusal once the seed and the
+domain are deleted, and a plain `up` creates those two again on it; replaced
+with the image whose `path` it is created from, it is deleted only after the
+image's replacement has put the file in place, fetched where it was gone and
+reused where it was not, and the file outlives the image's original; and a
+disk whose state records no guard is guarded once a plain `up` has recorded
+it.
 
 It runs in the suite, under the bounds every real-engine case carries
 (below):

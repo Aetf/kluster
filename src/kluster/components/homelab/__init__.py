@@ -81,6 +81,9 @@ deletes the disk, the seed and the domain, the disk last, before it creates
 any of them again, the seed from the current rendering; the program's
 `protect` protects the new disk in the same run. It
 destroys everything the node held, which is why nothing does it by accident.
+A run that replaces the disk while no file is at its `source` is refused at
+the disk's delete, once the seed and the domain are gone, and keeps the disk
+(`rebuild`); a plain `up` then creates those two again on it.
 
 **What the provider cannot declare is one stylesheet layer**, applied when the
 domain and the volumes are created: the data disk's cache and discard, the
@@ -113,6 +116,7 @@ from kluster.lib import templates, workstation
 from putils import Component, async_output, own_provider_opts, resolve, with_provider
 
 from . import seed
+from .rebuild import SourceGuard
 
 __all__ = ('LIBVIRT_USER', 'PRIVATE_KEY', 'HomelabHost', 'connection_uri', 'slot')
 
@@ -445,6 +449,9 @@ class HomelabHost(Component, pulumi_type='kluster:homelab:HomelabHost'):
         )
 
         disk_volume = f'{domain_name}.{DISK_FORMAT}'
+        # What keeps a replacement from deleting the disk while no file is at
+        # its `source` (`rebuild`).
+        guard = SourceGuard()
         self.volume = libvirt.Volume(
             f'{domain_name}-disk',
             name=disk_volume,
@@ -453,7 +460,7 @@ class HomelabHost(Component, pulumi_type='kluster:homelab:HomelabHost'):
             # The bytes the worker boots. No `size` beside it: the provider
             # refuses the pair and takes the volume's capacity from the file,
             # which is the image and the room Talos boots into after it.
-            source=image_path,
+            source=guard.source(image_path),
             xml=libvirt.VolumeXmlArgs(xslt=volume_xslt()),
             opts=self.child_opts(
                 # The worker's disk is everything the node holds, and every
@@ -482,6 +489,10 @@ class HomelabHost(Component, pulumi_type='kluster:homelab:HomelabHost'):
                 # then deletes it as the original, which leaves the pool with
                 # no disk at all.
                 delete_before_replace=True,
+                # Deleted first and created from a file the provider opens
+                # only at the create, the disk is not deleted while nothing is
+                # there. The hook's name is recorded in state (`SourceGuard`).
+                hooks=guard.hooks(f'{domain_name}-disk-source'),
             ),
         )
 
