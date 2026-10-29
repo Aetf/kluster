@@ -503,53 +503,85 @@ builds it only when none was handed in: `kwargs.setdefault('cluster',
 build_cluster())` builds the default whatever the caller passed, which is a
 second registration under the same name.
 
-**A failed RPC fails the case that started it, unless the case received the
-failure.** The patch raises on the SDK's executor thread, inside the
-registration's own task, and a failure there reaches the program through the
-refused resource's outputs, which most cases never read, and through the SDK's
-wait for its outstanding RPCs, which a real program meets on its way out and
-which fails the deployment. A case that does neither would pass with the
-failure printed beside it. So `tests/conftest.py` does the wait for every
-case. Its `pytest_runtest_setup` hook marks where the case begins on every run
-`run_with` started, and its `pytest_runtest_call` hook, once the case has
-returned and before any fixture is torn down, so that what is still in flight
-finishes under the case's arrangements, has
-`mock_monitor.fail_on_unreceived_failures` let every RPC begun since that mark
-finish and fail the case with `UnreceivedFailure` from the first failure among
-them the case did not receive. The runs judged are every run whose loop is
-still open: the ones the case's setup and body started, and a wider fixture's,
-such as a module's shared run, at each case on it, each case for the RPCs
-begun during it, so a registration a task left on a shared loop makes only
-after its case has returned is judged at the next case on that loop. A run's
-loops are the one `run_with` started it on and each one a
+**A failed RPC or output fails the case that started it, unless the case
+received the failure.** The patch raises on the SDK's executor thread, inside
+the registration's own task, and a failure there reaches the program through
+the refused resource's outputs, which most cases never read, and through the
+SDK's wait for its outstanding RPCs, which a real program meets on its way out
+and which fails the deployment. A case that does neither would pass with the
+failure printed beside it. The same wait awaits every output the SDK still
+tracks (`wait_for_rpcs(await_all_outstanding_tasks=True)` in
+`pulumi/runtime/stack.py`): the future behind each output, which leaves the
+SDK's set when it succeeds or when an output derived from it takes it over,
+and stays there when it fails. The wait re-raises each such failure but
+`ResourceRegistrationFailed`, the engine's report of a resource that failed to
+register, which the program goes on past. So an output that failed fails the
+deployment even where no RPC carries the failure, as one nothing declared
+reads does. So `tests/conftest.py` does the wait for every case. Its
+`pytest_runtest_setup` hook marks where the case begins on every run `run_with`
+started, and its `pytest_runtest_call` hook, once the case has returned and
+before any fixture is torn down, so that what is still in flight finishes
+under the case's arrangements, has `mock_monitor.fail_on_unreceived_failures`
+let every RPC begun and every output tracked since that mark finish and fail
+the case with `UnreceivedFailure` from the first failure among them the case
+did not receive. The runs judged are every run whose loop is still open: the
+ones the case's setup and body started, and a wider fixture's, such as a
+module's shared run, at each case on it, each case for the RPCs begun and the
+outputs tracked during it, so a registration a task left on a shared loop
+makes only after its case has returned is judged at the next case on that
+loop. A run's loops are the one `run_with` started it on and each one a
 declaration on it ran on, so a case on a loop of its own is judged on the
-module's run too.
+module's run too. An output belongs to a run when its loop is one of the run's
+loops.
 
 **Each failure is judged on its own.** The SDK keeps the run's RPCs, each a
 future that holds the RPC's own failure, and a slot for the run's first
 failure, which a failure that comes while it is full never reaches; the
 judgment reads the futures and not the slot. That is any RPC's failure — a
 duplicate URN, a component's refusal reaching a resource's inputs, an invoke
-the mock refused — because a real run fails on any. A failure the case
-received fails nothing, and a receipt is by root, the program's own exception
-under the SDK's `While processing resource: …`: the one refusal that failed
-several registrations is received once, and a failure of another root is not.
-`declaring` receives the failures with the root of what leaves it, and leaves
-the others as notes for the hook. A case whose subject is a refused
-registration receives it with `the_run_failed_with(<type>)`, which hands back
-the program's own exception and receives its root; a case whose subject is a
-program that refuses at several places on its own receives every one with
+the mock refused — because a real run fails on any. The tracked outputs are
+one set for the process, which keeps no order, and the judgment reads each
+failed future in it that joined since the case's mark on one of the run's
+loops. A failure the case received fails nothing, and a receipt is by root,
+the program's own exception under the SDK's `While processing resource: …`:
+the one refusal that failed several registrations, or several outputs, is
+received once, and a failure of another root is not. `declaring` receives the
+failures with the root of what leaves it, and leaves the others as notes for
+the hook. A case whose subject is a refused registration receives it with
+`the_run_failed_with(<type>)`, which hands back the program's own exception
+and receives its root; a case whose subject is a program that refuses at
+several places on its own receives every one with
 `the_run_failed_with_each(<type>)`, and holds the list it hands back to the
-refusals it caught, as a set by identity: a bare receipt of a wide type
-receives every such refusal, related or not. The SDK wraps a component's `ValueError`
-refusal in a `ValueError` of its own, so a case holds what comes back to the
-refusal it caught, by identity: a bare receipt of a type that wide receives
-whichever such refusal's RPC began first. A duplicate URN beside a received
-refusal fails the case all the same. An output the case awaited does not
-count as receiving the registration's failure: an output carries it only to a
-case that reads that resource, and the hook cannot tell what a case read.
+refusals it caught, as a set by identity, or, where a refusal reaches only
+outputs the case does not read, holds what it caught to be among them and the
+rest by a structured field: a bare receipt of a wide type receives every such
+refusal, related or not. The SDK wraps a component's
+`ValueError` refusal in a `ValueError` of its own, so a case holds what comes
+back to the refusal it caught, by identity: a bare receipt of a type that wide
+receives whichever such refusal's RPC began first, or any such refusal that
+only outputs carry. A duplicate URN beside a received refusal fails the case
+all the same. An output the case awaited does not count as receiving its
+failure, a registration's or its own: a real program's wait awaits the output
+again on its way out, and the hook cannot tell what a case read. So a case that
+catches an output's refusal with `pytest.raises` also receives it, with
+`the_run_failed_with`.
 `tests/test_mock_monitor_failures.py` holds the rule in a child run, on a
 case's own run and on a module's shared one.
+
+**A failure the judgment read is not logged as never retrieved.** Reading a
+tracked output's failure retrieves it. The SDK leaves other futures of a failed
+output unretrieved: an output's task awaits its resources, its value, whether
+it is known and whether it is secret in turn, and stops at the first that
+fails, so where one exception fails several of them — every output of a
+refused resource, and every `putils.async_output` whose coroutine failed —
+asyncio logs the rest as never retrieved when they are collected, which can be
+cases later, in whichever case is running then. `mock_monitor._ReadFailures`,
+on each loop a run has work on, drops that report once the judgment has read
+the failure's root. A report made before then lands in the case still running,
+its own, and a report of a root no judgment read goes through as before. It is
+a workaround for the SDK, kept apart to be deleted whole, and its tripwire in
+`tests/test_mock_monitor_failures.py` fails once the SDK's output awaits every
+future it was given. That file's child run logs nothing as never retrieved.
 
 The patch belongs in one place because it does not compose: a second module
 capturing "the original" at its own import time would chain onto this one, and

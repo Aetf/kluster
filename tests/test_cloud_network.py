@@ -17,7 +17,7 @@ from typing import Any
 import pulumi
 import pytest
 import pytest_asyncio
-from mock_monitor import Recorder, root_of, run_with, the_run_failed_with
+from mock_monitor import Recorder, root_of, run_with, the_run_failed_with_each
 from pulumi_oci.core.outputs import SecurityListEgressSecurityRule, SecurityListIngressSecurityRule
 
 from kluster.components.cloud import ICMPV6_FROM_ANYWHERE, CloudNetwork, NoObjectStorageService
@@ -133,8 +133,12 @@ async def test_a_region_without_object_storage_is_refused() -> None:
         assert refusal.services == tuple(service['name'] for service in catalog)
         refusals.append(refusal)
     # And the run fails on it, as the deployment would: the registrations of
-    # the resources those inputs belong to meet the same refusal.
-    assert await the_run_failed_with(NoObjectStorageService) in refusals
+    # the resources those inputs belong to meet it. Each input picks the
+    # service for itself, so the program refuses once at each, and the run
+    # fails on every refusal it made, read or not.
+    received = await the_run_failed_with_each(NoObjectStorageService)
+    assert {id(it) for it in refusals} <= {id(it) for it in received}
+    assert {it.services for it in received} == {refusals[0].services}
 
 
 @pytest.mark.asyncio

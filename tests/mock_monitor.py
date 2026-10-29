@@ -20,14 +20,20 @@ mocks was re-growing:
 -   `decline_every_invoke`, the one answer to an invoke that the engine gives
     and the mock never does;
 -   `fail_on_unreceived_failures`, which fails a case whose run met a
-    failure in an RPC -- a registration, its outputs, an invoke -- that
-    nothing the case awaited received, judged from the mark `begin_case`
-    sets; and `the_run_failed_with` and `the_run_failed_with_each`, which are
-    how a case whose subject is that failure, or several, receives it.
+    failure -- in an RPC (a registration, an invoke) or in an output the SDK
+    tracks -- that nothing the case awaited received, judged from the mark
+    `begin_case` sets; and `the_run_failed_with` and
+    `the_run_failed_with_each`, which are how a case whose subject is that
+    failure, or several, receives it.
 
 Importing this module also installs the two patches of Pulumi's own mock
 monitor that the suite depends on (`_capture_request` and
 `_register_package` below).
+
+The last section is a workaround for the Pulumi SDK, kept apart so that it can
+be deleted whole: `_ReadFailures`, on each loop a run has work on, drops
+asyncio's report of a failure never retrieved once the judgment has read the
+failure's root.
 
 What a suite still writes for itself is the part that is its subject: which
 computed outputs the provider reads back, and which invokes it answers.
@@ -52,6 +58,8 @@ from pulumi import runtime
 from pulumi.runtime import mocks, settings
 from pulumi.runtime.proto import resource_pb2
 from pulumi.runtime.rpc_manager import RPCManager
+from pulumi.runtime.settings import SETTINGS
+from pulumi.runtime.stack import ResourceRegistrationFailed
 
 from putils import component as putils_component
 from putils import install_parent_backstop
@@ -500,7 +508,8 @@ async def run_with[MonitorT: runtime.Mocks](
     starts on, for `fail_on_unreceived_failures` to judge the run by.
     """
     runtime.set_mocks(monitor, project=project, stack=stack, preview=preview)
-    run = _Run(settings._get_rpc_manager(), [asyncio.get_running_loop()])  # pyright: ignore[reportPrivateUsage]
+    run = _Run(settings._get_rpc_manager(), [])  # pyright: ignore[reportPrivateUsage]
+    run.learn(asyncio.get_running_loop())
     _watch(run)
     _runs.append(run)
     return monitor
@@ -559,10 +568,21 @@ class _Run:
 
     `manager` is the SDK's own record of the run, which keeps every RPC the
     run has started, in the order each began: a future apiece, which holds
-    the RPC's failure once it has one. That future is the record judged here.
+    the RPC's failure once it has one. That future is one record judged here.
     The SDK keeps a slot for the run's first failure besides, which a failure
     that comes while it is full never reaches, so a run judged by the slot
     would be judged by one of its failures; nothing here reads it.
+
+    The other record is the SDK's set of tracked outputs (`_tracked`): the
+    future behind every output, which leaves the set when it succeeds, or
+    when an output derived from it takes it over, and stays there when it
+    fails. A real program awaits every future still in it on its way out
+    (`wait_for_rpcs(await_all_outstanding_tasks=True)` in
+    `pulumi/runtime/stack.py`), so one that failed fails the deployment
+    even where no RPC carries the failure -- an output nothing declared
+    reads. The set is the process's rather than the run's, so the run's
+    share of it is the futures on one of the run's loops that joined it
+    since the case's mark (`begin_case`).
     """
 
     manager: RPCManager
@@ -589,40 +609,81 @@ class _Run:
         """The run's RPCs that began since the current case's mark, in the order they began."""
         return [rpc for rpc in self.manager.rpcs[self.marked :] if isinstance(rpc, asyncio.Future)]
 
-    def outstanding(self, loop: asyncio.AbstractEventLoop | None = None) -> list[asyncio.Future[Any]]:
-        """The RPCs since the mark still in flight, on `loop` or on any loop not yet closed.
+    def outputs_since_mark(self) -> list[asyncio.Future[Any]]:
+        """The tracked outputs on one of the run's loops that joined the set since the current case's mark.
 
-        An RPC is a task, so it can be finished only on its own loop, and one on
-        a loop already closed never will be: the loop cancelled it on the way.
+        In no order the program gave them: the set keeps none. The future of
+        the task asking is left out, since it cannot wait for itself.
+        """
+        asking = _asking()
+        return [
+            output
+            for output in _tracked() - _outputs_at_mark
+            # An output of a loop no mocked run has work on is no run's to judge.
+            if output is not asking and any(output.get_loop() is loop for loop in self.loops)
+        ]
+
+    def outstanding(self, loop: asyncio.AbstractEventLoop | None = None) -> list[asyncio.Future[Any]]:
+        """The RPCs and the outputs since the mark still in flight, on `loop` or on any loop not yet closed.
+
+        Each is a future of one loop, so it can be finished only there, and one
+        on a loop already closed never will be: the loop cancelled it on the way.
         """
         return [
-            rpc
-            for rpc in self.since_mark()
-            if not rpc.done() and (rpc.get_loop() is loop if loop is not None else not rpc.get_loop().is_closed())
+            future
+            for future in [*self.since_mark(), *self.outputs_since_mark()]
+            if not future.done()
+            and (future.get_loop() is loop if loop is not None else not future.get_loop().is_closed())
         ]
 
     def learn(self, loop: asyncio.AbstractEventLoop) -> None:
         """Add `loop` to the loops the run has work on, once."""
         if not any(loop is it for it in self.loops):
             self.loops.append(loop)
+            _ReadFailures.install(loop)
 
     def open_loops(self) -> list[asyncio.AbstractEventLoop]:
         """Each loop the run has work on that is not yet closed, once."""
         return [loop for loop in self.loops if not loop.is_closed()]
 
-    def unreceived(self) -> list[BaseException]:
-        """Each failure among the RPCs since the mark that the case has not received, in the order the RPCs began."""
+    def failures(self) -> list[BaseException]:
+        """Each failure since the mark: the RPCs', in the order they began, then the outputs'.
+
+        Reading a failed output's failure here is also what retrieves it, so
+        asyncio does not log it as never retrieved when the future is
+        collected -- which can be cases later, in whichever case is running
+        then.
+        """
+        futures = [*self.since_mark(), *self.outputs_since_mark()]
         return [
             failure
-            for rpc in self.since_mark()
-            if rpc.done() and not rpc.cancelled()
-            if (failure := rpc.exception()) is not None and not self.has_received(failure)
+            for future in futures
+            if future.done() and not future.cancelled()
+            if (failure := future.exception()) is not None
+        ]
+
+    def unreceived(self) -> list[BaseException]:
+        """Each of `failures` the case has not received, and that a real program's wait does not pass over.
+
+        The one it passes over is an output the SDK faults with
+        `ResourceRegistrationFailed`: it is how the engine reports a resource
+        that failed to register, and the program goes on.
+        """
+        return [
+            failure
+            for failure in self.failures()
+            if not isinstance(failure, ResourceRegistrationFailed) and not self.has_received(failure)
         ]
 
     def has_received(self, failure: BaseException) -> bool:
-        """Whether a receipt of the current case names the root of `failure`."""
+        """Whether a receipt of the current case, on this run or any other on the record, names the root of `failure`.
+
+        Any run's, because an output belongs to every run on its loop and a
+        receipt is the case's: every run's receipts are emptied at its mark,
+        and a root is one refusal whichever run it reached.
+        """
         root = root_of(failure, BaseException)
-        return any(root is it for it in self.received)
+        return any(root is it for run in [self, *_runs] for it in run.received)
 
     def receive(self, failure: BaseException) -> None:
         """Record that `failure` has reached the case, and with it every failure that has its root."""
@@ -633,9 +694,38 @@ class _Run:
 #: Every run `run_with` has started that a case may still add to, oldest first.
 _runs: list[_Run] = []
 
+#: The SDK's tracked outputs as the current case's mark found them. Each is an
+#: earlier case's: judged at its end, or failed already.
+_outputs_at_mark: set[asyncio.Future[Any]] = set()
+
+
+def _tracked() -> set[asyncio.Future[Any]]:
+    """The futures of the outputs the SDK tracks for its wait at a program's end, now.
+
+    `SETTINGS.outputs`, which `Output._track` in `pulumi/output.py` adds every
+    output's future to. One set for the process: `set_mocks` installs
+    settings that carry none of their own, so each run adds to the set the
+    SDK's import made. The tracking is the SDK's alone and nothing here
+    changes it.
+    """
+    # Both are declared through the SDK's own `contextproperty` decorator,
+    # which the checker cannot read as an attribute of `Settings`.
+    tracked: set[asyncio.Future[Any]] = SETTINGS.outputs  # pyright: ignore[reportAttributeAccessIssue]
+    lock: AbstractContextManager[object] = SETTINGS.lock  # pyright: ignore[reportAttributeAccessIssue]
+    with lock:
+        return set(tracked)
+
+
+def _asking() -> asyncio.Future[Any] | None:
+    """The task running now, or `None` outside every running loop."""
+    try:
+        return asyncio.current_task()
+    except RuntimeError:
+        return None
+
 
 class UnreceivedFailure(AssertionError):
-    """A run's RPC failed, and nothing the case awaited received the failure; the failure is the cause."""
+    """A run's RPC or output failed, and nothing the case awaited received the failure; the failure is the cause."""
 
 
 def begin_case() -> None:
@@ -643,17 +733,20 @@ def begin_case() -> None:
 
     Everything a run did before the mark is an earlier case's, judged at its
     end or failed already, so the case's own judgment and its receipts read
-    what comes after. A run stays on the record while one of its loops is
-    open, however many cases ago it started: a module's shared run has work
-    on the module's loop until the module ends.
+    what comes after: the RPCs that begin after it, and the outputs that join
+    the SDK's tracked set after it. A run stays on the record while one of
+    its loops is open, however many cases ago it started: a module's shared
+    run has work on the module's loop until the module ends.
     """
     _runs[:] = [run for run in _runs if run.open_loops()]
     for run in _runs:
         run.mark()
+    _outputs_at_mark.clear()
+    _outputs_at_mark.update(_tracked())
 
 
 def fail_on_unreceived_failures() -> None:
-    """Raise if an RPC of a run met a failure since the case's mark that the case never received.
+    """Raise if an RPC or an output of a run met a failure since the case's mark that the case never received.
 
     Declaring a resource schedules its registration, and the SDK carries the
     registration out in a task of its own -- its RPC -- and, under the mocks,
@@ -661,41 +754,46 @@ def fail_on_unreceived_failures() -> None:
     failure there reaches the program through the refused resource's
     outputs, which most cases never read, and through `wait_for_rpcs`, which
     a real program meets on its way out and which fails the deployment; a
-    case that does neither passes with the failure printed beside it. This
-    is the wait such a case does not write: on every run still on the record
-    -- the ones the case started, and a wider fixture's run whose loop is
-    still open -- it lets every RPC begun since the case's mark finish, on
-    the loop each belongs to, and raises `UnreceivedFailure` from the first
-    failure among them that the case did not receive, with each other
-    failure of another root added as a note. It is called from outside every
-    loop, once the case has returned and before any fixture is torn down, so
-    an RPC still in flight finishes under the case's own arrangements; a
-    loop already closed has nothing left to finish.
+    case that does neither passes with the failure printed beside it. The
+    same wait also awaits every output the SDK still tracks, so an output
+    that failed fails the deployment too, with no RPC carrying the failure:
+    one nothing declared reads. This is the wait such a case does not write:
+    on every run still on the record -- the ones the case started, and a
+    wider fixture's run whose loop is still open -- it lets every RPC begun
+    and every output tracked since the case's mark finish, on the loop each
+    belongs to, and raises `UnreceivedFailure` from the first failure among
+    them that the case did not receive, with each other failure of another
+    root added as a note. It is called from outside every loop, once the
+    case has returned and before any fixture is torn down, so what is still
+    in flight finishes under the case's own arrangements; a loop already
+    closed has nothing left to finish.
 
-    Each failure is judged on its own, by the future of the RPC that met it,
-    and every RPC's failure is judged and not only a registration's --
-    registrations, their outputs and invokes alike -- because a real run
+    Each failure is judged on its own, by the future of the RPC or the
+    output that met it, and every RPC's failure is judged and not only a
+    registration's -- registrations and invokes alike -- because a real run
     fails on any of them. A failure the case received fails nothing here:
     `declaring` receives the failures that have the root of what leaves it,
     and `the_run_failed_with` the ones with the root of what it hands back.
-    An output awaited by the case does not count: an output carries the
-    failure only to a case that reads that resource, and nothing here can
-    tell what a case read.
+    An output awaited by the case does not count: a real program's wait
+    awaits it again, and nothing here can tell what a case read.
     """
     failures: list[BaseException] = []
     for run in _runs:
         _settle_from_outside(run)
         failures.extend(run.unreceived())
+        _ReadFailures.read(run.loops, run.failures())
     if failures:
         first, *others = _one_per_root(failures)
-        unreceived = UnreceivedFailure(f'an RPC of this run failed and nothing the case awaited received it: {first!r}')
+        unreceived = UnreceivedFailure(
+            f'an RPC or an output of this run failed and nothing the case awaited received it: {first!r}'
+        )
         for other in others:
-            unreceived.add_note(f'and another RPC failed that nothing received either: {other!r}')
+            unreceived.add_note(f'and another RPC or output failed that nothing received either: {other!r}')
         raise unreceived from first
 
 
 def _settle_from_outside(run: _Run) -> None:
-    """Finish every RPC of the run since the mark, on each loop the run has open, from outside them all."""
+    """Finish every RPC and output of the run since the mark, on each loop the run has open, from outside them all."""
     settled = False
     while not settled:
         while pending := run.outstanding():
@@ -706,9 +804,9 @@ def _settle_from_outside(run: _Run) -> None:
         settled = not run.outstanding()
 
 
-async def _finished(rpcs: list[asyncio.Future[Any]]) -> None:
-    """Wait until every one of `rpcs` has finished, however it finished."""
-    _ = await asyncio.gather(*rpcs, return_exceptions=True)
+async def _finished(futures: list[asyncio.Future[Any]]) -> None:
+    """Wait until every one of `futures` has finished, however it finished."""
+    _ = await asyncio.gather(*futures, return_exceptions=True)
 
 
 async def _turned() -> None:
@@ -716,15 +814,17 @@ async def _turned() -> None:
 
     A declaration schedules a task that starts its RPC, and an RPC's ending
     is followed by its wrapper's (`RPCManager.do_rpc`), which can schedule
-    more; one turn runs every wakeup already queued. It orders two events on
-    a path only the loop advances, and waits on no clock
-    (framework/testing.md §7).
+    more; one turn runs every wakeup already queued. A declaration whose
+    outputs are still pending gets those turns from the wait on its
+    outputs, so the turn here is for an RPC with no output pending beside
+    it, which nothing else would start. It orders two events on a path only
+    the loop advances, and waits on no clock (framework/testing.md §7).
     """
     await asyncio.sleep(0)
 
 
 async def _settled(run: _Run) -> list[BaseException]:
-    """The failures since the mark the case has not received, once every RPC on the running loop has finished."""
+    """The failures since the mark the case has not received, once every RPC and output on the running loop is done."""
     loop = asyncio.get_running_loop()
     run.learn(loop)
     settled = False
@@ -794,12 +894,14 @@ def root_of[FailureT: BaseException](failure: BaseException, expected: type[Fail
 async def the_run_failed_with[FailureT: BaseException](expected: type[FailureT]) -> FailureT:
     """The `expected` at the root of a failure of the current run, received by the case whose subject it is.
 
-    Waits for every RPC the run has outstanding first, so a failure still in
-    flight is found, and hands back `root_of` the first failure since the
-    case's mark that has an `expected` behind it and that the case has not
-    received yet: the program's own exception rather than the SDK's around
-    it. A run that failed nothing, or failed with nothing of that type
-    behind it, is refused.
+    Waits for every RPC and output the run has outstanding on the running
+    loop first, so a failure still in flight is found, and hands back
+    `root_of` the first failure since the case's mark that has an `expected`
+    behind it and that the case has not received yet: the program's own
+    exception rather than the SDK's around it. First is in the order the
+    RPCs began, and then among the outputs, which keep no order. A run that
+    failed nothing, or failed with nothing of that type behind it, is
+    refused.
 
     What is received is that failure's root, so every failure the one
     refusal caused is received with it and a failure of another root is not:
@@ -807,8 +909,9 @@ async def the_run_failed_with[FailureT: BaseException](expected: type[FailureT])
     a received refusal still fails the case. The SDK wraps a component's
     `ValueError` refusal in a `ValueError` of its own -- an `AssertionError`
     in an `AssertionError`, and a refusal of any other type not at all -- so
-    a type that wide matches whichever such refusal's RPC began first, and
-    the caller holds what comes back to the refusal it caught, by identity.
+    a type that wide matches whichever such refusal's RPC began first, or any
+    such refusal no RPC carries, and the caller holds what comes back to the
+    refusal it caught, by identity.
     """
     run = _current_run()
     failures = await _settled(run)
@@ -826,7 +929,8 @@ async def the_run_failed_with_each[FailureT: BaseException](expected: type[Failu
 
     Every failure since the case's mark that has an `expected` behind it and
     that the case has not received yet is received, and handed back as
-    `root_of` it, once per root, in the order the RPCs began: a program that
+    `root_of` it, once per root, in the order the RPCs began and then the
+    outputs' failures, in no order: a program that
     refuses at several places on its own -- each node, each anchor -- fails
     once at each, and a case reads all of them rather than the first. A
     failure with nothing of that type behind it is left for the hook, and a
@@ -872,14 +976,14 @@ async def declaring() -> AsyncGenerator[None]:
     that is not an `Exception` -- a cancellation, an interrupt, a case's
     timeout -- leaves at once, without the wait.
 
-    A failure among the run's RPCs that the wait meets has reached the case
-    when its root is the root of the exception that leaves -- the SDK's
-    wrapper of the very refusal that leaves, or that a task of the block
+    A failure among the run's RPCs and outputs that the wait meets has reached
+    the case when its root is the root of the exception that leaves -- the
+    SDK's wrapper of the very refusal that leaves, or that a task of the block
     failed with first. Only then is it received, so that
-    `fail_on_unreceived_failures` does not fail the case for it a second
-    time. A failure merely added as a note has not reached the case: a
-    `pytest.raises` around the block reads no notes, and a duplicate URN
-    noted on a refusal the case catches would otherwise pass.
+    `fail_on_unreceived_failures` does not fail the case for it a second time.
+    A failure merely added as a note has not reached the case: a
+    `pytest.raises` around the block reads no notes, and a duplicate URN noted
+    on a refusal the case catches would otherwise pass.
     """
     before = asyncio.all_tasks()
     run = _current_run()
@@ -935,3 +1039,71 @@ def decline_every_invoke() -> None:
         return resource_pb2.ResourceInvokeResponse(unknown=True)
 
     mock.Invoke = declined
+
+
+# -- the workaround ------------------------------------------------------------
+#
+# The SDK leaves futures of an output it fails unretrieved. An output's task
+# awaits its resources, its value, whether it is known and whether it is
+# secret in turn, and stops at the first that fails (`Output.__init__` in
+# `pulumi/output.py`); where one exception fails several of them, the rest
+# are never awaited. That is every output of a refused resource -- the SDK
+# fails value, known and secret together (`do_resolve` in
+# `pulumi/runtime/rpc.py`) -- and every `putils.async_output` whose coroutine
+# failed, since all four of its futures come from that one coroutine. asyncio
+# logs each as never retrieved when it is collected, which can be cases after
+# the one whose run failed it, and nothing the judgment can reach holds it, so
+# what the judgment does instead is drop the report. A report made before the
+# judgment has read the root is not dropped, and lands in the case that is
+# still running, its own. The layer is `_ReadFailures` and its two call
+# sites, `_Run.learn` and `fail_on_unreceived_failures`, and it comes out
+# whole when the SDK's output awaits every future it was given, which
+# `tests/test_mock_monitor_failures.py` shows: its tripwire on the SDK fails.
+
+
+class _ReadFailures:
+    """A loop's exception handler that drops the report of a failure never retrieved once the judgment read its root.
+
+    A report of anything else, or of a failure whose root the judgment never
+    read, goes on to the handler the loop had before, or to the loop's
+    default. The roots read are kept with the handler, and so with the loop,
+    which every future of the loop holds: a report made once the loop has
+    closed, cases later, still finds them.
+    """
+
+    def __init__(self, previous: Callable[[asyncio.AbstractEventLoop, dict[str, Any]], object] | None) -> None:
+        self.previous = previous
+        #: The root (`root_of`) of every failure a judgment read on a run with work on this loop.
+        self.roots: list[BaseException] = []
+
+    def __call__(self, loop: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
+        failure = context.get('exception')
+        if (
+            isinstance(failure, BaseException)
+            and str(context.get('message', '')).endswith('was never retrieved')
+            and any(root_of(failure, BaseException) is root for root in self.roots)
+        ):
+            return
+        if self.previous is None:
+            loop.default_exception_handler(context)
+        else:
+            _ = self.previous(loop, context)
+
+    @classmethod
+    def install(cls, loop: asyncio.AbstractEventLoop) -> None:
+        """Put one in front of whatever handler `loop` has, unless one is there already."""
+        previous = loop.get_exception_handler()
+        if not isinstance(previous, cls):
+            loop.set_exception_handler(cls(previous))
+
+    @classmethod
+    def read(cls, loops: list[asyncio.AbstractEventLoop], failures: list[BaseException]) -> None:
+        """Record on each of `loops` that the judgment read `failures`."""
+        roots = [root_of(failure, BaseException) for failure in failures]
+        for loop in loops:
+            handler = loop.get_exception_handler()
+            if not isinstance(handler, cls):
+                continue
+            for root in roots:
+                if not any(root is it for it in handler.roots):
+                    handler.roots.append(root)

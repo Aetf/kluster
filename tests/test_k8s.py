@@ -20,7 +20,7 @@ import pulumi_crds as crds
 import pulumi_kubernetes as k8s
 import pytest
 import pytest_asyncio
-from mock_monitor import Recorder, declaring, run_with
+from mock_monitor import Recorder, declaring, run_with, the_run_failed_with
 
 from kluster.lib.versions import ChartPin, ManifestPin, versions
 
@@ -103,6 +103,8 @@ async def rendered_search(declarations: Recorder) -> tuple[str, str]:
     try:
         _ = await find_rendered([service, config], k8s.core.v1.Secret).future()
     except LookupError as refused:
+        # And the run fails on it, as a deployment would at its end.
+        assert await the_run_failed_with(LookupError) is refused
         return (found or '').rsplit('::', 1)[-1], str(refused)
     raise AssertionError('searching for a kind nothing rendered found something')
 
