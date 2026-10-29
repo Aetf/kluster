@@ -653,8 +653,8 @@ def test_a_replacement_that_reuses_the_file_keeps_it_when_the_original_is_delete
     The replacement declares the same path, finds the file the original
     fetched and reuses it, and the engine then deletes the original with the
     original's outputs. That delete must not take the file the replacement
-    stands for: nothing would bring it back, and the next disk rebuild on
-    this machine would find none.
+    stands for: no run that leaves the image alone brings it back, and a
+    disk created from it in such a run would find none.
     """
     requested = serve(monkeypatch, lzma.compress(PAYLOAD))
     warned = warnings_of(monkeypatch)

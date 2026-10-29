@@ -500,9 +500,17 @@ them for day-2 once v0.12 is stable *and* has reached the Pulumi bridge.
     (`replace_with`), so a new disk boots the rendering current at the
     run that created it, and it is deleted before it is replaced for
     the disk's reason.
--   **Rebuilding the worker** is two commands: `mise x -- pulumi state
-    unprotect --stack physical '<disk URN>'`, then `mise x -- pulumi up
-    --stack physical --replace '<disk URN>'`. The run deletes the disk,
+-   **Rebuilding the worker** is two commands, with `physical` the
+    function of §6, which runs `pulumi` under `physical`'s own
+    passphrase: `physical state unprotect '<disk URN>'`, then
+    `physical up --replace '<image URN>' --replace '<disk URN>'`, the
+    disk being `…:Volume::kluster-worker-disk` and the image the
+    worker's `FactoryImage`, `…:FactoryImage::kluster-worker-nocloud`,
+    in `physical stack --show-urns`. The disk is created
+    from the image's file on the machine running the apply, which the
+    provider opens only at the create, after the old disk is deleted;
+    the image's replacement is created first and puts the file there
+    when it is missing (operations.md §3.2). The run deletes the disk,
     the seed and the domain, the disk last, before it creates any of
     them again, the seed from the current rendering, and the program's
     `protect` protects the new disk in the same run. A `talosctl reset`
