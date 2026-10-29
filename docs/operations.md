@@ -227,12 +227,23 @@ from an HTTP repository, which offers nothing to check a download against
     from the Talos image cached on the machine running the apply
     (`components/talos/image.py`, `IMAGE_CACHE`), and the libvirt
     provider first opens that file at the disk's create, after the
-    delete-first replacement has removed the old disk, so a run that
+    delete-first replacement has removed the old disk. So a run that
     names the disk alone where the cache has lost the file, or never
-    held it, leaves the worker with no disk. Every later `up` then
-    fails, the disk pending replacement, until the two-flag command
-    runs: it brings the file back and creates the disk, deleting
-    nothing more. Named too, the image is replaced before the disk is
+    held it, is refused at that delete: the disk's `before_delete`
+    hook (`components/homelab/rebuild.py`) finds no file at the path
+    the run declares, and the run fails with `before hook
+    "kluster-worker-disk-source" failed: no file is at <path>, …`,
+    naming the two-flag command. The seed and the domain go ahead of
+    the disk, so the worker is down by then and the disk is kept. A
+    plain `physical up` creates the two again on the kept disk and
+    protects it again. The two-flag command rebuilds it: straight after
+    the refusal the disk is still unprotected, and after a plain `up`
+    the unprotect comes first again. The hook guards a disk once an
+    `up` has run with it, since a delete runs the hooks state
+    recorded, and it covers a missing file only: a create that fails
+    for another reason fails after the delete, the disk pending
+    replacement. Named too, the
+    image is replaced before the disk is
     touched: its create fetches the artifact where the file is missing
     and reuses the file where it is present, and a fetch that fails
     fails the run with the old disk in place. Its original, deleted

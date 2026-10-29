@@ -24,8 +24,9 @@ and every command leads a POSIX session of its own that ends with it
 (`process_sessions`), so a `pulumi` stopped at its bound takes its plugins
 with it.
 
-The rebuild's cases run a second program, the worker's image and its disk
-(`REBUILD_PROGRAM`). The image is the real `FactoryImage`, fetching from a
+The rebuild's cases run a second program, the worker's image, its disk, and
+the seed and domain as the first program declares them (`REBUILD_PROGRAM`).
+The image is the real `FactoryImage`, fetching from a
 server of the case's own into a cache under the case's directory; the server
 appends `fetch image` to the same log when it is asked for the artifact. The
 disk is a stand-in that opens its `source` at its create and nowhere before,
@@ -34,8 +35,10 @@ validation and the resource no `CustomizeDiff`, and its create opens the file
 to probe for a QCOW2 header before it asks libvirt for the volume
 (terraform-provider-libvirt v0.8.1, which `pulumi-libvirt` 0.5.4 bridges,
 `libvirt/resource_libvirt_volume.go` and `libvirt/volume_image.go`). Like the
-worker's disk, it is deleted before it is replaced and ignores changes to
-`source`.
+worker's disk, it is protected, deleted before it is replaced and ignores
+changes to `source`, and it carries the worker's disk's guard: its `source`
+and its `before_delete` hook come from the real `SourceGuard`, as they do in
+`HomelabHost`, except in a run with `PROBE_UNGUARDED` set, which binds no hook.
 """
 
 from __future__ import annotations
@@ -270,10 +273,12 @@ def test_a_resource_replaced_alone_is_deleted_before_it_is_created_again(
 REBUILD_PROGRAM = """\
 import os
 import pathlib
+import uuid
 
 import pulumi
 from pulumi.dynamic import CreateResult, DiffResult, Resource, ResourceProvider
 
+from kluster.components.homelab.rebuild import SourceGuard
 from kluster.providers.talos_factory import FactoryImage
 
 LOG = pathlib.Path(os.environ['PROBE_LOG'])
@@ -299,16 +304,54 @@ class Disk(ResourceProvider):
         log('delete disk')
 
 
-class Volume(Resource):
-    def __init__(self, name, props, opts):
-        super().__init__(Disk(), name, props, opts)
+class Replaced(ResourceProvider):
+    \"\"\"A resource every input of which replaces it, as every field of a libvirt volume does.\"\"\"
+
+    def __init__(self, kind, key):
+        self.kind = kind
+        self.key = key
+
+    def create(self, props):
+        log(f'create {self.kind} {self.key}={props[self.key]}')
+        return CreateResult(id_=f'{self.kind}-{uuid.uuid4().hex[:8]}', outs=dict(props))
+
+    def diff(self, _id, olds, news):
+        replaces = [self.key] if olds.get(self.key) != news.get(self.key) else []
+        return DiffResult(changes=bool(replaces), replaces=replaces)
+
+    def delete(self, id_, _props):
+        log(f'delete {self.kind}')
+
+
+class Stand(Resource):
+    def __init__(self, name, provider, props, opts):
+        super().__init__(provider, name, props, opts)
 
 
 image = FactoryImage('image', url=os.environ['PROBE_URL'], path=os.environ['PROBE_IMAGE'], room=0)
-Volume(
+guard = SourceGuard()
+disk = Stand(
     'disk',
-    {'source': image.path},
-    pulumi.ResourceOptions(ignore_changes=['source'], delete_before_replace=True),
+    Disk(),
+    {'source': guard.source(image.path)},
+    pulumi.ResourceOptions(
+        protect=True,
+        ignore_changes=['source'],
+        delete_before_replace=True,
+        hooks=None if os.environ.get('PROBE_UNGUARDED') else guard.hooks('disk-source'),
+    ),
+)
+seed = Stand(
+    'seed',
+    Replaced('seed', 'source'),
+    {'source': 'r1'},
+    pulumi.ResourceOptions(ignore_changes=['source'], replace_with=[disk], delete_before_replace=True),
+)
+Stand(
+    'domain',
+    Replaced('domain', 'disks'),
+    {'disks': pulumi.Output.all(disk.id, seed.id).apply(lambda ids: ','.join(ids))},
+    pulumi.ResourceOptions(delete_before_replace=True),
 )
 """
 
@@ -391,26 +434,60 @@ def rebuild(tmp_path: Path, factory: str) -> Rebuild:
     assert initialized.returncode == 0, initialized.stderr
     first = engine.up()
     assert first.returncode == 0, _ran(first)
-    assert engine.log() == ['fetch image', f'create disk from {ARTIFACT.decode()}']
+    created = _ids_elided(engine.log())
+    # The seed waits on nothing, so where it falls among the rest is the
+    # engine's to choose.
+    assert sorted(created) == sorted([*CREATED, 'create seed source=r1'])
+    assert [line for line in created if line.split()[1] != 'seed'] == CREATED
     return Rebuild(engine=engine, cached=cached)
 
 
-def test_a_rebuild_naming_the_disk_alone_deletes_it_before_a_missing_image_fails_its_create(rebuild: Rebuild) -> None:
-    """Why the rebuild names the image too (operations.md §3.2).
+#: What the first `up` runs, besides the seed's create: the image fetches, the
+#: disk is created from what it fetched, and the domain attaches both volumes.
+CREATED = ['fetch image', f'create disk from {ARTIFACT.decode()}', 'create domain disks=disk,seed-<id>']
+
+
+def _ids_elided(log: list[str]) -> list[str]:
+    return [re.sub(r'seed-[0-9a-f]{8}', 'seed-<id>', line) for line in log]
+
+
+def _unprotected(engine: Engine) -> str:
+    """The disk's URN, once its state's protection is lifted, as the rebuild's first command lifts it."""
+    disk = engine.urn('disk')
+    unprotected = engine.pulumi('state', 'unprotect', '--yes', disk)
+    assert unprotected.returncode == 0, _ran(unprotected)
+    return disk
+
+
+def test_a_rebuild_naming_the_disk_alone_is_refused_with_no_image_and_keeps_the_disk(rebuild: Rebuild) -> None:
+    """The guard on the disk's delete (`components.homelab.rebuild`, operations.md §3.2).
 
     The image's resource has nothing to do in a run that replaces only the
     disk, so nothing brings back a cached file that is gone, and the disk's
-    create is the first thing to open it: after the delete.
+    create would be the first thing to open it: after the delete. The disk's
+    `before_delete` hook refuses instead, once the seed and the domain, which
+    depend on the disk, are deleted, and its refusal names the run that
+    replaces the image too. A plain `up` then creates those two again on the
+    kept disk.
     """
     rebuild.cached.unlink()
+    engine = rebuild.engine
+    disk = _unprotected(engine)
 
-    result = rebuild.engine.up('--replace', rebuild.engine.urn('disk'))
+    refused = engine.up('--replace', disk)
 
-    assert result.returncode != 0
-    assert rebuild.engine.log() == ['delete disk']
-    # What state keeps is the deleted original, awaiting a replacement that
-    # was never made.
-    assert rebuild.engine.resources()['disk'].get('pendingReplacement') is True
+    assert refused.returncode != 0
+    assert "--replace '<image URN>'" in _ran(refused)
+    assert f"--replace '{disk}'" in _ran(refused)
+    assert sorted(engine.log()) == ['delete domain', 'delete seed']
+    assert not engine.resources()['disk'].get('pendingReplacement')
+
+    restored = engine.up()
+
+    assert restored.returncode == 0, _ran(restored)
+    assert _ids_elided(engine.log()) == ['create seed source=r1', 'create domain disks=disk,seed-<id>']
+    # The program's `protect` protects the kept disk again.
+    assert engine.resources()['disk'].get('protect') is True
 
 
 @pytest.mark.parametrize('cache', ['cleaned', 'kept'])
@@ -421,16 +498,72 @@ def test_a_rebuild_naming_the_image_too_has_the_image_in_place_before_it_deletes
 
     The image's replacement is created before the disk's delete-first
     replacement begins: it fetches the artifact where the cache has lost it
-    and reuses it where it has not. The image's original is deleted last, and
-    finds the replacement's write at the path, so the file stands.
+    and reuses it where it has not, so the disk's guard finds the file and
+    lets the delete run. The image's original is deleted last, and finds the
+    replacement's write at the path, so the file stands.
     """
     if cache == 'cleaned':
         rebuild.cached.unlink()
     engine = rebuild.engine
+    disk = _unprotected(engine)
 
-    result = engine.up('--replace', engine.urn('image'), '--replace', engine.urn('disk'))
+    result = engine.up('--replace', engine.urn('image'), '--replace', disk)
 
     assert result.returncode == 0, _ran(result)
+    log = _ids_elided(engine.log())
     fetched = ['fetch image'] if cache == 'cleaned' else []
-    assert engine.log() == [*fetched, 'delete disk', f'create disk from {ARTIFACT.decode()}']
+    on_the_disk = [line for line in log if line.split()[1] in {'image', 'disk'}]
+    assert on_the_disk == [*fetched, 'delete disk', f'create disk from {ARTIFACT.decode()}']
+    # The disk goes after its dependents and before anything is created again.
+    assert log.index('delete disk') > max(log.index('delete seed'), log.index('delete domain'))
     assert rebuild.cached.read_bytes() == ARTIFACT
+
+
+def test_a_disk_whose_state_records_no_guard_is_guarded_once_a_plain_up_records_it(rebuild: Rebuild) -> None:
+    """What puts the guard in force on a disk created before it (`components.homelab.rebuild`).
+
+    A delete runs the hooks state recorded with the resource, so a disk whose
+    state names none is deleted without the guard, whatever the run deleting
+    it registers. Any plain `up` records the program's binding, after which
+    the disk is guarded.
+    """
+    engine = rebuild.engine
+    engine.env['PROBE_UNGUARDED'] = '1'
+    unguarded = engine.up()
+    assert unguarded.returncode == 0, _ran(unguarded)
+    # From here the disk's state records no hook.
+    assert not engine.resources()['disk'].get('resourceHooks')
+    del engine.env['PROBE_UNGUARDED']
+
+    recorded = engine.up()
+
+    assert recorded.returncode == 0, _ran(recorded)
+    assert engine.log() == []
+    rebuild.cached.unlink()
+    disk = _unprotected(engine)
+    refused = engine.up('--replace', disk)
+    assert refused.returncode != 0
+    assert 'delete disk' not in engine.log()
+
+
+def test_a_disk_replaced_after_its_image_moved_is_guarded_on_the_path_this_run_declares(
+    rebuild: Rebuild, tmp_path: Path
+) -> None:
+    """The guard reads the path this run declares, not the one the disk was created from (`components.homelab.rebuild`).
+
+    A new Talos release moves the image's path: a plain `up` replaces the
+    image, which fetches the new file and removes the old one, and plans
+    nothing on the disk, whose state keeps the old `source`.
+    """
+    engine = rebuild.engine
+    engine.env['PROBE_IMAGE'] = str(tmp_path / 'cache' / 'next.raw')
+    moved = engine.up()
+    assert moved.returncode == 0, _ran(moved)
+    assert engine.log() == ['fetch image']
+    assert not rebuild.cached.exists()
+    disk = _unprotected(engine)
+
+    result = engine.up('--replace', disk)
+
+    assert result.returncode == 0, _ran(result)
+    assert f'create disk from {ARTIFACT.decode()}' in engine.log()
