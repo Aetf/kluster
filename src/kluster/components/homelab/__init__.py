@@ -70,8 +70,13 @@ in place over its machine API — the declared artifact is what the disk was
 volume the first time the node is upgraded, and a later `versions:talos` bump
 must not propose rewriting a running node's disk. Rebuilding the worker from a
 newer image is therefore a deliberate act rather than a diff, and two
-commands: `mise x -- pulumi state unprotect --stack physical '<disk URN>'`,
-then `mise x -- pulumi up --stack physical --replace '<disk URN>'`. The run
+commands, with `physical` the function of declarative/physical.md §6, which
+runs `pulumi` under the stack's own passphrase: `physical state unprotect
+'<disk URN>'`, then `physical up --replace '<image URN>' --replace
+'<disk URN>'`, the image being the worker's `FactoryImage`. The provider opens
+the disk's `source` only at the create, after the old disk is deleted, and the
+image's replacement, created first, puts the file there when the machine
+running the apply has lost it (operations.md §3.2). The run
 deletes the disk, the seed and the domain, the disk last, before it creates
 any of them again, the seed from the current rendering; the program's
 `protect` protects the new disk in the same run. It

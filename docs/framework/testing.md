@@ -1225,7 +1225,13 @@ resource declared `replace_with` another ignores runs nothing, and a
 protection is lifted, deleting it, the seed and their dependent before
 creating all three again, the seed from the program's current value; and
 a stand-in replaced alone, whose name is stated, is deleted before it is
-created again.
+created again. It holds what the worker's rebuild rests on as well, with the
+real `FactoryImage` beside a stand-in disk: replaced alone and deleted first,
+the disk is deleted before a create that cannot open its source fails, and
+stays pending replacement; replaced with the image whose `path` it is created
+from, it is deleted only after the image's replacement has put the file in
+place, fetched where it was gone and reused where it was not, and the file
+outlives the image's original.
 
 It runs in the suite, under the bounds every real-engine case carries
 (below):
@@ -1238,16 +1244,20 @@ It runs in the suite, under the bounds every real-engine case carries
     temporary directory, with every `PULUMI_` and `PG` variable of the test
     run's own removed — as they are for a scratch probe (§5.1), and it reads
     `pulumi stack ls --all` back as empty before its first `stack init`.
--   **The program runs on the locked SDK and fetches nothing.** Its virtual
-    environment's `.pth` file reaches the test run's own packages. A `uv`
+-   **The program runs on the locked SDK and fetches nothing from outside
+    the case.** Its virtual environment's `.pth` file reaches the test run's
+    own packages. A program that imports this repository's code names `src/`
+    in a second `.pth`, because the editable install's own `.pth` is not read
+    through a path; the rebuild's image fetches from a server the case runs
+    itself on `127.0.0.1`. A `uv`
     environment carries no `pip`, which the language host asks for unless it
     runs under `uv` — the project's `toolchain` option set to `uv`, or a
     `uv.lock` in a directory above the project — and under `uv` it asks for
     a lock beside the project, which `uv lock --offline` writes.
 -   **Each case is a few commands against a fresh stack**, under the
     real-engine bounds below, and the order the engine ran things in is
-    read from a log every provider method and hook appends to, rather than
-    from the CLI's output.
+    read from a log every stand-in's provider method and hook appends to,
+    and the case's own server, rather than from the CLI's output.
 -   **What one release does and the next stops doing is not held.** A test
     that pinned it would fail on the bump for a change that removes nothing
     the design relies on.

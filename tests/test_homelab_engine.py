@@ -1,4 +1,4 @@
-"""The engine semantics the homelab worker's seed rests on, held by the pinned `pulumi` itself.
+"""The engine semantics the homelab worker's seed and its rebuild rest on, held by the pinned `pulumi` itself.
 
 The seed is first-boot input: a new rendering of the worker's configuration
 plans nothing on it or on the domain that attaches it, and a replaced disk
@@ -23,21 +23,40 @@ engine ran them in. The project around the program is `scratch_projects`',
 and every command leads a POSIX session of its own that ends with it
 (`process_sessions`), so a `pulumi` stopped at its bound takes its plugins
 with it.
+
+The rebuild's cases run a second program, the worker's image and its disk
+(`REBUILD_PROGRAM`). The image is the real `FactoryImage`, fetching from a
+server of the case's own into a cache under the case's directory; the server
+appends `fetch image` to the same log when it is asked for the artifact. The
+disk is a stand-in that opens its `source` at its create and nowhere before,
+as the pinned libvirt provider does: its volume schema gives `source` no
+validation and the resource no `CustomizeDiff`, and its create opens the file
+to probe for a QCOW2 header before it asks libvirt for the volume
+(terraform-provider-libvirt v0.8.1, which `pulumi-libvirt` 0.5.4 bridges,
+`libvirt/resource_libvirt_volume.go` and `libvirt/volume_image.go`). Like the
+worker's disk, it is deleted before it is replaced and ignores changes to
+`source`.
 """
 
 from __future__ import annotations
 
 import json
+import lzma
 import re
 import shutil
 import subprocess as sp
+import threading
+from collections.abc import Iterator
 from dataclasses import dataclass
+from http import server as http_server
 from pathlib import Path
 from typing import Any, cast
 
 import process_sessions
 import pytest
 from scratch_projects import scratch_project
+
+import kluster
 
 #: How long one case may take: its project's set-up and every command it runs
 #: against the engine. On four cores the slowest case here took 5 s idle and
@@ -246,3 +265,172 @@ def test_a_resource_replaced_alone_is_deleted_before_it_is_created_again(
     assert len(log) == 2, log
     assert log[0] == f'delete {name}'
     assert log[1].startswith(created), log
+
+
+REBUILD_PROGRAM = """\
+import os
+import pathlib
+
+import pulumi
+from pulumi.dynamic import CreateResult, DiffResult, Resource, ResourceProvider
+
+from kluster.providers.talos_factory import FactoryImage
+
+LOG = pathlib.Path(os.environ['PROBE_LOG'])
+
+
+def log(line):
+    with LOG.open('a') as handle:
+        handle.write(line + '\\n')
+
+
+class Disk(ResourceProvider):
+    \"\"\"A volume created from a file, which it opens at its create and nowhere before.\"\"\"
+
+    def create(self, props):
+        content = pathlib.Path(props['source']).read_bytes()
+        log(f'create disk from {content.decode()}')
+        return CreateResult(id_='disk', outs=dict(props))
+
+    def diff(self, _id, olds, news):
+        return DiffResult(changes=False)
+
+    def delete(self, _id, _props):
+        log('delete disk')
+
+
+class Volume(Resource):
+    def __init__(self, name, props, opts):
+        super().__init__(Disk(), name, props, opts)
+
+
+image = FactoryImage('image', url=os.environ['PROBE_URL'], path=os.environ['PROBE_IMAGE'], room=0)
+Volume(
+    'disk',
+    {'source': image.path},
+    pulumi.ResourceOptions(ignore_changes=['source'], delete_before_replace=True),
+)
+"""
+
+#: What the case's factory serves, compressed as the Image Factory serves
+#: `nocloud`, and what the disk is created from once it is decompressed.
+ARTIFACT = b'talos'
+
+
+@dataclass
+class Rebuild:
+    """The worker's image and disk after their first `up`, with the log read empty."""
+
+    engine: Engine
+    #: The file the image caches the artifact in, on the machine running the program.
+    cached: Path
+
+
+@pytest.fixture
+def factory(tmp_path: Path) -> Iterator[str]:
+    """A factory of the case's own, serving the artifact at the URL it yields and logging every request."""
+    log_file = tmp_path / 'engine.log'
+    compressed = lzma.compress(ARTIFACT)
+
+    class Serving(http_server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            with log_file.open('a') as handle:
+                _ = handle.write('fetch image\n')
+            self.send_response(200)
+            self.send_header('Content-Length', str(len(compressed)))
+            self.end_headers()
+            _ = self.wfile.write(compressed)
+
+        def log_message(self, format: str, *args: object) -> None:  # noqa: A002 -- the base class's own name
+            pass
+
+    # The standard library's server on its own thread, the way its own
+    # documentation runs one beside a client.
+    server = http_server.ThreadingHTTPServer(('127.0.0.1', 0), Serving)
+    serving = threading.Thread(target=server.serve_forever, daemon=True)
+    serving.start()
+    try:
+        yield f'http://127.0.0.1:{server.server_port}/nocloud-amd64.raw.xz'
+    finally:
+        server.shutdown()
+        server.server_close()
+        serving.join()
+
+
+@pytest.fixture
+def rebuild(tmp_path: Path, factory: str) -> Rebuild:
+    log_file = tmp_path / 'engine.log'
+    cached = tmp_path / 'cache' / 'talos.raw'
+    scratch = scratch_project(tmp_path, REBUILD_PROGRAM)
+    # The test run's packages reach the program through the paths of its
+    # site directories, and an editable install's own `.pth` there is not
+    # read through a path, so the provider's tree is named for the program.
+    (site_packages,) = (tmp_path / 'venv').glob('lib/python*/site-packages')
+    _ = (site_packages / 'kluster.pth').write_text(f'{Path(kluster.__file__).parent.parent}\n')
+    engine = Engine(
+        project=scratch.directory,
+        env=scratch.env
+        | {
+            'PROBE_LOG': str(log_file),
+            'PROBE_URL': factory,
+            'PROBE_IMAGE': str(cached),
+            # The factory is on the loopback, and a proxy the test run's
+            # environment names would not reach it. Both spellings, since
+            # `requests` reads the lowercase one first.
+            'no_proxy': '127.0.0.1',
+            'NO_PROXY': '127.0.0.1',
+        },
+        log_file=log_file,
+    )
+    # The backend in hand is the case's own, and holds nothing yet
+    # (framework/testing.md §5.1).
+    listed = engine.pulumi('stack', 'ls', '--all', '--json')
+    assert listed.returncode == 0, listed.stderr
+    assert json.loads(listed.stdout) == []
+    initialized = engine.pulumi('stack', 'init', STACK)
+    assert initialized.returncode == 0, initialized.stderr
+    first = engine.up()
+    assert first.returncode == 0, _ran(first)
+    assert engine.log() == ['fetch image', f'create disk from {ARTIFACT.decode()}']
+    return Rebuild(engine=engine, cached=cached)
+
+
+def test_a_rebuild_naming_the_disk_alone_deletes_it_before_a_missing_image_fails_its_create(rebuild: Rebuild) -> None:
+    """Why the rebuild names the image too (operations.md §3.2).
+
+    The image's resource has nothing to do in a run that replaces only the
+    disk, so nothing brings back a cached file that is gone, and the disk's
+    create is the first thing to open it: after the delete.
+    """
+    rebuild.cached.unlink()
+
+    result = rebuild.engine.up('--replace', rebuild.engine.urn('disk'))
+
+    assert result.returncode != 0
+    assert rebuild.engine.log() == ['delete disk']
+    # What state keeps is the deleted original, awaiting a replacement that
+    # was never made.
+    assert rebuild.engine.resources()['disk'].get('pendingReplacement') is True
+
+
+@pytest.mark.parametrize('cache', ['cleaned', 'kept'])
+def test_a_rebuild_naming_the_image_too_has_the_image_in_place_before_it_deletes_the_disk(
+    rebuild: Rebuild, cache: str
+) -> None:
+    """The rebuild's `up`, replacing the image and the disk (operations.md §3.2).
+
+    The image's replacement is created before the disk's delete-first
+    replacement begins: it fetches the artifact where the cache has lost it
+    and reuses it where it has not. The image's original is deleted last, and
+    finds the replacement's write at the path, so the file stands.
+    """
+    if cache == 'cleaned':
+        rebuild.cached.unlink()
+    engine = rebuild.engine
+
+    result = engine.up('--replace', engine.urn('image'), '--replace', engine.urn('disk'))
+
+    assert result.returncode == 0, _ran(result)
+    fetched = ['fetch image'] if cache == 'cleaned' else []
+    assert engine.log() == [*fetched, 'delete disk', f'create disk from {ARTIFACT.decode()}']
+    assert rebuild.cached.read_bytes() == ARTIFACT

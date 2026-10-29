@@ -216,9 +216,28 @@ from an HTTP repository, which offers nothing to check a download against
     and the node holding the **dedicated VIP** needs the secondary
     private IP and the reserved-IP NAT re-pointed (architecture.md §3.2).
 -   **§3.2 Homelab worker VM.** Trigger: VM/disk loss or rebuild.
-    Gist: `mise x -- pulumi state unprotect --stack physical '<disk
-    URN>'`, then `mise x -- pulumi up --stack physical --replace '<disk
-    URN>'`, which
+    Gist: from the root of the checkout that holds `.credentials/`,
+    with `physical` the function of declarative/physical.md §6, which
+    runs `pulumi` under `physical`'s own passphrase (credentials.md
+    §4.4): `physical state unprotect '<disk URN>'`, then `physical up
+    --replace '<image URN>' --replace '<disk URN>'`, the image being
+    the worker's `FactoryImage`. `physical stack --show-urns` lists
+    the disk as `…:Volume::kluster-worker-disk` and the image as
+    `…:FactoryImage::kluster-worker-nocloud`. The new disk is created
+    from the Talos image cached on the machine running the apply
+    (`components/talos/image.py`, `IMAGE_CACHE`), and the libvirt
+    provider first opens that file at the disk's create, after the
+    delete-first replacement has removed the old disk, so a run that
+    names the disk alone where the cache has lost the file, or never
+    held it, leaves the worker with no disk. Every later `up` then
+    fails, the disk pending replacement, until the two-flag command
+    runs: it brings the file back and creates the disk, deleting
+    nothing more. Named too, the image is replaced before the disk is
+    touched: its create fetches the artifact where the file is missing
+    and reuses the file where it is present, and a fetch that fails
+    fails the run with the old disk in place. Its original, deleted
+    last, leaves the file and warns that it is not the file it
+    recorded. The run then
     replaces the disk, the domain and the seed, the seed from the
     current machine config (declarative/physical.md §3) — the way to a
     fresh worker, where a STATE wipe on the kept disk boots the seed as

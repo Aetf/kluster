@@ -36,6 +36,7 @@ import pytest
 import pytest_asyncio
 import yaml
 from device_places import DEVICE_TYPE_PREFIX, PLACES
+from google.protobuf import json_format
 from mock_monitor import Recorder, declaring, run_under_backstop
 from oci_conventions import with_compartment
 from physical_installation import (
@@ -285,6 +286,28 @@ def test_the_libvirt_session_is_dialed_where_the_roster_placed_the_host(ran: Run
     # The pin is written against the address the URI dials: a `known_hosts`
     # entry keyed on anything else matches nothing the session sees.
     assert (ran.root / known_hosts).read_text() == f'{parts.hostname} {conventions.HOMELAB_HOST_KEY}\n'
+
+
+def test_the_workers_disk_waits_on_what_writes_its_source(ran: Run) -> None:
+    """The worker's disk is created from a file a resource it waits on writes.
+
+    The rebuild's order rests on this edge (operations.md §3.2): the disk
+    registers only once the resource that puts its `source` in place has
+    settled, so a replacement of that resource, named in the same run, has
+    the file there before the disk's delete-first replacement begins. A disk
+    handed a path that nothing it waits on writes would race the fetch
+    against its own delete.
+    """
+    disk = f'{conventions.CLUSTER_NAME}-{conventions.HOMELAB_NODE}-disk'
+    volume = 'libvirt:index/volume:Volume'
+    source = ran.recorded.inputs_of(disk, volume)['source']
+    waited_on = cast('list[str]', list(ran.recorded.options_of(disk, volume).propertyDependencies['source'].urns))
+    writers = [
+        urn
+        for urn in waited_on
+        if json_format.MessageToDict(ran.recorded.registrations[urn].object).get('path') == source
+    ]
+    assert writers, f'{disk} waits on {waited_on} for its source {source}, and none of them declares that path'
 
 
 def test_the_overlay_carries_rules_composed_from_the_roster_and_the_resolvers(ran: Run) -> None:
