@@ -503,44 +503,53 @@ builds it only when none was handed in: `kwargs.setdefault('cluster',
 build_cluster())` builds the default whatever the caller passed, which is a
 second registration under the same name.
 
-**A failed RPC of a run the case started fails the case, unless the case
-received the failure.** The patch raises on the SDK's executor thread, inside the
-registration's own task, and a failure there reaches the program through
-the refused resource's outputs, which most cases never read, and through
-the SDK's wait for its outstanding RPCs, which a real program meets on its
-way out and which fails the deployment. A case that does neither would pass
-with the failure printed beside it. So `tests/conftest.py` does
-the wait for every case, in its `pytest_runtest_call` hook: once the case
-has returned and before any fixture is torn down, so that what is still in
-flight finishes under the case's arrangements,
-`mock_monitor.fail_on_unreceived_failures` lets every RPC of the runs the
-case's setup and body started finish, and fails the case with
-`UnreceivedFailure` from the first failure among them. That is any RPC's
-failure — a duplicate URN, a component's refusal reaching a resource's
-inputs, an invoke the mock refused — because the SDK records the first of
-them all, and a real run fails on any. A failure the case received fails
-nothing: `declaring` receives the failure that leaves it, or one with the
-root of what leaves, and leaves one it only adds as a note for the hook; a
-case whose subject is a refused registration receives it with
-`the_run_failed_with(<type>)`, which hands back the program's own exception
-from under the SDK's `While processing resource: …`. The receipt is complete
-when that returns, and the SDK wraps a component's `ValueError` refusal in a
-`ValueError` of its own, so the case holds what comes back to the refusal it
-caught, by identity: a bare receipt of a type that wide receives whichever
-such refusal failed first.
-An output the case awaited does not count as receiving the registration's
-failure: an output carries it only to a case that reads that resource, and
-the hook cannot tell what a case read. `tests/test_mock_monitor_failures.py`
-holds the rule in a child run.
+**A failed RPC fails the case that started it, unless the case received the
+failure.** The patch raises on the SDK's executor thread, inside the
+registration's own task, and a failure there reaches the program through the
+refused resource's outputs, which most cases never read, and through the SDK's
+wait for its outstanding RPCs, which a real program meets on its way out and
+which fails the deployment. A case that does neither would pass with the
+failure printed beside it. So `tests/conftest.py` does the wait for every
+case. Its `pytest_runtest_setup` hook marks where the case begins on every run
+`run_with` started, and its `pytest_runtest_call` hook, once the case has
+returned and before any fixture is torn down, so that what is still in flight
+finishes under the case's arrangements, has
+`mock_monitor.fail_on_unreceived_failures` let every RPC begun since that mark
+finish and fail the case with `UnreceivedFailure` from the first failure among
+them the case did not receive. The runs judged are every run whose loop is
+still open: the ones the case's setup and body started, and a wider fixture's,
+such as a module's shared run, at each case on it, each case for the RPCs
+begun during it, so a registration a task left on a shared loop makes only
+after its case has returned is judged at the next case on that loop. A run's
+loops are the one `run_with` started it on and each one a
+declaration on it ran on, so a case on a loop of its own is judged on the
+module's run too.
 
-Two limits stand, and
-[Aetf/kluster-ops#692](https://github.com/Aetf/kluster-ops/issues/692) is
-about them. The SDK records only a run's first failure, and a failure that
-comes while it holds one is never recorded, so a case that receives the
-first has received the run: a second failure is not judged. And a
-run that a wider fixture started, such as a module's shared run, is judged
-at the case that set the fixture up and not again, so a later case on it
-declares inside `declaring`.
+**Each failure is judged on its own.** The SDK keeps the run's RPCs, each a
+future that holds the RPC's own failure, and a slot for the run's first
+failure, which a failure that comes while it is full never reaches; the
+judgment reads the futures and not the slot. That is any RPC's failure — a
+duplicate URN, a component's refusal reaching a resource's inputs, an invoke
+the mock refused — because a real run fails on any. A failure the case
+received fails nothing, and a receipt is by root, the program's own exception
+under the SDK's `While processing resource: …`: the one refusal that failed
+several registrations is received once, and a failure of another root is not.
+`declaring` receives the failures with the root of what leaves it, and leaves
+the others as notes for the hook. A case whose subject is a refused
+registration receives it with `the_run_failed_with(<type>)`, which hands back
+the program's own exception and receives its root; a case whose subject is a
+program that refuses at several places on its own receives every one with
+`the_run_failed_with_each(<type>)`, and holds the list it hands back to the
+refusals it caught, as a set by identity: a bare receipt of a wide type
+receives every such refusal, related or not. The SDK wraps a component's `ValueError`
+refusal in a `ValueError` of its own, so a case holds what comes back to the
+refusal it caught, by identity: a bare receipt of a type that wide receives
+whichever such refusal's RPC began first. A duplicate URN beside a received
+refusal fails the case all the same. An output the case awaited does not
+count as receiving the registration's failure: an output carries it only to a
+case that reads that resource, and the hook cannot tell what a case read.
+`tests/test_mock_monitor_failures.py` holds the rule in a child run, on a
+case's own run and on a module's shared one.
 
 The patch belongs in one place because it does not compose: a second module
 capturing "the original" at its own import time would chain onto this one, and

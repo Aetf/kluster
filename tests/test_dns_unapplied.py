@@ -26,7 +26,7 @@ from typing import Any
 import pulumi
 import pytest
 import pytest_asyncio
-from mock_monitor import Recorder, declaring, run_under_backstop
+from mock_monitor import Recorder, declaring, run_under_backstop, the_run_failed_with_each
 from pulumi.output import UNKNOWN
 
 from kluster import conventions
@@ -87,11 +87,14 @@ class Physical(Recorder):
 
 
 class Run:
-    """One run of the program: what it registered, and the refusal that stopped it, if one did."""
+    """One run of the program: what it registered, and the refusals that stopped it, if any did."""
 
     def __init__(self, monitor: Physical, refused: UnusableAnchorAddress | None) -> None:
         self.monitor = monitor
+        #: The refusal that surfaced first, which is the one the program raises.
         self.refused = refused
+        #: Every other refusal the run met, each failing a record's registration.
+        self.also_refused: list[UnusableAnchorAddress] = []
 
     def records(self) -> dict[str, dict[str, Any]]:
         return self.monitor.by_name(RECORD)
@@ -156,21 +159,32 @@ def non_addresses(run: Run) -> dict[str, object]:
 
 @pytest_asyncio.fixture(scope='module', loop_scope='module', params=[True, False], ids=['preview', 'update'])
 async def unapplied(request: pytest.FixtureRequest) -> Run:
-    """The program against a `physical` that has never been applied: its stack publishes nothing."""
+    """The program against a `physical` that has never been applied: its stack publishes nothing.
+
+    Every anchor reads an absent output then, and each refuses on its own:
+    `declare` catches the refusal that surfaces first, and the others are
+    received here, onto the run.
+    """
     preview: bool = request.param
-    return await declare({}, preview=preview)
+    run = await declare({}, preview=preview)
+    run.also_refused = await the_run_failed_with_each(UnusableAnchorAddress)
+    return run
 
 
-def test_an_unapplied_physical_stops_the_run_at_an_anchor_by_name(unapplied: Run) -> None:
-    """The refusal names an output an anchor reads and says it is absent.
+def test_an_unapplied_physical_stops_the_run_at_every_anchor_by_name(unapplied: Run) -> None:
+    """Each anchor refuses, naming the output it reads and saying it is absent.
 
-    Which of the three surfaces first is the order the reads resolve in, so
-    the case asks for one of them rather than for a particular one.
+    Which refusal surfaces first is the order the reads resolve in, so the
+    case asks for every anchor among all of them rather than for a particular
+    one first.
     """
     assert unapplied.refused is not None
-    message = str(unapplied.refused)
-    assert any(repr(output) in message for output in ANCHOR_OUTPUTS), message
-    assert 'absent' in message
+    named: set[str] = set()
+    for refusal in [unapplied.refused, *unapplied.also_refused]:
+        message = str(refusal)
+        assert 'absent' in message, message
+        named |= {output for output in ANCHOR_OUTPUTS if repr(output) in message}
+    assert named == set(ANCHOR_OUTPUTS)
 
 
 def test_no_record_is_declared_with_content_that_is_not_an_address(unapplied: Run) -> None:
