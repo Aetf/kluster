@@ -44,7 +44,7 @@ Column 5 names issues in the ops repository, where the drift is tracked.
 
 | Row | Domain | (1) Live source of truth today | (2) Stack · apply state | (3) Tracker until the flip · what "take" means | (4) Flip → retirement | (5) Known drift |
 |---|---|---|---|---|---|---|
-| R1 | `dns` · the Cloudflare zones: base records, mail with DKIM, the `*.zt` block, `legacy.py`'s application records, anchors, CAA, DNSSEC | DNSControl: Aetf/dns `dnsconfig.js`, whose `push.yml` is active and last applied on 2026-10-04 (G5). Its preview reports no correction on any zone at `e865032` (C1). The ruling that keeps it authoritative is `kluster-ops#177` | `dns` · **imported, never applied.** Its only update is a `resource-import` that succeeded on 2026-08-26, run locally (B2). It holds 139 resources (B1): 123 `DnsRecord`, 6 `Zone`, 6 `ManagedZone`, 2 `ZoneDnssec` (B3). The repository-against-live preview cannot run before `physical` is applied (note N1), and its refresh, run on 2026-10-08 after the state was rebound to the stack's own Cloudflare provider (`kluster-ops#511`), finds `dkim-k8s` in both mail zones behind live, which matches `DKIM_K8S` | Aetf/dns: edit `dnsconfig.js` and merge to `master`, and the merge applies (`push.yml`, no gate). Here: the same edit to `components/dns/`, same sitting, unapplied; the DKIM key change (Aetf/kluster#441) is the shape | `kluster-ops#75`'s `dns` first up, in the order of note N1, which names the records it deletes and the ruling that retires each → `kluster-ops#7` (the pointer commit, then the archive) | `kluster-ops#510`; `kluster-ops#478` |
+| R1 | `dns` · the Cloudflare zones: base records, mail with DKIM, the `*.zt` block, `legacy.py`'s application records, anchors, CAA, DNSSEC | DNSControl: Aetf/dns `dnsconfig.js`, whose `push.yml` is active and last applied on 2026-10-29, the two deletes in jiahui.id of `47ab103` (`kluster-ops#702`; G5). Before that it applied on 2026-10-04, when its preview reported no correction on any zone at `e865032` (C1). The ruling that keeps it authoritative is `kluster-ops#177` | `dns` · **imported, never applied.** Its only update is a `resource-import` that succeeded on 2026-08-26, run locally (B2). It holds 139 resources (B1): 123 `DnsRecord`, 6 `Zone`, 6 `ManagedZone`, 2 `ZoneDnssec` (B3). The repository-against-live preview cannot run before `physical` is applied (note N1), and its refresh, run on 2026-10-08 after the state was rebound to the stack's own Cloudflare provider (`kluster-ops#511`), finds `dkim-k8s` in both mail zones behind live, which matches `DKIM_K8S` | Aetf/dns: edit `dnsconfig.js` and merge to `master`, and the merge applies (`push.yml`, no gate). Here: the same edit to `components/dns/`, same sitting, unapplied; the DKIM key change (Aetf/kluster#441) is the shape | `kluster-ops#75`'s `dns` first up, in the order of note N1, which names the records it deletes and the ruling that retires each → `kluster-ops#7` (the pointer commit, then the archive) | `kluster-ops#510`; `kluster-ops#478` |
 | R2 | `dns` · the split-horizon answers on alice and bob | alice, by hand. adguardhome-sync, a homelab user unit that is running (H2), copies alice to bob. Both instances answer from `$dnsrewrite` user rules, 18 each, with the rewrite list the stack writes empty and switched off (U3) | `dns` · declares none: B3 lists no rewrite among the stack's types. Its first rows are Aetf/kluster#454, open and held | alice's UI, which the sync carries to bob, and the weekly backup pull, `gateway-backup-pull`, records in yadm's `~/.config/gw-backups` (physical/gateway.md §1.6). Here: every rule the instances answer from, declared in the `user_rules` list of each instance, a list one resource per instance owns whole (`kluster-ops#507`, way (b)), same sitting, unapplied. The `lan.ucw.phd` rules are declared too until their application migrates (rule 4), since the first apply of that list removes every rule it does not declare | Aetf/kluster#454, which declares the user-rules list, merged and applied after R1's flip; adguardhome-sync stopped before it (note N2) → its unit's removal (`kluster-ops#79`); the pull's AdGuard transfer, which keeps column 3's record until the flip (rule 4), is removed in the change that applies #454 | `kluster-ops#507`; `kluster-ops#482`; `kluster-ops#223`; `kluster-ops#143` |
 | R3 | `physical` · the cloud fleet in compartment `kluster-physical` (network, nodes, load balancer, addresses, volumes, guardrails) and the Talos day-1 chain | none: never applied | `physical` · **no history**: 0 resources, the stack initialized on 2026-08-26 and never updated (B1, B2). The console read of OCI (O1) was not taken | none | `physical`'s run with no targets in `kluster-ops#75` (physical/gateway.md §2.5) → none | none known |
 | R4 | `physical` · the homelab's libvirt objects: the pool on the `nodatacow` subvolume, and the worker's volume, seed and domain | none. The host preparation under them is aconfmgr's, and applied (physical/homelab-host.md, status) | as R3. The host holds one domain, `haos`, and one pool, `images` (H3): no worker and no cluster pool | none for these. The host preparation stays aconfmgr's for good, and a pool defined there would fail the first apply (physical/homelab-host.md §4) | the same run as R3, then the host-side `truncate` and `virsh blockresize` (physical/homelab-host.md §1) → none | none known |
@@ -72,7 +72,9 @@ pointer commit. **Aetf/dns takes no push from 2026-10-08 on** (operator
 ruling, `kluster-ops#505`): a push to its `master` runs DNSControl over
 the zones, and DNSControl removes what its file does not declare, so
 one landing between the `up` and the retirement would undo the `up`.
-`push.yml` stays enabled as a workflow and is not run.
+`push.yml` stays enabled as a workflow and is not run. The one push
+since the ruling is the operator's own, `47ab103` on 2026-10-29
+(`kluster-ops#702`).
 
 The preview is reconciled line by line, as
 `kluster-ops#75` asks: no replace or delete from the type move
@@ -89,10 +91,11 @@ until `physical` publishes the anchors' addresses (declarative/dns.md
 **The first `up`'s expected deletes are the `DnsRecord`s in the `dns`
 state that the program does not declare.** The import took the live
 records, so the state holds what DNSControl published, and what of that
-the declaration leaves out is deleted at Cloudflare by the first `up`
-that completes. Each falls in one of three classes, and each class has
-its ruling. Today's members are C1's live set, Aetf/dns at `e865032`,
-less the declaration, listed by zone and label:
+the declaration leaves out, and Cloudflare still holds, is deleted there
+by the first `up` that completes. Each falls in one of the classes
+below, and each class has its ruling. Today's members are C1's live
+set, Aetf/dns at `e865032`, less the declaration, listed by zone and
+label:
 
 -   **Every record of a parked zone but its apex and `www`**, the copies
     DNSControl published there: rfc-003 §5.3 and §5.4. In each of
@@ -113,6 +116,16 @@ less the declaration, listed by zone and label:
     `conventions.overlay.ROSTER` entry**: the overlay block publishes one
     name per roster member and nothing else (`kluster-ops#510`, ruled on
     2026-10-08). In `unlimited-code.works`: `Aetf-Laptop.zt`.
+-   **A record Aetf/dns removed after `e865032`, already gone live**,
+    in the same sitting as the declaration, as column 3 of R1 lands a
+    change: its push deleted it. In `jiahui.id`: the apex `A` and the
+    `www` `A`, which addressed a Google Site that no longer exists
+    (Aetf/dns `47ab103`, `kluster-ops#702`). No `up` deletes one: the
+    pinned provider's delete reports Cloudflare's not-found answer as a
+    failure, and only its read drops a record Cloudflare no longer holds
+    from state. A refresh of the two, run before B6
+    (physical/gateway-cutover.md §8.2), takes them out of state, and
+    neither B6 nor the preview prints them after it.
 
 **The website co-host, `unlimitedcodeworks.xyz`, has none**
 (`kluster-ops#202`): the overlay block and the legacy anchor rfc-003
@@ -123,7 +136,8 @@ Run before the `up`, B6 prints every record in the state that the
 declaration lacks. Its lines and the preview's `-` rows are the same
 set, and each belongs to a class above. A line B6 prints that fits no
 class, or a member listed here that B6 does not print, is a finding to
-settle before the `up`, not an expected delete.
+settle before the `up`, not an expected delete, but for the members
+of the class already gone live once that refresh has run.
 
 **N2. adguardhome-sync may stop at any time** (operator ruling,
 `kluster-ops#505`). It carries more than the rules written by hand, which
@@ -184,8 +198,8 @@ by stack, on something other than the merge:
     the first copy, and the commit of both stack files, is the first
     step of M2 (`kluster-ops#77`, operations.md §2.5), since a merge
     carrying it is an `up` of both stacks with no reviewer. After that,
-    `apps`' rows flip by merge (R12), so a component for an application
-    that has not migrated does not merge.
+    the rows of `apps` flip by merge (R12), so a component for an
+    application that has not migrated does not merge.
 -   **`state-backend` and `github`:** operator stacks, which no job runs
     (framework/pulumi.md §3.3).
 

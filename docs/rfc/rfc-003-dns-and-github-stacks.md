@@ -58,6 +58,10 @@
     and that import is still owed (`kluster-ops#208`);
     framework/github.md §3.1 carries the command, the parent URN it has
     to name, and what its preview should and should not contain.
+    **§4.6's second clause went with its one instance**: jiahui.id's apex
+    and `www` were dropped with the site they addressed
+    (`kluster-ops#702`), so declarative/dns.md §2 names the apex clause
+    alone.
 *   **Created:** 2026-08-29
 *   **Updated:** 2026-09-03, revised under review. §4 inverts the record
     tables: the unit is a block of records naming the zone set it appears in,
