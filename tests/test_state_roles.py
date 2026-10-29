@@ -3,11 +3,11 @@
 The rendered Ignition's own files -- `pg_hba.conf`, the init script, the TLS
 material -- go into the pinned image under the Postgres unit's own `podman
 run` arguments. What changes is only what has to: the address the server
-certificate names, the port it is published on and the rootless network it is
-published through, the delivered directories,
-which are copied into the container rather than mounted from a host that does
-not have them, and a data directory on a tmpfs, which starts empty and goes
-away with the container. So what is exercised is the image's own
+certificate names, the port it is published on and the network it is reached
+through, which is a second container's (`_network`), the delivered
+directories, which are copied into the container rather than mounted from a
+host that does not have them, and a data directory on a tmpfs, which starts
+empty and goes away with the container. So what is exercised is the image's own
 initialization mechanism (`/docker-entrypoint-initdb.d`), the server's own
 authentication, and real clients: `pulumi` from this workstation, and the
 Postgres client tools from the same image, which are the server's own
@@ -40,6 +40,7 @@ each move of the pin -- and is skipped elsewhere with the reason named.
 from __future__ import annotations
 
 import base64
+import errno
 import gzip
 import io
 import json
@@ -47,6 +48,7 @@ import os
 import re
 import shlex
 import shutil
+import socket
 import subprocess as sp
 import tarfile
 import uuid
@@ -190,7 +192,7 @@ def _archive(files: list[File]) -> bytes:
     containers/buildah#6573.** podman's copier stops reading at those blocks
     and exits, and podman's write of the padding into its pipe then fails
     the copy with `passing bulk input to subprocess: write |1: broken pipe`
-    whenever the copier has exited first. On CI's podman 4.9 a stream of one
+    whenever the copier has exited first. On podman 4.9 a stream of one
     small file, which is mostly padding, fails that way reliably. Its
     boundary is the slice on the return line, and
     `test_an_archive_ends_at_its_end_of_archive_blocks` holds it; both go
@@ -267,12 +269,13 @@ def _unit_container(ignition: dict[str, Any]) -> tuple[list[str], list[File]]:
     """The Postgres unit's `podman run` as a `podman create`, and what to copy in.
 
     Every argument is the unit's except these: `--replace` and the name,
-    which the caller gives; the published port, which becomes a free one on
-    the loopback interface, published through pasta (`_published`); each volume a delivered file sits under, which
-    becomes a copy of those files at the path the volume mounts them on; and
-    the one volume nothing is delivered into, which is the box's own state and
-    starts here empty, as the tmpfs `_bounded` mounts on the path the image's
-    own `VOLUME` names. `_bounded`'s arguments are added.
+    which the caller gives; the published port, which the box does without,
+    since it is reached through the network the caller joins it to
+    (`_network`); each volume a delivered file sits under, which becomes a
+    copy of those files at the path the volume mounts them on; and the one
+    volume nothing is delivered into, which is the box's own state and starts
+    here empty, as the tmpfs `_bounded` mounts on the path the image's own
+    `VOLUME` names. `_bounded`'s arguments are added.
     """
     argv = _unit_command(ignition)
     assert argv[:2] == ['/usr/bin/podman', 'run'], argv
@@ -288,7 +291,6 @@ def _unit_container(ignition: dict[str, Any]) -> tuple[list[str], list[File]]:
                 _ = next(rest)
             case '--publish':
                 _ = next(rest)
-                created += _published()
             case '--volume':
                 host, inside, *_options = next(rest).split(':')
                 under = [file for file in delivered if file.path.is_relative_to(host)]
@@ -360,8 +362,15 @@ def _remove(name: str) -> None:
     the image's `VOLUME`s would add if `IMAGE_VOLUMES` fell behind them: a
     container that `podman rm` removes keeps its anonymous volumes without
     it, `--rm` notwithstanding.
+
+    A refusal fails the caller: a container still there stays until
+    `CONTAINER_TIMEOUT`, and a network container keeps its host port until
+    then.
+    A container that is already gone is no refusal, since `--force` passes
+    over a name podman does not know -- one that `--rm` removed when it
+    ended, or one whose `create` never ran.
     """
-    _ = process_sessions.run(['podman', 'rm', '--force', '--volumes', '--time', '0', name], timeout=COMMAND_TIMEOUT)
+    _ = _podman('rm', '--force', '--volumes', '--time', '0', name)
 
 
 def _named(created: list[str], name: str) -> list[str]:
@@ -369,8 +378,13 @@ def _named(created: list[str], name: str) -> list[str]:
     return [*created[:1], '--name', name, *created[1:]]
 
 
+def _joined(created: list[str], netns: str) -> list[str]:
+    """A `podman create` built without a network, given the network namespace at `netns`."""
+    return [*created[:1], '--network', f'ns:{netns}', *created[1:]]
+
+
 def _published() -> list[str]:
-    """The arguments that publish a box's port on a free port of `ADDRESS`, through pasta.
+    """The arguments that publish the box port on a free port of `ADDRESS`, through pasta.
 
     **`--network pasta` is a workaround for podman's rootless default before
     5.0, slirp4netns**, whose port forwarder stays in the session of the
@@ -385,6 +399,47 @@ def _published() -> list[str]:
     return ['--network', 'pasta', '--publish', f'{ADDRESS}::{settings.PORT}']
 
 
+def _network_container(name: str) -> list[str]:
+    """The `podman run` of the container whose network a box joins, with the box port published."""
+    return _bounded('run', '--detach', *_published(), '--name', name, '--entrypoint', 'sleep', IMAGE, 'infinity')
+
+
+def _network(name: str) -> tuple[str, int]:
+    """Start a box's network as the container `name`: the namespace's path, and the host port it is published on.
+
+    **podman chooses a free host port at `create` and binds it only when it
+    sets up the network, at `init` or `start`.** Its `getRandomHostPort`
+    (`pkg/specgen/generate/ports.go`) takes the port from
+    `utils.GetRandomPort`, which listens on port 0 and closes the listener
+    straight away, and the choice is written into the container's
+    configuration; pasta binds the configuration's ports when the network
+    comes up (`libpod/networking_pasta_linux.go`). A box is created, then
+    filled with `podman cp`, then started, and the port its `create` chose
+    would be free for anything else on the machine to take until the
+    start -- a run beside this one included, whose podman can be handed the
+    same port -- and then pasta could not bind it and the start would fail.
+
+    So the port is published by a container of its own, which `podman run`
+    creates and starts in one command, and a box joins that container's
+    network namespace by its path. The port is bound before this returns
+    it, so no box is created on a port nothing holds. podman still chooses
+    before pasta binds inside that one command, so a port taken there fails
+    this `podman run` with pasta's message: a window of podman's own, which
+    no step of a box widens.
+
+    The path rather than `--network container:<name>`, because the second
+    makes the box a dependent of this container, and podman removes no
+    container another depends on, whether `--rm` or `podman rm` asks: this
+    one, which starts first and so ends first, would outlive its own `--rm`,
+    and a teardown that removes it first would be refused.
+    `test_a_network_is_removed_while_a_box_joined_to_it_exists` holds it.
+    """
+    _ = _podman(*_network_container(name))
+    netns = _podman('container', 'inspect', '--format', '{{.NetworkSettings.SandboxKey}}', name).decode().strip()
+    published = _podman('port', name, f'{settings.PORT}/tcp').decode().split()[0]
+    return netns, int(published.rsplit(':', 1)[1])
+
+
 def _client(name: str) -> list[str]:
     """The `podman run` of the container that serves the image's client tools."""
     return _bounded('run', '--detach', '--network', 'host', '--name', name, '--entrypoint', 'sleep', IMAGE, 'infinity')
@@ -394,7 +449,6 @@ def _superusers() -> list[str]:
     """The `podman create` of a box whose image superuser is `ci`, which is a client role's name."""
     return _bounded(
         'create',
-        *_published(),
         *('--env', f'POSTGRES_DB={settings.DATABASE}'),
         *('--env', f'POSTGRES_USER={settings.CI_ROLE}'),
         *('--env', 'POSTGRES_HOST_AUTH_METHOD=trust'),
@@ -407,23 +461,29 @@ Start = Callable[[list[str], list[File], str], Box]
 
 @pytest.fixture(scope='module')
 def start() -> Iterator[Start]:
-    """Create, fill and start containers, and remove every one when the module is done."""
+    """Create, fill and start containers, each in a network of its own, and remove every one when the module is done."""
     names: list[str] = []
 
     def run(created: list[str], copies: list[File], superuser: str) -> Box:
         name = f'kluster-test-pgstate-{uuid.uuid4().hex[:12]}'
-        names.append(name)
-        _ = _podman(*_named(created, name))
+        network = f'{name}-network'
+        names.extend((network, name))
+        netns, port = _network(network)
+        _ = _podman(*_named(_joined(created, netns), name))
         if copies:
             _ = _podman('cp', '--archive=false', '-', f'{name}:/', stdin=_archive(copies))
         _ = _podman('start', name)
         _await_ready(name)
-        published = _podman('port', name, f'{settings.PORT}/tcp').decode().split()[0]
-        return Box(name=name, port=int(published.rsplit(':', 1)[1]), superuser=superuser)
+        return Box(name=name, port=port, superuser=superuser)
 
     yield run
+    refused: list[str] = []
     for name in names:
-        _remove(name)
+        try:
+            _remove(name)
+        except AssertionError as refusal:
+            refused.append(f'{name}: {refusal}')
+    assert not refused, refused
 
 
 @pytest.fixture(scope='module')
@@ -542,7 +602,7 @@ def _stack_init(target: state.Connection, project: Path, stack: str, env: dict[s
     )
 
 
-@pytest.mark.parametrize('container', ['appliance', 'superusers', 'client'])
+@pytest.mark.parametrize('container', ['appliance', 'superusers', 'network', 'client'])
 def test_every_container_ends_by_itself_and_mounts_no_volume(ignition: dict[str, Any], container: str) -> None:
     """Each container these cases start is bounded, removed when it ends, labelled, and given no volume.
 
@@ -554,6 +614,7 @@ def test_every_container_ends_by_itself_and_mounts_no_volume(ignition: dict[str,
     argv = {
         'appliance': lambda: _named(_unit_container(ignition)[0], name),
         'superusers': lambda: _named(_superusers(), name),
+        'network': lambda: _network_container(name),
         'client': lambda: _client(name),
     }[container]()
     try:
@@ -570,6 +631,43 @@ def test_every_container_ends_by_itself_and_mounts_no_volume(ignition: dict[str,
     assert made['Config']['Timeout'] == CONTAINER_TIMEOUT
     assert made['HostConfig']['AutoRemove'] is True
     assert LABEL in {f'{key}={value}' for key, value in made['Config']['Labels'].items()}
+
+
+def test_the_port_a_box_is_reached_on_is_bound_before_the_box_is_created() -> None:
+    """The host port `_network` returns is already taken when it returns.
+
+    A box is created, filled and started after this, and nothing outside
+    can take its port in between: a bind of it from here is refused. A port
+    a `podman create` chose is not taken yet, so the same bind succeeds,
+    and the `podman start` after it fails with pasta's `Address already in
+    use`.
+    """
+    name = f'kluster-test-pgnetwork-{uuid.uuid4().hex[:12]}'
+    try:
+        _, port = _network(name)
+        with socket.socket() as taker, pytest.raises(OSError) as refused:
+            taker.bind((ADDRESS, port))
+    finally:
+        _remove(name)
+    assert refused.value.errno == errno.EADDRINUSE
+
+
+def test_a_network_is_removed_while_a_box_joined_to_it_exists() -> None:
+    """A box records no dependency on the container whose network it joins, so that container's `--rm` stands.
+
+    podman removes no container another depends on, whether `--rm` or
+    `podman rm` asks. The box is only created, which is where podman records
+    a dependency.
+    """
+    network = f'kluster-test-pgnetwork-{uuid.uuid4().hex[:12]}'
+    box = f'{network}-box'
+    try:
+        netns, _ = _network(network)
+        _ = _podman(*_named(_joined(_superusers(), netns), box))
+        _remove(network)
+    finally:
+        _remove(box)
+        _remove(network)
 
 
 def test_an_archive_ends_at_its_end_of_archive_blocks() -> None:
