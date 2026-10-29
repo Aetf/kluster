@@ -140,6 +140,15 @@ STACK = 'roles'
 #: The status coreutils `timeout` exits with when its command ran out of time.
 TIMED_OUT = 124
 
+#: How many zero bytes the tripwire on `_archive`'s workaround puts after its
+#: probe's end-of-archive blocks: sixteen times what the pipe between podman
+#: and its copier holds, 64 KiB, the kernel's default, which Go's `os.Pipe`
+#: keeps. So a copier that stops at the blocks fails that copy whatever the
+#: timing. The padding `tarfile` writes, under one 10 KiB record, fits a pipe
+#: of that size, and fails the copy only when the copier wins a race or the
+#: pipe is smaller than it, as the 8 KiB pipes of containers/buildah#6573 were.
+PAST_THE_END = 1 << 20
+
 
 pytestmark = [
     pytest.mark.skipif(shutil.which('butane') is None, reason='butane is not on PATH (mise x -- ...)'),
@@ -194,10 +203,12 @@ def _archive(files: list[File]) -> bytes:
     the copy with `passing bulk input to subprocess: write |1: broken pipe`
     whenever the copier has exited first. On podman 4.9 a stream of one
     small file, which is mostly padding, fails that way reliably. Its
-    boundary is the slice on the return line, and
-    `test_an_archive_ends_at_its_end_of_archive_blocks` holds it; both go
-    once every podman that runs this module carries buildah 1.44 or later,
-    whose copier drains the stream (containers/buildah#6678).
+    boundary is the slice on the return line, which
+    `test_an_archive_ends_at_its_end_of_archive_blocks` holds, and the
+    tripwire `test_remove_the_archive_workaround_once_the_runners_copier_drains_its_stream`
+    with its `PAST_THE_END`. All of it goes once the podman on CI's runner
+    carries a copier that drains the stream, as buildah's does from 1.44
+    (containers/buildah#6678): the tripwire fails there then.
     """
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode='w') as tar:
@@ -675,8 +686,10 @@ def test_an_archive_ends_at_its_end_of_archive_blocks() -> None:
 
     The workaround's own contract (`_archive`): what podman's copier reads up
     to is the whole stream, so podman has nothing left to write into a pipe
-    the copier has stopped reading. The race the workaround avoids cannot be
-    held still; this is what the workaround promises, read by `tarfile`'s
+    the copier has stopped reading. The race the workaround avoids is not
+    held still here: only a stream with more past its blocks than a pipe
+    holds makes the defect show every time, and that is the tripwire's
+    probe. This is what the workaround promises, read by `tarfile`'s
     reader, which finds the blocks on its own.
     """
     files = [
@@ -694,6 +707,61 @@ def test_an_archive_ends_at_its_end_of_archive_blocks() -> None:
         end = tar.offset
     assert read == {str(file.path.relative_to('/')): (file.mode, file.uid, file.gid, file.content) for file in files}
     assert stream[end:] == bytes(2 * tarfile.BLOCKSIZE)
+
+
+def test_remove_the_archive_workaround_once_the_runners_copier_drains_its_stream() -> None:
+    """The tripwire on `_archive`'s workaround: red on CI's runner once its podman reads past the end-of-archive blocks.
+
+    The probe is `_archive`'s stream with `PAST_THE_END` zero bytes after
+    its blocks, copied into a box that is only created. A copier that stops
+    at the blocks (containers/buildah#6573) takes the archive up to them
+    whole and fails the copy every time; one that drains the stream takes
+    all of it and the copy succeeds. The probe file is read back either
+    way. What the probe finds says whether this host's podman needs the
+    workaround, and the outcome says which it found:
+
+    -   **It stops at the blocks: the case passes.** The workaround is
+        needed here.
+    -   **It drains the stream, on CI's runner: the case fails**, naming the
+        layer to remove. The runner's run is the verdict, being the podman
+        every change runs this module on.
+    -   **It drains the stream anywhere else: the case skips**, naming what
+        it found. A workstation's run sees only its own podman, so its
+        finding cannot clear the workaround for the runner.
+
+    A copy that fails before the archive is in -- the probe file is not
+    read back whole -- fails the case, since that failure says nothing
+    about the copier. podman's message does not tell the two apart: any
+    copy that ends before podman has passed on its input prints
+    `io: read/write on closed pipe`, and a remote client sees only that and
+    the service's `500`.
+    """
+    name = f'kluster-test-drain-{uuid.uuid4().hex[:12]}'
+    path, content = PurePosixPath('/kluster-drain-probe'), b'probe\n'
+    probe = _archive([File(path, content)]) + bytes(PAST_THE_END)
+    try:
+        _ = _podman(*_named(_superusers(), name))
+        copied = process_sessions.run(
+            ['podman', 'cp', '--archive=false', '-', f'{name}:/'], input=probe, timeout=COMMAND_TIMEOUT
+        )
+        read = process_sessions.run(['podman', 'cp', f'{name}:{path}', '-'], timeout=COMMAND_TIMEOUT)
+    finally:
+        _remove(name)
+
+    # Whichever way the copy ended, the archive before the blocks went in
+    # whole; a copy that failed short of it failed on something else.
+    assert read.returncode == 0, (copied.stderr.decode(), read.stderr.decode())
+    with tarfile.open(fileobj=io.BytesIO(read.stdout), mode='r:') as tar:
+        extracted = tar.extractfile(path.name)
+        assert extracted is not None and extracted.read() == content, copied.stderr.decode()
+    if copied.returncode != 0:
+        return
+    buildah = _podman('info', '--format', '{{.Host.BuildahVersion}}').decode().strip()
+    found = f'podman cp read past the end-of-archive blocks on buildah {buildah}'
+    # GitHub sets `GITHUB_ACTIONS` on every job's runner.
+    if os.environ.get('GITHUB_ACTIONS') != 'true':
+        pytest.skip(f"{found}: the `_archive` workaround is unneeded here, and CI's runner decides its removal")
+    pytest.fail(f"{found} on CI's runner: remove the `_archive` workaround (containers/buildah#6573) and this case")
 
 
 def test_a_box_silent_before_it_serves_fails_the_wait_naming_the_follower() -> None:
