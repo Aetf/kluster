@@ -15,7 +15,7 @@ from typing import Any, assert_type, cast
 import pulumi
 import pytest
 import pytest_asyncio
-from mock_monitor import Recorder, run_with
+from mock_monitor import Recorder, run_with, the_run_failed_with
 from pulumi.output import Unknown
 
 import putils
@@ -253,8 +253,10 @@ async def test_a_failure_inside_an_async_input_fails_its_output(mocks: Engine) -
         raise RuntimeError('boom in async input')
 
     out = async_output(broken)
-    with pytest.raises(RuntimeError, match='boom in async input'):
+    with pytest.raises(RuntimeError, match='boom in async input') as failed:
         await out.future()
+    # And the run fails on it, as a deployment would at its end.
+    assert await the_run_failed_with(RuntimeError) is failed.value
 
 
 @pytest.mark.asyncio
@@ -325,8 +327,10 @@ async def test_an_upstream_failure_fails_the_input_rather_than_hanging_it(mocks:
     if not settled.done():
         _ = settled.cancel()
         pytest.fail(f'the input did not settle after {IDLE_TURNS} idle iterations of the event loop')
-    with pytest.raises(RuntimeError, match='upstream boom'):
+    with pytest.raises(RuntimeError, match='upstream boom') as failed:
         await settled
+    # And the run fails on it, as a deployment would at its end.
+    assert await the_run_failed_with(RuntimeError) is failed.value
 
 
 @pytest.mark.asyncio

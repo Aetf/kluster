@@ -27,6 +27,7 @@ from mock_monitor import (
     decline_every_invoke,
     root_of,
     run_with,
+    the_run_failed_with,
     the_run_failed_with_each,
 )
 
@@ -518,6 +519,8 @@ async def test_a_family_the_provider_never_handed_out_is_refused(monitor: Oci) -
         _ = await balancer.address_v6.future()
     # It names the family of the address this balancer was never handed.
     assert FAMILY_SEPARATOR[refused.value.family] in LB_ADDRESS_V6
+    # And the run fails on it, as a deployment would at its end.
+    assert await the_run_failed_with(NoPublicAddress) is refused.value
 
 
 #: The types everything declared per forwarded port is registered under.

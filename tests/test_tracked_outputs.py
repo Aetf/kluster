@@ -1,4 +1,4 @@
-"""The tripwire on `conftest.mocked_runs_release_their_tasks`, the suite's one workaround for the Pulumi SDK.
+"""The tripwire on `conftest.mocked_runs_release_their_tasks`, like `mock_monitor._ReadFailures` a workaround for the SDK.
 
 The SDK keeps a cancelled output's task in its set of tracked outputs, and the
 set outlives the case whose loop the task belonged to. The workaround drops

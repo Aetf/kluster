@@ -29,8 +29,9 @@ it rather than whichever case happens to run after it.
 
 Then a watch on the mocked runs a case declares on: the `pytest_runtest_setup`
 hook marks where the case begins on each, and the `pytest_runtest_call` hook
-fails a case whose run met a failure in an RPC since then -- a registration
-refused, a duplicate URN among them -- that nothing the case awaited received
+fails a case whose run met a failure since then -- in an RPC, a registration
+refused or a duplicate URN among them, or in an output nothing declared reads
+-- that nothing the case awaited received
 (`mock_monitor.fail_on_unreceived_failures`).
 
 The last is a workaround for the Pulumi SDK, kept apart so that it can be
@@ -388,17 +389,19 @@ def pytest_runtest_setup() -> None:
 
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_call() -> Generator[None, object, object]:
-    """Fail a case whose mocked run met a failure in an RPC that the case never received.
+    """Fail a case whose mocked run met a failure in an RPC or an output that the case never received.
 
     A mocked run carries each registration out in a task of its own, and a
     failure there -- the recorder's refusal of a duplicate URN, a component's
     refusal reaching a resource's inputs -- reaches the case through the
     refused resource's outputs, which most cases never read, or through a
-    wait for the run's RPCs, which most never write; the case would pass with
-    the failure printed beside it. `mock_monitor.fail_on_unreceived_failures`
-    is that wait, for every RPC begun since the case's mark on every run
-    still open: the runs the case's setup or body started, and a wider
-    fixture's -- a module's shared run -- at each case that declares on it.
+    wait for the run's RPCs and outputs, which most never write; the case
+    would pass with the failure printed beside it. So would one in an output
+    nothing declared reads, which no RPC carries at all.
+    `mock_monitor.fail_on_unreceived_failures` is that wait, for every RPC
+    begun and every output tracked since the case's mark on every run still
+    open: the runs the case's setup or body started, and a wider fixture's
+    -- a module's shared run -- at each case that declares on it.
 
     Here rather than in a fixture because of when it has to run: after the
     case has returned, so that its loop is idle and can finish what is still
@@ -431,14 +434,16 @@ def mocked_runs_release_their_tasks() -> Iterator[None]:
     set for the whole process, so every case's leftovers stay reachable from
     it for the rest of the run, and `asyncio.all_tasks()` walks them all on
     every call. A task of a closed loop can never be awaited again, so
-    dropping it is invisible to the SDK; a task of a loop still open, a
-    module's shared run included, is left where it is.
+    dropping it is invisible to the SDK, and to the judgment of a case's
+    failures, which reads the set for the outputs of loops still open
+    (`mock_monitor._tracked`); a task of a loop still open, a module's
+    shared run included, is left where it is.
 
     The layer's boundary is this fixture and `release_closed_loops_tasks`;
-    nothing else in the suite knows the set exists. It comes out whole --
-    both, and the import of `SETTINGS` -- when a locked `pulumi` stops
-    leaving them there, which `tests/test_tracked_outputs.py` shows: its child
-    run passes with this fixture deleted.
+    nothing else in the suite takes anything out of the set. It comes out
+    whole -- both, and the import of `SETTINGS` -- when a locked `pulumi`
+    stops leaving them there, which `tests/test_tracked_outputs.py` shows:
+    its child run passes with this fixture deleted.
     """
     yield
     # Both are declared through the SDK's own `contextproperty` decorator,
