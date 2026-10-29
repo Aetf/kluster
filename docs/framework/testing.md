@@ -42,7 +42,9 @@ the summary `pytest` gives by default, failures and errors, with every
 skipped case and its reason added. `tests/test_state_roles.py` skips
 where the Postgres image it runs is not local, and runs on CI as it does
 on a workstation, because `checks` pulls that image before the tests
-([ci.md](ci.md) §3).
+([ci.md](ci.md) §3), apart from the tripwire on its `_archive`
+workaround, whose verdict is the runner's: where podman's copier drains
+its stream, that case fails on CI and skips anywhere else.
 
 A coroutine that never resolves its futures hangs forever instead of failing,
 and the run is bounded twice against that, at two scales:
