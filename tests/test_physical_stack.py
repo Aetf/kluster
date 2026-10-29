@@ -312,16 +312,6 @@ def test_the_workers_disk_waits_on_what_writes_its_source(ran: Run) -> None:
     assert writers, f'{disk} waits on {waited_on} for its source {source}, and none of them declares that path'
 
 
-class _Callbacks:
-    """The callback server a hook registers with, which the mock monitor has none of. Keeps each hook by name."""
-
-    def __init__(self) -> None:
-        self.hooks: dict[str, pulumi.ResourceHook] = {}
-
-    def register_resource_hook(self, hook: pulumi.ResourceHook) -> None:
-        self.hooks[hook.name] = hook
-
-
 async def _ran_before_delete(hooks: list[pulumi.ResourceHook], args: pulumi.ResourceHookArgs) -> None:
     """Call each hook as the engine calls a resource's `before_delete` hooks: in order, awaiting each."""
     for hook in hooks:
@@ -342,14 +332,12 @@ async def test_the_workers_disk_is_not_deleted_while_no_file_is_at_its_source(
     disk ahead of a create that cannot open its file.
     """
     monkeypatch.setattr(talos_image, 'IMAGE_CACHE', tmp_path / 'cache')
-    callbacks = _Callbacks()
-    monkeypatch.setattr(pulumi.runtime.settings.SETTINGS, 'callbacks', callbacks)
     async with declaring():
         await physical.main()
     disk = f'{conventions.CLUSTER_NAME}-{conventions.HOMELAB_NODE}-disk'
     volume = 'libvirt:index/volume:Volume'
     source = Path(setup.inputs_of(disk, volume)['source'])
-    run_before_delete = [callbacks.hooks[name] for name in setup.options_of(disk, volume).hooks.before_delete]
+    run_before_delete = [setup.hooks[name] for name in setup.options_of(disk, volume).hooks.before_delete]
     args = pulumi.ResourceHookArgs(
         urn=f'urn:pulumi:physical::kluster::{volume}::{disk}', id=disk, name=disk, type=volume
     )

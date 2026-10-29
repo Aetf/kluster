@@ -605,9 +605,31 @@ fails once the SDK closes those loops or gives the threads none. That file's
 child run, whose cases each collect what the cases before them left, warns of
 no unclosed loop.
 
-The patch belongs in one place because it does not compose: a second module
-capturing "the original" at its own import time would chain onto this one, and
-which chained onto which would be decided by collection order.
+**A mocked run starts no callback server.** A real program registers a
+resource hook with a gRPC server of the SDK's own, which the engine calls back
+into when a step runs the hook. The SDK starts that server the first time a
+program registers one, and stops it at the end of the program
+(`run_pulumi_func` in `pulumi/runtime/stack.py`, which the SDK's own
+`pulumi.runtime.test` decorator ends in too). A run here is declared through
+`declaring` and never reaches that end, so each server a run started would be
+left running, and a worker that exits with servers running prints
+`Error in sys.excepthook` as it goes. The mock monitor calls no hook, so such
+a server serves no one. `run_with` hands every run `mock_monitor._Callbacks`
+instead, which keeps each hook by name on the run's `Recorder`
+(`Recorder.hooks`). A case calls a hook from there as the engine would, by
+the names the registration request binds, which `Recorder.options_of` returns.
+That is the one mechanism, and a suite installs no stand-in of its own. It is
+the harness's design rather than a workaround: the SDK's mocks start and stop
+the server as a real program does, and it is this harness that never reaches
+a program's end. It serves resource hooks alone, so a program that registers a
+transform or an error hook fails with an `AttributeError` naming the
+registration. `tests/test_mock_monitor_callbacks.py` holds that a run binding
+a hook starts no server and keeps the hook.
+
+The `RegisterResource` patch belongs in one place because it does not
+compose: a second module capturing "the original" at its own import time would
+chain onto this one, and which chained onto which would be decided by
+collection order.
 
 ### 3.2 Asserting Dependencies via URNs
 
@@ -1232,8 +1254,10 @@ at its source, the disk is kept by the guard's refusal once the seed and the
 domain are deleted, and a plain `up` creates those two again on it; replaced
 with the image whose `path` it is created from, it is deleted only after the
 image's replacement has put the file in place, fetched where it was gone and
-reused where it was not, and the file outlives the image's original; and a
-disk whose state records no guard is guarded once a plain `up` has recorded
+reused where it was not, and the file outlives the image's original; after
+the image's path has moved, the guard reads the path the run declares rather
+than the one the disk's state recorded, so the disk replaced alone is created
+from the new file; and a disk whose state records no guard is guarded once a plain `up` has recorded
 it.
 
 It runs in the suite, under the bounds every real-engine case carries
