@@ -583,6 +583,28 @@ a workaround for the SDK, kept apart to be deleted whole, and its tripwire in
 `tests/test_mock_monitor_failures.py` fails once the SDK's output awaits every
 future it was given. That file's child run logs nothing as never retrieved.
 
+**A loop the SDK's mocks gave a thread is closed once the thread has
+finished.** Each method of the mock monitor that reaches `_sync_await` —
+`Invoke`, `ReadResource` and `RegisterResource` in `pulumi/runtime/mocks.py`
+today — runs on an executor thread of the run's loop and first calls the
+SDK's `_ensure_event_loop` (`pulumi/runtime/sync_await.py`), which gives a
+thread with no loop one of its own and never closes it. When the executor
+shuts down, its threads exit and their loops are left to the garbage
+collector, which finalizes them in whichever case is running then; finalizing
+one whose self-pipe socket was finalized first raises `Invalid file
+descriptor: -1` from `selectors`, reported as a
+`PytestUnraisableExceptionWarning` in that case. `conftest` keeps each loop the
+mocks hand a thread, and once a case's teardown is over closes every one whose
+thread has finished, so no loop of a finished thread reaches the collector
+unclosed. A thread still running at the last teardown keeps its loop until the
+interpreter exits. A loop whose thread is still running, an executor thread
+of a module's shared loop between its cases, stays open until the first
+teardown after its thread has finished. It is a workaround for the SDK, kept
+apart to be deleted whole, and its tripwire in `tests/test_sdk_thread_loops.py`
+fails once the SDK closes those loops or gives the threads none. That file's
+child run, whose cases each collect what the cases before them left, warns of
+no unclosed loop.
+
 The patch belongs in one place because it does not compose: a second module
 capturing "the original" at its own import time would chain onto this one, and
 which chained onto which would be decided by collection order.
