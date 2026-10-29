@@ -386,15 +386,15 @@ def _joined(created: list[str], netns: str) -> list[str]:
 def _published() -> list[str]:
     """The arguments that publish the box port on a free port of `ADDRESS`, through pasta.
 
-    **`--network pasta` is a workaround for podman's rootless default before
-    5.0, slirp4netns**, whose port forwarder stays in the session of the
-    `podman` command that started the container: `process_sessions` ends that
-    session with the command, taking the forwarder with it, and the published
-    port then refuses connections. pasta leaves nothing in that session. On
-    a podman whose rootless network is pasta already, the argument changes
-    nothing; on one without pasta installed, the `podman` command fails
-    naming it. The argument goes once every podman that runs this module
-    defaults to pasta, as podman does from 5.0 on.
+    **The module needs pasta, so it names it** rather than take the network
+    a container gets without `--network`, which is the host's
+    `containers.conf` to decide. `process_sessions` ends the session of
+    each `podman` command with the command, and a port forwarder left in
+    that session goes with it, after which the published port refuses
+    connections: slirp4netns leaves its forwarder there, and pasta leaves
+    the session. Where the host's default is pasta the argument changes
+    nothing, and a podman without pasta fails the command naming it rather
+    than a case failing later on a refused connection.
     """
     return ['--network', 'pasta', '--publish', f'{ADDRESS}::{settings.PORT}']
 

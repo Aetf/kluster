@@ -271,9 +271,8 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     script to a real server. A pull that fails fails the step rather
     than leaving the module to skip, since a green run that skipped it
     would read as one that proved it. The step's log names the runner's
-    podman, the buildah it carries and its rootless network, which are
-    what the module's own podman workarounds name as the conditions for
-    removing them.
+    podman and the buildah it carries, which are what the module's own
+    podman workarounds name as the conditions for removing them.
 
 -   **Merge side runs `up` only — except `physical`, which gets a plan
     job** (2026-08-24, superseding the pure-up shape): for
