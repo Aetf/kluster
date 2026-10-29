@@ -162,9 +162,6 @@ class Appliance(Recorder):
     def __init__(self, *, address: str = settings.ADDRESS) -> None:
         super().__init__()
         self.address = address
-        #: Every hook the run registered, by name: the callbacks the engine
-        #: would call.
-        self.hooks: dict[str, pulumi.ResourceHook] = {}
 
     def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
         match args.typ:
@@ -194,38 +191,14 @@ class Appliance(Recorder):
                 return {}
 
 
-class _Callbacks:
-    """The callback server a hook registers with, which the mock monitor has none of. Keeps each hook by name."""
-
-    def __init__(self, hooks: dict[str, pulumi.ResourceHook]) -> None:
-        self.hooks = hooks
-
-    def register_resource_hook(self, hook: pulumi.ResourceHook) -> None:
-        self.hooks[hook.name] = hook
-
-
-@contextmanager
-def _hooks_accepted(monitor: Appliance) -> Generator[_Callbacks]:
-    callbacks = _Callbacks(monitor.hooks)
-    # A property the SDK declares through a decorator the checker cannot read.
-    settings_ = pulumi.runtime.settings.SETTINGS
-    before: object = settings_.callbacks  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]
-    settings_.callbacks = callbacks  # pyright: ignore[reportAttributeAccessIssue]
-    try:
-        yield callbacks
-    finally:
-        settings_.callbacks = before  # pyright: ignore[reportAttributeAccessIssue]
-
-
 async def _run(monitor: Appliance, machine: Machine, *, generation: int | None = None) -> Appliance:
     config = _config(machine.keys)
     if generation is not None:
         config[f'kluster:{program.DUMP_KEY_GENERATION}'] = str(generation)
     pulumi.runtime.set_all_config(config)
     _ = await run_under_backstop(monitor, stack=NAME)
-    with _hooks_accepted(monitor):
-        async with declaring():
-            await program.main()
+    async with declaring():
+        await program.main()
     return monitor
 
 

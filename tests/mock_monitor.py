@@ -11,7 +11,9 @@ mocks was re-growing:
     handed a provider, and through which provider, rather than only that it
     made something;
 -   `run_with`, which points the runtime at a monitor, through `set_mocks`,
-    which builds each run a fresh registration queue;
+    which builds each run a fresh registration queue, and hands the run a
+    stand-in for the SDK's callback server (`_Callbacks`), so a run that binds
+    a hook starts no server and the `Recorder` keeps the hook by name;
 -   `run_under_backstop`, which is `run_with` for a run that also refuses an
     unparented resource the way a real run does;
 -   `declaring`, which waits until the monitor has actually seen the
@@ -66,6 +68,8 @@ from putils import install_parent_backstop
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
+
+    import pulumi
 
 
 #: The engine's own root resource. Every run registers one and no case asks
@@ -187,6 +191,10 @@ class Recorder(runtime.Mocks):
         #: one step only under a lock: two registrations of one URN would
         #: otherwise both pass the check, and the second replace the first.
         self.registering: AbstractContextManager[object] = threading.Lock()
+        #: Every resource hook the run registered, by name: the callbacks the
+        #: engine would call, which a case calls the same way, by the names a
+        #: request binds (`_Callbacks`).
+        self.hooks: dict[str, pulumi.ResourceHook] = {}
 
     # -- what a suite overrides ---------------------------------------------
 
@@ -497,6 +505,32 @@ def _register_package(self: Any, request: Any) -> Any:
 mocks.MockMonitor.RegisterPackage = _register_package
 
 
+class _Callbacks:
+    """What a mocked run registers its resource hooks with, in place of the SDK's callback server.
+
+    A real program registers a hook with a gRPC server of the SDK's own, which
+    the engine calls back into when a step of the resource runs it; the SDK
+    starts that server the first time a program registers one, and stops it in
+    `run_pulumi_func`, the end of a real program (`_get_callbacks` and
+    `_shutdown_callbacks` in `pulumi/runtime/settings.py`). A run here is
+    declared through `declaring` and never ends there, so every server a run
+    started would outlive it. And the mock monitor calls no hook, so the
+    server would serve no one: what a case needs is the hook itself, to call
+    as the engine would. So each run gets this instead, which keeps every hook
+    by name on the run's `Recorder` and asks the monitor for nothing.
+
+    Resource hooks are all it serves. A program that registers a resource
+    transform, an invoke transform or an error hook meets an `AttributeError`
+    naming the registration, which is where serving it would start.
+    """
+
+    def __init__(self, hooks: dict[str, pulumi.ResourceHook]) -> None:
+        self.hooks = hooks
+
+    def register_resource_hook(self, hook: pulumi.ResourceHook) -> None:
+        self.hooks[hook.name] = hook
+
+
 async def run_with[MonitorT: runtime.Mocks](
     monitor: MonitorT, *, stack: str, project: str = 'kluster', preview: bool = False
 ) -> MonitorT:
@@ -504,10 +538,12 @@ async def run_with[MonitorT: runtime.Mocks](
 
     `set_mocks` builds the run's mock monitor and its queue of outstanding
     registrations afresh, so nothing a previous run left in flight is this
-    run's to wait for. That queue is also kept here, with the loop the run
+    run's to wait for, and the run's callbacks are `_Callbacks` from then on. That queue is also kept here, with the loop the run
     starts on, for `fail_on_unreceived_failures` to judge the run by.
     """
     runtime.set_mocks(monitor, project=project, stack=stack, preview=preview)
+    # A property the SDK declares through a decorator the checker cannot read.
+    SETTINGS.callbacks = _Callbacks(monitor.hooks if isinstance(monitor, Recorder) else {})  # pyright: ignore[reportAttributeAccessIssue]
     run = _Run(settings._get_rpc_manager(), [])  # pyright: ignore[reportPrivateUsage]
     run.learn(asyncio.get_running_loop())
     _watch(run)
