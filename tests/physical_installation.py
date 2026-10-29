@@ -12,6 +12,7 @@ stay in the suite, where the cases that take them are.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, cast
@@ -120,6 +121,14 @@ class Installation(Controller):
         #: token and provider; the arguments are what a case about where a
         #: call was dialed reads.
         self.invoked: list[tuple[str, dict[str, Any]]] = []
+
+    def new_resource(self, args: pulumi.runtime.MockResourceArgs) -> tuple[str | None, dict[str, Any]]:
+        """The id a resource is created with: for a schematic, its content's digest, as the Image Factory names one."""
+        resource_id, outputs = super().new_resource(args)
+        if args.typ == 'talos:imageFactory/schematic:Schematic':
+            # The outputs carry the inputs, the document among them, typed.
+            return hashlib.sha256(str(outputs['schematic']).encode()).hexdigest(), outputs
+        return resource_id, outputs
 
     def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
         match args.typ:

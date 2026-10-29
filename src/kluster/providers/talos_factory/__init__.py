@@ -24,13 +24,16 @@ space, and how much room a disk needs is the consumer's to say.
 **A delete removes only the file its own create left.** The object a
 `FactoryImage` stands for is the file, not anything at the factory: the
 factory names an artifact by the schematic's content and offers no delete.
-The file's path is named by its content too, so a replacement that declares
-the same artifact, a targeted `--replace` say, finds the file there and keeps
-it, and the engine then deletes the original. Each create therefore records
-the identity of its own last write to the file, `written`, and the delete
-unlinks the file only while it still carries that identity. A file with
+The file's path is the caller's, and one declaration names one path on every
+run and every machine, so a replacement that declares the same artifact, a
+targeted `--replace` say, declares its original's path, finds the file there
+and keeps it, and the engine then deletes the original. Each create therefore
+records the identity of its own last write to the file, `written`, and the
+delete unlinks the file only while it still carries that identity. A file with
 another identity, a replacement's write say, is left in place, with a
-warning.
+warning. The identity tells a resource's write apart from its own
+replacement's and from no other resource's, which is why a caller gives every
+resource a path of its own (`materialize`).
 
 What is *done* with an artifact — which schematic it was built from, which
 volume or catalog it feeds — belongs to the components in
@@ -138,8 +141,15 @@ def materialize(url: str, path: Path, *, room: int) -> None:
     A file already at `path` is the artifact and is reused: the download lands
     under a temporary name in the same directory and is renamed only once the
     xz stream has ended cleanly, so a file under the final name is whole by
-    construction. That is what keeps a re-created resource — or a second stack
-    on the same machine — from spending a gigabyte of bandwidth again.
+    construction. That is what keeps a re-created resource from spending a
+    gigabyte of bandwidth again.
+
+    The reuse is for a resource's own replacement, which declares its
+    original's path. No identity tells a delete who else declares a file. So a
+    file two live resources declare is the last writer's, and that writer's
+    delete removes it from under the other. A caller gives every resource a
+    path no other resource declares. On a machine that several stacks' runs
+    share, that means a path the stack's own name is part of.
 
     Fetching and decompressing are the same pass. Neither form of the artifact
     is ever held in memory, and a failure removes the partial file rather than
@@ -258,9 +268,9 @@ class FactoryImageProvider(dynamic.ResourceProvider):
     def delete(self, _id: str, props: dict[str, Any]) -> None:
         """Unlink the file while it is still the one this resource's create left.
 
-        Another identity at the path is another write, by a replacement,
-        another stack or another machine, or a status change since then, and
-        the file is left: the delete says so and returns rather than failing,
+        Another identity at the path is another write, by a replacement or on
+        another machine than the create ran on, or a status change since then,
+        and the file is left: the delete says so and returns rather than failing,
         since an original whose delete fails stays in state and that delete
         fails again on every later run. A resource with nothing recorded
         unlinks the file, as every delete did before the create recorded an
@@ -269,10 +279,10 @@ class FactoryImageProvider(dynamic.ResourceProvider):
         the file, the original's delete removes it.
 
         The check and the unlink are two calls, so a write landing between
-        them would be removed. Within a stack nothing writes the path at that
-        point: the engine deletes an original only after its replacement's
-        create has returned, and no other resource of the stack declares the
-        path.
+        them would be removed. Nothing writes the path at that point: the
+        engine deletes an original only after its replacement's create has
+        returned, and no other resource declares the path, in this stack or
+        another (`materialize`).
         """
         path = Path(str(props['path']))
         try:
@@ -305,12 +315,12 @@ class FactoryImage(dynamic.Resource, module='talos_factory', name='FactoryImage'
     ) -> None:
         """Declare that `path` holds the decompressed contents of `url`, and `room` zero bytes after them.
 
-        `path` is derived from what the file contains rather than generated, so
-        the same declaration names the same file on every run and on every
-        machine — which is what lets a consumer take the path as an input
-        without proposing a change each time the program moves. The room is
-        part of what it contains: a file already at the path is reused as it
-        is, so a path that did not change with the room would serve a file
-        with the old one.
+        `path` is the caller's, and it is the same for one declaration on every
+        run and on every machine rather than generated — which is what lets a
+        consumer take the path as an input without proposing a change each
+        time the program moves. No other resource declares it
+        (`materialize`). The room is part of what the file contains: a file
+        already at the path is reused as it is, so a path that did not change
+        with the room would serve a file with the old one.
         """
         super().__init__(FactoryImageProvider(), name, {'url': url, 'path': path, 'room': room}, opts)

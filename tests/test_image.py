@@ -6,7 +6,8 @@ serves `nocloud` compressed, the libvirt provider will not decompress what it
 is handed, and a raw image cannot back a copy-on-write chain — so the program
 itself fetches the artifact, decompresses it where it runs, and hands libvirt a
 file. What is asserted below is mostly the consequences of that: the file is
-named by what it contains and by nothing else, a stream that ends early leaves
+named by what it contains, in a directory of the stack that declares it, and
+by nothing about the machine or the moment, a stream that ends early leaves
 nothing that looks finished, and a machine that has never seen the file is not
 mistaken for a resource somebody deleted.
 """
@@ -285,10 +286,11 @@ async def worker_path(name: str, version: str = TALOS_VERSION) -> str:
 
 @pytest.mark.asyncio
 async def test_the_local_artifact_is_named_by_what_it_contains(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Schematic and version, and nothing else. The path is an input of the
-    # libvirt volume, so anything else in it — a timestamp, a temporary
-    # directory, the user's home — would propose replacing a protected disk
-    # the next time the program ran somewhere else.
+    # Schematic, version and room, under the stack's directory, and nothing
+    # else. The path is an input of the image, so anything else in it — a
+    # timestamp, a temporary directory, the user's home — would replace the
+    # image, fetching the whole artifact again, every time the program ran
+    # somewhere else.
     paths: list[str] = []
     for where in ('one', 'two'):
         monkeypatch.setenv('HOME', str(tmp_path / where / 'home'))
@@ -306,6 +308,47 @@ async def test_the_local_artifact_is_named_by_what_it_contains(tmp_path: Path, m
     monkeypatch.setattr(image, 'HOMELAB_DISK_ROOM', image.HOMELAB_DISK_ROOM + 1)
     assert paths[0] != await worker_path(WORKER)
     assert Path(paths[0]).is_absolute()
+
+
+async def declared_in(project: str, stack: str) -> dict[str, Any]:
+    """What the worker artifact's resource is handed in a run of `project`'s `stack`, the run its own."""
+    factory = await run_with(Factory(), stack=stack, project=project)
+    _ = await build_worker().path.future()
+    return factory.inputs_of(f'{WORKER}-nocloud')
+
+
+@pytest.mark.parametrize(
+    ('one', 'other'),
+    [(('kluster-py', 'physical'), ('kluster-py', 'physical-next')), (('kluster-py', 'physical'), ('fork', 'physical'))],
+    ids=['two-stacks-of-one-project', 'two-projects-with-one-stack-name'],
+)
+@pytest.mark.asyncio
+async def test_a_stack_keeps_its_file_when_another_stack_that_declares_the_artifact_deletes_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, one: tuple[str, str], other: tuple[str, str]
+) -> None:
+    """Two stacks that declare one artifact on one machine each hold a file of their own.
+
+    A delete removes the file while it carries its own create's write, and
+    nothing it records says who else declares the file. So two stacks at one
+    path would share a file that is the last writer's, and that writer's
+    delete would take it from under the other stack, whose disk is created
+    from it on its next rebuild. A stack is named within its project, so two
+    projects that share a stack name are two stacks too.
+    """
+    monkeypatch.setattr(image, 'IMAGE_CACHE', tmp_path / 'cache')
+    # No room, so the file read back below is the artifact alone.
+    monkeypatch.setattr(image, 'HOMELAB_DISK_ROOM', 0)
+    first = await declared_in(*one)
+    second = await declared_in(*other)
+    assert first['url'] == second['url'], 'both stacks declare one artifact'
+    _ = serve(monkeypatch, lzma.compress(PAYLOAD))
+    provider = talos_factory.FactoryImageProvider()
+    _ = provider.create(first)
+    written = provider.create(second)
+
+    provider.delete(str(written.id), written.outs or {})
+
+    assert Path(first['path']).read_bytes() == PAYLOAD
 
 
 def test_the_cache_is_somewhere_both_a_workstation_and_a_runner_have() -> None:

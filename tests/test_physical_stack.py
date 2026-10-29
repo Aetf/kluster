@@ -35,7 +35,7 @@ import pulumi
 import pytest
 import pytest_asyncio
 import yaml
-from device_places import DEVICE_TYPE_PREFIX, PLACES
+from device_places import DEVICE_TYPE_PREFIX, PLACES, stated_type
 from google.protobuf import json_format
 from mock_monitor import Recorder, declaring, run_under_backstop
 from oci_conventions import with_compartment
@@ -73,6 +73,7 @@ from kluster.components.talos import TalosCluster
 from kluster.components.talos import image as talos_image
 from kluster.components.talos.image import TalosArtifact
 from kluster.lib import config as lib_config
+from kluster.providers.talos_factory import FactoryImage
 from kluster.stacks import physical
 
 #: A LAN address for the gateway, as the first-bring-up knob carries one. It is
@@ -511,6 +512,24 @@ def test_no_two_resources_claim_one_place_on_the_device(ran: Run) -> None:
     device_types = {typ for typ in ran.recorded.types if typ.startswith(DEVICE_TYPE_PREFIX)}
     assert device_types <= set(PLACES), device_types - set(PLACES)
     assert ran.recorded.places_claimed_more_than_once(PLACES) == {}
+
+
+def test_no_two_resources_declare_one_image_file(ran: Run) -> None:
+    """One file on the machine running the program, one `FactoryImage` -- the half of the rule a stack holds itself.
+
+    An image's delete tells its own create's write apart from its
+    replacement's and from no other resource's (`talos_factory.materialize`),
+    so two images at one path would share a file that is the last writer's,
+    and that writer's delete would take it from under the other. The stack's
+    directory keeps other stacks off the path; within the stack only the
+    inputs do, so the program is read back by the path each image declares.
+    The installation names a schematic by its content, as the factory does,
+    so two images of one artifact reach the census at one path whatever
+    their resource names.
+    """
+    image_type = stated_type(FactoryImage)
+    assert image_type in ran.recorded.types, 'the census reads no image at all'
+    assert ran.recorded.places_claimed_more_than_once({image_type: 'path'}) == {}
 
 
 @pytest.mark.asyncio
