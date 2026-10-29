@@ -113,6 +113,15 @@ class NotOneIpv6Address(ValueError):
         self.addresses: tuple[str, ...] = tuple(addresses)
 
 
+class DedicatedVipStranger(ValueError):
+    """The dedicated VIP is declared on a node that has no machine configuration; `nodes` are the ones that do."""
+
+    def __init__(self, *, node: str, nodes: Sequence[str]) -> None:
+        super().__init__(f'the dedicated VIP is declared on {node!r}, which is not among {sorted(nodes)}')
+        self.node: str = node
+        self.nodes: tuple[str, ...] = tuple(sorted(nodes))
+
+
 def management_ports() -> list[tuple[str, int]]:
     """Each management port as its field in `conventions.ManagementPorts` and its number.
 
@@ -329,9 +338,7 @@ class CloudNodes(Component, pulumi_type='kluster:cloud:CloudNodes'):
     ) -> None:
         super().__init__(name, opts=opts)
         if dedicated_vip_node not in machine_configs:
-            raise ValueError(
-                f'the dedicated VIP is declared on {dedicated_vip_node!r}, which is not among {sorted(machine_configs)}'
-            )
+            raise DedicatedVipStranger(node=dedicated_vip_node, nodes=list(machine_configs))
 
         self._placements = placements
         self.instances: dict[str, oci.core.Instance] = {}

@@ -44,6 +44,8 @@ sender on the internet nothing an echo flood does not already give it.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import pulumi
 import pulumi_oci as oci
 from pulumi_oci.core.outputs import GetServicesServiceResult
@@ -113,6 +115,19 @@ def ingress_rules(subnet_ipv6: pulumi.Input[str]) -> list[oci.core.SecurityListI
         rule(ICMPV6, LINK_LOCAL_V6),
         rule(ICMPV6, subnet_ipv6),
     ]
+
+
+class NoObjectStorageService(ValueError):
+    """The region's service catalog read back with no Object Storage entry; `services` are the names it holds.
+
+    One rule, so a program tells the refusal apart by the type alone, and a
+    `ValueError`, so a caller that catches one is unaffected. The message,
+    built from the fields, is for a person.
+    """
+
+    def __init__(self, *, services: Sequence[str]) -> None:
+        super().__init__(f'the region offers no Object Storage service, only {list(services)}')
+        self.services: tuple[str, ...] = tuple(services)
 
 
 class CloudNetwork(Component, pulumi_type='kluster:cloud:CloudNetwork'):
@@ -237,7 +252,7 @@ class CloudNetwork(Component, pulumi_type='kluster:cloud:CloudNetwork'):
         for service in services.services:
             if 'Object Storage' in service.name:
                 return service
-        raise ValueError('no Object Storage service in this region')
+        raise NoObjectStorageService(services=[service.name for service in services.services])
 
     async def _object_storage_service_id(self) -> str:
         return (await self._object_storage_service()).id
