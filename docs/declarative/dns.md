@@ -80,14 +80,15 @@ from the records:
     while it holds the certificate; declaring it is what makes the
     authorization outlive the edge.
 -   **A zone whose names something outside this installation serves gets
-    no pin invented for it.** jiahui.id is a Google Site, and the log
-    (§1.2) shows several authorities issuing for it rather than one: the
-    pair — apex and `*.jiahui.id` in one certificate — from whichever of
-    the edge's partners its rotation draws, since the edge mints one for
-    every zone it hosts, proxied or not, beside an apex-only certificate
-    from Let's Encrypt. It carries no CAA, so it keeps none. A pin that
-    current issuance does not satisfy is an outage at the next renewal,
-    and no CAA is not a regression from no CAA.
+    no pin invented for it.** jiahui.id's mail is forwarded by its
+    registrar, and the log (§1.2) shows several authorities issuing for
+    the zone rather than one: the pair — apex and `*.jiahui.id` in one
+    certificate — from whichever of the edge's partners its rotation
+    draws, since the edge mints one for every zone it hosts, proxied or
+    not, beside an apex-only certificate from Let's Encrypt. It carries
+    no CAA, so it keeps none. A pin that current issuance does not
+    satisfy is an outage at the next renewal, and no CAA is not a
+    regression from no CAA.
 
 Both tags are written out: `issuewild` does not inherit from `issue`,
 and the LAN-only names are covered by per-zone wildcards (§4).
@@ -248,14 +249,12 @@ first DS of each zone in that order.
 
 -   **`*.hosts.<zone>` is the anchor namespace** — already the live
     convention (`archvps.hosts`). **IP literals exist only here**, with
-    low TTLs, and two clauses name where an address may sit outside it:
-    **where the name cannot be an alias**, and **where there is no name
-    of this installation's to alias**. Both are structural rather than
-    exceptions granted: a zone apex cannot be a CNAME, so the web origin
-    every website zone carries is an apex `A` and so is jiahui.love's;
-    and jiahui.id's apex and `www` address a site served entirely outside
-    this installation, which publishes no name of ours for them to alias.
-    `base.py` says the same beside the literals. New anchors:
+    low TTLs, and one clause names where an address may sit outside it:
+    **where the name cannot be an alias**. That is structural rather than
+    an exception granted: a zone apex cannot be a CNAME, so the web
+    origin every website zone carries is an apex `A` and so is
+    jiahui.love's. `base.py` says the same beside the literals. New
+    anchors:
     `kluster.hosts` → the NLB, an A *and* an AAAA because the load
     balancer is dual-stack and serves every port it forwards on both
     families (architecture.md §3.2, physical.md §1), and

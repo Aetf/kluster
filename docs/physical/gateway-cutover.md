@@ -1650,7 +1650,23 @@ on, the `dns` stack is what writes every zone, and Aetf/dns takes no
 push (note N1 there). The stack runs under the stack passphrase that
 `mise.toml` hands every run, so it needs no wrapper, and it refuses
 until step 5 has published the anchors' addresses (`stacks/dns.py`,
-`_usable_address`). From the checkout root:
+`_usable_address`).
+
+**First, the records already gone live leave state.** The records
+Aetf/dns removed after `e865032`, a class of sources-of-truth.md note
+N1, are gone from Cloudflare, and no `up` can delete them:
+the pinned provider's delete reports the not-found answer as a failure.
+A refresh of those records alone drops them, since the provider's read
+of a record Cloudflare does not hold removes it from state. It runs
+before B6 and the preview, and its plan deletes those records from
+state and changes nothing else. From the checkout root:
+
+```sh
+urn() { mise x -- pulumi stack --stack dns --show-urns | sed -n "s/.*URN: \(.*::$1\)$/\1/p"; }
+mise x -- pulumi refresh --stack dns --target "$(urn 'jiahui\.id-@-a')" --target "$(urn 'jiahui\.id-www-a')"
+```
+
+Then the preview:
 
 ```sh
 mise x -- pulumi preview --stack dns --diff

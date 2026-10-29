@@ -60,15 +60,6 @@ __all__ = (
 #: one is read by the row below it and by nothing else.
 MAIL_ZONES: tuple[str, ...] = (conventions.ZONE_PRIMARY, 'unlimitedcodeworks.xyz')
 
-#: Where `conventions.ZONE_EXTERNALLY_ISSUED`'s Google Site is served from.
-IP_JIAHUI_SITE = '173.194.206.121'
-
-#: Why the Google Site's names are published direct, as far as anything
-#: here can say.
-JIAHUI_SITE_UNPROXIED = (
-    'a Google Site, served and certified outside this installation; why the proxy is off is not recorded'
-)
-
 
 def overlay_label(member: str) -> str:
     """A member name as a DNS label: lowercase, spaces become hyphens.
@@ -328,14 +319,11 @@ BASE_RECORDS: tuple[Block, ...] = (
             ),
         ),
     ),
-    # The externally issued zone: a Google Site, mail forwarded by the
-    # registrar. Nothing of ours answers in it, so its apex and `www` are
-    # addresses with no name of this installation's to alias (dns.md §2).
+    # The externally issued zone: its site verifications and the mail the
+    # registrar forwards, and no address. Nothing of ours answers in it.
     Block(
         (conventions.ZONE_EXTERNALLY_ISSUED,),
         (
-            a('@', IP_JIAHUI_SITE, unproxied=JIAHUI_SITE_UNPROXIED),
-            a('www', IP_JIAHUI_SITE, unproxied=JIAHUI_SITE_UNPROXIED),
             *_verifications(
                 'PyY9W6ikS_voZGQE3i_JGRNPvMUw5o2QNyGxpnRxSoU',
                 'y6Df9QsIorwAdC8bsyCBMtlu3HpzPqppgM7syZsBTyo',
