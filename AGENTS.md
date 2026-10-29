@@ -183,9 +183,10 @@ documentation the change makes true ships with it rather than after it.
   - Run it **one file at a time**: given many files at once it hangs
     rather than finishing.
   - Some findings are **artifacts of the checker** and are answered by
-    neither a dictionary entry nor a disabled rule. Both kinds below come
+    neither a dictionary entry nor a disabled rule. Each kind below comes
     from the conversion the checker runs before it reads a file: inline
-    code spans become dummy tokens whose length differs from the source.
+    code spans become dummy tokens, which differ from the source in
+    length and in spelling.
     - **The first body row of a table whose first cell is a lone code
       span** is misread: every finding on that row lands at a shifted
       offset and reports a fragment of neighboring words, or the dummy
@@ -213,6 +214,24 @@ documentation the change makes true ships with it rather than after it.
       tells are that the finding does **not** reproduce on `main`'s copy
       of the same file, and that it moves or vanishes when unrelated
       nearby text changes length.
+    - **An apostrophe right after a code span**, the possessive in
+      `` `apps`' rows ``, is read as a closing quote with no opening one:
+      `EN_UNPAIRED_QUOTES`, at the apostrophe's column. The token that
+      stands in for the span does not end in an `s`, so the plural
+      possessive that passes in plain prose (`apps' rows`) is not
+      recognized there; a `'s` after a span (`` `physical`'s ``) passes.
+      The checker pairs quotes across paragraphs, so an apostrophe ahead
+      of this one — a plural possessive in plain prose, or a quote left
+      open — pairs with it in silence. A long file is checked in
+      stretches that pairing does not cross, whose ends move with the
+      length of the text ahead of them. So a change above a possessive
+      can bring its finding out without touching it, and a possessive a
+      change writes can pass. Its tell is where the finding sits, on an
+      apostrophe after a closing backtick, whatever `main`'s copy
+      reports. The cure, and how such a possessive is written to begin
+      with, is the reword, "the rows of `apps`", which leaves nothing to
+      pair. Resizing the text above only moves the finding, and the rule
+      stays on, because a quote left open is a real finding in prose.
 
 ## Working beside other agents
 

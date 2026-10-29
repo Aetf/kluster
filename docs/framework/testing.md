@@ -119,7 +119,7 @@ above that one.
     assertion would render a path, which discloses nothing. A path is what a
     process follows to the material, though, so the file layer's closure
     below removes them from the process instead. Every key `mise.toml` sets
-    has to land in one of `root_credentials`' verdicts — masked, a path, or a
+    has to land in one of the verdicts of `root_credentials` — masked, a path, or a
     tool's setting — which is what makes a new one a decision somebody takes
     rather than an omission nobody sees.
 -   **A suite that needs a value asks for a fake one by name**, with
