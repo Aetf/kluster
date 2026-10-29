@@ -26,6 +26,7 @@ from kluster import conventions
 from kluster.components.cloud.nodes import (
     FAMILY_SEPARATOR,
     CloudNodes,
+    DedicatedVipStranger,
     NodeLoadBalancer,
     NoPublicAddress,
     NotOneIpv6Address,
@@ -163,7 +164,7 @@ def build_balancer(name: str = 'lb') -> NodeLoadBalancer:
     return NodeLoadBalancer(name, compartment_id=COMPARTMENT_ID, subnet_id=SUBNET_ID)
 
 
-def build_nodes(placements: list[tuple[str, str]]) -> CloudNodes:
+def build_nodes(placements: list[tuple[str, str]], dedicated_vip_node: str = 'cp1') -> CloudNodes:
     return CloudNodes(
         'kluster',
         compartment_id=COMPARTMENT_ID,
@@ -174,7 +175,7 @@ def build_nodes(placements: list[tuple[str, str]]) -> CloudNodes:
         memory_gb=8,
         boot_volume_gb=50,
         placements=placements,
-        dedicated_vip_node='cp1',
+        dedicated_vip_node=dedicated_vip_node,
         load_balancer=build_balancer('kluster'),
     )
 
@@ -360,6 +361,16 @@ async def test_the_vip_is_on_a_secondary_private_ip_of_its_node(nodes: CloudNode
     """
     assert await nodes.secondary_ip.vnic_id.future() == vnic_of(VIP_NODE_ID)
     assert await nodes.reserved_ip.private_ip_id.future() == await nodes.secondary_ip.id.future()
+
+
+@pytest.mark.asyncio
+async def test_a_dedicated_vip_on_a_node_without_a_machine_config_is_refused() -> None:
+    """There is no instance to map it onto, so no address a workload could be scheduled beside."""
+    with pytest.raises(DedicatedVipStranger) as refused:
+        _ = build_nodes(await placements(), dedicated_vip_node='cp4')
+    # It names the node it was declared on, and the nodes there are.
+    assert refused.value.node == 'cp4'
+    assert set(refused.value.nodes) == set(MACHINE_CONFIGS)
 
 
 @pytest.mark.asyncio

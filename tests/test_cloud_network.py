@@ -17,14 +17,24 @@ from typing import Any
 import pulumi
 import pytest
 import pytest_asyncio
-from mock_monitor import Recorder, run_with
+from mock_monitor import Recorder, root_of, run_with, the_run_failed_with
 from pulumi_oci.core.outputs import SecurityListEgressSecurityRule, SecurityListIngressSecurityRule
 
-from kluster.components.cloud import ICMPV6_FROM_ANYWHERE, CloudNetwork
+from kluster.components.cloud import ICMPV6_FROM_ANYWHERE, CloudNetwork, NoObjectStorageService
 
 VCN_IPV6_PREFIX = '2603:c020:8000:1200::/56'
 OBJECT_STORAGE_SERVICE_ID = 'ocid1.service.oc1.phx.objectstorage'
 OBJECT_STORAGE_CIDR = 'oci-phx-objectstorage'
+
+#: A service the region offers beside Object Storage, listed first so a pick
+#: that took the first entry would take it.
+OTHER_SERVICE = {'id': 'ocid1.service.oc1.phx.other', 'name': 'All PHX Services', 'cidrBlock': 'all-phx'}
+
+#: The region's catalog as the account reads it back.
+SERVICES = [
+    OTHER_SERVICE,
+    {'id': OBJECT_STORAGE_SERVICE_ID, 'name': 'OCI PHX Object Storage', 'cidrBlock': OBJECT_STORAGE_CIDR},
+]
 
 
 class Oci(Recorder):
@@ -35,6 +45,12 @@ class Oci(Recorder):
     service picked out of the second.
     """
 
+    def __init__(self, services: Sequence[dict[str, str]] = SERVICES) -> None:
+        super().__init__()
+        #: The catalog `getServices` answers with, which a case replaces to
+        #: stand in for a region that lacks a service.
+        self.services: Sequence[dict[str, str]] = services
+
     def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
         if args.typ == 'oci:Core/vcn:Vcn':
             return {'ipv6cidrBlocks': [VCN_IPV6_PREFIX]}
@@ -42,16 +58,7 @@ class Oci(Recorder):
 
     def answer(self, args: pulumi.runtime.MockCallArgs) -> dict[str, Any]:
         if args.token == 'oci:Core/getServices:getServices':
-            return {
-                'services': [
-                    {'id': 'ocid1.service.oc1.phx.other', 'name': 'All PHX Services', 'cidrBlock': 'all-phx'},
-                    {
-                        'id': OBJECT_STORAGE_SERVICE_ID,
-                        'name': 'OCI PHX Object Storage',
-                        'cidrBlock': OBJECT_STORAGE_CIDR,
-                    },
-                ]
-            }
+            return {'services': list(self.services)}
         return {}
 
 
@@ -102,6 +109,32 @@ async def test_object_storage_is_routed_at_the_service_gateway(network: CloudNet
     assert by_destination[OBJECT_STORAGE_CIDR] == ('SERVICE_CIDR_BLOCK', service_gateway)
     assert by_destination['0.0.0.0/0'] == ('CIDR_BLOCK', internet_gateway)
     assert by_destination['::/0'] == ('CIDR_BLOCK', internet_gateway)
+
+
+@pytest.mark.asyncio
+async def test_a_region_without_object_storage_is_refused() -> None:
+    """Guessing would put a service other than Object Storage on the service gateway, and on the route to it.
+
+    The service is picked out of the catalog when the gateway's input
+    resolves, so that is where the refusal is: in the gateway's service and
+    in the route that takes Object Storage traffic to it.
+    """
+    catalog = [OTHER_SERVICE, {'id': 'ocid1.service.oc1.phx.vault', 'name': 'OCI PHX Vault', 'cidrBlock': 'vault'}]
+    _ = await run_with(Oci(services=catalog), stack='physical')
+    network = CloudNetwork('kluster', compartment_id='ocid1.compartment.test')
+
+    refusals: list[NoObjectStorageService] = []
+    for read in (network.service_gateway.services, network.route_table.route_rules):
+        with pytest.raises(ValueError) as failed:
+            _ = await read.future()
+        # The output fails with the SDK's exception around the program's own,
+        # which names every service the region did offer.
+        refusal = root_of(failed.value, NoObjectStorageService)
+        assert refusal.services == tuple(service['name'] for service in catalog)
+        refusals.append(refusal)
+    # And the run fails on it, as the deployment would: the registrations of
+    # the resources those inputs belong to meet the same refusal.
+    assert await the_run_failed_with(NoObjectStorageService) in refusals
 
 
 @pytest.mark.asyncio
