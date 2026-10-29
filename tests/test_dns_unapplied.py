@@ -21,6 +21,7 @@ component leaves unparented fails it here as it would fail `pulumi preview`.
 """
 
 import ipaddress
+from collections import Counter
 from typing import Any
 
 import pulumi
@@ -31,6 +32,7 @@ from pulumi.output import UNKNOWN
 
 from kluster import conventions
 from kluster.components.dns.base import overlay_label
+from kluster.lib.stack_addresses import Held
 from kluster.stacks.dns import UnusableAnchorAddress
 
 RECORD = 'cloudflare:index/dnsRecord:DnsRecord'
@@ -56,20 +58,20 @@ ANCHOR_RECORDS = {
 }
 
 #: What a StackReference can read back in place of an IPv4 address: the value,
-#: whether a preview or an update is where it is read back, and the part of the
-#: refusal that names it. The string values carry a marker the refusal must not
+#: whether a preview or an update is where it is read back, and what the
+#: refusal must call it. The string values carry a marker the refusal must not
 #: quote.
-UNUSABLE: dict[str, tuple[object, bool, str]] = {
+UNUSABLE: dict[str, tuple[object, bool, Held]] = {
     # An output `physical` has not published, and in an update the sentinel a
     # targeted apply wrote, plain or encrypted.
-    'absent': (None, False, 'absent'),
+    'absent': (None, False, Held.ABSENT),
     # Every output of a `physical` holding the sentinel anywhere, previewed.
-    'unknown': (UNKNOWN, True, 'unknown'),
+    'unknown': (UNKNOWN, True, Held.UNKNOWN),
     # A secret the reader cannot decrypt, elided by the engine.
-    'elided-secret': ({}, False, 'a mapping'),
-    'empty': ('', False, 'an empty string'),
-    'hostname': ('marker.example', False, 'not an address'),
-    'not-a-string': ([], False, 'a list'),
+    'elided-secret': ({}, False, Held.MAPPING),
+    'empty': ('', False, Held.EMPTY_STRING),
+    'hostname': ('marker.example', False, Held.NOT_AN_ADDRESS),
+    'not-a-string': ([], False, Held.OTHER),
 }
 
 
@@ -172,19 +174,18 @@ async def unapplied(request: pytest.FixtureRequest) -> Run:
 
 
 def test_an_unapplied_physical_stops_the_run_at_every_anchor_by_name(unapplied: Run) -> None:
-    """Each anchor refuses, naming the output it reads and saying it is absent.
+    """Each anchor refuses once, naming the output it reads, its family, and that the output is absent.
 
     Which refusal surfaces first is the order the reads resolve in, so the
     case asks for every anchor among all of them rather than for a particular
     one first.
     """
     assert unapplied.refused is not None
-    named: set[str] = set()
-    for refusal in [unapplied.refused, *unapplied.also_refused]:
-        message = str(refusal)
-        assert 'absent' in message, message
-        named |= {output for output in ANCHOR_OUTPUTS if repr(output) in message}
-    assert named == set(ANCHOR_OUTPUTS)
+    refusals = [unapplied.refused, *unapplied.also_refused]
+    assert Counter(refusal.output for refusal in refusals) == dict.fromkeys(ANCHOR_OUTPUTS, 1)
+    for refusal in refusals:
+        assert refusal.held is Held.ABSENT, refusal
+        assert refusal.family == ANCHOR_OUTPUTS[refusal.output][0], refusal
 
 
 def test_no_record_is_declared_with_content_that_is_not_an_address(unapplied: Run) -> None:
@@ -224,17 +225,17 @@ async def test_an_anchor_output_that_is_not_an_address_stops_the_run_by_name(fou
     The other two anchors read addresses, so the refusal is the one output's
     and the records they carry are declared.
     """
-    value, preview, named = UNUSABLE[found]
+    value, preview, held = UNUSABLE[found]
     output = OUTPUTS.cluster_endpoint
 
     run = await declare_reading(output, value, preview=preview)
 
     assert run.refused is not None
-    message = str(run.refused)
-    assert repr(output) in message
-    assert named in message
+    assert run.refused.output == output
+    assert run.refused.family == ANCHOR_OUTPUTS[output][0]
+    assert run.refused.held is held
     if isinstance(value, str) and value:
-        assert value not in message
+        assert value not in str(run.refused)
     assert non_addresses(run) == {}
     declared = {name for name, read in ANCHOR_RECORDS.items() if read != output}
     assert set(ANCHOR_RECORDS) & set(run.records()) == declared
@@ -249,13 +250,13 @@ async def test_each_anchor_takes_only_its_own_family(output: str) -> None:
     family is part of what the read checks, per output.
     """
     family, _ = ANCHOR_OUTPUTS[output]
-    other_family, other = (6, '2001:db8::7') if family == 4 else (4, '198.51.100.7')
+    other = '2001:db8::7' if family == 4 else '198.51.100.7'
 
     run = await declare_reading(output, other, preview=True)
 
     assert run.refused is not None
-    message = str(run.refused)
-    assert repr(output) in message
-    assert f'an IPv{other_family} address' in message
-    assert other not in message
+    assert run.refused.output == output
+    assert run.refused.family == family
+    assert run.refused.held is Held.WRONG_FAMILY
+    assert other not in str(run.refused)
     assert non_addresses(run) == {}

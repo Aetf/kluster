@@ -39,6 +39,7 @@ from kluster.components.dns.legacy import LEGACY
 from kluster.components.dns.record import zone_records
 from kluster.components.dns.rewrites import ResolverRewrites, rewrites
 from kluster.components.dns.zone import ManagedZone
+from kluster.lib.stack_addresses import Held
 
 #: Where the zones token is read: at the line that builds the provider it
 #: configures, and nowhere else (rfc-002 §8.1). The key is this project's, not
@@ -52,7 +53,20 @@ CLOUDFLARE_API_TOKEN = 'cloudflareApiToken'
 
 
 class UnusableAnchorAddress(ValueError):
-    """An output of the `physical` stack that an anchor reads and that is not an address of the anchor's family."""
+    """An output of the `physical` stack that an anchor reads and that is not an address of the anchor's family.
+
+    `output` names it, `family` is the IP version the anchor takes from it, and
+    `held` says what it held instead; the value itself is never kept nor
+    quoted. A `ValueError`, so a caller that catches one is unaffected; the
+    message is for a person, and the fields are what a program tells refusals
+    apart by.
+    """
+
+    def __init__(self, message: str, *, output: str, family: Literal[4, 6], held: Held) -> None:
+        super().__init__(message)
+        self.output: str = output
+        self.family: Literal[4, 6] = family
+        self.held: Held = held
 
 
 async def main() -> None:
@@ -150,31 +164,44 @@ def _usable_address(output: str, version: Literal[4, 6], value: object) -> str:
         try:
             parsed = ipaddress.ip_address(value)
         except ValueError:
-            found = 'a string that is not an address' if value else 'an empty string'
+            if value:
+                held = Held.NOT_AN_ADDRESS
+                found = 'a string that is not an address'
+            else:
+                held = Held.EMPTY_STRING
+                found = 'an empty string'
         else:
             if parsed.version == version:
                 return value
+            held = Held.WRONG_FAMILY
             found = f'an IPv{parsed.version} address'
     elif value is None:
+        held = Held.ABSENT
         found = (
             'absent: `physical` has not published it, or a targeted apply of `physical` wrote it as '
             "Pulumi's unknown sentinel, which an update reads back as nothing (framework/pulumi.md §1.4), "
             'and the rest of `physical` has to be applied first'
         )
     elif isinstance(value, Unknown):
+        held = Held.UNKNOWN
         found = (
             "unknown, which is how a preview reads every output of a `physical` holding Pulumi's unknown "
             'sentinel in any of them: a targeted apply of `physical` wrote it (framework/pulumi.md §1.4), '
             'and the rest of `physical` has to be applied first'
         )
     elif isinstance(value, Mapping):
+        held = Held.MAPPING
         found = (
             'a mapping, which is how a StackReference reads back a secret it could not decrypt: this '
             "stack cannot open `physical`'s secrets"
         )
     else:
+        held = Held.OTHER
         found = f'a {type(value).__name__}'
     raise UnusableAnchorAddress(
         f"the physical stack's {output!r} output is {found}; an anchor takes an IPv{version} address from it, "
-        'and no record is declared with what it holds'
+        'and no record is declared with what it holds',
+        output=output,
+        family=version,
+        held=held,
     )
