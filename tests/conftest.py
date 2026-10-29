@@ -34,9 +34,11 @@ refused or a duplicate URN among them, or in an output nothing declared reads
 -- that nothing the case awaited received
 (`mock_monitor.fail_on_unreceived_failures`).
 
-The last is a workaround for the Pulumi SDK, kept apart so that it can be
-deleted whole: `mocked_runs_release_their_tasks` drops from the SDK's set of
-tracked outputs every task whose event loop has closed.
+The last two are workarounds for the Pulumi SDK, each kept apart so that it
+can be deleted whole: `mocked_runs_release_their_tasks` drops from the SDK's
+set of tracked outputs every task whose event loop has closed; and the last
+section closes each event loop the SDK's mocks gave a thread once that thread
+has finished.
 """
 
 # `pykeepass` ships no type information; the store module carries the same
@@ -49,6 +51,7 @@ from __future__ import annotations
 import asyncio
 import os
 import pickle
+import threading
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -60,6 +63,7 @@ import root_credentials
 from keyring.backends import fail as fail_keyring
 from memory_keyring import installed
 from memory_kit import MemoryKit
+from pulumi.runtime import mocks
 from pulumi.runtime.settings import SETTINGS
 from pykeepass import PyKeePass
 
@@ -451,3 +455,83 @@ def mocked_runs_release_their_tasks() -> Iterator[None]:
     tracked: set[asyncio.Task[Any]] = SETTINGS.outputs  # pyright: ignore[reportAttributeAccessIssue]
     lock: AbstractContextManager[object] = SETTINGS.lock  # pyright: ignore[reportAttributeAccessIssue]
     release_closed_loops_tasks(tracked, lock)
+
+
+# -- the workaround for the SDK's per-thread loops -------------------------------
+#
+# Pulumi's mock monitor gives every thread that carries one of its RPCs an
+# event loop of its own and never closes it. The SDK runs each RPC on its
+# loop's default executor, and each monitor method that reaches `_sync_await`
+# -- `MockMonitor.Invoke`, `ReadResource` and `RegisterResource` in
+# `pulumi/runtime/mocks.py` today -- first calls `_ensure_event_loop`
+# (`pulumi/runtime/sync_await.py`), which on a thread with no loop makes one
+# with `new_event_loop` and `set_event_loop`. Once the executor shuts down
+# its threads exit, and their loops are left to the garbage collector, which
+# finalizes them whenever it next runs, in whichever case is running then;
+# finalizing an unclosed loop whose self-pipe socket was finalized first
+# raises `ValueError: Invalid file descriptor: -1` from `selectors`, which
+# pytest reports as a `PytestUnraisableExceptionWarning` in that case.
+#
+# So the layer keeps every loop the mocks hand a thread, and once a case's
+# teardown is over closes each one whose thread has finished: a finished
+# thread cannot reach its loop again, and a loop held here is not the
+# collector's to finalize. The loop of a thread still running -- an executor
+# of a module's shared loop, between its cases -- is closed at the first
+# teardown after that thread has finished. The layer is
+# `_recorded_event_loop`, which stands in for the mocks' own binding of
+# `_ensure_event_loop` -- the call each of those methods makes before any
+# `_sync_await`, which then finds the thread's loop made already --
+# `close_finished_threads_loops` and the `pytest_runtest_teardown` hook,
+# with the imports of `threading` and `pulumi.runtime.mocks`. It comes out
+# whole when a locked `pulumi` closes the loops its mocks give executor
+# threads, or gives them none, which `tests/test_sdk_thread_loops.py` shows:
+# its tripwire on the SDK fails.
+
+#: Each event loop the mocks handed a thread, with that thread, until it is closed here.
+_threads_loops: dict[asyncio.AbstractEventLoop, threading.Thread] = {}
+#: Executor threads record their loops while a teardown reads the record.
+_threads_loops_lock = threading.Lock()
+_ensure_event_loop = mocks._ensure_event_loop  # pyright: ignore[reportPrivateUsage, reportPrivateImportUsage]
+
+
+def _recorded_event_loop() -> asyncio.AbstractEventLoop:
+    """The SDK's `_ensure_event_loop`, which also records the loop it hands back with the thread asking."""
+    loop = _ensure_event_loop()
+    with _threads_loops_lock:
+        _ = _threads_loops.setdefault(loop, threading.current_thread())
+    return loop
+
+
+mocks._ensure_event_loop = _recorded_event_loop  # pyright: ignore[reportPrivateUsage, reportPrivateImportUsage]
+
+
+def close_finished_threads_loops() -> None:
+    """Close and forget every recorded loop whose thread has finished, and forget every one closed already.
+
+    A loop recorded on a thread that is still running is left where it is,
+    open: that thread can still be handed an RPC, and the monitor would run
+    it on the loop. A loop closed already is its owner's, closed by it --
+    the loop of a case that called the monitor on its own thread -- and is
+    only forgotten.
+    """
+    with _threads_loops_lock:
+        finished = [loop for loop, thread in _threads_loops.items() if loop.is_closed() or not thread.is_alive()]
+        for loop in finished:
+            del _threads_loops[loop]
+    for loop in finished:
+        loop.close()
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_teardown() -> Generator[None, object, object]:
+    """Once a case's teardown is over, the loops the mocks gave threads that have finished are closed.
+
+    After the teardown rather than in a fixture's: a case's loop shuts its
+    executor down, and so finishes its threads, when the loop's own fixture
+    is torn down, and a module's or a session's loop when the last case to
+    use it is, which a fixture of the case's own outlives.
+    """
+    try:
+        return (yield)
+    finally:
+        close_finished_threads_loops()

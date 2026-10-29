@@ -63,7 +63,10 @@ The layers built this way today include the Renovate rule that looks
 pin's channel on; and, in the test suite, `mocked_runs_release_their_tasks`
 in `tests/conftest.py` and `_ReadFailures` in `tests/mock_monitor.py`,
 which go once the Pulumi SDK stops leaving a closed loop's outputs in its
-tracked set, and once its output awaits every future it was given.
+tracked set, and once its output awaits every future it was given; and the
+section of `tests/conftest.py` that closes the event loops the SDK's mocks
+give executor threads, which goes once the SDK closes those loops itself or
+gives the threads none.
 
 ## Naming
 
