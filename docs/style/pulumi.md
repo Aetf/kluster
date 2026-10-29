@@ -468,6 +468,24 @@ and vulnerability alerts; the B2 buckets; a Cloudflare zone, its DNSSEC
 state and its records; and the gateway's UniFi firewall groups and
 device directories.
 
+**An object a resource stands for on the machine running the program is
+placed under the project and stack it belongs to.** The identity a
+create records tells its delete whether the object is still that
+create's write, not who else declares it: an object two live resources
+declare belongs to the last to write it, whose delete removes it from
+under the other. So the
+identity presumes one live resource per object, as a delete by name
+does. Within a stack that is one-place-one-resource, the invariant over
+the declared inputs above. Across stacks no program sees both
+declarations. So an object a resource stands for on the machine running
+the program, which the runs of every stack there share, has the
+project's and the stack's names in its place. Both are names the stack
+has on every machine, so one declaration keeps one place wherever it
+runs. An object whose name is made unique where it is made, as a
+`tempfile` directory is, is no other resource's to declare, and its
+place needs neither name. Today: the Talos image cache,
+`IMAGE_CACHE/<project>/<stack>/` (`components/talos/image.py`).
+
 **Adopted resources graduate to declared.** `import` is step one of
 adoption; the end state is an explicit declaration whose fields are
 owned, with `ignore_changes` shrunk to what genuinely belongs to
