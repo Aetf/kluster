@@ -579,35 +579,76 @@ not moved.
     every member, the household's devices among them, so a rule that
     misbehaves is found on stand-ins rather than on them.
 -   **The window's targeted apply has been previewed.** Step 3 runs
-    `pulumi up` against the gateway's resources alone, named by URN.
-    Those URNs are derived from the component declarations
-    (`stacks/physical.py`, `components/gateway/`) rather than read off
-    an applied stack, because nothing has ever applied this one — so
-    they are confirmed by a preview, which costs nothing and needs no
-    window:
+    `pulumi up` against the gateway's resources and what the overlay
+    network's adoption depends on, named by URN. Those URNs are derived
+    from the component declarations (`stacks/physical.py`,
+    `components/gateway/`, `components/overlay/`) rather than read off an
+    applied stack, because nothing has ever applied this one — so they
+    are confirmed by a preview, which costs nothing and needs no window:
 
     ```sh
     physical preview \
         -t 'urn:pulumi:physical::kluster-py::kluster:gateway:Gateway::kluster' \
-        -t 'urn:pulumi:physical::kluster-py::kluster:gateway:Gateway$**::**'
+        -t 'urn:pulumi:physical::kluster-py::kluster:gateway:Gateway$**::**' \
+        -t 'urn:pulumi:physical::kluster-py::kluster:overlay:Overlay::kluster' \
+        -t 'urn:pulumi:physical::kluster-py::kluster:overlay:Overlay$zerotier:index/identity:Identity::*'
     ```
 
-    What it must show is the gateway's own resources and nothing else:
-    the persistence layer, the nspawn runtime, the four machines, the
-    routing session, the authorized key and the controller-side
-    firewall — no cloud instance, no overlay member, no bucket, no
-    worker VM. One row that is not the gateway's is expected beside
-    them: a single `=` on `zerotier:index/network:Network
-    kluster-network`, the overlay network read into state at Central's
-    current values, because the engine performs an import before it
-    asks whether a resource is targeted (gateway.md §2.5 step 1). That
-    row changes nothing at Central. A preview without it means the
-    adoption rides the run with no targets instead; the update to the
-    network is in that run either way, and is read there before it is
-    applied. A preview that matches nothing, or that plans the whole
-    stack, means the targets do not select what they were derived
-    from; the window then runs `pulumi up` with no targets at all and
-    takes the risk gateway.md §2.5 sets out.
+    The first two targets are the gateway. The other two are there
+    because the overlay network is adopted by this run whether it is
+    targeted or not, and an import is held to every resource it
+    depends on, its parent among them (framework/pulumi.md §1.4). The
+    network's parent is the `Overlay` component, and its flow rules are
+    rendered over the node addresses of the CI identities the overlay
+    mints, so the component and the identities are targeted. A `*`
+    stands for one URN segment, so the last target takes every identity
+    the overlay mints, a roster entry added later included, and no
+    member. The network itself stays out of the targets: it is read
+    into state and planned as it stands, and the run with no targets is
+    the one that updates it (gateway.md §2.5 step 1).
+
+    What it must show is the gateway's own resources and, beside them,
+    the network's adoption and what it depends on. The gateway's
+    resources are the persistence layer, the nspawn runtime, the four
+    machines, the routing session, the authorized key and the
+    controller-side firewall. The adoption's rows are a `+` on
+    `kluster:overlay:Overlay kluster`, a `+` on each
+    `zerotier:index:Identity`, and a single `=` on
+    `zerotier:index:Network kluster-network`, which the CLI prints with
+    `import` after it: the overlay network read into state at Central's
+    current values. The
+    stack and the explicit providers are planned beside them, as in
+    every targeted run. Nothing else: no cloud instance, no overlay
+    member, no bucket, no worker VM, and no `~` on the network. None of
+    the adoption's rows changes anything at Central. The component is a
+    record in state, an identity is a key pair generated on the
+    workstation, and the `=` is a read.
+
+    Three other readings:
+
+    -   **A refusal naming a URN**,
+        `depends on '<urn>' which was was not specified in --target list`,
+        is a dependency of the adoption that the targets miss. The window
+        does not open on it. The `up` would not refuse the same way: it
+        runs the import first, writes a checkpoint recording the network
+        beside a parent or a dependency the run never created, and fails
+        on that checkpoint, which every later command then refuses to
+        load (framework/pulumi.md §1.4).
+    -   **On a window retried after §6**, the stack already records
+        everything the earlier step 3 created that §6 does not delete,
+        the controller-side firewall and the adoption among it, and each
+        of those plans no row. So the `+` on the component, a `+` on an
+        identity or the `=` on the network can be missing, each one for
+        a resource `physical stack --show-urns` already lists, and the
+        preview still passes; a step 3 that went red partway can
+        leave any part of the adoption behind, the identities without
+        the network included, since the import waits on the identities'
+        outputs. The rest of the criterion holds as written: no member,
+        no `~` on the network, and nothing else outside the gateway.
+    -   **A preview that matches nothing, or that plans the whole
+        stack,** means the targets do not select what they were derived
+        from; the window then runs `pulumi up` with no targets at all and
+        takes the risk gateway.md §2.5 sets out.
 -   **The host jobs that read the device are in place**
     (gateway.md §1.6), on the homelab host:
     -   the homelab-ops pin in yadm's mise configuration names the
@@ -759,9 +800,10 @@ are instant, but the push that follows pulls four root filesystems from
 the registry over the site's uplink and unpacks each one, which is tens
 of minutes rather than minutes. **Step 3 is also the first apply the
 `physical` stack has ever had**, which is why it is run against the
-gateway's resources alone rather than as a plain `pulumi up`; what the
-form with no targets would put inside this window, and what it costs to
-leave out, is gateway.md §2.5.
+gateway's resources, and what the overlay network's adoption depends
+on, rather than as a plain `pulumi up`; what the form with no targets
+would put inside this window, and what it costs to leave out, is
+gateway.md §2.5.
 
 The LAN has no resolver for that entire span — every lease names alice
 and bob, and both are down. The device's own resolution is expected to
@@ -873,13 +915,15 @@ One rename takes the old trees and their `.old` copies together. The
 overlay member gets no directory here: `40-machines.sh` creates the
 state directory, and an empty one is what mints a new identity.
 
-**Step 3 — apply the gateway's resources** from the operator's
-workstation, over the LAN:
+**Step 3 — apply the gateway's resources, and adopt the overlay
+network,** from the operator's workstation, over the LAN:
 
 ```sh
 physical up \
     -t 'urn:pulumi:physical::kluster-py::kluster:gateway:Gateway::kluster' \
-    -t 'urn:pulumi:physical::kluster-py::kluster:gateway:Gateway$**::**'
+    -t 'urn:pulumi:physical::kluster-py::kluster:gateway:Gateway$**::**' \
+    -t 'urn:pulumi:physical::kluster-py::kluster:overlay:Overlay::kluster' \
+    -t 'urn:pulumi:physical::kluster-py::kluster:overlay:Overlay$zerotier:index/identity:Identity::*'
 ```
 
 It delivers the boot chain, the unit sources, the executables, the
@@ -896,13 +940,21 @@ Post-apply hooks converge and start the machines — writing
 each machine's content stamp as they do — the overlay member last and
 for the first time (gateway.md §1.1).
 
+The targets are §3's preview's, and the last two are the adoption's:
+the run reads the overlay network off Central into state, records the
+`Overlay` component, and mints the CI identities on the workstation,
+none of which writes to Central. From here on the identities are in
+`physical`'s state, and they are live nowhere: an identity is live
+where a daemon holds its secret, and the secret reaches CI only at
+§8.3's sync, which runs after the ceremony's step 4 (gateway.md §2.6).
+
 **The targets are what keeps the rest of the stack's first apply out
 of this window.** Why that is safe, what the run without them adds and
 what targeting does not remove are one argument, and it sits with the
 ceremony it belongs to: gateway.md §2.5. What this step needs from it
 is that a red `pulumi up` says the update failed rather than which
-half of it converged, and that everything outside the gateway is
-applied at step 5 instead, with the LAN's DNS back up.
+half of it converged, and that everything outside the gateway and
+the adoption is applied at step 5 instead, with the LAN's DNS back up.
 
 **Step 4 — read the failure, if there is one.** Every file's hook asks
 systemd whether its machine reached active and fails the resource when it
@@ -1112,11 +1164,14 @@ object with no file behind it and goes at the next boot, or to
     output of the stack as unknown, and an update reads the poisoned
     ones as absent or `None` (framework/pulumi.md §1.4). A targeted
     apply against a stack that has state leaves the outputs of a
-    resource outside the target set as state holds them; this one has no state, so **every export whose value
-    comes from a resource is of that kind** — the kubeconfig and the
-    talosconfig among them. Nothing may read one between step 3 and
-    step 5: `credentials derived sync` and each `StackReference`
-    reader wait, and nothing in this section reads an export at all.
+    resource outside the target set as state holds them; this one has
+    no state, so **every export whose value comes from a resource
+    outside the targets is of that kind** — the kubeconfig and the
+    talosconfig among them. The CI identities' exports are real from
+    step 3, which creates the identities, and they wait all the same,
+    for §8.3. Nothing may read an export between step 3 and step 5:
+    `credentials derived sync` and each `StackReference` reader wait,
+    and nothing in this section reads an export at all.
 -   **The routing daemon runs this program's configuration.** The
     installed file is the smaller half of that; the daemon is the rest:
 
@@ -1247,7 +1302,7 @@ against the stamps. **It passes when a further `physical up` reports no
 changes**, which is the whole-stack form of the reading above and the
 one the soak's previews go on repeating. **One diff may appear there
 without anything having drifted**: `routes` on
-`zerotier:index/network:Network kluster-network`, where the only
+`zerotier:index:Network kluster-network`, where the only
 difference is `via` on the `10.144.0.0/16` route — declared absent,
 read back as `""`. None is expected, since the provider hashes the two
 alike; one that appears is that normalization rather than anything
@@ -1322,11 +1377,20 @@ device-side children have to leave state before that can happen — each
 named individually, each with its own dependents:
 
 ```sh
-physical stack --show-urns | grep 'URN:' | grep -E \
-    'kluster-(persistence|nspawn|caddy|adguard-alice|adguard-bob|zerotier|routing|access)$'
+physical stack --show-urns | grep 'URN:' | grep -F '::kluster:gateway:Gateway$' | grep -E \
+    '::kluster-(persistence|nspawn|caddy|adguard-alice|adguard-bob|zerotier|routing|access)$'
 # then, for each URN that printed:
 physical state delete --target-dependents '<urn>'
 ```
+
+The filter is anchored to the gateway's own children: it prints the
+eight the pattern names and nothing else. A name alone is not
+enough, because the overlay's provider,
+`pulumi:providers:zerotier::kluster-zerotier`, ends the way the
+gateway's ZeroTier machine does. A `state delete
+--target-dependents` on that provider is refused on the protected
+network, and the `--force` the refusal suggests would drop the
+provider, the network and the identities from state with it.
 
 **Not the gateway component itself.** Deleting the parent takes every
 descendant with it, and one of them is `kluster-firewall`, whose
@@ -1336,6 +1400,15 @@ not touch any of those, so they still exist; forgetting them from state
 leaves the next apply trying to create a second VLAN 7 with duplicate
 policies, or failing on the names. `kluster-firewall` stays in state
 because nothing undid what it did.
+
+**Nor the overlay's adoption.** Step 3 also left in state whatever of
+the overlay's adoption it reached: the `Overlay` component, the CI
+identities, the network and the overlay's provider, all four where it
+got that far. None of them holds anything on the device, and none of
+them wrote anything to Central, so the rollback has nothing of theirs
+to undo. A retried window reuses each of them that is in state: its
+step 3 plans it as unchanged, and mints no second identity for one it
+holds.
 
 **`pulumi destroy` is not a way back**, with or without a target. A unit
 resource's delete disables the unit and removes the live copy, and

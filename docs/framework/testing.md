@@ -1316,6 +1316,29 @@ It runs as the case above does, except where these say otherwise:
 -   **The provider the engine planned is read from `pulumi preview --json`**,
     the step for the resource naming it, rather than from a log.
 
+`tests/test_targeted_import_engine.py` holds what the gateway cutover's
+targeted apply rests on ([physical/gateway-cutover.md](../physical/gateway-cutover.md)
+§4 step 3): over a stack with no state, an `up` with the window's
+targets, read from the runbook, passes, creates, updates and deletes
+neither the overlay network nor a member, and leaves a checkpoint that a
+preview with the same targets loads and passes. Its stand-ins register
+under the physical stack's own project and stack, so the runbook's
+targets are passed as they are written. How a target set that misses a
+dependency fails, the refusal's text or the checkpoint written before
+it ([pulumi.md](pulumi.md) §1.4), is not held: a release may change
+either without changing what the window rests on.
+
+**A stand-in the engine imports is a provider plugin of the case's
+own**, served from the project's `plugins.providers` path, and it
+fetches nothing. An import's `Read` carries neither inputs nor state,
+and those are where the Python dynamic provider host looks for the
+provider it pickled (`pulumi/dynamic/__main__.py`, `Read` calling
+`get_provider`), so a dynamic stand-in cannot be imported; it is the
+same reason `pulumi import` fails on `'__provider'` ([ci.md](ci.md) §3).
+`scratch_projects.scratch_project` takes such a plugin's program by its
+package name, writes it into a directory under the case's, runs it on
+the project's own environment and names it in the project file.
+
 **A case that starts the pinned `pulumi` CLI carries bounds set from its
 measured duration, not the suite's per-case bound.** That is the
 definition, so a module that comes to start the CLI is under it without an
@@ -1324,7 +1347,8 @@ the case it was started from and hands over to the pinned one. Today's
 are:
 
 -   the engine modules above, `tests/test_state_backend_engine.py`,
-    `tests/test_homelab_engine.py` and `tests/test_extension_provider.py`;
+    `tests/test_homelab_engine.py`, `tests/test_extension_provider.py`
+    and `tests/test_targeted_import_engine.py`;
 -   `tests/test_device_directory_engine.py`, which holds what a device
     directory's `delete_before_replace` rests on;
 -   the `real` cases of `tests/test_operator_stack.py`, which run the

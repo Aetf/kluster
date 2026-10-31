@@ -259,6 +259,32 @@ So a targeted apply leaves every export that depends on a resource the
 run skips creating poisoned until the rest of the stack is applied, and
 nothing between the two runs may read one (§3.1).
 
+A fourth case is a resource the run imports. A resource that declares
+`import_` and that the stack does not yet record is imported, targeted
+or not: the engine decides on the import before it reads `--target`,
+or `--exclude`, for that resource, and the import's `Read` runs in a
+preview as in an `up`. Only once the import has resolved is the
+resource planned, as an unchanged step where the targets leave it out,
+and that step is held to the rule of the refusal above. Every resource
+it depends on — its parent, its dependencies and property dependencies,
+and a `deleted_with` or `replace_with` target — must be targeted,
+targeted implicitly as the stack and the providers are, or already in
+state. So **a targeted run over a stack that does not yet record such a
+resource selects every resource it depends on.** A preview that leaves
+one out reports the refusal once for each one it misses. An `up` that
+leaves one out fails differently, and worse: the import has already run
+and been saved, recording the resource beside a parent or a dependency
+the run never created, and a `file://` or `postgres://` backend writes
+that checkpoint before it verifies it. The `up` fails on `snapshot
+integrity failure; it was already written, but is invalid`, naming the
+missing parent or dependency, and every later command that loads the
+stack refuses it, `preview`, `up` and `state delete` alike, until
+`pulumi state repair` removes the resource's references to what is
+missing. `tests/test_targeted_import_engine.py` holds the targeted `up`
+the gateway cutover runs, which selects them
+([physical/gateway-cutover.md](../physical/gateway-cutover.md) §4 step 3,
+[testing.md](testing.md) §8).
+
 ## 2. Integration with `putils`
 
 The framework is implemented in the library `src/putils` (stable; the async
