@@ -1428,7 +1428,10 @@ def test_every_resource_of_this_module_carries_the_one_version(monkeypatch: pyte
 ## `rm -f` and to `[ -e ]` is the shell's answer rather than this repository's,
 ## so the tests below ask a shell instead of restating the belief. The scripts
 ## are the shipped ones and the tree is a temporary one; nothing here needs a
-## device.
+## device. The shell is the host's `/bin/sh`, where the device runs them under
+## root's login shell, bash: on CI that is dash, the stricter of the two, and
+## on a workstation whose `/bin/sh` is bash it is the device's shell itself
+## (the `ssh` module docstring says why that stands in for the device's).
 
 
 #: Bounds one script run through a real shell, here and through `Shell`. A
@@ -1438,7 +1441,7 @@ SHELL_TIMEOUT = 5.0
 
 
 def sh(script: str) -> int:
-    """Run one of the scripts the way the device's shell runs it, and report the status."""
+    """Run one of the scripts as `sh -c`, where the device's login shell runs it as `bash -c`, and report the status."""
     completed = process_sessions.run(
         ['/bin/sh', '-c', script],
         check=False,

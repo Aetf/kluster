@@ -300,7 +300,11 @@ class _Hooked:
     ran: Path
 
     def run(self, hook: str, *, converger_status: int = 0) -> tuple[int, list[str]]:
-        """Run `hook` as the push runs it, and say what it ran, in order."""
+        """Run `hook` under the host's `/bin/sh`, and say what it ran, in order.
+
+        The push runs it under root's login shell instead, the way the
+        `device_files` `ssh` module docstring describes.
+        """
         completed = process_sessions.run(
             ['/bin/sh', '-c', hook],
             env={'PATH': f'{self.device.systemd.tools}:/usr/bin:/bin', MACHINES_STATUS: str(converger_status)},
