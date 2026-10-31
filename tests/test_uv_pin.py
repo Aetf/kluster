@@ -11,11 +11,10 @@ request.
 
 from __future__ import annotations
 
-import re
 import tomllib
 from pathlib import Path
 
-from renovate_text import group, listed, package_rules, scalar
+from renovate_text import constraints, group, listed, package_rules, scalar
 
 ROOT = Path(__file__).parent.parent
 
@@ -26,17 +25,18 @@ def test_renovates_uv_is_the_pinned_one_and_moves_with_it() -> None:
     pinned = tomllib.loads((ROOT / 'mise.toml').read_text())['tools']['uv']
 
     # The constraint is the pin.
-    constrained = re.findall(r"^  constraints: \{\n    uv: '([^']+)',\n  \},$", config, re.MULTILINE)
-    assert constrained == [pinned], (
-        f"renovate's uv is {constrained or 'unconstrained, so the newest'}; mise.toml pins {pinned}"
-    )
+    constrained = constraints(config).get('uv', 'unconstrained, so the newest')
+    assert constrained == pinned, f"renovate's uv is {constrained}; mise.toml pins {pinned}"
 
     # The manager that reads the constraint reads it from the releases the
     # mise pin is read from, and puts it in the pin's pull request: the group
     # the rule for the mise manager names.
     rules = package_rules(config)
-    (constraint,) = [rule for rule in rules if listed(rule, 'matchManagers') == ['renovate-config']]
-    assert listed(constraint, 'matchDepNames') == ['uv']
+    (constraint,) = [
+        rule
+        for rule in rules
+        if listed(rule, 'matchManagers') == ['renovate-config'] and listed(rule, 'matchDepNames') == ['uv']
+    ]
     assert (scalar(constraint, 'overrideDatasource'), scalar(constraint, 'overridePackageName')) == (
         'github-releases',
         'astral-sh/uv',

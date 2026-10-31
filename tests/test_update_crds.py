@@ -1152,7 +1152,7 @@ def test_no_pin_carries_an_annotation_comment() -> None:
 
 
 def test_the_mise_action_rule_outranks_the_github_actions_group() -> None:
-    """Order is what puts `jdx/mise-action` in the toolchain group, so order is held here.
+    """Order is what puts `jdx/mise-action` in its own group, so order is held here.
 
     `packageRules` are applied in the order they are written and the last match
     wins a given field, so the rule naming the dependency has to come after the
