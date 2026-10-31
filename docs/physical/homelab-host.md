@@ -337,6 +337,17 @@ a second git-ignored directory would be a second boundary to establish
 and get right. Nothing here is produced by a command, so nothing should
 go looking for the command that produced it.
 
+**The directory is the stack's own**:
+`.credentials/libvirt/<project>/<stack>/`. Every stack run from a
+checkout reaches the same `.credentials/`, and each working file is
+the last writer's — the identity and `known_hosts` are written over
+whatever is at their paths, and the seed removes every seed beside it —
+so two stacks sharing one directory would each dial with the other's
+files and delete the other's seed. The project and the stack are names
+the stack has on every machine and in every run, so the paths in state
+keep one value wherever it runs, which a name unique to the run would
+not.
+
 The contrast with the gateway's own SSH session is worth stating,
 because the two look alike and only one has this problem: the gateway's
 private key is never written to disk. It goes from configuration into

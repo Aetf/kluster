@@ -23,9 +23,11 @@ one fails to decode; the node's addressing is in its machine configuration.
 **The file is named by what it carries.** Its name is the digest of
 `user-data` and `meta-data`, not of the image, whose bytes carry the time the
 image was built: one rendering names one file on every run, and a new
-rendering names a new one. It is written into the libvirt slot, `0600`
-inside the `0700` boundary, because `user-data` holds the cluster's secrets,
-and the files an older rendering wrote there are removed.
+rendering names a new one. It is written into the stack's directory of the
+libvirt slot, `0600` inside the `0700` boundary, because `user-data` holds the
+cluster's secrets, and the files an older rendering wrote there are removed.
+The directory is the stack's own because of that removal: a seed beside this
+one is an older rendering of this stack's, never another stack's current one.
 """
 
 from __future__ import annotations
@@ -77,6 +79,9 @@ def image(*, user_data: str, meta_data: str) -> bytes:
 
 def write(directory: Path, *, user_data: str, meta_data: str) -> Path:
     """Write the seed into `directory`, named by what it carries, and remove every older seed beside it.
+
+    `directory` is one stack's alone (`homelab.working_directory`): every seed
+    in it is taken for an older rendering of the seed being written.
 
     The write is `workstation.write_bytes`'s: `0600` from creation, replacing
     a file rather than writing into it, in a directory held to `0700`.

@@ -1940,15 +1940,16 @@ never a hunt for per-machine environment wiring:
 | `operator.passphrase` | The operator passphrase (§2.2), which opens the operator stacks (framework/pulumi.md §3.3) and nothing else, on a machine whose desktop secret store does not hold it: the file layer of §2's chain, below the store. Found by the `operator-stack` driver, which hands it to `pulumi` for every run of an operator stack, and read by no `mise.toml` template: `PULUMI_CONFIG_PASSPHRASE` is process-global, so which passphrase is right depends on the stack a command names, which a template never sees. | `credentials derived operator-passphrase generate`, `credentials derived operator-passphrase recover`, where the machine has no store |
 | `roots/<root>.<field>` | An account root's token file — the second layer of §2's chain, written only on a machine with no desktop secret store. No tool reads one on its own; a `credentials` run does, when a mint asks for the root. | `credentials root <name> remember` |
 | `state-backend/` | What a workstation knows about the appliance. The `operator` client bundle: CA, certificate, key, and the connection string for the appliance they authenticate against — which names the appliance and none of the files; the key is `0600`, which libpq insists on. `bundle operator` writes it, each time over the last, and the `state-backend` stack's hooks and the `operator-stack` driver connect with it. `known_hosts`, the box's SSH host-key pin (physical/state-backend.md §1): the committed public half, written by every `ssh` before it connects, rewritten whole rather than ever cleared. | `state-backend bundle operator`, `state-backend ssh` |
-| `libvirt/` | Working files, not slots (physical/homelab-host.md): the libvirt provider's SSH identity and the host's pinned key, copied `0600` out of `physical`'s config on every run that opens it. | the `physical` stack |
+| `libvirt/` | Working files, not slots (physical/homelab-host.md §6), in one directory per project and stack, `libvirt/<project>/<stack>/`: that stack's libvirt SSH identity, copied `0600` out of its config on every run that opens it, the `known_hosts` pinning the host's key, and the worker's seed image. | the `physical` stack |
 
 **The directory is `0700`, and that is the boundary that matters**: it
 is what keeps every entry inside it private, whatever mode the file
 itself carries. Each secret a command or a stack puts there is `0600` on
 its own account as well (`lib/workstation.write`): the passphrases, a
 root's token file, the OCI key and its configuration, the libvirt
-identity and its pinned host key, and the client key, which libpq
-refuses to use when anyone but its owner can read it. What takes the
+identity, its pinned host key and the worker's seed image, and the
+client key, which libpq refuses to use when anyone but its owner can
+read it. What takes the
 process `umask` under that directory holds no private key in the clear —
 the bundle's CA, certificate and connection string, the appliance's
 host-key pin beside them, and the kit, which is encrypted. Only the kit

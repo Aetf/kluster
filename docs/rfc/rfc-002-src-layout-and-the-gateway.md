@@ -18,7 +18,8 @@
     design document disagree, the design document is right. **Decisions that
     moved during construction: the endpoint, §4.3's bridge dependency, the
     rendered machine list of §4.2 and §5, the container set's name of §3.1
-    and §5, and the node volume's mount of §10.5.**
+    and §5, the node volume's mount of §10.5, and the libvirt working files'
+    directory of §8.4.**
     The endpoint: §7.4 composes the session from values `configure` put on the
     provider, and §11 routes `gatewayBootstrapHost` there beside the credential;
     what was built keeps the address a declared resource input, because a
@@ -88,7 +89,19 @@
     path and the node label — and a renamed row is a protected volume
     deleted, which Pulumi refuses. The mechanism is
     [cluster/storage.md](../cluster/storage.md) §6 and
-    [declarative/physical.md](../declarative/physical.md) §2.
+    [declarative/physical.md](../declarative/physical.md) §2. **The libvirt
+    working files' directory, 2026-10-30:** §8.4 puts the identity and its
+    `known_hosts` in `.credentials/libvirt/`, so the URI's relative value is
+    `.credentials/libvirt/identity`. What is built gives each stack a
+    directory of its own below it, so the identity, the `known_hosts` and
+    the worker's seed are in `.credentials/libvirt/<project>/<stack>/`, and
+    the URI's relative value is
+    `.credentials/libvirt/<project>/<stack>/identity`. Every stack run from
+    one checkout reaches the same `.credentials/`, and each of these files
+    is the last writer's, so two stacks sharing one directory would dial
+    with each other's files and delete each other's seed (kluster-ops#707).
+    The arrangement as built is
+    [physical/homelab-host.md](../physical/homelab-host.md) §6.
 *   **Created:** 2026-08-28
 *   **Authority:** the style rules (`docs/style/`) are what this document
     obeys; where they are silent, a rule proposed here is marked **new rule**.

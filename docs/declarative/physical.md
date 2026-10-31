@@ -485,14 +485,15 @@ them for day-2 once v0.12 is stable *and* has reached the Pulumi bridge.
     and reads `meta-data` at every boot and `user-data` only while the
     disk's STATE partition holds no complete configuration. The program
     builds the image (`components/homelab/seed.py`) and writes it into
-    the libvirt slot, `0600`, under a name that is the digest of what it
-    carries; it is uploaded into the pool as an ordinary volume declared
-    `iso`, the format libvirt probes an uploaded ISO as and reads back,
-    and attached as the domain's second virtio disk, read-only, so Talos
-    leaves it out of provisioning. Neither the provider's
-    `CloudInitDisk` nor the domain's `cloudinit` attribute is used: the
-    attribute attaches an IDE CD-ROM, which q35 has no bus for, and the
-    resource builds its image with a `mkisofs` that nothing can pin.
+    the stack's own directory of the libvirt slot, `0600`, under a name
+    that is the digest of what it carries; it is uploaded into the pool
+    as an ordinary volume declared `iso`, the format libvirt probes an
+    uploaded ISO as and reads back, and attached as the domain's second
+    virtio disk, read-only, so Talos leaves it out of provisioning.
+    Neither the provider's `CloudInitDisk` nor the domain's `cloudinit`
+    attribute is used: the attribute attaches an IDE CD-ROM, which q35
+    has no bus for, and the resource builds its image with a `mkisofs`
+    that nothing can pin.
     The seed is first-boot input, so it ignores later changes to its
     `source`, and `ConfigurationApply` keeps the running worker current,
     as it keeps the control planes current (§1), so a new rendering

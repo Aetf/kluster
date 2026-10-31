@@ -118,7 +118,7 @@ from putils import Component, async_output, own_provider_opts, resolve, with_pro
 from . import seed
 from .rebuild import SourceGuard
 
-__all__ = ('LIBVIRT_USER', 'PRIVATE_KEY', 'HomelabHost', 'connection_uri', 'slot')
+__all__ = ('LIBVIRT_USER', 'PRIVATE_KEY', 'HomelabHost', 'connection_uri', 'slot', 'working_directory')
 
 #: The package `importlib.resources` resolves this module's `templates/`
 #: directory against, so the stylesheets travel with the code that reads them
@@ -161,7 +161,8 @@ LIBVIRT_USER = 'virt'
 #: The workstation slot the run materializes its transport and the worker's
 #: seed into (credentials.md §1 rule 6): the checkout's git-ignored
 #: `.credentials/`, one directory deeper so these files sit beside another
-#: consumer's rather than in the root of it.
+#: consumer's rather than in the root of it, and a directory for each stack
+#: below that (`working_directory`).
 SLOT = 'libvirt'
 KEYFILE = 'identity'
 KNOWN_HOSTS = 'known_hosts'
@@ -180,9 +181,9 @@ PRIVATE_KEY = 'libvirtPrivateKey'
 
 
 def slot(root: Path | None = None) -> Path:
-    """`.credentials/libvirt/` in this checkout.
+    """`.credentials/libvirt/` in this checkout, which holds a directory for each stack (`working_directory`).
 
-    Every file in it is a **working file, not a slot**: a slot is durable
+    Every file under it is a **working file, not a slot**: a slot is durable
     and written by a `credentials` command — a kit, a passphrase, a client
     bundle — while these — the session's identity and `known_hosts`, and
     the worker's seed image — are derived from stack configuration by this
@@ -194,6 +195,32 @@ def slot(root: Path | None = None) -> Path:
     produced it.
     """
     return (workstation.directory() if root is None else workstation.slots(root)) / SLOT
+
+
+def working_directory(root: Path | None = None) -> Path:
+    """`slot`'s directory for the stack this run belongs to: `.credentials/libvirt/<project>/<stack>/`.
+
+    Every working file is written here, because the checkout is shared and the
+    files are not: every stack run from one checkout reaches the same `slot`,
+    and each file is the last writer's. `connection_uri` writes the identity
+    and `known_hosts` over whatever is there, and `seed.write` removes every
+    seed beside the one it writes, so two stacks that declare a `HomelabHost`
+    from one checkout would each dial with the other's files and delete the
+    other's seed. The project is in the path as well as the stack, because a
+    stack is named within its project.
+
+    The stack is the unit because a stack declares one `HomelabHost`, the host
+    being one machine. Nothing enforces that: a second one in the same stack
+    would write its `known_hosts` over the first's and delete the first's seed.
+
+    The names are the stack's own rather than the run's, because the paths
+    are provider inputs in state — the identity's and `known_hosts`' in the
+    session's URI, the seed's as its volume's `source` — and both names are
+    the same on every machine and in every run, so one declaration keeps one
+    value wherever it runs. A name unique to the run would make the URI
+    differ from its own state on every run.
+    """
+    return slot(root) / pulumi.get_project() / pulumi.get_stack()
 
 
 def connection_uri(*, host: str, private_key: str, root: Path | None = None) -> str:
@@ -255,7 +282,7 @@ def connection_uri(*, host: str, private_key: str, root: Path | None = None) -> 
     if not private_key.strip():
         raise ValueError('the libvirt SSH identity is empty, and an unauthenticated session reaches nothing')
     checkout = workstation.repo_root() if root is None else root
-    target = slot(root)
+    target = working_directory(root)
     if '$' in str(target):
         raise ValueError(f'{target} contains a "$", which the libvirt provider expands before opening the file')
 
@@ -355,19 +382,20 @@ def seed_metadata(hostname: str) -> str:
 
 
 def seed_source(*, user_data: pulumi.Input[str], meta_data: str, root: Path | None = None) -> pulumi.Output[str]:
-    """Write the seed for `user_data` into the slot, and return its path relative to the checkout.
+    """Write the seed for `user_data` into the stack's working directory, and return its path relative to the checkout.
 
-    The file is a working file of the slot's (`slot`), written on every run
-    like the session's identity and for the same reason: a path is a property
-    of the machine running the program. It is named relative to the checkout,
-    as the identity is (`connection_uri`), because the volume's `source` is a
-    provider input in state.
+    The file is a working file (`slot`), written on every run beside the
+    session's identity (`working_directory`) and for the same reason: a path
+    is a property of the machine running the program. It is named relative to
+    the checkout, as the identity is (`connection_uri`), because the volume's
+    `source` is a provider input in state.
     """
+    checkout = workstation.repo_root() if root is None else root
+    directory = working_directory(root)
 
     async def written() -> str:
         rendered = await resolve(user_data)
-        checkout = workstation.repo_root() if root is None else root
-        path = seed.write(slot(root), user_data=rendered, meta_data=meta_data)
+        path = seed.write(directory, user_data=rendered, meta_data=meta_data)
         return str(path.relative_to(checkout))
 
     return async_output(written)
