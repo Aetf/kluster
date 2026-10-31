@@ -2250,9 +2250,10 @@ apply is run in two parts around the cutover window:
     verification and its rollback are
     [gateway-cutover.md](gateway-cutover.md).
     **This is also the first apply of the whole stack, and the window
-    runs only the gateway's share of it**: the cutover targets the
-    gateway's own resources by URN, and the run with no targets that
-    completes this step follows once the window has closed
+    runs only the gateway's share of it**, with the overlay network's
+    adoption beside it: the cutover targets the gateway's own resources
+    and what the adoption depends on by URN, and the run with no
+    targets that completes this step follows once the window has closed
     (gateway-cutover.md §4 step 3, then §5 step 5). Why it is split
     that way is below. Step 2 needs only the first of those two runs;
     step 3 needs both, because the address it reads is formed by a
@@ -2267,16 +2268,27 @@ apply is run in two parts around the cutover window:
     **The window's targeted run adopts it and changes nothing at
     Central.** The network is declared with `import_`, and the engine
     performs an import before it asks whether a resource is targeted,
-    so the run whose targets name only the gateway still reads the
-    network into state at Central's current values. The pre-window
-    preview (gateway-cutover.md §3) shows this as one `=` row,
-    `zerotier:index/network:Network kluster-network`, beside the
-    gateway's own resources and nothing else; that row is the one
-    exception to "the gateway's own resources and nothing else". Every
-    roster member stays out of the window; the overlay's provider does
-    not — providers are implicitly targeted, and the adoption's read
-    goes through it, which is why the window's run reaches Central at
-    all (gateway-cutover.md §3).
+    so a run whose targets leave the network out still reads it into
+    state at Central's current values. The import is then held to its
+    dependencies: every resource it depends on, its parent among them,
+    has to be in the run (framework/pulumi.md §1.4). The network's
+    parent is the `Overlay` component and its flow rules are rendered
+    over the CI identities (§2.3), so the window's targets carry the
+    component and the identities beside the gateway, and leave out the
+    network and every member (gateway-cutover.md §3). The pre-window
+    preview shows the adoption as its own rows, a `+` on the component,
+    a `+` on each `zerotier:index:Identity` and one `=` on
+    `zerotier:index:Network kluster-network`, beside the
+    gateway's own resources; with the stack and the providers, those
+    rows are all the preview plans outside the gateway. The identities
+    are minted in the window, locally: an identity's create generates a
+    key pair on the workstation and calls Central for nothing, and the
+    identity is live only where a daemon holds its secret (§2.6), which
+    no daemon does before gateway-cutover.md §8.3. Every roster member
+    stays out of the window; the overlay's provider does not —
+    providers are implicitly targeted, and the adoption's read goes
+    through it, which is why the window's run reaches Central at all
+    (gateway-cutover.md §3).
     There is no import refusal to get past: the engine reads the live
     resource into state and then plans an ordinary update from that
     state to the declaration, so the declaration carries its full

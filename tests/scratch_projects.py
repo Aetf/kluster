@@ -16,6 +16,11 @@ files in -- a plugin's tarball, a provider's kubeconfig, `uv`'s locks -- so
 pytest's clean-up of the case's directory takes them, a run killed
 mid-download included. Every suite that runs the pinned CLI takes both from
 there.
+
+**A stand-in the engine imports is a provider plugin of the case's own**
+(`providers`), a Python program in a directory under the case's, run on the
+project's environment and served from the project's `plugins.providers`
+path, so the engine fetches nothing for it (§8).
 """
 
 from __future__ import annotations
@@ -34,11 +39,31 @@ import process_sessions
 #: a `uv.lock` above the project), and then it asks for the lock beside the
 #: project (rfc-006 slice 0, X7).
 PROJECT = """\
-name: probe
+name: {name}
 runtime:
   name: python
   options:
     toolchain: uv
+    virtualenv: {venv}
+"""
+#: The project's `plugins.providers`, followed by one `PROVIDER` entry per
+#: provider plugin the case serves.
+PLUGINS = """\
+plugins:
+  providers:
+"""
+PROVIDER = """\
+    - name: {name}
+      path: {path}
+"""
+#: A provider plugin's own project file: the program in its directory, run by
+#: the Python language host on the environment the project runs on. The host
+#: runs a plugin and installs nothing for it, so it asks for neither `pip` nor
+#: a lock.
+PLUGIN = """\
+runtime:
+  name: python
+  options:
     virtualenv: {venv}
 """
 PYPROJECT = """\
@@ -92,8 +117,17 @@ def scrubbed(environ: Mapping[str, str]) -> dict[str, str]:
     return {key: value for key, value in environ.items() if not key.startswith(('PULUMI_', 'PG'))}
 
 
-def scratch_project(root: Path, program: str) -> ScratchProject:
-    """`program` as the `__main__.py` of a project under `root`, with its backend and home under `root` too."""
+def scratch_project(
+    root: Path, program: str, *, name: str = 'probe', providers: Mapping[str, str] | None = None
+) -> ScratchProject:
+    """`program` as the `__main__.py` of a project under `root`, with its backend and home under `root` too.
+
+    `name` is the project's, which every URN the program registers carries.
+    `providers` maps a provider plugin's name to the program that serves it:
+    each is written to a directory of its own under `root` and named in the
+    project's `plugins.providers`, so a resource of that package is served by
+    it rather than by a plugin the engine would install.
+    """
     project = root / 'project'
     project.mkdir()
     venv = root / 'venv'
@@ -103,7 +137,16 @@ def scratch_project(root: Path, program: str) -> ScratchProject:
     (site_packages,) = venv.glob('lib/python*/site-packages')
     _ = (site_packages / 'test_run.pth').write_text('\n'.join(site.getsitepackages()) + '\n')
     _ = (project / '__main__.py').write_text(program)
-    _ = (project / 'Pulumi.yaml').write_text(PROJECT.format(venv=venv))
+    declared = PROJECT.format(name=name, venv=venv)
+    if providers:
+        declared += PLUGINS
+        for plugin, served in providers.items():
+            directory = root / 'plugins' / plugin
+            directory.mkdir(parents=True)
+            _ = (directory / '__main__.py').write_text(served)
+            _ = (directory / 'PulumiPlugin.yaml').write_text(PLUGIN.format(venv=venv))
+            declared += PROVIDER.format(name=plugin, path=directory)
+    _ = (project / 'Pulumi.yaml').write_text(declared)
     _ = (project / 'pyproject.toml').write_text(
         PYPROJECT.format(major=sys.version_info.major, minor=sys.version_info.minor)
     )

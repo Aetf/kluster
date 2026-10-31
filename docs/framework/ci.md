@@ -1209,16 +1209,16 @@ concurrency group (§2), and one of the pair is routinely canceled
 before it runs a single step rather than reaching the failing one. A
 `preview (dns)` that is canceled with no steps at all was superseded
 by the lock; it is not a separate problem. **Retires with the M1 first
-`physical` up**: the identity is minted by the run of ceremony step 1
-that follows the cutover window (physical/gateway.md §2.5) — the one
-with no targets, which creates the overlay — and not by the targeted
-apply inside the window. So the `credentials derived sync` that fills
-the row waits for that later run; run earlier it would succeed and
-push a placeholder, because on a stack with no prior state a targeted
-apply writes every export that comes from a resource it did not create
-as Pulumi's unknown sentinel, which `pulumi stack output` returns as
-an ordinary value (physical/gateway-cutover.md §5). These jobs then
-join like any other.
+`physical` up, at its identity sync**: the identity is minted by the
+targeted apply inside the cutover window, whose targets take the
+overlay's identities because the network's adoption depends on them
+(physical/gateway.md §2.5 step 1), and the member that authorizes it is
+created by the run with no targets that follows the window. The
+`credentials derived sync` that fills the row runs after ceremony step
+4 and the device's half of the overlay's verification
+(physical/gateway.md §2.4.2), because that is where the join it hands
+CI becomes load-bearing (physical/gateway-cutover.md §8.3). These jobs
+then join like any other.
 
 **`k8s-base` and `apps` preview red until they hold a kubeconfig they
 can open.** Both stacks exist, with their stack files committed, and

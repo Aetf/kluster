@@ -401,6 +401,121 @@ def test_the_overlay_network_is_adopted_by_the_conventions_id_and_is_the_runs_on
     assert [request.type for request in adopted] == ['zerotier:index/network:Network']
 
 
+#: The cutover runbook, whose window applies this stack under `--target`.
+RUNBOOK = Path(__file__).parent.parent / 'docs' / 'physical' / 'gateway-cutover.md'
+#: The project every URN of a real run carries.
+PROJECT = cast('dict[str, Any]', yaml.safe_load((Path(__file__).parent.parent / 'Pulumi.yaml').read_text()))['name']
+_ROOT = 'pulumi:pulumi:Stack'
+
+
+def _runbook_targets() -> dict[str, list[str]]:
+    """The `-t` arguments of each targeted `physical` command the runbook spells, by its verb.
+
+    A verb spelled twice is refused rather than either block standing for
+    it, since only one of them could be the command the other is checked
+    against.
+    """
+    # A block inside a list item is indented with it.
+    blocks = [block.lstrip() for block in re.findall(r'```sh\n(.*?)```', RUNBOOK.read_text(), re.DOTALL)]
+    targeted = [
+        (block.split()[1], re.findall(r"-t '([^']*)'", block))
+        for block in blocks
+        if block.startswith('physical ') and ' -t ' in block
+    ]
+    verbs = [verb for verb, _ in targeted]
+    assert len(verbs) == len(set(verbs)), verbs
+    return dict(targeted)
+
+
+def _selects(target: str, urn: str) -> bool:
+    """Whether a `--target` value selects `urn`, by the engine's rule: `**` is `.*`, `*` is `[^:]*`."""
+    if '*' not in target:
+        return target == urn
+    pattern = re.escape(target).replace(r'\*\*', '.*').replace(r'\*', '[^:]*')
+    return re.fullmatch(pattern, urn) is not None
+
+
+def test_the_windows_targets_take_the_gateway_and_what_the_runs_adoption_depends_on(ran: Run) -> None:
+    """The cutover's targets select the gateway's subtree and the adoption's dependencies, and nothing else.
+
+    The window (physical/gateway-cutover.md §3 and §4 step 3) applies this
+    stack for the first time under `--target`, and the URNs it names are
+    derived from the declarations because no state exists to read them off.
+    A target naming a type the program does not declare selects nothing
+    without erroring, so the runbook is read here, as the side of the seam
+    this program does not write. The preview before the window and the `up`
+    inside it have to name the same list, or the preview proves the wrong
+    command.
+
+    A run restricted by `--target` imports a resource that declares
+    `import_` whether or not it is targeted, and then holds it to every
+    resource it depends on, its parent among them (framework/pulumi.md §1.4).
+    So the selection is exactly the `Gateway` component's subtree, what the
+    engine targets implicitly -- the stack and the providers -- and the
+    closure of every adoption the targets leave out. A dependency of the
+    adoption that the targets miss is the window's `up` failing on a
+    checkpoint it has already written; a target that takes more than this
+    takes an overlay member, which is an admission at Central, or the
+    network's converge, which belongs to the run with no targets.
+
+    Every edge is read at the engine's URN, which the mock's does not carry:
+    the mock qualifies a type by the immediate parent's type alone
+    (framework/testing.md §3.1), and the engine by the whole chain.
+    """
+    commands = _runbook_targets()
+    assert set(commands) == {'preview', 'up'}, commands
+    assert commands['preview'] == commands['up']
+    targets = commands['up']
+
+    registrations = ran.recorded.registrations
+
+    def qualified(urn: str) -> str:
+        request = registrations[urn]
+        above = registrations.get(request.parent)
+        if above is None or above.type == _ROOT:
+            return request.type
+        return f'{qualified(request.parent)}${request.type}'
+
+    engine = {
+        urn: f'urn:pulumi:physical::{PROJECT}::{qualified(urn)}::{registrations[urn].name}' for urn in registrations
+    }
+
+    def edges(urn: str) -> set[str]:
+        request = registrations[urn]
+        found = {request.parent, request.deletedWith, *request.dependencies, *request.replace_with}
+        for dependencies in request.propertyDependencies.values():
+            found.update(dependencies.urns)
+        return found - {''}
+
+    implicit = {
+        urn
+        for urn in registrations
+        if registrations[urn].type == _ROOT or registrations[urn].type.startswith('pulumi:providers:')
+    }
+    selected = {urn for urn in registrations if any(_selects(target, engine[urn]) for target in targets)}
+    (gateway,) = [urn for urn in registrations if registrations[urn].type == Gateway.__pulumi_type__]
+
+    def below(urn: str) -> bool:
+        parent = registrations[urn].parent
+        return parent == gateway or (parent in registrations and below(parent))
+
+    subtree = {gateway} | {urn for urn in registrations if below(urn)}
+    closure: set[str] = set()
+    pending = [edge for urn in registrations.keys() - selected if registrations[urn].importId for edge in edges(urn)]
+    while pending:
+        urn = pending.pop()
+        if urn not in closure:
+            closure.add(urn)
+            pending.extend(edges(urn) if urn in registrations else ())
+
+    def named(urns: set[str]) -> list[str]:
+        return sorted(engine.get(urn, urn) for urn in urns)
+
+    assert named(selected - implicit) == named((subtree | closure) - implicit)
+    unselected = {engine[urn]: named(edges(urn) - selected - implicit) for urn in selected}
+    assert {urn: missing for urn, missing in unselected.items() if missing} == {}
+
+
 def test_the_overlay_pushes_the_block_domain_and_the_resolvers_it_admits_a_run_to(ran: Run) -> None:
     """The managed DNS reaches the network from `conventions`, not composed here.
 
