@@ -58,6 +58,17 @@ def group(rule: str) -> list[str]:
     return re.findall(r"^\s*group(?:Name|Slug): '([^']*)',$", rule, re.MULTILINE)
 
 
+def constraints(config: str) -> dict[str, str]:
+    """The tool versions the top-level `constraints` block names, by tool.
+
+    The block is the one object at two spaces' indent opened by
+    `constraints: {`, and each entry sits on a line of its own.
+    """
+    blocks = re.findall(r'^  constraints: \{\n(.*?)^  \},$', config, re.MULTILINE | re.DOTALL)
+    assert len(blocks) == 1, f'renovate.json5 holds {len(blocks)} top-level constraints blocks'
+    return dict(re.findall(r"^    (\w+): '([^']*)',$", blocks[0], re.MULTILINE))
+
+
 def as_renovate_spells_it(pattern: str) -> str:
     """`pattern` as `renovate.json5` holds it: a JSON5 single-quoted string, each backslash doubled."""
     return "'" + pattern.replace('\\', '\\\\') + "'"

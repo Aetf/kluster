@@ -6,7 +6,8 @@ it, and `test_gate_command` holds every test run they execute to the gate's
 form. Each finds the files through `workflows_and_actions`, so they agree on
 which files exist; the census and the shape test also read them through the
 rest of the loaders here, so those agree on how a failure names a file and
-what a job is.
+what a job is. The suites that hold another pin of mise to CI's read CI's
+through `mise_action_versions`, so they agree on which steps install it.
 """
 
 from __future__ import annotations
@@ -64,3 +65,23 @@ def workflow_jobs(workflow: dict[str, object], what: str) -> dict[str, dict[str,
     """A workflow's jobs by name; `what` names the workflow in a failure."""
     jobs = mapping(workflow.get('jobs'), f'{what} jobs:')
     return {name: mapping(job, f'{what} job {name}') for name, job in jobs.items()}
+
+
+def mise_action_versions() -> dict[str, object]:
+    """The `version` input of every `jdx/mise-action` step, by file, job and step position."""
+    versions: dict[str, object] = {}
+    for path in workflows_and_actions():
+        document = read_workflow(path)
+        if path.parent.name == 'workflows':
+            jobs = mapping(document.get('jobs'), f'{github_name(path)} jobs:')
+            groups = {name: mapping(job, f'{github_name(path)} job {name}').get('steps') for name, job in jobs.items()}
+        else:
+            groups = {'runs': mapping(document.get('runs'), f'{github_name(path)} runs:').get('steps')}
+        for name, steps in groups.items():
+            for index, step in enumerate(cast('list[object]', steps or [])):
+                step_map = mapping(step, f'{github_name(path)} {name} step {index}')
+                uses = step_map.get('uses')
+                if isinstance(uses, str) and uses.startswith('jdx/mise-action@'):
+                    inputs = mapping(step_map.get('with', {}), f'{github_name(path)} {name} step {index} with:')
+                    versions[f'{github_name(path)} {name} step {index}'] = inputs.get('version')
+    return versions
