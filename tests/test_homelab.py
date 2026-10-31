@@ -16,12 +16,13 @@ here asserts about it (rfc-002 §13).
 from __future__ import annotations
 
 import copy
+import hashlib
 import inspect
 import io
 import json
 import re
 import time
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from importlib import metadata
 from pathlib import Path
 from typing import Any, cast
@@ -84,6 +85,10 @@ class Providers(Recorder):
     definition-only provider does.
     """
 
+    def __init__(self, machine_config: str = MACHINE_CONFIG) -> None:
+        super().__init__()
+        self.machine_config = machine_config
+
     def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
         if args.typ != 'talos:machine/secrets:Secrets':
             return {}
@@ -98,7 +103,7 @@ class Providers(Recorder):
 
     def answer(self, args: pulumi.runtime.MockCallArgs) -> dict[str, Any]:
         if args.token == 'talos:machine/getConfiguration:getConfiguration':
-            return {'machineConfiguration': MACHINE_CONFIG}
+            return {'machineConfiguration': self.machine_config}
         return {}
 
 
@@ -225,17 +230,21 @@ async def test_the_seed_is_a_cidata_image_carrying_the_rendering_and_the_derived
 
 
 @pytest.mark.asyncio
-async def test_the_seed_is_written_into_the_slot_where_only_this_machine_can_read_it(tmp_path: Path) -> None:
+async def test_the_seed_is_written_into_the_slot_where_only_this_machine_can_read_it(
+    monitor: Providers, tmp_path: Path
+) -> None:
     """It carries the cluster's secrets, as the session's identity does, and sits beside it.
 
     The volume names it relative to the checkout, because the name is a
     provider input in state and an absolute path differs on every machine.
     """
-    host = build()
+    async with declaring():
+        host = build()
 
     source = str(await host.seed.source.future())
     seed = _opened(tmp_path, source)
-    assert seed.parent == homelab.slot(tmp_path)
+    assert seed.parent == _session_files(monitor, tmp_path)['keyfile'].parent
+    assert seed.parent.is_relative_to(homelab.slot(tmp_path))
     assert seed.stat().st_mode & 0o777 == 0o600
     assert seed.parent.stat().st_mode & 0o777 == 0o700
 
@@ -351,6 +360,9 @@ async def test_a_second_worker_is_a_design_change_not_a_default() -> None:
 
 HOST = '10.144.200.1'
 IDENTITY = '-----BEGIN OPENSSH PRIVATE KEY-----\nexample\n-----END OPENSSH PRIVATE KEY-----\n'
+#: A second host and identity, for a second stack's session.
+OTHER_HOST = '10.144.200.2'
+OTHER_IDENTITY = '-----BEGIN OPENSSH PRIVATE KEY-----\nother\n-----END OPENSSH PRIVATE KEY-----\n'
 
 
 def _dial(tmp_path: Any, host: str = HOST) -> tuple[Any, dict[str, list[str]]]:
@@ -463,6 +475,61 @@ def test_a_checkout_the_provider_would_rewrite_the_path_of_is_refused(tmp_path: 
 
     with pytest.raises(ValueError, match=r'expands'):
         _ = connection_uri(host=HOST, private_key=IDENTITY, root=tmp_path / 'build$one')
+
+
+def _session_files(monitor: Providers, checkout: Path) -> dict[str, Path]:
+    """The files the session's URI names, by parameter, as the provider resolves them in `checkout`."""
+    uri = str(monitor.inputs_of(f'{CLUSTER}-libvirt', 'pulumi:providers:libvirt')['uri'])
+    query = parse_qs(urlsplit(uri).query)
+    return {name: _opened(checkout, query[name][0]) for name in ('keyfile', 'knownhosts')}
+
+
+async def _working_files_of(
+    project: str, stack: str, *, identity: str, host: str, machine_config: str, checkout: Path
+) -> dict[Path, str | None]:
+    """Every working file a run of `project`'s `stack` names, with what it holds when the run is declared."""
+    from kluster.components.homelab import PRIVATE_KEY
+
+    pulumi.runtime.set_all_config({f'{project}:{PRIVATE_KEY}': identity})
+    monitor = await run_with(Providers(machine_config), stack=stack, project=project)
+    async with declaring():
+        declared = build(host=host)
+    seed = _opened(checkout, str(await declared.seed.source.future()))
+    return _held([*_session_files(monitor, checkout).values(), seed])
+
+
+def _held(paths: Iterable[Path]) -> dict[Path, str | None]:
+    """What each file holds, by its digest, and `None` for one that is gone."""
+    return {path: hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None for path in paths}
+
+
+@pytest.mark.parametrize(
+    ('one', 'other'),
+    [(('kluster-py', 'physical'), ('kluster-py', 'physical-next')), (('kluster-py', 'physical'), ('fork', 'physical'))],
+    ids=['two-stacks-of-one-project', 'two-projects-with-one-stack-name'],
+)
+@pytest.mark.asyncio
+async def test_two_stacks_that_declare_the_host_from_one_checkout_keep_each_others_working_files(
+    tmp_path: Path, one: tuple[str, str], other: tuple[str, str]
+) -> None:
+    """Every stack run from a checkout reaches its `.credentials/`, and each working file is the last writer's.
+
+    The identity and `known_hosts` are written over whatever is at their
+    paths, and the seed removes every seed beside it, so two stacks at one
+    path would each dial with the other's identity and pin, and one stack's
+    run would delete the seed the other's volume is to be created from. A
+    stack is named within its project, so two projects that share a stack
+    name are two stacks too. The two runs differ in every input the files
+    are written from.
+    """
+    first = await _working_files_of(
+        *one, identity=IDENTITY, host=HOST, machine_config=MACHINE_CONFIG, checkout=tmp_path
+    )
+    _ = await _working_files_of(
+        *other, identity=OTHER_IDENTITY, host=OTHER_HOST, machine_config='machine: {other: true}\n', checkout=tmp_path
+    )
+
+    assert _held(first) == first
 
 
 def test_the_slot_is_the_checkouts_own_local_directory() -> None:
