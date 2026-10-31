@@ -690,7 +690,12 @@ def run_sync[T](coroutine: Coroutine[Any, Any, T]) -> T:
 
 
 async def run_hook(transport: ssh.Transport, props: Mapping[str, Any]) -> None:
-    """Run the post-apply hook, if the resource declares one."""
+    """Run the post-apply hook, if the resource declares one.
+
+    The hook is a command line for the transport's `run`, so on the device it
+    runs under the session user's login shell, as every command `ssh` sends
+    does (the `ssh` module docstring says which shell that is on the gateway).
+    """
     hook = props.get('hook')
     if not hook:
         return

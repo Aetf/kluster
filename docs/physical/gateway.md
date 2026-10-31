@@ -135,8 +135,11 @@ declarative/physical.md §4.
         release, what `/bin/sh` resolves to, and the side of systemd
         258 above. `gateway-health` reads each against the device
         (§1.6), and a mismatch is "The device's base moved" (§3). Root's
-        login shell is not among them, since nothing here depends on
-        it, and neither is the firmware's own release.
+        login shell is not among them, and neither is the firmware's own
+        release. The login shell goes unread because what reaches it is
+        held portable: the suite runs the commands the push sends under
+        dash on CI, so any POSIX shell in that place runs them (the
+        docstring of `src/kluster/providers/device_files/ssh.py`).
 
         **The `machinectl` verbs below are derived from systemd's and
         s6's sources rather than measured on this device**, which is

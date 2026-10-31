@@ -30,9 +30,23 @@ that position as the name of a file to read, and the connection fails with a
 The surface is deliberately five verbs -- read a file, stat a file, write a file,
 remove a file, run a command. Everything the provider does is one of those, so a
 test double is a dictionary of files and a list of commands rather than a shell
-emulator. The verbs are `sh` one-liners over an exec channel rather than SFTP:
+emulator. The verbs are shell one-liners over an exec channel rather than SFTP:
 UniFi OS is not guaranteed to offer the SFTP subsystem, while a shell is the one
 thing an SSH server on such a device always has.
+
+**The shell that runs them is the login shell of the session's user.** An SSH
+server hands an exec channel's command to that shell as `<shell> -c <command>`,
+and every verb is one such command, `run` and a resource's hook included. On
+the gateway that shell is root's `/bin/bash`, while the device's `/bin/sh` is
+dash (physical/gateway.md §1, "The device's shells"). So a command sent here
+runs under bash, and a script it executes runs under the interpreter the
+script names: the gateway's `#!/bin/sh` scripts run under dash.
+
+The suite runs these commands as `['/bin/sh', '-c', …]`, under the host's
+`/bin/sh`. On CI's Ubuntu runners that is dash, the stricter of the two: it
+refuses the bashisms bash accepts, so a command that passes there leans on
+nothing only bash has. On a workstation whose `/bin/sh` is bash, as on Arch, it
+is the device's shell itself, started as `sh` and so in its POSIX mode.
 
 Writes are staged: the bytes land in a sibling temporary file, take their mode
 and ownership there, and are moved into place with `mv`, which is atomic within a
@@ -383,7 +397,7 @@ class Transport(Protocol):
         ...
 
     async def run(self, command: str) -> CommandResult:
-        """Run a command through the device's shell and report how it went."""
+        """Run a command through the session user's login shell and report how it went."""
         ...
 
 
