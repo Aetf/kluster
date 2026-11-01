@@ -65,7 +65,7 @@ IMAGE_BUCKET = f'{NAME}-images'
 #: one pair for renovate's manager, which reads them in this order.
 POSTGRES_REPOSITORY = 'docker.io/library/postgres'
 POSTGRES_TAG = '17'
-POSTGRES_DIGEST = 'sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3'
+POSTGRES_DIGEST = 'sha256:3b0cda93be7c8dba2ed484d19393d93845dc3dafb88973e248ba8e6d99d784e1'
 POSTGRES_IMAGE = f'{POSTGRES_REPOSITORY}:{POSTGRES_TAG}@{POSTGRES_DIGEST}'
 
 #: The uid the official image runs Postgres as; the server key is owned by it.
