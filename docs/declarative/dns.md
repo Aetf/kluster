@@ -81,14 +81,16 @@ from the records:
     authorization outlive the edge.
 -   **A zone whose names something outside this installation serves gets
     no pin invented for it.** jiahui.id's mail is forwarded by its
-    registrar, and the log (§1.2) shows several authorities issuing for
-    the zone rather than one: the pair — apex and `*.jiahui.id` in one
-    certificate — from whichever of the edge's partners its rotation
-    draws, since the edge mints one for every zone it hosts, proxied or
-    not, beside an apex-only certificate from Let's Encrypt. It carries
-    no CAA, so it keeps none. A pin that current issuance does not
-    satisfy is an outage at the next renewal, and no CAA is not a
-    regression from no CAA.
+    registrar, so what serves the zone's names, and which authority a
+    service there uses, is decided outside this installation, and the
+    operator keeps the zone unpinned (`kluster-ops#703`). In the crt.sh
+    reads of 2026-10-29 (§1.2), what was issued for it after 2026-08-08
+    is the edge's alone: the pair — apex and `*.jiahui.id` in one
+    certificate — from `pki.goog` and `sectigo.com`, since the edge mints
+    one for every zone it hosts, proxied or not. A pin of the edge's set
+    would admit that, and refuse any other authority, which a service the
+    zone's names point at might use. It carries no CAA, so it keeps none,
+    and no CAA is not a regression from no CAA.
 
 Both tags are written out: `issuewild` does not inherit from `issue`,
 and the LAN-only names are covered by per-zone wildcards (§4).
@@ -200,7 +202,7 @@ Certification Practice Statement, or from the Cloudflare
 certificate-authorities page `base.py` cites where it is one of the
 edge's. A zone absent from `ZONE_ISSUERS` has no set to compare against;
 its rows say who issues for it, which is what a pin would have to name
-(§1.1) and is the reason it carries none.
+(§1.1).
 
 **A finding** is a row whose issuer is outside the zone's set, or whose
 name the declaration does not carry. Findings are filed as issues in

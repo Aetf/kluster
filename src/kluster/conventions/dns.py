@@ -36,11 +36,14 @@ PARKED_ZONES = ('peifeng.phd', ZONE_SHORT)
 
 #: The zone whose names something outside this installation serves: its mail,
 #: which the registrar forwards. It carries no CAA, because nothing here
-#: decides which authorities issue for it — the log shows the edge's partner
-#: rotation beside Let's Encrypt — and a pin that current issuance does not
-#: satisfy is an outage at the next renewal (declarative/dns.md §1.1). The
-#: name is the registrar's and the Cloudflare zone's, both held outside this
-#: repository, so it is not this repository's to rename.
+#: decides which authorities issue for it: that is decided where its names
+#: are served, and the operator keeps it unpinned (`kluster-ops#703`). In the
+#: crt.sh reads of 2026-10-29, what was issued for it after 2026-08-08 is the
+#: edge's alone, so a pin of the edge's set would admit it, and refuse any
+#: other authority, which a service the zone's names point at might use
+#: (declarative/dns.md §1.1). The name is the registrar's and the Cloudflare
+#: zone's, both held outside this repository, so it is not this repository's
+#: to rename.
 ZONE_EXTERNALLY_ISSUED = 'jiahui.id'
 
 #: Family zones — taxonomy only, so that `ALL_ZONES` reads. Nothing is
