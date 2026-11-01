@@ -1940,7 +1940,7 @@ never a hunt for per-machine environment wiring:
 | `operator.passphrase` | The operator passphrase (§2.2), which opens the operator stacks (framework/pulumi.md §3.3) and nothing else, on a machine whose desktop secret store does not hold it: the file layer of §2's chain, below the store. Found by the `operator-stack` driver, which hands it to `pulumi` for every run of an operator stack, and read by no `mise.toml` template: `PULUMI_CONFIG_PASSPHRASE` is process-global, so which passphrase is right depends on the stack a command names, which a template never sees. | `credentials derived operator-passphrase generate`, `credentials derived operator-passphrase recover`, where the machine has no store |
 | `roots/<root>.<field>` | An account root's token file — the second layer of §2's chain, written only on a machine with no desktop secret store. No tool reads one on its own; a `credentials` run does, when a mint asks for the root. | `credentials root <name> remember` |
 | `state-backend/` | What a workstation knows about the appliance. The `operator` client bundle: CA, certificate, key, and the connection string for the appliance they authenticate against — which names the appliance and none of the files; the key is `0600`, which libpq insists on. `bundle operator` writes it, each time over the last, and the `state-backend` stack's hooks and the `operator-stack` driver connect with it. `known_hosts`, the box's SSH host-key pin (physical/state-backend.md §1): the committed public half, written by every `ssh` before it connects, rewritten whole rather than ever cleared. | `state-backend bundle operator`, `state-backend ssh` |
-| `libvirt/` | Working files, not slots (physical/homelab-host.md §6), in one directory per project and stack, `libvirt/<project>/<stack>/`: that stack's libvirt SSH identity, copied `0600` out of its config on every run that opens it, the `known_hosts` pinning the host's key, and the worker's seed image. | the `physical` stack |
+| `libvirt/` | Working files, not slots (below, and physical/homelab-host.md §6), in one directory per project and stack, `libvirt/<project>/<stack>/`: that stack's libvirt SSH identity, copied `0600` out of its config on every run that opens it, the `known_hosts` pinning the host's key, and the worker's seed image. | the `physical` stack |
 
 **The directory is `0700`, and that is the boundary that matters**: it
 is what keeps every entry inside it private, whatever mode the file
@@ -1957,6 +1957,24 @@ is irreplaceable, and it is irreplaceable in the envelopes rather than
 here; every other entry is recovered, re-issued or re-pasted by the
 command in the right-hand column, so a lost `.credentials/` costs a few
 commands and no credential.
+
+**A working file is placed under its project and stack whenever its
+writer overwrites or removes what is already at or beside its path.**
+A working file is one a stack program writes on every run with no
+resource behind it: no create records it and no delete removes it, and
+it is not a slot, which a command writes for the operator to keep. Its
+place is `<consumer>/<project>/<stack>/`, `<consumer>` naming what the
+file is written for. Every stack run from one checkout shares
+`.credentials/`, so such a file is the last writer's, and a writer that
+clears its directory clears another stack's files too. The project is
+in the place as well as the stack because a stack is named within its
+project. An object a resource stands for on the machine running the
+program has the sibling rule,
+[style/pulumi.md](style/pulumi.md) under "Resources and their
+contents": that one places what a create writes and a delete removes,
+this one what the program writes on every run. Today: the libvirt
+identity, `known_hosts` and seed, `libvirt/<project>/<stack>/`
+(`components/homelab`).
 
 `mise.toml` reads this directory — the stack passphrase's slot, the backend
 URL and the three `PGSSL*` variables naming the bundle beside it —

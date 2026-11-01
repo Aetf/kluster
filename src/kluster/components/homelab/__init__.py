@@ -200,14 +200,13 @@ def slot(root: Path | None = None) -> Path:
 def working_directory(root: Path | None = None) -> Path:
     """`slot`'s directory for the stack this run belongs to: `.credentials/libvirt/<project>/<stack>/`.
 
-    Every working file is written here, because the checkout is shared and the
-    files are not: every stack run from one checkout reaches the same `slot`,
-    and each file is the last writer's. `connection_uri` writes the identity
-    and `known_hosts` over whatever is there, and `seed.write` removes every
-    seed beside the one it writes, so two stacks that declare a `HomelabHost`
-    from one checkout would each dial with the other's files and delete the
-    other's seed. The project is in the path as well as the stack, because a
-    stack is named within its project.
+    Every working file is written here, under its project and stack, by the
+    rule for working files (credentials.md §4.4). The rule applies because of
+    what the writers do: `connection_uri` writes the identity and `known_hosts`
+    over whatever is there, and `seed.write` removes every seed beside the one
+    it writes, so two stacks that declare a `HomelabHost` from one checkout
+    would otherwise each dial with the other's files and delete the other's
+    seed.
 
     The stack is the unit because a stack declares one `HomelabHost`, the host
     being one machine. Nothing enforces that: a second one in the same stack

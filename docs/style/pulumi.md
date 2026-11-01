@@ -483,7 +483,10 @@ project's and the stack's names in its place. Both are names the stack
 has on every machine, so one declaration keeps one place wherever it
 runs. An object whose name is made unique where it is made, as a
 `tempfile` directory is, is no other resource's to declare, and its
-place needs neither name. Today: the Talos image cache,
+place needs neither name. A file the program writes on every run, with
+no resource behind it, is a working file, and the rule for working
+files is [credentials.md](../credentials.md) §4.4's. Today: the Talos
+image cache,
 `IMAGE_CACHE/<project>/<stack>/` (`components/talos/image.py`).
 
 **Adopted resources graduate to declared.** `import` is step one of
