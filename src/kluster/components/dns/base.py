@@ -163,9 +163,9 @@ CLUSTER_ISSUERS: tuple[str, ...] = ('letsencrypt.org',)
 
 #: Zone → the CA set its CAA names, keyed by who actually issues for names in
 #: it (dns.md §1.1). A zone absent from this table carries no CAA at all, which
-#: is the only safe answer for a zone something outside this installation
-#: issues for: a pin that current issuance does not satisfy is an outage on
-#: the next renewal.
+#: is the only safe answer for a zone whose names something outside this
+#: installation serves: which authority that service uses is decided there,
+#: and a pin that does not name it fails that service's certificate.
 #:
 #: This is the one table where "which zones" is the answer rather than the
 #: premise, so it stays zone-first and `caa_blocks` groups it into the block
