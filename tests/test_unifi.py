@@ -23,7 +23,10 @@ visible in a rendered resource. So the suite asserts them directly:
 -   the cluster VLAN is a network object with no DHCP server, alone in a zone
     of its own, and everything that names the worker names that zone;
 -   the peer's IPv4 forward exists only once the application runs on the
-    worker, because until then the port is the legacy host's.
+    worker, because until then the port is the legacy host's;
+-   an allow asks for its return leg wherever the controller lets it:
+    everywhere but toward `External`, whose reverse pair already holds the
+    controller's return-only policy; and a drop never asks for one.
 
 No controller is contacted: the boundary is Pulumi's mock monitor, which
 answers the zone lookups and hands back the inputs each resource was given.
@@ -176,6 +179,34 @@ async def test_every_policy_is_declared_in_force(mocks: Controller) -> None:
 
 
 @pytest.mark.asyncio
+async def test_only_an_allow_away_from_external_asks_for_a_return_leg(mocks: Controller) -> None:
+    """The return flag follows the action and the destination zone, because the controller's own return policy does.
+
+    Every zone but `External` itself gets a predefined `External → <zone>`
+    `Allow Return Traffic`, and the controller refuses a flagged allow to
+    `External` for asking for a second one (Aetf/kluster-ops#709). So an
+    allow to `External` that sets the flag fails the apply. Between the
+    cluster zone and `Internal` the flag is the only thing that admits the
+    reply, because the reverse pair is a predefined block, so an allow there
+    without it admits a request and drops its answer. A drop has no answer
+    to admit, and the controller's refusal of a flagged policy toward
+    `External` was measured on allows only.
+    """
+    async with declaring():
+        build()
+
+    policies = mocks.by_name(POLICY)
+    # A loop is only a claim about what it visits; which policies there are is
+    # the census case's to pin. This one refuses to pass with either half
+    # unvisited.
+    assert any(inputs['action'] == 'ALLOW' for inputs in policies.values()), 'the build declared no allow'
+    assert any(inputs['action'] == 'BLOCK' for inputs in policies.values()), 'the build declared no drop'
+    for name, inputs in policies.items():
+        asks = inputs['action'] == 'ALLOW' and inputs['destination']['zoneId'] != zone_id(unifi.ZONE_EXTERNAL)
+        assert inputs.get('autoAllowReturnTraffic') is (True if asks else None), name
+
+
+@pytest.mark.asyncio
 async def test_the_cluster_vlan_is_a_network_object_the_gateway_terminates() -> None:
     """The opposite decision from the pool, and the reason nodes are policeable.
 
@@ -233,12 +264,14 @@ async def test_the_cluster_sits_alone_in_a_zone_this_program_creates() -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_new_zone_is_given_the_egress_its_nodes_cannot_work_without() -> None:
-    """A zone the controller has just been told about is denied in both directions.
+async def test_the_new_zone_declares_the_egress_its_nodes_cannot_work_without() -> None:
+    """The egress a new zone is given by default, declared rather than relied on.
 
-    So this policy is not a tightening: it is what makes the zone usable at
-    all. A cluster node's control plane is in a cloud region, and a node that
-    cannot leave the site cannot join the cluster it is a member of.
+    A zone the controller has just been told about reaches `External` through
+    a predefined `Allow All Traffic`, so this policy opens nothing the default
+    has not. It is declared because the cluster relies on it: a node's control
+    plane is in a cloud region, and a node that cannot leave the site cannot
+    join the cluster it is a member of.
     """
     firewall = build()
 
@@ -253,7 +286,6 @@ async def test_the_new_zone_is_given_the_egress_its_nodes_cannot_work_without() 
     assert source.ips is None
     assert await firewall.policies['cluster-egress'].ip_version.future() == 'BOTH'
     assert await firewall.policies['cluster-egress'].protocol.future() == 'all'
-    assert await firewall.policies['cluster-egress'].auto_allow_return_traffic.future() is True
 
 
 @pytest.mark.asyncio
@@ -291,9 +323,6 @@ async def test_the_cluster_zone_talks_to_the_home_in_both_directions() -> None:
     for policy in (outward, inward):
         assert await policy.ip_version.future() == 'BOTH'
         assert await policy.protocol.future() == 'all'
-        # An allow whose return leg is classified on the reverse pair and not
-        # admitted there is an allow that admits a request and drops the reply.
-        assert await policy.auto_allow_return_traffic.future() is True
 
 
 @pytest.mark.asyncio
@@ -388,9 +417,6 @@ async def test_only_the_media_vip_is_reachable_from_the_iot_vlan() -> None:
         assert destination is not None
         assert destination.ips == [str(vip)]
         assert await policy.protocol.future() == 'tcp'
-        # The reverse zone pair is where the answer is classified; an allow
-        # without it admits a request and drops the reply.
-        assert await policy.auto_allow_return_traffic.future() is True
 
 
 @pytest.mark.asyncio

@@ -654,10 +654,12 @@ own** it is placed in — the isolation the shared server LAN could not
 offer (physical/gateway.md §4.2) — the IoT→lan-pool zone
 policy with its address groups (architecture.md §3.4 — the v4 CIDR
 group and the ULA group are separate objects, UniFi address groups
-being single-family), the **three zone-matrix policies the new zone
-needs to be usable** (cluster→External, cluster→Internal, and
-Internal→cluster with the IoT VLAN dropped ahead of it as a
-single-family pair), a **`FirewallZonePolicyOrder` on every zone pair
+being single-family), the **three zone-matrix policies of the new
+zone** — cluster→Internal and Internal→cluster, with the IoT VLAN
+dropped ahead of the latter as a single-family pair, open directions
+a new zone is blocked in; cluster→External declares the egress a new
+zone is given by default, which the design relies on — a
+**`FirewallZonePolicyOrder` on every zone pair
 that carries a policy** — position is not a property of a policy, and
 on the inbound pair a drop declared after the allow matches nothing —
 the qbittorrent v6 pinhole — declared only once `workerGua` carries
@@ -897,9 +899,9 @@ the LAN's resolvers down and the machines' state already moved: the
 bridged filipowm/unifi provider round-tripping a scratch
 `firewall_zone_policy` (create → clean diff → delete) against the
 UDM's current Network release — the resource is experimental and
-targets UniFi OS ≥9, and a failure here flips the rules to the
-device-files provider's `UnifiFirewallPolicy` fallback
-(architecture.md §5.1). The same probe checks the legacy port-forward
+targets UniFi OS ≥9, and a resource that does not round-trip here
+flips the rules to the device-files provider's `UnifiFirewallPolicy`
+fallback (architecture.md §5.1). The same probe checks the legacy port-forward
 endpoint still accepting writes on a zone-firewall controller, which
 the window itself never exercises: the one declared forward is first
 written in Wave D, once qbittorrent runs on the worker

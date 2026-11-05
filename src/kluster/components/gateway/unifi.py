@@ -77,7 +77,7 @@ import pulumi_unifi as unifi
 from kluster import conventions
 from putils import Component, own_provider_opts, with_provider
 
-__all__ = ('CENSUS', 'SiteFirewall', 'controller_provider')
+__all__ = ('CENSUS', 'SiteFirewall', 'controller_provider', 'return_flag')
 
 #: The predefined zones of a UniFi OS 9 controller, looked up by name rather
 #: than by id: an id is per-site state, a name is stock. `Internal` holds
@@ -188,6 +188,36 @@ class Zone(enum.Enum):
     CLUSTER = enum.auto()
 
 
+def return_flag(action: Literal['ALLOW', 'BLOCK'], destination: Zone) -> Literal[True] | None:
+    """A zone policy's `auto_allow_return_traffic`: how an allow admits its return leg.
+
+    Set, the controller creates a `<name> (Return)` allow on the reverse pair
+    beside the policy. That is how every allow but one kind gets its return
+    leg. The exception is an allow to `External`, whose reverse pair already
+    holds the return leg: the controller gives every other zone, `Internal`
+    and the one `SiteFirewall` creates alike, a predefined `External →
+    <zone>` policy named `Allow Return Traffic`, which admits related and
+    established traffic only (`RESPOND_ONLY`), and it refuses to create a
+    second one — `400 … Firewall policy create respond traffic not
+    allowed`, on every pair whose destination is `External` — while it
+    accepts the flag on every other pair the census declares (read off the
+    controller 2026-11-05, Aetf/kluster-ops#709). So an allow to `External`
+    sets no flag, and its return leg is that predefined policy.
+
+    That is a dependency on a policy this program neither declares nor reads,
+    and nothing in it would notice the policy going away: a refresh compares
+    only what is declared. Its absence would surface as dropped replies to
+    the allows toward `External` — the cluster's egress and the IoT VLAN's
+    reach to the media VIP — not as a diff. physical/gateway.md §4.2 records
+    the same dependency.
+
+    A drop has no return leg to admit, so it sets nothing.
+    """
+    if action != 'ALLOW' or destination is Zone.EXTERNAL:
+        return None
+    return True
+
+
 class Needs(enum.Enum):
     """What a conditional row waits for before it is declared at all."""
 
@@ -244,10 +274,11 @@ IOT_V6 = AddressGroup('iot-v6', f'{conventions.CLUSTER_NAME}-iot-v6', convention
 class Policy:
     """One zone policy, on the pair whose row holds it.
 
-    An allow also admits its return leg (`auto_allow_return_traffic`): an
-    allow whose return leg is not allowed is not an allow, and the reverse
-    zone pair is where the return leg is classified. A drop sets nothing
-    there.
+    An allow also admits its return leg: an allow whose return leg is not
+    allowed is not an allow, and the reverse zone pair is where the return
+    leg is classified. Toward `External` that leg is a policy the
+    controller keeps on its own; on every other pair it is the one the
+    allow asks for (`return_flag`). A drop admits nothing there.
 
     `key` is the resource's name after the component's, and so part of its
     URN: changing it replaces the policy on the controller.
@@ -312,9 +343,12 @@ CENSUS: tuple[Pair | Forward, ...] = (
     # edit and never a firewall edit. On the uplink pair, because that is
     # where pool-bound traffic is classified (module docstring). Both allows
     # precede both drops, and all four precede the pair's predefined
-    # policies: otherwise the predefined accept on the uplink pair would
-    # answer first and the drop would never be reached. Family by family,
-    # because the source is the VLAN's group and a group holds one family.
+    # policies and the site's own policies on the pair: otherwise the
+    # predefined accept on the uplink pair, or a site allow that overlaps the
+    # drop, would answer first and the drop would never be reached for what
+    # it admits (two site allows overlap it, Aetf/kluster-ops#709). Family
+    # by family, because the source is the VLAN's group and a group holds
+    # one family.
     Pair(
         order='iot-pool-order',
         source=Zone.INTERNAL,
@@ -365,11 +399,13 @@ CENSUS: tuple[Pair | Forward, ...] = (
         ),
     ),
     # The cluster zone's way out. A zone the controller has only just been
-    # told about is denied against every other zone in both directions, so
-    # this is not a tightening but the thing that makes the zone usable at
-    # all: a node whose control plane is in a cloud region has to be able to
-    # leave the site. Both families in one policy, because the zone is
-    # dual-stack and nothing here distinguishes them.
+    # told about is blocked to and from `Internal` and to new connections
+    # from `External`, but its way to `External` is a predefined `Allow All
+    # Traffic`. So this policy opens nothing the default has not: it declares
+    # the egress the cluster relies on — a node whose control plane is in a
+    # cloud region has to be able to leave the site — rather than leaving it
+    # to a default the program does not own. Both families in one policy,
+    # because the zone is dual-stack and nothing here distinguishes them.
     Pair(
         order='cluster-egress-order',
         source=Zone.CLUSTER,
@@ -646,7 +682,7 @@ class SiteFirewall(Component, pulumi_type='kluster:gateway:SiteFirewall'):
                         ip_group_id=None if policy.source is None else self.groups[policy.source.key].id,
                     ),
                     destination=destination(policy, zones[pair.destination]),
-                    auto_allow_return_traffic=True if policy.action == 'ALLOW' else None,
+                    auto_allow_return_traffic=return_flag(policy.action, pair.destination),
                     enabled=True,
                     opts=child,
                 )
