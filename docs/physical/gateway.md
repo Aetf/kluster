@@ -2842,6 +2842,24 @@ looked up by, while the site's address plan does state its subnets.
 The cluster VLAN needs neither: it is alone in its zone, and a policy
 names it by naming the zone.
 
+**An allow admits its return leg, and toward External the controller's
+own policy is that leg.** Every allow but those to External sets
+`auto_allow_return_traffic`, which has the controller add a
+`<name> (Return)` allow on the reverse pair. An allow to External —
+rule 1's and rule 2's — sets nothing. The controller gives every other zone
+a predefined `External → <zone>` policy, `Allow Return Traffic`, which
+admits related and established traffic only, and it refuses the flag on
+every pair whose destination is External — `Firewall policy create
+respond traffic not allowed` — while it accepts it on every other pair
+the census declares, read off the controller on 2026-11-05
+(Aetf/kluster-ops#709). The return leg of those allows
+therefore rests on a policy the census does not declare. Nothing in the
+program would notice that policy going away, since the program neither
+declares nor reads it and a refresh compares only what is declared. Its
+absence would surface as dropped replies — the nodes cut off from their
+off-site control plane, the televisions from the media VIP — and not as
+a diff. The rule is `return_flag` in `components/gateway/unifi.py`.
+
 1.  **IoT → `lan` pool: default drop with one enumerated allow**
     (audit M2, amended 2026-08-24; ships with the cluster). The
     allow precedes the drop: **IoT → the media VIP, port 443** —
@@ -2862,14 +2880,22 @@ names it by naming the zone.
     cluster→IoT" was wrong — TV/streamer → jellyfin is an
     IoT-originated dependency the census missed; a blanket drop
     would have severed it at jellyfin's migration wave.
-    Ordered allow-then-drop, and both ahead of the pair's predefined
-    ACCEPT, or the drop is never reached.
+    Ordered allow-then-drop, and all of them ahead of the pair's
+    predefined ACCEPT and of the site's own policies on the pair, or
+    the drop is never reached for what those admit; two of the site's
+    own admit IPv6 traffic the drop stops, ICMPv6 and link-local or
+    unique-local mDNS and Matter (read 2026-11-05,
+    Aetf/kluster-ops#709).
 2.  **cluster zone → External: allow**, both families, every
     protocol. A zone the controller has just been told about is
-    denied against every other zone in both directions, so this is
-    not a tightening but the policy that makes the zone usable: a
-    node whose control plane is in a cloud region has to be able to
-    leave the site.
+    blocked to and from Internal and to new connections from
+    External, but its way to External is a predefined `Allow All
+    Traffic` (read off the controller on 2026-11-05,
+    Aetf/kluster-ops#709). So this policy opens nothing the default
+    has not: it declares the egress the design relies on — a node
+    whose control plane is in a cloud region has to be able to leave
+    the site — rather than leaving it to a default the program does
+    not own.
 3.  **cluster zone → Internal: allow**, both families, every
     protocol, return traffic admitted. This is the direction the
     recorded cross-VLAN dependencies run in — the home-automation API
@@ -2933,7 +2959,9 @@ Nothing else. A controller rule not on this census is drift.
 
 **Phase 1 (ships with the cluster rollout)**: exactly the census
 above. The cluster zone is **open to Internal and External, and open
-from Internal with the IoT source carved out**. LAN→LAN stays open;
+from Internal with the IoT source carved out**; of those, a new zone's
+defaults open only the way to External, which the census declares all
+the same (§4.2 rule 2). LAN→LAN stays open;
 the zero-isolation fact remains a dependency-in-force, now with the
 cluster VLAN sitting outside it as a zone whose policy can be
 tightened on its own schedule.

@@ -215,9 +215,9 @@ def test_the_controller_is_dialed_where_the_roster_placed_the_gateway(ran: Run) 
 def test_the_cluster_zone_is_opened_to_the_home_with_the_iot_vlan_carved_out(ran: Run) -> None:
     """The zone matrix as the whole run declares it, not as one component does.
 
-    A zone the controller has just been told about is denied against every
-    other zone in both directions, so each direction the design wants open is
-    a policy the stack has to declare — and the one direction it does not want
+    A zone the controller has just been told about is blocked to and from
+    `Internal`, so each direction to the home the design wants open is a
+    policy the stack has to declare — and the one direction it does not want
     open, the IoT VLAN into the node subnet, is a drop that has to be ordered
     *ahead* of the zone-wide allow beside it. Both properties are wiring: they
     hold only if the stack reaches this arm of the gateway at all, which is
