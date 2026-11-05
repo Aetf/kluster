@@ -1,10 +1,10 @@
 # RFC 008: The Workload Migration
 
 *   **Status:** Proposed, 2026-11-05. The operator ruled on an outline of
-    this design on 2026-11-05. hath moves directly after Wave A2 has
-    soaked (§11.1). The unit of migration in §3, the shapes in §4, the
-    wave order and the slices in §10 stand as written, together with
-    every decision the outline listed as settled.
+    this design on 2026-11-05: hath moves directly after Wave A2 has
+    soaked (§11.1), and the unit of migration, the mechanisms ahead of
+    the shapes and the shapes ahead of the builds, the wave order and
+    every decision the outline listed as settled stand.
 *   **Created:** 2026-11-05
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
@@ -16,32 +16,38 @@
     declares a route and the stack that writes its rewrite (rfc-003 §6);
     [rfc-007](rfc-007-k8s-base-and-apps.md), for the application base,
     `route`, the sealed values and where a sealed value lives (rfc-007
-    §6.2, §9), and for the three decisions it left to the migration's
-    design (rfc-007 §15.3). Their precedents are cited at each use rather
-    than re-argued.
+    §6.2, §9), and for the decisions it left to the migration's design
+    (rfc-007 §15.3). Their precedents are cited at each use rather than
+    re-argued.
 *   **In scope:**
     1.  the unit of migration: how an application's component is built
         before its wave, deployed beside the legacy name, verified, and
         given the name, and how each step is rolled back;
-    2.  the order in which the deploy chain applies `dns` and `apps`;
+    2.  the order in which the deploy chain applies `dns`, `k8s-base`
+        and `apps`;
     3.  the shared shapes the applications are built from: public ports,
         LAN ports, names for raw ports, the authentication gate, backed
         claims, NAS datasets, node volumes, databases, single sign-on,
         static sites, and the secrets the migration carries;
     4.  per wave, each application's component, its data move, its
-        cutover with its DNS, its verification and its rollback;
+        cutover with its DNS, its verification and its rollback, and
+        what of the legacy estate keeps running for the applications
+        that have not moved;
     5.  the homelab worker's memory across the waves: when it grows, by
         how much, what is verified first, and how a rollback after a
         growth is run;
-    6.  the three decisions rfc-007 §15.3 left to this design;
+    6.  the decisions rfc-007 §15.3 left to the migration's design;
     7.  what the decommission inherits from the waves;
     8.  the slices.
 *   **Out of scope:**
     *   **The decommission itself**: the legacy cluster's teardown, the
         VPS's cancellation, the trackers' retirement, the sealing key's
-        rotation and the worker's final sizing. migration.md §4 lists
+        rotation and the worker's final size. migration.md §4 lists
         them, and the milestone that retires the legacy estate opens with
         a design of its own. §5.8 says what it inherits.
+    *   **Whether the state-backend appliance's pins move into the
+        `versions:` block**, the one decision of rfc-007 §15.3 that is
+        not the migration's: it is that appliance's own change.
     *   **The GPU's allocation mechanism in the cluster.** It is
         `k8s-base`'s ([declarative/cluster-infra.md](../declarative/cluster-infra.md)
         §1 item 7). An application here requests the A380 through
@@ -58,11 +64,13 @@
         migrating").
     *   **The applications retired outright** (migration.md §2), which
         never land.
-    *   **The upgrade of immich's `vchord` extension.** It runs once,
-        on the new cluster, after every workload has moved.
+    *   **The upgrade of immich's `vchord` extension.** It is immich's
+        own change, made once on the new cluster after every workload
+        has moved.
     *   **Edits inside kluster-code**, the legacy repository. Each wave
-        needs two of them (§3.5), and they are that repository's pull
-        requests; the slices here name them.
+        that stops legacy applications needs changes there (§3.5); they
+        are that repository's pull requests, and the slices here name
+        them.
 
 --------------------------------------------------------------------------------
 
@@ -77,8 +85,8 @@ legacy cluster holds its share (§6.1), the VPS is a monthly bill, and
 every day both run is a day on which a change has two places to land
 ([sources-of-truth.md](../sources-of-truth.md), rule 1).
 
-Most of the migration was decided before this document.
-migration.md orders the waves and names each storage kind's data move.
+Most of the migration was decided before this document. migration.md
+orders the waves and names each storage kind's data move.
 [declarative/workloads.md](../declarative/workloads.md) fixes the
 application contract: each component owns its namespace, workload,
 storage and backups, its exposure and its DNS records. rfc-007 builds
@@ -90,8 +98,8 @@ the application base and `route`. What is left is of four kinds:
     the cut one pull request, and a merge to `main` is an apply of
     `apps`. The same merge also hands each name from `dns`, which deletes
     its legacy block, to `apps`, which creates its record, and the deploy
-    chain runs those two stacks in parallel, while Cloudflare refuses
-    the second record while the first stands (§3.4).
+    chain runs those two stacks in parallel while Cloudflare refuses the
+    second record as long as the first stands (§3.4).
 *   **Shapes the contract names and nothing builds**: `public_port`,
     `backed_pvc`, the database pattern, the static site, the
     authentication gate. Beside them are the shapes the legacy estate
@@ -102,16 +110,18 @@ the application base and `route`. What is left is of four kinds:
     bucket. Its authentication service's users and second factors are
     backed up nowhere. One application's data sits on the shared
     JuiceFS volume, which migration.md §3 treats as the syncthing
-    replica's alone. The selectorless backend workloads.md §4 designs
-    for Home Assistant is one a cloud node cannot reach. The mail
-    relay the authentication service sends through is scheduled a wave
-    after it. Each is settled where its wave is (§5).
+    replica's alone. Legacy applications that stay behind for a wave
+    depend on the authentication service and the mail relay that move
+    first. The selectorless backend workloads.md §4 designs for Home
+    Assistant is one a cloud node cannot reach. Each is settled where
+    its wave is (§5).
 *   **The memory interleave, against measured numbers.** migration.md §0
     rule 4 grows the worker as legacy releases memory, towards
     [cluster/nodes.md](../cluster/nodes.md) §4.2's 20 GiB, and a
     rollback after a growth has nowhere to start the legacy application.
     The host's readings of 2026-11-05 put the ceiling below that end
-    state (§6.1).
+    state, and lower still while the legacy cluster's own control plane
+    runs (§6.1).
 
 The milestone is also the long pole: the platform below it is built,
 and stands up live directly after the bring-up. So this design is
@@ -126,17 +136,19 @@ waiting; each wave then costs only the small live steps of §3.
 | Precedent | Applied here |
 | --- | --- |
 | Stop-copy-start per application, verify before the DNS cut, rollback by scaling the legacy application back up (migration.md §0 rule 1) | The unit of migration: build, land, verify, cut (§3) |
-| One `route(row)` per HTTP exposure, the row's `Exposure` deciding gateways, record and rewrite; the rewrite is `dns`'s, from the same row (dns.md §3, §5; rfc-003 §6) | The legacy-held state, the apex row, the raw-port and public-and-IoT exposures (§3.3, §4.1) |
+| One `route(row)` per HTTP exposure, the row's `Exposure` deciding gateways, record and rewrite; the rewrite is `dns`'s, from the same row (dns.md §3, §5; rfc-003 §6) | The legacy-held state, the apex row, bare names, the raw-port and public-and-IoT exposures (§3.3, §4.1) |
 | Every record of a type the proxy can front is proxied unless it states why not, at its declaration (dns.md §2) | Route rows carry the same reason before the first direct name migrates (§4.1) |
 | `legacy.py` is one block per application, deleted whole at its migration (dns.md §6) | The block goes at the cut, not at the deploy (§3.2) |
-| A merge to `main` is an apply of `apps`, and `dns` and `apps` run in parallel on it (framework/ci.md §3; sources-of-truth.md §3) | `up-apps` waits for `up-dns` (§3.4) |
-| A component receives the census it acts on; a census read by more than one program is a convention ([style/pulumi.md](../style/pulumi.md), "Data") | Each application's component receives its rows; the LAN ports, the NAS datasets, the single sign-on clients and the backed namespaces are censuses in `conventions` (§4) |
-| A sealed value is a plain value in the declaring stack's configuration; `conventions.sealed` lists what `credentials` seals (rfc-007 §6.2) | The legacy ciphertexts and the backup credentials (§4.6) |
+| The stacks apply as `physical → dns ∥ k8s-base → apps`, with `apps` reading `dns`'s zone identifiers (dns.md §1); the deploy chain runs `up-apps` after `up-k8s-base` alone (framework/ci.md §3) | `up-k8s-base` and `up-apps` each wait for `up-dns`, whatever its result (§3.4) |
+| A component receives the census it acts on; a census read by more than one program is a convention, one read by one program is data in that program's area ([style/pulumi.md](../style/pulumi.md), "Data") | Each application's component receives its rows; the LAN ports, the backed namespaces and the single sign-on clients are conventions, the NAS datasets data of `apps` (§4) |
+| A sealed value is a plain value in the declaring stack's configuration; `conventions.sealed` lists what `credentials` seals, strict (rfc-007 §6.2) | The legacy ciphertexts, and the writer keys sealed namespace-wide (§4.6) |
+| The writer keys are `physical`'s, one scope per namespace on the backup bucket; a restic password is generated in state by `backed_pvc` ([credentials.md](../credentials.md) §2.2, §3) | Kept, with the sealed delivery the register leaves pending (§4.6) |
 | The legacy sealing key is restored at the first ported manifest, its channel left open (rfc-007 §6.3, §15.3) | A one-off carry at Wave A1's head, retired by the decommission's rotation (§4.6) |
 | How hath leaves on its own address is the migration's choice, the reserved address on its node's primary private address recommended (rfc-007 §15.3) | Taken (§5.4) |
 | Which name the alert read route answers on, and whether `k8s-base` publishes a record (rfc-007 §15.3) | `mon`, published by `k8s-base` (§5.5) |
+| The Gateways' apex listener arrives with the first application served at an apex (rfc-007 §5.2) | It arrives with the blog (§4.1) |
 | The worker grows as legacy releases memory, toward 20 GiB (migration.md §0 rule 4, nodes.md §4.2) | Grown to fit, in drained windows, with a reading before each (§6) |
-| A flip keeps the live service's feature parity unless its row records otherwise (sources-of-truth.md rule 4) | Each application's cut, and the two arrangements recorded in §5 |
+| A flip keeps the live service's feature parity unless its row records otherwise (sources-of-truth.md rule 4) | Each application's cut, and the arrangements §5 records: multicast discovery not carried, legacy alerting ending with the legacy applications it watches |
 | CNPG on local-path with barman to the backup bucket, a restore drill inherited from the legacy discipline (workloads.md §4) | One instance per database, recovery from the legacy store, the drill ported (§4.3) |
 
 --------------------------------------------------------------------------------
@@ -163,9 +175,9 @@ ahead of the cluster:
 *   **A component receives its census rows as parameters**, as
     style/pulumi.md asks of every component ("A component receives the
     census it acts on"). Its build slice tests it against rows of the
-    test's own, and its row in `conventions.routes` arrives with the
-    wiring, in the wave that lands it. The build therefore touches no
-    census, and no two builds share a file.
+    test's own, and its rows in the censuses arrive with the wiring, in
+    the wave that lands it. The build therefore touches no census, and
+    no two builds share a file.
 
 ### 3.2 Land, verify, cut
 
@@ -177,30 +189,31 @@ them:
     component into the `apps` program and adds its route rows in the
     legacy-held state (§3.3). The application runs on the new cluster;
     its route attaches to the Gateways; no public record and no rewrite
-    names it, so the name still answers where the legacy estate answers
-    it.
+    names it, so the name still resolves where the legacy estate
+    publishes it.
 2.  **Verify.** The name is requested at the cluster's front door
     directly — `curl --resolve <name>:443:<address>`, at the balancer's
     address for a public row and at the LAN VIP for a LAN-side one. The
-    Gateway matches the route by hostname, and the zone's wildcard
-    certificate, which the cluster holds for every zone a row names
-    (rfc-007 §5.2), answers the handshake, so the request reaches the
-    new application exactly as a client's will after the cut. Each wave
-    in §5 says what its applications are verified by.
+    Gateway matches the route by hostname, and the zone's certificate,
+    which the cluster holds for every zone a row names (rfc-007 §5.2),
+    answers the handshake, so the request reaches the new application
+    exactly as a client's will after the cut. Each wave in §5 says what
+    its applications are verified by.
 3.  **Cut.** The cut pull request deletes every legacy declaration of
     the name and takes the row out of the legacy-held state, so `apps`
     publishes the record and `dns` the rewrite. The legacy declarations
     are, by kind: the application's block in `legacy.py`; the web
     origin's address, for an apex (§4.5); a `$dnsrewrite` rule on the
     resolvers' declared list for the same name (sources-of-truth.md, row
-    R2); and a row of the gateway proxy's `conventions.gateway.LEGACY_VHOSTS`,
-    for a name under the retiring LAN zone, which `physical` serves
-    until the cut and whose apply waits on that stack's reviewer.
+    R2); and a row of the gateway proxy's
+    `conventions.gateway.LEGACY_VHOSTS`, for a name under the retiring
+    LAN zone, which `physical` serves until the cut and whose apply
+    waits on that stack's reviewer.
 
 **Why two merges.** Verification has to run against what is deployed,
 and nothing is deployed until a merge applies it; the cut has to wait
-for the verification. One merge cannot both. **New rule**, landing in
-migration.md §0 rule 1 and dns.md §6, whose "three files in one pull
+for the verification. One merge cannot do both. **New rule**, landing
+in migration.md §0 rule 1 and dns.md §6, whose "three files in one pull
 request" becomes the cut's pull request, with the component's wiring
 moved to the land's.
 
@@ -210,11 +223,11 @@ several, and the cut's pull request carries every name that verified. An
 application that does not verify is left out of the cut, and its land
 is reverted on its own (§3.6).
 
-A LAN-only application whose new name differs from its legacy one —
+**A LAN-only application whose new name differs from its legacy one** —
 every name under the retiring LAN zone becomes a name under a public
-zone (dns.md §4) — needs no legacy-held state: its new name has nobody
-else's declaration to collide with, so its row lands published, both
-names answer until the cut, and the cut deletes the vhost row alone.
+zone (dns.md §4) — needs no legacy-held state, unless the resolvers'
+rule list already rewrites the new name (§11.3): its row lands
+published, and the cut deletes the legacy name's vhost row.
 
 ### 3.3 The legacy-held route
 
@@ -224,33 +237,37 @@ publishes no record and no rewrite; `served_zones` still counts its
 zones, because verification needs the zone's certificate. **New rule**,
 landing in dns.md §5.
 
-**A row is held exactly while `dns` points its name at the VPS.** The
-invariant is a relation between `conventions.routes.ROUTES` and the
-`dns` stack's records — a row is held if and only if a record that
-addresses the VPS, in `legacy.py` or in the web origin's pair, holds the
-row's host in one of the row's zones — and it is held in
-`tests/test_conventions.py` with the census invariants, against a census
-that breaks it in each direction. A land that forgets the field, or a
-cut that deletes the block and keeps the field, is red there.
+**A row is held exactly while `dns` points its name at the VPS.** A
+record points at the VPS when its content is the VPS's address or its
+anchor (`legacy.IP_ARCHVPS`, `legacy.ANCHOR_ARCHVPS`), wherever the
+`dns` stack declares it: an application block of `legacy.py`, the web
+origin's pair, or `jiahui.love`'s apex. The invariant is a relation
+between `conventions.routes.ROUTES` and those records — a row is held if
+and only if such a record holds the row's host in one of the row's zones
+— and it is held in `tests/test_conventions.py` with the census
+invariants, against a census that breaks it in each direction. A land
+that forgets the field, or a cut that deletes the record and keeps the
+field, is red there.
 
-**Derivation was weighed and loses.** Deriving the state from
-`legacy.py` would make the illegal state unwritable, but `apps` would
-then read the `dns` stack's record blocks, which makes them a census of
-two readers that belongs in `conventions` (style/pulumi.md, "Data"),
-and moves the record types with them — for a fact that exists only
-until the migration ends. The field is the cheaper statement, and the
-relation test makes its one illegal state red.
+**Derivation was weighed and loses.** Deriving the state from the
+records would make the illegal state unwritable, but `apps` would then
+read the `dns` stack's record blocks, which makes them a census of two
+readers that belongs in `conventions` (style/pulumi.md, "Data"), and
+moves the record types with them — for a fact that exists only until the
+migration ends. The field is the cheaper statement, and the relation
+test makes its one illegal state red.
 
-**The field leaves with the last block.** It is a migration-period
-statement: when `legacy.py` is empty, the field and its relation test
-are deleted together, and nothing else changes. Its boundary is the
-field, the branch in `route` and in the rewrite derivation that reads
-it, and that test.
+**The field leaves with the last such record.** It is a
+migration-period statement: when nothing in `dns` points at the VPS,
+the field and its relation test are deleted together, and nothing else
+changes. Its boundary is the field, the branch in `route` and in the
+rewrite derivation that reads it, and that test.
 
 ### 3.4 The record changes hands in one run
 
 A cut deletes the legacy record in `dns` and creates the application's
-record in `apps`, at the same name. Two facts force their order:
+record in `apps` — or in `k8s-base`, for the monitoring component's
+name (§5.5) — at the same name. Two facts force their order:
 
 *   the pinned Cloudflare provider's `DnsRecord` has no option to adopt
     or overwrite a record that exists (`pulumi-cloudflare` 6.22.1, whose
@@ -259,23 +276,35 @@ record in `apps`, at the same name. Two facts force their order:
 *   Cloudflare refuses a CNAME beside another record of the same name,
     so a create that runs before the delete fails.
 
-**So `up-apps` runs after `up-dns`, whatever `up-dns`'s result.** In
-`deploy.yml`, `up-apps` needs `up-dns` beside `up-k8s-base`, and its
-condition requires only `up-k8s-base`'s success. A cut's run then
-deletes before it creates, and the name is absent for the time between
-them. A run in which `up-dns` failed still applies `apps`: a failing
-`dns` — the stack that reaches the LAN — never blocks the daily driver,
-which keeps the separation dns.md §3 put there. Only a cut whose
-`up-dns` failed then fails in `up-apps` too, on Cloudflare's refusal,
-and the next run converges it. **New rule**, landing in
+**So `up-k8s-base` and `up-apps` each run after `up-dns`, whatever
+`up-dns`'s result.** In `deploy.yml`, both name `up-dns` among their
+needs; `up-k8s-base` keeps its condition on the `physical` gate, and
+`up-apps` its condition on `up-k8s-base`'s success. That is dns.md §1's
+order, `physical → dns ∥ k8s-base → apps`, with `k8s-base` now behind
+`dns` too. A cut's run then deletes before it creates, and the name is
+absent for the time between them. **New rule**, landing in
 framework/ci.md §3.
+
+*   **A failed `up-dns` blocks neither stack.** A run in which it failed
+    still applies `k8s-base` and `apps`, so a failing `dns` — the stack
+    that reaches the LAN — never stops the daily driver, which keeps the
+    separation dns.md §3 put there. A slow or hung `up-dns` does delay
+    both, by up to its job's bound: that is the cost of the order.
+*   **A cut's run can leave a name unpublished.** Where `up-dns` deleted
+    the legacy records and `up-k8s-base` then failed, `up-apps` is
+    skipped and the cut's names resolve nowhere until a run succeeds. A
+    window therefore re-runs the chain until it succeeds before it
+    verifies the cut. Where `up-dns` failed before its deletes, the
+    create fails on Cloudflare's refusal and the names stay where they
+    were; the next run converges.
 
 **Adoption was weighed and loses.** A record kept by `dns` with
 `retain_on_delete` and imported by `apps` would change hands with no
 gap, but an import is refused unless the declared inputs match the
 record as it stands, so retargeting it takes a second apply of `apps`,
-and the import needs a record ID the program would have to look up. The gap it saves is a minute, inside a
-window in which the application is already stopped.
+and the import needs a record ID the program would have to look up.
+The gap it saves is a minute, inside a window in which the application
+is already stopped.
 
 ### 3.5 Stopping and removing the legacy side
 
@@ -284,15 +313,36 @@ window in which the application is already stopped.
 `main`, so a scale made by hand is undone by the next merge there,
 whatever it is about. The stop sets the application's workloads to no
 replicas and keeps every claim it holds. It merges at the head of the
-window, before the data move.
+window, before the data move. **New rule**, landing in migration.md §0
+rule 1.
+
+**A legacy service that other legacy applications depend on stops when
+its last legacy consumer has moved**, not with its own successor's
+land. Two such services move first:
+
+*   **The mail relay** keeps relaying for the legacy applications that
+    send through it — immich and the legacy monitoring — until Wave C's
+    head, when both stop. The new relay signs with the same key under
+    the same selector, so two relays signing at once is invisible to a
+    receiver.
+*   **The authentication service** stops at Wave A1's head, and the
+    same kluster-code change points the legacy forward-auth checks
+    at the new service's public authorization endpoints, the session
+    check and the HTTP Basic check alike. The gated legacy fronts —
+    `sync`, `dav`, `spool`, `sync-nas` — then ask the one service whose
+    sessions the portal issues, until each is cut. Two services side by
+    side would each hold their own sessions, and a sign-in at the portal
+    would never satisfy the other. The checks' target is the
+    legacy cluster's transitional state; it goes with the last gated
+    legacy front, at Wave C's cut.
 
 **It is removed by a second kluster-code change, after its cut has
 soaked**: the component goes, and its claims' directories are mapped
-or deleted in the retained-volume census storage.md §3.3 asks for. That
-removal is also what releases the application's memory for the next
-growth (§6.3).
+or deleted in the retained-volume census storage.md §3.3 asks for. The
+removal is part of the next window's head (§10.3), and it is what
+releases the application's memory for the next growth (§6.3).
 
-Both are kluster-code pull requests, which the operator merges; the
+These are kluster-code pull requests, which the operator merges; the
 slices of §10 carry them.
 
 ### 3.6 Rollback
@@ -301,17 +351,22 @@ slices of §10 carry them.
 | --- | --- |
 | Before the land merges | Revert the stop in kluster-code; nothing here changed |
 | After the land, before the cut | Revert the land: `apps` deletes the workload, and no record or rewrite was ever published. Then revert the stop |
-| After the cut | Two merges, in order. First the row goes back to legacy-held, so `apps` deletes its record and `dns` its rewrite. Then the legacy declarations come back, so `dns` recreates the block. Then the stop is reverted |
+| After the cut | Revert the cut in one merge, so that the row is held again, and its legacy records are back in the same commit, as §3.3's relation requires. Its first run fails in `up-dns`, on Cloudflare's refusal to recreate a record beside the application's, while `up-k8s-base` and `up-apps`, which run whatever that result, delete the application's record. A re-run of the chain then recreates the legacy record. Then revert the stop |
 | After a growth of the worker | The window reversed (§6.4), before the legacy application can start |
 
-A single revert of a cut is not a rollback: its run would recreate the
-legacy block while the application's record still stands, and
-`up-dns` would fail on Cloudflare's refusal.
+Between `apps` deleting its record and the re-run, the name resolves
+nowhere; the window re-runs the chain at once.
 
 **Data written to the new application after its cut is not carried
 back.** Rule 1's rollback restarts the legacy application on its own
 data, which the stop left intact, and that is the rollback's cost for
 each application with state; each wave names its own.
+
+**A database whose land is reverted is landed again under a new server
+name.** Its first land archived to the bucket, the bucket refuses every
+delete (storage.md §4), and barman refuses to archive into a server's
+path that already holds an archive, so the retry's cluster takes the
+next generation of its server name (§4.3).
 
 --------------------------------------------------------------------------------
 
@@ -328,50 +383,82 @@ the base, what two call lives in the library.
     first users: stdiscosrv, the cloud syncthing replica and hath. It
     emits one LoadBalancer Service for a row of the public port census,
     under `Cluster`, without node ports, carrying the pool label and
-    the addresses its front asks for.
+    the addresses its front asks for: the cloud nodes' own addresses and
+    the balancer's two for a balancer row, and the dedicated node's for
+    hath's. Those are `physical`'s outputs, so **`apps` reads the
+    `internet` pool's members across a StackReference**, through
+    `kluster.lib.stack_addresses` as `k8s-base` does, and the stack
+    program hands them to each call. It is a recorded use beside the
+    others style/pulumi.md names: machine facts, read so that anything
+    but an address stops the run. **New rule**, landing in
+    style/pulumi.md ("Layering") and declarative/README.md §2.
 *   **The route census states the reason a name is published direct.**
     `Route` takes `unproxied: str`, empty for a proxied name, and
     `proxied` is derived from it, as the record blocks already do
     (dns.md §2). A row published direct, and every record it aliases,
     hold the same chain relation the blocks do: a direct name resolves
-    through no proxied record. The co-host check holds that no row names
-    the website co-host zone's labels as one of the primary's
-    applications. Each is tested against a census that breaks it, since
-    the census is empty until the first land.
-*   **Two exposures join `Exposure`**, each the value its docstring says
-    an application would add rather than a flag:
+    through no proxied record. The route-side half of the record blocks'
+    co-host check (`tests/test_dns_records.py`) holds for rows too. Each
+    is tested against a census that breaks it, since the census is
+    empty until the first land.
+*   **Two exposures join `Exposure`**, each a value rather than a flag:
     *   `SPLIT_IOT` — a public name, and the LAN rewrite answered by the
-        media VIP rather than the LAN one. Jellyfin is public today and
-        reached by the IoT VLAN's televisions; both stay (sources-of-truth.md
-        rule 4).
+        media VIP rather than the LAN one, the value the enum's
+        docstring says an application would add. Jellyfin is public
+        today and reached by the IoT VLAN's televisions; both stay
+        (sources-of-truth.md rule 4), where workloads.md §1 and
+        architecture.md §3.6 gave it the LAN-only `IOT`.
     *   `PORT` — a public name for a raw port: the record, with its
-        `unproxied` reason, and no route, no rewrite and no certificate.
-        It is how `syncapi` and `btsync` are published, which name ports
-        the balancer forwards rather than routes. `served_zones` skips it.
+        `unproxied` reason, and no route, no rewrite and no certificate,
+        one more value by the same rule. It is how `syncapi` and
+        `btsync` are published, which name ports the balancer forwards
+        rather than routes. `served_zones` skips it.
 *   **An apex row publishes no record from `route`.** A zone apex cannot
     be a CNAME, so a website's apex is an address, and it is the `dns`
     stack's web origin block (dns.md §2) that holds it, read from the
     balancer's addresses as the anchors are. The row for an apex
-    attaches its route and leaves the record to that block. **New
-    rule**, landing in dns.md §2.
+    attaches its route and leaves the record to that block, and the
+    Gateways gain an HTTPS listener for the apex of each zone a row
+    publishes an apex in, since a wildcard listener does not match the
+    apex (rfc-007 §5.2). **New rule**, landing in dns.md §2.
+*   **A row may ask for its bare name.** A LAN name that is typed rather
+    than followed — `go`, `tube`, `bt` today, each a bare label the
+    gateway proxy answers (`LEGACY_VHOSTS`) — keeps resolving: `dns`
+    writes the bare label's rewrite, and `route` adds a redirect from
+    the bare label to the full name on the HTTP listener of each LAN-side
+    Gateway the row attaches. **New rule**, landing in dns.md §5.
 *   **A LAN port** is a LoadBalancer Service on the `lan` pool for a raw
     TCP or UDP port a LAN client reaches: an IMAP proxy, a printer's
-    API, a peer port. It shares the default LAN VIP with `lan-gw`,
-    under a sharing key, so that the ports, not new addresses,
-    distinguish the Services, and the resolver rewrite that already
-    answers a LAN-side name with that VIP serves the port too. The
-    ports are a census beside the public one, `LAN_PORT_CENSUS` in
-    `conventions.cluster`, because `apps` declares each Service and the
-    census invariant that no two rows, and no Gateway listener, take one
-    port on one VIP is the same table's; a row that names a host of its
-    own makes `dns` write that host's rewrite. **New rule**, landing in
-    cluster/architecture.md §3.6 and workloads.md §1.
-*   **`auth=True`** puts the ExternalAuth filter on the route, pointed
-    at Authelia's `ext_authz` endpoint (cluster-infra.md §2), so a
-    request the authentication service does not admit never reaches the
-    application. The authentication canary that cluster-infra.md §2
-    requires, and that rfc-007 §7.2 left waiting for the authentication
-    service, lands with Authelia's component (§5.2).
+    API, a peer port. Each row of the LAN port census,
+    `LAN_PORT_CENSUS` in `conventions.cluster`, names the application,
+    its ports and their transports, a VIP of its own from the pool — a
+    literal, as the default and media VIPs are, because the resolvers'
+    rewrites cannot wait for an allocation — and the host label `dns`
+    rewrites to that VIP. One Service holds each VIP, as every `lan`
+    VIP is held (rfc-007 §4.4), under `Cluster`. Two programs read the
+    census, `apps` for the Service and `dns` for the rewrite, so it is a
+    convention; its invariants are that each VIP is inside the pool,
+    distinct from the Gateways' and from every other row's. **New
+    rule**, landing in cluster/architecture.md §3.6 and workloads.md §1.
+*   **The authentication gate.** `route(row, auth=…)` puts the
+    ExternalAuth filter on the route, pointed at Authelia's `ext_authz`
+    endpoint (cluster-infra.md §2), with the authorization it asks for:
+    the portal's session for a browser application, or HTTP Basic for a
+    client that cannot follow a redirect (the WebDAV server). A request
+    the authentication service does not admit never reaches the
+    application. The authentication canary cluster-infra.md §2 requires
+    lands with Authelia's component (§5.2).
+*   **A LAN-device backend** is a small reverse proxy on the worker,
+    which the route's Service selects, forwarding to the device's LAN
+    address and passing the client's address on in `X-Forwarded-For`.
+    workloads.md §4 designs it as a selectorless Service with an
+    `EndpointSlice` at the device's address, but a request through
+    `internet-gw` reaches a cloud node's Envoy, which connects to the
+    endpoint itself, and a cloud node has no route to a home VLAN
+    (physical/homelab-host.md §5). The worker reaches the device over
+    the cluster zone's allow toward the home networks
+    (physical/gateway.md §4.2). The device trusts the worker's address
+    as its proxy. **New rule**, landing in workloads.md §4.
 
 ### 4.2 Storage
 
@@ -379,18 +466,24 @@ the base, what two call lives in the library.
     §3 states it: a `local-path` claim, and a VolSync
     `ReplicationSource` with the restic mover, scheduled by the
     retention class, to the repository at
-    `conventions.volsync_repo_path`. Its repository Secret is the
-    namespace's backup value (§4.6) under the claim's own name, with the
-    repository's path beside the sealed keys in the SealedSecret's
-    template.
+    `conventions.volsync_repo_path`. It generates the repository's
+    password into state, as credentials.md §3 says it does, and its
+    repository Secret is a SealedSecret under the claim's own name that
+    carries the namespace's sealed writer key (§4.6) with the password
+    and the repository's path in its template. The password reaches no
+    file in the repository: the template's values are in state, which is
+    where credentials.md §2.2 keeps the password.
 *   **A NAS volume** is an NFS `PersistentVolume` and its claim, for a
-    dataset of a new census, `conventions.nas.DATASETS`: the dataset's
-    export path and whether the consumer may write. The server is the
-    host's address on the worker's own leg, and the volume is
-    scheduled only to the worker, since no other node can reach the
-    export (physical/homelab-host.md §5). A row's coupling to the host
-    is stated on the row: the export is aconfmgr's, and a dataset the
-    export list does not name is a mount that fails at the land (§5.1).
+    dataset of a table of the `apps` stack's own,
+    `kluster.components.apps.datasets.DATASETS`: the dataset's export
+    path and whether the consumer may write. One program reads it, so it
+    is data in that program's area beside the shape that receives it
+    (style/pulumi.md, "Data"). The server is the host's address on the
+    worker's own leg, and the volume is scheduled only to the worker,
+    since no other node can reach the export (physical/homelab-host.md
+    §5). A row's coupling to the host is stated on the row: the export
+    is aconfmgr's, and a dataset the export list does not name is a
+    mount that fails at its first use (§5.1).
 *   **A node-volume claim** is a `local` `PersistentVolume` over a
     volume of `conventions.NODE_VOLUMES`, at a directory inside the
     mount and never the mount point, with node affinity on the volume's
@@ -410,19 +503,19 @@ barman plugin to the backup bucket at `conventions.barman_repo_path`,
 with its scheduled backup and retention taken from a retention class
 (workloads.md §3). Three decisions are taken here.
 
-**One instance, `instances: 1`, with no standby.** The second instance
-a CNPG cluster can run would be scheduled to the same machine as the
-first: every database here is pinned to one site, and the homelab site
-has one worker. It would share the primary's node, disk and failure
-domain, and add no availability against any failure the installation
-plans for, while costing its whole memory request a second time —
-legacy immich's database runs two instances on its one node, each
-requesting 2 GiB. Durability is barman to the backup bucket, and the
-restore drill below is what proves it. **One cluster shared by both
-databases** would not fit their placement either: splitpro's database
-runs on the cloud pool beside it (Wave A2), immich's on the worker
-(Wave C), and immich's needs the `vchord` image, splitpro's the
-`pg_cron` one. **New rule**, landing in workloads.md §4.
+**One instance, `instances: 1`, with no standby, and the shape takes no
+instance count.** The second instance a CNPG cluster can run would be
+scheduled to the same machine as the first: every database here is
+pinned to one site, and the homelab site has one worker. It would share
+the primary's node, disk and failure domain, and add no availability
+against any failure the installation plans for, while costing its whole
+memory request a second time — legacy immich's database runs two
+instances on its one node, each requesting 2 GiB. Durability is barman
+to the backup bucket, and the restore drill below is what proves it.
+**One cluster shared by both databases** would not fit their placement
+either: splitpro's database runs on the cloud pool beside it (Wave A2),
+immich's on the worker (Wave C), and immich's needs the `vchord` image,
+splitpro's the `pg_cron` one. **New rule**, landing in workloads.md §4.
 
 **A migrated database bootstraps by recovery from the legacy object
 store.** The legacy databases archive to Google Cloud Storage, one
@@ -431,9 +524,11 @@ barman plugin, with the legacy credential ported as a namespace-wide
 ciphertext (§4.6) — migration.md §3's "barman restore, not dump/restore
 reinvention", against the store the legacy cluster actually writes. The
 recovery runs once, at the land; the cluster then archives to the
-backup bucket under the new layout, and the legacy store is read by
-nothing after the cut. Whether the plugin recovers a backup that the
-legacy in-tree archiver wrote is a live reading (immich's, §5.6).
+backup bucket under the new layout, with its server name carrying a
+generation, so that a land retried after a revert archives to a path of
+its own (§3.6). The legacy store is read by nothing after the cut.
+Whether the plugin recovers a backup that the legacy in-tree archiver
+wrote is a live reading (immich's, §5.6).
 
 **The restore drill ports with the shape.** The legacy cluster's drill
 recovers a throwaway cluster from the latest backup, checks that it has
@@ -448,14 +543,26 @@ cover operations.md §4 asks of an in-cluster drill.
 ### 4.4 Single sign-on
 
 **The OpenID Connect clients are a census**, `conventions.sso.CLIENTS`:
-each client's identifier, its redirect addresses, its authorization
-policy and its authentication method. Two programs read it: `apps`,
-which renders Authelia's client list and gives each application its
-own client, and `k8s-base`, whose monitoring component gives Grafana
-its client. A redirect address is built from the client's route row,
-so a client and the name it redirects to cannot drift apart. The
-clients' secrets are not in the census; each is a value sealed into the
-configuration of the stack that declares its consumer (§4.6).
+for each client, its redirect addresses, its authorization policy and
+its authentication method. Two programs read it: `apps`, which renders
+Authelia's client list and gives each application its client, and
+`k8s-base`, whose monitoring component gives Grafana its client.
+
+**The census carries every client the legacy authentication service
+carries, from Wave A1.** At A1's cut the new service takes the portal's
+name, and every legacy application that signs in through it signs in
+there from then on. So an application that has not moved has its client
+already, its redirect addresses at its legacy name, which `dns` still
+publishes; its own route row takes the addresses over at its land. The
+relation test holds every redirect address to a name that a route row
+publishes or that `dns` points at the VPS (§3.3), in a zone the row or
+the record names.
+
+**A client's identifier and secret are not in the census.** The legacy
+service keeps both sealed, and the port keeps them so: each is a ported
+ciphertext in the configuration of the stack that declares its consumer
+(§4.6), and no one reads the legacy cluster to write an identifier
+down.
 
 Authelia's access-control rules for the forward-auth applications are
 its own configuration and stay in its component; the census holds only
@@ -468,10 +575,10 @@ with several hostnames, one route per zone, parameterized by its
 content source.
 
 *   **A git source** pulls a built branch through a git-sync sidecar
-    into an empty directory. The blog instance runs two replicas across
-    the cloud nodes, and carries the matrix delegation's two static
-    files and the CORS header the route adds to them with a
-    `ResponseHeaderModifier`.
+    into an empty directory. The blog instance runs more than one
+    replica, spread across the cloud nodes, and carries the matrix
+    delegation's two static files and the CORS header the route adds to
+    them with a `ResponseHeaderModifier`.
 *   **A NAS source** mounts its dataset read-only (§4.2), on the worker.
     The doors instance serves three hostnames from it.
 
@@ -497,7 +604,7 @@ pair stays on the VPS until the decommission (dns.md §2).
     values, whose namespace becomes the monitoring component's. **New
     rule**, landing in workloads.md §5. These are per-application
     secrets, which the program enumerates and the register does not
-    ([credentials.md](../credentials.md) §1, rule 8).
+    (credentials.md §1, rule 8).
 *   **The legacy sealing key is carried by hand once**, at Wave A1's
     head, from the legacy cluster's controller to the new one's, by a
     pipe between the two clusters' API servers that writes it to no
@@ -508,30 +615,30 @@ pair stays on the VPS until the decommission (dns.md §2).
     credential whose last use is the decommission's re-sealing, which
     deletes it. Its register row says exactly that. **New rule**,
     landing in credentials.md §3.
-*   **Each namespace that backs anything up has one backup value**, a
-    row of `conventions.sealed` built from the backed namespaces of
-    `conventions.backup`. It holds the namespace's B2 writer keys, one
-    per prefix it writes (VolSync's and barman's), and its restic
-    password. `credentials` mints the keys, generates the password,
-    escrows the password (credentials.md §2.2), and seals the whole value
-    namespace-wide, so that every repository Secret in the namespace
-    reuses one ciphertext under its own name.
-    *   **The password is escrowed** because a restic repository whose
-        password is lost is unreadable, and the cluster's sealing key is
-        escrowed nowhere (rfc-007 §6.1). A sealed copy alone would make
-        the backups unreadable exactly when they are needed, after the
-        cluster is lost.
-    *   **The keys are sealed, and never configuration secrets**: under
-        the stack passphrase they would reach every pull request's
-        preview (credentials.md §1), and a writer key with the password
-        reads every backup in its prefix.
-    *   The register's two pending rows change to say so: the restic
-        password is generated by `credentials`, escrowed and sealed,
-        rather than generated in state. **New rule**, landing in
-        credentials.md §3 and cluster-infra.md §1.1.
-    The mint seals against the running controller, so it is an operator
-    step at the head of each wave whose applications back anything up,
-    and the ciphertext travels in that wave's land pull request.
+*   **The backup bucket's writer keys stay `physical`'s**, one scope per
+    namespace and family on the bucket (`volsync_scope`,
+    `barman_scope`), each minted from the B2 management key as
+    credentials.md §3 already has it. Which namespaces back anything up
+    becomes a census, `conventions.backup.BACKED_NAMESPACES`, because
+    three programs agree on it: `physical` declares each namespace's
+    scopes from it, `credentials` seals their keys, and `apps` declares
+    the claims and databases that use them. It lists every namespace the
+    waves back up from the start, so `physical`'s first apply after it
+    mints every key the migration needs.
+*   **`credentials` delivers each writer key into `apps`'s
+    configuration**, reading it from `physical`'s state under that
+    stack's passphrase and sealing it into the `apps` stack's
+    `sealedSecrets` — the shape `credentials derived sync` already has
+    for the kubeconfig. The keys are sealed and never configuration
+    secrets: under the stack passphrase they would reach every pull
+    request's preview (credentials.md §1), and a writer key with a
+    repository's password reads every backup in its prefix. A key is
+    sealed **namespace-wide**, rather than strict as rfc-007 §6.2 has
+    every value `credentials` seals, because one ciphertext serves every
+    repository Secret in its namespace under that Secret's own name. The
+    seal needs the running controller, so it is one operator step after
+    M2, at Wave A1's head, for every namespace at once. **New rule**,
+    landing in credentials.md §3 and §4 and cluster-infra.md §1.1.
 
 --------------------------------------------------------------------------------
 
@@ -539,13 +646,16 @@ pair stays on the VPS until the decommission (dns.md §2).
 
 Each wave lists its applications in the order they land. For each:
 what the component declares beyond its shapes, how its data moves, how
-it is verified, what the cut deletes, and what its rollback costs. A
-component's image is the legacy one, pinned in `Pulumi.yaml`'s
-`versions:` block (§10, slice 2), and **the components declare their
-workloads directly rather than through the legacy charts**: the immich
-chart and the Bitnami Redis chart carry no security context that meets
-`restricted`, and the Bitnami images have moved to a legacy namespace
-of their own.
+it is verified, what the cut deletes, and what its rollback costs.
+
+**A component's image is the legacy one**, pinned in `Pulumi.yaml`'s
+`versions:` block (§10, slice 2) — or, for a component on the cloud
+pool, which is arm64, the oldest release that publishes that
+architecture where the legacy one does not. **The components declare
+their workloads directly rather than through the legacy charts**: the
+immich chart and the Bitnami Redis chart carry no security context that
+meets `restricted`, and the Bitnami images have moved to a legacy
+namespace of their own.
 
 ### 5.1 Before Wave A
 
@@ -553,9 +663,11 @@ of their own.
     passed.
 *   The shapes of §4 and the build slices of the waves' applications
     have merged (§10).
-*   The NAS exports name every dataset of `conventions.nas.DATASETS`, at
-    the worker's address: an aconfmgr change on the host, landed before
-    Wave B's land, which is the first to mount one.
+*   `physical` has applied `BACKED_NAMESPACES`, so every writer key
+    exists.
+*   The NAS exports name each dataset of `DATASETS` at the worker's
+    address before its first use: an aconfmgr change on the host. The
+    first of them is the temporary source of hath's cache (§5.4).
 
 ### 5.2 Wave A1: exim and authelia
 
@@ -563,7 +675,8 @@ of their own.
 — password resets and second-factor enrollment — through it, as immich
 and Grafana do later, so a relay that moves in Wave B leaves the
 authentication service without mail for a wave. Its placement is free
-(workloads.md §5); it runs on the cloud pool beside its first sender.
+(workloads.md §5), and it runs on the worker, the architecture its
+legacy image is built for.
 
 *   **exim** declares its relay as workloads.md §5 does: the `dkim-exim`
     value mounted where exim reads `tls.key`, no `Certificate`, the
@@ -571,26 +684,31 @@ authentication service without mail for a wave. Its placement is free
     Its relay range is the cluster's pod ranges. No data. **Verified**
     by a message relayed from a pod and its DKIM signature checked at
     the receiver, and by sources-of-truth.md §X's digest against the new
-    cluster's Secret, before the legacy relay stops. **Rollback** loses
-    nothing; the relay holds no state.
+    cluster's Secret. The legacy relay keeps relaying for its legacy
+    senders until Wave C's head (§3.5). **Rollback** loses nothing; the
+    relay holds no state.
 *   **authelia** declares its server with its configuration rendered
-    from the component, its session store, its users file and its
-    database on one backed claim (`PRECIOUS`), its OpenID Connect
-    clients from the census (§4.4), and the `ext_authz` endpoint the
-    gateway filter calls. Its users and second factors are backed up
-    nowhere today; the backed claim is what changes that. Its session
-    store is not migrated, and every session signs in again.
+    from the component, its access-control rules ported with it, its
+    session store, its users file and its database on one backed claim
+    (`PRECIOUS`), every client of the census (§4.4), and the `ext_authz`
+    endpoint the gateway filter calls. Its users and second factors are
+    backed up nowhere today; the backed claim is what changes that. Its
+    session store is not migrated, and every session signs in again.
     **Data**: the legacy claim's users file and SQLite database, copied
     into the new claim (§5.3's technique). **Verified** by a login with
-    a second factor at the balancer, an unauthenticated request to a
-    protected route refused, the canary's rule green, and a request
-    with the gateway's filter target unreachable refused. **Cut**:
-    `auth`. **Rollback** loses the enrollments made since the cut.
+    a second factor at the balancer, a sign-in to a legacy application
+    through its client, a request through a legacy gated front answered
+    after a portal sign-in, and the canary green. **Cut**: `auth`.
+    **Rollback** loses the enrollments made since the cut, and points
+    the legacy forward-auth checks back.
 
-The canary of cluster-infra.md §2 ships with authelia: a `CronJob` that
-requests a protected route with no credential every few minutes and
-publishes the result, and a rule that fires on anything but a refusal,
-with its tier and playbook.
+**The canary of cluster-infra.md §2 ships with authelia**, with a target
+of its own, because no gated route exists before Wave A2: a protected
+path on the portal's name, served by a static responder in authelia's
+namespace. A `CronJob` requests it with no credential every few minutes
+and publishes the result, and a rule fires on anything but a refusal,
+with its tier and playbook. The same request, made with the filter's
+target unreachable, is part of the verification.
 
 ### 5.3 Wave A2: blog, splitpro, matrix, syncthing, stdiscosrv
 
@@ -602,11 +720,16 @@ second end here — a Talos node runs no SSH server — and the stream
 needs no route between the sites beyond the one the operator already
 has.
 
-*   **blog**: the `StaticSite` with its git source (§4.5). No data; the
-    built branch is the content. **Verified** at the balancer for every
-    hostname, including both delegation files with their header.
-    **Cut**: the web origin's served apex, and `www` in both website
-    zones.
+**The wave's land brings the website co-host zone into the served
+zones**, through the blog's rows, so the cluster's DNS-01 token is
+minted afresh at the wave's head, scoped to them, into the land's
+branch.
+
+*   **blog**: the `StaticSite` with its git source (§4.5), and the
+    Gateways' apex listeners. No data; the built branch is the content.
+    **Verified** at the balancer for every hostname, including both
+    delegation files with their header. **Cut**: the web origin's served
+    apex, and `www` in both website zones.
 *   **splitpro**: its server on the cloud pool, its uploads on a backed
     claim, its database by recovery from the legacy store (§4.3), its
     client from the census. It sends no mail. **Data**: the uploads by
@@ -627,12 +750,16 @@ has.
     reason on record: the NAS replica and every client hold the data),
     the device key ported, so the device keeps its identity, the index
     on a backed claim, and the WebDAV server beside it on the same
-    volume, under the `dav` route with the gateway's basic-auth
-    policy. Its peer port is a `public_port` on both transports, where
-    the legacy Service exposed TCP alone. **Data**: none
-    (migration.md §3); the replica reseeds from its peers.
-    **Verified** by the peers connecting under its device identity and
-    the reseed completing. **Cut**: `sync`, `dav`, and `btsync` in the
+    volume. Its interface is the `sync` row and the WebDAV server the
+    `dav` row, both gated as their legacy fronts are: `sync` by the
+    portal's session, `dav` by HTTP Basic. Its peer port is a
+    `public_port` on both transports, where the legacy Service exposed
+    TCP alone. **Data**: none (migration.md §3); the replica reseeds
+    from its peers. What the legacy WebDAV server's own claim holds,
+    beside the synced folder it serves, is read at the wave's head
+    (§11.3). **Verified** by the peers connecting under its device
+    identity, the reseed completing, and both fronts refusing an
+    unauthenticated request. **Cut**: `sync`, `dav`, and `btsync` in the
     website co-host zone as a `PORT` row. **Rollback** restarts the
     legacy replica on its JuiceFS volume, which the stop kept.
 *   **stdiscosrv**: a `public_port` on its census row, terminating its
@@ -666,14 +793,30 @@ else supports. Its costs are rfc-007's: hath is held to the node its
 volume already holds it to, that node's public address is the reserved
 one, and the node's other pods share hath's egress address.
 
-**The `physical` change comes first**, in a slice of its own: the
-reserved address moves onto the node's primary private address, and
-the secondary address, its pool member and the outputs that name it
-go. A private address carries one public address, so the node's
+**The `physical` change comes first**, in a slice of its own applied at
+hath's head: the reserved address moves onto the node's primary private
+address, and the secondary address goes with everything that names it —
+its pool member, the outputs, and the machine configuration's secondary
+address. A private address carries one public address, so the node's
 ephemeral one is released for it; whether the pinned provider releases
 it in place, or only by replacing the instance, is that slice's first
 reading. A control-plane node's replacement is a different design, and
 the slice stops and reports if that is what it would take.
+
+**hath moves in three merges**, because its cache is copied warm while
+the legacy client still serves, and two clients online under one login
+are refused by the network:
+
+1.  **Stage.** The component is wired with its client not started, and
+    next to it, a copy pair: a reader on the worker over a temporary NAS
+    dataset row for the legacy cache, and a writer on the dedicated node
+    over the cache claim. The warm copy runs.
+2.  **Land.** The legacy client is stopped, the final delta and the
+    client state are copied, and the client starts.
+3.  **Cut.** The new address is registered with the network, and the
+    copy pair, the temporary row and the not-started parameter are
+    deleted. The parameter is a migration layer of the component's own:
+    its boundary is the parameter and the copy pair, and it goes here.
 
 *   **hath**: its client on the node the volume follows, its cache on a
     node-volume claim over `hath-cache` (`backup=None`, preserved,
@@ -682,18 +825,12 @@ the slice stops and reports if that is what it would take.
     `hath` row. The legacy egress pods and their WireGuard keys do not
     port. **Data**: the legacy cache is on the NAS, larger than the
     volume, so the client's configured cache size is read first and set
-    below the volume's free space before the copy; the cache is copied
-    warm, ahead of the window, by a pair of throwaway pods — a reader on
-    the worker over a temporary NAS dataset row, a writer on the node
-    over the claim — and the final delta and the client state inside
-    the window. **Verified** by the client starting with no cache
-    rebuild, the network's test of its address passing, and its
-    outbound connections arriving from the reserved address. **Cut**:
-    none in DNS — hath is reached by its address — but the
-    re-registration of the new address with the network, and the
-    temporary dataset row's removal. **Rollback** within the window is
-    the legacy client restarted on its NAS cache; after
-    re-registration, a second re-registration back.
+    below the volume's free space before the warm copy. **Verified** by
+    the client starting with no cache rebuild, the network's test of its
+    address passing, and its outbound connections arriving from the
+    reserved address. **Rollback** before re-registration restarts the
+    legacy client on its NAS cache; after it, a second re-registration
+    back.
 
 ### 5.5 Wave B
 
@@ -702,102 +839,112 @@ worker only if the worker's allocatable cannot hold the wave's requests
 on the reading of §6.3; the wave's applications are small, and the
 expectation is that it does not.
 
-*   **golinks**: its store on a backed claim, a LAN-only row with
-    `auth=True`. Its bare name `go` is typed rather than followed, so it
-    keeps resolving on the LAN: the row asks for the bare name's
-    rewrite. **Cut**: the `go` vhost row.
+*   **golinks**: its store on a backed claim, a LAN-only row with the
+    portal gate and its bare name `go`. **Cut**: the `go` vhost row.
 *   **emailproxy**: its token cache on a backed claim, its configuration
     ported (§4.6), its IMAP port a LAN port with a host of its own,
     which Home Assistant's mail integration is pointed at in the same
     window. **Cut**: none in DNS — the name is new.
 *   **spoolman**: its database on a backed claim, the `spool` row with
-    `auth=True`, and its API a LAN port without the gate, for the
-    printers, which are pointed at it in the window. **Data**: the legacy
-    claim is on the shared JuiceFS volume, which migration.md §3 does
-    not copy; its single file is streamed from the legacy pod's mount.
-    **Cut**: `spool`, and its vhost row.
-*   **The Home Assistant backend**: a relay on the worker, behind the
-    `haos` row on `internet-gw`. workloads.md §4 designs a selectorless
-    Service with an `EndpointSlice` at Home Assistant's LAN address, but
-    a request through `internet-gw` reaches a cloud node's Envoy, which
-    connects to the endpoint itself, and a cloud node has no route to a
-    home VLAN (physical/homelab-host.md §5). So the Service selects a
-    small reverse proxy pinned to the worker, which forwards to Home
-    Assistant's address over the cluster zone's allow toward the home
-    networks (physical/gateway.md §4.2) and passes the client's address
-    on in `X-Forwarded-For`. Home Assistant's trusted proxies gain the
-    worker's address in the same window. **Verified** by a sign-in at
-    the balancer showing the client's address in Home Assistant's log.
-    **Cut**: `haos`.
+    the portal gate, and its API a LAN port without the gate, for the
+    printers, which are pointed at it in the window. **Data**: the
+    legacy claim is on the shared JuiceFS volume, which migration.md §3
+    does not copy; its single file is streamed from the legacy pod's
+    mount. **Cut**: `spool`, and its vhost row.
+*   **The Home Assistant backend**: the LAN-device relay (§4.1) behind
+    the `haos` row on `internet-gw`. Home Assistant's trusted proxies
+    gain the worker's address in the same window. **Verified** by a
+    sign-in at the balancer showing the client's address in Home
+    Assistant's log. **Cut**: `haos`.
 *   **The doors**: the `StaticSite`'s NAS instance, its content copied
     once from the VPS's directory onto its dataset. Its rows name the
-    website co-host zone and `jiahui.love`, so the land brings
-    certificates for zones the cluster has not served, and the
-    cluster's DNS-01 token is minted afresh, scoped to them, into the
-    land's branch. **Cut**: `games` and `game`, and `jiahui.love`'s
-    apex in the web origin.
+    website co-host zone, served since Wave A2, and `jiahui.love`, which
+    is not, so the cluster's DNS-01 token is minted afresh at the head,
+    scoped to `jiahui.love` too, into the land's branch. The labels that
+    alias `jiahui.love`'s apex — `www`, `gift`, `ji`, `peifeng` — reach
+    the Gateway with no route, as they reach the legacy ingress today.
+    **Cut**: `games` and `game`, and `jiahui.love`'s apex.
 *   **thread-dashboard**: its image built in `docker/` (framework/ci.md
     §4: a cluster-consumed image is built where its consumer lives), a
-    LAN-only row with `auth=True`. **Cut**: the `thread` vhost row, and
-    its quadlet removed from yadm (sources-of-truth.md, row R13).
+    LAN-only row with the portal gate. **Cut**: the `thread` vhost row.
+    Its quadlet is removed from yadm at the next head, after the soak
+    (sources-of-truth.md, row R13).
 *   **Monitoring's name.** `mon` becomes a row of the monitoring
-    component (rfc-007 §7.4): Grafana behind it with its single
-    sign-on client, and `k8s-base` publishing its record. A stack that
-    calls `route` for a public row builds a Cloudflare provider (rfc-007
-    §9.1), so `k8s-base` reads the zones token: the token's slot gains
-    `k8s-base` as a target. `dns`, `k8s-base` and `apps` share one
-    passphrase, so no reader gains the token that does not hold it
-    already (credentials.md §1). The alert read route rides `mon`,
+    component (rfc-007 §7.4): Grafana behind it with its single sign-on
+    client, and `k8s-base` publishing its record. A stack that calls
+    `route` for a public row builds a Cloudflare provider and reads the
+    `dns` stack's zone identifiers (rfc-007 §9.1), so at this wave's
+    land `k8s-base` gains the zones token, whose slot names it as a
+    target, and a StackReference to `dns` for the identifiers, the
+    recorded use `apps` already makes. `dns`, `k8s-base` and `apps`
+    share one passphrase, so no reader gains the token that does not
+    hold it already (credentials.md §1). Grafana's two values are
+    sealed afresh at the head (§4.6). The alert read route rides `mon`,
     matched on method, path and header, and lands with the poller that
     reads it. **Cut**: `mon`.
-*   **The legacy Prometheus stops** with the rest of the legacy
-    monitoring, and its claim is kept cold until its retention would
-    have aged out, rather than running read-only: running it would hold
-    memory the interleave needs, for a history no rule reads.
+
+**The legacy monitoring keeps running until Wave C's head**, because it
+is what alerts on the legacy applications that have not moved — immich,
+jellyfin and syncthing-nas — and on the legacy node they run on. It
+stops with them, and its claim is kept cold until its retention would
+have aged out, rather than running read-only for a history no rule
+reads. The legacy cluster's own conditions are alerted on by nothing
+after that: they end with the legacy applications they watched, and the
+arrangement is recorded in row R12 (sources-of-truth.md rule 4).
 
 The same cut takes the gateway's resolver and console names out of
 `LEGACY_VHOSTS`, whose rows retire at Wave B: their public names have
-had rewrites since `dns`'s first up.
+had rewrites since `dns`'s first up, and the bare labels `gw` and `dns`
+move onto the gateway's declared vhosts in `physical`.
 
 ### 5.6 Wave C
 
-**The window** grows the worker and binds the A380 in one drained
-apply, since each replaces the domain (migration.md, Wave C). Just
-before it, kluster-code moves the legacy GPU plugin to the iGPU, and the
-window's stop releases the A380 from legacy immich and jellyfin.
+**The head** removes Wave B's legacy applications and the legacy
+JuiceFS stack, whose last consumer was spoolman, with their claims kept;
+moves the legacy GPU plugin to the iGPU; and stops legacy immich,
+jellyfin, shoko, syncthing-nas, the legacy monitoring and the legacy
+mail relay, whose last senders those are (§3.5). **The window** then
+grows the worker and binds the A380 in one drained apply, since each
+replaces the domain (migration.md, Wave C).
 
 *   **immich**: its server and its machine-learning service, each
     requesting the A380 through what `k8s-base` offers when the wave
     opens; its library a NAS dataset; its thumbnails and model caches on
     `local-path` with `backup=None` (re-derivable); its queue store a
-    Redis of its own; its database by recovery (§4.3) on the
-    `vchord` image, with its extensions created on recovery as
-    legacy creates them; its configuration rendered as legacy renders
-    it, its client from the census, its mail through exim; its
-    queue watchdog ported. Its row is `SPLIT`, published direct for
-    uploads larger than the proxy accepts. **Data**: the library stays
-    in place; the database by recovery after a final backup.
-    **Verified** by an upload from a phone on each side of the split,
-    a search answered by the model, and a video transcoded on the A380.
-    **Cut**: `photos`, and its LAN rewrite rule.
-    **Rollback** loses the uploads since the cut, which stay in the
-    library on the NAS but outside the restored database.
+    Redis of its own; its database by recovery (§4.3) on the `vchord`
+    image, with its extensions created on recovery as legacy creates
+    them; its configuration rendered as legacy renders it, its client
+    from the census, its mail through exim; its queue watchdog ported.
+    Its row is `SPLIT`, published direct for uploads larger than the
+    proxy accepts. Its memory limits are set inside the transitional
+    headroom of §6.1. **Data**: the library stays in place; the
+    database by recovery after a final backup. **Verified** by an
+    upload from a phone on each side of the split, a search answered by
+    the model, and a video transcoded on the A380. **Cut**: `photos`,
+    and its LAN rewrite rule. **Rollback** loses the uploads since the
+    cut, which stay in the library on the NAS but outside the restored
+    database.
 *   **jellyfin** and **shoko**: each in a namespace of its own, with
-    its own claim on the media dataset; jellyfin's configuration and cache on
-    claims, the configuration backed; jellyfin's row `SPLIT_IOT`
-    (§4.1). Discovery by multicast does not cross into a routed pool
-    address, so the televisions reach jellyfin by its name; the host's
-    discovery relays are pointed at the media VIP in the window.
-    **Data**: each configuration claim by stream, with any render node
-    path it names checked against the worker's one GPU. **Verified** by
-    a television playing a title through the media VIP, and a
-    transcode on the A380. **Cut**: `tube`, and its vhost row.
+    its own claim on the media dataset; jellyfin's configuration and
+    cache on claims, the configuration backed; jellyfin's row
+    `SPLIT_IOT` (§4.1) with its bare name `tube`. Discovery by multicast
+    does not cross into a routed pool address, so the televisions reach
+    jellyfin by its name, and the host's discovery relays are pointed at
+    the media VIP in the window; the multicast discovery the legacy LAN
+    load balancer answered is not carried, the arrangement row R12
+    records. **Data**: each configuration claim by stream, with any
+    render node path it names checked against the worker's one GPU.
+    **Verified** by a television playing a title through the media VIP,
+    and a transcode on the A380. **Cut**: `tube`, and its vhost row.
 *   **syncthing-nas**: the shared component in its NAS form — the `Sync`
-    dataset, the index on a backed claim, the peer port a LAN port.
-    Its device identity lives in its configuration, which is copied
-    whole, so its peers see the same device. **Cut**: `sync-nas`.
+    dataset, the index on a backed claim, the peer port a LAN port, the
+    interface on `sync-nas` behind the portal gate. Its device identity
+    lives in its configuration, which is copied whole, so its peers see
+    the same device. **Cut**: `sync-nas`.
 
-The VPS's last legacy ingress name is cut here. Its cancellation is the
+The cut also ends the transitional target of the legacy forward-auth
+checks, whose last gated front is `sync-nas` (§3.5). The VPS's last
+legacy ingress name is cut here. Its cancellation is the
 decommission's (§5.8).
 
 ### 5.7 Wave D
@@ -806,14 +953,19 @@ decommission's (§5.8).
     (workloads.md §4): its downloads and the media links on the media
     dataset, its profile on a backed claim, its peer port's forward
     declared by `physical` (`qbittorrentOnWorker`, migration.md, Wave
-    D), the Web UI `SPLIT` with `auth=True` on `bt`; seedwatch's image
-    built in `docker/`, and its access to qbittorrent's API by the
-    namespace's own address range rather than by running on the same host.
-    **Data**: the profile copied with UPnP turned off. **Verified** by
-    peers connecting on both families, and seedwatch's links counted as
-    before. **Cut**: `bt`, the `bt` and `seedwatch` vhost rows, and the
-    host units removed from aconfmgr and yadm (row R13). **Rollback**
-    restarts the host units on the profile the stop kept.
+    D), the Web UI `SPLIT` with the portal gate on `bt`, with its bare
+    name; seedwatch's image built in `docker/`, its interface the
+    LAN-only `seedwatch` row with the portal gate, and its access to
+    qbittorrent's API by the namespace's own address range rather than
+    by running on the same host. **Data**: the profile copied with UPnP
+    turned off. **Verified** by peers connecting on both families, and
+    seedwatch's links counted as before. **Cut**: `bt`, the `bt` and
+    `seedwatch` vhost rows, and the UPS card's row, the one row of
+    `LEGACY_VHOSTS` no application claims, which moves onto the
+    gateway's declared vhosts so that the census empties with this wave
+    (migration.md §2). The host units are stopped at the head and
+    removed from aconfmgr and yadm after the soak (row R13).
+    **Rollback** restarts the host units on the profile the stop kept.
 
 ### 5.8 What the decommission inherits
 
@@ -822,12 +974,12 @@ cluster, and what the waves leave is the decommission's:
 
 *   the legacy cluster stopped and uninstalled, its retained-volume
     census finished;
-*   the VPS cancelled: nothing has addressed it since Wave C's cut, and
-    hath has left its egress since §5.4;
-*   `legacy.py` empty, and with it the legacy-held field of §3.3 and its
-    relation test deleted;
-*   the parked zones' web origin, the VPS's anchor and its overlay
-    roster entry removed;
+*   the VPS cancelled: no application is served from it after Wave C's
+    cut, and hath has left its egress since §5.4; the records that
+    still name it are the parked zones' web origin and its anchor;
+*   with those records gone, nothing in `dns` points at the VPS, and the
+    legacy-held field of §3.3 and its relation test are deleted;
+*   the VPS's overlay roster entry removed;
 *   the legacy Google Cloud Storage buckets and their ported
     credentials, read by nothing since the cuts;
 *   the sealing key's rotation, which re-seals every ported ciphertext
@@ -843,32 +995,44 @@ cluster, and what the waves leave is the decommission's:
 
 The host has 31 GiB. On 2026-11-05 legacy k3s took about 7.5 GiB, Home
 Assistant's machine 4.5, the host's own services about 3, and the ZFS
-cache 4, its floor (nodes.md §4.1). The worker boots at 10 GiB. That
-leaves the worker about what legacy releases: roughly 17 to 18 GiB once
-legacy has gone, short of nodes.md §4.2's 20 GiB, which was written
-against the August measurement.
+cache 4, its floor (nodes.md §4.1), with 11.7 GiB available before the
+worker started at 10 GiB. What the worker can grow by is what legacy
+releases, less a margin.
 
-**The applications fit under that ceiling.** Their requests, taken from
-the legacy components where those carry them and sized from evidence
-otherwise:
+**Two ceilings matter.**
+
+*   **While the waves run**, the legacy cluster's own control plane and
+    platform stay resident — its server and container runtime, its
+    system pods, the database operator and its ingress, about 2.5 GiB
+    by nodes.md §4.4's measurement, and the JuiceFS stack's 1 GiB until
+    Wave C's head removes it (§5.6). At Wave C's window, with legacy's
+    applications stopped, the worker reaches about 15.5 GiB, about 14 of
+    it allocatable to workloads.
+*   **After the decommission**, legacy releases all of its share, and
+    the worker could reach about 18 GiB, short of nodes.md §4.2's 20 GiB,
+    which was written against the August measurement.
+
+**The applications fit under the transitional ceiling.** Their requests,
+taken from the legacy components where those carry them and sized from
+evidence otherwise:
 
 | What runs on the worker | Requests (memory) |
 | --- | --- |
-| Platform: kubelet, the container runtime, Cilium and its Envoy | about 1.5 GiB, reserved (nodes.md §4.2) |
 | Monitoring, from M2 | 0.7 GiB |
-| Wave B's applications | about 0.3 GiB together |
+| exim, and Wave B's applications | about 0.3 GiB together |
 | immich: server 4 GiB, machine learning 1 GiB, one database instance 2 GiB, its Redis 0.1 GiB | 7.1 GiB |
 | jellyfin and shoko | 1 GiB |
 | syncthing-nas | 0.1 GiB |
 | qbittorrent and seedwatch | about 1 GiB |
-| **Total** | **about 11.7 GiB** |
+| **Total** | **about 10.2 GiB** |
 
-That leaves headroom for the limits above the requests, which are
-large for immich's server and machine-learning service and for
-jellyfin's transcodes, inside a worker grown to about 17 GiB, whose
-allocatable is about 16. **So the per-app
-sizing does not trigger the conditional ruling of §11.2**: the
-migration fits the ceiling without the relief valve.
+That leaves about 4 GiB of the transitional allocatable for the limits
+above the requests, which are large for immich's server and
+machine-learning service and for jellyfin's transcodes; during the
+transition those limits are set to share that headroom rather than to
+the legacy values, and they rise with the decommission's growth. **So
+the per-app sizing does not trigger the conditional ruling of §11.2**,
+on these numbers; Wave C's reading decides it (§6.3).
 
 ### 6.2 Growing to fit, in windows
 
@@ -905,7 +1069,8 @@ commit merges:
 3.  the host's available memory, read with the ZFS cache at its floor,
     covers the growth with a margin;
 4.  the worker's requests after the next wave's land, read against the
-    allocatable the growth gives, leave the headroom §6.1 assumes.
+    allocatable the growth gives, leave the headroom §6.1 assumes. Where
+    they do not, the wave waits, and §11.2 is asked.
 
 ### 6.4 Rollback across a growth
 
@@ -916,8 +1081,8 @@ then run §3.6's rollback. It costs a drained window, which restarts
 every workload on the worker. Wave C is where this is real: its window
 stops legacy immich and jellyfin and grows by what they free, and a
 rollback restarts them on the iGPU, which kluster-code moved them to
-before the window, once the worker has given the memory back. **New
-rule**, landing in migration.md §0.
+at the head, once the worker has given the memory back. **New rule**,
+landing in migration.md §0.
 
 Every other growth is funded by applications already past their
 rollback point (§6.3, items 1 and 2), so it never meets this case.
@@ -931,7 +1096,9 @@ rollback point (§6.3, items 1 and 2), so it never meets this case.
     the VIP its exposure selects; §3.3 and §4.1 add to it rather than
     reshape it.
 *   **`conventions.backup`** has the retention classes, the bucket and
-    the repository layout every backed claim and database uses.
+    the repository layout every backed claim and database uses, and
+    `physical`'s `BackupBucket` already declares a writer scope per
+    namespace and family.
 *   **`conventions.NODE_VOLUMES`** declares both preserved volumes, and
     `physical` attaches them.
 *   **The public port census** has every row the migration's raw ports
@@ -950,40 +1117,53 @@ rollback point (§6.3, items 1 and 2), so it never meets this case.
 *   **From dns.md §6, a migration as three files in one pull request.**
     Rule 1's verification needs a merge between the deploy and the cut
     (§3.2).
-*   **From migration.md §0 rule 1, scaling the legacy application
-    down by hand.** kluster-code's deploy would undo it (§3.5).
+*   **From framework/ci.md §3, `up-apps` after `up-k8s-base` alone, and
+    `up-k8s-base` beside `up-dns`.** Both follow `up-dns` (§3.4).
+*   **From migration.md §0 rule 1, scaling the legacy application down
+    by hand.** kluster-code's deploy would undo it (§3.5).
 *   **From migration.md §0 rule 4, growing the worker by everything
     legacy frees, toward 20 GiB.** It grows to fit (§6.2), and nodes.md
     §4.2's 20 GiB is not reachable on the measured host (§6.1).
-*   **From migration.md §2, exim in Wave B.** Its first sender moves in
-    Wave A1 (§5.2).
+*   **From migration.md §2, exim in Wave B, and the legacy relay
+    stopping with its successor's land.** The new relay moves in Wave
+    A1, and the legacy one stops with its last sender (§3.5, §5.2).
 *   **From migration.md §2, hath last of the applications, in a Wave E
     of its own.** It moves after Wave A2 (§5.4).
 *   **From migration.md §2, the legacy Prometheus kept running
-    read-only.** It is kept cold (§5.5).
+    read-only.** It runs until Wave C's head for the alerts, and is then
+    kept cold (§5.5).
 *   **From migration.md §3, rsync over SSH into the target claim.** A
     Talos node has no SSH server; the stream runs through the API server
     (§5.3).
 *   **From migration.md §3, no copy for any shared-JuiceFS data.** True
     of the syncthing replica, false of spoolman's database (§5.5).
+*   **From workloads.md §1 and architecture.md §3.6, jellyfin as `IOT`.**
+    It is public too, as it is today (§4.1).
+*   **From workloads.md §4, the LAN-device backend as a selectorless
+    Service.** A cloud node's Envoy cannot reach the endpoint; a relay on
+    the worker does (§4.1).
 *   **From the legacy immich database, two instances.** One (§4.3).
 *   **From the legacy charts, the immich and Redis releases.** The
     components declare their workloads (§5).
 *   **From the legacy egress pods, hath's WireGuard gateway.** hath
     leaves by its node's address (§5.4).
-*   **From workloads.md §4, the LAN-device backend as a selectorless
-    Service.** A cloud node's Envoy cannot reach the endpoint; a relay on
-    the worker does (§5.5).
 *   **From the legacy LAN load balancers, multicast discovery.** A
     routed pool address does not receive it; clients reach the
     applications by name (§5.6).
-*   **From credentials.md §3, the restic password generated in state.**
-    It is generated by `credentials`, escrowed and sealed (§4.6).
+*   **From rfc-007 §6.2, the strict scope of every value
+    `credentials` seals.** The writer keys are sealed namespace-wide, one ciphertext
+    per namespace for every repository Secret in it (§4.6).
+*   **From credentials.md §4, "a new volume will need no `credentials`
+    run".** True of a volume in a namespace that already backs up; a
+    namespace that starts backing up needs `physical`'s scope and a seal
+    (§4.6).
 *   **From rfc-007 §6.3, the legacy key's channel left open.** It is a
     one-off carry with a register row, retired at the decommission
     (§4.6).
 *   **From architecture.md §3.2, the dedicated VIP on a secondary
     private address.** It is the node's primary private address (§5.4).
+*   **From rfc-007 slice 5's test, `apps` reading nothing across a
+    StackReference.** It reads the `internet` pool's members (§4.1).
 
 --------------------------------------------------------------------------------
 
@@ -991,19 +1171,21 @@ rollback point (§6.3, items 1 and 2), so it never meets this case.
 
 | Document | What lands there |
 | --- | --- |
-| [cluster/migration.md](../cluster/migration.md) | migration.md §0 rule 1: build, land, verify, cut, and the stop and removal in kluster-code, from §3.1, §3.2 and §3.5. migration.md §0 rule 4: growing to fit, the windows, the reading before each growth and the rollback across one, from §6. migration.md §1: the legacy key's carry at Wave A1's head, from §4.6. migration.md §2: exim at Wave A1's head, hath after Wave A2, Wave B's window conditional, Wave D funded by Wave C's window, the legacy Prometheus kept cold, from §5. migration.md §3: the stream through the API server, recovery from the legacy store, spoolman's copy, from §4.3 and §5. migration.md §4: what the decommission inherits, from §5.8 |
-| [declarative/workloads.md](../declarative/workloads.md) | workloads.md §1: a component receives its rows and merges unwired, the LAN port, from §3.1 and §4.1. workloads.md §3: the namespace's backup value, from §4.6. workloads.md §4: the dedicated-VIP pattern on the node's primary address, one database instance with recovery and the drill, the static site's apex, the single sign-on census, the LAN-device backend as a relay on the worker, from §4, §5.4 and §5.5. workloads.md §5: a ported ciphertext keeps its namespace, from §4.6 |
-| [declarative/dns.md](../declarative/dns.md) | dns.md §2: an apex row's record is the web origin, from §4.1 and §4.5. dns.md §5: the legacy-held state, the `unproxied` reason on a row, `SPLIT_IOT`, `PORT`, LAN ports' rewrites, from §3.3 and §4.1. dns.md §6: the cut's pull request and the land's, from §3.2 |
-| [framework/ci.md](../framework/ci.md) | ci.md §3: `up-apps` after `up-dns`, from §3.4 |
-| [sources-of-truth.md](../sources-of-truth.md) | sources-of-truth.md §3: a component that has not migrated is not wired, from §3.1. Note N4 replaced by its answer, from §3.2 and §3.4. Rows R12 and R13: each flip is a cut, and its pull request edits the row |
-| [cluster/architecture.md](../cluster/architecture.md) | architecture.md §3.2 and §3.5: hath's address and egress on its node's primary private address, from §5.4. architecture.md §3.6: the LAN raw-port row on the shared LAN VIP, from §4.1 |
+| [cluster/migration.md](../cluster/migration.md) | migration.md §0 rule 1: build, land, verify, cut, the stop and removal in kluster-code, and the legacy services that outlive their successor's land, from §3. migration.md §0 rule 4: growing to fit, the windows, the reading before each growth and the rollback across one, from §6. migration.md §1: the legacy key's carry and the writer keys' seal at Wave A1's head, from §4.6. migration.md §2: exim at Wave A1's head, hath after Wave A2, Wave B's window conditional, Wave D funded by Wave C's window, the legacy monitoring until Wave C's head, from §5. migration.md §3: the stream through the API server, recovery from the legacy store, spoolman's copy, from §4.3 and §5. migration.md §4: what the decommission inherits, from §5.8 |
+| [cluster/nodes.md](../cluster/nodes.md) | nodes.md §4.2: the transitional and end-state ceilings, and the end state as the decommission's decision, grown to fit, from §6 |
+| [declarative/workloads.md](../declarative/workloads.md) | workloads.md §1: a component receives its rows and merges unwired, the LAN port, jellyfin's exposure, from §3.1 and §4.1. workloads.md §3: the namespace's sealed writer key in each repository Secret, from §4.2 and §4.6. workloads.md §4: the dedicated-VIP pattern on the node's primary address, one database instance with recovery and the drill, the static site's apex, the single sign-on census, the LAN-device relay, from §4 and §5.4. workloads.md §5: a ported ciphertext keeps its namespace, from §4.6 |
+| [declarative/dns.md](../declarative/dns.md) | dns.md §2: an apex row's record is the web origin, from §4.1 and §4.5. dns.md §5: the legacy-held state, the `unproxied` reason on a row, `SPLIT_IOT`, `PORT`, bare names, LAN ports' rewrites, from §3.3 and §4.1. dns.md §6: the cut's pull request and the land's, from §3.2 |
+| [declarative/README.md](../declarative/README.md) | §2: the StackReferences `apps` makes for the pool's members and `k8s-base` makes for the zone identifiers, from §4.1 and §5.5 |
+| [framework/ci.md](../framework/ci.md) | ci.md §3: `up-k8s-base` and `up-apps` after `up-dns`, from §3.4 |
+| [sources-of-truth.md](../sources-of-truth.md) | sources-of-truth.md §3: a component that has not migrated is not wired, from §3.1. Note N4 replaced by its answer, from §3.2 and §3.4. Rows R12 and R13: each flip is a cut, and its pull request edits the row; R12's arrangements, from §5.5 and §5.6 |
+| [cluster/architecture.md](../cluster/architecture.md) | architecture.md §3.2 and §3.5: hath's address and egress on its node's primary private address, from §5.4. architecture.md §3.6: the LAN raw-port row on a VIP of its own, and jellyfin's row, from §4.1 |
 | [declarative/physical.md](../declarative/physical.md) | physical.md §1: the reserved address on the node's primary private address, and no secondary address, from §5.4 |
-| [declarative/cluster-infra.md](../declarative/cluster-infra.md) | cluster-infra.md §1.1: the backup value's channel, from §4.6. cluster-infra.md §2: the canary as built with authelia, from §5.2. cluster-infra.md §3: the `mon` route and the Cloudflare provider of `k8s-base`, from §5.5 |
-| [credentials.md](../credentials.md) | credentials.md §3: the B2 writer keys and restic password rows, the zones token's `k8s-base` target, the legacy sealing key's row, from §4.6 and §5.5. credentials.md §4: the backup value's mint |
-| [cluster/storage.md](../cluster/storage.md) | storage.md §2: the NAS dataset census, from §4.2. storage.md §5: one database instance, and the restore drill in place, from §4.3 |
-| [cluster/nodes.md](../cluster/nodes.md) | nodes.md §4.2: the end state as the decommission's decision, grown to fit, from §6 |
+| [declarative/cluster-infra.md](../declarative/cluster-infra.md) | cluster-infra.md §1.1: the writer keys' channel, from §4.6. cluster-infra.md §2: the canary as built with authelia, the apex listeners, from §4.1 and §5.2. cluster-infra.md §3: the `mon` route and the Cloudflare provider of `k8s-base`, from §5.5 |
+| [credentials.md](../credentials.md) | credentials.md §3: the writer keys' sealed delivery, the zones token's `k8s-base` target, the legacy sealing key's row, from §4.6 and §5.5. credentials.md §4: the seal of the writer keys from `physical`'s state, and the sentence on a new volume, from §4.6 |
+| [cluster/storage.md](../cluster/storage.md) | storage.md §2: the NAS datasets, from §4.2. storage.md §5: one database instance, its server name's generation, and the restore drill in place, from §4.3 |
 | [operations.md](../operations.md) | operations.md §4: the database restore drill and the authentication canary built, from §4.3 and §5.2 |
-| [physical/homelab-host.md](../physical/homelab-host.md) | homelab-host.md §4: the export list follows the NAS dataset census, from §4.2 |
+| [physical/homelab-host.md](../physical/homelab-host.md) | homelab-host.md §4: the export list follows the NAS datasets, from §4.2 |
+| [style/pulumi.md](../style/pulumi.md) | "Layering": the StackReference uses `apps` and `k8s-base` gain, from §4.1 and §5.5 |
 | [rfc-003](rfc-003-dns-and-github-stacks.md) | The status header: the route row's change of shape, from §4.1 |
 | [rfc-007](rfc-007-k8s-base-and-apps.md) | The status header: slice 12 cut in two, from §10. That dated line ships in the pull request that builds the first half, not in this document's |
 
@@ -1014,303 +1196,347 @@ rollback point (§6.3, items 1 and 2), so it never meets this case.
 **Pre-live** means built and tested against Pulumi's mocks and fakes,
 with nothing live; such a slice merges as soon as it is ready, and
 changes nothing deployed (§3.1). **Live** means the slice needs the
-running cluster, a sealed value, a window or an operator.
+running cluster, a sealed value, a window or an operator, or its merge
+changes what is deployed.
 
 Each slice's **After** line names the slices it depends on and every
 slice it shares an owned path with, so two slices whose lines do not
-reach each other can run at once. The shape slices 3 to 7 form one
-line, because each adds a census and its invariants
-(`src/kluster/conventions/__init__.py`, `tests/test_conventions.py`).
-The build slices, 10 to 23, own only their own package and test
-module, and run together once their shapes have merged.
-`docs/framework/ci.md` is serialized, and slice 1 is the one slice here
-that touches it.
+reach each other can run at once. The shape slices 3 to 9 form one
+line, because each adds a census, its invariants or a section of
+workloads.md. The build slices, 10 to 23, own their own package and test
+module and nothing shared unless their line says so, and run together
+once their shapes have merged. `docs/framework/ci.md` is serialized, and
+slice 1 is the one slice here that touches it.
 
-**Before the shapes and the builds: rfc-007 slice 12, cut in two.** Its first half —
-the application base and `route`, with their tests and the documents
-its done-means names for them — merges now and declares nothing, since
-the `apps` program calls neither. Its second half — the echo
-component, its row, its image pin and its wiring — merges after rfc-007
-slice 9 is applied, as written. Every shape and build here extends the
-first half. The pull request that builds the first half records the cut
-in rfc-007's status header with a dated `Updated:` line (rfc.md §5.2).
+**Before the shapes and the builds: rfc-007 slice 12, cut in two.** Its
+first half — the application base and `route`, with their tests and the
+documents its done-means names for them — merges now and declares
+nothing, since the `apps` program calls neither. Its second half — the
+echo component, its row, its image pin and its wiring — merges after
+rfc-007 slice 9 is applied, as written, and slice 27 here deletes it.
+Every shape and build here extends the first half. The pull request
+that builds the first half records the cut in rfc-007's status header
+with a dated `Updated:` line, the detail move rfc.md §5.2 provides for:
+nothing has been built from slice 12 yet.
 
 ### 10.1 Pre-live: the mechanisms and the shapes
 
-**Slice 1: the deploy order.** Pre-live. **After** nothing.
+**Slice 1: the deploy order, and the migration plan.** Pre-live.
+**After** nothing.
 
-*   **Done means**: `up-apps` needs `up-dns` and `up-k8s-base` and runs
-    when `up-k8s-base` succeeded, whatever `up-dns`'s result; ci.md §3
-    says so, with the reason (§3.4).
+*   **Done means**: `up-k8s-base` and `up-apps` each need `up-dns` and
+    run whatever its result, `up-k8s-base` when the `physical` gate
+    passed and `up-apps` when `up-k8s-base` succeeded; ci.md §3 says so,
+    with the reason (§3.4); migration.md and nodes.md §4.2 state this
+    design, as §9 lists for them.
 *   **Owned paths**: `.github/workflows/deploy.yml`,
-    `docs/framework/ci.md` (serialized), `tests/test_workflow_shape.py`.
-*   **Tests that fail without it**: `up-apps` names `up-dns` among its
-    needs (drop it); its condition reads `up-k8s-base`'s result and not
-    `up-dns`'s (require both to succeed).
+    `docs/framework/ci.md` (serialized), `tests/test_workflow_shape.py`,
+    `docs/cluster/migration.md`, `docs/cluster/nodes.md`.
+*   **Tests that fail without it**: both jobs name `up-dns` among their
+    needs (drop it from one); each job's condition, evaluated over every
+    result its needs can take, runs it exactly when its own gate passed,
+    whatever `up-dns`'s result (require `up-dns` to succeed).
 
 **Slice 2: the image pins.** Pre-live. **After** nothing.
 
-*   **Done means**: every image the waves' components run is a
-    `versions:image-<name>` pin in `Pulumi.yaml`, at the legacy
-    version, and Renovate opens a pull request for each one's next
-    release under `renovate.json5`'s rules.
+*   **Done means**: every image the waves' components run, the copy
+    pair's included, is a `versions:image-<name>` pin in `Pulumi.yaml`,
+    at the version §5 states, and Renovate opens a pull request for each
+    one's next release under `renovate.json5`'s rules. The two images
+    built in `docker/` are their slices' to pin.
 *   **Owned paths**: `Pulumi.yaml`, `renovate.json5`,
     `tests/test_versions.py`, `tests/test_images.py`.
-*   **Tests that fail without it**: each new pin parses (write one
-    that does not parse); the existing renovate fixture tests, with a
-    pin of each new image's scheme (drop the rule a scheme needs).
+*   **Tests that fail without it**: each new pin parses (write one that
+    does not parse); the existing renovate fixture tests, with a pin of
+    each new image's scheme (drop the rule a scheme needs).
+*   **Unproven live**: that each cloud-pool image runs on arm64, which
+    the slice reads from each pinned manifest's platforms.
 
 **Slice 3: the route census for the migration.** Pre-live. **After**
 rfc-007 slice 12's first half.
 
 *   **Done means**: `Route` carries `unproxied`, with `proxied` derived;
-    the legacy-held field; `Exposure.SPLIT_IOT` and `Exposure.PORT`;
-    `route` attaches a held row's route and publishes nothing for it,
-    publishes no record for an apex row, and for a `PORT` row publishes
-    the record and attaches no route; `served_zones` skips `PORT` rows; `dns` writes no rewrite for a held or `PORT` row, and
-    the media VIP for `SPLIT_IOT`; dns.md §2, §5 and §6, sources-of-truth.md
-    §3 and note N4, and rfc-003's status header are true.
+    the legacy-held field; a bare-name field; `Exposure.SPLIT_IOT` and
+    `Exposure.PORT`; `route` attaches a held row's route and publishes
+    nothing for it, publishes no record for an apex row, for a `PORT`
+    row publishes the record and attaches no route, and for a bare name
+    adds the redirect; `served_zones` skips `PORT` rows; `dns` writes no
+    rewrite for a held or `PORT` row, the media VIP for `SPLIT_IOT`, and
+    a bare name's rewrite; dns.md §2, §5 and §6, sources-of-truth.md §3
+    and note N4, `legacy.py`'s module docstring, and rfc-003's status
+    header are true.
 *   **Owned paths**: `src/kluster/conventions/routes.py`,
     `src/kluster/lib/k8s.py`, `src/kluster/components/dns/rewrites.py`,
+    `src/kluster/components/dns/legacy.py` (its docstring),
     `tests/test_conventions.py`, `tests/test_dns_rewrites.py`,
     `tests/test_dns_records.py`, `tests/test_k8s.py`,
     `docs/declarative/dns.md`, `docs/sources-of-truth.md`,
     `docs/rfc/rfc-003-dns-and-github-stacks.md`.
 *   **Tests that fail without it**: a row is held exactly while a record
-    `dns` points at the VPS holds its name, against a census broken each
-    way (keep the field after deleting the block); a direct row states its reason, and
-    resolves through no proxied record (a direct row aliasing a proxied
-    one); no row names a co-host label as a primary application; a held
-    row's route attaches with no record and no rewrite (publish one); an
-    apex row publishes no record (publish a CNAME at the apex); a `PORT`
-    row costs no certificate (count its zone); `SPLIT_IOT`'s rewrite is
-    the media VIP (answer the LAN one).
+    pointing at the VPS holds its name, against a census broken each way
+    (keep the field after deleting the record); a direct row states its
+    reason, and resolves through no proxied record (a direct row
+    aliasing a proxied one); the route-side co-host check; a held row's
+    route attaches with no record and no rewrite (publish one); an apex
+    row publishes no record (publish a CNAME at the apex); a `PORT` row
+    costs no certificate (count its zone); `SPLIT_IOT`'s rewrite is the
+    media VIP (answer the LAN one); a bare name gets its rewrite and its
+    redirect on each LAN-side Gateway the row attaches (redirect on
+    `internet-gw`).
 
-**Slice 4: exposure.** Pre-live. **After** slice 3.
+**Slice 4: exposure.** Pre-live. **After** slice 3, and rfc-007 slice 9.
 
-*   **Done means**: `public_port` on the application base; the LAN port
-    census in `conventions.cluster` and the LAN port shape on the base;
-    `dns` writes a LAN port row's rewrite; `route(row, auth=True)`
-    attaches the ExternalAuth filter; workloads.md §1, dns.md §5 and
-    architecture.md §3.6 are true.
+*   **Done means**: `public_port` on the application base, with `apps`
+    reading the `internet` pool's members across a StackReference and
+    handing them in; the LAN port census in `conventions.cluster`, the
+    LAN port shape, and `dns` writing a LAN port row's rewrite; the
+    authentication gate in both its forms; the LAN-device relay shape;
+    the Gateways' apex listener per zone a row publishes an apex in;
+    workloads.md §1 and its §4 relay, dns.md §5, architecture.md §3.6,
+    cluster-infra.md §2's listeners, and style/pulumi.md and
+    declarative/README.md §2 for the reference `apps` makes, are true.
 *   **Owned paths**: `src/kluster/components/apps/__init__.py`,
     `src/kluster/lib/k8s.py`, `src/kluster/conventions/cluster.py`,
     `src/kluster/conventions/__init__.py`,
-    `src/kluster/components/dns/rewrites.py`, `tests/test_apps.py`,
-    `tests/test_conventions.py`, `tests/test_dns_rewrites.py`,
-    `tests/test_k8s.py`, `docs/declarative/workloads.md`,
-    `docs/declarative/dns.md`, `docs/cluster/architecture.md`.
+    `src/kluster/components/dns/rewrites.py`,
+    `src/kluster/components/cilium/`, `src/kluster/stacks/apps.py`,
+    `tests/test_apps.py`, `tests/test_conventions.py`,
+    `tests/test_dns_rewrites.py`, `tests/test_k8s.py`,
+    `tests/test_front_door.py`, `tests/test_stack_programs.py`,
+    `docs/declarative/workloads.md`, `docs/declarative/dns.md`,
+    `docs/cluster/architecture.md`, `docs/declarative/cluster-infra.md`,
+    `docs/style/pulumi.md`, `docs/declarative/README.md`.
 *   **Tests that fail without it**: `public_port` emits the Service
-    alone, under `Cluster`, with no node ports and the row's front's
-    addresses (state `Local`; allocate node ports; request the VIP for
-    a balancer row); a LAN port shares the default VIP with `lan-gw`
-    under one sharing key (request a fresh address); no two LAN port
-    rows, and no Gateway listener, take one port on one VIP (a census
-    invariant); `auth=True` attaches the filter and the default does
-    not (attach it everywhere).
+    alone, under `Cluster`, with no node ports and the addresses of its
+    row's front from what it is handed (state `Local`; allocate node
+    ports; hand a balancer row the dedicated node's address); an output
+    the pool reads that is not an address stops the run naming it (read
+    a node address as the unknown sentinel); a LAN port's Service holds
+    its row's VIP alone (share it with the Gateway); each LAN port VIP
+    is inside the pool and distinct from the Gateways' and every other
+    row's (a census invariant); each form of the gate asks Authelia for
+    its own authorization (ask for the session on the Basic form); the
+    relay's Service selects the relay, which is scheduled only to the
+    worker (a selectorless Service); an apex listener exists exactly for
+    each zone a row publishes an apex in (derive from every served
+    zone).
 
 **Slice 5: storage.** Pre-live. **After** slice 4.
 
 *   **Done means**: `backed_pvc` and the node-volume claim on the
-    application base, and the NAS volume shape over the new
-    `conventions.nas.DATASETS`; workloads.md §2 and §3, storage.md §2 and
+    application base, and the NAS volume shape over the `apps` stack's
+    `DATASETS`; workloads.md §2 and §3, storage.md §2 and
     homelab-host.md §4 are true.
 *   **Owned paths**: `src/kluster/components/apps/storage.py` (new),
-    `src/kluster/conventions/nas.py` (new),
-    `src/kluster/conventions/backup.py`,
-    `src/kluster/conventions/__init__.py`, `tests/test_apps_storage.py`
-    (new), `tests/test_conventions.py`,
+    `src/kluster/components/apps/datasets.py` (new),
+    `tests/test_apps_storage.py` (new),
     `docs/declarative/workloads.md`, `docs/cluster/storage.md`,
     `docs/physical/homelab-host.md`.
 *   **Tests that fail without it**: a backed claim's source schedules
     by its class and writes to `volsync_repo_path` of its namespace and
     name (hard-code a cron line; name another path); its repository
-    Secret reuses the namespace's backup value under its own name (seal
-    a value per claim); a NAS volume mounts its row's export and is
-    scheduled only to the worker (drop the affinity); a node-volume
-    claim's path is inside the mount and never the mount point (point at
-    the mount).
+    Secret carries the namespace's sealed writer key under the claim's
+    own name, with a password generated in state (seal a value per
+    claim; write the password into configuration); a NAS volume mounts
+    its row's export and is scheduled only to the worker (drop the
+    affinity); a node-volume claim's path is inside the mount and never
+    the mount point (point at the mount).
 
-**Slice 6: backup credentials and the ported ciphertexts.** Pre-live;
-the mints are live, at each wave's head. **After** slice 5.
+**Slice 6: the writer keys and the ported ciphertexts.** Pre-live; the
+`physical` apply its merge leads to mints the keys, behind that stack's
+reviewer. **After** slice 5.
 
-*   **Done means**: `conventions.backup` lists the backed namespaces and
-    `conventions.sealed` builds one backup value per namespace from it;
-    `credentials` mints each namespace's writer keys, generates and
-    escrows its restic password, and seals the value namespace-wide into
-    `apps`'s configuration; every legacy ciphertext the waves' components
-    declare is copied into `Pulumi.apps.yaml`; credentials.md §1 rule 6's
-    channel and §3's rows, cluster-infra.md §1.1, and the legacy key's
-    row are true.
-*   **Owned paths**: `src/kluster/conventions/sealed.py`,
-    `src/kluster/conventions/backup.py`,
+*   **Done means**: `conventions.backup.BACKED_NAMESPACES` lists every
+    namespace the waves back up, and `physical` declares its scopes from
+    it; `credentials` seals each namespace's writer keys from
+    `physical`'s state, namespace-wide, into `apps`'s configuration, at
+    paths its rows in `conventions.sealed` derive; every legacy
+    ciphertext the waves' components declare is copied into
+    `Pulumi.apps.yaml`; credentials.md §3 and §4, cluster-infra.md §1.1
+    and workloads.md §5 are true.
+*   **Owned paths**: `src/kluster/conventions/backup.py`,
+    `src/kluster/conventions/sealed.py`,
+    `src/kluster/conventions/__init__.py`,
+    `src/kluster/stacks/physical.py`,
     `src/kluster/scripts/credentials/`, `Pulumi.apps.yaml`,
-    `tests/test_sealing.py`, `tests/test_slots.py`, `tests/test_b2.py`,
-    `tests/test_conventions.py`, `docs/credentials.md`,
-    `docs/declarative/cluster-infra.md`.
-*   **Tests that fail without it**: a writer key is scoped to its
-    namespace's prefix and lacks `deleteFiles`, against the B2 fake
-    (scope it to the bucket; grant delete); the password is escrowed
-    before it is sealed, and a mint that fails between them leaves
-    neither (seal first); the value opens under any name in its
-    namespace and in no other namespace (seal strict); every backed
-    namespace has a row (drop one).
-*   **Unproven live**: each mint, against the running controller and
-    the real B2 account.
+    `tests/test_conventions.py`, `tests/test_sealing.py`,
+    `tests/test_slots.py`, `tests/test_physical_stack.py`,
+    `tests/test_backup_bucket.py`, `docs/credentials.md`,
+    `docs/declarative/cluster-infra.md`,
+    `docs/declarative/workloads.md`.
+*   **Tests that fail without it**: `physical` declares exactly the
+    scopes the census names, beside the etcd snapshots' scope (derive from a fixed
+    list); a sealed key opens under any name in its namespace and in no
+    other namespace (seal strict); the seal reads `physical`'s state
+    under that stack's passphrase and writes a plain value at its row's
+    path, through the `pulumi` runner the package fakes (write it as a
+    configuration secret); every backed namespace has a row (drop one).
+*   **Unproven live**: the keys' mint, by `physical`'s apply, and their
+    seal, at slice 26.
 
-**Slice 7: single sign-on.** Pre-live. **After** slices 4 and 6.
+**Slice 7: single sign-on.** Pre-live. **After** slice 6.
 
-*   **Done means**: `conventions.sso.CLIENTS`, each redirect address
-    built from its client's route row; workloads.md §4 is true.
+*   **Done means**: `conventions.sso.CLIENTS` holds every client the
+    legacy authentication service carries, each redirect address built
+    from its client's route row once the row exists and from its legacy
+    name until then; workloads.md §4 is true.
 *   **Owned paths**: `src/kluster/conventions/sso.py` (new),
     `src/kluster/conventions/__init__.py`, `tests/test_conventions.py`,
     `docs/declarative/workloads.md`.
 *   **Tests that fail without it**: every redirect address is a name a
-    route row publishes, in a zone the row names (a client redirecting
-    to an unrouted name); client identifiers are unique (a census
-    invariant).
+    route row publishes or a record points at the VPS, in a zone the row
+    or the record names (a client redirecting to a name nobody
+    publishes); clients are unique by name (a census invariant).
 
-**Slice 8: databases.** Pre-live. **After** slices 5 and 6.
+**Slice 8: databases.** Pre-live. **After** slice 7.
 
 *   **Done means**: the database shape of §4.3 on the application base:
-    one instance, the barman plugin to the backup bucket under the
-    namespace's backup value, scheduled by its class, an optional
-    recovery from a named object store with its credential, and the
-    restore drill with its rule; storage.md §5 and operations.md §4 are
-    true.
+    a single instance, the barman plugin to the backup bucket under the
+    namespace's sealed writer key, scheduled by its class, a server name
+    with its generation, an optional recovery from a named object store
+    with its credential, and the restore drill with its rule;
+    workloads.md §4, storage.md §5 and operations.md §4 are true.
 *   **Owned paths**: `src/kluster/components/apps/database.py` (new),
-    `tests/test_apps_database.py` (new), `docs/cluster/storage.md`,
+    `tests/test_apps_database.py` (new),
+    `docs/declarative/workloads.md`, `docs/cluster/storage.md`,
     `docs/operations.md`.
-*   **Tests that fail without it**: the cluster runs one instance (run
-    two); it archives to `barman_repo_path` of its namespace and name
-    (name another); a recovering cluster bootstraps from the store it
-    is handed and archives to the bucket (archive back to the legacy
-    store); the drill's role reaches only its namespace, and its rule
-    carries a tier and a playbook that resolves (grant it cluster-wide;
-    name a missing section).
+*   **Tests that fail without it**: the cluster archives to
+    `barman_repo_path` of its namespace and its server name with its
+    generation (drop the generation); a recovering cluster bootstraps
+    from the store it is handed and archives to the bucket (archive back
+    to the legacy store); the drill's role reaches only its namespace,
+    and its rule carries a tier and a playbook that resolves (grant it
+    cluster-wide; name a missing section).
 
-**Slice 9: static sites.** Pre-live. **After** slice 5.
+**Slice 9: static sites.** Pre-live. **After** slice 8.
 
 *   **Done means**: `StaticSite` with both sources, the delegation
-    files' header on the apex route; workloads.md §4 is true as it
-    stands.
+    files' header on the apex route; workloads.md §4's static site,
+    with its apex, is true.
 *   **Owned paths**: `src/kluster/components/apps/static_site.py`
-    (new), `tests/test_static_site.py` (new).
+    (new), `tests/test_apps_static_site.py` (new),
+    `docs/declarative/workloads.md`.
 *   **Tests that fail without it**: a git-source site syncs its branch
-    into an empty directory and runs two replicas across the cloud pool
-    (one replica; no spread); a NAS-source site mounts read-only and
-    runs on the worker (mount read-write); the header is set on the
-    delegation paths alone (set it site-wide).
+    into an empty directory and runs more than one replica, spread
+    across the cloud nodes (one replica; no spread); a NAS-source site
+    mounts read-only and runs on the worker (mount read-write); the
+    header is set on the delegation paths alone (set it site-wide).
 
 ### 10.2 Pre-live: the applications
 
 Each build slice owns `src/kluster/components/apps/<application>/` and
-`tests/test_app_<application>.py`, both new, and nothing else unless
-its line says so; **done means** the component declares what §5 says
-its application declares, the gate passes, and the component is not
-wired. Its tests hold the relations §5 names: the claims backed or
-exempted with their reason, the rows it receives attached to what their
-exposure says, its ported values read from the configuration, its pod
-security `restricted` unless its line states otherwise. Each pull
+`tests/test_apps_<application>.py`, both new, and the shared paths its
+line adds; **done means** the component declares what §5 says its
+application declares, the gate passes, and the component is not wired.
+Its tests hold the relations §5 names: the claims backed or exempted
+with their reason, the rows it receives attached to what their exposure
+and their gate say, its ported values read from the configuration, its
+pod security `restricted` unless its line states otherwise. Each pull
 request carries an unproven-live note naming its wave's verification.
 
-| Slice | Application | Wave | Size | After |
-| --- | --- | --- | --- | --- |
-| 10 | exim | A1 | S | 2, 4, 6 |
-| 11 | authelia, with the canary | A1 | M | 2, 5, 6, 7 |
-| 12 | blog | A2 | S | 2, 9 |
-| 13 | splitpro | A2 | M | 2, 7, 8 |
-| 14 | matrix | A2 | S | 2, 5, 7 |
-| 15 | syncthing, both forms, and the WebDAV server | A2, C | M | 2, 4, 5 |
-| 16 | stdiscosrv | A2 | S | 2, 4 |
-| 17 | hath | after A2 | M | 2, 4, 5 |
-| 18 | golinks, emailproxy and spoolman | B | M | 2, 4, 5, 6 |
-| 19 | the Home Assistant relay, and the doors | B | S | 2, 4, 9 |
-| 20 | thread-dashboard, and its image in `docker/` | B | S | 2, 4 |
-| 21 | immich | C | L | 2, 4, 5, 7, 8 |
-| 22 | jellyfin and shoko | C | M | 2, 4, 5, 7 |
-| 23 | qbittorrent and seedwatch, and seedwatch's image in `docker/` | D | M | 2, 4, 5 |
+| Slice | Application | Wave | Size | Shared paths beyond its own | After |
+| --- | --- | --- | --- | --- | --- |
+| 10 | exim | A1 | S | none | 2, 4, 6 |
+| 11 | authelia, with the canary and its target | A1 | M | `docs/declarative/cluster-infra.md`, `docs/operations.md` | 2, 5, 6, 7, 8 |
+| 12 | blog | A2 | S | none | 2, 9 |
+| 13 | splitpro | A2 | M | none | 2, 7, 8 |
+| 14 | matrix | A2 | S | none | 2, 5, 7 |
+| 15 | syncthing, both forms, and the WebDAV server | A2, C | M | none | 2, 4, 5 |
+| 16 | stdiscosrv | A2 | S | none | 2, 4 |
+| 17 | hath, with its stage and copy pair | after A2 | M | none | 2, 4, 5 |
+| 18 | golinks, emailproxy and spoolman | B | M | none | 2, 4, 5, 6 |
+| 19 | the Home Assistant relay, and the doors | B | S | none | 2, 4, 9 |
+| 20 | thread-dashboard, and its image in `docker/` | B | S | `Pulumi.yaml`, `docker/` | 2, 4 |
+| 21 | immich | C | L | none | 2, 4, 5, 7, 8 |
+| 22 | jellyfin and shoko | C | M | none | 2, 4, 5, 7 |
+| 23 | qbittorrent and seedwatch, and seedwatch's image in `docker/` | D | M | `Pulumi.yaml`, `docker/` | 2, 4, 5, 20 |
 
-**Slice 24: monitoring's name.** Pre-live. **After** slices 3, 6 and 7,
-and rfc-007 slice 11.
+**Slice 24: monitoring's route roll.** Pre-live. **After** slices 3, 4
+and 7, and rfc-007 slice 11.
 
-*   **Done means**: the monitoring component takes the `mon` row and
-    Grafana's client from the census; `k8s-base` builds its Cloudflare
-    provider from the zones token, whose slot names it as a target; its
-    two Grafana values sealed afresh into its configuration;
-    cluster-infra.md §3 and credentials.md §3 are true.
+*   **Done means**: the monitoring component takes a required roll of
+    route rows and Grafana's client from the census, and builds no
+    Cloudflare provider while it routes no public row; `k8s-base` hands
+    it an empty roll. The `mon` row, the provider, the zones token and
+    the reference to `dns` arrive with Wave B's land (slice 36).
 *   **Owned paths**: `src/kluster/components/monitoring/`,
-    `src/kluster/stacks/k8s_base.py`,
-    `src/kluster/scripts/credentials/slots.py`,
-    `tests/test_monitoring.py`, `tests/test_stack_programs.py`,
-    `tests/test_slots.py`, `docs/declarative/cluster-infra.md`,
-    `docs/credentials.md`.
-*   **Tests that fail without it**: the component's route attaches the
-    row it is handed (hard-code a host); `k8s-base` builds one
-    Cloudflare provider from its own configuration (read it across a
-    StackReference); the zones row targets every stack that builds one
-    (drop `k8s-base`).
+    `src/kluster/stacks/k8s_base.py`, `tests/test_monitoring.py`,
+    `tests/test_stack_programs.py`.
+*   **Tests that fail without it**: the component's route attaches each
+    row it is handed (hard-code a host); handed no public row, it builds
+    no Cloudflare provider and reads no zones token (build one
+    regardless).
 
-**Slice 25: hath's address in `physical`.** Pre-live to build; its apply
-is live, behind `physical`'s reviewer, before slice 33. **After** the
-bring-up.
+**Slice 25: hath's address in `physical`.** Live: its merge is the gated
+`physical` apply that moves the dedicated node's public address, made at
+hath's head, before slice 33. **After** slices 4, 6, 8, 9, 11 and 24.
 
 *   **Done means**: the reserved address is assigned to the dedicated
-    node's primary private address, the secondary address and its pool
-    member are gone, and the outputs `k8s-base` reads for the pool no
-    longer name it; architecture.md §3.2 and §3.5 and physical.md §1 are
-    true.
+    node's primary private address; the secondary address, its pool
+    member, its outputs and the machine configuration's secondary
+    address are gone, with the mechanism that carried it; dns.md §2's
+    anchor reads the address it now names; architecture.md §3.2 and
+    §3.5, physical.md §1, cluster-infra.md §1 and §2, workloads.md §4
+    and operations.md are true.
 *   **Owned paths**: `src/kluster/components/cloud/nodes.py`,
-    `src/kluster/conventions/outputs.py`, `src/kluster/stacks/physical.py`,
-    `src/kluster/components/cilium/`, `tests/test_cloud_nodes.py`,
+    `src/kluster/conventions/outputs.py`,
+    `src/kluster/conventions/cloud.py`, `src/kluster/stacks/physical.py`,
+    `src/kluster/stacks/k8s_base.py`, `src/kluster/components/cilium/`,
+    `src/kluster/components/talos/__init__.py`,
+    `src/kluster/components/dns/base.py`, `tests/test_cloud_nodes.py`,
     `tests/test_physical_stack.py`, `tests/test_cilium.py`,
-    `docs/cluster/architecture.md`, `docs/declarative/physical.md`.
+    `tests/test_stack_programs.py`, `tests/k8s_base_installation.py`,
+    `tests/test_talos_config.py`, `tests/test_talos_day1.py`,
+    `tests/test_talos_validate.py`, `tests/test_dns_stack.py`,
+    `docs/cluster/architecture.md`, `docs/declarative/physical.md`,
+    `docs/declarative/dns.md`, `docs/declarative/cluster-infra.md`,
+    `docs/declarative/workloads.md`, `docs/operations.md`.
 *   **Tests that fail without it**: the reserved address names the
     dedicated node's primary private address (name a secondary one); the
-    pool holds no address the node does not carry (keep the secondary
-    member).
+    pool holds no address a node does not carry (keep the secondary
+    member); no node's machine configuration states a secondary address
+    (keep one).
 *   **Unproven live**: whether the provider releases the node's
     ephemeral address in place (§5.4); the egress address hath's
     outbound connections arrive from.
 
 ### 10.3 Live: the windows
 
-Each window is a sequence of slices, run in the order below; each
-pull request is its own slice, and so is each step with none.
+Each window is a sequence of slices, run in the order below; each pull
+request is its own slice, and so is each step with none. A head carries
+the removal of the previous window's legacy applications, which waits
+for their soak (§3.5).
 
 | Slice | Window | What | Owned paths |
 | --- | --- | --- | --- |
-| 26 | A1 | The operator's steps at the head: the legacy key carried (§4.6), authelia's namespace's backup value minted into a branch, kluster-code's stop of exim and authelia merged | none; kluster-code |
-| 27 | A1 | **Land**: exim and authelia wired, `auth` held, the backup value | `src/kluster/stacks/apps.py`, `src/kluster/conventions/routes.py`, `Pulumi.apps.yaml` |
+| 26 | A1 | The head: the legacy key carried (§4.6); every namespace's writer keys sealed; kluster-code stops authelia and points its forward-auth checks at the new service | `Pulumi.apps.yaml`; kluster-code |
+| 27 | A1 | **Land**: exim and authelia wired, `auth` held; the echo component, its row and its pin deleted | `src/kluster/stacks/apps.py`, `src/kluster/conventions/routes.py`, `src/kluster/conventions/cluster.py`, `src/kluster/components/apps/datasets.py`, `docs/sources-of-truth.md`, the echo component's module, `Pulumi.yaml` |
 | 28 | A1 | **Cut**: `auth` | `src/kluster/conventions/routes.py`, `src/kluster/components/dns/legacy.py`, `docs/sources-of-truth.md` |
-| 29 | A2 | The head: backup values minted, kluster-code's stop | none; kluster-code |
-| 30 | A2 | **Land**: blog, splitpro, matrix, syncthing, stdiscosrv | as slice 27 |
+| 29 | A2 | The head: A1's legacy authelia removed; the DNS-01 token minted for the co-host zone into the land's branch; kluster-code stops A2's applications | kluster-code |
+| 30 | A2 | **Land**: blog, splitpro, matrix, syncthing, stdiscosrv | as slice 27, and `Pulumi.k8s-base.yaml` |
 | 31 | A2 | **Cut**: `split`, `matrix`, `sync`, `dav`, `syncapi`, `btsync`, the web origin's served apex and both `www` | as slice 28, and `src/kluster/components/dns/base.py` |
-| 32 | after A2 | The head: the client's cache size set, the warm copy, the backup value, kluster-code's stop | none; kluster-code |
-| 33 | after A2 | **Land**: hath wired, with the temporary NAS dataset row its copy reads; the final delta | as slice 27, and `src/kluster/conventions/nas.py` |
-| 34 | after A2 | **Cut**: the re-registration, and the temporary dataset row removed | `src/kluster/conventions/nas.py`, `docs/sources-of-truth.md` |
-| 35 | B | The head: the NAS exports, backup values, the doors' content and DNS-01 token, the window if §6.3 asks for one, kluster-code's stop | `src/kluster/conventions/homelab.py` if the window runs; kluster-code; aconfmgr |
-| 36 | B | **Land**: Wave B's applications, and slice 24's row | as slice 27, and `Pulumi.k8s-base.yaml` |
-| 37 | B | **Cut**: `spool`, `haos`, `mon`, `games`, `game`, `jiahui.love`'s apex, and the B rows of `LEGACY_VHOSTS` | as slice 31, and `src/kluster/conventions/gateway.py` |
-| 38 | C | The head: kluster-code's move to the iGPU and stop, backup values, then the window: growth and the A380's bind | `src/kluster/conventions/homelab.py`, `src/kluster/components/homelab/`, `tests/test_homelab.py`, `docs/physical/homelab-host.md` |
+| 32 | after A2 | The head and the **stage**: A2's legacy applications removed; slice 25 applied; the Hath export on the host; the client's cache size set; hath wired with its client not started, the copy pair and the temporary dataset row; the warm copy | as slice 27; aconfmgr; kluster-code |
+| 33 | after A2 | **Land**: kluster-code stops legacy hath; the final delta; the client started | as slice 27 |
+| 34 | after A2 | **Cut**: the re-registration; the copy pair, the temporary row and the not-started parameter deleted | as slice 27 |
+| 35 | B | The head: legacy hath removed; the datasets' exports; the doors' content; the DNS-01 token minted for `jiahui.love`; Grafana's two values sealed afresh; the window if §6.3 asks for one; kluster-code stops Wave B's applications | `Pulumi.k8s-base.yaml`; `src/kluster/conventions/homelab.py` if the window runs; aconfmgr; kluster-code |
+| 36 | B | **Land**: Wave B's applications; `k8s-base` hands the monitoring component the held `mon` row, and builds the Cloudflare provider and the reference to `dns` | as slice 27, and `src/kluster/stacks/k8s_base.py`, `src/kluster/scripts/credentials/slots.py`, `Pulumi.k8s-base.yaml`, `tests/test_stack_programs.py`, `tests/test_slots.py`, `docs/credentials.md`, `docs/declarative/cluster-infra.md`, `docs/style/pulumi.md`, `docs/declarative/README.md` |
+| 37 | B | **Cut**: `spool`, `haos`, `mon`, `games`, `game`, `jiahui.love`'s apex, and the B rows of `LEGACY_VHOSTS`, with the bare `gw` and `dns` onto the gateway's declared vhosts | as slice 31, and `src/kluster/conventions/gateway.py` |
+| 38 | C | The head: Wave B's legacy applications and the JuiceFS stack removed, thread-dashboard's quadlet removed; the legacy GPU plugin onto the iGPU; kluster-code stops legacy immich, jellyfin, shoko, syncthing-nas, the legacy monitoring and the legacy relay; then the window: growth and the A380's bind | `src/kluster/conventions/homelab.py`, `src/kluster/components/homelab/`, `tests/test_homelab.py`, `docs/physical/homelab-host.md`; aconfmgr; yadm; kluster-code |
 | 39 | C | **Land**: immich, jellyfin and shoko, syncthing-nas | as slice 27 |
-| 40 | C | **Cut**: `photos`, `tube`, `sync-nas`, their rewrite rules, and the `tube` vhost row | as slice 37 |
-| 41 | D | The head: the window if Wave C's did not fund it, and the host units stopped; kluster-code has nothing to stop | `src/kluster/conventions/homelab.py` if the window runs; aconfmgr; yadm |
+| 40 | C | **Cut**: `photos`, `tube`, `sync-nas`, their rewrite rules, and the `tube` vhost row; kluster-code drops the transitional target of the legacy forward-auth checks | as slice 37; kluster-code |
+| 41 | D | The head: Wave C's legacy applications removed; the window if Wave C's did not fund it; the host units stopped | `src/kluster/conventions/homelab.py` if the window runs; aconfmgr; yadm; kluster-code |
 | 42 | D | **Land**: qbittorrent and seedwatch, and `qbittorrentOnWorker` | as slice 27, and `Pulumi.physical.yaml` |
-| 43 | D | **Cut**: `bt`, the `bt` and `seedwatch` vhost rows | as slice 37 |
+| 43 | D | **Cut**: `bt`, the `bt` and `seedwatch` vhost rows, and the UPS card's row onto the gateway's declared vhosts | as slice 37 |
+| 44 | D | After the soak: the host units removed from aconfmgr and yadm; this document's status flipped to **Implemented**, naming where its content lives | `docs/rfc/rfc-008-workload-migration.md`, `docs/rfc/README.md`; aconfmgr; yadm |
 
 A cut's owned paths also take the resolvers' declared rule list, where
 it names a moved name (sources-of-truth.md, row R2).
 
-**Each window's done means** is the slice's own verification of §5,
-transcribed on its issue, and for each cut, its soak passed and
-kluster-code's removal of the cut applications merged (§3.5, §6.3).
-The removals are kluster-code pull requests the operator merges, each
-named on the cut's issue.
-
-Each land and cut also edits the rows of sources-of-truth.md its
-applications' flips change, and the last cut's pull request flips this
-document's status to **Implemented** and names where its content lives.
+**A head's done means** is each of its steps done, with its reading
+recorded on the slice's issue; **a land's** is its verification of §5
+transcribed there; **a cut's** is its names answering from the cluster,
+the chain re-run to success where §3.4 asks for it. Each land and cut
+edits the rows of sources-of-truth.md its applications' flips change.
 
 --------------------------------------------------------------------------------
 
@@ -1325,14 +1551,16 @@ after hath's soak. What decided it: hath is cloud-side and depends on
 nothing Waves B to D move, and the address it needs is one that only
 hath exercises, so the waves between them would not have proven it.
 
-### 11.2 Conditional: the worker's end-state size
+### 11.2 Conditional: the worker's size
 
-The worker's end-state size, against what the host keeps for the
-operator's own work, was to be ruled only if the per-app sizing did not
-fit under the ceiling of §6.1. It fits (§6.1), so nothing is asked of
-the operator here; the end-state size is the decommission's decision
-(§5.8). The question returns only if a wave's reading of §6.3 departs
-from §6.1's sizing by more than its headroom.
+The worker's size, against what the host keeps for the operator's own
+work, is to be ruled only if the per-app sizing does not fit. On §6.1's
+numbers it fits the transitional ceiling, with about 4 GiB of headroom
+for the limits, so nothing is asked of the operator now; the end-state
+size is the decommission's decision (§5.8). The question is asked if
+Wave C's reading (§6.3, item 4) leaves less headroom than the limits
+need, and the choice then is the RAM upgrade, nodes.md §4.2's relief
+valve, or tighter limits for the rest of the transition.
 
 ### 11.3 Settled on first contact
 
@@ -1344,4 +1572,9 @@ from §6.1's sizing by more than its headroom.
     path, read when its claim is copied (§5.6).
 *   The rewrite rules the resolvers' declared list carries for names
     the waves move, read off the list when its own declaration lands.
-*   The host label each LAN port row names.
+*   What the legacy WebDAV server's own claim holds beside the synced
+    folder, read at Wave A2's head; anything there is copied onto the
+    replica volume (§5.3).
+*   The host label each LAN port row names, and the printers' VLAN: a
+    printer on the IoT VLAN reaches no `lan` VIP but the media one, so
+    spoolman's port then needs the IoT allow widened in `physical`.
