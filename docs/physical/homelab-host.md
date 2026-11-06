@@ -89,6 +89,9 @@ resources (§4):
     the NAS, and without a leg every NFS read by a VM one bridge away
     would hairpin out to the UDM and back for both directions of every
     packet. With it, host↔worker storage traffic stays on the box.
+    The leg takes a SLAAC address from the VLAN's advertisement and no
+    resolver: the wired link is the host's one source of DNS, set in
+    the same aconfmgr network files.
 
 A real bridge, **not macvtap**: macvtap trades away host↔guest
 connectivity for zero host-network reconfiguration (frames from the
