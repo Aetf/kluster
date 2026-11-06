@@ -1001,11 +1001,12 @@ under any retention. A move is three steps:
 
 A mover states `moverSecurityContext`, without which `restricted`
 refuses it, as the identity `claim` takes for the pod, so that it can
-read the data, and its resources, as workloads.md §1 asks. `claim` emits
-the allow for a mover's traffic inside its namespace, and for a restic
-mover's egress to the bucket. **Unproven live**: `moverAffinity` placing
-an unbound claim, the generated key shared by a source and a destination
-of one name, and a DNS name in `address`.
+read the data, and its resources, as workloads.md §1 asks. `claim`
+emits, for every claim, the allow for a mover's traffic inside its
+namespace and to the cluster's DNS, and for a restic mover's egress to
+the bucket. **Unproven live**: `moverAffinity` placing an unbound claim,
+the generated key shared by a source and a destination of one name, and
+a DNS name in `address`.
 
 immich's model cache, 11 GiB that re-derives, takes `off`, so immich's
 namespace has no restic repository; its barman scope and key stand for
@@ -1967,7 +1968,7 @@ worker has given the memory back. **New rule**, landing in migration.md
 | [credentials.md](../credentials.md) | credentials.md §3: the tunnel's hand-kept token, the alert webhook as Home Assistant's own address, the writer keys' sealed delivery, the zones token's `k8s-base` target, the legacy sealing key's row, from §4.6 and §5.5. credentials.md §4: the seal of the writer keys from `physical`'s state, and the sentence on a new volume, from §4.6 |
 | [cluster/storage.md](../cluster/storage.md) | storage.md §2: the two kinds of claim and `cloud-block-<row>`, from §4.2. storage.md §3.1: a move by `rsync-tls`, from §4.2. storage.md §3.3: `off` has no undo, from §4.2. storage.md §6: a node volume as a `local-path` pool, from §4.2. storage.md §5: one database instance, its server name's generation, and the restore drill in place, from §4.3 |
 | [operations.md](../operations.md) | operations.md §4: the database restore drill and the authentication canary built, from §4.3 and §5.2 |
-| [physical/gateway.md](../physical/gateway.md) | gateway.md §1: a declared vhost's appliance upstream, and what answers the UPS card's name on the LAN, from §5.7. gateway.md §4.2: Home Assistant's allow, and the peer rows read the census, from §4.1. gateway.md §4.3: the sentences that call a television the sole IoT-originated flow, and "a single host as a literal", narrowed to destinations, from §4.1 |
+| [physical/gateway.md](../physical/gateway.md) | gateway.md §1: a declared vhost's appliance upstream, and what answers the UPS card's name on the LAN, from §5.7. gateway.md §4.2: Home Assistant's allow, "a single host as a literal" narrowed to destinations, and the peer rows read the census, from §4.1. gateway.md §4.3: the sentences that call a television the sole IoT-originated flow, from §4.1 |
 | [cluster/security-audit.md](../cluster/security-audit.md) | The tunnel in place of the gateway pod range in Home Assistant's trusted proxies, from §4.1. The restic password in clear in each repository SealedSecret and in the etcd snapshots, with its actor and why it opens nothing, from §4.2 |
 | [style/pulumi.md](../style/pulumi.md) | "Data": the composed declaration in place of `Exposure` as its example, from §4.1. "Layering": the StackReference uses `apps` and `k8s-base` gain, from §4.1 and §5.5 |
 | [rfc-003](rfc-003-dns-and-github-stacks.md) | The status header: the enumeration and the route row replaced by the two dimensions, from §4.1 |
@@ -2081,8 +2082,8 @@ this slice.
     `SiteFirewall`'s peer rows, and Home Assistant's allow ahead of rule
     1's drops, from `conventions.site.HOME_ASSISTANT`; dns.md §2, §5 and
     §6, sources-of-truth.md §3 and note N4, `legacy.py`'s module
-    docstring, gateway.md §4.2, architecture.md §3.4, style/pulumi.md
-    ("Data"), and rfc-003's status header are true.
+    docstring, gateway.md §4.2 and §4.3, architecture.md §3.4,
+    style/pulumi.md ("Data"), and rfc-003's status header are true.
 *   **Owned paths**: `src/kluster/conventions/routes.py`,
     `src/kluster/conventions/cluster.py`,
     `src/kluster/conventions/site.py`,
@@ -2196,19 +2197,19 @@ program before it.
     source is the next generation's, and the repository path survives
     the move (schedule it; move through the bucket; derive the path from
     the generation; keep the old source); a mover's traffic stays inside
-    its namespace, and a restic mover reaches the bucket (drop either);
-    every mover states its security context and resources, and every
-    source `copyMethod: Direct` (leave them out); a backed claim's
-    source schedules by its class and writes to `volsync_repo_path` of
-    its namespace and name (hard-code a cron line; name another path);
-    its repository Secret carries the namespace's sealed writer key
-    under the claim's own name, with a password generated in state (seal
-    a value per claim; write the password into configuration); a
-    `nas_claim` is scheduled only to the worker (drop the affinity);
-    each row's class has its row's mount as the path for every node,
-    `Retain`, the pattern as a parameter and the volume type as an
-    annotation (reclaim `Delete`; put the volume type in the
-    parameters).
+    its namespace and reaches the cluster's DNS, and a restic mover
+    reaches the bucket (drop any); every mover states its security
+    context and resources, and every source `copyMethod: Direct` (leave
+    them out); a backed claim's source schedules by its class and writes
+    to `volsync_repo_path` of its namespace and name (hard-code a cron
+    line; name another path); its repository Secret carries the
+    namespace's sealed writer key under the claim's base name, with a
+    password generated in state (seal a value per claim; write the
+    password into configuration); a `nas_claim` is scheduled only to the
+    worker (drop the affinity); each row's class has its row's mount as
+    the path for every node, `Retain`, the pattern as a parameter and
+    the volume type as an annotation (reclaim `Delete`; put the volume
+    type in the parameters).
 
 **Slice 6: the writer keys and the ported ciphertexts.** Live: its merge
 leads to the gated `physical` apply that mints the keys, so it merges
