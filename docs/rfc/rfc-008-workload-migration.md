@@ -343,12 +343,12 @@ land. Two such services move first:
     same kluster-code change points the legacy forward-auth checks
     at the new service's public authorization endpoints, the session
     check and the HTTP Basic check alike. The gated legacy fronts —
-    `sync`, `dav`, `spool`, `sync-nas` — then ask the one service whose
+    `sync`, `sync-nas`, `dav`, `spool` — then ask the one service whose
     sessions the portal issues, until each is cut. Two services side by
     side would each hold their own sessions, and a sign-in at the portal
     would never satisfy the other. The checks' target is the
     legacy cluster's transitional state; it goes with the last gated
-    legacy front, at Wave C's cut.
+    legacy front, `spool`, at Wave B's cut.
 
 **It is removed by a second kluster-code change, after its cut has
 soaked**: the component goes, and its claims' directories are mapped
@@ -408,8 +408,8 @@ records; and 61 days of byte counts.
 | matrix | a browser client's long poll, and federation on 443 | public |
 | the WebDAV server | 1.9 GiB in October, nothing since; its own files are live | public, Basic gate |
 | the discovery server | six devices announcing, all on 443 | public, passthrough |
-| the syncthing replica's peer port | every device, and the NAS instance by name | raw port, balancer |
-| the syncthing interfaces | nothing but probes in the log | home, gated |
+| syncthing's peer port | an always-reachable anchor for the roaming devices | raw port, balancer, to the worker |
+| syncthing's interface | nothing but probes in the log | home, gated |
 | Home Assistant | the companion application and a model client | public |
 | immich | phones syncing and uploading, some over 100 MB | public direct, and home |
 | jellyfin | the televisions, on the Default LAN at the host's name; light use from outside | public, and home |
@@ -581,12 +581,12 @@ recommendations of §11.4:
 | immich | `Name('photos', Both(Public(Direct('uploads past the proxy limit')), Home(LAN)))` |
 | jellyfin | `Name('tube', Both(Public(PROXIED), Home(LAN)))` |
 | qbittorrent | `Name('bt', Both(Public(PROXIED, gate=SESSION), Home(IOT)))` |
-| the syncthing interfaces | `Name('sync', Home(LAN, gate=SESSION))`, `Name('sync-nas', Home(LAN, gate=SESSION))` |
+| syncthing's interface | `Name('sync', Home(LAN, gate=SESSION))` |
 | spoolman | `Name('spool', Home(IOT))` |
 | seedwatch | `Name('seedwatch', Home(LAN))` |
 | golinks | `Name('go', Home(LAN, bare=True))` |
 | the discovery server | `Passthrough('syncapi', 'clients present a certificate the proxy would end')` |
-| the syncthing replica | `Port('syncthing', 22000, TCP_AND_UDP, Balancer())` |
+| syncthing's peers | `Port('syncthing', 22000, TCP_AND_UDP, Balancer())` |
 | hath | `Port('hath', 60011, TCP, Dedicated())` |
 | emailproxy | `Port('imap', 1993, TCP, Vip(IOT, 'imap'))` |
 | qbittorrent's peers | `Port('qbittorrent-peer', 53363, TCP_AND_UDP, SiteForward())` |
@@ -629,6 +629,43 @@ touching a device. A raw port on 443 is unavailable, since the Gateways
 hold it. The server sees no client address, as it does today. **Unproven
 live**, with the raw port and a reconfiguration of each device as its
 fallback.
+
+**The balancer's peer port reaches syncthing on the worker.** There is
+no cloud replica: its only role was an always-reachable port for roaming
+devices, every device holds its own copy, and the NAS holds the full set.
+The path needs nothing new, and each part of it was read:
+
+*   **The datapath.** Under `Cluster`, a cloud node that takes the
+    connection translates it and forwards it through the tunnel to the
+    worker's pod, on TCP and UDP alike, which is what any raw `Balancer`
+    row already did for a pod on another cloud node.
+*   **The source.** The pod sees a cluster address, not the client's.
+    A device is authenticated by its certificate, so nothing depends on
+    it. The address only classes the connection as LAN, which raises a
+    priority and exempts it from a limit none is set.
+*   **The MTU.** The pod's is 1370, inside KubeSpan's 1420. TCP takes it
+    from the pod's advertised segment size. On UDP the transport starts at
+    1252 bytes and finds its own ceiling by probing, so a lost probe costs nothing.
+*   **The health check.** The balancer probes the port over TCP on each
+    cloud node, each probe reaching the pod. With the worker down, all
+    three fail, and only this row's backend set goes unhealthy.
+*   **The hairpin.** Every node answers the balancer's address for a
+    census port (rfc-007 §4.4), and nothing here needs it: no workload
+    dials this port.
+
+**A client has to find it, and that is the one part that leans on
+upstream's behavior.** Behind the passthrough, the discovery server sees
+no client address, as it does today, so a wildcard announcement resolves
+to nothing useful. So syncthing's `listenAddress` adds
+`tcp://syncapi.<primary>:22000` and its `quic://` twin. Such an address
+cannot bind, which is logged each minute, and is announced all the same:
+at the pinned release a listener stays on the list `WANAddresses` reads
+even if it never bound, and the discovery server keeps a hostname as it
+is. A device with `dynamic` for this instance then needs no change. That
+is read from the source and not documented, so it is the wave's first
+check (§5.3), and its fallback is a static address on each roaming
+device. **Unproven live**, as is UDP through the balancer, which the
+bring-up's gate tries with a scratch Service on the worker.
 
 **A LAN-device backend** is a small reverse proxy on the worker, which
 the route's Service selects, forwarding to the device's address and
@@ -715,25 +752,24 @@ today:
 | authelia | 1.1 MB | `backed_pvc`, `PRECIOUS`; its sessions in a Redis with no claim, since losing them costs a sign-in |
 | splitpro | an empty uploads directory; a 16 MB database | no uploads claim, an `emptyDir`; the database (§4.3) |
 | matrix | 18 MB, on a 20 GiB claim | `backed_pvc`, `PRECIOUS` |
-| the WebDAV server | 1.1 GiB of its own files, on JuiceFS | `backed_pvc`: its own files are in no syncthing folder, so the replica's reseed does not cover them |
-| syncthing, cloud | 125 GiB; a 200 MB index | one `fixed_claim` over `syncthing-replica`, the index beside the data, since it re-derives and the volume outlives the node |
-| syncthing-nas | 115 GiB on the NAS; 145 MB index and device key | `Nfs('Sync')`; `backed_pvc` for what holds the device key |
+| the WebDAV server | 1.1 GiB of its own files, on JuiceFS | `Nfs('Dav')` for them, which are in no syncthing folder, and `Nfs('Sync/Stuff')` for the folder it serves |
+| syncthing | 115 GiB on the NAS; 145 MB index and device key | `Nfs('Sync')`; `backed_pvc` for what holds the device key |
 | stdiscosrv | 2 MB | an `emptyDir`: it rebuilds in minutes |
 | immich | 1.5 GiB database; library, thumbnails and encoded video together on the NAS; 11 GiB model cache; 27 MB queue | the database (§4.3); `Nfs('Immich')` whole; `scratch` for the models; a Redis with no claim, since a lost queue re-runs |
 | jellyfin | 21 GiB of configuration: 11 GiB its own backups, 7.9 GiB scrub previews, 2.6 GiB metadata; a 512 GiB claim holding 116 MB | `backed_pvc` for the database and settings; `Nfs` for scrub previews and metadata; its backups not copied; an `emptyDir` for transcodes |
 | golinks, emailproxy, spoolman | 21 KB, 5 KB, 4.5 MB | `backed_pvc` each |
 | qbittorrent | a 175 MB profile; payloads on the NAS | `backed_pvc`; `Nfs('')`, the whole export, because hard links into `Media` need one mount, and a `Downloads` mount and a `Media` mount would fail them across the mount boundary |
 | seedwatch | 97 MB in memory; audit history | `backed_pvc`; `Nfs('Downloads', read_only)` |
-| hath | 52 GiB of cache, 13 KB of state, on the NAS | one `fixed_claim` over `hath-cache`, the state beside the cache, since nothing in it is worth a restore |
+| hath | 49 GiB of cache in 327,604 files, 13 KB of state, on the NAS | one `fixed_claim` over `hath-cache`, the state beside the cache, since nothing in it is worth a restore |
 | the doors | static files | `Nfs` read-only |
 
-**Both node volumes are too small for what they hold, and the first
-`physical` apply creates them.** `syncthing-replica` is 110 GB against
-115 to 125 GiB of data, and `hath-cache` 50 GB against a 52 GiB cache.
-They become 150 and 60 GB, about $1.30 a month beyond the storage
-overflow nodes.md already counts. It is one line each in
-`conventions.NODE_VOLUMES`, and it lands ahead of this document, before
-the first `physical` apply, by an issue of its own.
+**`hath-cache` is 55 GB, and it is the one node volume left.** The cache
+is 49.3 GiB of data, which is about 50.7 GiB on 4 KiB blocks at its file
+count, so the volume keeps about 3.5 GiB free after the filesystem's own
+share. `syncthing-replica` leaves `NODE_VOLUMES` with the replica. Both
+change ahead of this document, before the first `physical` apply, by an
+issue of their own, and the cloud's block storage falls to 5 GB past the
+free allowance.
 
 **Thumbnails stay with the library.** workloads.md §2 lists them as
 `local-path`, re-derivable, but they sit under immich's one media root
@@ -896,6 +932,8 @@ on the readings of §4.1.
 
 | What goes | Why | What it costs a user |
 | --- | --- | --- |
+| The cloud syncthing replica, and its volume | Its role was an always-reachable port, which the balancer gives the NAS instance | A roaming device syncs at the home uplink's speed, and with the homelab down there is no anchor: devices fall back on relays and each other. The replica's 3 GiB of file versions are not carried |
+| The separate `sync-nas` name | One instance has one interface, `sync` | A bookmark of the old name stops resolving |
 | The name `btsync.unlimitedcodeworks.xyz` | No configuration in the estate names it, on either syncthing instance | Nothing found; a device that held the old name would fall back on discovery |
 | The discovery server's raw port on 8443 and its balancer listeners | A passthrough on 443 keeps the clients (§4.1) | Nothing |
 | The matrix identity SRV, with `Extra`, `Srv` and `SELF` | Nothing answers it: the server has no identity endpoints, which answer 404 today | Nothing. Its one row was why the types existed |
@@ -1020,6 +1058,10 @@ the keys are sealed.
 
 ### 5.3 Wave A2: blog, splitpro, matrix, syncthing, stdiscosrv
 
+**This wave reaches the worker as well as the cloud pool.** The balancer's
+peer port moves to syncthing the moment the VPS's replica stops, so the
+NAS instance and the WebDAV server move here rather than in Wave C.
+
 **The wave's land brings the website co-host zone into the served
 zones**, through the blog's rows, so the cluster's DNS-01 token is
 minted afresh at the wave's head, scoped to them, into the land's
@@ -1045,23 +1087,31 @@ branch.
     with that as its reason. **Cut**: `matrix`, and its identity SRV goes
     (§4.7). **Rollback** loses the events since the cut, which federation
     partners retry.
-*   **syncthing**, the cloud replica: the shared component, in its cloud
-    form — the device key ported, so the device keeps its identity, and
-    the WebDAV server beside it, serving its own files from a backed
-    claim and the synced folder from the volume. Its peer port is the
-    `syncthing` row on both transports, where the legacy Service exposed
-    TCP alone. **Data**: the WebDAV server's own files by stream, off
-    JuiceFS; the replica reseeds from its peers (migration.md §3), which
-    takes the home uplink some hours for 125 GiB and blocks nothing.
-    **Verified** by the peers connecting under its device identity, the
-    interface refusing an unauthenticated request at the LAN VIP, and
-    `dav` refusing one at the balancer. **Cut**: `dav`, and `sync`'s
-    legacy block; its row lands published (§3.3). **Rollback** restarts the legacy
-    replica on its JuiceFS volume, which the stop kept.
+*   **syncthing** on the worker, with the WebDAV server beside it, and
+    the `syncthing` row on both transports, where the legacy Service
+    exposed TCP alone. Its device identity lives in its configuration,
+    which is copied whole, and it drops the VPS's device and adds the
+    announced addresses of §4.1. **Data**: the NAS's data stays in
+    place. The configuration and index go through the NAS, and the
+    WebDAV server's own files from the legacy pod's mount onto it, off
+    JuiceFS. **Two folders have no NAS copy**: `DolphinSaves` and
+    `PhD.Study` exist only on the replica and its clients, so the head
+    shares them with the NAS instance before the stop. **Verified** first
+    by a roaming device's lookup returning the balancer's name, and that
+    device connecting on each transport; then the interface refusing an
+    unauthenticated request at the LAN VIP, and `dav` refusing one at the
+    balancer. **Cut**: `dav`, and the `sync` and `sync-nas` legacy blocks;
+    `sync`'s row lands published (§3.3). A device still holding the VPS's
+    entry shows it disconnected until it is removed, since the address
+    answers with another device's certificate. **Rollback** restarts the
+    legacy replica on its JuiceFS volume and the legacy NAS instance,
+    which the stop kept.
 *   **stdiscosrv**: the `Passthrough` on `syncapi`, terminating its own
     TLS with a certificate the cluster's issuer gives it for the name.
-    The syncthing-nas instance dials the replica at that name on port
-    22000, which the same record serves. **Data**: none; its
+    It keeps its reason with the replica gone, on the cloud pool: it is
+    how a device learns the balancer's address, and how devices find each
+    other with the homelab down, and retiring it would be a change on
+    every device. The same record serves the peer port. **Data**: none; its
     announcements are rebuilt within minutes. **Verified** by a client's
     announcement and lookup on 443. **Cut**: `syncapi`.
 
@@ -1117,7 +1167,7 @@ are refused by the network:
 
 *   **hath**: its client on the node the volume follows, its login
     ported, strict CPU limits, and the `hath` row. The legacy egress pods
-    and their WireGuard keys do not port. **Data**: 52 GiB over the home
+    and their WireGuard keys do not port. **Data**: 50 GiB over the home
     uplink, a few hours. **Verified** by the client starting with no
     cache rebuild, the network's test of its address passing, and its
     outbound connections arriving from the reserved address.
@@ -1183,8 +1233,8 @@ worker as it booted (§6.1), so the wave needs no window.
     balancer. **Cut**: `mon`.
 
 **The legacy monitoring keeps running until Wave C's head**, because it
-is what alerts on the legacy applications that have not moved — immich,
-jellyfin and syncthing-nas — and on the legacy node they run on. It
+is what alerts on the legacy applications that have not moved — immich
+and jellyfin — and on the legacy node they run on. It
 stops with them, and its claim is kept cold until its retention would
 have aged out, rather than running read-only for a history no rule
 reads. The legacy cluster's own conditions are alerted on by nothing
@@ -1193,15 +1243,17 @@ arrangement is recorded in row R12 (sources-of-truth.md rule 4).
 
 The same cut takes the gateway's resolver and console names out of
 `LEGACY_VHOSTS`, whose rows retire at Wave B: their public names have
-had rewrites since `dns`'s first up.
+had rewrites since `dns`'s first up. It also ends the transitional target
+of the legacy forward-auth checks, whose last gated front is `spool`
+(§3.5).
 
 ### 5.6 Wave C
 
 **The head** removes Wave B's legacy applications and the legacy
 JuiceFS stack, whose last consumer was spoolman, with their claims kept;
 moves the legacy GPU plugin to the iGPU; and stops legacy immich,
-jellyfin, syncthing-nas, the legacy monitoring and the legacy mail
-relay, whose last senders those are (§3.5). **The window** then grows
+jellyfin, the legacy monitoring and the legacy mail relay, whose last
+senders those are (§3.5). **The window** then grows
 the worker and binds the A380 in one drained apply, since each replaces
 the domain (migration.md, Wave C).
 
@@ -1227,17 +1279,8 @@ the domain (migration.md, Wave C).
     metadata stay on the NAS. **Verified** by each television playing a
     title through the name, and a transcode on the A380. **Cut**: `tube`,
     and its vhost row.
-*   **syncthing-nas**: the shared component in its NAS form, its
-    interface on `sync-nas`, whose row lands published (§3.3). Its device identity
-    lives in its configuration, which is copied whole, so its peers see
-    the same device. **Data**: the configuration and the index through
-    the NAS; the data stays in place. **Verified** by its peers
-    connecting under its device identity. **Cut**: `sync-nas`'s legacy
-    block.
 
-The cut also ends the transitional target of the legacy forward-auth
-checks, whose last gated front is `sync-nas` (§3.5). The VPS's last
-legacy ingress name is cut here. Its cancellation is the
+The VPS's last legacy ingress name is cut here. Its cancellation is the
 decommission's (§5.8).
 
 ### 5.7 Wave D
@@ -1304,7 +1347,7 @@ wave cannot show on its first day:
 | Wave | Soak | What it watches | What a shorter one would miss |
 | --- | --- | --- | --- |
 | A1 | 1 day | The first nightly backup of authelia's claim; a DMARC aggregate report showing the relay's mail aligned; the canary through a night | The first backup, and any DKIM failure: receivers report daily |
-| A2 | 3 days | The first base backup and WAL archive to the backup bucket; the reseed finished; the cloud pool under real load, as etcd's fsync with the applications' CPU limits; federation's backlog | A slow fault in the cloud pool, which hath would then land on, and the reseed itself |
+| A2 | 3 days | The first base backup and WAL archive to the backup bucket; roaming devices reaching syncthing through the balancer as they travel; the cloud pool under real load, as etcd's fsync with the applications' CPU limits; federation's backlog | A slow fault in the cloud pool, which hath would then land on, and a device that only roams days later |
 | hath | 7 days | The network's quality score and the client's static ranges, which recover over days; the reserved address staying the egress | A demotion the network applies slowly. This soak gates nothing but the VPS's cancellation, and it runs beside Waves B to D |
 | B | 1 day | The first nightly backups; Home Assistant's integrations through a day | The first backups, and an integration that only polls daily |
 | C | 3 days | The first base backup of immich's database and a by-hand restore drill; the machine-learning queues; the A380 under real transcodes; the worker's memory at its peaks | The memory peak, which comes with a backlog of jobs and not at the cut; the VPS's way back goes when this ends |
@@ -1338,8 +1381,8 @@ days:
     that has no old address to return to, only a repair on the new one.
     It saves 3 days of a $30 bill, about $3; the choice is the operator's
     and cheap either way.
-*   **Data copies are no bound.** Every claim is small, and the two
-    large moves run ahead of their window or block nothing: hath's warm copy, and the reseed of the replica.
+*   **Data copies are no bound.** Every claim is small, and the one
+    large move, hath's warm copy, runs ahead of its window.
 *   **Worker growth is one window**, Wave C's (§6.2), so it costs one
     drained apply, and that day is the one that needs the operator
     throughout.
@@ -1393,7 +1436,7 @@ host, where the rest of the table replaces what legacy releases.
 | immich's machine learning | 0.1, 4.1 GiB | 1 GiB | 5 GiB |
 | immich's database and Redis | 0.7 GiB | 1.1 GiB | 2 GiB |
 | jellyfin | 0.4, 3.3 GiB | 0.5 GiB | 4 GiB |
-| syncthing-nas, qbittorrent, seedwatch | 0.4 GiB | 0.4 GiB | |
+| syncthing, the WebDAV server, qbittorrent, seedwatch | 0.4 GiB | 0.4 GiB | |
 | **Total** | **every peak at once: about 14 GiB** | **about 6 GiB** | |
 
 The requests take less than half of the allocatable, and every peak at
@@ -1415,8 +1458,8 @@ A growth is a commit to `HOMELAB_MEMORY_GIB` and an apply of `physical`
 that replaces the domain, so it is a drained window and a pull request
 of its own. **One window is enough.**
 
-*   **Waves A and B** need none. A's applications run on the cloud pool,
-    and B's requests fit the worker as it booted.
+*   **Waves A and B** need none. What A puts on the worker is small, and
+    B's requests fit the worker as it booted.
 *   **Wave C's window** grows the worker from 10 GiB to about 16, for
     Wave C and Wave D together, and it is also the A380's bind, which
     replaces the domain anyway.
@@ -1459,8 +1502,8 @@ has given the memory back. **New rule**, landing in migration.md §0.
     the repository layout every backed claim and database uses, and
     `physical`'s `BackupBucket` already declares a writer scope per
     namespace and family.
-*   **`conventions.NODE_VOLUMES`** declares both preserved volumes, and
-    `physical` attaches them.
+*   **`conventions.NODE_VOLUMES`** declares `hath-cache`, and `physical`
+    attaches it.
 *   **`conventions.sealed.DKIM_EXIM`** and the `credentials` command
     that records it carry the mail relay's key across.
 *   **`conventions.gateway.LEGACY_VHOSTS`** already gives each LAN-zone
@@ -1493,8 +1536,14 @@ has given the memory back. **New rule**, landing in migration.md §0.
 *   **From migration.md §3, rsync over SSH into the target claim.** A
     Talos node has no SSH server; the stream runs through the API server
     (§5.3).
-*   **From migration.md §3, no copy for any shared-JuiceFS data.** True
-    of the syncthing replica, false of spoolman's database (§5.5).
+*   **From migration.md §3, no copy for any shared-JuiceFS data.** False
+    of the WebDAV server's own files and spoolman's database (§5.3, §5.5).
+*   **From storage.md §6, workloads.md §4 and migration.md §2 and §3, the
+    cloud syncthing replica as an independent second-site copy.** That
+    was never a requirement. Its role was a reachable port, which the
+    balancer gives the NAS instance. hath is then the only block-volume
+    application, and syncthing and the WebDAV server move in Wave A2
+    (§4.1, §5.3).
 *   **From rfc-003 §6, `Exposure` as one field of one enumeration.** Its
     argument against independent flags stands, and a composed type meets
     it better: a row that reaches nobody has no value at all (§4.1).
@@ -1547,9 +1596,9 @@ has given the memory back. **New rule**, landing in migration.md §0.
 
 | Document | What lands there |
 | --- | --- |
-| [cluster/migration.md](../cluster/migration.md) | migration.md §0 rule 1: build, land, verify, cut, the stop and removal in kluster-code, and the legacy services that outlive their successor's land, from §3. migration.md §0 rule 4: growing to fit, the windows, the reading before each growth and the rollback across one, from §6. migration.md §1: the legacy key's carry and the writer keys' seal, from §4.6. migration.md §2: exim at Wave A1's head, hath after Wave A2, one window at Wave C, the legacy monitoring until Wave C's head, from §5. migration.md §3: the stream through the API server, recovery from the legacy store, spoolman's copy, from §4.3 and §5. migration.md §4: what the decommission inherits, from §5.8 |
-| [cluster/nodes.md](../cluster/nodes.md) | nodes.md §4.2: the transitional and end-state ceilings, and the end state as the decommission's decision, grown to fit, from §6 |
-| [declarative/workloads.md](../declarative/workloads.md) | workloads.md §1: a component receives its rows and merges unwired, one `Port` shape, the gate per side, the discovery server, from §3.1 and §4.1. workloads.md §2: the three kinds of claim, and the thumbnails, from §4.2. workloads.md §3: the namespace's sealed writer key in each repository Secret, from §4.2 and §4.6. workloads.md §4: the dedicated-VIP pattern on the node's primary address, one database instance with recovery and the drill, the static site's apex, the single sign-on census, the LAN-device relay, from §4 and §5.4. workloads.md §5: a ported ciphertext keeps its namespace, from §4.6 |
+| [cluster/migration.md](../cluster/migration.md) | migration.md §0 rule 1: build, land, verify, cut, the stop and removal in kluster-code, and the legacy services that outlive their successor's land, from §3. migration.md §0 rule 4: growing to fit, the windows, the reading before each growth and the rollback across one, from §6. migration.md §1: the legacy key's carry and the writer keys' seal, from §4.6. migration.md §2: exim at Wave A1's head, syncthing and the WebDAV server in Wave A2, hath after it, one window at Wave C, the legacy monitoring until Wave C's head, from §5. migration.md §3: the stream through the API server, recovery from the legacy store, the JuiceFS row's replica gone and its two copies, from §4.3 and §5. migration.md §4: what the decommission inherits, from §5.8 |
+| [cluster/nodes.md](../cluster/nodes.md) | nodes.md §1 and §3.2: the block storage sums, with one node volume, from §4.2. nodes.md §4.2: the transitional and end-state ceilings, and the end state as the decommission's decision, grown to fit, from §6 |
+| [declarative/workloads.md](../declarative/workloads.md) | workloads.md §1: a component receives its rows and merges unwired, one `Port` shape, the gate per side, the discovery server, from §3.1 and §4.1. workloads.md §2: the three kinds of claim, and the thumbnails, from §4.2. workloads.md §3: the namespace's sealed writer key in each repository Secret, from §4.2 and §4.6. workloads.md §4: the block-volume application as hath alone, the dedicated-VIP pattern on the node's primary address, one database instance with recovery and the drill, the static site's apex, the single sign-on census, the LAN-device relay, from §4 and §5.4. workloads.md §5: a ported ciphertext keeps its namespace, from §4.6 |
 | [declarative/dns.md](../declarative/dns.md) | dns.md §1: the order of the stacks' applies, and the reference `k8s-base` makes, from §3.4 and §5.5. dns.md §2: an apex row's record is the web origin, from §4.1 and §4.5. dns.md §5: the composed declaration, `Held`, bare names, ports' rewrites, from §3.3 and §4.1. dns.md §6: the cut's pull request and the land's, from §3.2 |
 | [declarative/README.md](../declarative/README.md) | §2: the StackReferences `apps` makes for the pool's members and `k8s-base` makes for the zone identifiers, from §4.1 and §5.5 |
 | [framework/ci.md](../framework/ci.md) | ci.md §3: `up-k8s-base` and `up-apps` after `up-dns`, from §3.4 |
@@ -1558,7 +1607,7 @@ has given the memory back. **New rule**, landing in migration.md §0.
 | [declarative/physical.md](../declarative/physical.md) | physical.md §1: the reserved address on the node's primary private address, and no secondary address, from §5.4 |
 | [declarative/cluster-infra.md](../declarative/cluster-infra.md) | cluster-infra.md §1.1: the writer keys' channel, from §4.6. cluster-infra.md §2: the canary as built with authelia, the apex listeners, from §4.1 and §5.2. cluster-infra.md §3: the `mon` route and the Cloudflare provider of `k8s-base`, from §5.5 |
 | [credentials.md](../credentials.md) | credentials.md §3: the writer keys' sealed delivery, the zones token's `k8s-base` target, the legacy sealing key's row, from §4.6 and §5.5. credentials.md §4: the seal of the writer keys from `physical`'s state, and the sentence on a new volume, from §4.6 |
-| [cluster/storage.md](../cluster/storage.md) | storage.md §2: the three kinds of claim, from §4.2. storage.md §5: one database instance, its server name's generation, and the restore drill in place, from §4.3 |
+| [cluster/storage.md](../cluster/storage.md) | storage.md §2: the three kinds of claim, from §4.2. storage.md §6: no cloud replica and no second-site copy, from §4.1. storage.md §5: one database instance, its server name's generation, and the restore drill in place, from §4.3 |
 | [operations.md](../operations.md) | operations.md §4: the database restore drill and the authentication canary built, from §4.3 and §5.2 |
 | [physical/gateway.md](../physical/gateway.md) | gateway.md §1: a declared vhost's appliance upstream, and what answers the UPS card's name on the LAN, from §5.7. gateway.md §4.2: rule 1's source narrowed to Home Assistant, and the peer rows read the census, from §4.1 and §4.7 |
 | [cluster/security-audit.md](../cluster/security-audit.md) | The restic password in clear in each repository SealedSecret and in the etcd snapshots, with its actor and why it opens nothing, from §4.2 |
@@ -1611,8 +1660,10 @@ declaration of §4.1, and the echo server waits for those. The pull
 request that builds the base records the cut the same way, editing
 slice 12's entry in rfc-007 §14 in place.
 
-**The node volumes' sizes land before anything else**, by an issue of
-their own, before the first `physical` apply (§4.2).
+**The node volumes land before anything else**, by an issue of their
+own, before the first `physical` apply: `syncthing-replica` removed and
+`hath-cache` at 55 GB (§4.2), with the rows of §9 for nodes.md,
+storage.md, workloads.md and migration.md that the removal falsifies.
 
 ### 10.1 Pre-live: the mechanisms and the shapes
 
@@ -1860,7 +1911,7 @@ request carries an unproven-live note naming its wave's verification.
 | 12 | blog | A2 | S | none | 2, 9 |
 | 13 | splitpro | A2 | M | none | 2, 7, 8 |
 | 14 | matrix | A2 | S | none | 2, 5, 7 |
-| 15 | syncthing, both forms, and the WebDAV server, whose own files need `backed_pvc` | A2, C | M | none | 2, 4, 5 |
+| 15 | syncthing and the WebDAV server, on the NAS | A2 | M | none | 2, 4, 5 |
 | 16 | stdiscosrv | A2 | S | none | 2, 4 |
 | 17 | hath, with its stage and copy pair | after A2 | M | none | 2, 4, 5 |
 | 18 | golinks, emailproxy and spoolman | B | M | none | 2, 4, 5, 6 |
@@ -1953,18 +2004,18 @@ ended, and slice 45 carries the rest.
 | 27 | A1 | The head: physical/bring-up.md's last stage has run; kluster-code stops authelia and points its forward-auth checks at the new service | kluster-code |
 | 28 | A1 | **Land**: exim and authelia wired, `auth` held; the echo component, its row, its pin and its tests deleted | `src/kluster/stacks/apps.py`, `src/kluster/conventions/routes.py`, `src/kluster/conventions/cluster.py`, `docs/sources-of-truth.md`, the echo component's module, `tests/test_apps.py`, `Pulumi.yaml` |
 | 29 | A1 | **Cut**: `auth` | `src/kluster/conventions/routes.py`, `src/kluster/components/dns/legacy.py`, `docs/sources-of-truth.md` |
-| 30 | A2 | The head: A1's legacy authelia removed; the DNS-01 token minted for the co-host zone into the land's branch; kluster-code stops A2's applications | kluster-code |
+| 30 | A2 | The head: A1's legacy authelia removed; the two NAS-less folders shared with the NAS instance; the DNS-01 token minted for the co-host zone into the land's branch; kluster-code stops A2's applications | kluster-code |
 | 31 | A2 | **Land**: blog, splitpro, matrix, syncthing, stdiscosrv; the discovery server's raw port leaves the census, its apply waiting at `physical`'s gate | as slice 28, and `Pulumi.k8s-base.yaml` |
-| 32 | A2 | **Cut**: `split`, `matrix` with its SRV, `dav`, `syncapi`, the web origin's served apex and both `www`; `btsync` and `sync`'s legacy block deleted | as slice 29, and `src/kluster/components/dns/base.py` |
+| 32 | A2 | **Cut**: `split`, `matrix` with its SRV, `dav`, `syncapi`, the web origin's served apex and both `www`; `btsync` and the `sync` and `sync-nas` legacy blocks deleted | as slice 29, and `src/kluster/components/dns/base.py` |
 | 33 | after A2 | The head and the **stage**: A2's legacy applications removed; slice 25 applied; hath wired with its client not started, and the copy pair; the warm copy | as slice 28; kluster-code |
 | 34 | after A2 | **Land**: kluster-code stops legacy hath; the final delta; the client started | as slice 28; kluster-code |
 | 35 | after A2 | **Cut**: the re-registration; the copy pair and the not-started parameter deleted | as slice 28, and `src/kluster/components/apps/hath/`, `tests/test_apps_hath.py` |
 | 36 | B | The head: the doors' content; the DNS-01 token minted for `jiahui.love` and Grafana's values sealed afresh, both into the land's branch; kluster-code stops Wave B's applications | kluster-code |
 | 37 | B | **Land**: Wave B's applications, the `imap` row's IoT allow waiting at `physical`'s gate; `k8s-base` hands the monitoring component the held `mon` row and Grafana's client, and builds the Cloudflare provider and the reference to `dns` | as slice 28, and `src/kluster/stacks/k8s_base.py`, `src/kluster/scripts/credentials/slots.py`, `Pulumi.k8s-base.yaml`, `tests/test_stack_programs.py`, `tests/test_slots.py`, `docs/credentials.md`, `docs/declarative/cluster-infra.md`, `docs/style/pulumi.md`, `docs/declarative/README.md`, `docs/declarative/dns.md` (§1) |
-| 38 | B | **Cut**: `spool`, `haos`, `mon`, `games`, `game`, `jiahui.love`'s apex, and the B rows of `LEGACY_VHOSTS` | as slice 32, and `src/kluster/conventions/gateway.py` |
-| 39 | C | The head: the library re-owned on the host; Wave B's legacy applications and the JuiceFS stack removed; shoko stopped and archived, on §11.4's answer; the legacy GPU plugin onto the iGPU; kluster-code stops legacy immich, jellyfin, syncthing-nas, the legacy monitoring and the legacy relay; then the window: growth and the A380's bind | `src/kluster/conventions/homelab.py`, `src/kluster/components/homelab/`, `tests/test_homelab.py`, `docs/physical/homelab-host.md`; aconfmgr; yadm; kluster-code |
-| 40 | C | **Land**: immich, jellyfin, syncthing-nas | as slice 28 |
-| 41 | C | **Cut**: `photos`, `tube`, `sync-nas`, their rewrite rules, and the `tube` vhost row; kluster-code drops the transitional target of the legacy forward-auth checks | as slice 38; kluster-code |
+| 38 | B | **Cut**: `spool`, `haos`, `mon`, `games`, `game`, `jiahui.love`'s apex, and the B rows of `LEGACY_VHOSTS`; kluster-code drops the transitional target of the legacy forward-auth checks | as slice 32, and `src/kluster/conventions/gateway.py`; kluster-code |
+| 39 | C | The head: the library re-owned on the host; Wave B's legacy applications and the JuiceFS stack removed; shoko stopped and archived, on §11.4's answer; the legacy GPU plugin onto the iGPU; kluster-code stops legacy immich, jellyfin, the legacy monitoring and the legacy relay; then the window: growth and the A380's bind | `src/kluster/conventions/homelab.py`, `src/kluster/components/homelab/`, `tests/test_homelab.py`, `docs/physical/homelab-host.md`; aconfmgr; yadm; kluster-code |
+| 40 | C | **Land**: immich and jellyfin | as slice 28 |
+| 41 | C | **Cut**: `photos`, `tube`, their rewrite rules, and the `tube` vhost row | as slice 38 |
 | 42 | D | The head: the host units stopped | aconfmgr; yadm |
 | 43 | D | **Land**: qbittorrent and seedwatch, and `qbittorrentOnWorker`, whose apply waits at `physical`'s gate | as slice 28, and `Pulumi.physical.yaml` |
 | 44 | D | **Cut**: `bt`, the `bt` and `seedwatch` vhost rows, and the UPS card's row onto the gateway's declared vhosts | as slice 38 |
@@ -2010,8 +2061,8 @@ the transition.
     states none, and its limits, from the first week's readings.
 *   Whether jellyfin's or immich's configuration names a render node
     path, read when its claim is copied (§5.6).
-*   The upstream rate of the home line, which sizes the reseed and hath's
-    warm copy.
+*   The upstream rate of the home line, which sizes hath's warm copy and
+    every roaming device's sync from now on.
 *   The rewrite rules the resolvers' declared list carries for names
     the waves move, read off the list when its own declaration lands.
 *   Whether a printer talks to spoolman at all, which the printer's own
