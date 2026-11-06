@@ -874,12 +874,14 @@ direct as architecture.md §4.3 asks. A home client takes the public name
 too, since a rewrite would have to answer from the cluster.
 
 `haos` is then a record in `dns`, a proxied CNAME to the tunnel, with no
-row in `EXPOSURES`. The tunnel is made in the console and kept by hand,
-as Home Assistant itself is (architecture.md §6.8): its hostname and
-upstream, `homeassistant:8123`, live there, the add-on holds its token,
-and only its identifier is a constant, so `dns`'s token keeps its scope.
-The relay is the fallback, §11.5. **New rule**, landing in workloads.md
-§4 in place of its LAN-device backend.
+row in `EXPOSURES`. The tunnel is made and kept by hand, as Home
+Assistant itself is (architecture.md §6.8). Its upstream,
+`homeassistant:8123`, is set by one call to the tunnel's configuration
+API under a short-lived token, since the console refuses a hostname a
+record already holds and the API writes no record. The add-on holds its
+token, and only its identifier is a constant, in `dns`'s `base.py`, so
+`dns`'s token keeps its scope. The relay is the fallback, §11.5. **New
+rule**, landing in workloads.md §4 in place of its LAN-device backend.
 
 **`photos` stays direct, because the proxy's limit cannot be raised.**
 The proxy is Cloudflare's, the `proxied` flag on a record. Its request
@@ -930,17 +932,19 @@ canary cluster-infra.md §2 requires lands with Authelia's component
 
 **One claim on a node, one on the NAS, and a class for a node volume:**
 
-*   **`claim(name, size, retention, storage_class=local-path)`** is the
-    one claim on a node. `retention` is required, and it is a retention
-    class or `off('<reason>')`, so that an unbacked claim is a decision
-    on record, as workloads.md §2's `backup=None` has it. A class is a
-    row of `conventions.backup`, so a new retention is one row, and a
-    claim picks it rather than stating counts.
+*   **`claim(name, size, retention, *, uid, generation=0,
+    moving_to=None, storage_class=local-path)`** is the one claim on a
+    node. `retention` is required, and it is a retention class or
+    `off('<reason>')`, so that an unbacked claim is a decision on
+    record, as workloads.md §2's `backup=None` has it. A class is a row
+    of `conventions.backup`, so a new retention is one row, and a claim
+    picks it rather than stating counts.
 *   **A class** emits, beside the claim, a VolSync `ReplicationSource`
-    with the restic mover, scheduled by the class, to the repository at
+    with the restic mover and `copyMethod: Direct`, since `local-path`
+    has no snapshots, scheduled by the class, to the repository at
     `conventions.volsync_repo_path`. It generates the repository's
     password into state, as credentials.md §3 says it does, and its
-    repository Secret is a SealedSecret under the claim's own name that
+    repository Secret is a SealedSecret under the claim's base name that
     carries the namespace's sealed writer key (§4.6) with the password
     and the repository's path in its template. The password reaches no
     file in the repository: the template's values are in state, which is
@@ -976,31 +980,32 @@ bucket leaves a snapshot behind it. The `rsync-tls` mover needs no bucket,
 repository or credential: a source and a destination copy claim to claim
 over a Service on port 8000.
 
-So a claim's name carries a generation, as §4.3's server name does,
-while its restic source, repository path and password stay keyed by the
-base name, and `claim` takes `moving_to=<node label>`, under any retention.
-A move is three steps:
+So a claim's name and its restic source's carry a generation, as §4.3's
+server name does, while the repository Secret, path and password stay
+keyed by the base name, and `claim` takes `moving_to=<node label>`,
+under any retention. A move is three steps:
 
-1.  **Copy.** A merge raises the generation, stops the workload, and adds
-    the target claim and a `rsync-tls` source and destination, with
-    `copyMethod: Direct` and `trigger.manual`, the destination held to the
-    target by `moverAffinity`. That apply waits on `lastManualSync`
-    through `pulumi.com/waitFor`, with a timeout sized to the claim, and
-    a red run means no second merge, because reclaim `Delete` has no undo
-    on an `off` claim.
+1.  **Copy.** A merge raises the generation, stops the workload, and
+    adds the target claim and a `rsync-tls` source and destination, with
+    `copyMethod: Direct` and `trigger.manual`, the source depending on
+    the workload's scale-down, since a copy of a running claim is torn,
+    and the destination held to the target by `moverAffinity`. That
+    apply waits on `lastManualSync` through `pulumi.com/waitFor`, with a
+    timeout sized to the claim, and a red run means no second merge,
+    because reclaim `Delete` has no undo on an `off` claim.
 2.  **Protection off**, where the old claim is protected (storage.md §3.3).
 3.  **Finish.** A merge removes the old claim and the movers and scales
-    the workload up on the target. Under a class, the source follows the
-    new claim to the same repository, and its first reconcile is the
-    first backup there.
+    the workload up on the target. Under a class, the new source takes
+    its own cache on the target and syncs to the same repository on its
+    first reconcile, and the old source's removal takes its cache.
 
 A mover states `moverSecurityContext`, without which `restricted`
 refuses it, as the identity `claim` takes for the pod, so that it can
-read the data, and its resources, as workloads.md §1 asks. The base
-admits a mover's traffic inside its namespace, and a restic mover's
-egress to the bucket. **Unproven live**: `moverAffinity` placing an
-unbound claim, the generated key shared by a source and a destination of
-one name, and a DNS name in `address`.
+read the data, and its resources, as workloads.md §1 asks. `claim` emits
+the allow for a mover's traffic inside its namespace, and for a restic
+mover's egress to the bucket. **Unproven live**: `moverAffinity` placing
+an unbound claim, the generated key shared by a source and a destination
+of one name, and a DNS name in `address`.
 
 immich's model cache, 11 GiB that re-derives, takes `off`, so immich's
 namespace has no restic repository; its barman scope and key stand for
@@ -1460,11 +1465,14 @@ are refused by the network:
 
 1.  **Stage.** The component is wired with its client not started, and
     next to it, a copy pair: a `rsync-tls` source on the worker over
-    `nas_claim('Hath')`, and a destination on the dedicated node,
-    selecting the volume's label, over the cache claim, each with
-    `trigger.manual`. The first tag is the warm copy.
-2.  **Land.** The legacy client is stopped, a second tag copies the final
-    delta and the client state, and the client starts.
+    `nas_claim('Hath', read_only)`, and a destination on the dedicated
+    node, selecting the volume's label, over the cache claim, each
+    `copyMethod: Direct` with `trigger.manual`. The first tag is the
+    warm copy, which the apply does not wait for.
+2.  **Land.** The legacy client is stopped, a second tag copies the
+    final delta and the client state, the apply waiting on
+    `lastManualSync` for it as §4.2's first step does, and the client
+    depending on that, and the client starts.
 3.  **Cut.** The new address is registered with the network, and the
     copy pair and the not-started parameter are deleted. The parameter
     is a migration layer of the component's own: its boundary is the
@@ -1542,7 +1550,7 @@ worker as it booted (§6.1), so the wave needs no window.
     afresh at the head (§4.6). The alert read route rides `mon`, matched
     on method, path and header, and lands with the poller that reads it.
     **Verified** by a sign-in to Grafana through its client at the
-    balancer. **Cut**: `mon`.
+    balancer and at the LAN VIP. **Cut**: `mon`.
 
 **The legacy monitoring keeps running until Wave C's head**, because it
 is what alerts on the legacy applications that have not moved — immich
@@ -1953,13 +1961,13 @@ worker has given the memory back. **New rule**, landing in migration.md
 | [framework/rfc.md](../framework/rfc.md) | rfc.md §2: an intention is read from what is declared, and a reading is evidence for it, from §4.1 |
 | [framework/ci.md](../framework/ci.md) | ci.md §3: `up-k8s-base` and `up-apps` after `up-dns`, from §3.4 |
 | [sources-of-truth.md](../sources-of-truth.md) | sources-of-truth.md §3: a component that has not migrated is not wired, from §3.1. Note N4 replaced by its answer, from §3.2 and §3.4. Rows R12 and R13: each flip is a cut, and its pull request edits the row; R12's arrangements, from §5.5 and §5.6; R13 without thread-dashboard, from §11.4 |
-| [cluster/architecture.md](../cluster/architecture.md) | architecture.md §3.2 and §3.5: hath's address and egress on its node's primary private address, from §5.4. architecture.md §3.4: Home Assistant's reach, and what it depends on from the cluster, from §4.1. architecture.md §3.5: large syncs, from §4.1. architecture.md §3.6: the two dimensions, and the raw home row on its Gateway's VIP, from §4.1. architecture.md §6.7: where a TLS passthrough stands against the refusal of Envoy for raw traffic, from §4.1 |
+| [cluster/architecture.md](../cluster/architecture.md) | architecture.md §3.2 and §3.5: hath's address and egress on its node's primary private address, from §5.4. architecture.md §3.4: Home Assistant's reach, from §4.1. architecture.md §5.1: what the name depends on from the cluster, from §4.1. architecture.md §3.5: large syncs, from §4.1. architecture.md §3.6: the two dimensions, and the raw home row on its Gateway's VIP, from §4.1. architecture.md §6.7: where a TLS passthrough stands against the refusal of Envoy for raw traffic, from §4.1 |
 | [declarative/physical.md](../declarative/physical.md) | physical.md §1: the reserved address on the node's primary private address, and no secondary address, from §5.4. physical.md §2: the node volume's label, which hath selects, from §4.2. physical.md §6: a claim made with the volume unmounted stays pending, from §4.2 |
 | [declarative/cluster-infra.md](../declarative/cluster-infra.md) | cluster-infra.md §1.1: the writer keys' channel, from §4.6. cluster-infra.md §2: the canary as built with authelia, the apex listeners, a pod's device and route MTU and the discovery mode, from §4.1 and §5.2. cluster-infra.md §3: the `mon` route and the Cloudflare provider of `k8s-base`, from §5.5 |
 | [credentials.md](../credentials.md) | credentials.md §3: the tunnel's hand-kept token, the alert webhook as Home Assistant's own address, the writer keys' sealed delivery, the zones token's `k8s-base` target, the legacy sealing key's row, from §4.6 and §5.5. credentials.md §4: the seal of the writer keys from `physical`'s state, and the sentence on a new volume, from §4.6 |
 | [cluster/storage.md](../cluster/storage.md) | storage.md §2: the two kinds of claim and `cloud-block-<row>`, from §4.2. storage.md §3.1: a move by `rsync-tls`, from §4.2. storage.md §3.3: `off` has no undo, from §4.2. storage.md §6: a node volume as a `local-path` pool, from §4.2. storage.md §5: one database instance, its server name's generation, and the restore drill in place, from §4.3 |
 | [operations.md](../operations.md) | operations.md §4: the database restore drill and the authentication canary built, from §4.3 and §5.2 |
-| [physical/gateway.md](../physical/gateway.md) | gateway.md §1: a declared vhost's appliance upstream, and what answers the UPS card's name on the LAN, from §5.7. gateway.md §4.2: Home Assistant's allow, and the peer rows read the census, from §4.1. gateway.md §4.3: the sentences that call a television the sole IoT-originated flow, from §4.1 |
+| [physical/gateway.md](../physical/gateway.md) | gateway.md §1: a declared vhost's appliance upstream, and what answers the UPS card's name on the LAN, from §5.7. gateway.md §4.2: Home Assistant's allow, and the peer rows read the census, from §4.1. gateway.md §4.3: the sentences that call a television the sole IoT-originated flow, and "a single host as a literal", narrowed to destinations, from §4.1 |
 | [cluster/security-audit.md](../cluster/security-audit.md) | The tunnel in place of the gateway pod range in Home Assistant's trusted proxies, from §4.1. The restic password in clear in each repository SealedSecret and in the etcd snapshots, with its actor and why it opens nothing, from §4.2 |
 | [style/pulumi.md](../style/pulumi.md) | "Data": the composed declaration in place of `Exposure` as its example, from §4.1. "Layering": the StackReference uses `apps` and `k8s-base` gain, from §4.1 and §5.5 |
 | [rfc-003](rfc-003-dns-and-github-stacks.md) | The status header: the enumeration and the route row replaced by the two dimensions, from §4.1 |
@@ -2084,17 +2092,17 @@ this slice.
     `src/kluster/components/cloud/nodes.py`,
     `src/kluster/components/talos/__init__.py`,
     `src/kluster/components/gateway/unifi.py`,
-    `src/kluster/components/cilium/`,
-    `tests/test_conventions.py`, `tests/test_dns_rewrites.py`,
-    `tests/test_dns_records.py`, `tests/test_dns_stack.py`,
-    `tests/test_sealing.py`, `tests/test_cloud_nodes.py`,
-    `tests/test_talos_config.py`, `tests/test_unifi.py`,
-    `tests/test_front_door.py`,
+    `src/kluster/components/cilium/`, `tests/test_conventions.py`,
+    `tests/test_dns_rewrites.py`, `tests/test_dns_records.py`,
+    `tests/test_dns_stack.py`, `tests/test_sealing.py`,
+    `tests/test_cloud_nodes.py`, `tests/test_talos_config.py`,
+    `tests/test_unifi.py`, `tests/test_front_door.py`,
     `docs/declarative/dns.md`, `docs/declarative/physical.md`,
     `docs/declarative/cluster-infra.md`, `docs/sources-of-truth.md`,
-    `docs/physical/gateway.md`, `docs/cluster/architecture.md`,
-    `docs/cluster/security-audit.md`, `docs/style/pulumi.md`,
-    `docs/framework/rfc.md`, `docs/rfc/rfc-003-dns-and-github-stacks.md`.
+    `docs/physical/gateway.md` (§4.2 and §4.3),
+    `docs/cluster/architecture.md`, `docs/cluster/security-audit.md`,
+    `docs/style/pulumi.md`, `docs/framework/rfc.md`,
+    `docs/rfc/rfc-003-dns-and-github-stacks.md`.
 *   **Tests that fail without it**: rows of the test's own, one of each
     shape, derive §4.1's table's consequences, Gateway by Gateway,
     against literals (derive the rewrite from the wrong Gateway; add a
@@ -2177,28 +2185,30 @@ program before it.
     `src/kluster/components/local_path/`,
     `src/kluster/conventions/__init__.py`,
     `src/kluster/conventions/cluster.py`,
-    `src/kluster/conventions/cloud.py`,
-    `tests/test_apps_storage.py` (new), `tests/test_standing_set.py`,
+    `src/kluster/conventions/cloud.py`, `tests/test_apps_storage.py`
+    (new), `tests/test_standing_set.py`,
     `docs/declarative/workloads.md`, `docs/cluster/storage.md`,
     `docs/declarative/physical.md`, `docs/cluster/security-audit.md`.
 *   **Tests that fail without it**: `off` emits the claim alone and
     refuses an empty reason (emit a source; accept none); `moving_to`
     adds a target claim and a `rsync-tls` source and destination, Direct
-    with a manual trigger, and the surviving claim is the target's while
-    the repository path survives the move (schedule it; move through the
-    bucket; derive the path from the generation); a mover's traffic
-    stays inside its namespace, and a restic mover reaches the bucket
-    (drop either); every mover states its security context and resources
-    (leave them out); a backed claim's source schedules by its class and
-    writes to `volsync_repo_path` of its namespace and name (hard-code a
-    cron line; name another path); its repository Secret carries the
-    namespace's sealed writer key under the claim's own name, with a
-    password generated in state (seal a value per claim; write the
-    password into configuration); a `nas_claim` is scheduled only to the
-    worker (drop the affinity); each row's class has its row's mount as
-    the path for every node, `Retain`, the pattern as a parameter and
-    the volume type as an annotation (reclaim `Delete`; put the volume
-    type in the parameters).
+    with a manual trigger, and the surviving claim is the target's, its
+    source is the next generation's, and the repository path survives
+    the move (schedule it; move through the bucket; derive the path from
+    the generation; keep the old source); a mover's traffic stays inside
+    its namespace, and a restic mover reaches the bucket (drop either);
+    every mover states its security context and resources, and every
+    source `copyMethod: Direct` (leave them out); a backed claim's
+    source schedules by its class and writes to `volsync_repo_path` of
+    its namespace and name (hard-code a cron line; name another path);
+    its repository Secret carries the namespace's sealed writer key
+    under the claim's own name, with a password generated in state (seal
+    a value per claim; write the password into configuration); a
+    `nas_claim` is scheduled only to the worker (drop the affinity);
+    each row's class has its row's mount as the path for every node,
+    `Retain`, the pattern as a parameter and the volume type as an
+    annotation (reclaim `Delete`; put the volume type in the
+    parameters).
 
 **Slice 6: the writer keys and the ported ciphertexts.** Live: its merge
 leads to the gated `physical` apply that mints the keys, so it merges
@@ -2392,18 +2402,18 @@ ended, and slice 45 carries the rest.
 
 | Slice | Window | What | Owned paths |
 | --- | --- | --- | --- |
-| 27 | A1 | The head: physical/bring-up.md's last stage has run; kluster-code stops authelia and points its forward-auth checks at the new service | kluster-code |
+| 27 | A1 | The head: Home Assistant's configured addresses read; physical/bring-up.md's last stage has run; kluster-code stops authelia and points its forward-auth checks at the new service | kluster-code |
 | 28 | A1 | **Land**: exim and authelia wired, `auth` held; the echo component, its row, its pin and its tests deleted | `src/kluster/stacks/apps.py`, `src/kluster/conventions/routes.py`, `docs/sources-of-truth.md`, the echo component's module, `tests/test_apps.py`, `Pulumi.yaml` |
 | 29 | A1 | **Cut**: `auth` | `src/kluster/conventions/routes.py`, `src/kluster/components/dns/legacy.py`, `docs/sources-of-truth.md` |
 | 30 | A2 | The head: A1's legacy authelia removed; Home Assistant's configured addresses read; both instances' devices and folders read, and each gap fixed on the device; the DNS-01 token minted for the co-host zone into the land's branch; kluster-code stops A2's applications | kluster-code |
 | 31 | A2 | **Land**: blog, splitpro, matrix, syncthing, stdiscosrv | as slice 28, and `Pulumi.k8s-base.yaml` |
 | 32 | A2 | **Cut**: `split`, `matrix` with its SRV, `dav`, `sync`, `syncapi`, the web origin's served apex and both `www`; the `sync-nas` and `btsync` records deleted | as slice 29, and `src/kluster/components/dns/base.py` |
-| 33 | after A2 | The head and the **stage**: A2's legacy applications removed; slice 25 applied; hath wired with its client not started, and the copy pair; the warm copy | as slice 28; kluster-code |
+| 33 | after A2 | The head and the **stage**: A2's legacy applications removed; slice 25 applied; the tree on the NAS read as world-readable, or re-owned, since the source reads it as the export's anonymous user; hath wired with its client not started, and the copy pair; the warm copy | as slice 28; kluster-code |
 | 34 | after A2 | **Land**: kluster-code stops legacy hath; the final delta; the client started | as slice 28; kluster-code |
 | 35 | after A2 | **Cut**: the re-registration; the copy pair and the not-started parameter deleted | as slice 28, and `src/kluster/components/apps/hath/`, `tests/test_apps_hath.py` |
-| 36 | B | The head: the doors' content; Home Assistant's tunnel made, its add-on and token installed, its trusted proxies set, and its configured addresses read; the DNS-01 token minted for `jiahui.love` and Grafana's values sealed afresh, both into the land's branch; kluster-code stops Wave B's applications | kluster-code |
-| 37 | B | **Land**: Wave B's applications, `k8s-base` hands the monitoring component the held `mon` row and Grafana's client, and builds the Cloudflare provider and the reference to `dns` | as slice 28, and `src/kluster/stacks/k8s_base.py`, `src/kluster/scripts/credentials/slots.py`, `Pulumi.k8s-base.yaml`, `tests/test_stack_programs.py`, `tests/test_slots.py`, `docs/credentials.md`, `docs/declarative/cluster-infra.md`, `docs/style/pulumi.md`, `docs/declarative/README.md`, `docs/declarative/dns.md` (§1) |
-| 38 | B | **Cut**: `spool`, `haos` to its tunnel's constant, with the legacy route stopped, `mon`, `games`, `game`, `jiahui.love`'s apex, and the B rows of `LEGACY_VHOSTS`, with `thread`'s onto the gateway's declared vhosts; R13 loses thread-dashboard; kluster-code drops the transitional target of the legacy forward-auth checks | as slice 32, and `src/kluster/conventions/gateway.py`; kluster-code |
+| 36 | B | The head: the doors' content; Home Assistant's tunnel made, with the upstream set through the API, the add-on and token installed, the trusted proxies set, and the configured addresses read; the DNS-01 token minted for `jiahui.love` and Grafana's values sealed afresh, both into the land's branch; kluster-code stops Wave B's applications | kluster-code |
+| 37 | B | **Land**: Wave B's applications, the tunnel's row in the credential register, `k8s-base` hands the monitoring component the held `mon` row and Grafana's client, and builds the Cloudflare provider and the reference to `dns` | as slice 28, and `src/kluster/stacks/k8s_base.py`, `src/kluster/scripts/credentials/slots.py`, `Pulumi.k8s-base.yaml`, `tests/test_stack_programs.py`, `tests/test_slots.py`, `docs/credentials.md`, `docs/declarative/cluster-infra.md`, `docs/style/pulumi.md`, `docs/declarative/README.md`, `docs/declarative/dns.md` (§1) |
+| 38 | B | **Cut**: `spool`, `haos` to its tunnel's constant, with the legacy route stopped, `mon`, `games`, `game`, `jiahui.love`'s apex, and the B rows of `LEGACY_VHOSTS`, with `thread`'s onto the gateway's declared vhosts; R13 loses thread-dashboard; kluster-code drops the transitional target of the legacy forward-auth checks | as slice 32, and `src/kluster/conventions/gateway.py`, `docs/declarative/workloads.md`, `docs/declarative/dns.md`, `docs/cluster/security-audit.md`, `docs/cluster/architecture.md`; kluster-code |
 | 39 | C | The head: the library re-owned on the host; Home Assistant's configured addresses read; Wave B's legacy applications and the JuiceFS stack removed; the legacy GPU plugin onto the iGPU; kluster-code stops legacy immich, jellyfin, shoko, the legacy monitoring and the legacy relay; then the window: growth and the A380's bind | `src/kluster/conventions/homelab.py`, `src/kluster/components/homelab/`, `tests/test_homelab.py`, `docs/physical/homelab-host.md`; aconfmgr; yadm; kluster-code |
 | 40 | C | **Land**: immich, jellyfin and shoko; the host's discovery relay stopped | as slice 28; aconfmgr |
 | 41 | C | **Cut**: `photos`, `tube`, their rewrite rules, and the `tube` vhost row | as slice 38 |
