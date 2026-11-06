@@ -879,7 +879,13 @@ The entire stack is deployed via Pulumi using multiple providers:
     if it or the
     bridge misbehaves: a `UnifiFirewallPolicy` resource on the
     device-files dynamic provider (§5.2) driving the v2 API directly
-    (the AdGuard-rewrite technique). Younger rewrites
+    (the AdGuard-rewrite technique). The rank of a zone pair's policies
+    is on that technique already: the bridged order cannot send the
+    whole batch the controller requires, so each pair's order is
+    `ZonePolicyOrder`, a dynamic resource of this repository's own that
+    comes out on the two conditions its docstring states
+    (physical/gateway.md §4.2).
+    Younger rewrites
     (alexklibisz/terrifi, BadgerOps/unifi) were passed over as
     pre-1.0 single-maintainer projects for a load-bearing gateway.
     **All UniFi resources live in the `physical` stack** — a

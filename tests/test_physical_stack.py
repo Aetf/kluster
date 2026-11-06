@@ -251,14 +251,12 @@ def test_the_cluster_zone_is_opened_to_the_home_with_the_iot_vlan_carved_out(ran
 
     # The drops first: the allow behind them is the broad one here, so an
     # allow declared ahead of them would answer for the IoT VLAN as well.
-    assert ran.recorded.inputs_of(f'{name}-internal-cluster-order')['beforePredefinedIds'] == [
+    assert ran.recorded.inputs_of(f'{name}-internal-cluster-order')['policy_ids'] == [
         f'{name}-iot-cluster-v4_id',
         f'{name}-iot-cluster-v6_id',
         f'{name}-internal-cluster_id',
     ]
-    assert ran.recorded.inputs_of(f'{name}-cluster-internal-order')['beforePredefinedIds'] == [
-        f'{name}-cluster-internal_id'
-    ]
+    assert ran.recorded.inputs_of(f'{name}-cluster-internal-order')['policy_ids'] == [f'{name}-cluster-internal_id']
 
 
 def test_the_libvirt_session_is_dialed_where_the_roster_placed_the_host(ran: Run) -> None:

@@ -644,8 +644,9 @@ leaving a tree of unknown provenance, which the next preview reports as
 work to do.
 
 The **unifi provider (filipowm/unifi via the Terraform bridge,
-architecture.md §5.1)** manages the controller-side resources, **all
-in this stack** — the co-location exception on record: gateway
+architecture.md §5.1)** manages the controller-side resources, each
+pair's order aside, which is a dynamic resource of this repository's
+own, **all in this stack** — the co-location exception on record: gateway
 resources follow the gateway's credential tier, so the `apps` CI
 environment never holds a controller credential; app components keep
 a pointer (workloads.md §4). The census: the **cluster VLAN network
@@ -659,9 +660,13 @@ zone** — cluster→Internal and Internal→cluster, with the IoT VLAN
 dropped ahead of the latter as a single-family pair, open directions
 a new zone is blocked in; cluster→External declares the egress a new
 zone is given by default, which the design relies on — a
-**`FirewallZonePolicyOrder` on every zone pair
+**`ZonePolicyOrder` on every zone pair
 that carries a policy** — position is not a property of a policy, and
-on the inbound pair a drop declared after the allow matches nothing —
+on the inbound pair a drop declared after the allow matches nothing;
+the order sends the whole batch the controller requires and treats a
+custom policy of the pair that the census does not own as drift, since
+a pair the census orders is the census's whole, so a rule wanted there
+is a row of it whatever traffic it is about (physical/gateway.md §4.2) —
 the qbittorrent v6 pinhole — declared only once `workerGua` carries
 the worker's SLAAC address, which no apply before the worker's first
 boot can supply (physical/gateway.md §4.2) — and its v4 peer-port
@@ -908,6 +913,84 @@ written in Wave D, once qbittorrent runs on the worker
 ([physical/gateway.md](../physical/gateway.md) §4.2). The probe runs
 on scratch objects, on any day before the window
 ([physical/gateway-cutover.md](../physical/gateway-cutover.md) §3).
+
+**The order's tripwire** runs when the `filipowm/unifi` pin or the
+controller's Network release changes, and says whether the bridged
+`FirewallZonePolicyOrder` has caught up with what the controller
+requires of a batch ([physical/gateway.md](../physical/gateway.md)
+§4.2). It is a scratch project in the form framework/testing.md §5.1
+gives one, run in the stack's own `.venv`: a zone with no network in it,
+so nothing it says matches anything, two policies from that zone to
+External, and a bridged order listing one of them. From the root of the
+checkout that holds `.credentials/`, with `physical()` as above and
+`ADDR` the address the stack reaches the controller at:
+
+```sh
+PROBE=$PWD/.claude/unifi-probe
+PULUMI=$(mise which pulumi)
+probe() {
+    (cd "$PROBE" && PULUMI_BACKEND_URL="file://$PROBE/state" PULUMI_HOME="$PROBE/home" \
+        PULUMI_CONFIG_PASSPHRASE=probe "$PULUMI" "$@")
+}
+mise x uv -- uv sync
+mkdir -p "$PROBE/state"
+cat > "$PROBE/Pulumi.yaml" <<'EOF'
+name: unifi-probe
+runtime:
+  name: python
+  options:
+    toolchain: uv
+    virtualenv: ../../.venv
+EOF
+cat > "$PROBE/__main__.py" <<'EOF'
+import pulumi
+import pulumi_unifi as unifi
+
+from kluster import conventions
+from kluster.components.gateway import url_host
+from kluster.components.gateway.unifi import ZONE_EXTERNAL, controller_provider
+
+NAME = 'kluster-tripwire'
+site = conventions.gateway.UNIFI_SITE
+provider = controller_provider(
+    f'{NAME}-unifi', api_url=f'https://{url_host(pulumi.Config().require("gatewayHost"))}', site=site
+)
+opts = pulumi.ResourceOptions(provider=provider)
+external = unifi.get_firewall_zone_output(
+    name=ZONE_EXTERNAL, site=site, opts=pulumi.InvokeOptions(provider=provider)
+).id
+zone = unifi.FirewallZone(f'{NAME}-zone', name=NAME, site=site, opts=opts)
+listed, unlisted = (
+    unifi.FirewallZonePolicy(
+        f'{NAME}-{name}', name=f'{NAME} {name}', description=NAME, action='BLOCK', ip_version='IPV4',
+        protocol='all', source=unifi.FirewallZonePolicySourceArgs(zone_id=zone.id),
+        destination=unifi.FirewallZonePolicyDestinationArgs(zone_id=external, ips=['192.0.2.200']),
+        enabled=True, opts=opts,
+    )
+    for name in ('listed', 'unlisted')
+)
+unifi.FirewallZonePolicyOrder(
+    f'{NAME}-order', source_zone_id=zone.id, destination_zone_id=external,
+    before_predefined_ids=[listed.id], site=site,
+    opts=pulumi.ResourceOptions.merge(opts, pulumi.ResourceOptions(depends_on=[unlisted])),
+)
+EOF
+probe stack ls --all       # an empty table: the backend in hand is the probe's own
+probe stack init probe
+probe config set gatewayHost "$ADDR"
+physical config get unifiApiKey | probe config set --secret unifiApiKey
+probe up --continue-on-error
+probe destroy --remove
+rm -rf "$PROBE"
+```
+
+While `ZonePolicyOrder` is needed, the order is refused with `Should
+include firewall policy in batch update`, and everything else applies.
+If it applies, with `kluster-tripwire unlisted` left behind
+`kluster-tripwire listed`, the first of the conditions that remove the
+order's layer is met (`kluster.providers.unifi_zone_policy_order`).
+Whatever `destroy` cannot delete is removed in the console by its
+`kluster-tripwire` name before the directory goes.
 
 Security verifications (from the 2026-08-23 audit,
 cluster/security-audit.md): a pod's request to `169.254.169.254` is
