@@ -187,9 +187,10 @@ ahead of the cluster:
     the wave that lands it. The build therefore touches no census, and
     no two builds share a file. The exception is a `Port` row whose
     listener or forward `physical` declares ahead of its application:
-    `syncthing` and `qbittorrent-peer` stand in `EXPOSURES` from slice 3,
-    `syncthing`'s hosts held, with `hath` beside them, since the firewall
-    audit reads the public ports as one list.
+    `syncthing` and `qbittorrent-peer` stand in `EXPOSURES` from slice
+    3, `syncthing`'s hosts held, with `hath` beside them, since the
+    recorded fallback copies the rows a Service's pods answer into
+    machine configuration.
 
 ### 3.2 Land, verify, cut
 
@@ -2056,6 +2057,7 @@ program before it.
     and the security audit's residual are true.
 *   **Owned paths**: `src/kluster/components/apps/storage.py` (new),
     `src/kluster/components/local_path/`,
+    `src/kluster/conventions/__init__.py`,
     `src/kluster/conventions/cluster.py`,
     `src/kluster/conventions/cloud.py`,
     `tests/test_apps_storage.py` (new), `tests/test_standing_set.py`,
