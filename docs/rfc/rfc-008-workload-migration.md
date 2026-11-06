@@ -118,10 +118,9 @@ the application base and `route`. What is left is of four kinds:
     replica's alone. Legacy applications that stay behind for a wave
     depend on the authentication service and the mail relay that move
     first. The selectorless backend workloads.md §4 designs for Home
-    Assistant is one a cloud node cannot reach. Both node volumes are
-    smaller than their data, and the discovery server's clients are on a
-    port the census does not hold. Each is settled where its wave is
-    (§4, §5).
+    Assistant is one a cloud node cannot reach. The discovery server's
+    clients are on a port the census does not hold. Each is settled
+    where its wave is (§4, §5).
 *   **The memory interleave, against measured numbers.** migration.md §0
     rule 4 grows the worker as legacy releases memory, towards
     [cluster/nodes.md](../cluster/nodes.md) §4.2's 20 GiB, and a
@@ -246,15 +245,15 @@ publishes no record and no rewrite; `served_zones` still counts its
 zones, because verification needs the zone's certificate. **New rule**,
 landing in dns.md §5.
 
-**A row with a public half is held exactly while `dns` points its name
-at the VPS.** A record points at the VPS when its content is the VPS's
+**A row on `internet` is held exactly while `dns` points its name at
+the VPS.** A record points at the VPS when its content is the VPS's
 address or its anchor (`legacy.IP_ARCHVPS`, `legacy.ANCHOR_ARCHVPS`),
 wherever the `dns` stack declares it: an application block of
 `legacy.py`, or the web origin's pair. A home-only row cannot collide
 with such a record, since it publishes none, so it lands published and
 its cut deletes the record. An `Apex` publishes no record, and has no
 held state. The invariant is a relation between
-`conventions.routes.ROUTES` and those records — a row with a public half
+`conventions.routes.EXPOSURES` and those records — a row on `internet`
 is held if and only if such a record holds the row's host in one of the
 row's zones — and it is held in `tests/test_conventions.py` with the census
 invariants, against a census that breaks it in each direction. A land
@@ -396,42 +395,53 @@ the base, what two call lives in the library.
 
 **What each application needs, asked from scratch.** The question put to
 each application is how it would be reached if it were added to this
-cluster today, against what its clients do now. The readings are the
-legacy estate's of 2026-11-06: the ingress log, which reaches 23 hours
-and carries no client address; each application's own log; the host's
-records; and 61 days of byte counts.
+cluster today. The answer is an intention, so it is read from what the
+estate declares: kluster-code's hosts, gates, Services and comments, and
+the canon. **A reading supplies evidence for an intention and never
+decides one**, since it is one point in time and not the design behind
+it. Where a reading contradicts a declaration, the declaration stands
+and the contradiction is reported (§11.5). **New rule**, landing in
+rfc.md §2.
 
-| Application | What the readings show | Reach |
+| Application | What the code declares | Reach |
 | --- | --- | --- |
-| authelia | every signed-in application | public |
-| splitpro | a handful of requests a day | public |
-| matrix | a browser client's long poll, and federation on 443 | public |
-| the WebDAV server | 1.9 GiB in October, nothing since; its own files are live | public, Basic gate |
-| the discovery server | six devices announcing, all on 443 | public, passthrough |
-| syncthing's peer port | an always-reachable anchor for the roaming devices | raw port, balancer, to the worker |
-| syncthing's interface | nothing but probes in the log | home, gated |
-| Home Assistant | the companion application and a model client | public |
-| immich | phones syncing and uploading, some over 100 MB | public direct, and home |
-| jellyfin | the televisions, on the Default LAN at the host's name; light use from outside | public, and home |
-| Grafana | nothing in the log's window; `mon` stays a public row (rfc-007 §7.4) | public |
-| qbittorrent | Home Assistant, by its own login | public gated, and IoT |
-| hath | the network, at one address | raw port, dedicated |
-| golinks | typed as `go/<name>` | home, bare name |
-| spoolman | Home Assistant, on the IoT VLAN | IoT |
-| seedwatch | its interface | home |
-| emailproxy | Home Assistant, on the IoT VLAN, and two host jobs | raw port, media VIP |
-| the blog and the doors | visitors and crawlers | public |
+| authelia | the portal at `auth` | internet |
+| splitpro | `split`, signing in through Authelia itself | internet |
+| matrix | `matrix`, delegated on 443 by the blog's `.well-known` | internet |
+| the WebDAV server | `dav`, with `enableBasicAuth` | internet, Basic gate |
+| the discovery server | `syncapi` in `passthroughHosts`, and `https://syncapi…` in syncthing's configuration | internet and LAN, passthrough |
+| syncthing's peer port | an `internet` Service on one instance, a `homelan` one "reachable on its home-LAN and ZeroTier IPs" on the other, and two names published direct | raw port, internet and LAN |
+| syncthing's interface | `sync` and `sync-nas`, each with `enableAuth` | internet, session gate |
+| Home Assistant | `haos`, with no gate since it has its own authentication | internet |
+| immich | `photos`, and a `homelan` Service so that a home client never takes the cloud path | internet direct, and LAN |
+| jellyfin | `tube`; a `homelan` Service with auto-discovery; `media-gw`, in the canon, for the televisions | internet, media, and a raw port |
+| Grafana | `mon`, a public row (rfc-007 §7.4) | internet |
+| qbittorrent | the public entrance behind the gate, and the rewrite (workloads.md §4); Home Assistant on the IoT VLAN signs in with its own login | internet gated, and media |
+| hath | an `internet` Service at its own address | raw port, dedicated |
+| golinks | "LAN-only via the UDM caddy", typed as `go/<name>` | LAN, bare name |
+| spoolman | `spool` with `enableAuth`, and a LAN Service "without auth and proxy for printers to connect directly" | internet gated, media, and a raw port |
+| seedwatch | its interface, on the host | LAN |
+| shoko | a `homelan` Service and no ingress | LAN |
+| emailproxy | "LAN-only service; no ingress, no auth -- IMAP straight from HA" | raw port, media |
+| the blog and the doors | the static sites' public names | internet |
 
 **Most of what a port of the legacy estate would carry goes**, and §4.7
 lists each with what it costs. What is left is small enough to state as
 one type.
 
-**Exposure is composed, so that a combination that means nothing cannot
-be written.** `Exposure`, one enumeration over a cross-product of
-independent concerns, gives way to a declaration whose parts each carry
-only what applies to them. **New rule**, landing in dns.md §5 and
-style/pulumi.md ("Data"), replacing rfc-003 §6's "one field rather than
-two flags".
+**An application has one `Exposure`, and it has two dimensions.**
+architecture.md §3.6 says that deploying an application answers two
+questions, which pool and HTTP or not, and the declaration is those two
+questions. *Which Gateway* is three peers, `internet`, `lan` and `media`:
+the same three fields on every row. *How* is the row's type: `Route` and
+`Passthrough` go through a Gateway's proxy, by name, and `Port` is raw,
+at a Gateway's address. Setting a field chooses that Gateway, and the
+field's type carries what only that Gateway and that way of reaching it
+mean, so a combination that means nothing cannot be written. This
+replaces the enumeration of the same name, one field over a
+cross-product of independent concerns. **New rule**, landing in dns.md
+§5 and style/pulumi.md ("Data"), replacing rfc-003 §6's "one field
+rather than two flags".
 
 ```python
 class Gate(Enum):  # what the ExternalAuth filter asks Authelia for
@@ -439,101 +449,138 @@ class Gate(Enum):  # what the ExternalAuth filter asks Authelia for
     BASIC = ...  # HTTP Basic, for a client that cannot follow a redirect
 
 
-class Side(Enum):  # which home VIP answers: which VLANs reach it
-    LAN = ...
-    IOT = ...
+@dataclass(frozen=True)
+class Proxied:  # on `internet`: behind the proxy
+    gate: Gate | None = None
 
 
 @dataclass(frozen=True)
-class Proxied: ...
-
-
-@dataclass(frozen=True)
-class Direct:  # published past the proxy, and why
+class Direct:  # on `internet`: published past the proxy, and why
     reason: str
 
 
 @dataclass(frozen=True)
-class Public:  # the internet's half: a public record
-    edge: Proxied | Direct
-    gate: Gate | None = None
-
-
-@dataclass(frozen=True)
-class Home:  # the home's half: a rewrite
-    side: Side
-    gate: Gate | None = None
+class Rewrite:  # on `lan` or `media`: the rewrite to that Gateway's VIP
     bare: bool = False  # the bare label resolves and redirects
 
 
 @dataclass(frozen=True)
-class Both:
-    public: Public
-    home: Home
-
-
-@dataclass(frozen=True)
-class Name:  # an HTTPS name, routed by the Gateways
+class Route:  # HTTPS by name, on the Gateways it sets
     host: str
-    reach: Public | Home | Both
+    internet: Proxied | Direct | None = None
+    lan: Rewrite | None = None
+    media: Rewrite | None = None
     zones: Sequence[str] = PRIMARY_ONLY
-
-
-@dataclass(frozen=True)
-class Apex:  # a website's apex; `dns` holds its address
-    zones: Sequence[str]
 
 
 @dataclass(frozen=True)
 class Passthrough:  # TLS the pod terminates, on 443, by name
     host: str
-    reason: str
+    internet: Direct | None = None
+    lan: Rewrite | None = None
+    media: Rewrite | None = None
 
 
 @dataclass(frozen=True)
-class Port:  # a raw port, named for what it serves
+class Apex:  # a website's apex, on `internet`; `dns` holds its address
+    zones: Sequence[str]
+
+
+@dataclass(frozen=True)
+class Host:  # a name a raw port is dialed at, published direct
+    label: str
+    zones: Sequence[str] = PRIMARY_ONLY
+
+
+@dataclass(frozen=True)
+class Balancer:  # `internet` at the balancer
+    hosts: Sequence[Host] = ()
+
+
+@dataclass(frozen=True)
+class Dedicated: ...  # `internet` at the dedicated node's address
+
+
+@dataclass(frozen=True)
+class SiteForward: ...  # `internet` through the home site's forward
+
+
+@dataclass(frozen=True)
+class LanVip:  # `lan` at its VIP
+    host: str
+
+
+@dataclass(frozen=True)
+class MediaVip:  # `media` at its VIP
+    host: str
+    iot: Sequence[str] = ()  # the IoT VLAN's addresses it admits
+
+
+@dataclass(frozen=True)
+class Port:  # a raw port, at the addresses of the Gateways it sets
     name: str
     port: int
     transports: Transports
-    front: Balancer | Dedicated | Vip | SiteForward
+    internet: Balancer | Dedicated | SiteForward | None = None
+    lan: LanVip | None = None
+    media: MediaVip | None = None
+
+
+@dataclass(frozen=True)
+class Exposure:  # how one application is reached
+    routes: Sequence[Route | Passthrough | Apex] = ()
+    ports: Sequence[Port] = ()
 ```
 
-`Vip` carries its `Side` and the host `dns` rewrites to it; the other
-three fronts carry nothing. `Held` wraps a `Name` or a `Passthrough`
+`PROXIED` and `REWRITE` are the two plain values, `Proxied()` and
+`Rewrite()`. `EXPOSURES` in `conventions.routes` maps each application to
+its `Exposure` and is the census; the rows `dns`, `physical` and
+`k8s-base` read derive from it. A component makes one call,
+`expose(exposure)`. `Held` wraps a `Route`, a `Passthrough` or a `Host`
 while the legacy estate holds the name (§3.3), so the migration's state
-is a wrapper the census sheds rather than a field every row carries.
+is a wrapper the census sheds rather than a field every row carries; a
+VIP's host that a held row shares publishes no rewrite until the row
+does.
 
 **What can no longer be written**, each of which a census test or a
 review would have had to catch:
 
-*   an `unproxied` reason on a LAN-only row: `Direct` exists only inside
-    `Public`;
-*   a bare name on a row with no home half: it is a field of `Home`;
-*   an apex with a home half, a gate or a reason: `Apex` has none of
-    them, and `Name.host` is a label type that refuses `@`;
-*   a gate on a raw port, or on a name the pod terminates: `Port` and
-    `Passthrough` have no gate;
-*   a raw port behind the proxy: `Port` has no edge and no record;
-*   a row that reaches nobody: `reach` has no empty value, and a zone
-    set is a non-empty tuple;
-*   a reason that says nothing: `Direct` and `Passthrough` refuse an
-    empty one where they are constructed;
+*   a reason for publishing direct on a row that is not on `internet`:
+    `Direct` is a value of that field alone;
+*   a gate on a home Gateway, on a name the pod terminates, or on a raw
+    port: it is a field of `Proxied`, which only `Route.internet` takes;
+*   a bare name on a row with no home Gateway: it is a field of
+    `Rewrite`;
+*   a raw port behind the proxy: `Port.internet` takes a front, and a
+    front has no edge;
+*   a front on the wrong Gateway, or an IoT allow on `lan`: each field
+    takes its own types;
+*   one Gateway twice on a row: it is one field;
+*   an apex on a home Gateway, with a gate or with a reason: `Apex` has
+    none of them, and `Route.host` is a label type that refuses `@`;
 *   a Gateway answering on the dedicated address, which a census test
     holds today: the Gateways' own ports leave the census for
     `GATEWAY_PORTS`, always on the balancer, and `Answerer` goes.
 
-What a type cannot carry stays a census invariant: known zones; names
-unique across `Name`, `Passthrough` and a `Vip`'s host; one claimant of
-a port on a front, `GATEWAY_PORTS` counted; an `Apex` zone holding its
-address record; and §3.3's relation.
+**What a type cannot say is refused where it is constructed**, so the
+module does not load: a row with no Gateway set, and an `Exposure` with
+nothing in it; `lan` and `media` on one row, since a host has one
+rewrite and the media VIP already answers every home VLAN the LAN VIP
+does; an empty reason, and an empty zone set.
 
-**A gate is per side, because the two sides differ.** The home VLANs have
-reached these interfaces ungated, and the legacy LAN vhosts carry no
-gate. So a row states a gate where its side wants one, and `bt` is gated
-from the internet and not from the home, where Home Assistant signs in
-with qbittorrent's own login. That narrows cluster-infra.md §2's list of
-applications behind the gate to their public side. `route` emits one
-`HTTPRoute` per side.
+What is a relation between rows stays a census invariant: known zones; a
+port claimed once on a front, `GATEWAY_PORTS` counted; an `Apex` zone
+holding its address record; §3.3's relation; and **one host, one answer**:
+rows that share a host, as `tube`, `spool` and `syncapi` do across a
+`Route` or `Passthrough` and a `Port`, publish one record and one rewrite,
+and any other shared host is refused.
+
+**A gate belongs to `internet`, since the home has none.** The legacy
+LAN vhosts carry no gate, and spoolman's comment asks for a home path
+without one. So `bt` is gated from the internet and not from the home,
+where Home Assistant signs in with qbittorrent's own login. That narrows
+cluster-infra.md §2's list of applications behind the gate to their
+`internet` row. `route` emits one `HTTPRoute` per Gateway the row sets.
 
 **A gate is declared on the row, not at the call**, so the census says
 which names are gated. Three route details stay in the component that
@@ -542,63 +589,66 @@ on the blog's apex, the canary's protected path on the portal's name,
 and the alert read route on `mon`. Each is a rule of its component's own
 beside what `route` emits.
 
-**`route` and the port are one census's two kinds, and they stay two.**
-A `Name` is host-routed: it shares the Gateways, takes a wildcard
-certificate and has no port. A `Port` is port-addressed: it has a
-Service of its own, no hostname on the wire and no certificate.
-Forcing them into one record would make each field optional on the
-other kind, which is the state this section removes. `public_port` and
-the LAN port, by contrast, are one shape: the `port` helper takes the
-row, and its `Front` decides the rest. One component call, `expose(rows)`,
-takes an application's rows of either kind.
+**By proxy and raw stay two types.** A `Route` is host-routed: it shares
+the Gateways, takes a wildcard certificate and has no port. A `Port` is
+port-addressed: it has a Service of its own for each Gateway it sets, no
+hostname on the wire and no certificate. Forcing them into one record
+would make each field optional on the other kind, which is the state
+this section removes. `public_port` and the LAN port, by contrast, are
+one shape: the `port` helper takes the row, and its fields decide the
+rest.
 
-**Every consequence but the apex's record derives from the row:**
+**Every consequence but the apex's record derives from the row**, one
+cell for each way of being reached on each Gateway:
 
-| Consequence | `Name` | `Apex` | `Passthrough` | `Port` |
-| --- | --- | --- | --- | --- |
-| Gateways | `internet-gw` for a public half; `lan-gw` or `media-gw` by `Side` | `internet-gw` | `internet-gw` | none |
-| Listener | the zone's wildcard HTTPS | an HTTPS listener for the apex, per zone | a TLS passthrough listener on 443, for the host | none |
-| Certificate zones | each it names | its zones | none | none |
-| Public record | a CNAME to the cluster anchor per zone, proxied by its edge | `dns`'s web origin, written in its block and held to the row by an invariant | a direct CNAME to the anchor | none |
-| Rewrite | per zone, at its `Side`'s VIP, and the bare label if asked | none | none | `Vip`: its host, at its `Side`'s VIP |
-| Service | none | none | none | LoadBalancer: the cloud nodes and the balancer's two addresses for `Balancer`, the dedicated node's for `Dedicated`, the VIP for `Vip`, the worker's for `SiteForward` |
-| Balancer listeners | none | none | none | `Balancer`: one per family |
-| Firewall | none | none | none | `Vip` on `IOT`: the IoT allow for its port; `SiteForward`: the forward and the pinhole; the others are answered ahead of the node firewall |
+| How | `internet` | `lan` | `media` |
+| --- | --- | --- | --- |
+| A `Route` | `internet-gw`, on the zone's wildcard listener; the zone's certificate; a CNAME to the cluster anchor per zone, proxied or direct; its gate | `lan-gw`, on the zone's wildcard listener; the zone's certificate; a rewrite at the LAN VIP per zone, and the bare label if asked | the same on `media-gw`, at the media VIP |
+| A `Passthrough` | a TLS passthrough listener on 443 on `internet-gw`, for the host, with a `TLSRoute`; a direct CNAME to the anchor; no certificate | the same on `lan-gw`, with a rewrite at the LAN VIP | the same on `media-gw`, with a rewrite at the media VIP |
+| An `Apex` | an HTTPS listener per zone; its certificate zones; `dns`'s web origin, written in its block and held to the row by an invariant | none | none |
+| A `Port` | a LoadBalancer Service: for `Balancer`, on the cloud nodes and the balancer's two addresses, requiring both families, with one listener per family and a direct CNAME per `Host`; for `Dedicated`, on the dedicated node's address; for `SiteForward`, on the worker's, with the forward and the pinhole | a Service at the LAN VIP, under `lan-gw`'s sharing key, and a rewrite for its host | a Service at the media VIP, under `media-gw`'s sharing key; a rewrite for its host; the IoT allow for its port from each `iot` address |
 
-**The worked table is the proof that it fits.** The real rows, under the
-recommendations of §11.4:
+**A `Port` also emits its own allow**, a network policy admitting `world`
+on its port and transports, on any Gateway. The base's default-deny
+admits the `ingress` entity and nothing else from outside the namespace
+(rfc-007 §9.1), which is right for a row a Gateway's Envoy forwards and
+drops every client of a raw one. That sentence of rfc-007 changes with
+it.
 
-| Application | Row |
-| --- | --- |
-| authelia | `Name('auth', Public(PROXIED))` |
-| splitpro | `Name('split', Public(PROXIED))` |
-| matrix | `Name('matrix', Public(PROXIED))` |
-| the WebDAV server | `Name('dav', Public(PROXIED, gate=BASIC))` |
-| Grafana | `Name('mon', Public(PROXIED))` |
-| Home Assistant | `Name('haos', Public(PROXIED))` |
-| the blog | `Apex(WEB_ZONES)`, `Name('www', Public(PROXIED), WEB_ZONES)` |
-| the doors | `Apex(('jiahui.love',))`, `Name('game', Public(PROXIED), COHOST)`, `Name('games', Public(PROXIED), COHOST)` |
-| immich | `Name('photos', Both(Public(Direct('uploads past the proxy limit')), Home(LAN)))` |
-| jellyfin | `Name('tube', Both(Public(PROXIED), Home(LAN)))` |
-| qbittorrent | `Name('bt', Both(Public(PROXIED, gate=SESSION), Home(IOT)))` |
-| syncthing's interface | `Name('sync', Home(LAN, gate=SESSION))` |
-| spoolman | `Name('spool', Home(IOT))` |
-| seedwatch | `Name('seedwatch', Home(LAN))` |
-| golinks | `Name('go', Home(LAN, bare=True))` |
-| the discovery server | `Passthrough('syncapi', 'clients present a certificate the proxy would end')` |
-| syncthing's peers | `Port('syncthing', 22000, TCP_AND_UDP, Balancer())` |
-| hath | `Port('hath', 60011, TCP, Dedicated())` |
-| emailproxy | `Port('imap', 1993, TCP, Vip(IOT, 'imap'))` |
-| qbittorrent's peers | `Port('qbittorrent-peer', 53363, TCP_AND_UDP, SiteForward())` |
+**The worked table is the proof that it fits.** The real rows, as ruled
+(§11.4):
+
+| Application | By proxy | Raw |
+| --- | --- | --- |
+| authelia | `Route('auth', internet=PROXIED)` | |
+| splitpro | `Route('split', internet=PROXIED)` | |
+| matrix | `Route('matrix', internet=PROXIED)` | |
+| the WebDAV server | `Route('dav', internet=Proxied(BASIC))` | |
+| Grafana | `Route('mon', internet=PROXIED)` | |
+| Home Assistant | `Route('haos', internet=PROXIED)` | |
+| the blog | `Apex(WEB_ZONES)`, `Route('www', internet=PROXIED, zones=WEB_ZONES)` | |
+| the doors | `Apex(('jiahui.love',))`, `Route('game', internet=PROXIED, zones=COHOST)`, `Route('games', internet=PROXIED, zones=COHOST)` | |
+| immich | `Route('photos', internet=Direct('uploads past the proxy limit'), lan=REWRITE)` | |
+| jellyfin | `Route('tube', internet=PROXIED, media=REWRITE)` | `Port('jellyfin-discovery', 7359, UDP, media=MediaVip('tube'))` |
+| qbittorrent | `Route('bt', internet=Proxied(SESSION), media=REWRITE)` | `Port('qbittorrent-peer', 53363, TCP_AND_UDP, internet=SiteForward())` |
+| syncthing | `Route('sync', internet=Proxied(SESSION))`, `Route('sync-nas', internet=Proxied(SESSION))` | `Port('syncthing', 22000, TCP_AND_UDP, internet=Balancer((Host('syncapi'), Host('btsync', COHOST))), lan=LanVip('syncapi'))` |
+| the discovery server | `Passthrough('syncapi', internet=Direct('clients present a certificate the proxy would end'), lan=REWRITE)` | |
+| spoolman | `Route('spool', internet=Proxied(SESSION), media=REWRITE)` | `Port('spoolman', 8000, TCP, media=MediaVip('spool', iot=(PRINTER,)))` |
+| seedwatch | `Route('seedwatch', lan=REWRITE)` | |
+| golinks | `Route('go', lan=Rewrite(bare=True))` | |
+| shoko | `Route('shoko', lan=REWRITE)` | |
+| hath | | `Port('hath', 60011, TCP, internet=Dedicated())` |
+| emailproxy | | `Port('imap', 1993, TCP, media=MediaVip('imap', iot=(HOME_ASSISTANT,)))` |
 
 Two things the rows need of the platform:
 
-*   **A raw LAN port shares its side's VIP.** `Port('imap', …)` takes the
-    media VIP beside `media-gw`, under the sharing annotations
-    `internet-gw` already carries (rfc-007 §4.4), so no address is
-    added: ports tell the Services apart. `media-gw`'s Service gains
-    them, and the raw Service takes `Cluster`. rfc-007 §4.4's sentence
-    that each `lan` VIP is held by one Service changes with it.
+*   **A raw home port shares its Gateway's VIP.** `imap`, `spoolman` and
+    `jellyfin-discovery` take the media VIP beside `media-gw`, and
+    `syncthing` takes the LAN VIP beside `lan-gw`, under the sharing
+    annotations `internet-gw` already carries (rfc-007 §4.4), so no
+    address is added: ports tell the Services apart. Both Gateways'
+    Services gain them, and a raw Service takes `Cluster`. rfc-007 §4.4's
+    sentence that each `lan` VIP is held by one Service changes with it.
 *   **`SiteForward` needs an address to land on.** The gateway's forward
     and pinhole end at the worker's own address, which is the address
     qbittorrent's outbound traffic wears, and no Service may hold a host
@@ -610,16 +660,17 @@ Two things the rows need of the platform:
     reads the port from it.
 
 **`physical` still declares the firewall; only the source of its ports
-moves.** `SiteFirewall` stays that stack's, and its rows stay its rows. The peer forward and pinhole read the port from the
-census instead of a constant, and the IoT allow gains a rule per
-`Vip(IOT, …)` port beside `MEDIA_PORT`. Nothing here depends on how the
-open question on the Internal-to-External rule's order is ruled; the
+moves.** `SiteFirewall` stays that stack's, and its rows stay its rows.
+The peer forward and pinhole read the port from the census instead of a
+constant, and the IoT allow gains a rule per address of a `MediaVip`'s
+`iot`, for that port, beside `MEDIA_PORT`. Nothing here depends on how
+the open question on the Internal-to-External rule's order is ruled; the
 slice that touches `SiteFirewall` follows the work that settles it.
 
 **A TLS passthrough keeps the discovery clients on 443.** The discovery
 server terminates its own TLS because it reads each client's
-certificate, and every device is configured with the name and no port.
-The legacy path is a passthrough on 443. A raw port on 8443, which the
+certificate, and syncthing's configuration names it with no port, which
+is the passthrough kluster-code declares. A raw port on 8443, which the
 census held, would have broken every device until it was reconfigured
 by hand. A Gateway listener in passthrough mode for one hostname, with a
 `TLSRoute` to the server, keeps them, and drops the census row and its
@@ -633,19 +684,23 @@ fallback.
 **The balancer's peer port reaches syncthing on the worker.** There is
 no cloud replica: its only role was an always-reachable port for roaming
 devices, every device holds its own copy, and the NAS holds the full set.
-The path needs nothing new, and each part of it was read:
+The path needs one thing of its own, the allow above, and each part of
+it was read:
 
 *   **The datapath.** Under `Cluster`, a cloud node that takes the
     connection translates it and forwards it through the tunnel to the
     worker's pod, on TCP and UDP alike, which is what any raw `Balancer`
-    row already did for a pod on another cloud node.
-*   **The source.** The pod sees a cluster address, not the client's.
-    A device is authenticated by its certificate, so nothing depends on
-    it. The address only classes the connection as LAN, which raises a
-    priority and exempts it from a limit none is set.
-*   **The MTU.** The pod's is 1370, inside KubeSpan's 1420. TCP takes it
-    from the pod's advertised segment size. On UDP the transport starts at
-    1252 bytes and finds its own ceiling by probing, so a lost probe costs nothing.
+    row already did for a pod on another cloud node. It carries the
+    `world` identity through the tunnel so that policy still applies
+    (Cilium's `bpf/lib/nodeport.h`, v1.20.1), which is what the allow
+    answers.
+*   **The source.** The pod sees a cloud node's address, not the
+    client's. A device is authenticated by its certificate, so nothing
+    depends on it. The address decides only whether a connection counts
+    as LAN, and here it never does.
+*   **The MTU.** A pod's device MTU is KubeSpan's 1420 and its route MTU
+    is 1370, and the path holds on every segment, as the next paragraph
+    sets out.
 *   **The health check.** The balancer probes the port over TCP on each
     cloud node, each probe reaching the pod. With the worker down, all
     three fail, and only this row's backend set goes unhealthy.
@@ -653,7 +708,67 @@ The path needs nothing new, and each part of it was read:
     census port (rfc-007 §4.4), and nothing here needs it: no workload
     dials this port.
 
-**A client has to find it, and that is the one part that leans on
+**The MTU holds across the path, and ICMP is a fallback in two places
+only.** TCP inside the tunnel needs no discovery at all, and the UDP
+transport reads no ICMP anywhere.
+
+| Segment | TCP | UDP |
+| --- | --- | --- |
+| Client to balancer | The client's own discovery, as on any path | 1280 bytes to start, then probes up to 1452, each acknowledged or lost |
+| Into the tunnel, on a cloud node | The route MTU sets the segment size the pod advertises, 1330 bytes on IPv4 and 1310 on IPv6, so nothing can exceed 1420 | Above 1370 the `vxlan` packet's outer header has DF clear, and the kernel fragments it |
+| KubeSpan's own packets | On IPv4, DF is clear and routers fragment. On IPv6, a link under 1500 needs a packet-too-big, which the subnet's list, Talos's rule for related traffic and the gateway's return policy each admit | The same |
+| The pod sending | The route MTU caps it | Its device MTU caps it, and a send over that is a lost probe |
+| Balancer to client | A link smaller than either end advertises sends its ICMP to the balancer's address, and no backend receives it | A lost probe |
+
+**The last row is a black hole by design, and it is bounded.** Oracle
+documents no relay of an ICMP error to a backend, and says of the
+protocol only that a public balancer does not support it; were one
+delivered, Cilium would hand it to the host, which holds no socket for
+this flow. So the pod's sends stall until Linux's own detection, which
+Cilium's `packetizationLayerPMTUDMode: blackhole` turns on in each pod:
+after about 3 seconds the segment size falls to 1024 bytes and probes
+upward. That mode is a chart default the repository never names, so
+`chart_values()` states it, with a test (slice 4). A client whose own
+link is the small one is not this case, since the segment size it
+advertised already says so. The UDP transport settles near 1420, above
+the route MTU, so a full-size packet crosses the tunnel in two pieces,
+which costs rate and not delivery; syncthing ranks TCP above it on a WAN
+address.
+
+**The second place is the one failure with no bound.** KubeSpan over an
+IPv6 path whose underlay is under 1500 needs its packet-too-big, and if
+that is lost, full-size packets vanish in that direction while small
+ones pass, so the peer still looks up. An IPv4 path has no such dependency. The home uplink's
+MTU is in no document, so the bring-up reads it. Below 1500,
+`KUBESPAN_MTU` becomes the uplink's less 80, 1412 on PPPoE, one constant
+with a pod route of 1362; restricting KubeSpan's endpoints to IPv4 is
+the alternative. **Unproven live**, as is whether the balancer relays
+ICMP errors, which Oracle's pages leave open.
+
+**A clamp cannot fix either, and a lower pod MTU is not worth it.**
+Cilium's datapath redirects this flow past `netfilter`, so no host rule
+sees its TCP, and a clamp would hold back only the client. A pod MTU
+low enough to rule out the last row costs about 6.5% of the payload of
+all pod traffic, for a stall that recovers in seconds.
+
+**A device at home stays at home.** The legacy NAS instance's port is
+declared "reachable on its home-LAN and ZeroTier IPs", and the row keeps
+the LAN half: with `LanVip('syncapi')` and the passthrough's `lan`,
+`syncapi` resolves at home to the LAN VIP on 443 and on 22000 alike, so
+a device at home reaches the instance over the LAN and not through the
+balancer. The overlay takes the public path, as dns.md §4 says of every
+name.
+
+**The data port keeps its names, on the raw row.** `legacy.py` publishes
+two names direct for syncthing's non-HTTP ports: `syncapi`, and
+`btsync.unlimitedcodeworks.xyz` in the co-host's zone. The one device
+whose configuration has been read, the XPS, dials the VPS's device at
+`tcp://syncapi.unlimited-code.works:22000` and its `quic://` twin, and
+names `btsync` nowhere. That is evidence about one device and no answer
+about the name, so both stay (§11.5): `Balancer` carries the hosts a raw
+port is dialed at, and `syncapi` is the same record as the passthrough's.
+
+**A device with `dynamic` has to be told that name, and that leans on
 upstream's behavior.** Behind the passthrough, the discovery server sees
 no client address, as it does today, so a wildcard announcement resolves
 to nothing useful. So syncthing's `listenAddress` adds
@@ -662,21 +777,33 @@ cannot bind, which is logged each minute, and is announced all the same:
 at the pinned release a listener stays on the list `WANAddresses` reads
 even if it never bound, and the discovery server keeps a hostname as it
 is. A device with `dynamic` for this instance then needs no change. That
-is read from the source and not documented, so it is the wave's first
-check (§5.3), and its fallback is a static address on each roaming
-device. **Unproven live**, as is UDP through the balancer, which the
-bring-up's gate tries with a scratch Service on the worker.
+is read from the source and not documented, so §5.3 checks it on both
+sides of the cut, and its fallback is a static address on each roaming
+device, not a rollback. **Unproven live**, as is UDP through the
+balancer, which the bring-up's gate tries with a scratch Service on the
+worker.
 
-**A LAN-device backend** is a small reverse proxy on the worker, which
-the route's Service selects, forwarding to the device's address and
-passing the client's address on in `X-Forwarded-For`. workloads.md §4
-designs it as a selectorless Service with an `EndpointSlice` at the
-device's address, but a request through `internet-gw` reaches a cloud
-node's Envoy, which connects to the endpoint itself, and a cloud node has
-no route to a home VLAN (physical/homelab-host.md §5). The worker reaches
-the device over the cluster zone's allow toward the home networks
-(physical/gateway.md §4.2). The device trusts the worker's address as
-its proxy. **New rule**, landing in workloads.md §4.
+**One device needs a backend outside the cluster: Home Assistant, at
+`haos`.** Every other public name is a workload in the cluster. Home
+Assistant is deliberately not one: home automation has to survive a
+cluster outage (architecture.md §6.8), and it holds the home's radios,
+so it is a machine on the host (nodes.md §4.1), on the IoT VLAN.
+kluster-code declares `haos` public, with its own authentication and no
+gate, and the companion application reaches it from outside the home, so
+the name stands. No second device or name needs this, and it is
+not a shape: it is one component's Deployment.
+
+A request through `internet-gw` reaches a cloud node's Envoy, which
+connects to its backend itself, and a cloud node has no route to a home
+VLAN (physical/homelab-host.md §5). So the selectorless Service with an
+`EndpointSlice` at the device's address that workloads.md §4 designs
+cannot work, and the hop has to sit where that route exists: a small
+reverse proxy on the worker, which the route's Service selects,
+forwarding to the device's address and passing the client's address on
+in `X-Forwarded-For`. The worker reaches the device over the cluster
+zone's allow toward the home networks (physical/gateway.md §4.2), and
+the device trusts the worker's address as its proxy. **New rule**,
+landing in workloads.md §4.
 
 **`apps` reads the `internet` pool's members across a StackReference**,
 through `kluster.lib.stack_addresses` as `k8s-base` does, since a
@@ -686,16 +813,17 @@ read so that anything but an address stops the run. **New rule**,
 landing in style/pulumi.md ("Layering") and declarative/README.md §2.
 
 The route census states the reason a name is published direct, as
-dns.md §2 requires of every record, because `Direct` carries it. A
-direct row, and every record it aliases, holds the chain relation the
-blocks do, and the route-side half of the record blocks' co-host check
+dns.md §2 requires of every record, because `Direct` carries it, and a
+`Host` needs none, since a raw port cannot cross the proxy. A direct
+row, and every record it aliases, holds the chain relation the blocks
+do, and the route-side half of the record blocks' co-host check
 (`tests/test_dns_records.py`) holds for rows too. The authentication
 canary cluster-infra.md §2 requires lands with Authelia's component
 (§5.2).
 
 ### 4.2 Storage
 
-**Three kinds of claim, each with what it owes:**
+**Two kinds of claim, and one class for a node volume:**
 
 *   **`backed_pvc(name, size, retention)`** is written as workloads.md
     §3 states it: a `local-path` claim, and a VolSync
@@ -713,27 +841,63 @@ canary cluster-infra.md §2 requires lands with Authelia's component
     in the security audit, whose actor is a reader of the snapshots, who
     holds no key to the VolSync prefix and so opens no repository with
     it.
-*   **`scratch(name, size, reason)`** is a `local-path` claim with no
-    backup, for data that re-derives and is worth keeping across a
-    restart: the reason is a required argument, which is workloads.md
-    §2's `backup=None` as a shape. Data that need not survive a restart
-    takes an `emptyDir` and no claim.
-*   **`fixed_claim(name, source)`** is a static `PersistentVolume` and
-    its claim, for data the cluster does not own, with no backup
-    parameter to set, since the source's own regime is its safety net.
-    NAS and node volumes differ only in `source`, so they are one shape:
-    *   `Nfs(path, read_only)`: a path under the host's one export, on
-        the worker alone, since no other node can reach it
-        (physical/homelab-host.md §5). The host exports `/mnt/nas` whole
-        to the worker, and the path is a single filesystem with no
-        dataset boundary, so a component names its path at the call. No
-        census is needed, and no export changes with a new path.
-    *   `NodeVolume(row, directory)`: a `local` volume over a row of
-        `conventions.NODE_VOLUMES`, at a directory inside the mount and
-        never the mount point, with node affinity on the volume's label.
-        The directory is created by a seeding step the shape declares,
-        so a volume that failed to mount leaves the pod pending rather
-        than writing into the node's root.
+*   **`nas_claim(name, path, read_only)`** is a static
+    `PersistentVolume` and its claim, for data the cluster does not own,
+    with no backup parameter to set, since the source's own regime is
+    its safety net. The path is under the host's one export, on the
+    worker alone, since no other node can reach it
+    (physical/homelab-host.md §5). The host exports `/mnt/nas` whole to
+    the worker, and the path is a single filesystem with no dataset
+    boundary, so a component names its path at the call. No census is
+    needed, and no export changes with a new path.
+*   **`cloud-block`** is a class `local-path` serves from a node volume,
+    below. Data that need not survive a restart takes an `emptyDir` and
+    no claim.
+
+**There is no `scratch`: a claim that persists is backed up.** Its one
+caller would have been immich's model cache, 11 GiB that re-derives.
+What `backed_pvc` costs that cache, at `BULKY`:
+
+| Cost | What it comes to |
+| --- | --- |
+| Memory | Nothing standing. The controller is there already, under 100 MB (storage.md §3.1), and a mover exists only while it runs: a few hundred MB for minutes, at 04:00 on Sunday, an hour after the daily movers |
+| The bucket | 11 GiB at B2's $6.95 per TB is about 8 cents a month. A model rarely changes, so versions add nothing, and API calls are free (storage.md §4) |
+| The schedule | One weekly mover. Its first run uploads 11 GiB at the home uplink's speed; after that it reads metadata |
+| Operations | immich's namespace joins `BACKED_NAMESPACES`: a `physical` scope, a sealed writer key and a repository password, all derived, and one freshness alert from the rule family that exists already |
+
+That buys the removal of a shape, its reason argument and workloads.md
+§2's `backup=None`, and a rebuilt worker restores the cache rather than
+downloading it. **So every working claim is a `backed_pvc`.** The
+exception is what a node volume holds: hath's cache, whose safety net is
+the H@H network (workloads.md §2).
+
+**A node volume is a `local-path` pool.** `hath-cache` is the one row
+left, and it needs no mechanism of its own. The provisioner's
+configuration already keys its pools by class (`storageClassConfigs`),
+and at the pinned v0.0.37 a class's paths are per node. So `cloud-block`,
+the class `conventions.SC_CLOUD_BLOCK` already names, lists each row of
+`NODE_VOLUMES` as its node and `/var/mnt/<row>`, with no default entry,
+so a claim on any other node is refused. The class reclaims `Retain`,
+takes `pathPattern: {{ .PVC.Namespace }}/{{ .PVC.Name }}/`, so that a
+claim made again finds its directory, and `defaultVolumeType: local`.
+hath declares an ordinary claim of that class, protected, and its pod is
+held to that node already. The static `PersistentVolume`, the seeding
+step and the `NodeVolume` source go, and `k8s-base` gains one class and
+one key of a configuration it already renders.
+
+**A volume that failed to mount still cannot take the data**, and
+neither half needs a step of its own:
+
+*   **At provisioning.** The helper pod's `hostPath` asks for
+    `DirectoryOrCreate`, but the kubelet's view of `/var/mnt` is
+    read-only, and it can create nothing inside a plain directory there
+    (physical.md §2). With the volume unmounted the helper does not
+    start, the claim stays pending, and nothing lands on the node's
+    disk.
+*   **At every later start.** A `local` volume's path has to exist, and
+    with the volume unmounted it does not, so the pod stays pending, as
+    physical.md §6 already gates. A `hostPath` volume would have
+    recreated it, which is why the class states `local`.
 
 **A pod writes to the NAS as the export's anonymous user.** The export
 is `all_squash`, so every NFS write arrives as one user, whatever the
@@ -752,24 +916,27 @@ today:
 | authelia | 1.1 MB | `backed_pvc`, `PRECIOUS`; its sessions in a Redis with no claim, since losing them costs a sign-in |
 | splitpro | an empty uploads directory; a 16 MB database | no uploads claim, an `emptyDir`; the database (§4.3) |
 | matrix | 18 MB, on a 20 GiB claim | `backed_pvc`, `PRECIOUS` |
-| the WebDAV server | 1.1 GiB of its own files, on JuiceFS | `Nfs('Dav')` for them, which are in no syncthing folder, and `Nfs('Sync/Stuff')` for the folder it serves |
-| syncthing | 115 GiB on the NAS; 145 MB index and device key | `Nfs('Sync')`; `backed_pvc` for what holds the device key |
+| the WebDAV server | 1.1 GiB of its own files, on JuiceFS | `backed_pvc` for them, which are in no syncthing folder, and `nas_claim('Sync/Stuff')` for the folder it serves |
+| syncthing | 115 GiB on the NAS; 145 MB index and device key | `nas_claim('Sync')`; `backed_pvc` for what holds the device key |
 | stdiscosrv | 2 MB | an `emptyDir`: it rebuilds in minutes |
-| immich | 1.5 GiB database; library, thumbnails and encoded video together on the NAS; 11 GiB model cache; 27 MB queue | the database (§4.3); `Nfs('Immich')` whole; `scratch` for the models; a Redis with no claim, since a lost queue re-runs |
-| jellyfin | 21 GiB of configuration: 11 GiB its own backups, 7.9 GiB scrub previews, 2.6 GiB metadata; a 512 GiB claim holding 116 MB | `backed_pvc` for the database and settings; `Nfs` for scrub previews and metadata; its backups not copied; an `emptyDir` for transcodes |
+| immich | 1.5 GiB database; library, thumbnails and encoded video together on the NAS; 11 GiB model cache; 27 MB queue | the database (§4.3); `nas_claim('Immich')` whole; `backed_pvc` at `BULKY` for the models; a Redis with no claim, since a lost queue re-runs |
+| jellyfin | 21 GiB of configuration: 11 GiB its own backups, 7.9 GiB scrub previews, 2.6 GiB metadata; a 512 GiB claim holding 116 MB | `backed_pvc` for the database and settings; `nas_claim` for scrub previews and metadata; its backups not copied; an `emptyDir` for transcodes |
+| shoko | 3.3 GiB of configuration | `backed_pvc`; `nas_claim('Media', read_only)` |
 | golinks, emailproxy, spoolman | 21 KB, 5 KB, 4.5 MB | `backed_pvc` each |
-| qbittorrent | a 175 MB profile; payloads on the NAS | `backed_pvc`; `Nfs('')`, the whole export, because hard links into `Media` need one mount, and a `Downloads` mount and a `Media` mount would fail them across the mount boundary |
-| seedwatch | 97 MB in memory; audit history | `backed_pvc`; `Nfs('Downloads', read_only)` |
-| hath | 49 GiB of cache in 327,604 files, 13 KB of state, on the NAS | one `fixed_claim` over `hath-cache`, the state beside the cache, since nothing in it is worth a restore |
-| the doors | static files | `Nfs` read-only |
+| qbittorrent | a 175 MB profile; payloads on the NAS | `backed_pvc`; `nas_claim('')`, the whole export, because hard links into `Media` need one mount, and a `Downloads` mount and a `Media` mount would fail them across the mount boundary |
+| seedwatch | 97 MB in memory; audit history | `backed_pvc`; `nas_claim('Downloads', read_only)` |
+| hath | 49 GiB of cache in 327,604 files, 13 KB of state, on the NAS | one ordinary claim of class `cloud-block`, the state beside the cache, since nothing in it is worth a restore |
+| the doors | static files | `nas_claim`, read-only |
 
 **`hath-cache` is 55 GB, and it is the one node volume left.** The cache
 is 49.3 GiB of data, which is about 50.7 GiB on 4 KiB blocks at its file
 count, so the volume keeps about 3.5 GiB free after the filesystem's own
-share. `syncthing-replica` leaves `NODE_VOLUMES` with the replica. Both
-change ahead of this document, before the first `physical` apply, by an
-issue of their own, and the cloud's block storage falls to 5 GB past the
-free allowance.
+share, reading OCI's GB as binary, which the bring-up confirms.
+`syncthing-replica` leaves `NODE_VOLUMES` with the replica. Both change
+ahead of this document, before the first `physical` apply, by an issue
+of their own, and the tenancy's block storage falls to 55 GB past the free
+allowance, about $1.40 a month: three boot volumes and the state
+backend's at 50 GB each, and this one.
 
 **Thumbnails stay with the library.** workloads.md §2 lists them as
 `local-path`, re-derivable, but they sit under immich's one media root
@@ -927,42 +1094,32 @@ pair stays on the VPS until the decommission (dns.md §2).
 sources-of-truth.md rule 4 keeps a flip's feature parity unless its row
 records otherwise, so nothing below is silent: each flip's row in that
 document carries what its own wave drops. An item with a cost someone
-would notice is put to the operator (§11.4); the rest are settled here,
-on the readings of §4.1.
+would notice is ruled (§11.4) or put to the operator (§11.5); the rest
+are settled here, on what §4.1 reads from the code.
 
 | What goes | Why | What it costs a user |
 | --- | --- | --- |
-| The cloud syncthing replica, and its volume | Its role was an always-reachable port, which the balancer gives the NAS instance | A roaming device syncs at the home uplink's speed, and with the homelab down there is no anchor: devices fall back on relays and each other. The replica's 3 GiB of file versions are not carried |
-| The separate `sync-nas` name | One instance has one interface, `sync` | A bookmark of the old name stops resolving |
-| The name `btsync.unlimitedcodeworks.xyz` | No configuration in the estate names it, on either syncthing instance | Nothing found; a device that held the old name would fall back on discovery |
-| The discovery server's raw port on 8443 and its balancer listeners | A passthrough on 443 keeps the clients (§4.1) | Nothing |
-| The matrix identity SRV, with `Extra`, `Srv` and `SELF` | Nothing answers it: the server has no identity endpoints, which answer 404 today | Nothing. Its one row was why the types existed |
-| `matrix` published direct | Federation is on 443 (its delegation says so), which the proxy carries, so the block's reason is stale | Nothing, given the live check; media over the proxy's body limit would not upload |
-| Jellyfin's ports 8096, 8920, 1900 and 7359, and the host's discovery relay | Each client is reached by name | Each television's saved server address, at the host's name and port, is re-entered once, and a new client types the name |
-| immich's port 2283 | The phones use the public name, which the home half steers | The photo scripts' first choice of address moves to the name |
-| spoolman's port 8000 | Home Assistant reaches the name over the IoT side, on HTTPS | Its integration's address is re-entered once |
-| The ports of golinks, shoko and syncthing-nas | No client beyond the proxy; the NAS instance's peers are dialed outbound | Nothing found |
+| The cloud syncthing replica, and its volume | The operator's ruling: its role was an always-reachable port, which the balancer gives the NAS instance | A roaming device syncs at the home uplink's speed, and with the homelab down there is no anchor: devices fall back on relays and each other. The replica's 3 GiB of file versions are not carried |
+| A second syncthing interface | One instance has one interface, and `sync` and `sync-nas` both reach it (§11.5) | Nothing: each name keeps working, and shows the same instance |
+| The discovery server's raw port on 8443 and its balancer listeners | kluster-code's `passthroughHosts` and syncthing's configured `https://syncapi…` put it on 443 (§4.1) | Nothing |
+| The matrix identity SRV, with `Extra`, `Srv` and `SELF` | The code deploys no identity service, so the record has no target | Nothing. Its one row was why the types existed |
+| `matrix` published direct | The delegation kluster-code declares puts federation on 443, which the proxy carries. The reason on the legacy record says otherwise, and the delegation is what servers follow | Media over the proxy's body limit would not upload |
+| Jellyfin's ports 8096, 8920 and 1900 | dns.md §4: a home client uses the public name. 1900 is multicast, which no VIP receives; 7359 stays, a raw port behind the host's relay | Each television's saved server address, at the host's name and port, is re-entered once |
+| immich's port 2283 | Its comment's intention, a home client off the cloud path with no setup, is what `lan` on the row does | The photo scripts' first choice of address moves to the name |
+| The ports of golinks and shoko | golinks's comment names the gateway's proxy as its one client, which `lan-gw` replaces; shoko is a `Route` by dns.md §4 | A saved address at the host's name is re-entered once |
 | The claims of authelia's and immich's Redis, stdiscosrv and splitpro's uploads, and jellyfin's 512 GiB cache | Each holds nothing a restart should keep | A Redis restart signs everyone in again, or re-runs immich's queue |
 | The second immich database instance | §4.3 | A failover takes a restart rather than a promotion |
-| shoko | §11.4, item 1 | Put to the operator |
-| thread-dashboard's move | §11.4, item 2 | Put to the operator |
-| The public reach of `sync`, `sync-nas` and `spool` | §11.4, item 3 | Put to the operator |
-| The bare names but `go` | §11.4, item 4 | Put to the operator |
+| thread-dashboard's move | §11.4, item 2 | Nothing: it stays on the host |
+| The bare names but `go` | §11.4, item 4 | `tube/`, `bt/`, `gw/` and `dns/` stop redirecting at their cuts, and the full names keep working |
 
-**The televisions were the reason `media-gw` exists**, and they are not
-on the IoT VLAN today. It stays, for what is: Home Assistant, which
-reaches `spool`, `bt` and `imap` from there. So **gateway.md §4.2's rule
-1 narrows its source from the IoT VLAN to Home Assistant's own address**,
-a literal in `conventions`, with a printer added if §11.3 finds one.
-The rule's reason was the VLAN's televisions, and with them gone, an
-allow for the whole VLAN would hand "the likeliest compromised host at
-home" (threat-model.md) qbittorrent's login and an interface with none.
-The narrowing keeps architecture.md §3.4's statement that those stay out
-of the IoT VLAN's reach true of every device on it but one, and the one
-is the home's own automation, which holds their integrations already.
-**New rule**, landing in gateway.md §4.2 and architecture.md §3.4.
-migration.md's Wave C check on the IoT path is replaced by re-entering
-each television's address.
+**The televisions stay on `media`.** The canon makes `media-gw` their
+path and rule 1 its allow (architecture.md §3.4, physical/gateway.md
+§4.2). The one television the host's records show is on the Default LAN,
+which contradicts it, and that is reported (§11.5) and not acted on:
+`tube` stays on `media`, which answers both VLANs, and rule 1 stays open
+to the IoT VLAN on 443. A raw port on the media VIP is narrower, because
+`MediaVip.iot` names who it admits: `imap` has no authentication, and
+threat-model.md's likeliest compromised host at home must not reach it.
 
 --------------------------------------------------------------------------------
 
@@ -1003,8 +1160,8 @@ sealed (§4.6). Beyond it:
     have merged (§10).
 *   `physical` has applied `BACKED_NAMESPACES`, so every writer key
     exists.
-*   Row R2 of sources-of-truth.md has flipped before the first row with
-    a home half lands, `sync` in Wave A2: adguardhome-sync stopped, both
+*   Row R2 of sources-of-truth.md has flipped before the first row on
+    a home Gateway lands, `syncapi` in Wave A2: adguardhome-sync stopped, both
     resolver instances reading their rewrites again, and the resolvers'
     declared list merged. Until then a rewrite applies, reports success
     and answers nothing.
@@ -1089,34 +1246,43 @@ branch.
     partners retry.
 *   **syncthing** on the worker, with the WebDAV server beside it, and
     the `syncthing` row on both transports, where the legacy Service
-    exposed TCP alone. Its device identity lives in its configuration,
-    which is copied whole, and it drops the VPS's device and adds the
-    announced addresses of §4.1. **Data**: the NAS's data stays in
-    place. The configuration and index go through the NAS, and the
-    WebDAV server's own files from the legacy pod's mount onto it, off
-    JuiceFS. **Two folders have no NAS copy**: `DolphinSaves` and
-    `PhD.Study` exist only on the replica and its clients, so the head
-    shares them with the NAS instance before the stop. **Verified** first
-    by a roaming device's lookup returning the balancer's name, and that
-    device connecting on each transport; then the interface refusing an
-    unauthenticated request at the LAN VIP, and `dav` refusing one at the
-    balancer. **Cut**: `dav`, and the `sync` and `sync-nas` legacy blocks;
-    `sync`'s row lands published (§3.3). A device still holding the VPS's
-    entry shows it disconnected until it is removed, since the address
-    answers with another device's certificate. **Rollback** restarts the
-    legacy replica on its JuiceFS volume and the legacy NAS instance,
-    which the stop kept.
-*   **stdiscosrv**: the `Passthrough` on `syncapi`, terminating its own
-    TLS with a certificate the cluster's issuer gives it for the name.
-    It keeps its reason with the replica gone, on the cloud pool: it is
+    exposed TCP alone, at the balancer and at the LAN VIP. Its device
+    identity lives in its configuration, which is copied whole, and it
+    drops the VPS's device and adds the announced addresses of §4.1.
+    **Data**: the NAS's data stays in place. The configuration and index
+    go through the NAS into their claim, and the WebDAV server's own
+    files likewise, from the legacy pod's mount, off JuiceFS. **The head
+    reads `/rest/config/devices` and `/rest/config/folders` on both
+    instances** and records each device or folder that lacks the NAS
+    instance, then fixes it on the device before the stop, since a folder
+    syncs only between devices that each list the other on it. The
+    introducer flag the XPS sets on both instances covers devices, not a
+    new folder's acceptance. `DolphinSaves`, `PhD.Study` and, on the
+    XPS's list, `CitraSaves` have no NAS copy, so each is shared with
+    the NAS instance there. **Verified** before the cut: a device given
+    the balancer's address as a static address connects on each
+    transport; `curl --resolve` with a client certificate shows the
+    discovery server taking and returning a hostname; a device at home
+    given the LAN VIP connects there; and each interface refuses an
+    unauthenticated request at the balancer. After the cut, a device
+    with `dynamic` finds the instance, and a miss there takes §4.1's
+    static address and not a rollback. **Cut**: `sync`, `sync-nas`,
+    `dav`, and `btsync` with `syncapi` below. A device still holding the
+    VPS's entry shows it disconnected until it is removed, since the
+    address answers with another device's certificate. **Rollback**
+    restarts the legacy replica on its JuiceFS volume and the legacy NAS
+    instance, which the stop kept.
+*   **stdiscosrv**: the `Passthrough` on `syncapi`, on `internet` and
+    `lan`, terminating its own TLS with a certificate the cluster's
+    issuer gives it for the name. It keeps its reason with the replica gone, on the cloud pool: it is
     how a device learns the balancer's address, and how devices find each
     other with the homelab down, and retiring it would be a change on
-    every device. The same record serves the peer port. **Data**: none; its
+    every device. **Data**: none; its
     announcements are rebuilt within minutes. **Verified** by a client's
     announcement and lookup on 443. **Cut**: `syncapi`.
 
 Legacy splitpro and matrix run on the homelab host, so Wave A frees
-homelab memory without asking any of it (§6).
+homelab memory and asks for no growth (§6).
 
 ### 5.4 hath, after Wave A2 has soaked
 
@@ -1155,7 +1321,7 @@ the legacy client still serves, and two clients online under one login
 are refused by the network:
 
 1.  **Stage.** The component is wired with its client not started, and
-    next to it, a copy pair: a reader on the worker over `Nfs('Hath')`,
+    next to it, a copy pair: a reader on the worker over `nas_claim('Hath')`,
     and a writer on the dedicated node over the cache claim. The warm
     copy runs.
 2.  **Land.** The legacy client is stopped, the final delta and the
@@ -1186,20 +1352,22 @@ worker as it booted (§6.1), so the wave needs no window.
 *   **emailproxy**: its configuration ported (§4.6), and the `imap` row,
     which Home Assistant's mail integration and the two host jobs are
     pointed at in the same window, on the media VIP because Home
-    Assistant sits on the IoT VLAN. It serves TLS itself, as it does
+    Assistant sits on the IoT VLAN, admitting its address alone. It serves TLS itself, as it does
     today, on a certificate from a self-signed issuer of its own
     namespace, since its clients do not verify it and the name is not
     one to publish in certificate logs. **Data**: the token cache through
     the NAS, so the account needs no fresh consent. **Verified** by
     Home Assistant reading the mailbox through it. **Cut**: none in DNS
     — the name is new. **Rollback** points the clients back.
-*   **spoolman**: its row, which Home Assistant's integration is pointed
-    at in the window. **Data**: the legacy claim is on the shared
+*   **spoolman**: its `spool` row, which Home Assistant's integration is
+    pointed at in the window, and the raw port its comment keeps for
+    printers to connect directly, at `spool` on port 8000, admitting the
+    printer's address. **Data**: the legacy claim is on the shared
     JuiceFS volume, which migration.md §3 does not copy; its single file
     is streamed from the legacy pod's mount. **Verified** by Home
     Assistant reading a spool through the name, which the row answers
-    from its land. **Cut**: `spool`'s legacy block, and its vhost row. **Rollback** loses the spool changes since the land.
-*   **The Home Assistant backend**: the LAN-device relay (§4.1) behind
+    from its land, and the printer reading one at the raw port. **Cut**: `spool`'s legacy block, and its vhost row. **Rollback** loses the spool changes since the land.
+*   **The Home Assistant backend**: the reverse proxy of §4.1 behind
     the `haos` row. Home Assistant's trusted proxies gain the worker's
     address in the same window. **Verified** by a sign-in at the
     balancer showing the client's address in Home Assistant's log.
@@ -1213,8 +1381,7 @@ worker as it booted (§6.1), so the wave needs no window.
     the Gateway with no route, as they reach the legacy ingress today.
     **Verified** at the balancer for each hostname. **Cut**: `games` and
     `game`, and `jiahui.love`'s apex.
-*   **thread-dashboard** stays on the host, on the recommendation of
-    §11.4: it needs multicast on the IoT bridge for its HomeKit names,
+*   **thread-dashboard** stays on the host, as ruled (§11.4): it needs multicast on the IoT bridge for its HomeKit names,
     which no pod has, and moving it would save 35 MB. Its vhost row
     moves onto the gateway's declared vhosts, as the UPS card's does.
 *   **Monitoring's name.** `mon` becomes a row of the monitoring
@@ -1252,7 +1419,7 @@ of the legacy forward-auth checks, whose last gated front is `spool`
 **The head** removes Wave B's legacy applications and the legacy
 JuiceFS stack, whose last consumer was spoolman, with their claims kept;
 moves the legacy GPU plugin to the iGPU; and stops legacy immich,
-jellyfin, the legacy monitoring and the legacy mail relay, whose last
+jellyfin, shoko, the legacy monitoring and the legacy mail relay, whose last
 senders those are (§3.5). **The window** then grows
 the worker and binds the A380 in one drained apply, since each replaces
 the domain (migration.md, Wave C).
@@ -1270,15 +1437,20 @@ the domain (migration.md, Wave C).
     rewrite rule. **Rollback** loses the uploads since the cut, which
     stay in the library on the NAS but outside the restored database.
 *   **jellyfin**, in a namespace of its own, with its claim on `Media`
-    read-only. Discovery by multicast does not cross into a routed pool
-    address, and no client depends on it: each television's saved
-    address, at the host's name and port, is re-entered in the window as
-    the row's name, and the host's discovery relay is retired. **Data**:
-    the database and settings through the NAS, with any render node path
+    read-only. Auto-discovery stays, as the code and nodes.md §4.1 keep
+    it: the host's relay forwards a client's broadcast to the
+    `jellyfin-discovery` row in place of a local port, and the server
+    publishes `tube`'s name. A saved address at the host's name and port
+    is re-entered in the window as the row's name. **Data**: the
+    database and settings through the NAS, with any render node path
     they name checked against the worker's one GPU; scrub previews and
     metadata stay on the NAS. **Verified** by each television playing a
-    title through the name, and a transcode on the A380. **Cut**: `tube`,
-    and its vhost row.
+    title through the name, a client finding the server by discovery,
+    and a transcode on the A380. **Cut**: `tube`, and its vhost row.
+*   **shoko**, in a namespace of its own, with its claim on `Media`
+    read-only, kept for now as ruled (§11.4). **Data**: its configuration
+    through the NAS. **Verified** by its interface answering at the
+    name. **Cut**: none in DNS, since the name is new.
 
 The VPS's last legacy ingress name is cut here. Its cancellation is the
 decommission's (§5.8).
@@ -1437,10 +1609,15 @@ host, where the rest of the table replaces what legacy releases.
 | immich's database and Redis | 0.7 GiB | 1.1 GiB | 2 GiB |
 | jellyfin | 0.4, 3.3 GiB | 0.5 GiB | 4 GiB |
 | syncthing, the WebDAV server, qbittorrent, seedwatch | 0.4 GiB | 0.4 GiB | |
-| **Total** | **every peak at once: about 14 GiB** | **about 6 GiB** | |
+| shoko | 0.7 GiB | 0.3 GiB | 1 GiB |
+| **Total** | **every peak at once: about 15 GiB** | **about 6.5 GiB** | |
 
 The requests take less than half of the allocatable, and every peak at
-once fits inside it. **So the per-app sizing does not trigger the
+once comes to about the allocatable itself, 14.7 against 14.5 GiB, with
+shoko staying. Those peaks are 30-day maxima that do not fall together,
+and the limits bound each. VolSync's movers stand outside the table: a
+dozen run at 03:00 for minutes, a few hundred MB each by estimate, which
+the first week reads. **So the per-app sizing does not trigger the
 conditional ruling of §11.2**, on these numbers; Wave C's reading
 decides it (§6.3).
 
@@ -1495,9 +1672,9 @@ has given the memory back. **New rule**, landing in migration.md §0.
 
 ## 7. What is already conformant
 
-*   **The rewrite derivation** in `dns`, which already answers a
-    home-side row at its side's VIP; §4.1 changes the type it reads and
-    not what it does.
+*   **The rewrite derivation** in `dns`, which already answers a row on
+    a home Gateway at that Gateway's VIP; §4.1 changes the type it reads
+    and not what it does.
 *   **`conventions.backup`** has the retention classes, the bucket and
     the repository layout every backed claim and database uses, and
     `physical`'s `BackupBucket` already declares a writer scope per
@@ -1545,19 +1722,29 @@ has given the memory back. **New rule**, landing in migration.md §0.
     application, and syncthing and the WebDAV server move in Wave A2
     (§4.1, §5.3).
 *   **From rfc-003 §6, `Exposure` as one field of one enumeration.** Its
-    argument against independent flags stands, and a composed type meets
-    it better: a row that reaches nobody has no value at all (§4.1).
+    argument against independent flags stands, and two dimensions meet
+    it better: a row that reaches nobody is refused where it is
+    constructed (§4.1).
 *   **From rfc-007 §5.3 and §4.4, the census's `Answerer`, and each
     `lan` VIP held by one Service.** The Gateways' ports leave the census,
-    and a raw LAN port shares its side's VIP (§4.1).
+    and a raw home port shares its Gateway's VIP (§4.1).
 *   **From cluster-infra.md §2, every listed application behind the gate
-    on every side.** The gate is per side (§4.1).
+    on every side.** The gate is `internet`'s (§4.1).
 *   **From workloads.md §1 and §5, the discovery server as a raw port on
     8443.** Its clients are on 443 (§4.1).
-*   **From workloads.md §1, architecture.md §3.6, and gateway.md §4.2,
-    jellyfin as `IOT`, the televisions on the IoT VLAN, and rule 1 open to
-    that VLAN.** They are on the Default LAN, jellyfin is public too, as
-    it is today, and rule 1 narrows to Home Assistant (§4.1, §4.7).
+*   **From gateway.md §4.2, one enumerated allow from the IoT VLAN.**
+    Rule 1 stands, and a `MediaVip`'s `iot` adds a row per address, for
+    its port alone (§4.1, §4.7).
+*   **From rfc-007 §9.1, a namespace admitting the `ingress` entity and
+    nothing else from outside it.** A `Port` admits `world` on its own
+    port (§4.1).
+*   **From architecture.md §3.5 and nodes.md §2.1, large syncs never
+    routed through a metered cloud path.** A roaming device's sync
+    crosses the cloud's egress, inside the 10 TB allowance, by the
+    operator's ruling (§4.1).
+*   **From workloads.md §2, `backup=None`, and from storage.md §6, a
+    static `local` volume over a node volume.** A working claim is backed
+    up, and a node volume is a `local-path` pool (§4.2).
 *   **From workloads.md §2, thumbnails on `local-path`, and hath's client
     state under VolSync.** The thumbnails are too large and stay with the
     library; hath's state is 13 KB beside its cache (§4.2).
@@ -1573,8 +1760,9 @@ has given the memory back. **New rule**, landing in migration.md §0.
     components declare their workloads (§5).
 *   **From the legacy egress pods, hath's WireGuard gateway.** hath
     leaves by its node's address (§5.4).
-*   **From the legacy LAN load balancers, every raw port but one.** §4.7
-    lists them.
+*   **From the legacy LAN load balancers, most raw ports.** §4.1's table
+    keeps those with a client that cannot use a name, and §4.7 lists the
+    rest.
 *   **From rfc-007 §6.2, the strict scope of every value
     `credentials` seals.** The writer keys are sealed namespace-wide, one ciphertext
     per namespace for every repository Secret in it (§4.6).
@@ -1597,23 +1785,24 @@ has given the memory back. **New rule**, landing in migration.md §0.
 | Document | What lands there |
 | --- | --- |
 | [cluster/migration.md](../cluster/migration.md) | migration.md §0 rule 1: build, land, verify, cut, the stop and removal in kluster-code, and the legacy services that outlive their successor's land, from §3. migration.md §0 rule 4: growing to fit, the windows, the reading before each growth and the rollback across one, from §6. migration.md §1: the legacy key's carry and the writer keys' seal, from §4.6. migration.md §2: exim at Wave A1's head, syncthing and the WebDAV server in Wave A2, hath after it, one window at Wave C, the legacy monitoring until Wave C's head, from §5. migration.md §3: the stream through the API server, recovery from the legacy store, the JuiceFS row's replica gone and its two copies, from §4.3 and §5. migration.md §4: what the decommission inherits, from §5.8 |
-| [cluster/nodes.md](../cluster/nodes.md) | nodes.md §1 and §3.2: the block storage sums, with one node volume, from §4.2. nodes.md §4.2: the transitional and end-state ceilings, and the end state as the decommission's decision, grown to fit, from §6 |
-| [declarative/workloads.md](../declarative/workloads.md) | workloads.md §1: a component receives its rows and merges unwired, one `Port` shape, the gate per side, the discovery server, from §3.1 and §4.1. workloads.md §2: the three kinds of claim, and the thumbnails, from §4.2. workloads.md §3: the namespace's sealed writer key in each repository Secret, from §4.2 and §4.6. workloads.md §4: the block-volume application as hath alone, the dedicated-VIP pattern on the node's primary address, one database instance with recovery and the drill, the static site's apex, the single sign-on census, the LAN-device relay, from §4 and §5.4. workloads.md §5: a ported ciphertext keeps its namespace, from §4.6 |
+| [cluster/nodes.md](../cluster/nodes.md) | nodes.md §1 and §3.2: the block storage sums, with one node volume, from §4.2. nodes.md §2.1: large syncs, from §4.1. nodes.md §4.2: the transitional and end-state ceilings, and the end state as the decommission's decision, grown to fit, from §6 |
+| [declarative/workloads.md](../declarative/workloads.md) | workloads.md §1: a component receives its `Exposure` and merges unwired, one `Port` shape, the gate on `internet`, a raw port's allow, the discovery server, from §3.1 and §4.1. workloads.md §2: the two kinds of claim with no `backup=None`, `cloud-block`, and the thumbnails, from §4.2. workloads.md §3: the namespace's sealed writer key in each repository Secret, from §4.2 and §4.6. workloads.md §4: the block-volume application as hath alone, the dedicated-VIP pattern on the node's primary address, one database instance with recovery and the drill, the static site's apex, the single sign-on census, Home Assistant's reverse proxy, from §4 and §5.4. workloads.md §5: a ported ciphertext keeps its namespace, from §4.6 |
 | [declarative/dns.md](../declarative/dns.md) | dns.md §1: the order of the stacks' applies, and the reference `k8s-base` makes, from §3.4 and §5.5. dns.md §2: an apex row's record is the web origin, from §4.1 and §4.5. dns.md §5: the composed declaration, `Held`, bare names, ports' rewrites, from §3.3 and §4.1. dns.md §6: the cut's pull request and the land's, from §3.2 |
 | [declarative/README.md](../declarative/README.md) | §2: the StackReferences `apps` makes for the pool's members and `k8s-base` makes for the zone identifiers, from §4.1 and §5.5 |
+| [framework/rfc.md](../framework/rfc.md) | rfc.md §2: an intention is read from what is declared, and a reading is evidence for it, from §4.1 |
 | [framework/ci.md](../framework/ci.md) | ci.md §3: `up-k8s-base` and `up-apps` after `up-dns`, from §3.4 |
 | [sources-of-truth.md](../sources-of-truth.md) | sources-of-truth.md §3: a component that has not migrated is not wired, from §3.1. Note N4 replaced by its answer, from §3.2 and §3.4. Rows R12 and R13: each flip is a cut, and its pull request edits the row; R12's arrangements, from §5.5 and §5.6 |
-| [cluster/architecture.md](../cluster/architecture.md) | architecture.md §3.2 and §3.5: hath's address and egress on its node's primary private address, from §5.4. architecture.md §3.4: the IoT VLAN's reach, from §4.7. architecture.md §3.6: the LAN raw-port row on its side's VIP, and jellyfin's row, from §4.1. architecture.md §6.7: where a TLS passthrough stands against the refusal of Envoy for raw traffic, from §4.1 |
-| [declarative/physical.md](../declarative/physical.md) | physical.md §1: the reserved address on the node's primary private address, and no secondary address, from §5.4 |
-| [declarative/cluster-infra.md](../declarative/cluster-infra.md) | cluster-infra.md §1.1: the writer keys' channel, from §4.6. cluster-infra.md §2: the canary as built with authelia, the apex listeners, from §4.1 and §5.2. cluster-infra.md §3: the `mon` route and the Cloudflare provider of `k8s-base`, from §5.5 |
+| [cluster/architecture.md](../cluster/architecture.md) | architecture.md §3.2 and §3.5: hath's address and egress on its node's primary private address, from §5.4. architecture.md §3.4: the raw ports the IoT VLAN reaches, from §4.7. architecture.md §3.5: large syncs, from §4.1. architecture.md §3.6: the two dimensions, and the raw home row on its Gateway's VIP, from §4.1. architecture.md §6.7: where a TLS passthrough stands against the refusal of Envoy for raw traffic, from §4.1 |
+| [declarative/physical.md](../declarative/physical.md) | physical.md §1: the reserved address on the node's primary private address, and no secondary address, from §5.4. physical.md §6: a claim made with the volume unmounted stays pending, from §4.2 |
+| [declarative/cluster-infra.md](../declarative/cluster-infra.md) | cluster-infra.md §1.1: the writer keys' channel, from §4.6. cluster-infra.md §2: the canary as built with authelia, the apex listeners, a pod's device and route MTU and the discovery mode, from §4.1 and §5.2. cluster-infra.md §3: the `mon` route and the Cloudflare provider of `k8s-base`, from §5.5 |
 | [credentials.md](../credentials.md) | credentials.md §3: the writer keys' sealed delivery, the zones token's `k8s-base` target, the legacy sealing key's row, from §4.6 and §5.5. credentials.md §4: the seal of the writer keys from `physical`'s state, and the sentence on a new volume, from §4.6 |
-| [cluster/storage.md](../cluster/storage.md) | storage.md §2: the three kinds of claim, from §4.2. storage.md §6: no cloud replica and no second-site copy, from §4.1. storage.md §5: one database instance, its server name's generation, and the restore drill in place, from §4.3 |
+| [cluster/storage.md](../cluster/storage.md) | storage.md §2: the two kinds of claim and `cloud-block`, from §4.2. storage.md §6: no cloud replica, no second-site copy, and a node volume as a `local-path` pool, from §4.1 and §4.2. storage.md §5: one database instance, its server name's generation, and the restore drill in place, from §4.3 |
 | [operations.md](../operations.md) | operations.md §4: the database restore drill and the authentication canary built, from §4.3 and §5.2 |
-| [physical/gateway.md](../physical/gateway.md) | gateway.md §1: a declared vhost's appliance upstream, and what answers the UPS card's name on the LAN, from §5.7. gateway.md §4.2: rule 1's source narrowed to Home Assistant, and the peer rows read the census, from §4.1 and §4.7 |
+| [physical/gateway.md](../physical/gateway.md) | gateway.md §1: a declared vhost's appliance upstream, and what answers the UPS card's name on the LAN, from §5.7. gateway.md §4.2: the rows a `MediaVip` port adds, and the peer rows read the census, from §4.1 and §4.7 |
 | [cluster/security-audit.md](../cluster/security-audit.md) | The restic password in clear in each repository SealedSecret and in the etcd snapshots, with its actor and why it opens nothing, from §4.2 |
 | [style/pulumi.md](../style/pulumi.md) | "Data": the composed declaration in place of `Exposure` as its example, from §4.1. "Layering": the StackReference uses `apps` and `k8s-base` gain, from §4.1 and §5.5 |
-| [rfc-003](rfc-003-dns-and-github-stacks.md) | The status header: `Exposure` and the route row replaced by the composed declaration, from §4.1 |
-| [rfc-007](rfc-007-k8s-base-and-apps.md) | rfc-007 §3.2, §14's slices 9 to 12 and the status header: the order of the sealed values, and the cut of slice 12, from §10. rfc-007 §4.4 and §5.3 in the same header: the VIP's sharing and the census's shape, from §4.1. Those edits ship with their slices, not in this document's pull request |
+| [rfc-003](rfc-003-dns-and-github-stacks.md) | The status header: the enumeration and the route row replaced by the two dimensions, from §4.1 |
+| [rfc-007](rfc-007-k8s-base-and-apps.md) | rfc-007 §3.2, §14's slices 9 to 12 and the status header: the order of the sealed values, and the cut of slice 12, from §10. rfc-007 §4.4, §5.3 and §9.1 in the same header: the VIP's sharing, the census's shape and a raw port's allow, from §4.1. Slice 12's `route`, from §10. Those edits ship with their slices, not in this document's pull request |
 
 --------------------------------------------------------------------------------
 
@@ -1660,6 +1849,16 @@ declaration of §4.1, and the echo server waits for those. The pull
 request that builds the base records the cut the same way, editing
 slice 12's entry in rfc-007 §14 in place.
 
+**What changes for slice 12 is what `route` takes.** It takes a `Route`
+from an application's `Exposure` in place of a row with an `Exposure`
+field, and emits one `HTTPRoute` for each of `internet`, `lan` and `media`
+the row sets. Its test stands as written, with "the gateways the
+exposure selects" now the fields the row sets, and a record published
+only where `internet` is set. The echo server's row is
+`Route('echo', internet=PROXIED)`, in an `Exposure` of its own, and
+dns.md §5's one route helper is `expose(exposure)`. `Route`'s `exposure`,
+`proxied`, `extras`, `public` and `lan_side` go, with the enumeration.
+
 **The node volumes land before anything else**, by an issue of their
 own, before the first `physical` apply: `syncthing-replica` removed and
 `hath-cache` at 55 GB (§4.2), with the rows of §9 for nodes.md,
@@ -1701,21 +1900,20 @@ server, if it is open, which pins its image in the same file.
     the slice reads from each pinned manifest's platforms.
 
 **Slice 3: the exposure declaration.** Pre-live only ahead of the first
-full `physical` apply: its row removal and rule 1's narrower source change
-`physical`'s plan, so after that apply its merge waits at that stack's
+full `physical` apply: its row removal changes `physical`'s plan, so after that apply its merge waits at that stack's
 gate, and the chain with it, once. **After** slice 1, the application
 base of rfc-007 slice 12, and Aetf/kluster#661, which owns `SiteFirewall`
 too. The resolvers' declared list, Aetf/kluster#454, is held for R2's
 flip and rebases onto this slice.
 
-*   **Done means**: `conventions.routes` holds §4.1's types and `Held`,
-    `Exposure`, `Extra`, `Srv` and `SELF` are gone, `conventions.cluster`
-    holds `Port`, its four fronts and `GATEWAY_PORTS`, and `Answerer` and
-    `QBITTORRENT_PEER_PORT` are gone; every reader derives what it did
-    from the new rows: `dns`'s rewrites, `served_zones`, the balancer's
-    listeners, the node firewall's openings, the Gateways' listeners and
-    `SiteFirewall`'s peer and IoT rows, whose rule 1 takes Home Assistant's
-    address as its source; dns.md §2, §5 and §6, sources-of-truth.md §3
+*   **Done means**: `conventions.routes` holds §4.1's types, `EXPOSURES`
+    and `Held`, the enumeration, `Extra`, `Srv` and `SELF` are gone,
+    `conventions.cluster` holds `GATEWAY_PORTS` beside the `Port` rows
+    and their fronts, and `Answerer` and `QBITTORRENT_PEER_PORT` are gone;
+    every reader derives what it did from the new rows: `dns`'s rewrites,
+    `served_zones`, the balancer's listeners, the node firewall's
+    openings, the Gateways' listeners and `SiteFirewall`'s peer and IoT
+    rows; dns.md §2, §5 and §6, sources-of-truth.md §3
     and note N4, `legacy.py`'s module docstring, gateway.md §4.2,
     architecture.md §3.4, style/pulumi.md ("Data"), and rfc-003's status
     header are true.
@@ -1739,30 +1937,35 @@ flip and rebases onto this slice.
     `docs/cluster/security-audit.md`, `docs/style/pulumi.md`,
     `docs/rfc/rfc-003-dns-and-github-stacks.md`.
 *   **Tests that fail without it**: rows of the test's own, one of each
-    shape, derive §4.1's table's consequences, gateway by gateway, against
-    literals (derive the rewrite from the wrong side; add a certificate
-    zone for a `Passthrough`); an empty reason, an empty zone set and `@`
-    as a host are refused (accept one); a row is held exactly while a record
+    shape, derive §4.1's table's consequences, Gateway by Gateway, against
+    literals (derive the rewrite from the wrong Gateway; add a certificate
+    zone for a `Passthrough`); a row with no Gateway, an `Exposure` with
+    nothing in it, `lan` and `media` on one row, an empty reason, an empty
+    zone set and `@` as a host are refused (accept one); rows that share
+    a host publish one record and one rewrite, and any other sharing is
+    refused (a `Port` at the LAN VIP for a `media` row's host); a row is
+    held exactly while a record
     pointing at the VPS holds its name, against a census broken each way,
     and a home-only row is never held (keep the wrapper after deleting
     the record; hold a home-only row); a direct row resolves
     through no proxied record (a direct row aliasing a proxied one); the
-    route-side co-host check; a `Vip(IOT, …)` port opens the allow for
-    its port alone, from Home Assistant's address alone (open the VIP;
-    name the VLAN).
+    route-side co-host check; a `MediaVip` port opens the allow for its
+    port alone, from its `iot` addresses alone (open the VIP; name the
+    VLAN).
 
 **Slice 4: exposure.** Pre-live. **After** slice 3, and rfc-007 slices 9,
 11 and 12's base, which own its Gateways, its documents and its stack
 program before it.
 
-*   **Done means**: `route`, emitting one `HTTPRoute` per side with its
-    gate, and its redirect for a bare name; the `TLSRoute` for a
-    `Passthrough`; `port`, for every front, with `apps` reading the
-    `internet` pool's members across a StackReference and handing them
-    in; `expose(rows)` on the application base; the LAN-device relay;
-    the Gateways' apex and passthrough listeners; `media-gw`'s sharing
-    annotations and the worker's address pool; workloads.md §1 and its
-    §4 relay, dns.md §5, architecture.md §3.6 and §6.7,
+*   **Done means**: `route`, emitting one `HTTPRoute` per Gateway the row
+    sets, with `internet`'s gate on that one alone, and its redirect for
+    a bare name; the `TLSRoute` for a `Passthrough`; `port`, for every
+    front and each Gateway it sets, with its allow, and with `apps`
+    reading the `internet` pool's members across a StackReference and
+    handing them in; `expose(exposure)` on the application base;
+    the Gateways' apex and passthrough listeners; the sharing annotations
+    of `lan-gw` and `media-gw`, the worker's address pool, and the chart's
+    path MTU discovery mode stated; workloads.md §1, dns.md §5, architecture.md §3.6 and §6.7,
     cluster-infra.md §2, and style/pulumi.md and declarative/README.md
     §2 for the reference `apps` makes, are true.
 *   **Owned paths**: `src/kluster/components/apps/__init__.py`,
@@ -1776,42 +1979,50 @@ program before it.
     `docs/declarative/dns.md`, `docs/cluster/architecture.md`,
     `docs/declarative/cluster-infra.md`, `docs/style/pulumi.md`,
     `docs/declarative/README.md`.
-*   **Tests that fail without it**: `route` attaches each side's gateway
-    with that side's gate alone (gate both sides from one); a `Port`
-    emits the Service alone, under `Cluster`, with no node ports and its
-    front's addresses from what it is handed (state `Local`; allocate
-    node ports; hand a balancer row the dedicated node's address); an
+*   **Tests that fail without it**: `route` attaches each Gateway the
+    row sets, and the gate to `internet`'s alone (gate every Gateway from
+    one); a `Port` emits, for each Gateway it sets, a Service under
+    `Cluster`, with no node ports and its front's addresses from what it
+    is handed, and one allow for `world` on its port and transports alone
+    (state `Local`; allocate node ports; hand a balancer row the
+    dedicated node's address; allow every port; emit none); a `Balancer`
+    Service requires both families (drop it from the Service); an
     output the pool reads that is not an address stops the run naming it
-    (read a node address as the unknown sentinel); a raw LAN port shares
-    its VIP with its side's Gateway under one sharing key (drop the key
-    from one); each form of the gate asks Authelia for its own
-    authorization (ask for the session on the Basic form); the relay's
-    Service selects the relay, which is scheduled only to the worker (a
-    selectorless Service); an apex listener exists exactly for each zone
+    (read a node address as the unknown sentinel); a raw home port shares
+    its VIP with its Gateway under one sharing key (drop the key from
+    one); each form of the gate asks Authelia for its own authorization
+    (ask for the session on the Basic form); the chart's values state
+    the `blackhole` mode (leave it to the default); an apex listener exists exactly for each zone
     an `Apex` names, and a passthrough listener for each `Passthrough`
     (derive from every served zone).
 *   **Unproven live**: the passthrough listener beside the wildcard on
-    443, with the raw port as its fallback (§4.1).
+    443, on `internet-gw` and `lan-gw`, with the raw port as its fallback
+    (§4.1).
 
 **Slice 5: storage.** Pre-live. **After** slice 4.
 
-*   **Done means**: `backed_pvc`, `scratch` and `fixed_claim` with its
-    two sources, and the rule that a pod writes to the NAS as the
-    export's anonymous user, on the application base; workloads.md §2 and §3,
-    storage.md §2 and the security audit's residual are true.
+*   **Done means**: `backed_pvc` and `nas_claim`, and the rule that a pod
+    writes to the NAS as the export's anonymous user, on the application
+    base; the `cloud-block` class in `k8s-base`, its pool derived from
+    `NODE_VOLUMES` in the provisioner's configuration; workloads.md §2
+    and §3, storage.md §2 and §6, physical.md §6 and the security audit's
+    residual are true.
 *   **Owned paths**: `src/kluster/components/apps/storage.py` (new),
-    `tests/test_apps_storage.py` (new),
+    `src/kluster/components/local_path/`,
+    `tests/test_apps_storage.py` (new), `tests/test_standing_set.py`,
     `docs/declarative/workloads.md`, `docs/cluster/storage.md`,
-    `docs/cluster/security-audit.md`.
+    `docs/declarative/physical.md`, `docs/cluster/security-audit.md`.
 *   **Tests that fail without it**: a backed claim's source schedules
     by its class and writes to `volsync_repo_path` of its namespace and
     name (hard-code a cron line; name another path); its repository
     Secret carries the namespace's sealed writer key under the claim's
     own name, with a password generated in state (seal a value per
-    claim; write the password into configuration); an `Nfs` source is
-    scheduled only to the worker (drop the affinity); a `NodeVolume`
-    source's path is inside the mount and never the mount point (point
-    at the mount); `scratch` refuses no reason (an empty reason).
+    claim; write the password into configuration); a `nas_claim` is
+    scheduled only to the worker (drop the affinity); a claim of
+    `cloud-block` lands under its row's mount on its row's node, and a
+    claim on any other node is refused, against a provisioner configuration
+    rendered from a table of the test's own (list a default path); the
+    class states `local` and `Retain` (state `hostPath`; reclaim `Delete`).
 
 **Slice 6: the writer keys and the ported ciphertexts.** Live: its merge
 leads to the gated `physical` apply that mints the keys, so it merges
@@ -1915,11 +2126,10 @@ request carries an unproven-live note naming its wave's verification.
 | 16 | stdiscosrv | A2 | S | none | 2, 4 |
 | 17 | hath, with its stage and copy pair | after A2 | M | none | 2, 4, 5 |
 | 18 | golinks, emailproxy and spoolman | B | M | none | 2, 4, 5, 6 |
-| 19 | the Home Assistant relay, and the doors | B | S | none | 2, 4, 9 |
-| 20 | thread-dashboard, and its image in `docker/`, only if §11.4 moves it | B | S | `Pulumi.yaml`, `docker/` | 2, 4 |
+| 19 | the Home Assistant component with its reverse proxy, and the doors | B | S | none | 2, 4, 9 |
 | 21 | immich | C | L | none | 2, 4, 5, 7, 8 |
-| 22 | jellyfin, and shoko only if §11.4 keeps it | C | M | none | 2, 4, 5, 7 |
-| 23 | qbittorrent and seedwatch, and seedwatch's image in `docker/` | D | M | `Pulumi.yaml`, `docker/` | 2, 4, 5, 20 |
+| 22 | jellyfin and shoko | C | M | none | 2, 4, 5, 7 |
+| 23 | qbittorrent and seedwatch, and seedwatch's image in `docker/` | D | M | `Pulumi.yaml`, `docker/` | 2, 4, 5 |
 
 **Slice 24: monitoring's route roll.** Pre-live. **After** slices 3, 4
 and 7, and rfc-007 slice 11.
@@ -1979,10 +2189,9 @@ uses what it adds, so `physical`'s plan is unchanged by its merge.
 
 *   **Done means**: a declared vhost may carry an appliance upstream, the
     form a `LEGACY_VHOSTS` row gives a LAN appliance with a certificate
-    of its own, and a bare label if §11.4 keeps one on the gateway's own
-    names; physical/gateway.md §1 says so, and names what answers the UPS
-    card's and, if §11.4 keeps it on the host, thread-dashboard's names on
-    the LAN once their rows move.
+    of its own; physical/gateway.md §1 says so, and names what answers
+    the UPS card's and thread-dashboard's names on the LAN once their
+    rows move.
 *   **Owned paths**: `src/kluster/components/gateway/` (its proxy's
     template), `src/kluster/conventions/gateway.py`,
     `tests/test_gateway.py`, `docs/physical/gateway.md`.
@@ -2004,17 +2213,17 @@ ended, and slice 45 carries the rest.
 | 27 | A1 | The head: physical/bring-up.md's last stage has run; kluster-code stops authelia and points its forward-auth checks at the new service | kluster-code |
 | 28 | A1 | **Land**: exim and authelia wired, `auth` held; the echo component, its row, its pin and its tests deleted | `src/kluster/stacks/apps.py`, `src/kluster/conventions/routes.py`, `src/kluster/conventions/cluster.py`, `docs/sources-of-truth.md`, the echo component's module, `tests/test_apps.py`, `Pulumi.yaml` |
 | 29 | A1 | **Cut**: `auth` | `src/kluster/conventions/routes.py`, `src/kluster/components/dns/legacy.py`, `docs/sources-of-truth.md` |
-| 30 | A2 | The head: A1's legacy authelia removed; the two NAS-less folders shared with the NAS instance; the DNS-01 token minted for the co-host zone into the land's branch; kluster-code stops A2's applications | kluster-code |
-| 31 | A2 | **Land**: blog, splitpro, matrix, syncthing, stdiscosrv; the discovery server's raw port leaves the census, its apply waiting at `physical`'s gate | as slice 28, and `Pulumi.k8s-base.yaml` |
-| 32 | A2 | **Cut**: `split`, `matrix` with its SRV, `dav`, `syncapi`, the web origin's served apex and both `www`; `btsync` and the `sync` and `sync-nas` legacy blocks deleted | as slice 29, and `src/kluster/components/dns/base.py` |
+| 30 | A2 | The head: A1's legacy authelia removed; both instances' devices and folders read, and each gap fixed on the device; the DNS-01 token minted for the co-host zone into the land's branch; kluster-code stops A2's applications | kluster-code |
+| 31 | A2 | **Land**: blog, splitpro, matrix, syncthing, stdiscosrv | as slice 28, and `Pulumi.k8s-base.yaml` |
+| 32 | A2 | **Cut**: `split`, `matrix` with its SRV, `dav`, `sync`, `sync-nas`, `syncapi`, `btsync`, the web origin's served apex and both `www` | as slice 29, and `src/kluster/components/dns/base.py` |
 | 33 | after A2 | The head and the **stage**: A2's legacy applications removed; slice 25 applied; hath wired with its client not started, and the copy pair; the warm copy | as slice 28; kluster-code |
 | 34 | after A2 | **Land**: kluster-code stops legacy hath; the final delta; the client started | as slice 28; kluster-code |
 | 35 | after A2 | **Cut**: the re-registration; the copy pair and the not-started parameter deleted | as slice 28, and `src/kluster/components/apps/hath/`, `tests/test_apps_hath.py` |
 | 36 | B | The head: the doors' content; the DNS-01 token minted for `jiahui.love` and Grafana's values sealed afresh, both into the land's branch; kluster-code stops Wave B's applications | kluster-code |
-| 37 | B | **Land**: Wave B's applications, the `imap` row's IoT allow waiting at `physical`'s gate; `k8s-base` hands the monitoring component the held `mon` row and Grafana's client, and builds the Cloudflare provider and the reference to `dns` | as slice 28, and `src/kluster/stacks/k8s_base.py`, `src/kluster/scripts/credentials/slots.py`, `Pulumi.k8s-base.yaml`, `tests/test_stack_programs.py`, `tests/test_slots.py`, `docs/credentials.md`, `docs/declarative/cluster-infra.md`, `docs/style/pulumi.md`, `docs/declarative/README.md`, `docs/declarative/dns.md` (§1) |
+| 37 | B | **Land**: Wave B's applications, the `imap` and `spoolman` rows' IoT allows waiting at `physical`'s gate; `k8s-base` hands the monitoring component the held `mon` row and Grafana's client, and builds the Cloudflare provider and the reference to `dns` | as slice 28, and `src/kluster/stacks/k8s_base.py`, `src/kluster/scripts/credentials/slots.py`, `Pulumi.k8s-base.yaml`, `tests/test_stack_programs.py`, `tests/test_slots.py`, `docs/credentials.md`, `docs/declarative/cluster-infra.md`, `docs/style/pulumi.md`, `docs/declarative/README.md`, `docs/declarative/dns.md` (§1) |
 | 38 | B | **Cut**: `spool`, `haos`, `mon`, `games`, `game`, `jiahui.love`'s apex, and the B rows of `LEGACY_VHOSTS`; kluster-code drops the transitional target of the legacy forward-auth checks | as slice 32, and `src/kluster/conventions/gateway.py`; kluster-code |
-| 39 | C | The head: the library re-owned on the host; Wave B's legacy applications and the JuiceFS stack removed; shoko stopped and archived, on §11.4's answer; the legacy GPU plugin onto the iGPU; kluster-code stops legacy immich, jellyfin, the legacy monitoring and the legacy relay; then the window: growth and the A380's bind | `src/kluster/conventions/homelab.py`, `src/kluster/components/homelab/`, `tests/test_homelab.py`, `docs/physical/homelab-host.md`; aconfmgr; yadm; kluster-code |
-| 40 | C | **Land**: immich and jellyfin | as slice 28 |
+| 39 | C | The head: the library re-owned on the host; Wave B's legacy applications and the JuiceFS stack removed; the legacy GPU plugin onto the iGPU; kluster-code stops legacy immich, jellyfin, the legacy monitoring and the legacy relay; then the window: growth and the A380's bind | `src/kluster/conventions/homelab.py`, `src/kluster/components/homelab/`, `tests/test_homelab.py`, `docs/physical/homelab-host.md`; aconfmgr; yadm; kluster-code |
+| 40 | C | **Land**: immich, jellyfin and shoko; the host's discovery relay pointed at `tube` | as slice 28; aconfmgr |
 | 41 | C | **Cut**: `photos`, `tube`, their rewrite rules, and the `tube` vhost row | as slice 38 |
 | 42 | D | The head: the host units stopped | aconfmgr; yadm |
 | 43 | D | **Land**: qbittorrent and seedwatch, and `qbittorrentOnWorker`, whose apply waits at `physical`'s gate | as slice 28, and `Pulumi.physical.yaml` |
@@ -2048,8 +2257,8 @@ hath exercises, so the waves between them would not have proven it.
 
 The worker's size, against what the host keeps for the operator's own
 work, is to be ruled only if the per-app sizing does not fit. On §6.1's
-numbers it fits, with every peak at once inside the transitional
-allocatable, so nothing is asked of the operator now; the end-state size
+numbers it fits, with the requests under half of the transitional
+allocatable and every peak at once about equal to it, so nothing is asked of the operator now; the end-state size
 is the decommission's decision (§5.8). The question is asked if Wave C's
 reading (§6.3, item 4) departs from §6.1, and the choice then is the RAM
 upgrade, nodes.md §4.2's relief valve, or tighter limits for the rest of
@@ -2065,35 +2274,50 @@ the transition.
     every roaming device's sync from now on.
 *   The rewrite rules the resolvers' declared list carries for names
     the waves move, read off the list when its own declaration lands.
-*   Whether a printer talks to spoolman at all, which the printer's own
-    configuration says and no log shows; on the IoT VLAN, it reaches
-    `spool` by the same row Home Assistant does.
+*   The address the printer's own configuration gives spoolman, which
+    its comment says it dials and no log shows, re-entered at Wave B's
+    land.
+*   Whether OCI's GB is binary, as `hath-cache`'s margin assumes; the
+    bring-up's readings take the volume's size, and at a decimal GB the
+    row grows.
 
-### 11.4 Put to the operator
+### 11.4 Ruled: the operator's answers
 
-Each is a capability a user would notice, and the canon does not decide
-it. The document is written to the recommendation, and each answer is a
-line.
+The operator ruled each on the review of `8e3f0133`.
 
-1.  **Retire shoko?** Recommended. Jellyfin stopped loading its plugin in
-    February, no vhost or client reaches it, 60 days of traffic come to
-    5.9 MB, and it holds 0.7 GiB of memory. It would retire as the
-    dormant applications of migration.md §2 did, its 3.3 GiB of
-    configuration archived to the NAS. Keeping it is `Name('shoko',
-    Home(LAN))` and one small build.
-2.  **Does thread-dashboard stay on the host?** Recommended. It uses
-    multicast on the IoT bridge for its HomeKit names, which a pod on the
-    worker cannot see. Moving it loses those names; keeping it adds one
-    host service to nodes.md §4.1's list, at 35 MB.
-3.  **Are `sync`, `sync-nas` and `spool` reachable from the home alone?**
-    Recommended. The log shows no client from outside on any of them,
-    over 18 days for `spool` and 23 hours for the other two. Each is an
-    administrative interface, and home-only means the gateway no longer
-    has it on its public side. Away from home they are unreachable, and
-    no overlay member is steered to a `lan` VIP. Keeping one public is
-    a `Both(Public(PROXIED, gate=SESSION), …)` in place of its row.
-4.  **Does only `go` keep its bare name?** Recommended. `go/<name>` is
-    how golinks is used. Nothing shows anyone typing `tube/`, `bt/`,
-    `gw/` or `dns/`; each stops redirecting at its cut, and the full name
-    keeps working. Keeping `tube` or `bt` is `bare=True` on its row;
-    keeping `gw` or `dns` is a field slice 26 adds.
+1.  **shoko stays for now.** It moves in Wave C beside jellyfin, on the
+    LAN (§5.6).
+2.  **thread-dashboard stays on the host.** It adds one host service to
+    nodes.md §4.1's list, at 35 MB (§5.5).
+3.  **`sync`, `sync-nas` and `spool` are reachable from public**, behind
+    the session gate, as kluster-code declares them.
+4.  **Only `go` keeps its bare name.** `tube/`, `bt/`, `gw/` and `dns/`
+    each stop redirecting at their cut, and the full name keeps working.
+
+### 11.5 Put to the operator
+
+The code does not answer these, or a reading contradicts it. The
+document is written to the recommendation, and each answer is a line.
+
+1.  **Do `sync` and `sync-nas` stay two names on one instance?**
+    Recommended, as ruled in §11.4. kluster-code declares one name per
+    instance, and with no replica there is one instance, so it does not
+    say. Both route to the one interface. Dropping `sync-nas` is one row
+    and costs a bookmark.
+2.  **Which device identity does the one instance keep?** Recommended:
+    the NAS's, as §5.3 is written. It keeps the instance's index, and
+    each device's VPS entry goes stale. The alternative is the VPS's
+    identity, whose key is sealed in the code, over the NAS's data with a
+    fresh index: no device changes, since the XPS already dials it at
+    `syncapi` and every folder lists it, and the announced addresses and
+    the folder fixes of §5.3 mostly go; it costs a rescan of 115 GiB, and
+    the NAS's entry goes stale instead. It has not been tried.
+3.  **Are any televisions on the IoT VLAN?** The canon says so
+    (architecture.md §3.4), and the host's records show the one found on
+    the Default LAN. `tube` stays on `media` either way. If none is, rule
+    1 can narrow from the VLAN to Home Assistant's address, which takes
+    qbittorrent's login out of the IoT VLAN's reach.
+4.  **Does anything still dial `btsync.unlimitedcodeworks.xyz`?** `legacy.py`
+    declares it for syncthing's non-HTTP ports, the XPS names `syncapi`
+    instead, and no other device's configuration has been read. It stays
+    on the row until a device list says otherwise (§5.3's head reads it).
