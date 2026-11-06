@@ -44,11 +44,10 @@ A1_CORES_PER_AD = 2
 A1_MEMORY_GB_PER_AD = 16
 
 #: Per AD. A node's boot volume is 50 GB and a node may carry one attached
-#: volume, the largest of which is 110 GB (`conventions.NODE_VOLUMES`); the
-#: remainder is room to restore such a volume beside the one it replaces. A
-#: bound that fitted only today's smaller volume would refuse to create the
-#: larger one at all.
-BLOCK_STORAGE_GB_PER_AD = 270
+#: volume of 55 GB (`conventions.NODE_VOLUMES`); the remainder is room to
+#: restore such a volume beside the one it replaces, 50 + 55 + 55, and it holds
+#: a replacement node's boot volume beside the old one as well.
+BLOCK_STORAGE_GB_PER_AD = 160
 
 #: The free allowance is five volume backups, and nothing in the design takes
 #: them — durability is backup/restore through the object store (storage.md §5).

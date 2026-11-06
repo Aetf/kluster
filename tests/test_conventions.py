@@ -244,7 +244,7 @@ def test_a_volume_is_mounted_under_its_own_name() -> None:
 
 
 def test_no_node_carries_two_volumes() -> None:
-    """Checked after the sentinel resolves, which is where the pair can collide.
+    """Checked after the sentinel resolves, which is where two rows can collide.
 
     Volumes are spread one per node so that the machine configuration's disk
     selection stays "the disk that is not the boot disk" and one node's loss

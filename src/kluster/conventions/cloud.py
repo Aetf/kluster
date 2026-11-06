@@ -75,18 +75,17 @@ class NodeVolumeEntry:
 #: Every block volume on the fleet, by the name that identifies its dataset
 #: (`NodeVolumeEntry`). Volumes are spread one per node: the disk selection in
 #: machine configuration stays "the disk that is not the boot disk" rather
-#: than a discrimination by size or serial, and losing one node stops taking
-#: two preserved datasets with it.
+#: than a discrimination by size or serial, and losing one node takes at most
+#: one preserved dataset with it.
 #:
-#: Both are preserved rather than backed up (storage.md §3.3): one holds a
-#: slice of a distributed archive whose redundancy is the network it came from,
-#: the other a replica whose full copy is on the NAS and in every client that
-#: syncs it. The invariants the type cannot carry — a node the fleet declares,
-#: at most one volume per node, a name Talos accepts — are held by tests, after
-#: the sentinel resolves.
+#: The hath cache is preserved rather than backed up (storage.md §3.3): it is
+#: a slice of a distributed archive whose redundancy is the network it came
+#: from. It is exactly 50 GB of data, and its volume is sized above that. The
+#: invariants the type cannot carry — a node the fleet declares, at most one
+#: volume per node, a name Talos accepts — are held by tests, after the
+#: sentinel resolves.
 NODE_VOLUMES: Mapping[str, NodeVolumeEntry] = {
-    'hath-cache': NodeVolumeEntry(node=FOLLOWS_DEDICATED_VIP, size_gb=50),
-    'syncthing-replica': NodeVolumeEntry(node='cp2', size_gb=110),
+    'hath-cache': NodeVolumeEntry(node=FOLLOWS_DEDICATED_VIP, size_gb=55),
 }
 
 #: Where Talos mounts every user volume: its `constants.UserVolumeMountPoint`.
@@ -113,6 +112,6 @@ def node_volume_mount(name: str) -> str:
 NODE_VOLUME_LABEL = f'{LABEL_DOMAIN}/node-volume'
 
 #: Lower Cost (0 VPUs/GB) is the tier the storage budget is written against:
-#: neither dataset is a database, and the balanced tier's surcharge buys
-#: latency nothing here needs.
+#: the dataset is no database, and the balanced tier's surcharge buys latency
+#: nothing here needs.
 NODE_VOLUME_VPUS = 0
