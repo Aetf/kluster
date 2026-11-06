@@ -40,7 +40,7 @@ dependencies = [
     "jinja2>=3.1.4,<4",
     "pulumi-crds",
     "pulumi-github>=6.4.0,<7",
-    "pulumi-kubernetes-cert-manager>=0.2.0,<0.3",
+    "pulumi-kubernetes-cert-manager>=0.3,<0.4",
     "cryptography>=50.0.0,<51",
     "oci>=2.184.2,<3",
     "pulumi-oci>=5.1.0,<6",
@@ -121,7 +121,7 @@ exclude-newer = "7 days"
 # nothing the pep621 manager reads is relocked by hand on its branch.
 build-constraint-dependencies = [
     "editables==0.6",
-    "hatchling==1.32.4",
+    "hatchling==1.33.0",
     "packaging==26.3",
     "pathspec==1.1.1",
     "pluggy==1.7.0",
@@ -170,7 +170,7 @@ pulumi-zerotier = { workspace = true }
 members = ["sdks/*"]
 
 [build-system]
-requires = ["hatchling==1.32.4"]
+requires = ["hatchling==1.33.0"]
 build-backend = "hatchling.build"
 
 [tool.hatch.metadata]
