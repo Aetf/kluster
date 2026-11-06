@@ -5,17 +5,17 @@
 # Hub image is stale, so this builds from a pinned commit. The Vue UI is built
 # first and embedded into the Go binary (go:embed), which leaves the final
 # image a single static binary on scratch.
-FROM docker.io/library/alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS src
+FROM docker.io/library/alpine:3.24@sha256:3f4d6b32e26703c6082839234f43769d5046b3ac7c910033911d1e71d8cd630a AS src
 ARG GOLINKS_COMMIT
 ADD https://github.com/kellegous/go/archive/${GOLINKS_COMMIT}.tar.gz /tmp/src.tar.gz
 RUN mkdir /src && tar -xzf /tmp/src.tar.gz -C /src --strip-components=1
 
-FROM docker.io/library/node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1 AS ui
+FROM docker.io/library/node:24-alpine@sha256:a34ab6d7f6f4813f4d0c5469d74685604b962fbdbf5793a7bc7b4998ecb867c8 AS ui
 COPY --from=src /src /src
 WORKDIR /src
 RUN npm ci && npm run build
 
-FROM docker.io/library/golang:1.27-alpine@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS build
+FROM docker.io/library/golang:1.27-alpine@sha256:fa3d596898d9f126af7c01d14ee7597bab3f39cccf392ef36b69fe77cd681f18 AS build
 COPY --from=ui /src /src
 WORKDIR /src
 RUN CGO_ENABLED=0 go build -o bin/go ./cmd/go
