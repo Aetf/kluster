@@ -1660,6 +1660,44 @@ def shell_transport() -> ssh.SshTransport:
     return ssh.SshTransport(Shell(), timeout=SHELL_TIMEOUT)
 
 
+@final
+class SessionShell:
+    """A real shell whose standard input stays open unless the input closes it, as a session's does.
+
+    `asyncssh` writes the input and its end of file together, and writes
+    neither for an empty input, which `Shell`'s `subprocess` input cannot show:
+    an empty one there still closes the pipe.
+    """
+
+    async def run(
+        self,
+        command: str,
+        *,
+        input: bytes,  # noqa: A002 -- asyncssh's parameter name
+        encoding: None,
+        check: bool,
+        timeout: float,
+    ) -> asyncssh.SSHCompletedProcess:
+        assert not input
+        assert encoding is None
+        read_end, write_end = os.pipe()
+        try:
+            with os.fdopen(read_end, 'rb') as stdin:
+                completed = process_sessions.run(['/bin/sh', '-c', command], stdin=stdin, check=check, timeout=timeout)
+        finally:
+            os.close(write_end)
+        return answer(exit_status=completed.returncode, stdout=completed.stdout, stderr=completed.stderr)
+
+
+def test_an_empty_file_is_written_without_waiting_on_the_session(tmp_path: Path) -> None:
+    """An empty file reads nothing, so a session that never sends an end of file cannot hold the write."""
+    path = tmp_path / 'networks.d' / 'network.conf'
+
+    asyncio.run(ssh.SshTransport(SessionShell(), timeout=SHELL_TIMEOUT).write(str(path), b'', mode='0644', owner=None))
+
+    assert path.read_bytes() == b''
+
+
 def test_a_write_through_a_real_shell_lands_the_bytes_with_the_declared_mode(tmp_path: Path) -> None:
     """The ordinary path, guard and all: the parent is made, the bytes land,
     the mode is the declared one and no staging file is left behind."""
