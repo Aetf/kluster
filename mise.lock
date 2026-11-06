@@ -114,9 +114,9 @@ checksum = "sha256:9c1533f1cf784f0e250919c0c9762d0b0e6bc727a79290ffb7cea1ceca1d0
 url = "https://conda.anaconda.org/conda-forge/linux-64/readline-8.3-hd6e31c0_1.conda"
 checksum = "sha256:01b3fe073a66e321970d09e04b388708f8cbdca5cdfbfcb7c9eeb470ad10383d"
 
-[conda-packages.linux-x64.tzcode-2026e-hebe6cf0_0]
-url = "https://conda.anaconda.org/conda-forge/linux-64/tzcode-2026e-hebe6cf0_0.conda"
-checksum = "sha256:7167bd77f9aa78d58c8cd13de97511c8131b51c6c81e184dc38f3f7a6d51eac4"
+[conda-packages.linux-x64.tzcode-2026f-hebe6cf0_0]
+url = "https://conda.anaconda.org/conda-forge/linux-64/tzcode-2026f-hebe6cf0_0.conda"
+checksum = "sha256:6e17f0f65ee110f1dbb4375021901daf3ef9d908e9c07a3e9fcbdb3d723a848a"
 
 [conda-packages.linux-x64.tzdata-2026e-h5d301ff_0]
 url = "https://conda.anaconda.org/conda-forge/noarch/tzdata-2026e-h5d301ff_0.conda"
@@ -285,7 +285,7 @@ conda_deps = [
     "libxml2-2.15.4-h7df9aa5_1",
     "libxml2-16-2.15.4-hf3af7cc_1",
     "openssl-3.6.5-h781a0a9_0",
-    "tzcode-2026e-hebe6cf0_0",
+    "tzcode-2026f-hebe6cf0_0",
     "tzdata-2026e-h5d301ff_0",
     "zstd-1.5.7-hb78ec9c_7",
     "keyutils-1.6.3-h7cc23a3_1",
