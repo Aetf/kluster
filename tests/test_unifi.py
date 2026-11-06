@@ -246,6 +246,11 @@ async def test_the_cluster_vlan_hands_out_no_leases() -> None:
     # delegated prefix and the router advertisements that carry it.
     assert await firewall.network.ipv6_ra_enable.future() is True
     assert await firewall.network.ipv6_interface_type.future() == 'pd'
+    # The controller refuses a delegated network with no range, and reads each
+    # bound as an address.
+    start = IPv6Address(await firewall.network.ipv6_pd_start.future())
+    stop = IPv6Address(await firewall.network.ipv6_pd_stop.future())
+    assert start < stop
 
 
 @pytest.mark.asyncio

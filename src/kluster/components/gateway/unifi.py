@@ -103,6 +103,12 @@ NETWORK_PURPOSE = 'corporate'
 #: and the gateway are one field.
 CLUSTER_SUBNET = f'{conventions.CLUSTER_VLAN.require_gateway()}/{conventions.CLUSTER_VLAN.v4.prefixlen}'
 
+#: The address range a network on a delegated prefix states. The controller
+#: refuses a delegated network without one (`api.err.InvalidIpv6Addr`), though
+#: nothing here leases from it: the cluster VLAN has no DHCPv6 server, and
+#: these are the bounds the controller gives every network on the site.
+DELEGATED_RANGE = ('::2', '::7d1')
+
 #: How many times the provider may re-attempt a request the controller failed
 #: transiently: three at most, and two is enough. The bound is there for the
 #: console rather than for this program: the controller's login rate limit is
@@ -621,6 +627,8 @@ class SiteFirewall(Component, pulumi_type='kluster:gateway:SiteFirewall'):
             dhcp_v6_enabled=False,
             ipv6_interface_type='pd',
             ipv6_pd_interface='wan',
+            ipv6_pd_start=DELEGATED_RANGE[0],
+            ipv6_pd_stop=DELEGATED_RANGE[1],
             ipv6_ra_enable=True,
             firewall_zone_id=self.zone.id,
             site=site,
