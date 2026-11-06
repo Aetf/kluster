@@ -101,7 +101,7 @@
   // `mise release` group with the workflows' pin; a test holds the two
   // equal.
   constraints: {
-    uv: '0.13.5',
+    uv: '0.13.6',
     mise: '2026.10.5',
   },
   dockerfile: {
