@@ -38,6 +38,10 @@ Documents:
     retirement each old tracker owes, and the first milestone's
     bring-up steps that follow the ceremony. It retires once the window
     and those steps have run.
+-   **[bring-up.md](bring-up.md)** — the one sequence from that window
+    to a verified, empty cluster: who runs each step, what it waits for,
+    its gate, and what a failure costs. It retires when its last stage
+    has run.
 -   **[gateway.md](gateway.md)** — the UDM as a system: the ZeroTier
     network design (roster, routes, CI-confining flow rules, cutover
     order), recovery playbooks, and the firewall target state
