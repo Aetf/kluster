@@ -997,8 +997,10 @@ Security verifications (from the 2026-08-23 audit,
 cluster/security-audit.md): a pod's request to `169.254.169.254` is
 denied by the baseline policy; the UDM rejects an out-of-policy BGP
 advertisement from the worker (bogus-prefix test, cluster-infra.md
-§2); a prefix-scoped B2 key cannot list/delete a foreign prefix
-(storage.md §4); the ExternalAuth filter fails closed with Authelia
+§2); and, in the first wave rather than the gate, since an empty
+cluster has neither ([physical/bring-up.md](../physical/bring-up.md)
+§6), a prefix-scoped B2 key cannot list/delete a foreign prefix
+(storage.md §4) and the ExternalAuth filter fails closed with Authelia
 down *and* the standing auth canary alerts (cluster-infra.md §2);
 the Talos ingress firewall drops an undeclared port on a node
 primary IP, **and** a declared raw TCP/UDP LoadBalancer service port
