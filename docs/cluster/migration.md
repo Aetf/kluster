@@ -103,10 +103,12 @@ owns sequencing, data movement, and teardown.
     exercise Cilium: LB-IPAM pool with the on-the-wire node IPs; NLB
     dual-stack + source preservation; reserved-IP NAT; MTU over
     KubeSpan; the security
-    verifications (pod→IMDS denied, bogus-BGP rejected, ExternalAuth
-    fail-closed) — alongside the Talos-level checks item 3 names, etcd
+    verifications (pod→IMDS denied, bogus-BGP rejected) — alongside the Talos-level checks item 3 names, etcd
     fsync among them. **No app migrates until this gate passes** —
-    every item is cheaper to fix on an empty cluster.
+    every item is cheaper to fix on an empty cluster. ExternalAuth
+    failing closed, the auth canary and a B2 key's prefix scope need
+    what the first wave brings, and move to it
+    ([physical/bring-up.md](../physical/bring-up.md) §6).
 
 ## 2. Waves
 
