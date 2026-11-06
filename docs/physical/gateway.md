@@ -1254,18 +1254,18 @@ in state — so a generated member with a node id written down is a
 combination that does not type-check rather than one something has to
 refuse. The roster's own invariants — names, node ids and addresses
 unique, every address inside the overlay subnet, the gateway at
-`10.144.1.1` when it is there at all, the roster no larger than
-multicast reaches — are held by the test suite and by nothing at run
+`10.144.1.1`, every route's next hop a roster address, the roster no
+larger than multicast reaches — are held by the test suite and by
+nothing at run
 time: the roster is static code, so a run cannot break what a test did
 not already catch.
 
-**The gateway is absent until the ceremony records it.** Its node id
-does not exist until the ZeroTier daemon — a container service this
-stack delivers — has run once on the device, so §2.5 step 2 reads
-that id off the device and adds the entry as a commit. Absence is the
-whole of the mechanism: no member is declared for the gateway and no
-`udm.zt` record is published for exactly as long as the entry is
-missing.
+**The ceremony records the gateway.** Its node id does not exist until
+the ZeroTier daemon — a container service this stack delivers — has
+run once on the device, so §2.5 step 2 reads that id off the device
+and records the entry as a commit. The entry declares the gateway's
+member and publishes `udm.zt`, as every other entry does for its own
+device.
 
 **Every roster member is placed; none draws from the pool.** A pool
 address would move, and the flow rules and DNS records naming it would
@@ -1293,8 +1293,8 @@ pool holding a placed address could give a legacy job the gateway's —
 the next hop of every route to the home — a CI identity's, or a
 person's. The pools are therefore derived and never written down:
 every host address of `10.144.0.0/16` less the addresses the roster
-places and `10.144.1.1`, which is left out before the gateway's entry
-exists (`conventions.overlay.assignment_pools`). The suite holds the
+places and every route's next hop
+(`conventions.overlay.assignment_pools`). The suite holds the
 relation rather than the ranges: no placed address falls inside a pool,
 every pool sits inside the subnet, and an entry added inside a pool
 takes its address out of it. The pools govern only what is drawn after
@@ -1305,7 +1305,7 @@ or for any later entry — is shared until that job deletes its member.
 
 | Member | role tag | Notes |
 | --- | --- | --- |
-| `udm` | `infra` | The gateway: a static managed address, and the next hop of every route to the home (§2.2). Absent from the roster until §2.5 step 2 records the node id its daemon mints. |
+| `udm` | `infra` | The gateway: a static managed address, and the next hop of every route to the home (§2.2). Its entry holds the node id its daemon minted, which §2.5 step 2 reads off the device. |
 | `Aetf-Arch-Homelab` | `infra` | The homelab host: a plain member, never a router (the overlay carries no home-LAN routes), and the recovery side-door (§3). The one address the flow rules and the libvirt session look up rather than take from a constant. |
 | `Aetf-Arch-VPS` | `infra` | The legacy deployment. Its entry leaves the roster in Wave F, no later than the machine is cancelled (cluster/migration.md §4). |
 | `haos` | `infra` | Home automation, reachable while the cluster is not. |

@@ -1668,8 +1668,7 @@ serving again with all of it in place:
     now lives, with the network file the daemon keeps beside it —
     `machines-new/zerotier/state`. **A retry of the window
     has to carry that directory across**, or the member mints a second
-    identity and the node id read in the ceremony's next step is not the
-    one the roster was about to authorize.
+    identity and its node id is not the one the roster authorizes.
 
 **Last, the host-side timers change back**, on the homelab host as the
 user that owns them. `check-gateway` holds the device to the declared

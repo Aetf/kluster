@@ -59,10 +59,9 @@ nothing it does not declare to reach the rules' final `accept`. One admission
 is made outside it: the legacy cluster's CI authorizes a fresh identity per job
 at Central until that cluster retires, an accepted residual (threat-model.md
 §2.10), and those members draw their addresses from the assignment pools. The
-gateway is the one member the roster can be missing, because a ZeroTier
-identity is minted by the daemon's first run and that daemon is a container the
-gateway delivers; while the entry is absent no member is declared for it, and
-the ceremony that reads the minted id adds the entry as a commit
+gateway's entry follows the bring-up, because a ZeroTier identity is minted by
+the daemon's first run and that daemon is a container the gateway delivers: the
+ceremony reads the minted id off the device and records the entry as a commit
 (physical/gateway.md §2.5).
 
 **Two continuous-integration identities, not one.** ZeroTier maps a node to one
@@ -251,8 +250,7 @@ class Overlay(Component, pulumi_type='kluster:overlay:Overlay'):
         )
 
         # One member per entry, and no entry is skipped: a device with no
-        # identity to authorize has no entry either, which is the state the
-        # gateway is in until the ceremony records the id its daemon minted.
+        # identity to authorize has no entry either.
         self.members = {entry.name: self._declare(name, entry, child) for entry in roster}
 
         self.register_outputs({})

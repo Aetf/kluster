@@ -79,8 +79,7 @@ def overlay_records() -> tuple[Record, ...]:
     own — so this block reaches no other stack. Publishing is therefore not a
     second list that can fall behind the first: a device joins the overlay and
     gets its name under `*.zt` by the same declaration, and a device that
-    leaves loses both. The gateway is the one member the roster may not carry
-    yet, and it has no record here for exactly as long.
+    leaves loses both.
     """
     return tuple(
         a(
