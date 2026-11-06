@@ -235,13 +235,17 @@ class Zone(enum.Enum):
     CLUSTER = enum.auto()
 
 
-def return_flag(action: Literal['ALLOW', 'BLOCK'], destination: Zone) -> Literal[True] | None:
+def return_flag(
+    action: Literal['ALLOW', 'BLOCK'],
+    destination: Zone,
+    connection_state: Literal['ALL', 'RESPOND_ONLY'] = 'ALL',
+) -> Literal[True] | None:
     """A zone policy's `auto_allow_return_traffic`: how an allow admits its return leg.
 
     Set, the controller creates a `<name> (Return)` allow on the reverse pair
-    beside the policy. That is how every allow but one kind gets its return
-    leg. The exception is an allow to `External`, whose reverse pair already
-    holds the return leg: the controller gives every other zone, `Internal`
+    beside the policy. That is how an allow gets its return leg. The exception
+    is an allow to `External`, whose reverse pair already holds the return
+    leg: the controller gives every other zone, `Internal`
     and the one `SiteFirewall` creates alike, a predefined `External →
     <zone>` policy named `Allow Return Traffic`, which admits related and
     established traffic only (`RESPOND_ONLY`), and it refuses to create a
@@ -261,6 +265,13 @@ def return_flag(action: Literal['ALLOW', 'BLOCK'], destination: Zone) -> Literal
     A drop has no return leg to admit, so it sets nothing.
     """
     if action != 'ALLOW' or destination is Zone.EXTERNAL:
+        return None
+    # An allow of `RESPOND_ONLY` is itself a return leg: every packet it
+    # matches answers a connection opened from the other side, whose own allow
+    # admits that side's packets, so no third policy has anything to admit.
+    # The controller stores the shape with the flag off (read 2026-11-05,
+    # Aetf/kluster-ops#714).
+    if connection_state == 'RESPOND_ONLY':
         return None
     return True
 
@@ -325,7 +336,8 @@ class Policy:
     allowed is not an allow, and the reverse zone pair is where the return
     leg is classified. Toward `External` that leg is a policy the
     controller keeps on its own; on every other pair it is the one the
-    allow asks for (`return_flag`). A drop admits nothing there.
+    allow asks for (`return_flag`). A drop admits nothing there, and an allow
+    of `RESPOND_ONLY` is a return leg already.
 
     `key` is the resource's name after the component's, and so part of its
     URN: changing it replaces the policy on the controller.
@@ -346,6 +358,10 @@ class Policy:
     #: an address the program is handed. `None` is the whole zone.
     destination: AddressGroup | IPv4Address | IPv6Address | Worker | None = None
     port: int | None = None
+    #: Which packets of a connection the policy matches, by the controller's
+    #: connection tracking: `ALL` is every packet, whatever its state, and
+    #: `RESPOND_ONLY` the related and established ones.
+    connection_state: Literal['ALL', 'RESPOND_ONLY'] = 'ALL'
 
 
 @dataclass(frozen=True)
@@ -487,20 +503,41 @@ CENSUS: tuple[Pair | Forward, ...] = (
         ),
     ),
     # The way back in, minus the IoT VLAN, and on this pair the drops come
-    # first. The trusted home VLANs reach the nodes directly — debugging
-    # straight at a node, a ping, a host path that hairpins. The IoT VLAN does
-    # not: the node subnet is where apid, the kubelet and the BGP session
-    # live, and the one recorded IoT-originated dependency — a television
-    # reaching the media VIP — targets the pool instead, so the drops sever
-    # nothing known. An allow for the whole internal zone ahead of them would
-    # answer for the IoT VLAN too, and the carve-out would match nothing. The
-    # same shape as the first row one zone over: the zone stays open, the
-    # untrusted subpopulation is carved out.
+    # ahead of the allow. The trusted home VLANs reach the nodes directly —
+    # debugging straight at a node, a ping, a host path that hairpins. The IoT
+    # VLAN does not: the node subnet is where apid, the kubelet and the BGP
+    # session live, and the one recorded IoT-originated dependency — a
+    # television reaching the media VIP — targets the pool instead, so the
+    # drops sever nothing known. An allow for the whole internal zone ahead of
+    # them would answer for the IoT VLAN too, and the carve-out would match
+    # nothing. The same shape as the first row one zone over: the zone stays
+    # open, the untrusted subpopulation is carved out.
+    #
+    # What does rank ahead of the drops is the return-only allow. The drops
+    # carry no state match and the controller keeps `cluster-internal
+    # (Return)` where the pair's predefined policies start, behind them, so
+    # without this row they take the reply to every connection a node opens
+    # toward the IoT VLAN — and that is the direction the recorded
+    # dependencies run. It admits related and established traffic alone, so
+    # the IoT VLAN still opens nothing, and whatever is neither meets the
+    # drops, `INVALID` packets included. A `CUSTOM` state list on the drops
+    # is no way to say the same thing: at the pinned provider the list reads
+    # back null, and `physical` plans an update on every run
+    # (filipowm/terraform-provider-unifi#205).
     Pair(
         order='internal-cluster-order',
         source=Zone.INTERNAL,
         destination=Zone.CLUSTER,
         policies=(
+            Policy(
+                key='cluster-replies',
+                title='replies to cluster nodes',
+                description='Replies to connections cluster nodes opened, ahead of the IoT drops.',
+                action='ALLOW',
+                ip_version='BOTH',
+                protocol='all',
+                connection_state='RESPOND_ONLY',
+            ),
             Policy(
                 key='iot-cluster-v4',
                 title='IoT to cluster nodes (v4)',
@@ -733,7 +770,8 @@ class SiteFirewall(Component, pulumi_type='kluster:gateway:SiteFirewall'):
                         ip_group_id=None if policy.source is None else self.groups[policy.source.key].id,
                     ),
                     destination=destination(policy, zones[pair.destination]),
-                    auto_allow_return_traffic=return_flag(policy.action, pair.destination),
+                    connection_state_type=policy.connection_state,
+                    auto_allow_return_traffic=return_flag(policy.action, pair.destination, policy.connection_state),
                     enabled=True,
                     opts=child,
                 )

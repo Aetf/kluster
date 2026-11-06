@@ -249,9 +249,11 @@ def test_the_cluster_zone_is_opened_to_the_home_with_the_iot_vlan_carved_out(ran
         ]
         assert drop['destination']['zoneId'] == zone
 
-    # The drops first: the allow behind them is the broad one here, so an
-    # allow declared ahead of them would answer for the IoT VLAN as well.
+    # The drops ahead of the allow: it is the broad one here, so an allow
+    # declared ahead of them would answer for the IoT VLAN as well. Only the
+    # return-only row leads them, and it matches no connection the VLAN opens.
     assert ran.recorded.inputs_of(f'{name}-internal-cluster-order')['policy_ids'] == [
+        f'{name}-cluster-replies_id',
         f'{name}-iot-cluster-v4_id',
         f'{name}-iot-cluster-v6_id',
         f'{name}-internal-cluster_id',

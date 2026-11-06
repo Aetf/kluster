@@ -13,6 +13,9 @@ visible in a rendered resource. So the suite asserts them directly:
     and a severed television — and on the way *into* the cluster zone the
     order is the other way round, the IoT drop ahead of the zone-wide allow
     that would otherwise answer for it;
+-   the replies to what the cluster opens pass the drops of the way back, and
+    what the IoT VLAN opens does not: both are read off the declared policies
+    in rank, as the pair evaluates them;
 -   the pool is named through address groups and never as a literal, and the
     only literal in the whole census is the media VIP the design says is one;
 -   no policy hands a subnet to a field that takes single addresses: the
@@ -26,15 +29,18 @@ visible in a rendered resource. So the suite asserts them directly:
     worker, because until then the port is the legacy host's;
 -   an allow asks for its return leg wherever the controller lets it:
     everywhere but toward `External`, whose reverse pair already holds the
-    controller's return-only policy; and a drop never asks for one.
+    controller's return-only policy; a drop never asks for one, and neither
+    does an allow that is a return leg itself.
 
 No controller is contacted: the boundary is Pulumi's mock monitor, which
 answers the zone lookups and hands back the inputs each resource was given.
 """
 
 import inspect
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from ipaddress import IPv4Address, IPv4Interface, IPv6Address, ip_address, ip_network
+from typing import Any
 
 import pulumi
 import pulumi_unifi as unifi_provider
@@ -193,7 +199,8 @@ async def test_only_an_allow_away_from_external_asks_for_a_return_leg(mocks: Con
     reply, because the reverse pair is a predefined block, so an allow there
     without it admits a request and drops its answer. A drop has no answer
     to admit, and the controller's refusal of a flagged policy toward
-    `External` was measured on allows only.
+    `External` was measured on allows only. An allow of return traffic alone
+    is the other allow's answer, so it has no answer of its own to ask for.
     """
     async with declaring():
         build()
@@ -205,7 +212,11 @@ async def test_only_an_allow_away_from_external_asks_for_a_return_leg(mocks: Con
     assert any(inputs['action'] == 'ALLOW' for inputs in policies.values()), 'the build declared no allow'
     assert any(inputs['action'] == 'BLOCK' for inputs in policies.values()), 'the build declared no drop'
     for name, inputs in policies.items():
-        asks = inputs['action'] == 'ALLOW' and inputs['destination']['zoneId'] != zone_id(unifi.ZONE_EXTERNAL)
+        asks = (
+            inputs['action'] == 'ALLOW'
+            and inputs['destination']['zoneId'] != zone_id(unifi.ZONE_EXTERNAL)
+            and inputs['connectionStateType'] != 'RESPOND_ONLY'
+        )
         assert inputs.get('autoAllowReturnTraffic') is (True if asks else None), name
 
 
@@ -547,12 +558,110 @@ async def test_the_iot_drop_precedes_the_allow_that_would_otherwise_answer_for_i
 
     order = firewall.orders['internal-cluster-order']
     assert await order.policy_ids.future() == [
+        f'{NAME}-cluster-replies_id',
         f'{NAME}-iot-cluster-v4_id',
         f'{NAME}-iot-cluster-v6_id',
         f'{NAME}-internal-cluster_id',
     ]
     assert await order.source_zone_id.future() == zone_id(unifi.ZONE_INTERNAL)
     assert await order.destination_zone_id.future() == f'{NAME}-zone_id'
+
+
+@dataclass(frozen=True)
+class Packet:
+    """A packet entering a pair, as far as the census's policies tell one from another."""
+
+    family: str
+    #: The address group holding its source; `None` for one in none of them.
+    group: str | None
+    #: Whether connection tracking holds it as part of a connection the other
+    #: side opened. Anything else is a new connection or an invalid packet.
+    answers: bool
+
+
+def _matches(inputs: Mapping[str, Any], packet: Packet) -> bool:
+    """Whether a policy applies to a packet.
+
+    A drop narrowed on its far side counts as covering the whole zone and an
+    allow narrowed there counts as covering nothing, so that a narrow row
+    never reads as a safe one. The tests below ask about the whole zone.
+    """
+    if inputs['ipVersion'] not in ('BOTH', packet.family):
+        return False
+    if inputs['connectionStateType'] == 'RESPOND_ONLY' and not packet.answers:
+        return False
+    if inputs['source'].get('ipGroupId') not in (None, packet.group):
+        return False
+    far_side = inputs['destination']
+    return inputs['action'] == 'BLOCK' or not any(far_side.get(key) for key in ('ipGroupId', 'ips', 'port'))
+
+
+def _verdict(ranked: Sequence[Mapping[str, Any]], packet: Packet) -> str | None:
+    """The action of the first policy that applies; `None` hands it to the pair's predefined policies."""
+    return next((inputs['action'] for inputs in ranked if _matches(inputs, packet)), None)
+
+
+def _ranked(mocks: Controller) -> dict[tuple[str, str], list[dict[str, Any]]]:
+    """Each ordered pair's declared policies, in the rank its order gives them."""
+    policies = mocks.by_name(POLICY)
+    return {
+        (inputs['source_zone_id'], inputs['destination_zone_id']): [
+            policies[policy.removesuffix('_id')] for policy in inputs['policy_ids']
+        ]
+        for inputs in mocks.by_name(ORDER).values()
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_reply_to_what_the_cluster_opens_survives_the_drops_of_the_way_back(mocks: Controller) -> None:
+    """An allow out of the cluster is an allow only if its answer comes back.
+
+    The answer enters the reverse pair, and it is the pair's rank that decides
+    it: a stateless drop ranked ahead of the controller's `(Return)` takes the
+    reply to a request the census admitted. So every source the reverse pair
+    names is asked about, in each family, against the policies in rank. The
+    reply passes by being answered first or by no drop matching it.
+    """
+    async with declaring():
+        build()
+
+    ranked = _ranked(mocks)
+    cluster = f'{NAME}-zone_id'
+    allows = [
+        pair
+        for pair, policies in ranked.items()
+        if pair[0] == cluster and any(inputs['action'] == 'ALLOW' for inputs in policies)
+    ]
+    # A loop is only a claim about what it visits: the case is about a way
+    # back that holds a drop, and at least one must.
+    assert any(
+        inputs['action'] == 'BLOCK'
+        for source, destination in allows
+        for inputs in ranked.get((destination, source), [])
+    ), 'no way back out of the cluster holds a drop'
+    for source, destination in allows:
+        way_back = ranked.get((destination, source), [])
+        for group in {None, *(inputs['source'].get('ipGroupId') for inputs in way_back)}:
+            for family in ('IPV4', 'IPV6'):
+                reply = Packet(family=family, group=group, answers=True)
+                assert _verdict(way_back, reply) != 'BLOCK', (source, destination, reply)
+
+
+@pytest.mark.asyncio
+async def test_the_iot_vlan_opens_nothing_into_the_cluster_past_the_replies(mocks: Controller) -> None:
+    """The row that lets replies through is whole-zone and ahead of the drops, so its state match is the carve-out.
+
+    Without it that row is an allow of everything from the internal zone,
+    ranked first, and the drops behind it match nothing.
+    """
+    async with declaring():
+        build()
+
+    ranked = _ranked(mocks)[zone_id(unifi.ZONE_INTERNAL), f'{NAME}-zone_id']
+
+    for family, group in (('IPV4', f'{NAME}-iot-v4_id'), ('IPV6', f'{NAME}-iot-v6_id')):
+        assert _verdict(ranked, Packet(family=family, group=group, answers=False)) == 'BLOCK', family
+        assert _verdict(ranked, Packet(family=family, group=None, answers=False)) == 'ALLOW', family
 
 
 @pytest.mark.asyncio

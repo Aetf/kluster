@@ -655,11 +655,12 @@ own** it is placed in — the isolation the shared server LAN could not
 offer (physical/gateway.md §4.2) — the IoT→lan-pool zone
 policy with its address groups (architecture.md §3.4 — the v4 CIDR
 group and the ULA group are separate objects, UniFi address groups
-being single-family), the **three zone-matrix policies of the new
+being single-family), the **zone-matrix policies of the new
 zone** — cluster→Internal and Internal→cluster, with the IoT VLAN
-dropped ahead of the latter as a single-family pair, open directions
-a new zone is blocked in; cluster→External declares the egress a new
-zone is given by default, which the design relies on — a
+dropped ahead of the latter as a single-family pair and a return-only
+allow ahead of that drop, so a reply to what a node opens passes it,
+open directions a new zone is blocked in; cluster→External declares
+the egress a new zone is given by default, which the design relies on — a
 **`ZonePolicyOrder` on every zone pair
 that carries a policy** — position is not a property of a policy, and
 on the inbound pair a drop declared after the allow matches nothing;
