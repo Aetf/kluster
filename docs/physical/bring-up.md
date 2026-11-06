@@ -14,8 +14,9 @@ none of their commands. It is what none of them is: the sequence.
 **It retires when stage 9 has run.** Everything here runs once. The
 procedures that recur are written in the documents above and outlive it,
 so the retirement sentence has nothing to move, and nothing but this
-file goes. The first wave's verification takes over what §6 moves. Until then, a step that one of those documents changes is
-changed here in the same pull request.
+file goes. The first wave's verification takes over what §6 moves. Until
+then, a step that one of those documents changes is changed here in the
+same pull request.
 
 "Empty" means no application of the migration: the cluster holds the
 closed component list and the echo server rfc-007 §9.2 uses as its exit
@@ -59,7 +60,7 @@ a step that needs one.
 | 0 | The prerequisites: the controller probe of gateway-cutover.md §3 passing for every zone pair, the node volumes as the migration's design sets them, since the first apply creates them, rfc-007 slices 9 to 11 merged, and Home Assistant's intake automation and check-in timer made (rfc-007 slice 14) | operator, dispatcher | nothing | gateway-cutover.md §3's list; the volumes and the three slices merged; the automation and the timer present | The window waits. Nothing has changed |
 | 1 | **The window**: gateway-cutover.md §3's readings, its §4 steps 0 to 4, and the verification of its §5 up to step 5 | operator | stage 0 | every pass of gateway-cutover.md §5 before step 5 | gateway-cutover.md §6, which undoes it whole |
 | 2 | **`physical` in full**: gateway-cutover.md §5's step 5, the readings after it, the disk grown on the host, then gateway.md §2.5's roster entry, `workerGua`, and the knob unset | operator | stage 1, and the tenancy grant gateway.md §2.5 names | a further `up` reports no changes, and a `physical` preview over the overlay comes back clean | Re-run the apply; leave the device alone. gateway-cutover.md §6 stays open throughout |
-| 3 | **Readings with no network plugin**: gateway-cutover.md §8.1, the device half of gateway.md §2.4.2, the node volume's size in bytes, and the home uplink's MTU | operator, dispatcher records | stage 2 | each item's own; at a decimal GB the volume's row grows, and under 1500 `KUBESPAN_MTU` follows the uplink | A failing item is fixed on the empty cluster, and costs only time |
+| 3 | **Readings with no network plugin**: gateway-cutover.md §8.1, the device half of gateway.md §2.4.2, the node volume's size in bytes, and the home uplink's MTU, read off the gateway's WAN interface | operator, dispatcher records | stage 2 | each item's own; at a decimal GB the volume's row grows, and under 1500 `KUBESPAN_MTU` follows the uplink | A failing item is fixed on the empty cluster, and costs only time |
 | 4 | **One sitting**: the `dns` first `up` (gateway-cutover.md §8.2), the identity sync and `deploy.yml` enabled (gateway-cutover.md §8.3), and at once `credentials derived sync --only kubeconfig` with both stack files committed | operator | stage 3 | the readings of gateway-cutover.md §8.2 and §8.3, and the copy in both stack files | Each has its way back in gateway-cutover.md §8.2 and §8.3. Disabling `deploy.yml` stops the chain, and undoes no write already made |
 | 5 | **The first `k8s-base` and `apps` runs**, which merging stage 4's commit starts | chain, dispatcher reads | stage 4 | `up-k8s-base` green, every node `Ready`, no `kube-proxy` DaemonSet, the sealing certificate answering, and the host's available memory read with the worker running | Fix forward in a pull request; the chain runs it. §3 |
 | 6 | **One sealing sitting**: `credentials derived cloudflare-dns01 mint`, `bgp seal` and `alert-webhook record` (credentials.md §4.1 stage 11), one commit to `Pulumi.k8s-base.yaml` | operator, chain on the merge | stage 5, and the webhook of stage 0 | a certificate issued for the primary zone; each Gateway's Service holding exactly its addresses; the BGP session up on both families; an alert reaching the phone | Re-run the one command, which writes a fresh ciphertext, and merge it. §3 |
@@ -125,8 +126,8 @@ These run alongside and gate no stage:
 *   **The resolvers' flip**, row R2 of sources-of-truth.md, after stage 4:
     adguardhome-sync stopped, both instances reading their rewrites
     again, and the declared rule list merged. The echo row is public, so
-    no stage here needs it, and the first wave with a home-side row
-    waits on it.
+    no stage here needs it, and the first wave with a row on a home
+    Gateway waits on it.
 *   **The worker's GPU and growth windows**, which belong to the waves
     and not to this pass.
 
@@ -154,4 +155,5 @@ that it runs under the base's default-deny, with the row's own allow.
 Its pod runs on the worker, and it answers on TCP and UDP through the
 balancer on both families and at the LAN VIP, because that is the path
 syncthing's peer port takes: from a cloud node, over KubeSpan, to the
-home, and from the home directly.
+home, and from the home directly. It is deleted when the check has
+passed, so that nothing public stays on the port.
