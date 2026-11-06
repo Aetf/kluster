@@ -260,9 +260,9 @@ not moved.
 -   **The controller round-trips the firewall's resource shapes.**
     Step 3 is otherwise the first time the bridged filipowm/unifi
     provider writes to this controller: the targeted apply creates the
-    cluster zone and the zone policies and their orders (gateway.md
-    §4.2). It creates no port forward: the census's one forward waits
-    for qbittorrent to move onto the worker, and the legacy host's
+    cluster zone and the zone policies, and the orders that rank them
+    through the controller's API (gateway.md §4.2). It creates no port
+    forward: the census's one forward waits for qbittorrent to move onto the worker, and the legacy host's
     hold on that port is untouched by the window. The zone-policy
     resource is marked experimental upstream, and whether it
     round-trips — create, a clean
@@ -286,7 +286,8 @@ not moved.
     with no network in it, standing in for the cluster zone; two address
     groups of each family, one to source from and one to send to, as the
     census's IoT and pool groups are; and the policies. **Every zone pair
-    the census declares a policy on gets an allow**, each setting the
+    the census declares a policy on with the cluster zone on one side
+    gets an allow**, each setting the
     return flag `SiteFirewall` sets on that pair, through the same
     `return_flag` (`components/gateway/unifi.py`) — none toward External,
     where the controller refuses it, and set everywhere else. Out of the
@@ -294,19 +295,20 @@ not moved.
     zone in both families, and per family a subnet source, named through
     its group, to a literal address with a port; beside them, per family,
     the same source to a group as a drop. Then an order on every pair it
-    declares a policy on, and a forward of an unused WAN port to the
-    worker's address. Each is named `kluster-probe` in the console. The
-    order on Internal to External is the one that matters most: it is
-    the one pair of stock zones, the pair the window's `iot-pool-order`
-    lands on, and it already holds policies of the site's own, which an
-    order listing only the program's policies may rank around, drop or
-    disable. The readings of that pair below are what find out. The
-    addresses are the documentation ranges, `192.0.2.0/24` and
-    `2001:db8::/32`. Every policy but one has the scratch zone on one
+    declares a policy on, built by `policy_order`, the function
+    `SiteFirewall` builds its own with, and a forward of an unused WAN
+    port to the worker's address. Each is named `kluster-probe` in the
+    console. Each order depends on the allow whose `(Return)` lands on
+    its pair, where there is one, so that policy is on the pair when the
+    order runs. Internal to External, the one census pair of stock
+    zones, carries no probe policy and no probe order: a census pair
+    holds no custom policy but the census's (gateway.md §4.2), and the
+    census's own are there once the window has run, so the readings of
+    that pair below read them, unchanged. The addresses are the
+    documentation ranges, `192.0.2.0/24` and
+    `2001:db8::/32`. Every policy has the scratch zone on one
     side, and a zone holding no network neither sends nor receives
-    traffic, so nothing they say matches anything. The one between stock
-    zones is sourced from a documentation-range group and sent to a
-    documentation literal, so it matches nothing either. The forward is
+    traffic, so nothing they say matches anything. The forward is
     open for the minutes the probe takes, to an address nothing answers
     on before the worker exists. The cluster VLAN's network object is not probed:
     a scratch network is a live VLAN on the gateway rather than an inert
@@ -339,7 +341,14 @@ not moved.
 
     from kluster import conventions
     from kluster.components.gateway import url_host
-    from kluster.components.gateway.unifi import ZONE_EXTERNAL, ZONE_INTERNAL, Zone, controller_provider, return_flag
+    from kluster.components.gateway.unifi import (
+        ZONE_EXTERNAL,
+        ZONE_INTERNAL,
+        Zone,
+        controller_provider,
+        policy_order,
+        return_flag,
+    )
 
     NAME = 'kluster-probe'
     PORT = '49999'  # a WAN port no forward on the controller uses
@@ -347,9 +356,8 @@ not moved.
     config = pulumi.Config()
 
     # The construction SiteFirewall builds its own provider with.
-    provider = controller_provider(
-        f'{NAME}-unifi', api_url=f'https://{url_host(config.require("gatewayHost"))}', site=site
-    )
+    api_url = f'https://{url_host(config.require("gatewayHost"))}'
+    provider = controller_provider(f'{NAME}-unifi', api_url=api_url, site=site)
     opts = pulumi.ResourceOptions(provider=provider)
     invoke = pulumi.InvokeOptions(provider=provider)
     external = unifi.get_firewall_zone_output(name=ZONE_EXTERNAL, site=site, opts=invoke).id
@@ -409,15 +417,6 @@ not moved.
         ip_version='IPV6', protocol='all', source=Source(zone_id=zone.id, ip_group_id=source_v6.id),
         destination=Destination(zone_id=external, ip_group_id=group_v6.id), enabled=True, opts=opts,
     )
-    # Internal to External, the one pair of stock zones: a documentation source to a
-    # documentation literal.
-    internal_external = unifi.FirewallZonePolicy(
-        f'{NAME}-internal-external', name=f'{NAME} internal external', description=NAME,
-        action='ALLOW', ip_version='IPV4', protocol='tcp',
-        source=Source(zone_id=internal, ip_group_id=source_v4.id),
-        destination=Destination(zone_id=external, ips=['192.0.2.200'], port=443),
-        auto_allow_return_traffic=to_external, enabled=True, opts=opts,
-    )
     # The scratch zone to and from Internal, and into it from External.
     zone_internal = unifi.FirewallZonePolicy(
         f'{NAME}-zone-internal', name=f'{NAME} zone internal', description=NAME, action='ALLOW',
@@ -437,16 +436,18 @@ not moved.
         destination=Destination(zone_id=zone.id, ips=['2001:db8:2::1'], port=443),
         auto_allow_return_traffic=to_cluster, enabled=True, opts=opts,
     )
-    for pair, source, destination, policies in (
-        ('order', zone.id, external, (wide, literal_v4, literal_v6, grouped_v4, grouped_v6)),
-        ('order-internal-external', internal, external, (internal_external,)),
-        ('order-zone-internal', zone.id, internal, (zone_internal,)),
-        ('order-internal-zone', internal, zone.id, (internal_zone,)),
-        ('order-external-zone', external, zone.id, (external_zone,)),
+    # The construction SiteFirewall builds its own orders with. The last column is
+    # the allow whose `(Return)` lands on the pair.
+    for pair, source, destination, policies, derives in (
+        ('order', zone.id, external, (wide, literal_v4, literal_v6, grouped_v4, grouped_v6), [external_zone]),
+        ('order-zone-internal', zone.id, internal, (zone_internal,), [internal_zone]),
+        ('order-internal-zone', internal, zone.id, (internal_zone,), [zone_internal]),
+        ('order-external-zone', external, zone.id, (external_zone,), []),
     ):
-        unifi.FirewallZonePolicyOrder(
-            f'{NAME}-{pair}', source_zone_id=source, destination_zone_id=destination,
-            before_predefined_ids=[p.id for p in policies], site=site, opts=opts,
+        policy_order(
+            f'{NAME}-{pair}', api_url=api_url, site=site, source_zone_id=source,
+            destination_zone_id=destination, policies=policies,
+            opts=pulumi.ResourceOptions(depends_on=derives),
         )
     unifi.PortForward(
         f'{NAME}-forward', name=NAME, port_forward_interface='wan', protocol='tcp_udp', src_ip='any',
@@ -462,16 +463,22 @@ not moved.
         physical config get unifiApiKey | sed 's/^/X-API-KEY: /' |
             curl -fsSk -H @- "https://$ADDR/proxy/network/v2/api/site/default/$1"
     }
-    pair() {        # every policy on Internal → External, whole, as the controller holds it
-        unifi_v2 firewall-policies | "$JQ" --argjson zones "$(unifi_v2 firewall/zone)" '
+    pair_of() {     # every policy from zone $1 to zone $2, whole, as the controller holds it
+        unifi_v2 firewall-policies | "$JQ" --argjson zones "$(unifi_v2 firewall/zone)" --arg s "$1" --arg d "$2" '
             ($zones | map({(.name): ._id}) | add) as $id
-            | map(select(.source.zone_id == $id.Internal and .destination.zone_id == $id.External))'
+            | map(select(.source.zone_id == $id[$s] and .destination.zone_id == $id[$d]))'
     }
-    site_pair() {   # its non-predefined policies by rank, the probe's among them, and where the predefined ones start
-        pair | "$JQ" -r '
+    ranks() {       # its custom policies by rank, and where the predefined ones start
+        pair_of "$1" "$2" | "$JQ" -r '
             (map(select(.predefined)) | min_by(.index) | .index) as $p
             | map(select(.predefined | not)) + [{index: $p, boundary: true}] | sort_by(.index)[]
             | if .boundary then "predefined from \(.index)" else "\(.index)\t\(.enabled)\t\(.action)\t\(.name)" end'
+    }
+    returns() {     # every `(Return)` on the pair, with each field that says what it is
+        pair_of "$1" "$2" | "$JQ" 'map(select(.name | endswith(" (Return)")))'
+    }
+    site_pair() {   # the pair of stock zones the census orders
+        ranks Internal External
     }
     ```
 
@@ -491,13 +498,18 @@ not moved.
     apart:
 
     ```sh
-    pair | "$JQ" 'map(select(.predefined | not))' > "$PROBE/pair-before.json"   # the site's own, whole
-    site_pair | tee "$PROBE/pair-before"      # the site's own policies, before the probe exists
+    site_pair | tee "$PROBE/pair-before"      # the rows of `iot-pool-order`, before the probe exists
     probe up --continue-on-error   # read the plan before confirming it; one refusal hides no other
-    site_pair | tee "$PROBE/pair-up"          # the probe's policy ranked among them
+    site_pair | tee "$PROBE/pair-up"          # the same rows: the probe has nothing on this pair
+    ranks kluster-probe External | tee "$PROBE/scratch-up"
+    returns kluster-probe External | tee "$PROBE/returns-external"
+    returns kluster-probe Internal | tee "$PROBE/returns-zone-internal"
+    returns Internal kluster-probe | tee "$PROBE/returns-internal-zone"
+    probe up --replace "$(probe stack export | "$JQ" -r '.deployment.resources[] | select(.urn | endswith("::kluster-probe-wide")) | .urn')"
+    ranks kluster-probe External | cut -f2- | diff <(cut -f2- "$PROBE/scratch-up") -
     probe preview --refresh --expect-no-changes
     probe destroy --remove
-    site_pair | tee "$PROBE/pair-destroyed"   # the site's own policies, with the probe's policy deleted
+    site_pair | tee "$PROBE/pair-destroyed"   # the same rows
     rm -rf "$PROBE"
     ```
 
@@ -507,48 +519,55 @@ not moved.
     it can land in the live backend. Its first run downloads, into
     that home, the plugins the SDKs in `.venv` name.
 
-    It passes on three readings. `probe up` plans the stack, its
+    It passes on these readings. `probe up` plans the stack, its
     provider and one create for each resource the program declares —
     the zone, the groups, the policies, the orders and the forward — and
-    nothing else, and applies every one. The refreshed preview exits
-    zero proposing no change: every field the controller reads back is
-    the value declared. And `destroy` deletes every one of them, after
-    which the console holds nothing named `kluster-probe`.
+    nothing else, and applies every one, each order while the `(Return)`
+    of the allow it depends on is on its pair. That settles that the
+    custom policies, which an order sends, are the whole of what the
+    controller requires of a batch. `--replace` applies, and the diff
+    after it is empty: the census's own edit, the replacement on the
+    pair beside its original, reaches the order and leaves the rank as
+    it was. The refreshed preview exits zero proposing no change: every field the
+    controller reads back is the value declared, and no order finds its
+    pair drifted. And `destroy` deletes every one of them, after which
+    the console holds nothing named `kluster-probe`.
 
-    **The pair readings pass when the probe's policy ranks ahead of
-    every site policy and the site's own come through untouched.** In
-    `pair-up` the probe's policy, the row named `kluster-probe`, comes
-    first. Every site policy `pair-before` lists is listed by `pair-up`
-    and `pair-destroyed` as well, `true` in every reading, in the same
-    relative order, and above the `predefined from` line, which
-    `site_pair` prints at its rank among them. A site policy's `index` that moves while that order holds is
-    expected and is not a failure. `pair-destroyed` reads the pair after
-    `destroy` has deleted the probe's policy. Deleting the order sends
-    nothing to the controller at the pinned provider release, which has
-    no operation that undoes an order, so the ranking `pair-up` shows is
-    the one `destroy` leaves.
+    **The pair readings pass when the pair holds what the census
+    declares and nothing else.** `pair-before`, `pair-up` and
+    `pair-destroyed` are one reading: the rows of `iot-pool-order`, in
+    the row's order, and then the `predefined from` line. `scratch-up`
+    holds the scratch pair's listed policies in the order's order above
+    its `predefined from`. Deleting an order sends nothing to the
+    controller, there being no operation that undoes one.
 
-    **Ahead is the requirement, not merely an outcome the pass accepts.**
-    The census's drops on this pair exist to stop the IoT VLAN reaching
-    the pool (gateway.md §4.2 rule 1), and any site allow that admits
-    some of that traffic answers for it first if it ranks ahead of them.
-    Today two of the site's own do. `Allow IPv6 UDP mDNS and Matter`
-    admits ICMPv6 from any source to any destination, and `Allow IPv6
-    mDNS & Matter` admits mDNS and Matter UDP from any link-local or
-    unique-local source to any destination. Both overlap `iot-pool-v6`,
-    whose source is the IoT VLAN's unique-local prefix. Ranked behind
-    them, that drop is never reached for ICMPv6 or for mDNS and Matter
-    while it reads as in force. The pass is the evidence that step 3's
-    `iot-pool-order` ranks every policy it lists ahead of the site's own
-    and leaves those present, enabled and in their order, since step 3
-    reads nothing back on this pair itself.
+    **`returns` is how the controller presents a `(Return)`**, which the
+    order reads as no drift: each entry reads `predefined: true`, its
+    `index` at that pair's `predefined from`, and `connection_state_type`
+    `RESPOND_ONLY`. Those three fields of each entry are recorded with
+    the readings. The same helper reads the census's own with no probe
+    at all, `returns Internal kluster` and `returns kluster Internal`.
+    One that reads `predefined: false` is the refused-order row of the
+    table below.
 
-    Paste the three readings and `pair-before.json` into the issue that
-    records the probe before `rm -rf` removes them. The JSON holds the
-    site's policies whole, which is what a missing one is recreated
-    from; that issue is in the private operations repository. It names
-    the address and port groups a policy matches by their `_id`, so a
-    recreate finds each by that id in the console's group list.
+    **A policy the census does not own is refused, and a refresh says
+    so.** After the refreshed preview and before `probe destroy`, add a
+    custom policy named `kluster-probe foreign` on the scratch zone to
+    External in the console, matching a documentation address:
+
+    ```sh
+    probe preview --refresh --diff  # one update, the scratch order's; `drift` names the policy
+    probe up --refresh              # refused, naming the policy, which stays where it is
+    ```
+
+    Then delete it in the console, and `probe preview --refresh
+    --expect-no-changes` exits zero. In the console, rank `kluster-probe
+    literal v4` first on that pair: a refreshed preview proposes the
+    same one update, and `probe up --refresh` ranks it back.
+
+    Paste the readings into the issue that records the probe before
+    `rm -rf` removes them; that issue is in the private operations
+    repository.
 
     What a failure means depends on where it lands:
 
@@ -567,47 +586,32 @@ not moved.
         refusal, not the resource: the answer is `return_flag` in the
         component, which the probe's flags come from, with its reason in
         gateway.md §4.2, and the probe runs again.
-    -   **The order on Internal to External refused while the scratch
-        zone's orders apply.** The controller wants every custom policy
-        of the pair listed, and step 3 would refuse `iot-pool-order` the
-        same way. The fallback below drives the same API and would meet
-        the same refusal, so it is no answer: the census has to own the
-        site's policies, or the order has to list them. That is a design
-        ruling filed before the window, and the window waits on it.
-    -   **The probe's policy behind a site policy in `pair-up`.** The
-        order ranks what it lists after the site's own. In the window
-        `iot-pool-order` would do the same, and `iot-pool-v6` would be
-        shadowed for ICMPv6 and for mDNS and Matter from the IoT VLAN,
-        which the two site allows above would then admit into the pool.
-        It is filed for the ruling the refused-order row names — the
-        census owns the site's policies, or the order lists them — and
-        the window waits on it.
-    -   **A site policy missing from `pair-up` or `pair-destroyed`.**
-        The order, or the delete of the probe's policy, removes the
-        pair's policies the program does not declare. In the window,
-        `iot-pool-order` would remove them in the same way, and whatever
-        they admit stops. They are recreated in the console from
-        `pair-before.json`. The census then has to own them, or the
-        order has to list them, which is that ruling again, and the
-        window waits on it.
-    -   **A site policy `false` in a later reading.** The order, or the
-        delete of the probe's policy, disables what the program does not
-        declare, with the same meaning for `iot-pool-order` and the same
-        ruling: re-enable them in the console, file it, and the window
-        waits.
-    -   **A site policy behind the predefined ones.** The pair's
-        predefined policies answer before it: a site drop there stops
-        dropping, and a site allow there is left to what the predefined
-        policies decide. In the window `iot-pool-order` would move the
-        site's policies the same way. Restore their order in the console
-        from `pair-before`, file it for that ruling, and the window
-        waits.
-    -   **The site's policies in another relative order.** A site drop
-        and a site allow that overlap trade which one answers, and
-        `iot-pool-order` would reorder them the same way in the window.
-        Restore, file and wait, as above.
-    -   **The zone, a group, a policy or a scratch-zone order refused,
-        or a delete refused.** The resources the rules are made of do not
+    -   **An order refused naming a policy on its pair as one the census
+        does not own.** Every order here is on a scratch pair, which
+        holds only the probe's policies, so what it names was made on
+        that pair in the console: it is deleted there, and the probe runs
+        again. Named `… (Return)`, it is the controller presenting the
+        derivative of an allow as a custom policy, against what the
+        order reads it as: the provider then has to carry it in the
+        batch, and what the order applied to waits on that change.
+    -   **An order refused with `Should include firewall policy in batch
+        update`.** The controller wants something listed that the
+        order's read of the pair did not show as custom. The fallback
+        below drives the same API and would meet the same refusal, so
+        the answer is in `kluster.providers.unifi_zone_policy_order`,
+        and the window waits on it.
+    -   **An order failing its read-back, naming what the pair ranks
+        first.** The controller took the batch and did not rank the list
+        ahead of the predefined policies. In the window `iot-pool-order`
+        would leave `iot-pool-v6` behind the pair's predefined accept. It
+        is filed, and the window waits on it.
+    -   **`--replace` refused.** A create refused naming the policy's
+        name is the controller wanting policy names unique: the census's
+        policies then take `delete_before_replace`, as its groups do. A
+        refusal at the order is the batch failing on the census's own
+        edit, which is the order's defect and is filed.
+    -   **The zone, a group or a policy refused, or a delete
+        refused.** The resources the rules are made of do not
         round-trip on this controller's release — the case
         architecture.md §5.1 records a fallback for: a
         `UnifiFirewallPolicy` resource on the device-files provider,
@@ -1082,6 +1086,20 @@ One rename takes the old trees and their `.old` copies together. The
 overlay member gets no directory here: `40-machines.sh` creates the
 state directory, and an empty one is what mints a new identity.
 
+**Before step 3, read the pair `iot-pool-order` lands on,** from the
+operator's workstation, with §3's helpers:
+
+```sh
+site_pair   # at most the rows of `iot-pool-order`, then the `predefined from` line
+```
+
+Step 3 runs only when nothing is above that line but the rows of
+`iot-pool-order`, which a window retried after §6 finds there. A census
+pair holds no custom policy but the census's (gateway.md §4.2), so the
+order would refuse any other by name, partway through the apply. One
+found here was made in the console after §3's probe, and it becomes a
+census row or is deleted in the console before step 3 runs.
+
 **Step 3 — apply the gateway's resources, and adopt the overlay
 network,** from the operator's workstation, over the LAN:
 
@@ -1161,6 +1179,10 @@ The client runs in the overlay member's mount namespace, entered through
 the machine's leader, because `machinectl shell` cannot start a command in
 a machine whose first process is s6-overlay rather than systemd
 (gateway.md §1.6).
+
+From the operator's workstation, `site_pair` (§3) reads the policies
+of the `iot-pool-order` row, in the row's order, and nothing else above
+the `predefined from` line.
 
 The overlay member lists the network `conventions.overlay.NETWORK_ID`
 names: as `ACCESS_DENIED` until the ceremony's step 3 authorizes it, or
@@ -1465,7 +1487,13 @@ physical up
 It completes the ceremony's step 1 (gateway.md §2.5) — the cloud
 fleet, the Talos bootstrap, the worker VM, the backup bucket, the
 overlay's network and routes — and re-walks the gateway as a no-op
-against the stamps. **It passes when a further `physical up` reports no
+against the stamps, the orders aside. A stack holding the bridged
+`FirewallZonePolicyOrder`s plans one create and one delete per pair, the
+type being part of the URN: the create reads the pair and refuses a
+policy the census does not own, and the delete sends nothing. **That run
+replaces and drops no census policy**: a create has no old list to carry
+one from, so an original still on the pair reads as foreign and the run
+is refused. A census edit waits for the run after it. **It passes when a further `physical up` reports no
 changes**, which is the whole-stack form of the reading above and the
 one the soak's previews go on repeating. **One diff may appear there
 without anything having drifted**: `routes` on

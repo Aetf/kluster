@@ -14,19 +14,24 @@ makes the population nameable in a policy; being alone in a firewall zone is
 what makes it *separately* nameable from everything else the internal zone
 holds.
 
-**The rule census**, which is exactly the design's and nothing more: a rule on
-the controller that is not declared here is drift. It is `CENSUS`, one row per
-zone pair carrying policies and one for the port forward, each with the reason
-it exists beside it, and `SiteFirewall` declares what the rows say and nothing
-else. So a rule added or removed is a line in that structure's diff, and so
-are the address groups a rule names, which exist because a row names them.
+**The rule census**, which is exactly the design's and nothing more: a pair
+the census orders belongs to it whole, so a custom policy there that is not
+declared here is drift. It is `CENSUS`, one row per zone pair carrying policies
+and one for the port forward, each with the reason it exists beside it, and
+`SiteFirewall` declares what the rows say and nothing else. So a rule added or
+removed is a line in that structure's diff, and so are the address groups a
+rule names, which exist because a row names them.
 
-Every zone pair that carries a policy also carries a
-`FirewallZonePolicyOrder`, and the order is the row's: a policy declared
-without one takes whatever position creation happened to produce, and on a
-pair with both a drop and an allow that is the difference between the design
-and its opposite. Deriving the order from the row is what keeps a policy from
-being declared without a place.
+Every zone pair that carries a policy also carries a `ZonePolicyOrder`, and
+the order is the row's: a policy declared without one takes whatever position
+creation happened to produce, and on a pair with both a drop and an allow that
+is the difference between the design and its opposite. Deriving the order from
+the row is what keeps a policy from being declared without a place. It is that
+resource rather than the bridged `FirewallZonePolicyOrder` because the
+controller takes a pair's rank only as a batch naming every custom policy of
+the pair, which a declared list alone cannot be while the census's own edits
+are in transit (`kluster.providers.unifi_zone_policy_order`, which also says
+what removes it).
 
 Three facts about the device shape the whole module (physical/gateway.md
 §4.1, measured, and §4.2):
@@ -54,9 +59,9 @@ Three facts about the device shape the whole module (physical/gateway.md
     comes as a pair, and each subnet's two groups are two resources.
 
 Authentication is an API key belonging to a dedicated local administrator,
-carried by a provider instance that exists only for these resources. It is
-never the SSH credential the device's own desired state travels on, and it
-never reaches the environment that deploys applications — that separation is
+carried by a provider instance that exists only for these resources and read
+by the order's provider for its own session. It is never the SSH credential
+the device's own desired state travels on, and it never reaches the environment that deploys applications — that separation is
 the reason these resources live in the `physical` stack rather than beside
 the applications whose traffic they admit. The connection is told not to
 verify the controller's certificate, and `ALLOW_INSECURE` is why and what
@@ -66,7 +71,7 @@ that costs.
 from __future__ import annotations
 
 import enum
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from ipaddress import IPv4Address, IPv4Network, IPv6Address, IPv6Network
 from typing import Literal
@@ -75,9 +80,10 @@ import pulumi
 import pulumi_unifi as unifi
 
 from kluster import conventions
+from kluster.providers.unifi_zone_policy_order import ZonePolicyOrder
 from putils import Component, own_provider_opts, with_provider
 
-__all__ = ('CENSUS', 'SiteFirewall', 'controller_provider', 'return_flag')
+__all__ = ('CENSUS', 'SiteFirewall', 'controller_provider', 'policy_order', 'return_flag')
 
 #: The predefined zones of a UniFi OS 9 controller, looked up by name rather
 #: than by id: an id is per-site state, a name is stock. `Internal` holds
@@ -120,8 +126,10 @@ DELEGATED_RANGE = ('::2', '::7d1')
 HTTP_MAX_RETRIES = 2
 
 #: Where the controller's API key is read. A key belonging to a dedicated local
-#: administrator on the device, never the SSH credential, and read at the one
-#: line that uses it.
+#: administrator on the device, never the SSH credential. It has two readers,
+#: each opening one session with it and handing it to nothing: the line in
+#: `controller_provider` that builds the bridged provider, and the `configure`
+#: of the order's provider, under its own `API_KEY_CONFIG`.
 API_KEY = 'unifiApiKey'
 
 #: Whether the provider skips verifying the controller's certificate, passed
@@ -150,6 +158,10 @@ API_KEY = 'unifiApiKey'
 #: residual as it stands for a dial over the server LAN or from a personal
 #: overlay member; a dial over the cluster VLAN is not covered by that
 #: acceptance.
+#:
+#: The order's session takes the same posture (`policy_order`). Its transport
+#: could pin the certificate, and that would change nothing: the same key
+#: crosses the same connection on the bridged provider's every request.
 ALLOW_INSECURE = True
 
 
@@ -178,6 +190,35 @@ def controller_provider(
         site=site,
         http_max_retries=HTTP_MAX_RETRIES,
         allow_insecure=ALLOW_INSECURE,
+        opts=opts,
+    )
+
+
+def policy_order(
+    name: str,
+    *,
+    api_url: str,
+    site: str,
+    source_zone_id: pulumi.Input[str],
+    destination_zone_id: pulumi.Input[str],
+    policies: Sequence[unifi.FirewallZonePolicy],
+    opts: pulumi.ResourceOptions | None = None,
+) -> ZonePolicyOrder:
+    """The rank of one zone pair: `policies` first, in this order, and nothing else custom on the pair.
+
+    One function for the reason `controller_provider` is one: `SiteFirewall`
+    builds every order here, and so does the pre-window probe, so what the
+    probe proves is the construction the window will use. It is also the one
+    line the order's layer touches here.
+    """
+    return ZonePolicyOrder(
+        name,
+        api_url=api_url,
+        allow_insecure=ALLOW_INSECURE,
+        site=site,
+        source_zone_id=source_zone_id,
+        destination_zone_id=destination_zone_id,
+        policy_ids=[policy.id for policy in policies],
         opts=opts,
     )
 
@@ -311,10 +352,11 @@ class Policy:
 class Pair:
     """A zone pair's policies, in the order the pair evaluates them, all ahead of its predefined ones.
 
-    The pair's `FirewallZonePolicyOrder` is this tuple, so a policy cannot be
-    declared without a place, and the place is its position here. `order` is
-    that resource's name after the component's, part of its URN as a
-    policy's key is.
+    The pair's `ZonePolicyOrder` is this tuple, so a policy cannot be declared
+    without a place, and the place is its position here. The pair holds no
+    other custom policy: one that has to answer on it is a row of this tuple,
+    whatever traffic it is about. `order` is that resource's name after the
+    component's, part of its URN as a policy's key is.
     """
 
     order: str
@@ -349,12 +391,9 @@ CENSUS: tuple[Pair | Forward, ...] = (
     # edit and never a firewall edit. On the uplink pair, because that is
     # where pool-bound traffic is classified (module docstring). Both allows
     # precede both drops, and all four precede the pair's predefined
-    # policies and the site's own policies on the pair: otherwise the
-    # predefined accept on the uplink pair, or a site allow that overlaps the
-    # drop, would answer first and the drop would never be reached for what
-    # it admits (two site allows overlap it, Aetf/kluster-ops#709). Family
-    # by family, because the source is the VLAN's group and a group holds
-    # one family.
+    # policies: otherwise the predefined accept on the uplink pair would
+    # answer first and the drop would never be reached. Family by family,
+    # because the source is the VLAN's group and a group holds one family.
     Pair(
         order='iot-pool-order',
         source=Zone.INTERNAL,
@@ -555,8 +594,8 @@ class SiteFirewall(Component, pulumi_type='kluster:gateway:SiteFirewall'):
     pinhole's pair, on `worker_gua`, and the peer's IPv4 forward, on
     `peer_on_worker` — and every other row unconditionally. A row's
     address groups are declared because a policy present names them, once
-    each, and each pair's policies are followed by the one
-    `unifi.FirewallZonePolicyOrder` that ranks them.
+    each, and each pair's policies are followed by the one `ZonePolicyOrder`
+    that ranks them.
 
     `policies`, `orders`, `groups` and `forwards` hold what was declared, by
     the key the row gives it.
@@ -679,7 +718,7 @@ class SiteFirewall(Component, pulumi_type='kluster:gateway:SiteFirewall'):
                     return unifi.FirewallZonePolicyDestinationArgs(zone_id=zone, port=policy.port)
 
         self.policies: dict[str, unifi.FirewallZonePolicy] = {}
-        self.orders: dict[str, unifi.FirewallZonePolicyOrder] = {}
+        self.orders: dict[str, ZonePolicyOrder] = {}
         for pair in pairs:
             declared = [
                 unifi.FirewallZonePolicy(
@@ -703,12 +742,13 @@ class SiteFirewall(Component, pulumi_type='kluster:gateway:SiteFirewall'):
             self.policies.update(
                 (policy.key, resource) for policy, resource in zip(pair.policies, declared, strict=True)
             )
-            self.orders[pair.order] = unifi.FirewallZonePolicyOrder(
+            self.orders[pair.order] = policy_order(
                 f'{name}-{pair.order}',
+                api_url=api_url,
+                site=site,
                 source_zone_id=zones[pair.source],
                 destination_zone_id=zones[pair.destination],
-                before_predefined_ids=[resource.id for resource in declared],
-                site=site,
+                policies=declared,
                 opts=child,
             )
 

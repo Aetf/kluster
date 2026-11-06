@@ -311,8 +311,8 @@ declarative/physical.md §4.
     negative answer it gave before the record was written for the
     zone's negative TTL.
 -   **Zone firewall**: UBIOS zone-based firewall, declared through the
-    bridged filipowm/unifi provider (architecture.md §5.1). Target
-    state: §4.
+    bridged filipowm/unifi provider (architecture.md §5.1), each pair's
+    order aside (§4.2). Target state: §4.
 -   **ZeroTier router**: the home side's overlay terminator (§2) — a
     net-new role; today the overlay and the home LANs are not connected at
     all (no member routes anything).
@@ -2785,8 +2785,9 @@ complete set and the zone-matrix target state.
 ### 4.2 Declared-objects census
 
 The complete set — every controller-side object and rule the design
-calls for, all declared in the `physical` stack via the bridged
-filipowm/unifi provider (auth discipline: dedicated local admin + API
+calls for, all declared in the `physical` stack, via the bridged
+filipowm/unifi provider and, for each pair's order, a dynamic resource
+of this repository's own (auth discipline: dedicated local admin + API
 key, throttled retries — declarative/physical.md §4).
 
 **Two address populations, two control planes.** The distinction runs
@@ -2824,9 +2825,36 @@ source VLANs stays available later as an adoption-triggered diff, the
 same treatment as §4.3 phase 2.
 
 Then the rules. Every zone pair that carries a policy also carries a
-**`FirewallZonePolicyOrder`**: a policy whose position is whatever
-creation happened to produce is a policy the design does not own, and
-on a pair holding both a drop and an allow the position *is* the rule.
+**`ZonePolicyOrder`**: a policy whose position is whatever creation
+happened to produce is a policy the design does not own, and on a pair
+holding both a drop and an allow the position *is* the rule.
+
+**A census pair holds no custom policy but the census's, and one found
+there is drift.** The pair belongs to the census whole, so a rule wanted
+on one is a row of the census in `physical`, whatever traffic it is
+about, a rule about the home's own internet access included, and a hand
+policy cannot narrow a census allow. A refresh reports a foreign policy,
+so a refreshed preview proposes an update of the pair's order, and the
+order refuses by name: the policy becomes a census row or is deleted in
+the console. The order never adopts, moves past or deletes it. What the
+census is in the middle of changing is no drift: a replacement is
+created before its original is deleted, and a dropped policy is deleted
+after the order that stopped naming it, so the order carries a policy
+its previous list named behind the new list. Nor is the `<name>
+(Return)` allow below, which the controller marks predefined and ranks
+where the pair's predefined policies start (read 2026-11-05). The
+census's policies are the pair's first custom policies, ahead of its
+predefined ones, and a refresh reports them when they are not.
+
+**The order is `kluster.providers.unifi_zone_policy_order`**, a dynamic
+resource driving the controller's v2 API, rather than the bridged
+`FirewallZonePolicyOrder`, on every census pair. The controller takes a
+pair's rank only as a batch naming every custom policy of the pair
+(`Should include firewall policy in batch update`, read 2026-11-05,
+Aetf/kluster-ops#709), and the bridged resource sends its declared list
+alone, so it fails on the census's own edits. The package's docstring
+states what removes it, and declarative/physical.md §6 holds the
+tripwire.
 
 **A policy names a subnet through an address group, and a single
 host as a literal.** A zone policy's `ips` field holds single
@@ -2881,11 +2909,7 @@ a diff. The rule is `return_flag` in `components/gateway/unifi.py`.
     IoT-originated dependency the census missed; a blanket drop
     would have severed it at jellyfin's migration wave.
     Ordered allow-then-drop, and all of them ahead of the pair's
-    predefined ACCEPT and of the site's own policies on the pair, or
-    the drop is never reached for what those admit; two of the site's
-    own admit IPv6 traffic the drop stops, ICMPv6 and link-local or
-    unique-local mDNS and Matter (read 2026-11-05,
-    Aetf/kluster-ops#709).
+    predefined ACCEPT, or the drop is never reached.
 2.  **cluster zone → External: allow**, both families, every
     protocol. A zone the controller has just been told about is
     blocked to and from Internal and to new connections from
@@ -2953,7 +2977,8 @@ a diff. The rule is `return_flag` in `components/gateway/unifi.py`.
     (cluster/migration.md §2): read the console for what holds the
     port, clear it, set the key, apply.
 
-Nothing else. A controller rule not on this census is drift.
+Nothing else. A custom policy on a pair this census orders that is not
+a row of it is drift.
 
 ### 4.3 Zone-matrix target state — two phases
 

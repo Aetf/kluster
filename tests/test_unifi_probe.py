@@ -22,9 +22,9 @@ and a change to either is a change to what they run:
     mocks, so no controller is dialed: every object through the provider the
     window's own `SiteFirewall` construction builds, and every object the
     console shows carrying the name the runbook's cleanup finds it by;
--   **its policies read every zone pair the census declares**, its scratch
-    zone standing in for the cluster's: an allow on each and an order on
-    each, so that a pair the census gains is a pair the probe misses until
+-   **its policies read every zone pair the census declares on the cluster
+    zone**, its scratch zone standing in for the cluster's: an allow on each
+    and an order on each, so that a pair the census gains is a pair the probe misses until
     the runbook covers it, and each allow's return flag the one the
     controller accepts on that pair.
 """
@@ -53,6 +53,7 @@ from kluster import conventions
 from kluster.components.gateway import unifi
 
 RUNBOOK = Path(__file__).parent.parent / 'docs' / 'physical' / 'gateway-cutover.md'
+TRIPWIRE = Path(__file__).parent.parent / 'docs' / 'declarative' / 'physical.md'
 
 #: Where the runbook puts the probe, relative to the checkout root it runs
 #: from (`PROBE=$PWD/.claude/unifi-probe`), and the project's name in it.
@@ -71,14 +72,14 @@ COMMAND_TIMEOUT = 120
 CASE_TIMEOUT = 3 * COMMAND_TIMEOUT + 2 * SETUP_TIMEOUT
 
 
-def heredoc(name: str) -> str:
-    """The file the runbook writes into the probe's directory as `name`, as it lands there."""
+def heredoc(name: str, document: Path = RUNBOOK) -> str:
+    """The file `document` writes into the probe's directory as `name`, as it lands there."""
     match = re.search(
         r'cat > "\$PROBE/' + re.escape(name) + r"\" <<'EOF'\n(?P<body>.*?)\n[ ]*EOF\n",
-        RUNBOOK.read_text(),
+        document.read_text(),
         re.DOTALL,
     )
-    assert match is not None, f'{RUNBOOK} writes no {name} for the probe'
+    assert match is not None, f'{document} writes no {name} for the probe'
     return textwrap.dedent(match['body']) + '\n'
 
 
@@ -183,15 +184,16 @@ NAMED = {
     'unifi:index/firewallZonePolicy:FirewallZonePolicy',
     'unifi:index/portForward:PortForward',
 }
-ORDER = 'unifi:index/firewallZonePolicyOrder:FirewallZonePolicyOrder'
+ORDER = 'pulumi-python:dynamic/unifi_zone_policy_order:ZonePolicyOrder'
+BRIDGED_ORDER = 'unifi:index/firewallZonePolicyOrder:FirewallZonePolicyOrder'
 
 
 POLICY = 'unifi:index/firewallZonePolicy:FirewallZonePolicy'
 ZONE = 'unifi:index/firewallZone:FirewallZone'
 
 
-async def run_probe() -> Controller:
-    """The probe's program, as the runbook writes it, declared under the mocks."""
+async def run_probe(document: Path = RUNBOOK) -> Controller:
+    """The probe's program, as `document` writes it, declared under the mocks."""
     controller = await run_with(Controller(site=conventions.gateway.UNIFI_SITE), stack='probe', project=PROJECT)
     pulumi.runtime.set_all_config(
         {f'{PROJECT}:gatewayHost': GATEWAY_HOST, f'{PROJECT}:unifiApiKey': 'not-a-key'},
@@ -199,7 +201,7 @@ async def run_probe() -> Controller:
     )
 
     async with declaring():
-        exec(compile(heredoc('__main__.py'), str(PROBE / '__main__.py'), 'exec'), {'__name__': '__main__'})
+        exec(compile(heredoc('__main__.py', document), str(PROBE / '__main__.py'), 'exec'), {'__name__': '__main__'})
     return controller
 
 
@@ -215,7 +217,9 @@ async def test_the_probes_program_declares_what_the_runbook_reads_back() -> None
     # what makes the probe's answer the window's (`controller_provider`).
     assert provider.inputs['apiUrl'] == f'https://{GATEWAY_HOST}'
     for declaration in controller.declared:
-        if declaration.typ != PROVIDER:
+        # An order dials the controller itself, through the construction
+        # `SiteFirewall` builds its own with (`policy_order`).
+        if declaration.typ not in (PROVIDER, ORDER):
             # A provider reference is the provider's URN, then its id.
             assert declaration.provider.rsplit('::', 1)[0].endswith(f'{PROVIDER}::{provider.name}'), declaration
         # The cleanup after a failure removes, in the console, whatever
@@ -225,17 +229,22 @@ async def test_the_probes_program_declares_what_the_runbook_reads_back() -> None
 
 
 @pytest.mark.asyncio
-async def test_the_probe_reads_every_zone_pair_the_census_declares() -> None:
+async def test_the_probe_reads_every_zone_pair_the_census_declares_on_the_cluster_zone() -> None:
     """A rerun that passes says the window's every pair will take its allows.
 
     The controller decides per pair, not per resource type: it refuses the
     return flag on an allow to `External` and accepts it everywhere else the
     census goes (Aetf/kluster-ops#709). So the probe answers for the window
     only on the pairs it holds an allow on, each flagged the way the
-    controller accepts. An order is per pair too, and on the pair of stock
-    zones it lands among the site's own policies, which the pair readings
-    measure, so every census pair carries one, ranking only that pair's
-    policies.
+    controller accepts. An order is per pair too, so each carries one, ranking
+    only that pair's policies, and one on a pair a flagged allow derives a
+    `(Return)` onto runs after that allow, which is what lets a pass say the
+    derivative needs no place in a batch.
+
+    The pairs are the census's with the cluster zone on one side. The pair of
+    stock zones is the exception: a census pair holds no custom policy but the
+    census's, so the probe has none to put there, and the census's own stand on
+    it once the window has run.
     """
     controller = await run_probe()
 
@@ -245,21 +254,61 @@ async def test_the_probe_reads_every_zone_pair_the_census_declares() -> None:
         unifi.Zone.EXTERNAL: zone_id(unifi.ZONE_EXTERNAL),
         unifi.Zone.CLUSTER: f'{scratch}_id',
     }
-    census = {(zones[row.source], zones[row.destination]) for row in unifi.CENSUS if isinstance(row, unifi.Pair)}
+    census = {
+        (zones[row.source], zones[row.destination])
+        for row in unifi.CENSUS
+        if isinstance(row, unifi.Pair) and unifi.Zone.CLUSTER in (row.source, row.destination)
+    }
     allows = [inputs for inputs in controller.by_name(POLICY).values() if inputs['action'] == 'ALLOW']
     probed = {(inputs['source']['zoneId'], inputs['destination']['zoneId']) for inputs in allows}
     assert census <= probed, sorted(census - probed)
+    stock = (zones[unifi.Zone.INTERNAL], zones[unifi.Zone.EXTERNAL])
+    assert stock not in probed, 'the probe holds a policy on a census pair of stock zones'
     for inputs in allows:
         toward_external = inputs['destination']['zoneId'] == zones[unifi.Zone.EXTERNAL]
         assert inputs.get('autoAllowReturnTraffic') is (None if toward_external else True), inputs['name']
 
+    policies = controller.by_name(POLICY)
     pair_of = {
-        f'{name}_id': (inputs['source']['zoneId'], inputs['destination']['zoneId'])
-        for name, inputs in controller.by_name(POLICY).items()
+        f'{name}_id': (inputs['source']['zoneId'], inputs['destination']['zoneId']) for name, inputs in policies.items()
     }
     orders = controller.by_name(ORDER)
-    ordered = {(inputs['sourceZoneId'], inputs['destinationZoneId']) for inputs in orders.values()}
+    ordered = {(inputs['source_zone_id'], inputs['destination_zone_id']) for inputs in orders.values()}
     assert census <= ordered, sorted(census - ordered)
     for name, inputs in orders.items():
-        ranked = {pair_of[policy] for policy in inputs['beforePredefinedIds']}
-        assert ranked == {(inputs['sourceZoneId'], inputs['destinationZoneId'])}, name
+        ranked = {pair_of[policy] for policy in inputs['policy_ids']}
+        assert ranked == {(inputs['source_zone_id'], inputs['destination_zone_id'])}, name
+
+    flagged = {name: pair_of[f'{name}_id'] for name, inputs in policies.items() if inputs.get('autoAllowReturnTraffic')}
+    assert flagged, 'the probe flags no allow, so no order meets a `(Return)`'
+    for name, inputs in orders.items():
+        origins = {
+            allow
+            for allow, (source, destination) in flagged.items()
+            if (destination, source) == (inputs['source_zone_id'], inputs['destination_zone_id'])
+        }
+        waits_on = {urn.rsplit('::', 1)[1] for urn in controller.depends_on(name, ORDER)}
+        assert origins <= waits_on, name
+
+
+@pytest.mark.asyncio
+async def test_the_orders_tripwire_leaves_a_policy_of_its_pair_unlisted() -> None:
+    """What the tripwire asks is whether a bridged batch short of its pair applies.
+
+    So the program holds one more policy on the pair than its bridged order
+    lists, and the order runs with that policy on the pair.
+    """
+    controller = await run_probe(TRIPWIRE)
+
+    (order,) = controller.by_name(BRIDGED_ORDER).items()
+    name, inputs = order
+    pair = (inputs['sourceZoneId'], inputs['destinationZoneId'])
+    on_pair = {
+        policy
+        for policy, held in controller.by_name(POLICY).items()
+        if (held['source']['zoneId'], held['destination']['zoneId']) == pair
+    }
+    listed = {str(policy).removesuffix('_id') for policy in inputs['beforePredefinedIds']}
+    (unlisted,) = on_pair - listed
+    assert listed < on_pair
+    assert unlisted in {urn.rsplit('::', 1)[1] for urn in controller.depends_on(name, BRIDGED_ORDER)}

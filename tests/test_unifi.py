@@ -5,9 +5,9 @@ properties are relationships between rules — which one is evaluated first,
 which one names a moving target, which one is missing — and none of those are
 visible in a rendered resource. So the suite asserts them directly:
 
--   the census is *exactly* the design's, because a rule on the controller
-    that nobody declared is drift and a rule declared beyond the census is
-    the same thing arriving the other way;
+-   the census is *exactly* the design's, because a custom policy on a pair
+    it orders that nobody declared is drift and a rule declared beyond the
+    census is the same thing arriving the other way;
 -   the drop is preceded by its allow, and both precede the predefined
     policies of the pair, which is the difference between a tightened VLAN
     and a severed television — and on the way *into* the cluster zone the
@@ -46,6 +46,7 @@ from unifi_controller import ZONE_LOOKUP, Controller, zone_id
 from kluster import conventions
 from kluster.components import talos
 from kluster.components.gateway import unifi
+from kluster.providers import unifi_zone_policy_order
 
 NAME = 'kluster'
 API_URL = 'https://gateway.invalid'
@@ -61,7 +62,7 @@ async def mocks() -> Controller:
 
 
 POLICY = 'unifi:index/firewallZonePolicy:FirewallZonePolicy'
-ORDER = 'unifi:index/firewallZonePolicyOrder:FirewallZonePolicyOrder'
+ORDER = 'pulumi-python:dynamic/unifi_zone_policy_order:ZonePolicyOrder'
 
 
 def _policy_pairs(mocks: Controller) -> dict[str, tuple[str, str]]:
@@ -106,9 +107,11 @@ def build(
 async def test_the_census_is_exactly_the_designed_set(mocks: Controller) -> None:
     """Nothing beyond the census, and nothing missing from it.
 
-    The design's sentence is "a controller rule not on this census is drift";
-    this is that sentence as an assertion, in the one direction a program can
-    make it — that the program declares the census and stops there.
+    The design's sentence is that a custom policy on a census pair that is
+    not a row of the census is drift; this is that sentence as an assertion,
+    in the one direction a program can make it — that the program declares the
+    census and stops there. The other direction is the order's own refusal
+    (`test_unifi_zone_policy_order.py`).
     """
     async with declaring():
         build()
@@ -121,11 +124,11 @@ async def test_the_census_is_exactly_the_designed_set(mocks: Controller) -> None
     # design does not actually own.
     pairs = _policy_pairs(mocks)
     orders = mocks.by_name(ORDER)
-    placed = [policy for inputs in orders.values() for policy in inputs['beforePredefinedIds']]
+    placed = [policy for inputs in orders.values() for policy in inputs['policy_ids']]
     assert sorted(placed) == sorted(pairs)
     for name, inputs in orders.items():
-        assert {pairs[policy] for policy in inputs['beforePredefinedIds']} == {
-            (inputs['sourceZoneId'], inputs['destinationZoneId'])
+        assert {pairs[policy] for policy in inputs['policy_ids']} == {
+            (inputs['source_zone_id'], inputs['destination_zone_id'])
         }, name
     # One network and one zone, both the cluster's: the pool is deliberately
     # neither, and no other network on the site is this program's to declare.
@@ -522,22 +525,12 @@ async def test_a_pair_evaluates_its_declared_policies_before_its_predefined_ones
         order = build().orders[key]
     on_pair = {policy for policy, pair in _policy_pairs(mocks).items() if pair == (source, destination)}
 
-    placed = await order.before_predefined_ids.future()
+    placed = await order.policy_ids.future()
     assert on_pair
     assert placed is not None
     assert set(placed) == on_pair
     assert await order.source_zone_id.future() == source
     assert await order.destination_zone_id.future() == destination
-
-
-@pytest.mark.asyncio
-async def test_nothing_is_ordered_behind_a_pairs_predefined_rules() -> None:
-    """The complement of the rule above: `after` is the placement nothing wants."""
-    firewall = build()
-
-    for key, *_ in ORDERINGS:
-        order = firewall.orders[key]
-        assert await order.after_predefined_ids.future() is None, key
 
 
 @pytest.mark.asyncio
@@ -553,12 +546,11 @@ async def test_the_iot_drop_precedes_the_allow_that_would_otherwise_answer_for_i
     firewall = build()
 
     order = firewall.orders['internal-cluster-order']
-    assert await order.before_predefined_ids.future() == [
+    assert await order.policy_ids.future() == [
         f'{NAME}-iot-cluster-v4_id',
         f'{NAME}-iot-cluster-v6_id',
         f'{NAME}-internal-cluster_id',
     ]
-    assert await order.after_predefined_ids.future() is None
     assert await order.source_zone_id.future() == zone_id(unifi.ZONE_INTERNAL)
     assert await order.destination_zone_id.future() == f'{NAME}-zone_id'
 
@@ -706,13 +698,14 @@ async def test_a_static_host_is_typed_by_the_family_of_its_address() -> None:
 
 @pytest.mark.asyncio
 async def test_the_controller_key_is_read_where_the_provider_is_built() -> None:
-    """The key that can rewrite the home\'s firewall reaches one line.
+    """The key that can rewrite the home\'s firewall reaches no signature.
 
-    It authorizes changes to the site\'s policy and nothing else in the program
-    has a use for it, so it is read at the line that builds the provider rather
-    than threaded through a signature (rfc-002 §8.1). What is still an argument
-    is the endpoint: which address the controller answers on is a site fact the
-    stack derives, not a credential.
+    It authorizes changes to the site\'s policy and nothing in the program but
+    the two sessions it opens has a use for it, so it is read at the line that
+    builds the provider, as the order\'s provider reads it in its `configure`,
+    rather than threaded through a signature (rfc-002 §8.1). What is still an
+    argument is the endpoint: which address the controller answers on is a site
+    fact the stack derives, not a credential.
     """
     firewall = build()
     assert await firewall.provider.api_key.future() == API_KEY
@@ -756,3 +749,37 @@ async def test_every_controller_resource_and_lookup_is_signed_by_it(mocks: Contr
     for declaration in controller:
         assert f'{NAME}-unifi' in declaration.provider, f'{declaration.name} is not signed by the provider'
     assert f'{NAME}-unifi' in mocks.called_through(ZONE_LOOKUP)
+
+
+@pytest.mark.asyncio
+async def test_an_order_dials_the_controller_the_provider_dials(mocks: Controller) -> None:
+    """An order is not signed by the provider, so it declares the same door itself.
+
+    A dynamic resource takes nothing from a provider resource, so the address,
+    the site and the certificate posture are its own inputs. They come from the
+    arguments `SiteFirewall` builds its provider from and from the same
+    `ALLOW_INSECURE`, so the two sessions cannot disagree about where the
+    controller is or whether it is verified. The key is neither: it is read in
+    the provider's `configure` and is no property of any resource.
+    """
+    async with declaring():
+        build()
+
+    orders = mocks.by_name(ORDER)
+    settings = mocks.inputs_of(f'{NAME}-unifi')
+
+    assert orders, 'the build declared no order'
+    for name, inputs in orders.items():
+        assert inputs['api_url'] == settings['apiUrl'], name
+        assert inputs['site'] == settings['site'], name
+        assert str(inputs['allow_insecure']).lower() == settings['allowInsecure'], name
+        assert API_KEY not in str(inputs), name
+
+
+def test_the_orders_session_opens_with_the_key_the_provider_is_built_with() -> None:
+    """One key with two readers, each naming it, since a provider imports nothing above it.
+
+    A difference is a run whose order fails to configure, for a key the stack
+    never held.
+    """
+    assert unifi.API_KEY == unifi_zone_policy_order.API_KEY_CONFIG

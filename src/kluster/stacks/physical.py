@@ -471,8 +471,10 @@ def _gateway(config: pulumi.Config) -> Gateway:
     overlay's configuration over ZeroTier Central's — and no one of them
     implies the others. **None of the three is read here.** The controller's
     API key and the overlay's administration token each configure a provider
-    and nothing else, so each is read at the line that builds that provider,
-    inside the component that owns the connection (rfc-002 §8.1). The device's
+    and nothing else, so each is read where that provider takes it: at the line
+    that builds it, inside the component that owns the connection (rfc-002
+    §8.1), and for the controller's key in the `configure` of the order's
+    dynamic provider as well. The device's
     SSH credential is the same rule for a provider with no such line: a dynamic
     provider reads its configuration in `configure`, in its own process, so
     `gatewayPrivateKey` is read there and by nothing else (framework/pulumi.md
