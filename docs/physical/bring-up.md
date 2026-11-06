@@ -56,7 +56,7 @@ a step that needs one.
 
 | Stage | What | Who | Needs | Gate | On failure |
 | --- | --- | --- | --- | --- | --- |
-| 0 | The prerequisites: the controller probe of gateway-cutover.md §3 passing for every zone pair, the node volumes at the sizes the migration's design gives them, since the first apply creates them, rfc-007 slices 9 to 11 merged, and Home Assistant's intake automation and check-in timer made (rfc-007 slice 14) | operator, dispatcher | nothing | gateway-cutover.md §3's list; the volumes and the three slices merged; the automation and the timer present | The window waits. Nothing has changed |
+| 0 | The prerequisites: the controller probe of gateway-cutover.md §3 passing for every zone pair, the node volumes as the migration's design sets them, since the first apply creates them, rfc-007 slices 9 to 11 merged, and Home Assistant's intake automation and check-in timer made (rfc-007 slice 14) | operator, dispatcher | nothing | gateway-cutover.md §3's list; the volumes and the three slices merged; the automation and the timer present | The window waits. Nothing has changed |
 | 1 | **The window**: gateway-cutover.md §3's readings, its §4 steps 0 to 4, and the verification of its §5 up to step 5 | operator | stage 0 | every pass of gateway-cutover.md §5 before step 5 | gateway-cutover.md §6, which undoes it whole |
 | 2 | **`physical` in full**: gateway-cutover.md §5's step 5, the readings after it, the disk grown on the host, then gateway.md §2.5's roster entry, `workerGua`, and the knob unset | operator | stage 1, and the tenancy grant gateway.md §2.5 names | a further `up` reports no changes, and a `physical` preview over the overlay comes back clean | Re-run the apply; leave the device alone. gateway-cutover.md §6 stays open throughout |
 | 3 | **Readings with no network plugin**: gateway-cutover.md §8.1, and the device half of gateway.md §2.4.2 | operator, dispatcher records | stage 2 | each item's own | A failing item is fixed on the empty cluster, and costs only time |
@@ -148,4 +148,7 @@ wave, which is where what it tests arrives.
 
 Everything else on those lists runs at stage 8. The check that a raw
 LoadBalancer port is answered ahead of the node firewall runs on a
-scratch Service, since no raw port exists yet.
+scratch Service on the `syncthing` row, since no raw port exists yet.
+Its pod runs on the worker, and it answers on TCP and UDP through the
+balancer on both families, because that is the path syncthing's peer
+port takes: from a cloud node, over KubeSpan, to the home.
