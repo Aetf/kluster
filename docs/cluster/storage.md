@@ -58,7 +58,7 @@ resort, object storage used directly where an app supports it.
 | `local-path` + VolSync | same local-path, plus a per-PVC restic schedule to the backup bucket | RWO, node-pinned; **movable via restore** | stateful apps without built-in replication; any volume that plausibly moves | bulk media (NAS's job) |
 | ~~`longhorn`~~ (deferred, §3.2) | Longhorn v1 engine | RWO | — not in the initial build — | — |
 | NAS (NFS PV / NodePV) | Existing NAS exports | RWO/RWX, homelab pool only | bulk media, large read-mostly sets | cloud-pool workloads; databases |
-| Cloud block volume | OCI block volume on a cloud node, one per node (`conventions.NODE_VOLUMES`), mounted at `/var/mnt/<name>` | RWO, node-pinned | preserved cloud-pool datasets: the hath cache, the syncthing replica | homelab-pool workloads; anything a node may have to lose |
+| Cloud block volume | OCI block volume on a cloud node, one per node (`conventions.NODE_VOLUMES`), mounted at `/var/mnt/<name>` | RWO, node-pinned | the preserved cloud-pool dataset: the hath cache | homelab-pool workloads; anything a node may have to lose |
 | Object storage (direct) | S3-compatible bucket (§4) | app-native | apps with first-class S3 support; all backups | POSIX pretenders |
 | JuiceFS (quarantined, no CSI — §6) | object storage + per-app metadata, mounted in-pod | RWX | last resort only, one app at a time | everything else; it is not selectable by `storageClassName` |
 
@@ -312,27 +312,20 @@ A workload may use it only if all of:
 **Decision (2026-08-29): the census is zero.** No workload in the design
 uses JuiceFS, so the policy above is a gate with nothing behind it and
 the CSI driver stays uninstalled. Everything else: immich media on NAS,
-the hath cache and the syncthing replica on cloud block volumes,
-qbittorrent on the home side, backups to object storage directly.
+the hath cache on a cloud block volume, qbittorrent on the home side,
+backups to object storage directly.
 
-The last candidate was the cloud-side syncthing replica (+ its dav
-share, ~110 GB of the legacy cluster's 5 Ti PVC). **The replica stays
-cloud-side**: its roles are an always-reachable public sync anchor for
-roaming clients and an independent second-site copy of the data, and
-pulling it home would collapse both copies into one site *and* route
-every roaming client's sync through VIP→KubeSpan→homelab. What changed
-is its backing store, because ~110 GB does not fit a boot disk:
+The last candidate was the legacy VPS's syncthing replica (+ its dav
+share, ~110 GB of the legacy cluster's 5 Ti PVC). **There is no cloud
+replica** (ruled 2026-11-05, `kluster-ops#712`). Its role was an
+always-reachable port for roaming clients, and every client already
+holds a copy, so nothing needs the data in the cloud. The balancer's
+peer port gives that reach to `syncthing-nas` on the homelab worker,
+and dav moves beside it.
 
--   **A plain OCI block volume, at the same price.** At OCI's Lower Cost
-    tier the volume is $0.0255/GB-month — the same per-GB rate as
-    Object Storage — so JuiceFS on OCI and a block volume cost the same
-    within cents at this size, and the block volume removes the whole
-    filesystem: no sidecar RAM, no metadata store, no cache tuning, and
-    ordinary PVC semantics. (An earlier rejection of a block volume
-    priced it at $0.10/GB, which is not OCI's rate.) The dataset is
-    **preserved, not backed up** (§3.3): every syncthing client holds a
-    subset and the homelab `syncthing-nas` instance holds the full set,
-    so recovery is a reseed over the syncthing protocol.
+That leaves the hath cache as the one cloud block volume, and these
+are the rules a node volume lives by:
+
 -   **The volume reaches the cluster without a vendor component in it.**
     The `physical` stack attaches it (`conventions.NODE_VOLUMES`), and
     the machine configuration of the node it attaches to mounts it: a
@@ -343,8 +336,7 @@ is its backing store, because ~110 GB does not fit a boot disk:
     ([declarative/physical.md](../declarative/physical.md) §2). The same
     configuration labels the node with the volume's name, and the
     cluster sees a `local` PersistentVolume with node affinity on that
-    label — the same path the hath cache takes. No OCI CSI driver, no
-    cloud controller.
+    label. No OCI CSI driver, no cloud controller.
 -   **The row's name is the dataset's identity**, in every place it
     appears: the OCI volume's logical name, the partition label, the
     mount path and the node label. A renamed row is therefore a
@@ -364,8 +356,8 @@ is its backing store, because ~110 GB does not fit a boot disk:
     that a volume row names. Once located, a partition carrying XFS is
     mounted as it is, and one carrying another filesystem is refused
     rather than mounted. A located partition on which the probe finds
-    no filesystem at all is formatted. For the fleet's datasets both
-    formatting paths cost a reseed, which is accepted because each is
+    no filesystem at all is formatted. For the hath cache both
+    formatting paths cost a reseed, which is accepted because it is
     preserved rather than backed up and is recovered by reseeding
     (§3.3); the rule above is what keeps any other data off those
     paths. The dataset's own disk has free space only between an OCI
@@ -390,14 +382,6 @@ is its backing store, because ~110 GB does not fit a boot disk:
     writes its dataset there. A path inside the volume is a missing path
     instead, the kubelet refuses a `local` volume whose path does not
     exist, and the pod stays pending until the volume is back.
--   **If it ever outgrows one volume**, JuiceFS reopens as a question,
-    and on B2 rather than OCI: B2 is ~3.7× cheaper per GB stored and
-    free on every API class, which is the dimension chunk traffic
-    stresses. That would need the delete-capable bucket key the
-    backup-integrity rules otherwise forbid, so it is a decision to
-    take deliberately rather than a fallback to slide into.
-
-The dav share serves the same dataset and follows the same volume.
 
 **Lifting the quarantine: the criterion is not on file.** Containment
 has two levers and only one of them has a written test. *Admitting

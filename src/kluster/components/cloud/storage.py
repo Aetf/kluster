@@ -2,8 +2,8 @@
 
 A volume here is data that outlives the container using it and is not part of
 any backup regime — its redundancy is elsewhere, in the network the dataset
-came from or in the other replicas of it (docs/cluster/storage.md §3.3). That
-combination is exactly what `protect=True` is for. The attachment carries the
+came from (docs/cluster/storage.md §3.3). That combination is exactly what
+`protect=True` is for. The attachment carries the
 same protection, because detaching a disk and deleting it cost the same thing:
 a node replacement that silently proposes a detach is the failure this catches,
 and node replacement is already an explicit, reviewed procedure (physical.md

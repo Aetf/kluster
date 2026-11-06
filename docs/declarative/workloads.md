@@ -80,9 +80,9 @@ be preserved (see the worked example).
 
 Worked examples: immich = CNPG (db) + NAS (originals) + local-path
 no-backup (thumbnails/ML cache); qbittorrent = NAS (payloads) +
-local-path+VolSync (its config/state); syncthing-nas = NAS (data) +
-local-path+VolSync (index/db); hath = **preserved but not backed**
-cache (its own protected block volume, moved-never-recreated — the
+local-path+VolSync (its config/state); syncthing-nas, the one instance,
+with dav beside it = NAS (data) + local-path+VolSync (index/db); hath =
+**preserved but not backed** cache (its own protected block volume, moved-never-recreated — the
 "cache" is a slice of the globally distributed H@H archive, not
 scratch, yet like NAS volumes its safety net is outside the cluster
 backup regime: the H@H network's own replication) + VolSync'd client
@@ -152,18 +152,17 @@ per-app number:
     hostname behind Authelia forward-auth on `internet-gw`, plus the
     LAN rewrite to `lan-gw` — continuing the legacy `bt.` entry rather
     than going rewrite-only.
--   **Block-volume app (cloud-side syncthing + dav)**: a `local`
+-   **Block-volume app (hath's cache)**: a `local`
     PersistentVolume over the node volume the `physical` stack attached
     (`conventions.NODE_VOLUMES`), with node affinity on that volume's
     node label, claimed by an ordinary PVC. The PersistentVolume's path
     is a directory inside the volume, `/var/mnt/<name>/<dir>`, created
     by the seeding step at the volume's root — never the mount point, so a volume that
     failed to mount is a missing path and the pod stays pending
-    (storage.md §6). `backup=None` on record —
-    every client holds a subset and `syncthing-nas` holds the full set,
-    so a reseed over the syncthing protocol is the recovery
-    (storage.md §6). No sidecar, no privileged namespace, and no
-    filesystem between the app and its data.
+    (storage.md §6). `backup=None` on record — the H@H network's own
+    replication is the dataset's redundancy (storage.md §3.3). No
+    sidecar, no privileged namespace, and no filesystem between the app
+    and its data.
 -   **CNPG-backed app (immich, splitpro, …)**: CNPG `Cluster` on
     local-path + barman to B2, a monthly restore drill to be inherited
     from the legacy discipline (storage.md §5; nothing runs it here
