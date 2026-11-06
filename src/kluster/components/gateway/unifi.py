@@ -616,8 +616,10 @@ class SiteFirewall(Component, pulumi_type='kluster:gateway:SiteFirewall'):
         # server offering leases beside that is a second opinion nothing
         # needs. IPv6 is a delegated prefix with router advertisements on,
         # because the design's worker GUA is a SLAAC address formed from what
-        # this network advertises. Nothing on it discovers anything by multicast,
-        # so the controller's reflector, on by default, is off.
+        # this network advertises. The multicast reflector is the site's setting,
+        # on for every network, and the controller derives this field from it, so
+        # the declaration states what it holds: `False` here would be ignored and
+        # planned again on every run.
         self.network = unifi.Network(
             f'{name}-network',
             name=conventions.gateway.UNIFI_NETWORK_CLUSTER,
@@ -631,7 +633,7 @@ class SiteFirewall(Component, pulumi_type='kluster:gateway:SiteFirewall'):
             ipv6_pd_start=DELEGATED_RANGE[0],
             ipv6_pd_stop=DELEGATED_RANGE[1],
             ipv6_ra_enable=True,
-            multicast_dns=False,
+            multicast_dns=True,
             firewall_zone_id=self.zone.id,
             site=site,
             opts=child,
