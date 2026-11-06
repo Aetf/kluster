@@ -2871,10 +2871,11 @@ The cluster VLAN needs neither: it is alone in its zone, and a policy
 names it by naming the zone.
 
 **An allow admits its return leg, and toward External the controller's
-own policy is that leg.** Every allow but those to External sets
+own policy is that leg.** An allow sets
 `auto_allow_return_traffic`, which has the controller add a
-`<name> (Return)` allow on the reverse pair. An allow to External —
-rule 1's and rule 2's — sets nothing. The controller gives every other zone
+`<name> (Return)` allow on the reverse pair, unless it goes to External
+or is a return leg itself. An allow to External — rule 1's and rule
+2's — sets nothing. The controller gives every other zone
 a predefined `External → <zone>` policy, `Allow Return Traffic`, which
 admits related and established traffic only, and it refuses the flag on
 every pair whose destination is External — `Firewall policy create
@@ -2886,7 +2887,10 @@ program would notice that policy going away, since the program neither
 declares nor reads it and a refresh compares only what is declared. Its
 absence would surface as dropped replies — the nodes cut off from their
 off-site control plane, the televisions from the media VIP — and not as
-a diff. The rule is `return_flag` in `components/gateway/unifi.py`.
+a diff. A return-only allow (rule 4) sets nothing either: it is a return
+leg itself, and the controller stores the shape with the flag off (read
+2026-11-05, Aetf/kluster-ops#714). The rule is `return_flag` in
+`components/gateway/unifi.py`.
 
 1.  **IoT → `lan` pool: default drop with one enumerated allow**
     (audit M2, amended 2026-08-24; ships with the cluster). The
@@ -2927,10 +2931,10 @@ a diff. The rule is `return_flag` in `components/gateway/unifi.py`.
     the home. What a workload may call is decided where the workload
     is declared; narrowing it here would move that decision behind a
     gateway credential.
-4.  **Internal → cluster zone: allow, with the IoT VLAN dropped ahead
-    of it.** The allow gives the trusted VLANs the reach they have to
-    every host of the Internal zone — debugging straight at a node, a
-    ping, a host path that hairpins. The drop is a v4-CIDR/ULA pair
+4.  **Internal → cluster zone: return traffic, then the IoT VLAN
+    dropped, then allow.** The allow gives the trusted VLANs the reach
+    they have to every host of the Internal zone — debugging straight
+    at a node, a ping, a host path that hairpins. The drop is a v4-CIDR/ULA pair
     sourced from the IoT VLAN's address groups, ordered **before** the allow
     because here the allow is the broad rule: declared after it, the
     drop would match nothing while reading as if it were in force.
@@ -2938,6 +2942,24 @@ a diff. The rule is `return_flag` in `components/gateway/unifi.py`.
     least-trusted population, and nothing recorded is severed — the single IoT-originated dependency targets the pool,
     not the node subnet. Structurally it is rule 1 one zone over: the
     zone stays open, the untrusted subpopulation is carved out.
+
+    **The first row is a return-only allow**, both families, the whole
+    Internal zone. The drop is stateless, and it ranks ahead of
+    `cluster-internal (Return)`, which sits where the pair's predefined
+    policies start, so with nothing before it the drop takes the reply
+    to every connection a node opens toward the IoT VLAN, the direction
+    rule 3's dependencies run in. The row matches related and
+    established traffic alone: the IoT VLAN still opens nothing, and
+    what is neither, an invalid packet included, meets the drop. The
+    drop cannot carry the state itself, because at the pinned provider a
+    `CUSTOM` state list reads back null and `physical` plans an update
+    on every run (filipowm/terraform-provider-unifi#205).
+
+    Rule 1's drop needs no such row. It matches traffic to the pool, and
+    a pool address opens no connection toward the IoT VLAN: a workload's
+    connection leaves masqueraded to its node's address, so the reply
+    enters on this pair, and the one flow the census admits into the
+    pool is opened by the IoT side and ranks ahead of that drop.
 5.  **qbittorrent inbound-v6 pinhole**: to the worker VM's GUA on the
     cluster VLAN, plus the service port. Constraint on record: the
     zone-policy API matches
