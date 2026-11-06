@@ -246,6 +246,9 @@ async def test_the_cluster_vlan_hands_out_no_leases() -> None:
     # delegated prefix and the router advertisements that carry it.
     assert await firewall.network.ipv6_ra_enable.future() is True
     assert await firewall.network.ipv6_interface_type.future() == 'pd'
+    # The controller's reflector is on unless declared off, and a declaration
+    # silent on it plans an update on every run.
+    assert await firewall.network.multicast_dns.future() is False
     # The controller refuses a delegated network with no range, and reads each
     # bound as an address.
     start = IPv6Address(await firewall.network.ipv6_pd_start.future())
