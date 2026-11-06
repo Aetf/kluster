@@ -25,6 +25,7 @@ config:
     secure: v1:zF0aZaYEDOMijHQn:hVaG5G7lcLVL0Y0tcIXuNCsTtci8aQ7kWo5FTsW7GO3C0EY7UXRJf+n6b4Vpjw==
   kluster-py:gatewayBgpPassword:
     secure: v1:I5lHgroKnPxY5fNB:EsSrZDu7CfTjlSMh+aiF1sgVrjpJTPzLrvhj0zQ3rmKgilbhcI6KaIwt4mxA8Jk2
+  kluster-py:gatewayBootstrapHost: 10.0.5.1
   kluster-py:gatewayAcmeToken:
     secure: v1:ZRwAUd6R77DfZ+0a:Q77o3aecyWR1yoau4uCXYkrZjvVy2OIe4nlZ5E4oxGjPeMVdpL5cC79sz0/DcqvVO2bkcxXmN1kn3CKJmB+SA9npz7On
   kluster-py:b2ApplicationKeyId:
