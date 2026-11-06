@@ -495,7 +495,10 @@ class SshTransport:
             symlink_test(path),
             regular_file_test(path),
             f'mkdir -p {shlex.quote(paths.parent(path))}',
-            f'cat > {staged}',
+            # Nothing to read means nothing to wait for: `asyncssh` sends its end
+            # of file with the input it writes, so `cat` on an empty input would
+            # block for as long as the session stays open.
+            f'cat > {staged}' if data else f': > {staged}',
             f'chmod {shlex.quote(mode)} {staged}',
         ]
         if owner:
