@@ -429,8 +429,9 @@
       // local-path-provisioner, whose every release is `v0.0.N`: docker
       // versioning reads each one as a patch, which the global
       // `patch: enabled: false` would drop, so its pin would never move. Its
-      // patches are re-enabled here, and nothing else's; the update then
-      // travels in the in-cluster group like any other chart or image bump.
+      // patches are re-enabled here, in a rule naming it alone; the update
+      // then travels in the in-cluster group like any other chart or image
+      // bump.
       matchDepNames: [
         'docker.io/rancher/local-path-provisioner',
       ],
@@ -438,6 +439,54 @@
         'patch',
       ],
       enabled: true,
+    },
+    {
+      // The application images whose release line moves by patches: socat
+      // numbers its releases in four parts and moves the last two (1.8.0.3,
+      // 1.8.1.1), every image of hath's client is a 1.6 release, and Redis
+      // 7.4 is the last minor of its major, so each of its fixes is a patch.
+      // Docker versioning reads every such release as a patch, which the
+      // global `patch: enabled: false` drops, so these pins would move only on
+      // a major. Their patches are re-enabled here, and the updates travel in
+      // the in-cluster group.
+      matchDepNames: [
+        'docker.io/alpine/socat',
+        'docker.io/frosty5689/hath',
+        'docker.io/library/redis',
+      ],
+      matchUpdateTypes: [
+        'patch',
+      ],
+      enabled: true,
+    },
+    {
+      // exim's relay image, tagged `<exim release>-r<Alpine package
+      // revision>-<image revision>`, the exim release in two parts or three
+      // (`4.94.2-r0-2`, `4.98-r0-4`). Docker versioning reads everything after
+      // the first hyphen as a suffix a candidate has to repeat exactly, and
+      // the number of release parts likewise, so no later release would be
+      // one it offers. This reads the three numbers apart: an exim release is
+      // a minor or a major, a new revision of one a patch. The
+      // per-architecture tags the image also publishes (`4.96-r1-0-arm64v8`)
+      // do not match, so they are never offered.
+      matchDepNames: [
+        'docker.io/devture/exim-relay',
+      ],
+      versioning: 'regex:^(?<major>\\d+)\\.(?<minor>\\d+)(?:\\.(?<patch>\\d+))?-r(?<build>\\d+)-(?<revision>\\d+)$',
+    },
+    {
+      // qBittorrent's own image, tagged `<release>-<image revision>`
+      // (`5.3.0-2`): docker versioning would read the revision as a suffix a
+      // candidate has to repeat, and a release's first image is revision 1.
+      // The pinned line builds against libtorrent 2, and the variant built
+      // against libtorrent 1.2 (`5.3.0-lt1-2`; `-lt2-` on releases from before
+      // libtorrent 2 was the default) does not match, so it is never offered.
+      // A new image revision or a patch release is a patch, which the global
+      // `patch: enabled: false` folds into the next minor release.
+      matchDepNames: [
+        'docker.io/qbittorrentofficial/qbittorrent-nox',
+      ],
+      versioning: 'regex:^(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)-(?<build>\\d+)$',
     },
     {
       // The interpreter every job runs, pinned by `.python-version`: uv
@@ -1129,7 +1178,10 @@
       // not a version and is ignored. A third-party image carries its
       // upstream's release tag, so its bumps are majors, minors or patches as
       // that upstream numbers them, and a patch reaches a pull request only
-      // where a package rule re-enables it (local-path-provisioner's, above).
+      // where a package rule re-enables it (local-path-provisioner's and the
+      // application images' whose line moves by patches, above). A tag that
+      // carries a revision beside its version takes a regex versioning from a
+      // package rule, since docker versioning would hold the revision fixed.
       customType: 'regex',
       managerFilePatterns: [
         '/^Pulumi\\.yaml$/',

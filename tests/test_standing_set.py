@@ -247,10 +247,11 @@ def test_the_provisioners_patch_releases_reach_a_pull_request() -> None:
     """Every provisioner release is `v0.0.N`, a patch to docker versioning, and patches are off unless a rule says so.
 
     The rule names the dependency the image manager reads off the pin's line,
-    re-enables patches and nothing else, and names no other dependency: every
-    other pin's patches stay folded into its minors. Renovate reads its
-    configuration from the default branch, so nothing goes red there when
-    this breaks.
+    re-enables patches and nothing else, and names no other dependency: an
+    image whose releases are patches is named by a rule of its own, and a pin
+    no such rule names keeps its patches folded into its minors. Renovate
+    reads its configuration from the default branch, so nothing goes red
+    there when this breaks.
     """
     config = (ROOT / 'renovate.json5').read_text()
     pin = re.search(r'^\s*versions:image-local-path-provisioner:.*$', (ROOT / 'Pulumi.yaml').read_text(), re.MULTILINE)
