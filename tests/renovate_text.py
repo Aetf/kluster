@@ -3,8 +3,10 @@
 There is no JSON5 parser here, so a suite that holds a renovate rule finds
 the rule's entry in the file's text and reads its keys one line at a time.
 The shape that makes that sound is the file's own: no `packageRules` entry
-nests an object, no comment inside one carries a brace, and each key a rule
-sets sits on a line of its own.
+nests an object, and each key a rule sets sits on a line of its own. A brace
+in a comment or inside a string -- a quantifier in a rule's regular
+expression, `[0-9a-f]{12}` -- is passed over, so the braces a scan finds are
+the ones that delimit an entry.
 
 A custom manager's `matchStrings` are regular expressions, which a suite
 holds by writing each one out in Python and checking it two ways: that
@@ -17,28 +19,46 @@ from __future__ import annotations
 
 import re
 
+#: A string, in either quote: `renovate.json5` writes a value in single quotes,
+#: and in double quotes where the value holds an apostrophe.
+_STRING = re.compile(r"'(?:[^'\\\n]|\\.)*'|\"(?:[^\"\\\n]|\\.)*\"")
+
+
+def _structure(text: str) -> str:
+    """`text` with each comment line and the inside of each string blanked, every offset kept."""
+
+    def blank(line: str) -> str:
+        if line.lstrip().startswith('//'):
+            return ' ' * len(line)
+        return _STRING.sub(lambda found: found[0][0] + ' ' * (len(found[0]) - 2) + found[0][-1], line)
+
+    return '\n'.join(blank(line) for line in text.split('\n'))
+
+
+def _uncommented(text: str) -> str:
+    return '\n'.join(line for line in text.splitlines() if not line.lstrip().startswith('//'))
+
 
 def package_rule(config: str, at: int) -> tuple[int, str]:
     """The `packageRules` entry around offset `at`: where it starts, and its lines bar comments.
 
     An entry is the braces around the offset, which holds because no entry
-    nests an object and no comment inside one carries a brace.
+    nests an object.
     """
-    start = config.rindex('{', 0, at)
-    lines = config[start : config.index('}', at)].splitlines()
-    return start, '\n'.join(line for line in lines if not line.lstrip().startswith('//'))
+    structure = _structure(config)
+    start = structure.rindex('{', 0, at)
+    return start, _uncommented(config[start : structure.index('}', at)])
 
 
 def package_rules(config: str) -> list[str]:
     """Each `packageRules` entry of `renovate.json5`, with its comment lines dropped.
 
-    An entry is a brace-delimited object; none nests an object and no comment
-    inside one carries a brace, which is what lets a text scan find them.
+    An entry is a brace-delimited object, and none nests an object, which is
+    what lets a text scan find them.
     """
     start = config.index('packageRules: [')
     block = config[start : config.index('customManagers: [', start)]
-    lines = (line for line in block.splitlines() if not line.lstrip().startswith('//'))
-    return re.findall(r'\{[^{}]*\}', '\n'.join(lines))
+    return [_uncommented(block[found.start() : found.end()]) for found in re.finditer(r'\{[^{}]*\}', _structure(block))]
 
 
 def listed(rule: str, key: str) -> list[str]:

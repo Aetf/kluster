@@ -489,6 +489,75 @@
       versioning: 'regex:^(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)-(?<build>\\d+)$',
     },
     {
+      // The images built in `docker/` (framework/ci.md §4), tagged with their
+      // conf's `TAG` and a fingerprint of what each was built from, twelve hex
+      // digits. Docker versioning reads the fingerprint as a suffix a
+      // candidate has to repeat exactly, so it would offer no later build. The
+      // versionings below match the fingerprint without capturing it: a later
+      // version is offered whatever its fingerprint, and a new build of the
+      // pinned version compares equal and is not, which leaves that refresh
+      // to a person (ci.md §4). The plain tags the legacy repository
+      // published and the per-architecture tags `images.yml` leaves beside
+      // each build do not match, so they are never offered.
+      //
+      // emailproxy's calendar versions, read as `images.yml` tags them.
+      matchDepNames: [
+        'ghcr.io/aetf/emailproxy',
+      ],
+      versioning: 'regex:^(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)-[0-9a-f]{12}$',
+    },
+    {
+      // golinks, tagged with the date and short hash of the upstream commit
+      // it is built from, since upstream publishes no releases: the date read
+      // as year, month and day, as emailproxy's calendar is, and the hash
+      // passed over with the fingerprint. Two commits of one day compare
+      // equal, so the later one is moved to by hand.
+      matchDepNames: [
+        'ghcr.io/aetf/golinks',
+      ],
+      versioning: 'regex:^(?<major>\\d{4})(?<minor>\\d{2})(?<patch>\\d{2})-[0-9a-f]{7}-[0-9a-f]{12}$',
+    },
+    {
+      // The `pg_cron` operand, tagged with the CloudNativePG image it extends
+      // (`17.10-standard-trixie`): the Postgres release, then the image's
+      // flavour and Debian release, which are held fixed.
+      matchDepNames: [
+        'ghcr.io/aetf/pgcron-cnpg',
+      ],
+      versioning: 'regex:^(?<major>\\d+)\\.(?<minor>\\d+)-(?<compatibility>[a-z]+-[a-z]+)-[0-9a-f]{12}$',
+    },
+    {
+      // The `vchord` operand, tagged with the CloudNativePG image it extends,
+      // its Debian release dropped (`15.13-1`), and the VectorChord release
+      // it was built with. The Postgres release is the version, and the
+      // base's revision is passed over: a new revision of one Postgres
+      // release compares equal, so the pin moves to it by hand, as to any new
+      // build of the pinned version. The VectorChord release is held fixed,
+      // because moving it upgrades the extension in immich's database, a
+      // change rfc-008 leaves to immich, made once on the new cluster, rather
+      // than a rebuild. A pin holding one release is moved to another by
+      // hand.
+      matchDepNames: [
+        'ghcr.io/aetf/vchord-cnpg',
+      ],
+      versioning: 'regex:^(?<major>\\d+)\\.(?<minor>\\d+)-\\d+-(?<compatibility>\\d+\\.\\d+\\.\\d+)-[0-9a-f]{12}$',
+    },
+    {
+      // The patches of emailproxy and golinks, re-enabled: a release on
+      // emailproxy's calendar within a month, a golinks commit within a
+      // month. Each is a new version, published once its conf's bump merges,
+      // and a pin that waited for the next minor would leave that image
+      // unrun. The operands' versionings read no patch.
+      matchDepNames: [
+        'ghcr.io/aetf/emailproxy',
+        'ghcr.io/aetf/golinks',
+      ],
+      matchUpdateTypes: [
+        'patch',
+      ],
+      enabled: true,
+    },
+    {
       // The interpreter every job runs, pinned by `.python-version`: uv
       // installs a build of that release for the project, and the pyenv
       // manager reads the pin against the `python` image's tags. Its patches
@@ -849,6 +918,22 @@
       groupSlug: 'pgvecto-rs',
     },
     {
+      // A VectorChord release, read off `VECTORCHORD_SEMVER` in
+      // `vchord-cnpg.conf`. Like a pgvecto.rs release it is an extension
+      // upgrade of immich's existing database rather than a rebuild, so it
+      // waits on the dashboard, patches included, which the rule for
+      // `docker/` would otherwise take through as an ordinary pull request.
+      matchDepNames: [
+        'tensorchord/VectorChord',
+      ],
+      matchUpdateTypes: [
+        'major',
+        'minor',
+        'patch',
+      ],
+      dependencyDashboardApproval: true,
+    },
+    {
       // The any-Terraform-provider bridge every SDK under `sdks/` is generated
       // with. One dependency written once per SDK, so one bump moves every
       // entry and regenerates every SDK; alone, because a bridge release
@@ -1181,7 +1266,8 @@
       // where a package rule re-enables it (local-path-provisioner's and the
       // application images' whose line moves by patches, above). A tag that
       // carries a revision beside its version takes a regex versioning from a
-      // package rule, since docker versioning would hold the revision fixed.
+      // package rule, since docker versioning would hold the revision fixed,
+      // and so does a self-built image's, which ends in a fingerprint.
       customType: 'regex',
       managerFilePatterns: [
         '/^Pulumi\\.yaml$/',

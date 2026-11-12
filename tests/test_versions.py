@@ -497,6 +497,29 @@ SCHEMES = {
     'docker.io/shokoanime/server': Scheme(('v5.2.5', 'v5.3.0')),
     'docker.io/alpine/k8s': Scheme(('1.36.6', '1.37.0')),
     'docker.io/qbittorrentofficial/qbittorrent-nox': Scheme(('5.1.4-2', '5.2.0-1'), ('5.3.0-lt1-2', '5.3.0-lt2-1')),
+    # The images built in `docker/`, tagged `<TAG>-<fingerprint>` (framework/ci.md
+    # §4). Their registry holds a version once `main` has built it, so a step to
+    # a version it does not hold yet is the upstream's own step, under
+    # fingerprints the registry does not hold. Each repository also serves the
+    # plain tags the legacy repository published and a per-architecture tag
+    # beside every build.
+    'ghcr.io/aetf/emailproxy': Scheme(
+        ('2025.6.24-0123456789ab', '2025.6.25-ba9876543210'), ('2026.7.3', '2026.7.3-84bf8a9443e6-amd64')
+    ),
+    'ghcr.io/aetf/golinks': Scheme(
+        ('20261018-1c6080a-0123456789ab', '20261026-7d51de8-ba9876543210'),
+        ('20260821-df12751', '20260821-df12751-e28925ffa30c-arm64'),
+    ),
+    'ghcr.io/aetf/pgcron-cnpg': Scheme(
+        ('17.10-standard-trixie-8850f6aa8e37', '17.11-standard-trixie-0123456789ab'),
+        ('17.10-standard-trixie-1', '17.10-standard-trixie-8850f6aa8e37-amd64'),
+    ),
+    # The pin is the Postgres release legacy runs, and `main` builds the next
+    # one. A build with another VectorChord release is no release of the line.
+    'ghcr.io/aetf/vchord-cnpg': Scheme(
+        ('15.13-1-0.3.0-2300e63aed1f', '15.14-1-0.3.0-d5a2df5aba77'),
+        ('15.13-1-0.3.0', '15.14-1-0.3.0-d5a2df5aba77-arm64', '15.14-1-1.0.0-0123456789ab'),
+    ),
 }
 
 
@@ -552,3 +575,42 @@ def test_renovate_offers_the_next_release_of_every_image_pin(dependency: str) ->
             assert read is None or read.compatibility != pinned.compatibility, f'{dependency}: {other} replaces {tag}'
     update = _update_type(before, after)
     assert _offered(config, dependency, update), f'{dependency}: a {update} update is never proposed'
+
+
+# --------------------------------------------------------------------------
+# An extension of immich's database moves on the dashboard.
+
+
+def _extensions() -> list[str]:
+    """What `vchord-cnpg.conf` builds immich's database with beyond its base, by renovate's name for each.
+
+    Every dependency the conf's renovate hints name but the one `PG_TAG`
+    pins, the CloudNativePG image the operand extends.
+    """
+    conf = (ROOT / 'docker' / 'vchord-cnpg.conf').read_text()
+    hinted = re.findall(r'^# renovate: datasource=\S+ depName=(\S+).*\n([A-Za-z_]\w*)=', conf, re.MULTILINE)
+    return sorted({dependency for dependency, key in hinted if key != 'PG_TAG'})
+
+
+def test_the_extensions_are_read() -> None:
+    """The case below is parametrized by the conf's hints, so a conf read as hinting nothing would hold nothing."""
+    assert _extensions()
+
+
+@pytest.mark.parametrize('update', ['major', 'minor', 'patch'])
+@pytest.mark.parametrize('dependency', _extensions())
+def test_a_release_of_an_extension_of_immichs_database_waits_on_the_dashboard(dependency: str, update: str) -> None:
+    """A release of an extension is an upgrade of immich's existing database, not a rebuild (operations.md §1).
+
+    So renovate proposes it only once someone approves it on the dashboard,
+    whatever kind of release it is: the rule for `docker/` would otherwise
+    take a minor or a patch through as an ordinary pull request, and its
+    merge would move the operand `main` builds off the release immich's pin
+    holds.
+    """
+    config = (ROOT / 'renovate.json5').read_text()
+    assert any(
+        re.search(r'^\s*dependencyDashboardApproval: true,$', rule, re.MULTILINE)
+        and update in (listed(rule, 'matchUpdateTypes') or [update])
+        for rule in _rules_naming(config, dependency)
+    ), f'a {update} release of {dependency} is proposed without approval'
