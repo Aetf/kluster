@@ -43,8 +43,13 @@ its own on top. It publishes no application name and is not going to
 (§2). None of that has an app to co-locate with — so it gets its own
 stack with its own (rare) change cadence, and non-cluster DNS edits
 never touch a cluster stack. Ordering:
-`physical → dns ∥ k8s-base → apps`; `apps` references `dns` for zone
-IDs and `dns` references `physical` for anchor IPs.
+`physical → dns → k8s-base → apps`, with `k8s-base` and `apps` each
+after `dns` whatever its result. A migration's cut hands a name from
+`dns` to a cluster stack in one run, and neither stack can adopt the
+other's record while Cloudflare refuses a CNAME beside another record of
+the same name, so the delete has to come first; a failed `dns` stops
+neither (framework/ci.md §3). `apps` references `dns` for zone IDs and
+`dns` references `physical` for anchor IPs.
 
 The `dns` stack owns: zone resources, the base records above, the
 **anchors** (§2), a reusable per-zone mail component

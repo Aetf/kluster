@@ -164,11 +164,11 @@ migration window that opens migration.md Wave C, the same drained
 window as that wave's VM growth (migration.md §0 rule 4), since each
 replaces the domain. It takes the A380 from the legacy cluster, whose
 device plugin kluster-code#253 limited to it, so a kluster-code change
-comes just before the window: the legacy plugin advertises the iGPU
-instead. The window scales every legacy GPU consumer (immich's
-transcoding and machine learning, jellyfin) down, since migration.md
+at the wave's head, before the window, has the legacy plugin advertise
+the iGPU instead. The head also stops every legacy GPU consumer (immich's
+transcoding and machine learning, jellyfin), since migration.md
 §0 rule 4 grows the VM by what they free, and they stay down until each
-app's move verifies, so from the window a legacy app runs only when the
+app's move verifies, so from the head a legacy app runs only when the
 rollback of migration.md §0 rule 1 starts it again. On the iGPU it runs
 at the lower throughput their batch work outgrew, which is what the
 A380 is there for, and the change waits for the head of the wave

@@ -119,9 +119,14 @@ The legacy VPS NIC moved 1276 GB TX/30d, but decomposed:
 **Steady-state true public egress ≈ 150–220 GB/mo.** Design rules
 (reflected in architecture.md §3.4):
 
--   **Bulk-egress workloads (qbittorrent/seeding, large syncs) are pinned to
-    the Homelab pool and egress directly via the home uplink**, never
-    through a metered cloud path.
+-   **Bulk-egress workloads (qbittorrent/seeding) are pinned to the
+    Homelab pool and egress directly via the home uplink**, never
+    through a metered cloud path. **A roaming device's sync crosses
+    one, by the operator's ruling**: no syncthing replica runs in
+    the cloud, and the balancer's peer port reaches the NAS instance on
+    the worker, so a device away from home syncs across the cloud's
+    metered egress, inside the 10 TB allowance (migration.md §2, Wave
+    A2).
 -   **hath is the only workload requiring a stable public IP** (inbound port
     and outbound on the same IP; the dedicated-VIP pattern,
     architecture.md §3.2). Its ~50–110 GB/mo fits trivially inside the
@@ -347,7 +352,8 @@ JBOD — this host *is* the NAS.
 | HAOS libvirt VM (2 vCPU / 4 GiB, PCIe USB3 + Wi-Fi/BT passthrough) | home automation must survive cluster outages; architecture.md §6.8 | 4 GiB |
 | AdGuard alice/bob run as nspawn containers **on the UDM**, not here; the host's adguardhome-sync **retires** once Pulumi dual-writes both instances (declarative/dns.md §3) | LAN DNS lives on the gateway and must survive cluster (and this host's) outages | ~0 |
 | The *legacy* Pulumi state-backend Postgres (podman) — serves kluster-code until decommission; the new cluster's backend lives on an OCI micro (framework/ci.md §1) | a state backend cannot live inside the cluster it manages | ~0.2 GiB (until Wave F) |
-| zerotier, sshd, apcupsd, smartd, syslog-ng, small relays (jellyfin-discovery, samsung-tv), Claude sessions | host plumbing / management path | ~1.5 GiB |
+| zerotier, sshd, apcupsd, smartd, syslog-ng, small relays, Claude sessions | host plumbing / management path. The relays: `samsung-tv`, between Home Assistant and a television on the Default LAN, neither end the cluster's; and the **heard relay** of the `jellyfin-discovery` row, a unit whose `socat` hears discovery broadcasts on each home VLAN and sends each as a unicast to the row's port at the media VIP. The row, a `Heard` side of its `Port`, is its declaration, and the host belongs to no stack, so the unit copies the row's port, group and VIP by hand, and each window's verification holds the copy | ~1.5 GiB |
+| thread-dashboard | operator ruling: its HomeKit names need multicast on the IoT bridge, which no pod has. Its name is a device row at `lan-gw`, served through a device relay on the worker that reaches the host's leg on the cluster VLAN | 35 MB |
 | dmarc-check timer (claude-driven DMARC triage) | uses the host's claude credentials (an in-cluster CronJob would need the API key sealed); revisit after cluster stabilization — a different approach may supersede it | ~0 |
 
 **Moves into the cluster**: everything currently in legacy k3s on this
@@ -356,8 +362,8 @@ immich+CNPG, jellyfin+Shoko, prometheus+grafana, syncthing-nas, hath is
 cloud-bound, …) **plus the natives that only stayed out for platform
 reasons**: qbittorrent-nox (blocked on IPv6, solved by architecture.md
 §3.5) with seedwatch alongside it (it drives the qbittorrent API and
-reads NAS hardlink counts — both reachable in-cluster), and
-thread-dashboard. distccd is retired or containerized opportunistically.
+reads NAS hardlink counts — both reachable in-cluster). distccd is
+retired or containerized opportunistically.
 
 **GPU** (2026-10-19): legacy workloads hold 3× `gpu.intel.com/i915` allocations
 (immich ML/transcode, jellyfin), all on the host's Arc A380, to which
@@ -374,19 +380,42 @@ migration.md Wave C the window).
 ### 4.2 VM sizing
 
 -   **Worker VM** (pure worker — the control plane lives cloud-side,
-    architecture.md §1.1): **12–16 vCPU / 20 GiB RAM**, disk on local
-    NVMe. RAM math: 32 − 4 (HAOS) − 4 (ARC) − 2 (host+podman) − ~1
-    (qemu/host overhead) ≈ 21 GiB. **20 GiB is the end state, not the
-    boot size**: while legacy k3s still holds ~16 GiB the VM starts at
-    ~10 GiB and grows stepwise as each migration wave stops its legacy
-    workloads (migration.md §0.4 — RAM is interleaved exactly like the
-    NVMe below). Today's ~16 GiB in-cluster usage
-    already includes ~5 GiB of infra tax that the economy program (§4.4)
-    shrinks — and with etcd/apiserver moved off this VM its share drops
-    further (kubelet+containerd+Cilium ≈ 1.5 GiB) — so ~20 GiB carries
-    the workload set plus qbittorrent with comfortable slack. **A RAM
-    upgrade remains the relief valve** (board verified: ROG Maximus
-    Z690 Hero, DDR5, 4×DIMM up to 128 GB).
+    architecture.md §1.1): **12–16 vCPU**, its RAM grown to fit (below),
+    disk on local NVMe. The host has 31 GiB. Read on 2026-11-05 before
+    the worker started, 12.3 GiB of it was available, with Home
+    Assistant's machine at 4.1, legacy k3s's server at 2.6 and its pods
+    at 5.6; the worker **boots at 10 GiB**, leaving about 2.3. What it
+    can grow by after that is what legacy releases, less a margin of
+    1 GiB. **Two ceilings follow**:
+    -   **Transitional, while the migration waves run: about 16 GiB**,
+        about 14.5 of it allocatable to workloads, reached at Wave C's
+        window with legacy's applications stopped. The legacy server and
+        what stays on it — its system pods and the idle CI runners a
+        neighboring project runs there, about 3.6 GiB together — stay
+        resident. The runners are the assumption: one under load has
+        taken up to 6 GiB, so the ceiling holds only while that
+        project's dispatching stays paused, as the operator has ruled
+        for the waves, or the runners are capped through Wave C's window
+        and soak.
+    -   **End state, after the decommission: about 19 GiB at most**,
+        once legacy releases the rest. That is a ceiling and not a
+        target: the end-state size is the decommission's decision
+        (migration.md §4), against what the host keeps for the
+        operator's own work beside the cluster.
+
+    **The worker grows to fit, not to absorb**: a drained window grows
+    it by what the next wave's requests and their headroom need, capped
+    by what legacy has released, and whatever legacy releases beyond
+    that stays with the host (migration.md §0 rule 4 — RAM is
+    interleaved like the NVMe below). One window does it, Wave C's, from
+    10 GiB to about 16. The workload set fits under the transitional
+    ceiling because requests are sized from what each application runs
+    at, and limits from its 30-day peak (rfc-008 §6.1): the requests
+    take less than half of the allocatable, and every peak at once
+    comes to about the allocatable itself. **A RAM upgrade remains the
+    relief valve** (board verified: ROG Maximus Z690 Hero, DDR5,
+    4×DIMM up to 128 GB), and the choice between it and tighter limits
+    is the operator's if Wave C's reading departs from that sizing.
 -   **Addressing**: the worker sits on the **dedicated cluster VLAN**
     (id 7, `192.168.70.0/24`) rather than the host's untagged server
     LAN, at the static address **`192.168.70.10`** — the network shape
@@ -399,8 +428,8 @@ migration.md Wave C the window).
     this VM; its disk constraint is ordinary workload I/O.)
 -   **Optional second worker VM** (2–4 vCPU / 8 GB): **not in the
     initial build**, deferred with criteria in §4.3. RAM is why it
-    waits: the end state above already spends ~20 of the ~21 GiB this
-    host can spare. The design must not assume it exists.
+    waits: the end-state ceiling above is already the whole of what
+    this host can spare. The design must not assume it exists.
 
 ### 4.3 One big VM, and the deferred second worker
 

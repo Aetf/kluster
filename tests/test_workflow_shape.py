@@ -15,6 +15,13 @@ installs from its apt repository, by release and by signing key. And every
 job that joins the overlay is held to the wait its identity calls for: a
 `physical` join waits for the gateway's shell, a `dns` join for nothing.
 
+And the merge chain applies in the order that section gives it: `up-k8s-base`
+and `up-apps` follow `up-dns`, each on a gate of its own, whatever `up-dns`
+returned. The conditions are read by a model of how GitHub evaluates a job's
+`if:` and evaluated over every result the jobs up the chain can end in, so a
+condition written another way is held to what it does rather than to how it
+is spelled.
+
 The workflow files are read the way the other seams read them, through the
 loaders in `workflow_files`.
 """
@@ -23,7 +30,9 @@ from __future__ import annotations
 
 import re
 import tomllib
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from itertools import product
 from pathlib import Path
 from typing import cast
 from urllib.parse import parse_qs, urlsplit
@@ -475,3 +484,194 @@ def test_a_physical_join_waits_for_the_gateways_shell_and_a_dns_join_waits_for_n
     gateway_shell = f'{conventions.overlay.UDM}:{SSH_PORT}'
     assert [join for join in physical if join.wait_for != gateway_shell] == []
     assert [join for join in dns if join.wait_for] == []
+
+
+#: A token of a job condition, by kind: a string literal, an operator or
+#: punctuation, a name. Anything else stops the read, so a condition in a form
+#: `_Condition` does not model fails rather than reading as something it is not.
+CONDITION_TOKEN = re.compile(r"\s*(?:(?P<string>'[^']*')|(?P<operator>==|&&|\|\||[().])|(?P<name>[A-Za-z_][\w-]*))")
+#: Every result a job a condition reads can end in.
+JOB_RESULTS: tuple[str, ...] = ('success', 'failure', 'cancelled', 'skipped')
+
+#: A read condition: an operator or kind, then its operands.
+type _Node = tuple[object, ...]
+
+
+class _Condition:
+    """A job's `if:`, read as GitHub evaluates it against the results of the jobs up its chain.
+
+    The model covers what the conditions of the jobs it reads are written in:
+    string literals, `needs.<job>.result`, `==` (which ignores case, as
+    GitHub's does), `&&`, `||`, parentheses and `always()`. A condition naming
+    no status function is evaluated as `success() && (<condition>)`, as GitHub
+    does, and that `success()` holds when every job up the job's chain
+    succeeded, the jobs it needs and every job they depend on in turn: a job
+    skipped or failed anywhere above stops it, which is how a skip cascades
+    down a chain. A job with no `if:` is that `success()` alone. Anything else
+    -- another path under `needs`, another function, another operator or
+    literal -- is refused while the condition is read.
+    """
+
+    def __init__(self, text: str, needs: list[str], where: str) -> None:
+        self.where = where
+        self.needs = needs
+        self.tokens = self._tokenize(text.strip())
+        self.position = 0
+        self.always = False
+        self.tree: _Node | None = self._or() if self.tokens else None
+        assert self.position == len(self.tokens), f'{where}: {text!r} has text past its end'
+
+    def _tokenize(self, text: str) -> list[tuple[str, str]]:
+        tokens: list[tuple[str, str]] = []
+        position = 0
+        while text[position:].strip():
+            found = CONDITION_TOKEN.match(text, position)
+            assert found and found.lastgroup, f'{self.where}: {text[position:]!r} is not read here'
+            tokens.append((found.lastgroup, found.group(found.lastgroup)))
+            position = found.end()
+        return tokens
+
+    def _peek(self) -> tuple[str, str] | None:
+        return self.tokens[self.position] if self.position < len(self.tokens) else None
+
+    def _take(self, expected: tuple[str, str] | None = None) -> tuple[str, str]:
+        token = self._peek()
+        assert token is not None, f'{self.where}: the condition ends early'
+        assert expected is None or token == expected, f'{self.where}: expected {expected}, not {token}'
+        self.position += 1
+        return token
+
+    def _binary(self, operator: str, operand: Callable[[], _Node]) -> _Node:
+        node = operand()
+        while self._peek() == ('operator', operator):
+            self._take()
+            node = (operator, node, operand())
+        return node
+
+    def _or(self) -> _Node:
+        return self._binary('||', self._and)
+
+    def _and(self) -> _Node:
+        return self._binary('&&', self._comparison)
+
+    def _comparison(self) -> _Node:
+        return self._binary('==', self._primary)
+
+    def _primary(self) -> _Node:
+        kind, text = self._take()
+        if (kind, text) == ('operator', '('):
+            node = self._or()
+            self._take(('operator', ')'))
+            return node
+        if kind == 'string':
+            return ('literal', text[1:-1])
+        assert kind == 'name', f'{self.where}: {text!r} cannot start an operand'
+        if text == 'always':
+            self._take(('operator', '('))
+            self._take(('operator', ')'))
+            self.always = True
+            return ('always',)
+        assert text == 'needs', f'{self.where}: {text!r} is not modeled here'
+        self._take(('operator', '.'))
+        _, job = self._take()
+        self._take(('operator', '.'))
+        assert self._take() == ('name', 'result'), f'{self.where}: only needs.<job>.result is modeled here'
+        assert job in self.needs, f'{self.where}: reads needs.{job}, a job it does not need'
+        return ('result', job)
+
+    def runs(self, results: Mapping[str, str]) -> bool:
+        """Whether the job runs when every job up its chain ended as `results` says."""
+        value = True if self.tree is None else self._evaluate(self.tree, results)
+        assert isinstance(value, bool), f'{self.where}: the condition is not a comparison'
+        if self.always:
+            return value
+        return all(result == 'success' for result in results.values()) and value
+
+    def _evaluate(self, node: _Node, results: Mapping[str, str]) -> str | bool:
+        match node:
+            case ('literal', str() as value):
+                return value
+            case ('always',):
+                return True
+            case ('result', str() as job):
+                return results[job]
+            case ('==', left, right):
+                lhs = self._evaluate(cast('_Node', left), results)
+                rhs = self._evaluate(cast('_Node', right), results)
+                assert isinstance(lhs, str) and isinstance(rhs, str), f'{self.where}: == between non-strings'
+                return lhs.casefold() == rhs.casefold()
+            case (('&&' | '||') as operator, left, right):
+                lhs = self._evaluate(cast('_Node', left), results)
+                rhs = self._evaluate(cast('_Node', right), results)
+                assert isinstance(lhs, bool) and isinstance(rhs, bool), f'{self.where}: {operator} between non-booleans'
+                return (lhs and rhs) if operator == '&&' else (lhs or rhs)
+            case _:
+                raise AssertionError(f'{self.where}: unread node {node!r}')
+
+
+DEPLOY = GITHUB / 'workflows' / 'deploy.yml'
+
+
+def _needs(job: dict[str, object]) -> list[str]:
+    """The jobs a job names in `needs:`, written as one name or a list."""
+    needs = job.get('needs', [])
+    return [needs] if isinstance(needs, str) else [str(need) for need in cast('list[object]', needs)]
+
+
+def _deploy_job(name: str) -> tuple[list[str], list[str], _Condition]:
+    """A `deploy.yml` job's needs, every job up its chain, and its condition read against them."""
+    jobs = workflow_jobs(read_workflow(DEPLOY), github_name(DEPLOY))
+    needs = _needs(jobs[name])
+    chain: list[str] = []
+    pending = list(needs)
+    while pending:
+        if (above := pending.pop()) not in chain:
+            chain.append(above)
+            pending.extend(_needs(jobs[above]))
+    condition = jobs[name].get('if')
+    where = f'{github_name(DEPLOY)}: {name}'
+    return needs, sorted(chain), _Condition('' if condition is None else str(condition), needs, where)
+
+
+def _physical_gate_passed(results: Mapping[str, str]) -> bool:
+    """The physical gate (framework/ci.md §3): planned, and applied or found to need no apply."""
+    return results['plan-physical'] == 'success' and results['up-physical'] in {'success', 'skipped'}
+
+
+#: The stacks that follow `up-dns`, each with the gate of its own it runs
+#: behind: `k8s-base` the physical gate, `apps` `k8s-base`'s success.
+AFTER_DNS: dict[str, Callable[[Mapping[str, str]], bool]] = {
+    'up-k8s-base': _physical_gate_passed,
+    'up-apps': lambda results: results['up-k8s-base'] == 'success',
+}
+
+
+def test_the_stacks_a_cut_hands_a_name_to_wait_for_dns() -> None:
+    """A cut deletes a name's legacy record in `dns` and creates its record in `k8s-base` or `apps`.
+
+    Cloudflare refuses the second record while the first stands, and neither
+    stack can adopt the other's, so each of the two runs only once `up-dns`
+    has ended (framework/ci.md §3).
+    """
+    missing = [job for job in AFTER_DNS if 'up-dns' not in _deploy_job(job)[0]]
+
+    assert missing == [], f'these jobs do not need up-dns: {missing}'
+
+
+def test_a_stack_after_dns_runs_on_its_own_gate_whatever_dns_returned() -> None:
+    """A failed `dns`, the stack that reaches the LAN, stops neither stack that follows it.
+
+    Each job's condition is evaluated over every combination of results the
+    jobs up its chain can end in, and runs it exactly when its own gate
+    passed: `up-k8s-base` the physical gate, `up-apps` `up-k8s-base`'s
+    success. `up-dns`'s result is among the combinations and decides nothing.
+    """
+    findings: list[str] = []
+    for name, gate in AFTER_DNS.items():
+        _, chain, condition = _deploy_job(name)
+        for combination in product(JOB_RESULTS, repeat=len(chain)):
+            results = dict(zip(chain, combination, strict=True))
+            if condition.runs(results) != gate(results):
+                findings.append(f'{name} under {results}: runs={condition.runs(results)}, its gate={gate(results)}')
+
+    assert findings == [], findings

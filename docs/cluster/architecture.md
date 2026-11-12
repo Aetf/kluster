@@ -414,9 +414,14 @@ both IP families (cluster-infra.md §2).
     workload; anything ever needing one fixed cloud egress IP takes
     the stable-IP pattern below. The OCI
     10 TB/mo egress allowance is tenancy-wide, shared by all three.
--   **Bulk egress (qbittorrent, seeding, large syncs)**: pinned to the
-    homelab pool; leaves via the home uplink. Never routed through a
+-   **Bulk egress (qbittorrent, seeding)**: pinned to the homelab
+    pool; leaves via the home uplink. Never routed through a
     metered-egress cloud path.
+-   **A roaming device's sync crosses the cloud's metered egress, by
+    the operator's ruling.** No syncthing replica runs in the cloud: the
+    balancer's peer port reaches the NAS instance on the worker, so a
+    device away from home syncs through the balancer, inside the 10 TB
+    allowance (nodes.md §2.1).
 -   **qbittorrent's IPv6** (the reason it never joined the legacy cluster):
     outbound v6 works via Cilium's IPv6 masquerade to the homelab VM's GUA
     (SLAAC on the cluster VLAN); inbound v6 peers need a UDM firewall
