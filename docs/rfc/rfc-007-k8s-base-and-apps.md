@@ -54,6 +54,14 @@
     as one commit to the stack file
     ([physical/bring-up.md](../physical/bring-up.md) §1,
     [rfc-008](rfc-008-workload-migration.md) §10).
+*   **Updated:** 2026-11-11 — §9.1 and §14 slice 12, as the application
+    base built it: slice 12 is cut in two
+    ([rfc-008](rfc-008-workload-migration.md) §10). The base's
+    namespace, route label, default-deny policy and admission of the
+    Gateways are `application_namespace` in `kluster.lib.k8s`, built
+    first; the policy imposes default-deny on ingress alone, restricting
+    egress being the component's. `route`, the census's rows and the
+    echo server wait for rfc-008 slices 3 and 4.
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
@@ -1261,7 +1269,10 @@ from the Gateways. Cilium gives traffic that arrives at a Gateway's
 Envoy the `ingress` identity
 ([`ingress-reference.rst` L28–56](https://github.com/cilium/cilium/blob/v1.20.1/Documentation/network/servicemesh/ingress-reference.rst#L28-L56)),
 so a namespace's policy admits the `ingress` entity and nothing else
-from outside it.
+from outside it. Those four are `application_namespace` in
+`kluster.lib.k8s`, beside the namespace helper it builds on, and the
+base calls it. Its default-deny is on ingress alone: restricting a
+pod's egress is the component's, with what the pod reaches.
 
 **`route(row)` lives in `kluster.lib.k8s`**, not on the base, because
 two stacks call it: every application, and the monitoring component
@@ -1822,8 +1833,15 @@ address absent; live once it is sealed in. **After** slice 10.
     `restricted`).
 
 **Slice 12: the application base, `route`, and the front-door check.**
-Built before M1's bring-up; merges after slice 9 is applied. **After**
-slices 8 and 9.
+Built before M1's bring-up, cut in two by
+[rfc-008](rfc-008-workload-migration.md) §10. **The application base**
+— the namespace at `restricted`, the route label, the default-deny
+policy and the admission of the Gateways — depends on nothing below it
+and has merged, as `application_namespace` in `kluster.lib.k8s`, with
+its test. **`route`, the census's rows and the echo server** wait for
+rfc-008 slices 3 and 4, which declare the route census they read and
+change what `route` takes; that part merges after slice 9 is applied.
+**After** slices 8 and 9, and for `route` rfc-008 slices 3 and 4.
 
 *   **Done means**: §9.1's base and `route` in `kluster.lib.k8s`; the
     echo component, its public row and its image pin (§9.2); dns.md §5,
@@ -1840,8 +1858,8 @@ slices 8 and 9.
     exposure selects and publishes records only for public rows (attach
     every row to `internet-gw`; publish a LAN-only row's record); the
     namespace enforces `restricted`, carries the route label and admits
-    `ingress` (drop any); the census invariants of rfc-003 §6.6 hold
-    with the new row, which exists.
+    `ingress` (drop any), which the base merged with; the census
+    invariants of rfc-003 §6.6 hold with the new row, which exists.
 *   **Live**: the exit criterion — the name resolves to the balancer,
     and a request answers through it with the client's address in the
     echoed headers.

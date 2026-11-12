@@ -6,7 +6,9 @@ so that "deploy an app" is one reviewable diff in one place. This is the top
 stack of [README.md](README.md) §1 and the home of ~80–90% of all future
 changes.
 
-> **Status**: designed 2026-08-22. Not implemented.
+> **Status**: designed 2026-08-22. Declared: an application's namespace,
+> its level, its route label and its policy (§1). Nothing else is
+> implemented.
 
 ## 1. The component contract
 
@@ -14,7 +16,7 @@ Every app is a `Component` subclass (putils, RFC-001) that owns:
 
 | Concern | Declared as | Governed by |
 | --- | --- | --- |
-| Namespace | created by the component (never shared) | README.md §1 |
+| Namespace | created by the component (never shared) with `application_namespace` (`kluster.lib.k8s`), which enforces its level and gives it `conventions.routes.ROUTE_LABEL`, the label the Gateways admit routes from; a namespace with no route carries it too | README.md §1, cluster-infra.md §2 |
 | Workload | Deployment/StatefulSet with **honest requests/limits** — CPU limits are mandatory on anything scheduled to the cloud pool (etcd shares those cores, nodes.md §1); memory requests sized from evidence, not idle numbers (the JuiceFS-sidecar lesson, storage.md §6) | nodes.md §§1, 4.4 |
 | Storage | by the two-axis selection in §2 (performance × persistence; fixed assets → NAS/object) | §2, storage.md §2 |
 | Backup | declared through the `backed_pvc` helper with a **retention class** — never ad-hoc schedules (§3) | §3, storage.md §3.1 |
@@ -22,7 +24,7 @@ Every app is a `Component` subclass (putils, RFC-001) that owns:
 | DNS | emitted by the same helpers (CNAME to anchor); the split-horizon rewrite the route implies is applied by the `dns` stack from the same declaration, not by this one (dns.md §3) | dns.md |
 | Secrets | SealedSecret first choice, `template.data` pattern | cluster-infra.md §1.1 |
 | Placement | scheduling constraints only: site pool (cloud/homelab), a node label for a volume or the dedicated VIP, GPU resource requests | architecture.md §3.6 |
-| Network policy | per-namespace default-deny + explicit allows, part of the component | architecture.md §4.1 |
+| Network policy | per-namespace default-deny + explicit allows, part of the component. `application_namespace` declares the default-deny: every pod in the namespace admits the namespace's own pods and the `ingress` entity, the identity of what a Gateway's Envoy forwards, and no other peer but the pod's own node, which Cilium admits whatever the policies say; another peer is admitted by a policy the component declares beside it. The default-deny is on ingress alone, and restricting egress is the component's: its first egress rule switches its pods to default-deny on egress, so that policy carries the allow to the cluster's DNS too | architecture.md §4.1 |
 | Monitoring | scrape/dashboard labels per the legacy conventions (`release`, `grafana_dashboard`) so VictoriaMetrics/grafana pick them up | cluster-infra.md §1 |
 
 What a component may **not** do: hostPort, hostNetwork, `externalIPs`
@@ -39,7 +41,9 @@ default — non-root, no added capabilities, RuntimeDefault seccomp
 (part of containing third-party binaries on the combined CP+ingress
 nodes, architecture.md §4.1). An exception is a declared component
 parameter with the reason on record — the same discipline as
-`backup=None`. No workload in the design holds one today.
+`backup=None` — which `application_namespace` takes as its `looser`
+argument, a `LooserLevel` carrying the reason. No workload in the
+design holds one today.
 
 ## 2. Choosing storage: two axes, then the data's character
 
