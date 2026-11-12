@@ -46,7 +46,8 @@ pin in `Pulumi.yaml`'s `config:` block, which renovate moves
 `versions:image-<name>` pins; a component installs what the program reads
 through `kluster.lib.versions` and hands it. The custom resources are written
 against `sdks/crds`, which `mise x -- uv run update_crds` regenerates from the
-same pins.
+same pins, but for the VictoriaMetrics operator's, which that SDK cannot import
+yet (`kluster.components.monitoring.operator_objects`).
 """
 
 from __future__ import annotations
@@ -60,6 +61,7 @@ from kluster.components.certificates import CertManager
 from kluster.components.cilium import BgpSession, Cilium, InternetPoolMembers
 from kluster.components.gpu import IntelGpuPlugin, NodeFeatureDiscovery
 from kluster.components.local_path import LocalPathProvisioner
+from kluster.components.monitoring import Monitoring
 from kluster.components.postgres import PostgresOperator
 from kluster.components.reloader import Reloader
 from kluster.components.sealing import SealedSecretsController
@@ -95,9 +97,10 @@ async def main() -> None:
     sealed = config.get_object(conventions.sealed.CONFIG_KEY)
 
     # cluster-infra.md §1's order. Nothing schedules before the CNI, so
-    # everything is behind Cilium; cert-manager and the BGP session are behind
-    # the sealing controller, because the credential cert-manager's solver
-    # uses and the session's password are sealed values.
+    # everything is behind Cilium; cert-manager, the BGP session and monitoring
+    # are behind the sealing controller, because the credential cert-manager's
+    # solver uses, the session's password and the address alertmanager posts
+    # to are sealed values.
     # A chart that declares objects another chart defines is behind that
     # chart: the database operator's backup plugin and the GPU plugin's
     # operator declare cert-manager's, and the GPU plugin declares NFD's.
@@ -135,6 +138,14 @@ async def main() -> None:
         opts=opts,
     )
     _ = VolSync('volsync', chart=versions.chart['volsync'], after=[cert_manager], opts=opts)
+    _ = Monitoring(
+        'monitoring',
+        stack_chart=versions.chart['victoria-metrics-k8s-stack'],
+        metrics_server_chart=versions.chart['metrics-server'],
+        after=[cilium, sealing],
+        alert_webhook=sealed_ciphertext(conventions.sealed.ALERT_WEBHOOK, sealed),
+        opts=opts,
+    )
     node_features = NodeFeatureDiscovery(
         'node-feature-discovery', chart=versions.chart['node-feature-discovery'], after=[cilium], opts=opts
     )

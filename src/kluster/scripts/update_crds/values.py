@@ -1,4 +1,4 @@
-"""The value paths a chart has, read off its `values.yaml`, its `values.schema.json` and its subcharts.
+"""The value paths a chart has, read off its `values.yaml`, its schema, its subcharts and the definitions it ships.
 
 Helm ignores a value the chart does not have: a component that sets a key a
 chart bump renamed or removed installs as before, says nothing, and behaves
@@ -20,7 +20,22 @@ path below it is accepted. Three shapes say so:
     its user: the Intel device plugins operator ranges over `manager.devices`,
     whose default is nothing but commented-out examples;
 -   a schema object carrying `additionalProperties` other than `false`, or
-    `patternProperties`.
+    `patternProperties`, or the `x-kubernetes-preserve-unknown-fields` a
+    custom resource definition marks an open object with.
+
+**A spec the chart passes through** is a map the chart renders whole as the
+`spec` of one of its own custom resources, which the VictoriaMetrics stack
+does for each component it installs (`vmsingle.spec` becomes the `VMSingle`'s
+spec). Its `values.yaml` sets a few defaults there and nothing fixes the rest,
+while a key below it is not ignored but becomes a field of the resource, so
+the paths below it are the definition's own: read from the
+`openAPIV3Schema` of the definition the chart ships in a `crds/` directory,
+its own or a subchart's, at the version the chart renders. At and below the
+map the definition replaces the chart's own verdict on what is free-form, so a
+`{}` the chart leaves there does not open it. Which maps pass through is
+declared rather than guessed (`SPEC_PASS_THROUGH`), for the chart a pin names
+and not its subcharts, and a declared map whose definition the chart does not
+ship stops the read.
 """
 
 # `ruamel.yaml` loads untyped documents, and so does `json`; this module walks
@@ -39,6 +54,35 @@ from ruamel.yaml import YAML
 
 #: The separator a path's keys are joined with in the record.
 SEPARATOR = '.'
+
+
+@dataclass(frozen=True)
+class CustomResourceSpec:
+    """The spec of one version of a custom resource: what a pass-through map of values becomes."""
+
+    group: str
+    version: str
+    kind: str
+
+
+#: Each map a chart passes through whole as a custom resource's spec, by the
+#: chart's name, which is its `versions:chart-<name>` pin's, and the map's path.
+#: Read in each chart's templates at its pinned version: a bump that stops
+#: passing one through is a change to this table.
+SPEC_PASS_THROUGH: Mapping[str, Mapping[tuple[str, ...], CustomResourceSpec]] = {
+    # `templates/_helpers.tpl` at 0.91.2: each component's `spec` is merged
+    # over the chart's computed defaults and rendered as its resource's spec.
+    'victoria-metrics-k8s-stack': {
+        ('vmsingle', 'spec'): CustomResourceSpec('operator.victoriametrics.com', 'v1beta1', 'VMSingle'),
+        ('vmagent', 'spec'): CustomResourceSpec('operator.victoriametrics.com', 'v1beta1', 'VMAgent'),
+        ('vmalert', 'spec'): CustomResourceSpec('operator.victoriametrics.com', 'v1beta1', 'VMAlert'),
+        ('alertmanager', 'spec'): CustomResourceSpec('operator.victoriametrics.com', 'v1beta1', 'VMAlertmanager'),
+    },
+}
+
+
+class MissingDefinition(LookupError):
+    """A map a chart is declared to pass through names a definition the chart does not ship."""
 
 
 @dataclass(frozen=True)
@@ -117,7 +161,11 @@ def _from_schema(
     resolved = _resolve(node, root)
     if not isinstance(resolved, Mapping):
         return
-    if resolved.get('additionalProperties') not in (None, False) or resolved.get('patternProperties'):
+    if (
+        resolved.get('additionalProperties') not in (None, False)
+        or resolved.get('patternProperties')
+        or resolved.get('x-kubernetes-preserve-unknown-fields') is True
+    ):
         yield prefix, True
     properties = resolved.get('properties')
     if isinstance(properties, Mapping):
@@ -150,6 +198,40 @@ def _subcharts(directory: Path) -> Iterator[tuple[str, Path]]:
             yield aliases.get(subchart.name, subchart.name), subchart
 
 
+def _definitions(directory: Path) -> Iterator[Mapping[str, object]]:
+    """Each custom resource definition the unpacked chart ships in a `crds/` directory, its subcharts' included.
+
+    The files there are plain YAML Helm installs untemplated, so they read as
+    the cluster receives them.
+    """
+    for path in sorted(directory.rglob('crds/*')):
+        if path.suffix not in ('.yaml', '.yml') or not (path.parent.parent / 'Chart.yaml').is_file():
+            continue
+        for document in _yaml().load_all(path.read_text()):
+            if isinstance(document, Mapping) and document.get('kind') == 'CustomResourceDefinition':
+                yield document
+
+
+def _spec_schema(directory: Path, spec: CustomResourceSpec) -> Mapping[str, object]:
+    """The `openAPIV3Schema` of `spec`'s `spec` field, out of the definitions the chart ships."""
+    for definition in _definitions(directory):
+        body = definition.get('spec')
+        if not isinstance(body, Mapping) or body.get('group') != spec.group:
+            continue
+        names = body.get('names')
+        if not isinstance(names, Mapping) or names.get('kind') != spec.kind:
+            continue
+        for version in body.get('versions') or []:
+            if isinstance(version, Mapping) and version.get('name') == spec.version:
+                schema = version.get('schema', {}).get('openAPIV3Schema', {})
+                found = schema.get('properties', {}).get('spec') if isinstance(schema, Mapping) else None
+                if isinstance(found, Mapping):
+                    return found
+    raise MissingDefinition(
+        f'{directory.name} ships no definition of {spec.kind}.{spec.group} {spec.version} with a spec'
+    )
+
+
 def _read(directory: Path) -> dict[tuple[str, ...], bool]:
     """Each path the unpacked chart at `directory` has, and whether it is a free-form map."""
     found: dict[tuple[str, ...], bool] = {}
@@ -172,6 +254,26 @@ def _read(directory: Path) -> dict[tuple[str, ...], bool]:
     return found
 
 
+def _pass_through(directory: Path, found: dict[tuple[str, ...], bool]) -> None:
+    """Hold each map the chart at `directory` passes through to the definition of the resource it becomes.
+
+    The definition replaces the chart's own reading at and below the map:
+    whether a path there is free-form is the definition's to say, so a `{}`
+    or a null default the chart's `values.yaml` holds there opens nothing. The
+    keys `values.yaml` sets there stay paths, since the chart renders them.
+    Matched at the root of the chart the pin names, not in its subcharts.
+    """
+    metadata = _yaml().load((directory / 'Chart.yaml').read_text())
+    name = metadata.get('name') if isinstance(metadata, Mapping) else None
+    for root, spec in SPEC_PASS_THROUGH.get(str(name), {}).items():
+        schema = _spec_schema(directory, spec)
+        for path in found:
+            if path[: len(root)] == root:
+                found[path] = False
+        for path, free_form in _from_schema(schema, schema, root, frozenset()):
+            found[path] = found.get(path, False) or free_form
+
+
 def read_chart(directory: Path) -> ValuePaths:
     """The paths the unpacked chart at `directory` has.
 
@@ -179,6 +281,7 @@ def read_chart(directory: Path) -> ValuePaths:
     recorded as the empty path, and every path is then accepted.
     """
     found = _read(directory)
+    _pass_through(directory, found)
     return ValuePaths(
         paths=frozenset(SEPARATOR.join(path) for path in found if path),
         free_form=frozenset(SEPARATOR.join(path) for path, free_form in found.items() if free_form),

@@ -128,9 +128,14 @@ the VPS empties progressively):
     itself from syncthing-nas over the syncthing protocol)
     with **stdiscosrv** alongside it (raw TCP `public_port`,
     workloads.md §5).
--   **Wave B — homelab VM, light**: monitoring (VictoriaMetrics fresh —
-    no TSDB migration; legacy prometheus kept read-only until its
-    retention ages out), golinks, emailproxy, spoolman, exim
+-   **Wave B — homelab VM, light**: monitoring's name (the monitoring
+    component already runs, installed by `k8s-base` from M2 with
+    VictoriaMetrics fresh — no TSDB migration; legacy prometheus kept
+    read-only until its retention ages out; what the wave moves is the
+    dashboard's `mon` name from the legacy block to that component,
+    and with it the alert read route, which needs a public name and
+    lands with its reader, the operations repository's poller —
+    rfc-007 §7.4), golinks, emailproxy, spoolman, exim
     (workloads.md §5; its DKIM key is in the `apps` stack's config before the
     wave, by `credentials derived dkim-exim record`, and once `apps` is
     up, sources-of-truth.md §X, run against the new cluster's

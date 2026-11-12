@@ -12,8 +12,7 @@ that speaks the k8s API, consumed by `apps`.
 > baseline and the BGP session), the sealed-secrets controller,
 > cert-manager with its issuer and certificates, CNPG and its Barman
 > Cloud plugin, VolSync, NFD and the Intel GPU plugin,
-> local-path-provisioner and reloader. Not yet implemented: the rest of
-> §1: monitoring, with metrics-server.
+> local-path-provisioner, reloader, and monitoring with metrics-server.
 
 ## 0. Scope and rules
 
@@ -102,36 +101,72 @@ empty cluster:
     database or a backup schedule.
 6.  **Monitoring**: VictoriaMetrics (vmsingle + vmagent + vmalert) +
     grafana, PromQL-compatible replacement for the legacy
-    prometheus-operator stack at ~1/5 the RAM (nodes.md §4.4); scrape
-    configs and alert rules follow the legacy label conventions so
-    dashboards port over. **Alert delivery**: vmalert needs an
-    Alertmanager-compatible sink — one small alertmanager instance,
-    its routing ported from the legacy config (Home Assistant push),
-    stays in the stack (~70 Mi, earns its rent as the alerting
-    spine). This is the **in-cluster half of the unified alert
-    channel** (architecture.md §4.3): same payload convention as the
-    CI-origin alerts, every alert carrying its playbook reference.
-    Alertmanager's one receiver is a Home Assistant webhook of its own,
-    an automation apart from the one the operations repository posts to,
-    because alertmanager's body is fixed: it reads the tier, the summary
-    and the playbook off each alert and pushes under the same title
-    convention. The webhook's address is a sealed value
-    (`conventions.sealed`'s alert-webhook row, §1.1), so it appears in
-    no rendered configuration (rfc-007 §7.3). Alertmanager holds **no
-    GitHub credential**; the GitHub-issue leg is *pulled* by the
-    ops repo's poller reading alertmanager's API through a
-    **dedicated header-match route** at the internet gateway
-    (2026-08-24): the HTTPRoute forwards only `method: GET` + path
-    `/api/v2/alerts` + an exact `Authorization: Bearer <token>`
-    header match — anything else 404s. **Read-only by method
-    match**, no auth middleware involved. Accepted and recorded:
-    the token literal sits inside the HTTPRoute spec (a Pulumi
-    config secret at render time, but readable through the k8s
-    API) — tolerable for an alert-list read token; the recorded
+    prometheus-operator stack at ~1/5 the RAM (nodes.md §4.4), from the
+    VictoriaMetrics stack chart, with metrics-server beside it, both in
+    the one monitoring component (`components/monitoring`). **It runs
+    on the homelab worker**, the node exporter apart: alertmanager
+    posts to Home Assistant at Home Assistant's own address, which only
+    the worker reaches ([rfc-008](../rfc/rfc-008-workload-migration.md)
+    §4.1), and the rest goes with it for the worker's memory and local
+    disk. The database's volume is `local-path`, named rather than left
+    to the default class, and unbacked: monitoring is rebuilt fresh
+    (migration.md §3). Grafana is reached by a port-forward until its
+    name moves (§3). The namespace is `privileged`, for the node
+    exporter (§0). **What the chart would add is off**: the sync job,
+    which fetches rules and dashboards off upstream default branches at
+    install time and is a hook; the default rules and dashboards it
+    would fetch; the operator's pre-delete cleanup, a second hook
+    (§1.2); and the scrape jobs for the controller manager, the
+    scheduler and etcd, whose metrics Talos does not expose to a
+    scraper (rfc-007 §7.1). vmagent keeps the chart's
+    `selectAllByDefault` and reads every VictoriaMetrics scrape object
+    in the cluster. The component declares the scrape objects for
+    Cilium's metrics endpoints, which are instances of this chart's
+    definitions and so cannot be Cilium's. metrics-server reads each
+    kubelet without verifying its certificate, which Talos' kubelet
+    signs itself, as the chart's own kubelet scrapes do. **That is
+    accepted** under threat-model.md §4, on its first clause: answering
+    for a kubelet takes a node address on the kubelet's port, which
+    none of the actors of threat-model.md §2.6, §2.9 and §2.10 holds (a
+    workload, anyone on the internet, a device on the home network): a
+    call to another node's kubelet rides KubeSpan between keyed peers,
+    and a call to the worker's own never leaves the host. Signed serving certificates would take a rotation
+    flag in every node's machine configuration, which is `physical`'s,
+    and a certificate approver on the closed list. **Alert
+    delivery**: vmalert needs an Alertmanager-compatible sink — one
+    small alertmanager instance stays in the stack (~70 Mi, earns its
+    rent as the alerting spine). This is the **in-cluster half of the
+    unified alert channel** (architecture.md §4.3): the tiers and the
+    playbook convention of the CI-origin alerts, every rule carrying a
+    `tier` label from `conventions.alert.Tier` and `summary` and
+    `playbook` annotations, which a test resolves for every rule the
+    program declares (operations.md §5). Alertmanager's one receiver
+    is a Home Assistant webhook of its own, an automation apart from
+    the one the operations repository posts to, because alertmanager's
+    body is fixed: it reads the tier, the summary and the playbook off
+    each alert and pushes under the same title convention. The
+    webhook's address is a sealed value (`conventions.sealed`'s
+    alert-webhook row, §1.1), read through the operator's `url_secret`,
+    so it appears in no rendered configuration (rfc-007 §7.3); until it
+    is sealed in, the receiver is skipped and alerts end at the chart's
+    `blackhole` receiver (physical/bring-up.md §1). **The cluster
+    checks in**: a rule that always fires, in the `heartbeat` tier,
+    which the receiver repeats to Home Assistant, whose timer for it is
+    the dead-man of operations.md §4. Alertmanager holds **no GitHub
+    credential**; the GitHub-issue leg is *pulled* by the ops repo's
+    poller reading alertmanager's API through a **dedicated
+    header-match route** at the internet gateway (2026-08-24): the
+    HTTPRoute forwards only `method: GET` + path `/api/v2/alerts` + an
+    exact `Authorization: Bearer <token>` header match — anything else
+    404s. **Read-only by method match**, no auth middleware involved.
+    Accepted and recorded: the token literal sits inside the HTTPRoute
+    spec (a Pulumi config secret at render time, but readable through
+    the k8s API) — tolerable for an alert-list read token; the recorded
     alternative, if that ever bothers, is Authelia OAuth2
-    client_credentials + ExternalAuth bearer validation.
-    HA-delivery failure surfaces as a meta-alert on the
-    notification-failure metric.
+    client_credentials + ExternalAuth bearer validation. The route is
+    **not declared yet**: it lands with its reader, the poller, when
+    the dashboard's name moves (§3, rfc-007 §7.4). HA-delivery failure
+    surfaces as a meta-alert on the notification-failure metric.
 7.  **NFD + Intel GPU device plugin** — inert until the GPU cutover
     flips vfio on the homelab worker (physical/homelab-host.md §3), present from
     day 0, so the cutover needs no k8s-base change.
@@ -159,7 +194,11 @@ the stack program installs from those pins, and `update_crds` reads the
 same file through the same parser to render the CRD bundle
 `packages/crds/crds.yaml` from exactly this chart set and regenerate the
 SDK the custom resources are declared through, `sdks/crds`, from that
-bundle; the legacy chart list retires with kluster-code.
+bundle; the legacy chart list retires with kluster-code. The
+VictoriaMetrics operator's kinds are the exception: the SDK generates
+them and cannot import them, so the monitoring component declares them
+untyped, in a layer of its own that goes once they import
+([Aetf/kluster-ops#720](https://github.com/Aetf/kluster-ops/issues/720)).
 A chart pin carries where the chart is served and its version — with the
 digest of its manifest where the chart comes from an OCI registry, which
 Helm pulls it by — and what the regeneration needs: whether the chart
@@ -255,15 +294,22 @@ The API every component installs through, wrapped as
 -   **Hooks are dropped.** Any object annotated `helm.sh/hook` is
     omitted from the rendered output, test hooks unconditionally, so a
     hook a pinned chart renders is switched off explicitly rather than
-    left to vanish silently. The installed set renders two by default.
-    One is cert-manager's `startupapicheck` post-install Job, which
+    left to vanish silently. These are the ones the installed set renders
+    by default. cert-manager's `startupapicheck` post-install Job
     blocks until the webhook answers; it is disabled with
     `startupapicheck.enabled: false`, and the wait it did is covered by
     the install order — nothing declares an Issuer or a Certificate
-    until cert-manager is up. The other is NFD's post-delete cleanup, a
-    Job with its own account and permissions that strips NFD's labels
-    from the nodes once the chart is uninstalled; it is disabled with
-    `postDeleteCleanup: false`. The provider's `includeHooks` (≥4.33) is
+    until cert-manager is up. NFD's post-delete cleanup is a Job with
+    its own account and permissions that strips NFD's labels from the
+    nodes once the chart is uninstalled; it is disabled with
+    `postDeleteCleanup: false`. The VictoriaMetrics stack's sync job, a
+    post-install and post-upgrade Job that fetches rules and dashboards
+    from upstream, is disabled with `syncJob.enabled: false` (item 6 of
+    §1). The VictoriaMetrics operator's pre-delete cleanup, a Job with
+    its own account and permissions that deletes the operator's objects
+    before an uninstall, is turned on by the stack chart over the
+    operator chart's default and is disabled with
+    `victoria-metrics-operator.crds.cleanup.enabled: false`. The provider's `includeHooks` (≥4.33) is
     not a substitute: it only writes hooks into a rendered directory for
     some other tool to apply.
 -   **CRDs.** Definitions in a chart's `crds/` directory are installed by
@@ -273,6 +319,15 @@ The API every component installs through, wrapped as
     a chart brings along. A chart that ships its definitions as ordinary
     templates behind a value instead (cert-manager) is unaffected by
     either switch and needs that value set.
+-   **`lookup` reads the cluster.** The render is a server-side dry run,
+    so a template's `lookup` sees what the cluster holds. A value a
+    chart generates at render time, a certificate or a password, is
+    stable across runs only where its template reuses what `lookup`
+    finds; one that does not is a diff on every `up`. The
+    VictoriaMetrics operator's webhook certificate reuses its Secret
+    while `admissionWebhooks.keepTLSSecret` holds, which the monitoring
+    component states, and Grafana's admin password reuses its own, so
+    each is generated once, by the first install.
 -   **Values may be Outputs.** Because the render happens in the
     provider rather than in the language host, a chart value can be an
     unresolved Output — the limitation that made `v3.Chart` unusable for
@@ -540,9 +595,14 @@ All decided behavior from architecture.md §3, expressed as config:
 
 ## 3. What this stack deliberately does not do
 
--   No ingress of its own — gateways are wiring; routes arrive with
-    apps, and the balancer's listeners for public ports are `physical`'s
-    (physical.md §1).
+-   No ingress of its own — gateways are wiring; an application's
+    routes arrive with `apps`, and the balancer's listeners for public
+    ports are `physical`'s (physical.md §1). A component of this stack
+    may declare routes of its own, through the same `route` helper
+    every application calls: the monitoring component's dashboard name
+    and its alert read route are its own, not an application's. Both
+    land with the wave that moves the dashboard's name from the legacy
+    `mon` block (rfc-007 §7.4, migration.md §2).
 -   No app namespaces, quotas, or per-app policy.
 -   No backup schedules — VolSync `ReplicationSource`s are declared
     beside their PVCs in `apps` via the `backed_pvc` helper and

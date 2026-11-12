@@ -127,5 +127,3 @@ them earlier would be deciding them on no evidence:
     over after the first pin. Known floors: **Cilium ≥1.20** for the
     ExternalAuth route filter, ≥1.16 for tunnel-mode Egress Gateway,
     Longhorn ≥1.12 if it is ever adopted.
--   **Alertmanager routing details** beyond "ported from legacy"
-    (operations.md §4 fixes the alert contract, not the routing tree).

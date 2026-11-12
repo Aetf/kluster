@@ -137,6 +137,21 @@ VERSIONS_CONFIG = {
             'definitions': False,
         }
     ),
+    'versions:chart-victoria-metrics-k8s-stack': json.dumps(
+        {
+            'repository': 'oci://registry.example.invalid/charts',
+            'version': '9.12.0',
+            'digest': f'sha256:{"b" * 64}',
+            'definitions': True,
+        }
+    ),
+    'versions:chart-metrics-server': json.dumps(
+        {
+            'repository': 'https://charts.example.invalid/',
+            'version': '9.13.0',
+            'definitions': False,
+        }
+    ),
     'versions:image-local-path-provisioner': f'registry.example.invalid/local-path-provisioner:v9.4.0@sha256:{"3" * 64}',
     'versions:image-local-path-helper': f'registry.example.invalid/busybox:9.5.0@sha256:{"4" * 64}',
     'versions:manifest-gateway-api': json.dumps(
