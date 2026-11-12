@@ -211,8 +211,8 @@ class Opening:
 #: The host ports a pod calls besides the kubelet's: the metrics endpoints the
 #: scraper, a pod, reads off processes on the host network. Cilium's agent
 #: (9962), operator (9963) and Envoy (9964), and Hubble's metrics server
-#: (9965), at the defaults of the pinned chart (Cilium v1.20.1 `values.yaml`
-#: L1501, L2657, L3073, L3401; the port table of `system_requirements.rst`
+#: (9965), at the defaults of the pinned chart (Cilium v1.20.4 `values.yaml`
+#: L1501, L2661, L3077, L3405; the port table of `system_requirements.rst`
 #: L437–457), every one of them on the host network; and the node exporter
 #: (9100), on the host network in the monitoring chart's pinned
 #: `prometheus-node-exporter` 4.55.1 (`values.yaml` L131, L382). The ports

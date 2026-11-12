@@ -124,6 +124,9 @@ Settled on first contact, in this order of appearance, because deciding
 them earlier would be deciding them on no evidence:
 
 -   **Version pins** for Talos, Cilium and the charts — renovate takes
-    over after the first pin. Known floors: **Cilium ≥1.20** for the
-    ExternalAuth route filter, ≥1.16 for tunnel-mode Egress Gateway,
-    Longhorn ≥1.12 if it is ever adopted.
+    over after the first pin. Known floors: **Cilium ≥1.20.2** for the
+    ExternalAuth route filter, which from that release fails closed on a
+    backend it cannot use
+    ([cilium/cilium#47929](https://github.com/cilium/cilium/pull/47929))
+    rather than serving the route unauthenticated, ≥1.16 for
+    tunnel-mode Egress Gateway, Longhorn ≥1.12 if it is ever adopted.

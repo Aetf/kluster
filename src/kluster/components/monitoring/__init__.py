@@ -185,7 +185,7 @@ class CiliumScrape:
 
 
 #: Cilium's four metrics endpoints, in the pod labels and port names of the
-#: pinned chart (Cilium v1.20.1, the agent's and Envoy's DaemonSets and the
+#: pinned chart (Cilium v1.20.4, the agent's and Envoy's DaemonSets and the
 #: operator's Deployment, with the metrics the cilium component enables): the
 #: agent's own and Hubble's on the agent, Envoy's, and the operator's. Each is
 #: on the host network, at a port the node firewall opens to the cluster's own
