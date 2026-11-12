@@ -260,7 +260,10 @@ first DS of each zone in that order.
     **where the name cannot be an alias**. That is structural rather than
     an exception granted: a zone apex cannot be a CNAME, so the web
     origin every website zone carries is an apex `A` and so is
-    jiahui.love's. `base.py` says the same beside the literals. New
+    jiahui.love's. `base.py` says the same beside the literals. A
+    website's `Apex` row in the exposure census (§5) publishes no record
+    of its own: its record is this web origin, and the census holds each
+    apex row's zone to one. New
     anchors:
     `kluster.hosts` → the NLB, an A *and* an AAAA because the load
     balancer is dual-stack and serves every port it forwards on both
@@ -367,10 +370,10 @@ first DS of each zone in that order.
     program loops over — can be written as a union of named sets. A zone
     set only one block names is declared beside that block instead:
     `MAIL_ZONES`, the two Google Workspace domains, is in `base.py`. An
-    app hands its census row to `route` and gets the primary; naming
-    another zone in the row is what says that zone serves the
-    application too, and the helper fans the records across whatever the
-    row names.
+    application's row is published in the primary unless it names
+    another zone, and naming one is what says that zone serves the
+    application too; its records fan across whatever the row names
+    (§5).
 -   **A parked zone is held and not served.** peifeng.phd and ucw.phd
     hold nothing of this installation's: what resolves in either is a
     copy of one of the primary's names addressed at the legacy VPS,
@@ -460,15 +463,14 @@ on the UDM.
     because Pulumi writes both; a change made in one instance's web UI
     afterward is reconciled by nothing. See
     `components/gateway/container.py` for the device's side of this.
--   **Placement**: rewrites are emitted automatically for any app
-    with a LAN-side gateway attachment — split-horizon (both
-    gateways), LAN-only (`lan-gw`), or IoT-reachable (`media-gw`,
-    rewrite targeting the media VIP) — an app cannot forget its
-    rewrite because it never writes it by hand. Crossing a stack
-    boundary does not weaken that: an app's route declaration is
-    **plain data** in a module both stacks import
-    (`kluster.conventions.routes`), so `apps` builds its HTTPRoutes from
-    it and `dns` builds the rewrites from the same rows. A rewrite's
+-   **Placement**: rewrites are emitted automatically for every row
+    with a home side — `lan`, answered at the LAN VIP, or `media`,
+    answered at the media VIP, with or without a public side, and a raw
+    port's VIP host (§5) — so an app cannot forget its rewrite because
+    it never writes it by hand. Crossing a stack boundary does not
+    weaken that: an app's exposure is **plain data** in a module both
+    stacks import (`kluster.conventions.routes`), so `apps` builds its
+    routes from it and `dns` builds the rewrites from the same rows. A rewrite's
     answer is an address and never a name, so what it steers a LAN
     client to cannot depend on some other rewrite existing to resolve
     it. One edit, two stack diffs, both previewable — rather than
@@ -520,8 +522,8 @@ plane names:
     republish exactly the LAN-only service census that rewrite-only just
     hid. The zones the cluster issues for are its **served zones**: the
     primary, served by definition, since the cluster's own endpoints are
-    names under it, and every zone a row of the route census names
-    (`conventions.routes.served_zones`). Each has one certificate,
+    names under it, and every zone a route or an apex of the exposure
+    census names, held or not (`conventions.routes.served_zones`). Each has one certificate,
     for the apex and the wildcard together, from the cluster's one
     issuer, so a row in a new zone is a new certificate in the preview
     that shows the row (cluster-infra.md §2). The DNS-01 token
@@ -554,68 +556,178 @@ plane names:
     those public names, so the way to keep the two sets apart is for
     it to ask for less.
 
-## 5. The one-line helpers
+## 5. The exposure declaration, and its one helper
 
-> **Not implemented; the implementation lands with the `apps` stack.**
-> The helpers belong to the app component base, which the `apps`
-> program does not declare yet. This section and workloads.md §1 are
-> the contract that implementation has to satisfy, and nothing in the
-> repository emits a route today — which is also why the route census
-> §3 reads from is empty.
+> **The declaration is built; the helper is not.** `conventions.routes`
+> holds the types and the census, `EXPOSURES`, and the `dns` and
+> `physical` stacks read it today. The helper an application's
+> component calls lands with the `apps` stack's application base, which
+> the program does not declare yet; the paragraphs on it are the
+> contract that implementation has to satisfy.
 
-`route(conventions.routes.PHOTOS)` on the app component base **takes
-the application's census row**, not a host string a reader would have
-to match against the census by eye — so an application publishing a
-name `dns` never rewrites cannot be written. From that row it emits the
-coherent set: the HTTPRoute, attached to the gateways the row's
-`Exposure` selects per the routing matrix (cluster/architecture.md
-§3.6) — `internet-gw`, `lan-gw`, `media-gw`, or both public and LAN —
-and the CNAMEs across the zone set the row names, for the rows that
-publish a public record at all, which is what `Route.public` says and
-which no LAN-side exposure does (§4). It is the same row `dns` writes
-the AdGuard rewrite from, read by both stacks rather than emitted by
-either; the helper never writes a rewrite itself, which is the split §3
-describes.
+**An application has one `Exposure`, and it has two dimensions** —
+the two questions deploying an application answers
+(cluster/architecture.md §3.6). *Which Gateway* is three peer fields,
+`internet`, `lan` and `media`, the same fields on every row where they
+mean something. *How* is the row's type:
 
-**There is one route helper, because the row already states the
-exposure.** Splitting it into a public one and a LAN-only one would
-make the call a second statement of the same thing, and a call that can
-disagree with its row forces the helper to rule on which of the two
-wins. Nothing else would distinguish the two: they emit the same kinds
-of resource, and each would differ only in which subset of `Exposure`
-values it accepts, which is a check rather than a difference in what is
-emitted. `Exposure.IOT` is a LAN-side value like `LAN_ONLY`, differing
-only in attaching `media-gw` so that the rewrite answers at the media
-VIP and the IoT VLAN reaches the app; "IoT devices may reach this app"
-is therefore decided once, on the census row a reviewer reads, and the
-helper has no say in it (cluster-infra.md §2, physical/gateway.md
-§4.2).
+| Row | What it is | `internet` | `lan` | `media` |
+| --- | --- | --- | --- | --- |
+| a `Route` | HTTPS by name, in each zone it names | `Proxied`, with an optional gate, or `Direct`, with its reason | `Rewrite`, or `Bare` | `Rewrite` |
+| a `Passthrough` | TLS the pod terminates, on 443, by name, in the primary | `Direct` | `Rewrite` | `Rewrite` |
+| an `Apex` | a website's apex, in each zone it names | set by the type, its address the web origin's (§2) | none | none |
+| a `Port` | a raw port, at a Gateway's address | `Balancer`, with the names it is dialed at, `Dedicated` or `SiteForward` | `Vip`, with its name, or `Heard` | `Vip`, or `Heard` |
 
-`public_port(…)` is the raw TCP/UDP analog, and it stays a helper of
-its own because it emits something no HTTP route does: a LoadBalancer
-Service on the `internet` pool, from the public port census row it is
-handed, under the `Cluster` traffic policy and without node ports
-(cluster/architecture.md §3.1). It emits **no** NLB listener. `apps`
-holds no OCI credential (credentials.md §3), so the balancer's listener
-and backend set for a row, one of each per family it holds, are declared
-in `physical` from the same row (physical.md §1); adding a public port is a
-census row and a `physical` apply before it is a `public_port` call.
+Setting a field chooses that Gateway, and the field's type carries what
+only that Gateway and that way of reaching it mean, so a combination
+that means nothing cannot be written: a reason to publish direct is a
+value of `internet` alone, a gate a field of what `internet` takes
+behind the proxy, a bare name a value of `lan` on a `Route`, a heard
+side a value of a home field on a `Port`, and one Gateway on a row is
+one field. The rule behind the shape is style/pulumi.md's ("Data").
+
+**What a type cannot say is refused where the row is constructed**, so
+the module holding a census that breaks it does not load: a row with no
+Gateway set, and an `Exposure` with nothing in it; `lan` and `media` on
+one row, since a name has one rewrite and the media VIP already answers
+every home network the LAN VIP does; two `Route`s in one `Exposure`, one
+on `internet` alone and one on a home Gateway alone, held or not, which
+is one service under two names; a `device` beside anything but
+`Route`s, held or not, since its relay forwards to one port; a heard
+side on a port not served on UDP alone, since a packet is what is
+heard; an empty reason, an empty zone set, and a host that is empty or
+`@`.
+
+**What is a relation between rows is an invariant of the census**, held
+in `tests/test_conventions.py` against the census and against a census
+that breaks it: each zone a row names is declared by the installation;
+a port is claimed once on each front, the Gateways' ports
+(`conventions.GATEWAY_PORTS`) counted on the balancer and on both VIPs;
+an apex's zone holds the web origin's address; a row is held exactly
+while a legacy record holds its name (below); and **one host, one
+answer** — rows that share a host publish one record and one rewrite,
+so they agree on both. A raw port's `Host` shares a name only with a
+row published `Direct`, since a proxied record would hide the raw port,
+every home side on the name answers at one VIP, and any other shared
+name is refused. The discovery server's `syncapi` is the case it
+exists for: one `Passthrough` and one `Port`, one direct record, and
+one rewrite to the LAN VIP.
+
+**A service reachable from home and from outside has one name.** Outside
+it resolves to the public address; at home the rewrite resolves the same
+name to the VIP of the home Gateway its row sets, and the client never
+sees the difference, which is what a rewrite is for. A row on `internet`
+alone takes the public path at home under the same name. A `Route` has
+one `host`, and its Gateways are fields of that row, so one name is what
+a row says by default; a second name takes a second row, and the
+constructor refuses the pair. No row keeps a `lan.ucw.phd` name (§4).
+
+**A gate belongs to `internet`, since the home has none.** It is the
+`gate` of `Proxied` — the portal's session, or HTTP Basic for a client
+that cannot follow a redirect — declared on the row, so the census says
+which names are gated, and a gated name's home side is answered ungated
+(cluster-infra.md §2).
+
+**A held row is the legacy VPS's until its cut.** `Held` wraps a
+`Route`, a `Passthrough`, or a raw port's `Host` while a record of this
+stack still points its name at the legacy VPS: by the VPS's address or
+its anchor (`legacy.IP_ARCHVPS`, `legacy.ANCHOR_ARCHVPS`), in an
+application's block of `legacy.py` or in the web origin's pair. A held
+row's route attaches to its Gateways and publishes no record and no
+rewrite, and neither does a VIP host that a held row shares, so the
+name keeps resolving where the legacy VPS publishes it while the new
+application is verified (§6). It still counts toward the served zones,
+since that verification needs the zone's certificate. The relation is
+the invariant above in both directions: a row on `internet` is held if
+and only if such a record holds its host in one of its zones, and a row
+on a home Gateway alone publishes no record to collide with and is
+never held. An `Apex` publishes no record and has no held state. The
+wrapper leaves with the last such record, and the class, the branch in
+each derivation that reads it, and its invariant go with it, with no
+row changing shape.
+
+**Every rewrite derives from the rows** (`rewrites.rewrites`, §3). A
+`Route` or a `Passthrough` with a home side is rewritten to that
+Gateway's VIP in each zone it is published in, and `Bare` adds the bare
+label, which `lan-gw` redirects to the name. A raw port's `Vip`
+rewrites its host in the primary to its Gateway's VIP, and a heard side
+has no host and no rewrite: its client never dials a name, and a relay
+on the host carries what it hears to the VIP
+([rfc-008](../rfc/rfc-008-workload-migration.md) §4.1). Both families
+are written.
+
+**Every record but the apex's derives from the rows** too
+(`conventions.routes.public_names`): a row on `internet` publishes a
+CNAME to the cluster anchor in each zone it names, proxied, or direct
+with the reason `Direct` carries, and a raw port's `Host` publishes one
+direct, in the primary, needing no reason of its own since a raw port
+cannot cross the proxy. A row published direct, and every record it
+aliases, holds the chain relation of §2, and the website co-host
+carries no application name of the primary's, from a row as from a
+block (`tests/test_dns_records.py`). The certificates follow
+`served_zones` (§4): the zones of every `Route` and `Apex`, held or
+not, and the primary; a `Passthrough` and a `Host` take none.
+
+**`expose(exposure)` on the app component base is the one helper**, and
+it takes the application's `Exposure` from the census, not a host
+string a reader would have to match against the census by eye — so an
+application publishing a name `dns` never rewrites cannot be written.
+From that it emits the coherent set: an `HTTPRoute` per Gateway each
+`Route` sets, `internet`'s gate on that one alone, and a redirect for a
+bare name; a `TLSRoute` per Gateway a `Passthrough` sets; for each
+`Port`, a Service for each Gateway it sets, with its allow; and the
+public records of the rows on `internet`. It never writes a rewrite,
+which is the split §3 describes.
+
+**There is one helper, because the declaration already states the
+exposure.** A helper per kind would make the call a second statement of
+the same thing, and a call that can disagree with its row forces the
+helper to rule on which of the two wins. "IoT devices may reach this
+application" is a `media` side on its row, decided once on the census
+row a reviewer reads (cluster-infra.md §2, physical/gateway.md §4.2).
+
+**A raw port's listener is `physical`'s.** `apps` holds no OCI
+credential (credentials.md §3), so the balancer's listener and backend
+set for a `Balancer` port, one of each per family it holds, are
+declared in `physical` from the same row (physical.md §1), and the
+site's forward and pinhole for a `SiteForward` port likewise
+(physical/gateway.md §4.2); adding such a port is a census row and a
+`physical` apply before it is a Service in `apps`.
 
 ## 6. Migration shape
 
 Per-app cutover falls out of the anchor design: an app's records point
-at `archvps.hosts` until the app migrates, then its component declares
+at `archvps.hosts` until the app is cut, then its component declares
 the same names against `kluster.hosts`, and its `legacy.py` block is
 deleted (below). DNSControl holds no entry by then: it retires at the
 zones' cutover, before any application migrates.
 
+**An application moves in two pull requests, its land and its cut**
+(cluster/migration.md §0 rule 1). Verification has to run against what
+is deployed, and a merge is what deploys, so one merge cannot both
+deploy the application and give it the name.
+
+-   **The land** wires the component into the `apps` program and adds
+    its rows to `conventions/routes.py`, a row on `internet` held
+    (§5): the route attaches to the Gateways while the name still
+    resolves where the legacy VPS publishes it, and the application is
+    verified at the cluster's front door. A home-only row publishes no
+    record to collide with, so it lands published, and where a rule on
+    the resolvers' declared list already rewrites its name, the land
+    deletes that rule, so the row's rewrite is the only one.
+-   **The cut** deletes every legacy declaration of the name — its
+    block in `legacy.py`, the web origin's address for an apex, a rule
+    on the resolvers' declared list, a row of the gateway proxy's
+    `LEGACY_VHOSTS` — and takes the row out of `Held`, so `apps`
+    publishes the record and `dns` the rewrite. The record changes
+    hands in one run of the deploy chain: `dns` deletes before `apps`
+    creates (§1). A window's applications cut together, in one pull
+    request.
+
 **`legacy.py` is one block per application**, because the unit of every
-remaining edit to it is a migration: each block is deleted whole when the
-application named in its header migrates, and the module empties block
-by block through Wave F. A migration is therefore three files in one
-pull request — the block deleted from `legacy.py`, the row added to
-`conventions/routes.py`, and the `route` call added to the app's
-component — with no row of a shared tuple to pick out. A block whose
+remaining edit to it is a cut: each block is deleted whole when the
+application named in its header is cut, and the module empties block by
+block through Wave F, with no row of a shared tuple to pick out. A block whose
 header names no application is a block no migration will ever delete,
 publishing a name no component will ever claim, so it is dropped rather
 than carried. Two blocks are kept whose owner exists but whose component

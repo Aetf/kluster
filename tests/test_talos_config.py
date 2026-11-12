@@ -368,19 +368,19 @@ def test_ingress_enumerates_host_ports_only() -> None:
     # opening the firewall lost would leave a listener forwarding to a port
     # the nodes drop.
     assert set(conventions.MANAGEMENT_PORTS) <= opened
-    # No port a Service's pods answer is opened: the BPF datapath answers it
-    # before nftables sees it (physical.md §2).
-    assert not opened & {row.port for row in PODS_ROWS}
+    # No raw port is opened: the BPF datapath answers its Service before
+    # nftables sees it (physical.md §2).
+    assert RAW_PORTS
+    assert not opened & RAW_PORTS
 
 
 #: The whole internet, one source per family.
 INTERNET = {'0.0.0.0/0', '::/0'}
 
-#: The public port census's rows the Gateways answer, whose packets cross the
-#: node firewall to reach Envoy on the host, and the rows a Service's pods
-#: answer, which the datapath takes ahead of it (rfc-007 §4.3).
-GATEWAY_ROWS = [row for row in conventions.PUBLIC_PORT_CENSUS if row.answerer is conventions.Answerer.GATEWAYS]
-PODS_ROWS = [row for row in conventions.PUBLIC_PORT_CENSUS if row.answerer is conventions.Answerer.PODS]
+#: The raw ports of the exposure census, which the datapath takes to their
+#: pods ahead of the node firewall, unlike the Gateways' ports, whose packets
+#: cross it to reach Envoy on the host (rfc-007 §4.3).
+RAW_PORTS = {row.port for row in conventions.routes.ports()}
 
 #: The host ports a pod calls besides the kubelet's, each a metrics endpoint
 #: on the host network: Cilium's agent, operator and Envoy and Hubble's
@@ -453,7 +453,7 @@ def test_the_internet_reaches_the_host_on_the_management_ports_kubespan_and_the_
     assert {(port, protocol) for port, protocol, _ in public} == {
         *((port, 'tcp') for port in conventions.MANAGEMENT_PORTS),
         KUBESPAN,
-        *((row.port, protocol) for row in GATEWAY_ROWS for protocol in row.transports.protocols),
+        *((port, 'tcp') for port in conventions.GATEWAY_PORTS),
     }
     # Both families: a node is dual-stack, and a client or a peer may come at
     # it over either.
@@ -466,15 +466,13 @@ def test_every_node_opens_each_gateway_port_to_the_whole_internet(shape: str) ->
 
     The datapath hands a Gateway's packets up the host's stack to the node's
     Envoy, and the ingress chain drops whatever no rule admits, the
-    balancer's health check with it. Every node opens every such port, on
-    every transport its row names, to both families' whole range: on a cloud
-    node those ports are the internet's by design.
+    balancer's health check with it. Every node opens every such port, over
+    TCP, to both families' whole range: on a cloud node those ports are the
+    internet's by design.
     """
-    assert GATEWAY_ROWS, 'the census holds no row the Gateways answer'
     opened = {(port, protocol): sources for port, protocol, sources in openings(**SHAPES[shape])}
-    for row in GATEWAY_ROWS:
-        for protocol in row.transports.protocols:
-            assert opened.get((row.port, protocol)) == INTERNET, (row.name, protocol)
+    for field, port in zip(conventions.GatewayPorts._fields, conventions.GATEWAY_PORTS, strict=True):
+        assert opened.get((port, 'tcp')) == INTERNET, field
 
 
 @pytest.mark.parametrize('shape', list(SHAPES))
@@ -530,9 +528,9 @@ def test_the_dhcpv6_client_hears_its_server_on_the_link(shape: str) -> None:
 def test_every_rule_names_itself_uniquely_even_on_a_shared_port() -> None:
     """Talos refuses two network rule documents of one name.
 
-    The recorded fallback puts the public port census's rows a Service's pods
-    answer into the firewall, and the census serves 22000 over both
-    protocols.
+    The recorded fallback puts the exposure census's raw ports, which a
+    Service's pods answer, into the firewall, and the census serves 22000
+    over both protocols.
     """
     extra = [talos.Opening(22000, 'tcp', talos.ANYWHERE), talos.Opening(22000, 'udp', talos.ANYWHERE)]
     names = [rule['name'] for rule in talos.ingress_firewall_documents(extra) if rule['kind'] == 'NetworkRuleConfig']

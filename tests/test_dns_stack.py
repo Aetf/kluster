@@ -2,12 +2,12 @@
 
 What it catches is wiring rather than data: that every zone is declared with
 its records, that the anchors carry the physical stack's addresses rather
-than literals, and that the rewrites are emitted from the route census.
+than literals, and that the rewrites are emitted from the exposure census.
 
 Every run here is under the parent backstop `kluster.main` installs before a
 real run declares anything, so a resource the program leaves unparented fails
-the run here rather than in `pulumi preview`. The route census is set by each
-run rather than inherited: one run holds it empty and one holds a single row,
+the run here rather than in `pulumi preview`. The exposure census is set by
+each run rather than inherited: one run holds it empty and one holds a single row,
 because what the stack declares for rewrites is a function of that state.
 """
 
@@ -42,9 +42,8 @@ REWRITE = f'pulumi-python:{AdGuardRewrite._resource_type_name}'  # pyright: igno
 
 #: The one row the routed run declares: a name answered on both sides,
 #: published in the primary zone alone.
-ROUTE = conventions.routes.Route(
-    host='photos', exposure=conventions.routes.Exposure.SPLIT, zones=conventions.PRIMARY_ONLY
-)
+ROUTE = conventions.routes.Route(host='photos', internet=conventions.routes.PROXIED, lan=conventions.routes.REWRITE)
+EXPOSURE = conventions.routes.Exposure(routes=(ROUTE,))
 
 
 class AppliedPhysical(Recorder):
@@ -63,15 +62,15 @@ class AppliedPhysical(Recorder):
         return {}
 
 
-async def declare_program(routes: tuple[conventions.routes.Route, ...]) -> AppliedPhysical:
-    """The whole program, declared once against `routes` and under the backstop."""
+async def declare_program(exposures: dict[str, conventions.routes.Exposure]) -> AppliedPhysical:
+    """The whole program, declared once against `exposures` and under the backstop."""
     from kluster.stacks import dns
     from kluster.stacks.dns import CLOUDFLARE_API_TOKEN
 
     pulumi.runtime.set_all_config({f'kluster:{CLOUDFLARE_API_TOKEN}': API_TOKEN})
     monitor = await run_under_backstop(AppliedPhysical(), stack='dns')
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(conventions.routes, 'ROUTES', routes)
+        patch.setattr(conventions.routes, 'EXPOSURES', exposures)
         async with declaring():
             await dns.main()
     return monitor
@@ -79,14 +78,14 @@ async def declare_program(routes: tuple[conventions.routes.Route, ...]) -> Appli
 
 @pytest_asyncio.fixture(scope='module', loop_scope='module', autouse=True)
 async def stack() -> AppliedPhysical:
-    """The program with an empty route census."""
-    return await declare_program(())
+    """The program with a census that implies no rewrite."""
+    return await declare_program({})
 
 
 @pytest_asyncio.fixture(scope='module', loop_scope='module')
 async def routed() -> AppliedPhysical:
     """The program with a census of one row, `ROUTE`."""
-    return await declare_program((ROUTE,))
+    return await declare_program({'photos': EXPOSURE})
 
 
 def records_of(stack: AppliedPhysical, zone: str) -> dict[str, dict[str, Any]]:
@@ -309,7 +308,7 @@ def test_no_rewrite_is_declared_while_no_app_declares_a_route(stack: AppliedPhys
 
 
 def test_a_route_in_the_census_is_rewritten_on_every_resolver(routed: AppliedPhysical) -> None:
-    """The wiring from the route census to the rewrites, held on a census of one row.
+    """The wiring from the exposure census to the rewrites, held on a census of one row.
 
     What a row implies is `rewrites`' subject (`test_dns_rewrites.py`); what
     is asserted here is that the program hands that derivation the census
@@ -321,7 +320,7 @@ def test_a_route_in_the_census_is_rewritten_on_every_resolver(routed: AppliedPhy
     implied = {
         (resolver.name, entry.domain, str(entry.answer))
         for resolver in conventions.gateway.RESOLVERS
-        for entry in rewrites((ROUTE,))
+        for entry in rewrites((EXPOSURE,))
     }
 
     assert written == implied

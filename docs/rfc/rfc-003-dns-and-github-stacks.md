@@ -5,8 +5,8 @@
     description of the system. What the system *is* lives in the design
     documents: what each zone serves and which zones a record is published
     in, the record blocks and the apex exception, the split-horizon rewrites
-    and where each resolver is reached, and the helper that takes a census
-    row, in [declarative/dns.md](../declarative/dns.md); the forge's
+    and where each resolver is reached, and the declaration an application's
+    exposure is, in [declarative/dns.md](../declarative/dns.md); the forge's
     declarations, the provider and the labels a workflow reads, in
     [framework/github.md](../framework/github.md); the census discriminator in
     [declarative/README.md](../declarative/README.md) and
@@ -14,23 +14,28 @@
     in this installation's terms, the rule that a logical name is never
     derived from a value that can move, and where a provider's credential is
     read and which store it comes from. The tables themselves are code:
-    the record blocks in `src/kluster/components/dns/`, the route and
+    the record blocks in `src/kluster/components/dns/`, the exposure and
     forge censuses in `src/kluster/conventions/`. Where this text and a
     design document disagree, the design document is right.
-    **§6.1 is overtaken on how the census is read**: it is not re-exported
-    from `conventions` but read qualified — `conventions.routes.ROUTES` —
-    because `SELF` and `Extra` are common nouns that need the prefix
-    (`kluster-ops#189`). That rule is stated in `conventions/__init__.py`
-    and in no design document, so the sentence above does not reach it; §7's
-    `entries=rewrites(conventions.ROUTES)` sketch no longer imports.
-    **§6.3's argument for the fourth `Exposure` value is ruled backwards**:
-    `iot_reachable` retires rather than surviving as a helper parameter,
-    because a flag beside a row that already carries `Exposure` reintroduces
-    at the signature what the single field forbids at the row. `IOT` is a
-    value *because* it cannot be expressed as a flag, so the value stands on
-    itself and the parameter has nowhere to stand (`kluster-ops#224`);
-    declarative/dns.md §5 and declarative/workloads.md §1 carry the
-    contract.
+    **§6's route row and its `Exposure` enumeration are replaced by the
+    two dimensions** ([rfc-008](rfc-008-workload-migration.md) §4.1): an
+    application has one `Exposure`, whose fields `internet`, `lan` and
+    `media` are the Gateways it is reached at and whose rows' types, a
+    route by name or a raw port, are how. A field's type carries what only
+    that Gateway means, so §6's "one field rather than two flags" gives way
+    to a field per Gateway, typed so that a combination that means nothing
+    cannot be written: the enumeration was one field over a cross-product
+    of independent concerns, and §6.3's fourth value and its
+    `iot_reachable` question go with it. §6's `extras` and its service
+    record go too: their one row was matrix's identity record, and no
+    identity service is deployed for it to name (rfc-008 §4.7). The census is
+    `conventions.routes.EXPOSURES`, read qualified, as §6.1 is overtaken
+    on (`kluster-ops#189`): its names are common nouns, `Route`, `Port` and
+    `Host`, that need the prefix. That rule is stated in
+    `conventions/__init__.py` and in no design document, so the sentence
+    above does not reach it; §7's `entries=rewrites(conventions.ROUTES)`
+    sketch no longer imports. declarative/dns.md §5 carries the
+    declaration, and style/pulumi.md ("Data") the rule.
     **§8.1 is a dated snapshot**: it describes the rewrite provider as it
     stood when this text was written, with its credential an input on every
     resource, which the stateless-provider work undid for the credential and
@@ -95,6 +100,8 @@
     the sentence is read with that scope (`kluster-ops#353`);
     declarative/dns.md §1.2 is the read that holds the declaration to the
     log, and its first read takes valid certificates for the same reason.
+*   **Updated:** 2026-11-12. The status header records that rfc-008 §4.1
+    replaced §6's route row and its enumeration with the two dimensions.
 *   **Authority:** the style rules (`docs/style/`) and the design documents are
     what this document obeys. Where they are silent, a rule proposed here is
     marked **new rule**.

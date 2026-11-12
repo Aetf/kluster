@@ -138,3 +138,35 @@ LAN_POOL = AddressPool(
     default_vip=Vip(v4=IPv4Address('192.168.71.1'), v6=IPv6Address('fd1a:665f:8bcb:71::1')),
     media_vip=Vip(v4=IPv4Address('192.168.71.2'), v6=IPv6Address('fd1a:665f:8bcb:71::2')),
 )
+
+
+@dataclass(frozen=True)
+class SiteHost:
+    """A machine at the site that a declaration names by address, in both families, on its own network."""
+
+    network: SiteNetwork
+    v4: IPv4Address
+    v6: IPv6Address
+
+    def __post_init__(self) -> None:
+        if self.v4 not in self.network.v4 or self.v6 not in self.network.v6:
+            raise ValueError(f'{self.v4} and {self.v6} are not both on the {self.network.name} network')
+
+
+#: Home Assistant, on the IoT VLAN with the devices it drives. Its
+#: integrations are how the home automates what the cluster's applications
+#: do, so it reaches the whole `lan` pool (physical/gateway.md §4.2), and its
+#: name is answered by a relay to its IPv4 address (rfc-008 §4.1). The
+#: controller's fixed-IP reservation for its MAC holds the IPv4 address, and
+#: survives a reinstall. The ULA is a stable-privacy address its
+#: NetworkManager derives from the VLAN's /64, the interface, the connection
+#: profile's stable id and a secret key the host generated: it holds while
+#: all four do, and a reinstall, or a lost `/var/lib/NetworkManager/secret_key`,
+#: moves it under the same prefix. Nothing reports the move; a firewall rule
+#: that names a moved address fails silently. Whether to pin it is
+#: Aetf/kluster-ops#722.
+HOME_ASSISTANT = SiteHost(
+    network=IOT_VLAN,
+    v4=IPv4Address('192.168.90.243'),
+    v6=IPv6Address('fd1a:665f:8bcb:90:38:692d:fe79:611'),
+)

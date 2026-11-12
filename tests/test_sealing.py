@@ -448,6 +448,13 @@ def _dns01_live(api: FakeApi) -> list[str]:
     return [str(token['id']) for token in api.tokens.values() if token['name'] == cloudflare.DNS01.name]
 
 
+def _public_route(zone: str) -> conventions.routes.Exposure:
+    """An exposure of one public name, in one zone."""
+    return conventions.routes.Exposure(
+        routes=(conventions.routes.Route(host='www', internet=conventions.routes.PROXIED, zones=(zone,)),)
+    )
+
+
 def test_the_dns01_token_is_scoped_to_the_served_zones_and_sealed_for_the_issuer(
     api: FakeApi,
     kit: KdbxStore,
@@ -459,9 +466,7 @@ def test_the_dns01_token_is_scoped_to_the_served_zones_and_sealed_for_the_issuer
 ) -> None:
     # One route, in one zone of several: the census this case reads is the
     # one it sets up, so a route added elsewhere is not its premise.
-    monkeypatch.setattr(
-        conventions.routes, 'ROUTES', (conventions.routes.Route(host='www', zones=(conventions.ZONE_PRIMARY,)),)
-    )
+    monkeypatch.setattr(conventions.routes, 'EXPOSURES', {'www': _public_route(conventions.ZONE_PRIMARY)})
     value = conventions.sealed.DNS01_TOKEN
 
     token_id = derived.cloudflare_dns01(kit, sealer=sealer)
@@ -487,7 +492,7 @@ def test_a_route_in_another_zone_widens_the_dns01_token_to_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     second = next(zone for zone in conventions.ALL_ZONES if zone != conventions.ZONE_PRIMARY)
-    monkeypatch.setattr(conventions.routes, 'ROUTES', (conventions.routes.Route(host='www', zones=(second,)),))
+    monkeypatch.setattr(conventions.routes, 'EXPOSURES', {'www': _public_route(second)})
     value = conventions.sealed.DNS01_TOKEN
 
     _ = derived.cloudflare_dns01(kit, sealer=sealer)

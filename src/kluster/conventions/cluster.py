@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from enum import Enum
 from ipaddress import IPv4Network, IPv6Network
 from typing import Literal, NamedTuple
@@ -49,7 +48,7 @@ MANAGEMENT_PORTS = ManagementPorts(kubernetes=6443, talos=50000)
 
 #: KubePrism — the node-local kube-apiserver front the Cilium datapath uses
 #: (there is no kube-proxy to fall back on). Node-local, so it is neither a
-#: management port above nor a public one below.
+#: management port above nor a Gateway port below.
 KUBEPRISM_PORT = 7445
 
 #: BGP (cluster-infra.md §2). The UDM's FRR is AS 65000; the cluster peers
@@ -106,7 +105,7 @@ KUBESPAN_MTU = 1420
 
 
 class Transports(Enum):
-    """The transport protocols a public port is served on, which one listener carries together."""
+    """The transport protocols a raw port is served on, which one listener carries together."""
 
     TCP = 'tcp'
     UDP = 'udp'
@@ -124,70 +123,27 @@ class Transports(Enum):
                 return ('tcp', 'udp')
 
 
-class Front(Enum):
-    """Where a public port's traffic enters the installation."""
+class GatewayPorts(NamedTuple):
+    """The ports every Gateway listens on, over TCP, which three declarations agree on.
 
-    BALANCER = 'balancer'
-    """The network load balancer, which forwards to every cloud node."""
-    DEDICATED_VIP = 'dedicated-vip'
-    """The dedicated VIP, which one node holds (`cloud.DEDICATED_VIP_NODE`) and
-    no listener forwards to."""
+    The Gateways' own and no application's: each Gateway answers its HTTPS
+    listeners on one and redirects plain HTTP off the other (rfc-007 §5.2).
+    The balancer forwards both to every cloud node, always, since the
+    Gateways answer there and nowhere else on the internet; the node firewall
+    opens both, since a Gateway's packets are handed up the host's stack to
+    the node's Envoy (rfc-007 §4.3); and every Gateway's listeners take
+    them. An application's raw port is a `conventions.routes.Port` instead,
+    and none may claim one of these on a front a Gateway answers. Iterating
+    it yields the set the balancer and the firewall enumerate, each named
+    after its field.
+    """
 
-
-class Answerer(Enum):
-    """What takes a public port's traffic once it reaches a node."""
-
-    GATEWAYS = 'gateways'
-    """The Gateways, whose Envoy runs on the host: the datapath hands the
-    packet up the host's stack, through the node firewall, so the port is one
-    the firewall opens."""
-    PODS = 'pods'
-    """A LoadBalancer Service's pods, which the datapath reaches ahead of the
-    node firewall, so the port is one the firewall never sees."""
+    http: int
+    """Answered with a redirect to HTTPS and nothing else."""
+    https: int
 
 
-@dataclass(frozen=True)
-class PublicPort:
-    """One row of the public port census: a port the internet reaches, and how."""
-
-    name: str
-    """What the port serves, never its number: the balancer's listener and
-    backend set are named after it, and after it and the family for IPv6."""
-    port: int
-    transports: Transports
-    front: Front
-    answerer: Answerer
-
-
-#: Public port census — every port the internet reaches a service of the
-#: cluster on through the cloud: at the balancer, or at the dedicated VIP. A
-#: node's own internet-facing ports are not rows (the management ports,
-#: `MANAGEMENT_PORTS`, and KubeSpan's, which the Talos component opens), and
-#: the home site's is `QBITTORRENT_PEER_PORT` below. Read by `physical` for
-#: the node firewall's openings of the rows the Gateways answer; rfc-007 §5.3
-#: makes `k8s-base` (the Gateways' ports) and `apps` (the raw Services) its
-#: readers too. No security rule names a port: the cloud subnet's list narrows
-#: no port, only IPv6's other protocols and ICMPv6 (security-audit.md M3), and
-#: the node's firewall is the filter (physical.md §1–2). It is
-#: the firewall-audit reference too, and what the recorded fallback copies
-#: into machine configuration for the rows a Service's pods answer.
-PUBLIC_PORT_CENSUS: tuple[PublicPort, ...] = (
-    # Redirects to HTTPS and nothing else.
-    PublicPort('http', 80, Transports.TCP, Front.BALANCER, Answerer.GATEWAYS),
-    PublicPort('https', 443, Transports.TCP, Front.BALANCER, Answerer.GATEWAYS),
-    # syncthing's discovery server, which terminates its own TLS.
-    PublicPort('syncthing-discovery', 8443, Transports.TCP, Front.BALANCER, Answerer.PODS),
-    PublicPort('syncthing', 22000, Transports.TCP_AND_UDP, Front.BALANCER, Answerer.PODS),
-    PublicPort('hath', 60011, Transports.TCP, Front.DEDICATED_VIP, Answerer.PODS),
-)
-
-#: The bulk-transfer peer port, which the *site* gateway terminates rather than
-#: the balancer above: inbound peer traffic reaches the worker VM through the
-#: home site, and the census above is the cloud half of the same subject. Two
-#: firewall declarations name it — the IPv6 pinhole and the IPv4 forward
-#: (physical/gateway.md §4.2) — and they have to agree, which is what makes it a
-#: convention rather than a setting (rfc-002 §11).
-QBITTORRENT_PEER_PORT = 53363
+GATEWAY_PORTS = GatewayPorts(http=80, https=443)
 
 SC_LOCAL_PATH = 'local-path'
 SC_NAS = 'nas'

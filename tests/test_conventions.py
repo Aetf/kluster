@@ -27,11 +27,12 @@ from __future__ import annotations
 import ast
 import base64
 import datetime as dt
+import ipaddress
 import json
 import re
 import tokenize
 import tomllib
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from ipaddress import IPv6Network
 from pathlib import Path
 from typing import Any, NamedTuple, cast
@@ -47,9 +48,12 @@ from workflow_files import GITHUB, github_name, mapping, read_workflow, workflow
 
 from kluster import conventions
 from kluster.components.dns import base as dns_base
+from kluster.components.dns import legacy as dns_legacy
+from kluster.components.dns import record as dns_record
 from kluster.components.dns.base import overlay_records
-from kluster.components.dns.record import zone_records
-from kluster.conventions import backup, identity
+from kluster.components.dns.record import Block, zone_records
+from kluster.conventions import backup, identity, routes
+from kluster.conventions.cluster import Transports
 from kluster.lib import k8s as lib_k8s
 from kluster.scripts.credentials import pulumi_config
 
@@ -297,69 +301,6 @@ def test_the_block_quota_admits_the_largest_volume_and_a_restore_beside_it() -> 
 
 
 # --------------------------------------------------------------------------
-# The public port census.
-# --------------------------------------------------------------------------
-# Read by `physical` for the node firewall's openings and the balancer's
-# listeners; rfc-007 §5.3 makes `k8s-base` (the Gateways' ports) and `apps`
-# (the raw Services) its readers. What a row's
-# type cannot carry is how its rows relate.
-
-
-def test_no_two_public_ports_share_a_name() -> None:
-    """A row's name is what the balancer names its listener and backend set after.
-
-    Two rows of one name would claim one listener and one backend set
-    between them, so the name is the row's identity.
-    """
-    names = [row.name for row in conventions.PUBLIC_PORT_CENSUS]
-
-    assert len(names) == len(set(names)), names
-
-
-def test_a_port_the_gateways_answer_enters_at_the_balancer() -> None:
-    """The Gateways answer on the node addresses the balancer forwards to, and never on the dedicated VIP.
-
-    The internet Gateway's Service holds the cloud nodes' addresses, which
-    are the balancer's backends, while the dedicated VIP is held by one
-    Service of its own (rfc-007 §4.4). A Gateway row fronted by the VIP would
-    open a port on every node that no listener forwards and no Gateway
-    serves at that address.
-    """
-    stray = [
-        row.name
-        for row in conventions.PUBLIC_PORT_CENSUS
-        if row.answerer is conventions.Answerer.GATEWAYS and row.front is not conventions.Front.BALANCER
-    ]
-
-    assert not stray, stray
-
-
-#: OCI's network load balancer holds at most fifty listeners and fifty backend
-#: sets (OCI: Network Load Balancer, "Limits"), the service's limits rather
-#: than a decision of this program.
-#: https://docs.oracle.com/en-us/iaas/Content/NetworkLoadBalancer/introduction.htm#LimitsNLBResources
-NLB_LISTENER_LIMIT = 50
-
-
-def test_the_balancers_names_are_distinct_and_fit_its_limit() -> None:
-    """The management ports and the rows the balancer fronts share one balancer, and one namespace on it.
-
-    Each is a listener and a backend set per family, named after the field
-    or the row, and after it and the family for IPv6 (rfc-007 §5.3). A row
-    named after a management field, or after one with the family appended,
-    would claim a listener the cluster endpoint already holds; and the two
-    lists together, twice over, are what the balancer's limit counts.
-    """
-    fronted = [row.name for row in conventions.PUBLIC_PORT_CENSUS if row.front is conventions.Front.BALANCER]
-    names = [*conventions.ManagementPorts._fields, *fronted]
-    on_the_balancer = [*names, *(f'{name}-ipv6' for name in names)]
-
-    assert not set(fronted) & set(conventions.ManagementPorts._fields), fronted
-    assert len(on_the_balancer) == len(set(on_the_balancer)), on_the_balancer
-    assert len(on_the_balancer) <= NLB_LISTENER_LIMIT
-
-
-# --------------------------------------------------------------------------
 # The overlay's managed DNS.
 # --------------------------------------------------------------------------
 # `conventions.overlay.MANAGED_DNS` is derived from two other tables -- its
@@ -431,64 +372,86 @@ def test_every_pushed_server_sits_behind_a_route_the_network_manages() -> None:
 
 
 # --------------------------------------------------------------------------
-# The route census.
+# The exposure census.
 # --------------------------------------------------------------------------
-# `conventions.routes.Route` makes a row's fields correct together; what a
-# row's type cannot express is a relation between rows, or between a row and
-# the zones the installation declares.
+# `conventions.routes` makes a row's fields correct together and refuses, where
+# a row is constructed, what a type cannot say. What is left is a relation
+# between rows, or between a row and what the installation declares elsewhere:
+# its zones, its fronts' ports, and the records of the `dns` stack.
 #
-# The census is empty until `apps` declares its first route, so each invariant
-# is a predicate over a table and each case applies it twice: to
-# `conventions.routes.ROUTES`, and to a row that breaks it. A case that only
-# inspected `ROUTES` would pass by having nothing to inspect -- and would keep
-# passing if the predicate stopped checking anything at all.
+# Each invariant is a predicate over a census, and each case applies it twice:
+# to `conventions.routes.EXPOSURES`, and to a census of its own that breaks it.
+# A case that only inspected the census would pass on whatever the census
+# happens to hold -- and would keep passing if the predicate stopped checking
+# anything at all.
 
 #: A DNS label's shape: letters, digits and interior hyphens, and no dot at all.
 DNS_LABEL = re.compile(r'[a-z0-9]([a-z0-9-]*[a-z0-9])?\Z')
 
 #: A DNS label's maximum length, in octets (RFC 1035 §2.3.4), which the shape
 #: above does not bound. Counted with `.encode()` because the limit is octets
-#: and not characters; the names a row publishes are ASCII either way -- a host
-#: by the shape check, a service label by its `_service._proto` form -- so the
-#: two counts agree here.
+#: and not characters; a name a row publishes is ASCII by the shape check, so
+#: the two counts agree here.
 DNS_LABEL_MAX_OCTETS = 63
 
-
-def _unknown_zones(routes: Iterable[conventions.routes.Route]) -> set[str]:
-    return {zone for route in routes for zone in route.zones} - set(conventions.ALL_ZONES)
-
-
-def _published_names(route: conventions.routes.Route) -> tuple[str, ...]:
-    """Every zone-relative name the row publishes: its own, and its extras'.
-
-    An `Srv` label is a name in the zone rather than under the host, so it
-    collides with another row's the same way two hosts do.
-    """
-    return (route.host, *(extra.label for extra in route.extras))
+#: A reason for a row published direct, whose wording no case here reads.
+REASON = routes.Direct('a reason')
 
 
-def _duplicated_names(routes: Iterable[conventions.routes.Route]) -> list[tuple[str, str]]:
-    published = [(name, zone) for route in routes for name in _published_names(route) for zone in route.zones]
-    return sorted({name for name in published if published.count(name) > 1})
+def _census(exposures: Mapping[str, routes.Exposure] | None = None) -> tuple[routes.Exposure, ...]:
+    return tuple((conventions.routes.EXPOSURES if exposures is None else exposures).values())
 
 
-def _hosts_that_are_not_labels(routes: Iterable[conventions.routes.Route]) -> set[str]:
-    return {route.host for route in routes if not DNS_LABEL.fullmatch(route.host)}
+def _of(*rows: routes.RouteRow | routes.Port) -> dict[str, routes.Exposure]:
+    """A census of one application per row, named after the row."""
+    census: dict[str, routes.Exposure] = {}
+    for index, row in enumerate(rows):
+        exposure = routes.Exposure(ports=(row,)) if isinstance(row, routes.Port) else routes.Exposure(routes=(row,))
+        census[f'app-{index}'] = exposure
+    return census
 
 
-def _oversized_labels(routes: Iterable[conventions.routes.Route]) -> set[str]:
-    """Every name a row publishes that carries a label over the limit.
+def _route_rows(
+    exposures: Iterable[routes.Exposure],
+) -> list[tuple[routes.Route | routes.Passthrough | routes.Apex, bool]]:
+    """Every row by name or apex, and whether the legacy VPS holds it."""
+    return [
+        (row.row, True) if isinstance(row, routes.Held) else (row, False)
+        for exposure in exposures
+        for row in exposure.routes
+    ]
 
-    The limit is per label and a published name is not always one label -- a
-    service record's is `_service._proto` -- so the name is split before each
-    piece is weighed.
-    """
-    return {
-        name
-        for route in routes
-        for name in _published_names(route)
-        if any(len(label.encode()) > DNS_LABEL_MAX_OCTETS for label in name.split('.'))
+
+def _hosts(exposures: Iterable[routes.Exposure]) -> list[tuple[routes.Host, bool]]:
+    """Every name a raw port is dialed at from outside, and whether the legacy VPS holds it."""
+    return [
+        (host.row, True) if isinstance(host, routes.Held) else (host, False)
+        for exposure in exposures
+        for port in exposure.ports
+        if isinstance(port.internet, routes.Balancer)
+        for host in port.internet.hosts
+    ]
+
+
+def _names(exposures: Iterable[routes.Exposure]) -> set[str]:
+    """Every label a row puts under a zone: a host by name, a raw port's host and its VIP host."""
+    census = tuple(exposures)
+    names = {row.host for row, _ in _route_rows(census) if not isinstance(row, routes.Apex)}
+    names |= {host.label for host, _ in _hosts(census)}
+    names |= {
+        side.host
+        for exposure in census
+        for port in exposure.ports
+        for side in (port.lan, port.media)
+        if isinstance(side, routes.Vip)
     }
+    return names
+
+
+def _unknown_zones(exposures: Iterable[routes.Exposure]) -> set[str]:
+    return {
+        zone for row, _ in _route_rows(exposures) if isinstance(row, routes.Route | routes.Apex) for zone in row.zones
+    } - set(conventions.ALL_ZONES)
 
 
 def test_every_zone_a_row_names_is_one_the_installation_declares() -> None:
@@ -498,125 +461,542 @@ def test_every_zone_a_row_names_is_one_the_installation_declares() -> None:
     id to declare the public record against -- neither is an error anything
     else reports.
     """
-    assert _unknown_zones(conventions.routes.ROUTES) == set()
-    assert _unknown_zones([conventions.routes.Route(host='photos', zones=('ucw.pdh',))]) == {'ucw.pdh'}
+    assert _unknown_zones(_census()) == set()
+    assert _unknown_zones(_census(_of(routes.Route('photos', internet=routes.PROXIED, zones=('ucw.pdh',))))) == {
+        'ucw.pdh'
+    }
+    assert _unknown_zones(_census(_of(routes.Apex(('ucw.pdh',))))) == {'ucw.pdh'}
 
 
-def test_no_two_rows_publish_the_same_host_in_the_same_zone() -> None:
-    """One name is one application.
+def test_a_name_a_row_publishes_is_one_dns_label_that_fits() -> None:
+    """A row is fanned out across its zones, so it may not carry one, and DNS caps a label at 63 octets.
 
-    Two rows on it are two records and two rewrites for the same name, and
-    which application answers depends on the order the census happens to be
-    in.
-    """
-    duplicated = [
-        conventions.routes.Route(host='photos', zones=('ucw.phd',)),
-        conventions.routes.Route(host='photos', zones=('ucw.phd', 'peifeng.phd')),
-    ]
-
-    assert _duplicated_names(conventions.routes.ROUTES) == []
-    assert _duplicated_names(duplicated) == [('photos', 'ucw.phd')]
-
-
-def test_no_two_rows_publish_the_same_name_in_the_same_zone() -> None:
-    """A host and an extra's label are one namespace, not two.
-
-    An `Srv` label sits in the zone rather than under the row's host, so it
-    collides with another row's label and with another row's host alike. One
-    walk over every name a row publishes is what sees both; a walk per kind
-    would see neither the second pair nor the third.
-    """
-    identity = conventions.routes.Srv('_matrix-identity._tcp', priority=10, weight=0, port=443)
-    two_extras = [
-        conventions.routes.Route(host='matrix', zones=('ucw.phd',), extras=(identity,)),
-        conventions.routes.Route(host='chat', zones=('ucw.phd',), extras=(identity,)),
-    ]
-    a_host_and_an_extra = [
-        conventions.routes.Route(host='status', zones=('ucw.phd',)),
-        conventions.routes.Route(
-            host='chat',
-            zones=('ucw.phd',),
-            extras=(conventions.routes.Srv('status', priority=10, weight=0, port=443),),
-        ),
-    ]
-
-    assert _duplicated_names(conventions.routes.ROUTES) == []
-    assert _duplicated_names(two_extras) == [('_matrix-identity._tcp', 'ucw.phd')]
-    assert _duplicated_names(a_host_and_an_extra) == [('status', 'ucw.phd')]
-
-
-def test_a_rows_host_fits_in_a_dns_label() -> None:
-    """The shape check bounds the characters, not how many of them there are.
-
-    DNS caps a label at 63 octets, so a longer host matches the pattern and is
-    refused by Cloudflare at apply time instead -- past the gate, in the one
-    place the census exists to keep a name out of.
+    A host written out in full would publish `photos.ucw.phd.ucw.phd` in every
+    zone the row names, and a longer host matches the shape and is refused by
+    Cloudflare at apply time instead -- past the gate, in the one place the
+    census exists to keep a name out of.
     """
     too_long = 'a' * 64
 
-    assert _oversized_labels(conventions.routes.ROUTES) == set()
-    assert _hosts_that_are_not_labels([conventions.routes.Route(host=too_long)]) == set()
-    assert _oversized_labels([conventions.routes.Route(host=too_long)]) == {too_long}
+    def misshapen(exposures: Iterable[routes.Exposure]) -> set[str]:
+        return {
+            name
+            for name in _names(exposures)
+            if not DNS_LABEL.fullmatch(name) or len(name.encode()) > DNS_LABEL_MAX_OCTETS
+        }
 
-
-def test_every_label_an_extra_publishes_fits_as_well() -> None:
-    """An extra publishes a name too, and that name is several labels.
-
-    The limit applies to each of them rather than to the name, so a service
-    record whose pieces are all short is legal however long the whole reads,
-    and one oversized piece is refused however short the whole reads.
-    """
-    oversized = conventions.routes.Srv('_' + 'a' * 63 + '._tcp', priority=10, weight=0, port=443)
-    long_but_legal = conventions.routes.Srv('_' + 'a' * 60 + '._tcp', priority=10, weight=0, port=443)
-
-    assert _oversized_labels([conventions.routes.Route(host='matrix', extras=(oversized,))]) == {oversized.label}
-    assert _oversized_labels([conventions.routes.Route(host='matrix', extras=(long_but_legal,))]) == set()
-
-
-def test_a_rows_host_is_a_label_and_not_a_fully_qualified_name() -> None:
-    """The row is fanned out across its zones, so it may not carry one.
-
-    A host written out in full would publish `photos.ucw.phd.ucw.phd` in every
-    zone the row names.
-    """
-    assert _hosts_that_are_not_labels(conventions.routes.ROUTES) == set()
-    assert _hosts_that_are_not_labels([conventions.routes.Route(host='photos.ucw.phd')]) == {'photos.ucw.phd'}
+    assert misshapen(_census()) == set()
+    assert misshapen(_census(_of(routes.Route('photos.ucw.phd', internet=routes.PROXIED)))) == {'photos.ucw.phd'}
+    assert misshapen(_census(_of(routes.Port('p', 1, Transports.TCP, lan=routes.Vip(too_long))))) == {too_long}
 
 
 def test_a_row_is_published_in_the_primary_zone_alone_unless_it_says_otherwise() -> None:
     """Every zone a name is published in costs a certificate to cover it.
 
-    So the zones a row reaches are what its owner asked for: a default that
-    fanned every name across every zone would buy the whole set for a name one
-    audience uses, and a LAN-only name -- which no public resolver answers --
-    would buy one wildcard per zone for nothing.
-
     Held against `ZONE_PRIMARY` rather than against `PRIMARY_ONLY`, which is
     the value the default *is*: that comparison agrees with any default the
-    census is given, every zone included. Naming the zone symbolically keeps
-    this red if the default is re-pointed at `WEB_ZONES` or if `PRIMARY_ONLY`
-    is quietly redefined, and green across a deliberate rename of the zone,
-    which is not this case's subject.
+    census is given, every zone included.
     """
-    assert conventions.routes.Route(host='photos').zones == (conventions.ZONE_PRIMARY,)
+    assert routes.Route('photos', internet=routes.PROXIED).zones == (conventions.ZONE_PRIMARY,)
 
 
-def test_a_row_states_what_it_publishes_beside_its_name() -> None:
-    """An application that publishes more than a hostname says so in its row.
+#: What a type cannot say, each built the way a census would write it, and a
+#: row beside it that differs in the one respect and is accepted.
+REFUSED: dict[str, tuple[Callable[[], object], Callable[[], object]]] = {
+    'a route on no Gateway': (lambda: routes.Route('photos'), lambda: routes.Route('photos', lan=routes.REWRITE)),
+    'a passthrough on no Gateway': (
+        lambda: routes.Passthrough('syncapi'),
+        lambda: routes.Passthrough('syncapi', lan=routes.REWRITE),
+    ),
+    'a raw port on no Gateway': (
+        lambda: routes.Port('imap', 1993, Transports.TCP),
+        lambda: routes.Port('imap', 1993, Transports.TCP, lan=routes.Vip('imap')),
+    ),
+    'an exposure with nothing in it': (
+        lambda: routes.Exposure(),
+        lambda: routes.Exposure(routes=(routes.Apex(conventions.WEB_ZONES),)),
+    ),
+    'a route on lan and media': (
+        lambda: routes.Route('tube', lan=routes.REWRITE, media=routes.REWRITE),
+        lambda: routes.Route('tube', media=routes.REWRITE),
+    ),
+    'a passthrough on lan and media': (
+        lambda: routes.Passthrough('syncapi', lan=routes.REWRITE, media=routes.REWRITE),
+        lambda: routes.Passthrough('syncapi', media=routes.REWRITE),
+    ),
+    'a raw port on lan and media': (
+        lambda: routes.Port('cast', 8009, Transports.TCP, lan=routes.Vip('cast'), media=routes.Vip('cast')),
+        lambda: routes.Port('cast', 8009, Transports.TCP, media=routes.Vip('cast')),
+    ),
+    'an empty reason': (lambda: routes.Direct(''), lambda: routes.Direct('a reason')),
+    'a route in no zone': (
+        lambda: routes.Route('photos', internet=routes.PROXIED, zones=()),
+        lambda: routes.Route('photos', internet=routes.PROXIED, zones=conventions.PRIMARY_ONLY),
+    ),
+    'an apex of no zone': (lambda: routes.Apex(()), lambda: routes.Apex(conventions.PRIMARY_ONLY)),
+    'an empty host': (
+        lambda: routes.Route('', internet=routes.PROXIED),
+        lambda: routes.Route('www', internet=routes.PROXIED),
+    ),
+    'the apex as a host': (
+        lambda: routes.Route('@', internet=routes.PROXIED),
+        lambda: routes.Route('www', internet=routes.PROXIED),
+    ),
+    'an empty passthrough host': (
+        lambda: routes.Passthrough('', internet=REASON),
+        lambda: routes.Passthrough('syncapi', internet=REASON),
+    ),
+    'an empty raw host': (lambda: routes.Host(''), lambda: routes.Host('syncapi')),
+    'the apex as a raw host': (lambda: routes.Host('@'), lambda: routes.Host('syncapi')),
+    'an empty VIP host': (lambda: routes.Vip(''), lambda: routes.Vip('imap')),
+    'one service under two names': (
+        lambda: routes.Exposure(
+            routes=(routes.Route('photos', internet=REASON), routes.Route('photos-home', lan=routes.REWRITE))
+        ),
+        lambda: routes.Exposure(routes=(routes.Route('photos', internet=REASON, lan=routes.REWRITE),)),
+    ),
+    'one service under two names, one of them held': (
+        lambda: routes.Exposure(
+            routes=(
+                routes.Held(routes.Route('photos', internet=REASON)),
+                routes.Route('photos-home', lan=routes.REWRITE),
+            )
+        ),
+        lambda: routes.Exposure(
+            routes=(routes.Held(routes.Route('photos', internet=REASON)), routes.Route('photos-www', internet=REASON))
+        ),
+    ),
+    'a device beside a raw port': (
+        lambda: routes.Exposure(
+            routes=(routes.Route('haos', internet=routes.PROXIED),),
+            ports=(routes.Port('p', 1, Transports.TCP, lan=routes.Vip('p')),),
+            device=routes.Device(conventions.HOME_ASSISTANT.v4, 8123),
+        ),
+        lambda: routes.Exposure(
+            routes=(routes.Route('haos', internet=routes.PROXIED),),
+            device=routes.Device(conventions.HOME_ASSISTANT.v4, 8123),
+        ),
+    ),
+    'a device beside a passthrough': (
+        lambda: routes.Exposure(
+            routes=(routes.Passthrough('haos', internet=REASON),),
+            device=routes.Device(conventions.HOME_ASSISTANT.v4, 8123),
+        ),
+        lambda: routes.Exposure(
+            routes=(routes.Route('haos', internet=REASON),),
+            device=routes.Device(conventions.HOME_ASSISTANT.v4, 8123),
+        ),
+    ),
+    'a device beside an apex': (
+        lambda: routes.Exposure(
+            routes=(routes.Apex(conventions.WEB_ZONES), routes.Route('www', internet=routes.PROXIED)),
+            device=routes.Device(conventions.HOME_ASSISTANT.v4, 8123),
+        ),
+        lambda: routes.Exposure(
+            routes=(routes.Route('www', internet=routes.PROXIED),),
+            device=routes.Device(conventions.HOME_ASSISTANT.v4, 8123),
+        ),
+    ),
+    'a raw port with no name': (
+        lambda: routes.Port('', 1993, Transports.TCP, lan=routes.Vip('imap')),
+        lambda: routes.Port('imap', 1993, Transports.TCP, lan=routes.Vip('imap')),
+    ),
+    'a raw port on port 0': (
+        lambda: routes.Port('imap', 0, Transports.TCP, lan=routes.Vip('imap')),
+        lambda: routes.Port('imap', 65535, Transports.TCP, lan=routes.Vip('imap')),
+    ),
+    'a raw port past the sixteen bits': (
+        lambda: routes.Port('imap', 65536, Transports.TCP, lan=routes.Vip('imap')),
+        lambda: routes.Port('imap', 1, Transports.TCP, lan=routes.Vip('imap')),
+    ),
+    'a device on port 0': (
+        lambda: routes.Device(conventions.HOME_ASSISTANT.v4, 0),
+        lambda: routes.Device(conventions.HOME_ASSISTANT.v4, 8123),
+    ),
+    'a balancer naming one host twice': (
+        lambda: routes.Balancer((routes.Host('syncapi'), routes.Held(routes.Host('syncapi')))),
+        lambda: routes.Balancer((routes.Host('syncapi'), routes.Held(routes.Host('btsync')))),
+    ),
+    'a heard side in no multicast group': (
+        lambda: routes.Heard(ipaddress.IPv4Address('192.168.1.1')),
+        lambda: routes.Heard(ipaddress.IPv4Address('239.255.255.250')),
+    ),
+    'a heard side on a port served on TCP': (
+        lambda: routes.Port('discovery', 7359, Transports.TCP_AND_UDP, media=routes.Heard()),
+        lambda: routes.Port('discovery', 7359, Transports.UDP, media=routes.Heard()),
+    ),
+}
 
-    The alternative is a published record that lives in neither this census nor
-    the `dns` tables, findable only by reading the components. The target is
-    the row itself rather than the hostname written out, so the name is spelled
-    once and a rename cannot leave the two halves disagreeing.
-    """
-    matrix = conventions.routes.Route(
-        host='matrix',
-        proxied=False,
-        extras=(conventions.routes.Srv('_matrix-identity._tcp', priority=10, weight=0, port=443),),
+
+@pytest.mark.parametrize('case', list(REFUSED))
+def test_what_a_type_cannot_say_is_refused_where_the_row_is_built(case: str) -> None:
+    """The census does not load while it holds one, so no reader is ever handed one."""
+    refused, accepted = REFUSED[case]
+
+    _ = accepted()
+    with pytest.raises(ValueError):
+        _ = refused()
+
+
+def test_a_device_backs_a_held_route() -> None:
+    """A device's relay serves its name while the legacy VPS still publishes it, which is how its land is verified."""
+    exposure = routes.Exposure(
+        routes=(routes.Held(routes.Route('haos', internet=routes.PROXIED, media=routes.REWRITE)),),
+        device=routes.Device(conventions.HOME_ASSISTANT.v4, 8123),
     )
 
-    assert matrix.extras[0].target is conventions.routes.SELF
-    assert conventions.routes.Route(host='photos').extras == ()
+    assert exposure.device is not None
+
+
+def test_each_shape_publishes_the_records_its_internet_side_states() -> None:
+    """A row of each shape, and the public names it implies, against literals.
+
+    A row on `internet` publishes a CNAME in each zone it names, proxied or
+    direct with its reason; a raw port's host is published direct, in the
+    primary. A held row, an apex, a row on a home Gateway alone, and a heard
+    side publish none, and rows that share a host publish one record.
+    """
+    census = _of(
+        routes.Route('www', internet=routes.PROXIED, zones=conventions.WEB_ZONES),
+        routes.Route('photos', internet=routes.Direct('uploads'), lan=routes.REWRITE),
+        routes.Route('go', lan=routes.BARE),
+        routes.Apex(conventions.WEB_ZONES),
+        routes.Held(routes.Route('auth', internet=routes.PROXIED)),
+        routes.Passthrough('syncapi', internet=routes.Direct('client certificates'), lan=routes.REWRITE),
+        routes.Port(
+            'syncthing',
+            22000,
+            Transports.TCP_AND_UDP,
+            internet=routes.Balancer((routes.Host('syncapi'), routes.Held(routes.Host('btsync')))),
+            lan=routes.Vip('syncapi'),
+        ),
+        routes.Port('hath', 60011, Transports.TCP, internet=routes.Dedicated()),
+        routes.Port('discovery', 7359, Transports.UDP, media=routes.Heard()),
+    )
+
+    assert routes.public_names(_census(census)) == (
+        routes.PublicName('www', 'unlimited-code.works', ''),
+        routes.PublicName('www', 'unlimitedcodeworks.xyz', ''),
+        routes.PublicName('photos', 'unlimited-code.works', 'uploads'),
+        routes.PublicName('syncapi', 'unlimited-code.works', 'client certificates'),
+    )
+
+
+def test_the_served_zones_are_the_primary_and_every_zone_a_row_takes_a_certificate_in() -> None:
+    """Two programs derive one set: `k8s-base` declares a certificate per zone, `credentials` scopes a token to it.
+
+    A route or an apex takes its zones' certificates whether held or not,
+    since verifying a held row needs them; a passthrough and a raw port's
+    host take none, since the pod holds the one and the other is no TLS of the
+    cluster's. The primary is served by definition, whatever the rows say.
+    """
+    cohost = 'unlimitedcodeworks.xyz'
+    census = _of(
+        routes.Held(routes.Route('game', internet=routes.PROXIED, zones=(cohost,))),
+        routes.Apex(('jiahui.love',)),
+        routes.Passthrough('syncapi', internet=REASON),
+        routes.Port('syncthing', 22000, Transports.TCP, internet=routes.Balancer((routes.Host('syncapi'),))),
+    )
+
+    assert routes.served_zones(()) == ('unlimited-code.works',)
+    assert routes.served_zones(_census(census)) == ('unlimited-code.works', cohost, 'jiahui.love')
+    assert routes.served_zones()[0] == 'unlimited-code.works'
+
+
+# A front is an address a port is claimed at: the balancer, the dedicated
+# node's address, the site's forward, and the two VIPs. The balancer answers
+# the management ports and the Gateways' ports besides its raw rows, and each
+# VIP the Gateways' ports besides its own.
+type Claim = tuple[str, int, str]
+
+
+def _claims(exposures: Iterable[routes.Exposure]) -> list[Claim]:
+    """Every port claimed on a front, by front, port and protocol."""
+    gateway = [(port, 'tcp') for port in conventions.GATEWAY_PORTS]
+    claims: list[Claim] = [('balancer', port, 'tcp') for port in conventions.MANAGEMENT_PORTS]
+    claims += [(front, port, protocol) for front in ('balancer', 'lan', 'media') for port, protocol in gateway]
+    for port in routes.ports(exposures):
+        fronts: list[str] = []
+        match port.internet:
+            case routes.Balancer():
+                fronts.append('balancer')
+            case routes.Dedicated():
+                fronts.append('dedicated')
+            case routes.SiteForward():
+                fronts.append('site')
+            case None:
+                pass
+        fronts += [front for front, side in (('lan', port.lan), ('media', port.media)) if side is not None]
+        claims += [(front, port.port, protocol) for front in fronts for protocol in port.transports.protocols]
+    return claims
+
+
+def _claimed_twice(exposures: Iterable[routes.Exposure]) -> list[Claim]:
+    claims = _claims(exposures)
+    return sorted({claim for claim in claims if claims.count(claim) > 1})
+
+
+def test_a_port_is_claimed_once_on_each_front() -> None:
+    """Two rows on one port at one address are two Services the address cannot tell apart.
+
+    The Gateways' ports count on every front a Gateway answers, so a raw port
+    on 443 at the LAN VIP is as much a collision as two raw rows on one port.
+    The same port on two fronts is two addresses and no collision.
+    """
+    assert _claimed_twice(_census()) == []
+    assert _claimed_twice(
+        _census(
+            _of(
+                routes.Port('a', 4000, Transports.TCP, internet=routes.Balancer()),
+                routes.Port('b', 4000, Transports.TCP_AND_UDP, internet=routes.Balancer()),
+            )
+        )
+    ) == [('balancer', 4000, 'tcp')]
+    assert _claimed_twice(_census(_of(routes.Port('raw', 443, Transports.TCP, lan=routes.Vip('raw'))))) == [
+        ('lan', 443, 'tcp')
+    ]
+    assert (
+        _claimed_twice(
+            _census(
+                _of(
+                    routes.Port('a', 4000, Transports.TCP, internet=routes.Dedicated()),
+                    routes.Port('b', 4000, Transports.TCP, internet=routes.Balancer()),
+                )
+            )
+        )
+        == []
+    )
+
+
+def _repeated_port_names(exposures: Iterable[routes.Exposure]) -> list[str]:
+    names = [row.name for row in routes.ports(exposures)]
+    return sorted({name for name in names if names.count(name) > 1})
+
+
+def test_no_two_raw_ports_share_a_name_whatever_their_fronts() -> None:
+    """A raw port's name is what everything declared for it is named after, on every front.
+
+    The balancer's listeners, the site's forward and the Services each take
+    it, so two rows of one name collide wherever both are declared, inside
+    one exposure or across two, and on fronts the balancer has no part in.
+    """
+    assert _repeated_port_names(_census()) == []
+    assert _repeated_port_names(
+        _census(
+            _of(
+                routes.Port('peer', 4000, Transports.TCP, internet=routes.Dedicated()),
+                routes.Port('peer', 4001, Transports.TCP, lan=routes.Vip('peer')),
+            )
+        )
+    ) == ['peer']
+    one_exposure = routes.Exposure(
+        ports=(
+            routes.Port('peer', 4000, Transports.TCP, internet=routes.SiteForward()),
+            routes.Port('peer', 4001, Transports.UDP, media=routes.Heard()),
+        )
+    )
+    assert _repeated_port_names((one_exposure,)) == ['peer']
+
+
+#: OCI's network load balancer holds at most fifty listeners and fifty backend
+#: sets (OCI: Network Load Balancer, "Limits"), the service's limits rather
+#: than a decision of this program.
+#: https://docs.oracle.com/en-us/iaas/Content/NetworkLoadBalancer/introduction.htm#LimitsNLBResources
+NLB_LISTENER_LIMIT = 50
+
+
+def test_the_balancers_names_are_distinct_and_fit_its_limit() -> None:
+    """The management ports, the Gateways' ports and the raw ports at the balancer share one balancer, and one namespace on it.
+
+    Each is a listener and a backend set per family, named after the field
+    or the row, and after it and the family for IPv6 (rfc-007 §5.3). A row
+    named after a field, or after one with the family appended, would claim a
+    listener the cluster endpoint or the Gateways already hold; and the
+    lists together, twice over, are what the balancer's limit counts.
+    """
+    fronted = [row.name for row in routes.ports() if isinstance(row.internet, routes.Balancer)]
+    fields = [*conventions.ManagementPorts._fields, *conventions.GatewayPorts._fields]
+    names = [*fields, *fronted]
+    on_the_balancer = [*names, *(f'{name}-ipv6' for name in names)]
+
+    assert not set(fronted) & set(fields), fronted
+    assert len(on_the_balancer) == len(set(on_the_balancer)), on_the_balancer
+    assert len(on_the_balancer) <= NLB_LISTENER_LIMIT
+
+
+# One host, one answer. Rows that share a host publish one record and one
+# rewrite, so they have to agree on both: a `Host` shares only with a row
+# published direct, since a proxied record would hide the raw port; every row
+# with a home side, and every VIP host, answers at one VIP; and two rows by
+# name are two services on one name, whatever they set.
+
+#: What a claimant says of a shared name: whether it publishes a record and how
+#: (`None` for no record, else whether it is proxied), and the VIP a home
+#: client is answered with (`None` for none). `NEUTRAL` is a claimant that
+#: says nothing of that half.
+NEUTRAL = 'neutral'
+type Side = str | bool | ipaddress.IPv4Address | None
+
+
+def _sharing(exposures: Iterable[routes.Exposure]) -> dict[tuple[str, str], list[tuple[str, Side, Side]]]:
+    """Every name, in each zone, with what each row on it says of its record and its rewrite."""
+    pool = conventions.LAN_POOL
+    claims: dict[tuple[str, str], list[tuple[str, Side, Side]]] = {}
+    census = tuple(exposures)
+    for row, _ in _route_rows(census):
+        if isinstance(row, routes.Apex):
+            continue
+        record: Side = None if row.internet is None else isinstance(row.internet, routes.Proxied)
+        vip: Side = pool.default_vip.v4 if row.lan is not None else pool.media_vip.v4 if row.media is not None else None
+        for zone in row.zones:
+            claims.setdefault((row.host, zone), []).append(('by name', record, vip))
+    for host, _ in _hosts(census):
+        claims.setdefault((host.label, conventions.ZONE_PRIMARY), []).append(('raw', False, NEUTRAL))
+    for port in routes.ports(census):
+        for side, vip in ((port.lan, pool.default_vip.v4), (port.media, pool.media_vip.v4)):
+            if isinstance(side, routes.Vip):
+                claims.setdefault((side.host, conventions.ZONE_PRIMARY), []).append(('raw', NEUTRAL, vip))
+    return claims
+
+
+def _two_answers(exposures: Iterable[routes.Exposure]) -> list[tuple[str, str]]:
+    """Every name whose rows disagree on its record or its rewrite, or that two rows by name claim."""
+    found: list[tuple[str, str]] = []
+    for name, claims in _sharing(exposures).items():
+        records = {record for _, record, _ in claims if record != NEUTRAL}
+        rewrites = {vip for _, _, vip in claims if vip != NEUTRAL}
+        if len(records) > 1 or len(rewrites) > 1 or [kind for kind, _, _ in claims].count('by name') > 1:
+            found.append(name)
+    return sorted(found)
+
+
+def test_rows_that_share_a_host_give_it_one_record_and_one_rewrite() -> None:
+    """The discovery server's passthrough and the peer port share `syncapi`, and agree on it.
+
+    A raw port's host on a proxied name would publish the proxy's address for
+    a port the proxy does not carry, and a raw port at the LAN VIP for a name
+    the media VIP answers would rewrite one name to two addresses. Anything
+    else sharing a name, two routes on it included, is a second service on
+    it.
+    """
+    syncapi = routes.Passthrough('syncapi', internet=REASON, lan=routes.REWRITE)
+    peer = routes.Port(
+        'syncthing',
+        22000,
+        Transports.TCP_AND_UDP,
+        internet=routes.Balancer((routes.Host('syncapi'),)),
+        lan=routes.Vip('syncapi'),
+    )
+    primary = conventions.ZONE_PRIMARY
+
+    assert _two_answers(_census()) == []
+    assert _two_answers(_census(_of(syncapi, peer))) == []
+    assert _two_answers(
+        _census(
+            _of(
+                routes.Route('tube', internet=routes.PROXIED, media=routes.REWRITE),
+                routes.Port('tube', 8096, Transports.TCP, lan=routes.Vip('tube')),
+            )
+        )
+    ) == [('tube', primary)]
+    assert _two_answers(
+        _census(
+            _of(
+                routes.Route('sync', internet=routes.PROXIED),
+                routes.Port('sync', 22000, Transports.TCP, internet=routes.Balancer((routes.Host('sync'),))),
+            )
+        )
+    ) == [('sync', primary)]
+    assert _two_answers(
+        _census(_of(routes.Route('auth', internet=routes.PROXIED), routes.Route('auth', internet=routes.PROXIED)))
+    ) == [('auth', primary)]
+
+
+# A row on `internet` is held exactly while the `dns` stack points its name at
+# the legacy VPS (rfc-008 §3.3): by its address or its anchor, in an
+# application's block of `legacy.py` or in the web origin's pair. A row on a
+# home Gateway alone publishes nothing to collide with such a record, and is
+# never held.
+
+
+def _points_at_the_vps(blocks: Iterable[Block]) -> set[tuple[str, str]]:
+    """Every name, in each zone, whose record names the legacy VPS by its address or its anchor."""
+    anchor = dns_legacy.ANCHOR_ARCHVPS.removesuffix(f'.{conventions.ZONE_PRIMARY}')
+    return {
+        (record.label, zone)
+        for block in blocks
+        for record in block.records
+        if record.content in (dns_legacy.IP_ARCHVPS, dns_legacy.ANCHOR_ARCHVPS) and record.label != anchor
+        for zone in block.zones
+    }
+
+
+def _held_out_of_step(exposures: Iterable[routes.Exposure], blocks: Iterable[Block]) -> list[str]:
+    """Every row whose wrapper disagrees with the records: held without one, published beside one, or home-only and held."""
+    pointed = _points_at_the_vps(blocks)
+    census = tuple(exposures)
+    rows: list[tuple[str, tuple[str, ...], bool, bool]] = [
+        (row.host, row.zones, row.internet is not None, is_held)
+        for row, is_held in _route_rows(census)
+        if not isinstance(row, routes.Apex)
+    ]
+    rows += [(host.label, conventions.PRIMARY_ONLY, True, is_held) for host, is_held in _hosts(census)]
+    return sorted(
+        host
+        for host, zones, on_internet, is_held in rows
+        if is_held != (on_internet and any((host, zone) in pointed for zone in zones))
+    )
+
+
+def _dns_blocks() -> tuple[Block, ...]:
+    anchors = dns_base.AnchorAddresses(cluster_v4='203.0.113.10', cluster_v6='2001:db8::10', vip1_v4='203.0.113.20')
+    return (*dns_base.blocks(anchors=anchors), *dns_legacy.LEGACY)
+
+
+def test_a_row_is_held_exactly_while_the_dns_stack_points_its_name_at_the_legacy_vps() -> None:
+    """A land that forgets the wrapper collides with the legacy record; a cut that keeps it publishes nothing.
+
+    Cloudflare refuses a record beside one of the same name, so a row
+    published while the legacy record stands fails its first apply; and a
+    wrapper kept after the record went leaves the name resolving nowhere.
+    """
+    vps = dns_record.Block(conventions.PRIMARY_ONLY, (dns_record.cname('spool', dns_legacy.ANCHOR_ARCHVPS),))
+
+    assert _held_out_of_step(_census(), _dns_blocks()) == []
+    assert _held_out_of_step(_census(_of(routes.Held(routes.Route('spool', internet=routes.PROXIED)))), [vps]) == []
+    # A land that forgets the wrapper.
+    assert _held_out_of_step(_census(_of(routes.Route('spool', internet=routes.PROXIED))), [vps]) == ['spool']
+    # A cut that deletes the record and keeps the wrapper.
+    assert _held_out_of_step(_census(_of(routes.Held(routes.Route('spool', internet=routes.PROXIED)))), []) == ['spool']
+    # A raw port's host, both ways.
+    held_host = routes.Port('p', 1, Transports.TCP, internet=routes.Balancer((routes.Held(routes.Host('spool')),)))
+    assert _held_out_of_step(_census(_of(held_host)), [vps]) == []
+    assert _held_out_of_step(_census(_of(held_host)), []) == ['spool']
+    # A home-only row, whether or not the name still has a legacy record.
+    for blocks in ([vps], []):
+        assert _held_out_of_step(_census(_of(routes.Held(routes.Route('spool', lan=routes.REWRITE)))), blocks) == [
+            'spool'
+        ]
+        assert _held_out_of_step(_census(_of(routes.Route('spool', lan=routes.REWRITE))), blocks) == []
+
+
+def _apex_zones_without_an_address(exposures: Iterable[routes.Exposure], blocks: Iterable[Block]) -> set[str]:
+    """Every zone an apex row names whose apex the `dns` stack gives no address."""
+    addressed = {
+        zone
+        for block in blocks
+        for record in block.records
+        if record.label == '@' and record.type in ('A', 'AAAA')
+        for zone in block.zones
+    }
+    return {zone for row, _ in _route_rows(exposures) if isinstance(row, routes.Apex) for zone in row.zones} - addressed
+
+
+def test_an_apex_rows_zone_holds_its_address_record() -> None:
+    """The apex's record is the `dns` stack's web origin, so a row naming an apex with none answers nothing."""
+    assert _apex_zones_without_an_address(_census(_of(routes.Apex(conventions.WEB_ZONES))), _dns_blocks()) == set()
+    assert _apex_zones_without_an_address(_census(), _dns_blocks()) == set()
+    assert _apex_zones_without_an_address(_census(_of(routes.Apex(('jiahui.id',)))), _dns_blocks()) == {'jiahui.id'}
 
 
 # --------------------------------------------------------------------------
@@ -2510,30 +2890,6 @@ def test_the_glossary_names_terms_the_package_uses_and_refuses_words_it_does_not
 
 
 # -- the served zones, and the route label (rfc-007 §5.2) ---------------------
-
-
-def test_the_served_zones_are_the_primary_and_exactly_the_zones_the_rows_name() -> None:
-    """Two programs derive one set: `k8s-base` declares a certificate per zone, `credentials` scopes a token to it.
-
-    Held on a census of its own as well as on the real one, which is empty
-    until `apps` declares its first application: the primary is served by
-    definition, and a zone joins only because a row publishes in it.
-    """
-    route = conventions.routes.Route
-    rows = (
-        route(host='photos'),
-        route(host='www', zones=('unlimitedcodeworks.xyz', conventions.ZONE_PRIMARY)),
-        route(host='media', zones=('unlimitedcodeworks.xyz',)),
-    )
-
-    assert conventions.routes.served_zones(()) == (conventions.ZONE_PRIMARY,)
-    assert conventions.routes.served_zones(rows) == (conventions.ZONE_PRIMARY, 'unlimitedcodeworks.xyz')
-    # Served by definition: a census whose rows are all in another zone still
-    # serves the primary, whose certificate the cluster's own endpoints hold.
-    assert conventions.routes.served_zones(rows[2:]) == (conventions.ZONE_PRIMARY, 'unlimitedcodeworks.xyz')
-    named = {zone for row in conventions.routes.ROUTES for zone in row.zones}
-    assert set(conventions.routes.served_zones()) == {conventions.ZONE_PRIMARY} | named
-    assert conventions.routes.served_zones()[0] == conventions.ZONE_PRIMARY
 
 
 def test_the_route_label_is_one_label_this_program_owns() -> None:

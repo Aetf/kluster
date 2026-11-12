@@ -220,18 +220,6 @@ class Opening:
 #: kubelet's is Kubernetes'.
 POD_REACHED_PORTS: tuple[int, ...] = (9962, 9963, 9964, 9965, 9100)
 
-#: The listener ports of the Gateways, each on every transport it is served
-#: on: the public port census's rows the Gateways answer, and no other. A
-#: Gateway's packets are handed up the host's stack to the node's Envoy, so
-#: they cross this firewall, while a row a Service's pods answer is taken by
-#: the datapath ahead of it (rfc-007 §4.3).
-GATEWAY_PORTS: tuple[tuple[int, Literal['tcp', 'udp']], ...] = tuple(
-    (row.port, protocol)
-    for row in conventions.PUBLIC_PORT_CENSUS
-    if row.answerer is conventions.Answerer.GATEWAYS
-    for protocol in row.transports.protocols
-)
-
 #: What terminates in the host network namespace, and who may reach it. The
 #: firewall is the only filter on ports in front of a public node: the cloud
 #: subnet's list narrows no port (declarative/physical.md §1–2).
@@ -239,9 +227,11 @@ GATEWAY_PORTS: tuple[tuple[int, Literal['tcp', 'udp']], ...] = tuple(
 #: The management APIs (`conventions.MANAGEMENT_PORTS`), which the balancer
 #: forwards from the same structure, are open to the internet; so is KubeSpan,
 #: whose peers include the homelab worker at a home address nothing declares;
-#: and so are the Gateways' listeners, on every node: on a cloud node those
-#: ports are the internet's by design and nothing on the host binds them but
-#: through the proxy, and the worker's site gateway forwards none of them
+#: and so are the Gateways' listeners (`conventions.GATEWAY_PORTS`), over TCP,
+#: on every node: a Gateway's packets are handed up the host's stack to the
+#: node's Envoy, so they cross this firewall (rfc-007 §4.3); on a cloud node
+#: those ports are the internet's by design and nothing on the host binds them
+#: but through the proxy, and the worker's site gateway forwards none of them
 #: from outside the site. The kubelet and the other ports a pod calls are
 #: open to the cluster alone, the pod ranges included: a pod's call to its own
 #: node arrives on the pod's device from the pod's address, while one to
@@ -262,13 +252,13 @@ GATEWAY_PORTS: tuple[tuple[int, Literal['tcp', 'udp']], ...] = tuple(
 #: would need an opening from the cluster's ranges, and the change that adds
 #: the scrape settles it (rfc-007 §7.1).
 #:
-#: A raw TCP/UDP LoadBalancer Service's port is absent: Cilium's BPF datapath
-#: answers it at tc ingress, ahead of nftables, so it serves without a
-#: firewall entry.
+#: A raw port's (`conventions.routes.Port`) is absent: Cilium's BPF datapath
+#: answers its LoadBalancer Service at tc ingress, ahead of nftables, so it
+#: serves without a firewall entry.
 HOST_OPENINGS: tuple[Opening, ...] = (
     *(Opening(port, 'tcp', ANYWHERE) for port in conventions.MANAGEMENT_PORTS),
     Opening(KUBESPAN_PORT, 'udp', ANYWHERE),
-    *(Opening(port, protocol, ANYWHERE) for port, protocol in GATEWAY_PORTS),
+    *(Opening(port, 'tcp', ANYWHERE) for port in conventions.GATEWAY_PORTS),
     Opening(KUBELET_PORT, 'tcp', CLUSTER_RANGES),
     *(Opening(port, 'tcp', CLUSTER_RANGES) for port in POD_REACHED_PORTS),
     Opening(DHCPV6_CLIENT_PORT, 'udp', (LINK_LOCAL,)),

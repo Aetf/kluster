@@ -4,8 +4,8 @@
 Records are plain data (`record`, `base`, `legacy`), grouped into blocks — the
 records that appear together, in every zone of one set — and the per-zone view
 Cloudflare's API takes is derived from them by `zone_records`. The
-split-horizon rewrites are derived from the shared route census by
-`rewrites.rewrites`, over `conventions.routes.ROUTES`, and the two things that
+split-horizon rewrites are derived from the shared exposure census by
+`rewrites.rewrites`, over `conventions.routes.EXPOSURES`, and the two things that
 turn data into resources are `zone.ManagedZone` and
 `rewrites.ResolverRewrites`, the latter over the custom provider in
 `kluster.providers.adguard_rewrites`.

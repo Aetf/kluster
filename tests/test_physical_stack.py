@@ -735,8 +735,9 @@ def test_the_pinhole_admits_the_configured_address_once_it_is_known(ran: Run) ->
     Step three of the bring-up ceremony is writing the key, so what follows it
     has to be the pinhole itself — the configured address, on the port the
     census holds, into the zone the worker sits in. The port is not configured beside
-    it: two firewall rules name it and they have to agree, so it sits with the
-    public port census in `conventions` (rfc-002 §11).
+    it: two firewall rules name it and they have to agree, so it is the port of
+    the exposure census's row through the site's forward, in `conventions`
+    (rfc-002 §11).
     """
     destination = ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-firewall-peer-v6')['destination']
     assert destination['ips'] == [WORKER_GUA]

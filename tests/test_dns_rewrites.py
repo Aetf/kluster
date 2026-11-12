@@ -1,7 +1,7 @@
-"""The rewrites: which rows a route census implies, and how they are declared.
+"""The rewrites: which rows an exposure census implies, and how they are declared.
 
 Two subjects, in the order the module puts them. The derivation is plain data
-and needs no runtime: what a route implies is a function of the row. The
+and needs no runtime: what a row implies is a function of the row. The
 component is the declaration — which instance a row says it belongs to, where
 that instance is reached, and what a resource is called. The provider's own
 behavior when any of those moves is `test_dns_adguard.py`.
@@ -14,9 +14,34 @@ from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
 from kluster.components.dns.rewrites import ResolverRewrites, Rewrite, rewrites
+from kluster.conventions.cluster import Transports
+from kluster.conventions.routes import (
+    BARE,
+    PROXIED,
+    REWRITE,
+    Apex,
+    Balancer,
+    Direct,
+    Exposure,
+    Heard,
+    Held,
+    Host,
+    Passthrough,
+    Port,
+    Route,
+    Vip,
+)
 from kluster.providers import configured
 
-ROUTE = conventions.routes.Route(host='photos', exposure=conventions.routes.Exposure.SPLIT, zones=('ucw.phd',))
+ROUTE = Exposure(routes=(Route(host='photos', internet=PROXIED, lan=REWRITE, zones=('ucw.phd',)),))
+
+#: The two VIPs, written out: what a home client is answered with is the
+#: thing under test, so it is stated rather than read back from the pool.
+LAN_VIP = ('192.168.71.1', 'fd1a:665f:8bcb:71::1')
+MEDIA_VIP = ('192.168.71.2', 'fd1a:665f:8bcb:71::2')
+
+#: A reason for the rows published direct, whose wording nothing here reads.
+REASON = Direct('a reason')
 
 ALICE = f'rewrites-{conventions.gateway.ADGUARD_ALICE.name}'
 BOB = f'rewrites-{conventions.gateway.ADGUARD_BOB.name}'
@@ -123,21 +148,85 @@ def test_the_package_does_not_shadow_this_module_with_the_function_it_holds() ->
     assert 'rewrites' not in package.__all__
 
 
-def test_a_public_route_needs_no_rewrite() -> None:
-    # LAN clients take the cloud path for it, which is the whole difference.
-    assert rewrites([conventions.routes.Route(host='www', exposure=conventions.routes.Exposure.PUBLIC)]) == ()
+def _answered(exposures: list[Exposure]) -> dict[str, tuple[str, ...]]:
+    """Each rewritten name and the addresses it is answered with, in the order emitted."""
+    answered: dict[str, tuple[str, ...]] = {}
+    for entry in rewrites(exposures):
+        answered[entry.domain] = (*answered.get(entry.domain, ()), str(entry.answer))
+    return answered
 
 
-def test_a_split_route_is_rewritten_in_every_zone_it_is_published_in() -> None:
-    route = conventions.routes.Route(
-        host='photos', exposure=conventions.routes.Exposure.SPLIT, zones=('ucw.phd', 'peifeng.phd')
-    )
+def test_each_shape_is_rewritten_at_the_vip_of_the_gateway_it_sets() -> None:
+    """A row of each shape, and what home clients are answered for it, Gateway by Gateway.
 
-    assert rewrites([route]) == (
-        Rewrite(domain='photos.ucw.phd', answer=conventions.LAN_POOL.default_vip.v4),
-        Rewrite(domain='photos.ucw.phd', answer=conventions.LAN_POOL.default_vip.v6),
-        Rewrite(domain='photos.peifeng.phd', answer=conventions.LAN_POOL.default_vip.v4),
-        Rewrite(domain='photos.peifeng.phd', answer=conventions.LAN_POOL.default_vip.v6),
+    A row on `lan` is answered with the LAN VIP and one on `media` with the
+    media VIP, in each zone the row is published in; a bare name adds the bare
+    label; a raw port's VIP host is rewritten in the primary. A row on
+    `internet` alone, an apex, a heard side and a held row publish none, and
+    neither does a VIP host that a held row stands on.
+    """
+    census = [
+        Exposure(routes=(Route('www', internet=PROXIED),)),
+        Exposure(routes=(Route('photos', internet=REASON, lan=REWRITE, zones=('ucw.phd', 'peifeng.phd')),)),
+        Exposure(routes=(Route('tube', internet=PROXIED, media=REWRITE),)),
+        Exposure(routes=(Route('go', lan=BARE),)),
+        Exposure(routes=(Passthrough('syncapi', internet=REASON, lan=REWRITE),)),
+        Exposure(routes=(Passthrough('relay', media=REWRITE),)),
+        Exposure(routes=(Apex(('unlimited-code.works',)),)),
+        Exposure(routes=(Held(Route('mon', internet=PROXIED, lan=REWRITE)),)),
+        Exposure(ports=(Port('imap', 1993, Transports.TCP, lan=Vip('imap')),)),
+        Exposure(ports=(Port('cast', 8009, Transports.TCP, media=Vip('cast')),)),
+        Exposure(ports=(Port('discovery', 7359, Transports.UDP, media=Heard()),)),
+        Exposure(
+            ports=(
+                Port(
+                    'peer',
+                    22000,
+                    Transports.TCP_AND_UDP,
+                    internet=Balancer((Held(Host('peer')),)),
+                    lan=Vip('peer'),
+                ),
+            )
+        ),
+    ]
+
+    assert _answered(census) == {
+        'photos.ucw.phd': LAN_VIP,
+        'photos.peifeng.phd': LAN_VIP,
+        'tube.unlimited-code.works': MEDIA_VIP,
+        'go.unlimited-code.works': LAN_VIP,
+        'go': LAN_VIP,
+        'syncapi.unlimited-code.works': LAN_VIP,
+        'relay.unlimited-code.works': MEDIA_VIP,
+        'imap.unlimited-code.works': LAN_VIP,
+        'cast.unlimited-code.works': MEDIA_VIP,
+    }
+
+
+def test_rows_that_share_a_host_publish_one_rewrite() -> None:
+    """The discovery server's passthrough and the peer port's VIP are one name with one answer.
+
+    Two rewrites for one name and family would be two rows on the
+    resolvers, written under one resource name.
+    """
+    census = [
+        Exposure(routes=(Passthrough('syncapi', internet=REASON, lan=REWRITE),)),
+        Exposure(
+            ports=(
+                Port(
+                    'syncthing',
+                    22000,
+                    Transports.TCP_AND_UDP,
+                    internet=Balancer((Host('syncapi'),)),
+                    lan=Vip('syncapi'),
+                ),
+            )
+        ),
+    ]
+
+    assert rewrites(census) == (
+        Rewrite(domain='syncapi.unlimited-code.works', answer=conventions.LAN_POOL.default_vip.v4),
+        Rewrite(domain='syncapi.unlimited-code.works', answer=conventions.LAN_POOL.default_vip.v6),
     )
 
 
@@ -147,34 +236,6 @@ def test_both_families_are_rewritten() -> None:
     AdGuard answers a rewrite only for the family of its answer, so a v4-only
     rewrite leaves AAAA resolving to the cloud path (RFC 6724).
     """
-    entries = rewrites(
-        [conventions.routes.Route(host='tube', exposure=conventions.routes.Exposure.SPLIT, zones=('ucw.phd',))]
-    )
+    entries = rewrites([ROUTE])
 
-    assert {entry.answer for entry in entries} == {
-        conventions.LAN_POOL.default_vip.v4,
-        conventions.LAN_POOL.default_vip.v6,
-    }
     assert {entry.answer.version for entry in entries} == {4, 6}
-
-
-def test_an_iot_route_is_answered_by_the_media_vip() -> None:
-    # Attaching to the media gateway *is* the "IoT may reach this" decision.
-    route = conventions.routes.Route(host='tube', exposure=conventions.routes.Exposure.IOT, zones=('ucw.phd',))
-
-    assert {entry.answer for entry in rewrites([route])} == {
-        conventions.LAN_POOL.media_vip.v4,
-        conventions.LAN_POOL.media_vip.v6,
-    }
-
-
-def test_a_lan_only_route_is_rewrite_only() -> None:
-    """No public record, but the name still has to resolve on the LAN.
-
-    Publishing nothing is what keeps the LAN service census out of public
-    resolvers; the rewrite is the only thing that makes the name work.
-    """
-    route = conventions.routes.Route(host='golinks', exposure=conventions.routes.Exposure.LAN_ONLY, zones=('ucw.phd',))
-
-    assert route.public is False
-    assert len(rewrites([route])) == 2

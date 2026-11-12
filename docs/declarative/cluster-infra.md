@@ -396,7 +396,7 @@ All decided behavior from architecture.md §3, expressed as config:
     TCP/UDP Service, whose traffic policy is `Cluster` (architecture.md
     §3.1), would then answer at a cloud node's public address. The
     Gateways' Services opt out through their `CiliumGatewayClassConfig`
-    (below), `public_port` sets the field on its Service
+    (below), a raw port's Service sets the field
     (workloads.md §1), and `type: NodePort` is on workloads.md §1's
     list of what a component may not do. Bootstrap verification: no
     Service carries a `nodePort` (physical.md §6). A `Local` Service
@@ -421,7 +421,7 @@ All decided behavior from architecture.md §3, expressed as config:
     alike). Pool membership via the `serviceSelector` label from
     `conventions`. **Every Service on the `internet` pool's node
     addresses takes `Cluster`** (architecture.md §3.1), and **a Service
-    whose census row the balancer fronts asks for the balancer's two
+    whose raw port the balancer fronts asks for the balancer's two
     addresses beside the node addresses**, so a pod on a cloud node
     reaching one of the cluster's public names is answered without the
     balancer, which a node it forwards to cannot reach (architecture.md
@@ -499,8 +499,8 @@ All decided behavior from architecture.md §3, expressed as config:
     dedicated `lan`-pool VIP** — a `conventions` literal, because
     the UDM firewall's IoT→media allow names it,
     physical/gateway.md §4.2). Attaching a route to `media-gw` *is*
-    the decision "reachable from the IoT VLAN", and the route census
-    row records it as `Exposure.IOT` (conventions/routes.py), so the
+    the decision "reachable from the IoT VLAN", and the row records it
+    as its `media` side (`conventions.routes`, dns.md §5), so the
     choice is on the row a reviewer reads rather than an argument at a
     call site. Apps attach `HTTPRoute`s (architecture.md §3.6 matrix).
     The Gateways share one `GatewayClass`, `cilium`, which the stack
@@ -515,13 +515,13 @@ All decided behavior from architecture.md §3, expressed as config:
     and is stated.
 -   **Listeners and certificates** (rfc-007 §5.2): every Gateway has an
     HTTPS listener per **served zone** — the primary zone, served by
-    definition, and every zone a row of the route census names
-    (`conventions.routes.served_zones`, which the DNS-01 token's scope
-    reads too) — on the zone's wildcard, terminating with the zone's
-    certificate, and one HTTP listener whose only route is a redirect to
-    HTTPS. The ports are the rows of the public port census the Gateways
-    answer, the same rows the node firewall opens for them
-    (physical.md §2). A route attaches to the HTTPS listeners from a
+    definition, and every zone a route or an apex of the exposure census
+    names, held or not (`conventions.routes.served_zones`, which the
+    DNS-01 token's scope reads too) — on the zone's wildcard, terminating
+    with the zone's certificate, and one HTTP listener whose only route
+    is a redirect to HTTPS. The ports are `conventions.GATEWAY_PORTS`,
+    the same structure the node firewall opens for them (physical.md §2)
+    and the balancer forwards. A route attaches to the HTTPS listeners from a
     namespace carrying `conventions.routes.ROUTE_LABEL`, which
     `allowedRoutes` selects on, and from no other; the HTTP listener
     admits only its own namespace, where the redirect is the one route.
@@ -548,13 +548,15 @@ All decided behavior from architecture.md §3, expressed as config:
     **ExternalAuth HTTPRoute filter** (GEP-1494; **Cilium ≥1.20 — this
     sets the Cilium version floor**)
     pointing at Authelia's Envoy `ext_authz` endpoint. This is how
-    apps without native auth (qbittorrent Web UI, golinks, spoolman,
-    thread-dashboard, …) get SSO-gated — the legacy traefik
-    forward-auth middleware's successor; the route helper exposes it
-    as an `auth=True` parameter. Bootstrap verification: confirm the
+    apps without native auth (qbittorrent Web UI, spoolman, …) get
+    SSO-gated from the internet — the legacy traefik forward-auth
+    middleware's successor. The gate is declared on the row, as the
+    `gate` of its `internet` side behind the proxy (dns.md §5), and it
+    applies to that side alone: the home has no gate, so a gated name's
+    home side is answered ungated. Bootstrap verification: confirm the
     filter **fails closed** when Authelia is unreachable (fail-open
     was reported against early builds, cilium#47178). Because every
-    `auth=True` app (qbittorrent Web UI included — its "run external
+    gated app (qbittorrent Web UI included — its "run external
     program" setting makes fail-open an RCE) rides this one mechanism,
     fail-closed is also **verified continuously, not only at
     bootstrap**: a standing **auth canary** — a synthetic

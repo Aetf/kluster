@@ -1502,8 +1502,8 @@ operator-passphrase generate` and `recover`.
     rules that name its address. A CI job that joins between the `up`
     and the syncs holds an identity the roster no longer admits, and
     reaches nothing over the overlay: a `physical` job fails at its first
-    dial of the device, and a `dns` job, while `ROUTES` is empty, does
-    not notice.
+    dial of the device, and a `dns` job, while the exposure census
+    implies no rewrite, does not notice.
 11. `credentials derived cloudflare-dns01 mint`,
     `credentials derived bgp seal` and
     `credentials derived alert-webhook record` — the values the cluster

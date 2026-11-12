@@ -2,9 +2,10 @@
 
 Every Gateway answers the same listeners (rfc-007 §5.2): one HTTPS listener per
 served zone, on that zone's wildcard with that zone's certificate, and one HTTP
-listener whose only route is a redirect to HTTPS. The ports are the rows of the
-public port census the Gateways answer, the same rows the node firewall opens
-for them (physical.md §2), so a port moved in the census moves both.
+listener whose only route is a redirect to HTTPS. The ports are
+`conventions.GATEWAY_PORTS`, the same structure the node firewall opens for
+them (physical.md §2) and the balancer forwards, so a port moved there moves
+all three.
 
 Where a Gateway answers is decided by where its address is routed, since
 Cilium hands its traffic to the Envoy on the node it arrives at (rfc-007
@@ -16,8 +17,8 @@ is how the pool label and the sharing annotations reach it:
 -   `internet-gw`, the `internet` pool's node members and the balancer's two
     addresses, the latter answering on the caller's own node a connection
     that starts in the cluster (architecture.md §3.2). It shares those
-    addresses with the raw Services of the public port census, which live in
-    their applications' namespaces.
+    addresses with the raw Services of the census's `Balancer` ports
+    (`conventions.routes.Port`), which live in their applications' namespaces.
 -   `lan-gw`, the `lan` pool's default VIP; `media-gw`, its media VIP. The
     worker alone announces either.
 
@@ -40,22 +41,13 @@ from kluster.lib.k8s import lb_pool_labels, namespace
 from putils import Component, async_output, resolve
 
 __all__ = (
-    'HTTPS_ROW',
-    'HTTP_ROW',
     'SHARING_CROSS_NAMESPACE',
     'SHARING_KEY',
-    'GatewayPorts',
     'Gateways',
     'InternetGatewayAddresses',
     'certificate_secret',
-    'gateway_ports',
     'https_listener',
 )
-
-#: The census rows the Gateways answer, by name: the one their HTTPS listeners
-#: take, and the one their HTTP listener redirects from.
-HTTPS_ROW = 'https'
-HTTP_ROW = 'http'
 
 #: The annotations LB IPAM reads a shared address off (`lb-ipam.rst` at Cilium
 #: v1.20.1, "Sharing Keys"). Every Service on the `internet` pool's node
@@ -68,30 +60,6 @@ SHARING_CROSS_NAMESPACE = 'lbipam.cilium.io/sharing-cross-namespace'
 
 #: The listener every Gateway's redirect attaches to.
 HTTP_LISTENER = 'http'
-
-
-@dataclass(frozen=True)
-class GatewayPorts:
-    """The ports of the census rows the Gateways answer."""
-
-    https: int
-    http: int
-
-
-def gateway_ports(census: Sequence[conventions.PublicPort]) -> GatewayPorts:
-    """The Gateways' two ports, out of the census rows they answer, refused unless those rows are exactly the two.
-
-    A row the Gateways answer is a port the node firewall opens to Envoy, so
-    one that no listener takes would be an opening to nothing, and one more
-    listener than the census names would be a port the firewall drops.
-    """
-    rows = {row.name: row for row in census if row.answerer is conventions.Answerer.GATEWAYS}
-    if rows.keys() != {HTTPS_ROW, HTTP_ROW}:
-        raise ValueError(
-            f'the Gateways answer the census rows {sorted(rows)}, and their listeners take {HTTPS_ROW!r} and '
-            f'{HTTP_ROW!r}: a row the Gateways answer is a listener of theirs'
-        )
-    return GatewayPorts(https=rows[HTTPS_ROW].port, http=rows[HTTP_ROW].port)
 
 
 def certificate_secret(zone: str) -> str:
@@ -140,7 +108,7 @@ class Gateways(Component, pulumi_type='kluster:cilium:Gateways'):
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         super().__init__(name, opts=opts)
-        ports = gateway_ports(conventions.PUBLIC_PORT_CENSUS)
+        ports = conventions.GATEWAY_PORTS
         #: Each served zone's certificate Secret, by zone.
         self.certificates: Mapping[str, str] = {zone: certificate_secret(zone) for zone in zones}
 
@@ -216,7 +184,7 @@ class Gateways(Component, pulumi_type='kluster:cilium:Gateways'):
         gateway: str,
         *,
         gateway_class: str,
-        ports: GatewayPorts,
+        ports: conventions.GatewayPorts,
         addresses: pulumi.Input[Sequence[crds.gateway.v1.GatewaySpecAddressesArgs]],
         pool: str,
         annotations: Mapping[str, str] | None = None,

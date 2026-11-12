@@ -26,8 +26,8 @@ prefix otherwise would (rfc-002 §3.1) — `conventions.overlay.ROSTER`,
 first two it is the distinction the naming rules care about most: which
 network a name belongs to is never a thing to guess.
 `forge`, `routes` and `alert` are qualified from the other side: their names
-are common nouns — `Repository`, `Environment`, `Account`; `Route`, `Extra`,
-`SELF`; `EVENT`, `Tier`, `FIELDS` — that mean one particular thing only while
+are common nouns — `Repository`, `Environment`, `Account`; `Route`, `Port`,
+`Host`; `EVENT`, `Tier`, `FIELDS` — that mean one particular thing only while
 the forge, the census or the alert stands beside them.
 
 Glossary
@@ -57,8 +57,8 @@ site
 
 LAN
     On its own, the side an application is reachable from, and the pool that
-    side is steered to (`routes.Exposure`, `cluster.GATEWAY_LAN`,
-    `site.LAN_POOL`); with a site network's name, that network (`SERVER_LAN`).
+    side is steered to (the `lan` field of a `routes.Route`,
+    `cluster.GATEWAY_LAN`, `site.LAN_POOL`); with a site network's name, that network (`SERVER_LAN`).
     Not one of rfc-002 §3.2's adjectives, which say which network an address
     is on.
 
@@ -79,7 +79,7 @@ gateway
     component (`conventions.gateway`; rfc-002 §3.2). The cluster's own
     gateways — `cluster.GATEWAY_INTERNET`, `GATEWAY_LAN`, `GATEWAY_MEDIA` —
     are Gateway API objects, and a sentence that could mean either says "the
-    site gateway" (`cluster.QBITTORRENT_PEER_PORT`). Neither is a prefix:
+    site gateway" (`routes.SiteForward`). Neither is a prefix:
     rfc-002 §3.1 retired `GW_*`.
     Not: gw.
 
@@ -166,15 +166,14 @@ node volume
     that name is also its dataset's identity on the node, its mount path and
     its node label (`cloud.node_volume_mount`, `cloud.NODE_VOLUME_LABEL`).
 
-public port
-    A port the internet reaches a service of the cluster on through the
-    cloud, at the balancer or the dedicated VIP; one row of the public port
-    census each (`cluster.PUBLIC_PORT_CENSUS`, `cluster.PublicPort`;
-    rfc-007 §5.3), named for what it serves and never for its number. Its
-    front is where its traffic enters — the balancer or the dedicated VIP
-    (`cluster.Front`) — and its answerer what takes the traffic on the node:
-    the Gateways, through the node firewall, or a Service's pods, ahead of it
-    (`cluster.Answerer`).
+raw port
+    A port an application is reached on at a Gateway's address rather than
+    through a Gateway's proxy by name (`routes.Port`; rfc-008 §4.1), named
+    for what it serves and never for its number. On `internet` its front is
+    where its traffic enters — the balancer, the dedicated node's address or
+    the site's forward (`routes.Balancer`, `routes.Dedicated`,
+    `routes.SiteForward`). The Gateways' own ports are no application's and
+    are not raw ports (`cluster.GATEWAY_PORTS`).
 
 CI
     This repository's own GitHub Actions, the deployment pipeline
@@ -225,6 +224,7 @@ from kluster.conventions.cluster import (
     GATEWAY_LAN,
     GATEWAY_MEDIA,
     GATEWAY_NAMESPACE,
+    GATEWAY_PORTS,
     KUBEPRISM_PORT,
     KUBESPAN_MTU,
     LB_POOL_LABEL,
@@ -235,8 +235,6 @@ from kluster.conventions.cluster import (
     POD_CIDR_V4,
     POD_CIDR_V6,
     POOL_INTERNET,
-    PUBLIC_PORT_CENSUS,
-    QBITTORRENT_PEER_PORT,
     SC_CLOUD_BLOCK,
     SC_LOCAL_PATH,
     SC_NAS,
@@ -245,10 +243,8 @@ from kluster.conventions.cluster import (
     SERVICE_CIDR_V4,
     SERVICE_CIDR_V6,
     UDM_ASN,
-    Answerer,
-    Front,
+    GatewayPorts,
     ManagementPorts,
-    PublicPort,
     Transports,
 )
 from kluster.conventions.dns import (
@@ -301,12 +297,14 @@ from kluster.conventions.providers import (
 from kluster.conventions.site import (
     CLUSTER_VLAN,
     CONTAINER_VLAN,
+    HOME_ASSISTANT,
     IOT_VLAN,
     LAN_POOL,
     SERVER_LAN,
     SITE_NETWORKS,
     SITE_ULA,
     AddressPool,
+    SiteHost,
     SiteNetwork,
     Vip,
     ula_subnet,
@@ -340,6 +338,7 @@ __all__ = (
     'GATEWAY_LAN',
     'GATEWAY_MEDIA',
     'GATEWAY_NAMESPACE',
+    'GATEWAY_PORTS',
     'HOMELAB_BRIDGE',
     'HOMELAB_HOST_KEY',
     'HOMELAB_MEMORY_GIB',
@@ -347,6 +346,7 @@ __all__ = (
     'HOMELAB_NODE_IPV4',
     'HOMELAB_STORAGE_DIR',
     'HOMELAB_VCPUS',
+    'HOME_ASSISTANT',
     'IOT_VLAN',
     'KUBEPRISM_PORT',
     'KUBESPAN_MTU',
@@ -375,8 +375,6 @@ __all__ = (
     'POOL_INTERNET',
     'PRECIOUS',
     'PRIMARY_ONLY',
-    'PUBLIC_PORT_CENSUS',
-    'QBITTORRENT_PEER_PORT',
     'RETENTION_CLASSES',
     'SC_CLOUD_BLOCK',
     'SC_LOCAL_PATH',
@@ -402,19 +400,18 @@ __all__ = (
     'ZONE_PRIMARY',
     'ZONE_SHORT',
     'AddressPool',
-    'Answerer',
     'B2Account',
     'CloudflareAccount',
     'Compartment',
     'CompartmentMissing',
     'FollowsDedicatedVip',
-    'Front',
+    'GatewayPorts',
     'ManagementPorts',
     'NodeVolumeEntry',
     'OciTenancy',
     'PhysicalOutputs',
-    'PublicPort',
     'RetentionClass',
+    'SiteHost',
     'SiteNetwork',
     'StackNames',
     'Transports',

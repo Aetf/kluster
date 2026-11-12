@@ -18,7 +18,6 @@ address type and listener protocols, cert-manager's issuer kind.
 
 from __future__ import annotations
 
-import dataclasses
 import json
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -58,20 +57,24 @@ SEALED_TOKEN = 'AgB-the-sealed-dns01-token'
 #: The second zone the sealed run's census routes a name in.
 SECOND_ZONE = 'second.example'
 
-#: The ports the sealed run's census moves the Gateways' two rows to.
-MOVED_PORTS = {'https': 10443, 'http': 10080}
+#: The ports the sealed run moves the Gateways' two ports to.
+MOVED_PORTS = conventions.GatewayPorts(http=10080, https=10443)
+
+#: The sealed run's census: the installation's, and one route in a second zone.
+PROBE = {
+    **conventions.routes.EXPOSURES,
+    'probe': conventions.routes.Exposure(
+        routes=(conventions.routes.Route('probe', internet=conventions.routes.PROXIED, zones=(SECOND_ZONE,)),)
+    ),
+}
 
 
 @contextmanager
 def moved_census() -> Generator[None]:
-    """The Gateways' census rows on other ports, and one route in a second zone, for the length of a run."""
-    census = tuple(
-        dataclasses.replace(row, port=MOVED_PORTS[row.name]) if row.name in MOVED_PORTS else row
-        for row in conventions.PUBLIC_PORT_CENSUS
-    )
+    """The Gateways' ports moved, and one route in a second zone, for the length of a run."""
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(conventions, 'PUBLIC_PORT_CENSUS', census)
-        patch.setattr(conventions.routes, 'ROUTES', (conventions.routes.Route('probe', zones=(SECOND_ZONE,)),))
+        patch.setattr(conventions, 'GATEWAY_PORTS', MOVED_PORTS)
+        patch.setattr(conventions.routes, 'EXPOSURES', PROBE)
         yield
 
 
@@ -243,43 +246,15 @@ def test_internet_gw_shares_its_addresses_with_other_namespaces(absent: tuple[Ru
     assert annotations['lbipam.cilium.io/sharing-cross-namespace'] == '*'
 
 
-def test_the_listeners_ports_are_the_census_rows_the_gateways_answer(sealed: Run) -> None:
-    """Every Gateway listens on the ports of the rows it answers, which are the ports the node firewall opens to Envoy."""
-    with moved_census():
-        census = conventions.PUBLIC_PORT_CENSUS
-    rows = {row.name: row.port for row in census if row.answerer is conventions.Answerer.GATEWAYS}
+def test_the_listeners_ports_are_the_gateway_ports(sealed: Run) -> None:
+    """Every Gateway listens on `GATEWAY_PORTS`, which are the ports the node firewall opens to Envoy and the balancer forwards.
 
-    for name, gateway in _gateways(sealed).items():
-        assert {listener['port'] for listener in _https(gateway)} == {rows['https']}, name
-        assert _http(gateway)['port'] == rows['http'], name
-
-
-#: A third port the Gateways answer, which no listener of theirs takes.
-THIRD_GATEWAY_ROW = conventions.PublicPort(
-    'quic', 8443, conventions.Transports.UDP, conventions.Front.BALANCER, conventions.Answerer.GATEWAYS
-)
-
-
-@pytest.mark.parametrize(
-    'census',
-    [
-        (*conventions.PUBLIC_PORT_CENSUS, THIRD_GATEWAY_ROW),
-        tuple(row for row in conventions.PUBLIC_PORT_CENSUS if row.name != 'http'),
-    ],
-    ids=['a-third-row', 'no-http-row'],
-)
-def test_a_census_whose_gateway_rows_are_not_the_listeners_is_refused(
-    census: tuple[conventions.PublicPort, ...],
-) -> None:
-    """A row the Gateways answer is a port the node firewall opens to Envoy, so each one is a listener of theirs.
-
-    A third row would be an opening no listener takes, and a missing one a
-    listener on a port the firewall drops.
+    The run moves both ports, so a listener that kept a number of its own
+    would differ from them.
     """
-    from kluster.components.cilium.gateways import gateway_ports
-
-    with pytest.raises(ValueError, match='a row the Gateways answer is a listener of theirs'):
-        _ = gateway_ports(census)
+    for name, gateway in _gateways(sealed).items():
+        assert {listener['port'] for listener in _https(gateway)} == {MOVED_PORTS.https}, name
+        assert _http(gateway)['port'] == MOVED_PORTS.http, name
 
 
 def test_each_https_listener_serves_its_own_zones_certificate(sealed: Run) -> None:

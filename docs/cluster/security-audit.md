@@ -200,7 +200,12 @@ rather than waiting for a future zone tightening. *Amended
 2026-08-24*: the original "recorded cross-VLAN dependencies all
 originate cluster→IoT" claim was wrong — smart TVs/streamers →
 jellyfin is IoT-originated; the `media-gw` carve-out serves it without
-reopening the pool (physical/gateway.md §4.2).
+reopening the pool (physical/gateway.md §4.2). *Amended 2026-11-12*
+(rfc-008 §4.1): Home Assistant, a resident of the VLAN, reaches the
+whole pool ahead of the drop, from its own address alone, a literal in
+each family, because its integrations are how the home
+automates what the cluster's applications do; every other IoT address
+still meets the drop.
 
 **Lives in.** architecture.md §3.4, declared via the unifi provider
 (physical.md §4); full firewall target state in
@@ -267,14 +272,14 @@ because their peers arrive over KubeSpan. The 2026-08-24 amendment holds
 for raw TCP/UDP Services only: a Gateway listener's packets go up the
 host stack to the node's Envoy and cross the firewall. *Amended
 2026-10-01* (rfc-007 §4.3): machine config therefore opens to anywhere
-each port of the public port census's rows the Gateways answer,
-derived from the census rather than listed, and opens the metrics ports
+each of the Gateways' ports, derived from `conventions.GATEWAY_PORTS`
+rather than listed, and opens the metrics ports
 a pod scrapes on the host network to the kubelet's sources and nothing
 wider (physical.md §2). `tests/test_talos_config.py`
 holds every node shape to the default-deny document, and holds the
 openings whose sources reach beyond the cluster's ranges, the link and
 the worker's BGP peer to exactly the management ports over TCP, the
-Gateways' ports over the transports their rows name, and KubeSpan over
+Gateways' ports over TCP, and KubeSpan over
 UDP, each from both families. What the datapath answers is bounded by a
 rule of its own:
 **no Service allocates a `NodePort`** (cluster-infra.md §2, workloads.md
@@ -353,7 +358,7 @@ register row).
 
 ### L1 — ExternalAuth is a single point for all gated apps
 
-Every `auth=True` app (qbittorrent Web UI included — its "run external
+Every gated app (qbittorrent Web UI included — its "run external
 program" setting turns a fail-open into public RCE) rides one Cilium
 ExternalAuth filter with a known fail-open history (cilium#47178). The
 fix is to **harden and monitor the mechanism, not to add per-app

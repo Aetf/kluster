@@ -3,18 +3,20 @@
 Every row here names a service the retiring VPS answers for, and every row
 here is a row the co-location principle says should live beside its
 application (dns.md §1). They live in the `dns` stack for exactly as long as
-the application lives on the VPS: at migration the application's component
-declares the same name against `kluster.hosts`, and the block is deleted from
-this module. Wave F checks that nothing still references `archvps.hosts`,
-which is the same statement as "this module is empty" (dns.md §6,
-migration.md).
+the VPS answers the name: the application's land wires its component with its
+row held (`conventions.routes.Held`), and its cut deletes the block and takes
+the wrapper off, so the component declares the same name against
+`kluster.hosts` (dns.md §6). A row on `internet` is held exactly while a
+record here, or the web origin's, points its name at the VPS, which the
+census tests hold. Wave F checks that nothing still references
+`archvps.hosts`, which is the same statement as "this module is empty"
+(dns.md §6, migration.md).
 
 **The unit is the application, because the unit of every remaining edit here
-is a migration.** migration.md's waves are enumerated by application, so a
-migration is one block deleted whole beside the route row and the component
-declaration that replace it — three files in one pull request, and no row of
-a shared tuple to pick out. Each block header names the owner that will
-delete it and the wave it goes in.
+is a cut.** migration.md's waves are enumerated by application, so a cut
+deletes one block whole beside the row it releases, with no row of a shared
+tuple to pick out. Each block header names the owner that will delete it and
+the wave it goes in.
 
 The VPS's own address and anchor name are here too, and `base.py` reads them
 from here: they retire with this module rather than outliving it, so the
