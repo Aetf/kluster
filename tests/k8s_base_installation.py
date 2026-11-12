@@ -5,7 +5,9 @@ program reads besides its kubeconfig, so they are here rather than in any one
 of those suites (framework/testing.md §2): `test_stack_programs.py` runs it for
 its providers, `test_cilium.py` for what Cilium declares, and every suite that
 takes an `applied` fixture for what the other components install. `applied`
-is that run, and `Run` reads what it registered.
+is that run, and `Run` reads what it registered. `applied(sealed=SEALED)` is
+the same run with every sealed value the stack declares sealed in, which the
+stack holds only once the bring-up has sealed them (physical/bring-up.md §1).
 
 Every value is invented. The addresses are documentation and private ranges
 of the families each output carries, and each output holds addresses no other
@@ -254,12 +256,28 @@ class Run:
         ]
 
 
-async def declare(physical: Physical, *, preview: bool = False) -> Run:
-    """The whole program against `physical`, a refusal caught and every registration settled."""
+#: A ciphertext for every key of every sealed value the census has `k8s-base`
+#: declare, as the stack's configuration holds them once each is sealed in.
+#: Built from the census, so a row added to it is sealed in here too.
+SEALED: dict[str, object] = {
+    value.name: {key: f'AgB-sealed-{value.name}-{key}' for key in value.keys}
+    for value in conventions.sealed.VALUES.values()
+    if value.stack == conventions.STACK_NAMES.k8s_base
+}
+
+
+async def declare(physical: Physical, *, preview: bool = False, sealed: dict[str, object] | None = None) -> Run:
+    """The whole program against `physical`, a refusal caught and every registration settled.
+
+    `sealed` is what the stack holds under its sealed key, which is nothing
+    when it is `None`.
+    """
     from kluster.stacks import k8s_base
 
     config = {f'kluster:{KUBECONFIG_KEY}': 'a-fake-kubeconfig-that-reaches-no-cluster'}
-    pulumi.runtime.set_all_config(config | VERSIONS_CONFIG, secret_keys=list(config))
+    if sealed is not None:
+        config[f'kluster:{conventions.sealed.CONFIG_KEY}'] = json.dumps(sealed)
+    pulumi.runtime.set_all_config(config | VERSIONS_CONFIG, secret_keys=[f'kluster:{KUBECONFIG_KEY}'])
     monitor = await run_under_backstop(physical, stack=conventions.STACK_NAMES.k8s_base, preview=preview)
     refused = None
     with release_assets() as fetched:
@@ -271,13 +289,13 @@ async def declare(physical: Physical, *, preview: bool = False) -> Run:
     return Run(monitor, fetched, refused)
 
 
-async def applied() -> Run:
+async def applied(*, sealed: dict[str, object] | None = None) -> Run:
     """The whole program against a `physical` that has published every output, which no refusal stops.
 
     A suite's `applied` fixture is this, once per module. The fixture itself
     stays in the suite: one imported by name would be shadowed by every case
     that takes it as an argument, which the linter reports as a redefinition.
     """
-    run = await declare(Autonaming())
+    run = await declare(Autonaming(), sealed=sealed)
     assert run.refused is None, f'the program refused a physical that published every output: {run.refused}'
     return run

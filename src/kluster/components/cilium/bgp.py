@@ -104,7 +104,7 @@ class BgpSession(Component, pulumi_type='kluster:cilium:BgpSession'):
         behind = self.child_opts(depends_on=list(after))
         secret = conventions.sealed.BGP_PASSWORD
 
-        self.password = sealed_value(secret, ciphertext=password, opts=behind)
+        self.password = sealed_value(f'{name}-password', secret, ciphertext=password, opts=behind)
 
         self.advertisement = crds.cilium.v2.CiliumBGPAdvertisement(
             f'{name}-advertisement',

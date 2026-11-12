@@ -444,8 +444,9 @@ class SecretTemplate:
 
 
 def sealed_secret(
-    name: str,
+    resource_name: str,
     *,
+    name: str,
     namespace: pulumi.Input[str],
     encrypted_data: Mapping[str, pulumi.Input[str]],
     template: SecretTemplate | None = None,
@@ -464,6 +465,9 @@ def sealed_secret(
     seals the ciphertext against it. A replacement therefore deletes first:
     two objects of one name cannot coexist.
 
+    :param resource_name: The logical name, which carries the declaring
+        component's name.
+    :param name: The name of the object and of the Secret it becomes.
     :param namespace: The namespace the ciphertext was sealed for, which is
         more than where the object lands.
     :param encrypted_data: Field name to `kubeseal` ciphertext.
@@ -482,7 +486,7 @@ def sealed_secret(
         template_metadata['labels'] = dict(template.labels)
 
     return crds.bitnami.v1alpha1.SealedSecret(
-        name,
+        resource_name,
         metadata=k8s.meta.v1.ObjectMetaArgs(
             name=name,
             namespace=namespace,
@@ -537,6 +541,7 @@ def _not_a_mapping(what: str, found: object, expected: str) -> ShapeRefused:
 
 
 def sealed_value(
+    resource_name: str,
     value: SealedValue,
     *,
     ciphertext: Mapping[str, pulumi.Input[str]] | None,
@@ -547,7 +552,10 @@ def sealed_value(
     A row's ciphertext is sealed to the row's name and namespace at the row's
     scope (`conventions.sealed`), so the object is declared from the row
     rather than from arguments a caller could get wrong. `ciphertext` is what
-    the program read for the row with `sealed_ciphertext`.
+    the program read for the row with `sealed_ciphertext`. The row names the
+    object and not the resource: `resource_name`, the logical name, is the
+    caller's, and carries the declaring component's name as every child's
+    does (style/pulumi.md), whichever row the component declares.
 
     **Absent, it declares nothing and warns, naming the value.** A sealed
     value can be made only once the controller that opens it runs, which is
@@ -568,7 +576,8 @@ def sealed_value(
         )
         return None
     return sealed_secret(
-        value.name,
+        resource_name,
+        name=value.name,
         namespace=value.namespace,
         encrypted_data=ciphertext,
         scope=value.scope,
