@@ -68,6 +68,15 @@
     criterion of §14 slice 10 is a route in the gateway's kernel table
     for a VIP of each family, the IPv6 half waiting on
     [Aetf/kluster-ops#719](https://github.com/Aetf/kluster-ops/issues/719).
+*   **Updated:** 2026-11-12 — §7.1, §11 and §14 slice 11, as slice 11
+    built it: monitoring's placement on the worker is a requirement,
+    because alertmanager posts to Home Assistant at an address only the
+    worker reaches ([rfc-008](rfc-008-workload-migration.md) §4.1), and
+    slice 11 ships a test that fails when alertmanager can schedule
+    elsewhere; the CRD bindings generate the VictoriaMetrics operator's
+    kinds but cannot import them, so the monitoring component declares
+    them untyped, as a layer that goes once they import; and the
+    operator's pre-delete cleanup joins §7.1's defaults switched off.
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
@@ -1076,17 +1085,22 @@ it is a secret moved by hand from the legacy cluster, and credentials.md
 ### 7.1 What is installed, and where it runs
 
 The monitoring component installs the VictoriaMetrics stack chart and
-metrics-server, and runs on the homelab worker. The push leg reaches the
-phone through the home system anyway, so a home site that is down
-silences it wherever the spine runs; the worker has the memory and the
-local disk, and the cloud nodes share their cores with etcd. The
+metrics-server, and runs on the homelab worker. For alertmanager the
+placement is a requirement: it posts to Home Assistant at Home
+Assistant's own address, which only the worker reaches
+([rfc-008](rfc-008-workload-migration.md) §4.1), so slice 11 ships a
+test that fails when alertmanager can schedule anywhere else. The push
+leg reaches the phone through the home system anyway, so a home site
+that is down silences it wherever the spine runs; the worker has the
+memory and the local disk, and the cloud nodes share their cores with
+etcd. The
 database's volume is `local-path` and unbacked, with the reason on
 record: monitoring is rebuilt fresh, not migrated (migration.md §3).
 The chart's Grafana runs, as item 6 of cluster-infra.md §1 lists it,
 and is reached by a port-forward until its name moves (§7.4). The
 namespace is `privileged`, for the node exporter (§8).
 
-Four of the chart's defaults are switched off:
+The chart's defaults switched off here:
 
 *   **The sync job**, which fetches rules and dashboards "from upstream
     sources at deploy time", off the upstream projects' `master`
@@ -1116,6 +1130,13 @@ Four of the chart's defaults are switched off:
     the listener needs an opening of that class, for a scraper on its
     own node, is settled with it. All of it lands with the first rule
     that needs them.
+*   **The operator's pre-delete cleanup**, a Job with its own account
+    and permissions that deletes the operator's objects before an
+    uninstall. It is a Helm hook, which `helm.v4.Chart` drops, and the
+    stack chart turns it on over the operator chart's own default, so it
+    is switched off rather than left to vanish
+    ([declarative/cluster-infra.md](../declarative/cluster-infra.md)
+    §1.2).
 
 The scrapes that do run: the kubelet and its containers, the API server,
 the cluster DNS, the node exporter, kube-state-metrics, and Cilium's
@@ -1437,7 +1458,10 @@ none needs a ruling beyond this document.
     local-path root.
 *   **The CRD bindings**, which carry every kind declared here; the four
     Cilium kinds the planned generator drops are ones the agent writes
-    and nothing here declares.
+    and nothing here declares. The VictoriaMetrics operator's kinds are
+    generated and cannot be imported, the generator naming two of a
+    definition's properties alike, so the monitoring component declares
+    them untyped, as a layer that goes once they import (slice 11).
 *   **The CI chain's order**, `physical` then `k8s-base` then `apps`, and
     the `k8s-base` and `apps` Environments, which exist.
 
@@ -1846,7 +1870,8 @@ address absent; live once it is sealed in. **After** slice 10.
     the sync job, default rules and the three control-plane jobs are off
     (turn one on); the receiver reads the sealed Secret (inline a URL);
     the namespace enforces `privileged` with its reason (label it
-    `restricted`).
+    `restricted`); alertmanager can schedule on the worker alone (drop
+    its placement).
 
 **Slice 12: the application base, `route`, and the front-door check.**
 Built before M1's bring-up, cut in two by

@@ -34,8 +34,8 @@ from renovate_text import as_python_spells_it, as_renovate_spells_it, group, lis
 from tqdm import tqdm
 
 from kluster.lib.versions import CHART, MANIFEST, ChartPin, Floor, ProjectFile, Versions
-from kluster.scripts.update_crds import cli, pins, record, sources
-from kluster.scripts.update_crds.values import ValuePaths, read_chart
+from kluster.scripts.update_crds import cli, pins, record, sources, values
+from kluster.scripts.update_crds.values import CustomResourceSpec, MissingDefinition, ValuePaths, read_chart
 
 ROOT = Path(__file__).parent.parent
 
@@ -387,6 +387,131 @@ def test_a_subcharts_paths_are_below_the_key_the_parent_passes_its_values_under(
         'plain.size',
     }
     assert read.free_form == {'monitoring.labels'}
+
+
+#: A definition as a chart ships it in `crds/`: one version, whose spec fixes
+#: `storage.storageClassName` and leaves `affinity` open, the way the
+#: VictoriaMetrics operator's definitions do.
+PASSED_THROUGH_DEFINITION = """\
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: vmthings.operator.example.invalid
+spec:
+  group: operator.example.invalid
+  names:
+    kind: VMThing
+  versions:
+    - name: v1beta1
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                affinity:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                disableNamespaceMatcher:
+                  type: boolean
+                storage:
+                  type: object
+                  properties:
+                    storageClassName:
+                      type: string
+"""
+
+PASSED_THROUGH = CustomResourceSpec('operator.example.invalid', 'v1beta1', 'VMThing')
+
+
+def test_a_spec_the_chart_passes_through_has_the_paths_of_its_definition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Below a declared pass-through map the definition's schema decides, and a misspelled key is refused.
+
+    The definition is read where a subchart ships it, and an open object in the
+    schema is free-form below, as `{}` is in `values.yaml`.
+    """
+    monkeypatch.setattr(values, 'SPEC_PASS_THROUGH', {'stack': {('thing', 'spec'): PASSED_THROUGH}})
+    parent = chart(
+        tmp_path / 'stack',
+        name='stack',
+        values='thing:\n  spec:\n    port: "8428"\n',
+        dependencies='dependencies:\n  - name: operator\n',
+    )
+    operator = chart(parent / 'charts' / 'operator', name='operator', values='replicas: 1\n')
+    (operator / 'crds').mkdir()
+    _ = (operator / 'crds' / 'crd.yaml').write_text(PASSED_THROUGH_DEFINITION)
+
+    read = read_chart(parent)
+
+    assert read.accepts(('thing', 'spec', 'port'))
+    assert read.accepts(('thing', 'spec', 'storage', 'storageClassName'))
+    assert read.accepts(('thing', 'spec', 'disableNamespaceMatcher'))
+    assert read.accepts(('thing', 'spec', 'affinity', 'nodeAffinity', 'requiredDuringSchedulingIgnoredDuringExecution'))
+    assert not read.accepts(('thing', 'spec', 'storage', 'storageClasName'))
+    assert not read.accepts(('thing', 'spec', 'disableNamespaceMatchr'))
+
+
+@pytest.mark.parametrize(
+    'defaults',
+    [
+        'thing:\n  spec: {}\n',
+        'thing:\n  spec:\n    port: "1"\n    storage: null\n',
+        'thing:\n  spec:\n    storage: {}\n',
+    ],
+    ids=['an empty spec', 'a null default below it', 'an empty map below it'],
+)
+def test_a_free_form_default_below_a_pass_through_map_opens_nothing_its_definition_fixes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, defaults: str
+) -> None:
+    """The definition, not the chart's `{}` or null, decides what is free-form at and below the map."""
+    monkeypatch.setattr(values, 'SPEC_PASS_THROUGH', {'stack': {('thing', 'spec'): PASSED_THROUGH}})
+    directory = chart(tmp_path / 'stack', name='stack', values=defaults)
+    (directory / 'crds').mkdir()
+    _ = (directory / 'crds' / 'crd.yaml').write_text(PASSED_THROUGH_DEFINITION)
+
+    read = read_chart(directory)
+
+    assert read.accepts(('thing', 'spec', 'storage', 'storageClassName'))
+    assert not read.accepts(('thing', 'spec', 'storage', 'storageClasName'))
+    assert not read.accepts(('thing', 'spec', 'disableNamespaceMatchr'))
+
+
+def test_a_pass_through_is_matched_at_the_pinned_charts_root_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A subchart that carries a listed chart's name is read as any subchart is, and needs no definition."""
+    monkeypatch.setattr(values, 'SPEC_PASS_THROUGH', {'stack': {('thing', 'spec'): PASSED_THROUGH}})
+    parent = chart(
+        tmp_path / 'top',
+        name='top',
+        values='enabled: true\n',
+        dependencies='dependencies:\n  - name: stack\n',
+    )
+    _ = chart(parent / 'charts' / 'stack', name='stack', values='thing:\n  spec: {}\n')
+
+    read = read_chart(parent)
+
+    assert read.accepts(('stack', 'thing', 'spec', 'anything'))
+
+
+def test_a_declared_pass_through_whose_definition_the_chart_does_not_ship_stops_the_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bump that drops the definition, or a declaration naming the wrong one, is refused rather than read as open."""
+    monkeypatch.setattr(
+        values,
+        'SPEC_PASS_THROUGH',
+        {'stack': {('thing', 'spec'): CustomResourceSpec('operator.example.invalid', 'v1', 'VMThing')}},
+    )
+    directory = chart(tmp_path / 'stack', name='stack', values='thing:\n  spec: {}\n')
+    (directory / 'crds').mkdir()
+    _ = (directory / 'crds' / 'crd.yaml').write_text(PASSED_THROUGH_DEFINITION)
+
+    with pytest.raises(MissingDefinition):
+        read_chart(directory)
 
 
 def test_kubeseal_is_the_release_of_the_controller_the_sealed_secrets_chart_installs() -> None:

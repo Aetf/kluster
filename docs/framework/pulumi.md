@@ -836,12 +836,26 @@ pin, the version the script read it at, every value path the chart has
 there, and the free-form maps among them (`update_crds/values.py`). It
 covers every chart pin, not only those read for definitions, since a
 component can install a chart that has none. A path is the chart's keys
-from the root, joined with `.`: every key its `values.yaml` sets, every
-property its `values.schema.json` declares, its local `$ref`s followed,
-and every path of a chart it depends on, below the key it passes that
-dependency's values under. A free-form map fixes no keys, and any path
-below one is accepted: an empty `{}`, a key whose default is null, and a
-schema object open to further properties. `tests/test_chart_values.py`
+from the root, joined with `.`, and the chart has every path something it
+ships declares: every key its `values.yaml` sets, every property its
+`values.schema.json` declares, its local `$ref`s followed, and every path
+of a chart it depends on, below the key it passes that dependency's
+values under. A map the chart renders whole as the `spec` of one of its
+own custom resources is declared by that resource's definition, since a
+key below it becomes a field of the resource: the paths below it are the
+properties of the definition's `spec` schema, read from the definition
+the chart ships in a `crds/` directory, beside the keys the chart's
+`values.yaml` sets there. Whether a map at or below it is free-form is
+the definition's verdict alone, so a `{}` or a null default the chart
+leaves there opens nothing. Which maps a chart passes through is a table
+in `update_crds/values.py`, keyed on the name of the chart a pin names
+and the map's path, and a declared map whose definition the chart does
+not ship stops the read. A free-form map is one whose
+declaration fixes no keys, and any path below one is accepted: an empty
+`{}`, a key whose default is null, and a schema object open to further
+properties, whether by `additionalProperties`, `patternProperties` or a
+definition's `x-kubernetes-preserve-unknown-fields`.
+`tests/test_chart_values.py`
 runs the `k8s-base` program under mocks and holds every path each
 installed chart's values set to the record, naming the component, the
 chart and the path it lacks. A test holds the record's versions to the

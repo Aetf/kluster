@@ -309,18 +309,21 @@ exposed key reads in the clear is the resource graph and the
 non-secret configuration. With the key held there, the state-backend
 rebuild drill can run unattended end to end once its workflow exists.
 
-**As of 2026-09-25, nothing in the table below runs.** One row has its
-workflow: of the credential expiry tripwires, the state-backend server
-certificate's is scheduled daily in the ops repository's `probes.yml`
-(state-backend.md §6), which has started no job, because no job in
-that repository starts until its Actions billing is restored
-(`kluster-ops#393`). The other ops-repo rows have no workflow written
-(`kluster-ops#57`): not the state-backend rebuild, and not the etcd
-restore-verify, nor the scheduled snapshot it would restore. The
-in-cluster rows wait on the `k8s-base` stack that would install the
-operators the two restores drive and the alerting every in-cluster row
-reports into (§1), and the orphan-volume audit's recipe (storage.md
-§3.3) is not written either. The last column is the designed form
+**As of 2026-11-12, one row runs, and only in part.** Of the
+credential expiry tripwires, the state-backend server certificate's
+runs daily in the ops repository's `probes.yml`, beside the age of the
+appliance's newest dump (state-backend.md §6). Its alert job
+dispatches into the intake, whose handler is not built
+(`kluster-ops#715`), so a failing probe is a red run there and nothing
+more (the alert contract, below). The other ops-repo rows have no
+workflow written (`kluster-ops#57`): not the state-backend rebuild,
+and not the etcd restore-verify, nor the scheduled snapshot it would
+restore. No in-cluster row has its drill written. `k8s-base` declares
+what they would stand on, the operators the two restores drive and
+the alerting every in-cluster row reports into, and none of it runs
+until the cluster's bring-up applies it (physical/bring-up.md). The
+orphan-volume audit's recipe (storage.md §3.3) is not written either.
+The last column is the designed form
 rather than a census of schedulers: every row is an operator act, and
 the only one written out as a procedure is the state-backend restore
 (state-backend.md §7.3.1). By the standing principle above, that makes
@@ -360,18 +363,20 @@ volumes and so needs what only a node can read). Each automated drill
 is to be covered against stopping silently — an ops-repo drill by the
 dead-man below, an in-cluster one by a **freshness alert** (the
 backup-freshness family, cluster-infra.md §3) — because a drill that
-silently stops running is indistinguishable from a failing one. Until
-the workflows, the dead-man and that alert family exist, a drill that
-never started is indistinguishable from both. The only calendar ritual
+silently stops running is indistinguishable from a failing one. The
+family is declared and evaluates over no series until a backup source
+reports its last sync; until the workflows, the dead-man and those
+series exist, a drill that never started is indistinguishable from
+both. The only calendar ritual
 left is the yearly offline-day issue.
 
 **The alert contract.** Every ops-repo drill and probe above, and
 every workflow here that fails on `main` (framework/ci.md §3 names
 any it still excuses), reports through the dispatch intake
-(architecture.md §4.3); the in-cluster drills report through
-alertmanager, outside this contract. What every side of the intake
-agrees on is fixed here, and it is the contract the Home Assistant
-side is built against:
+(architecture.md §4.3); what the cluster raises, the in-cluster drills
+included, reports through alertmanager, to an intake of its own. What
+every side of each intake agrees on is fixed here, and it is the
+contract the Home Assistant side is built against:
 
 -   **The event.** One `repository_dispatch` into the ops repo, whose
     event type, tiers and payload fields are the census
@@ -400,6 +405,25 @@ side is built against:
     is kluster-code's and keeps its own id until that repository's
     cutover; this repository's `deploy.yml` posts to it too until it
     calls the producer.
+-   **alertmanager's post to Home Assistant.** alertmanager's body is
+    fixed, so the cluster posts to a second intake automation, a
+    webhook trigger whose id is in the sealed value
+    `conventions.sealed.ALERT_WEBHOOK` and which accepts `POST` from
+    the home site alone, where the post comes from. The post stays direct, at Home
+    Assistant's own address, which only the homelab worker reaches and
+    where monitoring therefore runs
+    ([rfc-008](rfc/rfc-008-workload-migration.md) §4.1); it never rides
+    the cluster's relay or the overlay. Every alert in the body
+    carries a `tier` label from the census and `summary` and
+    `playbook` annotations (`kluster.components.monitoring.rules`),
+    and only firing alerts are sent. Per alert, the automation
+    restarts the cluster's timer when the tier is `heartbeat`, and
+    otherwise pushes a notification titled
+    `[<tier>] cluster/<alertname>: <summary>` whose message is the
+    playbook. alertmanager repeats a firing alert on its own interval,
+    so an `actionable` alert pushes again until it resolves; the issue
+    leg that would deduplicate it is the poller, which is not built
+    (architecture.md §4.3).
 -   **The dead-man.** Every scheduled ops-repo workflow is watched by a
     Home Assistant timer, `timer.kluster_ops_<workflow>` (the
     workflow's file name without the suffix, hyphens as underscores),
@@ -412,11 +436,31 @@ side is built against:
     hand), or a green run whose post landed on a webhook id nothing
     is registered under (`credentials derived sync --only
     haos-webhook`).
+-   **The cluster's check-in.** A rule that always fires, in the
+    `heartbeat` tier, reaches alertmanager's intake once per repeat
+    interval, ten minutes, and at most one group interval, a minute,
+    after it (`rules.HEARTBEAT_REPEAT` and `HEARTBEAT_GROUP_INTERVAL` in
+    `kluster.components.monitoring`). Each one restarts
+    `timer.kluster_cluster`, whose duration is `rules.HEARTBEAT_TIMER`,
+    `conventions.backup.max_age` of the repeat, fifteen minutes, and
+    which survives a restart. Its expiry pushes "no check-in from the
+    cluster": the cluster stopped evaluating rules or stopped
+    delivering them, which no in-cluster alert can say. Its playbook:
+    whether the worker is up and `Ready` (§3); whether vmalert and
+    alertmanager run in the `monitoring` namespace
+    (`kubectl -n monitoring get pods`); whether the receiver's
+    configuration is in use (`kubectl -n monitoring get
+    vmalertmanagerconfig`, whose status names a missing Secret); and,
+    with all of that in order, alertmanager's own playbook for failing
+    notifications (architecture.md §4.3).
 
-What is built of it is the census and CI's producer. The handler, the
-ops repo's own intake, and the Home Assistant automation and timers
-are not: until the handler exists, a dispatch is accepted and starts
-nothing, and a CI alert is a red run and nothing more.
+What is built of it is the census, CI's producer, and the cluster's
+side: alertmanager's receiver, the rules and the check-in, declared in
+`k8s-base` and running once the bring-up applies it and seals the
+webhook in. The handler, the ops repo's own intake, and the Home
+Assistant automations and timers are not: until the handler exists, a
+dispatch is accepted and starts nothing, and a CI alert is a red run
+and nothing more.
 
 ## 5. Playbook index
 
@@ -436,4 +480,8 @@ Owning docs keep the content — the index only locates it.
 
 vmalert rule families adopt this index as they are ported: an alert
 that cannot point at a row (or at its owner doc's census) does not
-ship — the same-change rule.
+ship — the same-change rule. For the rules the cluster declares it is
+a test rather than a review question: `tests/test_monitoring.py` holds
+every rule the `k8s-base` program declares to a `playbook` that names a
+document and a section that document has, beside a tier from the
+census and a summary (architecture.md §4.3).

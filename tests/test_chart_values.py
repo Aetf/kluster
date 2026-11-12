@@ -9,9 +9,10 @@ this suite holds every path a component sets to that record. The program runs
 whole under mocks (`k8s_base_installation`), so a component added later is
 held here without being named.
 
-A path below a map the chart declares free-form -- an empty `{}`, a null
-default, or a schema object open to further properties -- is accepted below
-that map, since the chart fixes no keys there.
+What the chart has, which maps of it are free-form, and how a map the chart
+passes through to a custom resource is held to that resource's definition, is
+defined in docs/framework/pulumi.md §4; a path below a free-form map is
+accepted, since nothing fixes the keys there.
 """
 
 from __future__ import annotations

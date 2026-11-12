@@ -574,6 +574,15 @@ GitHub Actions** — the deployment pipeline. Workflows in any other
 repo are always named with their repo ("the ops repo's dispatch
 handler"), never called CI.
 
+**Every rule the cluster declares carries its tier and its
+playbook.** A rule has a `tier` label from `conventions.alert.Tier` and
+`summary` and `playbook` annotations, the fields the dispatch payload
+carries, so an alert reads the same whichever producer raised it.
+`tests/test_monitoring.py` holds every rule the `k8s-base` program
+declares to that, with a playbook that names a document and a section
+the documentation has, so the rule this section opens with is a gate
+rather than a review question.
+
 **One channel, two producers (2026-08-24).** Every alert — cluster
 or physical layer — terminates at the **same Home Assistant notify
 endpoint** (the phone push) with the **same payload convention**:
@@ -581,10 +590,12 @@ source system, severity, one-line summary, playbook reference. Two
 producer paths exist by necessity, not preference:
 
 -   **In-cluster**: vmalert → alertmanager → HA push
-    (cluster-infra.md §1's alerting spine, routing ported from
-    legacy). Direct by design: an alert about the home network must
-    not detour through a third party, and must not wait on anything
-    slower than a webhook POST.
+    (cluster-infra.md §1's alerting spine). Direct by design: an alert
+    about the home network must not detour through a third party, and
+    must not wait on anything slower than a webhook POST. The post goes
+    to Home Assistant's own address, which only the homelab worker
+    reaches, so monitoring runs there
+    ([rfc-008](../rfc/rfc-008-workload-migration.md) §4.1).
 -   **Out-of-cluster**: CI alerts (deploy failures, the ci.md §3
     scheduled checks) must not route through the cluster — they
     exist precisely to fire when it can't. They deliver via the
@@ -665,7 +676,14 @@ paths, matched to the producers' shapes:
     GitHub exposes no arbitrary-body trigger (the first cut's
     direct-dispatch receiver was infeasible; correction on record).
     So: **alertmanager → HA stays a native receiver** (instant, no
-    third party in the home-alert path — the § above), and the
+    third party in the home-alert path — the § above), posting to
+    **a webhook of its own**: a second intake automation, apart from
+    the one the handler posts to, that reads the tier, the summary and
+    the playbook off each alert and pushes under the same title
+    convention (operations.md §4). Both end at the same phone
+    notification, which is what makes the two intakes one channel. The
+    webhook's address is a sealed value the receiver reads from a
+    Secret, so no rendered configuration carries it. And the
     issue leg is pulled: the ops repo's **poller** workflow
     reads alertmanager's API on a schedule (the read-only
     header-match route at the internet gateway —
@@ -679,6 +697,20 @@ paths, matched to the producers' shapes:
     rule on alertmanager's notification-failure metric (actionable,
     with its own playbook) — the channel breaking is itself an
     alert, surfacing through the poller's leg, which still works.
+    The cluster's check-in covers the case it cannot: a cluster that
+    stops evaluating or delivering stops restarting its Home
+    Assistant timer, and the timer's expiry is the push
+    (operations.md §4, the dead-man).
+    **The playbook, when alertmanager's notifications are failing**:
+    read alertmanager's log on the worker (`kubectl -n monitoring logs`
+    on its StatefulSet) for the integration that fails and the answer
+    it got. Refused or not found is a webhook id that no longer
+    matches Home Assistant's automation: make the automation's webhook
+    again, run `credentials derived alert-webhook record`, and merge
+    the stack file it writes. Unreachable is Home Assistant down, or
+    its address moved. Until the receiver delivers again, firing alerts reach
+    nobody but the alert list itself (`kubectl -n monitoring
+    port-forward` to alertmanager).
 
 Costs and facts on record:
 
