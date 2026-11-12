@@ -46,6 +46,14 @@
     in the machine configuration, with no opening, for the bring-up's
     fsync reading through the API server's node proxy; the etcd scrape
     job stays deferred with the other two.
+*   **Updated:** 2026-11-11 — §3.2 and §14's slices 9, 10, 11 and 14, as
+    slice 9 built it: the three slices that declare a sealed value merge
+    ahead of the cluster with their values absent, an absent value
+    declares no SealedSecret and warns naming it until the bring-up's gate
+    has passed, and the operator's sealing sitting adds the three values
+    as one commit to the stack file
+    ([physical/bring-up.md](../physical/bring-up.md) §1,
+    [rfc-008](rfc-008-workload-migration.md) §10).
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
@@ -254,11 +262,22 @@ after it, and every later slice by its own merge. The install order of
 cluster-infra.md §1 is what makes the first of those converge in one
 `up`.
 
-That holds for everything but a consumer of a sealed value. A sealed
-value can be produced only once the controller that opens it is running
-(§6.2), so a slice that declares one merges after the controller has
-been applied and after the operator has sealed its value — slices 9,
-10 and 11 of §14.
+That holds for a consumer of a sealed value too. A sealed value can be
+produced only once the controller that opens it is running (§6.2), so
+slices 9, 10 and 11 of §14, which declare one each, merge ahead of the
+cluster with their values absent, and the cluster's first `up` declares
+all of them at once. **Until the bring-up's gate has passed, an absent
+sealed value declares no SealedSecret and warns at the run, naming
+it**, and what reads it stays pending: the issuer's certificates, the
+BGP session and alertmanager's receiver. The operator's sealing sitting
+then adds the three values as one commit to `Pulumi.k8s-base.yaml`, and
+no code changes with it
+([physical/bring-up.md](../physical/bring-up.md) §1 and stage 6). The
+tolerance is a dated exception to the rule that a value a program cannot
+run without stops the run at the read ([style/pulumi.md](../style/pulumi.md),
+"Layering"): slice 9 builds it, in `kluster.lib.k8s.sealed_value`, with
+a test of the absent path, and the pull request that ends bring-up.md's
+stage 8 deletes it, after which an absent value stops the run by name.
 
 ### 3.3 What a green preview needs
 
@@ -1475,7 +1494,10 @@ none needs a ruling beyond this document.
 with nothing live; such a slice can merge before the first `physical`
 apply, and the chain applies it with the first push after that apply
 (§3.2). **Live** means the slice needs the running cluster to finish,
-for a sealed value or a measurement.
+for a sealed value or a measurement. Slices 9, 10 and 11 are both: each
+merges before M1's bring-up with its sealed value absent (§3.2), and its
+**Live** line is what the running cluster shows once the operator's
+sealing sitting has added the value.
 
 Each slice's **After** line is complete: it names the slices it depends
 on and every slice it shares an owned path with, so two slices whose
@@ -1729,18 +1751,22 @@ slices 2 and 3.
     zone); the register
     column holds every new slot (the existing seam).
 
-**Slice 9: the issuer, the certificates and the Gateways.** Live.
-**After** slices 7 and 8, with slice 6 applied and the operator's mint
-having sealed the DNS-01 token into the branch.
+**Slice 9: the issuer, the certificates and the Gateways.** Before M1's
+bring-up, with the DNS-01 token absent; live once it is sealed in.
+**After** slices 7 and 8.
 
 *   **Done means**: the `ClusterIssuer`, one certificate per served
     zone, the three Gateways with their addresses, listeners and
-    redirect (§5.1, §5.2); cluster-infra.md §2 and dns.md §4 are true.
+    redirect (§5.1, §5.2); the sealed tolerance of §3.2, the token read
+    out of the stack's `sealedSecrets` by its census row; cluster-infra.md
+    §2, dns.md §4, and this document's §3.2 and §14 are true.
 *   **Owned paths**: `src/kluster/components/certificates/`,
     `src/kluster/components/cilium/`, `src/kluster/stacks/k8s_base.py`,
-    `Pulumi.k8s-base.yaml` (the sealed token),
-    `tests/test_front_door.py` (new),
-    `docs/declarative/cluster-infra.md`, `docs/declarative/dns.md`.
+    `src/kluster/conventions/sealed.py`, `src/kluster/lib/k8s.py` (the
+    sealed-secret helper), `tests/test_front_door.py` (new),
+    `tests/test_k8s.py`, `docs/declarative/cluster-infra.md`,
+    `docs/declarative/dns.md`, and this document. The token itself is
+    the sealing sitting's commit to `Pulumi.k8s-base.yaml`.
 *   **Tests that fail without it**: a certificate per served zone for the
     apex and the wildcard (derive from a fixed list); each Gateway's
     addresses are its pool's, `internet-gw`'s the node members and the
@@ -1750,18 +1776,22 @@ having sealed the DNS-01 token into the branch.
     reference their own zone's certificate (cross two); `allowedRoutes`
     selects the route label (allow every namespace); the issuer's token
     Secret comes from the stack's `sealedSecrets` value (inline a
-    ciphertext).
+    ciphertext); an absent token declares no SealedSecret and warns
+    naming it (declare it with no data; stay silent); a value is read
+    back from the path the sealing command writes it at (read the data
+    key one level down).
 *   **Live**: a certificate issued for the primary; each Gateway's
     Service holds exactly its addresses.
 
-**Slice 10: BGP to the gateway.** Live. **After** slice 9, with the
-password sealed into the branch.
+**Slice 10: BGP to the gateway.** Before M1's bring-up, with the
+password absent; live once it is sealed in. **After** slice 9.
 
-*   **Done means**: §4.6's three objects and the sealed password.
+*   **Done means**: §4.6's three objects, the password's SealedSecret
+    declared through §3.2's tolerance.
 *   **Owned paths**: `src/kluster/components/cilium/`,
-    `src/kluster/stacks/k8s_base.py`,
-    `Pulumi.k8s-base.yaml` (the sealed password), `tests/test_cilium.py`,
-    `docs/declarative/cluster-infra.md`.
+    `src/kluster/stacks/k8s_base.py`, `tests/test_cilium.py`,
+    `docs/declarative/cluster-infra.md`. The password itself is the
+    sealing sitting's commit to `Pulumi.k8s-base.yaml`.
 *   **Tests that fail without it**: the cluster configuration selects
     the worker alone (select every node); the peer carries the password
     reference and both families (drop one); the advertisement selects
@@ -1769,8 +1799,8 @@ password sealed into the branch.
 *   **Live**: the session is established on both families, and the
     gateway rejects a bogus prefix (physical.md §6).
 
-**Slice 11: monitoring.** Live. **After** slice 10, with slice 14's
-webhook made and its address sealed into the branch.
+**Slice 11: monitoring.** Before M1's bring-up, with the webhook's
+address absent; live once it is sealed in. **After** slice 10.
 
 *   **Done means**: §7.1's installation and settings, metrics-server
     and Grafana among them; §7.2's rules, §7.3's receiver and heartbeat;
@@ -1778,10 +1808,11 @@ webhook made and its address sealed into the branch.
     the documents of §13 for architecture.md §4.3, cluster-infra.md §1
     and §3, migration.md §2 and operations.md §4 and §5.
 *   **Owned paths**: `src/kluster/components/monitoring/` (new),
-    `src/kluster/stacks/k8s_base.py`, `Pulumi.k8s-base.yaml` (the sealed
-    webhook), `tests/test_monitoring.py` (new),
+    `src/kluster/stacks/k8s_base.py`, `tests/test_monitoring.py` (new),
     `docs/cluster/architecture.md`, `docs/declarative/cluster-infra.md`,
-    `docs/cluster/migration.md`, `docs/operations.md`.
+    `docs/cluster/migration.md`, `docs/operations.md`. The webhook's
+    address itself is the sealing sitting's commit to
+    `Pulumi.k8s-base.yaml`.
 *   **Tests that fail without it**: every declared rule carries a tier
     from the census, a summary and a playbook that resolves to a section
     (a tier outside the census; a playbook naming a missing section);
@@ -1844,7 +1875,8 @@ item fails. **After** slices 10, 11 and 12.
     flips lands in the document that records it.
 
 **Slice 14: Home Assistant's side.** Operator, in Home Assistant; no pull
-request. **After** nothing; slice 11 waits for it.
+request. **After** nothing; the sealing sitting that seals slice 11's
+webhook waits for it (physical/bring-up.md stage 6).
 
 *   **Done means**: the alertmanager intake automation and the cluster's
     check-in timer exist, built against the contract §7.3 states; the

@@ -4,7 +4,9 @@ What these check is the part a chart or a controller would otherwise only tell
 us at apply time: that a chart is installed from the pin its caller resolved
 and from no other, that a manifest is refused unless its bytes are the pinned
 ones, that a search through a chart's rendered set refuses to guess, that a
-SealedSecret carries its scope where the controller looks for it, and that a
+SealedSecret carries its scope where the controller looks for it, that a value
+of the sealed census is read from where it is written and declared as its row
+says -- or, while it is absent, not declared and named in a warning -- and that a
 custom resource of the generated CRD SDK reaches the provider as the object the
 API server takes.
 """
@@ -13,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import cast
 
 import pulumi
@@ -22,6 +25,8 @@ import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with, the_run_failed_with
 
+from kluster import conventions
+from kluster.lib.config import Shape, ShapeRefused
 from kluster.lib.versions import ChartPin, ManifestPin, versions
 
 DIGEST = f'sha256:{"c" * 64}'
@@ -298,3 +303,129 @@ def test_a_pool_the_cluster_does_not_have_is_refused() -> None:
 
     with pytest.raises(ValueError, match='no such load-balancer pool'):
         _ = lb_pool_labels('homelab')
+
+
+# -- a value of the sealed census --------------------------------------------------
+
+
+def _as_the_cli_stores(writes: dict[str, str]) -> dict[str, object]:
+    """The structured key `pulumi config set --path` builds out of these writes, path by path.
+
+    Each path is `sealedSecrets["<name>"]["<key>"]`, a quoted segment per level,
+    as `SealedValue.path` writes it; the object returned is what is then held
+    under `sealedSecrets`.
+    """
+    held: dict[str, object] = {}
+    for path, ciphertext in writes.items():
+        assert path.split('[', 1)[0] == conventions.sealed.CONFIG_KEY, path
+        segments = re.findall(r'\["([^"]*)"\]', path)
+        level = held
+        for segment in segments[:-1]:
+            level = cast('dict[str, object]', level.setdefault(segment, {}))
+        level[segments[-1]] = ciphertext
+    return held
+
+
+@pytest.mark.parametrize('value', conventions.sealed.VALUES.values(), ids=conventions.sealed.VALUES)
+def test_a_sealed_value_is_read_back_from_where_its_path_writes_it(value: conventions.sealed.SealedValue) -> None:
+    """The program reads each of a row's keys from the place the sealing command writes it, data keys with dots included."""
+    from kluster.lib.k8s import sealed_ciphertext
+
+    writes = {value.path(key): f'AgB-sealed-{key}' for key in value.keys}
+
+    assert sealed_ciphertext(value, _as_the_cli_stores(writes)) == {key: f'AgB-sealed-{key}' for key in value.keys}
+
+
+def test_a_value_the_stack_does_not_hold_reads_as_absent() -> None:
+    """Absent from the stack, or the stack holding no sealed value at all: nothing has been sealed in yet."""
+    from kluster.lib.k8s import sealed_ciphertext
+
+    value = conventions.sealed.DNS01_TOKEN
+    other = conventions.sealed.BGP_PASSWORD
+
+    assert sealed_ciphertext(value, None) is None
+    assert sealed_ciphertext(value, {other.name: dict.fromkeys(other.keys, 'AgB-other')}) is None
+
+
+#: The row the refusals below are read for, and one data key of it: the cases
+#: are built from the row's own keys, so a renamed key leaves each case the
+#: kind of mistake it names.
+REFUSED = conventions.sealed.DNS01_TOKEN
+REFUSED_KEY = REFUSED.keys[0]
+
+
+@pytest.mark.parametrize(
+    ('configured', 'what', 'shape'),
+    [
+        ({REFUSED.name: {}}, REFUSED.path(REFUSED_KEY), Shape.WRONG_TYPE),
+        ({REFUSED.name: dict.fromkeys(REFUSED.keys, '')}, REFUSED.path(REFUSED_KEY), Shape.EMPTY),
+        ({REFUSED.name: dict.fromkeys(REFUSED.keys, 3)}, REFUSED.path(REFUSED_KEY), Shape.WRONG_TYPE),
+        (
+            {REFUSED.name: 'AgB-not-a-mapping'},
+            f'{conventions.sealed.CONFIG_KEY}["{REFUSED.name}"]',
+            Shape.WRONG_TYPE,
+        ),
+        ('AgB-not-a-mapping', conventions.sealed.CONFIG_KEY, Shape.WRONG_TYPE),
+    ],
+    ids=['no-key', 'blank', 'not-text', 'value-not-a-mapping', 'sealed-key-not-a-mapping'],
+)
+def test_a_value_held_but_not_whole_is_refused_naming_its_path(configured: object, what: str, shape: Shape) -> None:
+    """A value whose ciphertext is missing a key, or is not text, is a write gone wrong, never a value still to come.
+
+    Refused by where it is and what it is instead, never by what it holds:
+    the refusal reaches the run's log.
+    """
+    from kluster.lib.k8s import sealed_ciphertext
+
+    with pytest.raises(ShapeRefused) as refused:
+        _ = sealed_ciphertext(REFUSED, configured)
+
+    assert (refused.value.what, refused.value.shape) == (what, shape)
+    assert 'AgB-not-a-mapping' not in str(refused.value)
+
+
+def warnings_recorded(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Every warning the run logs from here on, kept rather than sent to the engine."""
+    warned: list[str] = []
+
+    def warn(message: str, *_: object, **__: object) -> None:
+        warned.append(message)
+
+    monkeypatch.setattr(pulumi.log, 'warn', warn)
+    return warned
+
+
+@pytest.mark.asyncio
+async def test_a_sealed_value_is_declared_as_its_row_says(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Named, placed and scoped as the row says, which is what its ciphertext is sealed to, and with no warning."""
+    from kluster.lib.k8s import sealed_value
+
+    value = conventions.sealed.DNS01_TOKEN
+    warned = warnings_recorded(monkeypatch)
+    monitor = await run_with(Recorder(), stack='k8s-base')
+    async with declaring():
+        _ = sealed_value(value, ciphertext=dict.fromkeys(value.keys, 'AgB-sealed'))
+
+    secret = monitor.inputs_of(value.name, SEALED_SECRET)
+    assert (secret['metadata']['name'], secret['metadata']['namespace']) == (value.name, value.namespace)
+    assert secret['spec']['encryptedData'] == dict.fromkeys(value.keys, 'AgB-sealed')
+    assert secret['spec']['template']['metadata']['annotations'] == {
+        f'sealedsecrets.bitnami.com/{value.scope.value}': 'true'
+    }
+    assert warned == []
+
+
+@pytest.mark.asyncio
+async def test_an_absent_sealed_value_declares_nothing_and_warns_naming_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Until the bring-up's gate, a value not yet sealed in is no SealedSecret, and the run names it (bring-up.md §1)."""
+    from kluster.lib.k8s import sealed_value
+
+    value = conventions.sealed.DNS01_TOKEN
+    warned = warnings_recorded(monkeypatch)
+    monitor = await run_with(Recorder(), stack='k8s-base')
+    async with declaring():
+        declared = sealed_value(value, ciphertext=None)
+
+    assert declared is None
+    assert monitor.of_type(SEALED_SECRET) == []
+    assert [message for message in warned if repr(value.name) in message and conventions.sealed.CONFIG_KEY in message]
