@@ -158,7 +158,7 @@ class CiliumNodeConfig(pulumi.CustomResource):
             if spec is None and not opts.urn:
                 raise TypeError("Missing required property 'spec'")
             __props__.__dict__["spec"] = spec
-        alias_opts = pulumi.ResourceOptions(aliases=[pulumi.Alias(type_="kubernetes:cilium.io/v2:CiliumNodeConfig")])
+        alias_opts = pulumi.ResourceOptions(aliases=[pulumi.Alias(type_="crds:cilium.io/v2alpha1:CiliumNodeConfig"), pulumi.Alias(type_="kubernetes:cilium.io/v2:CiliumNodeConfig")])
         opts = pulumi.ResourceOptions.merge(opts, alias_opts)
         super(CiliumNodeConfig, __self__).__init__(
             'crds:cilium.io/v2:CiliumNodeConfig',

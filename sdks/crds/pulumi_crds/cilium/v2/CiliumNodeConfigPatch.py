@@ -169,6 +169,8 @@ class CiliumNodeConfigPatch(pulumi.CustomResource):
             __props__.__dict__["kind"] = 'CiliumNodeConfig'
             __props__.__dict__["metadata"] = metadata
             __props__.__dict__["spec"] = spec
+        alias_opts = pulumi.ResourceOptions(aliases=[pulumi.Alias(type_="crds:cilium.io/v2alpha1:CiliumNodeConfigPatch")])
+        opts = pulumi.ResourceOptions.merge(opts, alias_opts)
         super(CiliumNodeConfigPatch, __self__).__init__(
             'crds:cilium.io/v2:CiliumNodeConfigPatch',
             resource_name,

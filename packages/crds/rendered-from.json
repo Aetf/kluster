@@ -10,13 +10,13 @@
   },
   "versions:chart-cilium": {
     "definitions": false,
-    "digest": "sha256:906ce40d35daad838d12add8a5ba7033e767767f51799a93c7eace2cec9cdc05",
+    "digest": "sha256:712e1f65bf30533d117d1996ac3ace3efdb2521302d31ee887b1e45806bd6b64",
     "floor": {
-      "document": "cluster-infra.md §2: the ExternalAuth route filter (GEP-1494)",
-      "operator": "1.20"
+      "document": "cluster-infra.md §2: the ExternalAuth route filter (GEP-1494), which fails closed from 1.20.2",
+      "operator": "1.20.2"
     },
     "repository": "oci://quay.io/cilium/charts",
-    "version": "1.20.1"
+    "version": "1.20.4"
   },
   "versions:chart-cloudnative-pg": {
     "definitions": true,

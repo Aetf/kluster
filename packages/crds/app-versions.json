@@ -4,8 +4,8 @@
     "version": "v1.21.1"
   },
   "versions:chart-cilium": {
-    "appVersion": "1.20.1",
-    "version": "1.20.1"
+    "appVersion": "1.20.4",
+    "version": "1.20.4"
   },
   "versions:chart-cloudnative-pg": {
     "appVersion": "1.30.0",

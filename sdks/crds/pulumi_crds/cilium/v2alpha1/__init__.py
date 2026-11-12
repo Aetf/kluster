@@ -39,6 +39,9 @@ from .CiliumL2AnnouncementPolicyPatch import *
 from .CiliumLoadBalancerIPPool import *
 from .CiliumLoadBalancerIPPoolList import *
 from .CiliumLoadBalancerIPPoolPatch import *
+from .CiliumNodeConfig import *
+from .CiliumNodeConfigList import *
+from .CiliumNodeConfigPatch import *
 from .CiliumPodIPPool import *
 from .CiliumPodIPPoolList import *
 from .CiliumPodIPPoolPatch import *

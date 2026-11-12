@@ -270,6 +270,20 @@ __all__ = [
     'CiliumLoadBalancerIPPoolStatusArgsDict',
     'CiliumLoadBalancerIPPoolStatusConditionsArgs',
     'CiliumLoadBalancerIPPoolStatusConditionsArgsDict',
+    'CiliumNodeConfigArgs',
+    'CiliumNodeConfigArgsDict',
+    'CiliumNodeConfigSpecArgs',
+    'CiliumNodeConfigSpecArgsDict',
+    'CiliumNodeConfigSpecNodeSelectorArgs',
+    'CiliumNodeConfigSpecNodeSelectorArgsDict',
+    'CiliumNodeConfigSpecNodeSelectorMatchExpressionsArgs',
+    'CiliumNodeConfigSpecNodeSelectorMatchExpressionsArgsDict',
+    'CiliumNodeConfigSpecNodeSelectorMatchExpressionsPatchArgs',
+    'CiliumNodeConfigSpecNodeSelectorMatchExpressionsPatchArgsDict',
+    'CiliumNodeConfigSpecNodeSelectorPatchArgs',
+    'CiliumNodeConfigSpecNodeSelectorPatchArgsDict',
+    'CiliumNodeConfigSpecPatchArgs',
+    'CiliumNodeConfigSpecPatchArgsDict',
     'CiliumPodIPPoolArgs',
     'CiliumPodIPPoolArgsDict',
     'CiliumPodIPPoolSpecArgs',
@@ -10628,6 +10642,510 @@ class CiliumLoadBalancerIPPoolStatusConditionsArgs:
     @observed_generation.setter
     def observed_generation(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "observed_generation", value)
+
+
+class CiliumNodeConfigArgsDict(TypedDict):
+    """
+    CiliumNodeConfig is a list of configuration key-value pairs. It is applied to
+    nodes indicated by a label selector.
+
+    If multiple overrides apply to the same node, they will be ordered by name
+    with later Overrides overwriting any conflicting keys.
+    """
+    spec: pulumi.Input['CiliumNodeConfigSpecArgsDict']
+    api_version: NotRequired[pulumi.Input[Optional[Literal['cilium.io/v2alpha1']]]]
+    """
+    APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+    """
+    kind: NotRequired[pulumi.Input[Optional[Literal['CiliumNodeConfig']]]]
+    """
+    Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+    """
+    metadata: NotRequired[pulumi.Input[Optional['pulumi_kubernetes.meta.v1.ObjectMetaArgsDict']]]
+    """
+    Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+    """
+
+@pulumi.input_type
+class CiliumNodeConfigArgs:
+    def __init__(__self__, *,
+                 spec: pulumi.Input['CiliumNodeConfigSpecArgs'],
+                 api_version: pulumi.Input[Optional[Literal['cilium.io/v2alpha1']]] = None,
+                 kind: pulumi.Input[Optional[Literal['CiliumNodeConfig']]] = None,
+                 metadata: pulumi.Input[Optional['pulumi_kubernetes.meta.v1.ObjectMetaArgs']] = None):
+        """
+        CiliumNodeConfig is a list of configuration key-value pairs. It is applied to
+        nodes indicated by a label selector.
+
+        If multiple overrides apply to the same node, they will be ordered by name
+        with later Overrides overwriting any conflicting keys.
+
+        :param pulumi.Input[Literal['cilium.io/v2alpha1']] api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+        :param pulumi.Input[Literal['CiliumNodeConfig']] kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+        :param pulumi.Input['pulumi_kubernetes.meta.v1.ObjectMetaArgs'] metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+        """
+        pulumi.set(__self__, "spec", spec)
+        if api_version is not None:
+            pulumi.set(__self__, "api_version", 'cilium.io/v2alpha1')
+        if kind is not None:
+            pulumi.set(__self__, "kind", 'CiliumNodeConfig')
+        if metadata is not None:
+            pulumi.set(__self__, "metadata", metadata)
+
+    @_builtins.property
+    @pulumi.getter
+    def spec(self) -> pulumi.Input['CiliumNodeConfigSpecArgs']:
+        return pulumi.get(self, "spec")
+
+    @spec.setter
+    def spec(self, value: pulumi.Input['CiliumNodeConfigSpecArgs']):
+        pulumi.set(self, "spec", value)
+
+    @_builtins.property
+    @pulumi.getter(name="apiVersion")
+    def api_version(self) -> pulumi.Input[Optional[Literal['cilium.io/v2alpha1']]]:
+        """
+        APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+        """
+        return pulumi.get(self, "api_version")
+
+    @api_version.setter
+    def api_version(self, value: pulumi.Input[Optional[Literal['cilium.io/v2alpha1']]]):
+        pulumi.set(self, "api_version", value)
+
+    @_builtins.property
+    @pulumi.getter
+    def kind(self) -> pulumi.Input[Optional[Literal['CiliumNodeConfig']]]:
+        """
+        Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+        """
+        return pulumi.get(self, "kind")
+
+    @kind.setter
+    def kind(self, value: pulumi.Input[Optional[Literal['CiliumNodeConfig']]]):
+        pulumi.set(self, "kind", value)
+
+    @_builtins.property
+    @pulumi.getter
+    def metadata(self) -> pulumi.Input[Optional['pulumi_kubernetes.meta.v1.ObjectMetaArgs']]:
+        """
+        Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+        """
+        return pulumi.get(self, "metadata")
+
+    @metadata.setter
+    def metadata(self, value: pulumi.Input[Optional['pulumi_kubernetes.meta.v1.ObjectMetaArgs']]):
+        pulumi.set(self, "metadata", value)
+
+
+class CiliumNodeConfigSpecArgsDict(TypedDict):
+    """
+    Spec is the desired Cilium configuration overrides for a given node
+    """
+    defaults: pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]
+    """
+    Defaults is treated the same as the cilium-config ConfigMap - a set
+    of key-value pairs parsed by the agent and operator processes.
+    Each key must be a valid config-map data field (i.e. a-z, A-Z, -, _, and .)
+    """
+    node_selector: pulumi.Input['CiliumNodeConfigSpecNodeSelectorArgsDict']
+
+@pulumi.input_type
+class CiliumNodeConfigSpecArgs:
+    def __init__(__self__, *,
+                 defaults: pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]],
+                 node_selector: pulumi.Input['CiliumNodeConfigSpecNodeSelectorArgs']):
+        """
+        Spec is the desired Cilium configuration overrides for a given node
+
+        :param pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]] defaults: Defaults is treated the same as the cilium-config ConfigMap - a set
+               of key-value pairs parsed by the agent and operator processes.
+               Each key must be a valid config-map data field (i.e. a-z, A-Z, -, _, and .)
+        """
+        pulumi.set(__self__, "defaults", defaults)
+        pulumi.set(__self__, "node_selector", node_selector)
+
+    @_builtins.property
+    @pulumi.getter
+    def defaults(self) -> pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]:
+        """
+        Defaults is treated the same as the cilium-config ConfigMap - a set
+        of key-value pairs parsed by the agent and operator processes.
+        Each key must be a valid config-map data field (i.e. a-z, A-Z, -, _, and .)
+        """
+        return pulumi.get(self, "defaults")
+
+    @defaults.setter
+    def defaults(self, value: pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]):
+        pulumi.set(self, "defaults", value)
+
+    @_builtins.property
+    @pulumi.getter(name="nodeSelector")
+    def node_selector(self) -> pulumi.Input['CiliumNodeConfigSpecNodeSelectorArgs']:
+        return pulumi.get(self, "node_selector")
+
+    @node_selector.setter
+    def node_selector(self, value: pulumi.Input['CiliumNodeConfigSpecNodeSelectorArgs']):
+        pulumi.set(self, "node_selector", value)
+
+
+class CiliumNodeConfigSpecNodeSelectorArgsDict(TypedDict):
+    """
+    NodeSelector is a label selector that determines to which nodes
+    this configuration applies.
+    If not supplied, then this config applies to no nodes. If
+    empty, then it applies to all nodes.
+    """
+    match_expressions: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['CiliumNodeConfigSpecNodeSelectorMatchExpressionsArgsDict']]]]]
+    """
+    matchExpressions is a list of label selector requirements. The requirements are ANDed.
+    """
+    match_labels: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]]
+    """
+    matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+    map is equivalent to an element of matchExpressions, whose key field is "key", the
+    operator is "In", and the values array contains only "value". The requirements are ANDed.
+    """
+
+@pulumi.input_type
+class CiliumNodeConfigSpecNodeSelectorArgs:
+    def __init__(__self__, *,
+                 match_expressions: pulumi.Input[Optional[Sequence[pulumi.Input['CiliumNodeConfigSpecNodeSelectorMatchExpressionsArgs']]]] = None,
+                 match_labels: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None):
+        """
+        NodeSelector is a label selector that determines to which nodes
+        this configuration applies.
+        If not supplied, then this config applies to no nodes. If
+        empty, then it applies to all nodes.
+
+        :param pulumi.Input[Sequence[pulumi.Input['CiliumNodeConfigSpecNodeSelectorMatchExpressionsArgs']]] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
+        :param pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+               map is equivalent to an element of matchExpressions, whose key field is "key", the
+               operator is "In", and the values array contains only "value". The requirements are ANDed.
+        """
+        if match_expressions is not None:
+            pulumi.set(__self__, "match_expressions", match_expressions)
+        if match_labels is not None:
+            pulumi.set(__self__, "match_labels", match_labels)
+
+    @_builtins.property
+    @pulumi.getter(name="matchExpressions")
+    def match_expressions(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['CiliumNodeConfigSpecNodeSelectorMatchExpressionsArgs']]]]:
+        """
+        matchExpressions is a list of label selector requirements. The requirements are ANDed.
+        """
+        return pulumi.get(self, "match_expressions")
+
+    @match_expressions.setter
+    def match_expressions(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['CiliumNodeConfigSpecNodeSelectorMatchExpressionsArgs']]]]):
+        pulumi.set(self, "match_expressions", value)
+
+    @_builtins.property
+    @pulumi.getter(name="matchLabels")
+    def match_labels(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]:
+        """
+        matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+        map is equivalent to an element of matchExpressions, whose key field is "key", the
+        operator is "In", and the values array contains only "value". The requirements are ANDed.
+        """
+        return pulumi.get(self, "match_labels")
+
+    @match_labels.setter
+    def match_labels(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]):
+        pulumi.set(self, "match_labels", value)
+
+
+class CiliumNodeConfigSpecNodeSelectorMatchExpressionsArgsDict(TypedDict):
+    """
+    A label selector requirement is a selector that contains values, a key, and an operator that
+    relates the key and values.
+    """
+    key: pulumi.Input[_builtins.str]
+    """
+    key is the label key that the selector applies to.
+    """
+    operator: pulumi.Input[_builtins.str]
+    """
+    operator represents a key's relationship to a set of values.
+    Valid operators are In, NotIn, Exists and DoesNotExist.
+    """
+    values: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]]
+    """
+    values is an array of string values. If the operator is In or NotIn,
+    the values array must be non-empty. If the operator is Exists or DoesNotExist,
+    the values array must be empty. This array is replaced during a strategic
+    merge patch.
+    """
+
+@pulumi.input_type
+class CiliumNodeConfigSpecNodeSelectorMatchExpressionsArgs:
+    def __init__(__self__, *,
+                 key: pulumi.Input[_builtins.str],
+                 operator: pulumi.Input[_builtins.str],
+                 values: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None):
+        """
+        A label selector requirement is a selector that contains values, a key, and an operator that
+        relates the key and values.
+
+        :param pulumi.Input[_builtins.str] key: key is the label key that the selector applies to.
+        :param pulumi.Input[_builtins.str] operator: operator represents a key's relationship to a set of values.
+               Valid operators are In, NotIn, Exists and DoesNotExist.
+        :param pulumi.Input[Sequence[pulumi.Input[_builtins.str]]] values: values is an array of string values. If the operator is In or NotIn,
+               the values array must be non-empty. If the operator is Exists or DoesNotExist,
+               the values array must be empty. This array is replaced during a strategic
+               merge patch.
+        """
+        pulumi.set(__self__, "key", key)
+        pulumi.set(__self__, "operator", operator)
+        if values is not None:
+            pulumi.set(__self__, "values", values)
+
+    @_builtins.property
+    @pulumi.getter
+    def key(self) -> pulumi.Input[_builtins.str]:
+        """
+        key is the label key that the selector applies to.
+        """
+        return pulumi.get(self, "key")
+
+    @key.setter
+    def key(self, value: pulumi.Input[_builtins.str]):
+        pulumi.set(self, "key", value)
+
+    @_builtins.property
+    @pulumi.getter
+    def operator(self) -> pulumi.Input[_builtins.str]:
+        """
+        operator represents a key's relationship to a set of values.
+        Valid operators are In, NotIn, Exists and DoesNotExist.
+        """
+        return pulumi.get(self, "operator")
+
+    @operator.setter
+    def operator(self, value: pulumi.Input[_builtins.str]):
+        pulumi.set(self, "operator", value)
+
+    @_builtins.property
+    @pulumi.getter
+    def values(self) -> pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]:
+        """
+        values is an array of string values. If the operator is In or NotIn,
+        the values array must be non-empty. If the operator is Exists or DoesNotExist,
+        the values array must be empty. This array is replaced during a strategic
+        merge patch.
+        """
+        return pulumi.get(self, "values")
+
+    @values.setter
+    def values(self, value: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]):
+        pulumi.set(self, "values", value)
+
+
+class CiliumNodeConfigSpecNodeSelectorMatchExpressionsPatchArgsDict(TypedDict):
+    """
+    A label selector requirement is a selector that contains values, a key, and an operator that
+    relates the key and values.
+    """
+    key: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    key is the label key that the selector applies to.
+    """
+    operator: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    operator represents a key's relationship to a set of values.
+    Valid operators are In, NotIn, Exists and DoesNotExist.
+    """
+    values: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]]
+    """
+    values is an array of string values. If the operator is In or NotIn,
+    the values array must be non-empty. If the operator is Exists or DoesNotExist,
+    the values array must be empty. This array is replaced during a strategic
+    merge patch.
+    """
+
+@pulumi.input_type
+class CiliumNodeConfigSpecNodeSelectorMatchExpressionsPatchArgs:
+    def __init__(__self__, *,
+                 key: pulumi.Input[Optional[_builtins.str]] = None,
+                 operator: pulumi.Input[Optional[_builtins.str]] = None,
+                 values: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None):
+        """
+        A label selector requirement is a selector that contains values, a key, and an operator that
+        relates the key and values.
+
+        :param pulumi.Input[_builtins.str] key: key is the label key that the selector applies to.
+        :param pulumi.Input[_builtins.str] operator: operator represents a key's relationship to a set of values.
+               Valid operators are In, NotIn, Exists and DoesNotExist.
+        :param pulumi.Input[Sequence[pulumi.Input[_builtins.str]]] values: values is an array of string values. If the operator is In or NotIn,
+               the values array must be non-empty. If the operator is Exists or DoesNotExist,
+               the values array must be empty. This array is replaced during a strategic
+               merge patch.
+        """
+        if key is not None:
+            pulumi.set(__self__, "key", key)
+        if operator is not None:
+            pulumi.set(__self__, "operator", operator)
+        if values is not None:
+            pulumi.set(__self__, "values", values)
+
+    @_builtins.property
+    @pulumi.getter
+    def key(self) -> pulumi.Input[Optional[_builtins.str]]:
+        """
+        key is the label key that the selector applies to.
+        """
+        return pulumi.get(self, "key")
+
+    @key.setter
+    def key(self, value: pulumi.Input[Optional[_builtins.str]]):
+        pulumi.set(self, "key", value)
+
+    @_builtins.property
+    @pulumi.getter
+    def operator(self) -> pulumi.Input[Optional[_builtins.str]]:
+        """
+        operator represents a key's relationship to a set of values.
+        Valid operators are In, NotIn, Exists and DoesNotExist.
+        """
+        return pulumi.get(self, "operator")
+
+    @operator.setter
+    def operator(self, value: pulumi.Input[Optional[_builtins.str]]):
+        pulumi.set(self, "operator", value)
+
+    @_builtins.property
+    @pulumi.getter
+    def values(self) -> pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]:
+        """
+        values is an array of string values. If the operator is In or NotIn,
+        the values array must be non-empty. If the operator is Exists or DoesNotExist,
+        the values array must be empty. This array is replaced during a strategic
+        merge patch.
+        """
+        return pulumi.get(self, "values")
+
+    @values.setter
+    def values(self, value: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]):
+        pulumi.set(self, "values", value)
+
+
+class CiliumNodeConfigSpecNodeSelectorPatchArgsDict(TypedDict):
+    """
+    NodeSelector is a label selector that determines to which nodes
+    this configuration applies.
+    If not supplied, then this config applies to no nodes. If
+    empty, then it applies to all nodes.
+    """
+    match_expressions: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['CiliumNodeConfigSpecNodeSelectorMatchExpressionsPatchArgsDict']]]]]
+    """
+    matchExpressions is a list of label selector requirements. The requirements are ANDed.
+    """
+    match_labels: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]]
+    """
+    matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+    map is equivalent to an element of matchExpressions, whose key field is "key", the
+    operator is "In", and the values array contains only "value". The requirements are ANDed.
+    """
+
+@pulumi.input_type
+class CiliumNodeConfigSpecNodeSelectorPatchArgs:
+    def __init__(__self__, *,
+                 match_expressions: pulumi.Input[Optional[Sequence[pulumi.Input['CiliumNodeConfigSpecNodeSelectorMatchExpressionsPatchArgs']]]] = None,
+                 match_labels: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None):
+        """
+        NodeSelector is a label selector that determines to which nodes
+        this configuration applies.
+        If not supplied, then this config applies to no nodes. If
+        empty, then it applies to all nodes.
+
+        :param pulumi.Input[Sequence[pulumi.Input['CiliumNodeConfigSpecNodeSelectorMatchExpressionsPatchArgs']]] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
+        :param pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+               map is equivalent to an element of matchExpressions, whose key field is "key", the
+               operator is "In", and the values array contains only "value". The requirements are ANDed.
+        """
+        if match_expressions is not None:
+            pulumi.set(__self__, "match_expressions", match_expressions)
+        if match_labels is not None:
+            pulumi.set(__self__, "match_labels", match_labels)
+
+    @_builtins.property
+    @pulumi.getter(name="matchExpressions")
+    def match_expressions(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['CiliumNodeConfigSpecNodeSelectorMatchExpressionsPatchArgs']]]]:
+        """
+        matchExpressions is a list of label selector requirements. The requirements are ANDed.
+        """
+        return pulumi.get(self, "match_expressions")
+
+    @match_expressions.setter
+    def match_expressions(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['CiliumNodeConfigSpecNodeSelectorMatchExpressionsPatchArgs']]]]):
+        pulumi.set(self, "match_expressions", value)
+
+    @_builtins.property
+    @pulumi.getter(name="matchLabels")
+    def match_labels(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]:
+        """
+        matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+        map is equivalent to an element of matchExpressions, whose key field is "key", the
+        operator is "In", and the values array contains only "value". The requirements are ANDed.
+        """
+        return pulumi.get(self, "match_labels")
+
+    @match_labels.setter
+    def match_labels(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]):
+        pulumi.set(self, "match_labels", value)
+
+
+class CiliumNodeConfigSpecPatchArgsDict(TypedDict):
+    """
+    Spec is the desired Cilium configuration overrides for a given node
+    """
+    defaults: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]]
+    """
+    Defaults is treated the same as the cilium-config ConfigMap - a set
+    of key-value pairs parsed by the agent and operator processes.
+    Each key must be a valid config-map data field (i.e. a-z, A-Z, -, _, and .)
+    """
+    node_selector: NotRequired[pulumi.Input[Optional['CiliumNodeConfigSpecNodeSelectorPatchArgsDict']]]
+
+@pulumi.input_type
+class CiliumNodeConfigSpecPatchArgs:
+    def __init__(__self__, *,
+                 defaults: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
+                 node_selector: pulumi.Input[Optional['CiliumNodeConfigSpecNodeSelectorPatchArgs']] = None):
+        """
+        Spec is the desired Cilium configuration overrides for a given node
+
+        :param pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]] defaults: Defaults is treated the same as the cilium-config ConfigMap - a set
+               of key-value pairs parsed by the agent and operator processes.
+               Each key must be a valid config-map data field (i.e. a-z, A-Z, -, _, and .)
+        """
+        if defaults is not None:
+            pulumi.set(__self__, "defaults", defaults)
+        if node_selector is not None:
+            pulumi.set(__self__, "node_selector", node_selector)
+
+    @_builtins.property
+    @pulumi.getter
+    def defaults(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]:
+        """
+        Defaults is treated the same as the cilium-config ConfigMap - a set
+        of key-value pairs parsed by the agent and operator processes.
+        Each key must be a valid config-map data field (i.e. a-z, A-Z, -, _, and .)
+        """
+        return pulumi.get(self, "defaults")
+
+    @defaults.setter
+    def defaults(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]):
+        pulumi.set(self, "defaults", value)
+
+    @_builtins.property
+    @pulumi.getter(name="nodeSelector")
+    def node_selector(self) -> pulumi.Input[Optional['CiliumNodeConfigSpecNodeSelectorPatchArgs']]:
+        return pulumi.get(self, "node_selector")
+
+    @node_selector.setter
+    def node_selector(self, value: pulumi.Input[Optional['CiliumNodeConfigSpecNodeSelectorPatchArgs']]):
+        pulumi.set(self, "node_selector", value)
 
 
 class CiliumPodIPPoolArgsDict(TypedDict):

@@ -348,7 +348,7 @@ def chart_value_paths(helm: Path, pin: ChartPin, *, workdir: Path) -> ValuePaths
 def version_tuple(version: str) -> tuple[int, ...]:
     """The numeric components of a version, for comparing one against a floor.
 
-    Upstream is not consistent about the leading `v` (`v1.21.1` and `1.20.1`
+    Upstream is not consistent about the leading `v` (`v1.21.1` and `1.20.4`
     are both pinned), and a floor is written as far as it is meaningful —
     `1.26` covers every `1.26.x`. Comparing tuples handles both, and stops at
     the first non-numeric component so a pre-release suffix cannot make a
