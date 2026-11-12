@@ -193,8 +193,8 @@ PR      preview.yml:        changes ─→ preview (dns | k8s-base | apps)
 
 merge   deploy.yml:         plan-physical ──zero diff──→ (up-physical skipped)
                                    └───────── diff ────→ up-physical [gate]
-                            ──→ up-k8s-base ──needs──→ up-apps
-                            ──→ up-dns (parallel to k8s-base)
+                            ──→ up-dns ──any result──→ up-k8s-base ──needs──→ up-apps
+                                   └──────────────── any result ─────────────────┘
                             any of the five failed ──→ notify-failure
 
 weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
@@ -293,6 +293,38 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     result — failed, a timed-out apply included, or cancelled for
     whatever reason — stands for a physical apply that did not finish
     and stops it.
+-   **`up-k8s-base` and `up-apps` run after `up-dns`, whatever its
+    result.** Both name `up-dns` among their `needs`; `up-k8s-base`
+    keeps its condition on the physical gate and `up-apps` its condition
+    on `up-k8s-base`'s success, each under `always()`, so what `up-dns`
+    returned decides neither. The order is a migration's. A cut deletes
+    a name's legacy record in `dns` and creates the application's record
+    at the same name in `apps`, or in `k8s-base` for the name the
+    monitoring component serves ([cluster/migration.md](../cluster/migration.md)
+    §2, Wave B), and two facts force the order: the pinned Cloudflare
+    provider's `DnsRecord` has no option to adopt or overwrite a record
+    that exists, so each stack creates and deletes its own; and
+    Cloudflare refuses a CNAME beside another record of the same name,
+    so a create that runs before the delete fails. A cut's run therefore
+    deletes before it creates, and the name is absent for the time
+    between them. **A failed `up-dns` blocks neither stack**, so a
+    failing `dns`, the stack that reaches the LAN, never stops the daily
+    driver, which keeps the separation
+    [declarative/dns.md](../declarative/dns.md) §3 puts there. A slow or
+    hung `up-dns` delays both, by up to its job's bound, and so does its
+    wait on the `zt-dns` group it shares with the previews, proofs and
+    drift checks that join with the same identity (§2): that is the cost
+    of the order. Where `up-dns` deleted a cut's legacy records and
+    `up-k8s-base` then failed, `up-apps` is skipped and the cut's names
+    resolve nowhere until a run succeeds, so a migration window re-runs
+    the chain until it succeeds before it verifies the cut
+    (migration.md §0 rule 2). Where `up-dns` failed before its deletes,
+    the create in `up-k8s-base` or `up-apps` fails on Cloudflare's
+    refusal, the names stay where they were, and the next run converges.
+    `tests/test_workflow_shape.py` holds both
+    jobs to needing `up-dns`, and evaluates each one's condition over
+    every result the jobs up its chain can end in, through a model of how
+    GitHub reads a job's `if:`.
 -   **PR previews run in parallel** (previews don't mutate state). When
     an upstream layer has a diff, downstream previews are computed
     against the *current* StackReference outputs and may be off — accepted

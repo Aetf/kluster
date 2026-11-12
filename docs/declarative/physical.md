@@ -440,11 +440,13 @@ them for day-2 once v0.12 is stable *and* has reached the Pulumi bridge.
 
 ## 3. Homelab (pulumi-libvirt)
 
--   **Worker VM**: 12–16 vCPU / 20 GiB end-state (nodes.md §4.2),
+-   **Worker VM**: 12–16 vCPU, its RAM grown to fit up to an end state
+    the decommission decides (nodes.md §4.2),
     bridged onto the cluster VLAN (id 7, `192.168.70.0/24`) at the
     static `192.168.70.10`, disk on NVMe — both disk *and* RAM start
-    smaller during migration and grow per wave (~60 GB / ~10 GiB at
-    bootstrap; migration.md §0.4). The VM's **system design** — disk shape (raw sparse on a
+    smaller during migration (~60 GB / 10 GiB at bootstrap): the disk
+    grows as legacy data is deleted, and the RAM in one drained window,
+    Wave C's (migration.md §0.4). The VM's **system design** — disk shape (raw sparse on a
     nodatacow subvolume, virtio-blk), the second host bridge over the
     tagged VLAN interface with the host's own leg beside it, the
     two-phase GPU passthrough, and the host-prep aconfmgr change-set

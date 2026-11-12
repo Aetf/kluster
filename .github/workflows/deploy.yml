@@ -195,7 +195,10 @@ jobs:
         run: mise x -- pulumi up --stack dns --yes --diff
 
   up-k8s-base:
-    needs: [plan-physical, up-physical]
+    # After `up-dns` whatever its result, as `up-apps` is: a name a cut hands
+    # over is deleted by `dns` before it is created here or in `apps`, and a
+    # failed `dns` stops neither (framework/ci.md §3).
+    needs: [plan-physical, up-physical, up-dns]
     if: >-
       always() && needs.plan-physical.result == 'success'
       && (needs.up-physical.result == 'success' || needs.up-physical.result == 'skipped')
@@ -236,7 +239,7 @@ jobs:
         run: mise x -- pulumi up --stack k8s-base --yes --diff
 
   up-apps:
-    needs: up-k8s-base
+    needs: [up-k8s-base, up-dns]
     if: always() && needs.up-k8s-base.result == 'success'
     runs-on: ubuntu-26.04
     # The sum of its steps' bounds, a `uses:` step twice, plus five minutes

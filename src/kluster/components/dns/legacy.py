@@ -121,7 +121,7 @@ LEGACY: tuple[Block, ...] = (
     _vps('photos', 'immich; unproxied for large uploads', unproxied='uploads larger than the proxy accepts'),
     # jellyfin -- Wave C
     _vps('tube', 'jellyfin'),
-    # syncthing-nas -- Wave C
+    # syncthing-nas -- Wave A2
     _vps('sync-nas', 'syncthing on the NAS, UI only'),
     # qbittorrent -- Wave D. Nothing on the VPS answers this name today; it is
     # kept because the host qbittorrent migrates and its component declares the
