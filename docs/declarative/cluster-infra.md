@@ -8,12 +8,12 @@ the middle stack of [README.md](README.md) §1: everything cluster-scoped
 that speaks the k8s API, consumed by `apps`.
 
 > **Status**: designed 2026-08-22. Declared: Cilium (§2: the datapath,
-> the Gateway API definitions and class, the pools and the baseline),
-> the sealed-secrets controller, cert-manager's chart, CNPG and its
-> Barman Cloud plugin, VolSync, NFD and the Intel GPU plugin,
-> local-path-provisioner and reloader. Not yet implemented: the
-> Gateways, BGP, cert-manager's issuer and certificates, and the rest
-> of §1: monitoring, with metrics-server.
+> the Gateway API definitions and class, the Gateways, the pools, the
+> baseline and the BGP session), the sealed-secrets controller,
+> cert-manager with its issuer and certificates, CNPG and its Barman
+> Cloud plugin, VolSync, NFD and the Intel GPU plugin,
+> local-path-provisioner and reloader. Not yet implemented: the rest of
+> §1: monitoring, with metrics-server.
 
 ## 0. Scope and rules
 
@@ -305,7 +305,10 @@ All decided behavior from architecture.md §3, expressed as config:
     control-group mount; and kube-proxy replacement on, reaching the API
     server through KubePrism (`k8sServiceHost: localhost`,
     `k8sServicePort: 7445` — mandatory, there is no kube-proxy to fall
-    back on). What the design adds: dual-stack with IPv4 primary; tunnel
+    back on). What the design adds: `NET_BIND_SERVICE` after the
+    guides' capability list, which the BGP session's instance needs to
+    listen on 179 (Cilium's manual, `bgp-control-plane-configuration.rst`
+    L47–52 at v1.20.1); dual-stack with IPv4 primary; tunnel
     routing over `vxlan`, whose packets are addressed node to node and so
     ride KubeSpan; the MTU of KubeSpan's link, `conventions.KUBESPAN_MTU`,
     stated rather than detected, because the agent takes the tunnel's
@@ -376,14 +379,43 @@ All decided behavior from architecture.md §3, expressed as config:
     (AS 65000) over both families, advertising `lan` VIPs as
     /32 + /128. The UDM side is physical's device-files provider; the
     session only establishes once both stacks are up — acceptable,
-    nothing LAN-facing exists before apps deploy.
+    nothing LAN-facing exists before apps deploy. As declared
+    (`components/cilium/bgp.py`): the cluster configuration selects
+    every node without the `node-role.kubernetes.io/control-plane`
+    label Talos puts on each control plane node, which is the homelab
+    worker alone, since every other node is control plane; its one
+    instance is `conventions.CLUSTER_ASN` and listens on the port the
+    worker's firewall opens to the gateway, and its one peer is the
+    gateway's leg on the cluster VLAN, the worker's default route, at
+    `conventions.UDM_ASN` — the two ASNs the gateway's FRR
+    configuration names from the same constants. Both families are
+    negotiated on the one IPv4 session, as the gateway's configuration
+    has it, and that is all the IPv6 half is today: the `/128`s carry
+    the session's IPv4 address as an IPv4-mapped next hop, which the
+    UDM's kernel does not install, so the UDM routes the `lan` pool's
+    IPv4 addresses and not its IPv6 ones. Cilium has no next-hop
+    setting; what gives the `/128`s a usable one is a decision on the
+    UDM's side, tracked as
+    [Aetf/kluster-ops#719](https://github.com/Aetf/kluster-ops/issues/719).
+    The agent can bind the instance's port, which is below 1024,
+    because the design grants it `NET_BIND_SERVICE` (the datapath
+    bullet above). The advertisement selects the Services carrying the `lan` pool label,
+    so the Services the `lan` pool hands addresses to are the ones
+    announced. The session is a component of its own beside the rest
+    of Cilium, installed behind the sealing controller, because its
+    password is a sealed value.
     **Session hardening (2026-08-23, architecture.md §4.1)**: an MD5
     session password on both ends — BGPv2's `authSecretRef` on the
     Cilium side; **placement fact on top of §1.1**: the referenced
     Secret must live in the namespace named by
     `--bgp-secrets-namespace` (kube-system by default), so its
-    SealedSecret is sealed for that namespace — and a device
-    secret on the UDM side. The UDM's
+    SealedSecret is sealed for that namespace, which the chart's values
+    state from the same convention rather than inherit — and a device
+    secret on the UDM side. While the password is absent from the
+    stack's configuration (rfc-007 §3.2), no SealedSecret is
+    declared and the session is declared all the same: Cilium then
+    opens it with an empty password, which the UDM refuses, so it stays
+    down until the operator's sealing sitting adds the value. The UDM's
     FRR config applies an inbound **prefix-list** (`192.168.71.0/24
     le 32` + the ULA /64 `le 128`, deny the rest) plus a
     `maximum-prefix` cap — without the filter, a compromised worker

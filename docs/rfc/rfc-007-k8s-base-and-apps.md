@@ -62,6 +62,12 @@
     first; the policy imposes default-deny on ingress alone, restricting
     egress being the component's. `route`, the census's rows and the
     echo server wait for rfc-008 slices 3 and 4.
+*   **Updated:** 2026-11-11 — §3.1: an entry of the closed list is one
+    component or one per separately installed part; the BGP session is a
+    component beside Cilium's, behind the sealing controller. The live
+    criterion of §14 slice 10 is a route in the gateway's kernel table
+    for a VIP of each family, the IPv6 half waiting on
+    [Aetf/kluster-ops#719](https://github.com/Aetf/kluster-ops/issues/719).
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
@@ -210,10 +216,15 @@ builds its providers, and calls one component per unit.
     kubeconfig, and, from the `physical` stack's outputs, the addresses
     the `internet` pool is made of (§4.4). It builds one Kubernetes
     provider from the kubeconfig and disables the package's default
-    provider in its stack file. It calls one component per entry of the
-    closed list, in cluster-infra.md §1's order, and the order is also
-    the parent and `depends_on` chain that lets one `up` converge from an
-    empty cluster.
+    provider in its stack file. It calls a component for each thing the
+    closed list installs, in cluster-infra.md §1's order: an entry is one
+    component, or one per part where its parts are installed separately.
+    Cilium's BGP session (§4.6) is such a part — its password is a
+    sealed value, and the sealing controller is installed behind the
+    whole of Cilium's component, so as a child of that component the
+    session would wait on a controller that waits on it. The order is
+    also the parent and `depends_on` chain that lets one `up` converge
+    from an empty cluster.
 *   **`apps`** reads the kubeconfig the same way, and `dns`'s zone
     identifiers for the public records it declares beside each
     application ([dns.md](../declarative/dns.md) §1). It builds the
@@ -1807,8 +1818,13 @@ password absent; live once it is sealed in. **After** slice 9.
     the worker alone (select every node); the peer carries the password
     reference and both families (drop one); the advertisement selects
     the `lan` pool label (select every Service).
-*   **Live**: the session is established on both families, and the
-    gateway rejects a bogus prefix (physical.md §6).
+*   **Live**: a route in the gateway's kernel table for a VIP of each
+    family, and the gateway rejects a bogus prefix (physical.md §6). The
+    IPv6 half waits on
+    [Aetf/kluster-ops#719](https://github.com/Aetf/kluster-ops/issues/719):
+    both families are negotiated on the one IPv4 session, and the IPv6
+    host routes carry its IPv4 address as an IPv4-mapped next hop, which
+    the gateway's kernel does not install.
 
 **Slice 11: monitoring.** Before M1's bring-up, with the webhook's
 address absent; live once it is sealed in. **After** slice 10.

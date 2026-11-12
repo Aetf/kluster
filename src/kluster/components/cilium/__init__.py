@@ -15,7 +15,9 @@ definition is the asset's, so it waits for that and for its configuration,
 and the Gateways (`gateways`), which are the asset's kind too, wait for the
 class. Their certificates are cert-manager's to issue
 (`components.certificates`), into the Secrets the Gateways name. The BGP
-session is a later piece of the same component (rfc-007 §14).
+session to the gateway (`bgp`) is a component of its own beside this one,
+because its password is a sealed value, which waits for the sealing
+controller, and that controller is installed behind this component.
 """
 
 from __future__ import annotations
@@ -30,18 +32,21 @@ import pulumi_crds as crds
 import pulumi_kubernetes as k8s
 
 from kluster import conventions
+from kluster.components.cilium.bgp import BgpSession
 from kluster.components.cilium.gateways import Gateways, InternetGatewayAddresses
 from kluster.lib.k8s import helm_chart, lb_pool_labels
 from kluster.lib.versions import ChartPin
 from putils import Component, async_output, resolve
 
 __all__ = (
+    'AGENT_ADDED_CAPABILITIES',
     'AGENT_CAPABILITIES',
     'CLEAN_STATE_CAPABILITIES',
     'GATEWAY_CLASS',
     'HOST_DNS_ADDRESS',
     'METADATA_RANGE',
     'NAMESPACE',
+    'BgpSession',
     'Cilium',
     'Gateways',
     'InternetPoolMembers',
@@ -78,6 +83,15 @@ AGENT_CAPABILITIES = (
     'SETGID',
     'SETUID',
 )
+
+#: What the design adds to the agent's capabilities: binding a port below 1024,
+#: which the BGP session's instance listens on (`bgp`). Cilium's manual states
+#: the requirement and where to grant it, "Listening on the default BGP port
+#: (179) requires `CAP_NET_BIND_SERVICE`", through this list
+#: (`bgp-control-plane-configuration.rst` at v1.20.1, L47–52); Talos lowers no
+#: unprivileged port floor, so without it the instance's listener fails and the
+#: instance is never started.
+AGENT_ADDED_CAPABILITIES = ('NET_BIND_SERVICE',)
 
 #: The state-cleaning init container's capabilities, as both guides list them.
 CLEAN_STATE_CAPABILITIES = ('NET_ADMIN', 'SYS_ADMIN', 'SYS_RESOURCE')
@@ -117,7 +131,8 @@ def chart_values() -> dict[str, Any]:
         'k8sServicePort': conventions.KUBEPRISM_PORT,
         'securityContext': {
             'capabilities': {
-                'ciliumAgent': list(AGENT_CAPABILITIES),
+                # The guides' list, and after it what the design adds.
+                'ciliumAgent': [*AGENT_CAPABILITIES, *AGENT_ADDED_CAPABILITIES],
                 'cleanCiliumState': list(CLEAN_STATE_CAPABILITIES),
             },
         },
@@ -139,7 +154,10 @@ def chart_values() -> dict[str, Any]:
             'gatewayClass': {'create': 'false'},
             'secretsNamespace': {'sync': True},
         },
-        'bgpControlPlane': {'enabled': True},
+        # The namespace the agent reads the BGP session's password from,
+        # stated rather than inherited, so that a moved default cannot leave
+        # it apart from where the password is sealed to.
+        'bgpControlPlane': {'enabled': True, 'secretsNamespace': {'name': conventions.BGP_SECRETS_NAMESPACE}},
         # Off, so a `Local` Service's health check port gets no frontend on
         # its load-balancer address, which on the `internet` pool is a node's
         # own address, ahead of the node firewall (cluster-infra.md §2).

@@ -3,13 +3,17 @@
 The program runs whole, against a `physical` that has published its addresses
 (`k8s_base_installation`), and the cases read what it handed the provider: the
 chart's values, the Gateway API definitions, the Gateways' class and its
-configuration, the two address pools and the baseline policy (rfc-007 §4,
-§5.1).
+configuration, the two address pools, the baseline policy and the BGP session
+to the gateway (rfc-007 §4, §5.1). The session's cases run it twice more, with
+the session's password sealed in and as the stack stands until it is
+(physical/bring-up.md §1).
 
 Literals written here are the upstream projects' contracts: the values both
-guides for Cilium on Talos prescribe, KubePrism's port, and the addresses
-Talos and the cloud fix. What the program derives from a convention is held to
-that convention.
+guides for Cilium on Talos prescribe, KubePrism's port, the addresses Talos
+and the cloud fix, the label Talos puts on a control plane node, and the
+families and the password's key as Cilium spells them. What the program
+derives from a convention is held to that convention, and where the session
+has a second end, to what the gateway's stack declares of it.
 
 Every run is under the parent backstop `kluster.main` installs, so a resource
 the component leaves unparented fails it here as it would in `pulumi
@@ -19,6 +23,9 @@ preview`.
 from __future__ import annotations
 
 import ipaddress
+import json
+import re
+from collections.abc import Mapping
 from typing import Any, cast
 
 import pulumi
@@ -29,16 +36,21 @@ from k8s_base_installation import (
     GATEWAY_API_DEFINITIONS,
     OUTPUTS,
     PUBLISHED,
+    VERSIONS_CONFIG,
+    Autonaming,
     Physical,
     Run,
     applied,
     declare,
+    release_assets,
 )
-from mock_monitor import Declaration
+from mock_monitor import Declaration, declaring, run_under_backstop
 from pulumi.output import UNKNOWN
 
 from kluster import conventions
 from kluster.components import talos
+from kluster.components.gateway import routing
+from kluster.lib.k8s import KUBECONFIG_KEY
 from kluster.lib.stack_addresses import Held
 from kluster.lib.versions import versions
 
@@ -48,10 +60,15 @@ CLASS_CONFIG = 'crds:cilium.io/v2alpha1:CiliumGatewayClassConfig'
 GATEWAY_CLASS = 'crds:gateway.networking.k8s.io/v1:GatewayClass'
 POOL = 'crds:cilium.io/v2:CiliumLoadBalancerIPPool'
 CLUSTERWIDE_POLICY = 'crds:cilium.io/v2:CiliumClusterwideNetworkPolicy'
+BGP_CLUSTER = 'crds:cilium.io/v2:CiliumBGPClusterConfig'
+BGP_PEER = 'crds:cilium.io/v2:CiliumBGPPeerConfig'
+BGP_ADVERTISEMENT = 'crds:cilium.io/v2:CiliumBGPAdvertisement'
+GATEWAY = 'crds:gateway.networking.k8s.io/v1:Gateway'
+SEALED_SECRET = 'crds:bitnami.com/v1alpha1:SealedSecret'
 
 #: The kinds whose definitions Cilium's operator registers once elected,
 #: rather than the chart or the Gateway API's release asset carrying them.
-OPERATOR_KINDS = (CLASS_CONFIG, POOL, CLUSTERWIDE_POLICY)
+OPERATOR_KINDS = (CLASS_CONFIG, POOL, CLUSTERWIDE_POLICY, BGP_CLUSTER, BGP_PEER, BGP_ADVERTISEMENT)
 
 #: The agent's capabilities and the state-cleaning container's, exactly as
 #: Cilium's guide for Talos writes them (`k8s-install-talos-linux.rst` at
@@ -107,14 +124,18 @@ def test_the_chart_is_installed_from_its_pin_after_the_definitions(applied: Run)
 
 
 def test_the_values_both_guides_prescribe_are_set_as_written(applied: Run) -> None:
-    """Kubernetes IPAM, the capability lists without `SYS_MODULE`, and Talos' own control groups."""
+    """Kubernetes IPAM, the capability lists without `SYS_MODULE`, and Talos' own control groups.
+
+    The agent's list is the guides' as they write it, followed by what the
+    design adds to it, none of which is `SYS_MODULE`.
+    """
     values = applied.values('cilium')
+    capabilities = values['securityContext']['capabilities']
 
     assert values['ipam'] == {'mode': 'kubernetes'}
-    assert values['securityContext']['capabilities'] == {
-        'ciliumAgent': GUIDE_AGENT_CAPABILITIES,
-        'cleanCiliumState': GUIDE_CLEAN_STATE_CAPABILITIES,
-    }
+    assert capabilities['ciliumAgent'][: len(GUIDE_AGENT_CAPABILITIES)] == GUIDE_AGENT_CAPABILITIES
+    assert 'SYS_MODULE' not in capabilities['ciliumAgent']
+    assert capabilities['cleanCiliumState'] == GUIDE_CLEAN_STATE_CAPABILITIES
     assert values['cgroup'] == {'autoMount': {'enabled': False}, 'hostRoot': '/sys/fs/cgroup'}
 
 
@@ -389,3 +410,257 @@ async def test_an_output_that_is_not_an_address_stops_the_run_by_name(
     assert repr(output) in str(run.refused)
     assert (run.refused.output, run.refused.held) == (output, held)
     assert conventions.POOL_INTERNET not in {it.inputs['metadata']['name'] for it in run.monitor.of_type(POOL)}
+
+
+# -- The BGP session to the gateway --------------------------------------------
+
+PASSWORD = conventions.sealed.BGP_PASSWORD
+
+#: The ciphertext the sealed run's configuration holds for the session's
+#: password.
+SEALED_PASSWORD = 'AgB-the-sealed-bgp-password'
+
+#: The label Talos puts on every control plane node (`node_label_spec.go` at
+#: v1.13.9, L83–85), and the key Cilium reads a BGP password under
+#: (`bgp-control-plane-configuration.rst` at v1.20.1, "MD5 Password").
+TALOS_CONTROL_PLANE_LABEL = 'node-role.kubernetes.io/control-plane'
+CILIUM_PASSWORD_KEY = 'password'
+
+#: The lowest port the kernel lets a process bind without
+#: `CAP_NET_BIND_SERVICE` (`net.ipv4.ip_unprivileged_port_start`'s default),
+#: which Talos leaves as it is.
+UNPRIVILEGED_PORT_FLOOR = 1024
+
+
+async def _declared(*, sealed: dict[str, object] | None) -> tuple[Run, list[str]]:
+    """The whole program with `sealed` as its sealed values, and every warning it logged."""
+    from kluster.stacks import k8s_base
+
+    config = {f'kluster:{KUBECONFIG_KEY}': 'a-fake-kubeconfig-that-reaches-no-cluster'}
+    if sealed is not None:
+        config[f'kluster:{conventions.sealed.CONFIG_KEY}'] = json.dumps(sealed)
+    pulumi.runtime.set_all_config(config | VERSIONS_CONFIG, secret_keys=[f'kluster:{KUBECONFIG_KEY}'])
+    monitor = await run_under_backstop(Autonaming(), stack=conventions.STACK_NAMES.k8s_base)
+    warned: list[str] = []
+
+    def warn(message: str, *_: object, **__: object) -> None:
+        warned.append(message)
+
+    with release_assets() as fetched, pytest.MonkeyPatch.context() as patch:
+        patch.setattr(pulumi.log, 'warn', warn)
+        async with declaring():
+            await k8s_base.main()
+    return Run(monitor, fetched), warned
+
+
+@pytest_asyncio.fixture(scope='module', loop_scope='module', name='unsealed')
+async def unsealed_fixture() -> tuple[Run, list[str]]:
+    """The stack as it stands before the session's password is sealed in."""
+    return await _declared(sealed=None)
+
+
+@pytest_asyncio.fixture(scope='module', loop_scope='module', name='sealed')
+async def sealed_fixture() -> Run:
+    """The session's password sealed in."""
+    run, _ = await _declared(sealed={PASSWORD.name: dict.fromkeys(PASSWORD.keys, SEALED_PASSWORD)})
+    return run
+
+
+def _one(run: Run, kind: str) -> dict[str, Any]:
+    (declared,) = [it.inputs for it in run.monitor.of_type(kind)]
+    return declared
+
+
+def _matches(selector: Mapping[str, Any], labels: Mapping[str, str]) -> bool:
+    """Whether a present label selector matches `labels`, as Kubernetes reads one: every requirement holds."""
+    match_labels = cast('dict[str, str]', selector.get('matchLabels', {}))
+    expressions = cast('list[dict[str, Any]]', selector.get('matchExpressions', []))
+    return all(labels.get(key) == value for key, value in match_labels.items()) and all(
+        _holds(expression, labels) for expression in expressions
+    )
+
+
+def _holds(expression: Mapping[str, Any], labels: Mapping[str, str]) -> bool:
+    key = cast('str', expression['key'])
+    values = cast('list[str]', expression.get('values', []))
+    match expression['operator']:
+        case 'In':
+            return key in labels and labels[key] in values
+        case 'NotIn':
+            return key not in labels or labels[key] not in values
+        case 'Exists':
+            return key in labels
+        case 'DoesNotExist':
+            return key not in labels
+        case operator:
+            raise AssertionError(f'no such selector operator: {operator}')
+
+
+def test_the_cluster_configuration_selects_the_worker_alone(applied: Run) -> None:
+    """The one node that runs a BGP instance is the worker; no control plane node does.
+
+    Each node carries the label Talos puts on a control plane node, or does
+    not. An absent selector applies the configuration to every node.
+    """
+    nodes: dict[str, dict[str, str]] = {
+        **{node: {TALOS_CONTROL_PLANE_LABEL: ''} for node in conventions.CLOUD_NODES},
+        conventions.HOMELAB_NODE: {},
+    }
+    selector = _one(applied, BGP_CLUSTER)['spec'].get('nodeSelector')
+
+    selected = {node for node, labels in nodes.items() if selector is None or _matches(selector, labels)}
+
+    assert selected == {conventions.HOMELAB_NODE}
+
+
+def test_the_session_is_the_one_the_gateways_routing_daemon_names(applied: Run) -> None:
+    """The two ends agree: each side's ASN is the one the other expects, at the worker's own default route.
+
+    Read off the configuration the gateway's stack renders for its routing
+    daemon, `router bgp <its ASN>` and `neighbor <worker> remote-as <the
+    worker's>`, so the session is external and both ends say so.
+    """
+    gateway = routing.frr_config(neighbor=conventions.HOMELAB_NODE_IPV4, password='not-the-password')
+    gateway_asn = re.search(r'^router bgp (\d+)$', gateway, re.M)
+    worker_asn = re.search(r'^ neighbor \S+ remote-as (\d+)$', gateway, re.M)
+    assert gateway_asn is not None
+    assert worker_asn is not None
+    (instance,) = _one(applied, BGP_CLUSTER)['spec']['bgpInstances']
+    (peer,) = instance['peers']
+
+    assert instance['localASN'] == int(worker_asn[1])
+    assert peer['peerASN'] == int(gateway_asn[1])
+    assert instance['localASN'] != peer['peerASN']
+    assert peer['peerAddress'] == str(talos.STATIC_ADDRESSES[conventions.HOMELAB_NODE].gateway)
+    assert peer['peerConfigRef'] == {'name': _one(applied, BGP_PEER)['metadata']['name']}
+
+
+def test_the_cluster_configuration_waits_for_the_peer_configuration_it_names(applied: Run) -> None:
+    """The instance's peer names its configuration, which is declared first."""
+    (cluster,) = applied.monitor.of_type(BGP_CLUSTER)
+    (instance,) = cluster.inputs['spec']['bgpInstances']
+    (peer,) = instance['peers']
+    (named,) = [
+        it for it in applied.monitor.of_type(BGP_PEER) if it.inputs['metadata']['name'] == peer['peerConfigRef']['name']
+    ]
+
+    assert applied.urn(BGP_PEER, named.name) in applied.monitor.depends_on(cluster.name, cluster.typ)
+
+
+def test_the_worker_listens_on_the_port_its_firewall_opens_to_the_gateway(applied: Run) -> None:
+    """A session the gateway opens is answered: the instance listens where the worker's firewall admits the gateway."""
+    (instance,) = _one(applied, BGP_CLUSTER)['spec']['bgpInstances']
+    (peer,) = instance['peers']
+    documents = [
+        json.loads(document)
+        for document in talos.patches(installer='an-installer', role='worker', bgp_peer=f'{peer["peerAddress"]}/32')
+    ]
+
+    opened = [
+        document
+        for document in documents
+        if document.get('kind') == 'NetworkRuleConfig'
+        and document['portSelector'] == {'ports': [instance['localPort']], 'protocol': 'tcp'}
+    ]
+
+    assert [rule['ingress'] for rule in opened] == [[{'subnet': f'{peer["peerAddress"]}/32'}]]
+
+
+def test_an_instance_listening_below_1024_has_the_agent_allowed_to_bind_it(applied: Run) -> None:
+    """A BGP instance listens from inside the agent, which binds a port below the kernel's floor only with the capability.
+
+    Talos leaves the unprivileged port floor at the kernel's 1024, and the
+    agent runs with every capability dropped but the chart's list, so an
+    instance on a lower port fails to start, and Cilium's manual names the
+    capability that lets it (`bgp-control-plane-configuration.rst` at
+    v1.20.1, L47–52).
+    """
+    privileged = [
+        instance['localPort']
+        for config in applied.monitor.of_type(BGP_CLUSTER)
+        for instance in config.inputs['spec']['bgpInstances']
+        if instance.get('localPort') is not None and instance['localPort'] < UNPRIVILEGED_PORT_FLOOR
+    ]
+    capabilities = applied.values('cilium')['securityContext']['capabilities']['ciliumAgent']
+
+    assert not privileged or 'NET_BIND_SERVICE' in capabilities, privileged
+
+
+def test_the_peer_carries_the_password_reference_and_both_families(sealed: Run) -> None:
+    """The password's Secret is the one the sealed value becomes, where the agent reads it; both families advertise.
+
+    The Secret is named and placed by the sealed value's row, and the agent
+    reads BGP secrets from the namespace the chart's values name, so the two
+    have to be the same namespace. Each family selects the advertisement.
+    """
+    spec = _one(sealed, BGP_PEER)['spec']
+    (secret,) = [
+        it.inputs for it in sealed.monitor.of_type(SEALED_SECRET) if it.inputs['metadata']['name'] == PASSWORD.name
+    ]
+    advertisement = _one(sealed, BGP_ADVERTISEMENT)['metadata']['labels']
+
+    assert spec['authSecretRef'] == secret['metadata']['name']
+    assert secret['metadata']['namespace'] == sealed.values('cilium')['bgpControlPlane']['secretsNamespace']['name']
+    assert secret['spec']['encryptedData'] == {CILIUM_PASSWORD_KEY: SEALED_PASSWORD}
+    assert sorted((family['afi'], family['safi']) for family in spec['families']) == [
+        ('ipv4', 'unicast'),
+        ('ipv6', 'unicast'),
+    ]
+    for family in spec['families']:
+        assert _matches(family['advertisements'], advertisement), family
+
+
+def test_the_advertisement_selects_the_lan_pools_services(applied: Run) -> None:
+    """The load-balancer address of a Service is announced exactly when the `lan` pool hands it one.
+
+    Held against the Services the Gateways make, which carry their
+    infrastructure labels: `lan-gw` and `media-gw` are announced, `internet-gw`
+    is not. An absent selector announces nothing.
+    """
+    (advertisement,) = _one(applied, BGP_ADVERTISEMENT)['spec']['advertisements']
+    lan_pool = _pool(applied, conventions.LAN_POOL.name)['serviceSelector']
+    services = {
+        it.inputs['metadata']['name']: it.inputs['spec']['infrastructure']['labels']
+        for it in applied.monitor.of_type(GATEWAY)
+    }
+    selector = advertisement.get('selector')
+
+    announced = {name for name, labels in services.items() if selector is not None and _matches(selector, labels)}
+
+    assert (advertisement['advertisementType'], advertisement['service']['addresses']) == (
+        'Service',
+        ['LoadBalancerIP'],
+    )
+    assert announced == {name for name, labels in services.items() if _matches(lan_pool, labels)}
+    assert announced
+    assert announced != set(services)
+
+
+def test_an_absent_password_declares_no_sealed_secret_warns_naming_it_and_leaves_the_session_declared(
+    unsealed: tuple[Run, list[str]],
+) -> None:
+    """Until the password is sealed in, nothing is declared for it, the run says so, and the session waits for it."""
+    run, warned = unsealed
+
+    assert [it for it in run.monitor.of_type(SEALED_SECRET) if it.inputs['metadata']['name'] == PASSWORD.name] == []
+    assert [message for message in warned if repr(PASSWORD.name) in message]
+    assert _one(run, BGP_PEER)['spec']['authSecretRef'] == PASSWORD.name
+    assert run.monitor.of_type(BGP_CLUSTER)
+
+
+def test_the_password_waits_for_the_sealing_controller(sealed: Run) -> None:
+    """A SealedSecret is an instance of the sealing controller's chart's definition."""
+    (secret,) = [it for it in sealed.monitor.of_type(SEALED_SECRET) if it.inputs['metadata']['name'] == PASSWORD.name]
+
+    assert sealed.urn(CHART, 'sealed-secrets') in sealed.monitor.depends_on(secret.name, secret.typ)
+
+
+def test_every_child_of_the_sealed_session_carries_its_components_name(sealed: Run) -> None:
+    """The password's SealedSecret is named by its row, and that name carries the session's."""
+    session = {
+        urn: component
+        for urn, component in sealed.monitor.children_not_named_for_their_component().items()
+        if 'BgpSession' in urn
+    }
+
+    assert session == {}
