@@ -40,7 +40,7 @@ import inspect
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from ipaddress import IPv4Address, IPv4Interface, IPv6Address, ip_address, ip_network
-from typing import Any
+from typing import Any, Literal
 
 import pulumi
 import pulumi_unifi as unifi_provider
@@ -348,9 +348,10 @@ async def test_the_cluster_zone_talks_to_the_home_in_both_directions() -> None:
 async def test_the_iot_vlan_is_carved_out_of_the_way_into_the_cluster() -> None:
     """The node subnet is what the LAN's least-trusted population loses.
 
-    apid, the kubelet and the BGP session live on it, and the one recorded
-    IoT-originated dependency — a television reaching the media VIP — targets
-    the pool instead, so this drop severs nothing known. Sourced from the
+    apid, the kubelet and the BGP session live on it, and every recorded
+    IoT-originated dependency — a television reaching the media VIP, Home
+    Assistant reaching the pool — targets the pool instead, so this drop
+    severs nothing known. Sourced from the
     VLAN and not from the internal zone at large, or it would take the
     operator's own machines with it.
     """
@@ -665,6 +666,64 @@ async def test_the_iot_vlan_opens_nothing_into_the_cluster_past_the_replies(mock
 
 
 @pytest.mark.asyncio
+async def test_home_assistant_reaches_the_whole_pool_ahead_of_the_iot_drops(mocks: Controller) -> None:
+    """Its integrations reach every VIP, raw or proxied, while the rest of its VLAN meets the drop.
+
+    The allow is sourced from Home Assistant's own address and nothing else,
+    so the VLAN it shares with untrusted devices is not widened with it; and
+    it ranks ahead of both drops, since a drop ranked first answers its
+    packets before the allow is reached. The address is a bare literal: the
+    source's `ips` holds single addresses, as the destination's does.
+    """
+    async with declaring():
+        build()
+
+    ranked = _ranked(mocks)[zone_id(unifi.ZONE_INTERNAL), zone_id(unifi.ZONE_EXTERNAL)]
+    drops = [rank for rank, inputs in enumerate(ranked) if inputs['action'] == 'BLOCK']
+    assert drops
+    home_assistant = conventions.HOME_ASSISTANT
+    for family, address, pool in (
+        ('IPV4', str(home_assistant.v4), 'pool-v4'),
+        ('IPV6', str(home_assistant.v6), 'pool-v6'),
+    ):
+        # The bare address: the provider's plan-time validator refuses a prefix in `ips`.
+        allows = [
+            rank
+            for rank, inputs in enumerate(ranked)
+            if inputs['action'] == 'ALLOW' and inputs['source'].get('ips') == [address]
+        ]
+        assert len(allows) == 1, family
+        inputs = ranked[allows[0]]
+        assert allows[0] < min(drops), family
+        assert inputs['ipVersion'] == family
+        assert inputs['protocol'] == 'all'
+        assert not inputs['source'].get('ipGroupId')
+        assert inputs['destination'].get('ipGroupId') == f'{NAME}-{pool}_id'
+        assert not inputs['destination'].get('port')
+
+
+def test_a_policy_naming_one_family_is_of_that_family_alone() -> None:
+    """A group or a literal holds one family, so on a policy of the other, or of both, it matches nothing.
+
+    Such a policy reads as narrowed to that address and narrows nothing in
+    the family it does not hold, which for a drop is a hole and for an allow
+    a rule that answers nothing.
+    """
+    home_assistant = conventions.HOME_ASSISTANT
+    _ = unifi.Policy('fits', 'fits', 'fits', 'ALLOW', 'IPV4', 'all', source=home_assistant.v4)
+    mismatched: list[tuple[Literal['IPV4', 'IPV6', 'BOTH'], unifi.AddressGroup | IPv4Address]] = [
+        ('IPV6', home_assistant.v4),
+        ('BOTH', home_assistant.v4),
+        ('IPV4', unifi.POOL_V6),
+    ]
+    for version, side in mismatched:
+        with pytest.raises(ValueError, match='names an IPv'):
+            _ = unifi.Policy('x', 'x', 'x', 'ALLOW', version, 'all', source=side)
+        with pytest.raises(ValueError, match='names an IPv'):
+            _ = unifi.Policy('x', 'x', 'x', 'ALLOW', version, 'all', destination=side)
+
+
+@pytest.mark.asyncio
 async def test_the_pool_rules_are_declared_on_the_uplink_pair() -> None:
     """The pool sits in no zone ipset, so its traffic is classified as uplink.
 
@@ -710,6 +769,13 @@ async def test_both_halves_of_the_peer_flow_name_the_same_port_and_host() -> Non
     assert fwd_port is not None
     assert pinhole.port is not None
     assert int(dst_port) == int(fwd_port) == int(pinhole.port)
+
+    # The port and transports the census row states, on both halves.
+    (peer,) = (row for row in conventions.routes.ports() if isinstance(row.internet, conventions.routes.SiteForward))
+    assert int(dst_port) == peer.port
+    protocol = {'tcp+udp': 'tcp_udp', 'tcp': 'tcp', 'udp': 'udp'}[peer.transports.value]
+    assert await firewall.policies['peer-v6'].protocol.future() == protocol
+    assert await firewall.forwards['peer-v4'].protocol.future() == protocol
 
     # The same host, in the address each family reaches it at: the worker's
     # global address on one side, its LAN address on the other.

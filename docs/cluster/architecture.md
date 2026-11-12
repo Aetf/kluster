@@ -210,14 +210,15 @@ Internet ingress is two layers, both free:
     listeners are single-family, so each public port (80, 443, syncthing
     22000/tcp+udp, …) has one listener per family, each with a backend
     set of its own family holding the three cloud nodes — by instance on
-    IPv4, by GUA on IPv6. The public ports are the rows of the public
-    port census the NLB fronts (`conventions.PUBLIC_PORT_CENSUS`), and
-    the `physical` stack declares each one's listeners from its row,
-    because `apps` holds no OCI credential (§5.1, credentials.md §3):
-    named after the
-    row, every backend set preserving the source and checking the
-    row's port over TCP, and a port served on both transports carried by
-    one `TCP_AND_UDP` listener. A row the dedicated VIP fronts has none.
+    IPv4, by GUA on IPv6. The public ports beside the management ones
+    are two kinds: the Gateways' own (`conventions.GATEWAY_PORTS`) and each raw
+    port of the exposure census whose front is the balancer
+    (`conventions.routes.Balancer`), and the `physical` stack declares
+    each one's listeners, because `apps` holds no OCI credential (§5.1,
+    credentials.md §3): named after the port, every backend set
+    preserving the source and checking the port over TCP, and a port
+    served on both transports carried by one `TCP_AND_UDP` listener. A
+    raw port at the dedicated VIP has none.
 2.  **Cilium terminates on the node primary addresses — the on-the-wire
     forms.** OCI 1:1-NATs each public IPv4 to the VNIC's primary
     *private* IP (the interface never carries the public address), so
@@ -242,14 +243,15 @@ Internet ingress is two layers, both free:
     pod on a cloud node resolving one of the cluster's public names that
     bypass Cloudflare's proxy would reach for the NLB and fail. So the
     `internet` pool holds the NLB's public IPv4 and IPv6, and **a
-    Service whose census row the NLB fronts asks for them beside the
+    Service whose port the NLB fronts asks for them beside the
     node addresses**: Cilium then installs them as frontends on every
     node, and such a connection is answered on the caller's own node —
     handed to that node's Envoy, or translated to a backend pod — and
     never reaches the NLB. They match no arriving traffic, since the NLB
     rewrites the destination to the backend's address and its
     transparent mode stays off; they exist for connections that start in
-    the cluster, and only on the census ports (6443 and 50000 stay on
+    the cluster, and only on the Gateways' and the raw ports (6443 and
+    50000 stay on
     the cloud path, which no workload takes and KubePrism does without).
     On a port those frontends do not cover, the worker, which is no NLB
     backend, reaches the NLB as any internet client does. Design and
@@ -374,12 +376,28 @@ both IP families (cluster-infra.md §2).
     object will ever exist for it. One tightening ships with the
     cluster rather than waiting (decided 2026-08-23, amended
     2026-08-24): **IoT-VLAN → pool default drop with one enumerated
-    allow — the `media-gw` VIP, port 443** (smart TVs/streamers
+    allow for the VLAN — the `media-gw` VIP, port 443** (smart TVs/streamers
     legitimately consume jellyfin, an IoT-originated dependency the
     original census missed; the IoT-reachable app set is decided by
-    `media-gw` route attachment, not firewall edits). The `lan`
-    gateway's admin UIs (immich, qbittorrent, grafana) stay
-    unreachable from IoT, the LAN's least-trusted population.
+    `media-gw` route attachment, not firewall edits). `media-gw`
+    answers the names whose rows set `media` (declarative/dns.md §5),
+    `haos` among them, so Home Assistant's own name answers on every
+    home VLAN, the IoT VLAN included. The `lan` gateway's admin UIs
+    (immich, qbittorrent, grafana) stay unreachable from the rest of
+    IoT, the LAN's least-trusted population.
+    **Home Assistant reaches every VIP, by its own address.** Its
+    integrations are how the home automates what the cluster's
+    applications do, so its reach is a requirement of the design and
+    not a cost of any one row: ahead of the IoT drop, the firewall
+    allows Home Assistant's own address, in each family, to the whole
+    `lan` pool on every protocol (physical/gateway.md §4.2 rule 1),
+    from `conventions.site.HOME_ASSISTANT`. A reservation keyed on its
+    MAC holds the IPv4 address; its ULA is a stable-privacy address, which
+    a reinstall of Home Assistant moves (physical/gateway.md §4.2). It covers `lan`, `media` and any raw VIP, so
+    a row on a home Gateway is reachable from Home Assistant on the day
+    it lands, and no row names a client. A node's own address stays
+    behind the IoT drop of the inbound pair, since nothing answers a
+    client there.
     Declared via the unifi provider (§5.1). The complete
     firewall target state — full rules census and the deferred
     IoT→LAN tightening — is
@@ -517,8 +535,8 @@ belongs to — this section holds the cluster-level statements).
     by the BPF datapath in front of it, so those ports never enter
     machine config, while a Gateway listener's traffic goes up the host
     stack to Envoy and crosses the firewall, so machine config opens
-    each port of the public port census's rows the Gateways answer,
-    derived from the census (physical.md §2). What the datapath answers on a
+    each of the Gateways' ports, derived from `conventions.GATEWAY_PORTS`
+    (physical.md §2). What the datapath answers on a
     node's own address is internet-facing on a cloud node. That set is
     the declared `internet`-pool frontends and nothing else, which is
     why **no Service allocates a `NodePort`**
@@ -882,10 +900,10 @@ The entire stack is deployed via Pulumi using multiple providers:
     Talos ingress firewall is the filter (§4.1, declarative/physical.md
     §1).
     -   NLB listeners are derived from declarations, not hand-listed:
-        the management ports' and the public port census's, both
-        conventions, and both declared in the physical stack, because
-        `apps` holds no OCI credential (credentials.md §3). A service's
-        raw port is a census
+        the management ports, the Gateways' own and the exposure
+        census's raw ports at the balancer, all conventions, and all
+        declared in the physical stack, because `apps` holds no OCI
+        credential (credentials.md §3). A service's raw port is a census
         row before it is a Service in `apps` (declarative/physical.md
         §1).
     -   Guardrails (nodes.md §3.2): compartment quotas pinning creatable

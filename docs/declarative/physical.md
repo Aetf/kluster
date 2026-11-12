@@ -128,16 +128,18 @@ credential (`ci_zerotier_identity_physical`,
     for IPv6 (`kubernetes-ipv6`, `https-ipv6`), never by its number. An
     IPv4 backend names the instance; an IPv6 backend names the node's
     GUA, because an instance OCID stands for the primary private IPv4.
-    **The ports are two conventions, and every listener is declared
+    **The ports are three conventions, and every listener is declared
     here**, because `apps` holds no OCI credential (credentials.md §3,
     rfc-007 §5.3): each management port (`conventions.ManagementPorts`,
-    6443/50000), named by its field, and each row of the public port
-    census the NLB fronts (`conventions.PUBLIC_PORT_CENSUS`), named by
-    the row. A row the dedicated VIP fronts has none — its port is
-    answered at the VIP alone. Adding a public port is a census row and
-    a `physical` apply; the Service behind it is `public_port`'s in
-    `apps` (dns.md §5). Every backend set **preserves the source**
-    (`is_preserve_source`), the census's as the management ports': the
+    6443/50000) and each of the Gateways' ports
+    (`conventions.GatewayPorts`, 80/443), named by its field, and each
+    raw port of the exposure census whose front is the balancer
+    (`conventions.routes.Balancer`), named by the row. A raw port at the
+    dedicated node's address or through the site's forward has none — its
+    port is answered at that address alone. Adding a raw port at the
+    balancer is a census row and a `physical` apply; `apps` declares the
+    Service behind it (dns.md §5). Every backend set **preserves the source**
+    (`is_preserve_source`), the raw ports' as the management ports': the
     apiserver's audit log and Envoy's access log both record the
     client's address. Envoy keeps it under the `Cluster` policy every
     Service on the node addresses takes, because it takes the traffic on
@@ -147,9 +149,9 @@ credential (`ci_zerotier_identity_physical`,
     Every set checks its port over TCP; a row served on TCP and UDP is
     one `TCP_AND_UDP` listener, and a UDP-only row is refused until a
     row can say what a UDP check sends. The row names and the
-    management fields are disjoint, and twice their count fits the
-    balancer's fifty listeners and fifty backend sets — invariants of
-    the census, held by its tests.
+    management and Gateway port fields are disjoint, and twice their
+    count fits the balancer's fifty listeners and fifty backend sets —
+    invariants of the exposure census, held by its tests.
 -   **Buckets**: none on this provider. The installation's
     cluster-data bucket is the backup bucket, which lives on B2
     precisely because it must not share a provider with what it
@@ -239,9 +241,9 @@ machine_secrets
     an NLB listener) are open to anywhere. So is KubeSpan
     51820/**udp**: one of its peers, the homelab worker, comes from a
     home address that is dynamic, and WireGuard answers no packet not
-    keyed to a peer. So are the ports of the public port census's rows
-    the Gateways answer, on every transport the row names — 80/tcp and
-    443/tcp today — on every node (the Service ports item below). The
+    keyed to a peer. So are the Gateways' ports
+    (`conventions.GATEWAY_PORTS`), 80/tcp and 443/tcp, on every node (the
+    Service ports item below). The
     kubelet 10250/tcp is open to the cluster's own ranges alone (the VCN,
     the cluster VLAN and both pod ranges), and so is every other host
     port a pod calls (the next item). The
@@ -301,17 +303,17 @@ machine_secrets
     listener is different**: the datapath marks its packets for the
     node's Envoy and hands them up the host stack, where they cross the
     ingress chain like any traffic to the host netns, and only an
-    opening admits them. **The Gateways' openings are derived from the
-    public port census** (`conventions.PUBLIC_PORT_CENSUS`), from its
-    rows the Gateways answer, and never listed: each such row is opened
-    from anywhere, on every transport it names, on every node. On a
+    opening admits them. **The Gateways' openings are derived from
+    `conventions.GATEWAY_PORTS`**, the structure their listeners and the
+    balancer's take, and never listed: each port is opened from anywhere,
+    over TCP, on every node. On a
     cloud node those ports are the internet's by design, and nothing on
     the host binds them but through the proxy; on the worker, the site
     gateway forwards none of them (physical/gateway.md §4.2). The
     raw-Service half is verified both ways at bootstrap (§6); recorded
     fallback if BPF precedence fails on the chosen datapath mode: copy
-    the census's other rows — the ones a Service's pods answer, rarely
-    changing — into machine config the same way, accepting the
+    the exposure census's raw ports — the ones a Service's pods answer,
+    rarely changing — into machine config the same way, accepting the
     cross-stack cost only in that world.
 -   **Document kinds.** A patch is either a strategic merge into the
     `v1alpha1` document or a configuration document of its own kind,
@@ -655,9 +657,11 @@ a pointer (workloads.md §4). The census: the **cluster VLAN network
 object** (id 7, `192.168.70.0/24`) and the **firewall zone of its
 own** it is placed in — the isolation the shared server LAN could not
 offer (physical/gateway.md §4.2) — the IoT→lan-pool zone
-policy with its address groups (architecture.md §3.4 — the v4 CIDR
-group and the ULA group are separate objects, UniFi address groups
-being single-family), the **zone-matrix policies of the new
+policies with their address groups, Home Assistant's allow to the
+whole pool ahead of the IoT VLAN's drop among them (architecture.md
+§3.4 — the v4 group and the ULA group are separate objects, UniFi
+address groups being single-family; Home Assistant's allow names its
+address as a literal in each family), the **zone-matrix policies of the new
 zone** — cluster→Internal and Internal→cluster, with the IoT VLAN
 dropped ahead of the latter as a single-family pair and a return-only
 allow ahead of that drop, so a reply to what a node opens passes it,
@@ -670,7 +674,9 @@ the order sends the whole batch the controller requires and treats a
 custom policy of the pair that the census does not own as drift, since
 a pair the census orders is the census's whole, so a rule wanted there
 is a row of it whatever traffic it is about (physical/gateway.md §4.2) —
-the qbittorrent v6 pinhole — declared only once `workerGua` carries
+the qbittorrent v6 pinhole, on the port and transports of the exposure
+census's one row through the site's forward
+(`conventions.routes.SiteForward`) — declared only once `workerGua` carries
 the worker's SLAAC address, which no apply before the worker's first
 boot can supply (physical/gateway.md §4.2) — and its v4 peer-port
 forward to `192.168.70.10` (**the only port forward**; no management
@@ -852,7 +858,7 @@ guide refuses ("Preserve source IP must be disabled in the backend set
 to add an IP address-based backend server") and Oracle's cloud
 controller manager declares. A refusal fails that `up` at those
 backends, which nothing depends on. The fallback is
-`is_preserve_source` off on the IPv6 backend sets alone, the census's
+`is_preserve_source` off on the IPv6 backend sets alone, the raw ports'
 with the management ports', and its cost is that the apiserver's audit
 log and Envoy's access log record the balancer's address for every
 request through the IPv6 front.
@@ -1007,7 +1013,7 @@ down *and* the standing auth canary alerts (cluster-infra.md §2);
 the Talos ingress firewall drops an undeclared port on a node
 primary IP, **and** a declared raw TCP/UDP LoadBalancer service port
 serves with no firewall entry (the BPF-precedence check — failure
-flips the recorded public-port-census fallback, §2); the kubelet
+flips the recorded raw-port fallback, §2); the kubelet
 answers the cluster and nothing else — once `k8s-base` is up,
 `kubectl top nodes` lists every node, while 10250 at a node's public
 address gets no answer from outside the VCN; and no `NodePort` is allocated — once `k8s-base` is up,

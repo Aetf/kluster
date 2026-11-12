@@ -2857,13 +2857,18 @@ states what removes it, and declarative/physical.md §6 holds the
 tripwire.
 
 **A policy names a subnet through an address group, and a single
-host as a literal.** A zone policy's `ips` field holds single
-addresses: the pinned provider validates each entry as one IPv4 or
-IPv6 address and refuses a CIDR at preview, and the controller's own
-field specification, which the provider's client library is generated
-from, defines each entry as one address. So the IoT VLAN, wherever it
-is a source, is named by a group pair holding its v4 subnet and its
-ULA /64, as the pool is named as a destination. The IoT VLAN is a
+host as a literal.** A zone
+policy's `ips` field holds single addresses: the pinned provider
+validates each entry as one IPv4 or IPv6 address and refuses a CIDR at
+preview, and the controller's own field specification, which the
+provider's client library is generated from, defines each entry as one
+address. So the IoT VLAN, wherever it is a source, is named by a group
+pair holding its v4 subnet and its ULA /64, as the pool is named as a
+destination. A single host is a literal on either side: the media VIP
+as a destination, Home Assistant's address, from
+`conventions.site.HOME_ASSISTANT`, as a source. `Policy` in
+`components/gateway/unifi.py` takes a group or a literal on each side,
+and refuses one whose family is not the policy's own. The IoT VLAN is a
 network object and could be matched as one, but the `physical` stack
 neither declares that network nor records the identity it would be
 looked up by, while the site's address plan does state its subnets.
@@ -2892,22 +2897,41 @@ leg itself, and the controller stores the shape with the flag off (read
 2026-11-05, Aetf/kluster-ops#714). The rule is `return_flag` in
 `components/gateway/unifi.py`.
 
-1.  **IoT → `lan` pool: default drop with one enumerated allow**
+1.  **IoT → `lan` pool: default drop with two enumerated allows**
     (audit M2, amended 2026-08-24; ships with the cluster). The
-    allow precedes the drop: **IoT → the media VIP, port 443** —
+    drop ranks behind both of them. **IoT → the media VIP, port 443** —
     the `media-gw` Gateway's dedicated `lan`-pool address
     (cluster-infra.md §2), which fronts the apps IoT devices
     legitimately consume (smart TVs and streamers → jellyfin, the
-    first member). Then the drop: IoT → the rest of the pool
-    (admin UIs — immich, qbittorrent, grafana — stay unreachable
-    from the LAN's least-trusted population). Both rules take the IoT
-    VLAN's address groups as their source, and address groups are
-    single-family, so both rules come in v4-CIDR and ULA pairs.
+    first member). **Home Assistant → the whole pool, every
+    protocol**: its integrations are how the home automates what the
+    cluster's applications do, so its reach is a requirement of the
+    design rather than a cost of any one application, and a VIP is
+    reachable from it on the day a row lands there, raw or proxied.
+    Its source is its own address. The controller's fixed-IP
+    reservation for its MAC holds the IPv4 address, through a
+    reinstall. The ULA is a stable-privacy address, derived from the
+    prefix, the interface, the connection profile's stable id and a
+    secret key the host generated, so a reinstall, or a lost
+    `/var/lib/NetworkManager/secret_key`, moves it under the same
+    prefix. A moved address fails the allow silently, and nothing
+    reports it; whether to pin the ULA is Aetf/kluster-ops#722. Then
+    the drop: IoT → the rest of the pool (admin UIs — immich,
+    qbittorrent, grafana — stay unreachable from the rest of the
+    LAN's least-trusted population). The media allow and the drop take the
+    IoT VLAN's address groups as their source and Home Assistant's
+    allow its own address as a literal, and a group or a literal holds
+    one family, so every rule comes in a v4 and a ULA policy. A node's own address
+    stays behind rule 4's drop for Home Assistant too, since nothing
+    answers a client there.
     **The firewall names only the stable media VIP** (a
     `conventions` literal): which apps are IoT-reachable is decided
-    at the Gateway layer (`media-gw` route attachment, recorded per
-    app as `Exposure.IOT` on its census row) — app membership
-    changes never touch a firewall rule. *Correction on record*:
+    at the Gateway layer — the names the media VIP answers are the
+    rows of the exposure census whose `media` side is set
+    (`conventions.routes`, declarative/dns.md §5), Home Assistant's
+    `haos` and jellyfin's `tube` among them from their waves
+    (cluster/migration.md §2) — so app membership changes never touch
+    a firewall rule. *Correction on record*:
     audit M2's "recorded cross-VLAN dependencies all originate
     cluster→IoT" was wrong — TV/streamer → jellyfin is an
     IoT-originated dependency the census missed; a blanket drop
@@ -2939,8 +2963,9 @@ leg itself, and the controller stores the shape with the flag off (read
     because here the allow is the broad rule: declared after it, the
     drop would match nothing while reading as if it were in force.
     Talos apid, the kubelet and BGP are off the table for the LAN's
-    least-trusted population, and nothing recorded is severed — the single IoT-originated dependency targets the pool,
-    not the node subnet. Structurally it is rule 1 one zone over: the
+    least-trusted population, and nothing recorded is severed — every
+    recorded IoT-originated dependency targets the pool, not the node
+    subnet. Structurally it is rule 1 one zone over: the
     zone stays open, the untrusted subpopulation is carved out.
 
     **The first row is a return-only allow**, both families, the whole
@@ -2958,10 +2983,12 @@ leg itself, and the controller stores the shape with the flag off (read
     Rule 1's drop needs no such row. It matches traffic to the pool, and
     a pool address opens no connection toward the IoT VLAN: a workload's
     connection leaves masqueraded to its node's address, so the reply
-    enters on this pair, and the one flow the census admits into the
-    pool is opened by the IoT side and ranks ahead of that drop.
+    enters on this pair, and the flows the census admits into the pool
+    are opened by the IoT side and rank ahead of that drop.
 5.  **qbittorrent inbound-v6 pinhole**: to the worker VM's GUA on the
-    cluster VLAN, plus the service port. Constraint on record: the
+    cluster VLAN, on the port and transports of the exposure census's
+    one row through the site's forward (`qbittorrent-peer`,
+    `conventions.routes.SiteForward`). Constraint on record: the
     zone-policy API matches
     literal IPs only (no prefix-relative objects), so the rule
     embeds the current GUA and is **re-declared when the dynamic
@@ -2981,7 +3008,8 @@ leg itself, and the controller stores the shape with the flag off (read
     forward below does not wait for it: it names an address the
     address plan states rather than one a booted machine reports.
 6.  **qbittorrent v4 peer-port forward** — target the worker at
-    `192.168.70.10`, and **the only port forward on the device**. No
+    `192.168.70.10`, on the same row's port and transports as the
+    pinhole, and **the only port forward on the device**. No
     management inbound exists: cluster and Talos management ride the
     NLB, home-side management rides the overlay.
 
@@ -3014,9 +3042,10 @@ cluster VLAN sitting outside it as a zone whose policy can be
 tightened on its own schedule.
 
 The carve-out is the only reachability the cutover removes, and it
-has **zero known dependents**: the sole recorded IoT-originated flow
-is a television reaching jellyfin, which is a pool address and not a
-node-subnet one. Anything discovered afterward is an enumerated-allow
+has **zero known dependents**: every recorded IoT-originated flow — a
+television reaching jellyfin and a device reaching `haos` at the media
+VIP, Home Assistant reaching the pool — goes to a pool address and not
+a node-subnet one. Anything discovered afterward is an enumerated-allow
 diff on the pair, not a rollback.
 
 **Phase 2 (deferred, adoption-triggered — the Longhorn treatment)**:
@@ -3042,9 +3071,9 @@ cluster-zone leg is census rule 4's drop, the pool leg is census rule
     `kluster-ops#85`, deliberately not bring-up work; phase 2 cannot
     flip ahead of it without bricking casting. Special attention also
     to **HAOS — the IoT VLAN's most capable resident**: every
-    integration's outbound target (LAN services, UDM APIs, cluster
-    VIPs) becomes an allow-list candidate the moment the default
-    flips.
+    integration's outbound target (LAN services, UDM APIs) becomes an
+    allow-list candidate the moment the default flips; the cluster's
+    VIPs are allowed to it already (§4.2 rule 1).
 -   **Shape when adopted**: an IoT→Internal default-drop zone policy
     plus enumerated address-group/port allows, joining the two legs
     already declared — previewed Pulumi changes over the

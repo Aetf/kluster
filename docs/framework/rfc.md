@@ -180,6 +180,16 @@ Alternatives weighed and rejected belong beside the decision they lose
 to, with the reason, rather than in a section of their own — that is
 where a reader is asking the question.
 
+**An intention is read from what is declared, and a reading is evidence
+for it.** What a system is meant to do is a design question, so a
+decision about it starts from what the system declares: its
+configuration, its code, the comments beside them and the canon. A
+reading — a log, a traffic count, a measurement — is one point in time
+and not the design behind it, so it supplies evidence for an intention
+and never decides one. Where a reading contradicts a declaration, the
+declaration stands and the contradiction is reported, in the document
+or on an issue of its own, for the declaration's owner to settle.
+
 A row naming `pkg.module.NAME`, in a table or in a decision, names that
 value's home rather than the import a caller writes
 ([style/python.md](../style/python.md) has the rule and what answers the

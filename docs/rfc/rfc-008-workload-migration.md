@@ -14,6 +14,17 @@
     and 23 follow it, and slice 23 merges seedwatch's image ahead of its
     pin. §10.2 also says which containers take a numeric `runAsUser`,
     and §3.1 and §10's opening agree with its table.
+*   **Updated:** 2026-11-12. Slice 3 built Home Assistant's allow
+    differently in three places, and physical/gateway.md §4.2 states
+    what was built. §4.1's source "is a group pair of one address each,
+    since `Policy.source` names groups": the controller refuses a
+    one-address group member, so the source is a literal address in each
+    family, and `Policy.source` takes one. §4.1's "a stable ULA": the
+    address is a stable-privacy one, which a reinstall of Home Assistant
+    moves under the same prefix; whether to pin it is
+    Aetf/kluster-ops#722. §9's row for gateway.md, "a single host as a
+    literal" narrowed to destinations: a single host is a literal on
+    either side.
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules

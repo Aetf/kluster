@@ -224,8 +224,23 @@ which member gets what sitting in the wiring. The test: can a reader
 name the set a row belongs to by reading the row? The DNS record blocks
 are one instance, the overlay roster (one entry per member, not one per
 network object) another, and `Exposure` a third — it says what an
-application's reachability *is* rather than which two resources it
+application's reachability *is* rather than which resources it
 produces.
+
+**A row is composed of its independent concerns, each typed to carry
+only what applies to it.** Where a row answers several questions that
+vary independently, each is a field of its own, and a field's type
+carries what only that answer means, so a combination that means nothing
+cannot be written. One enumeration over the cross-product of the answers
+is the shape this rule replaces: every combination becomes a value to
+name, and a value that means nothing is one more to refuse by hand.
+`Exposure` is the instance (declarative/dns.md §5): which Gateway is
+three peer fields, `internet`, `lan` and `media`, and how is the row's
+type, so a gate is a field of what `internet` takes behind the proxy
+and nowhere else, and a reason for publishing past the proxy is a value
+of `internet` alone. What a type still cannot say is refused where the
+row is constructed, so the module holding a census that breaks it does
+not load; a relation between rows stays an invariant of the census.
 
 **A census is the source of truth, and no test restates it.** A check
 that holds one reader of a census against another agrees with whatever

@@ -13,19 +13,21 @@ node through scheduling constraints declared beside the workload
 (architecture.md §3.2). Block volumes are a separate capability, attached per
 entry of the fleet's volume table (`storage`).
 
-The balancer forwards two lists of ports, both conventions (`forwarded`). The
+The balancer forwards three lists of ports, all conventions (`forwarded`). The
 management ports belong to the cluster rather than to any service -- they are
 `conventions.MANAGEMENT_PORTS`, which the node firewall opens and the cluster
-endpoint names from the same structure. Every other port is a row of the
-public port census the balancer fronts (`conventions.PUBLIC_PORT_CENSUS`):
-`apps` holds no OCI credential (credentials.md §3), so a service's listener is
-declared here from its row, never beside the service (rfc-007 §5.3). Everything
-declared per port is named after the port's field in the management
-structure (`kubernetes`, say) or the census row's name (`https`), never after
-its number -- the backend set and the listener in Pulumi and on the balancer,
-the backends in Pulumi and, through the autoname derived from that, on the
-balancer: a name is an identity that state and the balancer key on, and the
-number is a value either structure lets anyone edit.
+endpoint names from the same structure -- and so do the Gateways' ports,
+`conventions.GATEWAY_PORTS`, which the node firewall opens and every Gateway
+listens on. The rest are the raw ports of the exposure census whose front is
+the balancer (`conventions.routes.Balancer`): `apps` holds no OCI credential
+(credentials.md §3), so a service's listener is declared here from its row,
+never beside the service (rfc-007 §5.3). Everything declared per port is
+named after the port's field in its structure (`kubernetes`, `https`) or the
+row's name (`syncthing`), never after its number -- the backend set and the
+listener in Pulumi and on the balancer, the backends in Pulumi and, through
+the autoname derived from that, on the balancer: a name is an identity that
+state and the balancer key on, and the number is a value any of the three
+lets anyone edit.
 
 The balancer is dual-stack, and OCI's listeners and backend sets are not: each
 carries one `ip_version`, a listener forwards only to a backend set of its own
@@ -60,7 +62,7 @@ import pulumi
 import pulumi_oci as oci
 
 from kluster import conventions
-from kluster.conventions import Front, Transports
+from kluster.conventions import Transports
 from putils import Component, async_output, resolve
 
 #: How the two families are told apart in the balancer's address list. The
@@ -87,12 +89,10 @@ ENDPOINT_FAMILY = 'IPV4'
 
 
 class UdpOnlyPort(ValueError):
-    """A census row the balancer fronts is served on UDP alone; `name` is the row's."""
+    """A raw port the balancer fronts is served on UDP alone; `name` is the row's."""
 
     def __init__(self, *, name: str) -> None:
-        super().__init__(
-            f'the public port {name!r} is served on UDP alone, and its backend set has no TCP port to check'
-        )
+        super().__init__(f'the raw port {name!r} is served on UDP alone, and its backend set has no TCP port to check')
         self.name: str = name
 
 
@@ -147,31 +147,35 @@ class Forwarded(NamedTuple):
 
     name: str
     """What everything declared for it is named after: a management port's
-    field, or a census row's name."""
+    field or a Gateway port's, or a raw port's name."""
     port: int
     transports: Transports
 
 
 def forwarded() -> list[Forwarded]:
-    """Every port the balancer forwards: each management port, then each census row it fronts.
+    """Every port the balancer forwards: each management port, each Gateway port, then each raw port it fronts.
 
-    A row the dedicated VIP fronts has no listener: one would forward to three
-    nodes, none of which answers on that port at the address the balancer
-    reaches it on. A row served on UDP alone is refused. Its backend set
-    would check the port over TCP, as every set here does, and a UDP check
-    needs a request the application answers with a known reply, which a row
-    cannot state (rfc-007 §5.3).
+    A raw port at the dedicated node's address or through the site's forward
+    has no listener: one would forward to three nodes, none of which answers
+    on that port at the address the balancer reaches it on. A raw port served
+    on UDP alone is refused. Its backend set would check the port over TCP, as
+    every set here does, and a UDP check needs a request the application
+    answers with a known reply, which a row cannot state (rfc-007 §5.3).
     """
     management = [Forwarded(field, port, Transports.TCP) for field, port in management_ports()]
-    census = [
-        Forwarded(row.name, row.port, row.transports)
-        for row in conventions.PUBLIC_PORT_CENSUS
-        if row.front is Front.BALANCER
+    gateway_ports = conventions.GATEWAY_PORTS
+    gateways = [
+        Forwarded(field, port, Transports.TCP) for field, port in zip(gateway_ports._fields, gateway_ports, strict=True)
     ]
-    for entry in census:
+    raw = [
+        Forwarded(row.name, row.port, row.transports)
+        for row in conventions.routes.ports()
+        if isinstance(row.internet, conventions.routes.Balancer)
+    ]
+    for entry in raw:
         if 'tcp' not in entry.transports.protocols:
             raise UdpOnlyPort(name=entry.name)
-    return [*management, *census]
+    return [*management, *gateways, *raw]
 
 
 def user_data(machine_config: str) -> str:

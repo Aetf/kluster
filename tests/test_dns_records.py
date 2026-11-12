@@ -32,6 +32,7 @@ from kluster.components.dns.base import (
 from kluster.components.dns.legacy import ANCHOR_ARCHVPS, LEGACY
 from kluster.components.dns.record import Block, Record, a, aaaa, caa, cname, mx, srv, txt, zone_records
 from kluster.components.dns.zone import ManagedZone
+from kluster.conventions import routes
 
 RECORD = 'cloudflare:index/dnsRecord:DnsRecord'
 
@@ -385,6 +386,37 @@ def test_a_direct_name_resolves_through_no_proxied_record() -> None:
     assert _through_a_proxied_record(census, ('one.test',)) == ['direct.one.test']
 
 
+def _row_records(exposures: Iterable[routes.Exposure], anchor: str) -> tuple[Block, ...]:
+    """The records the census's rows publish, as blocks: each public name a CNAME to the anchor, direct where it says why."""
+    return tuple(
+        Block((name.zone,), (cname(name.host, anchor, unproxied=name.unproxied),))
+        for name in routes.public_names(exposures)
+    )
+
+
+def test_a_direct_row_resolves_through_no_proxied_record() -> None:
+    """A row published direct holds the chain relation the blocks do, through the anchor it aliases.
+
+    Its name is a CNAME to the cluster anchor, so its reason holds only while
+    the anchor is direct as well. Checked against the program's own anchor,
+    and against an anchor declared proxied, which makes the direct row's
+    reason false.
+    """
+    primary = conventions.ZONE_PRIMARY
+    anchor = f'{conventions.ANCHOR_CLUSTER}.{primary}'
+    census = (
+        routes.Exposure(routes=(routes.Route('photos', internet=routes.Direct('uploads'), lan=routes.REWRITE),)),
+        routes.Exposure(routes=(routes.Route('auth', internet=routes.PROXIED),)),
+    )
+    proxied_anchor = Block(conventions.PRIMARY_ONLY, (a(conventions.ANCHOR_CLUSTER, '203.0.113.10'),))
+
+    assert _through_a_proxied_record((*_blocks(), *_row_records(routes.EXPOSURES.values(), anchor)), [primary]) == []
+    assert _through_a_proxied_record((*_blocks(), *_row_records(census, anchor)), [primary]) == []
+    assert _through_a_proxied_record((proxied_anchor, *_row_records(census, anchor)), [primary]) == [
+        f'photos.{primary}'
+    ]
+
+
 def _proxied_where_the_edge_cannot_reach(blocks: Iterable[Block]) -> list[str]:
     """Every proxied address record whose address is not globally routable."""
     return [
@@ -488,6 +520,52 @@ def test_the_website_co_host_carries_no_name_of_the_primarys_applications() -> N
     assert applications
     assert _labels(cohost)
     assert _labels(cohost) & applications == set()
+
+
+def _cohost_names_of_primary_applications(exposures: Iterable[routes.Exposure]) -> set[str]:
+    """Every name a row puts in the website co-host that is an application's name in the primary.
+
+    An application's name in the primary is a CNAME to an anchor there, or a
+    row's host published there; the website's own names, the web origin's,
+    are no application's.
+    """
+    (cohost,) = (zone for zone in conventions.WEB_ZONES if zone != conventions.ZONE_PRIMARY)
+    origin = {record.label for record in _web_origin().records}
+    rows = [
+        row.row if isinstance(row, routes.Held) else row
+        for exposure in exposures
+        for row in exposure.routes
+        if not isinstance(row, routes.Apex)
+    ]
+    named = [row for row in rows if isinstance(row, routes.Route)]
+    primary = [block for block in _blocks() if conventions.ZONE_PRIMARY in block.zones]
+    applications = {record.label for record in _anchor_aliases(primary)} | {
+        row.host for row in rows if conventions.ZONE_PRIMARY in row.zones
+    }
+    return {row.host for row in named if cohost in row.zones} & (applications - origin)
+
+
+def test_a_row_in_the_website_co_host_carries_no_name_of_the_primarys_applications() -> None:
+    """The route-side half of the co-host check: a row cannot mirror an application into the co-host either.
+
+    The website's own `www` is served in both, and the co-host's own names
+    are its; any other name of the primary's is a login that loops there.
+    """
+    web = conventions.WEB_ZONES
+    cohost = tuple(zone for zone in web if zone != conventions.ZONE_PRIMARY)
+    census = (
+        routes.Exposure(routes=(routes.Apex(web), routes.Route('www', internet=routes.PROXIED, zones=web))),
+        routes.Exposure(routes=(routes.Route('game', internet=routes.PROXIED, zones=cohost),)),
+    )
+
+    assert _cohost_names_of_primary_applications(routes.EXPOSURES.values()) == set()
+    assert _cohost_names_of_primary_applications(census) == set()
+    assert _cohost_names_of_primary_applications(
+        (routes.Exposure(routes=(routes.Route('photos', internet=routes.PROXIED, zones=web),)),)
+    ) == {'photos'}
+    assert _cohost_names_of_primary_applications(
+        (routes.Exposure(routes=(routes.Held(routes.Route('auth', internet=routes.PROXIED, zones=cohost)),)),)
+    ) == {'auth'}
 
 
 def test_the_legacy_anchor_and_the_overlay_block_are_the_primary_zones_alone() -> None:

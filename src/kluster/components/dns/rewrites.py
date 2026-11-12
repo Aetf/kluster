@@ -1,12 +1,13 @@
-"""The split-horizon rewrites: what a route census implies, and who writes it.
+"""The split-horizon rewrites: what the exposure census implies, and who writes it.
 
 Three things, in the order a reader meets them: the row (`Rewrite`), the
-derivation that turns the shared route census into rows (`rewrites`), and the
-component that writes one instance's rows (`ResolverRewrites`).
+derivation that turns the shared exposure census into rows (`rewrites`), and
+the component that writes one instance's rows (`ResolverRewrites`).
 
-The routes themselves are a convention (`kluster.conventions.routes`) because
-`apps` and `dns` both read them. The derivation is not: only `dns` turns a
-route into rewrites, so it lives beside the component that declares them.
+The exposures themselves are a convention (`kluster.conventions.routes`)
+because `apps`, `dns` and `physical` all read them. The derivation is not:
+only `dns` turns a row into rewrites, so it lives beside the component that
+declares them.
 
 **A rewrite answers with an address and never with a name.** That is
 `Rewrite.answer`'s type rather than a convention anyone has to keep, so a
@@ -53,32 +54,75 @@ class Rewrite:
         return f'v{self.answer.version}'
 
 
-def rewrites(routes: Iterable[conventions.routes.Route]) -> tuple[Rewrite, ...]:
-    """The split-horizon rewrites the routes imply, one per name per family.
+def rewrites(exposures: Iterable[conventions.routes.Exposure]) -> tuple[Rewrite, ...]:
+    """The split-horizon rewrites the census implies, one per name per family.
 
-    A rewrite is emitted for every zone a LAN-side route is published in --
-    including LAN-only names, which have no public record but still resolve
-    for LAN clients. Both address families are emitted: AdGuard answers a
-    rewrite only for the family its answer is in, and a LAN client that
-    prefers IPv6 (RFC 6724) would otherwise fall through to the public
-    answer and take the cloud path.
+    Each row's home side decides its answer: a row on `lan` is rewritten to
+    the LAN VIP and one on `media` to the media VIP, a `Route` in every zone
+    it is published in and a `Passthrough` in the primary; `Bare` adds the
+    bare label, which the LAN Gateway redirects to the name. A raw port's
+    `Vip` rewrites its host in the primary to its Gateway's VIP, and a heard
+    side has no host to rewrite. A name published nowhere else is rewritten
+    all the same, since a home-only name resolves for a home client alone.
 
-    The only answers this can produce are the two LAN VIPs, so the addresses
-    are the site's own and the gateway resolves them without help.
+    **A held row publishes no rewrite** (rfc-008 §3.3), and neither does a
+    raw port's VIP host that a held row shares: the name resolves where the
+    legacy VPS publishes it until the cut. Rows that share a host publish one
+    rewrite, which the census invariants hold to one answer.
+
+    Both address families are emitted: AdGuard answers a rewrite only for the
+    family its answer is in, and a client that prefers IPv6 (RFC 6724) would
+    otherwise fall through to the public answer and take the cloud path. The
+    only answers this can produce are the two VIPs, so the addresses are the
+    site's own and the gateway resolves them without help.
     """
-    emitted: list[Rewrite] = []
-    for route in routes:
-        if not route.lan_side:
+    census = tuple(exposures)
+    held = {(name, zone) for exposure in census for name, zone in _held_names(exposure)}
+    answers: dict[str, conventions.Vip] = {}
+    for exposure in census:
+        for domain, vip in _answers(exposure):
+            if domain not in held:
+                _ = answers.setdefault(_fqdn(*domain), vip)
+    return tuple(
+        Rewrite(domain=domain, answer=answer) for domain, vip in answers.items() for answer in (vip.v4, vip.v6)
+    )
+
+
+def _fqdn(host: str, zone: str | None) -> str:
+    """The name a rewrite answers for: the host in its zone, or the bare label alone."""
+    return host if zone is None else f'{host}.{zone}'
+
+
+def _held_names(exposure: conventions.routes.Exposure) -> Iterable[tuple[str, str]]:
+    """Every name a held row of the exposure stands on, in each zone it names."""
+    routes = conventions.routes
+    for row in exposure.routes:
+        if isinstance(row, routes.Held):
+            yield from ((row.row.host, zone) for zone in row.row.zones)
+    for port in exposure.ports:
+        if isinstance(port.internet, routes.Balancer):
+            for host in port.internet.hosts:
+                if isinstance(host, routes.Held):
+                    yield (host.row.label, conventions.ZONE_PRIMARY)
+
+
+def _answers(exposure: conventions.routes.Exposure) -> Iterable[tuple[tuple[str, str | None], conventions.Vip]]:
+    """Each name an exposure's unheld rows rewrite, as host and zone (`None` for a bare label), with its VIP."""
+    routes = conventions.routes
+    pool = conventions.LAN_POOL
+    for row in exposure.routes:
+        if isinstance(row, routes.Held | routes.Apex):
             continue
-        vip = (
-            conventions.LAN_POOL.media_vip
-            if route.exposure is conventions.routes.Exposure.IOT
-            else conventions.LAN_POOL.default_vip
-        )
-        for zone in route.zones:
-            domain = f'{route.host}.{zone}'
-            emitted.extend((Rewrite(domain=domain, answer=vip.v4), Rewrite(domain=domain, answer=vip.v6)))
-    return tuple(emitted)
+        vip = pool.default_vip if row.lan is not None else pool.media_vip if row.media is not None else None
+        if vip is None:
+            continue
+        yield from (((row.host, zone), vip) for zone in row.zones)
+        if isinstance(row.lan, routes.Bare):
+            yield ((row.host, None), vip)
+    for port in exposure.ports:
+        for side, vip in ((port.lan, pool.default_vip), (port.media, pool.media_vip)):
+            if isinstance(side, routes.Vip):
+                yield ((side.host, conventions.ZONE_PRIMARY), vip)
 
 
 class ResolverRewrites(Component, pulumi_type='kluster:dns:ResolverRewrites'):
@@ -93,7 +137,7 @@ class ResolverRewrites(Component, pulumi_type='kluster:dns:ResolverRewrites'):
     The instance is taken as its census entry rather than as a URL, which is
     what leaves `conventions.gateway.resolver_api_url` the only spelling of the
     address. The rows are taken as a parameter for the opposite reason:
-    deriving them from `ROUTES` in here would be a component reaching for a
+    deriving them from `EXPOSURES` in here would be a component reaching for a
     census instead of receiving one.
 
     The instances' login is not a parameter either. It is the provider's own,

@@ -53,7 +53,9 @@ Three facts about the device shape the whole module (physical/gateway.md
     object for it, and the IoT VLAN as a source, because this program holds
     the VLAN's addresses and not its controller-side identity — it neither
     declares that network nor records the name it could be looked up by, so
-    a `network_ids` match would rest on a value nothing here states.
+    a `network_ids` match would rest on a value nothing here states. A
+    single host is a literal in `ips`, on either side: the media VIP as a
+    destination, Home Assistant as a source.
 -   **Address groups are single-family.** One group cannot hold both an IPv4
     CIDR and its unique-local IPv6 prefix, so every rule naming a subnet
     comes as a pair, and each subnet's two groups are two resources.
@@ -328,6 +330,34 @@ IOT_V4 = AddressGroup('iot-v4', f'{conventions.CLUSTER_NAME}-iot-v4', convention
 IOT_V6 = AddressGroup('iot-v6', f'{conventions.CLUSTER_NAME}-iot-v6', conventions.IOT_VLAN.v6)
 
 
+def _site_forwarded() -> conventions.routes.Port:
+    """The raw port the site's forward and pinhole open: the census's one row through the site's forward.
+
+    The forward lands on one address, the worker's, and the rows below wait
+    on one application, the bulk-transfer one (`Needs.PEER_ON_WORKER`), so
+    they are written for one such row. A second is a second forward, pinhole
+    and condition, which this census grows rows for before it is admitted.
+    """
+    rows = [row for row in conventions.routes.ports() if isinstance(row.internet, conventions.routes.SiteForward)]
+    if len(rows) != 1:
+        raise ValueError(
+            f'the site forwards one raw port to the worker, and the census has {[row.name for row in rows]}'
+        )
+    return rows[0]
+
+
+#: The bulk-transfer application's peer port, which the pinhole and the
+#: forward open on its port and transports.
+PEER = _site_forwarded()
+
+#: How a firewall row names a raw port's transports.
+PROTOCOL: Mapping[conventions.Transports, Literal['tcp', 'udp', 'tcp_udp']] = {
+    conventions.Transports.TCP: 'tcp',
+    conventions.Transports.UDP: 'udp',
+    conventions.Transports.TCP_AND_UDP: 'tcp_udp',
+}
+
+
 @dataclass(frozen=True)
 class Policy:
     """One zone policy, on the pair whose row holds it.
@@ -351,9 +381,10 @@ class Policy:
     description: str
     action: Literal['ALLOW', 'BLOCK']
     ip_version: Literal['IPV4', 'IPV6', 'BOTH']
-    protocol: Literal['all', 'tcp', 'tcp_udp']
-    #: Narrows the pair's source zone to one subnet; `None` is the whole zone.
-    source: AddressGroup | None = None
+    protocol: Literal['all', 'tcp', 'udp', 'tcp_udp']
+    #: Narrows the pair's source zone: a group, or one literal address.
+    #: `None` is the whole zone.
+    source: AddressGroup | IPv4Address | IPv6Address | None = None
     #: Narrows the pair's destination zone: a group, one literal address, or
     #: an address the program is handed. `None` is the whole zone.
     destination: AddressGroup | IPv4Address | IPv6Address | Worker | None = None
@@ -362,6 +393,16 @@ class Policy:
     #: connection tracking: `ALL` is every packet, whatever its state, and
     #: `RESPOND_ONLY` the related and established ones.
     connection_state: Literal['ALL', 'RESPOND_ONLY'] = 'ALL'
+
+    def __post_init__(self) -> None:
+        # A group or a literal holds one family, so a policy naming one is a
+        # policy of that family alone: of the other, or of both, it would
+        # match nothing on that side while reading as if it narrowed it.
+        for side in (self.source, self.destination):
+            if isinstance(side, AddressGroup | IPv4Address | IPv6Address):
+                version = side.subnet.version if isinstance(side, AddressGroup) else side.version
+                if self.ip_version != f'IPV{version}':
+                    raise ValueError(f'the policy {self.key!r} is {self.ip_version} and names an IPv{version} side')
 
 
 @dataclass(frozen=True)
@@ -399,17 +440,26 @@ class Forward:
 #: each with its reason. The pairs come first and the forward last; within a
 #: pair, the order is the rule.
 CENSUS: tuple[Pair | Forward, ...] = (
-    # IoT → the `lan` pool: one enumerated allow, then a drop. The allow is the
-    # media Gateway's VIP on 443, which is what smart televisions and
-    # streamers consume; the drop is the rest of the pool, where the cluster's
-    # administrative interfaces live. The firewall names only the media VIP,
-    # so deciding which applications the IoT VLAN may reach is a Gateway-layer
-    # edit and never a firewall edit. On the uplink pair, because that is
-    # where pool-bound traffic is classified (module docstring). Both allows
-    # precede both drops, and all four precede the pair's predefined
-    # policies: otherwise the predefined accept on the uplink pair would
-    # answer first and the drop would never be reached. Family by family,
-    # because the source is the VLAN's group and a group holds one family.
+    # IoT → the `lan` pool: one enumerated allow for the VLAN, then a drop. The
+    # allow is the media Gateway's VIP on 443, which is what the IoT VLAN's clients
+    # consume, the televisions and streamers among them; the drop is the rest
+    # of the pool, where the cluster's administrative interfaces live. The
+    # firewall names only the media VIP, so deciding which applications the
+    # IoT VLAN may reach is a Gateway-layer edit and never a firewall edit:
+    # the rows of the exposure census on `media`. On the uplink pair, because
+    # that is where pool-bound traffic is classified (module docstring).
+    #
+    # Home Assistant, on that VLAN, reaches the whole pool on every protocol:
+    # its integrations are how the home automates what the cluster's
+    # applications do, so its reach is a requirement and not a cost of a row,
+    # and every VIP a row lands on is reachable from it on the day it lands.
+    # Its source is its own address in each family, a literal, so the rest of
+    # the VLAN still meets the drop.
+    #
+    # Every allow precedes both drops, and all of them precede the pair's
+    # predefined policies: otherwise the predefined accept on the uplink pair
+    # would answer first and the drop would never be reached. Family by
+    # family, because each source is a group or an address of one family.
     Pair(
         order='iot-pool-order',
         source=Zone.INTERNAL,
@@ -436,6 +486,26 @@ CENSUS: tuple[Pair | Forward, ...] = (
                 source=IOT_V6,
                 destination=conventions.LAN_POOL.media_vip.v6,
                 port=MEDIA_PORT,
+            ),
+            Policy(
+                key='home-assistant-pool-v4',
+                title='Home Assistant to lan pool (v4)',
+                description='Home Assistant may reach every VIP of the cluster pool; its integrations need them.',
+                action='ALLOW',
+                ip_version='IPV4',
+                protocol='all',
+                source=conventions.HOME_ASSISTANT.v4,
+                destination=POOL_V4,
+            ),
+            Policy(
+                key='home-assistant-pool-v6',
+                title='Home Assistant to lan pool (v6)',
+                description='Home Assistant may reach every VIP of the cluster pool; its integrations need them.',
+                action='ALLOW',
+                ip_version='IPV6',
+                protocol='all',
+                source=conventions.HOME_ASSISTANT.v6,
+                destination=POOL_V6,
             ),
             Policy(
                 key='iot-pool-v4',
@@ -506,9 +576,9 @@ CENSUS: tuple[Pair | Forward, ...] = (
     # ahead of the allow. The trusted home VLANs reach the nodes directly —
     # debugging straight at a node, a ping, a host path that hairpins. The IoT
     # VLAN does not: the node subnet is where apid, the kubelet and the BGP
-    # session live, and the one recorded IoT-originated dependency — a
-    # television reaching the media VIP — targets the pool instead, so the
-    # drops sever nothing known. An allow for the whole internal zone ahead of
+    # session live, and every recorded IoT-originated dependency — a
+    # television reaching the media VIP, Home Assistant reaching the pool —
+    # targets the pool instead, so the drops sever nothing known. An allow for the whole internal zone ahead of
     # them would answer for the IoT VLAN too, and the carve-out would match
     # nothing. The same shape as the first row one zone over: the zone stays
     # open, the untrusted subpopulation is carved out.
@@ -586,9 +656,9 @@ CENSUS: tuple[Pair | Forward, ...] = (
                 description='Inbound peer traffic to the worker VM on the bulk-transfer port.',
                 action='ALLOW',
                 ip_version='IPV6',
-                protocol='tcp_udp',
+                protocol=PROTOCOL[PEER.transports],
                 destination=Worker.GUA,
-                port=conventions.QBITTORRENT_PEER_PORT,
+                port=PEER.port,
             ),
         ),
         needs=Needs.WORKER_GUA,
@@ -596,8 +666,8 @@ CENSUS: tuple[Pair | Forward, ...] = (
     # The IPv4 half of the same flow, and the only port forward on the device.
     # Nothing else is published inbound: cluster and node management arrive
     # over the cloud load balancer, home-side management over ZeroTier. Both
-    # halves take the port from the same place the public port census lives,
-    # because two rules that disagree on it admit nothing.
+    # halves take the port and its transports from the census row they open
+    # (`PEER`), because two rules that disagree on it admit nothing.
     #
     # It lands on the worker VM's node address because that is the address
     # the application's outbound peer traffic already wears: the cluster
@@ -616,8 +686,8 @@ CENSUS: tuple[Pair | Forward, ...] = (
     Forward(
         key='peer-v4',
         title='inbound peer port (v4)',
-        protocol='tcp_udp',
-        port=conventions.QBITTORRENT_PEER_PORT,
+        protocol=PROTOCOL[PEER.transports],
+        port=PEER.port,
         to=conventions.HOMELAB_NODE_IPV4,
         needs=Needs.PEER_ON_WORKER,
     ),
@@ -739,6 +809,15 @@ class SiteFirewall(Component, pulumi_type='kluster:gateway:SiteFirewall'):
                         opts=self.child_opts(delete_before_replace=True),
                     )
 
+        def source(policy: Policy, zone: pulumi.Input[str]) -> unifi.FirewallZonePolicySourceArgs:
+            match policy.source:
+                case AddressGroup() as group:
+                    return unifi.FirewallZonePolicySourceArgs(zone_id=zone, ip_group_id=self.groups[group.key].id)
+                case IPv4Address() | IPv6Address() as address:
+                    return unifi.FirewallZonePolicySourceArgs(zone_id=zone, ips=[str(address)])
+                case None:
+                    return unifi.FirewallZonePolicySourceArgs(zone_id=zone)
+
         def destination(policy: Policy, zone: pulumi.Input[str]) -> unifi.FirewallZonePolicyDestinationArgs:
             match policy.destination:
                 case AddressGroup() as group:
@@ -765,10 +844,7 @@ class SiteFirewall(Component, pulumi_type='kluster:gateway:SiteFirewall'):
                     action=policy.action,
                     ip_version=policy.ip_version,
                     protocol=policy.protocol,
-                    source=unifi.FirewallZonePolicySourceArgs(
-                        zone_id=zones[pair.source],
-                        ip_group_id=None if policy.source is None else self.groups[policy.source.key].id,
-                    ),
+                    source=source(policy, zones[pair.source]),
                     destination=destination(policy, zones[pair.destination]),
                     connection_state_type=policy.connection_state,
                     auto_allow_return_traffic=return_flag(policy.action, pair.destination, policy.connection_state),

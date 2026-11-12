@@ -36,13 +36,15 @@ from kluster.components.cloud.nodes import (
     FAMILY_SEPARATOR,
     CloudNodes,
     DedicatedVipStranger,
+    Forwarded,
     NodeLoadBalancer,
     NoPublicAddress,
     NotOneIpv6Address,
     UdpOnlyPort,
     user_data,
 )
-from kluster.conventions import Answerer, Front, ManagementPorts, PublicPort, Transports
+from kluster.conventions import ManagementPorts, Transports
+from kluster.conventions.routes import Balancer, Dedicated, Exposure, Port, SiteForward, Vip
 from kluster.stacks import physical
 
 COMPARTMENT_ID = 'ocid1.compartment.test'
@@ -410,13 +412,27 @@ async def test_a_vnic_lookup_the_engine_declines_leaves_the_vip_unknown_rather_t
     assert await nodes.secondary_ip.display_name.is_known() is True
 
 
-def balancer_rows() -> list[PublicPort]:
-    """The census rows the balancer fronts, read when a case runs so a patched census reaches it."""
-    return [row for row in conventions.PUBLIC_PORT_CENSUS if row.front is Front.BALANCER]
+def balancer_rows() -> list[Forwarded]:
+    """What the balancer fronts besides the management ports: the Gateways' ports, and the raw ports at the balancer.
+
+    Read when a case runs, so a patched census reaches it.
+    """
+    gateway_ports = conventions.GATEWAY_PORTS
+    return [
+        *(
+            Forwarded(field, port, Transports.TCP)
+            for field, port in zip(gateway_ports._fields, gateway_ports, strict=True)
+        ),
+        *(
+            Forwarded(row.name, row.port, row.transports)
+            for row in conventions.routes.ports()
+            if isinstance(row.internet, Balancer)
+        ),
+    ]
 
 
 def forwarded_names() -> set[str]:
-    """What the balancer forwards, by name: the management ports' fields and the balancer rows'."""
+    """What the balancer forwards, by name: the management ports' fields, the Gateway ports' and the raw ports'."""
     return {*ManagementPorts._fields, *(row.name for row in balancer_rows())}
 
 
@@ -659,17 +675,34 @@ async def test_a_balancer_row_yields_a_listener_and_a_backend_set_per_family_nam
             assert backend_set.inputs['healthChecker'] == {'protocol': 'TCP', 'port': row.port}, name
 
 
-@pytest.mark.asyncio
-async def test_a_row_the_dedicated_vip_fronts_yields_nothing_on_the_balancer(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A listener for it would forward to three nodes, none of which answers on its port at the address it reaches."""
-    declared = await declared_per_port(conventions.MANAGEMENT_PORTS, monkeypatch)
-    vip_rows = [row for row in conventions.PUBLIC_PORT_CENSUS if row.front is Front.DEDICATED_VIP]
-    names = {str(it.inputs.get('name') or it.inputs['backendSetName']) for it in declared}
+#: A raw port of each front, and one on a home Gateway alone: the balancer
+#: forwards the first and nothing of the other three.
+EACH_FRONT = {
+    'at-the-balancer': Exposure(ports=(Port('at-the-balancer', 4001, Transports.TCP, internet=Balancer()),)),
+    'dedicated': Exposure(ports=(Port('dedicated', 4002, Transports.TCP, internet=Dedicated()),)),
+    'site-forwarded': Exposure(ports=(Port('site-forwarded', 4003, Transports.TCP_AND_UDP, internet=SiteForward()),)),
+    'at-home': Exposure(ports=(Port('at-home', 4004, Transports.TCP, lan=Vip('at-home')),)),
+}
 
-    assert vip_rows
-    for row in vip_rows:
-        assert row.port not in forwarded_ports(declared), row.name
-        assert not {row.name, f'{row.name}-ipv6'} & names, row.name
+
+@pytest.mark.asyncio
+async def test_the_balancer_forwards_a_raw_port_whose_front_it_is_and_no_other(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A port at the dedicated node's address, through the site's forward, or on a home Gateway alone has no listener.
+
+    A listener for one would forward to three nodes, none of which answers on
+    its port at the address the balancer reaches it on. What the balancer
+    forwards beyond the management and Gateway ports is the one raw port
+    whose front it is.
+    """
+    monkeypatch.setattr(conventions.routes, 'EXPOSURES', EACH_FRONT)
+    declared = await declared_per_port(conventions.MANAGEMENT_PORTS, monkeypatch)
+    names = {str(it.inputs['name']) for it in declared if it.typ in {BACKEND_SET, LISTENER}}
+    cluster_ports = {*conventions.MANAGEMENT_PORTS, *conventions.GATEWAY_PORTS}
+    cluster_names = {*conventions.ManagementPorts._fields, *conventions.GatewayPorts._fields}
+
+    assert forwarded_ports(declared) - cluster_ports == {4001}
+    assert {name.removesuffix('-ipv6') for name in names} - cluster_names == {'at-the-balancer'}
+    assert {'at-the-balancer', 'at-the-balancer-ipv6'} <= names
 
 
 @pytest.mark.asyncio
@@ -694,8 +727,10 @@ async def test_the_listener_protocol_follows_the_rows_transports(monkeypatch: py
 @pytest.mark.asyncio
 async def test_a_row_served_on_udp_alone_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     """Its backend set would have no TCP port to check, and a UDP check needs a reply a row cannot state."""
-    udp_only = PublicPort('udp-only', 3478, Transports.UDP, Front.BALANCER, Answerer.PODS)
-    monkeypatch.setattr(conventions, 'PUBLIC_PORT_CENSUS', (*conventions.PUBLIC_PORT_CENSUS, udp_only))
+    udp_only = Port('udp-only', 3478, Transports.UDP, internet=Balancer())
+    monkeypatch.setattr(
+        conventions.routes, 'EXPOSURES', {**conventions.routes.EXPOSURES, 'udp-only': Exposure(ports=(udp_only,))}
+    )
 
     with pytest.raises(UdpOnlyPort) as refused:
         _ = build_balancer()

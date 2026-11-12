@@ -1980,9 +1980,9 @@ counted, because the counts move with every census change:
     records, one `kluster:dns:ResolverRewrites` component per entry of
     `conventions.gateway.RESOLVERS`, named `rewrites-<name>`, each
     holding one rewrite per entry that
-    `rewrites(conventions.routes.ROUTES)` derives
-    (`components/dns/rewrites.py`); with no routes, the components hold
-    no rewrite. The one-liner after this list prints what those rows are
+    `rewrites(conventions.routes.EXPOSURES.values())` derives
+    (`components/dns/rewrites.py`); while the exposure census implies no
+    rewrite, the components hold none. The one-liner after this list prints what those rows are
     matched against.
 -   **The updates** are read row by row: the right side of each field
     is the value of its row in the census.
@@ -1991,7 +1991,7 @@ counted, because the counts move with every census change:
     their rows show.
 
 ```sh
-mise x uv -- uv run python -c 'from kluster import conventions as c; from kluster.components.dns.rewrites import rewrites; print(*(f"rewrites-{r.name}" for r in c.gateway.RESOLVERS)); print(*rewrites(c.routes.ROUTES), sep="\n")'
+mise x uv -- uv run python -c 'from kluster import conventions as c; from kluster.components.dns.rewrites import rewrites; print(*(f"rewrites-{r.name}" for r in c.gateway.RESOLVERS)); print(*rewrites(c.routes.EXPOSURES.values()), sep="\n")'
 ```
 
 A preview that matches all of that is applied, and the `up` shows the
@@ -2117,7 +2117,7 @@ proves less. Its join is the one called with no `wait_for`, because a
 resolver is a leaf whose absence fails only its own rewrites
 (gateway.md §3) and a wait would fail the whole job; so its join step
 returns once `zerotier-cli join` does, admitted or not, and while
-`ROUTES` is empty
+the exposure census implies no rewrite
 the `dns` preview reaches nothing over the overlay. What it shows is
 that the identity installs and the stack previews. That `ci-dns` is a
 member Central admits is read in Central's member list, which shows it
