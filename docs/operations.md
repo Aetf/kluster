@@ -252,9 +252,10 @@ from an HTTP repository, which offers nothing to check a download against
     replaces the disk, the domain and the seed, the seed from the
     current machine config (declarative/physical.md §3) — the way to a
     fresh worker, where a STATE wipe on the kept disk boots the seed as
-    it stood at the last rebuild; local-path
-    data returns via VolSync restore (that's the designed move-path,
-    storage.md §2 — no drill of it has run, §4); NAS-backed PVs
+    it stood at the last rebuild; backed local-path
+    data returns by a restore from its VolSync repository (the DR path,
+    storage.md §3.1 — no drill of it has run, §4), and a claim under
+    `off` comes back empty and is derived again; NAS claims
     re-point untouched; BGP session re-establishes from the static IP
     in the config.
 -   **§3.3 Total-cloud-loss / total-home-loss** — owned by nodes.md

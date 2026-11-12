@@ -98,17 +98,20 @@ USER_VOLUME_ROOT = '/var/mnt'
 def node_volume_mount(name: str) -> str:
     """The path a node volume is mounted at on its node, from the row's name.
 
-    What a `local` PersistentVolume over the volume is written against — a
-    directory *inside* this path, never the path itself (storage.md §6).
+    The pool of the row's `local-path` class (`cluster.node_volume_class`),
+    which hands out a directory *inside* this path for each claim, never the
+    path itself (storage.md §6).
     """
     return f'{USER_VOLUME_ROOT}/{name}'
 
 
 #: The node label naming the volume a node carries, with the row's name as its
-#: value: what a `local` PersistentVolume's node affinity selects on, so that
-#: placement is a fact about the node rather than a string a workload repeats
-#: (rfc-002 §10.5). One key is enough because a node carries at most one
-#: volume.
+#: value. hath's client selects it, and so does the destination of a copy onto
+#: the volume (`moving_to`): a claim of the row's class waits for its first
+#: consumer, so it holds no pod anywhere by itself, and the pod that consumes it
+#: is what has to land on the volume's node. Placement is thereby a fact about
+#: the node rather than a string a workload repeats (rfc-002 §10.5). One key is
+#: enough because a node carries at most one volume.
 NODE_VOLUME_LABEL = f'{LABEL_DOMAIN}/node-volume'
 
 #: Lower Cost (0 VPUs/GB) is the tier the storage budget is written against:

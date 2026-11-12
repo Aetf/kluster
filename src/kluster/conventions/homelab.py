@@ -11,10 +11,20 @@ HOMELAB_NODE = 'worker'
 #: as a BGP neighbor, the peer-port forward sends traffic to it and day 1
 #: dials apid at it, so it is configured statically in machine config on one
 #: side and read from here on the others (physical/homelab-host.md §2).
-#: Nodes number from `.10`; `.1` is the gateway's leg and `.2` the homelab
-#: host's own leg on the bridge, which is host preparation rather than
-#: anything this program declares.
+#: Nodes number from `.10`; `.1` is the gateway's leg and `HOMELAB_HOST_LEG_IPV4`
+#: the homelab host's own.
 HOMELAB_NODE_IPV4 = IPv4Address('192.168.70.10')
+
+#: The homelab host's own leg on the bridge, on the cluster VLAN: host
+#: preparation rather than anything this program declares, and the address the
+#: worker reaches the NAS at (physical/homelab-host.md §2, §5).
+HOMELAB_HOST_LEG_IPV4 = IPv4Address('192.168.70.2')
+
+#: The one NFS export the host serves the worker, whole: a single filesystem
+#: with no dataset boundary under it, so a NAS claim names its path under this
+#: root and no export changes for a new path (physical/homelab-host.md §5). It
+#: squashes every client to its anonymous user, which is who a pod writes as.
+NAS_EXPORT = '/mnt/nas'
 
 #: Bootstrap sizing, deliberately below the end state of 12–16 vCPU, 100+ GB
 #: of disk and the RAM the decommission decides (nodes.md §4.2): the legacy

@@ -163,8 +163,9 @@ node volume
     A block volume attached to a node (`cloud.NODE_VOLUMES`,
     `cloud.NodeVolumeEntry`; rfc-002 §3.1). What it is for belongs to whatever
     claims it, so an entry is named after its claimant and the type is not;
-    that name is also its dataset's identity on the node, its mount path and
-    its node label (`cloud.node_volume_mount`, `cloud.NODE_VOLUME_LABEL`).
+    that name is also its dataset's identity on the node, its mount path, its
+    node label and its storage class (`cloud.node_volume_mount`,
+    `cloud.NODE_VOLUME_LABEL`, `cluster.node_volume_class`).
 
 raw port
     A port an application is reached on at a Gateway's address rather than
@@ -235,7 +236,7 @@ from kluster.conventions.cluster import (
     POD_CIDR_V4,
     POD_CIDR_V6,
     POOL_INTERNET,
-    SC_CLOUD_BLOCK,
+    RETENTION_LABEL,
     SC_LOCAL_PATH,
     SC_NAS,
     SEALING_CONTROLLER,
@@ -243,9 +244,11 @@ from kluster.conventions.cluster import (
     SERVICE_CIDR_V4,
     SERVICE_CIDR_V6,
     UDM_ASN,
+    WRITER_KEY_FIELDS,
     GatewayPorts,
     ManagementPorts,
     Transports,
+    node_volume_class,
 )
 from kluster.conventions.dns import (
     ALL_ZONES,
@@ -267,11 +270,13 @@ from kluster.conventions.dns import (
 from kluster.conventions.homelab import (
     HOMELAB_BRIDGE,
     HOMELAB_HOST_KEY,
+    HOMELAB_HOST_LEG_IPV4,
     HOMELAB_MEMORY_GIB,
     HOMELAB_NODE,
     HOMELAB_NODE_IPV4,
     HOMELAB_STORAGE_DIR,
     HOMELAB_VCPUS,
+    NAS_EXPORT,
 )
 from kluster.conventions.identity import (
     CLUSTER_NAME,
@@ -341,6 +346,7 @@ __all__ = (
     'GATEWAY_PORTS',
     'HOMELAB_BRIDGE',
     'HOMELAB_HOST_KEY',
+    'HOMELAB_HOST_LEG_IPV4',
     'HOMELAB_MEMORY_GIB',
     'HOMELAB_NODE',
     'HOMELAB_NODE_IPV4',
@@ -357,6 +363,7 @@ __all__ = (
     'LOCAL_PATH_VOLUME',
     'MANAGEMENT_PORTS',
     'MONITORING_NAMESPACE',
+    'NAS_EXPORT',
     'NODE_BOOT_VOLUME_GB',
     'NODE_MEMORY_GB',
     'NODE_OCPUS',
@@ -376,7 +383,7 @@ __all__ = (
     'PRECIOUS',
     'PRIMARY_ONLY',
     'RETENTION_CLASSES',
-    'SC_CLOUD_BLOCK',
+    'RETENTION_LABEL',
     'SC_LOCAL_PATH',
     'SC_NAS',
     'SEALING_CONTROLLER',
@@ -395,6 +402,7 @@ __all__ = (
     'VCN_CIDR',
     'VCN_SUBNET_CIDR',
     'WEB_ZONES',
+    'WRITER_KEY_FIELDS',
     'ZONE_EXTERNALLY_ISSUED',
     'ZONE_FAMILY',
     'ZONE_PRIMARY',
@@ -420,6 +428,7 @@ __all__ = (
     'barman_repo_path',
     'forge',
     'gateway',
+    'node_volume_class',
     'node_volume_mount',
     'overlay',
     'routes',

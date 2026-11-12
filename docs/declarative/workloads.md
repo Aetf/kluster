@@ -7,8 +7,9 @@ stack of [README.md](README.md) §1 and the home of ~80–90% of all future
 changes.
 
 > **Status**: designed 2026-08-22. Declared: an application's namespace,
-> its level, its route label and its policy, and its exposure through
-> `expose` with the records left out (§1). Nothing else is implemented.
+> its level, its route label and its policy, its exposure through
+> `expose` with the records left out (§1), and its storage through `claim`
+> and `nas_claim` (§2, §3). Nothing else is implemented.
 
 ## 1. The component contract
 
@@ -18,8 +19,8 @@ Every app is a `Component` subclass (putils, RFC-001) that owns:
 | --- | --- | --- |
 | Namespace | created by the component (never shared) with `application_namespace` (`kluster.lib.k8s`), which enforces its level and gives it `conventions.routes.ROUTE_LABEL`, the label the Gateways admit routes from; a namespace with no route carries it too | README.md §1, cluster-infra.md §2 |
 | Workload | Deployment/StatefulSet with **honest requests/limits** — CPU limits are mandatory on anything scheduled to the cloud pool (etcd shares those cores, nodes.md §1); memory requests sized from evidence, not idle numbers (the JuiceFS-sidecar lesson, storage.md §6) | nodes.md §§1, 4.4 |
-| Storage | by the two-axis selection in §2 (performance × persistence; fixed assets → NAS/object) | §2, storage.md §2 |
-| Backup | declared through the `backed_pvc` helper with a **retention class** — never ad-hoc schedules (§3) | §3, storage.md §3.1 |
+| Storage | by the two-axis selection in §2 (performance × persistence; fixed assets → NAS/object), through `claim` and `nas_claim` on the application base (`kluster.components.apps.storage`) | §2, storage.md §2 |
+| Backup | the `retention` every `claim` takes: a **retention class**, never an ad-hoc schedule, or `off` with its reason (§3) | §3, storage.md §3.1 |
 | Exposure | the component receives its application's `Exposure`, its row of `conventions.routes.EXPOSURES`, and makes one call, `expose(exposure)` on the application base (`kluster.components.apps`), with the Service its routes forward to, the pods its raw ports select and the fronts the `apps` program read (dns.md §5). Per `Route`, one `HTTPRoute` for each Gateway its fields set (`kluster.lib.k8s.route`); the gate is a field of its `internet` side and puts the ExternalAuth filter → Authelia on that route alone, so the home side is ungated (cluster-infra.md §2, which holds the gate's Cilium floor); every route without a gate removes the portal's identity headers from the request; `media` on the row is the explicit "IoT may reach this" decision, recorded on the row rather than at a call site (jellyfin; physical/gateway.md §4.2). A `Passthrough` row is refused by name: Cilium drops a passthrough listener together with the zone's wildcard listener on the same port (cluster-infra.md §2), and how the discovery server is reached is [Aetf/kluster-ops#723](https://github.com/Aetf/kluster-ops/issues/723). Per `Port`, one shape whatever its fronts: a LoadBalancer Service for each Gateway it sets, at that front's addresses, under the `Cluster` traffic policy every Service on a shared address takes (architecture.md §3.1) and with `allocateLoadBalancerNodePorts: false`, a home side at its Gateway's VIP under that Gateway's sharing key; the row's NLB listener, the site's forward and its pinhole are `physical`'s (physical.md §1); and one allow admitting the world on the port and its transports alone. A component merges unwired, and is wired into the `apps` program by its application's land (sources-of-truth.md §3) | architecture.md §3.6, dns.md §5 |
 | DNS | the public records of the rows on `internet` are not declared by `expose` yet; the split-horizon rewrite a row implies is applied by the `dns` stack from the same declaration, not by this one (dns.md §3) | dns.md |
 | Secrets | SealedSecret first choice, `template.data` pattern | cluster-infra.md §1.1 |
@@ -34,14 +35,15 @@ answered at the node's public address, ahead of its firewall
 (cluster-infra.md §2);
 cross-namespace reach-ins; unbudgeted sidecars;
 cluster-scoped resources (those belong to `k8s-base` and go through its
-closed-list rule).
+closed-list rule), save the PersistentVolume of a `nas_claim`, which is
+bound to its claim by name and to no other (§2).
 
 Namespaces are created with **Pod Security `restricted` enforced** by
 default — non-root, no added capabilities, RuntimeDefault seccomp
 (part of containing third-party binaries on the combined CP+ingress
 nodes, architecture.md §4.1). An exception is a declared component
 parameter with the reason on record — the same discipline as
-`backup=None` — which `application_namespace` takes as its `looser`
+`off('<reason>')` (§2) — which `application_namespace` takes as its `looser`
 argument, a `LooserLevel` carrying the reason. No workload in the
 design holds one today.
 
@@ -51,10 +53,11 @@ The storage.md §2 classes are the *menu*; this is how a workload
 chooses. Ask, in order:
 
 **Axis 1 — does it need to persist?** State that is re-derivable
-(caches, transcode scratch, thumbnail stores, ML model downloads) gets
-**plain local-path (or emptyDir) with no backup** — but the exemption is
-explicit: the component declares `backup=None` with a one-line reason,
-so "unbacked" is always a decision on record, never an omission.
+(caches, transcode scratch, ML model downloads) gets **a claim with no
+backup, or an `emptyDir`** where it need not survive a restart — but the
+exemption is explicit: `claim` requires its `retention`, and an unbacked
+claim takes `off('<reason>')`, which refuses an empty reason, so
+"unbacked" is always a decision on record, never an omission.
 Beware the false "cache": **hath's cache is not re-derivable** — it is
 this client's slice of the globally distributed H@H archive, and must
 be preserved (see the worked example).
@@ -70,9 +73,9 @@ be preserved (see the worked example).
 **Then the data's character decides among the survivors:**
 
 -   **Working state** (small-to-medium, hot, mutated in place) →
-    **local-path + VolSync** — the default. If the app is a database,
-    prefer **CNPG** (its replication + barman subsume the
-    backup/mobility roles).
+    **`claim` under a retention class**, local-path backed up by VolSync
+    — the default. If the app is a database, prefer **CNPG** (its
+    replication + barman subsume the backup/mobility roles).
 -   **Fixed assets** (large, append-mostly, immutable once written:
     media originals, photo masters, books, seeding payloads) → **NAS**
     when POSIX/streaming consumers live homelab-side, **object storage
@@ -82,15 +85,65 @@ be preserved (see the worked example).
 -   **The leftovers** — needs POSIX RWX over object capacity — is the
     JuiceFS quarantine gate (storage.md §6), per app, in writing.
 
-Worked examples: immich = CNPG (db) + NAS (originals) + local-path
-no-backup (thumbnails/ML cache); qbittorrent = NAS (payloads) +
-local-path+VolSync (its config/state); syncthing-nas, the one instance,
-with dav beside it = NAS (data) + local-path+VolSync (index/db); hath =
-**preserved but not backed** cache (its own protected block volume, moved-never-recreated — the
-"cache" is a slice of the globally distributed H@H archive, not
-scratch, yet like NAS volumes its safety net is outside the cluster
-backup regime: the H@H network's own replication) + VolSync'd client
-state.
+**The calls.** The two calls are on the application base
+(`kluster.components.apps.storage`), and the class is a name:
+
+-   **`claim(resource_name, name, size, retention, *, namespace, uid,
+    writer_key, generation=0, moving_to=None, stopped=None,
+    storage_class=local-path, protect=False)`** is the one claim on a
+    node, of `size` GiB. `retention` is a retention class (§3) or
+    `off('<reason>')`, which emits the claim alone. `uid` is the user
+    the workload runs as, which every mover of the claim runs as too, so
+    that it reads and writes the data as the workload does.
+    `writer_key` is the ciphertext of the namespace's sealed writer key
+    as the program read it, `None` while it is not sealed in (§3). The
+    generation, `moving_to` and `stopped`, the workload the copy's
+    source is applied after, are how the claim moves (storage.md §3.1).
+    `protect` protects the claim, for precious data and for a node
+    volume's (storage.md §3.3). The caller's `opts` carries the
+    dependency on the namespace, which `namespace` names as a plain
+    string, since the repository's path is built from it.
+-   **`nas_claim(resource_name, name, path, *, namespace, read_only)`**
+    is a static PersistentVolume
+    over `path` under the host's one export (`conventions.NAS_EXPORT`)
+    and its claim, for data the cluster does not own. It takes no
+    retention: the source's own regime is its safety net. The volume's
+    node affinity is the worker's, the one node that reaches the export
+    (physical/homelab-host.md §5), so every pod that mounts it lands
+    there. The export is one filesystem with no dataset boundary under
+    it, so a new path needs no census and no change to the export.
+-   **`cloud-block-<row>`**, `conventions.node_volume_class(row)`, is the
+    class a node volume's data is claimed under: an ordinary `claim`
+    with that `storage_class` (storage.md §6). The pod that consumes it
+    selects the volume's node label (`conventions.NODE_VOLUME_LABEL`),
+    since a claim that waits for its first consumer holds no pod
+    anywhere by itself.
+
+**A pod writes to the NAS as the export's anonymous user.** The export
+squashes every client, so every NFS write arrives as one user, whatever
+the pod runs as, and `restricted` needs nothing of it. A path a pod
+writes to is therefore that user's. A path the legacy pods wrote as root
+is not, so the head of the wave that lands such an application reads the
+owner and re-owns the path on the host.
+
+Worked examples: immich = CNPG (db) + `nas_claim('Immich')`, the one
+media root whole (originals, thumbnails and encoded video) + a claim,
+`off`, for the ML model cache; qbittorrent = `nas_claim('')`, the whole
+export, since hard links into `Media` need one mount + a claim,
+`STANDARD`, for its config/state; syncthing-nas, the one instance, with
+dav beside it = `nas_claim('Sync')` + a claim, `STANDARD`, for its index
+and device key; hath = one claim of its row's class, `off`, the client's
+state beside the cache — **preserved but not backed**: the cache is a
+slice of the globally distributed H@H archive, not scratch, yet like NAS
+volumes its safety net is outside the cluster backup regime: the H@H
+network's own replication. Its volume is protected and moved, never
+recreated (storage.md §3.3).
+
+**Thumbnails stay with the library.** They are re-derivable, but they
+sit under immich's one media root and run to hundreds of gigabytes,
+which no worker disk holds. Their latency is NFS's until a measurement
+says otherwise (physical/homelab-host.md §5's criterion for revisiting
+it).
 
 ## 3. Backups: centrally classed, locally declared
 
@@ -104,23 +157,35 @@ per-app number:
     prune cadence. An app picks a class; nobody writes cron lines or
     retain counts inline. Changing a class is one diff that previews
     across every affected app.
--   **The `backed_pvc(name, size, retention=STANDARD)` helper** emits
-    the PVC + `ReplicationSource` + its restic repo secret, with the
-    repo path following one bucket-layout convention
-    (`<bucket>/volsync/<namespace>/<pvc>`). Because every backup flows
-    through the helper, **the program itself is the backup inventory**
-    — a report of "everything backed, everything exempted (and why)"
-    is derivable from the stacks, no external registry to drift.
+-   **A `claim` under a class** emits, beside the claim, a VolSync
+    `ReplicationSource` with the restic mover and `copyMethod: Direct`,
+    scheduled by the class, to the repository at
+    `conventions.volsync_repo_path` of its namespace and its base name
+    (`<bucket>/volsync/<namespace>/<name>`). The repository's password
+    is generated into state. Its Secret is a SealedSecret under the
+    claim's base name that carries **the namespace's sealed writer
+    key**, one ciphertext sealed namespace-wide so that it opens under
+    every repository Secret's name in the namespace, with the
+    repository and its password in its template (credentials.md §3).
+    Because every backup flows through `claim`, **the program itself is
+    the backup inventory** — a report of "everything backed, everything
+    exempted (and why)" is derivable from the stacks, no external
+    registry to drift.
 -   **The other backup families plug into the same frame**: CNPG barman
     retention expressed from the same class constants; etcd snapshots
     (hourly, ~14d) and the state-backend pg_dump (ci.md §1) are
     physical/CI-side but follow the same bucket-layout and retention
     vocabulary (storage.md §5 stays the authority on targets/RPO).
 -   **Freshness is monitored centrally, not per-app**: one vmalert rule
-    family over VolSync/barman metrics — *any* backup whose last
-    success is older than its class threshold alerts; a new backed_pvc
-    is covered automatically because the metric labels come from the
-    helper. Restore drills are designed as unattended automations —
+    family — *any* backup whose last success is older than its class
+    threshold alerts. A volume's last success is its source's
+    `.status.lastSyncTime`, which kube-state-metrics is to publish, and
+    its class is the label `claim` puts on the source
+    (`conventions.RETENTION_LABEL`), since VolSync's own metrics carry
+    neither. The configuration that publishes the series is not written
+    (rfc-008 §10, slice 24), so the family evaluates over no series yet;
+    once it is, a new claim is covered with nothing added, because the
+    label comes from `claim`. Restore drills are designed as unattended automations —
     monthly VolSync spot-restores among them — and none of them runs
     yet (operations.md §4): a backup that hasn't restored recently is
     assumed broken, and until the drills run that is the standing
@@ -130,13 +195,14 @@ per-app number:
 
 -   **Dedicated-VIP workload (hath)**: LB Service requesting the
     dedicated VIP + a `CiliumEgressGatewayPolicy` with `egressIP` = the
-    secondary private IP + a claim on its cache volume (a `local`
-    PersistentVolume inside the node volume, storage.md §6) + strict CPU
+    secondary private IP + a claim of its cache volume's class
+    (`cloud-block-<row>`, storage.md §6) + strict CPU
     limits. All four pieces in the one component (architecture.md
     §3.2), and none of them names a node: the volume's entry declares
     that it follows the dedicated VIP, so the volume's node label and
     the VIP are on the same machine by construction. The cache volume
-    is `protect=True` and moved-never-recreated (storage.md §3.3).
+    and its claim are `protect=True` and moved-never-recreated
+    (storage.md §3.3).
 -   **Split-horizon app (immich)**: one set of pods, two exposures
     (`route` over a row whose `Exposure` is `SPLIT`, which the matrix
     maps to both gateways) — the helper emits both routes and the
@@ -156,17 +222,19 @@ per-app number:
     hostname behind Authelia forward-auth on `internet-gw`, plus the
     LAN rewrite to `lan-gw` — continuing the legacy `bt.` entry rather
     than going rewrite-only.
--   **Block-volume app (hath's cache)**: a `local`
-    PersistentVolume over the node volume the `physical` stack attached
-    (`conventions.NODE_VOLUMES`), with node affinity on that volume's
-    node label, claimed by an ordinary PVC. The PersistentVolume's path
-    is a directory inside the volume, `/var/mnt/<name>/<dir>`, created
-    by the seeding step at the volume's root — never the mount point, so a volume that
-    failed to mount is a missing path and the pod stays pending
-    (storage.md §6). `backup=None` on record — the H@H network's own
+-   **Block-volume app (hath's cache)**: an ordinary `claim` of the
+    class `local-path` serves from the node volume the `physical` stack
+    attached (`conventions.node_volume_class(row)` over
+    `conventions.NODE_VOLUMES`), protected, with the client selecting
+    the volume's node label, because a claim that waits for its first
+    consumer holds no pod anywhere by itself. The provisioner hands out
+    a directory inside the volume, `/var/mnt/<name>/<namespace>/<claim>/`
+    — never the mount point, so a volume that failed to mount is a
+    claim that stays pending, or a path missing at the pod's start
+    (storage.md §6). `off` on record — the H@H network's own
     replication is the dataset's redundancy (storage.md §3.3). No
-    sidecar, no privileged namespace, and no filesystem between the app
-    and its data.
+    sidecar, no privileged namespace for the application, and no
+    filesystem between the app and its data.
 -   **CNPG-backed app (immich, splitpro, …)**: CNPG `Cluster` on
     local-path + barman to B2, a monthly restore drill to be inherited
     from the legacy discipline (storage.md §5; nothing runs it here
