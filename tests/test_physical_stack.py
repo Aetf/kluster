@@ -835,6 +835,15 @@ def test_the_program_exports_every_name_the_structure_carries_and_nothing_else(r
     assert set(ran.exported) == set(conventions.PHYSICAL_OUTPUTS.names())
 
 
+def test_the_workers_gua_is_exported_as_the_stack_configures_it(ran: Run) -> None:
+    """The worker's own pool and a `SiteForward` port's Service read it across the reference (rfc-008 §4.1).
+
+    It is the configured measurement the gateway's pinhole names too, so the
+    pool, the Service and the pinhole agree on one address.
+    """
+    assert ran.exported[conventions.PHYSICAL_OUTPUTS.worker_gua] == WORKER_GUA
+
+
 @pytest.mark.asyncio
 async def test_every_cloud_nodes_gua_is_exported_under_its_name(
     setup: Installation, monkeypatch: pytest.MonkeyPatch
@@ -1268,7 +1277,7 @@ async def test_the_program_never_reads_the_devices_own_credential() -> None:
     )
 
     async with declaring():
-        physical._gateway(pulumi.Config())  # pyright: ignore[reportPrivateUsage]
+        physical._gateway(pulumi.Config(), worker_gua=WORKER_GUA)  # pyright: ignore[reportPrivateUsage]
 
 
 @pytest.mark.usefixtures('setup')

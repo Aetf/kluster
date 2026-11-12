@@ -558,12 +558,12 @@ plane names:
 
 ## 5. The exposure declaration, and its one helper
 
-> **The declaration is built; the helper is not.** `conventions.routes`
-> holds the types and the census, `EXPOSURES`, and the `dns` and
-> `physical` stacks read it today. The helper an application's
-> component calls lands with the `apps` stack's application base, which
-> the program does not declare yet; the paragraphs on it are the
-> contract that implementation has to satisfy.
+> **The declaration and its helper are built; the records are not.**
+> `conventions.routes` holds the types and the census, `EXPOSURES`, and
+> the `dns`, `physical` and `k8s-base` stacks read it. `expose`, on the
+> `apps` stack's application base, emits everything below but the
+> public records of the rows on `internet`, which it does not declare.
+> No application's component is wired into the `apps` program yet.
 
 **An application has one `Exposure`, and it has two dimensions** —
 the two questions deploying an application answers
@@ -668,16 +668,26 @@ block (`tests/test_dns_records.py`). The certificates follow
 `served_zones` (§4): the zones of every `Route` and `Apex`, held or
 not, and the primary; a `Passthrough` and a `Host` take none.
 
-**`expose(exposure)` on the app component base is the one helper**, and
-it takes the application's `Exposure` from the census, not a host
-string a reader would have to match against the census by eye — so an
-application publishing a name `dns` never rewrites cannot be written.
-From that it emits the coherent set: an `HTTPRoute` per Gateway each
-`Route` sets, `internet`'s gate on that one alone, and a redirect for a
-bare name; a `TLSRoute` per Gateway a `Passthrough` sets; for each
-`Port`, a Service for each Gateway it sets, with its allow; and the
-public records of the rows on `internet`. It never writes a rewrite,
-which is the split §3 describes.
+**`expose(exposure)` on the app component base is the one helper**
+(`kluster.components.apps`), and it takes the application's `Exposure`
+from the census, not a host string a reader would have to match against
+the census by eye — so an application publishing a name `dns` never
+rewrites cannot be written. From that it emits the coherent set: an
+`HTTPRoute` per Gateway each `Route` sets (`kluster.lib.k8s.route`),
+`internet`'s gate on that one alone, and a redirect for a bare name at
+`lan-gw`'s listener for the label; an `HTTPRoute` at `internet-gw`'s
+apex listeners for an `Apex`;
+and for each `Port`, a Service for each Gateway it sets, at that
+front's addresses, with one allow for the world on its port and
+transports. A held row's routes attach all the same. It refuses a
+`Passthrough` by name, as the Gateways do: Cilium drops a passthrough
+listener together with the zone's wildcard listener on the same port
+(cluster-infra.md §2), and how such a row is reached is
+[Aetf/kluster-ops#723](https://github.com/Aetf/kluster-ops/issues/723).
+It declares no
+record: the public records of the rows on `internet` are not built. It
+never writes a rewrite, which is the
+split §3 describes.
 
 **There is one helper, because the declaration already states the
 exposure.** A helper per kind would make the call a second statement of

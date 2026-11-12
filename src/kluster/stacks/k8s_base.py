@@ -26,11 +26,14 @@ a passphrase of its own (rfc-005 §5.1), and a StackReference elides the secrets
 the reading stack cannot decrypt. So `credentials derived sync --only
 kubeconfig` copies it out of `physical`'s state into this stack's
 configuration, and it is read so that anything but a kubeconfig stops the run
-(`kluster.lib.k8s.kubeconfig_from`). The addresses the `internet` pool is made
-of are plain machine facts, and they do cross by StackReference: the cloud
-nodes' private IPv4s and GUAs, the dedicated VIP's private address and the
-balancer's two public ones (rfc-007 §4.4), each read so that anything but an
-address stops the run (`kluster.lib.stack_addresses`). And the sealed values
+(`kluster.lib.k8s.kubeconfig_from`). The addresses the pools are made of are
+plain machine facts, and they do cross by StackReference: for the `internet`
+pool, the cloud nodes' private IPv4s and GUAs, the dedicated VIP's private
+address and the balancer's two public ones (rfc-007 §4.4,
+`kluster.components.cilium.internet_pool_members`), and for the worker's own
+pool, the worker's GUA beside its IPv4, which is a convention (rfc-008 §4.1);
+each is read so that anything but an address stops the run
+(`kluster.lib.stack_addresses`). And the sealed values
 it declares are plain values of this stack's configuration, under the one key
 `conventions.sealed.CONFIG_KEY`, read out per value by the value's census row
 (`kluster.lib.k8s.sealed_ciphertext`) and handed to the component that
@@ -58,7 +61,7 @@ import pulumi_kubernetes as k8s
 from kluster import conventions
 from kluster.components.backup.volsync import VolSync
 from kluster.components.certificates import CertManager
-from kluster.components.cilium import BgpSession, Cilium, InternetPoolMembers
+from kluster.components.cilium import BgpSession, Cilium, internet_pool_members
 from kluster.components.gpu import IntelGpuPlugin, NodeFeatureDiscovery
 from kluster.components.local_path import LocalPathProvisioner
 from kluster.components.monitoring import Monitoring
@@ -108,8 +111,9 @@ async def main() -> None:
         'cilium',
         chart=versions.chart['cilium'],
         gateway_api_definitions=gateway_api_definitions,
-        internet_pool=_internet_pool_members(physical),
-        zones=conventions.routes.served_zones(),
+        internet_pool=internet_pool_members(physical),
+        worker_gua=stack_addresses.address(physical, conventions.PHYSICAL_OUTPUTS.worker_gua, 6),
+        exposures=tuple(conventions.routes.EXPOSURES.values()),
         opts=opts,
     )
     sealing = SealedSecretsController(
@@ -164,24 +168,3 @@ async def main() -> None:
         opts=opts,
     )
     _ = Reloader('reloader', chart=versions.chart['reloader'], after=[cilium], opts=opts)
-
-
-def _internet_pool_members(physical: pulumi.StackReference) -> InternetPoolMembers:
-    """The `internet` pool's members, out of the physical stack, each refused unless it is an address.
-
-    These are the only outputs this program reads across the reference. The
-    names asked for are `conventions.PHYSICAL_OUTPUTS`, the structure
-    `physical` exports under, so a rename there is a rename here in the same
-    edit. Each read checks what it got, unknowns included: a targeted apply of
-    `physical` can leave any of these as Pulumi's unknown sentinel, which reads
-    back absent or unknown, and a pool built from that would carry `"None"`
-    as an address (framework/pulumi.md §1.4).
-    """
-    outputs = conventions.PHYSICAL_OUTPUTS
-    return InternetPoolMembers(
-        node_private_ips=stack_addresses.addresses_by_name(physical, outputs.node_private_ips, 4),
-        node_guas=stack_addresses.addresses_by_name(physical, outputs.node_guas, 6),
-        dedicated_vip=stack_addresses.address(physical, outputs.vip1_private, 4),
-        balancer_v4=stack_addresses.address(physical, outputs.cluster_endpoint, 4),
-        balancer_v6=stack_addresses.address(physical, outputs.cluster_endpoint_v6, 6),
-    )

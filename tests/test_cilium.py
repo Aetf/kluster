@@ -3,7 +3,7 @@
 The program runs whole, against a `physical` that has published its addresses
 (`k8s_base_installation`), and the cases read what it handed the provider: the
 chart's values, the Gateway API definitions, the Gateways' class and its
-configuration, the two address pools, the baseline policy and the BGP session
+configuration, the three address pools, the baseline policy and the BGP session
 to the gateway (rfc-007 §4, §5.1). The session's cases run it twice more, with
 the session's password sealed in and as the stack stands until it is
 (physical/bring-up.md §1).
@@ -50,6 +50,7 @@ from pulumi.output import UNKNOWN
 from kluster import conventions
 from kluster.components import talos
 from kluster.components.gateway import routing
+from kluster.conventions.cluster import POOL_WORKER
 from kluster.lib.k8s import KUBECONFIG_KEY
 from kluster.lib.stack_addresses import Held
 from kluster.lib.versions import versions
@@ -207,6 +208,17 @@ def test_both_families_are_on_where_a_pool_hands_out_both(applied: Run) -> None:
     assert _at(applied.values('cilium'), ('ipv6', 'enabled')) is True
 
 
+def test_a_pod_detects_a_path_that_drops_what_is_too_big_on_its_own(applied: Run) -> None:
+    """The chart's values state the `blackhole` mode, which a balancer front that relays no ICMP error leaves pods to.
+
+    A pod sending to a client behind a smaller link learns of it from no
+    packet-too-big (rfc-008 §4.1), so the kernel's own detection is what
+    recovers the connection; the mode is the chart's default, and stating
+    it keeps a moved default from taking it away.
+    """
+    assert applied.values('cilium')['pmtuDiscovery']['packetizationLayerPMTUDMode'] == 'blackhole'
+
+
 def test_hubble_exports_flow_metrics(applied: Run) -> None:
     """Hubble's metrics server, which the node firewall opens to the scraper, serves only when some metric is named."""
     assert applied.values('cilium')['hubble']['metrics']['enabled']
@@ -343,6 +355,21 @@ def test_the_lan_pool_is_its_range_and_selects_its_own_services(applied: Run) ->
     assert _selects_its_own_name(applied, lan.name)
 
 
+def test_the_worker_pool_is_the_workers_two_addresses_and_selects_its_own_services(applied: Run) -> None:
+    """The worker's IPv4, a convention, and the GUA `physical` published for it, one single-address block each.
+
+    A `SiteForward` port's Service asks for them, since the site's forward and
+    pinhole end at the worker's own address (rfc-008 §4.1); no other address
+    belongs here, and the label is the pool's own.
+    """
+    spec = _pool(applied, POOL_WORKER)
+
+    assert sorted(block['cidr'] for block in spec['blocks']) == sorted(
+        [f'{conventions.HOMELAB_NODE_IPV4}/32', f'{PUBLISHED[OUTPUTS.worker_gua]}/128']
+    )
+    assert _selects_its_own_name(applied, POOL_WORKER)
+
+
 # -- The baseline policy -------------------------------------------------------
 
 
@@ -375,27 +402,38 @@ def test_what_the_operator_defines_waits_for_the_chart(applied: Run) -> None:
 
 
 @pytest.mark.parametrize(
-    ('output', 'value', 'preview', 'held'),
+    ('output', 'value', 'preview', 'held', 'pool'),
     [
         # The node GUAs a targeted apply of `physical` left as the sentinel:
         # unknown in a preview, absent in an update.
-        (OUTPUTS.node_guas, UNKNOWN, True, Held.UNKNOWN),
-        (OUTPUTS.node_guas, None, False, Held.ABSENT),
-        (OUTPUTS.node_private_ips, {}, False, Held.EMPTY_MAPPING),
-        (OUTPUTS.cluster_endpoint_v6, '203.0.113.10', False, Held.WRONG_FAMILY),
-        (OUTPUTS.vip1_private, {}, False, Held.MAPPING),
+        (OUTPUTS.node_guas, UNKNOWN, True, Held.UNKNOWN, conventions.POOL_INTERNET),
+        (OUTPUTS.node_guas, None, False, Held.ABSENT, conventions.POOL_INTERNET),
+        (OUTPUTS.node_private_ips, {}, False, Held.EMPTY_MAPPING, conventions.POOL_INTERNET),
+        (OUTPUTS.cluster_endpoint_v6, '203.0.113.10', False, Held.WRONG_FAMILY, conventions.POOL_INTERNET),
+        (OUTPUTS.vip1_private, {}, False, Held.MAPPING, conventions.POOL_INTERNET),
+        # Unset until the bring-up reads it off the worker's advertisement.
+        (OUTPUTS.worker_gua, None, False, Held.ABSENT, POOL_WORKER),
+        (OUTPUTS.worker_gua, '192.168.70.10', False, Held.WRONG_FAMILY, POOL_WORKER),
     ],
-    ids=['guas-unknown', 'guas-absent', 'node-ips-elided', 'balancer-v6-wrong-family', 'vip-elided'],
+    ids=[
+        'guas-unknown',
+        'guas-absent',
+        'node-ips-elided',
+        'balancer-v6-wrong-family',
+        'vip-elided',
+        'worker-gua-absent',
+        'worker-gua-wrong-family',
+    ],
 )
 @pytest.mark.asyncio
 async def test_an_output_that_is_not_an_address_stops_the_run_by_name(
-    output: str, value: object, preview: bool, held: Held
+    output: str, value: object, preview: bool, held: Held, pool: str
 ) -> None:
-    """The pool is declared from nothing a StackReference can read back in place of an address.
+    """A pool is declared from nothing a StackReference can read back in place of an address.
 
     The read is answered here rather than by the mock monitor for `output`,
     because the mock drops an output that is `None` or unknown on its way to
-    the reader. The pool is never declared with what the output held.
+    the reader. The pool reading it is never declared with what the output held.
     """
     original = pulumi.StackReference.get_output
 
@@ -409,7 +447,7 @@ async def test_an_output_that_is_not_an_address_stops_the_run_by_name(
     assert run.refused is not None
     assert repr(output) in str(run.refused)
     assert (run.refused.output, run.refused.held) == (output, held)
-    assert conventions.POOL_INTERNET not in {it.inputs['metadata']['name'] for it in run.monitor.of_type(POOL)}
+    assert pool not in {it.inputs['metadata']['name'] for it in run.monitor.of_type(POOL)}
 
 
 # -- The BGP session to the gateway --------------------------------------------

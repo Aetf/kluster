@@ -44,6 +44,7 @@ PUBLISHED: dict[str, object] = {
     OUTPUTS.node_private_ips: {'cp-1': '10.0.1.11', 'cp-2': '10.0.1.12', 'cp-3': '10.0.1.13'},
     OUTPUTS.node_public_ips: {'cp-1': '198.51.100.11', 'cp-2': '198.51.100.12', 'cp-3': '198.51.100.13'},
     OUTPUTS.node_guas: {'cp-1': '2001:db8:1::11', 'cp-2': '2001:db8:1::12', 'cp-3': '2001:db8:1::13'},
+    OUTPUTS.worker_gua: '2001:db8:70::10',
     OUTPUTS.kubeconfig: {},
 }
 

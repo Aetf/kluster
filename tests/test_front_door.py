@@ -8,9 +8,12 @@ The program runs whole, against a `physical` that has published its addresses
     so, while the issuer and the certificates are declared all the same and
     wait for it (physical/bring-up.md §1);
 -   **with the token sealed in, a census whose Gateway rows sit on other
-    ports, and a route in a second zone**, so that a listener built from a
-    fixed port, a certificate built from a fixed zone list, or two zones'
-    certificates crossed, reads differently from what the census asks.
+    ports, a route in a second zone, and a row of each shape that asks a
+    Gateway for a listener of its own** -- an apex and a bare name -- so
+    that a listener built from a fixed port, a certificate built
+    from a fixed zone list, two zones' certificates crossed, or a listener
+    derived from anything but the rows that ask for it, reads differently
+    from what the census asks.
 
 Literals written here are the upstream projects' contracts: the Gateway API's
 address type and listener protocols, cert-manager's issuer kind.
@@ -38,7 +41,7 @@ from k8s_base_installation import (
 from mock_monitor import declaring, run_under_backstop
 
 from kluster import conventions
-from kluster.lib.k8s import KUBECONFIG_KEY
+from kluster.lib.k8s import KUBECONFIG_KEY, PassthroughRefused
 
 GATEWAY = 'crds:gateway.networking.k8s.io/v1:Gateway'
 HTTP_ROUTE = 'crds:gateway.networking.k8s.io/v1:HTTPRoute'
@@ -60,11 +63,23 @@ SECOND_ZONE = 'second.example'
 #: The ports the sealed run moves the Gateways' two ports to.
 MOVED_PORTS = conventions.GatewayPorts(http=10080, https=10443)
 
-#: The sealed run's census: the installation's, and one route in a second zone.
+#: The label of the sealed run's bare name.
+BARE_LABEL = 'short'
+
+#: The sealed run's census: the installation's, one route in a second zone,
+#: on `internet` and rewritten on `lan`, with an apex there, and a bare name.
 PROBE = {
     **conventions.routes.EXPOSURES,
     'probe': conventions.routes.Exposure(
-        routes=(conventions.routes.Route('probe', internet=conventions.routes.PROXIED, zones=(SECOND_ZONE,)),)
+        routes=(
+            conventions.routes.Apex((SECOND_ZONE,)),
+            conventions.routes.Route(
+                'probe', internet=conventions.routes.PROXIED, lan=conventions.routes.REWRITE, zones=(SECOND_ZONE,)
+            ),
+        )
+    ),
+    'probe-bare': conventions.routes.Exposure(
+        routes=(conventions.routes.Route(BARE_LABEL, lan=conventions.routes.BARE),)
     ),
 }
 
@@ -122,12 +137,36 @@ def _certificates(run: Run) -> list[dict[str, Any]]:
 
 
 def _https(gateway: dict[str, Any]) -> list[dict[str, Any]]:
-    return [listener for listener in gateway['spec']['listeners'] if listener['protocol'] == 'HTTPS']
+    """The zones' wildcard listeners."""
+    return [
+        listener
+        for listener in gateway['spec']['listeners']
+        if listener['protocol'] == 'HTTPS' and listener['hostname'].startswith('*.')
+    ]
+
+
+def _apexes(gateway: dict[str, Any]) -> list[dict[str, Any]]:
+    """The HTTPS listeners on a zone's own name."""
+    return [
+        listener
+        for listener in gateway['spec']['listeners']
+        if listener['protocol'] == 'HTTPS' and not listener['hostname'].startswith('*.')
+    ]
+
+
+def _protocol(gateway: dict[str, Any], protocol: str) -> list[dict[str, Any]]:
+    return [listener for listener in gateway['spec']['listeners'] if listener['protocol'] == protocol]
 
 
 def _http(gateway: dict[str, Any]) -> dict[str, Any]:
-    (listener,) = [listener for listener in gateway['spec']['listeners'] if listener['protocol'] == 'HTTP']
+    """The HTTP listener every Gateway has, which names no host."""
+    (listener,) = [it for it in _protocol(gateway, 'HTTP') if 'hostname' not in it]
     return listener
+
+
+def _bare(gateway: dict[str, Any]) -> list[dict[str, Any]]:
+    """The HTTP listeners on a bare label."""
+    return [it for it in _protocol(gateway, 'HTTP') if 'hostname' in it]
 
 
 # -- The certificates ------------------------------------------------------------
@@ -232,18 +271,27 @@ def test_internet_gws_addresses_are_all_in_its_pool(absent: tuple[Run, list[str]
     assert asked < blocks
 
 
-def test_internet_gw_shares_its_addresses_with_other_namespaces(absent: tuple[Run, list[str]]) -> None:
-    """The census's raw Services hold the same node addresses from their own namespaces (rfc-007 §4.4).
+def test_each_gateway_shares_its_addresses_with_other_namespaces_under_a_key_of_its_own(
+    absent: tuple[Run, list[str]],
+) -> None:
+    """The census's raw Services hold each Gateway's addresses from their own namespaces (rfc-007 §4.4, rfc-008 §4.1).
 
     LB IPAM shares an address only between Services carrying one sharing key,
     and across namespaces only where both carry the cross-namespace
-    annotation, so `internet-gw` carries both.
+    annotation, so every Gateway carries both. `lan-gw` and `media-gw` hold
+    one VIP each out of one pool, so their keys differ: a shared key would let
+    a raw port at one VIP be allocated the other.
     """
     run, _ = absent
-    annotations = _gateways(run)[conventions.GATEWAY_INTERNET]['spec']['infrastructure']['annotations']
+    gateways = _gateways(run)
+    keys: dict[str, str] = {}
+    for name, gateway in gateways.items():
+        annotations = gateway['spec']['infrastructure']['annotations']
+        keys[name] = annotations['lbipam.cilium.io/sharing-key']
+        assert annotations['lbipam.cilium.io/sharing-cross-namespace'] == '*', name
 
-    assert annotations['lbipam.cilium.io/sharing-key']
-    assert annotations['lbipam.cilium.io/sharing-cross-namespace'] == '*'
+    assert all(keys.values())
+    assert keys[conventions.GATEWAY_LAN] != keys[conventions.GATEWAY_MEDIA]
 
 
 def test_the_listeners_ports_are_the_gateway_ports(sealed: Run) -> None:
@@ -253,8 +301,9 @@ def test_the_listeners_ports_are_the_gateway_ports(sealed: Run) -> None:
     would differ from them.
     """
     for name, gateway in _gateways(sealed).items():
-        assert {listener['port'] for listener in _https(gateway)} == {MOVED_PORTS.https}, name
-        assert _http(gateway)['port'] == MOVED_PORTS.http, name
+        assert {listener['port'] for listener in _protocol(gateway, 'HTTPS')} == {MOVED_PORTS.https}, name
+        assert _protocol(gateway, 'TLS') == [], name
+        assert {listener['port'] for listener in _protocol(gateway, 'HTTP')} == {MOVED_PORTS.http}, name
 
 
 def test_each_https_listener_serves_its_own_zones_certificate(sealed: Run) -> None:
@@ -280,13 +329,10 @@ def test_each_https_listener_serves_its_own_zones_certificate(sealed: Run) -> No
             assert certificate['metadata']['namespace'] == gateway['metadata']['namespace']
 
 
-def test_a_route_attaches_to_the_https_listeners_only_from_a_namespace_carrying_the_route_label(
-    absent: tuple[Run, list[str]],
-) -> None:
-    run, _ = absent
-
-    for name, gateway in _gateways(run).items():
-        for listener in _https(gateway):
+def test_a_route_attaches_to_the_https_listeners_only_from_a_namespace_carrying_the_route_label(sealed: Run) -> None:
+    """Every listener an application's route attaches to: the zones', the apexes' and the bare names'."""
+    for name, gateway in _gateways(sealed).items():
+        for listener in [*_protocol(gateway, 'HTTPS'), *_bare(gateway)]:
             assert listener['allowedRoutes']['namespaces'] == {
                 'from': 'Selector',
                 'selector': {'matchLabels': dict(conventions.routes.ROUTE_LABEL)},
@@ -318,6 +364,71 @@ def test_plain_http_is_answered_with_a_redirect_to_https_alone(absent: tuple[Run
         assert _http(gateway)['allowedRoutes']['namespaces'] == {'from': 'Same'}, name
     labels = namespaces[conventions.GATEWAY_NAMESPACE]['metadata']['labels']
     assert not conventions.routes.ROUTE_LABEL.items() <= labels.items()
+
+
+# -- The listeners the rows ask for --------------------------------------------
+
+
+def test_an_apex_listener_exists_exactly_for_each_zone_an_apex_names(sealed: Run) -> None:
+    """On `internet-gw` alone, on the zone's own name, with the zone's certificate, which covers the apex.
+
+    The primary is served too, and no `Apex` names it, so it has none.
+    """
+    secrets = {
+        name: certificate['spec']['secretName']
+        for certificate in _certificates(sealed)
+        for name in certificate['spec']['dnsNames']
+    }
+    gateways = _gateways(sealed)
+
+    apexes = _apexes(gateways[conventions.GATEWAY_INTERNET])
+    assert [listener['hostname'] for listener in apexes] == [SECOND_ZONE]
+    (apex,) = apexes
+    assert apex['tls'] == {'mode': 'Terminate', 'certificateRefs': [{'name': secrets[SECOND_ZONE]}]}
+    for name in (conventions.GATEWAY_LAN, conventions.GATEWAY_MEDIA):
+        assert _apexes(gateways[name]) == [], name
+
+
+@pytest.mark.asyncio
+async def test_a_census_holding_a_passthrough_is_refused_naming_it() -> None:
+    """No listener is declared for it, since Cilium would drop it together with the zone's wildcard on 443.
+
+    The row is held, which changes nothing: its listener would stand while the
+    legacy VPS holds the name, and take the zone's names down with it. The
+    refusal names the row and the decision on how it is reached instead.
+    """
+    census = {
+        **conventions.routes.EXPOSURES,
+        'probe-passthrough': conventions.routes.Exposure(
+            routes=(
+                conventions.routes.Held(
+                    conventions.routes.Passthrough(
+                        'tunnel',
+                        internet=conventions.routes.Direct('the pod reads the client certificate'),
+                        lan=conventions.routes.REWRITE,
+                    )
+                ),
+            )
+        ),
+    }
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(conventions.routes, 'EXPOSURES', census)
+        with pytest.raises(PassthroughRefused, match=r"'tunnel'.*kluster-ops#723"):
+            _ = await declare(sealed=None)
+
+
+def test_a_bare_listener_exists_on_lan_gw_exactly_for_each_bare_row(sealed: Run) -> None:
+    """Plain HTTP on the label, where the bare name arrives, on `lan-gw` alone.
+
+    The IoT VLAN reaches only 443, and a bare name is a value of `lan` alone,
+    so neither other Gateway has one; a `Route` whose `lan` is a plain
+    rewrite asks for none either.
+    """
+    gateways = _gateways(sealed)
+
+    assert [listener['hostname'] for listener in _bare(gateways[conventions.GATEWAY_LAN])] == [BARE_LABEL]
+    for name in (conventions.GATEWAY_INTERNET, conventions.GATEWAY_MEDIA):
+        assert _bare(gateways[name]) == [], name
 
 
 # -- What waits for what ---------------------------------------------------------

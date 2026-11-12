@@ -77,6 +77,18 @@
     kinds but cannot import them, so the monitoring component declares
     them untyped, as a layer that goes once they import; and the
     operator's pre-delete cleanup joins §7.1's defaults switched off.
+*   **Updated:** 2026-11-12 — §4.4, §5.3 and §9.1, as
+    [rfc-008](rfc-008-workload-migration.md) slice 4 built them. The
+    census is rfc-008's composed `Exposure`, not the public port census,
+    and `public_port` is `port`, which takes a row of any front: a raw
+    home port shares its Gateway's VIP under that Gateway's own sharing
+    key, so `lan-gw` and `media-gw` carry sharing keys too and no `lan`
+    VIP is held by one Service; every side of a share admits every
+    namespace; and a raw port emits its own allow for the world on its
+    port and transports, beside the default-deny that admits the
+    `ingress` entity alone. `route(row)` takes a `Route` and emits one
+    `HTTPRoute` per Gateway the row sets, and declares no record yet; the
+    one helper a component calls is `expose(exposure)` on the base.
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules

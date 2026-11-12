@@ -3,8 +3,9 @@
 What is held here is where each program's providers' credentials come from --
 the kubeconfig and the zones token, both out of the stack's own configuration,
 the kubeconfig read so that anything but a kubeconfig stops the run -- what
-each reads across a StackReference, and that each committed stack file turns a
-missed provider into an error. What `k8s-base` installs is `test_cilium.py`'s
+each reads across a StackReference, read so that anything but an address
+stops the run, and that each committed stack file turns a missed provider into
+an error. What `k8s-base` installs is `test_cilium.py`'s
 and `test_standing_set.py`'s.
 
 Every run here is under the parent backstop `kluster.main` installs before a
@@ -23,10 +24,12 @@ import pytest_asyncio
 import yaml
 from k8s_base_installation import PUBLISHED, VERSIONS_CONFIG, Physical, release_assets
 from mock_monitor import declaring, run_under_backstop
+from pulumi.output import UNKNOWN
 from pulumi.runtime.rpc import UNKNOWN as UNKNOWN_SENTINEL
 
 from kluster import conventions, stacks
 from kluster.lib.k8s import KUBECONFIG_KEY, UnusableKubeconfig
+from kluster.lib.stack_addresses import Held, UnusableAddressOutput
 from kluster.stacks import apps
 
 #: A stand-in for the cluster-admin kubeconfig, which says what it is if it ever
@@ -38,14 +41,14 @@ ZONES_TOKEN = 'a-fake-zones-token-that-opens-nothing'
 
 KUBERNETES_PROVIDER = 'pulumi:providers:kubernetes'
 CLOUDFLARE_PROVIDER = 'pulumi:providers:cloudflare'
-STACK_REFERENCE = 'pulumi:pulumi:StackReference'
 
 #: The prefix every provider resource's type carries; what follows it is the
 #: package the provider serves.
 PROVIDER_PREFIX = 'pulumi:providers:'
 
-#: The outputs of `physical` the `internet` pool is made of (rfc-007 §4.4):
-#: the only ones `k8s-base` reads across a StackReference.
+#: The outputs of `physical` the pools and the raw ports' fronts are made of
+#: (rfc-007 §4.4, rfc-008 §4.1): the `internet` pool's members and the
+#: worker's GUA, the only ones either program reads across a StackReference.
 POOL_OUTPUTS = frozenset(
     {
         conventions.PHYSICAL_OUTPUTS.node_private_ips,
@@ -53,6 +56,7 @@ POOL_OUTPUTS = frozenset(
         conventions.PHYSICAL_OUTPUTS.vip1_private,
         conventions.PHYSICAL_OUTPUTS.cluster_endpoint,
         conventions.PHYSICAL_OUTPUTS.cluster_endpoint_v6,
+        conventions.PHYSICAL_OUTPUTS.worker_gua,
     }
 )
 
@@ -133,7 +137,7 @@ class Run(Physical):
         self.read_across: list[str] = []
 
 
-async def declare(name: str, *, kubeconfig: str | None = KUBECONFIG) -> Run:
+async def declare(name: str, *, kubeconfig: str | None = KUBECONFIG, preview: bool = False) -> Run:
     """One program, declared once, with `kubeconfig` in its configuration, or none at all.
 
     The reads through a StackReference's by-name methods -- `get_output`,
@@ -146,7 +150,7 @@ async def declare(name: str, *, kubeconfig: str | None = KUBECONFIG) -> Run:
     if kubeconfig is not None:
         secrets[f'kluster:{KUBECONFIG_KEY}'] = kubeconfig
     pulumi.runtime.set_all_config(secrets | VERSIONS_CONFIG, secret_keys=list(secrets))
-    monitor = await run_under_backstop(Run(), stack=name)
+    monitor = await run_under_backstop(Run(), stack=name, preview=preview)
 
     def recording(read: Callable[..., Any]) -> Callable[..., Any]:
         def read_by_name(reference: pulumi.StackReference, output: str) -> Any:
@@ -190,13 +194,14 @@ def test_each_program_builds_one_kubernetes_provider_from_its_configured_kubecon
 
 @pytest.mark.parametrize('name', PROGRAMS)
 def test_no_program_reads_the_kubeconfig_across_a_stack_reference(applied: dict[str, Run], name: str) -> None:
-    """`k8s-base` reads only the pool's addresses from `physical`, `apps` reads nothing, and no kubeconfig crosses.
+    """Each program reads only the pools' addresses from `physical`, and no kubeconfig crosses.
 
     `physical` is encrypted under a passphrase of its own (rfc-005 §5.1), and a
     StackReference from a stack that cannot decrypt it hands back `{}` for the
     kubeconfig; the copy in the stack's own configuration is the only route.
-    What does cross is plain machine facts, and only where a program declares
-    something from them: the `internet` pool's members (rfc-007 §3.1, §4.4).
+    What does cross is plain machine facts a program declares something
+    from: the pools' members, which `k8s-base` builds its pools from and
+    `apps` hands a raw port's Service (rfc-007 §3.1, §4.4; rfc-008 §4.1).
 
     Held two ways. By name, every by-name read is one of the pool's outputs.
     By value, the kubeconfig `physical` publishes here reaches no
@@ -212,11 +217,7 @@ def test_no_program_reads_the_kubeconfig_across_a_stack_reference(applied: dict[
 
     assert carrying == []
     assert conventions.PHYSICAL_OUTPUTS.kubeconfig not in read
-    if name == conventions.STACK_NAMES.k8s_base:
-        assert read == POOL_OUTPUTS
-    else:
-        assert read == set()
-        assert STACK_REFERENCE not in applied[name].types
+    assert read == POOL_OUTPUTS
 
 
 @pytest.mark.parametrize('name', PROGRAMS)
@@ -330,3 +331,37 @@ def test_each_stack_file_disables_the_defaults_of_every_package_its_program_uses
     config = yaml.safe_load(committed.read_text()).get('config', {})
 
     assert set(config.get('pulumi:disable-default-providers', ())) == built | (used - NOT_PACKAGES)
+
+
+@pytest.mark.parametrize(
+    ('output', 'value', 'held'),
+    [
+        (conventions.PHYSICAL_OUTPUTS.node_private_ips, UNKNOWN, Held.UNKNOWN),
+        (conventions.PHYSICAL_OUTPUTS.worker_gua, None, Held.ABSENT),
+    ],
+    ids=['node-ips-unknown', 'worker-gua-absent'],
+)
+@pytest.mark.asyncio
+async def test_a_front_apps_reads_that_is_not_an_address_stops_its_run_by_name(
+    output: str, value: object, held: Held
+) -> None:
+    """`apps` reads the fronts' addresses so that anything but an address stops the run, naming the output.
+
+    No component is wired to hand them to, and the run stops all the same:
+    a Service declared from what a targeted apply of `physical` left behind
+    would carry `"None"` as its address. The read is answered here rather
+    than by the mock monitor, which drops an output that is `None` or
+    unknown on its way to the reader.
+    """
+    original = pulumi.StackReference.get_output
+
+    def read_back(reference: pulumi.StackReference, name: pulumi.Input[str]) -> pulumi.Output[Any]:
+        return pulumi.Output.from_input(value) if name == output else original(reference, name)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(pulumi.StackReference, 'get_output', read_back)
+        with pytest.raises(UnusableAddressOutput) as refused:
+            _ = await declare(conventions.STACK_NAMES.apps, preview=value is UNKNOWN)
+
+    assert repr(output) in str(refused.value)
+    assert (refused.value.output, refused.value.held) == (output, held)

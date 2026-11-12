@@ -38,11 +38,12 @@ lock-in, and declarative management using Pulumi.
     worker initiates outbound to the cloud nodes' public endpoints.
 -   **CNI & Routing**: Cilium (eBPF-based, kube-proxy replacement).
 -   **Ingress (both sides, unified)**: every exposed app is a
-    `type: LoadBalancer` Service drawing from one of two Cilium LB IPAM
-    pools — `internet` (the cloud nodes' primary addresses as seen on
-    the wire, §3.2; publicly reachable via OCI's 1:1 NAT and fronted by
-    the free OCI NLB) or `lan` (dedicated dual-stack subnet BGP-announced
-    to the UDM SE). HTTP/S goes through Cilium Gateway API (Envoy)
+    `type: LoadBalancer` Service drawing from a Cilium LB IPAM pool —
+    `internet` (the cloud nodes' primary addresses as seen on the wire,
+    §3.2; publicly reachable via OCI's 1:1 NAT and fronted by the free
+    OCI NLB), `lan` (dedicated dual-stack subnet BGP-announced to the
+    UDM SE), or `worker` (the worker's own addresses, for a port the
+    site forwards, §3.1). HTTP/S goes through Cilium Gateway API (Envoy)
     gateways that are themselves LoadBalancer Services from these pools
     (§3).
 -   **Egress**: default per-node local egress; bulk egress stays on the home
@@ -151,17 +152,18 @@ The cluster will operate in Dual-Stack mode, prioritizing IPv4.
 
 ## 3. Ingress, Egress & Load Balancing
 
-### 3.1 One model for both sides: two LB IPAM pools
+### 3.1 One model for both sides: LB IPAM pools
 
 Every externally reachable app — cloud-facing or LAN-facing, HTTP or raw
-TCP/UDP — is a `type: LoadBalancer` Service drawing its VIP from one of two
-`CiliumLoadBalancerIPPool`s. The two sides are symmetric; only how packets
+TCP/UDP — is a `type: LoadBalancer` Service drawing its VIP from a
+`CiliumLoadBalancerIPPool`. The sides are symmetric; only how packets
 reach the VIP differs:
 
 | Pool | Addresses | How traffic reaches the VIP |
 | --- | --- | --- |
 | `internet` | The three cloud nodes' primary addresses **as seen on the wire** (§3.2): v4 = the primary **private** IPs (OCI 1:1-NATs each public IPv4 to its VNIC private IP — the interface never carries the public address), v6 = the GUAs (no NAT, on-interface); and the NLB's two public addresses, answered for connections that start in the cluster (§3.2) | OCI routes each public IP to its node; the free NLB fans the stable public front IP out across healthy nodes; no announcement needed |
 | `lan` | Dedicated dual-stack subnet, `192.168.71.0/24` + a ULA `/64` — deliberately *not* inside any home network, the nodes' own VLAN 7 (`192.168.70.0/24`) included | BGP-announced to the UDM SE (§3.4) |
+| `worker` | The homelab worker's own IPv4 and GUA, the same kind of member as the `internet` pool's node addresses | Routed to the worker as the node it is; the site's forward and pinhole end there, for a port whose inbound traffic must arrive where its outbound leaves (§3.5) |
 
 This works because Cilium's kube-proxy replacement installs BPF service
 entries for LoadBalancer frontends on the node regardless of whether any
@@ -173,7 +175,7 @@ respectively already do.
 ([LB IPAM docs](https://docs.cilium.io/en/stable/network/lb-ipam/),
 [KPR docs](https://docs.cilium.io/en/stable/network/kubernetes/kubeproxy-free/).)
 
-Mechanics shared by both pools:
+Mechanics every pool shares:
 
 -   **Pool selection** via a Service label matched by the pool's
     `serviceSelector`. A Service that must be on both sides is simply two
@@ -181,8 +183,11 @@ Mechanics shared by both pools:
 -   **IP sharing**: `internet` Services all request the same three
     primary IPs, and the NLB's two addresses beside them
     (`lbipam.cilium.io/ips` + a `sharing-key`, ports disambiguate —
-    §3.2); `lan` Services normally take one IP each (the pool is
-    plentiful).
+    §3.2); a raw `lan` port shares its Gateway's VIP the same way, under
+    that Gateway's own key, so `lan-gw` and `media-gw` each hold one VIP
+    and no raw port adds an address. Every side of a share admits every
+    namespace, since the Services sharing a front are in their
+    applications' namespaces.
 -   **Backends may live on any node.** With `externalTrafficPolicy: Cluster`
     the receiving node SNATs and forwards over KubeSpan to a remote backend
     — a public port can front a homelab pod. Cost: the backend
@@ -193,10 +198,11 @@ Mechanics shared by both pools:
     traffic policy, and between two `Local` Services only when both
     select the same pods; `internet-gw`'s Service is on those addresses
     and selects nothing, so a `Local` Service beside it would never be
-    allocated (rfc-007 §4.4). `externalTrafficPolicy: Local` (client IP
-    preserved, no extra hop) is left to a Service that holds an address
-    alone — the dedicated VIP, a `lan` VIP — and there only when its
-    backends are pinned to the VIP-owning node.
+    allocated (rfc-007 §4.4). The same holds at a Gateway's VIP, so a raw
+    port there takes `Cluster` too. `externalTrafficPolicy: Local` (client
+    IP preserved, no extra hop) is left to a Service that holds an address
+    alone — the dedicated VIP — and there only when its backends are pinned
+    to the VIP-owning node.
 
 ### 3.2 The internet side: NLB in front, primary IPs underneath
 
@@ -452,7 +458,9 @@ both IP families (cluster-infra.md §2).
     "Outbound-only v6" is the accepted first stage (peers are mostly
     reachable outbound; inbound v4 arrives via the v4 port forward
     that qbittorrent's own migration wave declares — physical/gateway.md
-    §4.2).
+    §4.2). Both families arrive at the peer Service's addresses in the
+    `worker` pool (§3.1), the worker's own, which is where the forward
+    and the pinhole end.
 -   **Stable-IP workloads (hath)**: served by the dedicated-VIP pattern
     (§3.2) — reserved public IP in, and out on the same address,
     independent of any node's lifecycle. How it leaves is hath's wave's
@@ -463,18 +471,31 @@ both IP families (cluster-infra.md §2).
 
 ### 3.6 Workload Routing Decision Matrix
 
-Deploying an app now answers exactly two questions — *which pool(s)* and
-*HTTP or not*:
+Deploying an app answers exactly two questions — *which Gateway* and
+*how*, by name through its proxy or raw at its address — and its
+`Exposure` (`conventions.routes`, declarative/dns.md §5) is those two
+questions: *which Gateway* is three peer fields, `internet`, `lan` and
+`media`, on every row, and *how* is the row's type. One component call,
+`expose(exposure)`, emits what each cell says:
 
-| Workload | Pool | Route kind |
-| --- | --- | --- |
-| Public HTTP/S (blog, authelia, splitpro) | `internet` | HTTPRoute → `internet-gw` (via NLB) |
-| LAN HTTP/S (immich fast path) | `lan` | HTTPRoute → `lan-gw` |
-| LAN HTTP/S consumed from the IoT VLAN (jellyfin) | `lan` | HTTPRoute → `media-gw` (dedicated IoT-reachable VIP, §3.4) |
-| Split-horizon HTTP/S (immich) | both | HTTPRoute → both gateways |
-| Public raw TCP/UDP (syncthing 22000) | `internet` | LoadBalancer Service + NLB listener |
-| LAN raw TCP/UDP | `lan` | LoadBalancer Service |
-| Same-IP-in/out (hath) | `internet` | LoadBalancer Service on a dedicated VIP + its wave's egress mechanism (§3.2) |
+| How | `internet` | `lan` | `media` |
+| --- | --- | --- | --- |
+| By name, HTTPS (`Route`: blog, authelia, immich) | HTTPRoute → `internet-gw` (via NLB), with the row's gate | HTTPRoute → `lan-gw`, ungated; a bare label redirects to the name | HTTPRoute → `media-gw`, the IoT-reachable VIP (§3.4) |
+| A website's apex (`Apex`: the blog) | HTTPRoute → `internet-gw`'s apex listener | — | — |
+| Raw TCP/UDP (`Port`: syncthing 22000, hath, qbittorrent's peer port) | LoadBalancer Service at its front: the NLB (+ its listener, `physical`'s), the dedicated VIP (+ its wave's egress mechanism, §3.2), or the worker's own address behind the site's forward | LoadBalancer Service at `lan-gw`'s VIP, sharing it | LoadBalancer Service at `media-gw`'s VIP, sharing it |
+
+A `Passthrough` row, TLS the pod terminates on 443 by name (the
+discovery server), is refused: Cilium drops a passthrough listener
+together with the zone's wildcard listener on the same port (§6.7), and
+how that server is reached is
+[Aetf/kluster-ops#723](https://github.com/Aetf/kluster-ops/issues/723).
+
+A row sets one field per Gateway it is reached on, so a split-horizon
+application (immich) is one row on `internet` and `lan`, under one
+name. A raw home row takes its Gateway's VIP rather than an address of
+its own, and its ports tell it apart from the Gateway's; a raw row of
+any kind brings its own allow, since the namespace's default-deny admits
+only what a Gateway forwards (§4.1).
 
 Placement (which node runs the pods) is orthogonal for every row — set
 by scheduling constraints, with §3.5's egress rules deciding it for
@@ -1248,6 +1269,20 @@ are not re-litigated from scratch. §6.5 documents the largest reversal
     arrive in Cilium 1.20. Plain LoadBalancer Services behind NLB
     listeners (§3.1–3.2) do the job in-kernel with zero extra
     components.
+-   **A TLS passthrough beside the zones' wildcard listeners is not
+    available either.** A `Passthrough` row is TLS the pod terminates on
+    443, by name, which a client that names its server with no port (the
+    syncthing discovery server's devices) needs. Cilium holds a TLS
+    passthrough listener and an HTTPS listener on one port to conflict
+    whenever their hostnames can match one name, and drops both
+    (`listenerPairConflict`, v1.20.1 through `main`), so a passthrough
+    for a name under a served zone takes the zone's wildcard listener,
+    and every name of the zone, off the Gateway. A `ListenerSet` loses to
+    the Gateway's own listener by the same rule, and two Gateways cannot
+    both hold 443 on one address. So the Gateways and `expose` refuse
+    the row by name, and how the discovery server is reached instead,
+    a raw port with each device reconfigured among the candidates, is
+    [Aetf/kluster-ops#723](https://github.com/Aetf/kluster-ops/issues/723).
 
 ### 6.8 HAOS under KubeVirt
 

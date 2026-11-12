@@ -46,6 +46,14 @@ class PhysicalOutputs:
     The `internet` pool's IPv6 members (rfc-007 §4.4), beside each node's
     private address; the balancer's IPv6 backends name the same addresses.
     """
+    worker_gua: str
+    """The homelab worker's GUA, as the stack's `workerGua` configures it, and absent until that is set.
+
+    The worker's own pool's IPv6 member, beside its IPv4, which is a
+    convention (`HOMELAB_NODE_IPV4`): `k8s-base` declares the pool from it,
+    and `apps` hands it to a `SiteForward` port's Service, whose address the
+    site's forward and pinhole end at (rfc-008 §4.1).
+    """
     kubeconfig: str
     """The cluster-admin kubeconfig, secret; `k8s-base` and `apps` are built on it."""
     talosconfig: str
@@ -90,6 +98,7 @@ PHYSICAL_OUTPUTS = PhysicalOutputs(
     node_private_ips='node_private_ips',
     node_public_ips='node_public_ips',
     node_guas='node_guas',
+    worker_gua='worker_gua',
     kubeconfig='kubeconfig',
     talosconfig='talosconfig',
     backup_bucket='backup_bucket',

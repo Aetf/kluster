@@ -143,10 +143,15 @@ above, and neither moves with the other.
 
 **Cross-component facts flow through parameters; cross-stack decisions
 flow through `conventions`.** StackReference is the exception and each
-use needs a recorded reason. Today there are two, each reading addresses
-`physical` publishes and a program declares something from: the `dns`
-stack reading the cluster anchors, and `k8s-base` reading the addresses
-its `internet` pool is made of (rfc-007 §4.4). **A StackReference carries plain outputs only, across a
+use needs a recorded reason. Today there are three, each reading
+addresses `physical` publishes and a program declares something from:
+the `dns` stack reading the cluster anchors; `k8s-base` reading the
+addresses its `internet` pool and the worker's pool are made of
+(rfc-007 §4.4, rfc-008 §4.1); and `apps` reading the same members and
+the worker's address, which a raw port's Service is declared at
+(rfc-008 §4.1). The last two read the pool's members through one
+function, `kluster.components.cilium.internet_pool_members`, and the
+worker's address each through `kluster.lib.stack_addresses.address`. **A StackReference carries plain outputs only, across a
 passphrase split**: it elides every secret output the reading stack
 cannot decrypt, and `physical` is encrypted under a passphrase of its
 own (rfc-005 §5.1). So a secret that one stack generates, needed by a

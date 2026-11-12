@@ -7,8 +7,8 @@ stack of [README.md](README.md) §1 and the home of ~80–90% of all future
 changes.
 
 > **Status**: designed 2026-08-22. Declared: an application's namespace,
-> its level, its route label and its policy (§1). Nothing else is
-> implemented.
+> its level, its route label and its policy, and its exposure through
+> `expose` with the records left out (§1). Nothing else is implemented.
 
 ## 1. The component contract
 
@@ -20,11 +20,11 @@ Every app is a `Component` subclass (putils, RFC-001) that owns:
 | Workload | Deployment/StatefulSet with **honest requests/limits** — CPU limits are mandatory on anything scheduled to the cloud pool (etcd shares those cores, nodes.md §1); memory requests sized from evidence, not idle numbers (the JuiceFS-sidecar lesson, storage.md §6) | nodes.md §§1, 4.4 |
 | Storage | by the two-axis selection in §2 (performance × persistence; fixed assets → NAS/object) | §2, storage.md §2 |
 | Backup | declared through the `backed_pvc` helper with a **retention class** — never ad-hoc schedules (§3) | §3, storage.md §3.1 |
-| Exposure | pool label + route kind per the routing matrix, via the helpers (`route`/`public_port`); one `route(row)` for every HTTP exposure, the row's `Exposure` deciding gateways and public record (dns.md §5); `public_port` emits the LoadBalancer Service alone, from the public port census row it is handed, under the `Cluster` traffic policy every Service on the node addresses takes (architecture.md §3.1) and with `allocateLoadBalancerNodePorts: false`, while the row's NLB listener is `physical`'s (physical.md §1); `auth=True` adds the ExternalAuth filter → Authelia for apps without native auth (cluster-infra.md §2); `Exposure.IOT` on the census row attaches `media-gw` — the explicit "IoT may reach this" decision, recorded on the row rather than at a call site (jellyfin; physical/gateway.md §4.2) | architecture.md §3.6, dns.md §3 |
-| DNS | emitted by the same helpers (CNAME to anchor); the split-horizon rewrite the route implies is applied by the `dns` stack from the same declaration, not by this one (dns.md §3) | dns.md |
+| Exposure | the component receives its application's `Exposure`, its row of `conventions.routes.EXPOSURES`, and makes one call, `expose(exposure)` on the application base (`kluster.components.apps`), with the Service its routes forward to, the pods its raw ports select and the fronts the `apps` program read (dns.md §5). Per `Route`, one `HTTPRoute` for each Gateway its fields set (`kluster.lib.k8s.route`); the gate is a field of its `internet` side and puts the ExternalAuth filter → Authelia on that route alone, so the home side is ungated (cluster-infra.md §2, which holds the gate's Cilium floor); every route without a gate removes the portal's identity headers from the request; `media` on the row is the explicit "IoT may reach this" decision, recorded on the row rather than at a call site (jellyfin; physical/gateway.md §4.2). A `Passthrough` row is refused by name: Cilium drops a passthrough listener together with the zone's wildcard listener on the same port (cluster-infra.md §2), and how the discovery server is reached is [Aetf/kluster-ops#723](https://github.com/Aetf/kluster-ops/issues/723). Per `Port`, one shape whatever its fronts: a LoadBalancer Service for each Gateway it sets, at that front's addresses, under the `Cluster` traffic policy every Service on a shared address takes (architecture.md §3.1) and with `allocateLoadBalancerNodePorts: false`, a home side at its Gateway's VIP under that Gateway's sharing key; the row's NLB listener, the site's forward and its pinhole are `physical`'s (physical.md §1); and one allow admitting the world on the port and its transports alone. A component merges unwired, and is wired into the `apps` program by its application's land (sources-of-truth.md §3) | architecture.md §3.6, dns.md §5 |
+| DNS | the public records of the rows on `internet` are not declared by `expose` yet; the split-horizon rewrite a row implies is applied by the `dns` stack from the same declaration, not by this one (dns.md §3) | dns.md |
 | Secrets | SealedSecret first choice, `template.data` pattern | cluster-infra.md §1.1 |
 | Placement | scheduling constraints only: site pool (cloud/homelab), a node label for a volume or the dedicated VIP, GPU resource requests | architecture.md §3.6 |
-| Network policy | per-namespace default-deny + explicit allows, part of the component. `application_namespace` declares the default-deny: every pod in the namespace admits the namespace's own pods and the `ingress` entity, the identity of what a Gateway's Envoy forwards, and no other peer but the pod's own node, which Cilium admits whatever the policies say; another peer is admitted by a policy the component declares beside it. The default-deny is on ingress alone, and restricting egress is the component's: its first egress rule switches its pods to default-deny on egress, so that policy carries the allow to the cluster's DNS too | architecture.md §4.1 |
+| Network policy | per-namespace default-deny + explicit allows, part of the component. `application_namespace` declares the default-deny: every pod in the namespace admits the namespace's own pods and the `ingress` entity, the identity of what a Gateway's Envoy forwards, and no other peer but the pod's own node, which Cilium admits whatever the policies say; another peer is admitted by a policy the component declares beside it, as `expose` does for a raw port's clients. The default-deny is on ingress alone, and restricting egress is the component's: its first egress rule switches its pods to default-deny on egress, so that policy carries the allow to the cluster's DNS too | architecture.md §4.1 |
 | Monitoring | scrape/dashboard labels per the legacy conventions (`release`, `grafana_dashboard`) so VictoriaMetrics/grafana pick them up | cluster-infra.md §1 |
 
 What a component may **not** do: hostPort, hostNetwork, `externalIPs`
@@ -250,9 +250,10 @@ Two quiet straight-ports, on record so they aren't forgotten: **exim**
 (the MTA relay behind immich/splitpro outbound mail — a plain small
 app, ClusterIP SMTP; it smarthosts via smtp.gmail.com:587, so port-25
 egress reachability constrains nothing and placement is free) and
-**stdiscosrv** (syncthing's discovery server — raw TCP via
-`public_port`; it terminates its own TLS on 8443, no gateway
-involvement).
+**stdiscosrv** (syncthing's discovery server — it terminates its own
+TLS and its clients name it with no port; the passthrough that would
+keep them as they are is refused, and how it is reached is
+[Aetf/kluster-ops#723](https://github.com/Aetf/kluster-ops/issues/723)).
 
 exim's DKIM key is the one thing of exim's that "same SealedSecrets"
 does not carry. The legacy relay signs with a cert-manager key, pinned
