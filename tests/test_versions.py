@@ -11,15 +11,19 @@ opens -- and they have to agree.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
 import pulumi
 import pytest
+from renovate_text import as_python_spells_it, as_renovate_spells_it, listed, package_rules, scalar
 
 from kluster.lib.versions import (
     CHART,
+    IMAGE,
     MANIFEST,
     ChartPin,
     Floor,
@@ -147,13 +151,17 @@ def test_the_parser_reads_the_same_pins_from_a_program_and_from_the_file() -> No
 
     charts = project.names(CHART)
     manifests = project.names(MANIFEST)
-    # Not vacuous: the block pins both kinds.
+    images = project.names(IMAGE)
+    # Not vacuous: the block pins every kind.
     assert charts
     assert manifests
+    assert images
     for name in charts:
         assert from_program.chart[name] == from_file.chart[name], name
     for name in manifests:
         assert from_program.manifest[name] == from_file.manifest[name], name
+    for name in images:
+        assert from_program.image[name] == from_file.image[name], name
     assert from_program.talos == from_file.talos
 
 
@@ -313,3 +321,234 @@ def test_a_talos_pin_that_is_not_a_release_tag_is_refused_by_name(value: str) ->
 
     with pytest.raises(ValueError, match='versions:talos'):
         _ = versions.talos
+
+
+# --------------------------------------------------------------------------
+# Renovate moves every image pin.
+
+#: The image manager's pattern, as `renovate.json5` writes it: the dependency
+#: is the reference before the tag, the version the tag.
+IMAGE_MATCH_STRING = r'versions:image-(?<key>[\w-]+):\s*(?<depName>\S+?):(?<currentValue>[^\s:@/]+)@(?<currentDigest>sha256:[0-9a-f]{64})'
+
+
+def _image_lines() -> list[str]:
+    return re.findall(r'^\s*versions:image-.*$', (ROOT / 'Pulumi.yaml').read_text(), re.MULTILINE)
+
+
+def _read_by_renovate(line: str) -> re.Match[str]:
+    found = as_python_spells_it(IMAGE_MATCH_STRING).search(line)
+    assert found is not None, f'renovate reads nothing off {line.strip()!r}'
+    return found
+
+
+def test_renovate_reads_every_image_pin_whole() -> None:
+    """Every image pin is one renovate reads, as the reference the program pulls by.
+
+    Renovate reads its configuration from the default branch, so a pin its
+    pattern does not reach, or reaches only in part, sits on its release
+    without a word: a pin with no digest is not read at all, and one whose
+    repository the pattern cut short would be looked up as another image.
+    """
+    config = (ROOT / 'renovate.json5').read_text()
+    # The pattern without the key's group is the one the file holds.
+    assert as_renovate_spells_it(IMAGE_MATCH_STRING.replace('(?<key>[\\w-]+)', '[\\w-]+')) in config
+
+    project = ProjectFile(project_block())
+    pins = Versions(project).image
+    lines = _image_lines()
+    assert len(lines) == len(project.names(IMAGE))
+    for line in lines:
+        found = _read_by_renovate(line)
+        assert pins[found['key']] == ImagePin(found['depName'], found['currentValue'], found['currentDigest'])
+
+
+# A model of the two versionings an image pin is read under, enough to say
+# whether renovate would offer a release: how a tag parses, which tags may
+# replace which, and how a step is classified. Each follows renovate's own
+# source: `lib/modules/versioning/docker/index.ts`,
+# `lib/modules/versioning/regex/index.ts` and
+# `lib/workers/repository/process/lookup/update-type.ts`.
+
+
+@dataclass(frozen=True)
+class Parsed:
+    release: tuple[int, ...]
+    #: What a candidate has to share with the pinned tag to replace it.
+    compatibility: tuple[object, ...]
+
+
+def _docker(tag: str) -> Parsed | None:
+    """A tag as docker versioning reads it: numbers, then everything past the first hyphen as a suffix.
+
+    A candidate replaces the pin only with the same suffix and the same number
+    of release parts, and a tag that looks like a commit hash is no version.
+    """
+    if re.fullmatch(r'[a-f0-9]{7,40}', tag) and not tag.isdigit():
+        return None
+    prefix, *suffix = re.sub(r'^[vV]', '', tag).split('-')
+    found = re.fullmatch(r'(\d+(?:\.\d+)*)(\w*)', prefix)
+    if found is None or found[2]:
+        # A prerelease, which renovate does not offer in place of a release.
+        return None
+    release = tuple(int(part) for part in found[1].split('.'))
+    return Parsed(release, ('-'.join(suffix), len(release)))
+
+
+def _regex(pattern: str) -> Callable[[str], Parsed | None]:
+    """A tag as a `regex:` versioning reads it: its named groups, build and revision after the patch."""
+    compiled = as_python_spells_it(pattern)
+
+    def parse(tag: str) -> Parsed | None:
+        found = compiled.match(tag)
+        if found is None:
+            return None
+        groups = found.groupdict()
+        release = [int(groups.get(part) or 0) for part in ('major', 'minor', 'patch')]
+        if groups.get('build'):
+            release.append(int(groups['build']))
+            if groups.get('revision'):
+                release.append(int(groups['revision']))
+        return Parsed(tuple(release), (groups.get('compatibility'),))
+
+    return parse
+
+
+def _update_type(before: Parsed, after: Parsed) -> str:
+    if before.release[0] != after.release[0]:
+        return 'major'
+    if before.release[1:2] != after.release[1:2]:
+        return 'minor'
+    return 'patch'
+
+
+def _rules_naming(config: str, dependency: str) -> list[str]:
+    return [rule for rule in package_rules(config) if dependency in listed(rule, 'matchDepNames')]
+
+
+def _versioning(config: str, dependency: str) -> Callable[[str], Parsed | None]:
+    chosen = [value for rule in _rules_naming(config, dependency) if (value := scalar(rule, 'versioning'))]
+    assert len(chosen) <= 1, f'{dependency} is given {len(chosen)} versionings'
+    if not chosen:
+        return _docker
+    assert chosen[0].startswith('regex:'), chosen[0]
+    # The file holds it as a JSON5 string, each backslash doubled.
+    return _regex(chosen[0].removeprefix('regex:').replace('\\\\', '\\'))
+
+
+def _offered(config: str, dependency: str, update: str) -> bool:
+    """Whether renovate proposes an update of this type: a major on the dashboard, a minor outright, a patch by rule."""
+    if update != 'patch':
+        return True
+    patches_off = re.search(r'^  patch: \{\s*(//[^\n]*\s*)*enabled: false,', config, re.MULTILINE)
+    if patches_off is None:
+        return True
+    return any(
+        'patch' in listed(rule, 'matchUpdateTypes') and re.search(r'^\s*enabled: true,$', rule, re.MULTILINE)
+        for rule in _rules_naming(config, dependency)
+    )
+
+
+@dataclass(frozen=True)
+class Scheme:
+    """How a pinned image's publisher tags it, by two consecutive releases its registry lists.
+
+    `step` is a release followed by the next one of the same line, chosen to
+    show how that line moves: a minor where the line moves by minors, a patch
+    where every release is one. `foreign` are tags the same repository
+    publishes that are no release of the pinned line -- another flavour,
+    another architecture, a prerelease, a commit -- and must never be offered
+    in its place.
+    """
+
+    step: tuple[str, str]
+    foreign: tuple[str, ...] = ()
+
+
+#: The tagging scheme of each image pinned, read off each publisher's
+#: registry. Every pinned dependency needs one; one whose pin is gone is
+#: inert.
+SCHEMES = {
+    'ghcr.io/aetf/homelab-containers/caddy': Scheme(('15', '16'), ('sha-192765fe96e82be927e875b040869f40536698eb',)),
+    'ghcr.io/aetf/homelab-containers/adguard': Scheme(('15', '16')),
+    'ghcr.io/aetf/homelab-containers/zerotier': Scheme(('15', '16')),
+    'docker.io/rancher/local-path-provisioner': Scheme(('v0.0.36', 'v0.0.37'), ('v0.0.x-head-arm64',)),
+    'docker.io/library/busybox': Scheme(('1.37.0', '1.38.0')),
+    'docker.io/devture/exim-relay': Scheme(('4.97.1-r0-1', '4.98-r0-0'), ('4.96-r1-0-arm64v8',)),
+    'ghcr.io/authelia/authelia': Scheme(('4.38.19', '4.39.0')),
+    'docker.io/curlimages/curl': Scheme(('8.22.0', '8.23.0')),
+    'docker.io/nginxinc/nginx-unprivileged': Scheme(('1.30.6', '1.31.0'), ('1.31.0-alpine',)),
+    'registry.k8s.io/git-sync/git-sync': Scheme(('v4.7.1', 'v4.8.0')),
+    'ghcr.io/oss-apps/splitpro': Scheme(('v2.0.3', 'v2.1.0')),
+    'ghcr.io/continuwuity/continuwuity': Scheme(('v26.8.1', 'v26.9.0')),
+    'docker.io/syncthing/syncthing': Scheme(('2.0.16', '2.1.0')),
+    'docker.io/mikefarah/yq': Scheme(('4.53.6', '4.54.1')),
+    'docker.io/sigoden/dufs': Scheme(('v0.46.0', 'v0.47.0')),
+    'docker.io/syncthing/discosrv': Scheme(('2.0.16', '2.1.0')),
+    'docker.io/frosty5689/hath': Scheme(('1.6.5', '1.6.6')),
+    'ghcr.io/donkie/spoolman': Scheme(('0.26.1', '0.27.0')),
+    'docker.io/alpine/socat': Scheme(('1.8.0.3', '1.8.1.1'), ('1.7.4.4-r0',)),
+    'ghcr.io/immich-app/immich-server': Scheme(('v3.3.6', 'v3.4.0'), ('v3.4.0-rc.1',)),
+    'ghcr.io/immich-app/immich-machine-learning': Scheme(
+        ('v3.3.6-openvino', 'v3.4.0-openvino'), ('v3.4.0', 'v3.4.0-cuda', 'v3.4.0-rc.1-openvino')
+    ),
+    'docker.io/library/redis': Scheme(('7.4.1', '7.4.2'), ('7.4.2-alpine',)),
+    'docker.io/oliver006/redis_exporter': Scheme(('v1.96.0', 'v1.97.0'), ('v1.97.0-alpine',)),
+    'ghcr.io/jellyfin/jellyfin': Scheme(('10.10.7', '10.11.0')),
+    'docker.io/shokoanime/server': Scheme(('v5.2.5', 'v5.3.0')),
+    'docker.io/alpine/k8s': Scheme(('1.36.6', '1.37.0')),
+    'docker.io/qbittorrentofficial/qbittorrent-nox': Scheme(('5.1.4-2', '5.2.0-1'), ('5.3.0-lt1-2', '5.3.0-lt2-1')),
+}
+
+
+def _pinned() -> dict[str, list[str]]:
+    """Every tag `Pulumi.yaml` pins, by the dependency renovate reads it as.
+
+    A line renovate reads nothing off is left to the case that requires it to.
+    """
+    pinned: dict[str, list[str]] = {}
+    for line in _image_lines():
+        found = as_python_spells_it(IMAGE_MATCH_STRING).search(line)
+        if found is not None:
+            pinned.setdefault(found['depName'], []).append(found['currentValue'])
+    return pinned
+
+
+def test_the_image_pins_are_read() -> None:
+    """The case below is parametrized by what `Pulumi.yaml` pins, so a block read as empty would hold nothing."""
+    assert _pinned()
+
+
+@pytest.mark.parametrize('dependency', sorted(_pinned()))
+def test_renovate_offers_the_next_release_of_every_image_pin(dependency: str) -> None:
+    """A later release of the pinned line is one renovate replaces the pin with, under the rules it reads.
+
+    Two things leave a pin on its release for good, and renovate reports
+    neither, since it reads its configuration from the default branch: a
+    tag whose scheme the versioning cannot order -- docker versioning holds
+    everything past the first hyphen fixed, so a tag carrying a packaging
+    revision never has a successor -- and a line whose every release is a
+    patch, which the global `patch: enabled: false` drops. So the next
+    release is read the way renovate reads it, against the pinned tag, and
+    the update it makes has to be one renovate proposes.
+
+    The case reads no registry: `SCHEMES` is a transcription of each
+    publisher's tagging scheme, so it is necessary and not sufficient. A
+    publisher that renames a flavour or a variant leaves the case green
+    until its scheme here is corrected.
+    """
+    assert dependency in SCHEMES, f'{dependency} is pinned with no tagging scheme recorded in SCHEMES'
+    config = (ROOT / 'renovate.json5').read_text()
+    scheme = SCHEMES[dependency]
+    parse = _versioning(config, dependency)
+    before, after = (parse(tag) for tag in scheme.step)
+    assert before is not None and after is not None, f'{dependency}: {scheme.step} is no pair of versions'
+    assert after.release > before.release, scheme.step
+    for tag in _pinned()[dependency]:
+        pinned = parse(tag)
+        assert pinned is not None, f'{dependency}: the pinned {tag} is no version'
+        assert after.compatibility == pinned.compatibility, f'{dependency}: {scheme.step[1]} cannot replace {tag}'
+        for other in scheme.foreign:
+            read = parse(other)
+            assert read is None or read.compatibility != pinned.compatibility, f'{dependency}: {other} replaces {tag}'
+    update = _update_type(before, after)
+    assert _offered(config, dependency, update), f'{dependency}: a {update} update is never proposed'

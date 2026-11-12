@@ -50,6 +50,69 @@ config:
   versions:image-local-path-provisioner: docker.io/rancher/local-path-provisioner:v0.0.37@sha256:e757967a5ec338f6a9b371c5a9688bedaa8c3578ea3dd4db329ea0084be0a86f
   versions:image-local-path-helper: docker.io/library/busybox:1.38.0@sha256:fd7dc98638c8e305f4dc34e979f1c0fdfdcaeb0fbf8fcff77ae834b6da3d7e6e
 
+  # The images the applications' components run, `apps` and the shapes it
+  # builds them from (rfc-008 §4 and §5): one pin per container a component
+  # declares, keyed by the component and the container's role in it rather
+  # than by the software, so that a component changing what it runs keeps its
+  # key. Each digest is the image index's where the publisher has one, since a
+  # component on the cloud pool runs on arm64 and one on the worker on amd64;
+  # the pins below that a component runs on the worker alone may name one
+  # architecture.
+  #
+  # Renovate reads each the way it reads every image pin here. A tagging scheme
+  # its default reading would never move -- a release line that moves by
+  # patches alone, or a tag carrying a packaging revision beside the upstream
+  # version -- has a rule in `renovate.json5` naming the dependency.
+
+  # Wave A1. exim runs on the worker, and its image may publish amd64 alone.
+  versions:image-exim: docker.io/devture/exim-relay:4.94.2-r0-2@sha256:4bafb3a859befd9e4c6c0dfd810588129112e8c97f350030857edd91be3ce38d
+  versions:image-authelia: ghcr.io/authelia/authelia:4.39.4@sha256:64b356c30fd817817a4baafb4dbc0f9f8702e46b49e1edb92ff42e19e487b517
+  # authelia's sessions, in a Redis of its own.
+  versions:image-authelia-redis: docker.io/library/redis:7.4.1@sha256:bb142a9c18ac18a16713c1491d779697b4e107c22a97266616099d288237ef47
+  # The authentication canary's unauthenticated request, and the protected
+  # path it requests, a static responder in authelia's namespace.
+  versions:image-auth-canary: docker.io/curlimages/curl:8.23.0@sha256:3fb7e13e5d179a845c97d78204f3f1064d1907037f26a3ebf91710571151fd93
+  versions:image-auth-canary-target: docker.io/nginxinc/nginx-unprivileged:1.28.0@sha256:cd33960e98e93d4d63385790ff7f8f5bf2ca95184c581b7f42ae8aea1139fbfc
+
+  # Wave A2, and the static sites of Waves A2 and B: the stock static server,
+  # and the sidecar that pulls a git source's built branch.
+  versions:image-static-site: docker.io/nginxinc/nginx-unprivileged:1.28.0@sha256:cd33960e98e93d4d63385790ff7f8f5bf2ca95184c581b7f42ae8aea1139fbfc
+  versions:image-static-site-git-sync: registry.k8s.io/git-sync/git-sync:v4.8.0@sha256:a20644562fba94773e594885cb001aadb5a3172175f13ac1215e5b2033c9200e
+  versions:image-splitpro: ghcr.io/oss-apps/splitpro:v2.1.5@sha256:efaa52b30d009573c4bf70e5711d6447536914469420db58680e1e6779acde6e
+  versions:image-matrix: ghcr.io/continuwuity/continuwuity:v26.9.1@sha256:c9c62bc5c0a641f3f713945c701b069c7bc30d2612b54d4a5de80a5be19d5420
+  # syncthing, and the step that merges the configuration the component
+  # renders into the one the instance keeps.
+  versions:image-syncthing: docker.io/syncthing/syncthing:2.1.2@sha256:4464f4161dd0251e20d46bb3aec83363db75d80cef1abdd5d5fd4054b04a004d
+  versions:image-syncthing-config: docker.io/mikefarah/yq:4.54.1@sha256:4b3d9475d65571d28cbb19544d3820ec2945e4c8b2f18279394282b8dc3a592e
+  versions:image-webdav: docker.io/sigoden/dufs:v0.47.0@sha256:e5152c04e41d5a9d785546278b632bf035c8a08c52d7e8d35f4b59681f5ff35a
+  versions:image-stdiscosrv: docker.io/syncthing/discosrv:2.1.2@sha256:77f065d5d02555679eb746a0f0776c8afe9b386bf0d36ca9d416018cfc21a153
+
+  # hath, on the dedicated cloud node.
+  versions:image-hath: docker.io/frosty5689/hath:1.6.5@sha256:d412b08d9a5ba6700c9674fb81824cca03b70fd02cd01041bbbf86d6bd90c6e1
+
+  # Wave B, and the device relay that backs every row naming a device.
+  versions:image-spoolman: ghcr.io/donkie/spoolman:0.27.0@sha256:7aba565eff774c6dda212d4204de8fa30bf68d513127ef875cc7ef3197a4664e
+  versions:image-device-relay: docker.io/alpine/socat:1.8.1.3@sha256:e8a6e8868a8e6e01d9c2c321a8f8d4474d2d741d962462e5c5a124a8e66a0055
+
+  # Wave C. immich's server and its machine-learning service are one release
+  # in two flavours, and move in one pull request, the in-cluster group's; the
+  # machine-learning flavour is OpenVINO, for the worker's Intel GPU, and may
+  # publish amd64 alone. Its queue store is a Redis of its own, with its
+  # metrics exporter beside it.
+  versions:image-immich-server: ghcr.io/immich-app/immich-server:v3.3.3@sha256:bae7664ff3aa4c2c1fcbdcdd86b40b105643c5f861f3e6a770fc760089f25862
+  versions:image-immich-machine-learning: ghcr.io/immich-app/immich-machine-learning:v3.3.3-openvino@sha256:43b6b964c6cc458b624ec9b7ed2af0231e19e3bcfaaa68fba8a2668353c48251
+  versions:image-immich-redis: docker.io/library/redis:7.4.1@sha256:bb142a9c18ac18a16713c1491d779697b4e107c22a97266616099d288237ef47
+  versions:image-immich-redis-exporter: docker.io/oliver006/redis_exporter:v1.75.0@sha256:bbc0b673a89296eab36d6c6c2bde8571ee868dc4059306be482c03d7b05aa662
+  versions:image-jellyfin: ghcr.io/jellyfin/jellyfin:10.11.4@sha256:37f2625f5d5d70c5b1ceb57f4d8f2a7ff666ea723fb96b468275bbafbde2c06c
+  versions:image-shoko: docker.io/shokoanime/server:v5.3.0@sha256:1e7304146c1a8a24345a0be55896fae5d2b12515960564ae8afbb9345131b70a
+
+  # The restore drill every database shape carries (rfc-008 §4.3), in the
+  # database's namespace, on either architecture.
+  versions:image-database-restore-drill: docker.io/alpine/k8s:1.37.0@sha256:b421c2e9419edb98db39b6ab641669f4db7bb2acf354f22450c6b7e7176d1ff4
+
+  # Wave D.
+  versions:image-qbittorrent: docker.io/qbittorrentofficial/qbittorrent-nox:5.3.0-2@sha256:43b2d352cf76330a7ca34c7320b9b74227d6f31e662e0e123d0457206b09a7ea
+
   # The charts `k8s-base` installs (declarative/cluster-infra.md §1), one
   # object per chart, written under `value:` -- the one form Pulumi's project
   # schema accepts for an object. The key's `<name>` is the chart's name in its
