@@ -53,6 +53,15 @@
     earlier ciphertexts are under is in no Environment, and the move's
     first contact is still to be observed, where it said the operator's
     run of the move, with its first contact, was pending.
+*   **Updated:** 2026-11-12. §9.1 gives the Actions billing of the
+    operations repository (Aetf/kluster-ops#393) as the reason no job
+    starts there, in the cost of its hand-moved pins and in the finding
+    on a self-hosted runner. That issue closed on 2026-10-26, and the
+    repository's workflows run: `probes.yml` daily, `lint.yml` on each
+    push to `main` and each pull request. So a hand pin that ages
+    between two moves is one those runs use, and the billing is no
+    reason to weigh a self-hosted runner; what runs there and what is
+    not built is [operations.md](../operations.md) §4.
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules

@@ -906,17 +906,15 @@ is the moment nobody can afford to find out later:
     (operations.md §4). One pass exercises B2 download, decryption,
     a launch from the Butane file, restore, and cert delivery. The *offline*
     age identity is proven separately by the yearly rotation (§7.4),
-    which inherently decrypts with it. **As of 2026-09-25 the workflow is
+    which inherently decrypts with it. **As of 2026-11-12 the workflow is
     not built**:
     the drill key is generated into the ops repository's `drill`
     Environment (§5) and the drill's OCI and B2 keys are minted beside
     it (credentials.md §3), but the workflow that would read them is not
-    written (`kluster-ops#57`), so as of 2026-09-25 nothing runs this on
-    a schedule and no pass of it has happened. Nor would a written one
-    start before that repository's Actions billing is restored
-    (`kluster-ops#393`): until then no job there starts, `probes.yml`
-    (§6) included. Until a pass does run, the same ground is covered by
-    hand — §7.3.1, which
+    written (`kluster-ops#57`), so nothing runs this on a schedule and
+    no pass of it has happened. What that repository does run on a
+    schedule is `probes.yml` (§6), daily. Until a pass does run, the
+    same ground is covered by hand — §7.3.1, which
     opens the object with the kit, the `--identity-file` form being the
     workflow's.
 -   **§7.4 age identity rotation.** Trigger: yearly cadence, key
