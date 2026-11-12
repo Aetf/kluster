@@ -1,7 +1,7 @@
-"""Kubernetes helpers shared by the `k8s-base` and `apps` stacks.
+"""Kubernetes helpers for the `k8s-base` and `apps` stacks.
 
-Only what both stacks need: checking the kubeconfig their Kubernetes provider
-is opened with, installing a pinned upstream chart, reaching into what one
+What both stacks need: checking the kubeconfig their Kubernetes provider is
+opened with, installing a pinned upstream chart, reaching into what one
 rendered, creating a namespace at its Pod Security level, declaring a
 SealedSecret in the shape
 [declarative/cluster-infra.md](../../docs/declarative/cluster-infra.md) §1.1
@@ -10,6 +10,13 @@ Service into a Cilium load-balancer pool. Anything specific to one component
 belongs with that component, not here. A pinned release manifest is fetched
 by `kluster.lib.release_assets`, which imports no bindings, so `update_crds`
 can run it while it regenerates them.
+
+One helper here is `apps`' alone: `application_namespace`, an application's
+namespace with its route label and its policy. It is the base the `apps`
+components compose on: the component base of rfc-007 §9.1, which the second
+half of rfc-007 slice 12 writes beside `route`, calls it. It is built on
+`namespace` and needs nothing of the `apps` area, so it sits beside the
+helper it extends.
 
 These are functions returning provider resources rather than subclasses of
 them. A subclass buys nothing over a call — the resource is the resource — and
@@ -37,13 +44,16 @@ from kluster.lib.secret import Secret
 from kluster.lib.versions import ChartPin
 
 __all__ = (
+    'INGRESS_ENTITY',
     'KUBECONFIG_KEY',
     'POD_SECURITY_ENFORCE_LABEL',
+    'ApplicationNamespace',
     'LooserLevel',
     'PodSecurity',
     'SealingScope',
     'SecretTemplate',
     'UnusableKubeconfig',
+    'application_namespace',
     'find_rendered',
     'helm_chart',
     'kubeconfig_from',
@@ -275,6 +285,7 @@ def namespace(
     *,
     name: str,
     looser: LooserLevel | None = None,
+    labels: Mapping[str, str] | None = None,
     opts: pulumi.ResourceOptions | None = None,
 ) -> k8s.core.v1.Namespace:
     """A namespace, its pods admitted under `restricted` unless `looser` names a lower level and why.
@@ -292,16 +303,120 @@ def namespace(
         what installs into the namespace names it.
     :param looser: The level the namespace is held to instead of `restricted`,
         and why.
+    :param labels: Further labels the namespace carries. The level is not one
+        of them: a mapping naming `POD_SECURITY_ENFORCE_LABEL` is refused,
+        since `looser` is the one way to state a level other than
+        `restricted`, and the one that carries a reason.
     """
+    if labels is not None and POD_SECURITY_ENFORCE_LABEL in labels:
+        raise ValueError(
+            f'namespace {name!r} is handed {POD_SECURITY_ENFORCE_LABEL!r} as a label; '
+            'its level is `restricted` unless `looser` names another, with the reason'
+        )
     level = PodSecurity.RESTRICTED if looser is None else looser.level
     return k8s.core.v1.Namespace(
         resource_name,
         metadata=k8s.meta.v1.ObjectMetaArgs(
             name=name,
-            labels={POD_SECURITY_ENFORCE_LABEL: level.value},
+            labels={**(labels or {}), POD_SECURITY_ENFORCE_LABEL: level.value},
         ),
         opts=opts,
     )
+
+
+#: The identity Cilium gives what its Gateways' Envoy forwards to a backend
+#: ([`ingress-reference.rst` L28-56](https://github.com/cilium/cilium/blob/v1.20.1/Documentation/network/servicemesh/ingress-reference.rst#L28-L56)),
+#: so a pod's policy sees a routed request arrive from it rather than from
+#: the client.
+INGRESS_ENTITY = 'ingress'
+
+
+@dataclass(frozen=True)
+class ApplicationNamespace:
+    """An application's namespace and the policy that holds every pod in it to default-deny."""
+
+    namespace: k8s.core.v1.Namespace
+    policy: crds.cilium.v2.CiliumNetworkPolicy
+
+
+def application_namespace(
+    resource_name: str,
+    *,
+    name: str,
+    looser: LooserLevel | None = None,
+    opts: pulumi.ResourceOptions | None = None,
+) -> ApplicationNamespace:
+    """The namespace an application's component installs into, admitting from outside it the Gateways alone.
+
+    Three things, each of which an application would otherwise have to
+    remember (declarative/workloads.md §1):
+
+    -   **The level**, `restricted` unless `looser` names another and why, as
+        `namespace` gives every namespace.
+    -   **The route label** (`conventions.routes.ROUTE_LABEL`), which the
+        Gateways' `allowedRoutes` select on, so an `HTTPRoute` declared in
+        the namespace attaches to them. A namespace with no route still
+        carries it: what it admits is a route the component declares, and
+        the policy below is what decides who reaches the pods.
+    -   **A default-deny policy on ingress**, selecting every pod in the
+        namespace and admitting two peers: the namespace's own pods, and
+        `INGRESS_ENTITY`, the identity a request a Gateway forwards arrives
+        with. An endpoint selector that names no namespace selects in the
+        policy's own
+        ([`kubernetes.rst` L216-219](https://github.com/cilium/cilium/blob/v1.20.1/Documentation/security/policy/kubernetes.rst#L216-L219)),
+        which is how the first peer reads. Any other peer -- a pod in
+        another namespace, a client at a raw port -- is refused until the
+        component declares an allow for it, as a policy of its own beside
+        this one, since Cilium admits what any policy selecting a pod
+        allows. The one peer no policy decides is the pod's own node, which
+        the agent admits whatever the policies say: `allow-localhost` is
+        `auto`, which is `always` under Kubernetes
+        ([`config.go` L69-70](https://github.com/cilium/cilium/blob/v1.20.1/pkg/option/config.go#L69-L70)),
+        and the cilium component sets no other. That is how the kubelet's
+        probes arrive, and how a host-network pod on that node does.
+
+    Default-deny is stated rather than left to follow from the ingress rules
+    being there, because imposing it is what this policy is for: the
+    cluster-wide baseline leaves it off (rfc-007 §4.5), and a policy that
+    leaves it off is ignored when Cilium decides an endpoint's mode
+    ([`intro.rst` L56-58](https://github.com/cilium/cilium/blob/v1.20.1/Documentation/security/policy/intro.rst#L56-L58)),
+    so this one decides it. Egress is not this policy's: it states no egress
+    rule and leaves default-deny off in that direction, so the pods reach out
+    as the baseline lets them. Restricting it is the component's, and a
+    component's first egress rule switches default-deny on for egress on
+    every pod it selects, since one policy requesting it is enough
+    ([`rule.go` L118-136](https://github.com/cilium/cilium/blob/v1.20.1/pkg/policy/api/rule.go#L118-L136)):
+    the policy that carries that rule carries the allow to the cluster's DNS
+    as well, or those pods resolve no name.
+
+    :param resource_name: The logical name, which carries the declaring
+        component's name; the policy's is this with `-default-deny`.
+    :param name: The namespace's own name, which the component's other
+        resources and its routes are declared in.
+    :param looser: The level the namespace is held to instead of
+        `restricted`, and why.
+    """
+    ns = namespace(resource_name, name=name, looser=looser, labels=conventions.routes.ROUTE_LABEL, opts=opts)
+    policy = crds.cilium.v2.CiliumNetworkPolicy(
+        f'{resource_name}-default-deny',
+        metadata=k8s.meta.v1.ObjectMetaArgs(name='default-deny', namespace=ns.metadata.name),
+        spec=crds.cilium.v2.CiliumNetworkPolicySpecArgs(
+            description=(
+                "Admit to every pod in the namespace the namespace's own pods and what a Gateway forwards, "
+                'and nothing else.'
+            ),
+            endpoint_selector=crds.cilium.v2.CiliumNetworkPolicySpecEndpointSelectorArgs(),
+            ingress=[
+                crds.cilium.v2.CiliumNetworkPolicySpecIngressArgs(
+                    from_endpoints=[crds.cilium.v2.CiliumNetworkPolicySpecIngressFromEndpointsArgs()]
+                ),
+                crds.cilium.v2.CiliumNetworkPolicySpecIngressArgs(from_entities=[INGRESS_ENTITY]),
+            ],
+            enable_default_deny=crds.cilium.v2.CiliumNetworkPolicySpecEnableDefaultDenyArgs(ingress=True, egress=False),
+        ),
+        opts=opts,
+    )
+    return ApplicationNamespace(namespace=ns, policy=policy)
 
 
 @dataclass(frozen=True, kw_only=True)

@@ -6,9 +6,10 @@ and from no other, that a manifest is refused unless its bytes are the pinned
 ones, that a search through a chart's rendered set refuses to guess, that a
 SealedSecret carries its scope where the controller looks for it, that a value
 of the sealed census is read from where it is written and declared as its row
-says -- or, while it is absent, not declared and named in a warning -- and that a
-custom resource of the generated CRD SDK reaches the provider as the object the
-API server takes.
+says -- or, while it is absent, not declared and named in a warning -- that an
+application's namespace is one a route attaches from and whose pods only the
+Gateways reach from outside it, and that a custom resource of the generated CRD
+SDK reaches the provider as the object the API server takes.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from typing import cast
+from typing import Any, cast
 
 import pulumi
 import pulumi_crds as crds
@@ -303,6 +304,114 @@ def test_a_pool_the_cluster_does_not_have_is_refused() -> None:
 
     with pytest.raises(ValueError, match='no such load-balancer pool'):
         _ = lb_pool_labels('homelab')
+
+
+# -- an application's namespace -----------------------------------------------
+
+NAMESPACE = 'kubernetes:core/v1:Namespace'
+NETWORK_POLICY = 'crds:cilium.io/v2:CiliumNetworkPolicy'
+
+
+def admitted_peers(rules: list[dict[str, Any]]) -> set[str]:
+    """Every peer a policy's ingress rules admit, one entry per selector or entity, whichever rule names it.
+
+    A peer named by any other field -- a CIDR, a node, a service account -- is
+    kept under that field's name, so a rule admitting one cannot hide.
+    """
+    peers: set[str] = set()
+    for rule in rules:
+        for field, value in rule.items():
+            if field == 'fromEntities':
+                peers |= {f'entity {entity}' for entity in value}
+            elif field == 'fromEndpoints':
+                peers |= {f'endpoints {json.dumps(selector, sort_keys=True)}' for selector in value}
+            else:
+                peers.add(f'{field} {json.dumps(value, sort_keys=True)}')
+    return peers
+
+
+@pytest_asyncio.fixture(loop_scope='module')
+async def application_namespaces() -> Recorder:
+    """An application's namespace at the default level, and one declaring a looser level."""
+    from kluster.lib.k8s import LooserLevel, PodSecurity, application_namespace
+
+    monitor = await run_with(Recorder(), stack='apps')
+    async with declaring():
+        _ = application_namespace('echo', name='echo')
+        _ = application_namespace(
+            'loose',
+            name='loose',
+            looser=LooserLevel(level=PodSecurity.BASELINE, reason='a stand-in for what the pods need'),
+        )
+    return monitor
+
+
+def test_an_application_namespace_enforces_restricted_and_carries_the_route_label(
+    application_namespaces: Recorder,
+) -> None:
+    """Restricted is what an application gets by naming nothing, and the label is what the Gateways admit routes from.
+
+    The label is checked against the mapping the Gateways' `allowedRoutes`
+    select on, so a namespace that lost it would hold routes that attach to
+    nothing.
+    """
+    labels = application_namespaces.inputs_of('echo', NAMESPACE)['metadata']['labels']
+
+    assert labels['pod-security.kubernetes.io/enforce'] == 'restricted'
+    assert conventions.routes.ROUTE_LABEL.items() <= labels.items()
+
+
+def test_an_application_namespace_admits_its_own_pods_and_the_gateways_and_nothing_else(
+    application_namespaces: Recorder,
+) -> None:
+    """Every pod in the namespace is held to default-deny on ingress, and the two peers it admits.
+
+    `ingress` is the identity Cilium gives what a Gateway's Envoy forwards; an
+    endpoint selector with no namespace in it is the policy's own namespace.
+    Default-deny is set by name, since the cluster-wide baseline leaves it off.
+    """
+    policy = application_namespaces.inputs_of('echo-default-deny', NETWORK_POLICY)
+
+    assert policy['metadata']['namespace'] == 'echo'
+    spec = policy['spec']
+    assert spec['endpointSelector'] == {}
+    assert spec['enableDefaultDeny']['ingress'] is True
+    assert admitted_peers(spec['ingress']) == {'endpoints {}', 'entity ingress'}
+    assert 'ingressDeny' not in spec
+
+
+def test_an_application_namespace_restricts_nothing_outbound(application_namespaces: Recorder) -> None:
+    """The base's policy leaves egress as the baseline does, so its pods still reach the cluster's DNS.
+
+    An egress rule here, or default-deny switched on for egress, would deny
+    every application pod everything outbound that no other policy admits.
+    """
+    spec = application_namespaces.inputs_of('echo-default-deny', NETWORK_POLICY)['spec']
+
+    assert spec['enableDefaultDeny']['egress'] is False
+    assert 'egress' not in spec
+    assert 'egressDeny' not in spec
+
+
+def test_an_application_namespace_at_a_looser_level_keeps_the_label_and_the_policy(
+    application_namespaces: Recorder,
+) -> None:
+    """A loosened level loosens admission of pods, not who reaches them or which routes attach."""
+    labels = application_namespaces.inputs_of('loose', NAMESPACE)['metadata']['labels']
+    policy = application_namespaces.inputs_of('loose-default-deny', NETWORK_POLICY)
+
+    assert labels['pod-security.kubernetes.io/enforce'] == 'baseline'
+    assert conventions.routes.ROUTE_LABEL.items() <= labels.items()
+    assert policy['metadata']['namespace'] == 'loose'
+    assert admitted_peers(policy['spec']['ingress']) == {'endpoints {}', 'entity ingress'}
+
+
+def test_a_namespace_refuses_its_level_as_a_label() -> None:
+    """A level handed in as a label would bypass `LooserLevel`, which is where an exception's reason is written."""
+    from kluster.lib.k8s import namespace
+
+    with pytest.raises(ValueError, match=re.escape('pod-security.kubernetes.io/enforce')):
+        _ = namespace('sneaky', name='sneaky', labels={'pod-security.kubernetes.io/enforce': 'privileged'})
 
 
 # -- a value of the sealed census --------------------------------------------------
