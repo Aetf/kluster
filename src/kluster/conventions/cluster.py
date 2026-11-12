@@ -64,6 +64,15 @@ CLUSTER_ASN = 65001
 #: pool's range is `site.LAN_POOL`, which is a decision of this program.
 POOL_INTERNET = 'internet'
 
+#: The worker's own pool: its IPv4 (`HOMELAB_NODE_IPV4`) and its GUA, which
+#: is a physical-stack output, the same kind of member as the `internet`
+#: pool's node addresses. A `SiteForward` port's Service asks for them,
+#: because the site's forward and pinhole end at the worker's own address,
+#: which is the address its outbound traffic wears, and no Service may hold a
+#: host port (rfc-008 §4.1). Nothing announces it: the addresses are the
+#: worker's own, routed to it as the node it is.
+POOL_WORKER = 'worker'
+
 #: A Service opts into a pool by carrying this label; the pools'
 #: `serviceSelector` matches on it.
 LB_POOL_LABEL = f'{LABEL_DOMAIN}/lb-pool'

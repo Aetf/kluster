@@ -2259,9 +2259,13 @@ apply is run in two parts around the cutover window:
     step 3 needs both, because the address it reads is formed by a
     machine the second one boots.
     Nothing is declared for the gateway on the overlay. `workerGua`
-    is unset here and optional for that reason: the address it
-    carries is formed by the worker off this apply's own router
-    advertisement, so the pinhole waits for step 3 (§4.2).
+    is unset here and optional to `physical` for that reason: the
+    address it carries is formed by the worker off this apply's own
+    router advertisement, so the pinhole waits for step 3 (§4.2). The
+    stack exports it as `worker_gua`, absent until it is set, and
+    `k8s-base` and `apps` stop at their read of it while it is, so
+    their first runs come after step 3
+    ([bring-up.md](bring-up.md) stage 2 before stage 5).
 
     What each of the two runs does to the overlay network:
 
@@ -2994,7 +2998,10 @@ leg itself, and the controller stores the shape with the flag off (read
     embeds the current GUA and is **re-declared when the dynamic
     home prefix rotates**; a stale rule degrades to the accepted
     outbound-only-v6 stage (inbound v4 unaffected) — annoying, not
-    urgent.
+    urgent. The same address is the IPv6 member of the cluster's
+    `worker` pool in `k8s-base` and the address the peer port's Service
+    asks for in `apps` (rfc-008 §4.1), so a rotation is re-declared in
+    three stacks, in order: `physical`, then `k8s-base`, then `apps`.
 
     **The address is configuration, and `workerGua` is optional** —
     the one conditional *policy* of the census. The GUA is a SLAAC
@@ -3003,7 +3010,9 @@ leg itself, and the controller stores the shape with the flag off (read
     that declares the VLAN, and no first apply can be given it. With
     the key unset this rule is not declared at all, which is the same
     outbound-only-v6 stage a stale rule leaves behind, reached from
-    the other side and with nothing wrong pointed at. Step 3 of the
+    the other side and with nothing wrong pointed at; the key is
+    optional to `physical` alone, and `k8s-base` and `apps` refuse to
+    run, naming the output, while it is unset. Step 3 of the
     bring-up ceremony (§2.5) is where it gets set. The v4 peer-port
     forward below does not wait for it: it names an address the
     address plan states rather than one a booted machine reports.

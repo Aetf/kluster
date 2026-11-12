@@ -41,7 +41,10 @@ Stack outputs (the machine facts other stacks may reference,
 the stack's exports to: `kubeconfig`, `talosconfig`, per-node
 public/private IPs, each cloud node's GUA (`node_guas` — with the
 private IPv4s, `vip1_private` and the NLB's two addresses, the
-`internet` pool's members, which `k8s-base` reads; rfc-007 §4.4), both
+`internet` pool's members, which `k8s-base` and `apps` read; rfc-007
+§4.4), the worker's GUA as `workerGua` configures it (`worker_gua`,
+absent until that is set — the worker's own pool in `k8s-base` and a
+`SiteForward` port's Service in `apps` read it; rfc-008 §4.1), both
 of the NLB's public addresses (IPv4 and IPv6 — the cluster anchor in
 `dns` carries an A and an AAAA), the
 dedicated-VIP addresses (reserved public + secondary private), the

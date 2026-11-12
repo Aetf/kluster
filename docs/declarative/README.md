@@ -78,9 +78,14 @@ contract), which is what makes this package the only shared home.
 A `StackReference` therefore carries only machine facts — values no
 program can know until an apply produces them. Nearly all of them are
 the `physical` stack's outputs, enumerated in
-[physical.md](physical.md) §0; the exception is `dns`'s zone IDs, which
-`apps` consumes for the records it declares beside each application
-([dns.md](dns.md) §1). A resource that deliberately keeps autonaming
+[physical.md](physical.md) §0: the `dns` stack reads the anchors'
+addresses, and `k8s-base` and `apps` read the addresses the pools are
+made of, `k8s-base` to declare the pools and `apps` to hand a raw
+port's Service the addresses of its front (rfc-008 §4.1), each read so
+that anything but an address stops the run. The exception is `dns`'s
+zone IDs, which it exports for the records declared beside each
+application ([dns.md](dns.md) §1); `apps` declares no record yet, and
+reads none. A resource that deliberately keeps autonaming
 publishes its generated name the same way, because a generated name is
 a machine fact too.
 

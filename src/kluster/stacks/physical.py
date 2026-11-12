@@ -370,8 +370,10 @@ async def main() -> None:
     # components, because the overlay is a network several machines belong to
     # and the gateway is one of them: what may join and what the rules are is
     # not the gateway's business (rfc-002 §6). The gateway's own outputs are on
-    # the device, so nothing downstream reads a handle to it.
-    _ = _gateway(config)
+    # the device, so nothing downstream reads a handle to it. The worker's
+    # global address is read once, here, because it is exported too.
+    worker_gua = config.get(WORKER_GUA)
+    _ = _gateway(config, worker_gua=worker_gua)
     overlay = Overlay(
         conventions.CLUSTER_NAME,
         network_id=conventions.overlay.NETWORK_ID,
@@ -431,6 +433,11 @@ async def main() -> None:
     # addresses, the `internet` pool's members, which `k8s-base` builds the
     # pool from (rfc-007 §4.4).
     pulumi.export(outputs.node_guas, nodes.guas)
+    # The worker's GUA, as configured, and `None` until the bring-up sets it:
+    # beside its IPv4, which is a convention, the worker's own pool in
+    # `k8s-base` and the address a `SiteForward` port's Service asks for in
+    # `apps` (rfc-008 §4.1). Each reader refuses an absent value by name.
+    pulumi.export(outputs.worker_gua, worker_gua)
 
     # Both are cluster-admin credentials, and both are marked secret at the
     # source; `k8s-base` and `apps` read them from here rather than from a file
@@ -463,7 +470,7 @@ async def main() -> None:
         pulumi.export(output, pulumi.Output.secret(overlay.identities[member].private_key))
 
 
-def _gateway(config: pulumi.Config) -> Gateway:
+def _gateway(config: pulumi.Config, *, worker_gua: str | None) -> Gateway:
     """The device and the controller behind it, from the four values it is told.
 
     Three credentials authorize three different things — the device's own
@@ -480,8 +487,9 @@ def _gateway(config: pulumi.Config) -> Gateway:
     `gatewayPrivateKey` is read there and by nothing else (framework/pulumi.md
     §5.2).
 
-    What is left is a knob, two secrets a file's content is rendered from, and
-    one measurement. Where the device answers and which key it must present are
+    What is left is a knob and two secrets a file's content is rendered from,
+    beside one measurement, `worker_gua`, which the program reads and hands in
+    because it exports it as well. Where the device answers and which key it must present are
     not among them: the pin is a decision and lives in `conventions`, and the
     address derives from the roster unless the ceremony below overrides it.
 
@@ -567,7 +575,7 @@ def _gateway(config: pulumi.Config) -> Gateway:
         # the design already accepts (physical/gateway.md §4.2) — and the
         # bring-up ceremony sets the key once the address can be read off the
         # advertisement (physical/gateway.md §2.5).
-        worker_gua=config.get(WORKER_GUA),
+        worker_gua=worker_gua,
         # Optional, and absent until qbittorrent's own migration wave: the
         # legacy qbittorrent on the homelab host holds the peer port's WAN
         # side until then, by a UPnP lease or a rule kept by hand, and the

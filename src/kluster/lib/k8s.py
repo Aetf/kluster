@@ -11,12 +11,15 @@ belongs with that component, not here. A pinned release manifest is fetched
 by `kluster.lib.release_assets`, which imports no bindings, so `update_crds`
 can run it while it regenerates them.
 
-One helper here is `apps`' alone: `application_namespace`, an application's
-namespace with its route label and its policy. It is the base the `apps`
-components compose on: the component base of rfc-007 §9.1, which the second
-half of rfc-007 slice 12 writes beside `route`, calls it. It is built on
-`namespace` and needs nothing of the `apps` area, so it sits beside the
-helper it extends.
+Two helpers here are the routes' and the applications': `route`, the
+`HTTPRoute`s of one `conventions.routes.Route` row, which both stacks call --
+every application, through `expose` on the application base
+(`kluster.components.apps`), and the monitoring dashboard's own row (rfc-007
+§9.1) -- with the names of the listeners a route attaches to by section
+(`bare_listener`) and the portal its gate asks (`PORTAL`); and `application_namespace`, an application's namespace with its
+route label and its policy, which the application base composes on. That one
+is `apps`' alone, built on `namespace` and needing nothing of the `apps` area,
+so it sits beside the helper it extends.
 
 These are functions returning provider resources rather than subclasses of
 them. A subclass buys nothing over a call — the resource is the resource — and
@@ -30,7 +33,7 @@ import fnmatch
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Annotated, Any, Literal, cast
+from typing import Annotated, Any, Literal, NoReturn, cast
 
 import pulumi
 import pulumi_crds as crds
@@ -38,6 +41,8 @@ import pulumi_kubernetes as k8s
 from pulumi.runtime.rpc import UNKNOWN as UNKNOWN_SENTINEL
 
 from kluster import conventions
+from kluster.conventions.cluster import POOL_WORKER
+from kluster.conventions.routes import Bare, Gate, Passthrough, Port, Proxied, Route
 from kluster.conventions.sealed import SealedValue, SealingScope
 from kluster.lib.config import Shape, ShapeRefused, text
 from kluster.lib.secret import Secret
@@ -47,19 +52,28 @@ __all__ = (
     'INGRESS_ENTITY',
     'KUBECONFIG_KEY',
     'POD_SECURITY_ENFORCE_LABEL',
+    'PORTAL',
     'ApplicationNamespace',
+    'Backend',
     'LooserLevel',
+    'PassthroughRefused',
     'PodSecurity',
+    'Portal',
     'SealingScope',
     'SecretTemplate',
     'UnusableKubeconfig',
     'application_namespace',
+    'bare_listener',
     'find_rendered',
     'helm_chart',
+    'identity_stripped',
     'kubeconfig_from',
     'lb_pool_labels',
     'namespace',
     'pick_resource',
+    'refuse_passthrough',
+    'route',
+    'row_gateways',
     'sealed_ciphertext',
     'sealed_secret',
     'sealed_value',
@@ -594,6 +608,259 @@ def lb_pool_labels(pool: str) -> dict[str, str]:
     successor, because Cilium allocates an address from a pool rather than
     lending out whichever node happens to be announcing.
     """
-    if pool not in (conventions.POOL_INTERNET, conventions.LAN_POOL.name):
+    if pool not in (conventions.POOL_INTERNET, conventions.LAN_POOL.name, POOL_WORKER):
         raise ValueError(f'no such load-balancer pool: {pool}')
     return {conventions.LB_POOL_LABEL: pool}
+
+
+# -- Routes ------------------------------------------------------------------
+
+
+@dataclass(frozen=True, kw_only=True)
+class Backend:
+    """What a route forwards to: a Service in the route's own namespace, on one of its ports."""
+
+    service: pulumi.Input[str]
+    port: int
+
+
+@dataclass(frozen=True, kw_only=True)
+class Portal:
+    """Where a gate asks for its authorization: the portal's Service, and the path each form of the gate asks at.
+
+    The authentication filter on a gated row's `internet` route (`route`)
+    sends each request it holds to `paths[gate]` on this Service first, and
+    passes the request on only on a `200` (cluster-infra.md §2). Each form
+    asks at its own endpoint, because each form is the portal's answer to a
+    different client: the session form redirects a browser to the portal to
+    sign in, and the Basic form answers `401` with a challenge, for a client
+    that cannot follow a redirect.
+
+    Authelia's component serves what this names (rfc-008 slice 7 and its
+    Wave A1): its Service under this namespace, name and port, an `ExtAuthz`
+    endpoint at each path -- the session form on the `CookieSession`
+    strategy, the Basic form on `HeaderAuthorization` with the Basic scheme
+    alone -- and the `ReferenceGrant` that lets a route in an application's
+    namespace name the Service across namespaces.
+
+    **Below Cilium 1.20.2 a target that is not declared drops the gate
+    rather than closing it.** There a filter whose Service is missing, or
+    whose reference no grant allows, is left out of the route, and the route
+    is programmed with its backend and no authentication; 1.20.2 marks such a
+    route invalid instead (cilium/cilium#47929). The floor is held at the
+    pin: the Cilium chart's pin carries a floor of 1.20.2, below which
+    `update_crds` refuses it (Aetf/kluster#682). Authelia's Service and grant
+    stand before any gated row does all the same, since a route marked
+    invalid serves nothing.
+
+    What the gate does not guard, which Authelia's component holds to:
+
+    -   **The identity headers** (`identity_headers`) are copied from the
+        portal's answer only where the answer carries them, and Authelia
+        sets them only for a signed-in subject: an answer under a `bypass`
+        rule carries none, and the client's own pass through. So an
+        application that trusts them sits under no `bypass` rule. On every
+        route without a gate `route` removes them from the request.
+    -   **`X-Forwarded-For`'s first element is the client's own word.**
+        Envoy appends the peer it saw to what the client sent, and Authelia
+        reads the first element, so a client outside names any address it
+        likes. The portal's access rules and its regulation key on no
+        client network while the header is forwarded this way.
+    """
+
+    namespace: str
+    service: str
+    port: int
+    paths: Mapping[Gate, str]
+    """Each form's endpoint, as the prefix the filter puts ahead of the request's own path."""
+    identity_headers: tuple[str, ...]
+    """What the portal's answer names its signed-in subject in, which the filter
+    copies onto the request it passes; named, because an empty list copies
+    every header of the answer."""
+
+
+#: The portal the gate asks: every route that reads it is declared by the
+#: `apps` stack, where Authelia's component is declared too, so it is no
+#: convention two programs share and lives beside the helper that reads it.
+PORTAL = Portal(
+    namespace='authelia',
+    service='authelia',
+    port=9091,
+    paths={Gate.SESSION: '/api/authz/ext-authz/', Gate.BASIC: '/api/authz/ext-authz-basic/'},
+    identity_headers=('remote-user', 'remote-groups', 'remote-email', 'remote-name'),
+)
+
+#: The request headers each form of the gate hands the portal beside the ones
+#: the filter always sends (`Host`, the method, the path and `Authorization`).
+#: Both forms send the scheme, which the portal builds the address it sends a
+#: client back to from, and `X-Forwarded-For`, whose first element the client
+#: wrote (`Portal`). The session form adds the cookie that carries the
+#: session and the proxy's own credential header.
+_GATE_REQUEST_HEADERS: Mapping[Gate, tuple[str, ...]] = {
+    Gate.SESSION: ('cookie', 'proxy-authorization', 'accept', 'x-forwarded-proto', 'x-forwarded-for'),
+    Gate.BASIC: ('accept', 'x-forwarded-proto', 'x-forwarded-for'),
+}
+
+
+class PassthroughRefused(ValueError):
+    """A `Passthrough` row, which no Gateway can carry at the pinned Cilium."""
+
+
+def refuse_passthrough(host: str) -> NoReturn:
+    """Refuse a `Passthrough` row by its host, naming why and where its reach is being decided.
+
+    Cilium treats a TLS passthrough listener and an HTTPS listener on one
+    port as conflicting whenever their hostnames can match one name, and
+    drops both: a passthrough for a name under a served zone would take
+    that zone's wildcard listener, and every name in the zone, off the
+    Gateway with it (`listenerPairConflict`, v1.20.1 to `main`).
+    """
+    raise PassthroughRefused(
+        f'the passthrough {host!r} cannot be served: Cilium drops a TLS passthrough listener together with the '
+        "zone's wildcard HTTPS listener on the same port, and every name of the zone with it. How the row is "
+        'reached instead is Aetf/kluster-ops#723'
+    )
+
+
+def bare_listener(label: str) -> str:
+    """The name of `lan-gw`'s plain HTTP listener for a `Bare` row's label."""
+    return f'http-{label}'
+
+
+def row_gateways(row: Route | Passthrough | Port) -> tuple[str, ...]:
+    """The Gateways a row sets, `internet` first: each of the three fields is one Gateway."""
+    fields = (
+        (row.internet, conventions.GATEWAY_INTERNET),
+        (row.lan, conventions.GATEWAY_LAN),
+        (row.media, conventions.GATEWAY_MEDIA),
+    )
+    return tuple(gateway for side, gateway in fields if side is not None)
+
+
+def _gate_filter(gate: Gate) -> crds.gateway.v1.HTTPRouteSpecRulesFiltersArgs:
+    return crds.gateway.v1.HTTPRouteSpecRulesFiltersArgs(
+        type='ExternalAuth',
+        external_auth=crds.gateway.v1.HTTPRouteSpecRulesFiltersExternalAuthArgs(
+            protocol='HTTP',
+            backend_ref=crds.gateway.v1.HTTPRouteSpecRulesFiltersExternalAuthBackendRefArgs(
+                name=PORTAL.service, namespace=PORTAL.namespace, port=PORTAL.port
+            ),
+            http=crds.gateway.v1.HTTPRouteSpecRulesFiltersExternalAuthHttpArgs(
+                path=PORTAL.paths[gate],
+                allowed_headers=list(_GATE_REQUEST_HEADERS[gate]),
+                allowed_response_headers=list(PORTAL.identity_headers),
+            ),
+        ),
+    )
+
+
+def identity_stripped() -> crds.gateway.v1.HTTPRouteSpecRulesFiltersArgs:
+    """The filter that removes the portal's identity headers from a request no gate answered for.
+
+    On a route with no gate nothing writes them, so whatever arrives under
+    those names is the client's own (`Portal`). It does not go on a gated
+    route: there it would run after the gate and remove the portal's answer.
+    """
+    return crds.gateway.v1.HTTPRouteSpecRulesFiltersArgs(
+        type='RequestHeaderModifier',
+        request_header_modifier=crds.gateway.v1.HTTPRouteSpecRulesFiltersRequestHeaderModifierArgs(
+            remove=list(PORTAL.identity_headers)
+        ),
+    )
+
+
+def route(
+    resource_name: str,
+    row: Route,
+    *,
+    namespace: pulumi.Input[str],
+    backend: Backend,
+    opts: pulumi.ResourceOptions | None = None,
+) -> list[crds.gateway.v1.HTTPRoute]:
+    """The `HTTPRoute`s of one route row: one per Gateway the row sets, and the redirect of a bare name.
+
+    Each route names the row's host in each of its zones and attaches to its
+    Gateway by hostname, which picks out that zone's wildcard listener
+    (rfc-007 §5.2). **The gate is `internet`'s alone**: a `Proxied` side with
+    a gate puts the authentication filter ahead of the backend on that route
+    and on no other, since the home has no gate (dns.md §5), so a gated
+    name's home side is answered ungated. Every route without a gate removes the portal's
+    identity headers from the request (`identity_stripped`). A `Bare` home
+    side adds one more
+    route on `lan-gw`: the bare label, at that Gateway's plain HTTP listener
+    for the label (`bare_listener`), answered with a redirect to the name in
+    the row's first zone over HTTPS, since a bare name has no certificate.
+
+    What the route publishes in DNS is not this helper's: the rewrite is the
+    `dns` stack's, from the same row, and this declares no record.
+
+    :param resource_name: The logical name, which carries the declaring
+        component's name; each route's is this with its Gateway's name.
+    :param row: The row, unwrapped: a row the legacy VPS holds attaches all
+        the same, which is how it is verified before its cut.
+    :param namespace: The namespace the routes are declared in, which carries
+        the route label and holds the backend.
+    :param backend: The Service the row's requests are forwarded to.
+    """
+    routes: list[crds.gateway.v1.HTTPRoute] = []
+    hostnames = [f'{row.host}.{zone}' for zone in row.zones]
+    for gateway in row_gateways(row):
+        gate = (
+            row.internet.gate if gateway == conventions.GATEWAY_INTERNET and isinstance(row.internet, Proxied) else None
+        )
+        routes.append(
+            crds.gateway.v1.HTTPRoute(
+                f'{resource_name}-{gateway}',
+                metadata=k8s.meta.v1.ObjectMetaArgs(name=f'{row.host}-{gateway}', namespace=namespace),
+                spec=crds.gateway.v1.HTTPRouteSpecArgs(
+                    parent_refs=[
+                        crds.gateway.v1.HTTPRouteSpecParentRefsArgs(
+                            name=gateway, namespace=conventions.GATEWAY_NAMESPACE
+                        )
+                    ],
+                    hostnames=hostnames,
+                    rules=[
+                        crds.gateway.v1.HTTPRouteSpecRulesArgs(
+                            filters=[identity_stripped() if gate is None else _gate_filter(gate)],
+                            backend_refs=[
+                                crds.gateway.v1.HTTPRouteSpecRulesBackendRefsArgs(
+                                    name=backend.service, port=backend.port
+                                )
+                            ],
+                        )
+                    ],
+                ),
+                opts=opts,
+            )
+        )
+    if isinstance(row.lan, Bare):
+        routes.append(
+            crds.gateway.v1.HTTPRoute(
+                f'{resource_name}-bare',
+                metadata=k8s.meta.v1.ObjectMetaArgs(name=f'{row.host}-bare', namespace=namespace),
+                spec=crds.gateway.v1.HTTPRouteSpecArgs(
+                    parent_refs=[
+                        crds.gateway.v1.HTTPRouteSpecParentRefsArgs(
+                            name=conventions.GATEWAY_LAN,
+                            namespace=conventions.GATEWAY_NAMESPACE,
+                            section_name=bare_listener(row.host),
+                        )
+                    ],
+                    hostnames=[row.host],
+                    rules=[
+                        crds.gateway.v1.HTTPRouteSpecRulesArgs(
+                            filters=[
+                                crds.gateway.v1.HTTPRouteSpecRulesFiltersArgs(
+                                    type='RequestRedirect',
+                                    request_redirect=crds.gateway.v1.HTTPRouteSpecRulesFiltersRequestRedirectArgs(
+                                        hostname=hostnames[0], scheme='https', status_code=301
+                                    ),
+                                )
+                            ]
+                        )
+                    ],
+                ),
+                opts=opts,
+            )
+        )
+    return routes

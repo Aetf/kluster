@@ -26,6 +26,7 @@ that speaks the k8s API, consumed by `apps`.
     (`node_private_ips`), each node's GUA (`node_guas`), the dedicated
     VIP's secondary private address (`vip1_private`) and the balancer's
     public IPv4 and IPv6 (`cluster_endpoint`, `cluster_endpoint_v6`),
+    and the worker's GUA (`worker_gua`), which its own pool holds,
     each read so that anything but an address of its family stops the
     run naming the output (`kluster.lib.stack_addresses`). A stack holding no
     copy of the kubeconfig, or a blank one, stops at the read and names
@@ -379,7 +380,16 @@ All decided behavior from architecture.md §3, expressed as config:
     internal/unroutable, so outbound v6 is SNAT'd to the node's GUA; this
     *is* qbittorrent's outbound-v6 mechanism (architecture.md §3.5).
     Metrics: the agent's, the operator's and Envoy's endpoints, and
-    Hubble's flow metrics.
+    Hubble's flow metrics. **A pod's MTU**: its device's is KubeSpan's
+    1420, and its route MTU is that less the tunnel's overhead, 1370,
+    which sets the segment size a pod advertises, so TCP inside the tunnel
+    needs no discovery. A pod sending to a client behind a smaller link
+    gets no packet-too-big through a balancer front, which relays no ICMP
+    error to a backend, so the kernel's own detection of such a path is
+    on in every pod: `pmtuDiscovery.packetizationLayerPMTUDMode:
+    blackhole`, which after about three seconds of silence drops the
+    segment size to 1024 bytes and probes upward. It is the chart's
+    default, and the values state it (rfc-008 §4.1).
 -   **No `NodePort`** (Aetf/kluster-ops#397): whatever the datapath
     answers on a node's own address is internet-facing on a cloud
     node, because the subnet narrows no TCP or UDP port in either
@@ -408,7 +418,7 @@ All decided behavior from architecture.md §3, expressed as config:
     Service's load-balancer address, which for the `internet` pool is a
     node's own address, ahead of the firewall. The chart's values state
     it.
--   **LB IPAM**: two `CiliumLoadBalancerIPPool`s — `internet` (the
+-   **LB IPAM**: three `CiliumLoadBalancerIPPool`s — `internet` (the
     on-the-wire node addresses: the three primary **private** IPv4s +
     the v6 GUAs + the dedicated-VIP node's secondary private IP — OCI
     1:1-NATs a node's public v4 to its private one, so a node's public
@@ -418,8 +428,13 @@ All decided behavior from architecture.md §3, expressed as config:
     connection that starts in the cluster; all from physical outputs,
     one single-address block each) and `lan` (`192.168.71.0/24` + the
     ULA /64, outside every home network and the nodes' own VLAN 7
-    alike). Pool membership via the `serviceSelector` label from
-    `conventions`. **Every Service on the `internet` pool's node
+    alike), and `worker` (`conventions.cluster.POOL_WORKER`: the
+    worker's own IPv4, a convention, and its GUA, a physical output — the
+    same kind of member as the `internet` pool's node addresses, for a
+    Service whose traffic arrives at the worker as the node it is: the
+    site's forward and pinhole end there, so a `SiteForward` port's
+    Service asks for them, and no advertisement selects it). Pool
+    membership via the `serviceSelector` label from `conventions`. **Every Service on the `internet` pool's node
     addresses takes `Cluster`** (architecture.md §3.1), and **a Service
     whose raw port the balancer fronts asks for the balancer's two
     addresses beside the node addresses**, so a pod on a cloud node
@@ -489,16 +504,20 @@ All decided behavior from architecture.md §3, expressed as config:
     `lbipam.cilium.io/ips`, and carrying in `spec.infrastructure` the
     labels and annotations it copies onto that Service, the pool label
     among them — `internet-gw` (the `internet` pool's node members and
-    the balancer's two addresses, never the dedicated VIP, with
-    `lbipam.cilium.io/sharing-key` set to the pool's name and
-    `lbipam.cilium.io/sharing-cross-namespace` set to `*`, since the raw
-    Services that share those addresses live in their applications'
-    namespaces), `lan-gw` (the
+    the balancer's two addresses, never the dedicated VIP), `lan-gw` (the
     `lan` pool's default VIP, which the homelab worker announces), and
     `media-gw` (same shape as `lan-gw` on a **second,
     dedicated `lan`-pool VIP** — a `conventions` literal, because
     the UDM firewall's IoT→media allow names it,
-    physical/gateway.md §4.2). Attaching a route to `media-gw` *is*
+    physical/gateway.md §4.2). **Each shares its addresses with the
+    census's raw Services on its front**: `internet-gw` with the
+    `Balancer` ports', under `lbipam.cilium.io/sharing-key` set to the
+    pool's name, and `lan-gw` and `media-gw` with the home ports' at
+    their VIP, each under its own name as the key, so a raw home port
+    adds no address and is never handed the other VIP. Every side of a
+    share carries `lbipam.cilium.io/sharing-cross-namespace` set to `*`,
+    since the raw Services live in their applications' namespaces and
+    more than one may share a front (rfc-008 §4.1). Attaching a route to `media-gw` *is*
     the decision "reachable from the IoT VLAN", and the row records it
     as its `media` side (`conventions.routes`, dns.md §5), so the
     choice is on the row a reviewer reads rather than an argument at a
@@ -525,6 +544,26 @@ All decided behavior from architecture.md §3, expressed as config:
     namespace carrying `conventions.routes.ROUTE_LABEL`, which
     `allowedRoutes` selects on, and from no other; the HTTP listener
     admits only its own namespace, where the redirect is the one route.
+    Two more kinds of listener are derived from the exposure census,
+    each only where a row asks for it (rfc-008 §4.1): an **apex
+    listener** on `internet-gw` for each zone an `Apex` names, HTTPS on
+    the zone's own name with the zone's certificate; and a **bare
+    listener** on `lan-gw` for each `Bare` row, plain HTTP on the label,
+    where the row's route redirects the bare name to the full one over
+    HTTPS. Each admits routes from a namespace carrying the route label,
+    and a held row's listener stands while the legacy VPS holds its name,
+    since its route attaches all the same. Cilium refuses two listeners
+    of one protocol on one port only where their hostnames are
+    identical, which neither kind's ever is. **A `Passthrough` row is
+    refused by name, by the Gateways and by `expose` alike**: Cilium
+    holds a TLS passthrough listener and an HTTPS listener on one port to
+    conflict whenever their hostnames can match one name, and drops both
+    (`listenerPairConflict`, `operator/pkg/gateway-api/gateway_reconcile.go`
+    at v1.20.1, unchanged through `main`), so a passthrough for a name
+    under a served zone would take that zone's wildcard listener, and
+    every name of the zone, off the Gateway. How the discovery server,
+    the one such row, is reached instead is
+    [Aetf/kluster-ops#723](https://github.com/Aetf/kluster-ops/issues/723).
     **One certificate per served zone, for the apex and the wildcard
     together** (dns.md §4), in the Gateways' namespace so no listener
     refers across one, issued by **one `ClusterIssuer`, Let's Encrypt
@@ -545,17 +584,48 @@ All decided behavior from architecture.md §3, expressed as config:
     hath's migration wave decides between it and an address of the
     node's own (rfc-007 §15.3).
 -   **Route-level auth (the Authelia gate)**: the Gateway API
-    **ExternalAuth HTTPRoute filter** (GEP-1494; **Cilium ≥1.20 — this
-    sets the Cilium version floor**)
+    **ExternalAuth HTTPRoute filter** (GEP-1494; **Cilium ≥1.20.2 —
+    this sets the Cilium version floor**: the filter arrives in 1.20, and
+    only from 1.20.2 does it fail closed on a target that is not
+    declared, below)
     pointing at Authelia's Envoy `ext_authz` endpoint. This is how
     apps without native auth (qbittorrent Web UI, spoolman, …) get
     SSO-gated from the internet — the legacy traefik forward-auth
     middleware's successor. The gate is declared on the row, as the
     `gate` of its `internet` side behind the proxy (dns.md §5), and it
     applies to that side alone: the home has no gate, so a gated name's
-    home side is answered ungated. Bootstrap verification: confirm the
-    filter **fails closed** when Authelia is unreachable (fail-open
-    was reported against early builds, cilium#47178). Because every
+    home side is answered ungated. Each form of the gate asks the portal
+    at an endpoint of its own (`kluster.lib.k8s.PORTAL`): the session
+    form, which redirects a browser to sign in, and the Basic form, which
+    answers a challenge for a client that cannot follow a redirect. What
+    the filter names — Authelia's namespace, Service, port and each
+    form's path — is served by Authelia's component in `apps`, with the
+    `ReferenceGrant` that lets a route in an application's namespace name
+    that Service. **Below Cilium 1.20.2 a target that is not declared
+    drops the gate rather than closing it**: a filter whose Service is
+    missing, or whose reference no grant allows, is left out of the
+    route, which is programmed with its backend and serves
+    unauthenticated; 1.20.2 marks such a route invalid instead
+    (cilium/cilium#47929). So **the gate's floor is 1.20.2, held at the
+    pin**: the Cilium chart's pin carries that floor, and `update_crds`
+    refuses a pin below it
+    ([Aetf/kluster#682](https://github.com/Aetf/kluster/pull/682)).
+    Authelia's Service and grant stand before any gated row does all the
+    same, since a route marked invalid serves nothing. Two
+    things the gate does not guard, which the portal's configuration
+    holds to: the identity headers (`Remote-User` and the rest) are
+    copied from its answer only where the answer carries them, and
+    Authelia sets them only for a signed-in subject, so an application
+    that trusts them sits under no `bypass` rule, and every route without
+    a gate removes them from the request; and the first element of the
+    `X-Forwarded-For` the gate hands the portal is the client's own word,
+    since Envoy appends the peer it saw to what the client sent, so the
+    portal's access rules and its regulation key on no client network
+    while the header is forwarded this way. Bootstrap verification:
+    confirm the filter **fails closed** when Authelia is unreachable
+    (fail-open was reported against early builds, cilium#47178), and
+    when its target is not declared — no Service, and no grant — which
+    takes a different path through the operator. Because every
     gated app (qbittorrent Web UI included — its "run external
     program" setting makes fail-open an RCE) rides this one mechanism,
     fail-closed is also **verified continuously, not only at

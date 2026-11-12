@@ -10,7 +10,7 @@ Declared in the order the cluster needs them in, which the dependencies carry:
 the Gateway API definitions, a release asset rather than a chart, then the
 chart, which installs the agent and the operator; then the objects whose
 definitions the operator registers once elected -- the class configuration,
-the two address pools and the baseline policy. The `GatewayClass`'s own
+the three address pools and the baseline policy. The `GatewayClass`'s own
 definition is the asset's, so it waits for that and for its configuration,
 and the Gateways (`gateways`), which are the asset's kind too, wait for the
 class. Their certificates are cert-manager's to issue
@@ -34,6 +34,9 @@ import pulumi_kubernetes as k8s
 from kluster import conventions
 from kluster.components.cilium.bgp import BgpSession
 from kluster.components.cilium.gateways import Gateways, InternetGatewayAddresses
+from kluster.conventions.cluster import POOL_WORKER
+from kluster.conventions.routes import Exposure
+from kluster.lib import stack_addresses
 from kluster.lib.k8s import helm_chart, lb_pool_labels
 from kluster.lib.versions import ChartPin
 from putils import Component, async_output, resolve
@@ -51,6 +54,7 @@ __all__ = (
     'Gateways',
     'InternetPoolMembers',
     'chart_values',
+    'internet_pool_members',
 )
 
 #: Where the chart installs, which is where both guides install it: under
@@ -162,6 +166,14 @@ def chart_values() -> dict[str, Any]:
         # its load-balancer address, which on the `internet` pool is a node's
         # own address, ahead of the node firewall (cluster-infra.md §2).
         'nodePort': {'enableHealthCheckLoadBalancerIP': False},
+        # Linux's own detection of a path that drops what is too big, in every
+        # pod: after about three seconds of silence a connection's segment size
+        # falls to 1024 bytes and is probed upward again. A balancer front
+        # relays no ICMP error to a backend, so a pod sending to a client
+        # behind a smaller link has nothing else to learn it from (rfc-008
+        # §4.1). The chart's default, stated so that a moved default cannot
+        # take it away.
+        'pmtuDiscovery': {'packetizationLayerPMTUDMode': 'blackhole'},
         'prometheus': {'enabled': True},
         'operator': {'prometheus': {'enabled': True}},
         'envoy': {'prometheus': {'enabled': True}},
@@ -195,11 +207,35 @@ class InternetPoolMembers:
     """The balancer's public IPv6."""
 
 
+def internet_pool_members(physical: pulumi.StackReference) -> InternetPoolMembers:
+    """The `internet` pool's members, out of the physical stack, each refused unless it is an address.
+
+    Two programs read them: `k8s-base`, which builds the pool and
+    `internet-gw`'s addresses from them, and `apps`, which hands a raw port's
+    Service the addresses of its front (rfc-008 §4.1). The names asked for are
+    `conventions.PHYSICAL_OUTPUTS`, the structure `physical` exports under, so
+    a rename there is a rename here in the same edit. Each read checks what it
+    got, unknowns included: a targeted apply of `physical` can leave any of
+    these as Pulumi's unknown sentinel, which reads back absent or unknown,
+    and a pool or a Service built from that would carry `"None"` as an
+    address (framework/pulumi.md §1.4).
+    """
+    outputs = conventions.PHYSICAL_OUTPUTS
+    return InternetPoolMembers(
+        node_private_ips=stack_addresses.addresses_by_name(physical, outputs.node_private_ips, 4),
+        node_guas=stack_addresses.addresses_by_name(physical, outputs.node_guas, 6),
+        dedicated_vip=stack_addresses.address(physical, outputs.vip1_private, 4),
+        balancer_v4=stack_addresses.address(physical, outputs.cluster_endpoint, 4),
+        balancer_v6=stack_addresses.address(physical, outputs.cluster_endpoint_v6, 6),
+    )
+
+
 class Cilium(Component, pulumi_type='kluster:cilium:Cilium'):
     """The CNI, the Gateway API's definitions, the Gateways and their class, the address pools and the baseline policy.
 
-    `zones` are the served zones (`conventions.routes.served_zones`), which
-    each Gateway has an HTTPS listener for.
+    `exposures` is the exposure census, which the Gateways' listeners derive
+    from (`Gateways`). `worker_gua` is the worker's GUA, which its own pool
+    holds beside its IPv4.
     """
 
     def __init__(
@@ -209,7 +245,8 @@ class Cilium(Component, pulumi_type='kluster:cilium:Cilium'):
         chart: ChartPin,
         gateway_api_definitions: pulumi.Input[str],
         internet_pool: InternetPoolMembers,
-        zones: Sequence[str],
+        worker_gua: pulumi.Input[str],
+        exposures: Sequence[Exposure],
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         super().__init__(name, opts=opts)
@@ -271,7 +308,7 @@ class Cilium(Component, pulumi_type='kluster:cilium:Cilium'):
         self.gateways = Gateways(
             f'{name}-gateways',
             gateway_class=GATEWAY_CLASS,
-            zones=zones,
+            exposures=exposures,
             internet=InternetGatewayAddresses(
                 node_private_ips=internet_pool.node_private_ips,
                 node_guas=internet_pool.node_guas,
@@ -304,6 +341,29 @@ class Cilium(Component, pulumi_type='kluster:cilium:Cilium'):
                 ],
                 service_selector=crds.cilium.v2.CiliumLoadBalancerIPPoolSpecServiceSelectorArgs(
                     match_labels=lb_pool_labels(lan.name)
+                ),
+            ),
+            opts=after_the_chart,
+        )
+
+        # The worker's own addresses, for a Service whose traffic arrives at
+        # the worker as the node it is: the site's forward and pinhole end
+        # there (`conventions.routes.SiteForward`). No advertisement selects
+        # it, since the addresses are already the worker's.
+        self.worker_pool = crds.cilium.v2.CiliumLoadBalancerIPPool(
+            f'{name}-{POOL_WORKER}',
+            metadata=k8s.meta.v1.ObjectMetaArgs(name=POOL_WORKER),
+            spec=crds.cilium.v2.CiliumLoadBalancerIPPoolSpecArgs(
+                blocks=[
+                    crds.cilium.v2.CiliumLoadBalancerIPPoolSpecBlocksArgs(
+                        cidr=str(ipaddress.ip_network(conventions.HOMELAB_NODE_IPV4))
+                    ),
+                    crds.cilium.v2.CiliumLoadBalancerIPPoolSpecBlocksArgs(
+                        cidr=pulumi.Output.from_input(worker_gua).apply(lambda gua: str(ipaddress.ip_network(gua)))
+                    ),
+                ],
+                service_selector=crds.cilium.v2.CiliumLoadBalancerIPPoolSpecServiceSelectorArgs(
+                    match_labels=lb_pool_labels(POOL_WORKER)
                 ),
             ),
             opts=after_the_chart,
