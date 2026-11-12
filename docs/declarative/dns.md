@@ -513,7 +513,15 @@ plane names:
     certificates**, not per-name: every issued certificate lands in
     public Certificate Transparency logs, and per-name issuance would
     republish exactly the LAN-only service census that rewrite-only just
-    hid.
+    hid. The zones the cluster issues for are its **served zones**: the
+    primary, served by definition, since the cluster's own endpoints are
+    names under it, and every zone a row of the route census names
+    (`conventions.routes.served_zones`). Each has one certificate,
+    for the apex and the wildcard together, from the cluster's one
+    issuer, so a row in a new zone is a new certificate in the preview
+    that shows the row (cluster-infra.md §2). The DNS-01 token
+    cert-manager answers the challenges with is minted for the same set
+    of zones ([credentials.md](../credentials.md) §3).
 3.  **`lan.ucw.phd` retires.** Its two historical roles are both
     superseded: split-horizon duplicates collapse into the rewrites on
     the public names, and LAN-only names become rewrite-only names in

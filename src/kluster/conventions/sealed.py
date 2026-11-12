@@ -13,6 +13,9 @@ keys of its data, the scope it is sealed at and the stack that declares it.
 Where its ciphertext lives follows from the row (`SealedValue.path`): one
 structured key, `CONFIG_KEY`, keyed by the value's name and then by its data
 key, in the project's own namespace like every other key the programs read.
+The program reads it back by the same row's path
+(`kluster.lib.k8s.sealed_ciphertext`), so the writer and the reader cannot
+name two places.
 
 Read qualified -- `conventions.sealed.DNS01_TOKEN` -- because the module path
 says what a prefix on every name would otherwise have to.

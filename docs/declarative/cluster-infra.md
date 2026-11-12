@@ -396,9 +396,17 @@ All decided behavior from architecture.md §3, expressed as config:
     the node it arrives at before any backend is chosen, so where a
     Gateway answers is decided by where its address is routed, and the
     client's address reaches Envoy under either traffic policy
-    (rfc-007 §5.1). Three `Gateway`s — `internet-gw` (its Service
-    requesting the `internet` pool's node members and the balancer's two
-    addresses via `lbipam.cilium.io/ips` + sharing-key), `lan-gw` (the
+    (rfc-007 §5.1). Three `Gateway`s in `conventions.GATEWAY_NAMESPACE`,
+    each asking for its addresses in its own `spec.addresses`, which
+    Cilium's operator turns into the generated Service's
+    `lbipam.cilium.io/ips`, and carrying in `spec.infrastructure` the
+    labels and annotations it copies onto that Service, the pool label
+    among them — `internet-gw` (the `internet` pool's node members and
+    the balancer's two addresses, never the dedicated VIP, with
+    `lbipam.cilium.io/sharing-key` set to the pool's name and
+    `lbipam.cilium.io/sharing-cross-namespace` set to `*`, since the raw
+    Services that share those addresses live in their applications'
+    namespaces), `lan-gw` (the
     `lan` pool's default VIP, which the homelab worker announces), and
     `media-gw` (same shape as `lan-gw` on a **second,
     dedicated `lan`-pool VIP** — a `conventions` literal, because
@@ -418,6 +426,31 @@ All decided behavior from architecture.md §3, expressed as config:
     allocate no `NodePort`, and both IP families required. The
     Gateways' secret sync, which hands Envoy the certificates, stays on
     and is stated.
+-   **Listeners and certificates** (rfc-007 §5.2): every Gateway has an
+    HTTPS listener per **served zone** — the primary zone, served by
+    definition, and every zone a row of the route census names
+    (`conventions.routes.served_zones`, which the DNS-01 token's scope
+    reads too) — on the zone's wildcard, terminating with the zone's
+    certificate, and one HTTP listener whose only route is a redirect to
+    HTTPS. The ports are the rows of the public port census the Gateways
+    answer, the same rows the node firewall opens for them
+    (physical.md §2). A route attaches to the HTTPS listeners from a
+    namespace carrying `conventions.routes.ROUTE_LABEL`, which
+    `allowedRoutes` selects on, and from no other; the HTTP listener
+    admits only its own namespace, where the redirect is the one route.
+    **One certificate per served zone, for the apex and the wildcard
+    together** (dns.md §4), in the Gateways' namespace so no listener
+    refers across one, issued by **one `ClusterIssuer`, Let's Encrypt
+    over DNS-01**, whose Cloudflare token is the sealed value
+    `conventions.sealed.DNS01_TOKEN` in cert-manager's namespace (§1.1).
+    A row in a new zone is a new certificate and a new listener in the
+    preview that shows the row. A renewal reaches Envoy with nothing
+    restarted: the operator copies a referenced TLS Secret into Cilium's
+    secrets namespace whenever it changes, and the agent pushes it to
+    Envoy over SDS. Until the token is sealed into the stack, which
+    needs the running controller, no SealedSecret is declared for it,
+    the run warns naming it, and the issuer and the certificates stay
+    pending ([physical/bring-up.md](../physical/bring-up.md) §1).
 -   **Egress Gateway**: not enabled. It refuses to start without BPF
     masquerading, which on this platform brings the legacy host-routing
     switch with it (Datapath, above). Only hath would use it, for the

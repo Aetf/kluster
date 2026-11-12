@@ -5,10 +5,11 @@ is opened with, installing a pinned upstream chart, reaching into what one
 rendered, creating a namespace at its Pod Security level, declaring a
 SealedSecret in the shape
 [declarative/cluster-infra.md](../../docs/declarative/cluster-infra.md) §1.1
-fixes, and labeling a Service into a Cilium load-balancer pool. Anything
-specific to one component belongs with that component, not here. A pinned
-release manifest is fetched by `kluster.lib.release_assets`, which imports no
-bindings, so `update_crds` can run it while it regenerates them.
+fixes -- for a row of the sealed census, from the row -- and labeling a
+Service into a Cilium load-balancer pool. Anything specific to one component
+belongs with that component, not here. A pinned release manifest is fetched
+by `kluster.lib.release_assets`, which imports no bindings, so `update_crds`
+can run it while it regenerates them.
 
 These are functions returning provider resources rather than subclasses of
 them. A subclass buys nothing over a call — the resource is the resource — and
@@ -30,7 +31,8 @@ import pulumi_kubernetes as k8s
 from pulumi.runtime.rpc import UNKNOWN as UNKNOWN_SENTINEL
 
 from kluster import conventions
-from kluster.conventions.sealed import SealingScope
+from kluster.conventions.sealed import SealedValue, SealingScope
+from kluster.lib.config import Shape, ShapeRefused, text
 from kluster.lib.secret import Secret
 from kluster.lib.versions import ChartPin
 
@@ -48,7 +50,9 @@ __all__ = (
     'lb_pool_labels',
     'namespace',
     'pick_resource',
+    'sealed_ciphertext',
     'sealed_secret',
+    'sealed_value',
 )
 
 
@@ -380,6 +384,80 @@ def sealed_secret(
             ),
         ),
         opts=pulumi.ResourceOptions.merge(pulumi.ResourceOptions(delete_before_replace=True), opts),
+    )
+
+
+def sealed_ciphertext(value: SealedValue, configured: object) -> dict[str, str] | None:
+    """The ciphertext of each of a census row's keys, out of what the declaring stack holds under its sealed key.
+
+    `configured` is that whole object as the program read it, `None` when the
+    stack holds no sealed value at all. The read is the inverse of
+    `SealedValue.path` -- the value's name, then each data key -- so what the
+    sealing command wrote is what is found.
+
+    `None` when the stack holds nothing under the row's name: a value not yet
+    sealed in, which `sealed_value` declares as nothing until the bring-up's
+    gate has passed (physical/bring-up.md §1). Anything else that is not a
+    non-empty string per key is a write gone wrong, and is refused as a
+    `ShapeRefused` naming its path and its type, never its content
+    (`kluster.lib.config`): ciphertext does not belong in a run log either.
+    """
+    if configured is None:
+        return None
+    if not isinstance(configured, Mapping):
+        raise _not_a_mapping(conventions.sealed.CONFIG_KEY, configured, 'one entry per value')
+    held = cast('Mapping[str, object]', configured).get(value.name)
+    if held is None:
+        return None
+    if not isinstance(held, Mapping):
+        raise _not_a_mapping(f'{conventions.sealed.CONFIG_KEY}["{value.name}"]', held, 'its data keys')
+    data = cast('Mapping[str, object]', held)
+    return {key: text(data.get(key), value.path(key)) for key in value.keys}
+
+
+def _not_a_mapping(what: str, found: object, expected: str) -> ShapeRefused:
+    return ShapeRefused(
+        f'{what} must hold {expected}, and is {type(found).__name__}', what=what, shape=Shape.WRONG_TYPE
+    )
+
+
+def sealed_value(
+    value: SealedValue,
+    *,
+    ciphertext: Mapping[str, pulumi.Input[str]] | None,
+    opts: pulumi.ResourceOptions | None = None,
+) -> crds.bitnami.v1alpha1.SealedSecret | None:
+    """The SealedSecret of a census row, named, placed and scoped as the row says; none while its ciphertext is absent.
+
+    A row's ciphertext is sealed to the row's name and namespace at the row's
+    scope (`conventions.sealed`), so the object is declared from the row
+    rather than from arguments a caller could get wrong. `ciphertext` is what
+    the program read for the row with `sealed_ciphertext`.
+
+    **Absent, it declares nothing and warns, naming the value.** A sealed
+    value can be made only once the controller that opens it runs, which is
+    after the cluster's first `up`, so the stacks merge ahead of their values
+    and whatever reads one stays pending until the commit that adds it. That
+    is a dated exception to the rule that a value the program cannot run
+    without stops the run at the read (style/pulumi.md, "Layering"), and it
+    retires when the bring-up's gate has passed (physical/bring-up.md §1):
+    from then on an absent value is refused by name. Until then the warning
+    is what tells an `up` that declared nothing from one that declared the
+    value.
+    """
+    if ciphertext is None:
+        pulumi.log.warn(
+            f"sealed value {value.name!r} ({value.namespace}) is absent from this stack's "
+            f'{conventions.sealed.CONFIG_KEY}, so no SealedSecret is declared for it and what reads it stays pending '
+            f'until it is sealed in (physical/bring-up.md §1)'
+        )
+        return None
+    return sealed_secret(
+        value.name,
+        namespace=value.namespace,
+        encrypted_data=ciphertext,
+        scope=value.scope,
+        opts=opts,
     )
 
 

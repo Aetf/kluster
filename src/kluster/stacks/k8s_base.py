@@ -14,7 +14,7 @@ cluster. What every component shares — installing a pinned chart,
 creating a namespace at its Pod Security level, sealing a secret, labeling a
 Service into a load-balancer pool — is in `kluster.lib.k8s`.
 
-The program reads two things beside the pins. The cluster-admin kubeconfig
+The program reads three things beside the pins. The cluster-admin kubeconfig
 opens the one Kubernetes provider every component is declared through, and is
 a config secret of this stack's own (rfc-007 §3.1). The `physical` stack
 generates it, and it cannot cross the stack boundary by StackReference, the way
@@ -27,7 +27,13 @@ configuration, and it is read so that anything but a kubeconfig stops the run
 of are plain machine facts, and they do cross by StackReference: the cloud
 nodes' private IPv4s and GUAs, the dedicated VIP's private address and the
 balancer's two public ones (rfc-007 §4.4), each read so that anything but an
-address stops the run (`kluster.lib.stack_addresses`).
+address stops the run (`kluster.lib.stack_addresses`). And the sealed values
+it declares are plain values of this stack's configuration, under the one key
+`conventions.sealed.CONFIG_KEY`, read out per value by the value's census row
+(`kluster.lib.k8s.sealed_ciphertext`) and handed to the component that
+declares it (rfc-007 §6.2). One the stack does not hold yet is declared as
+nothing, with a warning, until the bring-up's gate has passed
+(`kluster.lib.k8s.sealed_value`, physical/bring-up.md §1).
 
 The chart set is pinned on first contact (declarative/README.md, "Deliberately
 not pre-decided"), and each chart is a project-level `versions:chart-<name>`
@@ -55,7 +61,7 @@ from kluster.components.postgres import PostgresOperator
 from kluster.components.reloader import Reloader
 from kluster.components.sealing import SealedSecretsController
 from kluster.lib import stack_addresses
-from kluster.lib.k8s import KUBECONFIG_KEY, kubeconfig_from
+from kluster.lib.k8s import KUBECONFIG_KEY, kubeconfig_from, sealed_ciphertext
 from kluster.lib.release_assets import fetch_manifest
 from kluster.lib.versions import versions
 from putils import background
@@ -83,6 +89,7 @@ async def main() -> None:
     )
 
     opts = pulumi.ResourceOptions(providers=[provider])
+    sealed = config.get_object(conventions.sealed.CONFIG_KEY)
 
     # cluster-infra.md §1's order. Nothing schedules before the CNI, so
     # everything is behind Cilium; cert-manager is behind the sealing
@@ -95,12 +102,21 @@ async def main() -> None:
         chart=versions.chart['cilium'],
         gateway_api_definitions=gateway_api_definitions,
         internet_pool=_internet_pool_members(physical),
+        zones=conventions.routes.served_zones(),
         opts=opts,
     )
     sealing = SealedSecretsController(
         'sealed-secrets', chart=versions.chart['sealed-secrets'], after=[cilium], opts=opts
     )
-    cert_manager = CertManager('cert-manager', chart=versions.chart['cert-manager'], after=[sealing], opts=opts)
+    cert_manager = CertManager(
+        'cert-manager',
+        chart=versions.chart['cert-manager'],
+        after=[sealing],
+        dns01_token=sealed_ciphertext(conventions.sealed.DNS01_TOKEN, sealed),
+        certificates=cilium.gateways.certificates,
+        certificates_namespace=cilium.gateways.namespace.metadata.name,
+        opts=opts,
+    )
     _ = PostgresOperator(
         'cloudnative-pg',
         operator_chart=versions.chart['cloudnative-pg'],

@@ -1,4 +1,4 @@
-"""Cilium: the datapath, the Gateway API's definitions and class, the address pools and the baseline policy.
+"""Cilium: the datapath, the Gateway API's definitions, class and Gateways, the address pools and the baseline policy.
 
 The installation is the one Cilium's and Talos' guides both document for Talos,
 and every value beyond theirs is one the design needs (rfc-007 §4.1,
@@ -11,16 +11,17 @@ the Gateway API definitions, a release asset rather than a chart, then the
 chart, which installs the agent and the operator; then the objects whose
 definitions the operator registers once elected -- the class configuration,
 the two address pools and the baseline policy. The `GatewayClass`'s own
-definition is the asset's, so it waits for that and for its configuration.
-
-The Gateways themselves, their certificates and the BGP session are later
-pieces of the same component (rfc-007 §14).
+definition is the asset's, so it waits for that and for its configuration,
+and the Gateways (`gateways`), which are the asset's kind too, wait for the
+class. Their certificates are cert-manager's to issue
+(`components.certificates`), into the Secrets the Gateways name. The BGP
+session is a later piece of the same component (rfc-007 §14).
 """
 
 from __future__ import annotations
 
 import ipaddress
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -29,6 +30,7 @@ import pulumi_crds as crds
 import pulumi_kubernetes as k8s
 
 from kluster import conventions
+from kluster.components.cilium.gateways import Gateways, InternetGatewayAddresses
 from kluster.lib.k8s import helm_chart, lb_pool_labels
 from kluster.lib.versions import ChartPin
 from putils import Component, async_output, resolve
@@ -41,6 +43,7 @@ __all__ = (
     'METADATA_RANGE',
     'NAMESPACE',
     'Cilium',
+    'Gateways',
     'InternetPoolMembers',
     'chart_values',
 )
@@ -175,7 +178,11 @@ class InternetPoolMembers:
 
 
 class Cilium(Component, pulumi_type='kluster:cilium:Cilium'):
-    """The CNI, the Gateway API's definitions, the Gateways' class, the address pools and the baseline policy."""
+    """The CNI, the Gateway API's definitions, the Gateways and their class, the address pools and the baseline policy.
+
+    `zones` are the served zones (`conventions.routes.served_zones`), which
+    each Gateway has an HTTPS listener for.
+    """
 
     def __init__(
         self,
@@ -184,6 +191,7 @@ class Cilium(Component, pulumi_type='kluster:cilium:Cilium'):
         chart: ChartPin,
         gateway_api_definitions: pulumi.Input[str],
         internet_pool: InternetPoolMembers,
+        zones: Sequence[str],
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         super().__init__(name, opts=opts)
@@ -241,6 +249,19 @@ class Cilium(Component, pulumi_type='kluster:cilium:Cilium'):
                 ),
             ),
             opts=self.child_opts(depends_on=[self.gateway_api, self.class_config]),
+        )
+        self.gateways = Gateways(
+            f'{name}-gateways',
+            gateway_class=GATEWAY_CLASS,
+            zones=zones,
+            internet=InternetGatewayAddresses(
+                node_private_ips=internet_pool.node_private_ips,
+                node_guas=internet_pool.node_guas,
+                balancer_v4=internet_pool.balancer_v4,
+                balancer_v6=internet_pool.balancer_v6,
+            ),
+            after=[self.gateway_api, self.gateway_class],
+            opts=self.child_opts(),
         )
 
         self.internet_pool = crds.cilium.v2.CiliumLoadBalancerIPPool(

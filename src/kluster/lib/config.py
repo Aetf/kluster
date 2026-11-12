@@ -58,13 +58,13 @@ def text(value: object, what: str) -> str:
     would otherwise be coerced into one silently — a `None` that becomes the
     four characters `null`, an object that becomes its JSON.
 
-    **The refusal names the type and never the value.** The one caller is the
-    slot map reading a stack output on its way into a GitHub secret
-    (`credentials.slots.StateRead`), which logs what this raises, so an export
-    that came out in the wrong shape would otherwise put a credential into the
-    run log of the command that was pushing it. What the operator has to fix is
-    the export's shape, which the type is, and `what` already names which
-    output it was.
+    **The refusal names the type and never the value**, so every caller may
+    hand it a value that must not reach a log — a credential, or ciphertext
+    — and log what it raises: a stack output on its way into a GitHub secret
+    (`credentials.slots.StateRead`), and a sealed value's ciphertext on its way
+    into a SealedSecret (`kluster.lib.k8s.sealed_ciphertext`). What the
+    operator has to fix is the value's shape, which the type is, and `what`
+    already names which value it was.
     """
     if not isinstance(value, str):
         raise ShapeRefused(
