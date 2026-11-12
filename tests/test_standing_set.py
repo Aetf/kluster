@@ -156,8 +156,11 @@ def test_cert_managers_definitions_are_installed_and_its_start_up_check_is_off(a
 # -- local-path-provisioner ------------------------------------------------------
 
 
-def test_local_paths_configuration_hands_its_class_the_user_volume(applied: Run) -> None:
-    """Every node's volumes of the `local-path` class are under the user volume, and no other class has a path."""
+def test_local_paths_configuration_hands_each_class_its_pool_on_every_node(applied: Run) -> None:
+    """`local-path`'s volumes are under the user volume, each node volume's class's under the volume's mount.
+
+    No class has a path outside its pool, and none is keyed by a node's name.
+    """
     configuration = json.loads(local_path_configuration(applied)['config.json'])
 
     assert configuration['nodePathMap'] == []
@@ -165,9 +168,45 @@ def test_local_paths_configuration_hands_its_class_the_user_volume(applied: Run)
     # user volume its machine configuration declares.
     storage_class = applied.inputs(STORAGE_CLASS, LOCAL_PATH)['metadata']['name']
     mounted = conventions.node_volume_mount(talos.local_path_volume_document()['name'])
-    assert configuration['storageClassConfigs'] == {
-        storage_class: {'nodePathMap': [{'node': EVERY_NODE, 'paths': [mounted]}]}
+    node_volume_pools = {
+        applied.inputs(STORAGE_CLASS, f'{LOCAL_PATH}-{row}')['metadata']['name']: conventions.node_volume_mount(row)
+        for row in conventions.NODE_VOLUMES
     }
+    assert configuration['storageClassConfigs'] == {
+        klass: {'nodePathMap': [{'node': EVERY_NODE, 'paths': [path]}]}
+        for klass, path in {storage_class: mounted, **node_volume_pools}.items()
+    }
+
+
+@pytest.mark.parametrize('row', sorted(conventions.NODE_VOLUMES))
+def test_a_node_volumes_class_retains_names_each_claims_directory_and_hands_out_local_volumes(
+    applied: Run, row: str
+) -> None:
+    """The class `conventions.node_volume_class` names, served by the same provisioner.
+
+    Its data is preserved rather than backed up, so it is retained; a claim
+    made again under its name finds its directory; and its volumes are
+    `local`, whose path the kubelet checks at every start. The volume type is
+    read off the class's annotations and the pattern off its parameters at the
+    pinned release, so each in the other place is ignored.
+    """
+    storage_class = applied.inputs(STORAGE_CLASS, f'{LOCAL_PATH}-{row}')
+
+    assert storage_class['metadata']['name'] == conventions.node_volume_class(row)
+    assert storage_class['provisioner'] == applied.inputs(STORAGE_CLASS, LOCAL_PATH)['provisioner']
+    assert storage_class['reclaimPolicy'] == 'Retain'
+    assert storage_class['volumeBindingMode'] == 'WaitForFirstConsumer'
+    assert storage_class['parameters'].keys() == {'pathPattern'}
+    # The provisioner refuses every claim of a class whose rendered path does
+    # not start with the claim's namespace and name (`provisioner.go` at
+    # v0.0.37, the `pathPattern` check).
+    rendered = re.sub(
+        r'{{\s*\.PVC\.(\w+)\s*}}',
+        lambda field: {'Namespace': 'some-namespace', 'Name': 'some-claim'}[field.group(1)],
+        storage_class['parameters']['pathPattern'],
+    )
+    assert rendered.startswith('some-namespace/some-claim/')
+    assert storage_class['metadata']['annotations'] == {'defaultVolumeType': 'local'}
 
 
 def test_local_path_is_the_default_class_reclaims_delete_and_binds_on_scheduling(applied: Run) -> None:

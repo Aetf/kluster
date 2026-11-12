@@ -1,9 +1,11 @@
-"""VolSync: the operator that backs up a PVC with restic into the backup bucket.
+"""VolSync: the operator that backs up a claim with restic into the backup bucket, and copies one claim into another.
 
-The operator alone, with no secret: a `backed_pvc` declares its own
-`ReplicationSource`, and the restic repository's password and the writer key
-for its prefix arrive with it (rfc-007 §8). Installed after cert-manager, with
-the database operator (declarative/cluster-infra.md §1, item 5).
+The operator alone, with no secret: a `claim` under a retention class declares
+its own `ReplicationSource`, and the restic repository's password and the
+namespace's writer key arrive with it, while a move's copy is an `rsync-tls`
+pair that needs neither (`kluster.components.apps.storage`, rfc-007 §8).
+Installed after cert-manager, with the database operator
+(declarative/cluster-infra.md §1, item 5).
 
 Its namespace is `restricted`: the chart's security contexts meet it, and the
 movers that touch a volume run in the namespace of the PVC they back up, not

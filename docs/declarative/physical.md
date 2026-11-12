@@ -211,8 +211,9 @@ machine_secrets
     StorageClass's provisioner is k8s-base's, but the directory under
     it is machine config); and on a node a block volume
     attaches to (§1), the **node volume** and a **node label** naming
-    it (`conventions.NODE_VOLUME_LABEL`), in the configuration the node
-    boots with.
+    it (`conventions.NODE_VOLUME_LABEL`), which the pods that consume
+    the volume's class select, hath's client among them, in the
+    configuration the node boots with.
 -   **Each node names its own factory installer.** The configuration
     sets `machine.install.image` to the installer the Image Factory
     builds from the schematic of the image that node boots, for that
@@ -342,8 +343,8 @@ machine_secrets
         with `grow` on, XFS stated, no encryption. Talos mounts it at
         `/var/mnt/<name>` and finds it on every later boot by the
         partition label `u-<name>` it wrote; what it will and will not
-        format, and the rule a PersistentVolume over it follows, are
-        storage.md §6. The volume is part of the configuration the node
+        format, and how the volume's `local-path` class hands out a
+        directory inside it, are storage.md §6. The volume is part of the configuration the node
         boots with because the table is known at day 0, while the
         attachment waits on the instance: the disk arrives on a node
         that already runs the document. `TalosCluster` refuses a volume
@@ -741,10 +742,12 @@ same gate confirms them:
     unmount. What a file written there would add is the kubelet's write
     path through `/var/mnt`, which is an item of its own below. The
     drill's commands are physical/gateway-cutover.md §8.1.
--   A pod writes through a `local` PersistentVolume at
-    `/var/mnt/<name>/<dir>`, despite the kubelet's read-only view of
-    `/var/mnt`.
--   With the volume unmounted, that pod stays pending (storage.md §6).
+-   A pod writes through a claim of the volume's class,
+    `cloud-block-<name>`, whose directory the provisioner creates at
+    `/var/mnt/<name>/<namespace>/<claim>/`, despite the kubelet's
+    read-only view of `/var/mnt`.
+-   With the volume unmounted, a claim made of the class stays pending,
+    and that pod stays pending at its next start (storage.md §6).
 -   The node label appears on the Node object.
 
 **A node volume is re-attached through the program**, not in the

@@ -6,7 +6,7 @@ from enum import Enum
 from ipaddress import IPv4Network, IPv6Network
 from typing import Literal, NamedTuple
 
-from kluster.conventions.cloud import USER_VOLUME_ROOT
+from kluster.conventions.cloud import NODE_VOLUMES, USER_VOLUME_ROOT
 from kluster.conventions.identity import LABEL_DOMAIN
 
 #: Talos/Cilium pod and service ranges, IPv4 first (architecture.md §1.3).
@@ -76,6 +76,16 @@ POOL_WORKER = 'worker'
 #: A Service opts into a pool by carrying this label; the pools'
 #: `serviceSelector` matches on it.
 LB_POOL_LABEL = f'{LABEL_DOMAIN}/lb-pool'
+
+#: The label a restic source carries its retention class's name under.
+#: VolSync's own metrics carry no class, so a series that needs one takes it
+#: from here (declarative/workloads.md §3).
+RETENTION_LABEL = f'{LABEL_DOMAIN}/retention'
+
+#: The fields of a namespace's sealed writer key: restic's own names for an S3
+#: key's two halves, read off the mover's environment. A repository Secret
+#: carries them as they are, and a key under any other field is refused.
+WRITER_KEY_FIELDS = frozenset({'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY'})
 
 GATEWAY_NAMESPACE = 'gateways'
 GATEWAY_INTERNET = 'internet-gw'
@@ -155,8 +165,24 @@ class GatewayPorts(NamedTuple):
 GATEWAY_PORTS = GatewayPorts(http=80, https=443)
 
 SC_LOCAL_PATH = 'local-path'
+#: The class a NAS claim's static PersistentVolume and its claim name, which no
+#: StorageClass object answers to: it is what binds the one to the other, and
+#: keeps every provisioner off both (`kluster.components.apps.storage`).
 SC_NAS = 'nas'
-SC_CLOUD_BLOCK = 'cloud-block'
+
+
+def node_volume_class(row: str) -> str:
+    """The `local-path` class served from the node volume `row` of `cloud.NODE_VOLUMES`.
+
+    One per row, each a pool of its own in the provisioner's configuration at
+    the row's mount (`cloud.node_volume_mount`), which `k8s-base` declares
+    (storage.md §6). A row the table does not hold has no class, and is
+    refused rather than named.
+    """
+    if row not in NODE_VOLUMES:
+        raise ValueError(f'{row!r} is no node volume: the rows are {sorted(NODE_VOLUMES)}')
+    return f'cloud-block-{row}'
+
 
 #: The Talos user volume `local-path` hands directories out of, on every
 #: node: a `directory` volume, which has no disk of its own and lives on the

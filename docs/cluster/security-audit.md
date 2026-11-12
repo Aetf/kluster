@@ -149,8 +149,21 @@ delete-capable key in any automation, the master credential offline
 only, account 2FA on. That a scoped key cannot list or delete a
 foreign prefix is checked at bootstrap (physical.md §6).
 
+**Residual: a repository's password is in clear outside state.** Each
+repository Secret is a SealedSecret whose template carries the
+repository's password beside the sealed writer key (workloads.md §3),
+and a SealedSecret is an object of its own kind, which etcd's encryption
+at rest does not cover. So the password is in clear in that object, and
+in every etcd snapshot the bucket keeps. The actor is whoever reads the
+snapshots: the holder of the `etcd/` scope's key, or the platform
+(threat-model.md §2.7). The first holds no key to any `volsync/<ns>/`
+prefix, so it reads no repository to open, and gains nothing it can use
+(threat-model.md §4, clause 2). The platform already holds the
+repositories, and its compromise is accepted. Accepted.
+
 **Lives in.** storage.md §4 (integrity rules), physical.md §6
-(verification), architecture.md §4.1.
+(verification), architecture.md §4.1, workloads.md §3 (the repository
+Secret).
 
 ---
 

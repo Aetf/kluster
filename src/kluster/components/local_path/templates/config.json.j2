@@ -1,10 +1,12 @@
 {
   "nodePathMap": [],
   "storageClassConfigs": {
+{%- for storage_class, path in pools.items() %}
     {{ storage_class | tojson }}: {
       "nodePathMap": [
         {"node": "DEFAULT_PATH_FOR_NON_LISTED_NODES", "paths": [{{ path | tojson }}]}
       ]
-    }
+    }{{ "," if not loop.last }}
+{%- endfor %}
   }
 }

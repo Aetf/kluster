@@ -18,9 +18,10 @@ resort, object storage used directly where an app supports it.
 > [architecture.md](architecture.md). Declared in code: the backup
 > bucket and its keys (`BackupBucket`, §4) and the cloud block volumes
 > (`conventions.NODE_VOLUMES`, §6), both by the `physical` stack. The
-> storage classes, VolSync and CNPG are the `k8s-base` stack's, whose
-> program builds its Kubernetes provider and none of them yet. None of
-> it is provisioned.
+> storage classes — `local-path` and one class per node volume —
+> VolSync and CNPG are the `k8s-base` stack's, and the claims, their
+> backups and their moves are the `apps` stack's
+> (`kluster.components.apps.storage`). None of it is provisioned.
 
 ## 1. Principles
 
@@ -30,15 +31,16 @@ resort, object storage used directly where an app supports it.
 2.  **Mobility is a first-class requirement, durability is not** (for the
     block layer). The legacy cluster's pain was *moving* local-path data
     between nodes (claimRef surgery, tar-over-SSH, permission bits). The
-    mobility mechanism is **backup/restore via VolSync** (§3): moves are
-    rare, planned events, so they may cost a restore — what they must not
-    cost is archaeology. Longhorn (a standing 2–4 GiB service for the
+    mobility mechanism is **a copy by VolSync** (§3): moves are
+    rare, planned events, so they may cost a copy with the workload
+    stopped — what they must not cost is archaeology. Longhorn (a standing 2–4 GiB service for the
     same affordance) is deferred until move frequency proves it out
     (§3.2).
 3.  **No storage stretches the WAN synchronously.** The homelab↔cloud RTT
     (~tens of ms) goes into every write of any cross-site replica. Replicas
-    stay within a site; cross-site movement is asynchronous (backup/restore
-    or an explicit, temporary rebuild during a planned migration window).
+    stay within a site; cross-site movement is asynchronous (a copy,
+    a backup and its restore, or an explicit, temporary rebuild during a
+    planned migration window).
 4.  **JuiceFS earned demotion empirically.** The legacy instability has
     two identified root causes, and both are architectural, not tuning:
     (a) the metadata server is a single Redis on one node — every client
@@ -55,12 +57,19 @@ resort, object storage used directly where an app supports it.
 | Class | Backing | Access | Use for | Not for |
 | --- | --- | --- | --- | --- |
 | `local-path` (default) | directories under `/var/mnt/storage`, a Talos user volume on each node's system disk | RWO, node-pinned | Databases (CNPG), caches, anything an app replicates itself | anything that may need to change nodes |
-| `local-path` + VolSync | same local-path, plus a per-PVC restic schedule to the backup bucket | RWO, node-pinned; **movable via restore** | stateful apps without built-in replication; any volume that plausibly moves | bulk media (NAS's job) |
+| `local-path` + VolSync | same local-path, plus a per-claim restic schedule to the backup bucket: `claim` under a retention class | RWO, node-pinned; **movable by copy** (§3.1) | stateful apps without built-in replication; any volume that plausibly moves | bulk media (NAS's job) |
 | ~~`longhorn`~~ (deferred, §3.2) | Longhorn v1 engine | RWO | — not in the initial build — | — |
-| NAS (NFS PV / NodePV) | Existing NAS exports | RWO/RWX, homelab pool only | bulk media, large read-mostly sets | cloud-pool workloads; databases |
-| Cloud block volume | OCI block volume on a cloud node, one per node (`conventions.NODE_VOLUMES`), mounted at `/var/mnt/<name>` | RWO, node-pinned | the preserved cloud-pool dataset: the hath cache | homelab-pool workloads; anything a node may have to lose |
+| NAS (`nas_claim`) | a static NFS PersistentVolume over a path of the host's one export, and its claim | RWX or read-only, the worker only | bulk media, large read-mostly sets | cloud-pool workloads; databases |
+| `cloud-block-<row>` | `local-path` served from an OCI block volume on a cloud node, one per node (`conventions.NODE_VOLUMES`), mounted at `/var/mnt/<name>` (§6) | RWO, node-pinned | the preserved cloud-pool dataset: the hath cache | homelab-pool workloads; anything a node may have to lose |
 | Object storage (direct) | S3-compatible bucket (§4) | app-native | apps with first-class S3 support; all backups | POSIX pretenders |
 | JuiceFS (quarantined, no CSI — §6) | object storage + per-app metadata, mounted in-pod | RWX | last resort only, one app at a time | everything else; it is not selectable by `storageClassName` |
+
+**Two calls claim them, and a class is named.** `claim` is the one
+claim on a node, under `local-path` or a node volume's class, and its
+retention is required: a retention class, or `off('<reason>')`, which
+emits the claim alone. `nas_claim` is the one claim on the NAS, with no
+retention to set, since the source's own regime is its safety net.
+declarative/workloads.md §2 says how each is chosen.
 
 **What local-path data outlives.** `/var/mnt/storage` is a Talos
 user volume of the `directory` type (physical.md §2), which has no
@@ -84,8 +93,8 @@ decision framework with worked examples lives in
 [declarative/workloads.md](../declarative/workloads.md) §2; the short
 form:
 
-1.  Re-derivable → plain **local-path/emptyDir, no backup** (exemption
-    declared explicitly).
+1.  Re-derivable → a **claim with `off('<reason>')`, or an
+    `emptyDir`** (the exemption declared explicitly).
 2.  Working state → **local-path + VolSync** (§3.1); databases →
     **CNPG** on local-path.
 3.  Fixed assets (large, append-mostly) → **NAS** (POSIX/streaming,
@@ -98,20 +107,73 @@ form:
 ### 3.1 VolSync on local-path (the initial build)
 
 Every working-state volume (rule 2: local-path, no app-level
-replication) gets a VolSync
+replication) is a `claim` under a retention class, which gets a VolSync
 `ReplicationSource` with the restic mover: scheduled backups to the
-backup bucket (§4), retention policy per app. VolSync needs no CSI
-snapshots — it mounts the PVC directly; mover pods exist only while a
-backup/restore runs, and the controller idles at well under 100 Mi. This
-one mechanism serves as:
+backup bucket (§4), retention by class, `copyMethod: Direct`, since
+`local-path` has no snapshots. VolSync needs no CSI snapshots — it
+mounts the claim directly; mover pods exist only while a mover runs, and
+the controller idles at well under 100 Mi. This one mechanism serves as:
 
 -   **Backup** (§5): the recurring job every stateful app gets by default.
--   **Mobility**: moving a volume = scale down → final `ReplicationSource`
-    sync → `ReplicationDestination` restore into a fresh PVC on the target
-    node/pool → scale up pointing at it. Works identically same-site and
-    cross-site, no claimRef surgery, and it exercises the restore path —
-    every move is a restore drill for free.
--   **DR**: same restore, onto a rebuilt node.
+-   **Mobility**: a copy from claim to claim by the `rsync-tls` mover
+    (below), which works identically same-site and cross-site, with no
+    claimRef surgery.
+-   **DR**: a restore from the repository, onto a rebuilt node.
+
+**A move is asked for, and it backs nothing up.** VolSync 0.16.0 has no
+idle mover to leave standing: every source syncs on its first
+reconcile, whatever its trigger, so a restic source declared on a claim
+is a backup at declaration, and restic has no retention of zero, so a
+move through the bucket would leave a snapshot behind it. The
+`rsync-tls` mover needs no bucket, repository or credential: a source
+and a destination copy claim to claim over a Service in the namespace,
+on port 8000. So a claim's name and its restic source's carry a
+generation, while its repository, its password and its Secret are keyed
+by its base name, and `claim` takes `moving_to`, the node labels the new
+generation is made on, under any retention. A move is three merges:
+
+1.  **Copy.** The generation is raised with `moving_to` set, and the
+    workload's replicas are set to zero. The claim of the generation before stays with
+    its restic source, if it has one; the new claim is added, with no
+    source, since one would back up a claim the copy has not filled;
+    and an `rsync-tls` source and destination of one name, both
+    `copyMethod: Direct` and started by hand (`trigger.manual`), copy
+    the one into the other. The source depends on the workload, so it
+    is applied after the apply that sets the replicas to zero, since a
+    copy of a claim in use is torn; that orders the request to stop and
+    not the end of the pods, which can still be writing inside their
+    grace period, and the wait that closes the gap is
+    [Aetf/kluster-ops#724](https://github.com/Aetf/kluster-ops/issues/724),
+    ahead of the first move. The destination's mover selects `moving_to`, which is what places the
+    new claim, since it waits for its first consumer. The apply waits
+    for the source's `lastManualSync` through `pulumi.com/waitFor`, with
+    a timeout sized to the claim, and a red run means no second merge,
+    because reclaim `Delete` has no undo on an `off` claim (§3.3).
+    What the copy's call changes is the new claim alone: the old claim
+    keeps the class and the size it was made with, whatever the call
+    states, since a changed class would replace it, and a replace of a
+    named claim deletes it first. Nor does a move grow a claim in place:
+    neither class expands one, and the size the new claim states is a
+    request `local-path` does not enforce.
+2.  **Protection off**, where the old claim is protected (§3.3).
+3.  **Finish.** The same generation without `moving_to` removes the old
+    claim and the movers, and the workload is scaled up on the target.
+    Under a class, the new source takes its own cache on the target and
+    syncs to the same repository on its first reconcile, and the old
+    source's removal takes its cache.
+
+Every mover states its pod security context, without which `restricted`
+refuses it, as the user the workload runs as, so that it can read the
+data, and its resources (declarative/workloads.md §1). Every claim with a
+mover carries the allow for its movers' traffic, which reaches the
+claim's namespace, the cluster's DNS and, for a restic mover, the
+bucket's endpoint, and nothing else. **Unproven live**: the
+destination's mover placing a claim that is not yet bound, the
+destination's Service resolving by its DNS name in the source's
+`address`, the copy's timeout per GiB, the movers' resource figures,
+restic's calls on the bucket itself under a key scoped to one prefix,
+and the overlap of the source with the workload's terminating pods
+(Aetf/kluster-ops#724).
 
 The cost is planned downtime proportional to volume size per move —
 acceptable because moves are rare, deliberate events (the legacy cluster
@@ -131,7 +193,7 @@ true. Each is a question with an answer on record, not a matter of
 taste; none of them is "Longhorn would be nicer":
 
 -   **Move rate**: volume moves run above **~1 per quarter** on volumes
-    whose VolSync restore window is user-visible downtime. The count is
+    whose VolSync copy window is user-visible downtime. The count is
     of moves actually performed; the legacy baseline is about one per
     year (§3.1), so this is a factor-of-four change in behavior, not a
     bad quarter.
@@ -165,9 +227,19 @@ Three related lessons, folded into policy:
     directories of uncertain provenance that nobody dares delete —
     exactly the archaeology this design forbids. In the new cluster a
     deleted working-state PVC cleans its directory; the backup (and its
-    retention class) is the safety net. NAS/NodePV volumes are
-    inherently safe either way: the PV points at a dataset, deletion
-    never touches data.
+    retention class) is the safety net. **A claim under `off` has no
+    undo**: its deletion takes the data, which is what `off` means and
+    why a move's copy is confirmed before its finish removes the old
+    claim (§3.1). Two kinds of volume reclaim `Retain` instead, each
+    for its own reason. A NAS claim's static PV points at a path of the
+    export, and deleting it never touches the data. A node volume's
+    class (§6) holds a dataset preserved rather than backed up, and
+    its directory is named by its claim's namespace and name, so a
+    claim made again under the same name, generation included, finds
+    it rather than an orphan. What `Retain` leaves is accounted for by
+    hand: a removed claim's PersistentVolume stays `Released` until it
+    is deleted, and a move within such a class leaves the old
+    generation's directory on the volume until it is removed there.
 -   **Deliberate preservation happens at the IaC layer, not the reclaim
     layer: `protect=True`.** Data-bearing and identity-bearing
     resources are Pulumi-protected so destroys/replaces fail loudly:
@@ -175,8 +247,9 @@ Three related lessons, folded into policy:
     archive — **not** re-derivable scratch, though also not
     VolSync-backed: like NAS volumes it sits outside the cluster backup
     regime, its redundancy being the H@H network itself), all buckets,
-    CNPG `Cluster`s, precious PVCs, `machine_secrets`, DNS zones, and
-    the reserved public IP. Deleting a protected resource is a two-step,
+    CNPG `Cluster`s, precious PVCs, each restic repository's password
+    (the repository's only key, escrowed nowhere), `machine_secrets`,
+    DNS zones, and the reserved public IP. Deleting a protected resource is a two-step,
     reviewed act: an unprotect diff, then the delete — the IaC
     equivalent of removing a safety catch, visible in preview both
     times. (Where a real resource must outlive its Pulumi entry,
@@ -267,10 +340,9 @@ Per nodes.md §5, durability = declarative rebuild + backups + drills:
     neither form has run.
 2.  **Volumes**: VolSync restic backups on every working-state PVC
     (§3.1), same bucket, retention by class
-    (declarative/workloads.md §3); restores double as the volume-move
-    mechanism, so every move exercises the restore path. Installed by
-    the `k8s-base` stack; no `ReplicationSource` is declared until the
-    first `backed_pvc`, so none runs (nodes.md §5 Tier 0).
+    (declarative/workloads.md §3). Installed by the `k8s-base` stack;
+    no `ReplicationSource` is declared until the first `claim` under a
+    class lands, so none runs (nodes.md §5 Tier 0).
 3.  **CNPG**: barman object-store backups + WAL archiving per database
     cluster (port the legacy barman-plugin setup), monthly automated
     restore drill (port the legacy drill; nothing runs it here yet).
@@ -335,11 +407,12 @@ are the rules a node volume lives by:
     label `u-<name>` that Talos wrote to it
     ([declarative/physical.md](../declarative/physical.md) §2). The same
     configuration labels the node with the volume's name, and the
-    cluster sees a `local` PersistentVolume with node affinity on that
-    label. No OCI CSI driver, no cloud controller.
+    cluster sees a `local-path` class whose pool is the mount (below).
+    No OCI CSI driver, no cloud controller.
 -   **The row's name is the dataset's identity**, in every place it
     appears: the OCI volume's logical name, the partition label, the
-    mount path and the node label. A renamed row is therefore a
+    mount path, the node label and the class,
+    `conventions.node_volume_class(row)`. A renamed row is therefore a
     protected volume deleted, which Pulumi refuses; moving a dataset to
     a new name is a migration, never an edit.
 -   **Talos formats a volume only where its disk probe finds nothing.**
@@ -371,17 +444,32 @@ are the rules a node volume lives by:
     and before any rebuild of the node. Nothing is encrypted: every key source Talos offers either
     binds the dataset to a machine that a rebuild replaces or puts the
     key in the instance's own metadata.
--   **A `local` PersistentVolume over a node volume names a directory
-    inside the volume, never its mount point.** The path is
-    `/var/mnt/<name>/<dir>`, and `<dir>` is created by the seeding step,
-    which works at the volume's root on the node rather than through the
-    PersistentVolume, whose path has to exist already. Talos leaves the mount point behind on the node's own disk
-    once it has mounted a volume there, so on a boot where the volume
-    fails to mount, a PersistentVolume at `/var/mnt/<name>` hands the
-    workload an empty directory on the node's disk and the workload
-    writes its dataset there. A path inside the volume is a missing path
-    instead, the kubelet refuses a `local` volume whose path does not
-    exist, and the pod stays pending until the volume is back.
+-   **A node volume is a `local-path` pool, and needs no mechanism of
+    its own.** The provisioner's configuration keys its pools by class,
+    so `k8s-base` derives one class per row, `cloud-block-<row>`, whose
+    pool is the row's mount, `/var/mnt/<name>`, stated for every node
+    (`DEFAULT_PATH_FOR_NON_LISTED_NODES`), which spares it a Kubernetes
+    node name. Each class reclaims `Retain`, names each claim's directory
+    `<namespace>/<claim>/` inside the pool (the parameter `pathPattern`),
+    so that a claim made again finds its directory, and hands out
+    `local` volumes (the annotation `defaultVolumeType`). An application
+    declares an ordinary `claim` of the class, and the pod that consumes
+    it selects `conventions.NODE_VOLUME_LABEL`, because a claim that
+    waits for its first consumer holds no pod anywhere by itself.
+-   **A volume that failed to mount still cannot take the data**, and
+    neither half needs a step of its own; a pod scheduled to any other
+    node meets the same refusal. Talos leaves the mount point behind on
+    the node's own disk once it has mounted a volume there, so what the
+    data meets is that plain directory:
+    -   **At provisioning.** The helper pod's `hostPath` asks for
+        `DirectoryOrCreate`, but the kubelet's view of `/var/mnt` is
+        read-only, and it can create nothing inside a plain directory
+        there (declarative/physical.md §2). The helper does not start,
+        the claim stays pending, and nothing lands on the node's disk.
+    -   **At every later start.** A `local` volume's path has to exist,
+        and with the volume unmounted the claim's directory inside it
+        does not, so the kubelet refuses the volume and the pod stays
+        pending until the volume is back.
 
 **Lifting the quarantine: the criterion is not on file.** Containment
 has two levers and only one of them has a written test. *Admitting
@@ -418,7 +506,8 @@ reason to write the criterion, not a license to skip it.
 -   **Longhorn from day one** (the 2026-08-21 plan): rejected 2026-08-22
     in the economy pass — 2–4 GiB standing RAM + CPU reservations to keep
     a mobility affordance idling for events that historically happen
-    about once a year. VolSync restore-moves cover the requirement at
+    about once a year. VolSync's copy from claim to claim covers the
+    requirement at
     ~zero idle cost; Longhorn keeps documented adoption criteria (§3.2)
     instead of a default seat.
 -   **OpenEBS Mayastor / local ZFS replication**: less turnkey than Longhorn

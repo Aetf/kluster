@@ -1,10 +1,29 @@
-"""local-path-provisioner: the cluster's default StorageClass, a directory on the node a pod is scheduled to.
+"""local-path-provisioner: the cluster's default StorageClass, a directory on the node a pod is scheduled to, and a class per node volume.
 
 Talos ships no StorageClass, and the one every node can serve is a directory
 of its own disk: `conventions.LOCAL_PATH_ROOT`, a Talos user volume on every
 node (physical.md §2, storage.md §2). The class binds when a pod is scheduled,
 so the volume lands on that pod's node, and it reclaims `Delete`, with a
 volume's backup, where it has one, as the undo (storage.md §3.3).
+
+**A node volume is a pool of the same provisioner** (storage.md §6). Each row
+of `conventions.NODE_VOLUMES` gets a class of its own,
+`conventions.node_volume_class(row)`, whose pool is the row's mount, and the
+provisioner's configuration keys its pools by class. A pool is stated for
+every node rather than for the volume's: the node's name is Kubernetes', and a
+claim of the class lands where its first consumer is scheduled, which selects
+the volume's node label. Nothing mounts the volume on any other node, so a pod
+placed elsewhere meets what a pod on that node meets with the volume
+unmounted: the helper's `DirectoryOrCreate` cannot create inside the kubelet's
+read-only `/var/mnt`, and the claim stays pending (physical.md §2).
+
+Such a class reclaims `Retain`, because the dataset is preserved rather than
+backed up and has no undo (storage.md §3.3); it names each claim's directory
+by its namespace and name (`pathPattern`), so that a claim made again under the
+same name finds its directory; and it hands out `local` volumes rather than
+`hostPath` ones (`defaultVolumeType`), whose path the kubelet checks at every
+start, so a volume that failed to mount leaves the pod pending instead of
+writing to the node's disk.
 
 Declared as resources rather than installed from a chart, after the release's
 own manifest at the pinned version: its upstream publishes no chart
@@ -21,7 +40,7 @@ pods mount the host path they provision (cluster-infra.md §0).
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 import pulumi
@@ -33,7 +52,16 @@ from kluster.lib.k8s import LooserLevel, PodSecurity, namespace
 from kluster.lib.versions import ImagePin
 from putils import Component
 
-__all__ = ('DEFAULT_CLASS_ANNOTATION', 'NAMESPACE', 'PROVISIONER', 'PROVISIONER_NAME', 'LocalPathProvisioner')
+__all__ = (
+    'DEFAULT_CLASS_ANNOTATION',
+    'NAMESPACE',
+    'NODE_VOLUME_PATH_PATTERN',
+    'PROVISIONER',
+    'PROVISIONER_NAME',
+    'VOLUME_TYPE_ANNOTATION',
+    'LocalPathProvisioner',
+    'pools',
+)
 
 #: The namespace the provisioner and its helper pods run in.
 NAMESPACE = 'local-path-storage'
@@ -48,6 +76,16 @@ PROVISIONER = 'rancher.io/local-path'
 #: The annotation that makes a StorageClass the one a claim naming none gets.
 DEFAULT_CLASS_ANNOTATION = 'storageclass.kubernetes.io/is-default-class'
 
+#: The annotation a class names the type of volume it hands out by, `local` or
+#: `hostPath`; an annotation and not a parameter at the pinned v0.0.37
+#: (`README.md`, "Storage classes").
+VOLUME_TYPE_ANNOTATION = 'defaultVolumeType'
+
+#: The directory of a node volume's claim inside its pool, a Go template over
+#: the claim (`README.md` at v0.0.37, "Storage classes"): its namespace and its
+#: name, so that a claim made again under the same name finds its directory.
+NODE_VOLUME_PATH_PATTERN = '{{ .PVC.Namespace }}/{{ .PVC.Name }}/'
+
 #: Where the provisioner's health server listens, which its probes ask.
 HEALTH_PORT = 8080
 
@@ -58,16 +96,25 @@ _LABELS = {'app': PROVISIONER_NAME}
 class _Configuration:
     """What the files beside this module are rendered with."""
 
-    storage_class: str
-    """The class whose volumes `path` holds."""
-    path: str
-    """The node directory a volume of `storage_class` is created under."""
+    pools: Mapping[str, str]
+    """Each class the provisioner serves, with the node directory a volume of it is created under."""
     image: str
     """The helper pod's image, as the whole reference it is pulled by."""
 
 
+def pools() -> dict[str, str]:
+    """Each class the provisioner serves, with its pool: `local-path` at the user volume, and a node volume's at its mount."""
+    return {
+        conventions.SC_LOCAL_PATH: conventions.LOCAL_PATH_ROOT,
+        **{
+            conventions.node_volume_class(row): conventions.node_volume_mount(row)
+            for row in sorted(conventions.NODE_VOLUMES)
+        },
+    }
+
+
 class LocalPathProvisioner(Component, pulumi_type='kluster:local_path:LocalPathProvisioner'):
-    """The provisioner, its permissions and configuration, and the `local-path` StorageClass it serves.
+    """The provisioner, its permissions and configuration, and the StorageClasses it serves.
 
     `after` is what the provisioner is installed behind. It is stated on the
     children rather than left to the component's own `depends_on`, which
@@ -165,6 +212,20 @@ class LocalPathProvisioner(Component, pulumi_type='kluster:local_path:LocalPathP
             volume_binding_mode='WaitForFirstConsumer',
             opts=behind,
         )
+        self.node_volume_classes = {
+            row: k8s.storage.v1.StorageClass(
+                f'{name}-{row}',
+                metadata=k8s.meta.v1.ObjectMetaArgs(
+                    name=conventions.node_volume_class(row), annotations={VOLUME_TYPE_ANNOTATION: 'local'}
+                ),
+                provisioner=PROVISIONER,
+                parameters={'pathPattern': NODE_VOLUME_PATH_PATTERN},
+                reclaim_policy='Retain',
+                volume_binding_mode='WaitForFirstConsumer',
+                opts=behind,
+            )
+            for row in sorted(conventions.NODE_VOLUMES)
+        }
 
         # Read by name, through the API, once at start: the provisioner's
         # configuration and the helper pod's template, and the helper's scripts
@@ -178,11 +239,7 @@ class LocalPathProvisioner(Component, pulumi_type='kluster:local_path:LocalPathP
                 templates.render_tree(
                     __name__,
                     'templates',
-                    _Configuration(
-                        storage_class=conventions.SC_LOCAL_PATH,
-                        path=conventions.LOCAL_PATH_ROOT,
-                        image=str(helper_image),
-                    ),
+                    _Configuration(pools=pools(), image=str(helper_image)),
                 )
             ),
             opts=behind,

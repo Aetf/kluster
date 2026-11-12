@@ -677,8 +677,8 @@ All decided behavior from architecture.md §3, expressed as config:
     `mon` block (rfc-007 §7.4, migration.md §2).
 -   No app namespaces, quotas, or per-app policy.
 -   No backup schedules — VolSync `ReplicationSource`s are declared
-    beside their PVCs in `apps` via the `backed_pvc` helper and
-    retention classes (workloads.md §3); this stack only installs the
-    controller, the shared B2 restic secret material, and the
-    backup-freshness vmalert rule family.
+    beside their claims in `apps` by `claim` and the retention classes,
+    each with its repository Secret (workloads.md §3); this stack only
+    installs the controller and the backup-freshness vmalert rule
+    family.
 -   No DNS records (declarative/dns.md).

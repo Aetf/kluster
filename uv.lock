@@ -1142,6 +1142,7 @@ dependencies = [
     { name = "pulumi-kubernetes-cert-manager" },
     { name = "pulumi-libvirt" },
     { name = "pulumi-oci" },
+    { name = "pulumi-random" },
     { name = "pulumi-unifi" },
     { name = "pulumi-zerotier" },
     { name = "pulumiverse-talos" },
@@ -1183,6 +1184,7 @@ requires-dist = [
     { name = "pulumi-kubernetes-cert-manager", specifier = ">=0.3,<0.4" },
     { name = "pulumi-libvirt", specifier = ">=0.5.4,<0.6" },
     { name = "pulumi-oci", specifier = ">=5.1.0,<6" },
+    { name = "pulumi-random", specifier = ">=4.21.6,<5" },
     { name = "pulumi-unifi", editable = "sdks/unifi" },
     { name = "pulumi-zerotier", editable = "sdks/zerotier" },
     { name = "pulumiverse-talos", specifier = ">=0.8.1,<0.9" },
@@ -2142,6 +2144,20 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5c/ee/7f2992cf271964a78fa6b24cc9d5983818817636b2263a6aebb385e53bf8/pulumi_oci-5.3.1.tar.gz", hash = "sha256:2ceb3247368f5d272a826e82f4e15b098c94b898a17c1387b416ddf4f24530f2", size = 12056376, upload-time = "2026-10-13T18:25:28.664Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/84/b7/718ed9880211e5d7bc727b5a55b382e0866ae3a751580540a8c44f74f214/pulumi_oci-5.3.1-py3-none-any.whl", hash = "sha256:f9838e7cff6e672f0c97ab67ae7e7fba3030eb20698714bcc46665f98dc6636c", size = 17055744, upload-time = "2026-10-13T18:25:25.605Z" },
+]
+
+[[package]]
+name = "pulumi-random"
+version = "4.21.6"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "packaging" },
+    { name = "pulumi" },
+    { name = "semver" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a0/9d/614f26ff80608d2e9ffdf4aa36d0bf95fea013d9555e1b94b091bedb1b18/pulumi_random-4.21.6.tar.gz", hash = "sha256:0f3e32a9882c42cc44b8669b8df4bdc66d8d0178ba172d0344922ed3b3791d72", size = 22797, upload-time = "2026-11-02T13:25:49.77Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ad/3e/67e5df1501864cc18090563c1f23ee1ee9d22357d0e4c7b9caabb430329e/pulumi_random-4.21.6-py3-none-any.whl", hash = "sha256:8f79e5dea85030fee287eec8d78ddfded33194c59b2c2a2d8771990980653a5d", size = 36098, upload-time = "2026-11-02T13:25:48.481Z" },
 ]
 
 [[package]]

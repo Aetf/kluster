@@ -515,7 +515,7 @@ by construction; Tier 0 remains the foundation everything else sits on:
     backups and CNPG barman to the same bucket (storage.md §5) —
     whose operators the `k8s-base` stack declares, with no backup
     declared against either until the first database and the first
-    `backed_pvc`, so neither runs; and periodically *drilled* restores — the drill program of
+    `claim` under a retention class, so neither runs; and periodically *drilled* restores — the drill program of
     operations.md §4, none of which has run.
     Target: RPO ≤ 1 h, RTO ~1–2 h hands-on. The **cold-standby drill**
     covers total-cloud-loss (tenancy termination included): bootstrap a

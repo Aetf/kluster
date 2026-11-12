@@ -582,8 +582,8 @@ def test_a_node_volume_is_one_partition_filling_the_disk_that_is_not_the_boot_di
 
 
 def test_a_node_volume_labels_its_node() -> None:
-    # What a `local` PersistentVolume's node affinity selects on, so that no
-    # workload names the node itself (rfc-002 §10.5).
+    # What the pod consuming the volume's class selects, so that no workload
+    # names the node itself (rfc-002 §10.5).
     assert merged('machine', volume=VOLUME)['nodeLabels'] == {conventions.NODE_VOLUME_LABEL: VOLUME}
 
 
