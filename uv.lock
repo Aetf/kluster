@@ -21,7 +21,7 @@ members = [
 ]
 build-constraints = [
     { name = "editables", specifier = "==0.6" },
-    { name = "hatchling", specifier = "==1.32.4" },
+    { name = "hatchling", specifier = "==1.33.0" },
     { name = "packaging", specifier = "==26.3" },
     { name = "pathspec", specifier = "==1.1.1" },
     { name = "pluggy", specifier = "==1.7.0" },
@@ -1180,7 +1180,7 @@ requires-dist = [
     { name = "pulumi-crds", editable = "sdks/crds" },
     { name = "pulumi-github", specifier = ">=6.4.0,<7" },
     { name = "pulumi-kubernetes", specifier = "==4.34.2" },
-    { name = "pulumi-kubernetes-cert-manager", specifier = ">=0.2.0,<0.3" },
+    { name = "pulumi-kubernetes-cert-manager", specifier = ">=0.3,<0.4" },
     { name = "pulumi-libvirt", specifier = ">=0.5.4,<0.6" },
     { name = "pulumi-oci", specifier = ">=5.1.0,<6" },
     { name = "pulumi-unifi", editable = "sdks/unifi" },
@@ -2103,7 +2103,7 @@ wheels = [
 
 [[package]]
 name = "pulumi-kubernetes-cert-manager"
-version = "0.2.0"
+version = "0.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "parver" },
@@ -2111,9 +2111,9 @@ dependencies = [
     { name = "pulumi-kubernetes" },
     { name = "semver" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/cc/2a/c74bfa63d2cd02b1ef8f429aa56073ac597631f167320cd2d98072b3231d/pulumi_kubernetes_cert_manager-0.2.0.tar.gz", hash = "sha256:c856900632be71bbd9fe1a8391b569fde7860470c0cbd73d030377319e9c2444", size = 24845, upload-time = "2025-03-14T18:41:19.535Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/1b/80/ebf1c16063bbb2b6a8ce1cfc501b2db538d4ee69d79a3680b9d73f5f2a95/pulumi_kubernetes_cert_manager-0.3.0.tar.gz", hash = "sha256:0b1afb0668ea3726bc312647a838e3c59627ad2499b0ff70ded04b6165c5009d", size = 24935, upload-time = "2026-10-28T19:28:14.271Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a3/f1/f4cb7c8e37fcff83c70d8dc315b534d3e64369a85581373775bf2bf44541/pulumi_kubernetes_cert_manager-0.2.0-py3-none-any.whl", hash = "sha256:66180adbc1eb5d92a0832ea265dea3d9559b7818ed0d396b610087716bbbbbec", size = 26686, upload-time = "2025-03-14T18:41:18.17Z" },
+    { url = "https://files.pythonhosted.org/packages/51/c1/6d4ffa98c5f7e0a9472e17c31d9d26ba064607beec4ad24627271055bb48/pulumi_kubernetes_cert_manager-0.3.0-py3-none-any.whl", hash = "sha256:b4cea63036c9dfb0ab50375a5dbccd57e7247afefada9199fc2619631e04dee5", size = 26724, upload-time = "2026-10-28T19:28:13.045Z" },
 ]
 
 [[package]]
