@@ -8,6 +8,12 @@
     accepted the design after review rounds whose answers are written
     into the text, as the rulings of §11.4.
 *   **Created:** 2026-11-05
+*   **Updated:** 2026-11-11. §10.1 gains slice 48, which pins the images
+    built in `docker/` that a legacy component runs. Slice 2's sentence
+    about them, §5's pointer and the After lines of slices 13, 18, 21
+    and 23 follow it, and slice 23 merges seedwatch's image ahead of its
+    pin. §10.2 also says which containers take a numeric `runAsUser`,
+    and §3.1 and §10's opening agree with its table.
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
@@ -182,8 +188,9 @@ Two properties follow, and they are what make the milestone buildable
 ahead of the cluster:
 
 *   **Every component is built and reviewed under mocks** before its
-    wave, many at once, each owning only its own package and test
-    module (§10). Nothing about a build depends on the cluster being up.
+    wave, many at once, each owning its own package and test module
+    and the few shared paths its line adds (§10). Nothing about a build
+    depends on the cluster being up.
 *   **A component receives its census rows as parameters**, as
     style/pulumi.md asks of every component ("A component receives the
     census it acts on"). Its build slice tests it against rows of the
@@ -1574,7 +1581,7 @@ it is verified, what the cut deletes, and what its rollback costs. Each
 application's row is §4.1's, and its storage §4.2's.
 
 **A component's image is the legacy one**, pinned in `Pulumi.yaml`'s
-`versions:` block (§10, slice 2) — or, for a component on the cloud
+`versions:` block (§10, slices 2 and 48) — or, for a component on the cloud
 pool, which is arm64, the oldest release after the legacy one that
 publishes that architecture, where the legacy one does not. **The
 components declare their workloads directly rather than through the
@@ -2341,10 +2348,12 @@ reach each other can run at once. The shape slices 3 to 9 form one line,
 because each adds a census, its invariants or a section of workloads.md.
 The build slices, 10 to 23, own their own package and test module and
 nothing shared unless their line says so, and run together once their
-shapes have merged. `docs/framework/ci.md` is serialized, and slices 1,
-46 and 47 touch it, one at a time. A slice of rfc-007 still open counts
-too: where one shares an owned path with a slice here, the line names
-it.
+shapes have merged. The pin files pass down one line: slice 2, slice 48,
+and the pull request of slice 23 that pins seedwatch. A land owns
+`Pulumi.yaml` too, and comes after every build (§5.1).
+`docs/framework/ci.md` is serialized, and slices 1, 46 and 47 touch it,
+one at a time. A slice of rfc-007 still open counts too: where one
+shares an owned path with a slice here, the line names it.
 
 **What of rfc-007 runs ahead of this list.** Slices 9, 10 and 11 merge
 pre-live, ahead of the window, with their sealed values arriving later
@@ -2412,8 +2421,9 @@ server, if it is open, which pins its image in the same file.
     `versions:image-<name>` pin in `Pulumi.yaml`, at the version §5
     states, or at its current release where no legacy component runs
     it, and Renovate opens a pull request for each one's next
-    release under `renovate.json5`'s rules. The two images built in
-    `docker/` are their slices' to pin.
+    release under `renovate.json5`'s rules. An image built in
+    `docker/` is pinned by slice 48 where a legacy component runs it,
+    and otherwise by the slice that adds it to `docker/`.
 *   **Owned paths**: `Pulumi.yaml`, `renovate.json5`,
     `tests/test_versions.py`, `tests/test_images.py`.
 *   **Tests that fail without it**: each new pin parses (write one that
@@ -2421,6 +2431,30 @@ server, if it is open, which pins its image in the same file.
     each new image's scheme (drop the rule a scheme needs).
 *   **Unproven live**: that each cloud-pool image runs on arm64, which
     the slice reads from each pinned manifest's platforms.
+
+**Slice 48: the pins of the images built in `docker/`.** Pre-live.
+**After** slice 2, and rfc-007 slice 12's echo server, if it is open:
+each pins in the same file.
+
+*   **Done means**: every image built in `docker/` that a legacy
+    component runs is a `versions:image-<name>` pin in `Pulumi.yaml`, at
+    the version §5 states: the `pgcron-cnpg` and `vchord-cnpg` operands,
+    golinks and emailproxy. A pin's tag is the one `images.yml`
+    published for that version, which ends in a fingerprint of what the
+    image was built from (framework/ci.md §4), with that tag's digest.
+    Where the registry serves more than one build of the version, the
+    pin takes the latest, which is the build `main`'s files name for as
+    long as `main` builds that version. Renovate opens a pull request
+    for each one's next version, under a `versioning` in
+    `renovate.json5` that matches the fingerprint without capturing it.
+*   **Owned paths**: `Pulumi.yaml`, `renovate.json5`,
+    `tests/test_versions.py`.
+*   **Tests that fail without it**: slice 2's, over these pins: each
+    parses (write one that does not parse), and the rules offer each
+    image's next version (drop the `versioning`).
+*   **Unproven live**: that Renovate reads a fingerprinted tag as the
+    model in the tests does, which its first run after the merge shows
+    on a pin whose next version the registry serves.
 
 **Slice 3: the exposure declaration.** Pre-live only ahead of the first
 full `physical` apply: its row removal changes `physical`'s plan, so
@@ -2668,22 +2702,42 @@ and their gate say, its ported values read from the configuration, its
 pod security `restricted` unless its line states otherwise. Each pull
 request carries an unproven-live note naming its wave's verification.
 
+**A container whose image states no numeric user is given one by its
+component.** `restricted` asks every container to run as a user that is
+not root, and the kubelet starts none it cannot show to be one: an image
+whose `USER` is unset runs as root, and one whose `USER` is a name
+cannot be checked. Such a container states a numeric `runAsUser`. As
+slice 2 pins them, those are the official `redis` (slices 11 and 21),
+the canary's `curl` (slice 11) and `qbittorrent-nox` (slice 23).
+
 | Slice | Application | Wave | Size | Shared paths beyond its own | After |
 | --- | --- | --- | --- | --- | --- |
 | 10 | exim | A1 | S | none | 2, 4, 6 |
 | 11 | authelia, with the canary and its target | A1 | M | `docs/declarative/cluster-infra.md`, `docs/operations.md` | 2, 5, 6, 7, 8; rfc-007 slice 11 |
 | 12 | blog | A2 | S | none | 2, 9 |
-| 13 | splitpro | A2 | M | none | 2, 7, 8 |
+| 13 | splitpro | A2 | M | none | 2, 7, 8, 48 |
 | 14 | matrix | A2 | S | none | 2, 5, 7 |
 | 15 | syncthing and the WebDAV server, on the NAS | A2 | M | none | 2, 4, 5, 6 |
 | 16 | stdiscosrv | A2 | S | none | 2, 4 |
 | 17 | hath, with its stage and copy pair | after A2 | M | none | 2, 4, 5, 6 |
-| 18 | golinks, emailproxy and spoolman | B | M | none | 2, 4, 5, 6 |
+| 18 | golinks, emailproxy and spoolman | B | M | none | 2, 4, 5, 6, 48 |
 | 19 | the doors | B | S | none | 2, 5, 9 |
 | 20 | shoko | C | S | none | 2, 4, 5, 6, 7 |
-| 21 | immich | C | L | none | 2, 4, 5, 7, 8 |
+| 21 | immich | C | L | none | 2, 4, 5, 7, 8, 48 |
 | 22 | jellyfin | C | M | none | 2, 4, 5, 6, 7 |
-| 23 | qbittorrent and seedwatch, and seedwatch's image in `docker/` | D | M | `Pulumi.yaml`, `docker/` | 2, 4, 5, 6 |
+| 23 | qbittorrent and seedwatch, and seedwatch's image in `docker/` | D | M | `Pulumi.yaml`, `renovate.json5`, `tests/test_versions.py`, `docker/` | 2, 4, 5, 6, 48 |
+
+**Slices 13, 18 and 21 run what slice 48 pins**, and come after it for
+that alone: they share no file with it or with each other.
+
+**seedwatch's image merges ahead of its pin.** Slice 23 adds the image
+to `docker/`, so slice 23 pins it, at its current version, since no
+legacy component runs it. Only a run on `main` publishes an image
+(framework/ci.md §4), so the slice is two pull requests. The first is
+the image's files in `docker/`; it shares no path with another slice and
+waits for none. The second is the component, with the pin of what that
+merge published: it owns the pin files, comes after slice 48, and its
+pin is of slice 48's kind, under slice 48's tests.
 
 **Slice 24: monitoring's route roll.** Pre-live. **After** slices 3, 4
 and 7, and rfc-007 slice 11.
