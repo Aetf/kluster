@@ -71,7 +71,8 @@ async def declarations() -> Recorder:
         helm_chart('registry-only', pin=versions.chart['thing'], namespace='things')
         helm_chart('explicit', pin=EXPLICIT, namespace='kube-system')
         sealed_secret(
-            'cloudflare-dns01',
+            'cert-manager-dns01',
+            name='cloudflare-dns01',
             namespace='cert-manager',
             encrypted_data={'token': 'AgBv...'},
             template=SecretTemplate(
@@ -81,7 +82,7 @@ async def declarations() -> Recorder:
             ),
             scope=SealingScope.STRICT,
         )
-        sealed_secret('ported', namespace='apps', encrypted_data={'password': 'AgAx...'})
+        sealed_secret('ported', name='ported', namespace='apps', encrypted_data={'password': 'AgAx...'})
         crds.cilium.v2.CiliumLoadBalancerIPPool(
             'lan',
             metadata=k8s.meta.v1.ObjectMetaArgs(name='lan'),
@@ -258,7 +259,7 @@ def test_a_sealed_secret_carries_its_scope_where_the_controller_looks(declaratio
     """The controller reads the scope off the template's metadata first, so an
     annotation only on the resource itself would be silently ignored — and the
     ciphertext, sealed for a scope, would then fail to decrypt."""
-    secret = declarations.inputs_of('cloudflare-dns01', SEALED_SECRET)
+    secret = declarations.inputs_of('cert-manager-dns01', SEALED_SECRET)
 
     assert secret['metadata']['name'] == 'cloudflare-dns01'
     assert secret['metadata']['namespace'] == 'cert-manager'
@@ -505,17 +506,23 @@ def warnings_recorded(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
 
 @pytest.mark.asyncio
-async def test_a_sealed_value_is_declared_as_its_row_says(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Named, placed and scoped as the row says, which is what its ciphertext is sealed to, and with no warning."""
+async def test_a_sealed_value_is_declared_as_its_row_says_under_its_callers_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The object named, placed and scoped as the row says, which is what its ciphertext is sealed to, and no warning.
+
+    The resource is the caller's to name: its logical name carries the
+    declaring component's, and the row's name is the object's alone.
+    """
     from kluster.lib.k8s import sealed_value
 
     value = conventions.sealed.DNS01_TOKEN
     warned = warnings_recorded(monkeypatch)
     monitor = await run_with(Recorder(), stack='k8s-base')
     async with declaring():
-        _ = sealed_value(value, ciphertext=dict.fromkeys(value.keys, 'AgB-sealed'))
+        _ = sealed_value('declaring-component-token', value, ciphertext=dict.fromkeys(value.keys, 'AgB-sealed'))
 
-    secret = monitor.inputs_of(value.name, SEALED_SECRET)
+    secret = monitor.inputs_of('declaring-component-token', SEALED_SECRET)
     assert (secret['metadata']['name'], secret['metadata']['namespace']) == (value.name, value.namespace)
     assert secret['spec']['encryptedData'] == dict.fromkeys(value.keys, 'AgB-sealed')
     assert secret['spec']['template']['metadata']['annotations'] == {
@@ -533,7 +540,7 @@ async def test_an_absent_sealed_value_declares_nothing_and_warns_naming_it(monke
     warned = warnings_recorded(monkeypatch)
     monitor = await run_with(Recorder(), stack='k8s-base')
     async with declaring():
-        declared = sealed_value(value, ciphertext=None)
+        declared = sealed_value('declaring-component-token', value, ciphertext=None)
 
     assert declared is None
     assert monitor.of_type(SEALED_SECRET) == []

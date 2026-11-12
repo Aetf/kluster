@@ -653,14 +653,3 @@ def test_the_password_waits_for_the_sealing_controller(sealed: Run) -> None:
     (secret,) = [it for it in sealed.monitor.of_type(SEALED_SECRET) if it.inputs['metadata']['name'] == PASSWORD.name]
 
     assert sealed.urn(CHART, 'sealed-secrets') in sealed.monitor.depends_on(secret.name, secret.typ)
-
-
-def test_every_child_of_the_sealed_session_carries_its_components_name(sealed: Run) -> None:
-    """The password's SealedSecret is named by its row, and that name carries the session's."""
-    session = {
-        urn: component
-        for urn, component in sealed.monitor.children_not_named_for_their_component().items()
-        if 'BgpSession' in urn
-    }
-
-    assert session == {}

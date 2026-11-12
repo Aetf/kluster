@@ -104,7 +104,10 @@ class CertManager(Component, pulumi_type='kluster:certificates:CertManager'):
         # Behind the sealing controller, whose chart defines the kind, and
         # the namespace the value is sealed to.
         self.dns01_token = sealed_value(
-            token, ciphertext=dns01_token, opts=self.child_opts(depends_on=[*after, self.namespace])
+            f'{name}-dns01-token',
+            token,
+            ciphertext=dns01_token,
+            opts=self.child_opts(depends_on=[*after, self.namespace]),
         )
 
         # Instances of the chart's definitions, so behind the chart.

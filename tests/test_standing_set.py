@@ -4,7 +4,10 @@ The program runs whole, against a `physical` that has published its addresses
 (`k8s_base_installation`), and the cases read what it handed the provider:
 the sealing controller, cert-manager, local-path-provisioner and reloader
 (rfc-007 §6.1, §8), the namespaces each creates, and the order they are
-installed in (declarative/cluster-infra.md §1).
+installed in (declarative/cluster-infra.md §1). The rule every child's name
+keeps is held over the whole program twice: as the stack stands until its
+sealed values are sealed in, and with every one of them sealed in, since a
+SealedSecret is declared only in the second (physical/bring-up.md §1).
 
 Literals written here are upstream contracts: the name and namespace
 `kubeseal` looks for the controller under, the charts' value names, the
@@ -25,7 +28,7 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 import yaml
-from k8s_base_installation import AUTONAME_SUFFIX, Run, applied
+from k8s_base_installation import AUTONAME_SUFFIX, SEALED, Run, applied
 from mock_monitor import Recorder, declaring, run_with
 from renovate_text import as_python_spells_it, as_renovate_spells_it, listed, package_rules
 
@@ -46,6 +49,7 @@ ROLE = 'kubernetes:rbac.authorization.k8s.io/v1:Role'
 ROLE_BINDING = 'kubernetes:rbac.authorization.k8s.io/v1:RoleBinding'
 CLUSTER_ROLE = 'kubernetes:rbac.authorization.k8s.io/v1:ClusterRole'
 CLUSTER_ROLE_BINDING = 'kubernetes:rbac.authorization.k8s.io/v1:ClusterRoleBinding'
+SEALED_SECRET = 'crds:bitnami.com/v1alpha1:SealedSecret'
 
 #: The name and namespace `kubeseal` fetches the controller's certificate from
 #: unless told otherwise (`cmd/kubeseal/main.go` at v0.39.1, `controllerName`
@@ -107,6 +111,12 @@ def local_path_configuration(run: Run) -> dict[str, str]:
 async def applied_fixture() -> Run:
     """The whole program against a `physical` that has published every output."""
     return await applied()
+
+
+@pytest_asyncio.fixture(scope='module', loop_scope='module', name='sealed')
+async def sealed_fixture() -> Run:
+    """The same program with every sealed value the stack declares sealed in."""
+    return await applied(sealed=SEALED)
 
 
 # -- Each chart, from its pin -------------------------------------------------
@@ -355,6 +365,12 @@ def test_cert_managers_children_are_installed_behind_the_sealing_controller(appl
 
 def test_every_child_carries_its_components_name(applied: Run) -> None:
     assert applied.monitor.children_not_named_for_their_component() == {}
+
+
+def test_every_child_carries_its_components_name_with_every_sealed_value_sealed_in(sealed: Run) -> None:
+    """The SealedSecrets are children too, and are declared only in this run."""
+    assert sealed.monitor.of_type(SEALED_SECRET)
+    assert sealed.monitor.children_not_named_for_their_component() == {}
 
 
 # -- The namespace helper ------------------------------------------------------
