@@ -348,8 +348,13 @@ both IP families (cluster-infra.md §2).
     Firewall policy references it via address groups instead. The ULA
     range follows the same `::1`-style host-address discipline as §1.3.
 2.  **BGP session**: Cilium BGPv2 (cluster-infra.md §2) peers with the
-    UDM SE (FRR, AS 65000) over both address families, advertising
-    Service VIPs as /32 + /128 (§5.2 automates the UDM side).
+    UDM SE (FRR, AS 65000) over one IPv4 session, which negotiates and
+    advertises both address families, Service VIPs as /32 + /128 (§5.2
+    automates the UDM side). Only the IPv4 VIPs are routed: the /128s
+    carry an IPv4-mapped next hop the UDM's kernel does not install,
+    until
+    [Aetf/kluster-ops#719](https://github.com/Aetf/kluster-ops/issues/719)
+    settles how they get a usable one.
 3.  **Firewall semantics of the routed pool** (ground truth read off the
     UDM's iptables, 2026-08-23): UniFi's zone firewall classifies
     forwarded traffic by **destination ipset**, not interface pairs —

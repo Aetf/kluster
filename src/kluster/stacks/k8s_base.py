@@ -7,10 +7,13 @@ docs/declarative/cluster-infra.md. The component list is closed: additions
 argue for themselves in writing first.
 
 Its components live in areas of `kluster/components/`, the way `physical`
-composes the areas it declares: this module stays the wiring, one component per
-entry of the closed list, each handed what it is installed behind; those
-edges are the dependency chain that lets one `up` converge from an empty
-cluster. What every component shares — installing a pinned chart,
+composes the areas it declares: this module stays the wiring, a component for
+each thing the closed list installs -- an entry is one component, or one per
+part where its parts are installed separately -- each handed what it is
+installed behind; those edges are the dependency chain that lets one `up`
+converge from an empty cluster. Cilium's BGP session is such a part: its
+password is a sealed value and the sealing controller is installed behind
+Cilium. What every component shares — installing a pinned chart,
 creating a namespace at its Pod Security level, sealing a secret, labeling a
 Service into a load-balancer pool — is in `kluster.lib.k8s`.
 
@@ -54,7 +57,7 @@ import pulumi_kubernetes as k8s
 from kluster import conventions
 from kluster.components.backup.volsync import VolSync
 from kluster.components.certificates import CertManager
-from kluster.components.cilium import Cilium, InternetPoolMembers
+from kluster.components.cilium import BgpSession, Cilium, InternetPoolMembers
 from kluster.components.gpu import IntelGpuPlugin, NodeFeatureDiscovery
 from kluster.components.local_path import LocalPathProvisioner
 from kluster.components.postgres import PostgresOperator
@@ -92,8 +95,9 @@ async def main() -> None:
     sealed = config.get_object(conventions.sealed.CONFIG_KEY)
 
     # cluster-infra.md §1's order. Nothing schedules before the CNI, so
-    # everything is behind Cilium; cert-manager is behind the sealing
-    # controller, because the credential its solver uses is a sealed value.
+    # everything is behind Cilium; cert-manager and the BGP session are behind
+    # the sealing controller, because the credential cert-manager's solver
+    # uses and the session's password are sealed values.
     # A chart that declares objects another chart defines is behind that
     # chart: the database operator's backup plugin and the GPU plugin's
     # operator declare cert-manager's, and the GPU plugin declares NFD's.
@@ -107,6 +111,12 @@ async def main() -> None:
     )
     sealing = SealedSecretsController(
         'sealed-secrets', chart=versions.chart['sealed-secrets'], after=[cilium], opts=opts
+    )
+    _ = BgpSession(
+        'bgp',
+        after=[cilium, sealing],
+        password=sealed_ciphertext(conventions.sealed.BGP_PASSWORD, sealed),
+        opts=opts,
     )
     cert_manager = CertManager(
         'cert-manager',
