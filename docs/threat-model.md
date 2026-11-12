@@ -202,10 +202,12 @@ Today:
 -   the Actions, by commit;
 -   the tools `mise.toml` pins, by the sha256 `mise.lock` records for each
     one's artifact, which `mise.toml`'s `locked` makes binding;
--   the container images the `versions:` block of `Pulumi.yaml` names, by
-    digest: the gateway's root filesystems and local-path-provisioner's
-    images; and the bases of the self-built images
-    ([framework/ci.md](framework/ci.md) §4);
+-   every container image the `versions:` block of `Pulumi.yaml` pins, by
+    digest, because an image pin is a whole reference that the parser
+    refuses without one: today the gateway's root filesystems,
+    local-path-provisioner's images and the images the applications'
+    components run, those built in `docker/` among them; and the bases of
+    the self-built images ([framework/ci.md](framework/ci.md) §4);
 -   a Helm chart its publisher serves from an OCI registry, by the digest
     of its manifest, which Helm pulls it by: `chart-cilium`,
     `chart-cert-manager`, `chart-cloudnative-pg`,

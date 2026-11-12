@@ -52,8 +52,8 @@ def test_one_manager_captures_the_release_and_its_digest_as_the_settings_hold_th
 
 def test_the_manager_reads_the_stream_through_its_own_data_source() -> None:
     config = _config()
-    # Its own entry's end rather than `package_rule`'s first brace, since the
-    # pattern carries one.
+    # Its own entry's bounds, since a custom manager is no `packageRules` entry,
+    # which is what `package_rule` finds.
     at = config.index(_spelled(MATCH_STRING))
     manager = config[config.rindex('    {\n', 0, at) : config.index('\n    },', at)]
 

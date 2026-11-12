@@ -61,8 +61,15 @@ config:
   #
   # Renovate reads each the way it reads every image pin here. A tagging scheme
   # its default reading would never move -- a release line that moves by
-  # patches alone, or a tag carrying a packaging revision beside the upstream
-  # version -- has a rule in `renovate.json5` naming the dependency.
+  # patches alone, a tag carrying a packaging revision beside the upstream
+  # version, or one ending in a fingerprint -- has a rule in `renovate.json5`
+  # naming the dependency.
+  #
+  # The images built in `docker/` are published under their conf's `TAG` and a
+  # fingerprint of what each was built from (framework/ci.md §4), and a
+  # published tag never changes: a new build of the pinned version is a new
+  # tag, which compares equal under the image's versioning, so the pin is moved
+  # to it by hand.
 
   # Wave A1. exim runs on the worker, and its image may publish amd64 alone.
   versions:image-exim: docker.io/devture/exim-relay:4.94.2-r0-2@sha256:4bafb3a859befd9e4c6c0dfd810588129112e8c97f350030857edd91be3ce38d
@@ -79,6 +86,8 @@ config:
   versions:image-static-site: docker.io/nginxinc/nginx-unprivileged:1.28.0@sha256:cd33960e98e93d4d63385790ff7f8f5bf2ca95184c581b7f42ae8aea1139fbfc
   versions:image-static-site-git-sync: registry.k8s.io/git-sync/git-sync:v4.8.0@sha256:a20644562fba94773e594885cb001aadb5a3172175f13ac1215e5b2033c9200e
   versions:image-splitpro: ghcr.io/oss-apps/splitpro:v2.1.5@sha256:efaa52b30d009573c4bf70e5711d6447536914469420db58680e1e6779acde6e
+  # splitpro's database, on the `pg_cron` operand built in `docker/`.
+  versions:image-splitpro-database: ghcr.io/aetf/pgcron-cnpg:17.10-standard-trixie-8850f6aa8e37@sha256:e8ed81d29bf838af718028acfc0b694eda412f18e23367c47a7658d9d1eb2b39
   versions:image-matrix: ghcr.io/continuwuity/continuwuity:v26.9.1@sha256:c9c62bc5c0a641f3f713945c701b069c7bc30d2612b54d4a5de80a5be19d5420
   # syncthing, and the step that merges the configuration the component
   # renders into the one the instance keeps.
@@ -93,6 +102,8 @@ config:
   # Wave B, and the device relay that backs every row naming a device.
   versions:image-spoolman: ghcr.io/donkie/spoolman:0.27.0@sha256:7aba565eff774c6dda212d4204de8fa30bf68d513127ef875cc7ef3197a4664e
   versions:image-device-relay: docker.io/alpine/socat:1.8.1.3@sha256:e8a6e8868a8e6e01d9c2c321a8f8d4474d2d741d962462e5c5a124a8e66a0055
+  versions:image-golinks: ghcr.io/aetf/golinks:20260821-df12751-e28925ffa30c@sha256:093ba524686141360e434c720d717d62df109e0a7ba799fda2b89400dbd8a436
+  versions:image-emailproxy: ghcr.io/aetf/emailproxy:2026.7.3-84bf8a9443e6@sha256:b8290e7e06492bc08b9b131f75f3f6ca7a6ddac99854e9b48753be26c086b819
 
   # Wave C. immich's server and its machine-learning service are one release
   # in two flavours, and move in one pull request, the in-cluster group's; the
@@ -103,6 +114,8 @@ config:
   versions:image-immich-machine-learning: ghcr.io/immich-app/immich-machine-learning:v3.3.3-openvino@sha256:43b6b964c6cc458b624ec9b7ed2af0231e19e3bcfaaa68fba8a2668353c48251
   versions:image-immich-redis: docker.io/library/redis:7.4.1@sha256:bb142a9c18ac18a16713c1491d779697b4e107c22a97266616099d288237ef47
   versions:image-immich-redis-exporter: docker.io/oliver006/redis_exporter:v1.75.0@sha256:bbc0b673a89296eab36d6c6c2bde8571ee868dc4059306be482c03d7b05aa662
+  # immich's database, on the `vchord` operand built in `docker/`.
+  versions:image-immich-database: ghcr.io/aetf/vchord-cnpg:15.13-1-0.3.0-2300e63aed1f@sha256:329a7747f9176d50e542553f7cd49e7861cf9fb70793b2d64586a68613720c70
   versions:image-jellyfin: ghcr.io/jellyfin/jellyfin:10.11.4@sha256:37f2625f5d5d70c5b1ceb57f4d8f2a7ff666ea723fb96b468275bbafbde2c06c
   versions:image-shoko: docker.io/shokoanime/server:v5.3.0@sha256:1e7304146c1a8a24345a0be55896fae5d2b12515960564ae8afbb9345131b70a
 
