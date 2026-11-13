@@ -558,7 +558,11 @@ def test_the_session_is_the_one_the_gateways_routing_daemon_names(applied: Run) 
     daemon, `router bgp <its ASN>` and `neighbor <worker> remote-as <the
     worker's>`, so the session is external and both ends say so.
     """
-    gateway = routing.frr_config(neighbor=conventions.HOMELAB_NODE_IPV4, password='not-the-password')
+    gateway = routing.frr_config(
+        neighbor=conventions.HOMELAB_NODE_IPV4,
+        neighbor_link_local=conventions.HOMELAB_NODE_LINK_LOCAL,
+        password='not-the-password',
+    )
     gateway_asn = re.search(r'^router bgp (\d+)$', gateway, re.M)
     worker_asn = re.search(r'^ neighbor \S+ remote-as (\d+)$', gateway, re.M)
     assert gateway_asn is not None

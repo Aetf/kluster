@@ -347,6 +347,7 @@ async def main() -> None:
         host=str(conventions.overlay.member(conventions.overlay.MEMBER_HOMELAB).address),
         storage_dir=conventions.HOMELAB_STORAGE_DIR,
         bridge=conventions.HOMELAB_BRIDGE,
+        mac=conventions.HOMELAB_NODE_MAC,
         vcpus=conventions.HOMELAB_VCPUS,
         memory_gib=conventions.HOMELAB_MEMORY_GIB,
         image_path=worker_image.path,
@@ -553,6 +554,7 @@ def _gateway(config: pulumi.Config, *, worker_gua: str | None) -> Gateway:
         ),
         routing=RoutingSession(
             neighbor=conventions.HOMELAB_NODE_IPV4,
+            neighbor_link_local=conventions.HOMELAB_NODE_LINK_LOCAL,
             password=config.require_secret(GATEWAY_BGP_PASSWORD),
         ),
         # The key this stack's own sessions present, and the only one this

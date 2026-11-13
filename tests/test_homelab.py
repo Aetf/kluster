@@ -46,6 +46,9 @@ DOMAIN = f'{CLUSTER}-{WORKER}'
 MACHINE_CONFIG = 'machine: {}\n'
 STORAGE_DIR = '/var/lib/libvirt/kluster'
 BRIDGE = 'kvmbr1'
+#: A MAC in QEMU's locally administered range, and not the convention's: what
+#: is asserted is that the interface carries the one it is handed.
+MAC = '52:54:00:12:34:56'
 VCPUS = 12
 MEMORY_GIB = 10
 
@@ -151,6 +154,7 @@ def build(**kwargs: Any) -> Any:
     kwargs.setdefault('host', str(conventions.overlay.member(conventions.overlay.MEMBER_HOMELAB).address))
     kwargs.setdefault('storage_dir', STORAGE_DIR)
     kwargs.setdefault('bridge', BRIDGE)
+    kwargs.setdefault('mac', MAC)
     kwargs.setdefault('vcpus', VCPUS)
     kwargs.setdefault('memory_gib', MEMORY_GIB)
     kwargs.setdefault('image_path', IMAGE_PATH)
@@ -321,6 +325,9 @@ async def test_the_worker_joins_the_second_bridge() -> None:
 
     interface = interfaces[0]
     assert interface.bridge == BRIDGE
+    # Stated rather than generated: the worker's link-local is formed from it,
+    # and a replacement of the domain has to form the same one.
+    assert interface.mac == MAC
     # A real bridge, not macvtap: host-to-guest traffic is load-bearing here
     # (the NAS role serves NFS into the cluster), and macvtap is exactly the
     # path that cannot hairpin back to the host.

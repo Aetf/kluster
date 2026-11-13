@@ -474,13 +474,11 @@ All decided behavior from architecture.md §3, expressed as config:
     `conventions.UDM_ASN` — the two ASNs the gateway's FRR
     configuration names from the same constants. Both families are
     negotiated on the one IPv4 session, as the gateway's configuration
-    has it, and that is all the IPv6 half is today: the `/128`s carry
-    the session's IPv4 address as an IPv4-mapped next hop, which the
-    UDM's kernel does not install, so the UDM routes the `lan` pool's
-    IPv4 addresses and not its IPv6 ones. Cilium has no next-hop
-    setting; what gives the `/128`s a usable one is a decision on the
-    UDM's side, tracked as
-    [Aetf/kluster-ops#719](https://github.com/Aetf/kluster-ops/issues/719).
+    has it. The `/128`s therefore carry the session's IPv4 address as
+    an IPv4-mapped next hop, which the UDM's kernel will not route
+    through, and Cilium has no next-hop setting; the UDM's inbound
+    route-map on the IPv6 family replaces it with the worker's
+    link-local, so the UDM routes the `lan` pool in both families.
     The agent can bind the instance's port, which is below 1024,
     because the design grants it `NET_BIND_SERVICE` (the datapath
     bullet above). The advertisement selects the Services carrying the `lan` pool label,
@@ -502,7 +500,8 @@ All decided behavior from architecture.md §3, expressed as config:
     down until the operator's sealing sitting adds the value. The UDM's
     FRR config applies an inbound **prefix-list** (`192.168.71.0/24
     le 32` + the ULA /64 `le 128`, deny the rest) plus a
-    `maximum-prefix` cap — without the filter, a compromised worker
+    `maximum-prefix` cap, and on the IPv6 family the route-map that
+    sets the next hop above — without the filter, a compromised worker
     VM (or anything claiming its static IP while it's down) could
     advertise arbitrary /32s — the DNS servers' addresses included —
     and MITM the whole LAN. Verified at bootstrap by advertising a

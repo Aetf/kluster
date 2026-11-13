@@ -516,7 +516,7 @@ DeviceServices(
     caddy=CaddyService(service=conventions.gateway.CADDY, pin=..., acme_token=...),
     resolvers=tuple(ResolverService(service=entry, pin=...) for entry in conventions.gateway.RESOLVERS),
     overlay_daemon=OverlayDaemon(service=conventions.gateway.OVERLAY, pin=...),
-    routing=RoutingSession(neighbour=..., password=...),
+    routing=RoutingSession(neighbor=..., neighbor_link_local=..., password=...),
 )
 ```
 

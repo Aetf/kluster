@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from ipaddress import IPv4Address
 
+from kluster.conventions.site import eui64_link_local
+
 #: A pure worker, because the control plane is cloud-side (nodes.md §4.2).
 HOMELAB_NODE = 'worker'
 
@@ -14,6 +16,29 @@ HOMELAB_NODE = 'worker'
 #: Nodes number from `.10`; `.1` is the gateway's leg and `HOMELAB_HOST_LEG_IPV4`
 #: the homelab host's own.
 HOMELAB_NODE_IPV4 = IPv4Address('192.168.70.10')
+
+#: The MAC the worker's one interface is declared with. A convention rather
+#: than the provider's choice because an address is derived from it: the kernel
+#: forms the worker's link-local on the uplink from this MAC, and the gateway
+#: routes the `lan` pool's IPv6 VIPs through that link-local. A generated MAC
+#: changes with every replacement of the domain, and the gateway's routes would
+#: then point at an address nothing holds, with nothing reporting it. In QEMU's
+#: locally administered range, and distinct from every other guest's on the
+#: host (physical/homelab-host.md §2).
+#:
+#: **Changing it once the domain exists is a migration.** The gateway's next
+#: hop is derived from it and moves on the next `up`, while the running domain
+#: keeps the MAC it was created with: the provider applies this value when it
+#: creates the domain and never in place. So the change lands only when the
+#: domain is replaced, in the same `up` or a later one; until then the IPv6
+#: VIPs go nowhere, and the only sign is a domain diff that never converges.
+HOMELAB_NODE_MAC = '52:54:00:07:00:0a'
+
+#: The worker's link-local address on the cluster VLAN, derived from its MAC
+#: rather than typed beside it, so the two cannot disagree: the next hop the
+#: gateway's routing configuration sets for every IPv6 route the worker
+#: announces (`components.gateway.routing`).
+HOMELAB_NODE_LINK_LOCAL = eui64_link_local(HOMELAB_NODE_MAC)
 
 #: The homelab host's own leg on the bridge, on the cluster VLAN: host
 #: preparation rather than anything this program declares, and the address the

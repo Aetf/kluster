@@ -3,7 +3,8 @@
 Every IPv6 prefix here is *derived* from its IPv4 sibling rather than written
 beside it. The site numbers each /64 out of `SITE_ULA` after the third octet of
 the IPv4 subnet, spelled as those same digits, so a pair that disagrees cannot
-be declared.
+be declared. A link-local address is derived too, from the MAC of the NIC that
+forms it (`eui64_link_local`).
 """
 
 from __future__ import annotations
@@ -30,6 +31,36 @@ def ula_subnet(v4: IPv4Network) -> IPv6Network:
     """
     prefix = ':'.join(SITE_ULA.network_address.exploded.split(':')[:_ULA_HEXTETS])
     return IPv6Network(f'{prefix}:{v4.network_address.packed[2]}::/64')
+
+
+#: The /64 every link-local address is formed in (RFC 4291 §2.5.6).
+_LINK_LOCAL = IPv6Network('fe80::/64')
+
+#: How many octets a MAC address has, and the bit of its first octet that
+#: the modified EUI-64 inverts: the universal/local bit (RFC 4291 Appendix A).
+_MAC_OCTETS = 6
+_UNIVERSAL_LOCAL_BIT = 0x02
+
+
+def eui64_link_local(mac: str) -> IPv6Address:
+    """The link-local address a NIC forms from its MAC: `fe80::/64` and the MAC's modified EUI-64.
+
+    The identifier is the MAC split in half around `ff:fe`, with the
+    universal/local bit of its first octet inverted (RFC 4291 Appendix A).
+    It is the address Linux forms on a link while the interface's
+    `addr_gen_mode` is EUI-64 — the kernel's default, which a `stable_secret`
+    would replace with stable-privacy — so a declaration that names a guest's
+    link-local derives it from the MAC the guest is declared with, and a
+    replaced guest forms the same address.
+    """
+    try:
+        octets = bytes.fromhex(mac.replace(':', ''))
+    except ValueError:
+        octets = b''
+    if len(octets) != _MAC_OCTETS:
+        raise ValueError(f'{mac!r} is not a MAC address')
+    identifier = bytes((octets[0] ^ _UNIVERSAL_LOCAL_BIT, *octets[1:3], 0xFF, 0xFE, *octets[3:]))
+    return _LINK_LOCAL.network_address + int.from_bytes(identifier, 'big')
 
 
 @dataclass(frozen=True)

@@ -714,6 +714,23 @@ def test_the_peer_forward_lands_on_the_worker_once_qbittorrent_runs_there(ran: R
     assert int(forward['dstPort']) == int(forward['fwdPort']) == int(pinhole['port'])
 
 
+def test_the_gateway_routes_ipv6_through_the_link_local_the_workers_declared_mac_forms(ran: Run) -> None:
+    """The next hop the routing configuration sets is the one the worker's interface will form.
+
+    The worker forms its link-local from the MAC its domain declares, and the
+    gateway routes every IPv6 VIP through the address the session names. A next
+    hop that is not that address installs routes that go nowhere, and the
+    session stays up and reports nothing, so the two are read here off what
+    the run declared: the domain's interface and the file the gateway is sent.
+    """
+    domain = f'{conventions.CLUSTER_NAME}-{conventions.HOMELAB_NODE}'
+    (interface,) = ran.recorded.inputs_of(domain, 'libvirt:index/domain:Domain')['networkInterfaces']
+    config = _unwrapped(ran.recorded.inputs_of(f'{conventions.CLUSTER_NAME}-routing-config')['content'])
+
+    next_hops = re.findall(r'^ set ipv6 next-hop local (\S+)$', config, re.M)
+    assert next_hops == [str(conventions.eui64_link_local(interface['mac']))]
+
+
 @pytest.mark.usefixtures('setup')
 @pytest.mark.asyncio
 async def test_a_flag_that_is_not_a_boolean_refuses_the_run() -> None:
