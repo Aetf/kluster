@@ -616,7 +616,9 @@ entire desired state — FRR/BGP
 output of the libvirt resource: the worker's address is written statically into
 its machine config, and everything that names it — the routing session, the
 peer-port forward, day 1's apid dial — reads that same constant, so no session
-depends on a lease), the nspawn container services
+depends on a lease; the IPv6 routes' next hop =
+`conventions.HOMELAB_NODE_LINK_LOCAL`, a constant of the same kind, derived from
+the MAC the libvirt domain is declared with), the nspawn container services
 (units + digest-pinned rootfs images from homelab-containers CI via
 `DeviceArtifact` (architecture.md §5.2) — including
 the **ZeroTier member container**, host-networking + `/dev/net/tun` +
@@ -723,7 +725,8 @@ migration.md §1): LB IPAM pool containing node primary IPs; NLB dual-stack list
 source-preservation semantics; etcd fsync latency on OCI block volumes;
 A1 capacity at creation; reserved-IP↔secondary-private-IP NAT; Cilium's
 MTU, `conventions.KUBESPAN_MTU`, over the KubeSpan underlay; talosctl reaching the homelab node via cloud endpoints (apid
-proxy).
+proxy); the worker's uplink link-local being `conventions.HOMELAB_NODE_LINK_LOCAL`,
+the next hop the gateway routes the `lan` pool's IPv6 VIPs through.
 
 The node volumes (§1, §2) are first exercised at bring-up too, and the
 same gate confirms them:

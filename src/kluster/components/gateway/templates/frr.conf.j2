@@ -18,6 +18,7 @@ router bgp {{ local_asn }}
   neighbor {{ peer }} activate
   neighbor {{ peer }} soft-reconfiguration inbound
   neighbor {{ peer }} prefix-list {{ v6_list }} in
+  neighbor {{ peer }} route-map {{ v6_next_hop_map }} in
   neighbor {{ peer }} maximum-prefix {{ max_prefixes }}
  exit-address-family
 !
@@ -25,4 +26,7 @@ ip prefix-list {{ v4_list }} seq 10 permit {{ pool_v4 }} le {{ pool_v4.max_prefi
 ip prefix-list {{ v4_list }} seq 20 deny any
 ipv6 prefix-list {{ v6_list }} seq 10 permit {{ pool_v6 }} le {{ pool_v6.max_prefixlen }}
 ipv6 prefix-list {{ v6_list }} seq 20 deny any
+!
+route-map {{ v6_next_hop_map }} permit 10
+ set ipv6 next-hop local {{ v6_next_hop }}
 !

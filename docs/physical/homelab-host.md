@@ -113,6 +113,22 @@ there is no lease, reservation or pool to reconcile it against. v6 is the SLAAC
 GUA from the UDM's RA on this network (architecture.md §3.5's
 qbittorrent path expects that GUA) plus the VLAN's ULA /64.
 
+**The worker's MAC is declared, `52:54:00:07:00:0a`**
+(`conventions.HOMELAB_NODE_MAC`), on the domain's one interface,
+because addresses are derived from it. The kernel forms the worker's
+link-local from it, `addr_gen_mode` being EUI-64 — the kernel's
+default, which Talos and this machine configuration leave alone — and
+the gateway routes the `lan` pool's IPv6 VIPs through that link-local
+(gateway.md §1.3); the SLAAC GUA's interface identifier is the same
+EUI-64. A MAC the provider generated would change with every replacement
+of the domain, and those routes would point at an address nothing holds.
+It is in QEMU's locally administered range `52:54:00`, and no other
+guest on the host carries it. The provider applies a declared MAC when
+it creates or replaces the domain and changes no bridge interface's MAC
+in place. The rule is general: **a guest whose link-layer-derived
+address a declaration depends on declares its MAC, and a next hop on a
+shared link is the neighbor's link-local, derived from that MAC.**
+
 ## 3. GPU: the A380, passed through in two phases
 
 The host has two GPUs, and the worker gets the discrete one:

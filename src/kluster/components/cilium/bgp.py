@@ -20,13 +20,11 @@ Cilium's BGPv2 control plane, in its three objects
 -   **the peer configuration** carries the session's password and negotiates
     both families, IPv4 and IPv6 unicast, on the one IPv4 session the
     gateway's configuration names, each family advertising what the
-    advertisement below selects. **The IPv6 host routes are not installed at
-    the gateway**: the session's IPv4 address is their next hop, sent as an
-    IPv4-mapped IPv6 address, and the gateway's kernel refuses a route through
-    it. Cilium has no next-hop setting, so the cure is a decision on the
-    gateway's side, tracked as
-    [Aetf/kluster-ops#719](https://github.com/Aetf/kluster-ops/issues/719);
-    until then the gateway routes the `lan` pool's IPv4 addresses alone;
+    advertisement below selects. The IPv6 host routes go out with the
+    session's IPv4 address as their next hop, an IPv4-mapped IPv6 address
+    the gateway's kernel will not route through, and Cilium has no next-hop
+    setting: the gateway's inbound route-map on that family replaces it with
+    the worker's link-local (`components.gateway.routing`);
 -   **the advertisement** advertises the load-balancer address of every Service
     the `lan` pool label selects, which Cilium announces as a host route, /32
     or /128. The gateway's inbound prefix-list admits the pool's range and

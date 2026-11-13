@@ -2,8 +2,9 @@
 
 The device routes for the site, and one of the routes it must know is not the
 site's: the pool the cluster hands out to its own load balancers, learned from
-the homelab worker over BGP (cluster-infra.md §2). The daemon that holds the
-session ships with the firmware; what this program owns is the configuration it
+the homelab worker over BGP (cluster-infra.md §2), both families over one IPv4
+session, the IPv6 routes through the worker's link-local (`frr_config`). The
+daemon that holds the session ships with the firmware; what this program owns is the configuration it
 reads, the converger that installs it, and the daemon's on-state — because a
 configuration nothing reads holds no session.
 
@@ -52,7 +53,7 @@ in it — which is also why the file is not world-readable on the device.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from ipaddress import IPv4Address, IPv4Network, IPv6Network
+from ipaddress import IPv4Address, IPv4Network, IPv6Address, IPv6Network
 from typing import Annotated, final
 
 import pulumi
@@ -201,15 +202,23 @@ class RoutingSession:
     `neighbor` is the worker VM's address, which the routing daemon's
     configuration names. That address is a constant rather than another
     resource's output on purpose — the session must not depend on a lease.
-    `password` authenticates the session, so that claiming the peer's address is
-    not enough to become the peer. It is a `Secret`, and does not print: the
-    stack hands it over as an `Output`, which discloses nothing, but a test
-    hands over the literal, and the field is hidden for what it holds rather
-    than for how one of its types prints.
+    `neighbor_link_local` is the same machine's link-local address on the same
+    link, the next hop of every IPv6 route the session brings in: a constant
+    for the same reason, and refused here unless it is link-local (`frr_config`
+    says why it has to be). `password` authenticates the session, so that
+    claiming the peer's address is not enough to become the peer. It is a
+    `Secret`, and does not print: the stack hands it over as an `Output`, which
+    discloses nothing, but a test hands over the literal, and the field is
+    hidden for what it holds rather than for how one of its types prints.
     """
 
     neighbor: IPv4Address
+    neighbor_link_local: IPv6Address
     password: Annotated[pulumi.Input[str], Secret] = field(repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if not self.neighbor_link_local.is_link_local:
+            raise ValueError(f'{self.neighbor_link_local} is not a link-local address')
 
 
 @final
@@ -233,6 +242,8 @@ class _FrrParams:
     pool_v6: IPv6Network
     v4_list: str
     v6_list: str
+    v6_next_hop_map: str
+    v6_next_hop: IPv6Address
     max_prefixes: int
 
 
@@ -274,13 +285,14 @@ class _UnitParams:
 def frr_config(
     *,
     neighbor: IPv4Address,
+    neighbor_link_local: IPv6Address,
     password: str,
 ) -> str:
-    """The routing daemon's configuration, rendered from the peer's address.
+    """The routing daemon's configuration, rendered from the peer's addresses.
 
     The peer is the homelab worker, whose address is a constant rather than a
-    lease precisely so that this file can name it. Three things are declared
-    about the session and each of them is load-bearing:
+    lease precisely so that this file can name it. The session is defended
+    three ways, and each of them is load-bearing:
 
     -   **an authentication password**, so that claiming the peer's address is
         not enough to become the peer;
@@ -294,6 +306,20 @@ def frr_config(
     the daemon's default would otherwise refuse to install anything until an
     outbound policy exists, which for a session that only ever *receives* would
     be ceremony with a failure mode.
+
+    **The IPv6 family sets its next hop on the way in.** Both families ride the
+    one IPv4 session, so the worker sends its IPv6 routes with its IPv4 address
+    as an IPv4-mapped next hop, and the kernel refuses a route through that.
+    An inbound route-map on the IPv6 family alone sets the worker's link-local
+    as the routes' link-local next hop (`set ipv6 next-hop local`), which the
+    daemon installs on the interface the session runs over and the kernel
+    accepts with that interface alone. Validity still follows the session's
+    IPv4 address, so a wrong link-local installs routes that go nowhere with
+    nothing reporting it — which is why the address is derived from the MAC the
+    worker is declared with rather than typed (`conventions.HOMELAB_NODE_MAC`).
+    The route-map, the line that applies it and `neighbor_link_local` are one
+    unit: a peer that sent a usable next hop of its own would make all three
+    go, and nothing else would change shape.
     """
     return templates.render(
         TEMPLATE_PACKAGE,
@@ -309,6 +335,8 @@ def frr_config(
             pool_v6=conventions.LAN_POOL.v6,
             v4_list=f'{conventions.CLUSTER_NAME}-lan-pool-v4',
             v6_list=f'{conventions.CLUSTER_NAME}-lan-pool-v6',
+            v6_next_hop_map=f'{conventions.CLUSTER_NAME}-lan-pool-v6-next-hop',
+            v6_next_hop=neighbor_link_local,
             max_prefixes=MAX_PREFIXES,
         ),
     )
@@ -431,7 +459,9 @@ class SiteRouting(Component, pulumi_type='kluster:gateway:SiteRouting'):
             connection=connection,
             path=FRR_CONFIG,
             content=pulumi.Output.from_input(session.password).apply(
-                lambda password: frr_config(neighbor=session.neighbor, password=password)
+                lambda password: frr_config(
+                    neighbor=session.neighbor, neighbor_link_local=session.neighbor_link_local, password=password
+                )
             ),
             mode=FRR_MODE,
             owner=conventions.gateway.SSH_USER,

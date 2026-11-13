@@ -427,6 +427,10 @@ class HomelabHost(Component, pulumi_type='kluster:homelab:HomelabHost'):
     :param image_path: the decompressed Talos `nocloud` image, on the machine
         running the program. The provider reads it there and uploads it into
         the pool; nothing about it is fetched by the host.
+    :param mac: the MAC the worker's one interface is declared with. The
+        worker's link-local address is derived from it, and the gateway routes
+        through that address, so it is stated rather than left to the
+        provider, which would generate another at every replacement of the domain.
     """
 
     def __init__(
@@ -437,6 +441,7 @@ class HomelabHost(Component, pulumi_type='kluster:homelab:HomelabHost'):
         host: str,
         storage_dir: pulumi.Input[str],
         bridge: pulumi.Input[str],
+        mac: pulumi.Input[str],
         vcpus: int,
         memory_gib: int,
         image_path: pulumi.Input[str],
@@ -576,8 +581,12 @@ class HomelabHost(Component, pulumi_type='kluster:homelab:HomelabHost'):
             # The existing bridge enslaves the IoT VLAN, which is where the
             # Home Assistant domain belongs and a cluster node does not; the
             # worker reaches its own subnet, its default route and its BGP
-            # peer through this one.
-            network_interfaces=[libvirt.DomainNetworkInterfaceArgs(bridge=bridge)],
+            # peer through this one. The MAC is applied when the domain is
+            # created, and again when it is replaced; the provider changes no
+            # bridge interface's MAC in place, so a running domain declared
+            # with a different one keeps its own and shows a diff that never
+            # converges.
+            network_interfaces=[libvirt.DomainNetworkInterfaceArgs(bridge=bridge, mac=mac)],
             # The host is headless, so a serial console is how a machine that
             # fails before apid comes up says why.
             consoles=[libvirt.DomainConsoleArgs(type='pty', target_type='serial', target_port='0')],

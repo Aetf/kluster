@@ -358,11 +358,13 @@ both IP families (cluster-infra.md §2).
 2.  **BGP session**: Cilium BGPv2 (cluster-infra.md §2) peers with the
     UDM SE (FRR, AS 65000) over one IPv4 session, which negotiates and
     advertises both address families, Service VIPs as /32 + /128 (§5.2
-    automates the UDM side). Only the IPv4 VIPs are routed: the /128s
-    carry an IPv4-mapped next hop the UDM's kernel does not install,
-    until
-    [Aetf/kluster-ops#719](https://github.com/Aetf/kluster-ops/issues/719)
-    settles how they get a usable one.
+    automates the UDM side). The /128s arrive with an IPv4-mapped next
+    hop, which the UDM's kernel will not route through, so the UDM's
+    inbound route-map on the IPv6 family sets the worker's link-local
+    as their next hop instead. That address is derived from the MAC
+    the worker's domain is declared with
+    (`conventions.HOMELAB_NODE_LINK_LOCAL`), which is what keeps it
+    across a rebuild of the domain.
 3.  **Firewall semantics of the routed pool** (ground truth read off the
     UDM's iptables, 2026-08-23): UniFi's zone firewall classifies
     forwarded traffic by **destination ipset**, not interface pairs —
@@ -1039,9 +1041,11 @@ pushes those files itself**:
     reference and digest, a directory's path, mode and owner, and the
     pinned host key are public by design.
 -   **FRR/BGP**: the FRR config (neighbor = the libvirt VM's IP, both
-    address families, with an inbound prefix-list and a prefix cap) is
-    rendered from `conventions.HOMELAB_NODE_IPV4` — a constant,
-    deliberately not an output of the libvirt resource — and delivered
+    address families, with an inbound prefix-list and a prefix cap, and
+    on the IPv6 family an inbound route-map setting the VM's link-local
+    as the next hop) is rendered from `conventions.HOMELAB_NODE_IPV4`
+    and `conventions.HOMELAB_NODE_LINK_LOCAL` — constants, deliberately
+    not outputs of the libvirt resource — and delivered
     as a `DeviceFile` under `/data`. An executable of this program's
     own — the file's post-apply hook, and a `Type=oneshot` unit at boot
     — installs it into `/etc/frr`, switches the BGP daemon on in the

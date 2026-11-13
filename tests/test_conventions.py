@@ -122,6 +122,35 @@ def test_a_fixed_vips_two_families_carry_the_same_host_number() -> None:
         assert v4_host == v6_host
 
 
+@pytest.mark.parametrize(
+    ('mac', 'link_local'),
+    [
+        # RFC 4291 Appendix A's own example, a universally administered MAC:
+        # `34-56-78-9A-BC-DE` gives the identifier `36-56-78-FF-FE-9A-BC-DE`.
+        pytest.param('34:56:78:9a:bc:de', 'fe80::3656:78ff:fe9a:bcde', id='universal'),
+        # QEMU's default guest MAC and the address Linux forms for it, a locally
+        # administered one: the bit is set, so inverting clears it, where
+        # setting it would leave `52`.
+        pytest.param('52:54:00:12:34:56', 'fe80::5054:ff:fe12:3456', id='local'),
+    ],
+)
+def test_a_link_local_address_is_the_modified_eui64_of_the_mac(mac: str, link_local: str) -> None:
+    """The universal/local bit inverted and `ff:fe` in the middle, under `fe80::/64`.
+
+    That is the address the kernel forms on the link, which the gateway routes
+    through, so a derivation that drifted from it would route to an address
+    nothing holds. One MAC of each administration, because on a MAC whose bit
+    is clear, inverting it and setting it agree.
+    """
+    assert conventions.eui64_link_local(mac) == ipaddress.IPv6Address(link_local)
+
+
+@pytest.mark.parametrize('mac', ['34:56:78:9a:bc', '34:56:78:9a:bc:de:f0', 'not a mac'])
+def test_what_is_not_a_mac_forms_no_link_local_address(mac: str) -> None:
+    with pytest.raises(ValueError, match='MAC'):
+        _ = conventions.eui64_link_local(mac)
+
+
 # The gateway census is held against the artifacts that can disagree with it,
 # and restated nowhere. `test_device_services` checks the rendered units and
 # files against `tests/data/live-caddyfile`, a transcript of what the

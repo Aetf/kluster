@@ -274,6 +274,8 @@ from kluster.conventions.homelab import (
     HOMELAB_MEMORY_GIB,
     HOMELAB_NODE,
     HOMELAB_NODE_IPV4,
+    HOMELAB_NODE_LINK_LOCAL,
+    HOMELAB_NODE_MAC,
     HOMELAB_STORAGE_DIR,
     HOMELAB_VCPUS,
     NAS_EXPORT,
@@ -312,6 +314,7 @@ from kluster.conventions.site import (
     SiteHost,
     SiteNetwork,
     Vip,
+    eui64_link_local,
     ula_subnet,
 )
 
@@ -350,6 +353,8 @@ __all__ = (
     'HOMELAB_MEMORY_GIB',
     'HOMELAB_NODE',
     'HOMELAB_NODE_IPV4',
+    'HOMELAB_NODE_LINK_LOCAL',
+    'HOMELAB_NODE_MAC',
     'HOMELAB_STORAGE_DIR',
     'HOMELAB_VCPUS',
     'HOME_ASSISTANT',
@@ -426,6 +431,7 @@ __all__ = (
     'Vip',
     'alert',
     'barman_repo_path',
+    'eui64_link_local',
     'forge',
     'gateway',
     'node_volume_class',

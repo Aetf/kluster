@@ -66,8 +66,7 @@
     component or one per separately installed part; the BGP session is a
     component beside Cilium's, behind the sealing controller. The live
     criterion of §14 slice 10 is a route in the gateway's kernel table
-    for a VIP of each family, the IPv6 half waiting on
-    [Aetf/kluster-ops#719](https://github.com/Aetf/kluster-ops/issues/719).
+    for a VIP of each family.
 *   **Updated:** 2026-11-12 — §7.1, §11 and §14 slice 11, as slice 11
     built it: monitoring's placement on the worker is a requirement,
     because alertmanager posts to Home Assistant at an address only the
@@ -89,6 +88,13 @@
     `ingress` entity alone. `route(row)` takes a `Route` and emits one
     `HTTPRoute` per Gateway the row sets, and declares no record yet; the
     one helper a component calls is `expose(exposure)` on the base.
+*   **Updated:** 2026-11-13 — §14 slice 10 and §15.2, as
+    [Aetf/kluster-ops#719](https://github.com/Aetf/kluster-ops/issues/719)
+    built them: the gateway routes the IPv6 VIPs through the worker's
+    link-local, which its inbound route-map on the IPv6 family sets as
+    their next hop, and the live criterion reads the neighbor that
+    address resolves to; the one IPv4 session stays, so §15.2 has no
+    IPv6 neighbor address to settle.
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
@@ -1855,12 +1861,14 @@ password absent; live once it is sealed in. **After** slice 9.
     reference and both families (drop one); the advertisement selects
     the `lan` pool label (select every Service).
 *   **Live**: a route in the gateway's kernel table for a VIP of each
-    family, and the gateway rejects a bogus prefix (physical.md §6). The
-    IPv6 half waits on
-    [Aetf/kluster-ops#719](https://github.com/Aetf/kluster-ops/issues/719):
-    both families are negotiated on the one IPv4 session, and the IPv6
-    host routes carry its IPv4 address as an IPv4-mapped next hop, which
-    the gateway's kernel does not install.
+    family, and the gateway rejects a bogus prefix (physical.md §6). Both
+    families are negotiated on the one IPv4 session, so the IPv6 host
+    routes arrive with an IPv4-mapped next hop, which the gateway's
+    inbound route-map replaces with the worker's link-local: the IPv6
+    route is `via` that link-local on the cluster VLAN's bridge, the
+    link-local answers a ping from the gateway, and the gateway's
+    neighbor table maps it to the worker's declared MAC
+    (physical/gateway-cutover.md §5).
 
 **Slice 11: monitoring.** Before M1's bring-up, with the webhook's
 address absent; live once it is sealed in. **After** slice 10.
@@ -1988,8 +1996,6 @@ it. What the ruling avoids, from the pinned releases:
 *   alertmanager's routing tree beyond the tiers (declarative/README.md
     §4 leaves it to the port from the legacy configuration).
 *   The echo server's image.
-*   The gateway's IPv6 neighbor address for the BGP session, read off
-    the device's routing configuration the `physical` stack writes.
 *   Whether a pool that holds node addresses works (physical.md §6), and
     the reserved-address fallback, at the cost §4.4 states, if it does
     not.

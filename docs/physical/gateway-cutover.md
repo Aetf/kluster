@@ -1391,8 +1391,15 @@ object with no file behind it and goes at the next boot, or to
     **Before the worker VM exists the peer state is `Active` or
     `Connect`** — the daemon holding our configuration and dialing a
     peer that is not there yet. Once the worker peers it is
-    `Established`, and `ip route show proto bgp` lists the pool's host
-    routes. `cannot start staticd: daemon binary not installed` in the
+    `Established`, `ip route show proto bgp` lists the pool's IPv4 host
+    routes, and `ip -6 route show proto bgp` its IPv6 ones, each `via`
+    the worker's link-local on the cluster VLAN's bridge
+    (`conventions.HOMELAB_NODE_LINK_LOCAL`). A route through a
+    link-local is installed with nothing yet answering there, so
+    the IPv6 reading goes one step further: `ping -6 -c1
+    <link-local>%<bridge>` answers, and `ip -6 neigh show <link-local>`
+    then names the MAC the worker is declared with
+    (`conventions.HOMELAB_NODE_MAC`). `cannot start staticd: daemon binary not installed` in the
     journal at every start is expected noise: this firmware's build
     compiles that daemon out, and the set that runs is `watchfrr`,
     `zebra`, `mgmtd` and `bgpd`.
@@ -1426,6 +1433,7 @@ object with no file behind it and goes at the next boot, or to
     cat /proc/"$(pgrep -x bgpd)"/cgroup                # frr.service
     systemctl show -p NRestarts frr                    # record; expect 0
     ip route show proto bgp                            # record
+    ip -6 route show proto bgp                         # record
     ```
 
     **This reading is the *before*, not the answer.** The push does
@@ -1817,6 +1825,25 @@ plane that answers is an A1 launch that found capacity. The worker's
 answer is the proxy path: `talosctl` dials only the talosconfig's
 endpoints, which are the control planes, and names the worker to them,
 so the answer came through whichever control plane it reached.
+
+**The worker forms the link-local the gateway routes through.**
+
+```sh
+tal -n "$WORKER" get addresses -o json \
+  | jq -r 'select(.spec.family == "inet6" and .spec.scope == "link") | "\(.spec.linkName) \(.spec.address)"'
+mise x uv -- uv run python -c 'from kluster import conventions as c; print(c.HOMELAB_NODE_LINK_LOCAL)'
+```
+
+It passes when the uplink's line carries the second command's address,
+as a `/64`. That address is the next hop the gateway's routing
+configuration sets for every IPv6 VIP (gateway.md §1.3), derived from
+the MAC the worker's domain declares on the premise that the worker
+forms an EUI-64 link-local from it. A different address means that
+premise does not hold here, and the gateway's IPv6 routes will point at
+an address nothing holds; the session will still come up and report
+nothing. It is settled now, while nothing routes through it, and not at
+bring-up.md stage 6, where it would show only as an IPv6 VIP that does
+not answer.
 
 **etcd's disk** is declarative/physical.md §6's etcd fsync item, both
 of its halves: the reading of etcd's fsync histogram against

@@ -590,7 +590,11 @@ def static_address_documents(static: StaticAddress) -> list[dict[str, Any]]:
     is different: Talos' `oracle` platform gives it the cloud's resolver at
     `169.254.169.254`, and a platform's resolvers outrank the defaults.
     IPv6 is untouched, because the GUA this design expects is SLAAC and SLAAC
-    is the kernel's, not DHCP's.
+    is the kernel's, not DHCP's. So is the link-local, which the kernel forms
+    from the NIC's MAC as an EUI-64 — nothing here sets `addr_gen_mode` or a
+    `stable_secret` — and which the gateway routes the `lan` pool's IPv6 VIPs
+    through: it holds only while the MAC does, which is why the worker's is
+    declared (`conventions.HOMELAB_NODE_MAC`).
 
     The link is found the way `secondary_address_documents` finds it — as
     the one physical link, through `uplink_alias_document`, not by a name. A

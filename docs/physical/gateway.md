@@ -827,11 +827,32 @@ in the firmware's list of what runs, and the daemon running at boot.
     file naming the worker VM as a BGP peer, with the inbound
     prefix-list and the prefix cap that keep a compromised (or
     impersonated) peer from advertising the LAN out from under itself
-    (declarative/cluster-infra.md §2). It carries the session's
+    (declarative/cluster-infra.md §2), and on the IPv6 family an
+    inbound route-map that sets the next hop of the routes the worker
+    sends (below). It carries the session's
     authentication password, so it is a secret in state and not
     world-readable on the device.
 -   **`/etc/frr/frr.conf`** is the one the daemon opens. It is off
     `/data`, so nothing promises it across a firmware update (§1.2).
+
+**The IPv6 routes go through the worker's link-local.** The one session
+runs over IPv4 and carries both families, so the worker sends its IPv6
+routes with its IPv4 address as an IPv4-mapped next hop, and the
+kernel refuses a route through that. The route-map on the IPv6 family
+sets the worker's link-local instead (`set ipv6 next-hop local`); the
+daemon installs each route through it on the interface the session
+runs over, the cluster VLAN's bridge, and the kernel needs nothing
+more of a link-local gateway than that interface. Whether the routes
+are valid still follows the session's IPv4 address, so a wrong
+link-local installs routes that reach nothing, with the session up and
+nothing reporting it. That is why the address is a constant derived
+from another one (`conventions.HOMELAB_NODE_LINK_LOCAL`, the EUI-64 of
+`HOMELAB_NODE_MAC`) and why the reading that proves it is the neighbor
+table rather than the route (gateway-cutover.md §5). The rule it
+follows is general: **a guest whose link-layer-derived address a
+declaration depends on declares its MAC, and a next hop on a shared
+link is the neighbor's link-local, derived from that MAC**
+(homelab-host.md §2).
 
 Between them sits **`frr-config.sh`**, an executable in `bin/` run by
 **`frr-config.service`**, a `Type=oneshot` unit wanted by
@@ -991,7 +1012,8 @@ cannot: no controller provisioning pass has yet happened while this
 daemon runs. Everything measured says the two managers ignore each
 other; the proof is that the same `up` provisions the gateway for the
 firewall, and afterward `frr.service` is still active with the same
-`bgpd` process and `ip route show proto bgp` is unchanged. A daemon
+`bgpd` process and `ip route show proto bgp` and `ip -6 route show
+proto bgp` are unchanged. A daemon
 found stopped, or those routes gone, is the single outcome that would
 reopen the controller path.
 
