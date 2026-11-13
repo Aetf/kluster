@@ -9,10 +9,10 @@ its `crds/` directory, so they are switched on here; and its start-up check is
 a Helm hook, which `helm.v4.Chart` drops, so it is switched off rather than
 left to vanish (cluster-infra.md §1.2). The issuer and the certificates,
 which are instances of the chart's definitions, are declared behind the
-chart, which covers two things: the definitions exist, and the chart's
-Deployments, the webhook's among them, are ready. It is not the check's
-own wait, for the API server to reach the webhook, which also needs the
-webhook's CA injected into its configuration first.
+chart, which covers what the check waited for: the definitions exist, the
+chart's Deployments, the webhook's among them, are ready, and the webhook's
+configuration carries the CA bundle cainjector writes into it, which
+`helm_chart` awaits for every chart (cluster-infra.md §1.2).
 
 **One `ClusterIssuer`, Let's Encrypt over DNS-01** (rfc-007 §5.2), whose
 Cloudflare token is the sealed value `conventions.sealed.DNS01_TOKEN`, in
@@ -110,7 +110,8 @@ class CertManager(Component, pulumi_type='kluster:certificates:CertManager'):
             opts=self.child_opts(depends_on=[*after, self.namespace]),
         )
 
-        # Instances of the chart's definitions, so behind the chart.
+        # Instances of the chart's definitions, admitted through its webhook,
+        # so behind the chart.
         after_the_chart = self.child_opts(depends_on=[self.chart])
         self.issuer = crds.cert_manager.v1.ClusterIssuer(
             f'{name}-issuer',

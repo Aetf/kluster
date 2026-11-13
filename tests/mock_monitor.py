@@ -13,7 +13,9 @@ mocks was re-growing:
 -   `run_with`, which points the runtime at a monitor, through `set_mocks`,
     which builds each run a fresh registration queue, and hands the run a
     stand-in for the SDK's callback server (`_Callbacks`), so a run that binds
-    a hook starts no server and the `Recorder` keeps the hook by name;
+    a hook or a resource's transform starts no server and the `Recorder`
+    keeps the hook by name and the transform by the token a registration
+    binds;
 -   `run_under_backstop`, which is `run_with` for a run that also refuses an
     unparented resource the way a real run does;
 -   `declaring`, which waits until the monitor has actually seen the
@@ -58,7 +60,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 from pulumi import runtime
 from pulumi.runtime import mocks, settings
-from pulumi.runtime.proto import resource_pb2
+from pulumi.runtime.proto import callback_pb2, resource_pb2
 from pulumi.runtime.rpc_manager import RPCManager
 from pulumi.runtime.settings import SETTINGS
 from pulumi.runtime.stack import ResourceRegistrationFailed
@@ -195,6 +197,10 @@ class Recorder(runtime.Mocks):
         #: engine would call, which a case calls the same way, by the names a
         #: request binds (`_Callbacks`).
         self.hooks: dict[str, pulumi.ResourceHook] = {}
+        #: Every resource transform the run registered, by the token a
+        #: registration binds it under (`_Callbacks`); `transforms_of` reads
+        #: the ones one registration binds.
+        self.transforms: dict[str, pulumi.ResourceTransform] = {}
 
     # -- what a suite overrides ---------------------------------------------
 
@@ -308,6 +314,16 @@ class Recorder(runtime.Mocks):
             )
         called = sorted({call.token for call in self.called})
         raise AssertionError(f'{token} was never called; the run called {called}')
+
+    def transforms_of(self, name: str, typ: str | None = None) -> list[pulumi.ResourceTransform]:
+        """The resource transforms this resource's registration binds, in the order it binds them.
+
+        These are the functions the engine would call on the resource and on
+        every registration below it -- a chart's rendered objects among them
+        -- which a case calls the same way, with a `ResourceTransformArgs`.
+        The registration is found as `options_of` finds it.
+        """
+        return [self.transforms[bound.token] for bound in self.options_of(name, typ).transforms]
 
     def options_of(self, name: str, typ: str | None = None) -> Any:
         """The registration request of this resource, which is where its options are.
@@ -505,8 +521,13 @@ def _register_package(self: Any, request: Any) -> Any:
 mocks.MockMonitor.RegisterPackage = _register_package
 
 
+#: The target every callback a mocked run binds names, in place of the
+#: address of the SDK's callback server: nothing ever dials it.
+_CALLBACK_TARGET = 'mock_monitor'
+
+
 class _Callbacks:
-    """What a mocked run registers its resource hooks with, in place of the SDK's callback server.
+    """What a mocked run registers its resource hooks and transforms with, in place of the SDK's callback server.
 
     A real program registers a hook with a gRPC server of the SDK's own, which
     the engine calls back into when a step of the resource runs it; the SDK
@@ -517,18 +538,37 @@ class _Callbacks:
     started would outlive it. And the mock monitor calls no hook, so the
     server would serve no one: what a case needs is the hook itself, to call
     as the engine would. So each run gets this instead, which keeps every hook
-    by name on the run's `Recorder` and asks the monitor for nothing.
+    by name, and every resource transform by the token its registrations bind,
+    on the run's `Recorder`, and asks the monitor for nothing.
 
-    Resource hooks are all it serves. A program that registers a resource
-    transform, an invoke transform or an error hook meets an `AttributeError`
-    naming the registration, which is where serving it would start.
+    A registration names its transforms as callbacks, a target and a token.
+    The SDK keeps its tokens in a table keyed by the transform itself, so a
+    transform equal to one it registered before -- the same function, or the
+    same bound method read again -- is handed the token that one was given.
+    So is it here, which is what lets a case ask whether two registrations
+    bind the same transform.
+
+    It serves resource hooks and the transforms a resource's options carry;
+    any other registration fails with an `AttributeError` naming it, which is
+    where serving it would start.
     """
 
-    def __init__(self, hooks: dict[str, pulumi.ResourceHook]) -> None:
+    def __init__(self, hooks: dict[str, pulumi.ResourceHook], transforms: dict[str, pulumi.ResourceTransform]) -> None:
         self.hooks = hooks
+        self.transforms = transforms
+        #: The token each transform this run registered was given, keyed as
+        #: the SDK keys it.
+        self.tokens: dict[pulumi.ResourceTransform, str] = {}
 
     def register_resource_hook(self, hook: pulumi.ResourceHook) -> None:
         self.hooks[hook.name] = hook
+
+    def register_transform(self, transform: pulumi.ResourceTransform) -> callback_pb2.Callback:
+        token = self.tokens.get(transform)
+        if token is None:
+            token = self.tokens[transform] = f'transform-{len(self.transforms)}'
+            self.transforms[token] = transform
+        return callback_pb2.Callback(target=_CALLBACK_TARGET, token=token)
 
 
 async def run_with[MonitorT: runtime.Mocks](
@@ -542,8 +582,9 @@ async def run_with[MonitorT: runtime.Mocks](
     starts on, for `fail_on_unreceived_failures` to judge the run by.
     """
     runtime.set_mocks(monitor, project=project, stack=stack, preview=preview)
+    callbacks = _Callbacks(monitor.hooks, monitor.transforms) if isinstance(monitor, Recorder) else _Callbacks({}, {})
     # A property the SDK declares through a decorator the checker cannot read.
-    SETTINGS.callbacks = _Callbacks(monitor.hooks if isinstance(monitor, Recorder) else {})  # pyright: ignore[reportAttributeAccessIssue]
+    SETTINGS.callbacks = callbacks  # pyright: ignore[reportAttributeAccessIssue]
     run = _Run(settings._get_rpc_manager(), [])  # pyright: ignore[reportPrivateUsage]
     run.learn(asyncio.get_running_loop())
     _watch(run)

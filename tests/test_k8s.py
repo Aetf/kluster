@@ -2,7 +2,8 @@
 
 What these check is the part a chart or a controller would otherwise only tell
 us at apply time: that a chart is installed from the pin its caller resolved
-and from no other, that a manifest is refused unless its bytes are the pinned
+and from no other, that each webhook configuration a chart renders awaits the
+CA bundle of every entry the API server could not yet verify, that a manifest is refused unless its bytes are the pinned
 ones, that a search through a chart's rendered set refuses to guess, that a
 SealedSecret carries its scope where the controller looks for it, that a value
 of the sealed census is read from where it is written and declared as its row
@@ -17,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Awaitable, Sequence
 from typing import Any, cast
 
 import pulumi
@@ -24,6 +26,7 @@ import pulumi_crds as crds
 import pulumi_kubernetes as k8s
 import pytest
 import pytest_asyncio
+from k8s_base_installation import Run, applied
 from mock_monitor import Recorder, declaring, run_with, the_run_failed_with
 
 from kluster import conventions
@@ -153,6 +156,184 @@ def test_a_chart_installs_the_pin_it_is_given_whatever_is_configured(declaration
     assert chart['chart'] == 'cilium'
     assert chart['version'] == EXPLICIT.version
     assert chart['repositoryOpts'] == {'repo': EXPLICIT.repository}
+
+
+# -- a chart's admission path ----------------------------------------------------------
+
+
+WEBHOOK_CONFIGURATIONS = ('ValidatingWebhookConfiguration', 'MutatingWebhookConfiguration')
+
+
+def webhook_entry(name: str, *, bundle: str | None = None, url: str | None = None) -> dict[str, Any]:
+    """A webhook entry as a chart renders it: calling its Service, or `url` if given, and carrying `bundle` if given."""
+    client_config: dict[str, Any] = (
+        {'url': url}
+        if url is not None
+        else {'service': {'name': 'webhook', 'namespace': 'cert-manager', 'path': f'/{name}'}}
+    )
+    if bundle is not None:
+        client_config['caBundle'] = bundle
+    return {
+        'name': f'{name}.example.io',
+        'clientConfig': client_config,
+        'failurePolicy': 'Fail',
+        'sideEffects': 'None',
+        'admissionReviewVersions': ['v1'],
+    }
+
+
+def rendered(kind: str, *entries: dict[str, Any], annotations: dict[str, str] | None = None) -> dict[str, Any]:
+    """An admission webhook configuration as a chart renders it, holding `entries`."""
+    metadata: dict[str, Any] = {'name': 'cert-manager-webhook'}
+    if annotations is not None:
+        metadata['annotations'] = annotations
+    return {
+        'apiVersion': 'admissionregistration.k8s.io/v1',
+        'kind': kind,
+        'metadata': metadata,
+        'webhooks': list(entries),
+    }
+
+
+def through(transforms: Sequence[pulumi.ResourceTransform], props: dict[str, Any]) -> dict[str, Any]:
+    """`props` as a chart's rendered object comes out of the transforms the chart's registration bound.
+
+    The engine applies them in order, each to what the one before it made of
+    the object, and an answer of `None` leaves the object as it was.
+    """
+    for transform in transforms:
+        result = transform(
+            pulumi.ResourceTransformArgs(
+                custom=True,
+                type_=f'kubernetes:admissionregistration.k8s.io/v1:{props.get("kind")}',
+                name=f'cert-manager/{props["metadata"]["name"]}',
+                props=props,
+                opts=pulumi.ResourceOptions(),
+            )
+        )
+        assert not isinstance(result, Awaitable)
+        if result is not None:
+            props = dict(result.props)
+    return props
+
+
+def transformed(declarations: Recorder, props: dict[str, Any]) -> dict[str, Any]:
+    """What a chart installed through `helm_chart` makes of `props`, one of the objects it renders."""
+    return through(declarations.transforms_of('cilium', CHART), props)
+
+
+def awaited(props: dict[str, Any]) -> list[str]:
+    """The expressions an object's `pulumi.com/waitFor` holds, which the provider reads as a JSON array."""
+    expressions = json.loads(props['metadata']['annotations']['pulumi.com/waitFor'])
+    assert isinstance(expressions, list)
+    return cast('list[str]', expressions)
+
+
+@pytest.mark.parametrize('kind', WEBHOOK_CONFIGURATIONS)
+def test_each_service_entry_rendered_without_a_bundle_is_awaited_by_its_own_index(
+    declarations: Recorder, kind: str
+) -> None:
+    """One expression per entry, each naming the entry by index: the provider
+    evaluates only the first value a path selects, so a path over every entry
+    would hold once any one of them had a bundle."""
+    props = transformed(declarations, rendered(kind, webhook_entry('first'), webhook_entry('second')))
+
+    assert awaited(props) == [
+        'jsonpath={.webhooks[0].clientConfig.caBundle}',
+        'jsonpath={.webhooks[1].clientConfig.caBundle}',
+    ]
+
+
+@pytest.mark.parametrize('kind', WEBHOOK_CONFIGURATIONS)
+def test_an_entry_with_a_bundle_or_naming_a_url_is_not_awaited(declarations: Recorder, kind: str) -> None:
+    """Nothing will write a bundle into either, so awaiting one would hold the
+    chart until the provider's timeout; the entries that are awaited keep
+    their own indices around them."""
+    props = transformed(
+        declarations,
+        rendered(
+            kind,
+            webhook_entry('injected', bundle='LS0tLS1CRUdJTg=='),
+            webhook_entry('pending'),
+            webhook_entry('external', url='https://admission.example.invalid/validate'),
+            webhook_entry('also-pending'),
+        ),
+    )
+
+    assert awaited(props) == [
+        'jsonpath={.webhooks[1].clientConfig.caBundle}',
+        'jsonpath={.webhooks[3].clientConfig.caBundle}',
+    ]
+
+
+def test_the_wait_is_added_to_what_the_chart_rendered_and_changes_nothing_else(declarations: Recorder) -> None:
+    original = rendered(
+        'ValidatingWebhookConfiguration',
+        webhook_entry('pending'),
+        annotations={'cert-manager.io/inject-ca-from-secret': 'cert-manager/cert-manager-webhook-ca'},
+    )
+    props = transformed(declarations, json.loads(json.dumps(original)))
+
+    annotations = props['metadata'].pop('annotations')
+    assert annotations.pop('pulumi.com/waitFor')
+    assert annotations == original['metadata']['annotations']
+    assert props == {**original, 'metadata': {'name': original['metadata']['name']}}
+
+
+@pytest.mark.parametrize(
+    'props',
+    [
+        pytest.param(
+            rendered(
+                'ValidatingWebhookConfiguration',
+                webhook_entry('validate', bundle='LS0tLS1CRUdJTg=='),
+                webhook_entry('external', url='https://admission.example.invalid/validate'),
+            ),
+            id='every-entry-has-a-bundle-or-a-url',
+        ),
+        pytest.param(
+            rendered(
+                'MutatingWebhookConfiguration',
+                webhook_entry('mutate'),
+                annotations={'pulumi.com/waitFor': 'jsonpath={.webhooks[0].name}'},
+            ),
+            id='awaited-by-its-own-annotation',
+        ),
+        pytest.param(
+            rendered(
+                'ValidatingWebhookConfiguration',
+                webhook_entry('validate'),
+                annotations={'pulumi.com/skipAwait': 'true'},
+            ),
+            id='its-await-waived',
+        ),
+        pytest.param(
+            {**rendered('ValidatingWebhookConfiguration', webhook_entry('validate')), 'apiVersion': 'example.io/v1'},
+            id='a-kind-of-the-same-name-in-another-group',
+        ),
+        pytest.param(
+            rendered('ValidatingAdmissionPolicy', webhook_entry('validate')),
+            id='another-kind-of-the-admission-group',
+        ),
+        pytest.param(
+            {
+                'apiVersion': 'apps/v1',
+                'kind': 'Deployment',
+                'metadata': {'name': 'cert-manager-webhook', 'namespace': 'cert-manager'},
+                'spec': {'replicas': 1},
+            },
+            id='a-deployment',
+        ),
+        pytest.param(
+            {'apiVersion': 'v1', 'kind': 'Service', 'metadata': {'name': 'cert-manager-webhook'}},
+            id='a-service',
+        ),
+    ],
+)
+def test_an_object_with_nothing_to_await_passes_through_as_rendered(
+    declarations: Recorder, props: dict[str, Any]
+) -> None:
+    assert transformed(declarations, json.loads(json.dumps(props))) == props
 
 
 # -- the release manifest --------------------------------------------------------
@@ -545,3 +726,31 @@ async def test_an_absent_sealed_value_declares_nothing_and_warns_naming_it(monke
     assert declared is None
     assert monitor.of_type(SEALED_SECRET) == []
     assert [message for message in warned if repr(value.name) in message and conventions.sealed.CONFIG_KEY in message]
+
+
+# -- every chart of the installation ---------------------------------------------------
+
+
+@pytest_asyncio.fixture(scope='module', loop_scope='module', name='applied')
+async def applied_fixture() -> Run:
+    """The whole `k8s-base` program against a `physical` that has published every output."""
+    return await applied()
+
+
+def test_every_chart_the_installation_declares_awaits_its_admission_path(applied: Run) -> None:
+    """Each chart registration's own transforms put the wait on a webhook configuration it renders.
+
+    The program runs whole, so a component that declares its chart some other
+    way than through `helm_chart` is caught here without being named.
+    """
+    charts = [request.name for request in applied.monitor.requested if request.type == CHART]
+    assert charts, 'the installation declared no chart'
+    pending = rendered('ValidatingWebhookConfiguration', webhook_entry('first'), webhook_entry('second'))
+
+    for chart in charts:
+        props = through(applied.monitor.transforms_of(chart, CHART), json.loads(json.dumps(pending)))
+        assert 'pulumi.com/waitFor' in props['metadata'].get('annotations', {}), f'{chart} awaits nothing'
+        assert awaited(props) == [
+            'jsonpath={.webhooks[0].clientConfig.caBundle}',
+            'jsonpath={.webhooks[1].clientConfig.caBundle}',
+        ], chart

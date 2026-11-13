@@ -606,25 +606,33 @@ child run, whose cases each collect what the cases before them left, warns of
 no unclosed loop.
 
 **A mocked run starts no callback server.** A real program registers a
-resource hook with a gRPC server of the SDK's own, which the engine calls back
-into when a step runs the hook. The SDK starts that server the first time a
+resource hook, or a transform a resource's options carry, with a gRPC server
+of the SDK's own,
+which the engine calls back into when a step runs the hook or a registration
+meets the transform. The SDK starts that server the first time a
 program registers one, and stops it at the end of the program
 (`run_pulumi_func` in `pulumi/runtime/stack.py`, which the SDK's own
 `pulumi.runtime.test` decorator ends in too). A run here is declared through
 `declaring` and never reaches that end, so each server a run started would be
 left running, and a worker that exits with servers running prints
-`Error in sys.excepthook` as it goes. The mock monitor calls no hook, so such
-a server serves no one. `run_with` hands every run `mock_monitor._Callbacks`
-instead, which keeps each hook by name on the run's `Recorder`
-(`Recorder.hooks`). A case calls a hook from there as the engine would, by
-the names the registration request binds, which `Recorder.options_of` returns.
-That is the one mechanism, and a suite installs no stand-in of its own. It is
-the harness's design rather than a workaround: the SDK's mocks start and stop
-the server as a real program does, and it is this harness that never reaches
-a program's end. It serves resource hooks alone, so a program that registers a
-transform or an error hook fails with an `AttributeError` naming the
-registration. `tests/test_mock_monitor_callbacks.py` holds that a run binding
-a hook starts no server and keeps the hook.
+`Error in sys.excepthook` as it goes. The mock monitor calls no hook and
+applies no transform, so such a server serves no one. `run_with` hands every
+run `mock_monitor._Callbacks` instead, which keeps each hook by name on the
+run's `Recorder` (`Recorder.hooks`), and each transform under the token the
+registration requests bind (`Recorder.transforms`), one token per transform
+as the SDK keys its own table, by the transform itself. A case calls a hook
+from there as the engine would, by the names the registration request binds,
+which `Recorder.options_of` returns, and calls a transform the same way, with
+a `ResourceTransformArgs`, from the list `Recorder.transforms_of` reads off
+one registration. That is the one mechanism, and a suite installs no stand-in
+of its own. What a transform bound on a chart does to the objects the chart
+renders is the engine's to apply, so a case shows that only against the
+engine (§8). This is the harness's design rather than a workaround: the SDK's
+mocks start and stop the server as a real program does, and it is this
+harness that never reaches a program's end. It serves resource hooks and the
+transforms a resource's options carry; any other registration fails with an
+`AttributeError` naming it. `tests/test_mock_monitor_callbacks.py` holds that
+a run binding a hook or a transform starts no server and keeps it.
 
 The `RegisterResource` patch belongs in one place because it does not
 compose: a second module capturing "the original" at its own import time would
@@ -1273,10 +1281,13 @@ It runs in the suite, under the bounds every real-engine case carries
     `pulumi stack ls --all` back as empty before its first `stack init`.
 -   **The program runs on the locked SDK and fetches nothing from outside
     the case.** Its virtual environment's `.pth` file reaches the test run's
-    own packages. A program that imports this repository's code names `src/`
-    in a second `.pth`, because the editable install's own `.pth` is not read
-    through a path; the rebuild's image fetches from a server the case runs
-    itself on `127.0.0.1`. A `uv`
+    own packages. An editable install's own `.pth` is read only in a site
+    directory, not through a path, so a program that imports this
+    repository's code names `src/` in a second `.pth`, and one that also
+    imports a generated SDK the repository installs editable, `pulumi_crds`
+    through `kluster.lib`, has that second `.pth` make each of the test
+    run's site directories one, with `site.addsitedir`. The rebuild's image
+    fetches from a server the case runs itself on `127.0.0.1`. A `uv`
     environment carries no `pip`, which the language host asks for unless it
     runs under `uv` — the project's `toolchain` option set to `uv`, or a
     `uv.lock` in a directory above the project — and under `uv` it asks for
@@ -1304,8 +1315,9 @@ rule above leaves in.
 
 It runs as the case above does, except where these say otherwise:
 
--   **It fetches the Kubernetes provider plugin**, the one exception to
-    fetching nothing. The extension is that provider's, so generating it
+-   **It fetches the Kubernetes provider plugin**, an exception to
+    fetching nothing that `tests/test_admission_wait_engine.py` (below)
+    shares. The extension is that provider's, so generating it
     and previewing it both need the plugin, at the version the locked
     `pulumi-kubernetes` registers, and no stand-in would exercise the
     provider's own handling of its extension.
@@ -1315,6 +1327,21 @@ It runs as the case above does, except where these say otherwise:
     still has a backend of its own.
 -   **The provider the engine planned is read from `pulumi preview --json`**,
     the step for the resource naming it, rather than from a log.
+
+`tests/test_admission_wait_engine.py` holds what a chart's readiness rests
+on ([declarative/cluster-infra.md](../declarative/cluster-infra.md) §1.2):
+the transform `helm_chart` binds on a chart reaches each object the chart
+renders, so a webhook configuration rendered with a Service-backed entry and
+no CA bundle reaches the provider carrying `pulumi.com/waitFor`, and an object
+of another kind does not. Its chart is the case's own, served from a Helm
+repository the case runs on `127.0.0.1`, and installed through `helm_chart`
+itself, so dropping the transform from the helper fails it. It fetches the
+Kubernetes provider plugin, as the case above does and for the same reason: a
+chart is that provider's component. The provider runs in its
+`renderYamlToDirectory` mode, which writes each object as a manifest rather
+than sending it to a cluster, so the case runs an `up` with no cluster, and
+its plugin is downloaded into the case's own `PULUMI_HOME`, which the case
+removes when it finishes.
 
 `tests/test_targeted_import_engine.py` holds what the gateway cutover's
 targeted apply rests on ([physical/gateway-cutover.md](../physical/gateway-cutover.md)
@@ -1347,8 +1374,9 @@ the case it was started from and hands over to the pinned one. Today's
 are:
 
 -   the engine modules above, `tests/test_state_backend_engine.py`,
-    `tests/test_homelab_engine.py`, `tests/test_extension_provider.py`
-    and `tests/test_targeted_import_engine.py`;
+    `tests/test_homelab_engine.py`, `tests/test_extension_provider.py`,
+    `tests/test_admission_wait_engine.py` and
+    `tests/test_targeted_import_engine.py`;
 -   `tests/test_device_directory_engine.py`, which holds what a device
     directory's `delete_before_replace` rests on;
 -   the `real` cases of `tests/test_operator_stack.py`, which run the

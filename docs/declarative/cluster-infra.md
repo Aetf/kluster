@@ -296,11 +296,11 @@ The API every component installs through, wrapped as
     omitted from the rendered output, test hooks unconditionally, so a
     hook a pinned chart renders is switched off explicitly rather than
     left to vanish silently. These are the ones the installed set renders
-    by default. cert-manager's `startupapicheck` post-install Job
-    blocks until the webhook answers; it is disabled with
-    `startupapicheck.enabled: false`, and the wait it did is covered by
-    the install order — nothing declares an Issuer or a Certificate
-    until cert-manager is up. NFD's post-delete cleanup is a Job with
+    by default. One is cert-manager's `startupapicheck` post-install
+    Job, which polls a dry-run create until the API server's call to the
+    webhook succeeds; it is disabled with
+    `startupapicheck.enabled: false`, and what it waited for is part of
+    the chart's readiness, below. NFD's post-delete cleanup is a Job with
     its own account and permissions that strips NFD's labels from the
     nodes once the chart is uninstalled; it is disabled with
     `postDeleteCleanup: false`. The VictoriaMetrics stack's sync job, a
@@ -313,6 +313,20 @@ The API every component installs through, wrapped as
     `victoria-metrics-operator.crds.cleanup.enabled: false`. The provider's `includeHooks` (≥4.33) is
     not a substitute: it only writes hooks into a rendered directory for
     some other tool to apply.
+-   **A chart is ready when its admission path is.** A webhook entry
+    that names a Service and is rendered without a CA bundle cannot be
+    called until something writes one — cert-manager's CA injector, for
+    cert-manager's webhook and the Intel operator's — and until then the
+    API server refuses every object the entry gates, a refusal
+    `pulumi-kubernetes` does not retry. So `helm_chart` gives
+    every chart a transform that sets `pulumi.com/waitFor` on each
+    webhook configuration the chart renders, one JSONPath per such
+    entry, and the chart resolves once every entry carries a bundle.
+    Whatever is declared behind a chart is therefore declared against a
+    webhook the API server can verify, and a component adds no wait of
+    its own. The wait observes the configuration, not an admission call:
+    each API server's own view of it is the cluster's to converge, and a
+    create refused there fails by name and passes on the next run.
 -   **CRDs.** Definitions in a chart's `crds/` directory are installed by
     default and become Pulumi's resources; `skip_crds` opts out. Helm
     never upgrades a CRD it installed that way, which is the reason
