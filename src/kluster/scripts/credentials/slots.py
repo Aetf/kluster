@@ -1,10 +1,11 @@
-"""The slot map: every §3 credential, where its value comes from, and every slot it lands in.
+"""The slot map: every §3 credential a channel holds, where its value comes from, and every slot it lands in.
 
 `docs/credentials.md` §3 is the register's human-readable half -- a table of
 credentials, each naming the channel its consumer reads. This is the same table
 in machine-readable form, and the two are held equal by a test that reads the
-document: a §3 row with no entry here, or an entry naming a credential §3 does
-not, fails there rather than in an operator's head.
+document: a §3 row with no entry here, unless its Slot is `none` (`NO_CHANNEL`),
+or an entry naming a credential §3 does not, fails there rather than in an
+operator's head.
 
 **A row is a credential, a source and a set of targets.** The targets are the
 closed set of storage channels §1 rule 6 names, one dataclass each, and three of
@@ -372,6 +373,13 @@ _GITHUB_TERMS: Mapping[tuple[str, bool], str] = {
     (conventions.forge.OPS.full_name, True): 'ops-repo Environment',
     (conventions.forge.OPS.full_name, False): 'ops-repo secret',
 }
+
+#: How §3's Slot column says a credential has no channel at all: a value
+#: carried by hand into a place that is no slot, and deleted by a later step,
+#: which this map has nothing to deliver for. Not a channel, so it is no term
+#: of the vocabulary below, and such a credential has no row here; the cell
+#: names what holds it in parentheses after the word.
+NO_CHANNEL = 'none'
 
 #: The whole vocabulary, which is what a cell may be written in. No term is a
 #: prefix of another, so the entry a cell begins with identifies its channel.
@@ -969,19 +977,10 @@ _ETCD_PREFIX_UNBUILT = (
     'that would fill its prefix is not built, so no secret there names it'
 )
 
-#: Why the writer keys' sealed copies have no address: nothing reads them until
-#: their consumers arrive, with `backed_pvc` and the first database
-#: (rfc-007 §6.2), so `conventions.sealed` has no row for them.
-_CLUSTER_UNBUILT = (
-    'their consumers arrive with `backed_pvc` and the first database, so no stack declares a sealed value for them yet'
-)
-
-#: Why the restic passwords' sealed copy has no address: the helper that seals
-#: each one beside its volume is not written.
-_BACKED_PVC_UNBUILT = (
-    'the `backed_pvc` helper that generates and seals each password is unwritten (declarative/workloads.md §3), '
-    'so no stack declares a sealed value for it'
-)
+#: Why the restic passwords have no address: `claim` generates each one, and
+#: no application that calls it is wired into the `apps` program yet
+#: (declarative/workloads.md §3).
+_NO_CLAIM_WIRED = 'the `apps` program wires no application yet, so it declares no claim under a retention class'
 
 #: Sinks this map used to carry, and where the fact each one delivered lives
 #: now. Retiring a sink moves a fact rather than deleting it, so the name that
@@ -1073,14 +1072,22 @@ ROWS: dict[str, Row] = {
             PulumiConfig(STATE_BACKEND_STACK, derived.B2_KEY_KEY),
         ),
     ),
-    'b2-writer': Row(
+    derived.B2_WRITER_ROW: Row(
         register='B2 writer keys',
-        source=Minted('the `physical` stack, from the B2 seed', unbuilt='the prefix-scoped keys are not declared'),
+        source=Minted(
+            f'the `physical` stack, from the B2 seed, and sealed into `{APPS_STACK}` by '
+            f'`credentials derived {derived.B2_WRITER_ROW} seal`'
+        ),
         # The appliance's cron is not among the consumers: the key it uploads
         # dumps with is `writeFiles` alone, which is the dump-key row below and
-        # not a writer key. The in-cluster copies are for VolSync, CNPG barman
-        # and the etcd snapshots.
-        pending={'SealedSecret': _CLUSTER_UNBUILT, 'ops-repo secret': _OPS_UNBUILT},
+        # not a writer key. The sealed copies are VolSync's and CNPG barman's,
+        # one per family of each backed namespace; the etcd snapshots' key
+        # waits on the ops-repository workflow that would take it.
+        targets=(
+            PulumiState(PHYSICAL_STACK, 'one key per scope of the backup bucket, exported as `backup_keys`'),
+            *(SealedSecret(value) for value in conventions.sealed.WRITER_KEYS),
+        ),
+        pending={'ops-repo secret': _OPS_UNBUILT},
     ),
     'b2-dump': Row(
         register='B2 dump key (micro)',
@@ -1265,21 +1272,13 @@ ROWS: dict[str, Row] = {
     ),
     'restic-passwords': Row(
         register='restic repo passwords',
-        source=Minted(
-            'the `backed_pvc` helper, one per volume',
-            unbuilt='the helper is unwritten (declarative/workloads.md §3)',
-        ),
-        # The `backed_pvc` helper is the producer of both channels -- it
-        # generates the password into the `apps` stack's state and seals it --
-        # so no `credentials` command will address either. Neither has an
-        # address until the helper exists and the `apps` program runs it.
-        pending={
-            'Pulumi state': (
-                'the `backed_pvc` helper that generates each password is unwritten, and the `apps` '
-                'program whose state would hold it declares no application (declarative/workloads.md §3)'
-            ),
-            'SealedSecret': _BACKED_PVC_UNBUILT,
-        },
+        source=Minted('the `claim` helper of the application base, one per claim under a retention class'),
+        # `claim` is the producer of both channels -- it generates the password
+        # into the `apps` stack's state and carries it in the template of the
+        # claim's repository SealedSecret, beside the namespace's sealed writer
+        # key -- so no `credentials` command will address either. Neither has
+        # an address until an application that calls it is wired.
+        pending={'Pulumi state': _NO_CLAIM_WIRED, 'SealedSecret': _NO_CLAIM_WIRED},
     ),
     'talos': Row(
         register='Talos machine secrets + talosconfig',

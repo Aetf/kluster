@@ -314,6 +314,22 @@ restore, cluster-infra.md §1), new exposure/storage declarations. The
 migration order and data movement are migration.md's concern; the shape
 each app lands in is this document's.
 
+**A ported ciphertext keeps its namespace.** Every legacy SealedSecret an
+application keeps is sealed namespace-wide against the legacy sealing
+key, which the bring-up carries into the cluster (cluster/migration.md
+§1). Its ciphertext is copied as it is into `Pulumi.apps.yaml`'s
+`sealedSecrets`, under the legacy Secret's name and then its data keys,
+and the component declares it through `sealed_secret`, whose default
+scope is namespace-wide for exactly these. A namespace-wide ciphertext
+opens only in the namespace it was sealed to, so an application keeps
+its legacy namespace's name wherever a ciphertext is ported into it, as
+the mail relay does; every other namespace is named after the
+application it holds (`conventions.backup.BACKED_NAMESPACES`). Where the
+namespace changes, the value is sealed afresh against the cluster's own
+key, as Grafana's values are. These are per-application secrets, which
+the program enumerates and the register does not (credentials.md §1,
+rule 8).
+
 Two quiet straight-ports, on record so they aren't forgotten: **exim**
 (the MTA relay behind immich/splitpro outbound mail — a plain small
 app, ClusterIP SMTP; it smarthosts via smtp.gmail.com:587, so port-25

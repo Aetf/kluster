@@ -216,6 +216,15 @@ _ORDER = """when to run what:
          Assistant. Commit the stack file; the next k8s-base apply hands
          each to what reads it. Re-running the first rotates the token;
          a `bgp record` from here on seals in the same run.
+   12. credentials derived b2-writer seal
+         The backup bucket's writer keys, at the hand-over to the first
+         wave: after the legacy sealing key is carried into the cluster and
+         the certificate its controller serves is confirmed as the cluster's
+         own. physical's apply mints one key per family of each namespace
+         conventions.backup names; this reads them out of physical's state
+         and seals each namespace-wide into the apps stack's config, for
+         every namespace at once. Commit Pulumi.apps.yaml. Re-run it after
+         an apply of physical that mints a key for a newly backed namespace.
 
   carrying the mail relay's DKIM key from the legacy cluster
     kubectl --context <legacy> -n mail-system get secret cert-dkim-exim \\
@@ -975,6 +984,31 @@ def build_parser() -> argparse.ArgumentParser:
         help=f'the kit entry the seed is read from (default: {derived.CLOUDFLARE_SEED_ENTRY})',
     )
     _add_bundle_dir(dns01_mint)
+
+    writer = rows.add_parser(
+        derived.B2_WRITER_ROW,
+        help="the backup bucket's writer keys, sealed to the cluster",
+        description=(
+            "The keys VolSync and barman write a namespace's backups with: one per family of each namespace the "
+            "census of backed namespaces names, each confined to that family's prefix of the namespace on the "
+            'backup bucket, with no capability to delete. The physical stack mints them from the B2 management '
+            'key and keeps them in its state; their consumers are in the cluster, so they reach it sealed.'
+        ),
+    )
+    writer_verbs = writer.add_subparsers(dest='action', required=True, metavar='<verb>')
+    writer_seal = writer_verbs.add_parser(
+        'seal',
+        help="seal every writer key physical holds into the apps stack's config",
+        description=(
+            "Fetch the sealing certificate from the cluster's sealed-secrets controller, with the kubeconfig in "
+            "the physical stack's state; read each backed namespace's writer keys out of that state, under the "
+            "physical stack's own passphrase; seal each with kubeseal namespace-wide, so that every repository "
+            'Secret of its namespace opens it under its own name; and write the ciphertext in the clear into the '
+            "apps stack's config, reading it back. A namespace whose key physical does not hold yet refuses the "
+            'run before anything is written. Then commit the config. Every run writes fresh ciphertext.'
+        ),
+    )
+    _add_bundle_dir(writer_seal)
 
     physical_key = rows.add_parser(
         derived.OCI_PHYSICAL_ROW,
@@ -1862,6 +1896,12 @@ def main(argv: list[str] | None = None) -> int:
                 _ = derived.cloudflare_dns01(
                     store, sealer=_sealer(_opener(args, store, registry)), seed_entry=args.entry
                 )
+            # Out of `physical`'s state rather than minted here: the stack's
+            # apply mints the keys, and the certificate is fetched first, so a
+            # cluster that cannot be reached refuses the run before the state
+            # is read.
+            case ('derived', derived.B2_WRITER_ROW, 'seal'):
+                _ = derived.b2_writer_seal(sealer=_sealer(_opener(args, store, registry)))
             case ('derived', derived.OCI_PHYSICAL_ROW, 'mint'):
                 _ = derived.oci_physical(
                     store,

@@ -2,7 +2,7 @@
 
 Two halves. The first reads `docs/credentials.md` — §3's table, and the closed
 set of channels §1 rule 6 states — and compares it with the map: a credential
-in the table with no map row, a map row naming a credential the table does not,
+in the table with no map row, unless its Slot is `none`, a map row naming a credential the table does not,
 a cell whose secret names are not the ones its rows push under (a name no row
 pushes, or one a row pushes that a cell naming the others leaves out), or a
 channel the map has a term for that rule 6 does not name, fails here — which is
@@ -90,12 +90,18 @@ def _command_line(argv: list[str]) -> str:
     return ' '.join(('credentials', *words))
 
 
-#: §3 rows the map deliberately does not carry. Empty, and meant to stay that
-#: way: a credential the register names is a credential something has to
-#: deliver, so a new row belongs in the map with its `pending` reason rather
-#: than in an exception list. An entry here needs a sentence saying why the row
-#: can never have one.
-UNMAPPED: frozenset[str] = frozenset()
+#: §3 rows the map deliberately does not carry. A credential the register
+#: names is a credential something has to deliver, so a new row belongs in the
+#: map with its `pending` reason rather than in an exception list. An entry
+#: here needs a sentence saying why the row can never have one.
+UNMAPPED: frozenset[str] = frozenset(
+    {
+        # It needs no channel: a transitional key carried by hand from the
+        # legacy cluster's controller into the new one's, whose last use is the
+        # decommission's re-sealing, which deletes it (rfc-008 §4.6).
+        'Legacy sealing key',
+    }
+)
 
 
 def register_table() -> dict[str, str]:
@@ -121,6 +127,17 @@ def register_credentials() -> list[str]:
     return list(register_table())
 
 
+def test_a_cell_says_none_exactly_where_the_map_carries_no_row_by_design() -> None:
+    # The reserved cell is how the register says a credential has no channel,
+    # and `UNMAPPED` is where the map says it carries no row for one; either
+    # without the other is a credential one half calls undelivered and the
+    # other calls waiting for nothing.
+    said = {credential for credential, cell in register_table().items() if has_no_channel(cell)}
+
+    assert said == UNMAPPED
+    assert not [term for term in slots.REGISTER_COLUMNS if re.match(f'{re.escape(slots.NO_CHANNEL)}\\b', term)]
+
+
 def test_every_map_row_names_a_credential_the_register_carries() -> None:
     named = set(register_credentials())
 
@@ -131,7 +148,7 @@ def test_every_map_row_names_a_credential_the_register_carries() -> None:
     assert unknown == {}
 
 
-def test_every_register_row_is_in_the_map() -> None:
+def test_every_register_row_a_channel_holds_is_in_the_map() -> None:
     mapped = {row.register for row in slots.ROWS.values()}
 
     missing = [credential for credential in register_credentials() if credential not in mapped | UNMAPPED]
@@ -245,7 +262,13 @@ PENDING = re.compile(r'\bpending\b')
 
 
 def channel_entries(cell: str) -> dict[str, str]:
-    """A §3 Slot cell split into its entries, each under the channel term it begins with."""
+    """A §3 Slot cell split into its entries, each under the channel term it begins with.
+
+    A cell that says its credential has no channel (`slots.NO_CHANNEL`) has
+    no entries.
+    """
+    if has_no_channel(cell):
+        return {}
     entries: dict[str, str] = {}
     for entry in cell.split(CHANNEL_SEPARATOR):
         text = entry.strip()
@@ -256,6 +279,16 @@ def channel_entries(cell: str) -> dict[str, str]:
         assert terms[0] not in entries, f'{cell!r} names {terms[0]!r} twice'
         entries[terms[0]] = text
     return entries
+
+
+def has_no_channel(cell: str) -> bool:
+    """Whether a §3 Slot cell says its credential has no channel: the reserved word, and what holds it after.
+
+    The whole cell, and not its first word alone: a cell that says `none` and
+    then names a channel is read entry by entry, so the entry that begins with
+    no channel term fails there.
+    """
+    return re.match(f'{re.escape(slots.NO_CHANNEL)}\\b', cell.strip()) is not None and CHANNEL_SEPARATOR not in cell
 
 
 def promised_channels(cell: str) -> dict[str, bool]:

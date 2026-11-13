@@ -30,11 +30,12 @@ import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 import pinned_tools
 import process_sessions
 import pytest
+import yaml
 from cloudflare_api import ACCOUNT_ID, FakeApi, console_seed
 from credentials_command_tree import named_leaves
 from cryptography import x509
@@ -47,6 +48,7 @@ from pulumi.runtime import rpc
 from scratch_projects import cli_directories, scrubbed
 
 from kluster import conventions
+from kluster.conventions.backup import BACKED_NAMESPACES, writer_scope
 from kluster.lib import pulumi_cli
 from kluster.scripts.credentials import cloudflare, derived, devices, pulumi_config, sealing
 from kluster.scripts.credentials.kdbx import KdbxStore
@@ -223,7 +225,14 @@ def written(stacks: Stacks, value: conventions.sealed.SealedValue) -> dict[str, 
 # -- sealing ------------------------------------------------------------------
 
 
-@pytest.mark.parametrize('value', conventions.sealed.VALUES.values(), ids=conventions.sealed.VALUES)
+#: Every value but the writer keys, which open under any name (below).
+STRICT = {
+    name: value for name, value in conventions.sealed.VALUES.items() if value not in conventions.sealed.WRITER_KEYS
+}
+WRITER_KEYS = {value.name: value for value in conventions.sealed.WRITER_KEYS}
+
+
+@pytest.mark.parametrize('value', STRICT.values(), ids=STRICT)
 def test_a_sealed_value_opens_under_its_name_and_namespace_and_under_no_other(
     value: conventions.sealed.SealedValue, sealer: sealing.Sealer, kubeseal: str, key_pair: KeyPair
 ) -> None:
@@ -241,6 +250,22 @@ def test_a_sealed_value_opens_under_its_name_and_namespace_and_under_no_other(
         _ = unseal(kubeseal, key_pair, value, ciphertexts, name=f'{value.name}-other')
     with pytest.raises(Unopened):
         _ = unseal(kubeseal, key_pair, value, ciphertexts, namespace=f'{value.namespace}-other')
+
+
+@pytest.mark.parametrize('value', WRITER_KEYS.values(), ids=WRITER_KEYS)
+def test_a_writer_key_opens_under_any_name_in_its_namespace_and_in_no_other_namespace(
+    value: conventions.sealed.SealedValue, sealer: sealing.Sealer, kubeseal: str, key_pair: KeyPair
+) -> None:
+    data = {key: f'the {key} of {value.name}' for key in value.keys}
+
+    ciphertexts = sealer.seal(value, data)
+
+    # Every repository Secret of the namespace carries the one ciphertext
+    # under the claim's own name, which no seal could have known.
+    assert unseal(kubeseal, key_pair, value, ciphertexts, name='a-claim') == data
+    assert unseal(kubeseal, key_pair, value, ciphertexts, name='another-claim') == data
+    with pytest.raises(Unopened):
+        _ = unseal(kubeseal, key_pair, value, ciphertexts, name='a-claim', namespace=f'{value.namespace}-other')
 
 
 def test_a_seal_refuses_data_whose_keys_are_not_the_rows(sealer: sealing.Sealer) -> None:
@@ -893,3 +918,194 @@ def test_a_dkim_key_is_never_taken_at_a_terminal(
     with pytest.raises(devices.FieldRefused) as refused:
         devices.record_sealed(DKIM, sealer=sealer, given={'key': given})
     assert refused.value.answer is devices.Answer.AT_TERMINAL
+
+
+# -- the writer keys ----------------------------------------------------------
+
+BACKUP_KEYS = conventions.PHYSICAL_OUTPUTS.backup_keys
+
+#: Every writer key the census has `physical` mint, by its scope, as the
+#: stack's state carries it: each half named after its scope and its half. In
+#: the census's order, each namespace's families sorted, as the seal walks them.
+EXPORTED = {
+    writer_scope(namespace, family): {
+        'id': f'{writer_scope(namespace, family)}-id',
+        'secret': f'{writer_scope(namespace, family)}-secret',
+    }
+    for namespace, families in BACKED_NAMESPACES.items()
+    for family in sorted(families)
+}
+
+
+@dataclass
+class StatePulumi(PathPulumi):
+    """`physical`'s recorded `pulumi`, whose state opens under that stack's own passphrase and no other."""
+
+    def __call__(self, args: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdin: str | None) -> str:
+        if list(args[:2]) == ['stack', 'output'] and env.get('PULUMI_CONFIG_PASSPHRASE') != 'the-physical-passphrase':
+            raise SlotRefused('`pulumi stack output` failed: error: incorrect passphrase')
+        return super().__call__(args, cwd=cwd, env=env, stdin=stdin)
+
+
+@pytest.fixture
+def backed(stacks: Stacks) -> Stacks:
+    """`apps` exists beside the two, and `physical`'s state exports every writer key the census names."""
+    stacks.runners[PHYSICAL] = StatePulumi(stacks=[PHYSICAL], outputs={BACKUP_KEYS: EXPORTED})
+    stacks.runner(APPS).stacks.append(APPS)
+    return stacks
+
+
+def test_every_writer_key_is_sealed_out_of_physicals_state_in_the_clear_at_its_rows_path(backed: Stacks) -> None:
+    sealer = sealing.Sealer(certificate='', open_stack=backed.open, run=fake_kubeseal)
+
+    sealed = derived.b2_writer_seal(sealer=sealer)
+
+    # Read under `physical`'s own passphrase, which the recorded state alone
+    # opens, and written into `apps` as plain values, never as secrets. Each
+    # half under the variable a mover reads it from: restic's S3 backend takes
+    # the key's id as `AWS_ACCESS_KEY_ID` and the key itself as
+    # `AWS_SECRET_ACCESS_KEY`.
+    expected: dict[str, str] = {}
+    for namespace, families in BACKED_NAMESPACES.items():
+        for family in families:
+            row = conventions.sealed.writer_key(namespace, family)
+            scope = writer_scope(namespace, family)
+            expected[row.path('AWS_ACCESS_KEY_ID')] = f'AgB-sealed-{scope}-id'
+            expected[row.path('AWS_SECRET_ACCESS_KEY')] = f'AgB-sealed-{scope}-secret'
+    apps = backed.runner(APPS)
+    assert apps.plain == expected
+    assert apps.config == {}
+    assert not [args for args in apps.invocations if '--secret' in args]
+    assert sorted(sealed) == sorted(value.name for value in conventions.sealed.WRITER_KEYS)
+
+
+def test_a_writer_key_physical_does_not_export_refuses_the_seal_before_anything_is_written(backed: Stacks) -> None:
+    # The last the census names, so a seal that wrote each key as it read it
+    # would have written every other one first.
+    missing = list(EXPORTED)[-1]
+    backed.runner(PHYSICAL).outputs = {BACKUP_KEYS: {scope: key for scope, key in EXPORTED.items() if scope != missing}}
+    sealer = sealing.Sealer(certificate='', open_stack=backed.open, run=fake_kubeseal)
+
+    with pytest.raises(derived.WriterKeyMissing) as refused:
+        _ = derived.b2_writer_seal(sealer=sealer)
+
+    assert refused.value.scope == missing
+    assert backed.runner(APPS).plain == {}
+
+
+@pytest.mark.parametrize(
+    'exported',
+    [{'secret': 'a-secret'}, {'id': '', 'secret': 'a-secret'}, {'id': None, 'secret': 'a-secret'}],
+    ids=['absent', 'empty', 'not a string'],
+)
+def test_a_writer_key_half_that_is_not_a_key_half_refuses_the_seal_before_anything_is_written(
+    backed: Stacks, exported: dict[str, object]
+) -> None:
+    # Sealed as it came, a missing half would put the text `None`, or
+    # nothing, in a repository Secret, which the first backup finds.
+    scope = list(EXPORTED)[-1]
+    backed.runner(PHYSICAL).outputs = {BACKUP_KEYS: EXPORTED | {scope: exported}}
+    sealer = sealing.Sealer(certificate='', open_stack=backed.open, run=fake_kubeseal)
+
+    with pytest.raises(derived.WriterKeyMissing) as refused:
+        _ = derived.b2_writer_seal(sealer=sealer)
+
+    assert refused.value.scope == scope
+    assert backed.runner(APPS).plain == {}
+
+
+def test_a_writer_key_left_as_the_unknown_sentinel_is_refused_by_name(backed: Stacks) -> None:
+    scope = next(iter(EXPORTED))
+    backed.runner(PHYSICAL).outputs = {BACKUP_KEYS: EXPORTED | {scope: {'id': rpc.UNKNOWN, 'secret': rpc.UNKNOWN}}}
+    sealer = sealing.Sealer(certificate='', open_stack=backed.open, run=fake_kubeseal)
+
+    with pytest.raises(pulumi_config.UnknownOutput) as refused:
+        _ = derived.b2_writer_seal(sealer=sealer)
+
+    assert (refused.value.stack, refused.value.output) == (PHYSICAL, BACKUP_KEYS)
+    assert backed.runner(APPS).plain == {}
+
+
+def test_a_writer_key_seal_into_an_apps_stack_that_does_not_exist_reads_nothing_of_physical(backed: Stacks) -> None:
+    backed.runner(APPS).stacks.clear()
+    sealer = sealing.Sealer(certificate='', open_stack=backed.open, run=fake_kubeseal)
+
+    with pytest.raises(pulumi_config.StackMissing) as refused:
+        _ = derived.b2_writer_seal(sealer=sealer)
+
+    assert refused.value.stack == APPS
+    assert not [args for args in backed.runner(PHYSICAL).invocations if args[:2] == ['stack', 'output']]
+
+
+# -- what the stack files hold ------------------------------------------------
+
+
+def committed_sealed() -> dict[str, dict[str, dict[str, str]]]:
+    """What every committed `Pulumi.<stack>.yaml` holds under the sealed key, by stack."""
+    project = pulumi_config.project_dir()
+    key = f'{yaml.safe_load((project / "Pulumi.yaml").read_text())["name"]}:{conventions.sealed.CONFIG_KEY}'
+    found: dict[str, dict[str, dict[str, str]]] = {}
+    for path in sorted(project.glob('Pulumi.*.yaml')):
+        config = cast('dict[str, object]', yaml.safe_load(path.read_text()).get('config') or {})
+        held = config.get(key)
+        if held is not None:
+            found[path.name.removeprefix('Pulumi.').removesuffix('.yaml')] = cast('dict[str, dict[str, str]]', held)
+    return found
+
+
+def is_sealed(ciphertext: object) -> bool:
+    """Whether `ciphertext` has the shape of `kubeseal`'s hybrid encryption.
+
+    Base64 of a two-byte length, an RSA-encrypted session key of that length
+    -- a whole RSA modulus, 256 bytes or more -- and the sealed data after it.
+    A value in the clear, a password or a token, does not decode to that.
+    """
+    if not isinstance(ciphertext, str):
+        return False
+    try:
+        raw = base64.b64decode(ciphertext, validate=True)
+    except ValueError:
+        return False
+    length = int.from_bytes(raw[:2], 'big')
+    return length >= 256 and length % 256 == 0 and len(raw) > 2 + length
+
+
+def test_the_ciphertext_check_takes_what_kubeseal_seals_and_refuses_a_value_in_the_clear(
+    sealer: sealing.Sealer,
+) -> None:
+    (ciphertext,) = sealer.seal(conventions.sealed.DNS01_TOKEN, {'api-token': 'a-token'}).values()
+
+    assert is_sealed(ciphertext)
+    assert not is_sealed('a-token')
+    assert not is_sealed(base64.b64encode(b'a password in the clear').decode())
+
+
+def test_every_value_a_stack_file_holds_sealed_is_ciphertext() -> None:
+    """Nothing under the sealed key is a secret in the clear, ported or sealed here.
+
+    The ciphertexts ported from the legacy cluster are copied in by hand
+    (declarative/workloads.md §5), and a hand can paste the wrong half of a
+    manifest. `apps` holds them, so it has something under the key.
+    """
+    held = committed_sealed()
+
+    assert held.get(APPS)
+    for stack, values in held.items():
+        for name, data in values.items():
+            assert data, f'{stack}: {name} holds no data key'
+            unsealed = sorted(key for key, ciphertext in data.items() if not is_sealed(ciphertext))
+            assert not unsealed, f'{stack}: {name} holds {unsealed} as something other than kubeseal ciphertext'
+
+
+def test_a_value_a_stack_file_holds_under_a_census_rows_name_carries_that_rows_keys() -> None:
+    """A value under the name of a census row is that row's, so no ported value is named like one.
+
+    Both live under the one sealed key of the declaring stack, keyed by name:
+    a writer key named like an application's own ported Secret would land
+    beside that Secret's data keys, and the program would read the two as one.
+    """
+    for stack, values in committed_sealed().items():
+        for name, data in values.items():
+            row = conventions.sealed.VALUES.get(name)
+            if row is not None and row.stack == stack:
+                assert sorted(data) == sorted(row.keys), f'{stack}: {name}'

@@ -145,17 +145,24 @@ facts about them.
     structured key `sealedSecrets`, keyed by the value's name and then by
     its data key: it needs no stack encryption, so it is committed in the
     clear beside that stack's config secrets, and the program reads it
-    there and declares the SealedSecret from it (rfc-007 §6.2). Each
-    sealed value is a row of the census `conventions.sealed`, which names
-    the Secret it becomes, its namespace, the keys of its data, the scope
-    it is sealed at and the stack that declares it, and the path follows
-    from the row, so the command that writes it and the program that
-    reads it name one place. A value `credentials` seals is sealed
+    there and declares the SealedSecret from it (rfc-007 §6.2). The
+    name a sealed value sits under is the name of its row when
+    `credentials` seals it, and the name of its legacy Secret when it is
+    a ciphertext ported from the legacy cluster as it is. A row is one of the census
+    `conventions.sealed`, which names the Secret the value becomes, its
+    namespace, the keys of its data, the scope it is sealed at and the
+    stack that declares it, and the path follows from the row, so the
+    command that writes it and the program that reads it name one
+    place. A ported ciphertext has no row: the component that declares
+    it is its one reader, and names it and the namespace it was sealed
+    to ([declarative/workloads.md](declarative/workloads.md) §5). A value `credentials` seals is sealed
     strict — name and namespace bound into the ciphertext — by the
     command that obtains it, in the same run, or, for a value recorded
     before there was a cluster to seal it to, by its row's `seal`, from
     the configuration that already holds it; neither parks a value
-    (rule 2).
+    (rule 2). The backup bucket's writer keys are sealed namespace-wide
+    instead, by their own `seal` out of `physical`'s state, so that one
+    ciphertext opens under every name in its namespace (§3).
 
     **The operator stacks are encrypted apart, under the operator
     passphrase.** An operator stack is one no CI job runs
@@ -581,19 +588,34 @@ Consequences, all deliberate:
     state-backend PKI's curve and age's X25519 are each their own
     design's choice (state-backend.md) rather than a consequence of how
     the kit stores them.
--   **The sealed-secrets sealing key is not a recovery root.** It is the
-    controller's own generated RSA key; losing it costs a re-seal, not
-    data, because every sealed value except one is held where it came from
-    too — escrowed, re-mintable, in the stack configuration it was
-    recorded into, or in the console that made it. Re-sealing is a
+-   **The sealed-secrets sealing key is not a recovery root for what
+    `credentials` seals.** It is the controller's own generated RSA key,
+    and a value `credentials` seals is held where it came from too —
+    escrowed, re-mintable, in the stack configuration or state it was
+    recorded or generated into, or in the console that made it — so
+    losing the key costs a re-seal of it, not data. Re-sealing is a
     command, not an archaeology project — which is why no offline export
-    of it exists. The exception is the mail relay's DKIM key, held nowhere
-    else once the legacy cluster is gone, and escrowed nowhere on
-    purpose: losing it, with the sealing key or alone, costs a rotation
-    and no data, since it guards none. The rotation is a new key minted
-    in the cluster under a new selector, published beside `k8s` before
-    any mail is signed with it
+    of it exists. The mail relay's DKIM key is the value `credentials`
+    seals that is held nowhere else once the legacy cluster is gone,
+    and it is escrowed nowhere on purpose: losing it, with the sealing
+    key or alone, costs a rotation and no data, since it guards none.
+    The rotation is a new key minted in the cluster under a new
+    selector, published beside `k8s` before any mail is signed with it
     ([declarative/workloads.md](declarative/workloads.md) §5).
+-   **For a ciphertext ported from the legacy cluster, the sealing key
+    is the recovery root once the legacy cluster is gone.** Each opens
+    with the legacy sealing key the bring-up carries into the cluster
+    (declarative/workloads.md §5), and a value the legacy cluster
+    generated — Authelia's storage encryption key, its session and JWT
+    secrets and the secrets its OIDC issuer signs with, the client secrets,
+    the database passwords — is held by the legacy cluster until the
+    decommission, and after it by nothing but its ciphertext and the
+    cluster's own sealing key, which the decommission's rotation
+    re-seals it under (rfc-008 §5.8). Losing the sealing key then loses those values, and
+    what each loss costs, a rotation or stored data, is stated nowhere
+    yet. Whether any of them gets a second home — an escrow row, or an
+    export of the sealing key — is open as
+    [Aetf/kluster-ops#727](https://github.com/Aetf/kluster-ops/issues/727).
 -   **A retired recovery key owes nothing forward.** Rotating the kit
     re-encrypts every generation in the registry to the successor
     identity (§4.2), and no secret is a function of the key that
@@ -604,11 +626,11 @@ Consequences, all deliberate:
 
 ## 3. Derived credentials
 
-Everything here is minted from a seed, generated and escrowed (§2.2),
-or generated by the program that owns it, and delivered straight to the
-slot named in its row. None of it is stored offline — an escrowed
-secret's ciphertext is not the offline store — and none of it is copied
-by hand.
+Everything here but a credential whose Slot is `none`, defined below, is
+minted from a seed, generated and escrowed (§2.2), or generated by the
+program that owns it, and delivered straight to the slot named in its
+row, and none of it is copied by hand. None of the register is stored
+offline — an escrowed secret's ciphertext is not the offline store.
 
 The **Slot** column is written in a fixed vocabulary, so that it can be
 checked rather than merely read: channels are separated by `·`, each
@@ -622,7 +644,11 @@ files each reason under the channel it is about, so a cell that defers
 one channel while the row is waiting on a different one is drift rather
 than a cell that reads well. Where a credential is several rows, a
 channel one of them fills while another defers it is drift too — the
-cell would say `pending` to an operator already being served.
+cell would say `pending` to an operator already being served. A
+credential no channel holds — one carried by hand into a place that is
+no slot, until a step deletes it — has `none` for its cell, with what
+holds it in parentheses, and no row in the map; the test that holds the
+column to the map lists it as one the map does not carry.
 
 | Credential | From | Scope | Slot | Consumer |
 | --- | --- | --- | --- | --- |
@@ -633,7 +659,7 @@ cell would say `pending` to an operator already being served.
 | Cloudflare token (gateway ACME) | CF seed token | DNS edit on the zones the gateway's own vhosts are served under | Pulumi config secret (`physical`) · device secret (caddy's token file) | the gateway's caddy, written onto the device by `physical` |
 | B2 management key | B2 seed key | Bucket/key/lifecycle admin, **no file capabilities** | Pulumi config secret | `physical` |
 | B2 management key (state backend) | B2 seed key (`credentials derived b2-state-backend-management mint`) | The same capabilities as the one above, under a key name of its own, so that neither row's mint retires the other's key | Pulumi config secret (`state-backend`) | the `state-backend` stack, which declares the appliance's dump bucket and dump key with it (rfc-006 §4) |
-| B2 writer keys | B2 seed key (via `physical`) | Prefix-scoped, `list+read+write`, **no `deleteFiles`** — deletes degrade to lifecycle-purged hides (audit H4): VolSync, CNPG barman, etcd snapshots | SealedSecret (pending) · ops-repo secret (pending) | restic/barman, ops-repo workflow |
+| B2 writer keys | B2 seed key (via `physical`) | Prefix-scoped, `list+read+write`, **no `deleteFiles`** — deletes degrade to lifecycle-purged hides (audit H4): VolSync, CNPG barman, etcd snapshots | Pulumi state (`physical`, `backup_keys`, by scope) · SealedSecret (`apps`, `sealedSecrets.writer-<scope>`, one per family of each namespace `conventions.backup.BACKED_NAMESPACES` names, sealed namespace-wide, by `credentials derived b2-writer seal`) · ops-repo secret (pending) | restic/barman, ops-repo workflow |
 | B2 dump key (micro) | minted through the `state-backend` stack, with its own B2 management key; rotated by a generation bump in its configuration | `writeFiles` alone, dump prefix | Pulumi state (`state-backend`, its committed checkpoint) · on-box (Ignition) | state-backend pg_dump timer |
 | B2 freshness key (state dumps) | B2 seed key (`credentials derived b2-freshness-dumps mint`) | `listFiles` alone, confined to the dump prefix of the appliance's bucket: names, never a byte | ops-repo secret (`B2_FRESHNESS_DUMPS_KEY_ID`, `B2_FRESHNESS_DUMPS_KEY`) | `state-backend probe`, run daily by the ops repo's `probes.yml` (state-backend.md §6) |
 | B2 freshness key (etcd) | B2 seed key | The same shape over the etcd snapshots' prefix of the backup bucket, which a B2 key cannot share with the one above: a key confines to one bucket | ops-repo secret (pending) | the etcd snapshot age probe |
@@ -661,6 +687,7 @@ cell would say `pending` to an operator already being served.
 | Alertmanager read token | generated, escrowed as `alertmanager/read` | `GET /api/v2/alerts` only, by HTTPRoute method+path+header match | escrow · ops-repo secret (pending) · Pulumi config secret (the HTTPRoute's match, rendered with that route; pending) | Issue-sync poller |
 | HA webhook URL/ID | Home Assistant | One notify endpoint, the automation that takes the ops repository's payload | ops-repo secret (`HA_WEBHOOK_URL`) | the ops repo's dispatch handler. Until `deploy.yml`'s `notify-failure` job becomes a caller of the alert producer it reads the legacy `kluster` repository secret `HAOS_DEPLOY_WEBHOOK_URL`, which this register no longer claims and `sync` does not touch; the operator deletes it from the repository with that job's conversion |
 | Alertmanager webhook URL | Home Assistant (`credentials derived alert-webhook record`) | One notify endpoint, a second automation that reads alertmanager's fixed body — the tier, the summary and the playbook off each alert — and pushes under the same title convention (rfc-007 §7.3) | SealedSecret (`k8s-base`, `sealedSecrets.alert-webhook`, in the monitoring namespace) | alertmanager, through the VictoriaMetrics operator's `url_secret` |
+| Legacy sealing key | The legacy cluster's sealed-secrets controller, carried by hand once at the hand-over to the first wave ([physical/bring-up.md](physical/bring-up.md) stage 9), by a pipe between the two clusters' API servers that writes it to no file | Opens every ciphertext ported from the legacy cluster ([declarative/workloads.md](declarative/workloads.md) §5); a controller holding it can seal to it, so the certificate the controller serves is confirmed as the cluster's own after the carry | none (the controller's own namespace, beside the cluster's own key; deleted by the decommission's re-sealing) | the sealed-secrets controller |
 | DKIM private key (exim) | The legacy cluster's `cert-dkim-exim` Secret, carried rather than minted (`credentials derived dkim-exim record`) | Signs mail as every mail zone's `k8s` selector, whose published public half is `conventions.DKIM_K8S` | SealedSecret (`apps`, `sealedSecrets.dkim-exim`, in the mail-system namespace) | exim |
 | Drill-environment credentials | OCI seed key and B2 seed key, one command (`credentials derived drill-credentials mint`) | The OCI key is its own user, group and policy: administrator of the `drill` compartment, which holds the drill's scratch box and nothing else, and a stranger outside it — no `--compartment` on this row, and no quota or budget guardrail on that compartment until `physical` declares one. The B2 key is `listFiles` and `readFiles` on the dump prefix alone, the writer's own prefix and nothing the writer may do | ops-repo Environment (`drill`: `DRILL_OCI_USER_OCID`, `DRILL_OCI_FINGERPRINT`, `DRILL_OCI_PRIVATE_KEY`, `DRILL_B2_KEY_ID`, `DRILL_B2_KEY`) | Quarterly rebuild drill (state-backend.md §7.3) |
 
@@ -738,7 +765,20 @@ etcd snapshot in the ops repository (ci.md §3) — and that reader is the
 whole of its ops-repo secret. The ZeroTier CI identities are the third
 shape: a job joins the overlay before it can reach anything the LAN
 holds, and that join is a workflow step rather than something a program
-does, which is why theirs is a CI Environment secret.
+does, which is why theirs is a CI Environment secret. The backup
+bucket's writer keys are the fourth: their readers are in the cluster,
+VolSync's movers and CNPG's barman, so each leaves `physical`'s state
+sealed. `credentials derived b2-writer seal` reads every key under
+`physical`'s passphrase and seals it into the `apps` stack's
+`sealedSecrets`, at the path its row in `conventions.sealed` derives. A
+configuration secret of `apps` would reach every pull request's preview
+(§1), and a writer key beside a repository's password reads every backup
+in its prefix. Each key is sealed **namespace-wide** rather than strict,
+the one exception to rule 6's strict seal, because one ciphertext serves
+every repository Secret of its namespace, each under its own name
+(declarative/workloads.md §3). Which namespaces back up is the census
+`conventions.backup.BACKED_NAMESPACES`: `physical` mints one key per
+family of each from it, and the seal covers every namespace at once.
 
 **The OCI rows are one mint and two stacks.** Both are the same act — the
 seed creates a user, the group that holds it and a policy confining that
@@ -1029,9 +1069,10 @@ name.
 | `credentials derived bgp seal` | Once, after `physical` has brought the cluster up and `k8s-base` runs the sealed-secrets controller, for a password recorded before there was a cluster. Reads the password back out of `physical`'s config, seals it with `kubeseal` to the cluster's certificate — fetched from the controller with the kubeconfig in `physical`'s state — strict, for the Secret Cilium reads, and writes the ciphertext in the clear at `sealedSecrets.bgp-password.password` in `k8s-base`'s config, reading it back; the stack file is then committed. Every run writes fresh ciphertext. |
 | `credentials derived alert-webhook record` | After `physical` has brought the cluster up and `k8s-base` runs the sealed-secrets controller, and after the operator has made alertmanager's intake automation in Home Assistant — which the command prints the steps for. Takes the webhook URL without echoing it, seals it with `kubeseal` strict for the Secret alertmanager's receiver reads, and writes the ciphertext in the clear at `sealedSecrets.alert-webhook.url` in `k8s-base`'s config, reading it back; the stack file is then committed. No stack holds the URL as a secret: its one consumer is in the cluster. A new webhook id and this command again is the rotation. |
 | `credentials derived dkim-exim record [--key-file <path>]` | Once, after `k8s-base` runs the sealed-secrets controller and before exim moves in Wave A1 ([cluster/migration.md](cluster/migration.md) §2). Takes the mail relay's DKIM private key whole on standard input, piped from the legacy cluster's `cert-dkim-exim` Secret by the command it prints, or from the file `--key-file` names, and echoes it nowhere. Before anything is sealed it refuses a key whose public half's SHA-256 over the DER differs from `conventions.DKIM_K8S`'s, the key every mail zone publishes as `k8s._domainkey`, printing the two digests and nothing of the key. Then it seals the key with `kubeseal` strict for the Secret exim reads, and writes the ciphertext in the clear at `sealedSecrets["dkim-exim"]["tls.key"]` in the `apps` stack's config, reading it back; `Pulumi.apps.yaml` is then committed. The key is never rotated in place (§2.2). |
+| `credentials derived b2-writer seal` | Once, at the hand-over to the first wave ([physical/bring-up.md](physical/bring-up.md) stage 9), after the legacy sealing key is carried and the certificate the controller serves is confirmed as the cluster's own; and again after a `physical` apply that mints a writer key for a newly backed namespace. Fetches the cluster's sealing certificate with the kubeconfig in `physical`'s state, reads every writer key `physical` exports under `backup_keys` out of that state under `physical`'s passphrase, one per family of each namespace in `conventions.backup.BACKED_NAMESPACES`, seals each with `kubeseal` namespace-wide, and writes the ciphertexts in the clear at their rows' paths in `apps`'s config, reading each back; `Pulumi.apps.yaml` is then committed. A namespace whose key `physical` does not export yet refuses the run before anything is written. |
 | `credentials derived github-admin record` | Once per installation, and again on each rotation, for the GitHub admin token — into the `github` stack's config, which is where the stack and every command that pushes a GitHub secret read it. Nothing in this repository can create the value: GitHub publishes no API that makes a personal access token, so a token generated on the account's settings page and recorded here is the whole of a rotation, and the superseded one is deleted on the same page. It runs before `derived sync`, which authenticates as it. |
 | `credentials derived github-dispatch-key record` / `credentials derived github-trigger-key record` | After the kit exists, and after the App's page has generated a private key — which the command prints the steps for. Takes the key on standard input and escrows it as the row's next generation, so a re-run with a key already on file changes nothing and a re-run with a fresh one is the rotation. `--from-kit` reads it out of the entry a kit that still carries the key as a seed row holds, instead of from standard input. A new generation is held to the recipients file as `generate`'s is (§2.2). |
-| `credentials derived ls` | Any time, with or without a kit. Prints the slot map (below): every §3 credential, where its value comes from, and every slot it lands in, the ones still waiting on a consumer included. It reads a checked-in file, so it needs no token, no kit and no network. |
+| `credentials derived ls` | Any time, with or without a kit. Prints the slot map (below): every §3 credential a channel holds, where its value comes from, and every slot it lands in, the ones still waiting on a consumer included. It reads a checked-in file, so it needs no token, no kit and no network. |
 | `credentials derived sync [--only <row>] [--bundle-dir <path>]` | During bring-up, one `--only` row per run (§4.1, stage 10), and again whenever one of those values moves or a slot is lost. Copies into their GitHub secrets the rows whose value lives somewhere else — recovered from the escrow; issued under the escrowed CA, as the `ci` client bundle is, afresh on every run; read back out of a stack's state; taken from `conventions`, as the overlay network's id is, which a workflow can only be handed as a secret; or typed in because the slot is its only storage — resolve, push, verify, per row. A row read out of a stack whose secrets another stack cannot open is copied into that stack's configuration too: the kubeconfig, out of `physical`'s state into the `k8s-base` and `apps` stacks' config, each of which must already exist, and which is left alone where it already holds the value; the stack files it writes are then committed. A row born into its slot is out of scope and is passed over; naming one is refused, pointing at the `mint` that owns it. `--only` addresses one row, and is what replaces a value that was typed in. The bare form fills every row it can obtain, which once `physical` has run includes the kubeconfig, so the first milestone's bring-up names its rows instead. `--only kubeconfig` reads no GitHub admin token, since that row has no GitHub secret; its first run is the second milestone's first step (`kluster-ops#77`), and it is run again after any `physical` apply that changes the kubeconfig from then on. |
 | `credentials derived <row> recover [--generation <n>] [--stdout]` | Reading an escrowed secret back out. `derived pulumi-passphrase recover` is the common one: it fills the passphrase slot (§4.4) so `mise.toml` finds it and a local preview needs no offline database; `--stdout` prints instead of writing, for a pipe into another machine. `--generation` opens an older one — the certificate issued under a superseded CA, the dump written under a superseded age identity — where the default is the newest. |
 | `state-backend bundle operator --address <ip> [--directory <path>]` | Once per workstation, or after a certificate reissue. Writes the client bundle into its slot, which the `state-backend` stack's hooks and the `operator-stack` driver connect with. `--directory` writes it somewhere else instead — a second checkout, or a directory being staged for another machine — and the default is the slot. |
@@ -1159,8 +1200,10 @@ which its `issue` issues from the escrowed CA, each delivered the same
 way. The `state-backend` stack's three are delivered into that stack's
 configuration, which its program reads: the slot exists, so nothing is
 parked. The DNS-01 token is delivered too, sealed to the cluster into
-`k8s-base`'s configuration (below); the writer keys and the etcd
-freshness key join them with the backup bucket and their consumers. The
+`k8s-base`'s configuration (below), and so are the backup bucket's
+writer keys, which `physical` mints and `credentials derived b2-writer
+seal` seals into `apps`'s; the etcd freshness key joins them with the
+workflow that fills its prefix. The
 GitHub-secret half of a row is
 delivered separately, by `credentials derived sync` rather than by the
 row's own command, for the rows whose value can be obtained without
@@ -1186,8 +1229,8 @@ session key for every seal, so a seal is a delivery and not a copy. The
 command fetches the sealing certificate from the cluster's sealed-secrets
 controller — through the API server's service proxy, the path `kubeseal`
 itself takes, with the kubeconfig in `physical`'s state — before it
-mints or writes anything, seals each data key strict for the Secret its
-row in `conventions.sealed` names, and writes the ciphertext in the clear
+mints or writes anything, seals each data key at its row's scope for the
+name and namespace its row in `conventions.sealed` gives it, and writes the ciphertext in the clear
 at the row's path in the declaring stack's configuration, reading it
 back as written and as plain. `kubeseal` is pinned in `mise.toml`: the
 format is the controller's own hybrid encryption, and the tool built for
@@ -1196,7 +1239,8 @@ alertmanager's webhook and the mail relay's DKIM key each by its
 `record`, which writes nothing else; and the BGP session password by its
 `record` once a cluster exists, or by its `seal`, which reads the value
 back out of `physical`'s configuration, for a password recorded before
-there was a cluster to seal it to.
+there was a cluster to seal it to. The writer keys are sealed by
+`b2-writer seal`, which reads them out of `physical`'s state.
 
 The **App-key rows** carry the same verb one slot over (`escrow.py`):
 console steps printed, the value taken on standard input, and the escrow
@@ -1516,6 +1560,15 @@ operator-passphrase generate` and `recover`.
     webhook, made by the operator in Home Assistant. The stack file is
     then committed, and the next `k8s-base` apply hands each to what
     reads it.
+12. `credentials derived b2-writer seal` — the backup bucket's writer
+    keys, at the hand-over to the first wave (physical/bring-up.md stage
+    9): after the legacy sealing key is carried into the cluster and the
+    certificate its controller serves is confirmed as the cluster's own.
+    `physical`'s apply has minted one key per family of each namespace
+    `conventions.backup.BACKED_NAMESPACES` names; each is read out of
+    `physical`'s state and sealed namespace-wide into `apps`'s
+    configuration, every namespace in one run. `Pulumi.apps.yaml` is then
+    committed.
 
 A stage that fails is re-run; nothing is parked. Once the last one is
 done, the kit goes back in its envelope.
@@ -1532,10 +1585,7 @@ writes its own Pulumi state and, for `physical`, the device secrets.
     command on this side. Neither is created in a console, so there are
     no steps to print: the installation's other automation installs them
     (§3), and what is left here is a paste into `physical`'s
-    configuration. The **writer keys' sealed copies** have neither half:
-    nothing reads them until their consumers arrive, with the first
-    `claim` under a retention class and the first database
-    (`kluster-ops#42`).
+    configuration.
 -   Part of the **CI Environment half** (ci.md §3). The sink exists (§4)
     and fills what a workstation can obtain: the stack passphrase into
     every Environment but `physical`'s, `physical`'s own into those two,
@@ -1577,7 +1627,10 @@ writes its own Pulumi state and, for `physical`, the device secrets.
 Restic passwords will not join that list: `claim` under a retention
 class (declarative/workloads.md §3) generates its repository's password
 into state and puts it in the repository's SealedSecret, so a new volume
-needs no `credentials` run (rule 6). Until the commands
+in a namespace that already backs up needs no `credentials` run (rule
+6). A namespace that starts backing up does: a row in
+`conventions.backup.BACKED_NAMESPACES`, the `physical` apply that mints
+its writer key, and `credentials derived b2-writer seal`. Until the commands
 above exist, a bring-up delivers the seed kit; the operator passphrase;
 the `state-backend` stack's configuration and the state backend it
 declares; the stack passphrase and `physical`'s; the zones token, the gateway's ACME token, the
@@ -1589,7 +1642,8 @@ escrow; the GitHub secrets whose values a workstation can obtain; the
 kubeconfig's copy into `k8s-base`'s and `apps`'s configuration, at
 `k8s-base`'s bring-up; and, once `k8s-base` runs the sealed-secrets
 controller, the values sealed into its configuration — the DNS-01 token,
-the BGP session password's copy and alertmanager's webhook. The commands outside that sequence deliver the drill's keys and the
+the BGP session password's copy and alertmanager's webhook; and, at the
+hand-over to the first wave, the writer keys sealed into `apps`'s. The commands outside that sequence deliver the drill's keys and the
 dump freshness key. The rest of §3 is design rather
 than procedure.
 

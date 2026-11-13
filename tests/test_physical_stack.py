@@ -62,7 +62,7 @@ from physical_installation import (
 from unifi_controller import zone_id
 
 from kluster import conventions
-from kluster.components.backup import BackupBucket
+from kluster.components.backup import BackupBucket, etcd_scope
 from kluster.components.cloud.guardrails import Guardrails
 from kluster.components.gateway import Gateway
 from kluster.components.gateway.container import CaddyService
@@ -72,6 +72,8 @@ from kluster.components.overlay import Overlay, flow_rules
 from kluster.components.talos import TalosCluster
 from kluster.components.talos import image as talos_image
 from kluster.components.talos.image import TalosArtifact
+from kluster.conventions import backup as backup_conventions
+from kluster.conventions.backup import BackupFamily, writer_scope
 from kluster.lib import config as lib_config
 from kluster.providers.talos_factory import FactoryImage
 from kluster.stacks import physical
@@ -1124,11 +1126,56 @@ async def test_the_bucket_census_is_exported_for_the_stacks_that_fill_the_bucket
 
     # A key per consumer that exists whether or not any application does, each
     # carrying the id of the key minted for its own prefix.
+    scopes = physical.backup_scopes(backup_conventions.BACKED_NAMESPACES)
     keys = cast('dict[str, dict[str, pulumi.Output[str]]]', exported[conventions.PHYSICAL_OUTPUTS.backup_keys])
-    assert set(keys) == {scope.name for scope in physical.BACKUP_SCOPES}
+    assert set(keys) == {scope.name for scope in scopes}
     minted = {inputs['namePrefix']: name for name, inputs in ran.recorded.by_name(APPLICATION_KEY).items()}
-    for scope in physical.BACKUP_SCOPES:
+    for scope in scopes:
         assert await keys[scope.name]['id'].future() == f'{minted[scope.prefix]}-key-id'
+
+
+@pytest.mark.asyncio
+async def test_the_bucket_holds_a_writer_key_per_family_of_each_backed_namespace_beside_the_etcd_snapshots(
+    setup: Installation, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The census of backed namespaces decides the bucket's keys, and the etcd snapshots' key stands beside them.
+
+    Run under a census of the case's own, so a roll written into the program
+    in place of the census -- today's namespaces, or any other -- declares the
+    wrong keys here. Each key is exported under the scope `credentials` reads
+    it by when it seals the key into `apps`.
+    """
+    census = {
+        'alpha': frozenset({BackupFamily.VOLSYNC, BackupFamily.BARMAN}),
+        'beta': frozenset({BackupFamily.BARMAN}),
+    }
+    monkeypatch.setattr(backup_conventions, 'BACKED_NAMESPACES', census)
+    exported: dict[str, object] = {}
+    export = pulumi.export
+
+    def record(name: str, value: object) -> None:
+        exported[name] = value
+        export(name, value)
+
+    monkeypatch.setattr(physical.pulumi, 'export', record)
+
+    async with declaring():
+        await physical.main()
+
+    minted = {inputs['namePrefix'] for inputs in setup.by_name(APPLICATION_KEY).values()}
+    assert minted == {
+        etcd_scope().prefix,
+        conventions.volsync_repo_path('alpha', ''),
+        conventions.barman_repo_path('alpha', ''),
+        conventions.barman_repo_path('beta', ''),
+    }
+    keys = cast('dict[str, object]', exported[conventions.PHYSICAL_OUTPUTS.backup_keys])
+    assert set(keys) == {
+        etcd_scope().name,
+        writer_scope('alpha', BackupFamily.VOLSYNC),
+        writer_scope('alpha', BackupFamily.BARMAN),
+        writer_scope('beta', BackupFamily.BARMAN),
+    }
 
 
 def test_the_quota_names_the_compartment_this_program_decided(ran: Run) -> None:

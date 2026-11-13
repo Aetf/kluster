@@ -253,7 +253,24 @@ Two channels, chosen by who consumes the secret:
         `credentials` seals is sealed strict — name and namespace bound
         into the ciphertext, `kubeseal`'s own default — since nothing
         about it will be renamed ([credentials.md](../credentials.md)
-        §1, rule 6, and §3).
+        §1, rule 6, and §3), but for the writer keys below.
+    -   **The backup bucket's writer keys reach the cluster sealed.**
+        `physical` mints one per family of each namespace
+        `conventions.backup.BACKED_NAMESPACES` names and keeps it in its
+        state, under its own passphrase, which no other stack holds;
+        `credentials derived b2-writer seal` reads each there and seals it
+        into the `apps` stack's `sealedSecrets`. They are the one value
+        `credentials` seals **namespace-wide**: every repository Secret of
+        a namespace carries its key under that Secret's own name, beside
+        the repository's password, so one ciphertext serves them all
+        (workloads.md §3). A key never becomes a configuration secret,
+        which would put it in every pull request's preview.
+    -   **A ported ciphertext is not a row.** A legacy SealedSecret an
+        application keeps is copied as it is into `Pulumi.apps.yaml`'s
+        `sealedSecrets`, under its legacy name, and the component that
+        declares it is its one reader. It is sealed namespace-wide against
+        the legacy key, so it opens only in the namespace it was sealed
+        to, and the application keeps that namespace (workloads.md §5).
 -   **Consumed by a Pulumi provider itself → Pulumi config secret**
     (passphrase-encrypted in state) — the only cases where SealedSecret
     is impossible, because the consumer is not the cluster (or the

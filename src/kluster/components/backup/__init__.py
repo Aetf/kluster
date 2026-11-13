@@ -49,6 +49,7 @@ import pulumi
 import pulumi_b2 as b2
 
 from kluster import conventions
+from kluster.conventions.backup import BackupFamily, writer_scope
 from putils import Component, own_provider_opts, with_provider
 
 #: What a backup mover needs, and nothing beyond it. `readFiles` and
@@ -116,13 +117,19 @@ def etcd_scope() -> Scope:
 
 
 def volsync_scope(namespace: str) -> Scope:
-    """One namespace's restic repositories — every backed-up PVC it owns."""
-    return Scope(name=f'volsync-{namespace}', prefix=conventions.volsync_repo_path(namespace, ''))
+    """One namespace's restic repositories — every backed-up PVC it owns.
+
+    Named as `conventions` names the family's scope, which is the name
+    `credentials` reads the key by when it seals it.
+    """
+    return Scope(
+        name=writer_scope(namespace, BackupFamily.VOLSYNC), prefix=conventions.volsync_repo_path(namespace, '')
+    )
 
 
 def barman_scope(namespace: str) -> Scope:
-    """One namespace's database archives, base backups and WAL alike."""
-    return Scope(name=f'cnpg-{namespace}', prefix=conventions.barman_repo_path(namespace, ''))
+    """One namespace's database archives, base backups and WAL alike, under its family's scope (`writer_scope`)."""
+    return Scope(name=writer_scope(namespace, BackupFamily.BARMAN), prefix=conventions.barman_repo_path(namespace, ''))
 
 
 class BackupBucket(Component, pulumi_type='kluster:backup:BackupBucket'):

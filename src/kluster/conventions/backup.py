@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import StrEnum
+from types import MappingProxyType
 
 
 def max_age(period: dt.timedelta) -> dt.timedelta:
@@ -116,3 +119,57 @@ BUCKET_BACKUP = 'kluster-backup'
 #: barman deletion degrades to a hide — and this is how long that hide has to
 #: be recoverable before it ages out (storage.md §4).
 BACKUP_VERSION_RETENTION_DAYS = 30
+
+
+class BackupFamily(StrEnum):
+    """What fills a namespace's prefix of the bucket, one writer key each.
+
+    A family's value is the word its prefix of the bucket and its key's scope
+    begin with, so one namespace's keys never share a prefix (storage.md §4).
+    """
+
+    VOLSYNC = 'volsync'
+    """The restic repositories of the namespace's claims under a retention
+    class, at `volsync_repo_path`."""
+    BARMAN = 'cnpg'
+    """The archives of the namespace's databases, at `barman_repo_path`."""
+
+
+def writer_scope(namespace: str, family: BackupFamily) -> str:
+    """The name of one namespace's writer key of one family on the bucket.
+
+    The scope name `physical` mints the key under and exports it by, which is
+    how `credentials` finds the key it seals for the namespace.
+    """
+    return f'{family.value}-{namespace}'
+
+
+#: Every namespace something backs up into the bucket, with the families that
+#: fill its prefix: a namespace with a claim under a retention class backs up
+#: through VolSync, one with a database through barman, and a namespace with
+#: neither is not here (rfc-008 §4.2). Three programs agree on it: `physical`
+#: declares each family's writer key from it, `credentials` seals those keys
+#: into the `apps` stack's configuration (`conventions.sealed.WRITER_KEYS`),
+#: and `apps` declares the claims and databases that use them. It names every
+#: namespace the waves back up from the start, so that the `physical` apply
+#: after it mints every key the migration needs.
+#:
+#: A namespace is named after the application it holds, except where a ported
+#: ciphertext fixes it: a legacy SealedSecret is sealed namespace-wide, and
+#: opens only in the namespace it was sealed to (declarative/workloads.md §5).
+BACKED_NAMESPACES: Mapping[str, frozenset[BackupFamily]] = MappingProxyType(
+    {
+        'serving-system': frozenset({BackupFamily.VOLSYNC}),
+        'splitpro': frozenset({BackupFamily.BARMAN}),
+        'matrix': frozenset({BackupFamily.VOLSYNC}),
+        'syncthing': frozenset({BackupFamily.VOLSYNC}),
+        'webdav': frozenset({BackupFamily.VOLSYNC}),
+        'golinks': frozenset({BackupFamily.VOLSYNC}),
+        'emailproxy': frozenset({BackupFamily.VOLSYNC}),
+        'spoolman': frozenset({BackupFamily.VOLSYNC}),
+        'media': frozenset({BackupFamily.VOLSYNC}),
+        'immich': frozenset({BackupFamily.BARMAN}),
+        'jellyfin': frozenset({BackupFamily.VOLSYNC}),
+        'qbittorrent': frozenset({BackupFamily.VOLSYNC}),
+    }
+)
