@@ -10,7 +10,7 @@
 # client presents. --local-server-auth is always on: first-time account
 # authorisation happens through a port-forward to 8080, because the provider
 # only allows loopback redirect URIs for desktop clients.
-FROM docker.io/library/python:3.15-slim@sha256:2da676046630d7bf14c6764ae1143dc7fa0377a53f94bf5a642f0b214aca5bce
+FROM docker.io/library/python:3.15-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928
 
 ARG EMAILPROXY_VERSION
 RUN pip install --no-cache-dir emailproxy==${EMAILPROXY_VERSION}
