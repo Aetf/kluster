@@ -30,6 +30,7 @@ were passed to the provider.
 from __future__ import annotations
 
 import fnmatch
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -63,6 +64,7 @@ __all__ = (
     'SecretTemplate',
     'UnusableKubeconfig',
     'application_namespace',
+    'await_admission_path',
     'bare_listener',
     'find_rendered',
     'helm_chart',
@@ -181,6 +183,10 @@ def helm_chart(
     :param skip_crds: Leave the chart's bundled CRDs uninstalled. Helm never
         upgrades a CRD it installed that way, so a component whose CRDs are
         declared separately sets this and keeps them upgradable.
+
+    Every chart is installed with `await_admission_path` as a transform, so
+    the chart is ready only once each admission webhook it renders can be
+    verified by the API server (cluster-infra.md §1.2).
     """
     return k8s.helm.v4.Chart(
         name,
@@ -190,8 +196,94 @@ def helm_chart(
         repository_opts=None if pin.oci else k8s.helm.v4.RepositoryOptsArgs(repo=pin.repository),
         values=dict(values) if values is not None else None,
         skip_crds=skip_crds,
-        opts=opts,
+        opts=pulumi.ResourceOptions.merge(pulumi.ResourceOptions(transforms=[await_admission_path]), opts),
     )
+
+
+#: The kinds whose entries the API server calls on admission, by the group
+#: they are served in.
+_WEBHOOK_CONFIGURATIONS = frozenset({'ValidatingWebhookConfiguration', 'MutatingWebhookConfiguration'})
+_ADMISSION_GROUP = 'admissionregistration.k8s.io/'
+
+#: `pulumi-kubernetes`' await annotations. `waitFor` holds a resource's create
+#: and update until each JSONPath expression in it selects a value, and
+#: `skipAwait` waives the wait entirely; an object carrying either one already
+#: says how it is awaited, and this module does not overrule it.
+_WAIT_FOR = 'pulumi.com/waitFor'
+_SKIP_AWAIT = 'pulumi.com/skipAwait'
+
+
+def await_admission_path(args: pulumi.ResourceTransformArgs) -> pulumi.ResourceTransformResult | None:
+    """The transform `helm_chart` installs every chart with: each webhook configuration awaits its CA bundles.
+
+    A webhook entry that names a Service and is rendered without a CA bundle
+    is one the API server cannot verify until something writes the bundle,
+    and until then it refuses every object the entry gates. `pulumi-kubernetes`
+    retries no refused create. So on such a configuration this sets
+    `pulumi.com/waitFor`, and the provider holds the configuration, and with
+    it the chart, until each such entry carries its bundle; whatever is
+    declared behind the chart is declared against a webhook the API server
+    can verify. The rule is stated by what an object is, so it names no chart.
+    `_admission_wait` decides what the object becomes; everything the chart
+    renders that it leaves alone passes through unchanged.
+    """
+    awaited = _admission_wait(args.props)
+    if awaited is None:
+        return None
+    return pulumi.ResourceTransformResult(props=awaited, opts=args.opts)
+
+
+def _admission_wait(rendered: Mapping[str, Any]) -> dict[str, Any] | None:
+    """`rendered` awaiting the CA bundle of each Service-backed webhook entry that lacks one, or `None` to leave it be.
+
+    `rendered` is an object as a chart renders it. It is left be -- `None` --
+    unless it is a validating or mutating webhook configuration with at
+    least one entry whose `clientConfig` names a Service and carries no
+    `caBundle`, and unless it already carries an await annotation of its own.
+    An entry that names a URL is left out: its server's certificate is
+    verified against the API server's own trust, not a bundle written here.
+
+    The annotation is a JSON array of one expression per such entry, each
+    indexing its entry: the provider evaluates only the first value a path
+    selects, so a single `[*]` expression would hold once any one entry had
+    a bundle. A path that selects nothing does not hold, and `caBundle` is
+    absent until it is written.
+    """
+    if rendered.get('kind') not in _WEBHOOK_CONFIGURATIONS:
+        return None
+    api_version = rendered.get('apiVersion')
+    if not isinstance(api_version, str) or not api_version.startswith(_ADMISSION_GROUP):
+        return None
+    metadata = _fields(rendered.get('metadata'))
+    annotations = _fields(metadata.get('annotations'))
+    if _WAIT_FOR in annotations or _SKIP_AWAIT in annotations:
+        return None
+
+    webhooks = rendered.get('webhooks')
+    entries = cast('Sequence[Any]', webhooks) if isinstance(webhooks, Sequence) else ()
+    expressions = [
+        f'jsonpath={{.webhooks[{index}].clientConfig.caBundle}}'
+        for index, entry in enumerate(entries)
+        if _awaits_its_bundle(entry)
+    ]
+    if not expressions:
+        return None
+    return {
+        **rendered,
+        'metadata': {**metadata, 'annotations': {**annotations, _WAIT_FOR: json.dumps(expressions)}},
+    }
+
+
+def _awaits_its_bundle(entry: object) -> bool:
+    """Whether a webhook entry names a Service and carries no CA bundle."""
+    client_config = _fields(_fields(entry).get('clientConfig'))
+    return client_config.get('service') is not None and not client_config.get('caBundle')
+
+
+def _fields(value: object) -> Mapping[str, Any]:
+    """`value` read as an object's fields, none where a rendered object holds no mapping."""
+    no_fields: Mapping[str, Any] = {}
+    return cast('Mapping[str, Any]', value) if isinstance(value, Mapping) else no_fields
 
 
 def find_rendered[R: pulumi.Resource](

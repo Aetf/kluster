@@ -23,9 +23,10 @@ session of its own that ends with it (`process_sessions`), so a `pulumi`
 stopped at its bound takes its plugins with it: the kubernetes provider, and
 in a preview the language host and the program.
 
-Unlike the other engine suites, this one fetches: the extension is the
-kubernetes provider's, so `pulumi package gen-sdk` and the engine both need
-its plugin, at the version the locked `pulumi-kubernetes` registers. It is
+This suite fetches, an exception to the engine suites' fetching nothing
+that it shares with `tests/test_admission_wait_engine.py` (testing.md §8):
+the extension is the kubernetes provider's, so `pulumi package gen-sdk` and
+the engine both need its plugin, at the version the locked `pulumi-kubernetes` registers. It is
 downloaded once per worker that runs one of the module's cases, because each
 worker process builds the module's fixture, and the home it downloads into,
 for itself. A whole-suite run hands cases out to the four workers in batches of
