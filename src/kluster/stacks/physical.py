@@ -32,7 +32,7 @@ one block at the end, because they are this stack's whole contract with `dns`,
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from ipaddress import IPv4Address, IPv6Address, ip_address
 
 import pulumi
@@ -40,7 +40,7 @@ import pulumi_oci as oci
 import pulumiverse_talos
 
 from kluster import conventions
-from kluster.components.backup import BackupBucket, Scope, etcd_scope
+from kluster.components.backup import BackupBucket, Scope, barman_scope, etcd_scope, volsync_scope
 from kluster.components.cloud import CloudNetwork
 from kluster.components.cloud.guardrails import AlertRule, Guardrails
 from kluster.components.cloud.nodes import CloudNodes, NodeLoadBalancer
@@ -59,6 +59,8 @@ from kluster.components.overlay import Overlay
 from kluster.components.overlay.flow_rules import flow_rules
 from kluster.components.talos import TalosCluster, TalosDay1
 from kluster.components.talos.image import TalosImage, TalosNocloudImage
+from kluster.conventions import backup as backup_conventions
+from kluster.conventions.backup import BackupFamily
 from kluster.lib import config as lib_config
 from kluster.lib.versions import NAMESPACE as VERSIONS
 from kluster.lib.versions import versions
@@ -118,9 +120,27 @@ BUDGET_ALERT_RULES: tuple[AlertRule, ...] = (
 )
 
 #: The bucket's consumers that exist whether or not any application does.
-#: Everything else is per namespace and is declared by the stack that declares
-#: the namespace, as a scope on the same bucket.
-BACKUP_SCOPES: tuple[Scope, ...] = (etcd_scope(),)
+FIXED_SCOPES: tuple[Scope, ...] = (etcd_scope(),)
+
+#: The scope each backup family's writer key reaches, by the namespace it
+#: backs up.
+FAMILY_SCOPES: Mapping[BackupFamily, Callable[[str], Scope]] = {
+    BackupFamily.VOLSYNC: volsync_scope,
+    BackupFamily.BARMAN: barman_scope,
+}
+
+
+def backup_scopes(backed: Mapping[str, frozenset[BackupFamily]]) -> tuple[Scope, ...]:
+    """Every writer key the bucket carries: the fixed consumers, and one per family of each backed namespace.
+
+    `backed` is `conventions.backup.BACKED_NAMESPACES`, the census `apps` and
+    `credentials` read too, so a namespace that starts backing up is one row
+    there and a key here on the next apply.
+    """
+    return (
+        *FIXED_SCOPES,
+        *(FAMILY_SCOPES[family](namespace) for namespace, families in backed.items() for family in sorted(families)),
+    )
 
 
 async def main() -> None:
@@ -364,7 +384,7 @@ async def main() -> None:
         region=conventions.B2_ACCOUNT.region,
         bucket_name=conventions.BUCKET_BACKUP,
         retention_days=conventions.BACKUP_VERSION_RETENTION_DAYS,
-        scopes=BACKUP_SCOPES,
+        scopes=backup_scopes(backup_conventions.BACKED_NAMESPACES),
     )
 
     # §4: the gateway and the overlay it is the site's member of. Two top-level
@@ -447,10 +467,10 @@ async def main() -> None:
     pulumi.export(outputs.talosconfig, day1.talosconfig)
 
     # Names, endpoints and credentials, because that is what a consumer of a
-    # bucket is configured with (physical.md §0). The per-namespace VolSync and
-    # barman keys are not here: the census of namespaces belongs to the stack
-    # that declares them, and each arrives as a scope on this bucket when it
-    # does. What exists without any application is the etcd snapshot key.
+    # bucket is configured with (physical.md §0). The keys are one per scope:
+    # the etcd snapshots', and a writer key per family of every backed
+    # namespace, which `credentials derived b2-writer seal` reads out of this
+    # stack's state by its scope and seals into `apps`.
     pulumi.export(outputs.backup_bucket, backup.bucket_name)
     pulumi.export(outputs.backup_endpoint, backup.endpoint)
     pulumi.export(

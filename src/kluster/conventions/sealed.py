@@ -17,6 +17,14 @@ The program reads it back by the same row's path
 (`kluster.lib.k8s.sealed_ciphertext`), so the writer and the reader cannot
 name two places.
 
+A row sealed namespace-wide opens under any name in its namespace, so its name
+says where its ciphertext is kept rather than which Secret it becomes: a
+namespace's writer keys, which every repository Secret there carries under its
+own name (`writer_key`). A ciphertext ported from the legacy cluster as it is
+has no row: it is not sealed here, the component that declares it is its one
+reader, and that component names it and the namespace it was sealed to
+(declarative/workloads.md §5).
+
 Read qualified -- `conventions.sealed.DNS01_TOKEN` -- because the module path
 says what a prefix on every name would otherwise have to.
 """
@@ -28,7 +36,13 @@ from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
 
-from kluster.conventions.cluster import BGP_SECRETS_NAMESPACE, CERT_MANAGER_NAMESPACE, MONITORING_NAMESPACE
+from kluster.conventions.backup import BACKED_NAMESPACES, BackupFamily, writer_scope
+from kluster.conventions.cluster import (
+    BGP_SECRETS_NAMESPACE,
+    CERT_MANAGER_NAMESPACE,
+    MONITORING_NAMESPACE,
+    WRITER_KEY_FIELDS,
+)
 from kluster.conventions.identity import STACK_NAMES
 
 __all__ = (
@@ -38,8 +52,10 @@ __all__ = (
     'DKIM_EXIM',
     'DNS01_TOKEN',
     'VALUES',
+    'WRITER_KEYS',
     'SealedValue',
     'SealingScope',
+    'writer_key',
 )
 
 
@@ -54,14 +70,17 @@ class SealingScope(StrEnum):
 
     STRICT = 'strict'
     """Name and namespace both fixed. `kubeseal`'s own default, and the scope
-    of every value `credentials` seals: nothing about one will be renamed."""
+    of every value `credentials` seals but the writer keys: nothing about one
+    will be renamed."""
 
     NAMESPACE_WIDE = 'namespace-wide'
     """Namespace fixed, any name. What the legacy cluster's secrets carry, so
     it stays the default of `sealed_secret`: the migration restores the legacy
     sealing key and ports the existing manifests unchanged
     (cluster/migration.md §0.5), and a different default would re-seal all of
-    them for no gain."""
+    them for no gain. The writer keys are sealed at it too, because one
+    ciphertext serves every repository Secret of its namespace under that
+    Secret's own name (`writer_key`)."""
 
     CLUSTER_WIDE = 'cluster-wide'
     """Neither fixed — a secret any namespace can decrypt. Never a default."""
@@ -79,8 +98,8 @@ class SealedValue:
     """One Secret the cluster receives as a SealedSecret, and where its ciphertext is committed."""
 
     name: str
-    """The Secret's name, which the SealedSecret carries too, and the value's
-    name under `CONFIG_KEY`."""
+    """The value's name under `CONFIG_KEY`, and the name `kubeseal` seals it
+    for. Strict, it is the Secret's name too, which the SealedSecret carries."""
     namespace: str
     keys: tuple[str, ...]
     """The keys of the Secret's data, each sealed on its own."""
@@ -148,7 +167,36 @@ DKIM_EXIM = SealedValue(
     stack=STACK_NAMES.apps,
 )
 
+
+def writer_key(namespace: str, family: BackupFamily) -> SealedValue:
+    """One namespace's writer key of one family on the backup bucket, sealed for the `apps` stack.
+
+    `physical` mints the key (`conventions.backup.BACKED_NAMESPACES`) and
+    `credentials derived b2-writer seal` seals it out of that stack's state.
+    Sealed namespace-wide, so the one ciphertext opens under whatever name a
+    consumer in its namespace gives it: each repository Secret a backed claim
+    declares carries it under the claim's own name, beside that repository's
+    password (declarative/workloads.md §3). Its data keys are the fields a
+    mover reads the key's two halves from (`WRITER_KEY_FIELDS`). The name is
+    the key's scope on the bucket after `writer-`, which is what keeps it
+    apart from every value ported from the legacy cluster under that
+    application's own name.
+    """
+    return SealedValue(
+        name=f'writer-{writer_scope(namespace, family)}',
+        namespace=namespace,
+        keys=tuple(sorted(WRITER_KEY_FIELDS)),
+        stack=STACK_NAMES.apps,
+        scope=SealingScope.NAMESPACE_WIDE,
+    )
+
+
+#: Every writer key the backed namespaces hold, one per namespace and family.
+WRITER_KEYS: tuple[SealedValue, ...] = tuple(
+    writer_key(namespace, family) for namespace, families in BACKED_NAMESPACES.items() for family in sorted(families)
+)
+
 #: Every sealed value, by name.
 VALUES: Mapping[str, SealedValue] = MappingProxyType(
-    {value.name: value for value in (DNS01_TOKEN, BGP_PASSWORD, ALERT_WEBHOOK, DKIM_EXIM)}
+    {value.name: value for value in (DNS01_TOKEN, BGP_PASSWORD, ALERT_WEBHOOK, DKIM_EXIM, *WRITER_KEYS)}
 )

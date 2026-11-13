@@ -29,7 +29,9 @@ reads it before it can run -- the state-backend appliance's OCI key included,
 which the `state-backend` stack builds its OCI provider from. A credential the
 cluster consumes is sealed to the cluster instead and its ciphertext written
 in the clear into the configuration of the stack that declares it
-(`sealing.py`): the DNS-01 token cert-manager answers challenges with.
+(`sealing.py`): the DNS-01 token cert-manager answers challenges with, and
+the backup bucket's writer keys, which `physical` mints and this side seals
+out of that stack's state into `apps` (`b2_writer_seal`).
 
 The drill age identity is drawn here rather than minted anywhere, as the
 appliance's SSH host key below is; its consumer is the ops repository's
@@ -75,9 +77,11 @@ import datetime as dt
 import logging
 from collections.abc import Sequence
 from pathlib import Path
+from typing import cast
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from pulumi.runtime import rpc
 
 from kluster.lib import stack_environment
 from kluster.lib import workstation as lib_workstation
@@ -85,6 +89,7 @@ from kluster.lib.state_backend import committed
 from kluster.lib.state_backend import settings as appliance_settings
 
 from ... import conventions
+from ...conventions.backup import BACKED_NAMESPACES, writer_scope
 from ..state_backend import config as appliance
 from ..state_backend import probe
 from . import age, b2, cloudflare, entries, escrow, oci_iam, pki, pulumi_config, sealing
@@ -232,6 +237,7 @@ BACKUP_RECIPIENTS_FILE = committed.BACKUP_RECIPIENTS
 ZONES_ROW = 'cloudflare-zones'
 GATEWAY_ACME_ROW = 'cloudflare-gateway-acme'
 DNS01_ROW = 'cloudflare-dns01'
+B2_WRITER_ROW = 'b2-writer'
 OCI_PHYSICAL_ROW = 'oci-physical'
 OCI_STATE_BACKEND_ROW = f'oci-{conventions.STATE_BACKEND}'
 B2_MANAGEMENT_ROW = 'b2-management'
@@ -483,6 +489,106 @@ def cloudflare_dns01(kit: KdbxStore, *, sealer: sealing.Sealer, seed_entry: str 
         'cert-manager answers DNS-01 challenges in %s as %s from the next apply', ', '.join(zones), delivered.token_id
     )
     return delivered.token_id
+
+
+class WriterKeyMissing(pulumi_config.SlotRefused):
+    """A backed namespace whose writer key `physical`'s state does not hold, or holds in no usable shape."""
+
+    def __init__(self, message: str, *, scope: str) -> None:
+        super().__init__(message)
+        self.scope: str = scope
+
+
+#: Which half of a minted B2 key each field of a sealed writer key carries:
+#: the fields are a mover's (`conventions.WRITER_KEY_FIELDS`), the halves are
+#: the names `physical` exports each key under. A field the row does not
+#: carry is refused by the seal itself, so the two cannot drift apart unseen.
+WRITER_KEY_HALVES: dict[str, str] = {'AWS_ACCESS_KEY_ID': 'id', 'AWS_SECRET_ACCESS_KEY': 'secret'}
+
+
+def _writer_key(keys: object, scope: str, *, physical: str) -> dict[str, str]:
+    """One scope's key out of `physical`'s `backup_keys` export, by field; `WriterKeyMissing` where it is not there.
+
+    Refused by its scope and the half that is wrong, never by its content.
+    """
+    output = conventions.PHYSICAL_OUTPUTS.backup_keys
+    held = cast('dict[str, object]', keys).get(scope) if isinstance(keys, dict) else None
+    if not isinstance(held, dict):
+        raise WriterKeyMissing(
+            f'the `{physical}` stack exports no writer key for `{scope}` in `{output}`; '
+            f"`{physical}`'s apply after the census names its namespace mints it",
+            scope=scope,
+        )
+    halves = cast('dict[str, object]', held)
+    fields: dict[str, str] = {}
+    for field, half in WRITER_KEY_HALVES.items():
+        value = halves.get(half)
+        if value == rpc.UNKNOWN:
+            raise pulumi_config.UnknownOutput(
+                f"the `{physical}` stack exports the {half} of `{scope}` as Pulumi's unknown sentinel, which an "
+                f'apply restricted by `--target` leaves behind; apply `{physical}` again with no targets',
+                stack=physical,
+                output=output,
+            )
+        if not isinstance(value, str) or not value:
+            raise WriterKeyMissing(
+                f'the `{physical}` stack exports the {half} of `{scope}` as no key half', scope=scope
+            )
+        fields[field] = value
+    return fields
+
+
+def b2_writer_seal(*, sealer: sealing.Sealer) -> list[str]:
+    """Seal every backed namespace's writer keys out of `physical`'s state into the `apps` stack's configuration.
+
+    Returns the names of the sealed values written, one per namespace and
+    family of `conventions.backup.BACKED_NAMESPACES`.
+
+    `physical` mints each key from the B2 management key, one per scope on the
+    backup bucket, and exports them under `backup_keys` in its state, which
+    opens under its own passphrase (credentials.md §1). A StackReference
+    cannot carry them across, and a copy as a configuration secret of `apps`
+    would reach every pull request's preview; so each is sealed, the shape
+    `derived sync` has for the kubeconfig with a seal in place of the copy.
+    Each key is sealed **namespace-wide** (`conventions.sealed.writer_key`):
+    one ciphertext, which every repository Secret of its namespace carries
+    under its own name.
+
+    `physical` is opened through `sealer`, by its name, so it is read under
+    its own passphrase. Its state exists by the time this runs: building
+    `sealer` read the cluster's kubeconfig out of it, and refuses a stack
+    with none (`sealing.cluster_kubeconfig`).
+
+    Every refusal comes before anything is written: a cluster whose
+    certificate could not be fetched, which building `sealer` does; an `apps`
+    stack that does not exist; and a namespace whose key `physical` does not
+    export yet, which a census row added since `physical`'s last apply is,
+    or exports with a half missing or empty.
+    Every run seals afresh, so it rewrites every value whatever the file
+    held (`sealing.py`).
+    """
+    rows = [
+        (writer_scope(namespace, family), conventions.sealed.writer_key(namespace, family))
+        for namespace, families in BACKED_NAMESPACES.items()
+        for family in sorted(families)
+    ]
+    # Each declaring stack once, before `physical` is read.
+    for value in {value.stack: value for _, value in rows}.values():
+        _ = sealer.stack(value)
+    physical = sealer.open_stack(PHYSICAL_STACK)
+    log.info("reading the backup bucket's writer keys out of the %s stack's state", physical.name)
+    keys = physical.outputs().get(conventions.PHYSICAL_OUTPUTS.backup_keys)
+    held = [(value, _writer_key(keys, scope, physical=physical.name)) for scope, value in rows]
+    sealed = [(value, sealer.seal(value, fields)) for value, fields in held]
+    for value, ciphertext in sealed:
+        sealer.write(value, ciphertext)
+    log.info(
+        'sealed %d writer keys into the %s stack; commit its file, and each repository Secret of a namespace '
+        'carries its key from the next apply',
+        len(sealed),
+        conventions.STACK_NAMES.apps,
+    )
+    return [value.name for value, _ in sealed]
 
 
 def _push_api_key(stack: pulumi_config.Stack, key: oci_iam.ApiKey, *, holds: str) -> None:

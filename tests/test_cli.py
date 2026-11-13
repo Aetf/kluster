@@ -119,6 +119,9 @@ def expected(path: list[str]) -> str | None:
             # One handler for every device row: what differs between them is
             # the table in `devices.py`, not the code that reads it.
             return 'devices.deliver'
+        case ['derived', cli.derived.B2_WRITER_ROW, 'seal']:
+            # The writer keys `physical` minted, sealed out of its state.
+            return 'derived.b2_writer_seal'
         case ['derived', row, 'seal'] if row in devices.DEVICES:
             # The sealed copy of a device row recorded before the cluster
             # existed, read back out of the stack that holds the value.
@@ -268,6 +271,7 @@ class Dispatch:
             (cli.derived, 'state_backend_server', None),
             (cli.derived, 'state_backend_host_key', 'ssh-ed25519 AAAA'),
             (cli.derived, 'backup_age_recipient', 'age1recipient'),
+            (cli.derived, 'b2_writer_seal', []),
             (cli.devices, 'deliver', ()),
             (cli.devices, 'seal', None),
             (cli.devices, 'record_sealed', None),

@@ -2986,10 +2986,37 @@ def test_every_sealed_value_is_declared_by_a_stack_of_the_census() -> None:
     assert {value.stack for value in conventions.sealed.VALUES.values()} <= set(conventions.STACK_NAMES.names())
 
 
-def test_every_value_credentials_seals_is_sealed_strict() -> None:
+def test_every_value_credentials_seals_but_a_writer_key_is_sealed_strict() -> None:
     # Name and namespace bound into the ciphertext: nothing about one of these
-    # will be renamed, and `namespace-wide` stays for the legacy manifests.
-    assert {value.scope for value in conventions.sealed.VALUES.values()} == {conventions.sealed.SealingScope.STRICT}
+    # will be renamed. A writer key is the exception, opened under every
+    # repository Secret's name in its namespace (`test_sealing`).
+    writer = set(conventions.sealed.WRITER_KEYS)
+    others = {value.scope for value in conventions.sealed.VALUES.values() if value not in writer}
+
+    assert others == {conventions.sealed.SealingScope.STRICT}
+
+
+def test_every_backed_namespace_has_a_writer_key_row_for_each_family() -> None:
+    """`physical` mints one key per family of each backed namespace, and `credentials` seals each by its row.
+
+    A namespace or a family the rows missed would be a key minted and never
+    sealed, and every repository Secret of that namespace would wait for it.
+    Each row carries the fields a repository Secret takes the key's halves
+    under, which `claim` refuses anything else of.
+    """
+    census = backup.BACKED_NAMESPACES
+    assert census, 'nothing to check: the census names no namespace'
+
+    for namespace, families in census.items():
+        assert families, f'{namespace} backs up nothing, so it does not belong in the census'
+        for family in families:
+            row = conventions.sealed.writer_key(namespace, family)
+            assert conventions.sealed.VALUES.get(row.name) == row, (namespace, family)
+            assert row.namespace == namespace
+            assert row.stack == conventions.STACK_NAMES.apps
+            assert frozenset(row.keys) == conventions.WRITER_KEY_FIELDS
+    assert len(conventions.sealed.WRITER_KEYS) == sum(len(families) for families in census.values())
+    assert len({row.name for row in conventions.sealed.WRITER_KEYS}) == len(conventions.sealed.WRITER_KEYS)
 
 
 def test_no_two_sealed_values_share_a_path() -> None:

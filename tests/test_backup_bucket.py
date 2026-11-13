@@ -27,6 +27,8 @@ from kluster.components.backup import (
     s3_endpoint,
     volsync_scope,
 )
+from kluster.conventions.backup import BackupFamily
+from kluster.stacks import physical
 
 BUCKET_ID = 'b2-bucket-id'
 REGION = 'us-west-004'
@@ -243,3 +245,26 @@ async def test_every_resource_is_signed_by_that_provider(monitor: B2) -> None:
 
     assert children
     assert [child.name for child in children if not child.provider.startswith(f'{provider}::')] == []
+
+
+@pytest.mark.parametrize('family', list(BackupFamily), ids=str)
+def test_a_familys_scope_reaches_where_that_family_writes_and_nothing_beside_it(family: BackupFamily) -> None:
+    """A family's key reaches the repositories or archives its namespace writes, and no other family's or namespace's.
+
+    The prefix is held to where that family's repositories and archives are
+    written, so the key reaches what it backs up and nothing beside it.
+    """
+    namespace = 'a-namespace'
+    scope = physical.FAMILY_SCOPES[family](namespace)
+
+    def written(within: str) -> dict[BackupFamily, str]:
+        return {
+            BackupFamily.VOLSYNC: conventions.volsync_repo_path(within, 'a-claim'),
+            BackupFamily.BARMAN: conventions.barman_repo_path(within, 'a-database'),
+        }
+
+    assert written(namespace)[family].startswith(scope.prefix)
+    # Neither the other family's prefix nor a namespace whose name extends
+    # this one's.
+    assert not any(path.startswith(scope.prefix) for other, path in written(namespace).items() if other is not family)
+    assert not written(f'{namespace}-other')[family].startswith(scope.prefix)

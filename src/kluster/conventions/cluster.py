@@ -95,7 +95,8 @@ GATEWAY_LAN = 'lan-gw'
 GATEWAY_MEDIA = 'media-gw'
 
 #: The namespaces a sealed value is bound to (`conventions.sealed`): `kubeseal`
-#: seals each value strict, its namespace part of the ciphertext, so the
+#: seals a value strict unless its row says namespace-wide, as a writer key's
+#: does, and either scope binds its namespace into the ciphertext, so the
 #: command that seals it and the stack that installs what reads it have to
 #: agree on the name.
 #:
