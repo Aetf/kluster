@@ -93,7 +93,7 @@ parent rather than creating one, and `.claude/workspaces/` is ignored
 rather than tracked, so the `mkdir` is not optional in a fresh clone.
 
 **The workspace is a git worktree of the primary.** `jj workspace add`
-from `jj` 0.46.0, the release `mise.toml` pins, makes the new workspace
+from `jj` 0.46.0 on makes the new workspace
 a git worktree when it runs from a colocated workspace, as the primary
 is: it prints `Created Git worktree for the new workspace.`, and the
 workspace's `.git` is a file naming `.git/worktrees/<name>` in the
