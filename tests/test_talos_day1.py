@@ -16,6 +16,7 @@ import asyncio
 import itertools
 import json
 import logging
+import typing
 from collections.abc import Callable
 from ipaddress import IPv4Interface
 from typing import Any, cast
@@ -24,6 +25,9 @@ import pulumi
 import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
+from pulumiverse_talos import client, machine
+from pulumiverse_talos.cluster import KubeconfigArgs, get_health_output
+from talos_secrets import declared_input_type, field_hint, generated_secrets, names_in, wire_names
 
 from kluster import conventions
 from kluster.components.talos import Refusal, RollRefused, TalosCluster, TalosDay1
@@ -54,24 +58,22 @@ class Talos(Recorder):
         #: Every invoke the program made, so a test can read what the health
         #: check and the client configuration were asked for.
         self.calls: dict[str, dict[str, Any]] = {}
+        #: The structures the provider generated for `Secrets`, by output.
+        self.generated: dict[str, Any] = {}
 
     def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
         if args.typ == 'talos:cluster/kubeconfig:Kubeconfig':
             return {'kubeconfigRaw': KUBECONFIG}
         if args.typ != 'talos:machine/secrets:Secrets':
             return {}
-        secrets: dict[str, Any] = {'bootstrapToken': 'bootstrap.token'}
-        if self.secretbox is not None:
+        generated = generated_secrets()
+        secrets = cast('dict[str, Any]', generated['machineSecrets']['secrets'])
+        if self.secretbox is None:
+            del secrets['secretboxEncryptionSecret']
+        else:
             secrets['secretboxEncryptionSecret'] = self.secretbox
-        return {
-            'machineSecrets': {
-                'certs': {},
-                'cluster': {'id': 'kluster', 'secret': 'cluster.secret'},
-                'secrets': secrets,
-                'trustdinfo': {'token': 'trustd.token'},
-            },
-            'clientConfiguration': {'caCertificate': 'ca', 'clientCertificate': 'crt', 'clientKey': 'key'},
-        }
+        self.generated = generated
+        return generated
 
     def answer(self, args: pulumi.runtime.MockCallArgs) -> dict[str, Any]:
         arguments = dict(cast('dict[str, Any]', args.args))
@@ -598,3 +600,99 @@ async def test_two_volumes_on_one_node_are_refused(fake: Talos) -> None:
         )
     )
     assert (following.refusal, following.nodes) == (Refusal.VOLUMES_CROWDED, (conventions.DEDICATED_VIP_NODE,))
+
+
+#: Every invoke that is handed something `Secrets` generated: the function's
+#: token, the generated function and its parameter, the name the argument
+#: travels under, and the output of `Secrets` it is handed.
+HANDED_SECRETS = [
+    (
+        'talos:machine/getConfiguration:getConfiguration',
+        machine.get_configuration_output,
+        'machine_secrets',
+        'machineSecrets',
+        'machineSecrets',
+    ),
+    (
+        'talos:client/getConfiguration:getConfiguration',
+        client.get_configuration_output,
+        'client_configuration',
+        'clientConfiguration',
+        'clientConfiguration',
+    ),
+    (
+        'talos:cluster/getHealth:getHealth',
+        get_health_output,
+        'client_configuration',
+        'clientConfiguration',
+        'clientConfiguration',
+    ),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(('token', 'function', 'parameter', 'argument', 'output'), HANDED_SECRETS)
+async def test_an_invoke_is_handed_what_secrets_generated_under_the_names_its_input_type_declares(
+    fake: Talos, token: str, function: Callable[..., object], parameter: str, argument: str, output: str
+) -> None:
+    # `Secrets` reads its structures back as output types, which hold their
+    # fields under Python names, and an invoke is serialized with no type to
+    # translate a mapping by: handed on as they are, the provider would get
+    # `k8s_aggregator` where it requires `k8sAggregator`. The names expected
+    # here are the ones the function's declared input type carries.
+    day1 = build()
+    _ = await asyncio.gather(
+        day1.talosconfig.future(),
+        day1.health.future(),
+        *(configuration.future() for configuration in day1.cluster.configurations.values()),
+    )
+    received = fake.calls[token][argument]
+    declared_type = declared_input_type(typing.get_type_hints(function)[parameter])
+    assert names_in(received) == wire_names(declared_type)
+    assert received == fake.generated[output]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('typ', 'args'),
+    [
+        ('talos:machine/configurationApply:ConfigurationApply', machine.ConfigurationApplyArgs),
+        ('talos:machine/bootstrap:Bootstrap', machine.BootstrapArgs),
+        ('talos:cluster/kubeconfig:Kubeconfig', KubeconfigArgs),
+    ],
+)
+async def test_a_resource_is_handed_the_generated_client_configuration_under_the_names_its_input_type_declares(
+    fake: Talos, typ: str, args: type
+) -> None:
+    async with declaring():
+        _ = build()
+    declared_type = declared_input_type(field_hint(args, 'clientConfiguration'))
+    declarations = fake.of_type(typ)
+    assert declarations
+    for declaration in declarations:
+        received = declaration.inputs['clientConfiguration']
+        assert names_in(received) == wire_names(declared_type)
+        assert received == fake.generated['clientConfiguration']
+
+
+@pytest.mark.asyncio
+async def test_the_sdk_still_hands_an_output_type_to_an_invoke_under_python_names(fake: Talos) -> None:
+    # The tripwire of the workaround layer at the end of
+    # `kluster.components.talos` (pulumi/pulumi#15883): the output of
+    # `Secrets`, handed on unchanged, reaches the provider under the Python
+    # names its output type holds rather than under the provider's own.
+    secrets = machine.Secrets('tripwire-secrets', talos_version='v1.11.0')
+    rendered = machine.get_configuration_output(
+        cluster_name='kluster',
+        cluster_endpoint=ENDPOINT,
+        machine_type='controlplane',
+        machine_secrets=cast('Any', secrets.machine_secrets),
+    )
+    _ = await rendered.future()
+    received = fake.calls['talos:machine/getConfiguration:getConfiguration']['machineSecrets']
+    assert names_in(received) != wire_names(machine.MachineSecretsArgs), (
+        'the SDK now hands an output type to an invoke under the provider names: once the output also '
+        "type-checks against the consumer's parameter, delete the workaround section at the end of "
+        'kluster.components.talos, hand `machine_secrets` and `client_configuration` on directly, '
+        'and drop this case and its census entry in docs/style/README.md'
+    )
