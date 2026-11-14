@@ -317,9 +317,7 @@ first DS of each zone in that order.
     reads. Nothing here crosses the StackReference: an entry carries
     the member's name and its overlay address together, so the whole
     block is code, and it is declared identically before and after
-    `physical` is applied. The
-    gateway is the one member the roster may not carry yet, and `udm.zt`
-    appears with its entry (physical/gateway.md §2.5). The block's name
+    `physical` is applied. The block's name
     as a client sees it is `conventions.dns.OVERLAY_DOMAIN`, and it has
     a second reader: the `physical` stack pushes it to the overlay's
     members as the network's managed-DNS search domain, with alice and

@@ -35,7 +35,13 @@ Four things are declared here, and each answers a different question
     via nothing, because that route is what the controller assigns every
     member's address under. The network is adopted with its routes declared
     in full, so a route the census lacks is one the update deletes at
-    Central.
+    Central. A `via` is an address the roster places, and a route naming any
+    other is refused before anything is declared: every member installs every
+    route, so a next hop nobody holds takes from each member the subnet it
+    routes. That the member holding it *answers* is not something a
+    declaration can say, which is why the run that writes the routes is
+    ordered after the one that creates the gateway's member, by the ceremony
+    rather than by the graph (gateway.md §2.2, §2.5).
 -   **The flow rules** — what a member may do once admitted. They arrive as a
     parameter, because what confines a run is a fact about how continuous
     integration reaches this site rather than about the network, and this
@@ -59,10 +65,9 @@ nothing it does not declare to reach the rules' final `accept`. One admission
 is made outside it: the legacy cluster's CI authorizes a fresh identity per job
 at Central until that cluster retires, an accepted residual (threat-model.md
 §2.10), and those members draw their addresses from the assignment pools. The
-gateway is the one member the roster can be missing, because a ZeroTier
-identity is minted by the daemon's first run and that daemon is a container the
-gateway delivers; while the entry is absent no member is declared for it, and
-the ceremony that reads the minted id adds the entry as a commit
+gateway's entry follows the bring-up, because a ZeroTier identity is minted by
+the daemon's first run and that daemon is a container the gateway delivers: the
+ceremony reads the minted id off the device and records the entry as a commit
 (physical/gateway.md §2.5).
 
 **Two continuous-integration identities, not one.** ZeroTier maps a node to one
@@ -161,6 +166,16 @@ class Overlay(Component, pulumi_type='kluster:overlay:Overlay'):
         unknown = [member for member in flow_rules.members if member not in {entry.name for entry in roster}]
         if unknown:
             raise ValueError(f'the flow rules name {unknown}, which the overlay roster does not carry')
+        # A route is forwarded by the member that holds its `via`, and a
+        # member installs it whether anyone holds that address or not, so a
+        # `via` no entry places is a route that captures the traffic of every
+        # member that takes the routes and delivers none of it
+        # (physical/gateway.md §2.2). Refused by the routes that name it,
+        # before anything is declared.
+        placed = {entry.address for entry in roster}
+        unplaced = [f'{route.target} via {route.via}' for route in managed_routes if route.via not in {None, *placed}]
+        if unplaced:
+            raise ValueError(f'the routes {unplaced} go via an address the overlay roster does not place')
         # The pools are drawn from the subnet the routes give the network, so
         # routes that give it no one subnet are refused here, before anything
         # is declared, rather than at the network's declaration.
@@ -251,8 +266,7 @@ class Overlay(Component, pulumi_type='kluster:overlay:Overlay'):
         )
 
         # One member per entry, and no entry is skipped: a device with no
-        # identity to authorize has no entry either, which is the state the
-        # gateway is in until the ceremony records the id its daemon minted.
+        # identity to authorize has no entry either.
         self.members = {entry.name: self._declare(name, entry, child) for entry in roster}
 
         self.register_outputs({})

@@ -1,4 +1,6 @@
-"""The engine semantics the gateway cutover's targeted apply rests on, held by the pinned `pulumi` itself.
+"""The engine semantics the bring-up's targeted applies rest on, held by the pinned `pulumi` itself.
+
+Two targeted runs, and each is a claim about the engine that no mock can show.
 
 Step 3 of the cutover window (docs/physical/gateway-cutover.md §4) is the
 `physical` stack's first apply, restricted by `--target`. The overlay network
@@ -8,10 +10,23 @@ parent among them (framework/pulumi.md §1.4). So the
 window's targets name what that adoption depends on as well, and what the
 window rests on is that its `up`, with exactly the runbook's targets, leaves a
 checkpoint the next command can load and writes nothing to the network or to
-a member. No mock can show either, so the case runs the CLI `mise.toml` pins
+a member.
+
+Step 2 of the ceremony (docs/physical/gateway.md §2.5) creates the gateway's
+member by a run targeting it alone, so that the member exists, and can be read
+answering, before the run with no targets writes the routes that name it as
+their next hop. What that step rests on is that a resource outside the targets
+and already in state is stepped over with the outputs state holds: the member
+takes the network's id from the adopted network, and the run creates the member
+without updating the network, which the run with no targets then does. The
+case reaches step 2's state as the runbook does, through step 5's first run,
+which excludes the network and its dependents and writes nothing to it or to a
+member.
+
+Both cases run the CLI `mise.toml` pins
 over a `file://` backend and a `PULUMI_HOME` of its own, against a program of
 stand-ins that registers under the physical stack's own URNs -- project
-`kluster-py`, stack `physical` -- so the runbook's targets are read from the
+`kluster-py`, stack `physical` -- so each runbook's targets are read from the
 runbook and passed as they are:
 
 -   `Gateway`: a component with stand-in device files two levels deep, as
@@ -19,8 +34,9 @@ runbook and passed as they are:
 -   `Overlay`: the overlay's dependency shape (`components/overlay/`). A
     `zerotier` provider built as the component's sibling, one generated
     identity per CI member, the network adopted by id and protected, with its
-    flow rules rendered over the identities' node addresses, and one member
-    per identity.
+    flow rules rendered over the identities' node addresses, one member per
+    identity, and the gateway's member, on a node id the program spells out as
+    an enrolled entry does.
 
 The overlay's resources are served by a stand-in `zerotier` provider plugin of
 the case's own, because the engine imports one of them: an import's `Read`
@@ -64,8 +80,11 @@ pytestmark = [
     pytest.mark.timeout(CASE_TIMEOUT),
 ]
 
-#: The cutover runbook, whose step 3 is the command this case runs.
+#: The cutover runbook, whose step 3 is the window's targeted `up`.
 RUNBOOK = Path(__file__).parent.parent / 'docs' / 'physical' / 'gateway-cutover.md'
+
+#: The ceremony, whose step 2 is the `up` targeting the gateway's member alone.
+CEREMONY = Path(__file__).parent.parent / 'docs' / 'physical' / 'gateway.md'
 
 #: The project and stack the runbook's URNs name.
 PROJECT = 'kluster-py'
@@ -160,6 +179,8 @@ from pulumi.dynamic import CreateResult, Resource, ResourceProvider
 
 LOG = pathlib.Path(os.environ['PROBE_LOG'])
 ROSTER = ('ci-physical', 'ci-dns')
+#: The gateway's entry: a name and the node id its daemon minted.
+GATEWAY = ('udm', 'feedc0de01')
 NETWORK_ID = 'feedc0de00000001'
 
 
@@ -232,6 +253,8 @@ class Overlay(pulumi.ComponentResource):
         )
         for member, identity in self.identities.items():
             Member(f'{name}-member-{member}', self.network.network_id, identity.identity_id, child)
+        gateway, node = GATEWAY
+        Member(f'{name}-member-{gateway}', self.network.network_id, node, child)
         self.register_outputs({})
 
 
@@ -246,6 +269,14 @@ for member, identity in overlay.identities.items():
 #: member, which is an admission.
 UNWRITTEN = ('zerotier:index/network:Network', 'zerotier:index/member:Member')
 
+NETWORK = 'zerotier:index/network:Network'
+MEMBER = 'zerotier:index/member:Member'
+
+#: The members of the program's overlay, as it names them: one per CI identity,
+#: and the gateway's.
+CI_MEMBERS = ('kluster-member-ci-physical', 'kluster-member-ci-dns')
+GATEWAY_MEMBER = 'kluster-member-udm'
+
 
 def step_3_targets() -> list[str]:
     """The `-t` arguments of the runbook's one targeted `physical up`, the window's step 3."""
@@ -256,6 +287,37 @@ def step_3_targets() -> list[str]:
     ]
     assert len(blocks) == 1, blocks
     return re.findall(r"-t '([^']*)'", blocks[0])
+
+
+def step_5_first_form() -> list[str]:
+    """The arguments of the runbook's step 5 `physical up` that leaves out the overlay's network and members."""
+    blocks = [
+        block
+        for block in (found.lstrip() for found in re.findall(r'```sh\n(.*?)```', RUNBOOK.read_text(), re.DOTALL))
+        if block.startswith('physical up') and '--exclude ' in block
+    ]
+    assert len(blocks) == 1, blocks
+    excluded = re.findall(r"--exclude '([^']*)'", blocks[0])
+    assert excluded, blocks[0]
+    flags = ['--exclude-dependents'] if '--exclude-dependents' in blocks[0] else []
+    return [argument for urn in excluded for argument in ('--exclude', urn)] + flags
+
+
+def gateway_member_target() -> str:
+    """The one target of the ceremony's step 2, the `up` that creates the gateway's member."""
+    blocks = [
+        block
+        for block in re.findall(r'```sh\n(.*?)```', CEREMONY.read_text(), re.DOTALL)
+        if 'physical up -t "$URN"' in block
+    ]
+    assert len(blocks) == 1, blocks
+    (urn,) = re.findall(r"^\s*URN='([^']*)'$", blocks[0], re.MULTILINE)
+    return urn
+
+
+def writes(log: list[str]) -> list[str]:
+    """The lines of `log` that are a create, an update or a delete, each `<verb> <type> <name>`."""
+    return [line for line in log if line.split(' ')[0] in {'create', 'update', 'delete'}]
 
 
 @dataclass
@@ -319,3 +381,51 @@ def test_the_windows_targeted_up_leaves_a_stack_the_next_command_loads_and_write
     again = fresh.pulumi('preview', *targets)
 
     assert again.returncode == 0, _ran(again)
+
+
+def test_the_ceremonys_up_creates_the_gateways_member_alone_and_the_run_with_no_targets_the_rest(
+    fresh: Engine,
+) -> None:
+    """Step 2's `up`, with its one target, over the stack the window and step 5's first run leave.
+
+    Step 5's first run is the runbook's, leaving out the overlay's network
+    and its dependents, and it writes nothing to the network or to a member.
+    The member's network id is an output of the network, which the window
+    adopted and which this run leaves out, so the run is accepted only if the
+    engine steps the network over with the outputs in state rather than
+    refusing a target that depends on it. What reaches Central is one member's
+    create and no write to the network: the routes the network carries are not
+    written by this run. The `up` with no targets that follows writes the
+    network and creates the other members, and leaves the gateway's member as
+    step 2 made it.
+    """
+    window = [argument for target in step_3_targets() for argument in ('--target', target)]
+    adopted = fresh.pulumi('up', '--yes', '--skip-preview', *window)
+    assert adopted.returncode == 0, _ran(adopted)
+    gateway = f'{MEMBER} {GATEWAY_MEMBER}'
+
+    before = len(fresh.log())
+    rest = fresh.pulumi('up', '--yes', '--skip-preview', *step_5_first_form())
+
+    assert rest.returncode == 0, _ran(rest)
+    assert writes(fresh.log()[before:]) == []
+
+    target = gateway_member_target()
+    previewed = fresh.pulumi('preview', '--target', target)
+    assert previewed.returncode == 0, _ran(previewed)
+    before = len(fresh.log())
+    created = fresh.pulumi('up', '--yes', '--skip-preview', '--target', target)
+
+    assert created.returncode == 0, _ran(created)
+    assert writes(fresh.log()[before:]) == [f'create {gateway}']
+
+    before = len(fresh.log())
+    converged = fresh.pulumi('up', '--yes', '--skip-preview')
+
+    assert converged.returncode == 0, _ran(converged)
+    written = writes(fresh.log()[before:])
+    assert f'update {NETWORK} kluster-network' in written, written
+    assert {line for line in written if line.startswith(f'create {MEMBER} ')} == {
+        f'create {MEMBER} {member}' for member in CI_MEMBERS
+    }
+    assert not [line for line in written if line.endswith(gateway)], written

@@ -15,8 +15,11 @@ itself must provide. Sizing and the host inventory live in
 > management (declarative/physical.md §3). The host side is in place too:
 > §4's change-set is applied, so the cluster VLAN and its bridge, the
 > nodatacow subvolume, the libvirt service user, the NFS exports and the
-> HAOS domain's XML are all live. §3's GPU passthrough is the one item
-> still ahead, and deliberately so — it is a Wave C step.
+> HAOS domain's XML are all live. The change-set does not yet carry §4's
+> overlay whitelist, which gateway-cutover.md §5 step 5 puts in place by
+> hand ahead of the run that writes the home routes. §3's GPU
+> passthrough is the one item still ahead by design — it is a Wave C
+> step.
 
 ## 1. VM disk: raw sparse file on the root btrfs, nodatacow, virtio-blk
 
@@ -242,7 +245,30 @@ contents, so nothing is discovered mid-bootstrap:
     cluster's side;
 -   the NAS NFS exports extended to the worker's VLAN-7 address,
     192.168.70.10 — scoped to that host, and served over the host leg
-    rather than the untagged LAN.
+    rather than the untagged LAN;
+-   the overlay's **home routes refused on the device**:
+    `allowManaged=10.144.0.0/16` in
+    `/var/lib/zerotier-one/networks.d/<network id>.local.conf`, the id
+    being `conventions.overlay.NETWORK_ID`, and every other line of that
+    file kept (gateway.md §2.2). The host sits on the server LAN and the
+    cluster VLAN and serves the other home subnets from them, and it is
+    the way into the LAN while the gateway's ZeroTier machine is down
+    (gateway.md §3), so its paths to the home stay on the LAN rather
+    than riding that machine. The value is the overlay's own subnet, so
+    the client keeps the host's address and refuses every route the
+    census carries to the home, a route added to it later included. Two
+    facts of the client decide how it is kept: the file is read when the
+    network comes up, so a change takes a restart of `zerotier-one`; and
+    every request to the service's own control endpoint for the network,
+    which is what `zerotier-cli set` and a repeated `zerotier-cli join`
+    send, rewrites the file with a boolean `allowManaged`, which erases
+    the list. So the change-set owns the file, and nothing on the host
+    sets the network's options through the client. The list holds no
+    IPv6 prefix, and the client holds assigned addresses to it as well
+    as routes, so the host keeps no IPv6 address on the overlay: the two
+    the network derives for it today go with the restart that applies
+    the file, as the converge takes them from every member anyway
+    (gateway.md §2.2).
 
 The A380's vfio-pci host binding is deliberately *not* here — it lands
 in the Wave C cutover (§3, migration.md).

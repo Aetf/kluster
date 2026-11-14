@@ -111,11 +111,11 @@ class ManagedDns:
 #: held in `test_conventions`.
 MANAGED_DNS = ManagedDns(domain=OVERLAY_DOMAIN, servers=tuple(resolver.address for resolver in RESOLVERS))
 
-#: The gateway, as the roster names it. It is the one member the roster may be
-#: missing: its node id is minted by the overlay daemon's first run, and that
-#: daemon is a container this program delivers, so the id does not exist until
-#: the bring-up has happened. Step 2 of the ceremony reads it off the device
-#: and adds the entry as a commit (physical/gateway.md §2.5).
+#: The gateway, as the roster names it. Its node id is minted by the overlay
+#: daemon's first run, and that daemon is a container this program delivers, so
+#: the id exists only once the bring-up has delivered it. Step 2 of the ceremony
+#: reads it off the device and records it as a commit, and a replacement device
+#: mints another and repeats the step (physical/gateway.md §2.5, §3).
 MEMBER_UDM = 'udm'
 
 #: The homelab host, as the roster names it. It is the one member the flow
@@ -193,10 +193,18 @@ RosterEntry = EnrolledMember | GeneratedMember
 #: residual until that cluster retires (threat-model.md §2.10); such a member
 #: draws its address from `assignment_pools`.
 #:
-#: The gateway is absent, and absence is the whole of what says so: no member
-#: is declared for it and no `udm.zt` record is published until the ceremony
-#: that reads its minted node id adds the entry (`MEMBER_UDM`).
+#: The gateway's entry is the one a bring-up records rather than starts from:
+#: the ceremony read its node id off the device (`MEMBER_UDM`), and the entry
+#: is what declares its member, the one that answers for the next hop of every
+#: route to the home, and publishes its `udm.zt` record.
 ROSTER: tuple[RosterEntry, ...] = (
+    EnrolledMember(
+        name=MEMBER_UDM,
+        node_id='537a9626fa',
+        address=UDM,
+        role=Role.INFRA,
+        note='the gateway: the next hop of every route to the home',
+    ),
     EnrolledMember(
         name=MEMBER_HOMELAB,
         node_id='c3755c24d1',
@@ -250,9 +258,7 @@ def member(name: str) -> RosterEntry:
     """The roster entry a member name stands for.
 
     Raises:
-        ValueError: no member of that name is declared. The gateway is the one
-            name that is legitimately absent, and nothing looks it up — its
-            absence is read by iterating the roster, not by asking for it.
+        ValueError: no member of that name is declared.
     """
     for entry in ROSTER:
         if entry.name == name:
@@ -282,9 +288,8 @@ def assignment_pools(roster: Iterable[RosterEntry], routes: Iterable[ManagedRout
     things the network is declared with: the subnet is the target of the one
     route with no `via` (`ManagedRoute`), and what is left out is every address
     `roster` places and every route's `via`. The gateway's address is therefore
-    left out whether or not its entry is there: the routes name it as their
-    next hop from the first converge, which is before the ceremony records the
-    entry (physical/gateway.md §2.5).
+    left out by the routes that name it as their next hop as well as by its
+    entry, so a roster short of that entry leaves no way to hand it out.
 
     The result is never empty while the roster leaves an address free, and that
     matters: the provider's field is optional and computed, so an empty list
@@ -348,10 +353,15 @@ class ManagedRoute:
 #: passes through no control plane. No run dials it: the `physical` stack's
 #: Talos calls go to the control planes' public addresses and to the balancer
 #: (`stacks/physical.py`), and the flow rules admit a run to no address on it.
-#: The gateway is the only next hop. The legacy cluster's pod subnet is not
-#: here: its flannel, in `host-gw` mode over the overlay interface, installs
-#: that route on the homelab host itself, and a managed route would hand every
-#: member a path to the legacy deployment's pods that nothing uses.
+#: The gateway is the only next hop, and every member that takes the routes
+#: installs every one here, at home as well as away; a member at home that
+#: serves the other home subnets refuses them on the device, and the run that
+#: writes them follows the one that creates the gateway's member
+#: (physical/gateway.md §2.2). The legacy
+#: cluster's pod subnet is not here: its flannel, in `host-gw` mode over the
+#: overlay interface, installs that route on the homelab host itself, and a
+#: managed route would hand every member a path to the legacy deployment's pods
+#: that nothing uses.
 MANAGED_ROUTES: tuple[ManagedRoute, ...] = (
     ManagedRoute(SUBNET, None),
     ManagedRoute(SERVER_LAN.v4, UDM),

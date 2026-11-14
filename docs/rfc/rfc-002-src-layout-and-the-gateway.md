@@ -18,8 +18,9 @@
     design document disagree, the design document is right. **Decisions that
     moved during construction: the endpoint, §4.3's bridge dependency, the
     rendered machine list of §4.2 and §5, the container set's name of §3.1
-    and §5, the node volume's mount of §10.5, and the libvirt working files'
-    directory of §8.4.**
+    and §5, the node volume's mount of §10.5, the libvirt working files'
+    directory of §8.4, and §6.1's member on a home subnet and §10.2 item
+    3's absent entry.**
     The endpoint: §7.4 composes the session from values `configure` put on the
     provider, and §11 routes `gatewayBootstrapHost` there beside the credential;
     what was built keeps the address a declared resource input, because a
@@ -101,7 +102,21 @@
     is the last writer's, so two stacks sharing one directory would dial
     with each other's files and delete each other's seed (kluster-ops#707).
     The arrangement as built is
-    [physical/homelab-host.md](../physical/homelab-host.md) §6.
+    [physical/homelab-host.md](../physical/homelab-host.md) §6. **The
+    overlay's route order, 2026-11-14 (kluster-ops#728):** §6.1's member
+    on a home subnet that "arranges to *lose*" holds for the one subnet
+    the member sits on and for no other. On Linux every route with a
+    `via` carries the same fixed metric, which decides only against an
+    equal prefix, so towards every other home subnet the managed route
+    wins over the member's default route, and a member at home that
+    serves the other subnets refuses the routes on the device
+    ([physical/gateway.md](../physical/gateway.md) §2.2). §10.2 item 3's
+    "until then the entry is absent" is no longer a state the bring-up
+    passes through with the routes written: the entry lands first, a run
+    targeting the gateway's member alone creates it and reads it
+    answering, and only then does the run with no targets write the
+    routes that name it ([physical/gateway.md](../physical/gateway.md)
+    §2.5).
 *   **Created:** 2026-08-28
 *   **Authority:** the style rules (`docs/style/`) are what this document
     obeys; where they are silent, a rule proposed here is marked **new rule**.

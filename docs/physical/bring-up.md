@@ -59,7 +59,7 @@ a step that needs one.
 | --- | --- | --- | --- | --- | --- |
 | 0 | The prerequisites: the controller probe of gateway-cutover.md §3 passing for every zone pair, rfc-007 slices 9 to 11 merged, and Home Assistant's intake automation and check-in timer made (rfc-007 slice 14) | operator, dispatcher | nothing | gateway-cutover.md §3's list; the three slices merged; the automation and the timer present | The window waits. Nothing has changed |
 | 1 | **The window**: gateway-cutover.md §3's readings, its §4 steps 0 to 4, and the verification of its §5 up to step 5 | operator | stage 0 | every pass of gateway-cutover.md §5 before step 5 | gateway-cutover.md §6, which undoes it whole |
-| 2 | **`physical` in full**: gateway-cutover.md §5's step 5, the readings after it, the disk grown on the host, then gateway.md §2.5's roster entry, which is ready and waits for this step, `workerGua`, and the knob unset | operator | stage 1, and the tenancy grant gateway.md §2.5 names | a further `up` reports no changes, and a `physical` preview over the overlay comes back clean | Re-run the apply; leave the device alone. gateway-cutover.md §6 stays open throughout |
+| 2 | **`physical` in full**, in the order of gateway.md §2.5: gateway-cutover.md §5's step 5 with the overlay's network and members left out, and the disk grown on the host; the gateway's roster entry and the run that creates its member alone; the homelab host refusing the home routes; step 5's run with no targets and the readings after it; `workerGua`; and the knob unset | operator | stage 1, and the tenancy grant gateway.md §2.5 names | a further `up` reports no changes, and a `physical` preview over the overlay comes back clean | Re-run the apply; leave the device alone. gateway-cutover.md §6 stays open throughout, and the run that writes the overlay's routes has its own way back in gateway-cutover.md §5 step 5 |
 | 3 | **Readings with no network plugin**: gateway-cutover.md §8.1, the device half of gateway.md §2.4.2, the node volume's size in bytes, and the home uplink's MTU, read off the gateway's WAN interface | operator, dispatcher records | stage 2 | each item's own; at a decimal GB the volume's row grows, and under 1500 `KUBESPAN_MTU` follows the uplink | A failing item is fixed on the empty cluster, and costs only time |
 | 4 | **One sitting**: the `dns` first `up` (gateway-cutover.md §8.2), the identity sync and `deploy.yml` enabled (gateway-cutover.md §8.3), and at once `credentials derived sync --only kubeconfig` with both stack files committed | operator | stage 3 | the readings of gateway-cutover.md §8.2 and §8.3, and the copy in both stack files | Each has its way back in gateway-cutover.md §8.2 and §8.3. Disabling `deploy.yml` stops the chain, and undoes no write already made |
 | 5 | **The first `k8s-base` and `apps` runs**, which merging stage 4's commit starts | chain, dispatcher reads | stage 4 | `up-k8s-base` green, every node `Ready`, no `kube-proxy` DaemonSet, the sealing certificate answering, and the host's available memory read with the worker running | Fix forward in a pull request; the chain runs it. §3 |
@@ -73,7 +73,9 @@ a step that needs one.
 **Through stage 2 the way back is the window's own.** gateway-cutover.md
 §6 restores the device, and no step of gateway-cutover.md §4 or §5
 closes that way back. What closes it is gateway-cutover.md §7, which
-waits for the soak.
+waits for the soak. The overlay's routes to the home are the one write
+of stage 2 that §6 does not cover, and gateway-cutover.md §5 step 5
+gives them a way back of their own.
 
 **From stage 3 on, nothing serves anyone from the new cluster**, so no
 failure is an outage. The cluster can be rebuilt: `physical` holds what

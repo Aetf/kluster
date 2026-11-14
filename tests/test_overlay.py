@@ -19,6 +19,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from ipaddress import IPv4Address, IPv4Network
 from itertools import pairwise
+from pathlib import Path
 from typing import Any, final
 
 import pulumi
@@ -29,9 +30,20 @@ from mock_monitor import Declaration, Recorder, declaring, run_with
 from kluster import conventions
 from kluster.components import overlay as overlay_module
 
-NAME = 'kluster'
+#: The name the `physical` stack declares the overlay under.
+NAME = conventions.CLUSTER_NAME
 NETWORK_ID = '0123456789abcdef'
 API_TOKEN = 'a-central-token'
+
+ROOT = Path(__file__).parent.parent
+
+#: The project the `physical` stack runs in, as `Pulumi.yaml` names it, so the
+#: fixture's URNs are the ones a run of the real program records.
+PROJECT = re.findall(r'^name: (\S+)$', (ROOT / 'Pulumi.yaml').read_text(), re.MULTILINE)[0]
+
+#: The ceremony, whose step 2 creates the gateway's member by a run targeted at
+#: that member alone (physical/gateway.md §2.5).
+CEREMONY = ROOT / 'docs' / 'physical' / 'gateway.md'
 
 NETWORK = 'zerotier:index/network:Network'
 MEMBER = 'zerotier:index/member:Member'
@@ -80,8 +92,8 @@ class Central(Recorder):
 @pytest_asyncio.fixture(scope='module', loop_scope='module', autouse=True)
 async def stack() -> Central:
     """The network declared once, the way the `physical` stack declares it."""
-    pulumi.runtime.set_all_config({f'kluster:{overlay_module.API_TOKEN}': API_TOKEN})
-    monitor = await run_with(Central(), stack='physical')
+    pulumi.runtime.set_all_config({f'{PROJECT}:{overlay_module.API_TOKEN}': API_TOKEN})
+    monitor = await run_with(Central(), stack='physical', project=PROJECT)
     async with declaring():
         _ = overlay_module.Overlay(
             NAME,
@@ -158,13 +170,12 @@ def test_every_member_is_placed_inside_the_overlays_own_subnet() -> None:
 def gateway_faults(roster: Iterable[conventions.overlay.RosterEntry]) -> set[str]:
     """Which ways the gateway entries `roster` holds are wrong: `address`, `role`, or none.
 
-    Two things the gateway's entry must say on the day the ceremony adds it.
-    The device's SSH, the controller's API and the next hop of every route to
-    the home all derive from `conventions.overlay.UDM`, so an entry at any
+    Two things the gateway's entry must say. The device's SSH, the
+    controller's API and the next hop of every route to the home all derive
+    from `conventions.overlay.UDM`, so an entry at any
     other address would point all three somewhere the member is not. And the
     gateway is infrastructure: an entry carrying the permissive default role
     would put the box every route runs through on the same footing as a phone.
-    Empty for a roster with no gateway entry.
     """
     faults: set[str] = set()
     for entry in roster:
@@ -178,12 +189,11 @@ def gateway_faults(roster: Iterable[conventions.overlay.RosterEntry]) -> set[str
 
 
 def test_the_gateway_entry_is_infrastructure_at_the_address_every_client_dials() -> None:
-    """`gateway_faults` over the roster as it stands.
+    """`gateway_faults` over the roster as it stands, which carries the entry.
 
-    The entry is absent until the ceremony reads the minted node id and adds
-    it (physical/gateway.md §2.5), so on a roster without it this holds
-    trivially; the case below is what shows the check refuses a bad entry.
+    The case below is what shows the check refuses a bad entry.
     """
+    assert conventions.overlay.member(conventions.overlay.MEMBER_UDM)
     assert gateway_faults(conventions.overlay.ROSTER) == set()
 
 
@@ -297,16 +307,15 @@ def test_a_route_with_no_via_covers_every_address_the_roster_places() -> None:
     ZeroTier installs on the member's own interface for the network's subnet.
     So a table whose via-less routes cover less than the roster is a table
     that leaves some member with no address at its next config refresh -- and
-    a table with none leaves every member that way. Held over the roster and
-    the gateway's address, not over the subnet constant: what has to be true
-    is that every placed member is covered, whatever the table's targets are.
+    a table with none leaves every member that way. Held over the roster, not
+    over the subnet constant: what has to be true is that every placed member
+    is covered, whatever the table's targets are.
     """
     own = [route.target for route in conventions.overlay.MANAGED_ROUTES if route.via is None]
     assert own, 'no via-less route: the controller would push no member an address'
 
-    placed = [entry.address for entry in conventions.overlay.ROSTER] + [conventions.overlay.UDM]
-    for address in placed:
-        assert any(address in target for target in own), address
+    for entry in conventions.overlay.ROSTER:
+        assert any(entry.address in target for target in own), entry.name
 
 
 def test_the_gateway_is_the_only_next_hop_and_only_for_the_home() -> None:
@@ -328,6 +337,19 @@ def test_the_gateway_is_the_only_next_hop_and_only_for_the_home() -> None:
             assert route.via == conventions.overlay.UDM, route
         elif route.via is not None:
             raise AssertionError(f'{route} is via {route.via} for a subnet that is not the home')
+
+
+def test_every_next_hop_is_an_address_the_roster_places() -> None:
+    """A route via an address no member holds is a route to nothing.
+
+    The gateway's entry is what answers for the next hop of every route to the
+    home, so a roster without it, or one placing it elsewhere, leaves the whole
+    home unreachable over the overlay while every run still applies clean.
+    """
+    placed = {entry.address for entry in conventions.overlay.ROSTER}
+
+    for route in conventions.overlay.MANAGED_ROUTES:
+        assert route.via is None or route.via in placed, route
 
 
 def test_the_census_carries_the_cluster_vlan_and_the_pool_by_name() -> None:
@@ -412,12 +434,9 @@ def test_the_network_carries_the_managed_dns_it_was_handed_and_composes_none(sta
 def test_the_members_declared_are_exactly_the_roster_and_nothing_else_is_consulted(stack: Central) -> None:
     """A member exists because an entry exists, and for no other reason.
 
-    That is what lets the gateway be absent during a first bring-up with no
-    relaxation to switch on: there is no configured mapping the roster could
-    be short against, so an entry that has not been written yet declares
-    nothing and costs nothing. The routes to the home name the gateway's
-    overlay address as their next hop either way — a route to a router that
-    has not joined yet is the ordinary state of a bring-up.
+    There is no configured mapping the roster could be short against, so a
+    device whose entry has not been written yet declares nothing and costs
+    nothing, which is how the gateway's identity can follow its own delivery.
     """
     members = fixture_declarations(stack, MEMBER)
     declared_members = {declaration.name for declaration in members}
@@ -460,8 +479,8 @@ def test_no_pool_holds_an_address_the_roster_places_or_the_gateways(stack: Centr
 
     That member is the legacy cluster's CI job, which authorizes itself at
     Central (physical/gateway.md §2.1). A pool holding a placed address could
-    hand it the gateway's -- the next hop of every route to the home, reserved
-    before the ceremony records its entry -- a CI identity's, or a person's.
+    hand it the gateway's -- the next hop of every route to the home -- a CI
+    identity's, or a person's.
     The pools stay among the subnet's host addresses: the controller hands out
     an IPv4 pool address under any route whose target holds it, the routes to
     the home included, so a range past the subnet could give a legacy job a
@@ -478,18 +497,17 @@ def test_no_pool_holds_an_address_the_roster_places_or_the_gateways(stack: Centr
     for start, end in pools:
         assert first <= start <= end <= last, (start, end)
 
-    placed = [entry.address for entry in conventions.overlay.ROSTER] + [conventions.overlay.UDM]
-    for address in placed:
-        assert not pooled(address, pools), address
+    for entry in conventions.overlay.ROSTER:
+        assert not pooled(entry.address, pools), entry.name
 
 
 def test_the_gateways_address_is_out_of_the_pools_whether_or_not_its_entry_is_recorded() -> None:
-    """The pools are written at step 1 and the gateway's entry at step 2, so its address is reserved on its own.
+    """The routes reserve the gateway's address on their own, as their next hop.
 
-    What reserves it is the routes, which name it as their next hop from step
-    1. Both rosters are built here, one without a gateway entry and one with it,
-    because the live roster holds only one of the two states at a time and a
-    case reading it would stop testing the other the day the entry lands.
+    The roster without a gateway entry is built to show that the routes
+    reserve the address on their own; it is not a roster the program takes,
+    `Overlay` refusing routes via an address no entry places. The one with
+    the entry is beside it, so the reservation is shown to hold either way.
     """
     overlay = conventions.overlay
     without = tuple(entry for entry in overlay.ROSTER if entry.address != overlay.UDM)
@@ -587,6 +605,34 @@ async def test_routes_giving_no_one_subnet_are_refused_before_anything_is_declar
 
 
 @pytest.mark.asyncio
+async def test_a_route_via_an_address_the_roster_does_not_place_is_refused_before_anything_is_declared(
+    stack: Central,
+) -> None:
+    """Every member installs every route, so a next hop nobody holds takes the subnet from all of them.
+
+    The roster handed in is the census less the gateway's entry, which is the
+    roster a bring-up has before its ceremony records that entry: the routes
+    to the home still name the gateway's address, and nothing would answer
+    there. The refusal names the routes, and comes before the component's
+    first resource.
+    """
+    without = tuple(entry for entry in conventions.overlay.ROSTER if entry.name != conventions.overlay.MEMBER_UDM)
+    declared = len(stack.declared)
+
+    async with declaring():
+        with pytest.raises(ValueError, match=re.escape(f'via {conventions.overlay.UDM}')):
+            _ = overlay_module.Overlay(
+                'unrouted',
+                network_id=NETWORK_ID,
+                flow_rules=RULES,
+                roster=without,
+                managed_routes=conventions.overlay.MANAGED_ROUTES,
+                dns=DNS,
+            )
+    assert len(stack.declared) == declared
+
+
+@pytest.mark.asyncio
 async def test_a_member_added_inside_a_pool_takes_its_address_out_of_the_pools(stack: Central) -> None:
     """The pools follow the roster the component is handed, not a copy of their own.
 
@@ -654,6 +700,41 @@ async def test_an_enrolled_member_carries_the_id_and_address_its_own_entry_holds
     member = stack.inputs_of(f'enrolled-member-{owned.name}')
     assert member['memberId'] == owned.node_id
     assert member['ipAssignments'] == [str(owned.address)]
+
+
+def gateway_member_target() -> str:
+    """The URN the ceremony's step 2 runs `physical up` against, read off gateway.md."""
+    blocks = [
+        block
+        for block in re.findall(r'```sh\n(.*?)```', CEREMONY.read_text(), re.DOTALL)
+        if 'physical up -t "$URN"' in block
+    ]
+    assert len(blocks) == 1, blocks
+    (urn,) = re.findall(r"^\s*URN='([^']*)'$", blocks[0], re.MULTILINE)
+    return urn
+
+
+def test_the_ceremonys_one_target_is_the_member_of_the_gateways_node(stack: Central) -> None:
+    """The run that creates the gateway's member ahead of the routes names that member and nothing else.
+
+    A target the program does not declare is refused by the engine, which is
+    safe: the run stops, and a stale URN fails before it writes anything. One
+    that names another member creates the wrong member and writes no route,
+    and it passes, so the run that writes the routes would follow it with no
+    member answering at their next hop (physical/gateway.md §2.2). So the
+    target the ceremony's command names is read here as a URN the overlay
+    declares, and that declaration is the member whose node id is the gateway
+    entry's.
+    """
+    urn = gateway_member_target()
+    gateway = conventions.overlay.member(conventions.overlay.MEMBER_UDM)
+    assert isinstance(gateway, conventions.overlay.EnrolledMember)
+
+    declared = f'::{NAME}-member-{gateway.name}'
+    assert urn in stack.registrations, [known for known in stack.registrations if known.endswith(declared)]
+    request = stack.registrations[urn]
+    assert request.type == MEMBER
+    assert stack.inputs_of(request.name, MEMBER)['memberId'] == gateway.node_id
 
 
 def test_the_central_credential_belongs_to_a_provider_of_its_own(stack: Central) -> None:
