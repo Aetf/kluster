@@ -17,7 +17,7 @@ every application, through `expose` on the application base
 (`kluster.components.apps`), and the monitoring dashboard's own row (rfc-007
 §9.1) -- with the names of the listeners a route attaches to by section
 (`bare_listener`) and the portal its gate asks (`PORTAL`); and `application_namespace`, an application's namespace with its
-route label and its policy, which the application base composes on. That one
+route label, its ingress policy and its egress block, which the application base composes on. That one
 is `apps`' alone, built on `namespace` and needing nothing of the `apps` area,
 so it sits beside the helper it extends.
 
@@ -31,9 +31,10 @@ from __future__ import annotations
 
 import fnmatch
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
+from ipaddress import IPv4Address, IPv4Network, IPv6Address, IPv6Network, ip_network
 from typing import Annotated, Any, Literal, NoReturn, cast
 
 import pulumi
@@ -42,7 +43,7 @@ import pulumi_kubernetes as k8s
 from pulumi.runtime.rpc import UNKNOWN as UNKNOWN_SENTINEL
 
 from kluster import conventions
-from kluster.conventions.cluster import POOL_WORKER
+from kluster.conventions.cluster import POOL_WORKER, Transports
 from kluster.conventions.routes import Bare, Gate, Passthrough, Port, Proxied, Route
 from kluster.conventions.sealed import SealedValue, SealingScope
 from kluster.lib.config import Shape, ShapeRefused, text
@@ -52,14 +53,19 @@ from kluster.lib.versions import ChartPin
 __all__ = (
     'INGRESS_ENTITY',
     'KUBECONFIG_KEY',
+    'NODE_ENTITIES',
+    'NON_NODE_CLUSTER_RANGES',
     'POD_SECURITY_ENFORCE_LABEL',
     'PORTAL',
+    'PRIVATE_SPACE',
+    'ApiClients',
     'ApplicationNamespace',
     'Backend',
     'LooserLevel',
     'PassthroughRefused',
     'PodSecurity',
     'Portal',
+    'Reach',
     'SealingScope',
     'SecretTemplate',
     'UnusableKubeconfig',
@@ -69,6 +75,7 @@ __all__ = (
     'find_rendered',
     'helm_chart',
     'identity_stripped',
+    'in_denied_space',
     'kubeconfig_from',
     'lb_pool_labels',
     'namespace',
@@ -437,12 +444,136 @@ def namespace(
 INGRESS_ENTITY = 'ingress'
 
 
+#: Private space, as the address plan of the internet sets it aside: every
+#: private-use IPv4 range (RFC 1918) and the unique-local IPv6 range (RFC
+#: 4193). These are facts of that plan and not decisions of this
+#: installation. The home, the overlay and the cloud's private network are
+#: numbered in it, the nodes among them, and so are the cluster's pods,
+#: Services and `lan` pool (`NON_NODE_CLUSTER_RANGES`).
+PRIVATE_SPACE: tuple[IPv4Network | IPv6Network, ...] = (
+    IPv4Network('10.0.0.0/8'),
+    IPv4Network('172.16.0.0/12'),
+    IPv4Network('192.168.0.0/16'),
+    IPv6Network('fc00::/7'),
+)
+
+#: The ranges the cluster numbers its pods, its Services and the `lan` pool
+#: from, in both families. The node networks are not among them: the cloud
+#: network and the cluster VLAN are private space the egress block denies,
+#: and a node is held by identity instead (`NODE_ENTITIES`). The node
+#: firewall's cluster ranges, `kluster.components.talos.CLUSTER_RANGES`, are
+#: the other set, which holds the node networks and admits them.
+NON_NODE_CLUSTER_RANGES: tuple[IPv4Network | IPv6Network, ...] = (
+    conventions.POD_CIDR_V4,
+    conventions.POD_CIDR_V6,
+    conventions.SERVICE_CIDR_V4,
+    conventions.SERVICE_CIDR_V6,
+    conventions.LAN_POOL.v4,
+    conventions.LAN_POOL.v6,
+)
+
+#: The identities Cilium gives a node, as a policy names them: `host` is the
+#: node a pod runs on, `remote-node` every other, the kube-apiserver's
+#: identity included
+#: ([`numericidentity.go` L430-433](https://github.com/cilium/cilium/blob/v1.20.4/pkg/identity/numericidentity.go#L430-L433)).
+NODE_ENTITIES = ('host', 'remote-node')
+
+#: The protocols a port rule names ports of; a rule that names ports matches
+#: no other protocol, ICMP among them
+#: ([`l4.go`](https://github.com/cilium/cilium/blob/v1.20.4/pkg/policy/api/l4.go)).
+_PORTED_PROTOCOLS = ('TCP', 'UDP', 'SCTP')
+_FIRST_PORT = 1
+_LAST_PORT = 65535
+#: The most ports one `toPorts` entry of a deny rule may carry. The agent
+#: refuses an entry of more, and with it the whole policy
+#: ([`rule_validation.go` L582-585](https://github.com/cilium/cilium/blob/v1.20.4/pkg/policy/api/rule_validation.go#L582-L585)),
+#: while the API server's schema bounds the allow form alone and applies it.
+_MAX_PORTS = 40
+
+
+#: The nodes' addresses a declaration fixes; the cloud nodes' are stack
+#: outputs, which the cloud hands out.
+_DECLARED_NODE_ADDRESSES: frozenset[IPv4Address | IPv6Address] = frozenset({conventions.HOMELAB_NODE_IPV4})
+
+
+def in_denied_space(address: IPv4Address | IPv6Address) -> bool:
+    """Whether `address` is private space outside the cluster.
+
+    That is an address in `PRIVATE_SPACE` and in no range of
+    `NON_NODE_CLUSTER_RANGES`, so a node's own address is one.
+    """
+    return any(address in space for space in PRIVATE_SPACE) and not any(
+        address in cluster for cluster in NON_NODE_CLUSTER_RANGES
+    )
+
+
+@dataclass(frozen=True, kw_only=True)
+class Reach:
+    """An address in private space outside the cluster that a namespace's pods call, on one port, and why.
+
+    The application base denies that space to every application pod
+    (`application_namespace`), so a call into it is an exception, declared
+    where the workload is (physical/gateway.md §4.2 rule 3) and carrying its
+    reason, the form `LooserLevel` has. What opens is the address on the
+    port and its transports: the address's other ports stay denied, and so
+    does every address beside it. ICMP to the address passes, since a port
+    rule does not cover it.
+
+    The address is refused where it is written unless it is private space
+    outside the cluster (`in_denied_space`): an address anywhere else is
+    open already or the cluster's own, and a reach naming it would be no
+    exception. So is a port no socket listens on, which would open nothing.
+    So is a node's address the installation declares
+    (`_DECLARED_NODE_ADDRESSES`): a node is not reached this way, since the
+    rule for a node's listeners holds it by identity whatever is carved out
+    of private space, and a reach naming one would open nothing. A node's
+    address a stack output carries is not known here and fails closed the
+    same way.
+    """
+
+    address: IPv4Address | IPv6Address
+    port: int
+    transports: Transports
+    #: What the namespace's pods call there, and for what.
+    reason: str
+
+    def __post_init__(self) -> None:
+        if not _FIRST_PORT <= self.port <= _LAST_PORT:
+            raise ValueError(f'the reach to {self.address} is on port {self.port}, which no socket listens on')
+        if self.address in _DECLARED_NODE_ADDRESSES:
+            raise ValueError(
+                f'{self.address} is a node, which a reach does not open: the egress block holds a node by '
+                "identity, and its listeners are no application's to call"
+            )
+        if not in_denied_space(self.address):
+            raise ValueError(
+                f'{self.address} is no address the application base denies: a reach names private space '
+                "outside the ranges of the cluster's pods, Services and `lan` pool"
+            )
+
+
+@dataclass(frozen=True, kw_only=True)
+class ApiClients:
+    """A namespace's exception to the kube-apiserver's deny: some of its pods call the API, and why.
+
+    The application base denies the API's port to every application pod
+    (`application_namespace`). In a namespace that declares this, a pod
+    carrying `conventions.API_CLIENT_LABEL` is let through to that port on
+    a node and to no other port there; every other pod in the namespace is
+    denied it still. Without this declaration the label opens nothing.
+    """
+
+    #: Which of the namespace's pods call the API, and for what.
+    reason: str
+
+
 @dataclass(frozen=True)
 class ApplicationNamespace:
-    """An application's namespace and the policy that holds every pod in it to default-deny."""
+    """An application's namespace, the policy that holds every pod in it to default-deny on ingress, and its egress block."""
 
     namespace: k8s.core.v1.Namespace
-    policy: crds.cilium.v2.CiliumNetworkPolicy
+    default_deny: crds.cilium.v2.CiliumNetworkPolicy
+    egress_block: crds.cilium.v2.CiliumNetworkPolicy
 
 
 def application_namespace(
@@ -450,11 +581,13 @@ def application_namespace(
     *,
     name: str,
     looser: LooserLevel | None = None,
+    reaches: Sequence[Reach] = (),
+    api_clients: ApiClients | None = None,
     opts: pulumi.ResourceOptions | None = None,
 ) -> ApplicationNamespace:
     """The namespace an application's component installs into, admitting from outside it the Gateways alone.
 
-    Three things, each of which an application would otherwise have to
+    Four things, each of which an application would otherwise have to
     remember (declarative/workloads.md §1):
 
     -   **The level**, `restricted` unless `looser` names another and why, as
@@ -480,30 +613,43 @@ def application_namespace(
         ([`config.go` L69-70](https://github.com/cilium/cilium/blob/v1.20.1/pkg/option/config.go#L69-L70)),
         and the cilium component sets no other. That is how the kubelet's
         probes arrive, and how a host-network pod on that node does.
+    -   **An egress block** (`_egress_block`), which leaves a pod's egress
+        open except toward private space outside the cluster
+        (`in_denied_space`), toward a node's own listeners, which are the
+        management plane, and toward the kube-apiserver. `reaches` and
+        `api_clients` are the namespace's exceptions to it, each with its
+        reason.
 
-    Default-deny is stated rather than left to follow from the ingress rules
-    being there, because imposing it is what this policy is for: the
-    cluster-wide baseline leaves it off (rfc-007 §4.5), and a policy that
-    leaves it off is ignored when Cilium decides an endpoint's mode
+    Default-deny on ingress is stated rather than left to follow from the
+    ingress rules being there, because imposing it is what that policy is
+    for: the cluster-wide baseline leaves it off (rfc-007 §4.5), and a policy
+    that leaves it off is ignored when Cilium decides an endpoint's mode
     ([`intro.rst` L56-58](https://github.com/cilium/cilium/blob/v1.20.1/Documentation/security/policy/intro.rst#L56-L58)),
-    so this one decides it. Egress is not this policy's: it states no egress
-    rule and leaves default-deny off in that direction, so the pods reach out
-    as the baseline lets them. Restricting it is the component's, and a
-    component's first egress rule switches default-deny on for egress on
-    every pod it selects, since one policy requesting it is enough
+    so this one decides it. Neither policy imposes default-deny on egress:
+    the pods reach out wherever no deny rule stops them. Restricting egress
+    to an allow-list is the component's, and a component's first egress
+    rule switches default-deny on for egress on every pod it selects, since
+    one policy requesting it is enough
     ([`rule.go` L118-136](https://github.com/cilium/cilium/blob/v1.20.1/pkg/policy/api/rule.go#L118-L136)):
     the policy that carries that rule carries the allow to the cluster's DNS
-    as well, or those pods resolve no name.
+    as well, or those pods resolve no name. The block still applies to such
+    a pod, since a deny outranks every allow.
 
     :param resource_name: The logical name, which carries the declaring
-        component's name; the policy's is this with `-default-deny`.
+        component's name; the policies' are this with `-default-deny` and
+        `-egress-block`.
     :param name: The namespace's own name, which the component's other
         resources and its routes are declared in.
     :param looser: The level the namespace is held to instead of
         `restricted`, and why.
+    :param reaches: The addresses in private space outside the cluster that
+        the namespace's pods call, each on its port and with its reason.
+    :param api_clients: That some of the namespace's pods call the
+        kube-apiserver, and why; those pods carry
+        `conventions.API_CLIENT_LABEL`.
     """
     ns = namespace(resource_name, name=name, looser=looser, labels=conventions.routes.ROUTE_LABEL, opts=opts)
-    policy = crds.cilium.v2.CiliumNetworkPolicy(
+    default_deny = crds.cilium.v2.CiliumNetworkPolicy(
         f'{resource_name}-default-deny',
         metadata=k8s.meta.v1.ObjectMetaArgs(name='default-deny', namespace=ns.metadata.name),
         spec=crds.cilium.v2.CiliumNetworkPolicySpecArgs(
@@ -522,7 +668,176 @@ def application_namespace(
         ),
         opts=opts,
     )
-    return ApplicationNamespace(namespace=ns, policy=policy)
+    egress_block = _egress_block(
+        f'{resource_name}-egress-block', namespace=ns.metadata.name, reaches=reaches, api_clients=api_clients, opts=opts
+    )
+    return ApplicationNamespace(namespace=ns, default_deny=default_deny, egress_block=egress_block)
+
+
+def _egress_block(
+    resource_name: str,
+    *,
+    namespace: pulumi.Input[str],
+    reaches: Sequence[Reach],
+    api_clients: ApiClients | None,
+    opts: pulumi.ResourceOptions | None,
+) -> crds.cilium.v2.CiliumNetworkPolicy:
+    """The policy that denies an application's pods private space outside the cluster, a node's listeners and the API.
+
+    Deny rules alone, because a deny outranks every allow, whichever policy
+    states it
+    ([`deny.rst`](https://github.com/cilium/cilium/blob/v1.20.4/Documentation/security/policy/deny.rst)):
+    it subtracts from what a pod's other policies grant, an open pod and an
+    allow-listed one alike, where an allow here would widen every narrower
+    allow-list in the namespace. For the same reason an exception is never
+    an allow. It is carved out of the deny, an `except` entry of the rule
+    that holds the address, which is also why the block is the namespace's
+    and not the cluster-wide baseline's: nothing a namespace declares could
+    reopen a deny the baseline states.
+
+    Two rules, each selecting pods of the namespace:
+
+    -   **Every pod**: private space outside the cluster on every protocol;
+        each reach's address on every port but the ones its reaches name; and
+        a node, by identity (`NODE_ENTITIES`), on every port but the API's.
+        A node is named by identity because a CIDR rule does not match an
+        address Cilium holds as a node's
+        ([`layer3.rst`](https://github.com/cilium/cilium/blob/v1.20.4/Documentation/security/policy/layer3.rst)).
+        Whichever identity Cilium gives the address KubeSpan gives a node,
+        one rule holds it: the entity rule where it is the node's, and
+        `fc00::/7` where it is not. Each range of
+        `PRIVATE_SPACE` excepts every range of `NON_NODE_CLUSTER_RANGES`
+        inside it, for the address Cilium has no identity for yet: a pod
+        that started a moment ago on another node.
+    -   **Every pod but the API's clients**: a node on the API's port,
+        `MANAGEMENT_PORTS.kubernetes`, where a call to `kubernetes.default`
+        arrives once the Service is translated. With `api_clients`, a pod
+        carrying `conventions.API_CLIENT_LABEL` is left out of it; without,
+        the rule selects every pod and the label opens nothing.
+
+    A deny rule alone switches its direction to default-deny on every pod it
+    selects ([`rule.go` L119-136](https://github.com/cilium/cilium/blob/v1.20.4/pkg/policy/api/rule.go#L119-L136)),
+    which would deny those pods everything outbound, so both rules turn it
+    off in both directions, as the baseline does.
+    """
+    opened: dict[IPv4Address | IPv6Address, set[tuple[str, int]]] = {}
+    for reach in reaches:
+        opened.setdefault(reach.address, set()).update(
+            (protocol.upper(), reach.port) for protocol in reach.transports.protocols
+        )
+    carved = [ip_network(address) for address in opened]
+
+    def excepted(space: IPv4Network | IPv6Network) -> list[str] | None:
+        inside = [
+            str(held)
+            for held in (*NON_NODE_CLUSTER_RANGES, *carved)
+            if held.version == space.version and held.network_address in space and held.broadcast_address in space
+        ]
+        return inside or None
+
+    every_pod_denies = [
+        crds.cilium.v2.CiliumNetworkPolicySpecsEgressDenyArgs(
+            to_cidr_set=[
+                crds.cilium.v2.CiliumNetworkPolicySpecsEgressDenyToCIDRSetArgs(cidr=str(space), except_=excepted(space))
+                for space in PRIVATE_SPACE
+            ]
+        ),
+        *(
+            crds.cilium.v2.CiliumNetworkPolicySpecsEgressDenyArgs(
+                to_cidr=[str(ip_network(address))], to_ports=_ports_but(ports)
+            )
+            for address, ports in opened.items()
+        ),
+        crds.cilium.v2.CiliumNetworkPolicySpecsEgressDenyArgs(
+            to_entities=list(NODE_ENTITIES),
+            to_ports=_ports_but({('TCP', conventions.MANAGEMENT_PORTS.kubernetes)}),
+        ),
+    ]
+    (client_key,) = conventions.API_CLIENT_LABEL
+    api_denied = (
+        crds.cilium.v2.CiliumNetworkPolicySpecsEndpointSelectorArgs()
+        if api_clients is None
+        else crds.cilium.v2.CiliumNetworkPolicySpecsEndpointSelectorArgs(
+            match_expressions=[
+                crds.cilium.v2.CiliumNetworkPolicySpecsEndpointSelectorMatchExpressionsArgs(
+                    key=client_key, operator='DoesNotExist'
+                )
+            ]
+        )
+    )
+    no_default_deny = crds.cilium.v2.CiliumNetworkPolicySpecsEnableDefaultDenyArgs(ingress=False, egress=False)
+    reasons = ''.join(
+        f' Reached: {reach.address} on {reach.port}/{reach.transports.value}, {reach.reason}.' for reach in reaches
+    )
+    return crds.cilium.v2.CiliumNetworkPolicy(
+        resource_name,
+        metadata=k8s.meta.v1.ObjectMetaArgs(name='egress-block', namespace=namespace),
+        specs=[
+            crds.cilium.v2.CiliumNetworkPolicySpecsArgs(
+                description=(
+                    'Deny every pod in the namespace private space outside the pod, Service and lan pool ranges, '
+                    f"listeners but the API's, except the namespace's declared reaches.{reasons}"
+                ),
+                endpoint_selector=crds.cilium.v2.CiliumNetworkPolicySpecsEndpointSelectorArgs(),
+                egress_deny=every_pod_denies,
+                enable_default_deny=no_default_deny,
+            ),
+            crds.cilium.v2.CiliumNetworkPolicySpecsArgs(
+                description=(
+                    'Deny the kube-apiserver to every pod in the namespace'
+                    + ('.' if api_clients is None else f' but the ones labelled as its clients: {api_clients.reason}.')
+                ),
+                endpoint_selector=api_denied,
+                egress_deny=[
+                    crds.cilium.v2.CiliumNetworkPolicySpecsEgressDenyArgs(
+                        to_entities=list(NODE_ENTITIES),
+                        to_ports=[
+                            crds.cilium.v2.CiliumNetworkPolicySpecsEgressDenyToPortsArgs(
+                                ports=[
+                                    crds.cilium.v2.CiliumNetworkPolicySpecsEgressDenyToPortsPortsArgs(
+                                        port=str(conventions.MANAGEMENT_PORTS.kubernetes), protocol='TCP'
+                                    )
+                                ]
+                            )
+                        ],
+                    )
+                ],
+                enable_default_deny=no_default_deny,
+            ),
+        ],
+        opts=opts,
+    )
+
+
+def _ports_but(
+    opened: Collection[tuple[str, int]],
+) -> list[crds.cilium.v2.CiliumNetworkPolicySpecsEgressDenyToPortsArgs]:
+    """Every port of every ported protocol but the `(protocol, port)` pairs in `opened`, as port ranges.
+
+    The ranges are split into entries of at most `_MAX_PORTS`; the entries
+    of one rule are a union, so the deny is the same however many there are.
+    """
+    ranges: list[crds.cilium.v2.CiliumNetworkPolicySpecsEgressDenyToPortsPortsArgs] = []
+    for protocol in _PORTED_PROTOCOLS:
+        start = _FIRST_PORT
+        for port in sorted(port for named, port in opened if named == protocol):
+            if port > start:
+                ranges.append(_port_range(protocol, start, port - 1))
+            start = port + 1
+        if start <= _LAST_PORT:
+            ranges.append(_port_range(protocol, start, _LAST_PORT))
+    return [
+        crds.cilium.v2.CiliumNetworkPolicySpecsEgressDenyToPortsArgs(ports=ranges[first : first + _MAX_PORTS])
+        for first in range(0, len(ranges), _MAX_PORTS)
+    ]
+
+
+def _port_range(
+    protocol: str, first: int, last: int
+) -> crds.cilium.v2.CiliumNetworkPolicySpecsEgressDenyToPortsPortsArgs:
+    return crds.cilium.v2.CiliumNetworkPolicySpecsEgressDenyToPortsPortsArgs(
+        port=str(first), end_port=last if last > first else None, protocol=protocol
+    )
 
 
 @dataclass(frozen=True, kw_only=True)

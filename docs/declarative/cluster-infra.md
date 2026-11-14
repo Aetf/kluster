@@ -685,15 +685,45 @@ All decided behavior from architecture.md §3, expressed as config:
     to. A deny rule alone switches every pod it selects to default-deny
     egress, so the baseline sets `enableDefaultDeny` false in both
     directions and leaves default-deny to the per-namespace policies
-    (rfc-007 §4.5). The baseline's wider intent, blocking pods from the
-    management plane except where declared, is **not built**: rfc-007
-    §4.5 scopes M2's baseline to the metadata range. A pod's call to
+    (rfc-007 §4.5). The baseline holds the metadata range and nothing
+    else. **Blocking an application's pods from the home and the
+    management plane is the application base's**: `application_namespace`
+    (`kluster.lib.k8s`; workloads.md §1) declares in every application
+    namespace a second policy, `egress-block`, of deny rules alone and
+    with default-deny off in both directions, so a pod's egress stays open
+    except toward three things. **Private space outside the cluster** is
+    every RFC 1918 address and every unique-local IPv6 address
+    (`fc00::/7`) outside the pod, Service and `lan` pool ranges: the site
+    networks, the cluster VLAN's residents that are not nodes, the
+    overlay, the cloud network's residents that are not nodes, and the
+    unique-local address KubeSpan gives each node, which no declaration
+    holds, wherever Cilium does not hold it as the node's; where it does,
+    the rule for a node's listeners below holds it instead. **A node's
+    listeners** — Talos' `apid` and `trustd`, the kubelet, etcd, the node
+    exporter, Cilium's own ports — are denied by identity, `host` and
+    `remote-node`, since a CIDR rule does not match an address Cilium
+    holds as a node's, on every port but the API's. **The
+    kube-apiserver**, at that port on a node, is denied to every pod its
+    namespace does not declare as a client. A namespace's declared
+    reaches and API clients are carved out of the deny rather than
+    allowed over it, because in Cilium a deny
+    outranks every allow, whichever policy states it; and that is why the
+    block is the namespace's and not the baseline's. A per-application
+    exception needs a per-application rule, and the baseline also selects
+    the platform's pods, whose work is the management plane: the scraper
+    reads the kubelet and the host's metrics ports, Alertmanager posts to
+    Home Assistant, the controllers call the API, the cluster DNS forwards
+    to host DNS. **Outside the block** stand a namespace this stack
+    declares with `namespace`, and a pod on the host network, which is
+    the host's endpoint (security-audit.md H1); a call from either to
     another node's management port leaves its node to a node address,
     rides KubeSpan and enters on `kubespan`, which the ingress chain
     accepts ahead of every rule, so each service's own authentication is
-    all that stands in its way. Building that block in a later slice or
-    retiring the intent is the operator's decision,
-    [Aetf/kluster-ops#499](https://github.com/Aetf/kluster-ops/issues/499).
+    all that stands in its way. A home machine's global IPv6 address
+    stands outside the block too, and a pod on the worker reaches it
+    through the gateway's allow from the cluster zone (physical/gateway.md
+    §4.2 rule 3): it is out of the delegated prefix, which the ISP assigns
+    and rotates, so no declaration can name it.
 
 ## 3. What this stack deliberately does not do
 

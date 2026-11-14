@@ -24,8 +24,10 @@ declarative/physical.md §4.
     **Site addressing convention**: every network this box hosts
     sits inside 192.168.0.0/16 and takes its **third octet from the
     VLAN id, times ten** — VLAN 7 → 192.168.70.0/24, VLAN 9 → IoT's
-    192.168.90.0/24 — with the network's /64 out of the site's ULA
-    prefix repeating that same third octet. The container VLAN's
+    192.168.90.0/24 — and a network that advertises a unique-local
+    prefix takes the /64 out of the site's ULA prefix repeating that
+    same third octet. The cluster VLAN advertises none: it carries the
+    delegated prefix alone (§2.5 step 3). The container VLAN's
     10.0.5.0/24 is the single network outside the scheme. The `lan`
     pool's 192.168.71.0/24 is deliberately not a multiple of ten: it
     is no VLAN and never becomes a network object (§4.1), and
@@ -2416,9 +2418,8 @@ apply is run in two parts around the cutover window:
     `192.168.70.10`**, which is the row to find first, because that
     listing covers every link the node has. Two families of decoy sit
     in it: an `fe80::` link-local on each link, and the `fd`-prefixed
-    unique-local addresses, which are the VLAN's own /64 and the one
-    KubeSpan gives the node on its own interface. The VLAN advertises
-    the delegated prefix and nothing else global
+    unique-local address KubeSpan gives the node on its own interface.
+    The VLAN advertises the delegated prefix and nothing else
     (`ipv6_ra_enable`, `ipv6_interface_type='pd'` on the network this
     same declaration creates), so on that link there is exactly one
     candidate. A worker with none there has seen no advertisement,
@@ -3008,8 +3009,17 @@ leg itself, and the controller stores the shape with the flag off (read
     recorded cross-VLAN dependencies run in — the home-automation API
     on the IoT VLAN and everything else a workload initiates toward
     the home. What a workload may call is decided where the workload
-    is declared; narrowing it here would move that decision behind a
-    gateway credential.
+    is declared: the application base denies every application pod
+    the home's networks, the cluster VLAN's other residents and the
+    overlay, and a component opens an address and a port there by
+    declaring it as its namespace's reach
+    (declarative/workloads.md §1, cluster-infra.md §2). Narrowing it
+    here would move that decision behind a gateway credential. One
+    destination stays open that no declaration can close: a home
+    machine's global IPv6 address, out of the delegated prefix the ISP
+    assigns and rotates, which a pod on the worker reaches over this
+    allow on any port. A pod on a cloud node reaches the same address
+    only as the internet does.
 4.  **Internal → cluster zone: return traffic, then the IoT VLAN
     dropped, then allow.** The allow gives the trusted VLANs the reach
     they have to every host of the Internal zone — debugging straight

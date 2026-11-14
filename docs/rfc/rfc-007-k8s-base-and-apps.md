@@ -95,6 +95,17 @@
     their next hop, and the live criterion reads the neighbor that
     address resolves to; the one IPv4 session stays, so §15.2 has no
     IPv6 neighbor address to settle.
+*   **Updated:** 2026-11-14 — §9.1, as
+    [Aetf/kluster-ops#718](https://github.com/Aetf/kluster-ops/issues/718)
+    built it: the application base's default-deny is on ingress alone,
+    and its egress is not left wholly to the component. Every
+    application namespace also carries an egress block of deny rules
+    alone, with default-deny off, denying private space outside the
+    pod, Service and `lan` pool ranges, a node's listeners and the
+    kube-apiserver; a
+    reach or the namespace's API clients, declared with the reason, are
+    carved out of it (declarative/cluster-infra.md §2,
+    declarative/workloads.md §1).
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules

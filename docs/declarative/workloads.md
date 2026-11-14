@@ -7,7 +7,7 @@ stack of [README.md](README.md) §1 and the home of ~80–90% of all future
 changes.
 
 > **Status**: designed 2026-08-22. Declared: an application's namespace,
-> its level, its route label and its policy, its exposure through
+> its level, its route label and its policies, its exposure through
 > `expose` with the records left out (§1), and its storage through `claim`
 > and `nas_claim` (§2, §3). Nothing else is implemented.
 
@@ -25,7 +25,7 @@ Every app is a `Component` subclass (putils, RFC-001) that owns:
 | DNS | the public records of the rows on `internet` are not declared by `expose` yet; the split-horizon rewrite a row implies is applied by the `dns` stack from the same declaration, not by this one (dns.md §3) | dns.md |
 | Secrets | SealedSecret first choice, `template.data` pattern | cluster-infra.md §1.1 |
 | Placement | scheduling constraints only: site pool (cloud/homelab), a node label for a volume or the dedicated VIP, GPU resource requests | architecture.md §3.6 |
-| Network policy | per-namespace default-deny + explicit allows, part of the component. `application_namespace` declares the default-deny: every pod in the namespace admits the namespace's own pods and the `ingress` entity, the identity of what a Gateway's Envoy forwards, and no other peer but the pod's own node, which Cilium admits whatever the policies say; another peer is admitted by a policy the component declares beside it, as `expose` does for a raw port's clients. The default-deny is on ingress alone, and restricting egress is the component's: its first egress rule switches its pods to default-deny on egress, so that policy carries the allow to the cluster's DNS too | architecture.md §4.1 |
+| Network policy | per-namespace default-deny + explicit allows, part of the component. `application_namespace` declares two policies. The default-deny: every pod in the namespace admits the namespace's own pods and the `ingress` entity, the identity of what a Gateway's Envoy forwards, and no other peer but the pod's own node, which Cilium admits whatever the policies say; another peer is admitted by a policy the component declares beside it, as `expose` does for a raw port's clients. The default-deny is on ingress alone. The egress block: deny rules alone, with default-deny off, which deny every pod private space outside the pod, Service and `lan` pool ranges, a node's listeners and the kube-apiserver, and leave the rest of its egress open; a reach (`Reach`) and the namespace's API clients (`ApiClients`) are its exceptions, declared on the namespace as below. Restricting egress to an allow-list is the component's: its first egress rule switches its pods to default-deny on egress, so that policy carries the allow to the cluster's DNS too, and the block still applies beneath it, since a deny outranks every allow | architecture.md §4.1, cluster-infra.md §2 |
 | Monitoring | scrape/dashboard labels per the legacy conventions (`release`, `grafana_dashboard`) so VictoriaMetrics/grafana pick them up | cluster-infra.md §1 |
 
 What a component may **not** do: hostPort, hostNetwork, `externalIPs`
@@ -46,6 +46,20 @@ parameter with the reason on record — the same discipline as
 `off('<reason>')` (§2) — which `application_namespace` takes as its `looser`
 argument, a `LooserLevel` carrying the reason. No workload in the
 design holds one today.
+
+An application's reach to private space outside the cluster, and a
+pod's reach to the kube-apiserver, are declared on its namespace with the
+reason, and the base denies both otherwise (cluster-infra.md §2). A reach
+names one address, a port and its transports, and is refused where it is
+written unless the address is private space the base denies; it opens
+that port at that address and nothing beside it, which is where
+physical/gateway.md §4.2 rule 3 leaves what a workload may call at home.
+A namespace whose pods call the API declares `api_clients`, and the pods
+that call it carry `conventions.API_CLIENT_LABEL`; without the
+declaration the label opens nothing, and a labelled pod reaches the API's
+port on a node and no other port there. The device relay declares its
+device as its namespace's reach, and the database shape declares its
+instances and its restore drill as API clients (rfc-008 §4.1, §4.3).
 
 ## 2. Choosing storage: two axes, then the data's character
 
