@@ -33,16 +33,15 @@ from kluster.lib.versions import ManifestPin
 OUTPUTS = conventions.PHYSICAL_OUTPUTS
 
 #: What a fully applied `physical` publishes under each output this program
-#: could read, the ones it must not included: the nodes' public IPv4s and the
-#: reserved public address are public IPv4s that are no pool member, and the
-#: kubeconfig is a secret that never crosses a StackReference.
+#: could read, the ones it must not included: the reserved public address is
+#: a public IPv4 that is no pool member, and the kubeconfig is a secret that
+#: never crosses a StackReference.
 PUBLISHED: dict[str, object] = {
     OUTPUTS.cluster_endpoint: '203.0.113.10',
     OUTPUTS.cluster_endpoint_v6: '2001:db8::10',
     OUTPUTS.vip1: '203.0.113.20',
     OUTPUTS.vip1_private: '10.0.1.99',
     OUTPUTS.node_private_ips: {'cp-1': '10.0.1.11', 'cp-2': '10.0.1.12', 'cp-3': '10.0.1.13'},
-    OUTPUTS.node_public_ips: {'cp-1': '198.51.100.11', 'cp-2': '198.51.100.12', 'cp-3': '198.51.100.13'},
     OUTPUTS.node_guas: {'cp-1': '2001:db8:1::11', 'cp-2': '2001:db8:1::12', 'cp-3': '2001:db8:1::13'},
     OUTPUTS.worker_gua: '2001:db8:70::10',
     OUTPUTS.kubeconfig: {},

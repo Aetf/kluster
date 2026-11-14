@@ -350,9 +350,9 @@ class ManagedRoute:
 #: reaches a cluster service, and the rest because a person off-site reaches
 #: the home as a machine on the LAN does. The cluster VLAN is one of the rest:
 #: it gives such a person the worker's own machine API, the one way to it that
-#: passes through no control plane. No run dials it: the `physical` stack's
-#: Talos calls go to the control planes' public addresses and to the balancer
-#: (`stacks/physical.py`), and the flow rules admit a run to no address on it.
+#: passes through no control plane. No run dials it: every Talos call the
+#: `physical` stack makes is dialed at the balancer (`stacks/physical.py`),
+#: and the flow rules admit a run to no address on it.
 #: The gateway is the only next hop, and every member that takes the routes
 #: installs every one here, at home as well as away; a member at home that
 #: serves the other home subnets refuses them on the device, and the run that

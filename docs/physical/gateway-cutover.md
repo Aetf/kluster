@@ -1519,6 +1519,156 @@ reports no changes.** Until it has passed, step 2 of the ceremony is the
 only later one that can run — step 3 reads an address off a machine
 this run boots.
 
+**A fleet that booted without the balancer in apid's certificate**
+fails that first run at its first Talos apply. The resource retries
+for ten minutes and fails with an x509 error naming the balancer's
+address: `certificate is valid for <private IPv4>, 127.0.0.1, <IPv6>,
+not <the balancer's IPv4>`. Every Talos call is dialed at the
+balancer, and a node verifies only with the SANs its booted
+configuration carries (declarative/physical.md §2). The program
+renders the address into every control plane's configuration, but
+`metadata.user_data` is under `ignore_changes`, so no run reaches the
+configuration a running instance booted with. Nor can it be repaired
+by hand: the talosconfig is an export the first run writes only when
+it completes, and no other client credential exists outside the
+state. What is left is the property that one node carrying the SAN is
+enough to reach every node, by its private address. This recovery is
+for a cluster that has not been bootstrapped, which is the only state
+that fault leaves behind, since nothing past the first apply is
+created. It is two runs, because the node that is given the SAN is a
+replaced instance, and its predecessor keeps running, under the same
+hostname and with valid cluster secrets, until the run that replaces
+it deletes it at its end. A control plane joining etcd with an empty
+data directory first removes any member that carries its own hostname,
+so bootstrapping while both exist would leave two nodes named
+`kluster-cp3` removing each other. The second run therefore starts only
+once the state holds no pending delete.
+
+**The operator gives a go before each run**, and each `up` is
+confirmed only after its own preview has been read. **The gateway stop
+holds for both**: the preview shows no operation on anything under
+`kluster:gateway:Gateway` and none of a `unifi:` type, and if it shows
+one, the run is not confirmed and the preview is reported.
+
+*Run 1 replaces `cp3`'s instance, and nothing else.* `cp3` because
+`cp1` holds the dedicated VIP and the attached volume and is the node
+the bootstrap names, and between `cp2` and `cp3` the declaration makes
+no difference. The regional A1 quota allows the fleet plus one node in
+flight (`components/cloud/guardrails.py`), and a replacement is created
+before its predecessor is deleted, so one instance is all a run can
+replace.
+
+It is a targeted run: the instance, and every resource in the state
+that names it. Those are the instance's balancer backends, one per
+port the balancer forwards on each family, and nothing else, since
+`cp3` carries no volume (`conventions.NODE_VOLUMES`). Talos day 1
+names the instance too, and is in no state yet, so a run that does not
+target it leaves it uncreated. Targeted, the run writes nothing it
+does not name, so the gateway, the overlay and Talos are out of it by
+construction rather than by an exclusion. An exclusion is not the
+form: with `--exclude-dependents`, the engine forbids every delete in
+the run, the replaced original included, and the original then stays
+in the state as a pending delete that no later preview shows.
+
+```sh
+TARGETS=($(physical stack --show-urns | sed -n \
+    -e 's/.*URN: \(urn:pulumi:.*Instance::kluster-cp3\)$/--target \1/p' \
+    -e 's/.*URN: \(urn:pulumi:.*Backend::kluster-nlb-.*-cp3\)$/--target \1/p'))
+CP3=$(physical stack --show-urns | sed -n 's/.*URN: \(urn:pulumi:.*Instance::kluster-cp3\)$/\1/p')
+printf '%s\n' "$CP3"             # exactly one line, an oci:Core/instance:Instance URN
+printf '%s\n' "${TARGETS[@]}"    # --target, then a URN: the instance and each backend named for cp3
+
+physical up "${TARGETS[@]}" --replace "$CP3"
+```
+
+The preview reads one replacement of `kluster-cp3`'s instance, a
+replacement or an update of each balancer backend named for `cp3`, and
+nothing else: no `talos:` resource, nothing under
+`kluster:gateway:Gateway`, and no other instance. The cluster's
+secrets (`talos:machine/secrets:Secrets`) are unchanged. **Stop,
+before confirming**, on any of these: `$CP3` empty or more than one
+line; a backend named for `cp3` in `physical stack --show-urns` that
+`$TARGETS` lacks; the gateway stop; any operation on a `talos:`
+resource; a replacement or a delete of anything but `cp3`'s instance
+and the backends named for `cp3`. After confirming, the run's output
+carries a `deleted original` line for the instance. A launch refused
+for capacity or quota leaves the old instance serving and nothing
+lost: it is reported, and the same command, on a fresh go, is the next
+run. Any other failure is reported, not retried.
+
+**Run 2 waits until the state holds no pending delete**, which this
+read, of the URNs alone, shows:
+
+```sh
+physical stack export | mise x -- jq -r '.deployment.resources[] | select(.delete) | .urn'   # prints nothing
+```
+
+A URN it prints is a resource the engine created a replacement for and
+has not yet deleted; it is reported, and run 2 waits.
+
+Between the runs a reading may be taken, from any host with an IPv4
+route. It gates nothing. The balancer's address is read off the
+resource's own state, since no export may be read before step 5 has
+passed:
+
+```sh
+NLB=$(physical stack export | mise x -- jq -r '.deployment.resources[]
+    | select(.urn | endswith("::kluster-nlb"))
+    | .outputs.ipAddresses[] | select(.isPublic) | .ipAddress')
+for i in 1 2 3 4 5 6 7 8; do
+    openssl s_client -connect "$NLB:50000" </dev/null 2>/dev/null \
+        | openssl x509 -noout -ext subjectAltName
+done
+```
+
+The answers that list the balancer's address among their SANs are the
+new `cp3`'s. The field names in the `jq` filter follow the bridged
+SDK's convention and have not been read off a live state; an empty
+`$NLB` means the reading was not taken, not that it failed.
+
+*Run 2 is step 5's first form*, with the gateway excluded as well and
+nothing else changed. The exclusion leaves the controller and the
+device unwritten whatever the checkout declares for them, and nothing
+in the cloud or Talos sections reads a gateway output:
+
+```sh
+GW='urn:pulumi:physical::kluster-py::kluster:gateway:Gateway**'
+physical up \
+    --exclude 'urn:pulumi:physical::kluster-py::kluster:overlay:Overlay$zerotier:index/network:Network::kluster-network' \
+    --exclude "$GW" \
+    --exclude-dependents
+```
+
+The preview reads creates for the Talos day-1 resources and for
+whatever else of the first form the failed run left uncreated, and no
+replacement or delete of a cloud resource. **Stop, before confirming**,
+on the gateway stop, or on any replacement or delete of an instance, a
+backend, the dedicated VIP or a volume. The applies to `cp1` and `cp2`
+name them by their private addresses. A connection the balancer hands
+to either of them fails verification and is retried on a new one,
+which the balancer may hand to `cp3`, whose apid forwards the call to
+the node it names. The balancer hashes each connection on its five
+fields and the provider opens a new connection on each attempt, so
+each apply lands within its ten minutes of retries, and each node it
+lands on carries the SAN from then on.
+
+**One warning is expected in this run**, on the applies, and in its
+preview too: `Cannot check reboot requirement … Using 'auto' mode (may
+reboot)`. The apply mode, `staged_if_needing_reboot`, is decided by a
+single dry run the provider makes outside its retries, and that one
+connection is likely to land on a node without the SAN and fail
+verification. The apply is then made in `auto` mode and may reboot the
+node. Before the bootstrap that costs only time: the next apply and the
+bootstrap retry through the reboot. The warning is not reported and
+does not stop the run.
+
+After confirming, a Talos
+resource that times out with the x509 error naming the balancer's
+address is reported with its full message, and the next run is the
+same command on a fresh go. Any other failure is reported, not
+retried. The run passes by step 5's own condition: the same command,
+run again, reports no changes.
+
 **Then the homelab host refuses the home routes**, once, by hand, as
 root on the host, ahead of the declaration in its configuration
 management that carries the same content (homelab-host.md §4). It needs
@@ -1910,24 +2060,24 @@ failure costs nothing. They share one setup:
 ```sh
 TC=~/.talos/kluster          # the talosconfig the ceremony's step 3 wrote
 WORKER=192.168.70.10
-ip_of() { physical stack output node_public_ips --json | jq -r --arg n "$1" '.[$n]'; }
-CP=($(physical stack output node_public_ips --json | jq -r '.[]'))
-CPS=$(physical stack output node_public_ips --json | jq -r '[.[]] | join(",")')
+ip_of() { physical stack output node_private_ips --json | jq -r --arg n "$1" '.[$n]'; }
+CP=($(physical stack output node_private_ips --json | jq -r '.[]'))
+CPS=$(physical stack output node_private_ips --json | jq -r '[.[]] | join(",")')
 tal() { talosctl --talosconfig "$TC" "$@"; }
 mkdir -p ~/.kube
 (umask 077; physical stack output kubeconfig --show-secrets > ~/.kube/kluster)
 ```
 
-The talosconfig's endpoints are the control planes and its nodes are
-the control planes' public addresses and the worker's LAN address, the
+The talosconfig's one endpoint is the balancer, and its nodes are the
+control planes' private addresses and the worker's LAN address, the
 same names step 5's health gate uses (`components/talos/`, `TalosDay1`).
 The kubeconfig is a cluster-admin credential, so it is written where
 the talosconfig is kept and not into a working directory. The API
 server answers without a network plugin, and the items that read the
 cluster through it use this file.
 
-**The launches found capacity, and the machine API reaches the worker
-through the cloud endpoints.**
+**The launches found capacity, and the machine API reaches every node
+through the balancer.**
 
 ```sh
 for n in "${CP[@]}" "$WORKER"; do tal -n "$n" version --short; done
@@ -1935,10 +2085,11 @@ for n in "${CP[@]}" "$WORKER"; do tal -n "$n" version --short; done
 
 It passes when every node answers with a server version, and the
 version is the `versions:talos` pin in `Pulumi.yaml`. Each control
-plane that answers is an A1 launch that found capacity. The worker's
-answer is the proxy path: `talosctl` dials only the talosconfig's
-endpoints, which are the control planes, and names the worker to them,
-so the answer came through whichever control plane it reached.
+plane that answers is an A1 launch that found capacity. Every answer
+came through a control plane: `talosctl` dials only the talosconfig's
+endpoint, the balancer, and names the node to whichever control plane
+the balancer reached, which forwards the call. For the worker that is
+the path over KubeSpan.
 
 **The worker forms the link-local the gateway routes through.**
 

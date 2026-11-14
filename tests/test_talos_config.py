@@ -213,6 +213,23 @@ def test_the_public_apiserver_is_hardened() -> None:
     assert 'audit-log-path' in api_server['extraArgs']
 
 
+@pytest.mark.parametrize(
+    'shape', [name for name, shape in SHAPES.items() if shape.get('role', 'controlplane') == 'controlplane']
+)
+def test_a_control_plane_puts_its_sans_into_apids_certificate_as_into_the_apiservers(shape: str) -> None:
+    # The two certificates read two fields; a call that verifies apid's
+    # against the address it dialed finds only what `machine.certSANs` lists.
+    assert merged('machine', **SHAPES[shape])['certSANs'] == SANS
+    assert merged('cluster', **SHAPES[shape])['apiServer']['certSANs'] == SANS
+
+
+def test_a_worker_puts_no_sans_into_either_certificate() -> None:
+    # Nothing dials a worker's apid directly: a call reaches it through a
+    # control plane, which verifies it by the address the worker holds.
+    assert 'certSANs' not in merged('machine', **SHAPES['homelab-worker'])
+    assert 'apiServer' not in merged('cluster', **SHAPES['homelab-worker'])
+
+
 def test_the_kubelet_reserves_room_for_the_node() -> None:
     assert merged('machine')['kubelet']['extraConfig']['systemReserved']
 

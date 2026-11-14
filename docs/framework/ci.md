@@ -82,7 +82,7 @@ the instance moves from the homelab host to an **OCI VM.Standard.E2.1.Micro**
 | Target | Needed by | Path |
 | --- | --- | --- |
 | OCI / Cloudflare / B2 APIs | all layers (Cloudflare: `dns`, `apps`) | public |
-| kube API, cloud Talos apid | `k8s-base`, `apps` | public (NLB 6443/50000, mTLS) |
+| kube API, cloud Talos apid | `physical`, `k8s-base`, `apps` | public (NLB 6443/50000, mTLS) |
 | homelab worker's Talos apid | `physical` | public — the cluster endpoint (NLB 50000), naming `--nodes <homelab>`; the control plane that answers proxies over KubeSpan (**bootstrap verification item**) |
 | libvirt + UDM SSH (the device files), UniFi Network API (firewall rules — `physical` only, API-key auth), AdGuard APIs | `physical`, `dns` (AdGuard rewrites) | **per-run ZeroTier join** (pre-authorized CI member identities, gateway.md §2.1/§2.6) — no standing runner, no home inbound ports |
 | State backend | all layers | public TLS (§1) |

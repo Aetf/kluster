@@ -1619,16 +1619,15 @@ APIs (the rewrites, `components/dns/rewrites.py`). One leaking buys
 neither the LAN nor the other's reach.
 
 **No leg names a Talos node**, the worker included, because no run
-dials one over the overlay. The `physical` stack's Talos calls go to
-the control planes' public addresses and to the balancer
-(`stacks/physical.py`, `TalosDay1`). The worker's configuration apply
-names the worker's cluster-VLAN address as its node and dials the
-balancer, and whichever control plane answers proxies the call over
-KubeSpan. Bootstrap and the kubeconfig read dial the first control
-plane. The health check dials the control planes, names the worker as
-a node, and reads Kubernetes at the balancer. So a run needs nothing
-on the cluster VLAN, and that VLAN's route (§2.2) is there for
-personal members.
+dials one over the overlay. Every Talos call the `physical` stack
+makes is dialed at the balancer (`stacks/physical.py`, `TalosDay1`),
+over IPv4 from wherever the run is, and names its node by an address
+the node holds. The worker's configuration apply names the worker's
+cluster-VLAN address, and whichever control plane answers forwards the
+call over KubeSpan; the health check names the worker the same way and
+reads Kubernetes at the balancer. So a run needs nothing on the
+cluster VLAN, and that VLAN's route (§2.2) is there for personal
+members.
 
 Facts about the rules engine that shape the draft (docs.zerotier.com
 /rules; ZeroTierOne 1.16 `node/Network.cpp`; quirks from ZeroTierOne

@@ -38,8 +38,9 @@ anything speaking the k8s API (that's `k8s-base`/`apps`).
 Stack outputs (the machine facts other stacks may reference,
 [README.md](README.md) §2) are named by `conventions.PHYSICAL_OUTPUTS`
 (`conventions/outputs.py`), which is the list and which a test holds
-the stack's exports to: `kubeconfig`, `talosconfig`, per-node
-public/private IPs, each cloud node's GUA (`node_guas` — with the
+the stack's exports to: `kubeconfig`, `talosconfig`, each cloud
+node's private IP (`node_private_ips`, the name a Talos call gives
+the node, §2), each cloud node's GUA (`node_guas` — with the
 private IPv4s, `vip1_private` and the NLB's two addresses, the
 `internet` pool's members, which `k8s-base` and `apps` read; rfc-007
 §4.4), the worker's GUA as `workerGua` configures it (`worker_gua`,
@@ -426,17 +427,49 @@ machine_secrets
 -   **Reboot-requiring config changes**: `apply_mode:
     staged_if_needing_reboot`, and CI applies node-serially, so the
     quorum never reboots together.
--   **Where a machine is reached**: apid routes by the node a call
-    names, not by the connection it arrives on, so the two halves of an
-    apply are separate answers. The cloud nodes are dialed at their own
-    public addresses, because a call with no cluster to route through —
-    the bootstrap is exactly that — has nothing else to use, and a
-    balancer would pick whichever backend it liked. The worker is
-    *named* by its cluster-VLAN address and *dialed* at the cluster
-    endpoint, which the NLB forwards on 50000: whichever control plane
-    answers proxies the call the rest of the way over KubeSpan, so the
-    backend chosen does not matter and nothing outside the site needs a
-    route to the worker.
+-   **Where a machine is reached**: a call over apid is *dialed* at
+    one address, whose certificate it verifies, and *names* a node in
+    the request. Every call the stack makes — each apply, the
+    bootstrap, the kubeconfig read, the health check — is dialed at
+    one management address, the NLB's IPv4, which forwards 50000 to
+    every control plane, and the exported talosconfig names the same
+    single endpoint. The control plane that answers forwards the call
+    to the node it names, on 50000 with the machine PKI, verifying
+    that node's certificate against the name. It needs neither etcd
+    nor Kubernetes for that, so the bootstrap, the cluster's first
+    contact, takes the same path as every apply, and so does a call to
+    the worker, which crosses KubeSpan to reach it. The backend the NLB
+    picks does not matter, and nothing outside the site needs a route
+    to the worker.
+-   **A node is named by an address it holds on an interface**: a
+    cloud node by its private IPv4, the worker by its cluster-VLAN
+    address. apid's certificate carries the addresses the node holds
+    on its links, `127.0.0.1`, its hostnames, and whatever
+    `machine.certSANs` lists. A cloud node's public IPv4 is a
+    one-to-one NAT that sits on no interface, and Talos' `oracle`
+    platform reports no external address, so that address is in no
+    certificate and a call dialed or named there fails verification.
+    It is no address Kubernetes reports for the node either, and the
+    health gate matches the names it is given against those. The
+    management address is the one NAT address a certificate carries:
+    every control plane renders it under `machine.certSANs` beside
+    `cluster.apiServer.certSANs`, in the configuration it boots with
+    and in every one applied to it, so a replacement boots reachable.
+    A worker renders neither, since nothing dials it directly. Each
+    call depends on the forward it is dialed through, the listener and
+    the backends, because the address exists before they do, and no
+    input carries that order.
+-   **What fails closed**: a change of the NLB's address leaves every
+    certificate naming the old one, and every call fails verification.
+    The same change breaks the cluster endpoint in every machine
+    configuration, so it costs nothing that was not already lost. The
+    way back in is the address each node always carries, its
+    on-interface IPv6 (`node_guas`), dialed from a host with an IPv6
+    route and holding the talosconfig. A node that holds a
+    configuration without the SAN fails a call the NLB hands to it and
+    is reached through any node that has it, by its private address,
+    which its certificate carries whatever its configuration says; one
+    node with the SAN is enough to reach every node.
 -   **Footgun on record**: destroy-time `reset = true` wipes *all* disk
     partitions (provider issue #205) — never enabled on nodes carrying
     data; node replacement is explicit (drain, etcd leave, destroy,
@@ -627,7 +660,7 @@ entire desired state — FRR/BGP
 (neighbor = `conventions.HOMELAB_NODE_IPV4`, a constant and deliberately not an
 output of the libvirt resource: the worker's address is written statically into
 its machine config, and everything that names it — the routing session, the
-peer-port forward, day 1's apid dial — reads that same constant, so no session
+peer-port forward, the name day 1's apid calls give the worker — reads that same constant, so no session
 depends on a lease; the IPv6 routes' next hop =
 `conventions.HOMELAB_NODE_LINK_LOCAL`, a constant of the same kind, derived from
 the MAC the libvirt domain is declared with), the nspawn container services
@@ -739,7 +772,7 @@ in the sequence is
 migration.md §1): LB IPAM pool containing node primary IPs; NLB dual-stack listeners +
 source-preservation semantics; etcd fsync latency on OCI block volumes;
 A1 capacity at creation; reserved-IP↔secondary-private-IP NAT; Cilium's
-MTU, `conventions.KUBESPAN_MTU`, over the KubeSpan underlay; talosctl reaching the homelab node via cloud endpoints (apid
+MTU, `conventions.KUBESPAN_MTU`, over the KubeSpan underlay; talosctl reaching the homelab node via the NLB's management address (apid
 proxy); the worker's uplink link-local being `conventions.HOMELAB_NODE_LINK_LOCAL`,
 the next hop the gateway routes the `lan` pool's IPv6 VIPs through.
 

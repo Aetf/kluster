@@ -221,7 +221,10 @@ async def main() -> None:
         endpoint=load_balancer.address.apply(
             lambda address: f'https://{address}:{conventions.MANAGEMENT_PORTS.kubernetes}'
         ),
-        cert_sans=[load_balancer.address],
+        # The machine API at the same address, on the other port the balancer
+        # forwards: what every Talos call is dialed at, and so what every
+        # control plane's apid certificate carries.
+        management_address=load_balancer.address,
         control_plane_nodes=conventions.CLOUD_NODES,
         worker_nodes=(conventions.HOMELAB_NODE,),
         talos_version=talos_version,
@@ -272,30 +275,32 @@ async def main() -> None:
     # time, the first control plane bootstraps etcd, and the kubeconfig is
     # released only once the cluster reports healthy.
     #
-    # Which address reaches which machine is two answers, because apid routes
-    # by the node a call names rather than by the connection it arrives on:
-    #
-    # -   The cloud nodes are dialed at their own public addresses. A call
-    #     with no cluster to route through has nothing else to use — bootstrap
-    #     is the first contact of all — and a balancer would pick whichever
-    #     backend it liked.
-    # -   The worker is named by its cluster-VLAN address and dialed at the
-    #     cluster endpoint, which the balancer forwards on 50000. Whichever
-    #     control plane answers proxies the call to the worker over KubeSpan,
-    #     so the backend the balancer chose does not matter and nothing outside
-    #     the site needs a route to the worker's LAN address.
+    # Every call is dialed at the balancer, which forwards 50000 to whichever
+    # control plane it likes; that control plane forwards the call to the node
+    # it names. So a node is named by an address it holds on its interface:
+    # a cloud node by its private address, the worker by its cluster-VLAN
+    # address, which a control plane reaches over KubeSpan. Nothing outside
+    # the site needs a route to the worker, and a cloud node's public address,
+    # which is on no interface, is in no certificate and names nothing here
+    # (declarative/physical.md §2).
     #
     # The worker's *first* configuration is not applied at all — it rides the
-    # seed image the VM boots from — so the proxy path is needed only once the
-    # node is in the mesh, which is where a change to a running worker finds it.
+    # seed image the VM boots from — so the path through a control plane is
+    # needed only once the node is in the mesh, which is where a change to a
+    # running worker finds it.
     day1 = TalosDay1(
         conventions.CLUSTER_NAME,
         cluster=cluster,
         addresses={
-            **{node: instance.public_ip for node, instance in nodes.instances.items()},
+            **{node: instance.private_ip for node, instance in nodes.instances.items()},
             conventions.HOMELAB_NODE: str(conventions.HOMELAB_NODE_IPV4),
         },
-        endpoints={conventions.HOMELAB_NODE: load_balancer.address},
+        # The forward the calls go through: the balancer's listeners and the
+        # backends behind them, the machine API's among them. Both components
+        # hold these as lists rather than by port, so day 1 waits on every
+        # one, which costs it nothing: it has no call to make before the
+        # fleet is behind the balancer.
+        forward=[load_balancer, *nodes.backends],
         # The dedicated VIP, which the node holding it does not otherwise
         # answer for: OCI assigns the address to the VNIC and leaves the guest
         # alone.
@@ -453,7 +458,6 @@ async def main() -> None:
     pulumi.export(outputs.vip1, nodes.reserved_ip.ip_address)
     pulumi.export(outputs.vip1_private, nodes.secondary_ip.ip_address)
     pulumi.export(outputs.node_private_ips, {node: instance.private_ip for node, instance in nodes.instances.items()})
-    pulumi.export(outputs.node_public_ips, {node: instance.public_ip for node, instance in nodes.instances.items()})
     # Each node's GUA beside its private address: with the dedicated VIP's
     # secondary private address (`vip1_private`) and the balancer's two
     # addresses, the `internet` pool's members, which `k8s-base` builds the

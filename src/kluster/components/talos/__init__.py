@@ -94,8 +94,6 @@ class Refusal(enum.Enum):
     INSTALLER_MISSING = enum.auto()
     #: Day 1 addresses keyed by nodes the cluster does not have.
     ADDRESS_STRANGER = enum.auto()
-    #: Day 1 endpoints keyed by nodes the cluster does not have.
-    ENDPOINT_STRANGER = enum.auto()
     #: Day 1 secondary addresses keyed by nodes the cluster does not have.
     SECONDARY_ADDRESS_STRANGER = enum.auto()
     #: Nodes day 1 has no address for.
@@ -371,11 +369,22 @@ def kubespan_document() -> dict[str, Any]:
 
 
 def control_plane_patch(*, cert_sans: Sequence[str], secretbox_secret: str | None = None) -> dict[str, Any]:
-    """The parts only a control plane has: the apiserver, etcd, the CNI and the service proxy.
+    """The parts only a control plane has: the apiserver, etcd, the CNI, the service proxy, and apid's SANs.
 
     A worker's configuration has no apiserver to harden and no etcd to
     encrypt or read, and the CNI and kube-proxy are installed by the control
     plane, so none of this belongs in the shared patch.
+
+    `cert_sans` go into two certificates, which read two fields: the
+    Kubernetes API server's (`cluster.apiServer.certSANs`) and apid's
+    (`machine.certSANs`). Nothing else puts a NAT address into apid's
+    certificate. Talos fills it from the addresses the node holds on its
+    links, loopback and its hostnames, and Talos' `oracle` platform reports no
+    external address, so an address the cloud maps onto the node from outside
+    is in neither certificate unless it is listed here. The management address
+    every Talos call is dialed at (`TalosCluster`) is such an address. A worker
+    renders neither field: nothing dials a worker's apid directly, since a
+    call reaches it through a control plane.
 
     Talos ships no CNI and no kube-proxy here: Cilium, which `k8s-base`
     installs, is both (rfc-007 §4.2). kube-proxy is off from the first boot
@@ -386,6 +395,7 @@ def control_plane_patch(*, cert_sans: Sequence[str], secretbox_secret: str | Non
     node until it reboots.
     """
     config: dict[str, Any] = {
+        'machine': {'certSANs': list(cert_sans)},
         'cluster': {
             'allowSchedulingOnControlPlanes': True,
             'network': {'cni': {'name': 'none'}},
@@ -400,7 +410,7 @@ def control_plane_patch(*, cert_sans: Sequence[str], secretbox_secret: str | Non
                 # etcd's metrics listener (`etcd_metrics_url`).
                 'extraArgs': {'listen-metrics-urls': etcd_metrics_url()},
             },
-        }
+        },
     }
     if secretbox_secret is not None:
         # Encryption at rest for Kubernetes secrets. etcd lives in a $0-trust
@@ -653,6 +663,9 @@ def patches(
     installer, which would drop the node's extensions on the upgrade that
     took it.
 
+    `cert_sans` are a control plane's certificate SANs (`control_plane_patch`);
+    a worker renders none.
+
     `volume` is the name of the node volume attached to this node, if one is.
 
     `bgp_peer` is a subnet, not a host: it is who may open a BGP session with
@@ -696,6 +709,13 @@ class TalosCluster(Component, pulumi_type='kluster:talos:TalosCluster'):
     changes, bootstrapping etcd, the health gate, the two credentials the
     later stacks are built on — is `TalosDay1`.
 
+    :param management_address: the one address the machine API is dialed at
+        (`TalosDay1`): the balancer's, which forwards apid to every control
+        plane, as it forwards the Kubernetes API that `endpoint` names. Every
+        control plane renders it into both certificates (`control_plane_patch`),
+        in the configuration it boots with and so in every one applied to it,
+        because a call verifies the certificate against the address it
+        dialed and nothing else would put a NAT address there.
     :param control_plane_nodes: node names, in the order they take the
         cluster; the first one is the node that bootstraps etcd.
     :param worker_nodes: node names that get a worker configuration. Required
@@ -734,7 +754,7 @@ class TalosCluster(Component, pulumi_type='kluster:talos:TalosCluster'):
         *,
         cluster_name: str,
         endpoint: pulumi.Input[str],
-        cert_sans: Sequence[pulumi.Input[str]],
+        management_address: pulumi.Input[str],
         control_plane_nodes: Sequence[str],
         worker_nodes: Sequence[str],
         talos_version: str,
@@ -775,7 +795,9 @@ class TalosCluster(Component, pulumi_type='kluster:talos:TalosCluster'):
         self.cluster_name = cluster_name
         self._endpoint = endpoint
         self._talos_version = talos_version
-        self._cert_sans = tuple(cert_sans)
+        #: Where every Talos call is dialed, and what every control plane's
+        #: certificates carry for it.
+        self.management_address: pulumi.Output[str] = pulumi.Output.from_input(management_address)
         self._bgp_peers = dict(bgp_peers)
         unknown = sorted(set(self._bgp_peers) - set(self.roles))
         if unknown:
@@ -859,7 +881,7 @@ class TalosCluster(Component, pulumi_type='kluster:talos:TalosCluster'):
         return patches(
             installer=str(await resolve(self._installers[node])),
             role=role,
-            cert_sans=await _resolved(self._cert_sans),
+            cert_sans=[str(await resolve(self.management_address))],
             secretbox_secret=await self._secretbox_secret() if role == 'controlplane' else None,
             static_address=STATIC_ADDRESSES.get(node),
             secondary_address=await _resolved_one(secondary_address),
@@ -902,30 +924,37 @@ class TalosDay1(Component, pulumi_type='kluster:talos:TalosDay1'):
 
     Everything here talks to machines that already run, over apid on port
     50000, which is why it is a component of its own: it is declared with the
-    addresses those machines answer on, and those exist only once the
-    instances and the worker VM do.
+    addresses those machines hold, and those exist only once the instances
+    and the worker VM do.
 
     A call over apid carries two addresses that are not the same thing: the
-    *endpoint* it opens a connection to, and the *node* it names in the
-    request. apid routes by node — a member that is not the named one proxies
-    the call across the cluster — so an endpoint only has to be a way in.
-    Where a node is not directly reachable, that is what reaches it: it is
-    named as the node and dialed at an endpoint that is.
+    *endpoint* it opens a connection to and verifies the certificate of, and
+    the *node* it names in the request. Every call here is dialed at one
+    endpoint, the cluster's management address (`TalosCluster`), which every
+    control plane's apid certificate carries. A control plane's apid forwards
+    a call to the node it names, over port 50000 with the machine PKI,
+    verifying that node's certificate against the name; it does so without
+    etcd or Kubernetes, and for a name that is its own as much as for
+    another's. So the bootstrap, the first contact of all, goes the way every
+    apply does, and so does a call to the worker, which no endpoint outside
+    the site reaches directly.
 
-    Not every call has that to lean on. Bootstrap is the cluster's first
-    contact, before there is a cluster to route through, so it dials the node
-    it names; so does the kubeconfig read that follows it. Those are
-    control-plane operations on the first control plane, which is directly
-    reachable, and they stay that way.
+    A node is therefore named by an address it holds on an interface, which
+    its certificate carries whatever its configuration says. A cloud node's
+    public IPv4 is a NAT mapping on no interface and in no certificate, and
+    it is no address Kubernetes reports for the node either, so the health
+    gate could not match it to one.
 
     :param cluster: the PKI and the day-0 configuration: what a machine boots with
-        when it is launched, and what is applied to it here.
-    :param addresses: node name to the address the node is *named* by. Every
-        node of the cluster needs one — a cluster is not healthy because the
-        nodes somebody listed are.
-    :param endpoints: node name to the address a call to it is *dialed* at,
-        for the nodes where that differs from the address above. A node with
-        no entry is dialed at its own address.
+        when it is launched, and what is applied to it here. Its management
+        address is what every call is dialed at.
+    :param addresses: node name to the address the node is *named* by, one
+        it holds on an interface. Every node of the cluster needs one — a
+        cluster is not healthy because the nodes somebody listed are.
+    :param forward: what carries a call from the management address to apid:
+        the listener on 50000 and the backends behind it. Every call here
+        depends on them. The address exists before they do, so no input
+        carries the order.
     :param secondary_addresses: node name to an extra address to put on its
         physical link (the node's dedicated VIP).
     """
@@ -936,7 +965,7 @@ class TalosDay1(Component, pulumi_type='kluster:talos:TalosDay1'):
         *,
         cluster: TalosCluster,
         addresses: Mapping[str, pulumi.Input[str]],
-        endpoints: Mapping[str, pulumi.Input[str]] | None = None,
+        forward: Sequence[pulumi.Resource],
         secondary_addresses: Mapping[str, pulumi.Input[str]] | None = None,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
@@ -946,7 +975,6 @@ class TalosDay1(Component, pulumi_type='kluster:talos:TalosDay1'):
         self._secondary_addresses = dict(secondary_addresses or {})
         for label, keyed, refusal in (
             ('addresses', self._addresses, Refusal.ADDRESS_STRANGER),
-            ('endpoints', dict(endpoints or {}), Refusal.ENDPOINT_STRANGER),
             ('secondary addresses', self._secondary_addresses, Refusal.SECONDARY_ADDRESS_STRANGER),
         ):
             unknown = sorted(set(keyed) - set(cluster.roles))
@@ -961,9 +989,8 @@ class TalosDay1(Component, pulumi_type='kluster:talos:TalosDay1'):
                 refusal=Refusal.ADDRESS_MISSING,
                 nodes=missing,
             )
-        #: Where each node is dialed, which is its own address unless the
-        #: caller named a way in to reach it with.
-        self._endpoints = {node: (endpoints or {}).get(node, self._addresses[node]) for node in cluster.roles}
+        endpoint = cluster.management_address
+        forward = list(forward)
 
         # What is applied is the current day-0 rendering plus whatever only
         # exists now: the secondary private IP behind the dedicated VIP. A node
@@ -987,10 +1014,7 @@ class TalosDay1(Component, pulumi_type='kluster:talos:TalosDay1'):
             applied = machine.ConfigurationApply(
                 f'{name}-{node}-config',
                 node=self._addresses[node],
-                # Not the same address for every node: an apply is routed by
-                # the node it names, so a node behind the mesh is dialed
-                # wherever the cluster answers.
-                endpoint=self._endpoints[node],
+                endpoint=endpoint,
                 client_configuration=client_configuration,
                 machine_configuration_input=self.configurations[node].machine_configuration,
                 # A change needing a reboot is staged rather than applied, so
@@ -1002,40 +1026,36 @@ class TalosDay1(Component, pulumi_type='kluster:talos:TalosDay1'):
                 # procedure (drain, etcd leave, destroy, recreate), never
                 # something a destroy of this resource does on its own.
                 on_destroy=machine.ConfigurationApplyOnDestroyArgs(reset=False, graceful=True, reboot=False),
-                opts=self.child_opts(depends_on=previous),
+                opts=self.child_opts(depends_on=[*forward, *previous]),
             )
             self.applies[node] = applied
             previous = [applied]
 
         first = cluster.control_plane_nodes[0]
         # Bootstrap is a once-per-cluster operation on one node: running it on
-        # a second control plane would try to start a second etcd cluster. It
-        # is also the call with nothing to route through — there is no cluster
-        # yet — so it dials the node it names, and so does the kubeconfig read
-        # that waits on it.
+        # a second control plane would try to start a second etcd cluster.
         self.bootstrap = machine.Bootstrap(
             f'{name}-bootstrap',
             node=self._addresses[first],
-            endpoint=self._addresses[first],
+            endpoint=endpoint,
             client_configuration=client_configuration,
-            opts=self.child_opts(depends_on=[self.applies[first]]),
+            opts=self.child_opts(depends_on=[*forward, self.applies[first]]),
         )
 
         self.kubeconfig_source = Kubeconfig(
             f'{name}-kubeconfig',
             node=self._addresses[first],
-            endpoint=self._addresses[first],
+            endpoint=endpoint,
             client_configuration=_client_configuration_input(generated, KubeconfigClientConfigurationArgs),
-            opts=self.child_opts(depends_on=[self.bootstrap]),
+            opts=self.child_opts(depends_on=[*forward, self.bootstrap]),
         )
 
-        # Every node is nameable, and the control planes are what an operator
-        # dials to reach any of them — the same split as the applies above, in
-        # the file a human then holds.
+        # Every node is nameable, by the names the applies use, through the
+        # one endpoint they are dialed at — the file a human then holds.
         self._client_configuration = client.get_configuration_output(
             cluster_name=cluster.cluster_name,
             client_configuration=_client_configuration_input(generated, client.GetConfigurationClientConfigurationArgs),
-            endpoints=async_output(partial(self._addresses_of, cluster.control_plane_nodes)),
+            endpoints=endpoint.apply(lambda address: [address]),
             nodes=async_output(partial(self._addresses_of, tuple(cluster.roles))),
             opts=pulumi.InvokeOutputOptions(parent=self),
         )
@@ -1044,14 +1064,14 @@ class TalosDay1(Component, pulumi_type='kluster:talos:TalosDay1'):
         # healthy, so anything that resolves it is ordered behind a working
         # cluster rather than behind a resource that merely finished.
         #
-        # It reaches the workers the same way: they are named as nodes, and the
-        # client talks to control-plane endpoints only.
+        # It names each node as the applies do, which is the address the
+        # node's kubelet reports to Kubernetes, and the check compares the two.
         self.health = get_health_output(
             client_configuration=_client_configuration_input(generated, GetHealthClientConfigurationArgs),
             control_plane_nodes=async_output(partial(self._addresses_of, cluster.control_plane_nodes)),
             worker_nodes=async_output(partial(self._addresses_of, cluster.worker_nodes)),
-            endpoints=async_output(partial(self._addresses_of, cluster.control_plane_nodes)),
-            opts=pulumi.InvokeOutputOptions(parent=self, depends_on=[self.bootstrap, *self.applies.values()]),
+            endpoints=endpoint.apply(lambda address: [address]),
+            opts=pulumi.InvokeOutputOptions(parent=self, depends_on=[*forward, self.bootstrap, *self.applies.values()]),
         )
         self._kubeconfig = pulumi.Output.secret(async_output(self._healthy_kubeconfig))
 
