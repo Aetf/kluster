@@ -63,7 +63,6 @@ from pulumi.runtime import mocks, settings
 from pulumi.runtime.proto import callback_pb2, resource_pb2
 from pulumi.runtime.rpc_manager import RPCManager
 from pulumi.runtime.settings import SETTINGS
-from pulumi.runtime.stack import ResourceRegistrationFailed
 
 from putils import component as putils_component
 from putils import install_parent_backstop
@@ -740,17 +739,14 @@ class _Run:
         ]
 
     def unreceived(self) -> list[BaseException]:
-        """Each of `failures` the case has not received, and that a real program's wait does not pass over.
+        """Each of `failures` the case has not received.
 
-        The one it passes over is an output the SDK faults with
-        `ResourceRegistrationFailed`: it is how the engine reports a resource
-        that failed to register, and the program goes on.
+        Every one of them, because a real program's wait re-raises every
+        failure it meets. A resource the engine reports as failed to register
+        is no failure here: the SDK resolves its outputs as unknown, and the
+        program goes on reading them.
         """
-        return [
-            failure
-            for failure in self.failures()
-            if not isinstance(failure, ResourceRegistrationFailed) and not self.has_received(failure)
-        ]
+        return [failure for failure in self.failures() if not self.has_received(failure)]
 
     def has_received(self, failure: BaseException) -> bool:
         """Whether a receipt of the current case, on this run or any other on the record, names the root of `failure`.
