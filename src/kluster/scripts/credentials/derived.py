@@ -31,7 +31,9 @@ cluster consumes is sealed to the cluster instead and its ciphertext written
 in the clear into the configuration of the stack that declares it
 (`sealing.py`): the DNS-01 token cert-manager answers challenges with, and
 the backup bucket's writer keys, which `physical` mints and this side seals
-out of that stack's state into `apps` (`b2_writer_seal`).
+out of that stack's state into `apps` (`b2_writer_seal`); and Authelia's
+storage encryption key, which is escrowed and sealed from the escrow
+(`authelia_storage_key_seal`).
 
 The drill age identity is drawn here rather than minted anywhere, as the
 appliance's SSH host key below is; its consumer is the ops repository's
@@ -247,6 +249,11 @@ B2_FRESHNESS_DUMPS_ROW = 'b2-freshness-dumps'
 B2_STATE_BACKEND_MANAGEMENT_ROW = f'b2-{conventions.STATE_BACKEND}-management'
 STATE_BACKEND_SERVER_ROW = f'{conventions.STATE_BACKEND}-server'
 STATE_BACKEND_HOST_KEY_ROW = f'{conventions.STATE_BACKEND}-host-key'
+#: The escrowed row whose value the cluster consumes, sealed from the escrow
+#: by the two functions named after it (`authelia_storage_key_import`,
+#: `authelia_storage_key_seal`). Its name is its escrow label's
+#: (`escrow.row_name`), as every escrowed row's is.
+AUTHELIA_STORAGE_KEY_ROW = escrow.row_name(escrow.AUTHELIA_STORAGE_KEY)
 
 
 def _drill_slot(name: str) -> Slot:
@@ -589,6 +596,104 @@ def b2_writer_seal(*, sealer: sealing.Sealer) -> list[str]:
         conventions.STACK_NAMES.apps,
     )
     return [value.name for value, _ in sealed]
+
+
+#: Where the legacy cluster holds Authelia's storage key, and the pipe that
+#: carries it from there into `import` without a file or a terminal between.
+AUTHELIA_STORAGE_KEY_SOURCE = f"""The legacy cluster holds it: the Secret authelia in serving-system, under
+  STORAGE_ENCRYPTION_KEY, generated there. Piped straight from it, so it
+  touches no file and no terminal:
+    kubectl --context <legacy> -n serving-system get secret authelia \\
+      -o jsonpath='{{.data.STORAGE_ENCRYPTION_KEY}}' | base64 -d \\
+      | credentials derived {AUTHELIA_STORAGE_KEY_ROW} import
+  Once, at a kit sitting before Wave A1's head, while the legacy cluster still
+  holds it. The value is escrowed without the whitespace around it, as every
+  piped value is; Wave A1's sign-in with a second factor against the migrated
+  database is what proves the escrowed key is the one Authelia encrypted with."""
+
+
+def _seal_storage_key(vault: escrow.Vault, *, sealer: sealing.Sealer) -> int:
+    """Seal the newest escrowed generation of Authelia's storage key into `apps`; returns that generation.
+
+    What is sealed is what the registry returns, read back out of the
+    ciphertext, so the Secret the server reads and the value a recovery opens
+    are one value by construction rather than by two writes agreeing.
+    """
+    label = escrow.AUTHELIA_STORAGE_KEY
+    value = conventions.sealed.AUTHELIA_STORAGE_KEY
+    generation = vault.registry.latest(label)
+    log.info('opening generation %d of %s with the kit', generation, label)
+    (key,) = value.keys
+    sealer.deliver(value, {key: vault.recover(label, generation)})
+    return generation
+
+
+def authelia_storage_key_announce() -> None:
+    """Print where Authelia's storage key comes from, and the pipe that carries it, before it is asked for.
+
+    Always, and ahead of the read, as `escrow.announce` and
+    `devices.record_sealed` print their steps: a run started bare to learn
+    the pipe is then answered before it waits on standard input, and a run
+    already fed by the pipe shows the operator what it was fed by.
+    """
+    log.warning(
+        '%s is carried from the legacy cluster, which generated it; it comes from here:', escrow.AUTHELIA_STORAGE_KEY
+    )
+    for line in AUTHELIA_STORAGE_KEY_SOURCE.splitlines():
+        log.warning('  %s', line)
+
+
+def authelia_storage_key_import(vault: escrow.Vault, secret: str, *, sealer: sealing.Sealer) -> int:
+    """Escrow the storage key a predecessor hands over, then seal what the registry holds; returns its generation.
+
+    The import credentials.md §2.2 prescribes for a value that predates the
+    model: the key becomes the label's next generation as it stands, checked
+    against what Authelia accepts before anything is written
+    (`escrow.AUTHELIA_KEY`). The declaring stack is held to exist first, so a
+    machine that could not write the ciphertext refuses before anything is
+    escrowed; the cluster's certificate was fetched in building `sealer`.
+
+    A seal that fails after the escrow leaves the key filed, and the repair is
+    `seal`, which seals that generation: a second `import` of the same key would
+    file it again as the generation after it. Where the key comes from is
+    printed before it is read (`authelia_storage_key_announce`).
+    """
+    label = escrow.AUTHELIA_STORAGE_KEY
+    _ = sealer.stack(conventions.sealed.AUTHELIA_STORAGE_KEY)
+    path = escrow.adopt(vault, label, secret)
+    log.info('escrowed %s in %s; commit it with the stack file', label, path)
+    try:
+        return _seal_storage_key(vault, sealer=sealer)
+    except pulumi_config.SlotRefused as exc:
+        raise pulumi_config.SlotRefused(
+            f'{exc}; {label} is escrowed in {path}, so the repair is '
+            f'`credentials derived {AUTHELIA_STORAGE_KEY_ROW} seal`, which seals it, rather than a second '
+            '`import`, which would file the same key again as the next generation'
+        ) from exc
+
+
+def authelia_storage_key_seal(vault: escrow.Vault, *, sealer: sealing.Sealer) -> int:
+    """Seal the newest escrowed generation of Authelia's storage key into `apps`; returns that generation.
+
+    The whole of the recovery after a rebuild: the escrow holds the key, and
+    the new cluster's controller seals it afresh. It is also the adoption of a
+    generation `generate` drew, on an installation whose Authelia has no
+    database yet; a generation drawn over a database already encrypted is one
+    Authelia opens only after the database is re-keyed to it, which nothing
+    here does. Refused by name, with nothing written, while the escrow holds
+    no generation.
+    """
+    label = escrow.AUTHELIA_STORAGE_KEY
+    if not vault.registry.generations(label):
+        raise escrow.EscrowRefused(
+            f'nothing escrowed for {label}, so there is nothing to seal: '
+            f'`credentials derived {AUTHELIA_STORAGE_KEY_ROW} import` takes the key the legacy cluster holds, and '
+            f'`credentials derived {AUTHELIA_STORAGE_KEY_ROW} generate` draws one for an Authelia with no database yet',
+            refusal=escrow.Refusal.NOTHING_ESCROWED,
+            label=label,
+        )
+    _ = sealer.stack(conventions.sealed.AUTHELIA_STORAGE_KEY)
+    return _seal_storage_key(vault, sealer=sealer)
 
 
 def _push_api_key(stack: pulumi_config.Stack, key: oci_iam.ApiKey, *, holds: str) -> None:

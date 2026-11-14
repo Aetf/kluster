@@ -50,7 +50,7 @@ from scratch_projects import cli_directories, scrubbed
 from kluster import conventions
 from kluster.conventions.backup import BACKED_NAMESPACES, writer_scope
 from kluster.lib import pulumi_cli
-from kluster.scripts.credentials import cloudflare, derived, devices, pulumi_config, sealing
+from kluster.scripts.credentials import cloudflare, derived, devices, escrow, pulumi_config, sealing
 from kluster.scripts.credentials.kdbx import KdbxStore
 from kluster.scripts.credentials.pulumi_config import SlotRefused
 from kluster.stacks import physical
@@ -918,6 +918,142 @@ def test_a_dkim_key_is_never_taken_at_a_terminal(
     with pytest.raises(devices.FieldRefused) as refused:
         devices.record_sealed(DKIM, sealer=sealer, given={'key': given})
     assert refused.value.answer is devices.Answer.AT_TERMINAL
+
+
+# -- Authelia's storage key ---------------------------------------------------
+
+STORAGE_KEY = conventions.sealed.AUTHELIA_STORAGE_KEY
+STORAGE_LABEL = escrow.AUTHELIA_STORAGE_KEY
+STORAGE_ROW = derived.AUTHELIA_STORAGE_KEY_ROW
+
+
+@pytest.fixture
+def vault(tmp_path: Path) -> escrow.Vault:
+    """An escrow of the case's own, under a recovery key in a kit of the case's own, with the pinned `age`."""
+    pinned_tools.require(*pinned_tools.AGE)
+    kit, registry = MemoryKit(), escrow.Registry.open(tmp_path / 'escrow')
+    _ = escrow.init(kit, registry)
+    return escrow.Vault.open(kit, registry)
+
+
+def _storage_key(n: int) -> str:
+    """A key Authelia would accept, one per `n`, so two generations are told apart."""
+    return f'storage-key-{n}-'.ljust(32, 'x')
+
+
+def test_seal_hands_the_sealer_the_newest_generation_for_the_rows_secret_at_its_path(
+    stacks: Stacks, sealer: sealing.Sealer, kubeseal: str, key_pair: KeyPair, apps: PathPulumi, vault: escrow.Vault
+) -> None:
+    """The recovery after a rebuild: what lands is the newest escrowed key, bound to the Secret the server reads.
+
+    Two generations, so a seal of the first is caught: the second is the key
+    the database is under. Opened as the controller opens the row's
+    SealedSecret, and under no other name, since the row is strict.
+    """
+    for n in (1, 2):
+        _ = escrow.adopt(vault, STORAGE_LABEL, _storage_key(n))
+
+    assert derived.authelia_storage_key_seal(vault, sealer=sealer) == 2
+
+    (key,) = STORAGE_KEY.keys
+    assert set(apps.plain) == {STORAGE_KEY.path(key)}
+    assert not apps.config
+    ciphertexts = written(stacks, STORAGE_KEY)
+    assert unseal(kubeseal, key_pair, STORAGE_KEY, ciphertexts) == {key: _storage_key(2)}
+    with pytest.raises(Unopened):
+        _ = unseal(kubeseal, key_pair, STORAGE_KEY, ciphertexts, name='authelia')
+
+
+def test_import_seals_the_value_the_registry_returns_not_the_one_it_was_handed(
+    stacks: Stacks,
+    sealer: sealing.Sealer,
+    kubeseal: str,
+    key_pair: KeyPair,
+    apps: PathPulumi,
+    vault: escrow.Vault,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Secret the server reads and the ciphertext a recovery opens are one value.
+
+    A registry that files something other than what it was handed stands in
+    for every way the two could part; the sealed value follows the registry.
+    """
+    adopt = escrow.adopt
+
+    def files_otherwise(vault: escrow.Vault, label: str, secret: str) -> Path:
+        return adopt(vault, label, f'{secret}-as-filed')
+
+    monkeypatch.setattr(escrow, 'adopt', files_otherwise)
+    _ = apps
+
+    assert derived.authelia_storage_key_import(vault, _storage_key(1), sealer=sealer) == 1
+
+    (key,) = STORAGE_KEY.keys
+    sealed = unseal(kubeseal, key_pair, STORAGE_KEY, written(stacks, STORAGE_KEY))
+    assert sealed == {key: vault.recover(STORAGE_LABEL)}
+    assert sealed[key] != _storage_key(1)
+
+
+def test_seal_with_nothing_escrowed_refuses_naming_import_and_writes_nothing(
+    stacks: Stacks, recorded: tuple[sealing.Sealer, RecordedKubeseal], apps: PathPulumi, vault: escrow.Vault
+) -> None:
+    sealer, run = recorded
+
+    with pytest.raises(escrow.EscrowRefused) as refused:
+        _ = derived.authelia_storage_key_seal(vault, sealer=sealer)
+
+    assert refused.value.refusal is escrow.Refusal.NOTHING_ESCROWED
+    assert ('derived', STORAGE_ROW, 'import') in named_leaves(str(refused.value))
+    assert not run.seals()
+    assert written(stacks, STORAGE_KEY) == {}
+    assert not apps.plain and not apps.config
+
+
+def test_import_of_a_key_authelia_refuses_files_no_generation_and_seals_nothing(
+    recorded: tuple[sealing.Sealer, RecordedKubeseal], apps: PathPulumi, vault: escrow.Vault
+) -> None:
+    sealer, run = recorded
+
+    with pytest.raises(escrow.EscrowRefused) as refused:
+        _ = derived.authelia_storage_key_import(vault, 'too-short', sealer=sealer)
+
+    assert refused.value.refusal is escrow.Refusal.NOT_ITS_SHAPE
+    assert vault.registry.generations(STORAGE_LABEL) == []
+    assert not run.seals()
+    assert not apps.plain
+
+
+def test_import_into_an_apps_stack_that_does_not_exist_escrows_nothing(
+    recorded: tuple[sealing.Sealer, RecordedKubeseal], vault: escrow.Vault
+) -> None:
+    # A key escrowed with nowhere to seal it would be a recovery copy of a
+    # value nothing reads, and the re-run would file it a second time.
+    sealer, run = recorded
+
+    with pytest.raises(pulumi_config.StackMissing):
+        _ = derived.authelia_storage_key_import(vault, _storage_key(1), sealer=sealer)
+
+    assert vault.registry.generations(STORAGE_LABEL) == []
+    assert not run.seals()
+
+
+def test_a_seal_that_fails_after_the_import_sends_the_operator_to_seal_not_to_a_second_import(
+    stacks: Stacks, apps: PathPulumi, vault: escrow.Vault
+) -> None:
+    def refusing(args: Sequence[str], *, stdin: str | None) -> str:
+        _ = args, stdin
+        raise SlotRefused('kubeseal refused: the controller is restarting')
+
+    sealer = sealing.Sealer(certificate='', open_stack=stacks.open, run=refusing)
+
+    with pytest.raises(SlotRefused) as refused:
+        _ = derived.authelia_storage_key_import(vault, _storage_key(1), sealer=sealer)
+
+    # The key is filed, so the repair is the verb that seals what is filed;
+    # a second import would file the same key again as generation 2.
+    assert vault.registry.generations(STORAGE_LABEL) == [1]
+    assert named_leaves(str(refused.value)) == [('derived', STORAGE_ROW, 'seal')]
+    assert not apps.plain
 
 
 # -- the writer keys ----------------------------------------------------------

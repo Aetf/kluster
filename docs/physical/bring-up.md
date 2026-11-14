@@ -66,7 +66,7 @@ a step that needs one.
 | 6 | **One sealing sitting**: `credentials derived cloudflare-dns01 mint`, `bgp seal` and `alert-webhook record` (credentials.md §4.1 stage 11), the webhook at Home Assistant's own address, so that an in-cluster alert stays direct, one commit to `Pulumi.k8s-base.yaml` | operator, chain on the merge | stage 5, and the webhook of stage 0 | a certificate issued for the primary zone; each Gateway's Service holding exactly its addresses; a route in the gateway's kernel table for a VIP of each family, the IPv6 one through the worker's link-local, which the gateway's neighbor table resolves to the worker's MAC (gateway-cutover.md §5); an alert reaching the phone | Re-run the one command, which writes a fresh ciphertext, and merge it. §3 |
 | 7 | **The echo server wired**: rfc-007 slice 12's second half, on `route` as the migration's design composes it | chain | stage 6's certificate, and that design's `route` merged | the exit criterion of rfc-007 §14 slice 12 | Revert it; nothing else stands on it |
 | 8 | **The gate**: rfc-007 §14 slice 13's list, and the rest of migration.md §1 item 4. A transcript per item. Then the pull request that deletes the sealed tolerance of §1 | dispatcher, operator for anything a credential reads, a builder for the pull request | stage 7 | every item, with a fallback that flips landing in the document that records it | A failing item is its own issue. No application moves until it closes |
-| 9 | **Handing over**: the legacy sealing key carried, the certificate the controller serves confirmed as the cluster's own, and then the backup bucket's writer keys sealed. These open the first wave | operator | stage 8, and the `physical` apply that minted the writer keys | the certificate confirmed, and each key sealed | §3 |
+| 9 | **Handing over**: the legacy sealing key carried, the certificate the controller serves confirmed as the cluster's own, and then the backup bucket's writer keys sealed and Authelia's storage encryption key imported from the legacy cluster into the escrow, which seals it (credentials.md §4.1 stage 12). These open the first wave | operator | stage 8, and the `physical` apply that minted the writer keys | the certificate confirmed, each key sealed, and `escrow/authelia/storage-key/1.age` and `Pulumi.apps.yaml` committed | §3 |
 
 ## 3. What a failure costs, by stage
 
@@ -97,7 +97,10 @@ certificate authority, and the controller goes on retrying by itself:
 a carried key that went wrong is deleted, the controller restarted, and
 the carry repeated, with nothing already opened lost. The one thing to
 read after the import is which certificate the controller now serves
-(rfc-007 §6.3).
+(rfc-007 §6.3). Authelia's storage key is the one step of the stage
+that files something: a seal that fails after it is escrowed is
+finished by its `seal`, not by a second import, which would file the
+same key again (credentials.md §4).
 
 ## 4. What the empty cluster costs meanwhile
 

@@ -351,6 +351,55 @@ def test_a_token_label_asks_only_that_there_be_a_value(vault: escrow.Vault) -> N
     assert vault.recover(escrow.ALERTMANAGER) == 'a-token-from-somewhere-else'
 
 
+#: What Authelia's documentation asks of `storage.encryption_key`
+#: (authelia.com, Configuration → Storage → Introduction): at least 20
+#: characters, and a random alphanumeric string of 64 or more recommended.
+#: Written here from that page rather than read from the register, which is
+#: the half under test.
+AUTHELIA_MINIMUM = 20
+AUTHELIA_RECOMMENDED = 64
+
+
+def test_a_storage_key_shorter_than_authelia_accepts_is_refused_and_files_nothing(vault: escrow.Vault) -> None:
+    # The server refuses to start with such a key, so it cannot be the key the
+    # legacy database is encrypted under: a pipe that delivered it read the
+    # wrong field, and escrowing it would leave the backups openable by
+    # nothing while the registry looked whole.
+    with pytest.raises(escrow.EscrowRefused) as refused:
+        _ = escrow.adopt(vault, escrow.AUTHELIA_STORAGE_KEY, 'k' * (AUTHELIA_MINIMUM - 1))
+    assert refused.value.refusal is escrow.Refusal.NOT_ITS_SHAPE
+
+    assert vault.registry.generations(escrow.AUTHELIA_STORAGE_KEY) == []
+
+
+def test_a_storage_key_padded_to_the_minimum_is_refused(vault: escrow.Vault) -> None:
+    # Authelia trims a file secret's trailing newline before it measures the
+    # key, so a short key with one appended is as short as it was.
+    with pytest.raises(escrow.EscrowRefused) as refused:
+        _ = escrow.adopt(vault, escrow.AUTHELIA_STORAGE_KEY, 'k' * (AUTHELIA_MINIMUM - 1) + '\n')
+    assert refused.value.refusal is escrow.Refusal.NOT_ITS_SHAPE
+
+    assert vault.registry.generations(escrow.AUTHELIA_STORAGE_KEY) == []
+
+
+def test_a_storage_key_authelia_accepts_is_taken_as_it_stands(vault: escrow.Vault) -> None:
+    # The shortest key the server starts with, in characters no draw here
+    # uses: a key a predecessor drew some other way is imported, not judged.
+    key = '#-' * (AUTHELIA_MINIMUM // 2)
+
+    _ = escrow.adopt(vault, escrow.AUTHELIA_STORAGE_KEY, key)
+
+    assert vault.recover(escrow.AUTHELIA_STORAGE_KEY) == key
+
+
+def test_a_drawn_storage_key_is_the_kind_authelia_recommends(vault: escrow.Vault) -> None:
+    key = escrow.generate(vault, escrow.AUTHELIA_STORAGE_KEY)
+
+    assert len(key) >= AUTHELIA_RECOMMENDED
+    assert key.isascii() and key.isalnum()
+    assert vault.recover(escrow.AUTHELIA_STORAGE_KEY) == key
+
+
 # --------------------------------------------------------------------------
 # The rows made in a console: recorded rather than drawn, and probed rather
 # than remembered.

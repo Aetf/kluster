@@ -16,8 +16,14 @@ provider mints — the Pulumi stack passphrase, `physical`'s own
 passphrase, which only that stack's CI Environments hold, the operator
 passphrase that encrypts the stacks no CI job runs, the state-backend CA key, the
 identities the state-backend's database dumps are encrypted to, the token the alert
-poller reads with, and the private key of each single-purpose GitHub
-App. Certificates issued under that CA
+poller reads with, the private key of each single-purpose GitHub
+App, and Authelia's storage encryption key, `authelia/storage-key`,
+without which no backup of Authelia's database opens. That one is
+imported once from the cluster that ran Authelia before this one, at
+the bring-up's last sitting with the offline key, and sealed from here
+into the Secret the server reads; after a rebuild,
+`credentials derived authelia-storage-key seal` seals it again.
+Certificates issued under that CA
 are not here: they are re-issued from it on demand, so keeping a copy
 would store a secret whose loss costs nothing.
 

@@ -39,6 +39,12 @@
     namespace's reach, slice 8 declares the database's API clients and
     labels their pods, and §5.2's verification reads the block on the
     first application namespace.
+*   **Updated:** 2026-11-14. §4.6 names the one ported value that is a
+    register row instead, Authelia's storage encryption key
+    ([Aetf/kluster-ops#727](https://github.com/Aetf/kluster-ops/issues/727)),
+    and §10.1 gains slice 49, which makes it one. Slices 7 and 11 come
+    after it, the first for workloads.md, and slice 11's server reads
+    the key from that row's Secret.
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
@@ -1494,6 +1500,22 @@ pair stays on the VPS until the decommission (dns.md §2).
     rule**, landing in workloads.md §5. These are per-application
     secrets, which the program enumerates and the register does not
     (credentials.md §1, rule 8).
+*   **A ported value whose loss loses stored data is a register row
+    instead.** After the decommission a ported value's plaintext and the
+    sealing key that opens its ciphertext sit in the same etcd, so the
+    sealing key is its only root. That costs a redraw or a visit to an
+    issuing account for every ported value but one: Authelia's storage
+    encryption key, without which the backups of authelia's `PRECIOUS`
+    claim (§5.2) do not open. It passes credentials.md §2.2's
+    durable-root test, so it is escrowed as `authelia/storage-key`,
+    imported once from the legacy cluster at the bring-up's last stage,
+    and sealed strict from the escrow as the Secret
+    `authelia-storage-key`, which is the one the server reads; the ported
+    `authelia` ciphertext does not carry it. Wave A1's sign-in with a
+    second factor against the migrated database (§5.2) proves the
+    escrowed key while the legacy cluster still holds the original. The
+    sealing key is not exported. **New rule**, landing in credentials.md
+    §1 rule 8 and §2.2, and in workloads.md §5.
 *   **The legacy sealing key is carried by hand once**, at the
     bring-up's last stage, from the legacy cluster's controller to the
     new one's, by a pipe between the two clusters' API servers that
@@ -2394,7 +2416,9 @@ changes what is deployed.
 Each slice's **After** line names the slices it depends on and every
 slice it shares an owned path with, so two slices whose lines do not
 reach each other can run at once. The shape slices 3 to 9 form one line,
-because each adds a census, its invariants or a section of workloads.md.
+because each adds a census, its invariants or a section of workloads.md,
+and slice 49 sits in it between slices 6 and 7, sharing workloads.md
+with them.
 The build slices, 10 to 23, own their own package and test module and
 nothing shared unless their line says so, and run together once their
 shapes have merged. The pin files pass down one line: slice 2, slice 48,
@@ -2691,7 +2715,43 @@ when the operator is ready to approve that apply. **After** slice 5.
 *   **Unproven live**: the keys' mint, by `physical`'s apply, and their
     seal, at the bring-up's last stage.
 
-**Slice 7: single sign-on.** Pre-live. **After** slice 6.
+**Slice 49: Authelia's storage key as a register row.** Pre-live.
+**After** slice 6, which ports the ciphertext it takes the key out of,
+and before slice 11.
+
+*   **Done means**: `authelia/storage-key` is an escrow row, drawn by
+    `generate` for an Authelia with no database and refused under the
+    length Authelia accepts; `conventions.sealed` holds the strict value
+    `authelia-storage-key` in `serving-system`, declared by `apps`; the
+    slot map's row lands in the escrow and in that value;
+    `credentials derived authelia-storage-key import` escrows the key
+    piped from the legacy Secret and seals what the registry returns,
+    and `credentials derived authelia-storage-key seal` seals the newest
+    generation again; `Pulumi.apps.yaml`'s ported `authelia` no longer
+    carries `STORAGE_ENCRYPTION_KEY`; credentials.md §1 rule 8, §2.2,
+    §3, §4 and §4.1, workloads.md §5, physical/bring-up.md stage 9 and
+    `escrow/README.md` are true.
+*   **Owned paths**: `src/kluster/conventions/sealed.py`,
+    `src/kluster/scripts/credentials/`, `Pulumi.apps.yaml`,
+    `tests/test_escrow.py`, `tests/test_sealing.py`,
+    `tests/test_slots.py`, `tests/test_cli.py`,
+    `tests/credentials_command_tree.py`, `docs/credentials.md`,
+    `docs/declarative/workloads.md`, `docs/physical/bring-up.md`,
+    `docs/rfc/rfc-008-workload-migration.md`, `escrow/README.md`.
+*   **Tests that fail without it**: `seal` hands the sealer the newest
+    escrowed generation, bound to the row's name, namespace and scope,
+    at the row's path (seal an older generation); `import` seals the
+    value the registry returns (seal the piped one); `seal` with nothing
+    escrowed refuses, names `import` and writes nothing; `import`
+    refuses a key shorter than Authelia accepts and files no generation;
+    the register and the command tree agree with credentials.md §3
+    through the slot map's own checks.
+*   **Unproven live**: the import, which the operator runs at the
+    bring-up's last kit sitting, and Wave A1's sign-in with a second
+    factor that proves it.
+
+**Slice 7: single sign-on.** Pre-live. **After** slice 6, and slice 49,
+which owns workloads.md before it.
 
 *   **Done means**: `conventions.sso.CLIENTS` holds every client the
     legacy authentication service carries, each under the host it keeps
@@ -2773,7 +2833,7 @@ the canary's `curl` (slice 11) and `qbittorrent-nox` (slice 23).
 | Slice | Application | Wave | Size | Shared paths beyond its own | After |
 | --- | --- | --- | --- | --- | --- |
 | 10 | exim | A1 | S | none | 2, 4, 6 |
-| 11 | authelia, with the canary and its target | A1 | M | `docs/declarative/cluster-infra.md`, `docs/operations.md` | 2, 5, 6, 7, 8; rfc-007 slice 11 |
+| 11 | authelia, with the canary and its target | A1 | M | `docs/declarative/cluster-infra.md`, `docs/operations.md` | 2, 5, 6, 7, 8, 49; rfc-007 slice 11 |
 | 12 | blog | A2 | S | none | 2, 9 |
 | 13 | splitpro | A2 | M | none | 2, 7, 8, 48 |
 | 14 | matrix | A2 | S | none | 2, 5, 7 |
@@ -2789,6 +2849,10 @@ the canary's `curl` (slice 11) and `qbittorrent-nox` (slice 23).
 
 **Slices 13, 18 and 21 run what slice 48 pins**, and come after it for
 that alone: they share no file with it or with each other.
+
+**Slice 11's server reads its storage key from the Secret slice 49
+seals**, `authelia-storage-key`, and the rest of its environment from
+the ported `authelia` ciphertext, which does not carry it.
 
 **seedwatch's image merges ahead of its pin.** Slice 23 adds the image
 to `docker/`, so slice 23 pins it, at its current version, since no

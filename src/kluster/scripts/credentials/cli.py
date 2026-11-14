@@ -225,6 +225,16 @@ _ORDER = """when to run what:
          and seals each namespace-wide into the apps stack's config, for
          every namespace at once. Commit Pulumi.apps.yaml. Re-run it after
          an apply of physical that mints a key for a newly backed namespace.
+       kubectl --context <legacy> -n serving-system get secret authelia \\
+           -o jsonpath='{.data.STORAGE_ENCRYPTION_KEY}' | base64 -d \\
+           | credentials derived authelia-storage-key import
+         At the same sitting: Authelia's storage encryption key, carried
+         from the legacy cluster before Wave A1's head. Escrows it as the
+         next generation of authelia/storage-key, refusing a key shorter
+         than Authelia accepts, then seals what the escrow holds into the
+         apps stack's config. Commit the escrow file and Pulumi.apps.yaml.
+         A seal that fails after the escrow is finished by `seal`, not by
+         a second import, which would file the same key again.
 
   carrying the mail relay's DKIM key from the legacy cluster
     kubectl --context <legacy> -n mail-system get secret cert-dkim-exim \\
@@ -237,6 +247,13 @@ _ORDER = """when to run what:
          into the apps stack's config; commit Pulumi.apps.yaml. Once the
          legacy cluster is gone it is held nowhere else; losing it costs a
          new key under a new selector, and no data.
+
+  after the cluster is rebuilt
+    credentials derived authelia-storage-key seal
+         Authelia's storage encryption key is escrowed, so its Secret is
+         sealed again from the escrow to the new cluster's certificate;
+         without it the backups of Authelia's database do not open.
+         Commit Pulumi.apps.yaml.
 
   on a workstation that develops without the kit
     Copy the .credentials directory from a machine that has one: the
@@ -794,7 +811,8 @@ def build_parser() -> argparse.ArgumentParser:
             'cluster. A value the cluster consumes is sealed to the '
             "cluster's certificate with kubeseal and written, as ciphertext anyone may read, into the "
             'configuration of the stack that declares it; `seal` writes that copy for a row recorded before '
-            'the cluster existed. `ls`, `check` and `sync` act on the map rather than on one row.'
+            'the cluster existed, and for an escrowed row the cluster consumes, from the escrow. `ls`, '
+            '`check` and `sync` act on the map rather than on one row.'
         ),
         epilog=_see_also('§3'),
     )
@@ -1431,6 +1449,16 @@ def build_parser() -> argparse.ArgumentParser:
                 action='store_true',
                 help='read it from its workstation slot instead of standard input',
             )
+            if label.name == escrow.AUTHELIA_STORAGE_KEY:
+                adopt.description = (
+                    f'{adopt.description} The cluster consumes this row, so the same run then seals what the '
+                    'registry holds -- the newest generation, read back out of its ciphertext -- with kubeseal and '
+                    "writes the ciphertext into the apps stack's config; the stack is held to exist before anything "
+                    'is escrowed, and a seal that fails after the escrow is repaired with `seal`, not with a second '
+                    'import. The value is the one the legacy cluster holds, piped from its Secret by the command '
+                    'this prints, and is refused under the length Authelia accepts.'
+                )
+                _add_bundle_dir(adopt)
         else:
             recording = escrow_verbs.add_parser(
                 'record',
@@ -1466,6 +1494,22 @@ def build_parser() -> argparse.ArgumentParser:
             '--generation', type=int, default=None, metavar='<n>', help='which generation to open (default: the newest)'
         )
         _ = recover.add_argument('--stdout', action='store_true', help='print it instead of writing the slot it has')
+        if label.name == escrow.AUTHELIA_STORAGE_KEY:
+            storage_seal = escrow_verbs.add_parser(
+                'seal',
+                help="seal the newest escrowed generation into the apps stack's config",
+                description=(
+                    "Open the newest generation of this row with the kit's recovery key, fetch the sealing "
+                    "certificate from the cluster's sealed-secrets controller with the kubeconfig in the physical "
+                    "stack's state, seal the key with kubeseal for the Secret the Authelia server reads, bound to "
+                    "its name and namespace, and write the ciphertext in the clear into the apps stack's config, "
+                    'reading it back. `import` seals in the same run; this is the step after a rebuild, after an '
+                    'import whose seal failed -- a second import would file the same key again -- and after a '
+                    '`generate` on an installation whose Authelia has no database yet. Refused, writing nothing, '
+                    'while nothing is escrowed. Every run writes fresh ciphertext. Then commit the config.'
+                ),
+            )
+            _add_bundle_dir(storage_seal)
         if label.name == escrow.PHYSICAL_PASSPHRASE:
             moving = escrow_verbs.add_parser(
                 're-encrypt',
@@ -2018,6 +2062,22 @@ def main(argv: list[str] | None = None) -> int:
                 _ = derived.backup_age_recipient(escrow.Vault.open(store, registry), args.label, recipients_file=target)
             case ('derived', row, 'generate') if row in escrow.rows():
                 _write_slot(args.label, escrow.generate(escrow.Vault.open(store, registry), args.label))
+            # The escrowed row the cluster consumes: escrowed, then sealed
+            # from the escrow, with the cluster's certificate fetched before
+            # anything is filed.
+            case ('derived', derived.AUTHELIA_STORAGE_KEY_ROW, 'import'):
+                # The pipe first, then the read, both ahead of the kit: a run
+                # started bare to learn the pipe is answered before it waits.
+                derived.authelia_storage_key_announce()
+                value = _imported(args)
+                open_stack = _opener(args, store, registry)
+                _ = derived.authelia_storage_key_import(
+                    escrow.Vault.open(store, registry), value, sealer=_sealer(open_stack)
+                )
+            case ('derived', derived.AUTHELIA_STORAGE_KEY_ROW, 'seal'):
+                _ = derived.authelia_storage_key_seal(
+                    escrow.Vault.open(store, registry), sealer=_sealer(_opener(args, store, registry))
+                )
             case ('derived', row, 'import') if row in escrow.rows():
                 # Read before the kit is unlocked, so an empty pipe is refused
                 # without a password prompt in front of it.

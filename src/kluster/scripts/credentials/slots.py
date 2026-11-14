@@ -267,10 +267,10 @@ class SealedSecret:
     and the stack that declares it, and from which the configuration path
     follows, so the command that seals it and the program that reads it name
     one place. Written by the command that obtains the value, in the same
-    run, or by the row's `seal` from the configuration that already holds a
-    value recorded before there was a cluster (`sealing.py`), and never by
-    `sync`: a seal is fresh ciphertext every time, so it is a delivery and
-    not a copy.
+    run, or by the row's `seal` from where the value is already held: the
+    configuration a value recorded before there was a cluster sits in, or the
+    escrow (`sealing.py`). Never by `sync`: a seal is fresh ciphertext every
+    time, so it is a delivery and not a copy.
     """
 
     #: The sealed value, by its row of the census; named as every other
@@ -1366,6 +1366,17 @@ ROWS: dict[str, Row] = {
         # automation takes the ops repository's payload, so alertmanager posts
         # to a webhook of its own, the row below (rfc-007 §7.3).
         targets=(Slot(repository=conventions.forge.OPS.full_name, name=HA_WEBHOOK_URL),),
+    ),
+    derived.AUTHELIA_STORAGE_KEY_ROW: Row(
+        register='Authelia storage encryption key',
+        source=Derived(escrow.AUTHELIA_STORAGE_KEY),
+        # The escrow copy is the recovery root, and the sealed copy is the one
+        # the server reads, sealed from the escrow by the row's own `import`
+        # and `seal` rather than by `sync`: a seal is a delivery, not a copy.
+        targets=(
+            EscrowCopy(escrow.AUTHELIA_STORAGE_KEY),
+            SealedSecret(conventions.sealed.AUTHELIA_STORAGE_KEY),
+        ),
     ),
     'alert-webhook': _sealed_record('alert-webhook'),
     'dkim-exim': _sealed_record('dkim-exim'),
