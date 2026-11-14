@@ -39,7 +39,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from device_places import DEVICE_ARTIFACT, DEVICE_DIRECTORY, DEVICE_FILE
 from mock_monitor import Recorder, declaring, run_with
 from pulumi.runtime import rpc
-from shimmed_serialization import serialized
+from serialized_provider import serialized
 
 from kluster.lib.secret import Secret
 from kluster.providers.configured import FINGERPRINT_LENGTH, PROVIDER_VERSION, SESSION

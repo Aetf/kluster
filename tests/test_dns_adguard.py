@@ -82,7 +82,7 @@ import requests
 from mock_monitor import Recorder, declaring, run_with
 from pulumi.runtime import rpc
 from requests.auth import AuthBase, HTTPBasicAuth
-from shimmed_serialization import serialized
+from serialized_provider import serialized
 
 from kluster.providers import adguard, adguard_rewrites, configured
 from kluster.providers.adguard import (
