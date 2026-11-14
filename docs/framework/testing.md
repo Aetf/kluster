@@ -513,11 +513,11 @@ failure printed beside it. The same wait awaits every output the SDK still
 tracks (`wait_for_rpcs(await_all_outstanding_tasks=True)` in
 `pulumi/runtime/stack.py`): the future behind each output, which leaves the
 SDK's set when it succeeds or when an output derived from it takes it over,
-and stays there when it fails. The wait re-raises each such failure but
-`ResourceRegistrationFailed`, the engine's report of a resource that failed to
-register, which the program goes on past. So an output that failed fails the
-deployment even where no RPC carries the failure, as one nothing declared
-reads does. So `tests/conftest.py` does the wait for every case. Its
+and stays there when it fails. The wait re-raises every such failure. A
+resource the engine reports as failed to register adds none to it: the SDK
+resolves that resource's outputs as unknown rather than failing them, and the
+program goes on. So an output that failed fails the deployment even where no
+RPC carries the failure, as one nothing declared reads does. So `tests/conftest.py` does the wait for every case. Its
 `pytest_runtest_setup` hook marks where the case begins on every run `run_with`
 started, and its `pytest_runtest_call` hook, once the case has returned and
 before any fixture is torn down, so that what is still in flight finishes

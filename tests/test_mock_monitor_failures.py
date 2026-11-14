@@ -38,9 +38,8 @@ ROOT = Path(__file__).parent.parent
 #: output failed that nothing declared reads, so no RPC carries the failure;
 #: one leaves such an output failing only once everything else has settled,
 #: which the judgment waits for; and one leaves such an output beside a
-#: refusal it receives, of another root. Each of the others meets a failure the case does receive, or none,
-#: or the one a real run passes over -- an output faulted as the engine
-#: faults a resource that failed to register -- and must pass. One of those
+#: refusal it receives, of another root. Each of the others meets a failure
+#: the case does receive, or none, and must pass. One of those
 #: receives a refusal that failed several outputs and no RPC, and the receipt
 #: covers them all; another receives a refusal whose resource's outputs fail
 #: with the SDK's exception around it, which the receipt covers by its root.
@@ -51,7 +50,6 @@ import pulumi
 import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with, the_run_failed_with
-from pulumi.runtime.stack import ResourceRegistrationFailed
 
 THING = 'test:index:Thing'
 
@@ -204,13 +202,6 @@ async def test_an_output_that_fails_only_once_everything_else_has_settled() -> N
 
     _ = pulumi.Output.from_input(refuses_later())
 
-
-@pytest.mark.asyncio
-async def test_an_output_faulted_as_a_resource_that_failed_to_register() -> None:
-    async def failed() -> str:
-        raise ResourceRegistrationFailed('resource thing [test:index:Thing] failed to register')
-
-    _ = pulumi.Output.from_input(failed())
 """
 
 #: The child's cases on one run the module shares, started by a module-scoped
@@ -469,7 +460,6 @@ def test_a_failure_no_case_received_fails_the_case_that_caused_it_and_no_other(t
         'test_a_refusal_that_fails_several_outputs_received_once': [],
         'test_an_output_failed_beside_a_refusal_the_case_receives': ['mock_monitor.UnreceivedFailure'],
         'test_an_output_that_fails_only_once_everything_else_has_settled': ['mock_monitor.UnreceivedFailure'],
-        'test_an_output_faulted_as_a_resource_that_failed_to_register': [],
         'test_the_first_case_on_a_shared_run': [],
         'test_a_duplicate_a_later_case_declares_on_a_shared_run': ['mock_monitor.UnreceivedFailure'],
         'test_a_refusal_a_later_case_receives_on_a_shared_run': [],
