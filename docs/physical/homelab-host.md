@@ -111,7 +111,7 @@ the UDM's FRR names it as a BGP neighbor and because on day 1 apid has
 no way to discover an address it was not told; with no DHCP on the VLAN
 there is no lease, reservation or pool to reconcile it against. v6 is the SLAAC
 GUA from the UDM's RA on this network (architecture.md §3.5's
-qbittorrent path expects that GUA) plus the VLAN's ULA /64.
+qbittorrent path expects that GUA).
 
 **The worker's MAC is declared, `52:54:00:07:00:0a`**
 (`conventions.HOMELAB_NODE_MAC`), on the domain's one interface,

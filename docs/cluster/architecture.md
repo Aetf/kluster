@@ -539,6 +539,28 @@ belongs to — this section holds the cluster-level statements).
     rather than switching it on for every pod (rfc-007 §4.5). A pod on
     the host network is outside the baseline and still reaches the
     endpoint, the residual security-audit.md H1 records.
+-   **Application pod → the home and the management plane, closed by
+    the application base**: an application runs code the installation
+    did not write, reached from the internet (threat-model.md §2.6 and
+    threat-model.md §2.9). Once such a pod is compromised, two paths
+    would otherwise carry it further: the allow from the cluster zone
+    toward the home (physical/gateway.md §4.2 rule 3), to the home
+    networks on every protocol, and KubeSpan's entry on every node, to
+    every node's management ports. So every application namespace
+    carries an egress block beside its
+    default-deny (cluster-infra.md §2, workloads.md §1): private space
+    outside the pod, Service and `lan` pool ranges, a node's listeners
+    and the kube-apiserver are denied, and what a workload calls there is
+    declared on its namespace with the reason and carved out of the
+    deny. Egress elsewhere stays open. Its residuals: a platform
+    namespace and a pod on the host network are outside it; a home
+    machine's global IPv6 address, out of a delegated prefix no
+    declaration can name, stays reachable on any port from a pod on the
+    worker, and only as the internet reaches it from a pod on a cloud
+    node; and where Cilium does not hold a node's public address as the
+    node's, a pod's call to it leaves for the internet and returns as the
+    internet does, to the management ports the node firewall opens to
+    anywhere and to their own authentication.
 -   **Workload-origin risk, on record**: hath — a closed-source
     third-party binary serving public traffic and taking H@H network
     commands — runs on the combined CP+ingress nodes, one kernel away

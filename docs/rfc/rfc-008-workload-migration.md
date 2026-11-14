@@ -31,6 +31,14 @@
     from the MAC and the IoT VLAN's /64, so the stable-privacy address
     of the line above is gone. physical/gateway.md §4.2 states the host
     setting and the sitting it is made in.
+*   **Updated:** 2026-11-14. The application base denies every
+    application pod private space outside the cluster, a node's
+    listeners and the kube-apiserver
+    ([Aetf/kluster-ops#718](https://github.com/Aetf/kluster-ops/issues/718)),
+    so §4.1's device relay and slice 26 declare the device as the relay
+    namespace's reach, slice 8 declares the database's API clients and
+    labels their pods, and §5.2's verification reads the block on the
+    first application namespace.
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules
@@ -1035,7 +1043,13 @@ that names a device: a `socat` pod pinned to the worker, in a namespace
 of its own, which the routes' Service selects. It forwards at L4, so an
 upgrade to a socket passes and the `X-Forwarded-For` Envoy sets arrives
 untouched. Its namespace admits the `ingress` entity alone and lets the
-pod out to the device's address and port alone. Its connection leaves
+pod out to the device's address and port alone. The device's address and
+port are also the namespace's declared reach, which carves them out of
+the egress block every application namespace carries
+(declarative/workloads.md §1): the relay's own policy is what keeps its
+pod off the internet and off the rest of the cluster, and the reach is
+what lets that policy's one allow through. Both come from the one
+`Device`. Its connection leaves
 masqueraded to the worker's own address, `conventions.HOMELAB_NODE_IPV4`,
 which the allow from the cluster zone toward the home networks already
 admits (physical/gateway.md §4.2), so nothing changes at the gateway.
@@ -1679,6 +1693,24 @@ is part of the verification, and closes the two items the bring-up's
 gate could not run: the filter failing closed, and the canary alerting.
 The third, a writer key's prefix isolation, is read at the head, once
 the keys are sealed.
+
+**The application base's egress block is read on the first application
+namespace** (declarative/cluster-infra.md §2), from an application pod,
+each reading the falsifier of one statement of its design
+([Aetf/kluster-ops#718](https://github.com/Aetf/kluster-ops/issues/718)).
+A name resolves, an in-cluster Service answers and an internet host
+answers, in both families, and a failure there is the baseline's too,
+since both turn default-deny off by the same field, so it stops the
+wave. The canary's request at the Gateway's address is answered on a
+cloud node and on the worker. A home address, the gateway's leg and its
+overlay address do not connect. Neither apid nor the kubelet connects
+at the pod's own node, at another node's address or at another node's
+KubeSpan address. `kubernetes.default` does not connect from a pod
+without the client label, and a scheduled backup completes. The API's
+opening to a labelled pod is read with the first database, whose first
+instance comes up, the job that initializes it included, and whose
+drill runs (slice 8); and a reach opening its port alone with the device
+relay, in Wave B's verification (slice 26).
 
 ### 5.3 Wave A2: blog, splitpro, matrix, syncthing, stdiscosrv
 
@@ -2679,7 +2711,11 @@ when the operator is ready to approve that apply. **After** slice 5.
     a single instance, the barman plugin to the backup bucket under the
     namespace's sealed writer key, scheduled by its class, a server name
     with its generation, an optional recovery from a named object store
-    with its credential, and the restore drill with its rule;
+    with its credential, and the restore drill with its rule; the
+    namespace declares its API clients, and the instance pods carry
+    `conventions.API_CLIENT_LABEL` through the `Cluster`'s
+    `inheritedMetadata`, the drill's pod through its template
+    (declarative/workloads.md §1);
     workloads.md §4, storage.md §5 and operations.md §4 are true.
 *   **Owned paths**: `src/kluster/components/apps/database.py` (new),
     `tests/test_apps_database.py` (new),
@@ -2691,7 +2727,14 @@ when the operator is ready to approve that apply. **After** slice 5.
     from the store it is handed and archives to the bucket (archive back
     to the legacy store); the drill's role reaches only its namespace,
     and its rule carries a tier and a playbook that resolves (grant it
-    cluster-wide; name a missing section).
+    cluster-wide; name a missing section); the instance pods and the
+    drill's pod carry the API client label in a namespace that declares
+    its clients (drop the label from either).
+*   **Unproven live**: that each pod the database operator creates, the
+    job that initializes the instance included, inherits the label. If
+    it does not, the slice reads which labels that pod does carry, and
+    the declaration names the operator's own in place of the
+    repository's.
 
 **Slice 9: static sites.** Pre-live. **After** slice 8.
 
@@ -2822,7 +2865,8 @@ to 9, which own `docs/declarative/workloads.md` before it.
 *   **Done means**: one component takes an `Exposure` that names a
     device and declares its namespace, a `socat` pod pinned to the
     worker that forwards to the device's address and port, the Service
-    its routes select, and the policy of §4.1; a device with
+    its routes select, and the policy of §4.1, with the device's address
+    and port as the namespace's reach; a device with
     `self_signed` is dialed over TLS, its certificate unverified; the
     component is not wired; workloads.md §4 states §4.1's rule for an
     end the data plane does not reach, in place of its selectorless
@@ -2833,7 +2877,9 @@ to 9, which own `docs/declarative/workloads.md` before it.
 *   **Tests that fail without it**: the pod schedules to the worker
     alone (drop the selector); it is let out to the device's address
     and port and nowhere else, and admits the `ingress` entity alone
-    (allow the device's network; admit `world`); every `Route` of the
+    (allow the device's network; admit `world`); its namespace declares
+    the device's address and port as its reach (declare none); every
+    `Route` of the
     `Exposure` is backed by the relay's Service (back one of two); a
     `self_signed` device is dialed over TLS and any other in the clear
     (dial every device in the clear); an `Exposure` without a device is

@@ -176,6 +176,18 @@ raw port
     `routes.SiteForward`). The Gateways' own ports are no application's and
     are not raw ports (`cluster.GATEWAY_PORTS`).
 
+private space
+    Every private-use IPv4 address (RFC 1918) and every unique-local IPv6
+    address (`fc00::/7`), as the address plan of the internet sets them
+    aside (`kluster.lib.k8s.PRIVATE_SPACE`): where the home, the overlay,
+    the cloud network and the nodes are numbered, and the cluster's pods,
+    Services and `lan` pool too. Private space outside the cluster is
+    what the application base denies, private space less the ranges of
+    the pods, the Services and the `lan` pool
+    (`kluster.lib.k8s.NON_NODE_CLUSTER_RANGES`), so the node networks are
+    in it; the node firewall's cluster ranges, which admit the node
+    networks, are the other set (`components.talos.CLUSTER_RANGES`).
+
 CI
     This repository's own GitHub Actions, the deployment pipeline
     (cluster/architecture.md §4.3; `overlay.Role.CI`, `overlay.CI_MEMBERS`).
@@ -218,6 +230,7 @@ from kluster.conventions.cloud import (
     node_volume_mount,
 )
 from kluster.conventions.cluster import (
+    API_CLIENT_LABEL,
     BGP_SECRETS_NAMESPACE,
     CERT_MANAGER_NAMESPACE,
     CLUSTER_ASN,
@@ -326,6 +339,7 @@ __all__ = (
     'ANCHOR_LABEL',
     'ANCHOR_TTL',
     'ANCHOR_VIP1',
+    'API_CLIENT_LABEL',
     'B2_ACCOUNT',
     'BACKUP_VERSION_RETENTION_DAYS',
     'BGP_SECRETS_NAMESPACE',

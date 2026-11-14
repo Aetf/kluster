@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import Enum
 from ipaddress import IPv4Network, IPv6Network
+from types import MappingProxyType
 from typing import Literal, NamedTuple
 
 from kluster.conventions.cloud import NODE_VOLUMES, USER_VOLUME_ROOT
@@ -12,6 +14,8 @@ from kluster.conventions.identity import LABEL_DOMAIN
 #: Talos/Cilium pod and service ranges, IPv4 first (architecture.md §1.3).
 #: Deliberately not 10.42/10.43: those are the legacy k3s cluster's, and the
 #: two clusters are routed to each other for the length of the migration.
+#: Each is private space, which the application base's egress block denies
+#: an application pod but for these ranges and the `lan` pool's.
 POD_CIDR_V4 = IPv4Network('10.244.0.0/16')
 POD_CIDR_V6 = IPv6Network('fd00:10:244::/56')
 SERVICE_CIDR_V4 = IPv4Network('10.96.0.0/12')
@@ -77,6 +81,13 @@ POOL_WORKER = 'worker'
 #: `serviceSelector` matches on it.
 LB_POOL_LABEL = f'{LABEL_DOMAIN}/lb-pool'
 
+#: The label a pod carries to call the kube-apiserver from an application's
+#: namespace, as the one-entry mapping a pod's template carries. The
+#: application base denies the API to every pod there that does not carry it,
+#: and to every pod of a namespace that declares no API clients
+#: (`kluster.lib.k8s.ApiClients`), so on its own it opens nothing.
+API_CLIENT_LABEL: Mapping[str, str] = MappingProxyType({f'{LABEL_DOMAIN}/api-client': 'true'})
+
 #: The label a restic source carries its retention class's name under.
 #: VolSync's own metrics carry no class, so a series that needs one takes it
 #: from here (declarative/workloads.md §3).
@@ -125,7 +136,12 @@ KUBESPAN_MTU = 1420
 
 
 class Transports(Enum):
-    """The transport protocols a raw port is served on, which one listener carries together."""
+    """The transport protocols one port is named on, together.
+
+    A raw port is served on them, one listener carrying both where it names
+    both (`conventions.routes.Port`), and a pod's reach to an address in
+    private space is opened on them (`kluster.lib.k8s.Reach`).
+    """
 
     TCP = 'tcp'
     UDP = 'udp'
