@@ -399,9 +399,10 @@ both IP families (cluster-infra.md §2).
     not a cost of any one row: ahead of the IoT drop, the firewall
     allows Home Assistant's own address, in each family, to the whole
     `lan` pool on every protocol (physical/gateway.md §4.2 rule 1),
-    from `conventions.site.HOME_ASSISTANT`. A reservation keyed on its
-    MAC holds the IPv4 address; its ULA is a stable-privacy address, which
-    a reinstall of Home Assistant moves (physical/gateway.md §4.2). It covers `lan`, `media` and any raw VIP, so
+    from `conventions.site.HOME_ASSISTANT`. Both addresses follow its MAC:
+    a reservation keyed on the MAC holds the IPv4 address, and the ULA is
+    the EUI-64 address Home Assistant's interface forms from it, which the
+    convention derives rather than states (physical/gateway.md §4.2). It covers `lan`, `media` and any raw VIP, so
     a row on a home Gateway is reachable from Home Assistant on the day
     it lands, and no row names a client. A node's own address stays
     behind the IoT drop of the inbound pair, since nothing answers a

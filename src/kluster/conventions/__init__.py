@@ -314,6 +314,7 @@ from kluster.conventions.site import (
     SiteHost,
     SiteNetwork,
     Vip,
+    eui64_address,
     eui64_link_local,
     ula_subnet,
 )
@@ -431,6 +432,7 @@ __all__ = (
     'Vip',
     'alert',
     'barman_repo_path',
+    'eui64_address',
     'eui64_link_local',
     'forge',
     'gateway',

@@ -223,7 +223,12 @@ contents, so nothing is discovered mid-bootstrap:
     host-side `virsh define` restores the machine from. This program
     declares nothing about that domain (declarative/physical.md §3), so
     the change-set is where it is versioned and where the disk path it
-    names is kept in step with the subvolume above;
+    names is kept in step with the subvolume above. The MAC its
+    interface carries is the one `conventions.site.HOME_ASSISTANT`
+    declares, and both of Home Assistant's addresses follow it — the
+    controller's reservation and the EUI-64 ULA (gateway.md §4.2) — so
+    it is §2's rule applied to a guest this program does not declare,
+    and a change to it in the XML moves both;
 -   a **dedicated service user** and its SSH identity for the libvirt
     provider (`qemu+ssh://` over the CI ZeroTier join), declared like
     every other system account in the change-set — a `systemd-sysusers`

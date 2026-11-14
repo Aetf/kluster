@@ -3,8 +3,9 @@
 Every IPv6 prefix here is *derived* from its IPv4 sibling rather than written
 beside it. The site numbers each /64 out of `SITE_ULA` after the third octet of
 the IPv4 subnet, spelled as those same digits, so a pair that disagrees cannot
-be declared. A link-local address is derived too, from the MAC of the NIC that
-forms it (`eui64_link_local`).
+be declared. An address an interface forms from its MAC is derived too — a
+link-local, or a host's ULA on its network's /64 — from the MAC it is formed
+from (`eui64_address`).
 """
 
 from __future__ import annotations
@@ -41,26 +42,46 @@ _LINK_LOCAL = IPv6Network('fe80::/64')
 _MAC_OCTETS = 6
 _UNIVERSAL_LOCAL_BIT = 0x02
 
+#: The prefix length an interface identifier completes: the identifier is the
+#: low 64 bits (RFC 4291 §2.5.1).
+_IDENTIFIER_PREFIXLEN = 64
 
-def eui64_link_local(mac: str) -> IPv6Address:
-    """The link-local address a NIC forms from its MAC: `fe80::/64` and the MAC's modified EUI-64.
 
-    The identifier is the MAC split in half around `ff:fe`, with the
-    universal/local bit of its first octet inverted (RFC 4291 Appendix A).
-    It is the address Linux forms on a link while the interface's
-    `addr_gen_mode` is EUI-64 — the kernel's default, which a `stable_secret`
-    would replace with stable-privacy — so a declaration that names a guest's
-    link-local derives it from the MAC the guest is declared with, and a
-    replaced guest forms the same address.
-    """
+def _mac_octets(mac: str) -> bytes:
+    """The six octets of a MAC written as colon-separated hex, or a refusal naming it."""
     try:
         octets = bytes.fromhex(mac.replace(':', ''))
     except ValueError:
         octets = b''
     if len(octets) != _MAC_OCTETS:
         raise ValueError(f'{mac!r} is not a MAC address')
+    return octets
+
+
+def eui64_address(network: IPv6Network, mac: str) -> IPv6Address:
+    """The address a NIC forms on a /64 from its MAC: the prefix and the MAC's modified EUI-64.
+
+    The identifier is the MAC split in half around `ff:fe`, with the
+    universal/local bit of its first octet inverted (RFC 4291 Appendix A).
+    It is the one Linux forms while the interface's `addr_gen_mode` is
+    EUI-64 — the kernel's default, which a `stable_secret` would replace with
+    stable-privacy — and NetworkManager's `ipv6.addr-gen-mode eui64` asks for
+    the same. The interface puts it under `fe80::/64` for its link-local, and
+    under every /64 a router advertises for stateless autoconfiguration
+    (RFC 4862 §5.5.3), so a declaration that names such an address derives it
+    from the MAC the machine is declared with, and a replaced machine that
+    keeps the MAC forms the same address.
+    """
+    if network.prefixlen != _IDENTIFIER_PREFIXLEN:
+        raise ValueError(f'{network} is not a /64, which is what an interface identifier completes')
+    octets = _mac_octets(mac)
     identifier = bytes((octets[0] ^ _UNIVERSAL_LOCAL_BIT, *octets[1:3], 0xFF, 0xFE, *octets[3:]))
-    return _LINK_LOCAL.network_address + int.from_bytes(identifier, 'big')
+    return network.network_address + int.from_bytes(identifier, 'big')
+
+
+def eui64_link_local(mac: str) -> IPv6Address:
+    """The link-local address a NIC forms from its MAC: `eui64_address` under `fe80::/64`."""
+    return eui64_address(_LINK_LOCAL, mac)
 
 
 @dataclass(frozen=True)
@@ -173,31 +194,45 @@ LAN_POOL = AddressPool(
 
 @dataclass(frozen=True)
 class SiteHost:
-    """A machine at the site that a declaration names by address, in both families, on its own network."""
+    """A machine at the site that a declaration names by address, in both families, on its own network.
+
+    Its ULA is not written beside its MAC but derived from it: it is the
+    address the host forms on its network's /64 by stateless
+    autoconfiguration, with the modified EUI-64 of the MAC as its identifier
+    (`eui64_address`). So the two cannot be declared apart, and a host is one
+    this type declares only while its interface forms its ULA that way.
+    """
 
     network: SiteNetwork
     v4: IPv4Address
-    v6: IPv6Address
+    #: The MAC of the host's interface on its network, which its ULA is formed from.
+    mac: str
 
     def __post_init__(self) -> None:
-        if self.v4 not in self.network.v4 or self.v6 not in self.network.v6:
-            raise ValueError(f'{self.v4} and {self.v6} are not both on the {self.network.name} network')
+        if self.v4 not in self.network.v4:
+            raise ValueError(f'{self.v4} is not on the {self.network.name} network')
+        _ = _mac_octets(self.mac)
+
+    @property
+    def v6(self) -> IPv6Address:
+        """The host's ULA: its network's /64 and its MAC's modified EUI-64."""
+        return eui64_address(self.network.v6, self.mac)
 
 
 #: Home Assistant, on the IoT VLAN with the devices it drives. Its
 #: integrations are how the home automates what the cluster's applications
 #: do, so it reaches the whole `lan` pool (physical/gateway.md §4.2), and its
-#: name is answered by a relay to its IPv4 address (rfc-008 §4.1). The
-#: controller's fixed-IP reservation for its MAC holds the IPv4 address, and
-#: survives a reinstall. The ULA is a stable-privacy address its
-#: NetworkManager derives from the VLAN's /64, the interface, the connection
-#: profile's stable id and a secret key the host generated: it holds while
-#: all four do, and a reinstall, or a lost `/var/lib/NetworkManager/secret_key`,
-#: moves it under the same prefix. Nothing reports the move; a firewall rule
-#: that names a moved address fails silently. Whether to pin it is
-#: Aetf/kluster-ops#722.
+#: name is answered by a relay to its IPv4 address (rfc-008 §4.1). Both its
+#: addresses follow its MAC, the one its domain's definition on the homelab
+#: host sets (physical/homelab-host.md §4): the controller's fixed-IP
+#: reservation for the MAC holds the IPv4 address, and the ULA is the EUI-64
+#: one because its interface runs `addr-gen-mode eui64`, a setting of the host
+#: and not of this program (physical/gateway.md §4.2). A reinstall leaves that
+#: setting at its default, which forms a different ULA under the same prefix,
+#: so it is made again before the allow can match; a changed MAC moves both
+#: addresses.
 HOME_ASSISTANT = SiteHost(
     network=IOT_VLAN,
     v4=IPv4Address('192.168.90.243'),
-    v6=IPv6Address('fd1a:665f:8bcb:90:38:692d:fe79:611'),
+    mac='52:54:00:8c:5d:10',
 )

@@ -25,6 +25,12 @@
     Aetf/kluster-ops#722. §9's row for gateway.md, "a single host as a
     literal" narrowed to destinations: a single host is a literal on
     either side.
+*   **Updated:** 2026-11-13. §4.1's ULA is pinned by Home Assistant's
+    MAC (Aetf/kluster-ops#722): its interface runs `addr-gen-mode
+    eui64`, and `conventions.site.HOME_ASSISTANT` derives the address
+    from the MAC and the IoT VLAN's /64, so the stable-privacy address
+    of the line above is gone. physical/gateway.md §4.2 states the host
+    setting and the sitting it is made in.
 *   **Authority:** AGENTS.md,
     [framework/dispatch.md](../framework/dispatch.md),
     [framework/rfc.md](../framework/rfc.md) and the style rules

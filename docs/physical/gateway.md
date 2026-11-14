@@ -2934,14 +2934,43 @@ leg itself, and the controller stores the shape with the flag off (read
     cluster's applications do, so its reach is a requirement of the
     design rather than a cost of any one application, and a VIP is
     reachable from it on the day a row lands there, raw or proxied.
-    Its source is its own address. The controller's fixed-IP
-    reservation for its MAC holds the IPv4 address, through a
-    reinstall. The ULA is a stable-privacy address, derived from the
-    prefix, the interface, the connection profile's stable id and a
-    secret key the host generated, so a reinstall, or a lost
-    `/var/lib/NetworkManager/secret_key`, moves it under the same
-    prefix. A moved address fails the allow silently, and nothing
-    reports it; whether to pin the ULA is Aetf/kluster-ops#722. Then
+    Its source is its own address, and both families follow its MAC,
+    the one its domain's definition on the homelab host sets
+    (homelab-host.md §4). The controller's fixed-IP reservation for the
+    MAC holds the IPv4 address, through a reinstall. The ULA is the
+    EUI-64 address the interface forms from the same MAC on the IoT
+    VLAN's /64, and `conventions.site.HOME_ASSISTANT` declares the MAC
+    and derives the ULA from it rather than stating the address, so the
+    allow names an address only the MAC can move.
+    **That rests on a setting of the host, outside this program**:
+    Home Assistant's interface runs `addr-gen-mode eui64`, made with
+    `ha network update <interface> --ipv6-method auto
+    --ipv6-addr-gen-mode eui64 --ipv6-privacy disabled`, the interface
+    being the one `ha network info` lists on the IoT VLAN. The method
+    and the privacy setting are stated because Supervisor rebuilds the
+    interface's whole IPv6 setting from the request, every key the
+    request leaves out at its default: the default method is `static`,
+    under which no address is formed, and the default privacy setting
+    defers to the host's own default and then the kernel's, which may prefer a
+    temporary address as the source of Home Assistant's connections, an
+    address no allow names.
+    The mode's default is a stable-privacy address, which hashes a
+    secret key the host generated, and a reinstall leaves the mode at
+    that default, so the setting is made again after one. Making it
+    moves the address, so it is made in the sitting of the `physical`
+    run whose preview shows the allow's IPv6 policy taking the derived
+    address (gateway-cutover.md §5, step 5): whichever of the two lands
+    alone leaves the IPv6 allow missing, silently, while IPv4 still
+    answers. It holds when `ha network info` reports, on that
+    interface, IPv6 privacy `disabled` and the address the convention
+    derives:
+
+    ```sh
+    mise x uv -- uv run python -c 'from kluster import conventions as c; print(c.HOME_ASSISTANT.v6)'
+    ```
+
+    A different address means the interface does not form EUI-64
+    addresses, or carries a MAC other than the one declared. Then
     the drop: IoT → the rest of the pool (admin UIs — immich,
     qbittorrent, grafana — stay unreachable from the rest of the
     LAN's least-trusted population). The media allow and the drop take the
