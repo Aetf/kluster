@@ -241,9 +241,12 @@ Each of these carries its reason, and these are accepted residuals:
     `chart-metrics-server` (`Pulumi.yaml` says why beside them);
 -   the Pulumi provider plugins, the bridge and the providers it fetches
     (`Pulumi.yaml` says why beside its `packages:` block);
--   the Talos factory images, fetched by schematic and release: the public
-    Image Factory publishes no checksum, and OCI imports the cloud image
-    from a URL with no digest;
+-   every Talos image fetched from the Image Factory, by schematic and
+    release: the public factory publishes no checksum, so what vouches
+    for one is the factory's TLS and the download's completeness, and
+    whatever is made from it carries no more than that. Today that is
+    the worker's disk, and the cloud nodes' image, which OCI imports from
+    an archive of the download in `physical`'s own bucket;
 -   an image a chart deploys, pinned as that chart's own values pin it:
     the chart's digest fixes the reference, and a reference that is a
     version tag can be pushed again by its publisher. Overriding every

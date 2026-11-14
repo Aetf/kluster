@@ -292,13 +292,22 @@ regardless of where the cloud pool lands. The bucket, its keys and its
 lifecycle rules are Pulumi-managed, declared by the `physical` stack
 (`BackupBucket`).
 
-It is not the installation's only bucket. The state backend keeps two
-of its own: its dumps land in a bucket on the same B2 account
-(`kluster-state-backend`, physical/state-backend.md §5), and its boot
-image is imported through an OCI Object Storage bucket, which holds
-nothing the placement rule insures. Both are declared by the
-`state-backend` stack, whose state is committed to this repository
-rather than kept in the backend it creates (framework/ci.md §1).
+It is not the installation's only bucket. Every other bucket is
+declared by the stack it serves, beside what it serves, and one on OCI
+holds only what is staged there on the way to an image import, which
+is nothing the placement rule insures. Today those are:
+
+-   the state backend's dump bucket on the same B2 account
+    (`kluster-state-backend`, physical/state-backend.md §5);
+-   the OCI Object Storage bucket the state backend's boot image is
+    imported through;
+-   the OCI Object Storage bucket in `physical`'s compartment that the
+    cloud nodes' Talos image is imported through (declarative/physical.md
+    §1).
+
+The state backend's buckets are declared by the `state-backend` stack,
+whose state is committed to this repository rather than kept in the
+backend it creates (framework/ci.md §1).
 
 **Backup-integrity rules (2026-08-23)** — backups are the actual HA
 mechanism (§5), so backup *deletability* is a first-class threat

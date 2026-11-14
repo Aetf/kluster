@@ -4,7 +4,8 @@ The fleet runs two artifacts of the same family, and neither of them is a stock
 image:
 
 -   the **cloud nodes** boot an OCI custom image. There is no official Talos
-    image in OCI's catalog, so one is built by the Image Factory and imported.
+    image in OCI's catalog, so one is built by the Image Factory and imported
+    from an archive in an Object Storage bucket of the stack's own (below).
 -   the **homelab worker** boots a `nocloud` disk image written into a libvirt
     volume. Its schematic is not the cloud one — it carries the driver,
     firmware and GSC modules for the host's Arc A380, which the Wave C GPU
@@ -25,29 +26,53 @@ same schematic for the same platform, and the node's machine configuration
 names it (`kluster.components.talos.installer_patch`), where the upgrade
 runbook reads it (operations.md §2.1).
 
-**The worker's artifact takes a detour through the machine running the
-program.** The factory serves `nocloud` as `.raw.xz`; the libvirt provider does
-not decompress an xz source (dmacvicar/terraform-provider-libvirt#390) and a
-raw image cannot back a copy-on-write chain, so there is no way to hand libvirt
-the factory URL directly. `FactoryImage` — the custom provider in
-`kluster.providers.talos_factory` — fetches and decompresses it where the
-program runs, and the libvirt volume is created *from that file*, which the
-provider uploads into the pool over its own connection.
+**Both artifacts take a detour through the machine running the program.**
+`FactoryImage` — the custom provider in `kluster.providers.talos_factory` —
+fetches each where the program runs, into a file of the stack's own
+(`IMAGE_CACHE`), and what consumes the artifact is handed that file:
+
+-   The factory serves `nocloud` as `.raw.xz`; the libvirt provider does not
+    decompress an xz source (dmacvicar/terraform-provider-libvirt#390) and a
+    raw image cannot back a copy-on-write chain, so there is no way to hand
+    libvirt the factory URL directly. `FactoryImage` decompresses it, and the
+    libvirt volume is created *from that file*, which the provider uploads into
+    the pool over its own connection.
+-   The factory serves `oracle` as an uncompressed `.qcow2`, and OCI imports a
+    custom image only from an object in its own Object Storage: an external
+    URL is refused as an invalid `sourceUri`. Talos's Oracle guide (talos v1.13,
+    "Upload image") packages the qcow2 with an `image_metadata.json` that sets
+    the firmware to UEFI and names `VM.Standard.A1.Flex` among the image's
+    shapes, as one gzipped tar, uploads that to a bucket, and imports the image
+    from the object. `TalosImage` declares those steps: the file, the bucket,
+    the archive (`kluster.providers.oci_objects.ImageArchive`) and the import.
+
+**Nothing but the factory's TLS and a download that ended whole vouches for
+either file**: the worker's `xz` stream reaching its own end, the cloud qcow2
+reaching the length the factory declared for it (`talos_factory`). The public
+factory publishes no checksum for an artifact; its
+Enterprise service does (Talos v1.13, "Enterprise Image Factory", the feature
+comparison). The schematic id in the URL is the factory's content hash of the
+customization asked for, which pins what is built rather than the bytes
+served. The two artifacts take that trust alike.
 """
 
 from __future__ import annotations
 
 import abc
+import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import final
+from urllib.parse import urlsplit
 
 import pulumi
 import pulumi_oci as oci
 from pulumiverse_talos import imagefactory
 
+from kluster import conventions
 from kluster.lib import templates
+from kluster.providers.oci_objects import ImageArchive
 from kluster.providers.talos_factory import FactoryImage
 from putils import Component, async_output, resolve
 
@@ -93,6 +118,10 @@ HOMELAB_PLATFORM = 'nocloud'
 CLOUD_EXTENSIONS: tuple[str, ...] = ()
 HOMELAB_EXTENSIONS = ('siderolabs/i915', 'siderolabs/mei')
 
+#: The document OCI reads the cloud image's launch options and compatible
+#: shapes from, packaged beside the disk image in the archive it imports.
+IMAGE_METADATA_TEMPLATE = 'templates/image_metadata.json.j2'
+
 GIB = 1 << 30
 
 #: The room the worker's disk has past the end of the Talos image when it is
@@ -115,9 +144,9 @@ GIB = 1 << 30
 #: the host afterwards (physical/homelab-host.md §1).
 HOMELAB_DISK_ROOM = 3 * GIB
 
-#: Where the machine running the program keeps decompressed artifacts, a
+#: Where the machine running the program keeps the factory's artifacts, a
 #: directory for each stack: `IMAGE_CACHE/<project>/<stack>/<file>`, the file
-#: named by what it holds (`TalosNocloudImage._local_path`).
+#: named by what it holds (`TalosArtifact._cache_path`).
 #:
 #: The root is a constant rather than a home-relative or temporary directory on
 #: purpose: the path is an *input* of the image, so a workstation and a CI
@@ -249,6 +278,24 @@ class TalosArtifact(Component, abc.ABC):
         """The factory's installer image for this schematic and platform."""
         return (await resolve(self._urls)).installer
 
+    async def _cache_path(self, suffix: str) -> str:
+        """Where this artifact lives locally: in the stack's directory, named by what it contains.
+
+        The directory is `IMAGE_CACHE/<project>/<stack>`, so no other stack's
+        run on the machine declares the file, and no other stack's delete
+        removes it (`talos_factory.materialize` states the rule). The Talos
+        version, the platform, the architecture and the schematic id are the
+        artifact's identity, and `suffix` is the rest of what the file holds,
+        so they are the file name: two schematics never share a file, a stack
+        reuses an artifact it already holds on a machine rather than fetching
+        it again, and nothing about *when* or *where* the program ran enters
+        the path.
+        """
+        schematic_id = await resolve(self.schematic.id)
+        name = f'talos-{self.talos_version}-{self.platform}-{self.architecture}-{schematic_id}'
+        directory = IMAGE_CACHE / pulumi.get_project() / pulumi.get_stack()
+        return str(directory / f'{name}{suffix}')
+
 
 class TalosImage(TalosArtifact, pulumi_type='kluster:talos:TalosImage'):
     """One schematic and the OCI custom image built from it.
@@ -258,6 +305,14 @@ class TalosImage(TalosArtifact, pulumi_type='kluster:talos:TalosImage'):
     (`TalosNocloudImage`): they are what this artifact *is* — the stock
     schematic, built for OCI's own image format on the ARM shape the cloud
     nodes run — and no caller has a second opinion about any of them.
+
+    The image is imported from an object of the stack's own, the archive
+    Talos's Oracle guide prescribes (the module docstring): the factory's
+    qcow2 is fetched to a file, packaged with `IMAGE_METADATA_TEMPLATE`,
+    uploaded to the image bucket, and imported from there. The bucket and the
+    archive are in the compartment the image is, on the account the stack's
+    OCI credential signs into, whose region and tenancy are the account's
+    permanent facts (`conventions.OCI_TENANCY`).
     """
 
     def __init__(
@@ -279,15 +334,52 @@ class TalosImage(TalosArtifact, pulumi_type='kluster:talos:TalosImage'):
         )
 
     def _declare_artifact(self, name: str) -> None:
+        self.artifact = FactoryImage(
+            f'{name}-qcow2',
+            url=async_output(self._disk_url),
+            path=async_output(self._local_path),
+            # A qcow2 has a length of its own, which zeros after it would not
+            # change, and OCI sizes the boot volume from the instance.
+            room=0,
+            opts=self.child_opts(),
+        )
+        self.image_bucket = oci.objectstorage.Bucket(
+            f'{name}-images',
+            compartment_id=self._compartment_id,
+            name=f'{name}-images',
+            namespace=async_output(self._namespace),
+            access_type='NoPublicAccess',
+            opts=self.child_opts(protect=True),
+        )
+        image_metadata = image_metadata_document(self.talos_version)
+        self.archive = ImageArchive(
+            f'{name}-archive',
+            path=self.artifact.path,
+            # The artifact's own name, `oracle-arm64.qcow2`, which is the
+            # member name of Talos's guide and stays short whatever the pin:
+            # the cache file's name carries the version and the schematic.
+            member=async_output(self._member),
+            image_metadata=image_metadata,
+            region=conventions.OCI_TENANCY.region,
+            tenancy=conventions.OCI_TENANCY.tenancy_ocid,
+            namespace=self.image_bucket.namespace,
+            bucket=self.image_bucket.name,
+            object_name=async_output(self._object_name(image_metadata)),
+            opts=self.child_opts(),
+        )
         self.image = oci.core.Image(
             f'{name}-image',
             compartment_id=self._compartment_id,
             display_name=async_output(self._image_name),
-            launch_mode='PARAVIRTUALIZED',
+            # No `sourceImageType` and no launch mode: the archive's
+            # `image_metadata.json` carries the launch options and the
+            # compatible shapes, and the API reads no image type for an
+            # archive in OCI's image format (`ImageSourceDetails`).
             image_source_details=oci.core.ImageImageSourceDetailsArgs(
-                source_type='objectStorageUri',
-                source_uri=async_output(self._disk_url),
-                source_image_type='QCOW2',
+                source_type='objectStorageTuple',
+                namespace_name=self.archive.namespace,
+                bucket_name=self.archive.bucket,
+                object_name=self.archive.object_name,
             ),
             # Rebuilding an image is cheap; replacing one out from under
             # running nodes is not, so a version bump creates the new image
@@ -298,6 +390,34 @@ class TalosImage(TalosArtifact, pulumi_type='kluster:talos:TalosImage'):
     async def _image_name(self) -> str:
         schematic_id = await resolve(self.schematic.id)
         return f'talos-{self.talos_version}-{self.architecture}-{str(schematic_id)[:12]}'
+
+    async def _local_path(self) -> str:
+        """The factory's qcow2, in the stack's directory (`_cache_path`)."""
+        return await self._cache_path('.qcow2')
+
+    async def _member(self) -> str:
+        """The factory's own name for the artifact: the last segment of the URL it serves it at."""
+        return PurePosixPath(urlsplit(await self._disk_url()).path).name
+
+    async def _object_name(self, image_metadata: str) -> str:
+        """The archive's name in the bucket: the artifact it packages, and a digest of the document beside it.
+
+        The local file's name says which artifact; the digest says which
+        document, so an edited document is a new object rather than the old
+        one uploaded over.
+        """
+        local = Path(await self._local_path())
+        digest = hashlib.sha256(image_metadata.encode()).hexdigest()[:12]
+        return f'{local.stem}-{digest}.oci'
+
+    async def _namespace(self) -> str:
+        """The account's Object Storage namespace, which every bucket in it is named within."""
+        found = await resolve(
+            oci.objectstorage.get_namespace_output(
+                compartment_id=self._compartment_id, opts=pulumi.InvokeOptions(parent=self)
+            )
+        )
+        return found.namespace
 
 
 class TalosNocloudImage(TalosArtifact, pulumi_type='kluster:talos:TalosNocloudImage'):
@@ -345,22 +465,12 @@ class TalosNocloudImage(TalosArtifact, pulumi_type='kluster:talos:TalosNocloudIm
         self.path: pulumi.Output[str] = self.artifact.path
 
     async def _local_path(self) -> str:
-        """Where this artifact lives locally: in the stack's directory, named by what it contains.
+        """The decompressed image and its room, in the stack's directory (`_cache_path`).
 
-        The directory is `IMAGE_CACHE/<project>/<stack>`, so no other stack's
-        run on the machine declares the file, and no other stack's delete
-        removes it (`talos_factory.materialize` states the rule). The schematic
-        id and the Talos version are the artifact's identity, and the room
-        after it is the rest of what the file holds, so they are the file name:
-        two schematics never share a file, a stack reuses an artifact it
-        already holds on a machine rather than fetching it again, a file made
-        with another room is never reused as this one, and nothing about
-        *when* or *where* the program ran enters the path.
+        The room is part of what the file holds, so it is in the name: a file
+        made with another room is never reused as this one.
         """
-        schematic_id = await resolve(self.schematic.id)
-        name = f'talos-{self.talos_version}-{self.platform}-{self.architecture}-{schematic_id}'
-        directory = IMAGE_CACHE / pulumi.get_project() / pulumi.get_stack()
-        return str(directory / f'{name}-room{HOMELAB_DISK_ROOM}.raw')
+        return await self._cache_path(f'-room{HOMELAB_DISK_ROOM}.raw')
 
 
 @final
@@ -383,6 +493,27 @@ class _SchematicParams:
     """What `schematic.yaml.j2` reads."""
 
     extensions: Sequence[str]
+
+
+@final
+@dataclass(frozen=True)
+class _ImageMetadataParams:
+    """What `image_metadata.json.j2` reads."""
+
+    operating_system_version: str
+
+
+def image_metadata_document(talos_version: str) -> str:
+    """The `image_metadata.json` packaged with the cloud image, for the Talos release `talos_version` names.
+
+    The release goes in as Talos writes it in its own guide's example, with
+    no leading `v`.
+    """
+    return templates.render(
+        _TEMPLATE_PACKAGE,
+        IMAGE_METADATA_TEMPLATE,
+        _ImageMetadataParams(operating_system_version=talos_version.removeprefix('v')),
+    )
 
 
 def _schematic_document(extensions: Sequence[str]) -> str:
