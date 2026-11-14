@@ -60,7 +60,10 @@ which for the design, and the detour has become the design.
 The layers built this way today include the Renovate rule that looks
 `postgresql` up under its channel, as `conda-forge/postgresql`
 (`renovate.json5`), which goes once Renovate's mise manager passes a
-pin's channel on; and, in the test suite, `mocked_runs_release_their_tasks`
+pin's channel on; the section of `src/kluster/components/talos/__init__.py`
+that hands what `Secrets` generated on as each consumer's input type,
+which goes once an output type handed to an invoke reaches the provider
+under the provider's names (pulumi/pulumi#15883); and, in the test suite, `mocked_runs_release_their_tasks`
 in `tests/conftest.py` and `_ReadFailures` in `tests/mock_monitor.py`,
 which go once the Pulumi SDK stops leaving a closed loop's outputs in its
 tracked set, and once its output awaits every future it was given; and the

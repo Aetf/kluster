@@ -57,11 +57,17 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 from ipaddress import IPv4Address, IPv4Interface
-from typing import Any, Literal, cast
+from typing import Any, Literal, Protocol, cast
 
 import pulumi
 from pulumiverse_talos import client, machine
-from pulumiverse_talos.cluster import Kubeconfig, get_health_output
+from pulumiverse_talos.cluster import (
+    GetHealthClientConfigurationArgs,
+    Kubeconfig,
+    KubeconfigClientConfigurationArgs,
+    get_health_output,
+)
+from pulumiverse_talos.machine.outputs import CertificateResult, ClientConfiguration, MachineSecretsResult
 
 from kluster import conventions
 from putils import Component, async_output, resolve
@@ -801,6 +807,8 @@ class TalosCluster(Component, pulumi_type='kluster:talos:TalosCluster'):
             # Regenerating cluster PKI is a rebuild, not an update.
             opts=self.child_opts(protect=True),
         )
+        # Part of the workaround layer at the end of this module.
+        self._machine_secrets = self.secrets.machine_secrets.apply(_machine_secrets_input)
 
         self.configurations = {node: self._render(node) for node in self.roles}
 
@@ -838,9 +846,7 @@ class TalosCluster(Component, pulumi_type='kluster:talos:TalosCluster'):
             cluster_name=self.cluster_name,
             cluster_endpoint=self._endpoint,
             machine_type=role,
-            # The provider's input and output types describe the same
-            # structure under different names.
-            machine_secrets=cast('Any', self.secrets.machine_secrets),
+            machine_secrets=self._machine_secrets,
             talos_version=self._talos_version,
             # The endpoint is the load balancer's address, which exists only
             # once that resource does — so the patches are computed inside an
@@ -968,7 +974,10 @@ class TalosDay1(Component, pulumi_type='kluster:talos:TalosDay1'):
             for node in cluster.roles
         }
 
-        client_configuration = cast('Any', cluster.secrets.client_configuration)
+        # Every `_client_configuration_input` below is part of the workaround
+        # layer at the end of this module.
+        generated = cluster.secrets.client_configuration
+        client_configuration = _client_configuration_input(generated, machine.ClientConfigurationArgs)
 
         # Node-serial by construction: each apply waits for the one before it,
         # so a change that reboots the machine never takes the quorum with it.
@@ -1016,7 +1025,7 @@ class TalosDay1(Component, pulumi_type='kluster:talos:TalosDay1'):
             f'{name}-kubeconfig',
             node=self._addresses[first],
             endpoint=self._addresses[first],
-            client_configuration=client_configuration,
+            client_configuration=_client_configuration_input(generated, KubeconfigClientConfigurationArgs),
             opts=self.child_opts(depends_on=[self.bootstrap]),
         )
 
@@ -1025,7 +1034,7 @@ class TalosDay1(Component, pulumi_type='kluster:talos:TalosDay1'):
         # the file a human then holds.
         self._client_configuration = client.get_configuration_output(
             cluster_name=cluster.cluster_name,
-            client_configuration=client_configuration,
+            client_configuration=_client_configuration_input(generated, client.GetConfigurationClientConfigurationArgs),
             endpoints=async_output(partial(self._addresses_of, cluster.control_plane_nodes)),
             nodes=async_output(partial(self._addresses_of, tuple(cluster.roles))),
             opts=pulumi.InvokeOutputOptions(parent=self),
@@ -1038,7 +1047,7 @@ class TalosDay1(Component, pulumi_type='kluster:talos:TalosDay1'):
         # It reaches the workers the same way: they are named as nodes, and the
         # client talks to control-plane endpoints only.
         self.health = get_health_output(
-            client_configuration=client_configuration,
+            client_configuration=_client_configuration_input(generated, GetHealthClientConfigurationArgs),
             control_plane_nodes=async_output(partial(self._addresses_of, cluster.control_plane_nodes)),
             worker_nodes=async_output(partial(self._addresses_of, cluster.worker_nodes)),
             endpoints=async_output(partial(self._addresses_of, cluster.control_plane_nodes)),
@@ -1104,3 +1113,83 @@ async def _resolved(inputs: Sequence[pulumi.Input[str]]) -> list[str]:
 
 async def _resolved_one(value: pulumi.Input[str] | None) -> str | None:
     return None if value is None else str(await resolve(value))
+
+
+# -- workaround: the provider's output types, as its input types ------------
+#
+# A layer of its own, around an upstream defect: an output of one resource
+# whose type is a structure cannot be handed on as another's input
+# (pulumi/pulumi#15883; for this provider, pulumiverse/pulumi-talos#93 and
+# #200). The secrets bundle and the client configuration are read back from
+# the `Secrets` resource as the provider's output types, and an output type is
+# a mapping keyed by Python names (`k8s_aggregator`). The SDK serializes a
+# mapping it has no type for key by key, as it stands, and an invoke gives it
+# no type, so the provider would receive the Python spellings in place of its
+# own (`k8sAggregator`) and refuse every multi-word field as missing. An input
+# type is serialized by its own field metadata, under the provider's names,
+# wherever it is handed. The SDK's `…ArgsDict` form is keyed by Python names
+# too, so an invoke sends it the way it sends an output type; only an `…Args`
+# instance carries the provider's names. So each hand-off builds the `…Args`
+# its consumer declares.
+#
+# The layer is:
+#   - `TalosCluster._machine_secrets`, which `_render` hands on;
+#   - in `TalosDay1.__init__`, each `_client_configuration_input(generated,
+#     …)` that feeds the applies, the bootstrap, the kubeconfig, the client
+#     configuration invoke and the health invoke;
+#   - this section: `_machine_secrets_input`, `_certificate_input`,
+#     `_ClientConfigurationInput` and `_client_configuration_input`.
+# Removing it means handing `self.secrets.machine_secrets` and
+# `cluster.secrets.client_configuration` on directly, and deleting this
+# section.
+#
+# It goes once an output of `Secrets`, handed unchanged to an invoke, reaches
+# the provider under the provider's names and type-checks against the
+# consumer's parameter. `test_the_sdk_still_hands_an_output_type_to_an_invoke_under_python_names`
+# in `tests/test_talos_day1.py` is the tripwire: it goes red the day the first
+# half holds.
+#
+# Each is an `apply` on the output itself rather than a `resolve`: what a
+# resolve returns is the plain mapping, without the attributes read here.
+
+
+def _machine_secrets_input(bundle: MachineSecretsResult) -> machine.MachineSecretsArgs:
+    """The secrets bundle `Secrets` generated, as the input `get_configuration` takes."""
+    certs = bundle.certs
+    return machine.MachineSecretsArgs(
+        certs=machine.CertificatesArgs(
+            etcd=_certificate_input(certs.etcd),
+            k8s=_certificate_input(certs.k8s),
+            k8s_aggregator=_certificate_input(certs.k8s_aggregator),
+            k8s_serviceaccount=machine.KeyArgs(key=certs.k8s_serviceaccount.key),
+            os=_certificate_input(certs.os),
+        ),
+        cluster=machine.ClusterArgs(id=bundle.cluster.id, secret=bundle.cluster.secret),
+        secrets=machine.KubernetesSecretsArgs(
+            bootstrap_token=bundle.secrets.bootstrap_token,
+            secretbox_encryption_secret=bundle.secrets.secretbox_encryption_secret,
+            aescbc_encryption_secret=bundle.secrets.aescbc_encryption_secret,
+        ),
+        trustdinfo=machine.TrustdInfoArgs(token=bundle.trustdinfo.token),
+    )
+
+
+def _certificate_input(certificate: CertificateResult) -> machine.CertificateArgs:
+    return machine.CertificateArgs(cert=certificate.cert, key=certificate.key)
+
+
+class _ClientConfigurationInput[T](Protocol):
+    """The constructor of one of the provider's client-configuration input types, which share their fields."""
+
+    def __call__(self, *, ca_certificate: str, client_certificate: str, client_key: str) -> T: ...
+
+
+def _client_configuration_input[T](
+    configuration: pulumi.Output[ClientConfiguration], as_input: _ClientConfigurationInput[T]
+) -> pulumi.Output[T]:
+    """The client configuration `Secrets` generated, as the input type `as_input` builds."""
+    return configuration.apply(
+        lambda it: as_input(
+            ca_certificate=it.ca_certificate, client_certificate=it.client_certificate, client_key=it.client_key
+        )
+    )

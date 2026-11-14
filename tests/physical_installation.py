@@ -21,6 +21,7 @@ import pulumi
 import pytest
 from mock_monitor import run_under_backstop
 from oci_conventions import with_compartment, with_tenancy_ocid
+from talos_secrets import generated_secrets
 from unifi_controller import Controller
 
 from kluster import conventions
@@ -142,7 +143,7 @@ class Installation(Controller):
                     ]
                 }
             case 'talos:machine/secrets:Secrets':
-                return {'machineSecrets': {'cluster': {'id': 'test'}}}
+                return generated_secrets()
             case 'talos:cluster/kubeconfig:Kubeconfig':
                 return {'kubeconfigRaw': KUBECONFIG}
             case 'zerotier:index/identity:Identity':

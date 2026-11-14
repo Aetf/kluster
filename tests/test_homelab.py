@@ -36,6 +36,7 @@ import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
 from pycdlib.dr import DirectoryRecord
+from talos_secrets import generated_secrets
 
 from kluster import conventions
 from kluster.components import homelab
@@ -95,14 +96,7 @@ class Providers(Recorder):
     def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
         if args.typ != 'talos:machine/secrets:Secrets':
             return {}
-        return {
-            'machineSecrets': {
-                'certs': {},
-                'cluster': {'id': CLUSTER},
-                'secrets': {'secretboxEncryptionSecret': 'c2VjcmV0Ym94'},
-            },
-            'clientConfiguration': {'caCertificate': 'ca', 'clientCertificate': 'crt', 'clientKey': 'key'},
-        }
+        return generated_secrets()
 
     def answer(self, args: pulumi.runtime.MockCallArgs) -> dict[str, Any]:
         if args.token == 'talos:machine/getConfiguration:getConfiguration':
