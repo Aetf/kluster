@@ -1521,6 +1521,16 @@ the device. Until this step has passed, step 2 of the ceremony is the
 only later one that can run — step 3 reads an address off a machine
 this step boots.
 
+**Home Assistant's address mode is set in the sitting of the run that
+changes its allow.** Whichever `physical` run's preview shows the IPv6
+policy of Home Assistant's allow taking the derived address (gateway.md
+§4.2 rule 1) is the run that rule's `ha network update` is made beside,
+and that run passes only once the rule's reading does. Where that run is
+this step's, its preview is also where the policy is read as an update
+in place: a replace there is a census policy this run would replace,
+against the paragraph above, so the edit waits for the run after it, and
+the sitting goes with the edit.
+
 **Nothing in §4 or §5 is irreversible**, step 5 included: what it
 creates is outside everything §6 undoes, and having it in place
 neither closes the rollback nor changes it. §8's `dns` first `up` has

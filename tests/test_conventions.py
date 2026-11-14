@@ -151,6 +151,57 @@ def test_what_is_not_a_mac_forms_no_link_local_address(mac: str) -> None:
         _ = conventions.eui64_link_local(mac)
 
 
+@pytest.mark.parametrize(
+    ('network', 'mac', 'address'),
+    [
+        # RFC 4291 Appendix A's identifier, under the documentation prefix
+        # (RFC 3849).
+        pytest.param('2001:db8:0:1::/64', '34:56:78:9a:bc:de', '2001:db8:0:1:3656:78ff:fe9a:bcde', id='universal'),
+        # The identifier Linux forms for QEMU's default guest MAC, which its
+        # link-local carries above, under one of the site's own /64s.
+        pytest.param('fd1a:665f:8bcb:90::/64', '52:54:00:12:34:56', 'fd1a:665f:8bcb:90:5054:ff:fe12:3456', id='local'),
+    ],
+)
+def test_an_autoconfigured_address_is_the_prefix_and_the_macs_modified_eui64(
+    network: str, mac: str, address: str
+) -> None:
+    """Stateless autoconfiguration puts the link-local's identifier under the advertised /64 (RFC 4862 §5.5.3).
+
+    So a host whose interface forms EUI-64 addresses holds this one on its
+    network, and a firewall rule naming the derived address names the
+    address the host's connections leave from.
+    """
+    assert conventions.eui64_address(IPv6Network(network), mac) == ipaddress.IPv6Address(address)
+
+
+def test_an_identifier_completes_only_a_64() -> None:
+    """A wider prefix leaves bits the identifier does not fill, and a narrower one has no room for it."""
+    for prefix in ('fd1a:665f:8bcb::/48', 'fd1a:665f:8bcb:90::/80'):
+        with pytest.raises(ValueError):
+            _ = conventions.eui64_address(IPv6Network(prefix), '52:54:00:12:34:56')
+
+
+def test_a_site_hosts_ula_is_the_one_its_interface_forms_from_its_mac() -> None:
+    """The ULA is derived from the network and the MAC, so the two cannot be declared apart."""
+    host = conventions.SiteHost(
+        network=conventions.IOT_VLAN, v4=ipaddress.IPv4Address('192.168.90.200'), mac='52:54:00:12:34:56'
+    )
+    assert host.v6 == ipaddress.IPv6Address('fd1a:665f:8bcb:90:5054:ff:fe12:3456')
+
+
+@pytest.mark.parametrize(
+    ('v4', 'mac'),
+    [
+        pytest.param('192.168.80.200', '52:54:00:12:34:56', id='off-network'),
+        pytest.param('192.168.90.200', '52:54:00:12:34', id='not-a-mac'),
+    ],
+)
+def test_a_site_host_off_its_network_or_without_a_mac_is_refused_where_it_is_declared(v4: str, mac: str) -> None:
+    """A malformed MAC is refused at the declaration, not at the first rule that reads the ULA."""
+    with pytest.raises(ValueError):
+        _ = conventions.SiteHost(network=conventions.IOT_VLAN, v4=ipaddress.IPv4Address(v4), mac=mac)
+
+
 # The gateway census is held against the artifacts that can disagree with it,
 # and restated nowhere. `test_device_services` checks the rendered units and
 # files against `tests/data/live-caddyfile`, a transcript of what the
