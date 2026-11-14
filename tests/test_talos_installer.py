@@ -85,10 +85,10 @@ async def ran(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Installation:
 @pytest.mark.asyncio
 async def test_every_node_names_the_installer_of_the_schematic_it_boots(ran: Installation) -> None:
     # The two images each node class boots, read off what the program handed
-    # the providers: the cloud nodes' OCI import and the worker's local disk.
-    cloud_source = ran.inputs_of(f'{conventions.CLUSTER_NAME}-image', 'oci:Core/image:Image')['imageSourceDetails']
+    # the providers: the factory artifact the cloud nodes' OCI image is
+    # packaged from, and the worker's local disk.
     booted = {
-        'controlplane': disk_image(str(cloud_source['sourceUri'])),
+        'controlplane': disk_image(str(ran.inputs_of(f'{conventions.CLUSTER_NAME}-qcow2')['url'])),
         'worker': disk_image(str(ran.inputs_of(f'{conventions.CLUSTER_NAME}-worker-nocloud')['url'])),
     }
     # The two classes boot different schematics, or a swap would pass below.

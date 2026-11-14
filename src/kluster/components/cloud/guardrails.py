@@ -53,14 +53,16 @@ BLOCK_STORAGE_GB_PER_AD = 160
 #: them — durability is backup/restore through the object store (storage.md §5).
 VOLUME_BACKUPS = 5
 
-#: Regional. This installation creates no bucket in this compartment — the
-#: backup bucket is on the other provider on purpose, the state backend's image
-#: bucket is in the appliance's own compartment, its dump bucket on B2
-#: (storage.md §4) — so this caps what the tenancy stores here on the
-#: installation's behalf. It is
-#: not zeroed the way the compute families are: a custom image import is not
-#: clearly outside this family, and a quota that refused the machine image
-#: would refuse the fleet.
+#: Regional. What this compartment's Object Storage holds is what this stack
+#: stages through it on the way to an import -- today the cloud image's
+#: archive, in the image bucket (`components/talos/image.py`) -- and nothing
+#: the installation keeps: the backup bucket is on the other provider on
+#: purpose (storage.md §4), and every other stack's buckets are in that
+#: stack's own compartment or account. So this caps that staging and whatever
+#: the tenancy stores here on the installation's behalf. It is not zeroed the
+#: way the compute families are: a custom image import is not clearly outside
+#: this family, and a quota that refused the machine image would refuse the
+#: fleet.
 OBJECT_STORAGE_GB = 250
 
 #: A month's spend the design already accepts: the A1 fleet under the

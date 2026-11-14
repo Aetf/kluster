@@ -82,8 +82,20 @@ credential (`ci_zerotier_identity_physical`,
 -   **Image**: no official Talos OCI image — an `image_factory_schematic`
     (talos provider) pins the schematic (platform `oracle`, arm64, no
     extensions initially), and a custom-image import brings the
-    factory-built image into OCI. The schematic ID is part of the
-    declared state, so image contents are reproducible.
+    factory-built image into OCI. OCI imports only from its own Object
+    Storage, so the import takes the path Talos's Oracle guide gives:
+    the factory's `oracle-arm64.qcow2` is fetched onto the machine
+    running the apply, packaged with an `image_metadata.json` (UEFI
+    firmware, `VM.Standard.A1.Flex` among the compatible shapes) into
+    one `tar` archive compressed with `gzip`, uploaded to a
+    `NoPublicAccess` bucket of the stack's own, and imported from that
+    object (`components/talos/image.py`).
+    The schematic ID is part of the declared state, so image contents
+    are reproducible. What vouches for the download is the factory's
+    TLS and the download having ended whole: here, at the length the
+    factory declared for it, and for the worker's image (§3), at the end
+    of its own `xz` stream. The public factory publishes no checksum for
+    an artifact.
 -   **Nodes**: 3× `VM.Standard.A1.Flex` (1 OCPU / 8 GB), one per
     availability domain (fault domains only as the tiebreak, nodes.md
     §5), boot volume ~50 GB. Machine config is delivered as

@@ -1,0 +1,33 @@
+{#- How OCI launches the cloud nodes' image, and on which shape: the arm64
+    example of Talos's Oracle guide (siderolabs/docs, talos v1.13,
+    `platform-specific-installations/cloud-platforms/oracle.mdx`, "Upload
+    image", step 3), with the operating system's version the image's own.
+    OCI reads it out of the archive it imports, beside the disk image. -#}
+{
+    "version": 2,
+    "externalLaunchOptions": {
+        "firmware": "UEFI_64",
+        "networkType": "PARAVIRTUALIZED",
+        "bootVolumeType": "PARAVIRTUALIZED",
+        "remoteDataVolumeType": "PARAVIRTUALIZED",
+        "localDataVolumeType": "PARAVIRTUALIZED",
+        "launchOptionsSource": "PARAVIRTUALIZED",
+        "pvAttachmentVersion": 2,
+        "pvEncryptionInTransitEnabled": true,
+        "consistentVolumeNamingEnabled": true
+    },
+    "imageCapabilityData": "{\"capabilities\":{\"Compute.AMD_SecureEncryptedVirtualization\":{\"descriptorType\":\"boolean\",\"defaultValue\":false},\"Storage.BootVolumeType\":{\"descriptorType\":\"enumstring\",\"values\":[\"ISCSI\",\"PARAVIRTUALIZED\",\"SCSI\",\"IDE\",\"NVME\"],\"defaultValue\":\"PARAVIRTUALIZED\"},\"Storage.Iscsi.MultipathDeviceSupported\":{\"descriptorType\":\"boolean\",\"defaultValue\":false},\"Storage.ParaVirtualization.EncryptionInTransit\":{\"descriptorType\":\"boolean\",\"defaultValue\":true},\"Storage.ConsistentVolumeNaming\":{\"descriptorType\":\"boolean\",\"defaultValue\":true},\"Compute.SecureBoot\":{\"descriptorType\":\"boolean\",\"defaultValue\":false},\"Storage.ParaVirtualization.AttachmentVersion\":{\"descriptorType\":\"enuminteger\",\"values\":[1,2],\"defaultValue\":2},\"Storage.LocalDataVolumeType\":{\"descriptorType\":\"enumstring\",\"values\":[\"ISCSI\",\"PARAVIRTUALIZED\",\"SCSI\",\"IDE\",\"NVME\"],\"defaultValue\":\"PARAVIRTUALIZED\"},\"Network.AttachmentType\":{\"descriptorType\":\"enumstring\",\"values\":[\"VFIO\",\"PARAVIRTUALIZED\",\"E1000\",\"VDPA\"],\"defaultValue\":\"PARAVIRTUALIZED\"},\"Storage.RemoteDataVolumeType\":{\"descriptorType\":\"enumstring\",\"values\":[\"ISCSI\",\"PARAVIRTUALIZED\",\"SCSI\",\"IDE\",\"NVME\"],\"defaultValue\":\"PARAVIRTUALIZED\"},\"Compute.LaunchMode\":{\"descriptorType\":\"enumstring\",\"values\":[\"NATIVE\",\"EMULATED\",\"VDPA\",\"PARAVIRTUALIZED\",\"CUSTOM\"],\"defaultValue\":\"PARAVIRTUALIZED\"},\"Network.IPv6Only\":{\"descriptorType\":\"boolean\",\"defaultValue\":false},\"Compute.Firmware\":{\"descriptorType\":\"enumstring\",\"values\":[\"UEFI_64\"],\"defaultValue\":\"UEFI_64\"}}}",
+    "imageCapsFormatVersion": "0eacf73b-5e10-4b69-a5d2-afd3f37fdd45",
+    "operatingSystem": "Talos",
+    "operatingSystemVersion": "{{ operating_system_version }}",
+    "additionalMetadata": {
+        "shapeCompatibilities": [
+            {
+                "internalShapeName": "VM.Standard.A1.Flex",
+                "ocpuConstraints": null,
+                "memoryConstraints": null
+            }
+        ]
+    }
+}
+

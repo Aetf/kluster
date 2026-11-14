@@ -14,13 +14,17 @@ mistaken for a resource somebody deleted.
 
 from __future__ import annotations
 
+import gzip
 import inspect
 import io
 import json
 import lzma
+import os
+import tarfile
+import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any, cast
+from typing import IO, Any, cast
 
 import pulumi
 import pulumi.dynamic as dynamic
@@ -31,7 +35,7 @@ from mock_monitor import Recorder, declaring, decline_every_invoke, run_with, th
 from pulumi.runtime import rpc
 
 from kluster.components.talos import image
-from kluster.providers import talos_factory
+from kluster.providers import oci_objects, talos_factory
 
 CLUSTER = 'kluster'
 WORKER = f'{CLUSTER}-worker'
@@ -39,6 +43,7 @@ TALOS_VERSION = 'v1.11.0'
 COMPARTMENT = 'ocid1.compartment.oc1..test'
 FACTORY_HOST = 'factory.talos.dev'
 FACTORY = f'https://{FACTORY_HOST}/image'
+NAMESPACE = 'a-namespace'
 
 #: What the mock monitor hands back as a schematic's id. It stands in for the
 #: factory's content hash, and the file name below is built out of it.
@@ -63,6 +68,8 @@ class Factory(Recorder):
         self.names_installer = True
 
     def answer(self, args: pulumi.runtime.MockCallArgs) -> dict[str, Any]:
+        if args.token == 'oci:ObjectStorage/getNamespace:getNamespace':
+            return {'namespace': NAMESPACE}
         if args.token != 'talos:imageFactory/getUrls:getUrls':
             return {}
         arguments = dict(cast('dict[str, Any]', args.args))
@@ -184,20 +191,69 @@ async def test_a_factory_answer_naming_no_installer_is_refused(factory: Factory)
     assert await the_run_failed_with(image.FactoryNamedNoInstaller) is refused.value
 
 
-# -- the cloud half, unchanged ----------------------------------------------
+# -- the cloud half ------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_the_cloud_image_is_still_imported_from_the_factory_url() -> None:
-    cloud = build_cloud()
+async def test_the_cloud_image_is_imported_from_the_archive_of_the_factory_qcow2(factory: Factory) -> None:
+    """The import names an object of the stack's own bucket, and that object packages the factory's qcow2.
 
-    # The worker's artifact is new; the OCI import is not, and nothing about
-    # sharing a base class may have moved it.
-    details = await cloud.image.image_source_details.future()
-    assert details is not None
-    assert details.source_type == 'objectStorageUri'
-    assert details.source_image_type == 'QCOW2'
-    assert details.source_uri == f'{FACTORY}/{CLOUD_SCHEMATIC}/{TALOS_VERSION}/oracle-arm64.qcow2'
+    OCI refuses a factory URL as an image source (`Invalid sourceUri`); it
+    imports from Object Storage. So the chain is read end to end: the
+    factory's `oracle` qcow2 is fetched to a file, the archive packages that
+    file, it is uploaded into the bucket declared beside it, and the image is
+    imported from that object by namespace, bucket and name.
+    """
+    cloud = build_cloud()
+    _ = await cloud.image.id.future()
+
+    fetched = factory.inputs_of(f'{CLUSTER}-qcow2')
+    archive = factory.inputs_of(f'{CLUSTER}-archive')
+    bucket = factory.inputs_of(f'{CLUSTER}-images', 'oci:ObjectStorage/bucket:Bucket')
+    details = factory.inputs_of(f'{CLUSTER}-image', 'oci:Core/image:Image')['imageSourceDetails']
+
+    assert fetched['url'] == f'{FACTORY}/{CLOUD_SCHEMATIC}/{TALOS_VERSION}/oracle-arm64.qcow2'
+    assert archive['path'] == fetched['path']
+    # Inside the archive the disk image has the factory's own name for it,
+    # the guide's, rather than the cache file's.
+    assert archive['member'] == 'oracle-arm64.qcow2'
+    assert (archive['namespace'], archive['bucket']) == (NAMESPACE, bucket['name'])
+    assert details['sourceType'] == 'objectStorageTuple'
+    assert (details['namespaceName'], details['bucketName'], details['objectName']) == (
+        archive['namespace'],
+        archive['bucket'],
+        archive['object_name'],
+    )
+    # The archive's own metadata is what OCI reads the image's launch options
+    # and shapes from; an image type beside it is a field the API does not
+    # read for that format.
+    assert 'sourceImageType' not in details
+    assert bucket['accessType'] == 'NoPublicAccess'
+
+
+@pytest.mark.asyncio
+async def test_the_cloud_qcow2_lands_in_the_stacks_own_directory_as_fetched(
+    factory: Factory, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cloud artifact is a working file of the stack's, served uncompressed and kept as it was served."""
+    monkeypatch.setattr(image, 'IMAGE_CACHE', tmp_path / 'cache')
+    cloud = build_cloud()
+    path = await cloud.artifact.path.future()
+    assert path is not None
+    declared = factory.inputs_of(f'{CLUSTER}-qcow2')
+    assert Path(path).parent == tmp_path / 'cache' / pulumi.get_project() / pulumi.get_stack()
+    _ = serve_raw(monkeypatch, PAYLOAD)
+
+    _ = talos_factory.FactoryImageProvider().create(declared)
+
+    assert Path(path).read_bytes() == PAYLOAD
+
+
+def test_the_image_metadata_names_the_pinned_release() -> None:
+    """The document is OCI's to parse, and the release in it is the one the image is built from."""
+    document = json.loads(image.image_metadata_document('v1.13.9'))
+
+    assert document['operatingSystemVersion'] == '1.13.9'
 
 
 @pytest.mark.asyncio
@@ -213,13 +269,13 @@ async def test_a_factory_lookup_the_engine_declines_leaves_the_source_unknown_ra
     same answer is a `None` for an `assert` to trip over -- a traceback on a
     run that may have converged everything it was asked to.
 
-    Read off what the program handed the provider rather than off the image's
-    outputs, because the source is nested inside `imageSourceDetails` and the
-    mock's readback of a nested unknown is not the engine's
-    (framework/testing.md §3.3): under this update run the key is dropped,
-    under a preview it would hold an `Unknown`. The assertion is the form that
-    holds in either kind of run, because what the case is about is that no
-    value reached the provider under that key.
+    The source the lookup answers is the URL the cloud artifact is fetched
+    from. It is read off what the program handed that resource, because the
+    mock's readback of an unknown is not the engine's (framework/testing.md
+    §3.3): under this update run the key is dropped, under a preview it would
+    hold an `Unknown`. The assertion is the form that holds in either kind of
+    run, because what the case is about is that no value reached the provider
+    under that key.
     """
     decline_every_invoke()
 
@@ -227,8 +283,8 @@ async def test_a_factory_lookup_the_engine_declines_leaves_the_source_unknown_ra
         cloud = build_cloud()
 
     assert await cloud.image.display_name.is_known() is True
-    details = factory.inputs_of(f'{CLUSTER}-image', 'oci:Core/image:Image')['imageSourceDetails']
-    assert not isinstance(details.get('sourceUri'), str)
+    fetched = factory.inputs_of(f'{CLUSTER}-qcow2')
+    assert not isinstance(fetched.get('url'), str)
 
 
 def test_each_artifact_states_its_platform_and_architecture_rather_than_taking_them() -> None:
@@ -426,6 +482,55 @@ def serve(monkeypatch: pytest.MonkeyPatch, *chunks: bytes) -> list[str]:
 
     monkeypatch.setattr(talos_factory, 'fetch', fetch)
     return requested
+
+
+class RawStream(FakeStream):
+    """A response serving an uncompressed artifact, with the length it declares."""
+
+    def __init__(self, chunks: list[bytes], declared: int | None) -> None:
+        super().__init__(chunks)
+        self.headers: dict[str, str] = {} if declared is None else {'Content-Length': str(declared)}
+
+
+def serve_raw(monkeypatch: pytest.MonkeyPatch, body: bytes, *, declared: int | None = -1) -> list[str]:
+    """Replace the fetch seam with an uncompressed artifact; `declared` defaults to the body's own length."""
+    requested: list[str] = []
+    length = len(body) if declared == -1 else declared
+
+    def fetch(url: str) -> requests.Response:
+        requested.append(url)
+        return cast('requests.Response', RawStream([body[:7], body[7:]], length))
+
+    monkeypatch.setattr(talos_factory, 'fetch', fetch)
+    return requested
+
+
+def test_an_uncompressed_artifact_lands_as_it_was_served(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The factory serves `oracle` as a loose qcow2: decompressing it would
+    # refuse it as a corrupt `xz` stream, so the suffix decides.
+    _ = serve_raw(monkeypatch, PAYLOAD)
+    path = tmp_path / 'talos.qcow2'
+
+    talos_factory.materialize('https://factory.invalid/oracle-arm64.qcow2', path, room=0)
+
+    assert path.read_bytes() == PAYLOAD
+
+
+@pytest.mark.parametrize('declared', [len(PAYLOAD) + 1, None], ids=['short-of-its-length', 'no-length'])
+def test_an_uncompressed_artifact_whose_end_cannot_be_vouched_for_leaves_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, declared: int | None
+) -> None:
+    # A loose artifact has no stream end of its own to check, so the length the
+    # server declared is the check; a response without one cannot be held to
+    # anything, and is refused rather than trusted.
+    _ = serve_raw(monkeypatch, PAYLOAD, declared=declared)
+    path = tmp_path / 'talos.qcow2'
+    refusal = talos_factory.TruncatedArtifact if declared is not None else talos_factory.UndeclaredLength
+
+    with pytest.raises(refusal):
+        talos_factory.materialize('https://factory.invalid/oracle-arm64.qcow2', path, room=0)
+
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_a_fetched_artifact_lands_decompressed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -751,3 +856,161 @@ def test_the_provider_carries_no_state_of_its_own() -> None:
     # another process, so anything it closed over would travel with it.
     provider: dynamic.ResourceProvider = talos_factory.FactoryImageProvider()
     assert vars(provider) == {}
+
+
+# -- the archive OCI imports the cloud image from ------------------------------
+
+
+METADATA = '{"operatingSystem": "Talos"}\n'
+
+
+MEMBER = 'oracle-arm64.qcow2'
+
+
+def archive_props(disk: Path, metadata: str = METADATA) -> dict[str, Any]:
+    return {
+        'path': str(disk),
+        'member': MEMBER,
+        'image_metadata': metadata,
+        'region': 'us-phoenix-1',
+        'tenancy': 'ocid1.tenancy.oc1..test',
+        'namespace': NAMESPACE,
+        'bucket': f'{CLUSTER}-images',
+        'object_name': 'talos-oracle-arm64.oci',
+    }
+
+
+def archive_provider() -> oci_objects.ImageArchiveProvider:
+    provider = oci_objects.ImageArchiveProvider()
+    provider.user, provider.fingerprint, provider.private_key = 'ocid1.user.oc1..test', 'aa:bb', 'a-key'
+    return provider
+
+
+def capture_uploads(monkeypatch: pytest.MonkeyPatch) -> list[bytes]:
+    """Replace the upload seam, and hand back every file's bytes as it reached the bucket."""
+    sent: list[bytes] = []
+
+    def upload(_config: object, _props: object, path: Path) -> str:
+        sent.append(path.read_bytes())
+        return f'an-etag-{len(sent)}'
+
+    monkeypatch.setattr(oci_objects, 'upload', upload)
+    return sent
+
+
+def members(archive: bytes) -> list[tuple[str, bytes]]:
+    """What a gzipped tar holds, in order, as `tar zxf` would read it."""
+    with tarfile.open(fileobj=io.BytesIO(archive), mode='r:gz') as tar:
+        return [(member.name, cast('IO[bytes]', tar.extractfile(member)).read()) for member in tar.getmembers()]
+
+
+def test_the_archive_holds_the_disk_image_and_then_its_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The shape Talos's Oracle guide builds: `tar zcf oracle-arm64.oci oracle-arm64.qcow2 image_metadata.json`."""
+    sent = capture_uploads(monkeypatch)
+    disk = tmp_path / 'talos-oracle-arm64.qcow2'
+    _ = disk.write_bytes(PAYLOAD)
+
+    result = archive_provider().create(archive_props(disk))
+
+    assert members(sent[0]) == [(MEMBER, PAYLOAD), ('image_metadata.json', METADATA.encode())]
+    assert result.id == f'{NAMESPACE}/{CLUSTER}-images/talos-oracle-arm64.oci'
+
+
+def test_the_disk_image_heads_the_archive_under_its_short_name_whatever_the_cache_file_is_called(
+    tmp_path: Path,
+) -> None:
+    """The archive's first header is the disk image, named as the guide names it, however long the file's name.
+
+    The cache file carries the release and the schematic, and a release string
+    a few characters longer than today's puts its name past the 100 a tar
+    header holds. Written under that name, the archive would open with a GNU
+    long-name record rather than the disk image, which `getmembers` hides, so
+    the first header is read off the bytes themselves.
+    """
+    disk = tmp_path / f'talos-v1.14.0-beta.1-oracle-arm64-{"0" * 64}.qcow2'
+    assert len(disk.name) > 100
+    _ = disk.write_bytes(PAYLOAD)
+    archive = tmp_path / 'talos.oci'
+
+    oci_objects.package(disk, MEMBER, METADATA, archive)
+
+    header = gzip.decompress(archive.read_bytes())[: tarfile.BLOCKSIZE]
+    assert header[:100].rstrip(b'\0') == MEMBER.encode()
+    assert header[156:157] == tarfile.REGTYPE
+
+
+def test_packaging_one_disk_image_twice_gives_one_archive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Nothing of the machine or the moment enters the archive: not the file's time, mode or owner, nor the clock.
+
+    The second packaging is a later run on another file system's terms: the
+    clock has moved on, and the disk image has another time and mode.
+    """
+    disk = tmp_path / 'talos-oracle-arm64.qcow2'
+    _ = disk.write_bytes(PAYLOAD)
+    first, second = tmp_path / 'first.oci', tmp_path / 'second.oci'
+
+    oci_objects.package(disk, MEMBER, METADATA, first)
+    disk.chmod(0o600)
+    os.utime(disk, (1, 1))
+    later = time.time() + 86_400
+    monkeypatch.setattr(time, 'time', lambda: later)
+    oci_objects.package(disk, MEMBER, METADATA, second)
+
+    assert first.read_bytes() == second.read_bytes()
+
+
+def test_an_archive_whose_disk_image_is_not_on_this_machine_uploads_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The disk image is a file another resource left on the machine that
+    # created it; elsewhere -- a fresh runner -- the archive cannot be built,
+    # and an empty or partial upload would be imported as a broken image.
+    sent = capture_uploads(monkeypatch)
+
+    with pytest.raises(oci_objects.DiskImageMissing):
+        _ = archive_provider().create(archive_props(tmp_path / 'absent.qcow2'))
+
+    assert sent == []
+
+
+@pytest.mark.parametrize(
+    ('change', 'key'),
+    [
+        ({'path': '/elsewhere/talos-next.qcow2'}, 'path'),
+        ({'image_metadata': '{"operatingSystem": "Talos", "version": 3}\n'}, 'image_metadata'),
+    ],
+    ids=['another-disk-image', 'another-document'],
+)
+def test_another_disk_image_or_document_is_another_archive(tmp_path: Path, change: dict[str, str], key: str) -> None:
+    """The object is what it packages, so either half changing is a new object rather than an update."""
+    provider = archive_provider()
+    olds = provider.check({}, archive_props(tmp_path / 'talos.qcow2')).inputs
+    news = provider.check({}, archive_props(tmp_path / 'talos.qcow2') | change).inputs
+
+    result = provider.diff('an-id', olds, news)
+
+    assert result.changes is True
+    assert result.replaces == [key]
+
+
+@pytest.mark.asyncio
+async def test_an_edited_document_is_uploaded_under_a_name_of_its_own(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The document's digest is in the object's name, so an edit never uploads over the archive an image came from.
+
+    A new name is a new object, uploaded before the old one goes; the same
+    name would be one object, deleted before it is uploaded again.
+    """
+    names: list[str] = []
+    for document in ('{"version": 2}\n', '{"version": 3}\n'):
+
+        def edited(_version: str, document: str = document) -> str:
+            return document
+
+        monkeypatch.setattr(image, 'image_metadata_document', edited)
+        factory = await run_with(Factory(), stack='physical')
+        _ = await build_cloud().image.id.future()
+        names.append(str(factory.inputs_of(f'{CLUSTER}-archive')['object_name']))
+
+    assert names[0] != names[1]

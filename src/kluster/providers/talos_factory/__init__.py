@@ -8,16 +8,30 @@ the factory URL directly. `FactoryImage` fetches and decompresses it where the
 program runs, and the libvirt volume is created *from that file*, which the
 provider uploads into the pool over its own connection.
 
+**The cloud nodes' artifact takes the same detour.** The factory serves
+`oracle` as an uncompressed `.qcow2`, and OCI imports a custom image only from
+an object in its own Object Storage, packaged with the metadata Talos's Oracle
+guide prescribes (`kluster.providers.oci_objects.ImageArchive`). So the file is
+what that package is built from, fetched as it is served.
+
+**Which form an artifact arrives in is its URL's to say.** The factory names
+each artifact with its format's suffix, so a URL ending in `.xz` is
+decompressed as it arrives and any other is written as it arrives.
+
 A dynamic provider rather than `local.Command`
 (`docs/rfc/rfc-002-src-layout-and-the-gateway.md` §7.3): the download is
-checked for truncation against the length the server declared, it needs neither
+checked for truncation -- a compressed one by the end of its own `xz` stream,
+an uncompressed one against the length the server declared -- it needs neither
 `curl` nor `xz` on the machine running the program, and the seam a test
-replaces is a Python function rather than a shell command.
+replaces is a Python function rather than a shell command. That check and the
+factory's TLS are the whole of what vouches for an artifact: the public factory
+publishes no checksum for one. The schematic id the URL carries is the
+factory's content hash of the customization asked for, not of the bytes served.
 
 **The file can be longer than the artifact.** A volume created from a file
 takes the file's length as its capacity, and a Talos disk booted in place
 needs room past the image's last partition for the partitions Talos creates
-there at first boot. So the decompressed artifact is extended by `room` bytes
+there at first boot. So the artifact is extended by `room` bytes
 of zeros, sparsely: the extension costs the machine running the program no
 space, and how much room a disk needs is the consumer's to say.
 
@@ -45,6 +59,7 @@ from __future__ import annotations
 import lzma
 import os
 import tempfile
+from io import BufferedWriter
 from pathlib import Path
 from typing import Any, final
 
@@ -63,6 +78,7 @@ __all__ = (
     'FactoryImageProvider',
     'FactoryRefused',
     'TruncatedArtifact',
+    'UndeclaredLength',
     'fetch',
     'materialize',
 )
@@ -72,7 +88,7 @@ __all__ = (
 #: slow link is not a failure; a link that has stopped moving is.
 FETCH_TIMEOUT = 60
 
-#: Bytes pulled from the network per decompression step. The artifact never
+#: Bytes pulled from the network per step. The artifact never
 #: exists in memory whole, in either form.
 CHUNK_BYTES = 1 << 20
 
@@ -91,10 +107,19 @@ WRITTEN = 'written'
 
 @final
 class TruncatedArtifact(Exception):
-    """The stream ended before the compressed artifact did."""
+    """The stream ended before the artifact did: before the `xz` stream's end, or short of the declared length."""
 
     def __init__(self, url: str) -> None:
         super().__init__(f'{url} ended mid-stream: the artifact is incomplete and was not kept')
+        self.url: str = url
+
+
+@final
+class UndeclaredLength(Exception):
+    """An uncompressed artifact was served with no `Content-Length`, so its end could not be checked."""
+
+    def __init__(self, url: str) -> None:
+        super().__init__(f'{url} declared no length, so a truncated artifact could not be told apart; it was not kept')
         self.url: str = url
 
 
@@ -136,13 +161,15 @@ def fetch(url: str) -> requests.Response:
 
 
 def materialize(url: str, path: Path, *, room: int) -> None:
-    """Leave the artifact at `url` sitting decompressed at `path`, followed by `room` bytes of zeros.
+    """Leave the artifact at `url` at `path`, decompressed if served `xz`, and `room` zero bytes after it.
 
-    A file already at `path` is the artifact and is reused: the download lands
-    under a temporary name in the same directory and is renamed only once the
-    xz stream has ended cleanly, so a file under the final name is whole by
-    construction. That is what keeps a re-created resource from spending a
-    gigabyte of bandwidth again.
+    An artifact whose URL ends in `.xz` is decompressed; any other is written
+    as it is served (the module docstring). A file already at `path` is the
+    artifact and is reused: the download lands under a temporary name in the
+    same directory and is renamed only once it has ended cleanly -- the `xz`
+    stream at its end, or the bytes at the length the server declared -- so a
+    file under the final name is whole by construction. That is what keeps a
+    re-created resource from spending a gigabyte of bandwidth again.
 
     The reuse is for a resource's own replacement, which declares its
     original's path. No identity tells a delete who else declares a file. So a
@@ -151,11 +178,11 @@ def materialize(url: str, path: Path, *, room: int) -> None:
     path no other resource declares. On a machine that several stacks' runs
     share, that means a path the stack's own name is part of.
 
-    Fetching and decompressing are the same pass. Neither form of the artifact
-    is ever held in memory, and a failure removes the partial file rather than
-    leaving something that looks finished. The room is added before the
-    rename too, so a file under the final name has it, and a consumer that
-    wants another room names another path.
+    Fetching and decompressing, or writing, are the same pass. Neither form of
+    the artifact is ever held in memory, and a failure removes the partial
+    file rather than leaving something that looks finished. The room is added
+    before the rename too, so a file under the final name has it, and a
+    consumer that wants another room names another path.
 
     Which of the two it does -- the pass, or reusing the file -- it says
     first, through `pulumi.log`, which `pulumi` draws on the stack's row as the
@@ -165,19 +192,19 @@ def materialize(url: str, path: Path, *, room: int) -> None:
     if path.exists():
         pulumi.log.info(f'{path} holds the artifact already: reused, nothing fetched')
         return
-    pulumi.log.info(f'fetching {url} and decompressing it into {path} as it arrives')
+    how = 'decompressing it' if _compressed(url) else 'writing it'
+    pulumi.log.info(f'fetching {url} and {how} into {path} as it arrives')
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, name = tempfile.mkstemp(dir=path.parent, prefix=f'{path.name}.', suffix='.part')
     partial = Path(name)
     try:
-        decompressor = lzma.LZMADecompressor()
         # The sink is entered first so that a fetch which raises still closes
         # the descriptor `mkstemp` handed over.
         with os.fdopen(descriptor, 'wb') as sink, fetch(url) as response:
-            for chunk in response.iter_content(CHUNK_BYTES):
-                _ = sink.write(decompressor.decompress(chunk))
-            if not decompressor.eof:
-                raise TruncatedArtifact(url)
+            if _compressed(url):
+                _decompress(url, response, sink)
+            else:
+                _copy(url, response, sink)
             # Past the end of what was written: on POSIX, growing a file this
             # way reads back as zeros and allocates nothing.
             _ = sink.truncate(sink.tell() + room)
@@ -187,6 +214,38 @@ def materialize(url: str, path: Path, *, room: int) -> None:
         _ = partial.replace(path)
     finally:
         partial.unlink(missing_ok=True)
+
+
+def _compressed(url: str) -> bool:
+    """Whether the artifact at `url` is served `xz`-compressed, which the factory says in its suffix."""
+    return url.endswith('.xz')
+
+
+def _decompress(url: str, response: requests.Response, sink: BufferedWriter) -> None:
+    """`response`'s `xz` stream into `sink`, refused as truncated where the stream does not reach its end."""
+    decompressor = lzma.LZMADecompressor()
+    for chunk in response.iter_content(CHUNK_BYTES):
+        _ = sink.write(decompressor.decompress(chunk))
+    if not decompressor.eof:
+        raise TruncatedArtifact(url)
+
+
+def _copy(url: str, response: requests.Response, sink: BufferedWriter) -> None:
+    """`response`'s bytes into `sink`, refused unless they reach the length the server declared.
+
+    The count is of the bytes `requests` hands over, which are the bytes on
+    the wire unless the server applied a content encoding. One that did fails
+    the comparison and is refused, rather than passing a check it was never
+    held to.
+    """
+    declared = response.headers.get('Content-Length')
+    if declared is None:
+        raise UndeclaredLength(url)
+    written = 0
+    for chunk in response.iter_content(CHUNK_BYTES):
+        written += sink.write(chunk)
+    if written != int(declared):
+        raise TruncatedArtifact(url)
 
 
 def _written(path: Path) -> str:
@@ -228,7 +287,7 @@ def _is_unknown(value: Any) -> bool:
 
 @final
 class FactoryImageProvider(dynamic.ResourceProvider):
-    """One factory artifact, decompressed on whatever machine runs the program.
+    """One factory artifact, as a file on whatever machine runs the program.
 
     There is no update: the resource *is* a particular artifact at a particular
     path with a particular room after it, so a different schematic, a different
@@ -298,7 +357,7 @@ class FactoryImageProvider(dynamic.ResourceProvider):
 
 @final
 class FactoryImage(dynamic.Resource, module='talos_factory', name='FactoryImage'):
-    """A factory artifact, fetched and decompressed at `path`, with `room` bytes of zeros after it."""
+    """A factory artifact, fetched to `path` (decompressed if served `xz`), with `room` bytes of zeros after it."""
 
     url: pulumi.Output[str]
     path: pulumi.Output[str]
@@ -313,7 +372,7 @@ class FactoryImage(dynamic.Resource, module='talos_factory', name='FactoryImage'
         room: pulumi.Input[int],
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
-        """Declare that `path` holds the decompressed contents of `url`, and `room` zero bytes after them.
+        """Declare that `path` holds `url`'s contents, decompressed if served `xz`, and `room` zero bytes after them.
 
         `path` is the caller's, and it is the same for one declaration on every
         run and on every machine rather than generated — which is what lets a
