@@ -299,23 +299,21 @@ def _differ(before: dict[str, Any], after: dict[str, Any]) -> set[str]:
 def pickler_left_as_found() -> Iterator[None]:
     """A case that leaves the pickler changed fails by its own name.
 
-    Pulumi's `serialize_provider` replaces methods on `pickle._Pickler` and
-    puts none of them back (its `finally` restores the `pickle.Pickler` name
-    alone; `kluster.providers.serialization` has the rest). Production is
-    covered by the shim `kluster.providers` installs on the module attribute;
-    a case that reaches the bare function -- a name bound by a from-import
-    before that package was imported, say -- leaves the wrappers behind for
-    every case after it in the process. Residue like that fails some later
-    case with text naming this one's leftovers, and only in the collection
-    orders where that case comes later. Checked after each case, it fails the
-    case that leaked, whatever the order, naming what changed. A fixture wider
-    than a case is held across its own life by the two hooks below.
+    Pulumi's `serialize_provider` replaces methods on `pickle._Pickler` for
+    the length of each call and puts them back in its `finally`, and a case
+    may patch the class itself. A change that outlives its case is there for
+    every case after it in the process, and fails some later case with text
+    naming this one's leftovers, only in the collection orders where that case
+    comes later. Checked after each case, it fails the case that left it,
+    whatever the order, naming what changed. A fixture wider than a case is
+    held across its own life by the two hooks below.
 
-    The whole attribute dict rather than the names the shim restores: what is
-    held is that the class is as the case found it, so a method Pulumi starts
-    patching in a later release is caught here without anyone listing it. The
-    comparison is by identity, which is what a leaked wrapper fails and what a
-    case that restored the original satisfies.
+    The whole attribute dict rather than the names Pulumi patches today: what
+    is held is that the class is as the case found it, so a method Pulumi
+    starts patching in a later release, without putting it back, is caught
+    here without anyone listing it. The comparison is by identity, which is
+    what a leftover wrapper fails and what a case that restored the original
+    satisfies.
     """
     before = _pickler()
     yield
