@@ -31,6 +31,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, cast
 from urllib.parse import parse_qs, urlsplit
 
+import process_sessions
 import pulumi
 import pytest
 import pytest_asyncio
@@ -1044,28 +1045,278 @@ def test_no_talos_call_is_dialed_into_the_cluster_vlan(ran: Run) -> None:
     and the flow rules give a run no leg into it (physical/gateway.md §2.2,
     §2.3), so a Talos call the run dialed at an address there would fail from
     continuous integration while passing from a workstation. Every address one
-    is dialed at is read here: each resource's `endpoint`, and the `endpoints`
-    of the health check and of the client configuration. The cloud nodes'
-    public addresses are unknown under mocks and read as `None`; the ones that
-    are addresses must lie outside the VLAN, and the worker's apply is among
-    them.
+    is dialed at is read here (`talos_dialed`), the worker's apply among them.
     """
     invoked = ran.recorded.invoked
-    dialed = [
-        str(declaration.inputs['endpoint'])
-        for declaration in ran.recorded.declared
-        if declaration.typ.startswith('talos:') and 'endpoint' in declaration.inputs
-    ]
-    dialed += [
-        str(endpoint) for token, args in invoked if token.startswith('talos:') for endpoint in args.get('endpoints', ())
-    ]
-    addresses = [ip_address(value) for value in dialed if value != 'None']
+    dialed = talos_dialed(ran.recorded)
     assert LB_ADDRESS in dialed
     assert {token for token, args in invoked if 'endpoints' in args} >= {
         'talos:cluster/getHealth:getHealth',
         'talos:client/getConfiguration:getConfiguration',
     }
-    assert not [address for address in addresses if address in conventions.CLUSTER_VLAN.v4], dialed
+    assert not [address for address in dialed if ip_address(address) in conventions.CLUSTER_VLAN.v4], dialed
+
+
+def talos_dialed(recorded: Installation) -> list[str]:
+    """Every address a Talos call of the run is dialed at: each resource's `endpoint`, each invoke's `endpoints`."""
+    dialed = [
+        str(declaration.inputs['endpoint'])
+        for declaration in recorded.declared
+        if declaration.typ.startswith('talos:') and 'endpoint' in declaration.inputs
+    ]
+    return dialed + [
+        str(endpoint)
+        for token, args in recorded.invoked
+        if token.startswith('talos:')
+        for endpoint in args.get('endpoints', ())
+    ]
+
+
+def rendered(configuration: dict[str, Any]) -> list[dict[str, Any]]:
+    """The patches one machine configuration was rendered from, as documents."""
+    return [json.loads(str(patch)) for patch in cast('list[Any]', configuration['configPatches'])]
+
+
+def apid_sans(configuration: dict[str, Any]) -> set[str]:
+    """What one rendering puts into apid's certificate: `machine.certSANs` of its `v1alpha1` patches."""
+    return {
+        str(san)
+        for document in rendered(configuration)
+        if 'kind' not in document
+        for san in cast('list[Any]', document.get('machine', {}).get('certSANs', []))
+    }
+
+
+def test_every_address_a_talos_call_dials_is_in_every_control_planes_apid_certificate(ran: Run) -> None:
+    """A call verifies apid's certificate against the address it dialed, on whichever control plane answers.
+
+    Every control-plane rendering of the run is read, the configurations the
+    nodes boot with and the one day 1 applies to the dedicated-VIP node alike.
+    The installation gives the balancer an address no other resource holds,
+    so a call dialed anywhere but the balancer fails here.
+    """
+    dialed = set(talos_dialed(ran.recorded))
+    assert dialed, 'the run dialed no Talos call'
+    control_planes = [it for it in ran.recorded.configurations if it['machineType'] == 'controlplane']
+    assert len(control_planes) > len(conventions.CLOUD_NODES), 'the day-1 rendering is missing'
+    for configuration in control_planes:
+        assert dialed <= apid_sans(configuration), dialed
+
+
+#: Each cloud node's private and public address, as the case below has the
+#: installation answer its instance with: distinct per node and per kind, so a
+#: name that crossed two nodes or took the public address names a wrong one.
+NODE_PRIVATE = {node: f'10.20.0.{index + 11}' for index, node in enumerate(conventions.CLOUD_NODES)}
+NODE_PUBLIC = {node: f'198.51.100.{index + 11}' for index, node in enumerate(conventions.CLOUD_NODES)}
+
+
+@pytest.mark.asyncio
+async def test_every_node_a_talos_call_names_is_an_address_that_node_holds(
+    setup: Installation, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A control plane forwards a call to the node it names and verifies it against that name.
+
+    A node's certificate carries the addresses it holds on its links, and a
+    cloud node's public IPv4 is a mapping on none of them. So each apply names
+    its own node by an address that node holds: a cloud node's private
+    address, which the platform leases onto its VNIC, and the worker's own
+    static address. The bootstrap and the kubeconfig read name the first
+    control plane, and the health check and the client configuration name
+    every node as the applies do, which is how the gate matches them to the
+    addresses Kubernetes reports.
+    """
+    computed = setup.computed
+
+    def with_addresses(args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
+        outputs = computed(args)
+        for node in conventions.CLOUD_NODES:
+            if args.typ == 'oci:Core/instance:Instance' and args.name == f'{conventions.CLUSTER_NAME}-{node}':
+                outputs |= {'privateIp': NODE_PRIVATE[node], 'publicIp': NODE_PUBLIC[node]}
+        return outputs
+
+    monkeypatch.setattr(setup, 'computed', with_addresses)
+    async with declaring():
+        await physical.main()
+
+    worker = [it for it in setup.configurations if it['machineType'] == 'worker']
+    held = {
+        **{node: {address} for node, address in NODE_PRIVATE.items()},
+        conventions.HOMELAB_NODE: {
+            str(address['address']).partition('/')[0]
+            for configuration in worker
+            for document in rendered(configuration)
+            if document.get('kind') == 'LinkConfig'
+            for address in document['addresses']
+        },
+    }
+    for node, addresses in held.items():
+        assert addresses, f'{node} holds no address the run declares'
+        assert setup.inputs_of(f'{conventions.CLUSTER_NAME}-{node}-config')['node'] in addresses, node
+    first = held[conventions.CLOUD_NODES[0]]
+    assert setup.inputs_of(f'{conventions.CLUSTER_NAME}-bootstrap')['node'] in first
+    assert setup.inputs_of(f'{conventions.CLUSTER_NAME}-kubeconfig')['node'] in first
+    invoked = dict(setup.invoked)
+    health = invoked['talos:cluster/getHealth:getHealth']
+    names = [*health['controlPlaneNodes'], *health['workerNodes']]
+    names += invoked['talos:client/getConfiguration:getConfiguration']['nodes']
+    every = {address for addresses in held.values() for address in addresses}
+    assert [name for name in names if name not in every] == [], set(NODE_PUBLIC.values()) & set(names)
+
+
+#: The type a balancer backend is registered under.
+BACKEND = 'oci:NetworkLoadBalancer/backend:Backend'
+
+
+def test_no_talos_call_is_registered_without_the_forward_it_is_dialed_through(ran: Run) -> None:
+    """The balancer's machine-API listener and every backend behind it come before any call through them.
+
+    The address a call dials exists before the forward does, so no input
+    carries the order: a call whose registration does not depend on the
+    listener and on each control plane's backend can start while the balancer
+    forwards to nothing. The forward is read off the run: the IPv4 listener on
+    the machine API's port, and the backends on that port that name an
+    instance.
+    """
+    recorded = ran.recorded
+    port = conventions.MANAGEMENT_PORTS.talos
+
+    def urns(typ: str, names: set[str]) -> set[str]:
+        return {urn for urn, request in recorded.registrations.items() if request.type == typ and request.name in names}
+
+    listener = urns(
+        LISTENER,
+        {name for name, it in recorded.by_name(LISTENER).items() if it['port'] == port and it['ipVersion'] == 'IPV4'},
+    )
+    backends = urns(
+        BACKEND, {name for name, it in recorded.by_name(BACKEND).items() if it['port'] == port and 'targetId' in it}
+    )
+    assert len(listener) == 1
+    assert len(backends) == len(conventions.CLOUD_NODES)
+    calls = {
+        declaration.name
+        for declaration in recorded.declared
+        if declaration.typ.startswith('talos:') and 'endpoint' in declaration.inputs
+    }
+    assert calls, 'the run made no Talos call'
+    for name in sorted(calls):
+        assert listener | backends <= set(recorded.depends_on(name)), name
+
+
+def engine_urns(registrations: dict[str, Any]) -> dict[str, str]:
+    """Each registration's URN as the engine spells it, which qualifies a type by the whole chain of parents' types.
+
+    The mock's qualifies by the immediate parent's type alone
+    (framework/testing.md §3.1), so a pattern the runbook matches against
+    `physical stack --show-urns` is matched against these.
+    """
+
+    def qualified(urn: str) -> str:
+        request = registrations[urn]
+        above = registrations.get(request.parent)
+        if above is None or above.type == _ROOT:
+            return request.type
+        return f'{qualified(request.parent)}${request.type}'
+
+    return {
+        urn: f'urn:pulumi:physical::{PROJECT}::{qualified(urn)}::{registrations[urn].name}' for urn in registrations
+    }
+
+
+#: What stands in for `physical` when a case runs a runbook block over the
+#: program's URNs: `stack --show-urns` lists them as the CLI does, one
+#: `URN:` line each, and `up` records its arguments instead of running.
+PHYSICAL_STAND_IN = """\
+physical() {
+    case "$1" in
+        stack) sed 's/^/    URN: /' "$URNS" ;;
+        up) shift; printf '%s\\n' "$@" > "$ARGS" ;;
+    esac
+}
+"""
+
+
+def test_the_recoverys_first_run_targets_cp3s_instance_and_everything_in_state_that_names_it(
+    ran: Run, tmp_path: Path
+) -> None:
+    """Run 1's block, run over the program's own URNs, targets the replaced instance and its every dependent but Talos.
+
+    A dependent left out of a targeted replacement keeps naming the original
+    instance, and the engine refuses to delete an original that an
+    untargeted resource in the state still depends on. Talos day 1 depends
+    on the instance as well, and is the one dependent run 1 leaves out: it
+    is in no state when the recovery runs, so leaving it untargeted leaves
+    it uncreated. The dependents are read off the run, transitively, so a
+    backend on a new port or a volume attached to the node is one the block
+    has to select too. `tests/test_node_replacement_engine.py` holds what
+    the engine then does with these flags.
+    """
+    registrations = ran.recorded.registrations
+    engine = engine_urns(registrations)
+    (instance,) = [
+        urn
+        for urn, request in registrations.items()
+        if request.type == 'oci:Core/instance:Instance' and request.name == f'{conventions.CLUSTER_NAME}-cp3'
+    ]
+
+    def edges(urn: str) -> set[str]:
+        request = registrations[urn]
+        found = set(request.dependencies)
+        for dependencies in request.propertyDependencies.values():
+            found.update(dependencies.urns)
+        return found
+
+    dependents = {instance}
+    grown = True
+    while grown:
+        more = {urn for urn in registrations if urn not in dependents and edges(urn) & dependents}
+        dependents |= more
+        grown = bool(more)
+    cloud = {engine[urn] for urn in dependents if not registrations[urn].type.startswith('talos:')}
+    assert len(cloud) > 1, 'no backend names the instance'
+
+    (block,) = [
+        block
+        for block in re.findall(r'```sh\n(.*?)```', RUNBOOK.read_text(), re.DOTALL)
+        if 'physical up' in block and '--replace' in block
+    ]
+    urns = tmp_path / 'urns'
+    _ = urns.write_text(''.join(f'{urn}\n' for urn in engine.values()))
+    arguments = tmp_path / 'arguments'
+    locations = f"URNS='{urns}' ARGS='{arguments}'\n"
+    _ = process_sessions.run(['bash', '-c', locations + PHYSICAL_STAND_IN + block], timeout=60, check=True)
+    passed = arguments.read_text().splitlines()
+    flags = list(zip(passed[::2], passed[1::2], strict=True))
+    assert {flag for flag, _ in flags} == {'--target', '--replace'}, passed
+    assert [value for flag, value in flags if flag == '--replace'] == [engine[instance]]
+    assert {value for flag, value in flags if flag == '--target'} == cloud
+
+
+def test_each_component_the_runbook_excludes_is_excluded_whole_and_alone(ran: Run) -> None:
+    """A component exclusion the runbook spells (the recovery's `…:Gateway**`) selects that component's subtree.
+
+    An exclusion that names a type the program does not declare excludes
+    nothing and is no error, and the recovery's second run leaves the
+    gateway out so that it writes nothing to the controller or the device
+    (physical/gateway-cutover.md §4 step 5). Each pattern is read off the
+    runbook and matched against the run's URNs as the engine spells them,
+    which qualify a type by the whole chain of parents' types.
+    """
+    registrations = ran.recorded.registrations
+
+    def below(urn: str, top: str) -> bool:
+        parent = registrations[urn].parent
+        return parent == top or (parent in registrations and below(parent, top))
+
+    engine = engine_urns(registrations)
+    patterns = sorted(
+        set(re.findall(r"'(urn:pulumi:[^'$]*:([A-Za-z0-9]+:[A-Za-z0-9]+:[A-Za-z0-9]+)\*\*)'", RUNBOOK.read_text()))
+    )
+    assert {component for _, component in patterns} >= {Gateway.__pulumi_type__}
+    for pattern, component in patterns:
+        (top,) = [urn for urn in registrations if registrations[urn].type == component]
+        subtree = {top} | {urn for urn in registrations if below(urn, top)}
+        selected = {urn for urn in registrations if _selects(pattern, engine[urn])}
+        assert selected == subtree, pattern
 
 
 def listener_ports(setup: Installation) -> set[int]:

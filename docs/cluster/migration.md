@@ -187,7 +187,7 @@ runbook, from the gateway window to a verified, empty cluster.
     `abacus.hosts`, its overlay entry, jupyter/mc records).
 3.  `k8s-base` up; backup-freshness alerts live. (Talos-level checks
     that need no CNI — etcd fsync, A1 capacity, talosctl→homelab via
-    cloud endpoints — may run before this step; everything
+    the NLB's management address — may run before this step; everything
     Cilium-shaped cannot.)
 4.  **Verification gate** — the consolidated checklist
     (physical.md §6) less the controller-side items item 2 ran before

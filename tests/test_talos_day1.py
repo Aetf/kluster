@@ -34,7 +34,8 @@ from kluster.components.talos import Refusal, RollRefused, TalosCluster, TalosDa
 
 #: The balancer in front of the control planes, in the two spellings the two
 #: ports are named with: a URL for the Kubernetes endpoint, a bare address for
-#: the machine API, which carries its own port.
+#: the machine API, which carries its own port. No node holds it, so a call
+#: that dials a node's own address dials something other than this.
 BALANCER = '203.0.113.10'
 ENDPOINT = f'https://{BALANCER}:6443'
 SECRETBOX = 'c2VjcmV0Ym94LWtleS1tYXRlcmlhbC0zMi1ieXRlcw=='
@@ -120,7 +121,7 @@ def build_cluster(name: str = 'kluster', **kwargs: Any) -> TalosCluster:
         name,
         cluster_name='kluster',
         endpoint=ENDPOINT,
-        cert_sans=[BALANCER],
+        management_address=BALANCER,
         talos_version='v1.11.0',
         **kwargs,
     )
@@ -133,19 +134,48 @@ def refused(build_it: Callable[[], object]) -> RollRefused:
     return caught.value
 
 
+class Forward(pulumi.CustomResource):
+    """A stand-in for what carries a call from the management address to apid: a listener and its backends."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__('kluster:test:Forward', name, {})
+
+
 def build(name: str = 'kluster', **kwargs: Any) -> TalosDay1:
     """Day 1, on top of a day 0 the caller may hand in to inspect.
 
     Day 0 is built only when none is handed in: a second `build_cluster()`
     beside the caller's would be a second cluster under the same logical
-    name, which the recorder refuses as the engine does. `name` is the
-    logical name, for the reason `build_cluster` takes one.
+    name, which the recorder refuses as the engine does. The forward is built
+    the same way. `name` is the logical name, for the reason `build_cluster`
+    takes one.
     """
     if 'cluster' not in kwargs:
         kwargs['cluster'] = build_cluster()
+    if 'forward' not in kwargs:
+        kwargs['forward'] = [Forward(f'{name}-forward')]
     kwargs.setdefault('addresses', ADDRESSES)
     kwargs.setdefault('secondary_addresses', {'cp1': SECONDARY})
     return TalosDay1(name, **kwargs)
+
+
+#: The invokes that dial apid or hand on where to dial it, each carrying an
+#: `endpoints` list: the health check, and the client configuration a human
+#: then dials with.
+DIALING_INVOKES = ('talos:cluster/getHealth:getHealth', 'talos:client/getConfiguration:getConfiguration')
+
+
+async def dialed(fake: Talos, day1: TalosDay1) -> list[str]:
+    """Every address a Talos call of day 1 is dialed at: each resource's endpoint, each invoke's endpoints."""
+    _ = await asyncio.gather(day1.health.future(), day1.talosconfig.future())
+    resources = [*day1.applies.values(), day1.bootstrap, day1.kubeconfig_source]
+    addresses = [str(await resource.endpoint.future()) for resource in resources]
+    return addresses + [str(endpoint) for token in DIALING_INVOKES for endpoint in fake.calls[token]['endpoints']]
+
+
+async def named(day1: TalosDay1) -> dict[str, str]:
+    """Node name to the address its configuration apply names it by."""
+    return {node: str(await applied.node.future()) for node, applied in day1.applies.items()}
 
 
 async def urns_of(output: pulumi.Output[Any]) -> set[str]:
@@ -228,32 +258,48 @@ async def test_configuration_is_applied_over_apid_without_rebooting_the_quorum(f
         assert await applied.apply_mode.future() == 'staged_if_needing_reboot'
 
 
-@pytest.mark.asyncio
-async def test_a_node_behind_the_mesh_is_named_by_its_own_address_and_dialed_elsewhere(fake: Talos) -> None:
-    # apid routes by the node a call names, so a node that nothing outside the
-    # site can open a connection to is still administered: it is named by its
-    # own address and dialed at one that answers, and whichever member that
-    # is proxies the call the rest of the way.
-    day1 = build(endpoints={'homelab': BALANCER})
-    worker = day1.applies['homelab']
-    assert await worker.node.future() == ADDRESSES['homelab']
-    assert await worker.endpoint.future() == BALANCER
-    # And only that node: the others are untouched by the override.
-    for node in ('cp1', 'cp2', 'cp3'):
-        assert await day1.applies[node].endpoint.future() == ADDRESSES[node]
+def apid_sans(patches: list[dict[str, Any]]) -> set[str]:
+    """The SANs a node's patches put into apid's certificate: `machine.certSANs` of its `v1alpha1` patches."""
+    return {
+        str(san)
+        for patch in patches
+        if 'kind' not in patch
+        for san in cast('list[str]', patch.get('machine', {}).get('certSANs', []))
+    }
 
 
 @pytest.mark.asyncio
-async def test_the_bootstrap_dials_the_node_it_names_whatever_it_was_given(fake: Talos) -> None:
-    # Bootstrap and the kubeconfig read behind it are the calls with nothing to
-    # route through — there is no cluster yet — so they never take a proxy,
-    # even for a node the caller handed an endpoint for.
-    day1 = build(endpoints={'cp1': BALANCER})
-    assert await day1.bootstrap.endpoint.future() == ADDRESSES['cp1']
-    assert await day1.kubeconfig_source.endpoint.future() == ADDRESSES['cp1']
-    # The apply on that same node did take it, so this is a decision rather
-    # than an input that goes nowhere.
-    assert await day1.applies['cp1'].endpoint.future() == BALANCER
+async def test_every_address_a_call_dials_is_in_every_control_planes_apid_certificate(fake: Talos) -> None:
+    """A call verifies apid's certificate against the address it dialed, on whichever control plane answers.
+
+    The balancer may hand a connection to any control plane, so the address
+    has to be in each one's certificate, in the rendering it boots with and in
+    the one day 1 applies. No node holds the balancer's address, so a call
+    dialed at a node's own address dials something these renderings do not
+    carry.
+    """
+    cluster = build_cluster()
+    day1 = build(cluster=cluster)
+    addresses = set(await dialed(fake, day1))
+    assert addresses, 'day 1 dialed nothing'
+    for node in cluster.control_plane_nodes:
+        for rendering in (cluster, day1):
+            sans = apid_sans(await patches_of(rendering, node))
+            assert addresses <= sans, f'{node} carries {sans}, and day 1 dials {addresses}'
+
+
+@pytest.mark.asyncio
+async def test_the_bootstrap_names_the_first_control_plane_and_dials_what_every_other_call_dials(
+    fake: Talos,
+) -> None:
+    # A control plane's apid forwards a call to the node it names without
+    # etcd, so the cluster's first contact needs no address of its own: it
+    # is dialed where every apply is, and the kubeconfig read behind it too.
+    day1 = build()
+    first = (await named(day1))[day1.cluster.control_plane_nodes[0]]
+    assert await day1.bootstrap.node.future() == first
+    assert await day1.kubeconfig_source.node.future() == first
+    assert len(set(await dialed(fake, day1))) == 1
 
 
 @pytest.mark.asyncio
@@ -298,15 +344,35 @@ async def test_the_kubeconfig_comes_from_the_bootstrapped_node(fake: Talos) -> N
 
 
 @pytest.mark.asyncio
-async def test_the_health_check_knows_which_node_is_which(fake: Talos) -> None:
+async def test_the_health_check_names_each_node_as_its_apply_does(fake: Talos) -> None:
+    # The check compares the names it is given with the addresses Kubernetes
+    # reports for its nodes, and the apply's name is the one the node holds.
     day1 = build()
     _ = await day1.health.future()
     health = fake.calls['talos:cluster/getHealth:getHealth']
-    assert health['controlPlaneNodes'] == [ADDRESSES[node] for node in ('cp1', 'cp2', 'cp3')]
-    assert health['workerNodes'] == [ADDRESSES['homelab']]
-    # The health client talks to a control plane, never to the worker: the
-    # worker is named as a node and the call is routed to it from there.
-    assert health['endpoints'] == [ADDRESSES[node] for node in ('cp1', 'cp2', 'cp3')]
+    names = await named(day1)
+    assert health['controlPlaneNodes'] == [names[node] for node in day1.cluster.control_plane_nodes]
+    assert health['workerNodes'] == [names[node] for node in day1.cluster.worker_nodes]
+
+
+@pytest.mark.asyncio
+async def test_no_call_is_made_before_the_forward_it_is_dialed_through(fake: Talos) -> None:
+    """Every call goes through the listener and the backends, which no input of it carries.
+
+    The management address exists before the forward behind it does, so an
+    order is declared or is missing. Each resource that dials is read by its
+    own registration, and the health check by what it waits on.
+    """
+    forward = Forward('kluster-forward')
+    day1 = build(forward=[forward])
+    urn = await forward.urn.future()
+    calls = {'bootstrap': day1.bootstrap, 'kubeconfig': day1.kubeconfig_source} | {
+        f'{node}-config': applied for node, applied in day1.applies.items()
+    }
+    _ = await asyncio.gather(*(call.urn.future() for call in calls.values()))
+    for name in calls:
+        assert urn in fake.depends_on(f'kluster-{name}'), f'{name} is not ordered behind the forward'
+    assert urn in await urns_of(day1.health), 'the health check is not ordered behind the forward'
 
 
 @pytest.mark.asyncio
@@ -353,12 +419,16 @@ async def test_the_credentials_are_secret(fake: Talos) -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_talosconfig_names_every_node_and_the_control_plane_endpoints(fake: Talos) -> None:
+async def test_the_talosconfig_names_every_node_as_its_apply_does_and_dials_where_the_applies_do(fake: Talos) -> None:
+    # The names an operator's talosctl uses are the names the gate holds the
+    # nodes to, through the one way in every call takes.
     day1 = build()
     assert await day1.talosconfig.future() == TALOSCONFIG
     configuration = fake.calls['talos:client/getConfiguration:getConfiguration']
-    assert configuration['nodes'] == [ADDRESSES[node] for node in ('cp1', 'cp2', 'cp3', 'homelab')]
-    assert configuration['endpoints'] == [ADDRESSES[node] for node in ('cp1', 'cp2', 'cp3')]
+    names = await named(day1)
+    assert configuration['nodes'] == [names[node] for node in day1.cluster.roles]
+    endpoints = {str(await applied.endpoint.future()) for applied in day1.applies.values()}
+    assert set(configuration['endpoints']) == endpoints
 
 
 async def patches_of(component: Any, node: str) -> list[dict[str, Any]]:
@@ -470,8 +540,6 @@ async def test_a_stranger_cannot_be_named_by_either_component(fake: Talos) -> No
     cluster = build_cluster()
     secondary = refused(lambda: build('kluster-secondary', cluster=cluster, secondary_addresses={'nowhere': SECONDARY}))
     assert (secondary.refusal, secondary.nodes) == (Refusal.SECONDARY_ADDRESS_STRANGER, ('nowhere',))
-    endpoint = refused(lambda: build('kluster-endpoint', cluster=cluster, endpoints={'nowhere': BALANCER}))
-    assert (endpoint.refusal, endpoint.nodes) == (Refusal.ENDPOINT_STRANGER, ('nowhere',))
     address = refused(
         lambda: build('kluster-address', cluster=cluster, addresses={**ADDRESSES, 'nowhere': '10.20.0.99'})
     )

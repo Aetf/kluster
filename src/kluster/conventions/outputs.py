@@ -38,8 +38,6 @@ class PhysicalOutputs:
     """The secondary private address the reserved one is 1:1-NATed onto."""
     node_private_ips: str
     """Cloud node name → its VCN address."""
-    node_public_ips: str
-    """Cloud node name → its public address, which day 1 dials it at."""
     node_guas: str
     """Cloud node name → the one GUA its primary VNIC holds.
 
@@ -96,7 +94,6 @@ PHYSICAL_OUTPUTS = PhysicalOutputs(
     vip1='vip1',
     vip1_private='vip1_private',
     node_private_ips='node_private_ips',
-    node_public_ips='node_public_ips',
     node_guas='node_guas',
     worker_gua='worker_gua',
     kubeconfig='kubeconfig',

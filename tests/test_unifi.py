@@ -247,7 +247,8 @@ async def test_the_cluster_vlan_hands_out_no_leases() -> None:
     """Every node states its own address, so a lease is a second opinion.
 
     Three other places treat the worker's address as a constant — the FRR
-    neighbor statement, the port forward and day 1's apid endpoint — and a
+    neighbor statement, the port forward and the node day 1's apid calls
+    name — and a
     DHCP server on this VLAN is exactly the thing that could hand out a
     different one.
     """

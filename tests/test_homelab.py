@@ -126,7 +126,7 @@ def build_cluster(worker_nodes: tuple[str, ...] = (WORKER,)) -> Any:
         CLUSTER,
         cluster_name=CLUSTER,
         endpoint='https://203.0.113.10:6443',
-        cert_sans=['203.0.113.10'],
+        management_address='203.0.113.10',
         control_plane_nodes=('cp1',),
         worker_nodes=worker_nodes,
         bgp_peers={},

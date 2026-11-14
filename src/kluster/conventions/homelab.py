@@ -10,9 +10,10 @@ from kluster.conventions.site import eui64_link_local
 HOMELAB_NODE = 'worker'
 
 #: Its address is a constant rather than a lease: the gateway's FRR names it
-#: as a BGP neighbor, the peer-port forward sends traffic to it and day 1
-#: dials apid at it, so it is configured statically in machine config on one
-#: side and read from here on the others (physical/homelab-host.md §2).
+#: as a BGP neighbor, the peer-port forward sends traffic to it and day 1's
+#: apid calls name the node by it, so it is configured statically in machine
+#: config on one side and read from here on the others
+#: (physical/homelab-host.md §2).
 #: Nodes number from `.10`; `.1` is the gateway's leg and `HOMELAB_HOST_LEG_IPV4`
 #: the homelab host's own.
 HOMELAB_NODE_IPV4 = IPv4Address('192.168.70.10')
