@@ -112,7 +112,7 @@ STATE_DUMP_PREFIX = 'pulumi-state'
 #: (storage.md §4): a backup kept at that provider is not a backup. The name is
 #: explicit because a B2 bucket name is global and the bucket is addressed from
 #: outside this program.
-BUCKET_BACKUP = 'kluster-backup'
+BUCKET_BACKUP = 'aetf-kluster-backup'
 
 #: How long the backup bucket keeps a prior version before its lifecycle rule
 #: removes it. Nothing in automation holds a delete capability, so a restic or
