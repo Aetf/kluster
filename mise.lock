@@ -219,14 +219,14 @@ checksum = "sha256:d34b294eee83a21aa2241003bec50d9c4e21eb54232c9578a56e1bcf4eb3a
 url = "https://archive.archlinux.org/packages/d/dash/dash-0.5.11.1-1-x86_64.pkg.tar.zst"
 
 [[tools.jj]]
-version = "0.46.0"
+version = "0.47.1"
 backend = "aqua:jj-vcs/jj"
-specifiers = ["0.46.0"]
+specifiers = ["0.47.1"]
 
 [tools.jj."platforms.linux-x64"]
-checksum = "sha256:fce0271158e665ceb82dc66c5eb95b1728649094e9133074f3b5baece345fc08"
-url = "https://github.com/jj-vcs/jj/releases/download/v0.46.0/jj-v0.46.0-x86_64-unknown-linux-musl.tar.gz"
-url_api = "https://api.github.com/repos/jj-vcs/jj/releases/assets/619869961"
+checksum = "sha256:d4b657f622ee50929c8916466dfa3d6a6c17a0a32b50e7b2c793707ec9ebcad7"
+url = "https://github.com/jj-vcs/jj/releases/download/v0.47.1/jj-v0.47.1-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/jj-vcs/jj/releases/assets/711489795"
 
 [[tools.jq]]
 version = "1.8.2"
@@ -300,14 +300,14 @@ conda_deps = [
 ]
 
 [[tools.pulumi]]
-version = "3.272.0"
+version = "3.274.1"
 backend = "aqua:pulumi/pulumi"
-specifiers = ["3.272.0"]
+specifiers = ["3.274.1"]
 
 [tools.pulumi."platforms.linux-x64"]
-checksum = "sha256:58d545f2b98761051922008ebd381ecef95484d7f7a5ff7faa15d7a780ea84f6"
-url = "https://github.com/pulumi/pulumi/releases/download/v3.272.0/pulumi-v3.272.0-linux-x64.tar.gz"
-url_api = "https://api.github.com/repos/pulumi/pulumi/releases/assets/666858847"
+checksum = "sha256:32ae6d09d0df51637db7a0affb3ceb7d0511093b22d477aff5f20214d0b7e471"
+url = "https://github.com/pulumi/pulumi/releases/download/v3.274.1/pulumi-v3.274.1-linux-x64.tar.gz"
+url_api = "https://api.github.com/repos/pulumi/pulumi/releases/assets/713536181"
 provenance = "cosign"
 
 [[tools.talosctl]]
@@ -322,12 +322,12 @@ url_api = "https://api.github.com/repos/siderolabs/talos/releases/assets/5205476
 provenance = "cosign"
 
 [[tools.uv]]
-version = "0.13.5"
+version = "0.13.7"
 backend = "aqua:astral-sh/uv"
-specifiers = ["0.13.5"]
+specifiers = ["0.13.7"]
 
 [tools.uv."platforms.linux-x64"]
-checksum = "sha256:f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f"
-url = "https://github.com/astral-sh/uv/releases/download/0.13.5/uv-x86_64-unknown-linux-gnu.tar.gz"
-url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/664336023"
+checksum = "sha256:c5221ff41b7892bfc223543883600125f6a47fe845093e0f5bdff4f359196d83"
+url = "https://github.com/astral-sh/uv/releases/download/0.13.7/uv-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/704009823"
 provenance = "github-attestations"

@@ -34,8 +34,8 @@ locked = true
 # Renovate maintains these -- it cannot bump `latest`, which is why they are
 # written out.
 [tools]
-pulumi = "3.272.0"
-uv = "0.13.5"
+pulumi = "3.274.1"
+uv = "0.13.7"
 # age is the tool this repository escrows with rather than a format it
 # reimplements: `age`/`age-keygen` write and open every ciphertext under
 # `escrow/`, and the box's dumps are age-encrypted too; butane renders the
@@ -112,7 +112,7 @@ jq = "1.8.2"
 # reads a jj checkout's working copy through it, so the cases that hold that
 # reading run the pinned release here and in CI alike. Its releases are
 # static binaries.
-jj = "0.46.0"
+jj = "0.47.1"
 # talosctl is what the suite asks whether Talos accepts the machine
 # configuration the Talos component renders: `gen config` builds the base the
 # provider builds, and `validate --strict` is the release's own validation of
