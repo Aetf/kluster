@@ -389,13 +389,21 @@ def _explained(config: pytest.Config, left: object, right: object) -> str:
     """What pytest reports for a failed `left == right`, whole.
 
     The hook a rewritten `assert` calls to explain a failed comparison, called
-    directly. Directly rather than through a failing `assert`, because the
-    rewriting truncates the explanation at default verbosity outside CI: a
-    secret printed below the cut would then pass here and print on CI.
+    directly, so that the case holds the text rather than a failure. The hook
+    cuts its own explanation short below an assertion verbosity of 2 unless it
+    detects CI, and a secret printed below the cut would then pass here and
+    print on CI. So it is called at 2, the `-vv` at which pytest truncates
+    nothing wherever it runs and explains the most it ever does: the
+    explanation read is the fullest any reader is shown.
     """
-    answers = cast(
-        'list[list[str]]', config.hook.pytest_assertrepr_compare(config=config, op='==', left=left, right=right)
-    )
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(config.option, 'verbose', 2)
+        # A `verbosity_assertions` setting overrides the global level; under
+        # one below 2 the explanation read here would be the truncated one.
+        assert config.get_verbosity(pytest.Config.VERBOSITY_ASSERTIONS) >= 2, 'the explanation would be truncated'
+        answers = cast(
+            'list[list[str]]', config.hook.pytest_assertrepr_compare(config=config, op='==', left=left, right=right)
+        )
     return '\n'.join(line for answer in answers for line in answer)
 
 
