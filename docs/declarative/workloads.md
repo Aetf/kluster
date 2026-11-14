@@ -342,7 +342,8 @@ application it holds (`conventions.backup.BACKED_NAMESPACES`). Where the
 namespace changes, the value is sealed afresh against the cluster's own
 key, as Grafana's values are. These are per-application secrets, which
 the program enumerates and the register does not (credentials.md §1,
-rule 8).
+rule 8), but for one whose loss loses stored data, which that rule makes
+a register row.
 
 Two quiet straight-ports, on record so they aren't forgotten: **exim**
 (the MTA relay behind immich/splitpro outbound mail — a plain small
@@ -368,3 +369,19 @@ with no `Certificate`, and keeps selector `k8s`, so the zones' TXT and
 retired one, is replaced by a fresh key minted in the cluster under a
 new selector, published beside `k8s` in every mail zone before any
 mail is signed with it, with `k8s` removed once nothing signs with it.
+
+Authelia's storage encryption key is the second thing "same
+SealedSecrets" does not carry. It encrypts the second factors and the
+OIDC data in Authelia's database, so a backup of that database opens
+with it and nothing else, and the ported `authelia` ciphertext would
+leave it with the sealing key as its only root. So it is a register row
+instead (credentials.md §1 rule 8): escrowed as `authelia/storage-key`,
+and sealed strict from the escrow as the Secret `authelia-storage-key`
+(`conventions.sealed.AUTHELIA_STORAGE_KEY`), under the data key
+`STORAGE_ENCRYPTION_KEY` the ported Secret carried it under and in the
+namespace the legacy server uses. The ported `authelia` ciphertext
+carries the rest of that Secret's data and not this key, and the server
+reads the key from the row's Secret.
+`credentials derived authelia-storage-key import` takes it from the
+legacy Secret once, and `credentials derived authelia-storage-key seal`
+seals it again after a rebuild (credentials.md §4).

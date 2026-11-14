@@ -157,10 +157,11 @@ facts about them.
     it is its one reader, and names it and the namespace it was sealed
     to ([declarative/workloads.md](declarative/workloads.md) §5). A value `credentials` seals is sealed
     strict — name and namespace bound into the ciphertext — by the
-    command that obtains it, in the same run, or, for a value recorded
-    before there was a cluster to seal it to, by its row's `seal`, from
-    the configuration that already holds it; neither parks a value
-    (rule 2). The backup bucket's writer keys are sealed namespace-wide
+    command that obtains it, in the same run, or by its row's `seal`
+    from where the value is already held: the configuration that holds
+    a value recorded before there was a cluster to seal it to, or the
+    escrow, for an escrowed row the cluster consumes (rule 8). Neither
+    parks a value (rule 2). The backup bucket's writer keys are sealed namespace-wide
     instead, by their own `seal` out of `physical`'s state, so that one
     ciphertext opens under every name in its namespace (§3).
 
@@ -218,7 +219,14 @@ facts about them.
 8.  **Boundary**: per-app secrets (OIDC clients, app API keys) follow
     the two-channel rule (cluster-infra.md §1.1) and are enumerated by
     the program itself — out of register scope. The register tracks
-    infra and cross-system credentials.
+    infra and cross-system credentials, and one kind of per-app secret:
+    **one that passes §2.2's durable-root test is a register row**,
+    escrowed, and sealed by `credentials` as a Secret of its own. Every
+    other per-app secret stays out of the register, and what its loss
+    costs is a redraw or a visit to the account that issued it; one
+    ported from the legacy cluster has the sealing key as its only root
+    (§2.2). Today's instance of the first kind is Authelia's storage
+    encryption key.
 
 ## 2. Seeds
 
@@ -479,6 +487,7 @@ issued under a superseded CA.
 | The operator passphrase, which encrypts the operator stacks (§3) | `operator/passphrase` | Generated |
 | `physical`'s passphrase, which encrypts that stack alone (§3) | `physical/passphrase` | Generated |
 | Bearer token the issue-sync poller presents (§3) | `alertmanager/read` | Generated |
+| Authelia's storage encryption key, which encrypts the second factors and OIDC data in its database (§3) | `authelia/storage-key` | Generated |
 | State-backend CA private key | `state-backend/ca` | Generated |
 | age identity for pg_dump encryption | `backup/age/<generation>` | Generated |
 | Private key of the dispatch App (§3) | `github/dispatch-key` | Console |
@@ -518,6 +527,20 @@ those (rule 6), and escrowing them would buy nothing. The drill age key
 fails it too, for the same reason from the other side: every dump it
 opens is also encrypted to an escrowed generation, so losing it costs a
 new key and a recipient swap rather than a byte of data.
+
+**A per-application secret that passes the test is a row too** (§1
+rule 8): it is escrowed, and `credentials` seals it from the escrow as
+a Secret of its own, which is the one the application reads. Authelia's
+storage encryption key is the instance. A backup of Authelia's database
+opens with it and with nothing else, since the second factors and the
+OIDC data in that database are encrypted under it, and nothing upstream
+mints it again. It is drawn by `generate` only for an Authelia with no
+database yet; an installation whose database a predecessor encrypted
+imports the predecessor's key instead, and its generations are the
+key's history, so `recover --generation` opens a backup taken under an
+earlier one. A per-application secret that fails the test is no row,
+and the bullet on ported ciphertexts below says what each kind costs
+when it is lost.
 
 Consequences, all deliberate:
 
@@ -603,19 +626,43 @@ Consequences, all deliberate:
     selector, published beside `k8s` before any mail is signed with it
     ([declarative/workloads.md](declarative/workloads.md) §5).
 -   **For a ciphertext ported from the legacy cluster, the sealing key
-    is the recovery root once the legacy cluster is gone.** Each opens
-    with the legacy sealing key the bring-up carries into the cluster
-    (declarative/workloads.md §5), and a value the legacy cluster
-    generated — Authelia's storage encryption key, its session and JWT
-    secrets and the secrets its OIDC issuer signs with, the client secrets,
-    the database passwords — is held by the legacy cluster until the
-    decommission, and after it by nothing but its ciphertext and the
-    cluster's own sealing key, which the decommission's rotation
-    re-seals it under (rfc-008 §5.8). Losing the sealing key then loses those values, and
-    what each loss costs, a rotation or stored data, is stated nowhere
-    yet. Whether any of them gets a second home — an escrow row, or an
-    export of the sealing key — is open as
-    [Aetf/kluster-ops#727](https://github.com/Aetf/kluster-ops/issues/727).
+    is the only root once the legacy cluster is gone.** Each opens with
+    the legacy sealing key the bring-up carries into the cluster
+    (declarative/workloads.md §5), and the legacy cluster holds its
+    plaintext until the decommission. After it, the plaintext is held by
+    nothing but the ciphertext and the cluster's own sealing key, which
+    the decommission's rotation re-seals it under (rfc-008 §5.8), and
+    both sit in the same etcd. What losing them costs is set by the
+    value's class:
+    -   **Issued by an account**: a value an account outside this
+        system made, and makes again. That account is its second home,
+        and a loss costs a visit to it. Today: the mail relay's Gmail
+        login (`exim`), the mail proxy's OAuth client (`emailproxy`),
+        the Hentai@Home login (`hath`), the key of the anime database
+        account shoko signs in to (`shoko`), and the legacy backup
+        bucket's service-account keys (`immich-db`, `splitpro-db`),
+        which the decommission deletes.
+    -   **A random draw whose loss costs a redraw**: a value the legacy
+        cluster generated whose loss loses no stored data, so it costs a
+        sign-in or a restart. It is escrowed nowhere on purpose, by the
+        precedent the DKIM key above sets. Today: the session, Redis,
+        password-reset and OIDC signing secrets that make up the rest of
+        `authelia`; the issuer key and the client pairs of
+        `authelia-config`; the client halves in `matrix`,
+        `immich-config` and `splitpro-auth`; splitpro's session secret;
+        and immich's Redis and database passwords.
+    -   **A durable root**: a value whose loss loses stored data and
+        that nothing upstream mints again. It passes the test above, so
+        it is a register row (§1 rule 8) and not a ported ciphertext at
+        all: imported from the legacy cluster into the escrow once,
+        sealed by `credentials` as a Secret of its own, and absent from
+        the ported ciphertext it came from. Today: Authelia's storage
+        encryption key, `authelia/storage-key`.
+
+    A rebuild of the cluster therefore obtains the first two classes
+    again, by a visit or a redraw, and opens the third from the escrow
+    with `credentials derived authelia-storage-key seal`. The sealing
+    key is not exported, for the reason the bullet above gives.
 -   **A retired recovery key owes nothing forward.** Rotating the kit
     re-encrypts every generation in the registry to the successor
     identity (§4.2), and no secret is a function of the key that
@@ -688,6 +735,7 @@ column to the map lists it as one the map does not carry.
 | HA webhook URL/ID | Home Assistant | One notify endpoint, the automation that takes the ops repository's payload | ops-repo secret (`HA_WEBHOOK_URL`) | the ops repo's dispatch handler. Until `deploy.yml`'s `notify-failure` job becomes a caller of the alert producer it reads the legacy `kluster` repository secret `HAOS_DEPLOY_WEBHOOK_URL`, which this register no longer claims and `sync` does not touch; the operator deletes it from the repository with that job's conversion |
 | Alertmanager webhook URL | Home Assistant (`credentials derived alert-webhook record`) | One notify endpoint, a second automation that reads alertmanager's fixed body — the tier, the summary and the playbook off each alert — and pushes under the same title convention (rfc-007 §7.3) | SealedSecret (`k8s-base`, `sealedSecrets.alert-webhook`, in the monitoring namespace) | alertmanager, through the VictoriaMetrics operator's `url_secret` |
 | Legacy sealing key | The legacy cluster's sealed-secrets controller, carried by hand once at the hand-over to the first wave ([physical/bring-up.md](physical/bring-up.md) stage 9), by a pipe between the two clusters' API servers that writes it to no file | Opens every ciphertext ported from the legacy cluster ([declarative/workloads.md](declarative/workloads.md) §5); a controller holding it can seal to it, so the certificate the controller serves is confirmed as the cluster's own after the carry | none (the controller's own namespace, beside the cluster's own key; deleted by the decommission's re-sealing) | the sealed-secrets controller |
+| Authelia storage encryption key | The legacy cluster's `authelia` Secret, imported into the escrow as `authelia/storage-key` (`credentials derived authelia-storage-key import`); drawn by `generate` only for an Authelia with no database yet | Encrypts the second factors and the OIDC data in Authelia's database, so a backup of that database opens with it and nothing else | escrow as `authelia/storage-key` · SealedSecret (`apps`, `sealedSecrets.authelia-storage-key`, in the serving-system namespace, sealed from the escrow) | the Authelia server |
 | DKIM private key (exim) | The legacy cluster's `cert-dkim-exim` Secret, carried rather than minted (`credentials derived dkim-exim record`) | Signs mail as every mail zone's `k8s` selector, whose published public half is `conventions.DKIM_K8S` | SealedSecret (`apps`, `sealedSecrets.dkim-exim`, in the mail-system namespace) | exim |
 | Drill-environment credentials | OCI seed key and B2 seed key, one command (`credentials derived drill-credentials mint`) | The OCI key is its own user, group and policy: administrator of the `drill` compartment, which holds the drill's scratch box and nothing else, and a stranger outside it — no `--compartment` on this row, and no quota or budget guardrail on that compartment until `physical` declares one. The B2 key is `listFiles` and `readFiles` on the dump prefix alone, the writer's own prefix and nothing the writer may do | ops-repo Environment (`drill`: `DRILL_OCI_USER_OCID`, `DRILL_OCI_FINGERPRINT`, `DRILL_OCI_PRIVATE_KEY`, `DRILL_B2_KEY_ID`, `DRILL_B2_KEY`) | Quarterly rebuild drill (state-backend.md §7.3) |
 
@@ -723,7 +771,11 @@ overwrite and that dump the drill cannot open the newest object, which
 is the cost of a one-slot design and is bounded by one nightly.
 The DKIM private key rotates by none of these: it is carried from the
 legacy cluster once and never rotated in place, and a new key goes under
-a new selector (§2.2).
+a new selector (§2.2). Authelia's storage encryption key does not rotate
+by a generation alone either: the server opens its database with a new
+generation only once `authelia storage encryption change-key` has
+re-keyed that database to it, which nothing here runs, so a generation
+is sealed only as the key the database is already under.
 
 **An ops-repo Environment secret's name carries its Environment as a
 prefix** (`DRILL_AGE_IDENTITY`, and the five the drill-credentials row
@@ -1070,6 +1122,8 @@ name.
 | `credentials derived alert-webhook record` | After `physical` has brought the cluster up and `k8s-base` runs the sealed-secrets controller, and after the operator has made alertmanager's intake automation in Home Assistant — which the command prints the steps for. Takes the webhook URL without echoing it, seals it with `kubeseal` strict for the Secret alertmanager's receiver reads, and writes the ciphertext in the clear at `sealedSecrets.alert-webhook.url` in `k8s-base`'s config, reading it back; the stack file is then committed. No stack holds the URL as a secret: its one consumer is in the cluster. A new webhook id and this command again is the rotation. |
 | `credentials derived dkim-exim record [--key-file <path>]` | Once, after `k8s-base` runs the sealed-secrets controller and before exim moves in Wave A1 ([cluster/migration.md](cluster/migration.md) §2). Takes the mail relay's DKIM private key whole on standard input, piped from the legacy cluster's `cert-dkim-exim` Secret by the command it prints, or from the file `--key-file` names, and echoes it nowhere. Before anything is sealed it refuses a key whose public half's SHA-256 over the DER differs from `conventions.DKIM_K8S`'s, the key every mail zone publishes as `k8s._domainkey`, printing the two digests and nothing of the key. Then it seals the key with `kubeseal` strict for the Secret exim reads, and writes the ciphertext in the clear at `sealedSecrets["dkim-exim"]["tls.key"]` in the `apps` stack's config, reading it back; `Pulumi.apps.yaml` is then committed. The key is never rotated in place (§2.2). |
 | `credentials derived b2-writer seal` | Once, at the hand-over to the first wave ([physical/bring-up.md](physical/bring-up.md) stage 9), after the legacy sealing key is carried and the certificate the controller serves is confirmed as the cluster's own; and again after a `physical` apply that mints a writer key for a newly backed namespace. Fetches the cluster's sealing certificate with the kubeconfig in `physical`'s state, reads every writer key `physical` exports under `backup_keys` out of that state under `physical`'s passphrase, one per family of each namespace in `conventions.backup.BACKED_NAMESPACES`, seals each with `kubeseal` namespace-wide, and writes the ciphertexts in the clear at their rows' paths in `apps`'s config, reading each back; `Pulumi.apps.yaml` is then committed. A namespace whose key `physical` does not export yet refuses the run before anything is written. |
+| `credentials derived authelia-storage-key import` | Once, while the legacy cluster still holds the key: at the bring-up's last kit sitting ([physical/bring-up.md](physical/bring-up.md) stage 9), beside `b2-writer seal`, or, on an installation past that stage, at a kit sitting of its own before Wave A1's head (rfc-008 §5.2). Takes Authelia's storage encryption key on standard input, piped from the legacy cluster's `authelia` Secret by the command it prints, and with the surrounding whitespace stripped, as every piped value is; refuses, filing nothing, a key shorter than Authelia accepts; escrows it as the next generation of `authelia/storage-key`; and seals what the registry then returns, read back out of the ciphertext, strict for the Secret the server reads, into `apps`'s config, reading it back. The cluster's certificate and the `apps` stack are held to exist before anything is escrowed. A seal that fails after the escrow is repaired by `seal` below, not by a second `import`, which would file the same key again as the next generation. The escrow file and `Pulumi.apps.yaml` are committed together. Wave A1's sign-in with a second factor against the migrated database, before the cut (rfc-008 §5.2), is what proves the escrowed key, whitespace stripped, is the one Authelia encrypted with. |
+| `credentials derived authelia-storage-key seal` | After a rebuild of the cluster, which is the whole of that key's recovery, and after an `import` whose seal failed. Opens the newest escrowed generation with the kit, seals it to the cluster's certificate strict for the Secret the server reads, and writes the ciphertext into `apps`'s config, reading it back; `Pulumi.apps.yaml` is then committed. On an installation whose Authelia has no database yet, it is also the step after `generate`. While the escrow holds no generation it refuses, naming `import`, and writes nothing. |
 | `credentials derived github-admin record` | Once per installation, and again on each rotation, for the GitHub admin token — into the `github` stack's config, which is where the stack and every command that pushes a GitHub secret read it. Nothing in this repository can create the value: GitHub publishes no API that makes a personal access token, so a token generated on the account's settings page and recorded here is the whole of a rotation, and the superseded one is deleted on the same page. It runs before `derived sync`, which authenticates as it. |
 | `credentials derived github-dispatch-key record` / `credentials derived github-trigger-key record` | After the kit exists, and after the App's page has generated a private key — which the command prints the steps for. Takes the key on standard input and escrows it as the row's next generation, so a re-run with a key already on file changes nothing and a re-run with a fresh one is the rotation. `--from-kit` reads it out of the entry a kit that still carries the key as a seed row holds, instead of from standard input. A new generation is held to the recipients file as `generate`'s is (§2.2). |
 | `credentials derived ls` | Any time, with or without a kit. Prints the slot map (below): every §3 credential a channel holds, where its value comes from, and every slot it lands in, the ones still waiting on a consumer included. It reads a checked-in file, so it needs no token, no kit and no network. |
@@ -1223,8 +1277,8 @@ the reason §2's live beside theirs: a runbook would be a second place
 for them to be wrong.
 
 **A value the cluster consumes is sealed by the command that obtains
-it, in the same run, or by its row's `seal` from the configuration that
-already holds it** (`sealing.py`), and is never copied by `sync`: `kubeseal` draws a
+it, in the same run, or by its row's `seal` from where the value is
+already held, the configuration or the escrow** (`sealing.py`), and is never copied by `sync`: `kubeseal` draws a
 session key for every seal, so a seal is a delivery and not a copy. The
 command fetches the sealing certificate from the cluster's sealed-secrets
 controller — through the API server's service proxy, the path `kubeseal`
@@ -1240,7 +1294,9 @@ alertmanager's webhook and the mail relay's DKIM key each by its
 `record` once a cluster exists, or by its `seal`, which reads the value
 back out of `physical`'s configuration, for a password recorded before
 there was a cluster to seal it to. The writer keys are sealed by
-`b2-writer seal`, which reads them out of `physical`'s state.
+`b2-writer seal`, which reads them out of `physical`'s state, and
+Authelia's storage encryption key by its `import` and its `seal`, each of
+which seals what the escrow holds.
 
 The **App-key rows** carry the same verb one slot over (`escrow.py`):
 console steps printed, the value taken on standard input, and the escrow
@@ -1568,7 +1624,20 @@ operator-passphrase generate` and `recover`.
     `conventions.backup.BACKED_NAMESPACES` names; each is read out of
     `physical`'s state and sealed namespace-wide into `apps`'s
     configuration, every namespace in one run. `Pulumi.apps.yaml` is then
-    committed.
+    committed. At the same sitting, Authelia's storage encryption key
+    is carried from the legacy cluster by the pipe that
+    `credentials derived authelia-storage-key import` prints, from the
+    legacy `authelia` Secret into that command. It escrows the key as
+    `authelia/storage-key` and seals what the escrow then holds into
+    `apps`'s configuration, and `escrow/authelia/storage-key/1.age` and
+    `Pulumi.apps.yaml` are committed together. The key is taken with the
+    surrounding whitespace stripped, and Wave A1's sign-in with a second
+    factor against the migrated database is what proves it is Authelia's
+    (rfc-008 §5.2). A seal that fails after the escrow is finished by
+    `credentials derived authelia-storage-key seal`, not by a second
+    import, which would file the same key again. An installation past
+    this stage runs the import as a kit sitting of its own, before Wave
+    A1's head.
 
 A stage that fails is re-run; nothing is parked. Once the last one is
 done, the kit goes back in its envelope.

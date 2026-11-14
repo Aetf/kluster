@@ -47,6 +47,7 @@ from kluster.conventions.identity import STACK_NAMES
 
 __all__ = (
     'ALERT_WEBHOOK',
+    'AUTHELIA_STORAGE_KEY',
     'BGP_PASSWORD',
     'CONFIG_KEY',
     'DKIM_EXIM',
@@ -167,6 +168,20 @@ DKIM_EXIM = SealedValue(
     stack=STACK_NAMES.apps,
 )
 
+#: Authelia's storage encryption key, which encrypts the second factors and
+#: the OIDC data in its database. A value of its own rather than a data key of
+#: the ported `authelia` Secret, because it is the one value of that Secret
+#: whose loss loses data: it is escrowed, and sealed here from the escrow by
+#: `credentials derived authelia-storage-key` (credentials.md §2.2). The data
+#: key is the one the ported Secret carried it under, so the server reads it as
+#: before; the namespace is the legacy server's, which the ported server keeps.
+AUTHELIA_STORAGE_KEY = SealedValue(
+    name='authelia-storage-key',
+    namespace='serving-system',
+    keys=('STORAGE_ENCRYPTION_KEY',),
+    stack=STACK_NAMES.apps,
+)
+
 
 def writer_key(namespace: str, family: BackupFamily) -> SealedValue:
     """One namespace's writer key of one family on the backup bucket, sealed for the `apps` stack.
@@ -198,5 +213,8 @@ WRITER_KEYS: tuple[SealedValue, ...] = tuple(
 
 #: Every sealed value, by name.
 VALUES: Mapping[str, SealedValue] = MappingProxyType(
-    {value.name: value for value in (DNS01_TOKEN, BGP_PASSWORD, ALERT_WEBHOOK, DKIM_EXIM, *WRITER_KEYS)}
+    {
+        value.name: value
+        for value in (DNS01_TOKEN, BGP_PASSWORD, ALERT_WEBHOOK, DKIM_EXIM, AUTHELIA_STORAGE_KEY, *WRITER_KEYS)
+    }
 )

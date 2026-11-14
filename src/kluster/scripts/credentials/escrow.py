@@ -45,6 +45,7 @@ import logging
 import os
 import re
 import secrets
+import string
 import textwrap
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
@@ -103,6 +104,12 @@ BACKUP = 'backup/age'
 #: (credentials.md §3). One label per App, because they rotate apart.
 DISPATCH_KEY = 'github/dispatch-key'
 TRIGGER_KEY = 'github/trigger-key'
+#: Authelia's storage encryption key, which encrypts the second factors and
+#: the OIDC data in its database (credentials.md §2.2). Escrowed because a
+#: backup of that database opens with it and with nothing else, and sealed by
+#: `credentials derived authelia-storage-key` as the Secret the server reads
+#: (`conventions.sealed.AUTHELIA_STORAGE_KEY`).
+AUTHELIA_STORAGE_KEY = 'authelia/storage-key'
 
 #: Where the recovery key lives in the kit — the register's decision, not this
 #: module's (`entries.py`).
@@ -110,6 +117,13 @@ RECOVERY_ENTRY = entries.SEEDS['recovery'].entry
 
 #: 32 bytes, in the form every consumer of a password accepts.
 TOKEN_BYTES = 32
+
+#: What Authelia asks of its storage encryption key: at least 20 characters,
+#: and a random alphanumeric string of 64 or more by its own recommendation
+#: (authelia.com, Configuration → Storage → Introduction, `encryption_key`).
+AUTHELIA_KEY_MINIMUM = 20
+AUTHELIA_KEY_LENGTH = 64
+_ALPHANUMERIC = string.ascii_letters + string.digits
 
 #: A label is a path, and a path built from a string is a way to write outside
 #: the directory it is supposed to stay in.
@@ -190,6 +204,10 @@ def _identity() -> str:
     return age.generate().secret
 
 
+def _authelia_key() -> str:
+    return ''.join(secrets.choice(_ALPHANUMERIC) for _ in range(AUTHELIA_KEY_LENGTH))
+
+
 @dataclass(frozen=True)
 class Shape:
     """What a label's plaintext looks like, and how to say so in an error.
@@ -232,6 +250,13 @@ def _is_private_key(value: str) -> bool:
 TEXT = Shape('a value', lambda value: bool(value.strip()))
 IDENTITY = Shape(f'an age identity, which starts {age.SECRET_PREFIX}', _is_identity)
 PRIVATE_KEY = Shape('a PEM private key, which starts -----BEGIN and ends -----END ... -----', _is_private_key)
+#: The length alone: Authelia refuses a shorter key and takes any longer one,
+#: whatever its characters, so a key a predecessor drew some other way is
+#: imported as it stands.
+AUTHELIA_KEY = Shape(
+    f'a key of at least {AUTHELIA_KEY_MINIMUM} characters, the shortest Authelia starts with',
+    lambda value: len(value.strip()) >= AUTHELIA_KEY_MINIMUM,
+)
 
 
 @dataclass(frozen=True)
@@ -548,6 +573,16 @@ def register() -> dict[str, Label]:
         ),
         Label(CA, "the state-backend CA's private key", Generated(pki.generate_ca_key), shape=PRIVATE_KEY),
         Label(ALERTMANAGER, 'the bearer token the issue-sync poller presents', Generated(_token)),
+        # Drawn by `generate` on an installation with no database yet, and
+        # imported where a predecessor hands one over (§2.2). Its generations
+        # are the key's history: a backup taken under an earlier one opens
+        # with `recover --generation`.
+        Label(
+            AUTHELIA_STORAGE_KEY,
+            "Authelia's storage encryption key, which encrypts the second factors and OIDC data in its database",
+            Generated(_authelia_key),
+            shape=AUTHELIA_KEY,
+        ),
         *(
             Label(
                 name,

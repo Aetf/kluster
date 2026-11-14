@@ -122,6 +122,11 @@ def expected(path: list[str]) -> str | None:
         case ['derived', cli.derived.B2_WRITER_ROW, 'seal']:
             # The writer keys `physical` minted, sealed out of its state.
             return 'derived.b2_writer_seal'
+        case ['derived', cli.derived.AUTHELIA_STORAGE_KEY_ROW as row, 'import' | 'seal' as verb]:
+            # The escrowed row the cluster consumes: escrowed, then sealed from
+            # the escrow, by a function of its own per verb in `derived.py`,
+            # under the mint rows' convention with the verb after the row.
+            return f'derived.{row}_{verb}'.replace('-', '_')
         case ['derived', row, 'seal'] if row in devices.DEVICES:
             # The sealed copy of a device row recorded before the cluster
             # existed, read back out of the stack that holds the value.
@@ -272,6 +277,8 @@ class Dispatch:
             (cli.derived, 'state_backend_host_key', 'ssh-ed25519 AAAA'),
             (cli.derived, 'backup_age_recipient', 'age1recipient'),
             (cli.derived, 'b2_writer_seal', []),
+            (cli.derived, 'authelia_storage_key_import', 1),
+            (cli.derived, 'authelia_storage_key_seal', 1),
             (cli.devices, 'deliver', ()),
             (cli.devices, 'seal', None),
             (cli.devices, 'record_sealed', None),
@@ -438,6 +445,24 @@ def test_a_bgp_record_whose_cluster_refuses_the_seal_writes_neither_end(
 
     assert 'devices.deliver' not in dispatch.reached
     assert 'kubeseal refused' in caplog.text
+
+
+def test_a_storage_key_import_on_an_empty_pipe_has_printed_the_pipe_when_it_refuses(
+    dispatch: Dispatch, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The operator runs it bare to learn the pipe its runbook step names. The
+    # pipe is printed before standard input is read, so the run that ends at
+    # ctrl-d with nothing read has already said where the value comes from;
+    # and nothing past the read is reached.
+    monkeypatch.setattr('sys.stdin', io.StringIO(''))
+
+    assert cli.main(['derived', cli.derived.AUTHELIA_STORAGE_KEY_ROW, 'import']) == 1
+
+    pipe = caplog.text.find('get secret authelia')
+    refusal = caplog.text.find('standard input was empty')
+    assert 0 <= pipe < refusal
+    assert 'derived.authelia_storage_key_import' not in dispatch.reached
+    assert 'escrow.Vault.open' not in dispatch.reached
 
 
 def test_bootstrap_carries_its_only_through(dispatch: Dispatch) -> None:
