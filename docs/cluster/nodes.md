@@ -253,7 +253,14 @@ program no longer exists on the official page. PAYG specifics:
     evaluated every ~24 h. The real guardrails are resource-side:
     **compartment quotas + service limits** pinning creatable shapes to
     the free envelope, plus budget alerts. Accept this consciously —
-    "billed, not killed" means the bill is the failure mode.
+    "billed, not killed" means the bill is the failure mode. The quotas
+    bound A1 twice, per availability domain and per region, and the
+    regional bound is the compartment's ceiling: the fleet plus one node.
+    A replacement is created before the node it replaces is deleted, so a
+    ceiling of the fleet alone would refuse it, and one replacement in
+    flight is all the capacity hold below asks for. The guardrails
+    component (`components/cloud/guardrails.py`) holds the numbers and
+    their reasons, and its tests hold them against the fleet's declaration.
 
 **Free-envelope facts that matter to this architecture** (beyond the A1
 shape itself):

@@ -13,13 +13,28 @@ watch, and only one of them can actually refuse anything:
     It cannot stop spending; it reports that spending happened. It exists for
     the costs quotas cannot express — egress, request counts, a price change.
 
-**Quota scope is per availability domain** for compute and block storage. The
-fleet is one node per AD (nodes.md §5), so the per-AD numbers below describe
-one node's worth of headroom, and the tenancy-wide ceiling is that multiplied
-by the number of ADs in the region. That is a looser bound than the free
-envelope, and deliberately so: a bound tight enough to forbid a second node in
-an AD would also forbid replacing one, which is the operation the design
-depends on being available (nodes.md §3.1, the capacity hunt).
+**A1 is bounded twice, per availability domain and per region**, and an
+instance is created only where both admit it. Both bounds leave room for one
+node more than the fleet holds, because replacing a node is the operation the
+design depends on being available (nodes.md §3.1, the capacity hunt), and a
+replacement exists beside the node it replaces: Pulumi creates the replacing
+resource before it deletes the old one, an order the nodes component leaves at
+its default. A bound equal to the fleet would therefore refuse every
+replacement while the old node still runs.
+
+-   **Per AD**, the bound is two nodes' worth: the fleet is one node per AD
+    (nodes.md §5), so the second is the room a replacement takes there, and a
+    bound tight enough to forbid a second node in an AD would also forbid
+    replacing the first. Block storage is scoped per AD the same way.
+-   **Per region**, the bound is the fleet plus one node, the fleet being
+    what `conventions.CLOUD_NODES`, `NODE_OCPUS` and `NODE_MEMORY_GB`
+    declare. That is the compartment's ceiling: one replacement in
+    flight at a time, which is all the design asks for (never create more than
+    one node at once, nodes.md §3.2). The per-AD numbers multiplied by the
+    region's ADs would admit more, and the regional quota is what stops it.
+
+Both are looser than the free envelope, and deliberately so: the replacement
+in flight is billed for as long as it runs beside the node it replaces.
 
 **Statement order is load-bearing.** Within one policy, a later statement
 supersedes an earlier one for the same quota, so the wildcard `zero` comes
@@ -42,6 +57,17 @@ from putils import Component, async_output, resolve
 #: for the node carrying the cache workload if it runs hot (nodes.md §3.2).
 A1_CORES_PER_AD = 2
 A1_MEMORY_GB_PER_AD = 16
+
+#: Regional. The fleet plus one node: three nodes of 1 OCPU / 8 GB
+#: (`conventions.CLOUD_NODES`, `NODE_OCPUS`, `NODE_MEMORY_GB`) and the
+#: replacement that runs beside one of them, because the replacement is created
+#: before the node it replaces is deleted and a bound of the fleet alone would
+#: refuse it. A literal like the others, not a number computed from those
+#: conventions: a bound that followed the fleet's declaration would follow a
+#: fat-fingered node count or size along with it, which is the mistake it is
+#: here to refuse. The suite compares the two instead.
+A1_CORES_REGIONAL = 4
+A1_MEMORY_GB_REGIONAL = 32
 
 #: Per AD. A node's boot volume is 50 GB and a node may carry one attached
 #: volume of 55 GB (`conventions.NODE_VOLUMES`); the remainder is room to
@@ -197,16 +223,24 @@ def quota_statements(
     *,
     a1_cores: int = A1_CORES_PER_AD,
     a1_memory_gb: int = A1_MEMORY_GB_PER_AD,
+    a1_cores_regional: int = A1_CORES_REGIONAL,
+    a1_memory_gb_regional: int = A1_MEMORY_GB_REGIONAL,
     block_storage_gb: int = BLOCK_STORAGE_GB_PER_AD,
     volume_backups: int = VOLUME_BACKUPS,
     object_storage_gb: int = OBJECT_STORAGE_GB,
 ) -> list[str]:
     """The quota policy, in OCI's statement language.
 
-    Only families whose names are verified against the service's own quota
-    reference appear here. A statement naming a family that does not exist is
-    rejected outright, so an unverified guess would cost the whole policy —
-    including the parts that do work.
+    Only quota names the service itself states appear here. A statement naming
+    a family or a quota that does not exist is rejected outright, so an
+    unverified guess would cost the whole policy — including the parts that do
+    work. The compute quota reference
+    (https://docs.oracle.com/iaas/Content/Quotas/Concepts/resourcequotas_topic-Compute_Quotas.htm)
+    states every name below except the two regional A1 quotas; those are
+    stated by the Compute API, which lists, as an A1 shape's `quotaNames`,
+    the compartment quotas that govern it: the per-AD pair and the regional
+    pair. Each regional quota is set in the family of its per-AD twin, and the
+    wildcard `zero` of that family holds it at 0 until it is.
 
     `compartment` is a name, not an OCID: unlike IAM policy, the quota
     statement language has no OCID form, and a nested compartment is written
@@ -219,6 +253,10 @@ def quota_statements(
         f'zero compute-memory quotas /*/ in compartment {compartment}',
         f'set compute-core quota standard-a1-core-count to {a1_cores} in compartment {compartment}',
         f'set compute-memory quota standard-a1-memory-count to {a1_memory_gb} in compartment {compartment}',
+        # The wildcard holds these at 0 as well, and a region at 0 admits no
+        # A1 instance whatever the per-AD quotas say.
+        f'set compute-core quota standard-a1-core-regional-count to {a1_cores_regional} in compartment {compartment}',
+        f'set compute-memory quota standard-a1-memory-regional-count to {a1_memory_gb_regional} in compartment {compartment}',
         f'set block-storage quota total-storage-gb to {block_storage_gb} in compartment {compartment}',
         f'set block-storage quota backup-count to {volume_backups} in compartment {compartment}',
         # Object Storage bills by the byte, and its quota is spelled that way.

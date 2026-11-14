@@ -8,6 +8,7 @@ spelled in. The budget's own assertion is smaller and blunter — that it points
 at the compartment and that somebody receives its alerts.
 """
 
+import re
 from collections.abc import Sequence
 
 import pulumi
@@ -15,6 +16,7 @@ import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, root_of, run_with, the_run_failed_with
 
+from kluster import conventions
 from kluster.components.cloud.guardrails import (
     A1_CORES_PER_AD,
     A1_MEMORY_GB_PER_AD,
@@ -72,6 +74,64 @@ def test_both_halves_of_a_flexible_shape_are_capped() -> None:
     # cores leaves the memory dimension open.
     assert f'set compute-core quota standard-a1-core-count to {A1_CORES_PER_AD} ' in ' '.join(lines) + ' '
     assert f'set compute-memory quota standard-a1-memory-count to {A1_MEMORY_GB_PER_AD} ' in ' '.join(lines) + ' '
+
+
+#: The compartment quotas that govern an A1 shape, as the Compute API lists them
+#: in the shape's `quotaNames` (ListShapes; Oracle's CLI walkthrough for Oracle
+#: Solaris on OCI records the list for `BM.Standard.A1.160`). The service's
+#: list, not this program's: a quota on it that the policy zeroes and never
+#: sets refuses every A1 instance.
+A1_SHAPE_QUOTA_NAMES = (
+    'standard-a1-memory-count',
+    'standard-a1-memory-regional-count',
+    'standard-a1-core-count',
+    'standard-a1-core-regional-count',
+)
+
+_SET = re.compile(r'set (?P<family>\S+) quota (?P<quota>\S+) to (?P<value>\d+) in ')
+
+
+def quota_values(lines: Sequence[str]) -> dict[str, int]:
+    """Each quota a `set` statement names, with the value the last such statement gives it."""
+    return {match['quota']: int(match['value']) for line in lines if (match := _SET.match(line))}
+
+
+def test_every_quota_on_the_a1_shape_is_set_after_the_deny() -> None:
+    lines = quota_statements(COMPARTMENT_NAME)
+    last_zero = max(index for index, line in enumerate(lines) if line.startswith('zero compute'))
+    after = quota_values(lines[last_zero + 1 :])
+    # The wildcard holds every one of them at 0, and the instance is refused
+    # by whichever is left there, per AD or per region.
+    assert set(A1_SHAPE_QUOTA_NAMES) <= set(after)
+
+
+def admitted(cores: int, memory_gb: int, *, quotas: dict[str, int], scope: str) -> bool:
+    suffix = '-regional-count' if scope == 'region' else '-count'
+    return cores <= quotas[f'standard-a1-core{suffix}'] and memory_gb <= quotas[f'standard-a1-memory{suffix}']
+
+
+def test_the_region_admits_the_fleet_and_one_replacement_in_flight() -> None:
+    quotas = quota_values(quota_statements(COMPARTMENT_NAME))
+    # A replacement is created before the node it replaces is deleted, so the
+    # region holds every declared node and the new one at once.
+    nodes = len(conventions.CLOUD_NODES) + 1
+    assert admitted(nodes * conventions.NODE_OCPUS, nodes * conventions.NODE_MEMORY_GB, quotas=quotas, scope='region')
+
+
+def test_an_ad_admits_its_node_beside_a_replacement() -> None:
+    quotas = quota_values(quota_statements(COMPARTMENT_NAME))
+    # One node per AD, and the replacement lands beside it.
+    assert admitted(2 * conventions.NODE_OCPUS, 2 * conventions.NODE_MEMORY_GB, quotas=quotas, scope='ad')
+
+
+def test_the_region_bounds_what_the_ads_together_would_admit() -> None:
+    quotas = quota_values(quota_statements(COMPARTMENT_NAME))
+    # One AD per node is the most the fleet spreads over, and the per-AD room
+    # summed across them is a fleet's worth of replacements. The regional
+    # quota is the bound that holds the compartment to one.
+    ads = len(conventions.CLOUD_NODES)
+    per_ad = (quotas['standard-a1-core-count'], quotas['standard-a1-memory-count'])
+    assert not admitted(ads * per_ad[0], ads * per_ad[1], quotas=quotas, scope='region')
 
 
 def test_object_storage_is_capped_in_the_unit_it_is_spelled_in() -> None:
