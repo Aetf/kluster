@@ -85,7 +85,7 @@ WORKER_GUA = 'workerGua'
 QBITTORRENT_ON_WORKER = 'qbittorrentOnWorker'
 
 #: The first-bring-up knob: a LAN address for the gateway, set only while the
-#: gateway is not yet on the overlay. Absent — the steady state — every client
+#: ceremony brings it onto the overlay. Absent — the steady state — every client
 #: of the gateway derives its address from `conventions.overlay.UDM`. One of the
 #: optional keys, and `workerGua` is its mirror image: this one is set only
 #: during the ceremony, `workerGua` only after it.
@@ -399,6 +399,11 @@ async def main() -> None:
         conventions.CLUSTER_NAME,
         network_id=conventions.overlay.NETWORK_ID,
         roster=conventions.overlay.ROSTER,
+        # The routes to the home name the gateway's member as their next hop,
+        # and every member installs them whether that member answers or not,
+        # so the run that writes them follows the one that creates the
+        # gateway's member alone: an order the ceremony keeps, which no edge
+        # here can (physical/gateway.md §2.2, §2.5).
         managed_routes=conventions.overlay.MANAGED_ROUTES,
         # The search domain and the resolvers the network pushes: the overlay
         # host block's own name, answered by the same two resolvers the flow
@@ -520,10 +525,9 @@ def _gateway(config: pulumi.Config, *, worker_gua: str | None) -> Gateway:
     `conventions.overlay.UDM` is one of the container services this run is
     delivering, so until the delivery has happened the overlay address answers
     nothing. Absent, which is the steady state, both derive from the roster's
-    address for the gateway. Whether the gateway is a member at all is a
-    separate question with a separate answer: the roster carries an entry for
-    it or it does not, and the ceremony that gets from one to the other is
-    physical/gateway.md §2.5.
+    address for the gateway. Whether the gateway is a member is a separate
+    question with a separate answer: the roster's entry for it, which the
+    ceremony recorded (physical/gateway.md §2.5).
 
     **The knob is a literal address, and that is checked here.** The one apply
     it exists for runs inside the cutover window, and that window stops both

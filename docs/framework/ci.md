@@ -1245,7 +1245,8 @@ by the lock; it is not a separate problem. **Retires with the M1 first
 targeted apply inside the cutover window, whose targets take the
 overlay's identities because the network's adoption depends on them
 (physical/gateway.md §2.5 step 1), and the member that authorizes it is
-created by the run with no targets that follows the window. The
+created by step 5's last run, the run with no targets, after the
+ceremony's step 2 (physical/gateway-cutover.md §5). The
 `credentials derived sync` that fills the row runs after ceremony step
 4 and the device's half of the overlay's verification
 (physical/gateway.md §2.4.2), because that is where the join it hands

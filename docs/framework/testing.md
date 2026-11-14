@@ -1343,17 +1343,19 @@ than sending it to a cluster, so the case runs an `up` with no cluster, and
 its plugin is downloaded into the case's own `PULUMI_HOME`, which the case
 removes when it finishes.
 
-`tests/test_targeted_import_engine.py` holds what the gateway cutover's
-targeted apply rests on ([physical/gateway-cutover.md](../physical/gateway-cutover.md)
-§4 step 3): over a stack with no state, an `up` with the window's
-targets, read from the runbook, passes, creates, updates and deletes
-neither the overlay network nor a member, and leaves a checkpoint that a
-preview with the same targets loads and passes. Its stand-ins register
-under the physical stack's own project and stack, so the runbook's
-targets are passed as they are written. How a target set that misses a
-dependency fails, the refusal's text or the checkpoint written before
-it ([pulumi.md](pulumi.md) §1.4), is not held: a release may change
-either without changing what the window rests on.
+`tests/test_targeted_import_engine.py` holds the engine semantics that
+every targeted `up` of the bring-up rests on, wherever its runbook
+writes it ([physical/gateway-cutover.md](../physical/gateway-cutover.md),
+[physical/gateway.md](../physical/gateway.md) §2.5). Each such run is
+made with its targets read from the runbook, over the state the runbook
+makes it on, and it has to pass, leave a checkpoint the next command
+loads, and write to Central — read off the stand-in provider's log —
+exactly what the runbook says it writes and nothing more. Its stand-ins
+register under the physical stack's own project and stack, so the
+runbook's targets are passed as they are written. How a target set that
+misses a dependency fails, the refusal's text or the checkpoint written
+before it ([pulumi.md](pulumi.md) §1.4), is not held: a release may
+change either without changing what a run rests on.
 
 **A stand-in the engine imports is a provider plugin of the case's
 own**, served from the project's `plugins.providers` path, and it

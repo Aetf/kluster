@@ -746,7 +746,7 @@ not moved.
     after the state has already moved.
 -   **The flow rules have passed on a scratch network**: gateway.md
     §2.4.1. It runs before the window because the run with no targets,
-    step 5 once the window has closed, writes the composed program to
+    the last of step 5's, writes the composed program to
     every member, the household's devices among them, so a rule that
     misbehaves is found on stand-ins rather than on them.
 -   **The window's targeted apply has been previewed.** Step 3 runs
@@ -776,7 +776,7 @@ not moved.
     the overlay mints, a roster entry added later included, and no
     member. The network itself stays out of the targets: it is read
     into state and planned as it stands, and the run with no targets is
-    the one that updates it (gateway.md §2.5 step 1).
+    the one that updates it (gateway.md §2.5 step 3).
 
     What it must show is the gateway's own resources and, beside them,
     the network's adoption and what it depends on. The gateway's
@@ -1119,8 +1119,8 @@ naming the pin its tree came from. Installing the initial states is a
 no-op for the machines that moved, whose state directories hold
 state. The overlay member's is the one empty state directory, so it is
 given its network file: the daemon asks to join the overlay at its
-first start, and is admitted once the ceremony's step 3 authorizes it
-(gateway.md §1, §2.5).
+first start, and is admitted once the ceremony's step 2 creates its
+member (gateway.md §1, §2.5).
 Post-apply hooks converge and start the machines — writing
 each machine's content stamp as they do — the overlay member last and
 for the first time (gateway.md §1.1).
@@ -1185,10 +1185,10 @@ of the `iot-pool-order` row, in the row's order, and nothing else above
 the `predefined from` line.
 
 The overlay member lists the network `conventions.overlay.NETWORK_ID`
-names: as `ACCESS_DENIED` until the ceremony's step 3 authorizes it, or
-as `REQUESTING_CONFIGURATION` while Central has not answered yet. A
-list without that network is a daemon that never asked to join, which
-step 3's authorization cannot admit, so it is chased before the
+names: as `ACCESS_DENIED` until the ceremony's step 2 creates its
+member, or as `REQUESTING_CONFIGURATION` while Central has not answered
+yet. A list without that network is a daemon that never asked to join,
+which step 2's member cannot admit, so it is chased before the
 ceremony's step 2 records the node id `info` printed (gateway.md
 §2.5). The push log's
 `machines: initial state for zerotier` line, and `networks.d/` under
@@ -1486,24 +1486,133 @@ object with no file behind it and goes at the next boot, or to
 **Step 5 — apply the rest of the stack**, from the operator's
 workstation, once every reading above has been taken and every check
 with a pass condition has passed, and the resolvers are answering
-again. Outside the window, and no longer against a clock:
+again. Outside the window, and no longer against a clock. It is two
+runs, because the overlay's network carries the routes to the home,
+and a route is written only once the member at its next hop has been
+read answering (gateway.md §2.2).
+
+**First, everything but the overlay's network and members**, run until
+it passes:
 
 ```sh
-physical up
+physical up \
+    --exclude 'urn:pulumi:physical::kluster-py::kluster:overlay:Overlay$zerotier:index/network:Network::kluster-network' \
+    --exclude-dependents
 ```
 
 It completes the ceremony's step 1 (gateway.md §2.5) — the cloud
-fleet, the Talos bootstrap, the worker VM, the backup bucket, the
-overlay's network and routes — and re-walks the gateway as a no-op
-against the stamps, the orders aside. A stack holding the bridged
+fleet, the Talos bootstrap, the worker VM, the backup bucket — and
+re-walks the gateway as a no-op against the stamps, the orders aside.
+Every member takes the network's id from the network, so
+`--exclude-dependents` leaves each of them out with it, and nothing
+reaches Central (`tests/test_targeted_import_engine.py`). A stack holding the bridged
 `FirewallZonePolicyOrder`s plans one create and one delete per pair, the
 type being part of the URN: the create reads the pair and refuses a
 policy the census does not own, and the delete sends nothing. **That run
 replaces and drops no census policy**: a create has no old list to carry
 one from, so an original still on the pair reads as foreign and the run
-is refused. A census edit waits for the run after it. **It passes when a further `physical up` reports no
-changes**, which is the whole-stack form of the reading above and the
-one the soak's previews go on repeating. **One diff may appear there
+is refused. A census edit waits for the run after it. A cloud resource
+that fails here fails with the LAN's DNS up and time to spend on it: it
+is retried rather than worked around, and nothing about it is a reason
+to touch the device. **It passes when the same command, run again,
+reports no changes.** Until it has passed, step 2 of the ceremony is the
+only later one that can run — step 3 reads an address off a machine
+this run boots.
+
+**Then the homelab host refuses the home routes**, once, by hand, as
+root on the host, ahead of the declaration in its configuration
+management that carries the same content (homelab-host.md §4). It needs
+nothing of this program and may come at any point before the run below:
+
+```sh
+f=/var/lib/zerotier-one/networks.d/83048a0632b6ba9b.local.conf
+cat "$f"                    # what is there today; every other line is kept
+zt=$(ip -4 -o addr show | awk '$4 ~ /^10\.144\./ {print $2}')
+ip -4 route show dev "$zt"  # the baseline the readings below compare against
+sed -i 's|^allowManaged=.*|allowManaged=10.144.0.0/16|' "$f"
+grep -Fx 'allowManaged=10.144.0.0/16' "$f" || echo 'allowManaged=10.144.0.0/16' >> "$f"
+systemctl restart zerotier-one
+```
+
+The restart takes the overlay interface down and up, and with it the
+legacy cluster's flannel route over it. Read on the host afterward:
+`ip -4 addr show dev "$zt"` holds `10.144.180.10/16`;
+`ip -4 route show dev "$zt"` lists what the baseline listed —
+`10.144.0.0/16`, and the route to the VPS's pod subnet via
+`10.144.160.212`; and `nc -w 5 10.144.160.212 22 </dev/null` prints the VPS's
+banner. The host's two IPv6 overlay addresses, the ones derived from
+the network id, are gone after the restart, and that is expected: the
+list holds no IPv6 prefix, and the run with no targets takes them from
+every member anyway (homelab-host.md §4). **Stop** if the IPv4 address
+does not come back: the file goes back
+to `allowManaged=1`, the daemon is restarted, and the run below waits on
+a finding. A missing pod route is repaired in the legacy cluster before
+anything else runs.
+
+**Last, the run with no targets**, once step 5's first run has passed,
+the ceremony's step 2 has, and the homelab host refuses the home routes.
+Where the workstation is at home and takes the routes,
+`gatewayBootstrapHost` names the device's leg on the workstation's own
+subnet: once the routes land, the workstation sends its traffic to every
+other home subnet over the overlay, so a dial address on another leg
+would move the run's sessions to the device onto the overlay mid-run. A
+knob on another leg is moved to that one first, which is an ordinary
+change of dial address (gateway.md §2.5).
+
+```sh
+physical preview
+physical up
+```
+
+The preview is read as gateway.md §2.5 step 3 reads it: the network
+row, a `+` for every roster entry but the gateway's, and no row for
+`zerotier:index:Member kluster-member-udm`. Any row there, `+`, `~` or
+`+-`, and the run is not made: a `+` means step 2 has not been made
+against this state, and the others write to the gateway's admission in
+the run that writes the routes. That the bridged provider plans no row
+there is unproven live, and gateway.md §2.5 step 3 says what the first
+such preview settles. After the `up`:
+
+-   On the homelab host, `ip -4 route show | grep -F 'via 10.144.1.1'`
+    prints nothing, `ip route get 10.0.5.3` names the LAN interface,
+    and `dig @10.0.5.3 cloudflare.com +short` answers.
+-   From a LAN client, Home Assistant answers through the reverse proxy,
+    and so does a service of the legacy cluster.
+-   On `Aetf-Arch-VPS`, `ip route get 10.0.5.3` names its ZeroTier
+    interface, and the `curl` of the ceremony's step 2 prints a status
+    with no route added by hand.
+-   On a member at home that takes the routes, the operator's
+    workstation where it is one, `ip route get 10.0.5.3` names its
+    ZeroTier interface and `dig @10.0.5.3 cloudflare.com +short`
+    answers.
+
+**Stop, and the way back:** an at-home member that has lost a home
+subnet, or a route via `10.144.1.1` on the homelab host. On the host the
+repair is local: the file and the restart above. For anything else the
+home routes are deleted at Central by hand, from an uplink that still
+resolves, by setting the network's route table back to the one route
+Central held before this run. The request goes from the root of the
+checkout that holds `.credentials/`, and the token reaches `curl` on
+its standard input rather than on its command line:
+
+```sh
+{ printf 'Authorization: token '; physical config get zerotierApiToken; } |
+    curl -sS -X POST -H @- -H 'Content-Type: application/json' \
+        -d '{"config":{"routes":[{"target":"10.144.0.0/16"}]}}' \
+        https://api.zerotier.com/api/v1/network/83048a0632b6ba9b |
+    jq -c .config.routes                     # [{"target":"10.144.0.0/16","via":null}]
+```
+
+Each member drops the home routes at its next configuration refresh.
+**Until the cause is fixed, every `physical` run is made in step 5's
+first form**, `--exclude` on the network with `--exclude-dependents`,
+the ceremony's remaining applies included, because a run with no
+targets writes the routes back. The next `physical preview` shows them
+as the diff of record.
+
+**It passes when a further `physical up` reports no changes**, which is
+the whole-stack form of §5's second-apply reading and the one the soak's
+previews go on repeating. **One diff may appear there
 without anything having drifted**: `routes` on
 `zerotier:index:Network kluster-network`, where the only
 difference is `via` on the `10.144.0.0/16` route — declared absent,
@@ -1514,21 +1623,17 @@ overlay component declares `via=''` for the route the census gives no
 `via` (`components/overlay/`), and the reading is taken again once
 that lands. A `routes` diff that differs in anything else — a target,
 or a `via` naming an address — is not this, and is read as gateway.md
-§2.5 step 1 reads the first one. A cloud resource that fails here
-fails with the LAN's DNS up and time to spend on it: it is retried
-rather than worked around, and nothing about it is a reason to touch
-the device. Until this step has passed, step 2 of the ceremony is the
-only later one that can run — step 3 reads an address off a machine
-this step boots.
+§2.5 step 3 reads the first one.
 
 **Home Assistant's address mode is set in the sitting of the run that
 changes its allow.** Whichever `physical` run's preview shows the IPv6
 policy of Home Assistant's allow taking the derived address (gateway.md
 §4.2 rule 1) is the run that rule's `ha network update` is made beside,
 and that run passes only once the rule's reading does. Where that run is
-this step's, its preview is also where the policy is read as an update
-in place: a replace there is a census policy this run would replace,
-against the paragraph above, so the edit waits for the run after it, and
+one of this step's, its preview is also where the policy is read as an
+update in place: a replace there is a census policy the run would
+replace, against step 5's first-run rule above (that run replaces and
+drops no census policy), so the edit waits for the run after it, and
 the sitting goes with the edit.
 
 **Nothing in §4 or §5 is irreversible**, step 5 included: what it
@@ -1686,8 +1791,7 @@ serving again with all of it in place:
     now lives, with the network file the daemon keeps beside it —
     `machines-new/zerotier/state`. **A retry of the window
     has to carry that directory across**, or the member mints a second
-    identity and the node id read in the ceremony's next step is not the
-    one the roster was about to authorize.
+    identity and its node id is not the one the roster authorizes.
 
 **Last, the host-side timers change back**, on the homelab host as the
 user that owns them. `check-gateway` holds the device to the declared
