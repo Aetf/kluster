@@ -89,19 +89,55 @@ runs:
           -o APT::Get::List-Cleanup=0
         sudo apt-get install -y --no-install-recommends "zerotier-one=${ZEROTIER_VERSION}"
 
+    # `systemctl start` returns once the service's process has started,
+    # which is before the service listens on its local control port, and a
+    # `zerotier-cli` command that cannot reach that port fails at once: the
+    # join prints `0 join connection failed` and exits 1. So the join waits
+    # until `zerotier-cli info` answers, which it does only once the service
+    # serves its control API.
     - name: Install the member identity
       shell: bash
       env:
         IDENTITY: ${{ inputs.identity }}
+        NETWORK_ID: ${{ inputs.network_id }}
+        DEADLINE: ${{ steps.clock.outputs.deadline }}
       run: |
         set -euo pipefail
+        # A clock step that was skipped, or wrote its output under another
+        # name, leaves DEADLINE empty, which the arithmetic would read as the
+        # epoch: the wait would fail at once and blame the service.
+        if [ -z "$DEADLINE" ]; then
+          echo "::error::the join's clock set no deadline, so the wait for the ZeroTier service has none"
+          exit 1
+        fi
         sudo systemctl stop zerotier-one
         printf '%s' "$IDENTITY" | sudo tee /var/lib/zerotier-one/identity.secret >/dev/null
         sudo chmod 600 /var/lib/zerotier-one/identity.secret
         sudo zerotier-idtool getpublic /var/lib/zerotier-one/identity.secret \
           | sudo tee /var/lib/zerotier-one/identity.public >/dev/null
         sudo systemctl start zerotier-one
-        sudo zerotier-cli join ${{ inputs.network_id }}
+        waiting=$(date +%s)
+        attempts=0
+        echo "waiting for the ZeroTier service to answer on its local control port (zerotier-cli info) before it joins"
+        while :; do
+          attempts=$((attempts + 1))
+          left=$((DEADLINE - $(date +%s)))
+          if answer="$(timeout "$((left < 1 ? 1 : left < 3 ? left : 3))" sudo zerotier-cli info 2>&1)"; then
+            break
+          fi
+          if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+            echo "::error::the ZeroTier service never answered on its local control port, after ${attempts} attempts, $(($(date +%s) - waiting)) s; the join's deadline has passed (zerotier-cli info last printed: ${answer:-nothing})"
+            timeout 5 sudo systemctl status --no-pager zerotier-one || true
+            exit 1
+          fi
+          sleep 1
+        done
+        echo "the ZeroTier service answered on its local control port after ${attempts} attempts, $(($(date +%s) - waiting)) s: ${answer}"
+        if ! joined="$(sudo zerotier-cli join "$NETWORK_ID")"; then
+          echo "::error::the ZeroTier service refused the join: ${joined:-no answer}"
+          exit 1
+        fi
+        echo "$joined"
 
     # A route only this run needs is installed here rather than carried by
     # the network, which would hand it to every member (framework/ci.md §2).
