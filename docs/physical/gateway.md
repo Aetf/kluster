@@ -1568,7 +1568,8 @@ A member away from home had no path to the home subnets, so a route to
 an absent router costs it nothing. One at home does:
 
 -   **While the next hop is not a member**, it loses every home subnet
-    but its own: the resolvers on the container VLAN, which every lease
+    but its own, and an Android phone its own as well (below): the
+    resolvers on the container VLAN, which every lease
     on the LAN names, and whatever it serves to another subnet, since a
     reply is routed by its destination too. The kernel does not fall
     back to the default route when nothing answers ARP for `10.144.1.1`.
@@ -1615,14 +1616,24 @@ and it takes the routes: how the Home Assistant add-on's client is given
 a `local.conf` that survives the add-on's restarts is not established
 here.
 
-**A device that roams takes the routes when it is at home.** A laptop or
-phone at home with its client on reaches the other home subnets, its
-resolvers among them, through the gateway's ZeroTier daemon, and loses
-them while that daemon is down; its own remedy is its client's switch.
-Nothing at Central can scope a route to the members that are away, and a
-mobile client has no whitelist to set. That is accepted: what would
-remove it is not routing the home through the overlay at all, which is
-what this section is for.
+**A device that roams sends the home through the overlay while it is at
+home with its ZeroTier running, and that is accepted.** A laptop or phone
+at home whose client runs reaches the other home subnets, its resolvers
+among them, through the gateway's ZeroTier daemon, and loses them while
+that daemon is down. On Android the overlay takes the phone's own subnet
+too: the app hands every managed route to the system's VPN, and Android
+consults the VPN's routing table ahead of the Wi-Fi network's, by rule
+priority rather than by prefix, so the connected route that keeps a
+Linux member's own subnet on the LAN decides nothing there. With its
+ZeroTier stopped, every platform keeps its LAN path, because a client
+that stops takes its routes with it: the desktop client's go with its
+networks' teardown, the Android app's with the VPN it closes. Stopping
+the client is the member's own remedy. Nothing at Central can scope a
+route to the members that are away, and the Android app has no
+whitelist to set. What would remove the behavior is not routing the
+home through the overlay at all, which is what this section is for.
+Each platform's behavior, with its source:
+[Aetf/kluster-ops#747](https://github.com/Aetf/kluster-ops/issues/747#issuecomment-6887971571).
 
 **Every managed route is IPv4, and the pool's ULA /64 is deliberately
 not among them.** The overlay assigns no v6 address to any member
