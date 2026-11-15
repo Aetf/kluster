@@ -208,7 +208,10 @@ from an HTTP repository, which offers nothing to check a download against
 -   **§3.1 Cloud CP node.** Trigger: hardware loss, A1 reclamation,
     or deliberate rebuild. Gist: drain → `talosctl etcd
     remove-member` → destroy in `physical` (unprotect if flagged) →
-    re-create → rejoin quorum → health gate. Facts that shape it:
+    re-create → rejoin quorum → health gate. The re-created node joins
+    by itself from its `user_data`, the cluster being live, and one
+    whose etcd service is `Failed` on the join timeout joins after its
+    next boot (declarative/physical.md §6). Facts that shape it:
     A1 capacity at re-create is the known risk (the standing quorum
     holds capacity; rebuild promptly), NLB backends follow from
     `physical` automatically; a node carrying a **block volume** needs
