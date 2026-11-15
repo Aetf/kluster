@@ -459,6 +459,29 @@ machine_secrets
     call depends on the forward it is dialed through, the listener and
     the backends, because the address exists before they do, and no
     input carries that order.
+-   **The dedicated-VIP node's Kubernetes address is its lease's.**
+    The kubelet takes, per family, the first of the node's routed
+    addresses inside `machine.kubelet.nodeIP.validSubnets`, in Talos'
+    default order, which compares addresses numerically. The VIP's
+    secondary private address sits on the uplink as a `/32` beside the
+    lease's, so unpinned it would be the node's address whenever OCI
+    assigned it the lower one, and the name day 1 gives the node would
+    match nothing Kubernetes reports. The rendering that adds the
+    secondary address therefore also renders the subnets, in the same
+    function so that one is never rendered without the other: the
+    whole of each family the service subnets give, which is Talos'
+    default, and a negation of the added address (`!<address>/32`). A
+    rendering with no added address sets no `nodeIP` at all.
+-   **The dedicated-VIP node's etcd member advertises its lease's
+    address alone.** With `cluster.etcd.advertisedSubnets` set to the
+    node network, Talos advertises every address of the node inside
+    it, the secondary `/32` included, as a peer URL, and the health
+    gate requires each peer-URL host to be one of the control-plane
+    names day 1 gives it. The same function that adds the secondary
+    address therefore negates it there too, on a control plane, after
+    the node network: Talos appends the lists of later patches and
+    folds the result in order, so a negation listed ahead of the
+    subnet would remove nothing.
 -   **What fails closed**: a change of the NLB's address leaves every
     certificate naming the old one, and every call fails verification.
     The same change breaks the cluster endpoint in every machine

@@ -56,7 +56,7 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
-from ipaddress import IPv4Address, IPv4Interface
+from ipaddress import IPv4Address, IPv4Interface, IPv4Network, IPv6Network
 from typing import Any, Literal, Protocol, cast
 
 import pulumi
@@ -175,6 +175,12 @@ CLUSTER_RANGES: tuple[str, ...] = tuple(
         conventions.POD_CIDR_V6,
     )
 )
+
+#: The cluster's service subnets, IPv4 first: the cluster is dual-stack with
+#: v4 primary (architecture.md §1.3). `node_patch` hands them to Kubernetes,
+#: and their families are the ones the kubelet takes a node address in
+#: (`kubelet_node_ip_patch`).
+SERVICE_SUBNETS: tuple[IPv4Network | IPv6Network, ...] = (conventions.SERVICE_CIDR_V4, conventions.SERVICE_CIDR_V6)
 
 #: The name this program gives a node's one physical link. Talos' network
 #: documents address a link by name, and the name the kernel gives it
@@ -314,7 +320,7 @@ def node_patch() -> dict[str, Any]:
                 # IPv4 first: the cluster is dual-stack with v4 primary
                 # (architecture.md §1.3).
                 'podSubnets': [str(conventions.POD_CIDR_V4), str(conventions.POD_CIDR_V6)],
-                'serviceSubnets': [str(conventions.SERVICE_CIDR_V4), str(conventions.SERVICE_CIDR_V6)],
+                'serviceSubnets': [str(subnet) for subnet in SERVICE_SUBNETS],
             },
         },
     }
@@ -530,8 +536,53 @@ def uplink_alias_document() -> dict[str, Any]:
     return {'apiVersion': 'v1alpha1', 'kind': 'LinkAliasConfig', 'name': UPLINK, 'selector': {'match': 'true'}}
 
 
-def secondary_address_documents(address: str) -> list[dict[str, Any]]:
-    """Put an extra address on the node's physical link.
+def kubelet_node_ip_patch(excluded: Sequence[str]) -> dict[str, Any]:
+    """Keep the kubelet's node address off each of `excluded`, IPv4 addresses as `secondary_address_documents` adds.
+
+    The kubelet's node IP is, per family, the first of the node's routed
+    addresses that falls inside `machine.kubelet.nodeIP.validSubnets`, in
+    Talos' default address order, which compares addresses numerically
+    (`controllers/k8s/nodeip.go`; this program sets no
+    `nodeAddressSortAlgorithm`). An address added beside the lease's is one
+    more candidate, so without this patch the node IP is whichever of the two
+    the cloud happened to assign lower.
+
+    The subnets are the whole of each family the service subnets give, which
+    is the set Talos takes when the field is unset (`nodeip_config.go`), and
+    a negation of each excluded address as a host. So the candidates are exactly the
+    default's less the excluded ones, and the kubelet keeps the address the
+    node's lease gives it.
+    """
+    admitted = [str(type(subnet)((0, 0))) for subnet in SERVICE_SUBNETS]
+    negated = [f'!{address}/32' for address in excluded]
+    return {'machine': {'kubelet': {'nodeIP': {'validSubnets': [*admitted, *negated]}}}}
+
+
+def etcd_advertised_patch(excluded: Sequence[str]) -> dict[str, Any]:
+    """Keep each of `excluded` out of the addresses a control plane's etcd member advertises.
+
+    With `cluster.etcd.advertisedSubnets` set, Talos advertises every current
+    address of the node inside it, not the first one, and writes them all
+    into the member's peer URLs (`controllers/etcd/spec.go`). The health
+    check requires every peer-URL host of every member to be among the
+    control-plane addresses it is given (`EtcdControlPlaneNodesAssertion`),
+    and those are the names day 1 gives the nodes (`TalosDay1`). An address
+    added inside the node network beside the lease's would be a second peer
+    URL, and the check would fail on it until it timed out.
+
+    The patch carries the negations alone. Talos appends the list a later
+    patch carries to the one before it, and `patches` lists
+    `control_plane_patch`, which names the node network, ahead of the
+    document that carries this one, so the rendered list is the node network
+    and then each negation. Talos folds the list in order, a negation
+    dropping from what the subnets before it kept, so the negations have to
+    come last.
+    """
+    return {'cluster': {'etcd': {'advertisedSubnets': [f'!{address}/32' for address in excluded]}}}
+
+
+def secondary_address_documents(address: str, *, role: Role) -> list[dict[str, Any]]:
+    """Put an extra address on the node's physical link, and keep the kubelet and etcd off it.
 
     OCI hands the node a secondary private IP on its VNIC but does
     not configure the guest, so without this the dedicated VIP is an address
@@ -546,12 +597,25 @@ def secondary_address_documents(address: str) -> list[dict[str, Any]]:
     entry with `dhcp: true` sends; the document's own default would be the
     MAC, and moving off the deprecated field is meant to change nothing the
     node does.
+
+    The address is also excluded from the kubelet's node IP
+    (`kubelet_node_ip_patch`), in this function rather than beside it, so
+    that the address cannot be added without the exclusion. The node's
+    Kubernetes address is then the lease's, which is the name Talos calls and
+    the health gate know the node by (`TalosDay1`). On a control plane it is
+    excluded from etcd's advertised addresses as well
+    (`etcd_advertised_patch`), for the same reason and in the same place: the
+    member's peer URLs are what the health gate holds to those names.
     """
-    return [
+    documents = [
         uplink_alias_document(),
         {'apiVersion': 'v1alpha1', 'kind': 'LinkConfig', 'name': UPLINK, 'addresses': [{'address': f'{address}/32'}]},
         {'apiVersion': 'v1alpha1', 'kind': 'DHCPv4Config', 'name': UPLINK, 'clientIdentifier': 'none'},
+        kubelet_node_ip_patch([address]),
     ]
+    if role == 'controlplane':
+        documents.append(etcd_advertised_patch([address]))
+    return documents
 
 
 @dataclass(frozen=True)
@@ -688,7 +752,7 @@ def patches(
     if static_address is not None:
         documents += static_address_documents(static_address)
     if secondary_address is not None:
-        documents += secondary_address_documents(secondary_address)
+        documents += secondary_address_documents(secondary_address, role=role)
     if volume is not None:
         documents.append(node_volume_document(volume))
     extra = [Opening(BGP_PORT, 'tcp', (bgp_peer,))] if bgp_peer is not None else []
